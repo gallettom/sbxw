@@ -34,7 +34,6 @@ use std::{
     io::Write,
     sync::{Arc, Mutex},
 };
-use tracing;
 use tokio::sync::broadcast;
 
 /// Output bytes kept per sandbox for replay on reconnect (256 KB).
@@ -101,7 +100,6 @@ pub async fn serve(
         .route("/ws", get(ws_handler))
         .route("/api/sandboxes", get(api_list))
         .route("/api/sandboxes/create", post(api_create))
-        .route("/api/sandboxes/ports", get(api_ports_all))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
         .route("/api/sandboxes/:name/ports/publish", post(api_ports_publish))
         .route("/api/sandboxes/:name/ports/unpublish", post(api_ports_unpublish))
@@ -144,14 +142,14 @@ struct PortMappingJson {
 
 #[derive(Serialize)]
 struct SandboxPorts {
-    name: String,
-    raw: String,
     ports: Vec<PortMappingJson>,
 }
 
-fn fetch_ports_for(name: &str) -> SandboxPorts {
-    let raw = sbx::list_ports(name).unwrap_or_default();
-    let ports = sbx::list_ports_parsed(name).into_iter()
+async fn api_ports_one(Path(name): Path<String>) -> Json<SandboxPorts> {
+    let ports = tokio::task::spawn_blocking(move || sbx::list_ports_parsed(&name))
+        .await
+        .unwrap_or_default()
+        .into_iter()
         .map(|p| PortMappingJson {
             spec: p.spec(),
             sandbox_port: p.sandbox_port,
@@ -160,27 +158,7 @@ fn fetch_ports_for(name: &str) -> SandboxPorts {
             host_port: p.host_port,
         })
         .collect();
-    SandboxPorts { name: name.to_string(), raw, ports }
-}
-
-async fn api_ports_one(Path(name): Path<String>) -> Json<SandboxPorts> {
-    Json(tokio::task::spawn_blocking(move || fetch_ports_for(&name))
-        .await
-        .unwrap_or_else(|_| SandboxPorts { name: String::new(), raw: String::new(), ports: vec![] }))
-}
-
-async fn api_ports_all() -> Json<Vec<SandboxPorts>> {
-    let sandboxes = tokio::task::spawn_blocking(sbx::list_sandboxes)
-        .await
-        .unwrap_or_default();
-    let mut result = Vec::new();
-    for s in sandboxes {
-        let info = tokio::task::spawn_blocking(move || fetch_ports_for(&s.name))
-            .await
-            .unwrap_or_else(|_| SandboxPorts { name: String::new(), raw: String::new(), ports: vec![] });
-        result.push(info);
-    }
-    Json(result)
+    Json(SandboxPorts { ports })
 }
 
 #[derive(Deserialize)]

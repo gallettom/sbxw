@@ -321,14 +321,3 @@ pub fn secret_set_stdin(service: &str, value: &str, global: bool, sandbox: Optio
     }
     Ok(())
 }
-
-/// Best-effort one-shot command inside a *running* sandbox:
-/// `sbx exec <name> <cmd...>`. General-purpose helper for debugging/extensions.
-#[allow(dead_code)]
-pub fn exec(name: &str, cmd: &[&str]) -> Result<()> {
-    let mut args: Vec<String> = vec!["exec".into(), name.into()];
-    args.extend(cmd.iter().map(|s| s.to_string()));
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_inherit(&refs)
-}
-
