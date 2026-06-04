@@ -206,6 +206,10 @@
   .sbx-actions button.rm-btn    { color: #f85149; }
   .sbx-actions button.rm-btn:hover    { background: #3d1c1c; border-color: #f85149; }
   /* Ports modal */
+  .ports-section-label {
+    color: #8b949e; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;
+  }
   .ports-table {
     width: 100%; border-collapse: collapse; font-size: 12px;
   }
@@ -399,18 +403,18 @@
       </div>
       <div class="modal-body" style="gap:0;padding-bottom:.5rem">
         <div id="ports-modal-content">
+          <div class="ports-section-label">Published ports</div>
           <table class="ports-table">
             <thead>
               <tr>
                 <th>Sandbox</th>
                 <th>Host binding</th>
-                <th>Alias</th>
                 <th>Proto</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="ports-modal-tbody">
-              <tr><td colspan="5" class="ports-empty-msg">Loading…</td></tr>
+              <tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>
             </tbody>
           </table>
           <div class="add-port-form">
@@ -427,6 +431,16 @@
             </div>
             <span class="ports-error-msg hidden" id="ports-add-error"></span>
           </div>
+
+          <div class="ports-section-label" style="margin-top:.9rem">Host aliases <span style="color:#6e7681;font-weight:400">(/etc/hosts)</span></div>
+          <table class="ports-table">
+            <thead>
+              <tr><th>Hostname</th><th>IP</th></tr>
+            </thead>
+            <tbody id="hosts-modal-tbody">
+              <tr><td colspan="2" class="ports-empty-msg">Loading…</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
@@ -805,6 +819,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
 const portsOverlay  = document.getElementById('ports-modal-overlay');
 const portsNameEl   = document.getElementById('ports-modal-name');
 const portsTbody    = document.getElementById('ports-modal-tbody');
+const hostsTbody    = document.getElementById('hosts-modal-tbody');
 const addSbxPort    = document.getElementById('add-sbx-port');
 const addHostPort   = document.getElementById('add-host-port');
 const addHostIp     = document.getElementById('add-host-ip');
@@ -813,35 +828,41 @@ const btnAddMapping = document.getElementById('btn-add-mapping');
 const portsAddError = document.getElementById('ports-add-error');
 let portsTarget = null;
 
-function renderPortsTable(ports, hostEntries) {
-  // Build a map hostname→ip from /etc/hosts for the alias column.
-  const ipToAlias = {};
-  (hostEntries || []).forEach(e => { ipToAlias[e.ip + ':' + e.hostname] = e.hostname; });
-  // Reverse-lookup: for a given (host_ip, host_port) find the alias.
-  const bindingAlias = {};
-  (hostEntries || []).forEach(e => { bindingAlias[e.ip] = e.hostname; });
-
+function renderPortsTable(ports) {
   if (!ports.length) {
-    portsTbody.innerHTML = '<tr><td colspan="5" class="ports-empty-msg">No ports published</td></tr>';
+    portsTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">No ports published</td></tr>';
     return;
   }
-  portsTbody.innerHTML = ports.map(p => {
-    const alias = bindingAlias[p.host_ip] || '';
-    return `<tr>
+  portsTbody.innerHTML = ports.map(p =>
+    `<tr>
       <td><strong>${p.sandbox_port}</strong></td>
       <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${p.host_ip}:${p.host_port}</td>
-      <td style="font-size:11px;color:#8b949e">${alias}</td>
       <td><span class="proto-badge">${p.proto}</span></td>
       <td><button class="btn-del-port" data-spec="${p.spec}" title="Unpublish">✕</button></td>
-    </tr>`;
-  }).join('');
+    </tr>`
+  ).join('');
   portsTbody.querySelectorAll('.btn-del-port').forEach(btn => {
     btn.addEventListener('click', () => deletePort(btn.dataset.spec, btn));
   });
 }
 
+function renderHostsTable(hostEntries) {
+  const rows = hostEntries || [];
+  if (!rows.length) {
+    hostsTbody.innerHTML = '<tr><td colspan="2" class="ports-empty-msg">No /etc/hosts aliases</td></tr>';
+    return;
+  }
+  hostsTbody.innerHTML = rows.map(e =>
+    `<tr>
+      <td style="color:#c9d1d9">${e.hostname}</td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${e.ip}</td>
+    </tr>`
+  ).join('');
+}
+
 async function fetchPorts(name) {
-  portsTbody.innerHTML = '<tr><td colspan="5" class="ports-empty-msg">Loading…</td></tr>';
+  portsTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>';
+  hostsTbody.innerHTML = '<tr><td colspan="2" class="ports-empty-msg">Loading…</td></tr>';
   try {
     const [portsRes, hostsRes] = await Promise.all([
       fetch(`/api/sandboxes/${encodeURIComponent(name)}/ports`),
@@ -849,9 +870,10 @@ async function fetchPorts(name) {
     ]);
     const portsData = await portsRes.json();
     const hostsData = await hostsRes.json();
-    renderPortsTable(portsData.ports || [], hostsData || []);
+    renderPortsTable(portsData.ports || []);
+    renderHostsTable(hostsData || []);
   } catch (_) {
-    portsTbody.innerHTML = '<tr><td colspan="5" class="ports-empty-msg" style="color:#f85149">Error fetching ports</td></tr>';
+    portsTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg" style="color:#f85149">Error fetching ports</td></tr>';
   }
 }
 
