@@ -33,8 +33,7 @@ network_allow = [
   # "storage.googleapis.com",              # skaffold
   # Uncomment for skaffold image builds / k3d cluster:
   # "quay.io", "*.quay.io",
-  # Uncomment for the headroom kit (token-compression proxy):
-  # "huggingface.co", "cdn-lfs.huggingface.co",
+  # (The headroom kit needs no extra domains — pypi + github defaults cover it.)
 ]
 
 # Optional explicit denylist (applied via `sbx policy deny network`). Empty by

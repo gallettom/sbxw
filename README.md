@@ -172,11 +172,10 @@ Bundled kits:
 
 - **`assets/k8s-tools`** — installs `kubectl` + `k3d` + `skaffold` into
   `~/.local/bin` (arch-aware, idempotent).
-- **`assets/headroom`** — installs [Headroom](https://github.com/chopratejas/headroom),
-  a local context-compression proxy, and routes Claude through it to **cut token
-  usage** (claimed 60–95% fewer tokens). Self-healing: it only sets
-  `ANTHROPIC_BASE_URL` while the proxy is confirmed up, so a failed install never
-  breaks the agent. See `assets/headroom/README.md`.
+- **`assets/headroom`** — installs [Headroom](https://github.com/chopratejas/headroom)
+  (`headroom-ai[proxy]`), a local context-compression proxy, and enables its
+  durable Claude Code integration (`headroom init --global claude`) to **cut token
+  usage** (claimed 60–95% fewer tokens). See `assets/headroom/README.md`.
 
 Both need extra egress domains (see each kit's README). Schema gotchas worth
 knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), and

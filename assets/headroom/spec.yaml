@@ -2,16 +2,19 @@ schemaVersion: "1"
 kind: mixin
 name: headroom
 description: >
-  Installs Headroom (context-compression proxy) and routes the Claude agent
-  through it to cut token usage. Self-healing: ANTHROPIC_BASE_URL is only set
-  when the proxy is confirmed healthy, so a failed install never breaks Claude.
+  Installs Headroom (headroom-ai[proxy]) and wires Claude Code through its
+  context-compression proxy to cut token usage. Uses Headroom's own durable
+  integration (`headroom init --global claude`): it sets ANTHROPIC_BASE_URL and
+  installs hooks that auto-start the proxy — no manual env or daemon wiring.
 
+# pip pulls from PyPI; `headroom init` clones a plugin marketplace from GitHub.
+# Both are already covered by sbxw's default network_allow (pypi/pythonhosted,
+# github/githubusercontent), so no extra domains are required.
 network:
   allowedDomains:
     - pypi.org
     - files.pythonhosted.org
-    - huggingface.co
-    - cdn-lfs.huggingface.co
+    - github.com
 
 commands:
   initFiles:
@@ -19,107 +22,51 @@ commands:
       mode: "0755"
       content: |
         #!/usr/bin/env bash
-        # Install Headroom, run its compression proxy, and point the Claude agent
-        # at it via ANTHROPIC_BASE_URL — but only while the proxy is healthy.
+        # Install Headroom and enable its durable Claude Code integration.
         # Idempotent: safe to re-run on every container start.
-        # (No `set -u`: we intentionally read possibly-unset vars like CLAUDE_ENV_FILE.)
+        # (No `set -u`: we read possibly-unset vars.)
         set -o pipefail
-
         info() { echo "  [headroom] $*"; }
 
-        PORT=8787
-        BASE_URL="http://localhost:$PORT"
         BIN="$HOME/.local/bin"
-        LOG="/tmp/headroom-proxy.log"
-        MARK_BEGIN="# >>> sbxw headroom >>>"
-        MARK_END="# <<< sbxw headroom <<<"
         mkdir -p "$BIN"
         export PATH="$BIN:$PATH"
 
-        # Files Claude Code / the shell may source for the agent's environment.
-        ENV_FILES="$HOME/.bashrc $HOME/.profile"
-        if [ -n "$CLAUDE_ENV_FILE" ]; then
-          ENV_DIR=$(dirname "$CLAUDE_ENV_FILE")
-          [ -w "$ENV_DIR" ] && ENV_FILES="$ENV_FILES $CLAUDE_ENV_FILE"
-        fi
-
-        # Add (idempotent) or remove our ANTHROPIC_BASE_URL block from a file.
-        env_block_add() {
-          local f="$1"
-          [ -e "$f" ] || touch "$f" 2>/dev/null || return 0
-          env_block_remove "$f"
-          {
-            echo "$MARK_BEGIN"
-            echo "export ANTHROPIC_BASE_URL=$BASE_URL"
-            echo "$MARK_END"
-          } >> "$f"
-        }
-        env_block_remove() {
-          local f="$1"
-          [ -f "$f" ] || return 0
-          sed -i "/$MARK_BEGIN/,/$MARK_END/d" "$f" 2>/dev/null || true
-        }
-
-        # ── 1. Python check (Headroom needs 3.10+) ───────────────────────────
+        # ── 1. Python >= 3.10 (Headroom's requirement) ───────────────────────
         PY=""
         for c in python3 python3.13 python3.12 python3.11 python3.10; do
-          if command -v "$c" >/dev/null 2>&1; then
-            if "$c" -c 'import sys; raise SystemExit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
-              PY="$c"; break
-            fi
+          if command -v "$c" >/dev/null 2>&1 \
+             && "$c" -c 'import sys; raise SystemExit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
+            PY="$c"; break
           fi
         done
         if [ -z "$PY" ]; then
-          info "no python >=3.10 found — skipping (Claude keeps direct API access)"
-          for f in $ENV_FILES; do env_block_remove "$f"; done
+          info "no python >=3.10 found — skipping"
           exit 0
         fi
 
-        # ── 2. Install Headroom (idempotent) ─────────────────────────────────
-        if command -v headroom >/dev/null 2>&1; then
+        # ── 2. Install headroom-ai[proxy] (idempotent, user site) ────────────
+        #    Debian/Ubuntu mark system Python externally-managed (PEP 668);
+        #    --user --break-system-packages confines the install to ~/.local.
+        if [ -x "$BIN/headroom" ]; then
           info "headroom already installed"
         else
-          info "installing headroom via pip --user ($PY)…"
-          "$PY" -m pip install --user --quiet --upgrade pip >/dev/null 2>&1 || true
-          if ! "$PY" -m pip install --user --quiet "headroom-ai[all]"; then
+          info "installing headroom-ai[proxy] ($PY)…"
+          if ! "$PY" -m pip install --user --break-system-packages --quiet "headroom-ai[proxy]"; then
             info "pip install failed — skipping (Claude keeps direct API access)"
-            for f in $ENV_FILES; do env_block_remove "$f"; done
             exit 0
           fi
           info "headroom installed -> $BIN/headroom"
         fi
 
-        # Ensure ~/.local/bin is on PATH for interactive shells.
-        for f in "$HOME/.bashrc" "$HOME/.profile"; do
-          [ -f "$f" ] || continue
-          grep -qF '.local/bin' "$f" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$f"
-        done
-
-        # ── 3. Start the proxy if not already running ────────────────────────
-        if pgrep -f "headroom proxy" >/dev/null 2>&1; then
-          info "proxy already running"
+        # ── 3. Durable Claude Code integration ───────────────────────────────
+        #    Writes ~/.claude/settings.json: ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+        #    plus SessionStart/PreToolUse hooks that auto-start the proxy.
+        info "configuring Claude Code integration (headroom init)…"
+        if "$BIN/headroom" init --global claude >/dev/null 2>&1; then
+          info "done — Reload the agent to route through Headroom"
         else
-          info "starting proxy on :$PORT…"
-          nohup "$BIN/headroom" proxy --port "$PORT" >"$LOG" 2>&1 &
-          disown 2>/dev/null || true
-        fi
-
-        # ── 4. Health check (TCP connect, not HTTP — the proxy is an API and
-        #       may 404 on /), then wire (or unwire) ANTHROPIC_BASE_URL ───────
-        healthy=0
-        for _ in $(seq 1 20); do
-          if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then
-            exec 3>&- 3<&-; healthy=1; break
-          fi
-          sleep 0.5
-        done
-
-        if [ "$healthy" = "1" ]; then
-          for f in $ENV_FILES; do env_block_add "$f"; done
-          info "proxy healthy — ANTHROPIC_BASE_URL=$BASE_URL (restart the agent to apply)"
-        else
-          for f in $ENV_FILES; do env_block_remove "$f"; done
-          info "proxy did not come up — left Claude on direct API access (see $LOG)"
+          info "headroom init failed — Claude keeps direct API access"
         fi
 
   startup:
