@@ -73,25 +73,55 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
 
+## Installation
+
+**Prerequisites:** the standalone [`sbx`](https://docs.docker.com/reference/cli/sbx)
+CLI on your `PATH` (`sbx version` should work), and `sbx login` done once.
+Building from source also needs a Rust toolchain.
+
+### Option A — install script (release binary)
+
+Downloads the prebuilt binary for your OS/arch into `/usr/local/bin` and the
+bundled kits into `~/.local/share/sbxw/kits`. The web UI is embedded in the
+binary, so that's all you need.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gallettom/sbxw/main/install.sh | sh
+# pin a version:    | sh -s v0.1.0
+# custom dir:       SBXW_INSTALL_DIR=$HOME/.local/bin   ... | sh
+```
+
+This requires a published [GitHub release](https://github.com/gallettom/sbxw/releases).
+If there isn't one yet, use Option B.
+
+### Option B — build from source
+
+```bash
+git clone https://github.com/gallettom/sbxw.git
+cd sbxw
+cargo build --release
+# binary at ./target/release/sbxw — copy it onto your PATH if you like:
+install -m755 target/release/sbxw /usr/local/bin/sbxw
+```
+
 ## Quick start
 
 ```bash
-# one-time
+# one-time, in your project
 sbx login
 cp sbxw.toml.example sbxw.toml      # edit ports/aliases for your project
-cargo build --release
 
 # from your project root (e.g. the NEOS repo)
 export ANTHROPIC_API_KEY=sk-ant-...        # optional, see Auth below
-./target/release/sbxw up neos .            # or: sbxw up neos /path/to/repo
+sbxw up neos .                             # or: sbxw up neos /path/to/repo
 # open http://sbxw.localhost:7681  → talk to Claude in the browser
 
 # …or just start the web daemon and create sandboxes from the UI:
-./target/release/sbxw up
+sbxw up
 ```
 
-Install system-wide with `install.sh` (downloads a release binary + bundled
-kits); set `REPO` in it first. The web UI is embedded in the binary.
+(If you built from source and didn't copy the binary onto your `PATH`, use
+`./target/release/sbxw` instead of `sbxw`.)
 
 Inside the sandbox, start your servers bound to **0.0.0.0** or the published
 ports won't be reachable:
