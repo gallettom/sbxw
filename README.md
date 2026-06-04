@@ -100,8 +100,11 @@ If there isn't one yet, use Option B.
 git clone https://github.com/gallettom/sbxw.git
 cd sbxw
 cargo build --release
-# binary at ./target/release/sbxw — copy it onto your PATH if you like:
-install -m755 target/release/sbxw /usr/local/bin/sbxw
+# binary at ./target/release/sbxw — copy it onto your PATH if you like.
+# /usr/local/bin is root-owned, so use sudo:
+sudo install -m755 target/release/sbxw /usr/local/bin/sbxw
+# …or install without root into ~/.local/bin (ensure it's on your PATH):
+#   mkdir -p ~/.local/bin && install -m755 target/release/sbxw ~/.local/bin/sbxw
 ```
 
 ## Quick start
