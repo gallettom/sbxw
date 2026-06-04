@@ -45,14 +45,15 @@ commands:
           exit 0
         fi
 
-        # ── 2. Install headroom-ai[proxy] (idempotent, user site) ────────────
+        # ── 2. Install headroom-ai[proxy,code] (idempotent, user site) ───────
         #    Debian/Ubuntu mark system Python externally-managed (PEP 668);
         #    --user --break-system-packages confines the install to ~/.local.
-        if [ -x "$BIN/headroom" ]; then
+        #    [code] adds tree-sitter for AST-aware code compression (--code-aware).
+        if [ -x "$BIN/headroom" ] && "$PY" -c 'import tree_sitter' 2>/dev/null; then
           info "headroom already installed"
         else
-          info "installing headroom-ai[proxy] ($PY)…"
-          if ! "$PY" -m pip install --user --break-system-packages --quiet "headroom-ai[proxy]"; then
+          info "installing headroom-ai[proxy,code] ($PY)…"
+          if ! "$PY" -m pip install --user --break-system-packages --quiet "headroom-ai[proxy,code]"; then
             info "pip install failed — skipping (Claude keeps direct API access)"
             exit 0
           fi
@@ -68,21 +69,48 @@ commands:
           exit 0
         fi
 
-        # ── 4. Optimization mode = token (maximise compression / token savings).
-        #    `token` rewrites prior turns for max savings. The hook-started proxy
-        #    inherits HEADROOM_MODE from settings.json env. (Switch to "cache" if
-        #    you see "cache prefix unstable" in `headroom perf`.)
+        # ── 4. Patch the deployment manifest (the real source for proxy_args) ─
+        #    `headroom init` writes ~/.headroom/deploy/init-user/manifest.json with
+        #    host=127.0.0.1, mode=token, and no compression flags. We force:
+        #      - host 0.0.0.0            → reachable via a published port (dashboard)
+        #      - mode  token             → maximise token savings
+        #      - --code-aware            → AST code compression (needs [code])
+        #      - --intercept-tool-results→ compress tool outputs (file reads, cmds)
+        #    Idempotent. The hook-started proxy reads proxy_args from this file.
         "$PY" - <<'PY' 2>/dev/null || true
         import json, os
-        p = os.path.expanduser("~/.claude/settings.json")
+        mp = os.path.expanduser("~/.headroom/deploy/init-user/manifest.json")
         try:
-            d = json.load(open(p))
+            m = json.load(open(mp))
         except Exception:
-            d = {}
-        d.setdefault("env", {})["HEADROOM_MODE"] = "token"
-        json.dump(d, open(p, "w"), indent=2)
+            raise SystemExit(0)
+        m["host"] = "0.0.0.0"
+        m["proxy_mode"] = "token"
+        be = m.setdefault("base_env", {})
+        be["HEADROOM_HOST"] = "0.0.0.0"
+        be["HEADROOM_MODE"] = "token"
+        be["HEADROOM_CODE_AWARE_ENABLED"] = "1"
+        a = m.get("proxy_args", [])
+        def setarg(flag, val):
+            if flag in a and a.index(flag) + 1 < len(a):
+                a[a.index(flag) + 1] = val
+            else:
+                a.extend([flag, val])
+        setarg("--host", "0.0.0.0")
+        setarg("--mode", "token")
+        for flag in ("--code-aware", "--intercept-tool-results"):
+            if flag not in a:
+                a.append(flag)
+        m["proxy_args"] = a
+        json.dump(m, open(mp, "w"), indent=2)
         PY
-        info "done (token mode) — Reload the agent to route through Headroom"
+
+        # Kill any proxy still bound to the old host; the SessionStart/PreToolUse
+        # hook restarts it from the patched manifest (on 0.0.0.0).
+        pid="$(lsof -t -i :8787 2>/dev/null | head -1)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+
+        info "done (token mode, host 0.0.0.0) — Reload the agent to route through Headroom"
 
   startup:
     - command: ["bash", "/home/agent/.local/bin/sbxw-headroom"]
