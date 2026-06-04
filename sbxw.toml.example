@@ -33,6 +33,8 @@ network_allow = [
   # "storage.googleapis.com",              # skaffold
   # Uncomment for skaffold image builds / k3d cluster:
   # "quay.io", "*.quay.io",
+  # Uncomment for the headroom kit (token-compression proxy):
+  # "huggingface.co", "cdn-lfs.huggingface.co",
 ]
 
 # Optional explicit denylist (applied via `sbx policy deny network`). Empty by
@@ -53,10 +55,12 @@ network_deny = []
 # table. In TOML, any key after [[ports]] belongs to that table, not the root,
 # and would be silently ignored.
 #
-# Example: install k3d + kubectl + skaffold for a Kubernetes dev workflow.
-# Requires also uncommenting the k8s entries in network_allow above.
+# Examples (each requires uncommenting its network_allow entries above):
+#   assets/k8s-tools — install k3d + kubectl + skaffold
+#   assets/headroom  — token-compression proxy in front of Claude (saves tokens)
 #
 # kits = [
+#   "path/to/sbxw/assets/headroom",
 #   "path/to/sbxw/assets/k8s-tools",
 # ]
 

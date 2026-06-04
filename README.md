@@ -168,11 +168,20 @@ kits = [
 A kit reference is a **directory containing `spec.yaml`** (not a single `.yaml`),
 a `.zip`, an OCI ref, or a git URL. Validate one with `sbx kit validate <dir>`.
 
-Bundled: **`assets/k8s-tools`** installs `kubectl` + `k3d` + `skaffold` into
-`~/.local/bin` (arch-aware, idempotent). It needs extra egress domains — see
-`assets/k8s-tools/README.md`. Schema gotchas worth knowing: `startup` entries are
-exec-style arrays (`command: ["bash", "…"]`), and `content` fields only allow the
-`${WORKDIR}` placeholder — use brace-free `$VAR` for shell variables.
+Bundled kits:
+
+- **`assets/k8s-tools`** — installs `kubectl` + `k3d` + `skaffold` into
+  `~/.local/bin` (arch-aware, idempotent).
+- **`assets/headroom`** — installs [Headroom](https://github.com/chopratejas/headroom),
+  a local context-compression proxy, and routes Claude through it to **cut token
+  usage** (claimed 60–95% fewer tokens). Self-healing: it only sets
+  `ANTHROPIC_BASE_URL` while the proxy is confirmed up, so a failed install never
+  breaks the agent. See `assets/headroom/README.md`.
+
+Both need extra egress domains (see each kit's README). Schema gotchas worth
+knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), and
+`content` fields only allow the `${WORKDIR}` placeholder — use brace-free `$VAR`
+for shell variables.
 
 ## Config (`sbxw.toml`)
 
