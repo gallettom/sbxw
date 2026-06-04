@@ -1,0 +1,11 @@
+# Rust build output
+/target
+
+# Editor / IDE
+/.idea
+
+# Local Claude Code settings
+/.claude
+
+# User-specific project config (use sbxw.toml.example as the template)
+/sbxw.toml

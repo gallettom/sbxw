@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── macOS Apple Silicon (native) ──────────────────────────────────
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: sbxw-macos-arm64
+
+          # ── macOS Intel (cross-arch on arm64 runner; Clang handles this) ──
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: sbxw-macos-x86_64
+
+          # ── Linux x86_64 (native) ─────────────────────────────────────────
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: sbxw-linux-x86_64
+
+          # ── Linux arm64 (cross via `cross` + Docker) ──────────────────────
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            artifact: sbxw-linux-arm64
+            use_cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cache Cargo registry + build artefacts to speed up subsequent runs.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Collect binary
+        run: cp target/${{ matrix.target }}/release/sbxw ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  # ── Create GitHub Release and attach all binaries ─────────────────────────
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout first so the bundled kits under assets/ are available to package.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      # Package bundled kit directories so install.sh can fetch them.
+      # The web UI (assets/index.html) is embedded in the binary at build time,
+      # so only the kit directories need shipping.
+      - name: Package kits
+        run: tar -czf sbxw-kits.tar.gz -C assets k8s-tools
+
+      - name: Generate checksums
+        run: sha256sum sbxw-macos-* sbxw-linux-* sbxw-kits.tar.gz > sha256sums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbxw-macos-*
+            sbxw-linux-*
+            sbxw-kits.tar.gz
+            sha256sums.txt
+          generate_release_notes: true

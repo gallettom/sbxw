@@ -1,0 +1,29 @@
+[package]
+name = "sbxw"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-light wrapper around `sbx` (Docker Sandboxes) for local dev with Claude Code"
+
+[[bin]]
+name = "sbxw"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Web TTY
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "process", "time"] }
+axum = { version = "0.7", features = ["ws"] }
+portable-pty = "0.8"
+serde_json = "1"
+futures-util = "0.3"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"

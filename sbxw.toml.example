@@ -1,0 +1,73 @@
+# sbxw.toml — drop this at the root of your project (e.g. the NEOS repo).
+# All fields are optional; the values below are the built-in defaults.
+
+# Host bind address for the browser terminal.
+web_addr = "127.0.0.1:7681"
+
+# Leave empty to attach the Claude agent (sbx run). Set to e.g. "bash" to open a
+# shell inside the sandbox instead (sbx exec -it … bash).
+web_shell = ""
+
+# Plan written into the injected OAuth credentials (subscriptionType) when
+# CLAUDE_CODE_OAUTH_TOKEN is used. Match your actual tier so the in-session
+# label is correct: "pro", "max", "team", "enterprise", or "free".
+claude_subscription = "pro"
+
+# One loopback IP per app => clean hostnames on their natural ports
+# (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
+# `ifconfig lo0 alias 127.0.0.X` (sudo). When false, everything shares 127.0.0.1.
+ip_per_app = false
+
+# Restrictive local-dev egress allowlist (applied via `sbx policy allow network`).
+# It is intentionally NOT "**". Add what your toolchain needs.
+network_allow = [
+  "*.npmjs.org", "registry.npmjs.org", "*.yarnpkg.com",
+  "pypi.org", "*.pythonhosted.org",
+  "repo.packagist.org", "*.packagist.org", "getcomposer.org",
+  "github.com", "*.githubusercontent.com", "codeload.github.com",
+  "*.docker.io", "*.docker.com", "ghcr.io",
+  "api.anthropic.com",
+  # Uncomment if using the k8s-tools kit (exact domains the installers hit):
+  # "dl.k8s.io", "cdn.dl.k8s.io",          # kubectl
+  # "get.k3d.io", "raw.githubusercontent.com", "objects.githubusercontent.com",  # k3d
+  # "storage.googleapis.com",              # skaffold
+  # Uncomment for skaffold image builds / k3d cluster:
+  # "quay.io", "*.quay.io",
+]
+
+# Optional explicit denylist (applied via `sbx policy deny network`). Empty by
+# default. Useful to carve exceptions out of a broad allow rule.
+network_deny = []
+
+# ── Kits ──────────────────────────────────────────────────────────────────────
+# Kits to apply via `sbx kit add` after the sandbox is created (and on every
+# `sbxw up`). Applied in order, AFTER the network policy so a kit's startup
+# commands have egress access.
+#
+# A kit reference is a DIRECTORY containing a spec.yaml (not a single .yaml),
+# a .zip, an OCI ref (ghcr.io/org/kit:tag), or a git URL. Relative paths are
+# resolved against this file's directory. Validate one with:
+#   sbx kit validate <dir>
+#
+# IMPORTANT: `kits` (and all root keys) MUST come BEFORE the first [[ports]]
+# table. In TOML, any key after [[ports]] belongs to that table, not the root,
+# and would be silently ignored.
+#
+# Example: install k3d + kubectl + skaffold for a Kubernetes dev workflow.
+# Requires also uncommenting the k8s entries in network_allow above.
+#
+# kits = [
+#   "path/to/sbxw/assets/k8s-tools",
+# ]
+
+# Apps to expose. `sandbox_port` is what your dev server listens on INSIDE the
+# sandbox — remember to bind it to 0.0.0.0 (ng serve --host 0.0.0.0).
+[[ports]]
+alias = "neos.local"
+sandbox_port = 4200
+host_port = 4200
+
+[[ports]]
+alias = "api.neos.local"
+sandbox_port = 8000
+host_port = 8000

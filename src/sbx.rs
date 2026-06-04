@@ -1,0 +1,334 @@
+//! Thin, typed wrappers around the `sbx` CLI.
+//!
+//! Every command here maps to a *confirmed* `sbx` 0.30 subcommand. We never call
+//! `docker sandbox` — only the standalone `sbx` binary, as requested.
+//!
+//! Confirmed surface (docs.docker.com/reference/cli/sbx, v0.30):
+//!   sbx create <agent> [PATH...] --name <name>
+//!   sbx run    [SANDBOX | <agent> [PATH...]] [-- AGENT_ARGS...]   (no --env flag)
+//!   sbx ls
+//!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
+//!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
+//!   sbx policy allow|deny network RESOURCES        (comma list, *.dom, dom:443, **)
+//!   sbx policy set-default <posture>               (posture names NOT confirmed)
+//!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin)
+
+use anyhow::{bail, Context, Result};
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+const BIN: &str = "sbx";
+
+/// Run `sbx <args...>`, inheriting stdio (for interactive-ish steps / logging).
+fn run_inherit(args: &[&str]) -> Result<()> {
+    tracing::debug!(target: "sbx", "sbx {}", args.join(" "));
+    let status = Command::new(BIN)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to spawn `{BIN}` — is it on your PATH?"))?;
+    if !status.success() {
+        bail!("`sbx {}` exited with {}", args.join(" "), status);
+    }
+    Ok(())
+}
+
+
+/// Run `sbx <args...>` and capture its output as a String.
+/// Some sbx commands (e.g. `sbx ls`) write to stderr instead of stdout when
+/// stdout is not a TTY, so we capture both and fall back to stderr when stdout
+/// is empty.
+fn run_capture(args: &[&str]) -> Result<String> {
+    tracing::debug!(target: "sbx", "sbx {} (capture)", args.join(" "));
+    let out = Command::new(BIN)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to spawn `{BIN}`"))?;
+    if !out.status.success() {
+        bail!("`sbx {}` exited with {}", args.join(" "), out.status);
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !stdout.is_empty() {
+        return Ok(stdout);
+    }
+    Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+/// Is `sbx` reachable at all?
+pub fn assert_available() -> Result<()> {
+    run_capture(&["version"])
+        .context("`sbx version` failed — install the standalone sbx binary and ensure it is on PATH")?;
+    Ok(())
+}
+
+/// Return true if a sandbox with this exact name already exists (any state).
+pub fn exists(name: &str) -> Result<bool> {
+    // `sbx ls` prints a table whose first column is the sandbox name.
+    let table = run_capture(&["ls"]).unwrap_or_default();
+    Ok(table
+        .lines()
+        .skip(1) // header
+        .filter_map(|l| l.split_whitespace().next())
+        .any(|n| n == name))
+}
+
+/// Return true if the sandbox is currently running.
+pub fn is_running(name: &str) -> Result<bool> {
+    let table = run_capture(&["ls"]).unwrap_or_default();
+    for line in table.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // Layout observed in docs: NAME AGENT STATUS PORTS WORKSPACE
+        if cols.first() == Some(&name) {
+            return Ok(cols.get(2).map(|s| s.eq_ignore_ascii_case("running")).unwrap_or(false));
+        }
+    }
+    Ok(false)
+}
+
+/// `sbx create claude <workspace> --name <name> [--kit <kit_path>]`.
+/// `workspace` is the host path the agent edits *in place* (bidirectional sync).
+/// Extra read-only mounts can be appended with a ":ro" suffix per the sbx spec.
+/// If `kit_path` is given it is forwarded as `--kit`; the kit is applied before
+/// the agent starts, so env vars it sets are visible from the first process.
+pub fn create_claude(name: &str, workspace: &str, ro_mounts: &[String], kit_path: Option<&str>) -> Result<()> {
+    let mut args: Vec<String> =
+        vec!["create".into(), "claude".into(), workspace.into(), "--name".into(), name.into()];
+    for m in ro_mounts {
+        args.push(format!("{m}:ro"));
+    }
+    if let Some(kit) = kit_path {
+        args.push("--kit".into());
+        args.push(kit.into());
+    }
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_inherit(&refs)
+}
+
+/// `sbx kit add SANDBOX REFERENCE` — apply a kit to an already-running sandbox.
+pub fn kit_add(sandbox: &str, kit_path: &str) -> Result<()> {
+    run_inherit(&["kit", "add", sandbox, kit_path])
+}
+
+/// Parsed row from `sbx ls`.
+pub struct SandboxInfo {
+    pub name: String,
+    pub agent: String,
+    pub status: String,
+}
+
+/// Parse `sbx ls` into sandbox info. Returns an empty list on error.
+pub fn list_sandboxes() -> Vec<SandboxInfo> {
+    let table = run_capture(&["ls"]).unwrap_or_default();
+    table
+        .lines()
+        .skip(1) // header row
+        .filter_map(|line| {
+            let mut cols = line.split_whitespace();
+            let name = cols.next()?.to_string();
+            let agent = cols.next().unwrap_or("").to_string();
+            let status = cols.next().unwrap_or("unknown").to_string();
+            Some(SandboxInfo { name, agent, status })
+        })
+        .collect()
+}
+
+/// `sbx stop SANDBOX` — stop without removing.
+pub fn stop_sandbox(name: &str) -> Result<()> {
+    run_inherit(&["stop", name])
+}
+
+/// `sbx rm --force [--all | SANDBOX...]` — remove sandboxes permanently.
+pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
+    let mut args = vec!["rm", "--force"];
+    if all {
+        args.push("--all");
+    } else {
+        args.extend_from_slice(names);
+    }
+    run_inherit(&args)
+}
+
+/// `sbx ports <name> --publish <spec>` where spec = [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO].
+/// Ports are NOT persistent across stop/restart — callers must re-publish.
+pub fn publish_port(name: &str, spec: &str) -> Result<()> {
+    run_inherit(&["ports", name, "--publish", spec])
+}
+
+/// `sbx ports <name> --unpublish <spec>` — remove a published port mapping.
+pub fn unpublish_port(name: &str, spec: &str) -> Result<()> {
+    run_inherit(&["ports", name, "--unpublish", spec])
+}
+
+/// `sbx ports <name>` — list currently published ports (raw text).
+pub fn list_ports(name: &str) -> Result<String> {
+    run_capture(&["ports", name])
+}
+
+/// A single parsed port mapping from `sbx ports <name>`.
+#[derive(Clone)]
+pub struct PortMapping {
+    pub sandbox_port: u16,
+    pub proto: String,
+    pub host_ip: String,
+    pub host_port: u16,
+}
+
+impl PortMapping {
+    /// Reconstruct the unpublish spec: `host_port:sandbox_port`.
+    /// Omitting the host IP removes all bindings (IPv4 + IPv6) for this port pair.
+    pub fn spec(&self) -> String {
+        format!("{}:{}", self.host_port, self.sandbox_port)
+    }
+}
+
+/// Parse the output of `sbx ports <name>` into structured mappings.
+///
+/// Confirmed sbx format (4 whitespace-separated columns, 1 header row):
+///   HOST IP     HOST PORT   SANDBOX PORT   PROTOCOL
+///   127.0.0.1   3000        3000           tcp
+///   ::1         3000        3000           tcp
+///
+/// Fallback: Docker arrow style "3000/tcp -> 0.0.0.0:3000".
+///
+/// IPv4/IPv6 duplicates for the same (sandbox_port, host_port) are collapsed;
+/// the IPv4 binding is kept since it's what we publish via sbxw.
+pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
+    let raw = list_ports(name).unwrap_or_default();
+    let mut lines = raw.lines().peekable();
+
+    // Consume blank lines and detect format from the first non-empty line.
+    let header = loop {
+        match lines.next() {
+            None => return vec![],
+            Some(l) if l.trim().is_empty() => continue,
+            Some(l) => break l.trim(),
+        }
+    };
+
+    let mut out: Vec<PortMapping> = Vec::new();
+
+    if header.contains("HOST IP") && header.contains("SANDBOX PORT") {
+        // sbx columnar format: HOST IP  HOST PORT  SANDBOX PORT  PROTOCOL
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let c: Vec<&str> = line.split_whitespace().collect();
+            if c.len() < 3 { continue; }
+            let host_ip      = c[0].to_string();
+            let host_port: u16   = match c[1].parse() { Ok(p) => p, _ => continue };
+            let sandbox_port: u16 = match c[2].parse() { Ok(p) => p, _ => continue };
+            let proto = c.get(3).unwrap_or(&"tcp").to_string();
+            out.push(PortMapping { sandbox_port, proto, host_ip, host_port });
+        }
+    } else {
+        // Fallback: Docker arrow "3000/tcp -> 0.0.0.0:3000" or bare table.
+        // Re-include the header line in case it's a data line in this format.
+        for line in std::iter::once(header).chain(lines) {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            // Skip all-uppercase header rows.
+            if line.split_whitespace().all(|w| w == w.to_uppercase()) { continue; }
+
+            let (left, right) = if let Some((l, r)) = line.split_once("->") {
+                (l.trim(), r.trim())
+            } else {
+                let mut parts = line.splitn(2, |c: char| c.is_whitespace());
+                match (parts.next(), parts.next()) {
+                    (Some(l), Some(r)) => (l.trim(), r.trim()),
+                    _ => continue,
+                }
+            };
+
+            let (port_str, proto) = left.split_once('/')
+                .map(|(p, pr)| (p, pr.to_string()))
+                .unwrap_or((left, "tcp".to_string()));
+            let sandbox_port: u16 = match port_str.parse() { Ok(p) => p, _ => continue };
+
+            let (host_ip, host_port) = if let Some((ip, p)) = right.rsplit_once(':') {
+                match p.parse::<u16>() {
+                    Ok(hp) => (ip.to_string(), hp),
+                    _ => continue,
+                }
+            } else {
+                match right.parse::<u16>() {
+                    Ok(hp) => ("0.0.0.0".to_string(), hp),
+                    _ => continue,
+                }
+            };
+
+            out.push(PortMapping { sandbox_port, proto, host_ip, host_port });
+        }
+    }
+
+    // Deduplicate: collapse IPv4+IPv6 pairs for the same (sandbox_port, host_port, proto).
+    // Keep the IPv4 entry; it matches what sbxw publishes.
+    let mut seen: std::collections::HashSet<(u16, u16, String)> = std::collections::HashSet::new();
+    out.retain(|p| {
+        let key = (p.sandbox_port, p.host_port, p.proto.clone());
+        if seen.contains(&key) {
+            return false; // drop duplicate
+        }
+        // If this is IPv6 and an IPv4 entry will come (or already came), prefer IPv4.
+        let is_ipv6 = p.host_ip.contains(':');
+        if is_ipv6 {
+            // Check if a non-IPv6 version exists anywhere in `out` for this key.
+            // Simpler: just skip IPv6 entirely — sbxw always publishes on IPv4.
+            seen.insert(key);
+            return false;
+        }
+        seen.insert(key);
+        true
+    });
+
+    out
+}
+
+/// `sbx policy allow network SANDBOX <resources>` (sandbox-scoped).
+pub fn policy_allow_network(sandbox: &str, resources: &str) -> Result<()> {
+    run_inherit(&["policy", "allow", "network", sandbox, resources])
+}
+
+/// `sbx policy deny network SANDBOX <resources>` (sandbox-scoped).
+pub fn policy_deny_network(sandbox: &str, resources: &str) -> Result<()> {
+    run_inherit(&["policy", "deny", "network", sandbox, resources])
+}
+
+/// Store a service-scoped secret by piping the value on stdin (keeps it out of
+/// argv / shell history). `service` must be one of sbx's known services
+/// (anthropic, openai, github, ...). For a global secret pass `global = true`.
+pub fn secret_set_stdin(service: &str, value: &str, global: bool, sandbox: Option<&str>) -> Result<()> {
+    let mut args: Vec<String> = vec!["secret".into(), "set".into()];
+    if global {
+        args.push("-g".into());
+    } else if let Some(s) = sandbox {
+        args.push(s.into());
+    }
+    args.push(service.into());
+
+    tracing::debug!(target: "sbx", "sbx {} (secret via stdin)", args.join(" "));
+    let mut child = Command::new(BIN)
+        .args(&args)
+        .stdin(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{BIN} secret set`"))?;
+    child
+        .stdin
+        .take()
+        .context("no stdin handle for sbx secret set")?
+        .write_all(value.as_bytes())?;
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("`sbx secret set {service}` failed: {status}");
+    }
+    Ok(())
+}
+
+/// Best-effort one-shot command inside a *running* sandbox:
+/// `sbx exec <name> <cmd...>`. General-purpose helper for debugging/extensions.
+#[allow(dead_code)]
+pub fn exec(name: &str, cmd: &[&str]) -> Result<()> {
+    let mut args: Vec<String> = vec!["exec".into(), name.into()];
+    args.extend(cmd.iter().map(|s| s.to_string()));
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_inherit(&refs)
+}
+

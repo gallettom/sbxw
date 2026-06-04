@@ -1,0 +1,68 @@
+schemaVersion: "1"
+kind: mixin
+name: k8s-dev-tools
+description: Installs k3d, kubectl and skaffold into ~/.local/bin (idempotent, arch-aware).
+network:
+  allowedDomains:
+    - dl.k8s.io
+    - storage.googleapis.com
+    - get.k3d.io
+commands:
+  initFiles:
+    - path: /home/agent/.local/bin/sbxw-install-k8s
+      mode: "0755"
+      content: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+        info() { echo "  [k8s-tools] $*"; }
+
+        case "$(uname -m)" in
+          x86_64)        ARCH=amd64 ;;
+          aarch64|arm64) ARCH=arm64 ;;
+          armv7l)        ARCH=arm   ;;
+          *)             info "unsupported arch $(uname -m)"; exit 1 ;;
+        esac
+        info "arch: $(uname -m) -> $ARCH"
+
+        BIN="$HOME/.local/bin"
+        mkdir -p "$BIN"
+        export PATH="$BIN:$PATH"
+
+        if command -v kubectl >/dev/null 2>&1; then
+          info "kubectl already installed"
+        else
+          info "installing kubectl (linux/$ARCH)..."
+          K8S_VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+          curl -fsSLo "$BIN/kubectl" \
+            "https://dl.k8s.io/release/$K8S_VER/bin/linux/$ARCH/kubectl"
+          chmod +x "$BIN/kubectl"
+          info "kubectl $K8S_VER -> $BIN/kubectl"
+        fi
+
+        if command -v k3d >/dev/null 2>&1; then
+          info "k3d already installed"
+        else
+          info "installing k3d..."
+          curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
+            | USE_SUDO=false K3D_INSTALL_DIR="$BIN" bash
+          info "k3d -> $BIN/k3d"
+        fi
+
+        if command -v skaffold >/dev/null 2>&1; then
+          info "skaffold already installed"
+        else
+          info "installing skaffold (linux-$ARCH)..."
+          curl -fsSLo "$BIN/skaffold" \
+            "https://storage.googleapis.com/skaffold/releases/latest/skaffold-linux-$ARCH"
+          chmod +x "$BIN/skaffold"
+          info "skaffold -> $BIN/skaffold"
+        fi
+
+        for RC in "$HOME/.bashrc" "$HOME/.profile"; do
+          [ -f "$RC" ] || continue
+          grep -qF '.local/bin' "$RC" || \
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
+        done
+        info "done."
+  startup:
+    - command: ["bash", "/home/agent/.local/bin/sbxw-install-k8s"]

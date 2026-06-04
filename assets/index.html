@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sbxw</title>
+<!-- SVG favicon: "sb" blue · "xw" green on dark background -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1117'/><rect x='1.5' y='1.5' width='29' height='29' rx='5' fill='none' stroke='%2321262d' stroke-width='1.5'/><text x='3' y='22' font-family='monospace' font-weight='700' font-size='15'><tspan fill='%2358a6ff'>sb</tspan><tspan fill='%233fb950'>xw</tspan></text></svg>">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+<style>
+  :root { color-scheme: dark; }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0;
+    background: #0d1117; color: #c9d1d9;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+  }
+  body { display: flex; flex-direction: column; }
+
+  /* ── Header ── */
+  header {
+    display: flex; align-items: center; gap: .75rem;
+    padding: .5rem 1rem;
+    background: #161b22; border-bottom: 1px solid #21262d;
+    flex-shrink: 0; height: 44px;
+  }
+  /* address badge — shows the URL, click to copy */
+  .addr-badge {
+    font-size: 11px; color: #8b949e;
+    background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+    padding: .15rem .5rem; cursor: pointer; user-select: none;
+    transition: border-color .15s, color .15s;
+  }
+  .addr-badge:hover { border-color: #30363d; color: #c9d1d9; }
+  .addr-badge.copied { border-color: #3fb950; color: #3fb950; }
+  header .spacer { flex: 1; }
+  .refresh-btn {
+    display: flex; align-items: center; gap: .35rem;
+    background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+    color: #c9d1d9; cursor: pointer;
+    padding: .3rem .75rem; font: inherit; font-size: 12px;
+    transition: background .1s, border-color .1s;
+  }
+  .refresh-btn:hover { background: #30363d; border-color: #484f58; color: #e6edf3; }
+  .refresh-btn svg { flex-shrink: 0; }
+
+  /* ── Layout ── */
+  .layout { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 196px; flex-shrink: 0;
+    background: #0d1117; border-right: 1px solid #21262d;
+    overflow-y: auto; padding: .4rem 0;
+    display: flex; flex-direction: column;
+  }
+  .sidebar-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .3rem .75rem .15rem;
+  }
+  .sidebar-label {
+    color: #6e7681; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .06em; font-weight: 600;
+  }
+  .btn-new {
+    background: none; border: none; color: #6e7681; cursor: pointer;
+    font-size: 16px; line-height: 1; padding: 0 .1rem;
+    border-radius: 3px;
+  }
+  .btn-new:hover { color: #e6edf3; background: #21262d; }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(1, 4, 9, .75);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 200;
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    width: 460px; max-width: 92vw; max-height: 85vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 24px 64px rgba(1, 4, 9, .9);
+  }
+  .modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .75rem 1rem; border-bottom: 1px solid #21262d; flex-shrink: 0;
+  }
+  .modal-title { color: #e6edf3; font-weight: 600; font-size: 14px; }
+  .modal-close {
+    background: none; border: none; color: #6e7681; cursor: pointer;
+    font-size: 18px; line-height: 1; padding: .1rem .3rem; border-radius: 4px;
+  }
+  .modal-close:hover { color: #e6edf3; background: #21262d; }
+  .modal-body { padding: .9rem 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .7rem; }
+  .modal-foot { padding: .7rem 1rem; border-top: 1px solid #21262d; display: flex; justify-content: flex-end; gap: .5rem; flex-shrink: 0; }
+  .field-label { color: #8b949e; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem; display: block; }
+  .field-input {
+    width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    color: #e6edf3; padding: .4rem .65rem; font: inherit; font-size: 13px;
+  }
+  .field-input:focus { outline: none; border-color: #58a6ff; }
+  .field-input.error { border-color: #f85149; }
+  /* Folder browser */
+  .fs-path {
+    font-size: 11px; color: #8b949e;
+    background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+    padding: .3rem .65rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fs-list {
+    border: 1px solid #21262d; border-radius: 6px;
+    max-height: 180px; overflow-y: auto; background: #0d1117;
+  }
+  .fs-item {
+    display: flex; align-items: center; gap: .45rem;
+    padding: .3rem .65rem; cursor: pointer; font-size: 12px; color: #c9d1d9;
+    border-bottom: 1px solid #0d1117;
+  }
+  .fs-item:last-child { border-bottom: none; }
+  .fs-item:hover { background: #161b22; }
+  .fs-item.up { color: #8b949e; font-style: italic; }
+  .fs-icon { font-size: 13px; flex-shrink: 0; }
+  .fs-empty { padding: .5rem .65rem; font-size: 12px; color: #6e7681; }
+  .fs-loading { padding: .5rem .65rem; font-size: 12px; color: #6e7681; }
+  /* Port forwarding rows */
+  .ports-header {
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .btn-add-port {
+    background: none; border: 1px solid #30363d; border-radius: 4px;
+    color: #8b949e; font: inherit; font-size: 11px; cursor: pointer;
+    padding: .1rem .5rem; display: flex; align-items: center; gap: .25rem;
+  }
+  .btn-add-port:hover { color: #e6edf3; border-color: #484f58; background: #21262d; }
+  .port-row {
+    display: grid; grid-template-columns: 1fr 16px 1fr 1fr auto;
+    gap: .35rem; align-items: center;
+  }
+  .port-arrow { color: #484f58; text-align: center; font-size: 13px; }
+  .port-input {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+    color: #e6edf3; padding: .3rem .5rem; font: inherit; font-size: 12px; width: 100%;
+  }
+  .port-input::placeholder { color: #484f58; }
+  .port-input:focus { outline: none; border-color: #58a6ff; }
+  .btn-rm-port {
+    background: none; border: none; color: #484f58; cursor: pointer;
+    font-size: 14px; line-height: 1; padding: .1rem .2rem; border-radius: 3px;
+  }
+  .btn-rm-port:hover { color: #f85149; background: #21262d; }
+  .port-col-label {
+    font-size: 10px; color: #6e7681; text-align: center;
+  }
+  /* Modal buttons */
+  .btn-cancel {
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+    padding: .3rem .75rem; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .btn-cancel:hover { background: #30363d; }
+  .btn-create {
+    background: #238636; color: #fff; border: 1px solid #2ea043; border-radius: 6px;
+    padding: .3rem .9rem; font: inherit; font-size: 12px; cursor: pointer; font-weight: 600;
+  }
+  .btn-create:hover { background: #2ea043; }
+  .btn-create:disabled { opacity: .5; cursor: not-allowed; }
+  .create-error { color: #f85149; font-size: 11px; align-self: center; }
+  .sbx-item {
+    padding: .45rem .75rem .35rem;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    user-select: none;
+  }
+  .sbx-item:hover { background: #161b22; }
+  .sbx-item.active { background: #161b22; border-left-color: #58a6ff; }
+  .sbx-name {
+    color: #e6edf3; font-weight: 500; font-size: 12.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    margin-bottom: .25rem;
+  }
+  .sbx-meta { display: flex; align-items: center; gap: .35rem; margin-bottom: .3rem; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot.running  { background: #3fb950; box-shadow: 0 0 5px #3fb95066; }
+  .dot.stopped  { background: #484f58; }
+  .dot.error    { background: #f85149; }
+  .sbx-status { color: #8b949e; font-size: 11px; }
+  .sbx-agent  { color: #6e7681; font-size: 10px; }
+  .sbx-actions { display: flex; gap: .3rem; align-items: center; }
+  .sbx-actions button {
+    background: #21262d; color: #c9d1d9;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: .1rem .45rem; font-size: 11px; cursor: pointer;
+    font-family: inherit; transition: background .1s; white-space: nowrap; flex-shrink: 0;
+  }
+  .sbx-actions button:hover { background: #30363d; }
+  /* Primary action (Stop / Connect) keeps its text */
+  .sbx-actions button.stop-btn { color: #f85149; }
+  .sbx-actions button.stop-btn:hover { background: #3d1c1c; border-color: #f85149; }
+  /* Icon-only secondary buttons: tighter padding, uniform size */
+  .sbx-actions button.icon-btn {
+    padding: .1rem .38rem; font-size: 13px; line-height: 1; color: #6e7681;
+  }
+  .sbx-actions button.restart-btn:hover { background: #1c2b1c; border-color: #3fb950; color: #3fb950; }
+  .sbx-actions button.ports-btn:hover   { color: #58a6ff; border-color: #58a6ff; background: #0d1f3c; }
+  .sbx-actions button.rm-btn    { color: #f85149; }
+  .sbx-actions button.rm-btn:hover    { background: #3d1c1c; border-color: #f85149; }
+  /* Ports modal */
+  .ports-table {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+  }
+  .ports-table th {
+    text-align: left; color: #6e7681; font-weight: 600;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+    padding: .2rem .5rem .35rem; border-bottom: 1px solid #21262d;
+  }
+  .ports-table td {
+    padding: .3rem .5rem; border-bottom: 1px solid #161b22;
+    color: #c9d1d9; vertical-align: middle;
+  }
+  .ports-table tr:last-child td { border-bottom: none; }
+  .ports-table .proto-badge {
+    font-size: 10px; color: #8b949e; background: #21262d;
+    border-radius: 3px; padding: .05rem .35rem;
+  }
+  .ports-table .btn-del-port {
+    background: none; border: none; color: #484f58; cursor: pointer;
+    font-size: 13px; padding: .1rem .3rem; border-radius: 3px; line-height: 1;
+  }
+  .ports-table .btn-del-port:hover { color: #f85149; background: #21262d; }
+  .ports-empty-msg { color: #6e7681; font-style: italic; font-size: 12px; padding: .5rem .25rem; }
+  .ports-error-msg { color: #f85149; font-size: 11px; margin-top: .35rem; }
+  /* Add-port inline form */
+  .add-port-form {
+    display: flex; flex-direction: column; gap: .3rem;
+    padding: .55rem .25rem 0; border-top: 1px solid #21262d; margin-top: .4rem;
+  }
+  .add-port-row { display: flex; gap: .35rem; align-items: center; }
+  .add-port-form .port-input {
+    background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
+    color: #e6edf3; padding: .25rem .45rem; font: inherit; font-size: 12px;
+  }
+  .add-port-form .port-input:focus { outline: none; border-color: #58a6ff; }
+  .add-port-form .port-input.w-port  { width: 68px; }
+  .add-port-form .port-input.w-ip    { width: 112px; }
+  .add-port-form .port-input.w-alias { flex: 1; }
+  .add-port-form .port-arrow  { color: #484f58; font-size: 12px; flex-shrink: 0; }
+  .add-port-form .port-at     { color: #484f58; font-size: 11px; flex-shrink: 0; }
+  .btn-add-mapping {
+    background: #238636; color: #fff; border: 1px solid #2ea043; border-radius: 4px;
+    padding: .25rem .65rem; font: inherit; font-size: 11px; cursor: pointer; font-weight: 600;
+    white-space: nowrap; margin-left: auto;
+  }
+  .btn-add-mapping:hover { background: #2ea043; }
+  .btn-add-mapping:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ── Main terminal area ── */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .term-bar {
+    display: flex; align-items: center; gap: .5rem;
+    padding: .3rem .75rem;
+    background: #161b22; border-bottom: 1px solid #21262d;
+    flex-shrink: 0; height: 32px; font-size: 12px;
+  }
+  /* term-bar uses blue/grey to distinguish from sidebar green/grey (container status) */
+  .term-bar .dot { width: 8px; height: 8px; }
+  .term-bar .dot.term-connected    { background: #58a6ff; box-shadow: 0 0 5px #58a6ff66; }
+  .term-bar .dot.term-disconnected { background: #484f58; }
+  .term-bar .sandbox-label { color: #e6edf3; }
+  .term-bar .conn-label { color: #8b949e; font-size: 11px; }
+  .term-bar .spacer { flex: 1; }
+  .term-bar button {
+    background: #21262d; color: #c9d1d9;
+    border: 1px solid #30363d; border-radius: 4px;
+    padding: .1rem .5rem; font-size: 11px; cursor: pointer;
+    font-family: inherit;
+  }
+  .term-bar button:hover { background: #30363d; }
+  /* Claude / Bash segmented switch */
+  .mode-switch {
+    display: inline-flex; background: #0d1117; border: 1px solid #30363d;
+    border-radius: 6px; overflow: hidden; margin-right: .25rem;
+  }
+  .term-bar .mode-switch button {
+    background: transparent; border: none; border-radius: 0;
+    padding: .15rem .6rem; font-size: 11px; color: #8b949e;
+  }
+  .term-bar .mode-switch button:hover { background: #161b22; color: #c9d1d9; }
+  .term-bar .mode-switch button.active { background: #21262d; color: #e6edf3; }
+  .term-bar .mode-switch button#mode-claude.active { color: #d2a8ff; }
+  .term-bar .mode-switch button#mode-bash.active   { color: #3fb950; }
+  #term { flex: 1; padding: 6px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <!-- Logo: rounded badge with "sb" in blue and "xw" in green -->
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 30" height="30" role="img" aria-label="sbxw">
+    <rect width="80" height="30" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1.25"/>
+    <!-- small terminal arrow -->
+    <text x="8" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#484f58">›</text>
+    <text x="20" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700">
+      <tspan fill="#58a6ff">sb</tspan><tspan fill="#3fb950">xw</tspan>
+    </text>
+  </svg>
+
+  <span class="addr-badge" id="addr-badge" title="Click to copy URL">—</span>
+
+  <span class="spacer"></span>
+
+  <button id="btn-refresh" class="refresh-btn">
+    <!-- circular arrow icon -->
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    Refresh
+  </button>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-label">Sandboxes</span>
+      <button class="btn-new" id="btn-new-sandbox" title="Create new sandbox">＋</button>
+    </div>
+    <div id="sandbox-list"></div>
+  </aside>
+
+  <!-- ── Create sandbox modal ── -->
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="modal-title">New sandbox</span>
+        <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div>
+          <label class="field-label" for="inp-name">Sandbox name</label>
+          <input id="inp-name" class="field-input" type="text" placeholder="my-project"
+                 pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" spellcheck="false">
+        </div>
+        <div>
+          <label class="field-label">Workspace folder</label>
+          <div class="fs-path" id="fs-path">—</div>
+          <div class="fs-list" id="fs-list">
+            <div class="fs-loading">Loading…</div>
+          </div>
+        </div>
+        <div>
+          <div class="ports-header">
+            <label class="field-label" style="margin:0">Port forwarding</label>
+            <button class="btn-add-port" id="btn-add-port" type="button">＋ Add port</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 16px 1fr 1fr auto;gap:.35rem;margin-top:.45rem;padding:0 .05rem">
+            <span class="port-col-label">Sandbox</span>
+            <span></span>
+            <span class="port-col-label">Host</span>
+            <span class="port-col-label">Hostname (opt.)</span>
+            <span></span>
+          </div>
+          <div id="port-rows" style="display:flex;flex-direction:column;gap:.35rem;margin-top:.25rem"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="create-error"></span>
+        <button class="btn-cancel" id="modal-cancel">Cancel</button>
+        <button class="btn-create" id="modal-create" disabled>✓ Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Remove sandbox confirmation modal ── -->
+  <div class="modal-overlay hidden" id="rm-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rm-modal-title" style="width:360px">
+      <div class="modal-head">
+        <span class="modal-title" id="rm-modal-title">Remove sandbox</span>
+        <button class="modal-close" id="rm-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin:0;color:#c9d1d9;font-size:13px;">
+          Remove <strong id="rm-modal-name" style="color:#e6edf3"></strong>?<br>
+          <span style="color:#f85149;font-size:11px;">This is irreversible — all sandbox state will be lost.</span>
+        </p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-cancel" id="rm-modal-cancel">Cancel</button>
+        <button id="rm-modal-confirm" style="background:#da3633;color:#fff;border:1px solid #f85149;border-radius:6px;padding:.3rem .9rem;font:inherit;font-size:12px;cursor:pointer;font-weight:600;">Remove</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Ports info modal ── -->
+  <div class="modal-overlay hidden" id="ports-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ports-modal-title" style="width:480px">
+      <div class="modal-head">
+        <span class="modal-title" id="ports-modal-title">Ports — <span id="ports-modal-name"></span></span>
+        <button class="modal-close" id="ports-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" style="gap:0;padding-bottom:.5rem">
+        <div id="ports-modal-content">
+          <table class="ports-table">
+            <thead>
+              <tr>
+                <th>Sandbox</th>
+                <th>Host binding</th>
+                <th>Alias</th>
+                <th>Proto</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="ports-modal-tbody">
+              <tr><td colspan="5" class="ports-empty-msg">Loading…</td></tr>
+            </tbody>
+          </table>
+          <div class="add-port-form">
+            <div class="add-port-row">
+              <input id="add-sbx-port"  class="port-input w-port" type="number" min="1" max="65535" placeholder="3000" title="Sandbox port">
+              <span class="port-arrow">→</span>
+              <input id="add-host-port" class="port-input w-port" type="number" min="1" max="65535" placeholder="same" title="Host port">
+              <span class="port-at">@</span>
+              <input id="add-host-ip"   class="port-input w-ip"   type="text" placeholder="127.0.0.1" title="Host IP">
+            </div>
+            <div class="add-port-row">
+              <input id="add-alias"     class="port-input w-alias" type="text" placeholder="app.local (optional — creates /etc/hosts alias)" title="Hostname alias">
+              <button class="btn-add-mapping" id="btn-add-mapping" disabled>＋ Add</button>
+            </div>
+            <span class="ports-error-msg hidden" id="ports-add-error"></span>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between;align-items:center">
+        <button id="ports-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Refresh
+        </button>
+        <button class="btn-cancel" id="ports-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="term-bar">
+      <span class="dot term-disconnected" id="conn-dot" title="Terminal connection (blue = open, grey = closed)"></span>
+      <span class="sandbox-label" id="active-label">—</span>
+      <span class="conn-label" id="conn-label">connecting…</span>
+      <span class="spacer"></span>
+      <div class="mode-switch" id="mode-switch" role="tablist" aria-label="Session mode">
+        <button class="mode-btn active" id="mode-claude" data-mode="claude" role="tab">✦ Claude</button>
+        <button class="mode-btn" id="mode-bash" data-mode="bash" role="tab">❯ Bash</button>
+      </div>
+      <button id="btn-reconnect">Reconnect</button>
+    </div>
+    <div id="term"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script>
+const INITIAL_SANDBOX = "__SANDBOX__";
+
+// ── Terminal ──────────────────────────────────────────────────────────────
+const term = new Terminal({
+  cursorBlink: true, fontSize: 13,
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
+  scrollback: 10000,
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open(document.getElementById('term'));
+fit.fit();
+
+// ── Address badge (copy URL) ──────────────────────────────────────────────
+const addrBadge = document.getElementById('addr-badge');
+addrBadge.textContent = location.host;
+addrBadge.addEventListener('click', () => {
+  navigator.clipboard?.writeText(location.href).then(() => {
+    addrBadge.textContent = 'copied!';
+    addrBadge.classList.add('copied');
+    setTimeout(() => {
+      addrBadge.textContent = location.host;
+      addrBadge.classList.remove('copied');
+    }, 1500);
+  });
+});
+
+// ── State ─────────────────────────────────────────────────────────────────
+let ws = null;
+let activeSandbox = null;
+let activeMode = 'claude';   // 'claude' | 'bash'
+let sandboxes = [];
+
+const connDot    = document.getElementById('conn-dot');
+const activeLabel = document.getElementById('active-label');
+const connLabel  = document.getElementById('conn-label');
+const listEl     = document.getElementById('sandbox-list');
+
+// ── Connection ────────────────────────────────────────────────────────────
+function setConnected(ok) {
+  // Uses blue/grey — distinct from sidebar's green/grey (container status).
+  connDot.className = 'dot ' + (ok ? 'term-connected' : 'term-disconnected');
+}
+
+function sendResize() {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+}
+
+function setMode(mode) {
+  activeMode = mode;
+  document.getElementById('mode-claude').classList.toggle('active', mode === 'claude');
+  document.getElementById('mode-bash').classList.toggle('active', mode === 'bash');
+}
+
+function connectTerminal(name, mode) {
+  if (!name) return;
+  if (mode) setMode(mode);
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  term.clear();
+  activeSandbox = name;
+  activeLabel.textContent = name;
+  connLabel.textContent = 'connecting…';
+  setConnected(false);
+  renderSidebar();
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(activeMode)}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    setConnected(true);
+    connLabel.textContent = 'connected';
+    fit.fit(); sendResize(); term.focus();
+    loadSandboxes();
+  };
+  ws.onmessage = ev => {
+    if (typeof ev.data === 'string') term.write(ev.data);
+    else term.write(new Uint8Array(ev.data));
+  };
+  ws.onclose = () => { setConnected(false); connLabel.textContent = 'disconnected'; loadSandboxes(); };
+  ws.onerror = () => { connLabel.textContent = 'error'; };
+}
+
+term.onData(data => {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(new TextEncoder().encode(data));
+});
+
+// ── Sidebar ───────────────────────────────────────────────────────────────
+function dotClass(status) {
+  if (status === 'running') return 'running';
+  if (status === 'stopped') return 'stopped';
+  return 'error';
+}
+
+function renderSidebar() {
+  if (!sandboxes.length) {
+    listEl.innerHTML = '<div style="padding:.5rem .75rem;color:#6e7681;font-size:11px;">No sandboxes</div>';
+    return;
+  }
+  listEl.innerHTML = sandboxes.map(s => {
+    const isActive = s.name === activeSandbox;
+    const isRunning = s.status === 'running';
+    const actions = isRunning
+      ? `<button class="stop-btn" data-action="stop" data-name="${s.name}">■ Stop</button>
+         <button class="icon-btn restart-btn" data-action="restart" data-name="${s.name}" title="Reload">↺</button>
+         <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Port mappings">⇌</button>
+         <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`
+      : `<button data-action="connect" data-name="${s.name}">▶ Connect</button>
+         <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Port mappings">⇌</button>
+         <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`;
+    return `<div class="sbx-item${isActive ? ' active' : ''}" data-name="${s.name}">
+      <div class="sbx-name">${s.name}</div>
+      <div class="sbx-meta">
+        <span class="dot ${dotClass(s.status)}"></span>
+        <span class="sbx-status">${s.status}</span>
+        <span class="sbx-agent">${s.agent}</span>
+      </div>
+      <div class="sbx-actions">${actions}</div>
+    </div>`;
+  }).join('');
+}
+
+listEl.addEventListener('click', e => {
+  const btn = e.target.closest('button[data-action]');
+  const item = e.target.closest('.sbx-item');
+  if (!item) return;
+  const name = item.dataset.name;
+  if (btn) {
+    e.stopPropagation();
+    const action = btn.dataset.action;
+    if (action === 'stop')    stopSandbox(name);
+    if (action === 'restart') restartSandbox(name);
+    if (action === 'connect') connectTerminal(name, 'claude'); // claude starts a stopped sandbox
+    if (action === 'rm')      openRmModal(name);
+    if (action === 'ports')   openPortsModal(name);
+  } else {
+    connectTerminal(name);
+  }
+});
+
+// ── API calls ─────────────────────────────────────────────────────────────
+async function loadSandboxes() {
+  try {
+    const res = await fetch('/api/sandboxes');
+    sandboxes = await res.json();
+    renderSidebar();
+  } catch (_) {}
+}
+
+async function stopSandbox(name) {
+  const s = sandboxes.find(x => x.name === name);
+  if (s) s.status = 'stopping…';
+  renderSidebar();
+  if (name === activeSandbox) { setConnected(false); ws && ws.close(); }
+  await fetch(`/api/sandboxes/${encodeURIComponent(name)}/stop`, { method: 'POST' });
+  setTimeout(loadSandboxes, 1200);
+}
+
+async function restartSandbox(name) {
+  await stopSandbox(name);
+  setTimeout(() => connectTerminal(name, 'claude'), 1600);
+}
+
+// ── Buttons ───────────────────────────────────────────────────────────────
+document.getElementById('btn-reconnect').addEventListener('click', () => {
+  if (activeSandbox) connectTerminal(activeSandbox, activeMode);
+});
+document.getElementById('btn-refresh').addEventListener('click', loadSandboxes);
+
+// Claude / Bash mode switch: reconnect the same sandbox in the chosen mode.
+// Each mode has its own persistent PTY server-side, so switching back and
+// forth preserves both sessions.
+document.getElementById('mode-claude').addEventListener('click', () => {
+  if (activeMode !== 'claude' && activeSandbox) connectTerminal(activeSandbox, 'claude');
+  else setMode('claude');
+});
+document.getElementById('mode-bash').addEventListener('click', () => {
+  if (activeMode !== 'bash' && activeSandbox) connectTerminal(activeSandbox, 'bash');
+  else setMode('bash');
+});
+
+window.addEventListener('resize', () => { fit.fit(); sendResize(); });
+
+// ── Create sandbox wizard ─────────────────────────────────────────────────
+const overlay   = document.getElementById('modal-overlay');
+const inpName   = document.getElementById('inp-name');
+const fsList    = document.getElementById('fs-list');
+const fsPath    = document.getElementById('fs-path');
+const btnCreate = document.getElementById('modal-create');
+const errEl     = document.getElementById('create-error');
+
+let selectedPath = '';
+
+// ── Port forwarding rows ──────────────────────────────────────────────────
+const portRowsEl = document.getElementById('port-rows');
+let portRowId = 0;
+
+function addPortRow(sandboxPort = '', hostPort = '', alias = '') {
+  const id = portRowId++;
+  const row = document.createElement('div');
+  row.className = 'port-row';
+  row.dataset.id = id;
+  row.innerHTML =
+    `<input class="port-input" type="number" min="1" max="65535" placeholder="3000" value="${sandboxPort}" data-field="sbx">` +
+    `<span class="port-arrow">→</span>` +
+    `<input class="port-input" type="number" min="1" max="65535" placeholder="same" value="${hostPort}" data-field="host">` +
+    `<input class="port-input" type="text" placeholder="app.local" value="${alias}" data-field="alias">` +
+    `<button class="btn-rm-port" type="button" title="Remove">✕</button>`;
+  row.querySelector('.btn-rm-port').addEventListener('click', () => row.remove());
+  // When sandbox port is typed and host port is empty, mirror the value.
+  const sbxInput  = row.querySelector('[data-field="sbx"]');
+  const hostInput = row.querySelector('[data-field="host"]');
+  sbxInput.addEventListener('input', () => {
+    if (!hostInput.value) hostInput.placeholder = sbxInput.value || 'same';
+  });
+  portRowsEl.appendChild(row);
+}
+
+function collectPorts() {
+  return Array.from(portRowsEl.querySelectorAll('.port-row')).map(row => {
+    const sbx   = parseInt(row.querySelector('[data-field="sbx"]').value, 10);
+    const host  = parseInt(row.querySelector('[data-field="host"]').value, 10);
+    const alias = row.querySelector('[data-field="alias"]').value.trim();
+    if (!sbx) return null;
+    const entry = { sandbox_port: sbx };
+    if (host) entry.host_port = host;
+    if (alias) entry.alias = alias;
+    return entry;
+  }).filter(Boolean);
+}
+
+document.getElementById('btn-add-port').addEventListener('click', () => addPortRow());
+
+function openModal() {
+  overlay.classList.remove('hidden');
+  inpName.value = '';
+  inpName.classList.remove('error');
+  errEl.textContent = '';
+  errEl.classList.add('hidden');
+  btnCreate.disabled = true;
+  selectedPath = '';
+  fsPath.textContent = '—';
+  portRowsEl.innerHTML = '';
+  browseTo(null); // start at HOME
+  inpName.focus();
+}
+
+function closeModal() {
+  overlay.classList.add('hidden');
+}
+
+async function browseTo(path) {
+  fsList.innerHTML = '<div class="fs-loading">Loading…</div>';
+  const url = path ? `/api/fs?path=${encodeURIComponent(path)}` : '/api/fs';
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    selectedPath = data.path;
+    fsPath.textContent = data.path;
+    validateForm();
+
+    let html = '';
+    if (data.parent) {
+      html += `<div class="fs-item up" data-path="${data.parent}">
+                 <span class="fs-icon">↑</span> ..
+               </div>`;
+    }
+    if (data.entries.length === 0 && !data.parent) {
+      html += '<div class="fs-empty">No subdirectories</div>';
+    }
+    html += data.entries.map(e =>
+      `<div class="fs-item" data-path="${e.path}">
+         <span class="fs-icon">📁</span>${e.name}
+       </div>`
+    ).join('');
+
+    fsList.innerHTML = html || '<div class="fs-empty">Empty directory</div>';
+
+    // Single click → navigate into folder (current dir becomes the selection)
+    fsList.querySelectorAll('.fs-item[data-path]').forEach(el => {
+      el.addEventListener('click', () => browseTo(el.dataset.path));
+    });
+  } catch (e) {
+    fsList.innerHTML = '<div class="fs-empty">Error loading directory</div>';
+  }
+}
+
+function validateForm() {
+  const nameOk = /^[a-z0-9][a-z0-9-]*$/.test(inpName.value.trim());
+  const pathOk = selectedPath.length > 0;
+  btnCreate.disabled = !(nameOk && pathOk);
+}
+
+inpName.addEventListener('input', () => {
+  inpName.classList.remove('error');
+  validateForm();
+});
+
+document.getElementById('btn-new-sandbox').addEventListener('click', openModal);
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-cancel').addEventListener('click', closeModal);
+
+overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeModal();
+});
+
+document.getElementById('modal-create').addEventListener('click', async () => {
+  const name = inpName.value.trim();
+  if (!name) { inpName.classList.add('error'); return; }
+
+  btnCreate.disabled = true;
+  btnCreate.textContent = 'Creating…';
+  errEl.classList.add('hidden');
+
+  try {
+    const res = await fetch('/api/sandboxes/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path: selectedPath, ports: collectPorts() }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      closeModal();
+      await loadSandboxes();
+      connectTerminal(name);
+    } else {
+      errEl.textContent = data.error || 'Creation failed';
+      errEl.classList.remove('hidden');
+      btnCreate.disabled = false;
+      btnCreate.textContent = '✓ Create';
+    }
+  } catch (e) {
+    errEl.textContent = 'Network error';
+    errEl.classList.remove('hidden');
+    btnCreate.disabled = false;
+    btnCreate.textContent = '✓ Create';
+  }
+});
+
+// ── Ports modal ───────────────────────────────────────────────────────────
+const portsOverlay  = document.getElementById('ports-modal-overlay');
+const portsNameEl   = document.getElementById('ports-modal-name');
+const portsTbody    = document.getElementById('ports-modal-tbody');
+const addSbxPort    = document.getElementById('add-sbx-port');
+const addHostPort   = document.getElementById('add-host-port');
+const addHostIp     = document.getElementById('add-host-ip');
+const addAlias      = document.getElementById('add-alias');
+const btnAddMapping = document.getElementById('btn-add-mapping');
+const portsAddError = document.getElementById('ports-add-error');
+let portsTarget = null;
+
+function renderPortsTable(ports, hostEntries) {
+  // Build a map hostname→ip from /etc/hosts for the alias column.
+  const ipToAlias = {};
+  (hostEntries || []).forEach(e => { ipToAlias[e.ip + ':' + e.hostname] = e.hostname; });
+  // Reverse-lookup: for a given (host_ip, host_port) find the alias.
+  const bindingAlias = {};
+  (hostEntries || []).forEach(e => { bindingAlias[e.ip] = e.hostname; });
+
+  if (!ports.length) {
+    portsTbody.innerHTML = '<tr><td colspan="5" class="ports-empty-msg">No ports published</td></tr>';
+    return;
+  }
+  portsTbody.innerHTML = ports.map(p => {
+    const alias = bindingAlias[p.host_ip] || '';
+    return `<tr>
+      <td><strong>${p.sandbox_port}</strong></td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${p.host_ip}:${p.host_port}</td>
+      <td style="font-size:11px;color:#8b949e">${alias}</td>
+      <td><span class="proto-badge">${p.proto}</span></td>
+      <td><button class="btn-del-port" data-spec="${p.spec}" title="Unpublish">✕</button></td>
+    </tr>`;
+  }).join('');
+  portsTbody.querySelectorAll('.btn-del-port').forEach(btn => {
+    btn.addEventListener('click', () => deletePort(btn.dataset.spec, btn));
+  });
+}
+
+async function fetchPorts(name) {
+  portsTbody.innerHTML = '<tr><td colspan="5" class="ports-empty-msg">Loading…</td></tr>';
+  try {
+    const [portsRes, hostsRes] = await Promise.all([
+      fetch(`/api/sandboxes/${encodeURIComponent(name)}/ports`),
+      fetch('/api/hosts'),
+    ]);
+    const portsData = await portsRes.json();
+    const hostsData = await hostsRes.json();
+    renderPortsTable(portsData.ports || [], hostsData || []);
+  } catch (_) {
+    portsTbody.innerHTML = '<tr><td colspan="5" class="ports-empty-msg" style="color:#f85149">Error fetching ports</td></tr>';
+  }
+}
+
+async function deletePort(spec, btn) {
+  btn.disabled = true;
+  const res = await fetch(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/unpublish`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spec }),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    await fetchPorts(portsTarget);
+  } else {
+    btn.disabled = false;
+    alert(`Failed to unpublish: ${data.error}`);
+  }
+}
+
+addSbxPort.addEventListener('input', () => {
+  btnAddMapping.disabled = !addSbxPort.value;
+  if (addSbxPort.value && !addHostPort.value)
+    addHostPort.placeholder = addSbxPort.value;
+});
+
+btnAddMapping.addEventListener('click', async () => {
+  const sbxPort  = parseInt(addSbxPort.value, 10);
+  const hostPort = parseInt(addHostPort.value, 10) || undefined;
+  const hostIp   = addHostIp.value.trim() || undefined;
+  const alias    = addAlias.value.trim() || undefined;
+  if (!sbxPort) return;
+
+  const body = { sandbox_port: sbxPort };
+  if (hostPort) body.host_port = hostPort;
+  if (hostIp)   body.host_ip   = hostIp;
+  if (alias)    body.alias     = alias;
+
+  btnAddMapping.disabled = true;
+  portsAddError.classList.add('hidden');
+  const res = await fetch(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/publish`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    addSbxPort.value  = '';
+    addHostPort.value = '';
+    addHostIp.value   = '';
+    addAlias.value    = '';
+    addHostPort.placeholder = 'same';
+    await fetchPorts(portsTarget);
+    if (data.hosts_warning) {
+      portsAddError.textContent = '⚠ ' + data.hosts_warning;
+      portsAddError.classList.remove('hidden');
+    }
+  } else {
+    portsAddError.textContent = data.error || 'Failed to publish';
+    portsAddError.classList.remove('hidden');
+  }
+  btnAddMapping.disabled = !addSbxPort.value;
+});
+
+function openPortsModal(name) {
+  portsTarget = name;
+  portsNameEl.textContent = name;
+  addSbxPort.value  = '';
+  addHostPort.value = '';
+  addHostIp.value   = '';
+  addAlias.value    = '';
+  addHostPort.placeholder = 'same';
+  btnAddMapping.disabled = true;
+  portsAddError.classList.add('hidden');
+  portsOverlay.classList.remove('hidden');
+  fetchPorts(name);
+}
+
+function closePortsModal() {
+  portsOverlay.classList.add('hidden');
+  portsTarget = null;
+}
+
+document.getElementById('ports-modal-close').addEventListener('click', closePortsModal);
+document.getElementById('ports-modal-close2').addEventListener('click', closePortsModal);
+document.getElementById('ports-modal-refresh').addEventListener('click', () => {
+  if (portsTarget) fetchPorts(portsTarget);
+});
+portsOverlay.addEventListener('click', e => { if (e.target === portsOverlay) closePortsModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !portsOverlay.classList.contains('hidden')) closePortsModal();
+});
+
+// ── Remove sandbox ────────────────────────────────────────────────────────
+const rmOverlay  = document.getElementById('rm-modal-overlay');
+const rmNameEl   = document.getElementById('rm-modal-name');
+const rmConfirm  = document.getElementById('rm-modal-confirm');
+let rmTarget = null;
+
+function openRmModal(name) {
+  rmTarget = name;
+  rmNameEl.textContent = name;
+  rmConfirm.disabled = false;
+  rmConfirm.textContent = 'Remove';
+  rmOverlay.classList.remove('hidden');
+}
+
+function closeRmModal() {
+  rmOverlay.classList.add('hidden');
+  rmTarget = null;
+}
+
+async function removeSandbox(name) {
+  if (name === activeSandbox) { ws && ws.close(); ws = null; activeSandbox = null; }
+  const s = sandboxes.find(x => x.name === name);
+  if (s) s.status = 'removing…';
+  renderSidebar();
+  const res = await fetch(`/api/sandboxes/${encodeURIComponent(name)}/rm`, { method: 'POST' });
+  const data = await res.json();
+  if (!data.ok) alert(`Failed to remove '${name}': ${data.error}`);
+  await loadSandboxes();
+  if (!activeSandbox && sandboxes.length) connectTerminal(sandboxes[0].name);
+}
+
+document.getElementById('rm-modal-close').addEventListener('click', closeRmModal);
+document.getElementById('rm-modal-cancel').addEventListener('click', closeRmModal);
+rmOverlay.addEventListener('click', e => { if (e.target === rmOverlay) closeRmModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !rmOverlay.classList.contains('hidden')) closeRmModal();
+});
+
+rmConfirm.addEventListener('click', async () => {
+  if (!rmTarget) return;
+  const name = rmTarget;
+  rmConfirm.disabled = true;
+  rmConfirm.textContent = 'Removing…';
+  closeRmModal();
+  await removeSandbox(name);
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────
+(async () => {
+  await loadSandboxes();
+  const initial = INITIAL_SANDBOX || sandboxes[0]?.name;
+  if (initial) {
+    connectTerminal(initial);
+  } else {
+    // Web-only daemon with no sandbox: show an idle prompt instead of "connecting…".
+    connLabel.textContent = sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
+    term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
+  }
+})();
+</script>
+</body>
+</html>
