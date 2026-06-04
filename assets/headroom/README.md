@@ -21,13 +21,11 @@ On every container start, the kit's startup script:
 - `SessionStart` / `PreToolUse` hooks that **auto-start the proxy** — so there's
   no daemon, env-file, or health-check wiring to maintain on our side.
 
-The kit then forces `env.HEADROOM_MODE = cache`. This is important for Claude
-Code: the default `token` mode rewrites prior turns to compress them, which
-**breaks Anthropic's prompt-cache prefix** — `headroom perf` shows this as 0%
-reduction plus "cache prefix unstable", and it costs more than it saves. `cache`
-mode freezes prior turns to preserve cache hits (and trims the transform
-pipeline, lowering latency). The hook-started proxy inherits `HEADROOM_MODE`
-from this env block.
+The kit sets `env.HEADROOM_MODE = token` — the mode that maximises compression
+(rewrites prior turns for max token savings). If `headroom perf` reports "cache
+prefix unstable" / low reduction (the `token` mode fighting Claude Code's prompt
+cache), switch to `"HEADROOM_MODE": "cache"` in `~/.claude/settings.json` to
+preserve cache hits instead.
 
 The proxy uses **Authorization-header passthrough**: it forwards Claude's
 existing credentials to `api.anthropic.com`, so it works with both the API-key

@@ -68,13 +68,10 @@ commands:
           exit 0
         fi
 
-        # ── 4. Force `cache` mode (critical for Claude Code) ─────────────────
-        #    Default `token` mode rewrites prior turns, which BREAKS Anthropic's
-        #    prompt-cache prefix — for Claude Code that costs more than it saves
-        #    (perf shows 0% reduction + "cache prefix unstable"). `cache` mode
-        #    freezes prior turns to keep cache hits, and trims the transform
-        #    pipeline (less rewriting → less latency). The hook-started proxy
-        #    inherits HEADROOM_MODE from settings.json env.
+        # ── 4. Optimization mode = token (maximise compression / token savings).
+        #    `token` rewrites prior turns for max savings. The hook-started proxy
+        #    inherits HEADROOM_MODE from settings.json env. (Switch to "cache" if
+        #    you see "cache prefix unstable" in `headroom perf`.)
         "$PY" - <<'PY' 2>/dev/null || true
         import json, os
         p = os.path.expanduser("~/.claude/settings.json")
@@ -82,10 +79,10 @@ commands:
             d = json.load(open(p))
         except Exception:
             d = {}
-        d.setdefault("env", {})["HEADROOM_MODE"] = "cache"
+        d.setdefault("env", {})["HEADROOM_MODE"] = "token"
         json.dump(d, open(p, "w"), indent=2)
         PY
-        info "done (cache mode) — Reload the agent to route through Headroom"
+        info "done (token mode) — Reload the agent to route through Headroom"
 
   startup:
     - command: ["bash", "/home/agent/.local/bin/sbxw-headroom"]
