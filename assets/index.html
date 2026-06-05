@@ -1014,11 +1014,15 @@ rmConfirm.addEventListener('click', async () => {
 // ── Init ──────────────────────────────────────────────────────────────────
 (async () => {
   await loadSandboxes();
-  const initial = INITIAL_SANDBOX || sandboxes[0]?.name;
+  // Only auto-connect to a sandbox that actually exists — INITIAL_SANDBOX may
+  // name a sandbox that was removed (or be empty for the web-only daemon),
+  // which would otherwise attach a phantom, buggy terminal.
+  const exists = name => sandboxes.some(s => s.name === name);
+  const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
   if (initial) {
     connectTerminal(initial);
   } else {
-    // Web-only daemon with no sandbox: show an idle prompt instead of "connecting…".
+    // No sandbox to attach: show an idle prompt instead of "connecting…".
     connLabel.textContent = sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
     term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
   }
