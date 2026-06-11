@@ -490,6 +490,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js"></script>
 <script>
 const INITIAL_SANDBOX = "__SANDBOX__";
 
@@ -502,8 +503,66 @@ const term = new Terminal({
 });
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
+if (typeof CanvasAddon !== 'undefined') {
+  term.loadAddon(new CanvasAddon.CanvasAddon());
+  console.log('[copy-dbg] CanvasAddon loaded');
+} else {
+  console.log('[copy-dbg] CanvasAddon NOT available (CDN failed?)');
+}
 term.open(document.getElementById('term'));
 fit.fit();
+
+// Snapshot the selection on mouseup — xterm clears it on keydown (Meta key),
+// so by the time Cmd+C fires the selection is already gone.
+let lastTermSelection = '';
+term.onSelectionChange(() => {
+  const s = term.getSelection();
+  if (s) lastTermSelection = s;
+});
+
+// ── Custom drag selection ─────────────────────────────────────────────────────
+// xterm sends mouse drag events to the terminal process when mouse-tracking
+// mode is active (Claude Code's TUI enables it), preventing text selection.
+// We let the mousedown through (process sees a click), then take over on
+// mousemove once the pointer moves ≥1 cell — calling term.select() ourselves.
+// On mouseup we let xterm through so the process receives a clean click.
+function mouseToCell(e) {
+  const el = document.getElementById('term');
+  const r  = el.getBoundingClientRect();
+  const cw = el.clientWidth  / term.cols;
+  const ch = el.clientHeight / term.rows;
+  return {
+    col: Math.max(0, Math.min(term.cols - 1, Math.floor((e.clientX - r.left) / cw))),
+    row: Math.max(0, Math.min(term.rows - 1, Math.floor((e.clientY - r.top)  / ch)))
+         + term.buffer.active.viewportY,
+  };
+}
+let dragSel = null; // { start, dragging }
+document.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const termEl = document.getElementById('term');
+  if (!termEl.contains(e.target)) return;
+  dragSel = { start: mouseToCell(e), dragging: false };
+  // Don't intercept: let xterm + process receive the click.
+}, true);
+document.addEventListener('mousemove', e => {
+  if (!dragSel || !(e.buttons & 1)) { dragSel = null; return; }
+  const cur = mouseToCell(e);
+  if (!dragSel.dragging) {
+    if (Math.abs(cur.col - dragSel.start.col) < 1 &&
+        Math.abs(cur.row - dragSel.start.row) < 1) return;
+    dragSel.dragging = true;
+  }
+  e.stopImmediatePropagation(); e.preventDefault();
+  let [a, b] = [dragSel.start, cur];
+  if (b.row < a.row || (b.row === a.row && b.col < a.col)) [a, b] = [b, a];
+  term.select(a.col, a.row, Math.max(1, (b.row - a.row) * term.cols + (b.col - a.col)));
+}, true);
+document.addEventListener('mouseup', e => {
+  if (!dragSel?.dragging) { dragSel = null; return; }
+  dragSel = null;
+  // Let mouseup through so process sees mousedown+mouseup = a clean click.
+}, true);
 
 // ── Address badge (copy URL) ──────────────────────────────────────────────
 const addrBadge = document.getElementById('addr-badge');
@@ -620,6 +679,27 @@ async function uploadPastedImage(file) {
     showToast('Upload error — is the sandbox running?', 'error');
   }
 }
+
+// Cmd+C (macOS) or Ctrl+Shift+C (Linux/Windows) copies the xterm selection.
+// Must be capture phase + stopImmediatePropagation so we beat every handler.
+document.addEventListener('keydown', e => {
+  const isCopy = (e.metaKey && !e.altKey && e.key === 'c') ||
+                 (e.ctrlKey && e.shiftKey && e.key === 'C');
+  if (!isCopy) return;
+  const sel = term.getSelection() || lastTermSelection || window.getSelection()?.toString() || '';
+  if (!sel) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const ta = Object.assign(document.createElement('textarea'),
+    { value: sel, style: 'position:fixed;opacity:0;top:0;left:0;width:1px;height:1px' });
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(ta);
+  navigator.clipboard?.writeText(sel)
+    .then(() => showToast('Copied', 'ok'))
+    .catch(() => { if (ok) showToast('Copied', 'ok'); });
+}, true);
 
 // Capture phase so this fires before xterm's textarea handler, which may call
 // stopPropagation() once the terminal has focus (i.e. after a successful connect).
