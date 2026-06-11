@@ -314,3 +314,35 @@ pub fn secret_set_stdin(service: &str, value: &str, global: bool, sandbox: Optio
     }
     Ok(())
 }
+
+/// Write `data` to `dest` inside the sandbox by piping it over stdin to
+/// `sbx exec`. Used by the web UI to drop a pasted image into the sandbox
+/// filesystem so the agent can read it.
+///
+/// `-i` (no `-t`) is deliberate: a PTY would perform newline translation and
+/// corrupt binary data. The destination is passed as a positional argument to
+/// `sh -c` (`$1`) so an arbitrary path can't break out into shell syntax, and
+/// the parent directory is created on demand.
+pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
+    let script = r#"mkdir -p "$(dirname "$1")" && cat > "$1""#;
+    let mut child = Command::new(BIN)
+        .args(["exec", "-i", sandbox, "--", "sh", "-c", script, "sh", dest])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{BIN} exec` to write {dest}"))?;
+    child
+        .stdin
+        .take()
+        .context("no stdin handle for sbx exec")?
+        .write_all(data)?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!(
+            "`sbx exec` write to {dest} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}

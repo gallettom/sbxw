@@ -294,6 +294,23 @@
   .term-bar .mode-switch button#mode-claude.active { color: #d2a8ff; }
   .term-bar .mode-switch button#mode-bash.active   { color: #3fb950; }
   #term { flex: 1; padding: 6px 8px; }
+
+  /* ── Pasted-image toast ── */
+  .paste-toast {
+    position: fixed; bottom: 16px; right: 16px; z-index: 300;
+    max-width: 60vw;
+    background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+    color: #c9d1d9; font-size: 12px; padding: .45rem .7rem;
+    box-shadow: 0 8px 24px rgba(1, 4, 9, .6);
+    display: flex; align-items: center; gap: .45rem;
+    opacity: 0; transform: translateY(6px); pointer-events: none;
+    transition: opacity .15s, transform .15s;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .paste-toast.show { opacity: 1; transform: translateY(0); }
+  .paste-toast.ok      { border-color: #2ea043; color: #3fb950; }
+  .paste-toast.error   { border-color: #f85149; color: #f85149; }
+  .paste-toast.progress { border-color: #58a6ff; color: #58a6ff; }
 </style>
 </head>
 <body>
@@ -469,6 +486,8 @@
   </div>
 </div>
 
+<div class="paste-toast" id="paste-toast"></div>
+
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script>
@@ -561,6 +580,60 @@ term.onData(data => {
   if (ws && ws.readyState === WebSocket.OPEN)
     ws.send(new TextEncoder().encode(data));
 });
+
+// ── Paste image → upload into sandbox → type its path into the terminal ─────
+// Text paste is left untouched (xterm handles it natively). When the clipboard
+// holds an image, we upload the bytes to the sandbox and insert the resulting
+// file path at the prompt so Claude can read the visual.
+let pasteToastTimer = null;
+function showToast(msg, kind) {
+  const t = document.getElementById('paste-toast');
+  t.textContent = msg;
+  t.className = 'paste-toast show' + (kind ? ' ' + kind : '');
+  clearTimeout(pasteToastTimer);
+  if (kind !== 'progress')
+    pasteToastTimer = setTimeout(() => { t.className = 'paste-toast'; }, 3000);
+}
+
+async function uploadPastedImage(file) {
+  if (!activeSandbox || !ws || ws.readyState !== WebSocket.OPEN) {
+    showToast('No sandbox attached — connect one first', 'error');
+    return;
+  }
+  showToast('Uploading image…', 'progress');
+  try {
+    const res = await fetch(
+      `/api/sandboxes/${encodeURIComponent(activeSandbox)}/paste-image`,
+      { method: 'POST', headers: { 'Content-Type': file.type || 'image/png' }, body: file }
+    );
+    const data = await res.json();
+    if (data.ok && data.path) {
+      // Type the in-sandbox path at the prompt (trailing space separates it
+      // from whatever the user types next). Claude reads the referenced file.
+      ws.send(new TextEncoder().encode(data.path + ' '));
+      term.focus();
+      showToast('📎 ' + data.path, 'ok');
+    } else {
+      showToast('Upload failed: ' + (data.error || 'unknown error'), 'error');
+    }
+  } catch (_) {
+    showToast('Upload error — is the sandbox running?', 'error');
+  }
+}
+
+// Capture phase so this fires before xterm's textarea handler, which may call
+// stopPropagation() once the terminal has focus (i.e. after a successful connect).
+document.addEventListener('paste', e => {
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  let file = null;
+  for (const it of items) {
+    if (it.kind === 'file' && it.type.startsWith('image/')) { file = it.getAsFile(); break; }
+  }
+  if (!file) return; // no image → let xterm handle the normal text paste
+  e.preventDefault();
+  e.stopPropagation(); // image found: stop xterm from also seeing this event
+  uploadPastedImage(file);
+}, true);
 
 // ── Sidebar ───────────────────────────────────────────────────────────────
 function dotClass(status) {

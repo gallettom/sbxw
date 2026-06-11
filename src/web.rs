@@ -18,10 +18,12 @@ use crate::ExtraPort;
 use crate::sbx;
 use anyhow::{Context, Result};
 use axum::{
+    body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        DefaultBodyLimit, Path, Query, State,
     },
+    http::HeaderMap,
     response::Html,
     routing::{get, post},
     Json, Router,
@@ -106,6 +108,11 @@ pub async fn serve(
         .route("/api/hosts", get(api_hosts_read))
         .route("/api/sandboxes/:name/stop", post(api_stop))
         .route("/api/sandboxes/:name/rm", post(api_rm))
+        .route(
+            "/api/sandboxes/:name/paste-image",
+            // Screenshots are easily a few MB; lift the 2 MB default body cap.
+            post(api_paste_image).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/api/fs", get(api_fs))
         .with_state(state);
 
@@ -281,6 +288,52 @@ async fn api_rm(Path(name): Path<String>) -> Json<serde_json::Value> {
     .await
     {
         Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
+        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    }
+}
+
+// ── Pasted image upload ───────────────────────────────────────────────────────
+
+/// Map an image MIME type to a file extension. Defaults to `png` for anything
+/// unrecognised (clipboard screenshots are almost always PNG).
+fn ext_for_mime(mime: &str) -> &'static str {
+    match mime.split(';').next().unwrap_or("").trim() {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        _ => "png",
+    }
+}
+
+/// `POST /api/sandboxes/:name/paste-image` — write a clipboard image into the
+/// sandbox and return its in-sandbox path. The browser then types that path
+/// into the terminal so the agent can read the file.
+async fn api_paste_image(
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Json<serde_json::Value> {
+    if body.is_empty() {
+        return Json(serde_json::json!({ "ok": false, "error": "empty image" }));
+    }
+    let ext = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(ext_for_mime)
+        .unwrap_or("png");
+    // Millisecond timestamp keeps names unique and chronologically sortable.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = format!("/tmp/sbxw-pastes/paste-{ts}.{ext}");
+    let data = body.to_vec();
+    let dest_ret = dest.clone();
+    match tokio::task::spawn_blocking(move || sbx::write_file_stdin(&name, &dest, &data)).await {
+        Ok(Ok(())) => Json(serde_json::json!({ "ok": true, "path": dest_ret })),
         Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
         Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }
