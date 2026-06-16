@@ -173,10 +173,11 @@ pub struct PortMapping {
 }
 
 impl PortMapping {
-    /// Reconstruct the unpublish spec: `host_port:sandbox_port`.
-    /// Omitting the host IP removes all bindings (IPv4 + IPv6) for this port pair.
+    /// Reconstruct the unpublish spec: `host_ip:host_port:sandbox_port`.
+    /// The host IP is included so unpublish targets this exact binding and
+    /// doesn't nuke a different alias (e.g. 127.0.0.2) on the same port pair.
     pub fn spec(&self) -> String {
-        format!("{}:{}", self.host_port, self.sandbox_port)
+        format!("{}:{}:{}", self.host_ip, self.host_port, self.sandbox_port)
     }
 }
 
@@ -259,24 +260,16 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
         }
     }
 
-    // Deduplicate: collapse IPv4+IPv6 pairs for the same (sandbox_port, host_port, proto).
-    // Keep the IPv4 entry; it matches what sbxw publishes.
-    let mut seen: std::collections::HashSet<(u16, u16, String)> = std::collections::HashSet::new();
+    // Drop the IPv6 mirror entries (sbx auto-adds an ::1 binding for each IPv4
+    // publish) but keep EVERY distinct IPv4 binding — including extra loopback
+    // aliases like 127.0.0.2 created by sbxw's ip_per_app mode. Only exact
+    // duplicates (same ip+ports+proto) are collapsed.
+    let mut seen: std::collections::HashSet<(String, u16, u16, String)> = std::collections::HashSet::new();
     out.retain(|p| {
-        let key = (p.sandbox_port, p.host_port, p.proto.clone());
-        if seen.contains(&key) {
-            return false; // drop duplicate
+        if p.host_ip.contains(':') {
+            return false; // IPv6 mirror — hidden (sbxw publishes on IPv4)
         }
-        // If this is IPv6 and an IPv4 entry will come (or already came), prefer IPv4.
-        let is_ipv6 = p.host_ip.contains(':');
-        if is_ipv6 {
-            // Check if a non-IPv6 version exists anywhere in `out` for this key.
-            // Simpler: just skip IPv6 entirely — sbxw always publishes on IPv4.
-            seen.insert(key);
-            return false;
-        }
-        seen.insert(key);
-        true
+        seen.insert((p.host_ip.clone(), p.host_port, p.sandbox_port, p.proto.clone()))
     });
 
     out
@@ -322,13 +315,34 @@ pub fn secret_set_stdin(service: &str, value: &str, global: bool, sandbox: Optio
     Ok(())
 }
 
-/// Best-effort one-shot command inside a *running* sandbox:
-/// `sbx exec <name> <cmd...>`. General-purpose helper for debugging/extensions.
-#[allow(dead_code)]
-pub fn exec(name: &str, cmd: &[&str]) -> Result<()> {
-    let mut args: Vec<String> = vec!["exec".into(), name.into()];
-    args.extend(cmd.iter().map(|s| s.to_string()));
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_inherit(&refs)
+/// Write `data` to `dest` inside the sandbox by piping it over stdin to
+/// `sbx exec`. Used by the web UI to drop a pasted image into the sandbox
+/// filesystem so the agent can read it.
+///
+/// `-i` (no `-t`) is deliberate: a PTY would perform newline translation and
+/// corrupt binary data. The destination is passed as a positional argument to
+/// `sh -c` (`$1`) so an arbitrary path can't break out into shell syntax, and
+/// the parent directory is created on demand.
+pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
+    let script = r#"mkdir -p "$(dirname "$1")" && cat > "$1""#;
+    let mut child = Command::new(BIN)
+        .args(["exec", "-i", sandbox, "--", "sh", "-c", script, "sh", dest])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{BIN} exec` to write {dest}"))?;
+    child
+        .stdin
+        .take()
+        .context("no stdin handle for sbx exec")?
+        .write_all(data)?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!(
+            "`sbx exec` write to {dest} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
-

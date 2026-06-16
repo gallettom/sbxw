@@ -15,13 +15,11 @@
 //!   5. serve a browser terminal attached to the agent (`sbx run <name>`).
 //!
 //! Authentication:
-//!   * API key  — pass `--use-api-key`; requires ANTHROPIC_API_KEY on the host.
-//!                Stored via `sbx secret set -g anthropic`.
-//!   * OAuth    — set CLAUDE_CODE_OAUTH_TOKEN on the host; sbxw generates an
-//!                ephemeral mixin kit whose spec.yaml routes the token through the
-//!                sbx request proxy. The real token never enters the container;
-//!                the VM receives the sentinel "proxy-managed" and the proxy swaps
-//!                the Authorization header on every outbound request.
+//!   * API key — pass `--use-api-key`; requires ANTHROPIC_API_KEY on the host,
+//!     stored via `sbx secret set -g anthropic`.
+//!   * OAuth — set CLAUDE_CODE_OAUTH_TOKEN on the host; sbxw generates an
+//!     ephemeral mixin kit whose `initFiles` writes `~/.claude/.credentials.json`
+//!     in the sandbox, so the agent is authenticated from first launch.
 
 mod config;
 mod hosts;
@@ -30,7 +28,7 @@ mod web;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use config::{Config, PortMap};
+use config::Config;
 use hosts::HostAlias;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -372,7 +370,7 @@ fn cmd_up_background(
     // Write PID file so `sbxw down [name]` can kill this daemon later.
     let _ = std::fs::write(daemon_pid_path(key), pid.to_string());
 
-    let web_port = web_addr.split(':').last().unwrap_or("7681");
+    let web_port = web_addr.rsplit(':').next().unwrap_or("7681");
     eprintln!("sbxw  pid {pid}  →  http://sbxw.localhost:{web_port}");
     eprintln!("logs  {}  (sbxw logs {key})", log.display());
     eprintln!("stop  sbxw down {key}");
@@ -475,37 +473,50 @@ fn kill_untracked_daemons() {
     }
 }
 
-/// Map each PortMap to the (alias, ip) used on the host.
-fn aliases_for(cfg: &Config) -> Vec<HostAlias> {
-    cfg.ports
-        .iter()
-        .enumerate()
-        .map(|(i, p)| HostAlias {
-            hostname: p.alias.clone(),
-            ip: if cfg.ip_per_app {
-                format!("127.0.0.{}", 2 + i) // distinct loopback IP per app
-            } else {
-                "127.0.0.1".into()
-            },
-        })
+/// A resolved port mapping: (host_port, sandbox_port, alias). Alias may be empty.
+type PortTriple = (u16, u16, String);
+
+/// Merge config ports with UI-added extra ports, preserving order. The index in
+/// the result drives the per-app loopback IP, so callers must keep this ordering.
+fn merged_ports(cfg: &Config, extra: &[ExtraPort]) -> Vec<PortTriple> {
+    cfg.ports.iter().map(|p| (p.host_port, p.sandbox_port, p.alias.clone()))
+        .chain(extra.iter().map(|p| (p.host_port, p.sandbox_port, p.alias.clone())))
         .collect()
 }
 
-/// Build the `sbx ports --publish` spec for one mapping.
-fn port_spec(cfg: &Config, p: &PortMap, ip: &str) -> String {
-    if cfg.ip_per_app {
-        format!("{ip}:{}:{}", p.host_port, p.sandbox_port)
+/// Host IP a port binds to: a distinct loopback per app (`ip_per_app`), else 127.0.0.1.
+fn host_ip_for(ip_per_app: bool, index: usize) -> String {
+    if ip_per_app {
+        format!("127.0.0.{}", 2 + index) // distinct loopback IP per app
     } else {
-        // Shared loopback: HOST_IP defaults to 127.0.0.1, so omit it.
-        format!("{}:{}", p.host_port, p.sandbox_port)
+        "127.0.0.1".into()
     }
 }
 
+/// `sbx ports --publish` spec for each mapping. With `ip_per_app` the host IP is
+/// explicit; otherwise it defaults to 127.0.0.1 and is omitted.
+fn publish_specs(ports: &[PortTriple], ip_per_app: bool) -> Vec<String> {
+    ports.iter().enumerate().map(|(i, (host, sbox, _))| {
+        if ip_per_app {
+            format!("{}:{host}:{sbox}", host_ip_for(true, i))
+        } else {
+            format!("{host}:{sbox}")
+        }
+    }).collect()
+}
+
+/// /etc/hosts aliases for the ports that declare a hostname.
+fn host_aliases(ports: &[PortTriple], ip_per_app: bool) -> Vec<HostAlias> {
+    ports.iter().enumerate()
+        .filter(|(_, (_, _, alias))| !alias.is_empty())
+        .map(|(i, (_, _, alias))| HostAlias { hostname: alias.clone(), ip: host_ip_for(ip_per_app, i) })
+        .collect()
+}
+
 fn publish_all_ports(name: &str, cfg: &Config) -> Result<()> {
-    let aliases = aliases_for(cfg);
-    for (p, a) in cfg.ports.iter().zip(aliases.iter()) {
-        let spec = port_spec(cfg, p, &a.ip);
-        tracing::info!("publishing {} -> http://{}:{}", spec, a.hostname, p.host_port);
+    let ports = merged_ports(cfg, &[]);
+    for spec in publish_specs(&ports, cfg.ip_per_app) {
+        tracing::info!("publishing {spec}");
         if let Err(e) = sbx::publish_port(name, &spec) {
             tracing::warn!("could not publish {spec}: {e:#}");
         }
@@ -612,54 +623,25 @@ pub(crate) fn provision_sandbox(
     }
 
     // Effective port list = config defaults + ports added from the UI.
-    // Each entry carries (host_port, sandbox_port, alias) — alias may be empty.
-    let all_ports: Vec<(u16, u16, String)> = cfg.ports.iter()
-        .map(|p| (p.host_port, p.sandbox_port, p.alias.clone()))
-        .chain(extra_ports.iter()
-            .map(|p| (p.host_port, p.sandbox_port, p.alias.clone())))
-        .collect();
+    let all_ports = merged_ports(cfg, extra_ports);
 
-    // 5. Host aliases for ports that have a named alias.
-    //    IP assignment: when ip_per_app, each port gets 127.0.0.{2+i}.
-    //    This is computed from the index in all_ports so the provisioning
-    //    thread can reproduce the same IP without relying on the aliases list.
-    let mut aliases: Vec<HostAlias> = all_ports.iter().enumerate()
-        .filter(|(_, (_, _, alias))| !alias.is_empty())
-        .map(|(i, (_, _, alias))| HostAlias {
-            hostname: alias.clone(),
-            ip: if cfg.ip_per_app {
-                format!("127.0.0.{}", 2 + i)
-            } else {
-                "127.0.0.1".into()
-            },
-        })
-        .collect();
+    // 5. Host aliases for ports that declare a hostname, plus the web interface.
+    let mut aliases = host_aliases(&all_ports, cfg.ip_per_app);
     let web_ip = cfg.web_addr.split(':').next().unwrap_or("127.0.0.1").to_string();
     if web_ip.starts_with("127.") {
         aliases.push(HostAlias { hostname: "sbxw.localhost".into(), ip: web_ip });
     }
-    let web_port = cfg.web_addr.split(':').last().unwrap_or("7681");
+    let web_port = cfg.web_addr.rsplit(':').next().unwrap_or("7681");
     hosts::ensure_loopback_aliases(&aliases)?;
     hosts::sync_hosts_block(&aliases)?;
-    for (_, (host_port, sandbox_port, alias)) in all_ports.iter().enumerate().filter(|(_, (_, _, a))| !a.is_empty()) {
-        tracing::info!("alias ready: http://{}:{} (sandbox :{})", alias, host_port, sandbox_port);
+    for (host_port, sandbox_port, alias) in all_ports.iter().filter(|(_, _, a)| !a.is_empty()) {
+        tracing::info!("alias ready: http://{alias}:{host_port} (sandbox :{sandbox_port})");
     }
     tracing::info!("web interface → http://sbxw.localhost:{web_port}");
 
     // 6. Provisioning thread: wait for `running`, then (re)publish ALL ports.
-    //    IP is derived from the port's index in all_ports — no alias required.
     let prov_name = name.to_string();
-    let prov_ip_per_app = cfg.ip_per_app;
-    let prov_specs: Vec<String> = all_ports.iter().enumerate()
-        .map(|(i, (host_port, sandbox_port, _))| {
-            if prov_ip_per_app {
-                let ip = format!("127.0.0.{}", 2 + i);
-                format!("{ip}:{host_port}:{sandbox_port}")
-            } else {
-                format!("{host_port}:{sandbox_port}")
-            }
-        })
-        .collect();
+    let prov_specs = publish_specs(&all_ports, cfg.ip_per_app);
     std::thread::spawn(move || {
         // Wait up to ~60s for the sandbox to come up (started by `sbx run`).
         for _ in 0..120 {

@@ -18,10 +18,12 @@ use crate::ExtraPort;
 use crate::sbx;
 use anyhow::{Context, Result};
 use axum::{
+    body::Bytes,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        DefaultBodyLimit, Path, Query, State,
     },
+    http::HeaderMap,
     response::Html,
     routing::{get, post},
     Json, Router,
@@ -34,7 +36,6 @@ use std::{
     io::Write,
     sync::{Arc, Mutex},
 };
-use tracing;
 use tokio::sync::broadcast;
 
 /// Output bytes kept per sandbox for replay on reconnect (256 KB).
@@ -101,13 +102,17 @@ pub async fn serve(
         .route("/ws", get(ws_handler))
         .route("/api/sandboxes", get(api_list))
         .route("/api/sandboxes/create", post(api_create))
-        .route("/api/sandboxes/ports", get(api_ports_all))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
         .route("/api/sandboxes/:name/ports/publish", post(api_ports_publish))
         .route("/api/sandboxes/:name/ports/unpublish", post(api_ports_unpublish))
         .route("/api/hosts", get(api_hosts_read))
         .route("/api/sandboxes/:name/stop", post(api_stop))
         .route("/api/sandboxes/:name/rm", post(api_rm))
+        .route(
+            "/api/sandboxes/:name/paste-image",
+            // Screenshots are easily a few MB; lift the 2 MB default body cap.
+            post(api_paste_image).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/api/fs", get(api_fs))
         .with_state(state);
 
@@ -144,14 +149,14 @@ struct PortMappingJson {
 
 #[derive(Serialize)]
 struct SandboxPorts {
-    name: String,
-    raw: String,
     ports: Vec<PortMappingJson>,
 }
 
-fn fetch_ports_for(name: &str) -> SandboxPorts {
-    let raw = sbx::list_ports(name).unwrap_or_default();
-    let ports = sbx::list_ports_parsed(name).into_iter()
+async fn api_ports_one(Path(name): Path<String>) -> Json<SandboxPorts> {
+    let ports = tokio::task::spawn_blocking(move || sbx::list_ports_parsed(&name))
+        .await
+        .unwrap_or_default()
+        .into_iter()
         .map(|p| PortMappingJson {
             spec: p.spec(),
             sandbox_port: p.sandbox_port,
@@ -160,27 +165,7 @@ fn fetch_ports_for(name: &str) -> SandboxPorts {
             host_port: p.host_port,
         })
         .collect();
-    SandboxPorts { name: name.to_string(), raw, ports }
-}
-
-async fn api_ports_one(Path(name): Path<String>) -> Json<SandboxPorts> {
-    Json(tokio::task::spawn_blocking(move || fetch_ports_for(&name))
-        .await
-        .unwrap_or_else(|_| SandboxPorts { name: String::new(), raw: String::new(), ports: vec![] }))
-}
-
-async fn api_ports_all() -> Json<Vec<SandboxPorts>> {
-    let sandboxes = tokio::task::spawn_blocking(sbx::list_sandboxes)
-        .await
-        .unwrap_or_default();
-    let mut result = Vec::new();
-    for s in sandboxes {
-        let info = tokio::task::spawn_blocking(move || fetch_ports_for(&s.name))
-            .await
-            .unwrap_or_else(|_| SandboxPorts { name: String::new(), raw: String::new(), ports: vec![] });
-        result.push(info);
-    }
-    Json(result)
+    Json(SandboxPorts { ports })
 }
 
 #[derive(Deserialize)]
@@ -303,6 +288,52 @@ async fn api_rm(Path(name): Path<String>) -> Json<serde_json::Value> {
     .await
     {
         Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
+        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    }
+}
+
+// ── Pasted image upload ───────────────────────────────────────────────────────
+
+/// Map an image MIME type to a file extension. Defaults to `png` for anything
+/// unrecognised (clipboard screenshots are almost always PNG).
+fn ext_for_mime(mime: &str) -> &'static str {
+    match mime.split(';').next().unwrap_or("").trim() {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        _ => "png",
+    }
+}
+
+/// `POST /api/sandboxes/:name/paste-image` — write a clipboard image into the
+/// sandbox and return its in-sandbox path. The browser then types that path
+/// into the terminal so the agent can read the file.
+async fn api_paste_image(
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Json<serde_json::Value> {
+    if body.is_empty() {
+        return Json(serde_json::json!({ "ok": false, "error": "empty image" }));
+    }
+    let ext = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(ext_for_mime)
+        .unwrap_or("png");
+    // Millisecond timestamp keeps names unique and chronologically sortable.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = format!("/tmp/sbxw-pastes/paste-{ts}.{ext}");
+    let data = body.to_vec();
+    let dest_ret = dest.clone();
+    match tokio::task::spawn_blocking(move || sbx::write_file_stdin(&name, &dest, &data)).await {
+        Ok(Ok(())) => Json(serde_json::json!({ "ok": true, "path": dest_ret })),
         Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
         Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }

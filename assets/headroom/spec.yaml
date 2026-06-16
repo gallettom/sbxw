@@ -1,0 +1,116 @@
+schemaVersion: "1"
+kind: mixin
+name: headroom
+description: >
+  Installs Headroom (headroom-ai[proxy]) and wires Claude Code through its
+  context-compression proxy to cut token usage. Uses Headroom's own durable
+  integration (`headroom init --global claude`): it sets ANTHROPIC_BASE_URL and
+  installs hooks that auto-start the proxy — no manual env or daemon wiring.
+
+# pip pulls from PyPI; `headroom init` clones a plugin marketplace from GitHub.
+# Both are already covered by sbxw's default network_allow (pypi/pythonhosted,
+# github/githubusercontent), so no extra domains are required.
+network:
+  allowedDomains:
+    - pypi.org
+    - files.pythonhosted.org
+    - github.com
+
+commands:
+  initFiles:
+    - path: /home/agent/.local/bin/sbxw-headroom
+      mode: "0755"
+      content: |
+        #!/usr/bin/env bash
+        # Install Headroom and enable its durable Claude Code integration.
+        # Idempotent: safe to re-run on every container start.
+        # (No `set -u`: we read possibly-unset vars.)
+        set -o pipefail
+        info() { echo "  [headroom] $*"; }
+
+        BIN="$HOME/.local/bin"
+        mkdir -p "$BIN"
+        export PATH="$BIN:$PATH"
+
+        # ── 1. Python >= 3.10 (Headroom's requirement) ───────────────────────
+        PY=""
+        for c in python3 python3.13 python3.12 python3.11 python3.10; do
+          if command -v "$c" >/dev/null 2>&1 \
+             && "$c" -c 'import sys; raise SystemExit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null; then
+            PY="$c"; break
+          fi
+        done
+        if [ -z "$PY" ]; then
+          info "no python >=3.10 found — skipping"
+          exit 0
+        fi
+
+        # ── 2. Install headroom-ai[proxy,code] (idempotent, user site) ───────
+        #    Debian/Ubuntu mark system Python externally-managed (PEP 668);
+        #    --user --break-system-packages confines the install to ~/.local.
+        #    [code] adds tree-sitter for AST-aware code compression (--code-aware).
+        if [ -x "$BIN/headroom" ] && "$PY" -c 'import tree_sitter' 2>/dev/null; then
+          info "headroom already installed"
+        else
+          info "installing headroom-ai[proxy,code] ($PY)…"
+          if ! "$PY" -m pip install --user --break-system-packages --quiet "headroom-ai[proxy,code]"; then
+            info "pip install failed — skipping (Claude keeps direct API access)"
+            exit 0
+          fi
+          info "headroom installed -> $BIN/headroom"
+        fi
+
+        # ── 3. Durable Claude Code integration ───────────────────────────────
+        #    Writes ~/.claude/settings.json: ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+        #    plus SessionStart/PreToolUse hooks that auto-start the proxy.
+        info "configuring Claude Code integration (headroom init)…"
+        if ! "$BIN/headroom" init --global claude >/dev/null 2>&1; then
+          info "headroom init failed — Claude keeps direct API access"
+          exit 0
+        fi
+
+        # ── 4. Patch the deployment manifest (the real source for proxy_args) ─
+        #    `headroom init` writes ~/.headroom/deploy/init-user/manifest.json with
+        #    host=127.0.0.1, mode=token, and no compression flags. We force:
+        #      - host 0.0.0.0            → reachable via a published port (dashboard)
+        #      - mode  token             → maximise token savings
+        #      - --code-aware            → AST code compression (needs [code])
+        #      - --intercept-tool-results→ compress tool outputs (file reads, cmds)
+        #    Idempotent. The hook-started proxy reads proxy_args from this file.
+        "$PY" - <<'PY' 2>/dev/null || true
+        import json, os
+        mp = os.path.expanduser("~/.headroom/deploy/init-user/manifest.json")
+        try:
+            m = json.load(open(mp))
+        except Exception:
+            raise SystemExit(0)
+        m["host"] = "0.0.0.0"
+        m["proxy_mode"] = "token"
+        be = m.setdefault("base_env", {})
+        be["HEADROOM_HOST"] = "0.0.0.0"
+        be["HEADROOM_MODE"] = "token"
+        be["HEADROOM_CODE_AWARE_ENABLED"] = "1"
+        a = m.get("proxy_args", [])
+        def setarg(flag, val):
+            if flag in a and a.index(flag) + 1 < len(a):
+                a[a.index(flag) + 1] = val
+            else:
+                a.extend([flag, val])
+        setarg("--host", "0.0.0.0")
+        setarg("--mode", "token")
+        for flag in ("--code-aware", "--intercept-tool-results"):
+            if flag not in a:
+                a.append(flag)
+        m["proxy_args"] = a
+        json.dump(m, open(mp, "w"), indent=2)
+        PY
+
+        # Kill any proxy still bound to the old host; the SessionStart/PreToolUse
+        # hook restarts it from the patched manifest (on 0.0.0.0).
+        pid="$(lsof -t -i :8787 2>/dev/null | head -1)"
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+
+        info "done (token mode, host 0.0.0.0) — Reload the agent to route through Headroom"
+
+  startup:
+    - command: ["bash", "/home/agent/.local/bin/sbxw-headroom"]

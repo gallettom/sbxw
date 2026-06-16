@@ -87,7 +87,7 @@ binary, so that's all you need.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gallettom/sbxw/main/install.sh | sh
-# pin a version:    | sh -s v0.1.0
+# pin a version:    | sh -s v1.0.0
 # custom dir:       SBXW_INSTALL_DIR=$HOME/.local/bin   ... | sh
 ```
 
@@ -168,11 +168,19 @@ kits = [
 A kit reference is a **directory containing `spec.yaml`** (not a single `.yaml`),
 a `.zip`, an OCI ref, or a git URL. Validate one with `sbx kit validate <dir>`.
 
-Bundled: **`assets/k8s-tools`** installs `kubectl` + `k3d` + `skaffold` into
-`~/.local/bin` (arch-aware, idempotent). It needs extra egress domains — see
-`assets/k8s-tools/README.md`. Schema gotchas worth knowing: `startup` entries are
-exec-style arrays (`command: ["bash", "…"]`), and `content` fields only allow the
-`${WORKDIR}` placeholder — use brace-free `$VAR` for shell variables.
+Bundled kits:
+
+- **`assets/k8s-tools`** — installs `kubectl` + `k3d` + `skaffold` into
+  `~/.local/bin` (arch-aware, idempotent).
+- **`assets/headroom`** — installs [Headroom](https://github.com/chopratejas/headroom)
+  (`headroom-ai[proxy]`), a local context-compression proxy, and enables its
+  durable Claude Code integration (`headroom init --global claude`) to **cut token
+  usage** (claimed 60–95% fewer tokens). See `assets/headroom/README.md`.
+
+Both need extra egress domains (see each kit's README). Schema gotchas worth
+knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), and
+`content` fields only allow the `${WORKDIR}` placeholder — use brace-free `$VAR`
+for shell variables.
 
 ## Config (`sbxw.toml`)
 
