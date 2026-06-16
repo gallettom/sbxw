@@ -87,7 +87,7 @@ binary, so that's all you need.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gallettom/sbxw/main/install.sh | sh
-# pin a version:    | sh -s v0.1.0
+# pin a version:    | sh -s v1.0.0
 # custom dir:       SBXW_INSTALL_DIR=$HOME/.local/bin   ... | sh
 ```
 
