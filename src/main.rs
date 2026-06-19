@@ -726,12 +726,16 @@ fn cmd_up(
     }
 }
 
-/// Foreground attach: `sbx run <name>` inheriting this terminal.
+/// Foreground attach: `sbx run --name <name>` inheriting this terminal.
+///
+/// We re-attach to the existing sandbox by name. The positional-name form
+/// (`sbx run <name>`) is deprecated as of the latest sbx release, so we use
+/// the `--name` flag, which re-attaches independent of the working directory.
 fn run_agent_foreground(name: &str) -> Result<()> {
     use std::process::Command;
-    let status = Command::new("sbx").args(["run", name]).status()?;
+    let status = Command::new("sbx").args(["run", "--name", name]).status()?;
     if !status.success() {
-        anyhow::bail!("`sbx run {name}` exited with {status}");
+        anyhow::bail!("`sbx run --name {name}` exited with {status}");
     }
     Ok(())
 }

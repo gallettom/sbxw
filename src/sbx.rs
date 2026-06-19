@@ -5,7 +5,8 @@
 //!
 //! Confirmed surface (docs.docker.com/reference/cli/sbx, v0.30):
 //!   sbx create <agent> [PATH...] --name <name>
-//!   sbx run    [SANDBOX | <agent> [PATH...]] [-- AGENT_ARGS...]   (no --env flag)
+//!   sbx run    <agent> [PATH...] [--name <name>] [-- AGENT_ARGS...]   (no --env flag)
+//!   sbx run    --name <name>                     (re-attach to existing sandbox)
 //!   sbx ls
 //!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]

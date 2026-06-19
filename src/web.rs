@@ -468,7 +468,7 @@ async fn handle_socket(socket: WebSocket, sandbox: String, mode: String, shell: 
 /// Sessions are keyed by "<sandbox>::<mode>" so the agent ("claude") and a
 /// bash shell coexist independently for the same sandbox.
 ///   mode == "bash"  → `sbx exec -it <sandbox> -- bash`
-///   mode == "claude"→ `sbx run <sandbox>` (or the configured web_shell via exec)
+///   mode == "claude"→ `sbx run --name <sandbox>` (or the configured web_shell via exec)
 /// The session lives until the PTY process exits.
 fn get_or_create_session(
     sandbox: &str,
@@ -491,7 +491,9 @@ fn get_or_create_session(
     if mode == "bash" {
         cmd.args(["exec", "-it", sandbox, "--", "bash"]);
     } else if shell.is_empty() {
-        cmd.args(["run", sandbox]);
+        // Re-attach by name. The positional form (`sbx run <name>`) is
+        // deprecated; `--name` re-attaches regardless of working directory.
+        cmd.args(["run", "--name", sandbox]);
     } else {
         cmd.args(["exec", "-it", sandbox, "--", shell]);
     }
