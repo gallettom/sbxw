@@ -15,6 +15,11 @@ network:
     - pypi.org
     - files.pythonhosted.org
     - github.com
+    - deb.debian.org
+    - security.debian.org
+    - archive.ubuntu.com
+    - security.ubuntu.com
+    - ports.ubuntu.com
 
 commands:
   initFiles:
@@ -43,6 +48,13 @@ commands:
         if [ -z "$PY" ]; then
           info "no python >=3.10 found — skipping"
           exit 0
+        fi
+
+        # ── 1b. C toolchain — required to compile headroom-ai's Rust extension
+        if ! dpkg -s build-essential >/dev/null 2>&1; then
+          info "installing build-essential…"
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends build-essential \
+            || { info "build-essential install failed — skipping"; exit 0; }
         fi
 
         # ── 2. Install headroom-ai[proxy,code] (idempotent, user site) ───────

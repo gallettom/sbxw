@@ -72,8 +72,8 @@ enum Cmd {
     },
     /// Tail the log of a running sbxw daemon.
     Logs {
-        /// Sandbox name.
-        name: String,
+        /// Sandbox name. Omit to tail the web-only daemon log.
+        name: Option<String>,
         /// Lines of history to show before following.
         #[arg(short = 'n', long, default_value = "40")]
         lines: u32,
@@ -143,9 +143,10 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Logs { name, lines } => {
-            let log = daemon_log_path(&name);
+            let key = name.as_deref().unwrap_or("web");
+            let log = daemon_log_path(key);
             if !log.exists() {
-                anyhow::bail!("no log file for '{name}' — start it with `sbxw up {name}` first");
+                anyhow::bail!("no log file for '{key}' — start it with `sbxw up {key}` first");
             }
             let status = std::process::Command::new("tail")
                 .args(["-n", &lines.to_string(), "-f", &log.to_string_lossy()])

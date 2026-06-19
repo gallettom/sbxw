@@ -10,7 +10,7 @@
 //!   sbx ls
 //!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
-//!   sbx policy allow|deny network RESOURCES        (comma list, *.dom, dom:443, **)
+//!   sbx policy allow|deny network [--sandbox NAME] RESOURCES  (comma list, *.dom, dom:443, **)
 //!   sbx policy set-default <posture>               (posture names NOT confirmed)
 //!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin)
 
@@ -276,14 +276,14 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
     out
 }
 
-/// `sbx policy allow network SANDBOX <resources>` (sandbox-scoped).
+/// `sbx policy allow network --sandbox <sandbox> <resources>` (sandbox-scoped).
 pub fn policy_allow_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_inherit(&["policy", "allow", "network", sandbox, resources])
+    run_inherit(&["policy", "allow", "network", "--sandbox", sandbox, resources])
 }
 
-/// `sbx policy deny network SANDBOX <resources>` (sandbox-scoped).
+/// `sbx policy deny network --sandbox <sandbox> <resources>` (sandbox-scoped).
 pub fn policy_deny_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_inherit(&["policy", "deny", "network", sandbox, resources])
+    run_inherit(&["policy", "deny", "network", "--sandbox", sandbox, resources])
 }
 
 /// Store a service-scoped secret by piping the value on stdin (keeps it out of
