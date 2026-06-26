@@ -542,6 +542,8 @@ document.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   const termEl = document.getElementById('term');
   if (!termEl.contains(e.target)) return;
+  // xterm-viewport carries the native scrollbar — let it scroll freely.
+  if (e.target.classList.contains('xterm-viewport')) return;
   dragSel = { start: mouseToCell(e), dragging: false };
   // Don't intercept: let xterm + process receive the click.
 }, true);
