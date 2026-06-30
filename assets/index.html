@@ -25,7 +25,6 @@
     background: #161b22; border-bottom: 1px solid #21262d;
     flex-shrink: 0; height: 44px;
   }
-  /* address badge — shows the URL, click to copy */
   .addr-badge {
     font-size: 11px; color: #8b949e;
     background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
@@ -45,7 +44,20 @@
   .refresh-btn:hover { background: #30363d; border-color: #484f58; color: #e6edf3; }
   .refresh-btn svg { flex-shrink: 0; }
 
-  /* ── Layout ── */
+  /* ── Layout switch (1-4 panes) ── */
+  .layout-switch {
+    display: inline-flex; background: #0d1117; border: 1px solid #30363d;
+    border-radius: 6px; overflow: hidden;
+  }
+  .layout-switch button {
+    background: transparent; border: none; border-radius: 0;
+    padding: .15rem .55rem; font-size: 11px; color: #8b949e; cursor: pointer;
+    font-family: inherit; line-height: 1;
+  }
+  .layout-switch button:hover { background: #161b22; color: #c9d1d9; }
+  .layout-switch button.active { background: #21262d; color: #e6edf3; }
+
+  /* ── Outer layout ── */
   .layout { display: flex; flex: 1; overflow: hidden; }
 
   /* ── Sidebar ── */
@@ -103,7 +115,6 @@
   }
   .field-input:focus { outline: none; border-color: #58a6ff; }
   .field-input.error { border-color: #f85149; }
-  /* Folder browser */
   .fs-path {
     font-size: 11px; color: #8b949e;
     background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
@@ -124,7 +135,6 @@
   .fs-icon { font-size: 13px; flex-shrink: 0; }
   .fs-empty { padding: .5rem .65rem; font-size: 12px; color: #6e7681; }
   .fs-loading { padding: .5rem .65rem; font-size: 12px; color: #6e7681; }
-  /* Port forwarding rows */
   .ports-header {
     display: flex; align-items: center; justify-content: space-between;
   }
@@ -153,7 +163,6 @@
   .port-col-label {
     font-size: 10px; color: #6e7681; text-align: center;
   }
-  /* Modal buttons */
   .btn-cancel {
     background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
     padding: .3rem .75rem; font: inherit; font-size: 12px; cursor: pointer;
@@ -179,6 +188,11 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     margin-bottom: .25rem;
   }
+  .sbx-pane-badge {
+    display: inline-block; font-size: 9px; color: #58a6ff;
+    background: #0d1f3c; border: 1px solid #1a3a6e; border-radius: 3px;
+    padding: 0 .3rem; margin-left: .3rem; vertical-align: middle;
+  }
   .sbx-meta { display: flex; align-items: center; gap: .35rem; margin-bottom: .3rem; }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .dot.running  { background: #3fb950; box-shadow: 0 0 5px #3fb95066; }
@@ -194,10 +208,8 @@
     font-family: inherit; transition: background .1s; white-space: nowrap; flex-shrink: 0;
   }
   .sbx-actions button:hover { background: #30363d; }
-  /* Primary action (Stop / Connect) keeps its text */
   .sbx-actions button.stop-btn { color: #f85149; }
   .sbx-actions button.stop-btn:hover { background: #3d1c1c; border-color: #f85149; }
-  /* Icon-only secondary buttons: tighter padding, uniform size */
   .sbx-actions button.icon-btn {
     padding: .1rem .38rem; font-size: 13px; line-height: 1; color: #6e7681;
   }
@@ -205,7 +217,6 @@
   .sbx-actions button.ports-btn:hover   { color: #58a6ff; border-color: #58a6ff; background: #0d1f3c; }
   .sbx-actions button.rm-btn    { color: #f85149; }
   .sbx-actions button.rm-btn:hover    { background: #3d1c1c; border-color: #f85149; }
-  /* Ports modal */
   .ports-section-label {
     color: #8b949e; font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;
@@ -234,7 +245,6 @@
   .ports-table .btn-del-port:hover { color: #f85149; background: #21262d; }
   .ports-empty-msg { color: #6e7681; font-style: italic; font-size: 12px; padding: .5rem .25rem; }
   .ports-error-msg { color: #f85149; font-size: 11px; margin-top: .35rem; }
-  /* Add-port inline form */
   .add-port-form {
     display: flex; flex-direction: column; gap: .3rem;
     padding: .55rem .25rem 0; border-top: 1px solid #21262d; margin-top: .4rem;
@@ -258,42 +268,60 @@
   .btn-add-mapping:hover { background: #2ea043; }
   .btn-add-mapping:disabled { opacity: .5; cursor: not-allowed; }
 
-  /* ── Main terminal area ── */
-  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
-  .term-bar {
+  /* ── Multi-pane main area ── */
+  .main {
+    flex: 1; overflow: hidden; min-width: 0;
+    display: grid; gap: 1px;
+    background: #21262d; /* 1px gap fill */
+  }
+  .main.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .main.layout-2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  .main.layout-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  .main.layout-3 .pane:nth-child(3) { grid-column: 1 / -1; }
+  .main.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+  /* ── Pane ── */
+  .pane {
+    display: flex; flex-direction: column; overflow: hidden;
+    background: #0d1117; min-width: 0; min-height: 0;
+  }
+  .pane-bar {
     display: flex; align-items: center; gap: .5rem;
     padding: .3rem .75rem;
     background: #161b22; border-bottom: 1px solid #21262d;
     flex-shrink: 0; height: 32px; font-size: 12px;
   }
-  /* term-bar uses blue/grey to distinguish from sidebar green/grey (container status) */
-  .term-bar .dot { width: 8px; height: 8px; }
-  .term-bar .dot.term-connected    { background: #58a6ff; box-shadow: 0 0 5px #58a6ff66; }
-  .term-bar .dot.term-disconnected { background: #484f58; }
-  .term-bar .sandbox-label { color: #e6edf3; }
-  .term-bar .conn-label { color: #8b949e; font-size: 11px; }
-  .term-bar .spacer { flex: 1; }
-  .term-bar button {
+  .pane.focused .pane-bar { border-bottom-color: #58a6ff; }
+  .pane-bar .dot { width: 8px; height: 8px; }
+  .pane-bar .dot.term-connected    { background: #58a6ff; box-shadow: 0 0 5px #58a6ff66; }
+  .pane-bar .dot.term-disconnected { background: #484f58; }
+  .pane-bar .sandbox-label { color: #e6edf3; }
+  .pane-bar .conn-label { color: #8b949e; font-size: 11px; }
+  .pane-bar .spacer { flex: 1; }
+  .pane-btn {
     background: #21262d; color: #c9d1d9;
     border: 1px solid #30363d; border-radius: 4px;
     padding: .1rem .5rem; font-size: 11px; cursor: pointer;
     font-family: inherit;
   }
-  .term-bar button:hover { background: #30363d; }
-  /* Claude / Bash segmented switch */
+  .pane-btn:hover { background: #30363d; }
+  .pane-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .pane-term { flex: 1; padding: 6px 8px; min-height: 0; }
+
+  /* ── Mode switch (shared between panes) ── */
   .mode-switch {
     display: inline-flex; background: #0d1117; border: 1px solid #30363d;
     border-radius: 6px; overflow: hidden; margin-right: .25rem;
   }
-  .term-bar .mode-switch button {
+  .pane-bar .mode-switch button {
     background: transparent; border: none; border-radius: 0;
-    padding: .15rem .6rem; font-size: 11px; color: #8b949e;
+    padding: .15rem .6rem; font-size: 11px; color: #8b949e; cursor: pointer;
+    font-family: inherit;
   }
-  .term-bar .mode-switch button:hover { background: #161b22; color: #c9d1d9; }
-  .term-bar .mode-switch button.active { background: #21262d; color: #e6edf3; }
-  .term-bar .mode-switch button#mode-claude.active { color: #d2a8ff; }
-  .term-bar .mode-switch button#mode-bash.active   { color: #3fb950; }
-  #term { flex: 1; padding: 6px 8px; }
+  .pane-bar .mode-switch button:hover { background: #161b22; color: #c9d1d9; }
+  .pane-bar .mode-switch button.active { background: #21262d; color: #e6edf3; }
+  .pane-bar .mode-switch button[data-mode="claude"].active { color: #d2a8ff; }
+  .pane-bar .mode-switch button[data-mode="bash"].active   { color: #3fb950; }
 
   /* ── Pasted-image toast ── */
   .paste-toast {
@@ -315,10 +343,8 @@
 </head>
 <body>
 <header>
-  <!-- Logo: rounded badge with "sb" in blue and "xw" in green -->
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 30" height="30" role="img" aria-label="sbxw">
     <rect width="80" height="30" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1.25"/>
-    <!-- small terminal arrow -->
     <text x="8" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#484f58">›</text>
     <text x="20" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700">
       <tspan fill="#58a6ff">sb</tspan><tspan fill="#3fb950">xw</tspan>
@@ -329,8 +355,14 @@
 
   <span class="spacer"></span>
 
+  <div class="layout-switch" id="layout-switch" title="Number of terminals">
+    <button data-n="1" class="active">1</button>
+    <button data-n="2">2</button>
+    <button data-n="3">3</button>
+    <button data-n="4">4</button>
+  </div>
+
   <button id="btn-refresh" class="refresh-btn">
-    <!-- circular arrow icon -->
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
@@ -470,21 +502,8 @@
     </div>
   </div>
 
-  <div class="main">
-    <div class="term-bar">
-      <span class="dot term-disconnected" id="conn-dot" title="Terminal connection (blue = open, grey = closed)"></span>
-      <span class="sandbox-label" id="active-label">—</span>
-      <span class="conn-label" id="conn-label">connecting…</span>
-      <span class="spacer"></span>
-      <div class="mode-switch" id="mode-switch" role="tablist" aria-label="Session mode">
-        <button class="mode-btn active" id="mode-claude" data-mode="claude" role="tab">✦ Claude</button>
-        <button class="mode-btn" id="mode-bash" data-mode="bash" role="tab">❯ Bash</button>
-      </div>
-      <button id="btn-ssh" title="Copy SSH command (requires feature.ssh enabled)" disabled>SSH</button>
-      <button id="btn-reconnect">Reconnect</button>
-    </div>
-    <div id="term"></div>
-  </div>
+  <!-- ── Multi-pane terminal area (panes injected here by JS) ── -->
+  <div class="main layout-1" id="main-area"></div>
 </div>
 
 <div class="paste-toast" id="paste-toast"></div>
@@ -495,62 +514,202 @@
 <script>
 const INITIAL_SANDBOX = "__SANDBOX__";
 
-// ── Terminal ──────────────────────────────────────────────────────────────
-const term = new Terminal({
-  cursorBlink: true, fontSize: 13,
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
-  scrollback: 10000,
-});
-const fit = new FitAddon.FitAddon();
-term.loadAddon(fit);
-if (typeof CanvasAddon !== 'undefined') {
-  term.loadAddon(new CanvasAddon.CanvasAddon());
-  console.log('[copy-dbg] CanvasAddon loaded');
-} else {
-  console.log('[copy-dbg] CanvasAddon NOT available (CDN failed?)');
+// ── Toast ─────────────────────────────────────────────────────────────────
+let pasteToastTimer = null;
+function showToast(msg, kind) {
+  const t = document.getElementById('paste-toast');
+  t.textContent = msg;
+  t.className = 'paste-toast show' + (kind ? ' ' + kind : '');
+  clearTimeout(pasteToastTimer);
+  if (kind !== 'progress')
+    pasteToastTimer = setTimeout(() => { t.className = 'paste-toast'; }, 3000);
 }
-term.open(document.getElementById('term'));
-fit.fit();
 
-// Snapshot the selection on mouseup — xterm clears it on keydown (Meta key),
-// so by the time Cmd+C fires the selection is already gone.
-let lastTermSelection = '';
-term.onSelectionChange(() => {
-  const s = term.getSelection();
-  if (s) lastTermSelection = s;
-});
+// ── Multi-pane state ──────────────────────────────────────────────────────
+let panes = [];
+let focusedPane = 0;
+let paneCount = 1;
 
-// ── Custom drag selection ─────────────────────────────────────────────────────
-// xterm sends mouse drag events to the terminal process when mouse-tracking
-// mode is active (Claude Code's TUI enables it), preventing text selection.
-// We let the mousedown through (process sees a click), then take over on
-// mousemove once the pointer moves ≥1 cell — calling term.select() ourselves.
-// On mouseup we let xterm through so the process receives a clean click.
-function mouseToCell(e) {
-  const el = document.getElementById('term');
+function mouseToCell(e, pane) {
+  const el = pane.termEl;
   const r  = el.getBoundingClientRect();
-  const cw = el.clientWidth  / term.cols;
-  const ch = el.clientHeight / term.rows;
+  const cw = el.clientWidth  / pane.term.cols;
+  const ch = el.clientHeight / pane.term.rows;
   return {
-    col: Math.max(0, Math.min(term.cols - 1, Math.floor((e.clientX - r.left) / cw))),
-    row: Math.max(0, Math.min(term.rows - 1, Math.floor((e.clientY - r.top)  / ch)))
-         + term.buffer.active.viewportY,
+    col: Math.max(0, Math.min(pane.term.cols - 1, Math.floor((e.clientX - r.left) / cw))),
+    row: Math.max(0, Math.min(pane.term.rows - 1, Math.floor((e.clientY - r.top)  / ch)))
+         + pane.term.buffer.active.viewportY,
   };
 }
-let dragSel = null; // { start, dragging }
+
+function createPane(index) {
+  const el = document.createElement('div');
+  el.className = 'pane';
+  el.id = `pane-${index}`;
+  el.innerHTML = `
+    <div class="pane-bar">
+      <span class="dot term-disconnected" id="pdot-${index}" title="Terminal connection"></span>
+      <span class="sandbox-label" id="plabel-${index}">—</span>
+      <span class="conn-label" id="pconn-${index}"></span>
+      <span class="spacer"></span>
+      <div class="mode-switch" role="tablist">
+        <button class="mode-btn active" data-mode="claude">✦ Claude</button>
+        <button class="mode-btn" data-mode="bash">❯ Bash</button>
+      </div>
+      <button class="pane-btn" id="pssh-${index}" title="Copy SSH command (requires feature.ssh)" disabled>SSH</button>
+      <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
+    </div>
+    <div class="pane-term" id="pterm-${index}"></div>`;
+  document.getElementById('main-area').appendChild(el);
+
+  const termEl = document.getElementById(`pterm-${index}`);
+  const term = new Terminal({
+    cursorBlink: true, fontSize: 13,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
+    scrollback: 10000,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  if (typeof CanvasAddon !== 'undefined') term.loadAddon(new CanvasAddon.CanvasAddon());
+  term.open(termEl);
+  fit.fit();
+
+  let lastSelection = '';
+  term.onSelectionChange(() => { const s = term.getSelection(); if (s) lastSelection = s; });
+
+  const pane = {
+    index, el, termEl, term, fit,
+    ws: null, sandbox: null, mode: 'claude',
+    getLastSelection: () => lastSelection,
+  };
+
+  // Focus pane on click inside it
+  el.addEventListener('mousedown', () => setFocusedPane(index));
+
+  // Mode buttons
+  const [claudeBtn, bashBtn] = el.querySelectorAll('.mode-btn');
+  claudeBtn.addEventListener('click', () => {
+    if (pane.mode !== 'claude' && pane.sandbox) connectPane(index, pane.sandbox, 'claude');
+    else setPaneMode(index, 'claude');
+  });
+  bashBtn.addEventListener('click', () => {
+    if (pane.mode !== 'bash' && pane.sandbox) connectPane(index, pane.sandbox, 'bash');
+    else setPaneMode(index, 'bash');
+  });
+
+  document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
+    if (pane.sandbox) connectPane(index, pane.sandbox, pane.mode);
+  });
+  document.getElementById(`pssh-${index}`).addEventListener('click', () => {
+    if (!pane.sandbox) return;
+    const cmd = `ssh ${pane.sandbox}@127.0.0.1 -p 2222`;
+    navigator.clipboard?.writeText(cmd).then(() => showToast('Copied: ' + cmd, 'ok'));
+  });
+
+  term.onData(data => {
+    if (pane.ws && pane.ws.readyState === WebSocket.OPEN)
+      pane.ws.send(new TextEncoder().encode(data));
+  });
+
+  return pane;
+}
+
+function setFocusedPane(idx) {
+  panes.forEach((p, i) => p.el.classList.toggle('focused', i === idx));
+  focusedPane = idx;
+  panes[idx]?.term.focus();
+}
+
+function setPaneMode(idx, mode) {
+  const pane = panes[idx];
+  if (!pane) return;
+  pane.mode = mode;
+  pane.el.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+}
+
+function sendPaneResize(pane) {
+  if (pane.ws && pane.ws.readyState === WebSocket.OPEN)
+    pane.ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols, rows: pane.term.rows }));
+}
+
+function connectPane(idx, name, mode) {
+  if (!name || idx >= panes.length) return;
+  const pane = panes[idx];
+  if (mode) setPaneMode(idx, mode);
+  if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
+  pane.term.clear();
+  pane.sandbox = name;
+  document.getElementById(`plabel-${idx}`).textContent = name;
+  document.getElementById(`pconn-${idx}`).textContent = 'connecting…';
+  document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
+  document.getElementById(`pssh-${idx}`).disabled = false;
+  renderSidebar();
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}`);
+  pane.ws.binaryType = 'arraybuffer';
+
+  pane.ws.onopen = () => {
+    document.getElementById(`pdot-${idx}`).className = 'dot term-connected';
+    document.getElementById(`pconn-${idx}`).textContent = 'connected';
+    pane.fit.fit(); sendPaneResize(pane);
+    if (focusedPane === idx) pane.term.focus();
+    loadSandboxes();
+  };
+  pane.ws.onmessage = ev => {
+    if (typeof ev.data === 'string') pane.term.write(ev.data);
+    else pane.term.write(new Uint8Array(ev.data));
+  };
+  pane.ws.onclose = () => {
+    document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
+    document.getElementById(`pconn-${idx}`).textContent = 'disconnected';
+    loadSandboxes();
+  };
+  pane.ws.onerror = () => {
+    document.getElementById(`pconn-${idx}`).textContent = 'error';
+  };
+}
+
+function setLayout(n) {
+  paneCount = n;
+  const mainEl = document.getElementById('main-area');
+  mainEl.className = `main layout-${n}`;
+
+  while (panes.length < n) panes.push(createPane(panes.length));
+  panes.forEach((p, i) => { p.el.style.display = i < n ? '' : 'none'; });
+
+  setTimeout(() => {
+    panes.slice(0, n).forEach(p => { p.fit.fit(); sendPaneResize(p); });
+    setFocusedPane(focusedPane < n ? focusedPane : 0);
+  }, 50);
+
+  document.querySelectorAll('#layout-switch button').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.n) === n);
+  });
+}
+
+// ── Custom drag selection ─────────────────────────────────────────────────
+// Intercepts mouse drag inside terminal areas so text can be selected even
+// when the process has mouse-tracking mode active (which normally steals drags).
+let dragSel = null;
+
+function paneFromEl(el) {
+  return panes.find(p => p.termEl && p.termEl.contains(el)) || null;
+}
+
 document.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
-  const termEl = document.getElementById('term');
-  if (!termEl.contains(e.target)) return;
+  const pane = paneFromEl(e.target);
+  if (!pane || pane.el.style.display === 'none') return;
   // xterm-viewport carries the native scrollbar — let it scroll freely.
   if (e.target.classList.contains('xterm-viewport')) return;
-  dragSel = { start: mouseToCell(e), dragging: false };
-  // Don't intercept: let xterm + process receive the click.
+  dragSel = { pane, start: mouseToCell(e, pane), dragging: false };
 }, true);
+
 document.addEventListener('mousemove', e => {
   if (!dragSel || !(e.buttons & 1)) { dragSel = null; return; }
-  const cur = mouseToCell(e);
+  const cur = mouseToCell(e, dragSel.pane);
   if (!dragSel.dragging) {
     if (Math.abs(cur.col - dragSel.start.col) < 1 &&
         Math.abs(cur.row - dragSel.start.row) < 1) return;
@@ -559,12 +718,12 @@ document.addEventListener('mousemove', e => {
   e.stopImmediatePropagation(); e.preventDefault();
   let [a, b] = [dragSel.start, cur];
   if (b.row < a.row || (b.row === a.row && b.col < a.col)) [a, b] = [b, a];
-  term.select(a.col, a.row, Math.max(1, (b.row - a.row) * term.cols + (b.col - a.col)));
+  dragSel.pane.term.select(a.col, a.row, Math.max(1, (b.row - a.row) * dragSel.pane.term.cols + (b.col - a.col)));
 }, true);
+
 document.addEventListener('mouseup', e => {
   if (!dragSel?.dragging) { dragSel = null; return; }
   dragSel = null;
-  // Let mouseup through so process sees mousedown+mouseup = a clean click.
 }, true);
 
 // ── Address badge (copy URL) ──────────────────────────────────────────────
@@ -582,142 +741,8 @@ addrBadge.addEventListener('click', () => {
 });
 
 // ── State ─────────────────────────────────────────────────────────────────
-let ws = null;
-let activeSandbox = null;
-let activeMode = 'claude';   // 'claude' | 'bash'
 let sandboxes = [];
-
-const connDot    = document.getElementById('conn-dot');
-const activeLabel = document.getElementById('active-label');
-const connLabel  = document.getElementById('conn-label');
-const listEl     = document.getElementById('sandbox-list');
-
-// ── Connection ────────────────────────────────────────────────────────────
-function setConnected(ok) {
-  // Uses blue/grey — distinct from sidebar's green/grey (container status).
-  connDot.className = 'dot ' + (ok ? 'term-connected' : 'term-disconnected');
-}
-
-function sendResize() {
-  if (ws && ws.readyState === WebSocket.OPEN)
-    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-}
-
-function setMode(mode) {
-  activeMode = mode;
-  document.getElementById('mode-claude').classList.toggle('active', mode === 'claude');
-  document.getElementById('mode-bash').classList.toggle('active', mode === 'bash');
-}
-
-function connectTerminal(name, mode) {
-  if (!name) return;
-  if (mode) setMode(mode);
-  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
-  term.clear();
-  activeSandbox = name;
-  activeLabel.textContent = name;
-  connLabel.textContent = 'connecting…';
-  setConnected(false);
-  document.getElementById('btn-ssh').disabled = false;
-  renderSidebar();
-
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(activeMode)}`);
-  ws.binaryType = 'arraybuffer';
-
-  ws.onopen = () => {
-    setConnected(true);
-    connLabel.textContent = 'connected';
-    fit.fit(); sendResize(); term.focus();
-    loadSandboxes();
-  };
-  ws.onmessage = ev => {
-    if (typeof ev.data === 'string') term.write(ev.data);
-    else term.write(new Uint8Array(ev.data));
-  };
-  ws.onclose = () => { setConnected(false); connLabel.textContent = 'disconnected'; loadSandboxes(); };
-  ws.onerror = () => { connLabel.textContent = 'error'; };
-}
-
-term.onData(data => {
-  if (ws && ws.readyState === WebSocket.OPEN)
-    ws.send(new TextEncoder().encode(data));
-});
-
-// ── Paste image → upload into sandbox → type its path into the terminal ─────
-// Text paste is left untouched (xterm handles it natively). When the clipboard
-// holds an image, we upload the bytes to the sandbox and insert the resulting
-// file path at the prompt so Claude can read the visual.
-let pasteToastTimer = null;
-function showToast(msg, kind) {
-  const t = document.getElementById('paste-toast');
-  t.textContent = msg;
-  t.className = 'paste-toast show' + (kind ? ' ' + kind : '');
-  clearTimeout(pasteToastTimer);
-  if (kind !== 'progress')
-    pasteToastTimer = setTimeout(() => { t.className = 'paste-toast'; }, 3000);
-}
-
-async function uploadPastedImage(file) {
-  if (!activeSandbox || !ws || ws.readyState !== WebSocket.OPEN) {
-    showToast('No sandbox attached — connect one first', 'error');
-    return;
-  }
-  showToast('Uploading image…', 'progress');
-  try {
-    const res = await fetch(
-      `/api/sandboxes/${encodeURIComponent(activeSandbox)}/paste-image`,
-      { method: 'POST', headers: { 'Content-Type': file.type || 'image/png' }, body: file }
-    );
-    const data = await res.json();
-    if (data.ok && data.path) {
-      // Type the in-sandbox path at the prompt (trailing space separates it
-      // from whatever the user types next). Claude reads the referenced file.
-      ws.send(new TextEncoder().encode(data.path + ' '));
-      term.focus();
-      showToast('📎 ' + data.path, 'ok');
-    } else {
-      showToast('Upload failed: ' + (data.error || 'unknown error'), 'error');
-    }
-  } catch (_) {
-    showToast('Upload error — is the sandbox running?', 'error');
-  }
-}
-
-// Cmd+C (macOS) or Ctrl+Shift+C (Linux/Windows) copies the xterm selection.
-// Must be capture phase + stopImmediatePropagation so we beat every handler.
-document.addEventListener('keydown', e => {
-  const isCopy = (e.metaKey && !e.altKey && e.key === 'c') ||
-                 (e.ctrlKey && e.shiftKey && e.key === 'C');
-  if (!isCopy) return;
-  const sel = term.getSelection() || lastTermSelection || window.getSelection()?.toString() || '';
-  if (!sel) return;
-  e.preventDefault();
-  e.stopImmediatePropagation();
-  const ta = Object.assign(document.createElement('textarea'),
-    { value: sel, style: 'position:fixed;opacity:0;top:0;left:0;width:1px;height:1px' });
-  document.body.appendChild(ta);
-  ta.focus(); ta.select();
-  const ok = document.execCommand('copy');
-  document.body.removeChild(ta);
-  navigator.clipboard?.writeText(sel)
-    .then(() => showToast('Copied', 'ok'))
-    .catch(() => { if (ok) showToast('Copied', 'ok'); });
-}, true);
-
-// Capture phase so this fires before xterm's textarea handler, which may call
-// stopPropagation() once the terminal has focus (i.e. after a successful connect).
-document.addEventListener('paste', e => {
-  const items = (e.clipboardData && e.clipboardData.items) || [];
-  let file = null;
-  for (const it of items) {
-    if (it.kind === 'file' && it.type.startsWith('image/')) { file = it.getAsFile(); break; }
-  }
-  if (!file) return; // no image → let xterm handle the normal text paste
-  e.preventDefault();
-  e.stopPropagation(); // image found: stop xterm from also seeing this event
-  uploadPastedImage(file);
-}, true);
+const listEl = document.getElementById('sandbox-list');
 
 // ── Sidebar ───────────────────────────────────────────────────────────────
 function dotClass(status) {
@@ -732,7 +757,12 @@ function renderSidebar() {
     return;
   }
   listEl.innerHTML = sandboxes.map(s => {
-    const isActive = s.name === activeSandbox;
+    // In multi-pane mode show which pane(s) are connected to this sandbox.
+    const connPanes = panes.filter((p, i) => i < paneCount && p.sandbox === s.name);
+    const paneTag = paneCount > 1 && connPanes.length
+      ? connPanes.map(p => `<span class="sbx-pane-badge">P${p.index + 1}</span>`).join('')
+      : '';
+    const isActive = connPanes.length > 0;
     const isRunning = s.status === 'running';
     const actions = isRunning
       ? `<button class="stop-btn" data-action="stop" data-name="${s.name}">■ Stop</button>
@@ -743,7 +773,7 @@ function renderSidebar() {
          <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Port mappings">⇌</button>
          <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`;
     return `<div class="sbx-item${isActive ? ' active' : ''}" data-name="${s.name}">
-      <div class="sbx-name">${s.name}</div>
+      <div class="sbx-name">${s.name}${paneTag}</div>
       <div class="sbx-meta">
         <span class="dot ${dotClass(s.status)}"></span>
         <span class="sbx-status">${s.status}</span>
@@ -754,6 +784,7 @@ function renderSidebar() {
   }).join('');
 }
 
+// Clicking a sandbox item (not a button) connects it to the focused pane.
 listEl.addEventListener('click', e => {
   const btn = e.target.closest('button[data-action]');
   const item = e.target.closest('.sbx-item');
@@ -764,11 +795,11 @@ listEl.addEventListener('click', e => {
     const action = btn.dataset.action;
     if (action === 'stop')    stopSandbox(name);
     if (action === 'restart') restartSandbox(name);
-    if (action === 'connect') connectTerminal(name, 'claude'); // claude starts a stopped sandbox
+    if (action === 'connect') connectPane(focusedPane, name, 'claude');
     if (action === 'rm')      openRmModal(name);
     if (action === 'ports')   openPortsModal(name);
   } else {
-    connectTerminal(name);
+    connectPane(focusedPane, name);
   }
 });
 
@@ -785,41 +816,87 @@ async function stopSandbox(name) {
   const s = sandboxes.find(x => x.name === name);
   if (s) s.status = 'stopping…';
   renderSidebar();
-  if (name === activeSandbox) { setConnected(false); ws && ws.close(); }
+  panes.forEach(p => { if (p.sandbox === name && p.ws) { try { p.ws.close(); } catch(_){} } });
   await fetch(`/api/sandboxes/${encodeURIComponent(name)}/stop`, { method: 'POST' });
   setTimeout(loadSandboxes, 1200);
 }
 
 async function restartSandbox(name) {
   await stopSandbox(name);
-  setTimeout(() => connectTerminal(name, 'claude'), 1600);
+  setTimeout(() => {
+    panes.forEach((p, i) => { if (i < paneCount && p.sandbox === name) connectPane(i, name, 'claude'); });
+  }, 1600);
 }
 
 // ── Buttons ───────────────────────────────────────────────────────────────
-document.getElementById('btn-reconnect').addEventListener('click', () => {
-  if (activeSandbox) connectTerminal(activeSandbox, activeMode);
-});
-
-document.getElementById('btn-ssh').addEventListener('click', () => {
-  if (!activeSandbox) return;
-  const cmd = `ssh ${activeSandbox}@127.0.0.1 -p 2222`;
-  navigator.clipboard?.writeText(cmd).then(() => showToast('Copied: ' + cmd, 'ok'));
-});
 document.getElementById('btn-refresh').addEventListener('click', loadSandboxes);
 
-// Claude / Bash mode switch: reconnect the same sandbox in the chosen mode.
-// Each mode has its own persistent PTY server-side, so switching back and
-// forth preserves both sessions.
-document.getElementById('mode-claude').addEventListener('click', () => {
-  if (activeMode !== 'claude' && activeSandbox) connectTerminal(activeSandbox, 'claude');
-  else setMode('claude');
-});
-document.getElementById('mode-bash').addEventListener('click', () => {
-  if (activeMode !== 'bash' && activeSandbox) connectTerminal(activeSandbox, 'bash');
-  else setMode('bash');
+document.querySelectorAll('#layout-switch button').forEach(btn => {
+  btn.addEventListener('click', () => setLayout(parseInt(btn.dataset.n)));
 });
 
-window.addEventListener('resize', () => { fit.fit(); sendResize(); });
+window.addEventListener('resize', () => {
+  panes.slice(0, paneCount).forEach(p => { p.fit.fit(); sendPaneResize(p); });
+});
+
+// ── Copy: Cmd+C (macOS) or Ctrl+Shift+C — copies focused pane's selection ─
+document.addEventListener('keydown', e => {
+  const isCopy = (e.metaKey && !e.altKey && e.key === 'c') ||
+                 (e.ctrlKey && e.shiftKey && e.key === 'C');
+  if (!isCopy) return;
+  const fp = panes[focusedPane];
+  if (!fp) return;
+  const sel = fp.term.getSelection() || fp.getLastSelection() || window.getSelection()?.toString() || '';
+  if (!sel) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const ta = Object.assign(document.createElement('textarea'),
+    { value: sel, style: 'position:fixed;opacity:0;top:0;left:0;width:1px;height:1px' });
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(ta);
+  navigator.clipboard?.writeText(sel)
+    .then(() => showToast('Copied', 'ok'))
+    .catch(() => { if (ok) showToast('Copied', 'ok'); });
+}, true);
+
+// ── Paste image → upload to focused pane's sandbox ────────────────────────
+async function uploadPastedImage(file, pane) {
+  if (!pane.sandbox || !pane.ws || pane.ws.readyState !== WebSocket.OPEN) {
+    showToast('No sandbox attached — connect one first', 'error');
+    return;
+  }
+  showToast('Uploading image…', 'progress');
+  try {
+    const res = await fetch(
+      `/api/sandboxes/${encodeURIComponent(pane.sandbox)}/paste-image`,
+      { method: 'POST', headers: { 'Content-Type': file.type || 'image/png' }, body: file }
+    );
+    const data = await res.json();
+    if (data.ok && data.path) {
+      pane.ws.send(new TextEncoder().encode(data.path + ' '));
+      pane.term.focus();
+      showToast('📎 ' + data.path, 'ok');
+    } else {
+      showToast('Upload failed: ' + (data.error || 'unknown error'), 'error');
+    }
+  } catch (_) {
+    showToast('Upload error — is the sandbox running?', 'error');
+  }
+}
+
+document.addEventListener('paste', e => {
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  let file = null;
+  for (const it of items) {
+    if (it.kind === 'file' && it.type.startsWith('image/')) { file = it.getAsFile(); break; }
+  }
+  if (!file) return;
+  e.preventDefault();
+  e.stopPropagation();
+  uploadPastedImage(file, panes[focusedPane] || panes[0]);
+}, true);
 
 // ── Create sandbox wizard ─────────────────────────────────────────────────
 const overlay   = document.getElementById('modal-overlay');
@@ -831,7 +908,6 @@ const errEl     = document.getElementById('create-error');
 
 let selectedPath = '';
 
-// ── Port forwarding rows ──────────────────────────────────────────────────
 const portRowsEl = document.getElementById('port-rows');
 let portRowId = 0;
 
@@ -847,7 +923,6 @@ function addPortRow(sandboxPort = '', hostPort = '', alias = '') {
     `<input class="port-input" type="text" placeholder="app.local" value="${alias}" data-field="alias">` +
     `<button class="btn-rm-port" type="button" title="Remove">✕</button>`;
   row.querySelector('.btn-rm-port').addEventListener('click', () => row.remove());
-  // When sandbox port is typed and host port is empty, mirror the value.
   const sbxInput  = row.querySelector('[data-field="sbx"]');
   const hostInput = row.querySelector('[data-field="host"]');
   sbxInput.addEventListener('input', () => {
@@ -881,13 +956,11 @@ function openModal() {
   selectedPath = '';
   fsPath.textContent = '—';
   portRowsEl.innerHTML = '';
-  browseTo(null); // start at HOME
+  browseTo(null);
   inpName.focus();
 }
 
-function closeModal() {
-  overlay.classList.add('hidden');
-}
+function closeModal() { overlay.classList.add('hidden'); }
 
 async function browseTo(path) {
   fsList.innerHTML = '<div class="fs-loading">Loading…</div>';
@@ -915,8 +988,6 @@ async function browseTo(path) {
     ).join('');
 
     fsList.innerHTML = html || '<div class="fs-empty">Empty directory</div>';
-
-    // Single click → navigate into folder (current dir becomes the selection)
     fsList.querySelectorAll('.fs-item[data-path]').forEach(el => {
       el.addEventListener('click', () => browseTo(el.dataset.path));
     });
@@ -931,10 +1002,7 @@ function validateForm() {
   btnCreate.disabled = !(nameOk && pathOk);
 }
 
-inpName.addEventListener('input', () => {
-  inpName.classList.remove('error');
-  validateForm();
-});
+inpName.addEventListener('input', () => { inpName.classList.remove('error'); validateForm(); });
 
 document.getElementById('btn-new-sandbox').addEventListener('click', openModal);
 document.getElementById('modal-close').addEventListener('click', closeModal);
@@ -963,7 +1031,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
     if (data.ok) {
       closeModal();
       await loadSandboxes();
-      connectTerminal(name);
+      connectPane(focusedPane, name);
     } else {
       errEl.textContent = data.error || 'Creation failed';
       errEl.classList.remove('hidden');
@@ -1112,10 +1180,7 @@ function openPortsModal(name) {
   fetchPorts(name);
 }
 
-function closePortsModal() {
-  portsOverlay.classList.add('hidden');
-  portsTarget = null;
-}
+function closePortsModal() { portsOverlay.classList.add('hidden'); portsTarget = null; }
 
 document.getElementById('ports-modal-close').addEventListener('click', closePortsModal);
 document.getElementById('ports-modal-close2').addEventListener('click', closePortsModal);
@@ -1141,13 +1206,15 @@ function openRmModal(name) {
   rmOverlay.classList.remove('hidden');
 }
 
-function closeRmModal() {
-  rmOverlay.classList.add('hidden');
-  rmTarget = null;
-}
+function closeRmModal() { rmOverlay.classList.add('hidden'); rmTarget = null; }
 
 async function removeSandbox(name) {
-  if (name === activeSandbox) { ws && ws.close(); ws = null; activeSandbox = null; }
+  panes.forEach(p => {
+    if (p.sandbox === name) {
+      if (p.ws) { try { p.ws.close(); } catch(_){} p.ws = null; }
+      p.sandbox = null;
+    }
+  });
   const s = sandboxes.find(x => x.name === name);
   if (s) s.status = 'removing…';
   renderSidebar();
@@ -1155,7 +1222,8 @@ async function removeSandbox(name) {
   const data = await res.json();
   if (!data.ok) alert(`Failed to remove '${name}': ${data.error}`);
   await loadSandboxes();
-  if (!activeSandbox && sandboxes.length) connectTerminal(sandboxes[0].name);
+  // If pane 0 has no sandbox and there are other sandboxes, connect to first one.
+  if (!panes[0]?.sandbox && sandboxes.length) connectPane(0, sandboxes[0].name);
 }
 
 document.getElementById('rm-modal-close').addEventListener('click', closeRmModal);
@@ -1176,18 +1244,16 @@ rmConfirm.addEventListener('click', async () => {
 
 // ── Init ──────────────────────────────────────────────────────────────────
 (async () => {
+  setLayout(1);
   await loadSandboxes();
-  // Only auto-connect to a sandbox that actually exists — INITIAL_SANDBOX may
-  // name a sandbox that was removed (or be empty for the web-only daemon),
-  // which would otherwise attach a phantom, buggy terminal.
   const exists = name => sandboxes.some(s => s.name === name);
   const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
   if (initial) {
-    connectTerminal(initial);
+    connectPane(0, initial);
   } else {
-    // No sandbox to attach: show an idle prompt instead of "connecting…".
-    connLabel.textContent = sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
-    term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
+    document.getElementById('pconn-0').textContent =
+      sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
+    panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
   }
 })();
 </script>
