@@ -11,7 +11,7 @@
 //!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
 //!   sbx policy allow|deny network [--sandbox NAME] RESOURCES  (comma list, *.dom, dom:443, **)
-//!   sbx policy set-default <posture>               (posture names NOT confirmed)
+//!   sbx policy init <posture>                      (was `set-default`, kept as deprecated alias)
 //!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin)
 
 use anyhow::{bail, Context, Result};
@@ -149,7 +149,8 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
 }
 
 /// `sbx ports <name> --publish <spec>` where spec = [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO].
-/// Ports are NOT persistent across stop/restart — callers must re-publish.
+/// sbx restores published ports on restart; we still re-publish as a belt-and-suspenders
+/// guard against conflict recovery choosing a different host port.
 pub fn publish_port(name: &str, spec: &str) -> Result<()> {
     run_inherit(&["ports", name, "--publish", spec])
 }

@@ -10,8 +10,8 @@
 //!      model). Only that directory is shared; the microVM keeps its own FS;
 //!   3. set up host aliases (/etc/hosts + macOS lo0 aliases) for your apps;
 //!   4. start a provisioning thread that, once the sandbox is `running`,
-//!      (re)publishes ports (they are NOT persistent across restarts) and injects
-//!      the Claude OAuth token;
+//!      (re)publishes ports (sbx restores them on restart; we republish as a guard
+//!      against conflict recovery changing the host port) and injects the Claude OAuth token;
 //!   5. serve a browser terminal attached to the agent (`sbx run <name>`).
 //!
 //! Authentication:
@@ -95,6 +95,15 @@ enum Cmd {
         /// Sandbox name.
         name: String,
     },
+    /// Connect to a running sandbox via SSH (experimental).
+    /// Requires: sbx settings set feature.ssh true
+    Ssh {
+        /// Sandbox name.
+        name: String,
+        /// SSH port (default: 2222).
+        #[arg(long, default_value = "2222")]
+        port: u16,
+    },
     /// List all sandboxes.
     Ls,
     /// Show published port mappings for one or all sandboxes.
@@ -175,6 +184,16 @@ fn main() -> Result<()> {
                 .status()?;
             if !status.success() {
                 anyhow::bail!("`sbx exec -it {name} -- bash` exited with {status}");
+            }
+            Ok(())
+        }
+        Cmd::Ssh { name, port } => {
+            let target = format!("{name}@127.0.0.1");
+            let status = std::process::Command::new("ssh")
+                .args(["-p", &port.to_string(), &target])
+                .status()?;
+            if !status.success() {
+                anyhow::bail!("`ssh -p {port} {target}` exited with {status}");
             }
             Ok(())
         }
@@ -525,6 +544,30 @@ fn publish_all_ports(name: &str, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Returns true if a kit reference requires an explicit allowlist entry in sbx.
+/// Git URLs (http/https/git@/git://) and non-Docker Hub OCI registries (any
+/// hostname prefix other than docker.io) are blocked by default since sbx
+/// restricts kit sources to Docker Hub only.
+fn kit_needs_allowlist(kit: &str) -> bool {
+    if kit.starts_with("http://") || kit.starts_with("https://")
+        || kit.starts_with("git@") || kit.starts_with("git://")
+        || kit.starts_with("ssh://")
+    {
+        return true;
+    }
+    // OCI ref with an explicit registry hostname (e.g. ghcr.io/owner/kit:tag).
+    // Docker Hub refs have no hostname prefix ("owner/kit") or use "docker.io/".
+    // Local paths start with '/' or '.'.
+    if !kit.starts_with('/') && !kit.starts_with('.') {
+        if let Some(first) = kit.split('/').next() {
+            if (first.contains('.') || first.contains(':')) && !first.contains("docker.io") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Full bring-up pipeline for a sandbox: OAuth kit, create-or-reuse, network
 /// policy, API key, host aliases, and a port-publishing provisioning thread.
 /// Does NOT start the web terminal or attach to this terminal — callers do that.
@@ -602,8 +645,15 @@ pub(crate) fn provision_sandbox(
     // 3b. User-defined kits from sbxw.toml (applied in order via sbx kit add).
     //     sbx kit add is idempotent — safe to run on every `sbxw up`.
     //     Runs AFTER network policy so kit startup commands have egress access.
-    //     A kit reference is a directory (with spec.yaml), ZIP, OCI ref, or git URL.
+    //     A kit reference is a directory (with spec.yaml), ZIP, or OCI ref (docker.io by default).
+    //     Git URLs and non-Docker Hub OCI refs require: sbx settings set kit.allowedSources <prefix>
     for kit in &cfg.kits {
+        if kit_needs_allowlist(kit) {
+            tracing::warn!(
+                "kit '{kit}' is a Git URL or non-Docker Hub registry — sbx now restricts kit \
+                 sources to Docker Hub by default. Run `sbx settings set kit.allowedSources <prefix>` to allow it."
+            );
+        }
         tracing::info!("applying kit: {kit}");
         if let Err(e) = sbx::kit_add(name, kit) {
             tracing::warn!("kit '{kit}' failed to apply: {e:#}");
@@ -651,7 +701,8 @@ pub(crate) fn provision_sandbox(
             }
             std::thread::sleep(Duration::from_millis(500));
         }
-        // Re-publish ports (not persistent across restarts).
+        // Re-publish ports. sbx restores them on restart, but we republish anyway
+        // in case conflict recovery chose a different host port than we expect.
         for spec in &prov_specs {
             if let Err(e) = sbx::publish_port(&prov_name, spec) {
                 tracing::warn!("publish {spec} failed: {e:#}");

@@ -480,6 +480,7 @@
         <button class="mode-btn active" id="mode-claude" data-mode="claude" role="tab">✦ Claude</button>
         <button class="mode-btn" id="mode-bash" data-mode="bash" role="tab">❯ Bash</button>
       </div>
+      <button id="btn-ssh" title="Copy SSH command (requires feature.ssh enabled)" disabled>SSH</button>
       <button id="btn-reconnect">Reconnect</button>
     </div>
     <div id="term"></div>
@@ -617,6 +618,7 @@ function connectTerminal(name, mode) {
   activeLabel.textContent = name;
   connLabel.textContent = 'connecting…';
   setConnected(false);
+  document.getElementById('btn-ssh').disabled = false;
   renderSidebar();
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -796,6 +798,12 @@ async function restartSandbox(name) {
 // ── Buttons ───────────────────────────────────────────────────────────────
 document.getElementById('btn-reconnect').addEventListener('click', () => {
   if (activeSandbox) connectTerminal(activeSandbox, activeMode);
+});
+
+document.getElementById('btn-ssh').addEventListener('click', () => {
+  if (!activeSandbox) return;
+  const cmd = `ssh ${activeSandbox}@127.0.0.1 -p 2222`;
+  navigator.clipboard?.writeText(cmd).then(() => showToast('Copied: ' + cmd, 'ok'));
 });
 document.getElementById('btn-refresh').addEventListener('click', loadSandboxes);
 
