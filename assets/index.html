@@ -47,7 +47,7 @@
   /* ── Layout switch (1-4 panes) ── */
   .layout-switch {
     display: inline-flex; background: #0d1117; border: 1px solid #30363d;
-    border-radius: 6px; overflow: hidden;
+    border-radius: 6px; overflow: hidden; height: 25px;
   }
   .layout-switch button {
     background: transparent; border: none; border-radius: 0;
@@ -648,6 +648,8 @@ function sendPaneResize(pane) {
 
 function connectPane(idx, name, mode) {
   if (!name || idx >= panes.length) return;
+  // Refuse to duplicate a sandbox already open in a different visible pane.
+  if (panes.slice(0, paneCount).some((p, i) => i !== idx && p.sandbox === name)) return;
   const pane = panes[idx];
   if (mode) setPaneMode(idx, mode, false);
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
