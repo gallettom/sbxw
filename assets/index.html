@@ -306,6 +306,12 @@
   }
   .pane-btn:hover { background: #30363d; }
   .pane-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .pane-close-btn {
+    background: none; border: none; color: #6e7681; cursor: pointer;
+    font-size: 14px; line-height: 1; padding: .1rem .35rem; border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .pane-close-btn:hover { color: #f85149; background: rgba(248,81,73,.1); }
   .pane-term { flex: 1; padding: 6px 8px; min-height: 0; }
 
   /* ── Mode switch (shared between panes) ── */
@@ -558,6 +564,7 @@ function createPane(index) {
       </div>
       <button class="pane-btn" id="pssh-${index}" title="Copy SSH command (requires feature.ssh)" disabled>SSH</button>
       <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
+      <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
     <div class="pane-term" id="pterm-${index}"></div>`;
   document.getElementById('main-area').appendChild(el);
@@ -601,6 +608,7 @@ function createPane(index) {
   document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
     if (pane.sandbox) connectPane(index, pane.sandbox, pane.mode);
   });
+  document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
   document.getElementById(`pssh-${index}`).addEventListener('click', () => {
     if (!pane.sandbox) return;
     const cmd = `ssh ${pane.sandbox}@127.0.0.1 -p 2222`;
@@ -687,6 +695,98 @@ function setLayout(n) {
   document.querySelectorAll('#layout-switch button').forEach(btn => {
     btn.classList.toggle('active', parseInt(btn.dataset.n) === n);
   });
+  updateCloseButtons();
+}
+
+// ── Close a pane ─────────────────────────────────────────────────────────
+function updateCloseButtons() {
+  panes.forEach((p, i) => {
+    const btn = document.getElementById(`pclose-${i}`);
+    if (btn) btn.style.display = paneCount > 1 ? '' : 'none';
+  });
+}
+
+// Close pane at `idx`, shifting subsequent panes left to fill the gap.
+// The WebSocket of each shifted pane is rewired to write to its new term element.
+function closePane(idx) {
+  if (paneCount <= 1) return;
+
+  // Disconnect the closing pane.
+  const closing = panes[idx];
+  if (closing.ws) { try { closing.ws.close(); } catch (_) {} closing.ws = null; }
+  closing.sandbox = null;
+  closing.term.clear();
+  document.getElementById(`plabel-${idx}`).textContent = '—';
+  document.getElementById(`pconn-${idx}`).textContent = '';
+  document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
+  document.getElementById(`pssh-${idx}`).disabled = true;
+
+  // Shift panes[idx+1..paneCount-1] one slot to the left.
+  // After each step the source slot is nulled so it can safely be overwritten
+  // in the next step without closing a still-live connection.
+  for (let k = idx; k < paneCount - 1; k++) {
+    const src = panes[k + 1];
+    const dst = panes[k];
+
+    dst.sandbox = src.sandbox;
+    dst.mode    = src.mode;
+    dst.ws      = src.ws;
+
+    if (dst.ws) {
+      // Rewire incoming data to the destination terminal element.
+      dst.ws.onmessage = ev => {
+        if (typeof ev.data === 'string') dst.term.write(ev.data);
+        else dst.term.write(new Uint8Array(ev.data));
+      };
+      dst.ws.onclose = () => {
+        document.getElementById(`pdot-${dst.index}`).className = 'dot term-disconnected';
+        document.getElementById(`pconn-${dst.index}`).textContent = 'disconnected';
+        loadSandboxes();
+      };
+      dst.ws.onerror = () => {
+        document.getElementById(`pconn-${dst.index}`).textContent = 'error';
+      };
+    }
+
+    // Update the destination pane bar.
+    document.getElementById(`plabel-${dst.index}`).textContent = src.sandbox || '—';
+    document.getElementById(`pdot-${dst.index}`).className = 'dot ' +
+      (dst.ws?.readyState === WebSocket.OPEN ? 'term-connected' : 'term-disconnected');
+    document.getElementById(`pconn-${dst.index}`).textContent =
+      dst.ws?.readyState === WebSocket.OPEN ? 'connected' : (src.sandbox ? 'disconnected' : '');
+    document.getElementById(`pssh-${dst.index}`).disabled = !src.sandbox;
+    setPaneMode(dst.index, src.mode);
+    dst.term.clear(); // clear stale content; PTY resize will trigger a redraw
+
+    // Null out the source so it becomes a clean empty slot.
+    src.sandbox = null;
+    src.ws      = null;
+    src.term.clear();
+    document.getElementById(`plabel-${src.index}`).textContent = '—';
+    document.getElementById(`pconn-${src.index}`).textContent = '';
+    document.getElementById(`pdot-${src.index}`).className = 'dot term-disconnected';
+    document.getElementById(`pssh-${src.index}`).disabled = true;
+  }
+
+  // Hide the now-empty last slot and decrement the count.
+  panes[paneCount - 1].el.style.display = 'none';
+  paneCount--;
+
+  const mainEl = document.getElementById('main-area');
+  mainEl.className = `main layout-${paneCount}`;
+  document.querySelectorAll('#layout-switch button').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.n) === paneCount);
+  });
+  updateCloseButtons();
+
+  if (focusedPane >= paneCount) setFocusedPane(paneCount - 1);
+
+  // Resize all visible panes; the PTY will redraw on receiving the new size.
+  setTimeout(() => {
+    panes.slice(0, paneCount).forEach(p => { p.fit.fit(); sendPaneResize(p); });
+  }, 50);
+
+  renderSidebar();
 }
 
 // ── Custom drag selection ─────────────────────────────────────────────────
