@@ -1,9 +1,14 @@
 # md-to-pdf-tools kit
 
-Pre-installs the dependencies used by the `/md-to-pdf` skill — **WeasyPrint**,
-**poppler-utils** (`pdftoppm`), **Pillow**, and **python-markdown** — so
-Markdown → PDF/PNG conversion works on first invocation with no install step.
-Idempotent — re-running skips anything already installed.
+Ships the `/md-to-pdf` skill itself — written to
+`/home/agent/.claude/commands/md-to-pdf.md` (user-level, so it's available
+regardless of which project is mounted as the workspace) — and pre-installs
+the dependencies it needs: **WeasyPrint**, **poppler-utils** (`pdftoppm`),
+**Pillow**, and **python-markdown**. Together this means Markdown → PDF/PNG
+conversion is available and works on first invocation, with no manual copy
+step and no install step. Idempotent — re-running skips anything already
+installed, and rewrites the skill file to whatever version ships with this
+kit.
 
 ## Usage
 
@@ -43,9 +48,12 @@ sbx kit validate path/to/sbxw/assets/md-to-pdf-tools   # sanity check the spec
 
 ## Notes
 
-- Without this kit, `/md-to-pdf` still works — it checks for each dependency
-  and installs whatever's missing on first run. This kit just moves that cost
-  to `sbxw up` time so the first conversion isn't the slow one.
+- Without this kit, `/md-to-pdf` is only available in a sandbox if the target
+  project happens to carry its own `.claude/commands/md-to-pdf.md`. The kit's
+  dependency checks are self-healing either way — even the copy it ships
+  installs whatever's missing on first run — so this kit's only real job is
+  moving both the skill file and the install cost to `sbxw up` time, instead
+  of requiring a manual copy and a slow first conversion.
 - `spec.yaml` `content` fields do **not** allow `${VAR}` placeholders (only
   `${WORKDIR}`). The install script uses brace-free `$VAR` syntax for that reason.
 - `startup` commands are exec-style arrays (`command: ["bash", "..."]`), not

@@ -10,12 +10,14 @@
 //!   POST /api/sandboxes/create      → create a new sandbox
 //!   POST /api/sandboxes/:name/stop  → `sbx stop <name>`
 //!   GET  /api/fs?path=<dir>         → directory listing for the folder picker
+//!   GET  /api/sandboxes/:name/artifacts             → non-code files under .sbxw-artifacts
+//!   GET  /api/sandboxes/:name/artifacts/download     → download one of those files
 //!   GET  /ws?sandbox=<name>         → WebSocket ↔ persistent PTY
 
 use crate::config::Config;
 use crate::hosts::{self, HostAlias};
-use crate::ExtraPort;
 use crate::sbx;
+use crate::ExtraPort;
 use anyhow::{Context, Result};
 use axum::{
     body::Bytes,
@@ -23,8 +25,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         DefaultBodyLimit, Path, Query, State,
     },
-    http::HeaderMap,
-    response::Html,
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -51,6 +53,8 @@ struct PtySession {
     master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     /// Ring buffer for replaying output to newly connected WebSockets.
     replay: Arc<Mutex<VecDeque<u8>>>,
+    /// Fires whenever the PTY emits a BEL (0x07) — the agent's "I need you" signal.
+    bell_tx: broadcast::Sender<()>,
     /// Child process handle — kept alive so the process is properly reaped on exit.
     _child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
 }
@@ -103,8 +107,14 @@ pub async fn serve(
         .route("/api/sandboxes", get(api_list))
         .route("/api/sandboxes/create", post(api_create))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
-        .route("/api/sandboxes/:name/ports/publish", post(api_ports_publish))
-        .route("/api/sandboxes/:name/ports/unpublish", post(api_ports_unpublish))
+        .route(
+            "/api/sandboxes/:name/ports/publish",
+            post(api_ports_publish),
+        )
+        .route(
+            "/api/sandboxes/:name/ports/unpublish",
+            post(api_ports_unpublish),
+        )
         .route("/api/hosts", get(api_hosts_read))
         .route("/api/sandboxes/:name/stop", post(api_stop))
         .route("/api/sandboxes/:name/rm", post(api_rm))
@@ -114,6 +124,11 @@ pub async fn serve(
             post(api_paste_image).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
         .route("/api/fs", get(api_fs))
+        .route("/api/sandboxes/:name/artifacts", get(api_artifacts))
+        .route(
+            "/api/sandboxes/:name/artifacts/download",
+            get(api_artifact_download),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -133,7 +148,11 @@ async fn api_list() -> Json<Vec<SandboxItem>> {
     Json(
         items
             .into_iter()
-            .map(|s| SandboxItem { name: s.name, agent: s.agent, status: s.status })
+            .map(|s| SandboxItem {
+                name: s.name,
+                agent: s.agent,
+                status: s.status,
+            })
             .collect(),
     )
 }
@@ -189,10 +208,13 @@ async fn api_ports_publish(
 ) -> Json<serde_json::Value> {
     match tokio::task::spawn_blocking(move || {
         let host_port = body.host_port.unwrap_or(body.sandbox_port);
-        let host_ip   = body.host_ip.clone().unwrap_or_else(|| "127.0.0.1".into());
+        let host_ip = body.host_ip.clone().unwrap_or_else(|| "127.0.0.1".into());
 
         // 1. Ensure the host IP exists on lo0 BEFORE sbx tries to bind to it.
-        let lo_entry = HostAlias { hostname: String::new(), ip: host_ip.clone() };
+        let lo_entry = HostAlias {
+            hostname: String::new(),
+            ip: host_ip.clone(),
+        };
         hosts::ensure_loopback_aliases(&[lo_entry])
             .context("failed to create loopback alias — run: sudo ifconfig lo0 alias <ip> up")?;
 
@@ -205,7 +227,10 @@ async fn api_ports_publish(
         let hosts_result: Option<String> = if let Some(ref alias) = body.alias {
             let alias = alias.trim();
             if !alias.is_empty() {
-                let new_entry = HostAlias { hostname: alias.to_string(), ip: host_ip.clone() };
+                let new_entry = HostAlias {
+                    hostname: alias.to_string(),
+                    ip: host_ip.clone(),
+                };
                 let mut entries: Vec<HostAlias> = hosts::read_hosts_block()
                     .into_iter()
                     .filter(|a| a.hostname != new_entry.hostname)
@@ -229,15 +254,21 @@ async fn api_ports_publish(
                          run manually: echo '{host_ip}\\t{alias}' | sudo tee -a /etc/hosts"
                     )),
                 }
-            } else { None }
-        } else { None };
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         Ok::<_, anyhow::Error>(hosts_result)
-    }).await {
-        Ok(Ok(None))            => Json(serde_json::json!({ "ok": true })),
-        Ok(Ok(Some(warn)))      => Json(serde_json::json!({ "ok": true, "hosts_warning": warn })),
-        Ok(Err(e))              => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_)                  => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    })
+    .await
+    {
+        Ok(Ok(None)) => Json(serde_json::json!({ "ok": true })),
+        Ok(Ok(Some(warn))) => Json(serde_json::json!({ "ok": true, "hosts_warning": warn })),
+        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }
 }
 
@@ -249,7 +280,7 @@ async fn api_ports_unpublish(
     match tokio::task::spawn_blocking(move || sbx::unpublish_port(&name, &spec)).await {
         Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
         Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_)     => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }
 }
 
@@ -267,7 +298,10 @@ async fn api_hosts_read() -> Json<Vec<HostEntry>> {
             .await
             .unwrap_or_default()
             .into_iter()
-            .map(|a| HostEntry { hostname: a.hostname, ip: a.ip })
+            .map(|a| HostEntry {
+                hostname: a.hostname,
+                ip: a.ip,
+            })
             .collect(),
     )
 }
@@ -377,14 +411,19 @@ async fn api_create(
 
     let cfg = state.cfg.clone();
     let use_api_key = state.use_api_key;
-    let extra_ports: Vec<ExtraPort> = body.ports.into_iter()
+    let extra_ports: Vec<ExtraPort> = body
+        .ports
+        .into_iter()
         .map(|pe| ExtraPort {
             sandbox_port: pe.sandbox_port,
             host_port: pe.host_port.unwrap_or(pe.sandbox_port),
             alias: pe.alias.unwrap_or_default(),
         })
         .collect();
-    tracing::info!("web UI: provisioning sandbox '{name}' at {path} ({} extra ports)", extra_ports.len());
+    tracing::info!(
+        "web UI: provisioning sandbox '{name}' at {path} ({} extra ports)",
+        extra_ports.len()
+    );
     match tokio::task::spawn_blocking(move || {
         crate::provision_sandbox(&name, &path, &[], &cfg, &extra_ports, use_api_key)
     })
@@ -417,9 +456,14 @@ struct FsResponse {
 }
 
 async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
-    let base = params.path.map(std::path::PathBuf::from).unwrap_or_else(|| {
-        std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or_else(|_| "/".into())
-    });
+    let base = params
+        .path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| "/".into())
+        });
     // Canonicalize prevents path traversal and resolves symlinks.
     let dir = base.canonicalize().unwrap_or(base);
 
@@ -439,7 +483,197 @@ async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
 
     entries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Json(FsResponse { path: dir.to_string_lossy().into_owned(), parent, entries })
+    Json(FsResponse {
+        path: dir.to_string_lossy().into_owned(),
+        parent,
+        entries,
+    })
+}
+
+// ── Generated-files ("artifacts") panel ───────────────────────────────────────
+//
+// Convention, not enforcement: sbxw just lists and serves whatever non-code
+// files (by extension) it finds under `<workspace>/.sbxw-artifacts`. Since the
+// workspace is bind-mounted straight from the host, this needs no `sbx exec`
+// round-trip — it reads the host side of the mount directly.
+
+const ARTIFACT_EXTENSIONS: &[&str] = &[
+    "md", "markdown", "pdf", "png", "jpg", "jpeg", "gif", "svg", "webp", "docx", "pptx", "xlsx",
+    "csv", "html", "txt",
+];
+
+const MAX_ARTIFACT_DEPTH: u32 = 6;
+
+#[derive(Serialize)]
+struct ArtifactEntry {
+    /// Path relative to `.sbxw-artifacts`, forward-slash separated.
+    path: String,
+    name: String,
+    size: u64,
+    /// Unix seconds.
+    modified: u64,
+}
+
+#[derive(Serialize)]
+struct ArtifactsResponse {
+    dir: String,
+    entries: Vec<ArtifactEntry>,
+}
+
+fn has_allowed_extension(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| ARTIFACT_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+fn walk_artifacts(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<ArtifactEntry>,
+    depth: u32,
+) {
+    if depth > MAX_ARTIFACT_DEPTH {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with('.') {
+            continue;
+        }
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_dir() {
+            walk_artifacts(root, &path, out, depth + 1);
+        } else if ft.is_file() && has_allowed_extension(&path) {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(ArtifactEntry {
+                path: rel,
+                name: file_name,
+                size: meta.len(),
+                modified,
+            });
+        }
+    }
+}
+
+fn collect_artifacts(dir: &std::path::Path) -> Vec<ArtifactEntry> {
+    let mut out = Vec::new();
+    if dir.is_dir() {
+        walk_artifacts(dir, dir, &mut out, 0);
+    }
+    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out
+}
+
+async fn api_artifacts(Path(name): Path<String>) -> Json<ArtifactsResponse> {
+    let Some(workspace) = crate::workspace_for(&name) else {
+        return Json(ArtifactsResponse {
+            dir: String::new(),
+            entries: Vec::new(),
+        });
+    };
+    let dir = workspace.join(crate::ARTIFACTS_DIR);
+    let dir_str = dir.to_string_lossy().into_owned();
+    let entries = tokio::task::spawn_blocking(move || collect_artifacts(&dir))
+        .await
+        .unwrap_or_default();
+    Json(ArtifactsResponse {
+        dir: dir_str,
+        entries,
+    })
+}
+
+fn guess_mime(filename: &str) -> &'static str {
+    let ext = filename
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "md" | "markdown" => "text/markdown",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "csv" => "text/csv",
+        "html" => "text/html",
+        "txt" => "text/plain",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => "application/octet-stream",
+    }
+}
+
+#[derive(Deserialize)]
+struct ArtifactDownloadQuery {
+    path: String,
+}
+
+/// Streams a single file back from `<workspace>/.sbxw-artifacts`. The
+/// requested `path` is resolved and canonicalized, then checked to still be
+/// inside the artifacts directory — this is what actually blocks `../`
+/// traversal, not the string itself.
+async fn api_artifact_download(
+    Path(name): Path<String>,
+    Query(params): Query<ArtifactDownloadQuery>,
+) -> Response {
+    let Some(workspace) = crate::workspace_for(&name) else {
+        return (StatusCode::NOT_FOUND, "unknown sandbox").into_response();
+    };
+    let dir = workspace.join(crate::ARTIFACTS_DIR);
+    let Ok(dir_canon) = dir.canonicalize() else {
+        return (StatusCode::NOT_FOUND, "no artifacts directory").into_response();
+    };
+    let candidate = dir.join(&params.path);
+    let Ok(candidate_canon) = candidate.canonicalize() else {
+        return (StatusCode::NOT_FOUND, "file not found").into_response();
+    };
+    if !candidate_canon.starts_with(&dir_canon) || !candidate_canon.is_file() {
+        return (StatusCode::FORBIDDEN, "invalid path").into_response();
+    }
+    let read_path = candidate_canon.clone();
+    let data = match tokio::task::spawn_blocking(move || std::fs::read(read_path)).await {
+        Ok(Ok(d)) => d,
+        _ => return (StatusCode::NOT_FOUND, "file not found").into_response(),
+    };
+    let filename = candidate_canon
+        .file_name()
+        .map(|n| n.to_string_lossy().replace('"', ""))
+        .unwrap_or_else(|| "download".into());
+    let mime = guess_mime(&filename);
+    (
+        [
+            (header::CONTENT_TYPE, mime.to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        data,
+    )
+        .into_response()
 }
 
 async fn ws_handler(
@@ -447,18 +681,33 @@ async fn ws_handler(
     Query(params): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
-    let sandbox = params.sandbox.unwrap_or_else(|| state.initial_sandbox.clone());
+    let sandbox = params
+        .sandbox
+        .unwrap_or_else(|| state.initial_sandbox.clone());
     // "bash" → shell session; anything else → the agent ("claude").
     let mode = match params.mode.as_deref() {
         Some("bash") => "bash",
         _ => "claude",
-    }.to_string();
+    }
+    .to_string();
     ws.on_upgrade(move |socket| {
-        handle_socket(socket, sandbox, mode, state.shell.clone(), state.sessions.clone())
+        handle_socket(
+            socket,
+            sandbox,
+            mode,
+            state.shell.clone(),
+            state.sessions.clone(),
+        )
     })
 }
 
-async fn handle_socket(socket: WebSocket, sandbox: String, mode: String, shell: String, sessions: Sessions) {
+async fn handle_socket(
+    socket: WebSocket,
+    sandbox: String,
+    mode: String,
+    shell: String,
+    sessions: Sessions,
+) {
     if let Err(e) = bridge(socket, sandbox, mode, shell, sessions).await {
         tracing::warn!("tty bridge ended: {e:#}");
     }
@@ -485,7 +734,12 @@ fn get_or_create_session(
 
     // Slow path: spin up a new PTY.
     let pty = native_pty_system();
-    let pair = pty.openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 })?;
+    let pair = pty.openpty(PtySize {
+        rows: 30,
+        cols: 100,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
 
     let mut cmd = CommandBuilder::new("sbx");
     if mode == "bash" {
@@ -505,31 +759,46 @@ fn get_or_create_session(
     let mut reader = pair.master.try_clone_reader()?;
     let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
     let master = Arc::new(Mutex::new(pair.master));
-    let replay: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::with_capacity(REPLAY_BYTES)));
+    let replay: Arc<Mutex<VecDeque<u8>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(REPLAY_BYTES)));
 
     // Broadcast channel capacity: 256 chunks. Slow receivers are warned, not killed.
     let (tx, _) = broadcast::channel::<Vec<u8>>(256);
+    let (bell_tx, _) = broadcast::channel::<()>(16);
 
     let session = Arc::new(PtySession {
         tx: tx.clone(),
         writer,
         master,
         replay: replay.clone(),
+        bell_tx: bell_tx.clone(),
         _child: Mutex::new(child),
     });
 
-    sessions.lock().unwrap().insert(session_key.clone(), session.clone());
+    sessions
+        .lock()
+        .unwrap()
+        .insert(session_key.clone(), session.clone());
 
     // Background reader thread: PTY output → replay buffer → broadcast.
     let sessions_ref = sessions.clone();
     let sandbox_key = session_key.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
+        // Debounces the bell signal — agents can emit several BELs in a row
+        // for one prompt, and we only want one notification out of that burst.
+        let mut last_bell = std::time::Instant::now() - std::time::Duration::from_secs(3);
         loop {
             match std::io::Read::read(&mut reader, &mut buf) {
                 Ok(0) => break, // PTY closed (process exited)
                 Ok(n) => {
                     let chunk = buf[..n].to_vec();
+                    if chunk.contains(&0x07)
+                        && last_bell.elapsed() >= std::time::Duration::from_secs(3)
+                    {
+                        last_bell = std::time::Instant::now();
+                        let _ = bell_tx.send(());
+                    }
                     // Append to replay ring buffer.
                     {
                         let mut r = replay.lock().unwrap();
@@ -554,7 +823,13 @@ fn get_or_create_session(
     Ok(session)
 }
 
-async fn bridge(socket: WebSocket, sandbox: String, mode: String, shell: String, sessions: Sessions) -> Result<()> {
+async fn bridge(
+    socket: WebSocket,
+    sandbox: String,
+    mode: String,
+    shell: String,
+    sessions: Sessions,
+) -> Result<()> {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Get or create the session on a blocking thread (PTY setup does syscalls).
@@ -570,6 +845,7 @@ async fn bridge(socket: WebSocket, sandbox: String, mode: String, shell: String,
     // Subscribe BEFORE reading the replay buffer so we don't miss output
     // produced in the window between snapshot and subscription.
     let mut rx = session.tx.subscribe();
+    let mut bell_rx = session.bell_tx.subscribe();
 
     // Send replay buffer → the client sees the terminal history.
     // Clone out of the lock before awaiting (MutexGuard is not Send).
@@ -581,19 +857,40 @@ async fn bridge(socket: WebSocket, sandbox: String, mode: String, shell: String,
         ws_tx.send(Message::Binary(replay_snapshot)).await.ok();
     }
 
-    // Forward live PTY output to this WebSocket.
+    // Forward live PTY output, and "attention" events (BEL → the agent is
+    // waiting on the user), to this WebSocket.
+    let sandbox_for_pump = sandbox.clone();
     let pump = tokio::spawn(async move {
         loop {
-            match rx.recv().await {
-                Ok(chunk) => {
-                    if ws_tx.send(Message::Binary(chunk)).await.is_err() {
-                        break;
+            tokio::select! {
+                res = rx.recv() => {
+                    match res {
+                        Ok(chunk) => {
+                            if ws_tx.send(Message::Binary(chunk)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("WebSocket lagged, dropped {n} PTY frames");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("WebSocket lagged, dropped {n} PTY frames");
+                res = bell_rx.recv() => {
+                    match res {
+                        Ok(()) => {
+                            let msg = serde_json::json!({
+                                "type": "attention",
+                                "sandbox": sandbox_for_pump,
+                            }).to_string();
+                            if ws_tx.send(Message::Text(msg)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });
@@ -622,7 +919,12 @@ async fn bridge(socket: WebSocket, sandbox: String, mode: String, shell: String,
                         let m = master.clone();
                         let _ = tokio::task::spawn_blocking(move || {
                             if let Ok(m) = m.lock() {
-                                let _ = m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+                                let _ = m.resize(PtySize {
+                                    rows,
+                                    cols,
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                });
                             }
                         })
                         .await;

@@ -17,6 +17,7 @@
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 const BIN: &str = "sbx";
 
@@ -32,7 +33,6 @@ fn run_inherit(args: &[&str]) -> Result<()> {
     }
     Ok(())
 }
-
 
 /// Run `sbx <args...>` and capture its output as a String.
 /// Some sbx commands (e.g. `sbx ls`) write to stderr instead of stdout when
@@ -56,8 +56,9 @@ fn run_capture(args: &[&str]) -> Result<String> {
 
 /// Is `sbx` reachable at all?
 pub fn assert_available() -> Result<()> {
-    run_capture(&["version"])
-        .context("`sbx version` failed — install the standalone sbx binary and ensure it is on PATH")?;
+    run_capture(&["version"]).context(
+        "`sbx version` failed — install the standalone sbx binary and ensure it is on PATH",
+    )?;
     Ok(())
 }
 
@@ -79,10 +80,26 @@ pub fn is_running(name: &str) -> Result<bool> {
         let cols: Vec<&str> = line.split_whitespace().collect();
         // Layout observed in docs: NAME AGENT STATUS PORTS WORKSPACE
         if cols.first() == Some(&name) {
-            return Ok(cols.get(2).map(|s| s.eq_ignore_ascii_case("running")).unwrap_or(false));
+            return Ok(cols
+                .get(2)
+                .map(|s| s.eq_ignore_ascii_case("running"))
+                .unwrap_or(false));
         }
     }
     Ok(false)
+}
+
+/// Poll `sbx ls` until `name` reports running, or `timeout` elapses.
+/// Returns whether it came up in time.
+pub fn wait_until_running(name: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if is_running(name).unwrap_or(false) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    false
 }
 
 /// `sbx create claude <workspace> --name <name> [--kit <kit_path>]`.
@@ -90,9 +107,19 @@ pub fn is_running(name: &str) -> Result<bool> {
 /// Extra read-only mounts can be appended with a ":ro" suffix per the sbx spec.
 /// If `kit_path` is given it is forwarded as `--kit`; the kit is applied before
 /// the agent starts, so env vars it sets are visible from the first process.
-pub fn create_claude(name: &str, workspace: &str, ro_mounts: &[String], kit_path: Option<&str>) -> Result<()> {
-    let mut args: Vec<String> =
-        vec!["create".into(), "claude".into(), workspace.into(), "--name".into(), name.into()];
+pub fn create_claude(
+    name: &str,
+    workspace: &str,
+    ro_mounts: &[String],
+    kit_path: Option<&str>,
+) -> Result<()> {
+    let mut args: Vec<String> = vec![
+        "create".into(),
+        "claude".into(),
+        workspace.into(),
+        "--name".into(),
+        name.into(),
+    ];
     for m in ro_mounts {
         args.push(format!("{m}:ro"));
     }
@@ -127,7 +154,11 @@ pub fn list_sandboxes() -> Vec<SandboxInfo> {
             let name = cols.next()?.to_string();
             let agent = cols.next().unwrap_or("").to_string();
             let status = cols.next().unwrap_or("unknown").to_string();
-            Some(SandboxInfo { name, agent, status })
+            Some(SandboxInfo {
+                name,
+                agent,
+                status,
+            })
         })
         .collect()
 }
@@ -213,23 +244,42 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
         // sbx columnar format: HOST IP  HOST PORT  SANDBOX PORT  PROTOCOL
         for line in lines {
             let line = line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let c: Vec<&str> = line.split_whitespace().collect();
-            if c.len() < 3 { continue; }
-            let host_ip      = c[0].to_string();
-            let host_port: u16   = match c[1].parse() { Ok(p) => p, _ => continue };
-            let sandbox_port: u16 = match c[2].parse() { Ok(p) => p, _ => continue };
+            if c.len() < 3 {
+                continue;
+            }
+            let host_ip = c[0].to_string();
+            let host_port: u16 = match c[1].parse() {
+                Ok(p) => p,
+                _ => continue,
+            };
+            let sandbox_port: u16 = match c[2].parse() {
+                Ok(p) => p,
+                _ => continue,
+            };
             let proto = c.get(3).unwrap_or(&"tcp").to_string();
-            out.push(PortMapping { sandbox_port, proto, host_ip, host_port });
+            out.push(PortMapping {
+                sandbox_port,
+                proto,
+                host_ip,
+                host_port,
+            });
         }
     } else {
         // Fallback: Docker arrow "3000/tcp -> 0.0.0.0:3000" or bare table.
         // Re-include the header line in case it's a data line in this format.
         for line in std::iter::once(header).chain(lines) {
             let line = line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             // Skip all-uppercase header rows.
-            if line.split_whitespace().all(|w| w == w.to_uppercase()) { continue; }
+            if line.split_whitespace().all(|w| w == w.to_uppercase()) {
+                continue;
+            }
 
             let (left, right) = if let Some((l, r)) = line.split_once("->") {
                 (l.trim(), r.trim())
@@ -241,10 +291,14 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
                 }
             };
 
-            let (port_str, proto) = left.split_once('/')
+            let (port_str, proto) = left
+                .split_once('/')
                 .map(|(p, pr)| (p, pr.to_string()))
                 .unwrap_or((left, "tcp".to_string()));
-            let sandbox_port: u16 = match port_str.parse() { Ok(p) => p, _ => continue };
+            let sandbox_port: u16 = match port_str.parse() {
+                Ok(p) => p,
+                _ => continue,
+            };
 
             let (host_ip, host_port) = if let Some((ip, p)) = right.rsplit_once(':') {
                 match p.parse::<u16>() {
@@ -258,7 +312,12 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
                 }
             };
 
-            out.push(PortMapping { sandbox_port, proto, host_ip, host_port });
+            out.push(PortMapping {
+                sandbox_port,
+                proto,
+                host_ip,
+                host_port,
+            });
         }
     }
 
@@ -266,12 +325,18 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
     // publish) but keep EVERY distinct IPv4 binding — including extra loopback
     // aliases like 127.0.0.2 created by sbxw's ip_per_app mode. Only exact
     // duplicates (same ip+ports+proto) are collapsed.
-    let mut seen: std::collections::HashSet<(String, u16, u16, String)> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(String, u16, u16, String)> =
+        std::collections::HashSet::new();
     out.retain(|p| {
         if p.host_ip.contains(':') {
             return false; // IPv6 mirror — hidden (sbxw publishes on IPv4)
         }
-        seen.insert((p.host_ip.clone(), p.host_port, p.sandbox_port, p.proto.clone()))
+        seen.insert((
+            p.host_ip.clone(),
+            p.host_port,
+            p.sandbox_port,
+            p.proto.clone(),
+        ))
     });
 
     out
@@ -279,7 +344,14 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
 
 /// `sbx policy allow network --sandbox <sandbox> <resources>` (sandbox-scoped).
 pub fn policy_allow_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_inherit(&["policy", "allow", "network", "--sandbox", sandbox, resources])
+    run_inherit(&[
+        "policy",
+        "allow",
+        "network",
+        "--sandbox",
+        sandbox,
+        resources,
+    ])
 }
 
 /// `sbx policy deny network --sandbox <sandbox> <resources>` (sandbox-scoped).
@@ -290,7 +362,12 @@ pub fn policy_deny_network(sandbox: &str, resources: &str) -> Result<()> {
 /// Store a service-scoped secret by piping the value on stdin (keeps it out of
 /// argv / shell history). `service` must be one of sbx's known services
 /// (anthropic, openai, github, ...). For a global secret pass `global = true`.
-pub fn secret_set_stdin(service: &str, value: &str, global: bool, sandbox: Option<&str>) -> Result<()> {
+pub fn secret_set_stdin(
+    service: &str,
+    value: &str,
+    global: bool,
+    sandbox: Option<&str>,
+) -> Result<()> {
     let mut args: Vec<String> = vec!["secret".into(), "set".into()];
     if global {
         args.push("-g".into());
@@ -347,4 +424,77 @@ pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Run a non-interactive command inside `sandbox` via `sbx exec`, inheriting stdio.
+fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
+    let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
+    full.extend_from_slice(args);
+    run_inherit(&full)
+}
+
+/// Pre-seed `/home/agent/.claude.json` so Claude Code considers `workspace`
+/// already trusted the first time it starts in this sandbox. Without this,
+/// a fresh sandbox shows the "workspace has not been trusted" banner and
+/// ignores every `permissions.allow` entry from `.claude/settings.local.json`
+/// until someone accepts the trust dialog interactively.
+///
+/// This merges into whatever `.claude.json` already exists (via a small
+/// Node script run inside the sandbox) rather than overwriting it, since
+/// Claude Code also keeps onboarding/account state in that same file.
+/// Safe to call repeatedly (e.g. on every `sbxw up`).
+pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
+    let script = format!(
+        "const fs=require('fs');const p='/home/agent/.claude.json';const w={};\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         d.projects=d.projects||{{}};\
+         d.projects[w]=Object.assign({{}},d.projects[w],{{hasTrustDialogAccepted:true}});\
+         fs.writeFileSync(p,JSON.stringify(d));",
+        serde_json::to_string(workspace)?
+    );
+    write_file_stdin(sandbox, "/tmp/.sbxw-trust.js", script.as_bytes())?;
+    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-trust.js"]);
+    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-trust.js"]);
+    result
+}
+
+/// Path (inside the sandbox) the enforcement hook script is installed at.
+const ARTIFACT_HOOK_PATH: &str = "/home/agent/.sbxw/enforce-artifacts.js";
+
+/// Install a user-level (`/home/agent/.claude/settings.json`) `PreToolUse`
+/// hook that blocks Claude from *creating* new non-code deliverables (docs,
+/// wireframes... by extension) anywhere outside the `.sbxw-artifacts/`
+/// convention folder. Editing a file that already exists is never blocked —
+/// only brand-new files with a matching extension trip it, and Claude gets a
+/// `permissionDecisionReason` back telling it where to retry. See
+/// `assets/enforce-artifacts.js` for the actual matching logic.
+///
+/// Installed at the user level (not the project's own `.claude/settings.json`)
+/// so it applies automatically to every sbxw sandbox without touching the
+/// user's own repo config. Merges into whatever `settings.json` already
+/// exists — removing any previous copy of this exact hook first — rather
+/// than overwriting it, since that file can also hold model/permission
+/// settings the user configured in-session. Safe to call repeatedly.
+pub fn install_artifact_hook(sandbox: &str) -> Result<()> {
+    const HOOK_SCRIPT: &str = include_str!("../assets/enforce-artifacts.js");
+    write_file_stdin(sandbox, ARTIFACT_HOOK_PATH, HOOK_SCRIPT.as_bytes())?;
+
+    let merge_script = format!(
+        "const fs=require('fs');const p='/home/agent/.claude/settings.json';const hookPath={};\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         d.hooks=d.hooks||{{}};\
+         d.hooks.PreToolUse=(d.hooks.PreToolUse||[]).filter(e=>\
+           !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
+         d.hooks.PreToolUse.push({{matcher:'Write',hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});\
+         fs.writeFileSync(p,JSON.stringify(d));",
+        serde_json::to_string(ARTIFACT_HOOK_PATH)?
+    );
+    write_file_stdin(
+        sandbox,
+        "/tmp/.sbxw-hook-install.js",
+        merge_script.as_bytes(),
+    )?;
+    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-hook-install.js"]);
+    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-hook-install.js"]);
+    result
 }

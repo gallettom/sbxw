@@ -83,12 +83,21 @@ pub fn read_hosts_block() -> Vec<HostAlias> {
     let mut aliases = Vec::new();
     let mut in_block = false;
     for line in content.lines() {
-        if line.trim() == BEGIN { in_block = true; continue; }
-        if line.trim() == END   { in_block = false; continue; }
+        if line.trim() == BEGIN {
+            in_block = true;
+            continue;
+        }
+        if line.trim() == END {
+            in_block = false;
+            continue;
+        }
         if in_block {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
-                aliases.push(HostAlias { ip: parts[0].to_string(), hostname: parts[1].to_string() });
+                aliases.push(HostAlias {
+                    ip: parts[0].to_string(),
+                    hostname: parts[1].to_string(),
+                });
             }
         }
     }

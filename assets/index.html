@@ -69,14 +69,13 @@
   }
   .sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: .4rem .75rem;
+    padding: .4rem .75rem; margin-bottom: 10px;
   }
-  .sidebar-label {
-    color: #6e7681; font-size: 10px; text-transform: uppercase;
+  .sidebar-label { font-size: 11px; text-transform: uppercase;
     letter-spacing: .06em; font-weight: 600;
   }
   .btn-new {
-    background: none; border: none; color: #6e7681; cursor: pointer;
+    background: none; border: none; cursor: pointer;
     font-size: 16px; line-height: 1; padding: 0 .1rem;
     border-radius: 4px;
   }
@@ -213,6 +212,7 @@
   .sbx-actions button.icon-btn {
     padding: .15rem .38rem; font-size: 13px; line-height: 1; color: #6e7681;
   }
+  .sbx-actions button.icon-btn svg { vertical-align: -1px; display: inline-block; }
   .sbx-actions button.restart-btn:hover { background: #1c2b1c; border-color: #3fb950; color: #3fb950; }
   .sbx-actions button.ports-btn:hover   { color: #58a6ff; border-color: #58a6ff; background: #0d1f3c; }
   .sbx-actions button.rm-btn    { color: #f85149; }
@@ -243,6 +243,11 @@
     font-size: 13px; padding: .1rem .3rem; border-radius: 4px; line-height: 1;
   }
   .ports-table .btn-del-port:hover { color: #f85149; background: #21262d; }
+  .ports-table .dl-link {
+    color: #58a6ff; text-decoration: none; font-size: 11px;
+    border: 1px solid #30363d; border-radius: 4px; padding: .1rem .5rem;
+  }
+  .ports-table .dl-link:hover { background: #21262d; border-color: #484f58; }
   .ports-empty-msg { color: #6e7681; font-style: italic; font-size: 12px; padding: .5rem .25rem; }
   .ports-error-msg { color: #f85149; font-size: 11px; margin-top: .35rem; }
   .add-port-form {
@@ -358,9 +363,9 @@
 <header>
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 30" height="30" role="img" aria-label="sbxw">
     <rect width="80" height="30" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1.25"/>
-    <text x="8" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" fill="#484f58">›</text>
-    <text x="20" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700">
-      <tspan fill="#58a6ff">sb</tspan><tspan fill="#3fb950">xw</tspan>
+    <text x="8" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700"> <tspan fill="#3fb950">>_ </tspan> </text>
+    <text x="30" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700">
+     <tspan fill="#58a6ff">sb</tspan><tspan fill="#3fb950">xw</tspan>
     </text>
   </svg>
 
@@ -515,6 +520,39 @@
     </div>
   </div>
 
+  <!-- ── Generated files ("artifacts") modal ── -->
+  <div class="modal-overlay hidden" id="files-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title" style="width:520px">
+      <div class="modal-head">
+        <span class="modal-title" id="files-modal-title">Files — <span id="files-modal-name"></span></span>
+        <button class="modal-close" id="files-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" style="gap:0;padding-bottom:.5rem">
+        <div class="ports-section-label" id="files-modal-dir" style="word-break:break-all">.sbxw-artifacts</div>
+        <table class="ports-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="files-modal-tbody">
+            <tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between;align-items:center">
+        <button id="files-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Refresh
+        </button>
+        <button class="btn-cancel" id="files-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Multi-pane terminal area (panes injected here by JS) ── -->
   <div class="main layout-1" id="main-area"></div>
 </div>
@@ -653,6 +691,37 @@ function sendPaneResize(pane) {
     pane.ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols, rows: pane.term.rows }));
 }
 
+// ── Attention notifications ────────────────────────────────────────────────
+// The server sends a {"type":"attention","sandbox":"<name>"} text frame when
+// that sandbox's PTY emits a BEL (the agent is waiting on the user). Permission
+// is requested lazily, on the first bell, instead of nagging on every page load.
+function notifyAttention(sandboxName) {
+  if (typeof Notification === 'undefined' || Notification.permission === 'denied') return;
+  const fire = () => {
+    if (Notification.permission !== 'granted') return;
+    try {
+      const n = new Notification('sbxw', { body: `${sandboxName} is waiting for your approval`, tag: `sbxw-attn-${sandboxName}` });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch (_) {}
+  };
+  if (Notification.permission === 'default') Notification.requestPermission().then(fire);
+  else fire();
+}
+
+// Shared onmessage handler: binary frames are PTY output, text frames are
+// JSON control messages (currently only "attention").
+function handlePaneData(pane, ev) {
+  if (typeof ev.data === 'string') {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'attention') { notifyAttention(msg.sandbox || pane.sandbox); return; }
+    } catch (_) { /* not JSON — fall through and write it verbatim */ }
+    pane.term.write(ev.data);
+  } else {
+    pane.term.write(new Uint8Array(ev.data));
+  }
+}
+
 function connectPane(idx, name, mode) {
   if (!name || idx >= panes.length) return;
   // Refuse to duplicate a sandbox already open in a different visible pane.
@@ -679,10 +748,7 @@ function connectPane(idx, name, mode) {
     if (focusedPane === idx) pane.term.focus();
     loadSandboxes();
   };
-  pane.ws.onmessage = ev => {
-    if (typeof ev.data === 'string') pane.term.write(ev.data);
-    else pane.term.write(new Uint8Array(ev.data));
-  };
+  pane.ws.onmessage = ev => handlePaneData(pane, ev);
   pane.ws.onclose = () => {
     document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
     document.getElementById(`pconn-${idx}`).textContent = 'disconnected';
@@ -771,10 +837,7 @@ function closePane(idx) {
 
     if (dst.ws) {
       // Rewire incoming data to the destination terminal element.
-      dst.ws.onmessage = ev => {
-        if (typeof ev.data === 'string') dst.term.write(ev.data);
-        else dst.term.write(new Uint8Array(ev.data));
-      };
+      dst.ws.onmessage = ev => handlePaneData(dst, ev);
       dst.ws.onclose = () => {
         document.getElementById(`pdot-${dst.index}`).className = 'dot term-disconnected';
         document.getElementById(`pconn-${dst.index}`).textContent = 'disconnected';
@@ -911,9 +974,11 @@ function renderSidebar() {
       ? `<button class="stop-btn" data-action="stop" data-name="${s.name}">■ Stop</button>
          <button class="icon-btn restart-btn" data-action="restart" data-name="${s.name}" title="Reload">↺</button>
          <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Port mappings">⇌</button>
+         <button class="icon-btn files-btn" data-action="files" data-name="${s.name}" title="Generated files"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg></button>
          <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`
       : `<button data-action="connect" data-name="${s.name}">▶ Connect</button>
          <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Port mappings">⇌</button>
+         <button class="icon-btn files-btn" data-action="files" data-name="${s.name}" title="Generated files"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg></button>
          <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`;
     return `<div class="sbx-item${isActive ? ' active' : ''}" data-name="${s.name}">
       <div class="sbx-name">${s.name}${paneTag}</div>
@@ -941,6 +1006,7 @@ listEl.addEventListener('click', e => {
     if (action === 'connect') connectPane(focusedPane, name, 'claude');
     if (action === 'rm')      openRmModal(name);
     if (action === 'ports')   openPortsModal(name);
+    if (action === 'files')   openFilesModal(name);
   } else {
     connectPane(focusedPane, name);
   }
@@ -993,15 +1059,15 @@ document.addEventListener('keydown', e => {
   if (!sel) return;
   e.preventDefault();
   e.stopImmediatePropagation();
-  const ta = Object.assign(document.createElement('textarea'),
-    { value: sel, style: 'position:fixed;opacity:0;top:0;left:0;width:1px;height:1px' });
-  document.body.appendChild(ta);
-  ta.focus(); ta.select();
-  const ok = document.execCommand('copy');
-  document.body.removeChild(ta);
-  navigator.clipboard?.writeText(sel)
+  if (!navigator.clipboard) {
+    showToast('Clipboard unavailable — needs HTTPS or localhost', 'error');
+    fp.term.focus();
+    return;
+  }
+  navigator.clipboard.writeText(sel)
     .then(() => showToast('Copied', 'ok'))
-    .catch(() => { if (ok) showToast('Copied', 'ok'); });
+    .catch(() => showToast('Copy failed', 'error'))
+    .finally(() => fp.term.focus());
 }, true);
 
 // ── Paste image → upload to focused pane's sandbox ────────────────────────
@@ -1333,6 +1399,73 @@ document.getElementById('ports-modal-refresh').addEventListener('click', () => {
 portsOverlay.addEventListener('click', e => { if (e.target === portsOverlay) closePortsModal(); });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !portsOverlay.classList.contains('hidden')) closePortsModal();
+});
+
+// ── Generated files ("artifacts") ─────────────────────────────────────────
+const filesOverlay = document.getElementById('files-modal-overlay');
+const filesNameEl  = document.getElementById('files-modal-name');
+const filesDirEl   = document.getElementById('files-modal-dir');
+const filesTbody   = document.getElementById('files-modal-tbody');
+let filesTarget = null;
+
+function humanSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let v = bytes / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${units[i]}`;
+}
+
+function humanTime(unixSecs) {
+  if (!unixSecs) return '—';
+  return new Date(unixSecs * 1000).toLocaleString();
+}
+
+function renderFilesTable(entries) {
+  if (!entries.length) {
+    filesTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">No generated files yet</td></tr>';
+    return;
+  }
+  filesTbody.innerHTML = entries.map(f => {
+    const url = `/api/sandboxes/${encodeURIComponent(filesTarget)}/artifacts/download?path=${encodeURIComponent(f.path)}`;
+    return `<tr>
+      <td>${f.path}</td>
+      <td>${humanSize(f.size)}</td>
+      <td>${humanTime(f.modified)}</td>
+      <td><a class="dl-link" href="${url}" download="${f.name}">⬇ Download</a></td>
+    </tr>`;
+  }).join('');
+}
+
+async function fetchArtifacts(name) {
+  filesTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>';
+  try {
+    const res = await fetch(`/api/sandboxes/${encodeURIComponent(name)}/artifacts`);
+    const data = await res.json();
+    filesDirEl.textContent = data.dir || '.sbxw-artifacts';
+    renderFilesTable(data.entries || []);
+  } catch (_) {
+    filesTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg" style="color:#f85149">Error fetching files</td></tr>';
+  }
+}
+
+function openFilesModal(name) {
+  filesTarget = name;
+  filesNameEl.textContent = name;
+  filesOverlay.classList.remove('hidden');
+  fetchArtifacts(name);
+}
+
+function closeFilesModal() { filesOverlay.classList.add('hidden'); filesTarget = null; }
+
+document.getElementById('files-modal-close').addEventListener('click', closeFilesModal);
+document.getElementById('files-modal-close2').addEventListener('click', closeFilesModal);
+document.getElementById('files-modal-refresh').addEventListener('click', () => {
+  if (filesTarget) fetchArtifacts(filesTarget);
+});
+filesOverlay.addEventListener('click', e => { if (e.target === filesOverlay) closeFilesModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !filesOverlay.classList.contains('hidden')) closeFilesModal();
 });
 
 // ── Remove sandbox ────────────────────────────────────────────────────────

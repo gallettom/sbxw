@@ -35,7 +35,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "sbxw", version, about = "Light wrapper around `sbx` for Claude Code dev sandboxes")]
+#[command(
+    name = "sbxw",
+    version,
+    about = "Light wrapper around `sbx` for Claude Code dev sandboxes"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -140,7 +144,16 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Up { name, path, ro, config, no_web, use_api_key, tail, daemon } => {
+        Cmd::Up {
+            name,
+            path,
+            ro,
+            config,
+            no_web,
+            use_api_key,
+            tail,
+            daemon,
+        } => {
             if daemon || no_web {
                 // Running as the daemon process itself, or in foreground-only mode:
                 // init logging (goes to the redirected log file or this terminal).
@@ -204,17 +217,30 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             // Dynamic column widths.
-            let w_name = sandboxes.iter().map(|s| s.name.len()).max().unwrap_or(7).max(7);
-            let w_agent = sandboxes.iter().map(|s| s.agent.len()).max().unwrap_or(5).max(5);
-            println!("{:<w_name$}  {:<w_agent$}  STATUS",  "SANDBOX", "AGENT");
+            let w_name = sandboxes
+                .iter()
+                .map(|s| s.name.len())
+                .max()
+                .unwrap_or(7)
+                .max(7);
+            let w_agent = sandboxes
+                .iter()
+                .map(|s| s.agent.len())
+                .max()
+                .unwrap_or(5)
+                .max(5);
+            println!("{:<w_name$}  {:<w_agent$}  STATUS", "SANDBOX", "AGENT");
             println!("{:-<w_name$}  {:-<w_agent$}  ------", "", "");
             for s in &sandboxes {
                 let dot = match s.status.as_str() {
                     "running" => "●",
                     "stopped" => "○",
-                    _         => "?",
+                    _ => "?",
                 };
-                println!("{:<w_name$}  {:<w_agent$}  {dot} {}", s.name, s.agent, s.status);
+                println!(
+                    "{:<w_name$}  {:<w_agent$}  {dot} {}",
+                    s.name, s.agent, s.status
+                );
             }
             Ok(())
         }
@@ -271,8 +297,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             for name in &targets {
-                sbx::stop_sandbox(name)
-                    .with_context(|| format!("failed to stop '{name}'"))?;
+                sbx::stop_sandbox(name).with_context(|| format!("failed to stop '{name}'"))?;
                 println!("stopped  {name}");
             }
             Ok(())
@@ -286,7 +311,9 @@ fn main() -> Result<()> {
             if all {
                 println!("all sandboxes removed");
             } else {
-                for n in &names { println!("removed  {n}"); }
+                for n in &names {
+                    println!("removed  {n}");
+                }
             }
             Ok(())
         }
@@ -352,7 +379,9 @@ fn cmd_up_background(
 
     // Create / truncate the log file before spawning so it exists for `tail -f`.
     let log_file = std::fs::OpenOptions::new()
-        .create(true).write(true).truncate(true)
+        .create(true)
+        .write(true)
+        .truncate(true)
         .open(&log)?;
 
     // Reconstruct the Up args for the daemon re-exec.
@@ -363,18 +392,28 @@ fn cmd_up_background(
         std::env::current_dir()?.join(&config)
     };
     let mut args: Vec<std::ffi::OsString> = vec!["up".into()];
-    if let Some(ref n) = name { args.push(n.into()); }
-    if let Some(ref p) = path { args.push(p.into()); }
-    for r in &ro { args.push("--ro".into()); args.push(r.into()); }
-    args.push("--config".into()); args.push((&config_abs).into());
-    if use_api_key { args.push("--use-api-key".into()); }
+    if let Some(ref n) = name {
+        args.push(n.into());
+    }
+    if let Some(ref p) = path {
+        args.push(p.into());
+    }
+    for r in &ro {
+        args.push("--ro".into());
+        args.push(r.into());
+    }
+    args.push("--config".into());
+    args.push((&config_abs).into());
+    if use_api_key {
+        args.push("--use-api-key".into());
+    }
     args.push("--daemon".into());
 
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(&args)
-       .stdout(log_file.try_clone()?)
-       .stderr(log_file)
-       .stdin(std::process::Stdio::null());
+        .stdout(log_file.try_clone()?)
+        .stderr(log_file)
+        .stdin(std::process::Stdio::null());
 
     // Detach from our process group so Ctrl+C in the launching terminal
     // doesn't propagate to the daemon.
@@ -408,6 +447,25 @@ fn cmd_up_background(
 fn daemon_log_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("sbxw-{name}.log"))
 }
+
+/// Path to the file recording the host workspace directory for a named sandbox.
+fn workspace_record_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("sbxw-{name}.workspace"))
+}
+
+/// Look up the host workspace directory `provision_sandbox` recorded for `name`.
+/// Used by the web UI's artifacts panel, which reads files straight off the
+/// host side of the bind mount instead of round-tripping through `sbx exec`.
+pub(crate) fn workspace_for(name: &str) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(workspace_record_path(name)).ok()?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+/// Subdirectory (relative to the workspace root) where non-code deliverables
+/// (wireframes, docs, exports...) are expected to live. Purely a convention:
+/// sbxw doesn't enforce it, it just lists+serves whatever it finds there.
+pub(crate) const ARTIFACTS_DIR: &str = ".sbxw-artifacts";
 
 /// Path to the PID file for a named sandbox daemon.
 fn daemon_pid_path(name: &str) -> PathBuf {
@@ -477,7 +535,9 @@ fn kill_untracked_daemons() {
     let Ok(out) = std::process::Command::new("pgrep")
         .args(["-f", "sbxw.*--daemon"])
         .output()
-    else { return };
+    else {
+        return;
+    };
 
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Ok(pid) = line.trim().parse::<u32>() {
@@ -499,8 +559,14 @@ type PortTriple = (u16, u16, String);
 /// Merge config ports with UI-added extra ports, preserving order. The index in
 /// the result drives the per-app loopback IP, so callers must keep this ordering.
 fn merged_ports(cfg: &Config, extra: &[ExtraPort]) -> Vec<PortTriple> {
-    cfg.ports.iter().map(|p| (p.host_port, p.sandbox_port, p.alias.clone()))
-        .chain(extra.iter().map(|p| (p.host_port, p.sandbox_port, p.alias.clone())))
+    cfg.ports
+        .iter()
+        .map(|p| (p.host_port, p.sandbox_port, p.alias.clone()))
+        .chain(
+            extra
+                .iter()
+                .map(|p| (p.host_port, p.sandbox_port, p.alias.clone())),
+        )
         .collect()
 }
 
@@ -516,20 +582,29 @@ fn host_ip_for(ip_per_app: bool, index: usize) -> String {
 /// `sbx ports --publish` spec for each mapping. With `ip_per_app` the host IP is
 /// explicit; otherwise it defaults to 127.0.0.1 and is omitted.
 fn publish_specs(ports: &[PortTriple], ip_per_app: bool) -> Vec<String> {
-    ports.iter().enumerate().map(|(i, (host, sbox, _))| {
-        if ip_per_app {
-            format!("{}:{host}:{sbox}", host_ip_for(true, i))
-        } else {
-            format!("{host}:{sbox}")
-        }
-    }).collect()
+    ports
+        .iter()
+        .enumerate()
+        .map(|(i, (host, sbox, _))| {
+            if ip_per_app {
+                format!("{}:{host}:{sbox}", host_ip_for(true, i))
+            } else {
+                format!("{host}:{sbox}")
+            }
+        })
+        .collect()
 }
 
 /// /etc/hosts aliases for the ports that declare a hostname.
 fn host_aliases(ports: &[PortTriple], ip_per_app: bool) -> Vec<HostAlias> {
-    ports.iter().enumerate()
+    ports
+        .iter()
+        .enumerate()
         .filter(|(_, (_, _, alias))| !alias.is_empty())
-        .map(|(i, (_, _, alias))| HostAlias { hostname: alias.clone(), ip: host_ip_for(ip_per_app, i) })
+        .map(|(i, (_, _, alias))| HostAlias {
+            hostname: alias.clone(),
+            ip: host_ip_for(ip_per_app, i),
+        })
         .collect()
 }
 
@@ -549,8 +624,10 @@ fn publish_all_ports(name: &str, cfg: &Config) -> Result<()> {
 /// hostname prefix other than docker.io) are blocked by default since sbx
 /// restricts kit sources to Docker Hub only.
 fn kit_needs_allowlist(kit: &str) -> bool {
-    if kit.starts_with("http://") || kit.starts_with("https://")
-        || kit.starts_with("git@") || kit.starts_with("git://")
+    if kit.starts_with("http://")
+        || kit.starts_with("https://")
+        || kit.starts_with("git@")
+        || kit.starts_with("git://")
         || kit.starts_with("ssh://")
     {
         return true;
@@ -589,6 +666,26 @@ pub(crate) fn provision_sandbox(
     extra_ports: &[ExtraPort],
     use_api_key: bool,
 ) -> Result<()> {
+    // 0. Record the workspace path for this sandbox name (best-effort — used
+    // by the web UI's artifacts panel), and make sure the conventional
+    // deliverables folder exists so it's discoverable from the first session.
+    let _ = std::fs::write(workspace_record_path(name), workspace);
+    let artifacts_dir = std::path::Path::new(workspace).join(ARTIFACTS_DIR);
+    if !artifacts_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
+            tracing::warn!("could not create {}: {e:#}", artifacts_dir.display());
+        } else {
+            let _ = std::fs::write(
+                artifacts_dir.join("README.md"),
+                "# .sbxw-artifacts\n\n\
+                 Drop non-code deliverables here (wireframes, docs, diagrams, exports —\n\
+                 .md .pdf .png .jpg .svg .webp .docx .pptx .xlsx .csv .html .txt) and \
+                 they show up\nin the sbxw web UI's \"Files\" panel with a one-click \
+                 download, instead of\nbeing buried in the repo.\n",
+            );
+        }
+    }
+
     // 1. Prepare the OAuth kit if a token is available.
     let oauth_token = resolve_oauth_token();
     let kit_dir = if let Some(ref token) = oauth_token {
@@ -626,20 +723,41 @@ pub(crate) fn provision_sandbox(
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // 2b. Pre-trust the workspace so Claude Code doesn't show the "workspace
+    // has not been trusted" banner and ignore .claude/settings.local.json's
+    // permissions.allow entries on first launch. Requires the container to
+    // actually be running for `sbx exec` to reach it.
+    if sbx::wait_until_running(name, Duration::from_secs(30)) {
+        if let Err(e) = sbx::trust_workspace(name, workspace) {
+            tracing::warn!(
+                "could not pre-trust workspace (accept the trust dialog manually instead): {e:#}"
+            );
+        }
+        // 2c. Enforce the .sbxw-artifacts convention: block Claude from
+        // creating new non-code deliverables anywhere else (see
+        // assets/enforce-artifacts.js). Best-effort — the panel still works
+        // for anything the agent does place there even if this fails.
+        if let Err(e) = sbx::install_artifact_hook(name) {
+            tracing::warn!("could not install artifacts-enforcement hook: {e:#}");
+        }
+    } else {
+        tracing::warn!(
+            "sandbox '{name}' did not come up in time; skipping workspace trust pre-seed"
+        );
+    }
+
     // 3. Network policy (sandbox-scoped; requires the sandbox to exist).
     //    MUST run before kits: a kit's `startup` commands often download tools
     //    and need the egress allowlist already in place, or they 403.
     if !cfg.network_allow.is_empty() {
         let resources = cfg.network_allow.join(",");
         tracing::info!("network allowlist: {resources}");
-        sbx::policy_allow_network(name, &resources)
-            .context("failed to apply network allowlist")?;
+        sbx::policy_allow_network(name, &resources).context("failed to apply network allowlist")?;
     }
     if !cfg.network_deny.is_empty() {
         let resources = cfg.network_deny.join(",");
         tracing::info!("network denylist: {resources}");
-        sbx::policy_deny_network(name, &resources)
-            .context("failed to apply network denylist")?;
+        sbx::policy_deny_network(name, &resources).context("failed to apply network denylist")?;
     }
 
     // 3b. User-defined kits from sbxw.toml (applied in order via sbx kit add).
@@ -678,9 +796,17 @@ pub(crate) fn provision_sandbox(
 
     // 5. Host aliases for ports that declare a hostname, plus the web interface.
     let mut aliases = host_aliases(&all_ports, cfg.ip_per_app);
-    let web_ip = cfg.web_addr.split(':').next().unwrap_or("127.0.0.1").to_string();
+    let web_ip = cfg
+        .web_addr
+        .split(':')
+        .next()
+        .unwrap_or("127.0.0.1")
+        .to_string();
     if web_ip.starts_with("127.") {
-        aliases.push(HostAlias { hostname: "sbxw.localhost".into(), ip: web_ip });
+        aliases.push(HostAlias {
+            hostname: "sbxw.localhost".into(),
+            ip: web_ip,
+        });
     }
     let web_port = cfg.web_addr.rsplit(':').next().unwrap_or("7681");
     hosts::ensure_loopback_aliases(&aliases)?;
@@ -740,7 +866,13 @@ fn cmd_up(
             anyhow::bail!("--no-web requires a sandbox name to attach to");
         }
         tracing::info!("starting web daemon only (no sandbox provisioned)");
-        return run_web(&cfg.web_addr.clone(), String::new(), cfg.web_shell.clone(), Arc::new(cfg), use_api_key);
+        return run_web(
+            &cfg.web_addr.clone(),
+            String::new(),
+            cfg.web_shell.clone(),
+            Arc::new(cfg),
+            use_api_key,
+        );
     };
 
     // Resolve workspace path (default: cwd), and make it absolute.
@@ -759,13 +891,25 @@ fn cmd_up(
 
     // Resolve kit paths relative to the config file's directory so that
     // relative paths in sbxw.toml work regardless of where sbxw was invoked.
-    let config_abs = if config.is_absolute() { config.clone() } else { std::env::current_dir()?.join(&config) };
+    let config_abs = if config.is_absolute() {
+        config.clone()
+    } else {
+        std::env::current_dir()?.join(&config)
+    };
     let config_dir = config_abs.parent().unwrap_or(config_abs.as_path());
     let mut cfg = cfg;
-    cfg.kits = cfg.kits.into_iter().map(|k| {
-        let p = std::path::Path::new(&k);
-        if p.is_absolute() { k } else { config_dir.join(p).to_string_lossy().into_owned() }
-    }).collect();
+    cfg.kits = cfg
+        .kits
+        .into_iter()
+        .map(|k| {
+            let p = std::path::Path::new(&k);
+            if p.is_absolute() {
+                k
+            } else {
+                config_dir.join(p).to_string_lossy().into_owned()
+            }
+        })
+        .collect();
 
     provision_sandbox(&name, &ws_str, &ro_strs, &cfg, &[], use_api_key)?;
 
@@ -774,7 +918,13 @@ fn cmd_up(
         tracing::info!("attaching agent in this terminal (no web). Ctrl-C to detach.");
         run_agent_foreground(&name)
     } else {
-        run_web(&cfg.web_addr.clone(), name, cfg.web_shell.clone(), Arc::new(cfg), use_api_key)
+        run_web(
+            &cfg.web_addr.clone(),
+            name,
+            cfg.web_shell.clone(),
+            Arc::new(cfg),
+            use_api_key,
+        )
     }
 }
 
@@ -793,7 +943,13 @@ fn run_agent_foreground(name: &str) -> Result<()> {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn run_web(addr: &str, name: String, shell: String, cfg: Arc<Config>, use_api_key: bool) -> Result<()> {
+async fn run_web(
+    addr: &str,
+    name: String,
+    shell: String,
+    cfg: Arc<Config>,
+    use_api_key: bool,
+) -> Result<()> {
     web::serve(addr, name, shell, cfg, use_api_key).await
 }
 

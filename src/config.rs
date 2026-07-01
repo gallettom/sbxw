@@ -70,8 +70,16 @@ impl Default for Config {
             network_deny: vec![],
             ip_per_app: false,
             ports: vec![
-                PortMap { alias: "neos.local".into(), sandbox_port: 4200, host_port: 4200 },
-                PortMap { alias: "api.neos.local".into(), sandbox_port: 8000, host_port: 8000 },
+                PortMap {
+                    alias: "neos.local".into(),
+                    sandbox_port: 4200,
+                    host_port: 4200,
+                },
+                PortMap {
+                    alias: "api.neos.local".into(),
+                    sandbox_port: 8000,
+                    host_port: 8000,
+                },
             ],
             kits: vec![],
             claude_subscription: "pro".into(),
@@ -84,8 +92,8 @@ impl Config {
         if path.exists() {
             let raw = std::fs::read_to_string(path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            let cfg: Config = toml::from_str(&raw)
-                .with_context(|| format!("parsing {}", path.display()))?;
+            let cfg: Config =
+                toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
             Ok(cfg)
         } else {
             Ok(Config::default())
