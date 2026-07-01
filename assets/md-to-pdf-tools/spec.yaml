@@ -1,0 +1,74 @@
+schemaVersion: "1"
+kind: mixin
+name: md-to-pdf-tools
+description: >
+  Pre-installs the WeasyPrint + poppler-utils + Pillow stack used by the
+  /md-to-pdf skill, so Markdown -> PDF/PNG conversion works instantly with no
+  first-run install step (idempotent, safe to re-run on every container start).
+
+# apt needs the Debian/Ubuntu mirrors; pip needs PyPI. pypi.org and
+# *.pythonhosted.org are already in sbxw's default network_allow, but the apt
+# mirrors are not — add them to sbxw.toml's network_allow (see this kit's
+# README) or the apt-get step will 403.
+network:
+  allowedDomains:
+    - deb.debian.org
+    - security.debian.org
+    - archive.ubuntu.com
+    - security.ubuntu.com
+    - ports.ubuntu.com
+    - pypi.org
+    - files.pythonhosted.org
+
+commands:
+  initFiles:
+    - path: /home/agent/.local/bin/sbxw-install-md-to-pdf
+      mode: "0755"
+      content: |
+        #!/usr/bin/env bash
+        set -uo pipefail
+        info() { echo "  [md-to-pdf-tools] $*"; }
+
+        # ── 1. System libs (WeasyPrint's renderer + poppler's pdftoppm) ──────
+        # Checked by actual .so/binary presence, not package name: on newer
+        # Debian/Ubuntu (the t64 transition), libgobject-2.0-0 and
+        # libglib2.0-0 are virtual packages provided by libglib2.0-0t64, so
+        # `dpkg -s <name>` always reports them missing even when satisfied.
+        NEED_LIBS=0
+        command -v pdftoppm >/dev/null 2>&1 || NEED_LIBS=1
+        for lib in libpango-1.0.so.0 libpangoft2-1.0.so.0 libgobject-2.0.so.0 libglib-2.0.so.0; do
+          ldconfig -p | grep -q "$lib" || NEED_LIBS=1
+        done
+        if [ "$NEED_LIBS" -eq 0 ]; then
+          info "system libs already installed"
+        else
+          info "installing poppler-utils + pango/glib libs..."
+          if sudo apt-get update -qq && sudo apt-get install -y -qq \
+              poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libgobject-2.0-0 libglib2.0-0; then
+            info "system libs installed"
+          else
+            info "apt-get install failed — skipping (check network_allow for apt mirrors)"
+          fi
+        fi
+
+        # ── 2. Python packages (Debian marks system Python externally-managed;
+        #    --break-system-packages confines nothing new since these are
+        #    pure-library installs the agent already runs as root/sudo user) ──
+        NEED_PIP=()
+        python3 -c "import weasyprint" 2>/dev/null || NEED_PIP+=("weasyprint")
+        python3 -c "import markdown"   2>/dev/null || NEED_PIP+=("markdown")
+        python3 -c "import PIL"        2>/dev/null || NEED_PIP+=("pillow")
+        if [ "${#NEED_PIP[@]}" -eq 0 ]; then
+          info "python packages already installed"
+        else
+          info "pip installing: ${NEED_PIP[*]}"
+          if pip3 install --break-system-packages -q "${NEED_PIP[@]}"; then
+            info "python packages installed"
+          else
+            info "pip install failed — skipping (check network_allow for pypi)"
+          fi
+        fi
+
+        info "done."
+  startup:
+    - command: ["bash", "/home/agent/.local/bin/sbxw-install-md-to-pdf"]

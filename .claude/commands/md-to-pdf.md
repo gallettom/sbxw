@@ -4,6 +4,10 @@ You are converting the Markdown file at path: $ARGUMENTS
 
 Follow these steps exactly. Do not ask the user to install anything or run anything manually — handle it all yourself.
 
+Note: if the `assets/md-to-pdf-tools` kit (see main README's Kits section) is
+applied to this sandbox, the dependency checks below will already pass and
+step 1 becomes a no-op — this only does real work on sandboxes without it.
+
 ## 0. Resolve input and output paths
 
 - If `$ARGUMENTS` is empty, ask the user which Markdown file to convert (or stop with a clear error).

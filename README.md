@@ -176,8 +176,12 @@ Bundled kits:
   (`headroom-ai[proxy]`), a local context-compression proxy, and enables its
   durable Claude Code integration (`headroom init --global claude`) to **cut token
   usage** (claimed 60–95% fewer tokens). See `assets/headroom/README.md`.
+- **`assets/md-to-pdf-tools`** — pre-installs WeasyPrint + poppler-utils +
+  Pillow, the stack the `/md-to-pdf` skill (`.claude/commands/md-to-pdf.md`)
+  uses to render Markdown to PDF/PNG, so first invocation has no install step.
+  See `assets/md-to-pdf-tools/README.md`.
 
-Both need extra egress domains (see each kit's README). Schema gotchas worth
+All three need extra egress domains (see each kit's README). Schema gotchas worth
 knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), and
 `content` fields only allow the `${WORKDIR}` placeholder — use brace-free `$VAR`
 for shell variables.
