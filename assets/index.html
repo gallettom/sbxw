@@ -729,7 +729,10 @@ function connectPane(idx, name, mode) {
   const pane = panes[idx];
   if (mode) setPaneMode(idx, mode, false);
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
-  pane.term.clear();
+  // Full reset, not just clear(): a previous session (e.g. a TUI that enabled
+  // xterm mouse-tracking) can leave DECSET modes on, which would otherwise
+  // survive into the new session and turn mouse moves into stray input.
+  pane.term.reset();
   pane.sandbox = name;
   document.getElementById(`plabel-${idx}`).textContent = name;
   document.getElementById(`pconn-${idx}`).textContent = 'connecting…';
@@ -856,7 +859,10 @@ function closePane(idx) {
       dst.ws?.readyState === WebSocket.OPEN ? 'connected' : (src.sandbox ? 'disconnected' : '');
     document.getElementById(`pssh-${dst.index}`).disabled = !src.sandbox;
     setPaneMode(dst.index, src.mode, false);
-    dst.term.clear(); // clear stale content; PTY resize will trigger a redraw
+    // Full reset, not just clear(): dst now displays a different live session,
+    // and any mouse-tracking mode left on from dst's previous content must not
+    // leak into it. PTY resize will trigger a redraw.
+    dst.term.reset();
 
     // Null out the source so it becomes a clean empty slot.
     src.sandbox = null;

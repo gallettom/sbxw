@@ -448,9 +448,25 @@ fn daemon_log_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("sbxw-{name}.log"))
 }
 
+/// Durable, host-side state directory for sbxw — unlike the OS temp dir (used
+/// for daemon logs/PIDs, which are fine to lose), this needs to survive
+/// reboots and daemon restarts: it's currently the only copy of the
+/// name→workspace mapping the web UI's artifacts panel depends on. Losing it
+/// doesn't affect the sandbox itself (still runs fine), only the panel, which
+/// silently goes blank until `sbxw up <name>` is run again. Falls back to the
+/// OS temp dir if `$HOME` can't be resolved.
+fn state_dir() -> PathBuf {
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join(".sbxw").join("state");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 /// Path to the file recording the host workspace directory for a named sandbox.
 fn workspace_record_path(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("sbxw-{name}.workspace"))
+    state_dir().join(format!("{name}.workspace"))
 }
 
 /// Look up the host workspace directory `provision_sandbox` recorded for `name`.
