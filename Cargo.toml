@@ -1,6 +1,6 @@
 [package]
 name = "sbxw"
-version = "1.0.9"
+version = "1.0.10"
 edition = "2021"
 description = "Ultra-light wrapper around `sbx` (Docker Sandboxes) for local dev with Claude Code"
 
@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"

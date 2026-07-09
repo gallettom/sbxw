@@ -24,6 +24,46 @@ err()   { printf "${RED}✗${RESET}  %s\n" "$*" >&2; }
 step()  { printf "\n${BOLD}%s${RESET}\n" "$*"; }
 die()   { err "$*"; exit 1; }
 
+# Writes the completion script for $1 (bash/zsh/fish) to the standard
+# user-local location for that shell, so it's picked up without needing
+# sudo. bash needs the `bash-completion` framework already sourced by the
+# shell to auto-load it; zsh needs its fpath entry, which we add to
+# ~/.zshrc (once) since compinit must see it before it runs.
+install_completions() {
+  sh_name="$1"
+  bin="${INSTALL_DIR}/${BINARY}"
+  case "$sh_name" in
+    bash)
+      dest_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+      mkdir -p "$dest_dir"
+      "$bin" completions bash > "${dest_dir}/sbxw"
+      info "installed → ${dest_dir}/sbxw"
+      printf "  (needs the 'bash-completion' package sourced by your shell; open a new shell to pick it up)\n"
+      ;;
+    zsh)
+      dest_dir="$HOME/.zfunc"
+      mkdir -p "$dest_dir"
+      "$bin" completions zsh > "${dest_dir}/_sbxw"
+      info "installed → ${dest_dir}/_sbxw"
+      rc="$HOME/.zshrc"
+      if [ -f "$rc" ] && grep -q '.zfunc' "$rc" 2>/dev/null; then
+        info "fpath already configured in ${rc}"
+      else
+        printf '\n# added by sbxw installer\nfpath+=(~/.zfunc)\nautoload -Uz compinit && compinit\n' >> "$rc"
+        info "added fpath + compinit to ${rc}"
+      fi
+      printf "  Open a new shell (or: exec zsh) to activate it.\n"
+      ;;
+    fish)
+      dest_dir="$HOME/.config/fish/completions"
+      mkdir -p "$dest_dir"
+      "$bin" completions fish > "${dest_dir}/sbxw.fish"
+      info "installed → ${dest_dir}/sbxw.fish"
+      printf "  Open a new shell to activate it.\n"
+      ;;
+  esac
+}
+
 # ── Check sbx dependency ─────────────────────────────────────────────────────
 step "Checking prerequisites…"
 
@@ -105,6 +145,31 @@ case ":${PATH}:" in
     ;;
 esac
 
+# ── Shell completions (optional) ────────────────────────────────────────────
+step "Shell completions…"
+SHELL_NAME="$(basename "${SHELL:-}" 2>/dev/null || true)"
+# `-r /dev/tty` only checks permission bits — the node can exist yet have no
+# controlling terminal behind it (e.g. CI, `curl | sh` with stdin redirected
+# from a file). Actually try to open it; that's the real test.
+if ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
+  warn "Non-interactive install — skipping the completions prompt."
+  printf "  Run 'sbxw completions --help' any time to set them up.\n"
+elif [ "$SHELL_NAME" != "bash" ] && [ "$SHELL_NAME" != "zsh" ] && [ "$SHELL_NAME" != "fish" ]; then
+  warn "Could not detect a supported shell (\$SHELL=${SHELL:-unset})."
+  printf "  Run 'sbxw completions --help' to set them up manually (bash/zsh/fish/elvish/powershell).\n"
+else
+  printf "Enable TAB-completion for sbxw in %s? [Y/n] " "$SHELL_NAME" > /dev/tty
+  read -r REPLY < /dev/tty || REPLY=""
+  case "$REPLY" in
+    [nN]*)
+      info "Skipped. Run 'sbxw completions --help' any time to install it later."
+      ;;
+    *)
+      install_completions "$SHELL_NAME"
+      ;;
+  esac
+fi
+
 # ── Bundled kits (optional) ───────────────────────────────────────────────────
 step "Fetching bundled kits…"
 KITS_URL="https://github.com/${REPO}/releases/download/${VERSION}/sbxw-kits.tar.gz"
@@ -162,6 +227,8 @@ printf "\n${BOLD}Useful extras${RESET}\n"
 printf "   sbxw bash <name>              # interactive shell in the sandbox\n"
 printf "   sbxw logs <name>              # tail daemon log\n"
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
+printf "   sbxw update                   # update sbxw itself to the latest release\n"
+printf "   sbxw completions --help       # TAB-complete commands (bash/zsh/fish/…)\n"
 if [ -d "$KITS_DIR" ]; then
   printf "   kits: %s/\n" "$KITS_DIR"
   printf "         reference one in sbxw.toml, e.g.:\n"
