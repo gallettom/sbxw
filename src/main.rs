@@ -148,14 +148,14 @@ enum Cmd {
     /// Print a shell completion script, so TAB completes subcommand and flag
     /// names instead of guessing (or running `sbxw help`).
     #[command(after_help = "\
-Install it once per shell:
-  bash        sbxw completions bash | sudo tee /etc/bash_completion.d/sbxw >/dev/null
-  zsh         sbxw completions zsh > \"${fpath[1]}/_sbxw\"   # then: exec zsh
-  fish        sbxw completions fish > ~/.config/fish/completions/sbxw.fish
-  elvish/ps   sbxw completions <shell> > <wherever your shell loads completions from>
+Add one line to your shell rc file (regenerated fresh on every new shell, so
+it never goes stale after `sbxw update`):
+  zsh    ~/.zshrc         source <(sbxw completion zsh)
+  bash   ~/.bashrc        source <(sbxw completion bash)
+  fish   ~/.config/fish/config.fish   sbxw completion fish | source
 
-Then open a new shell (or re-source your rc file).")]
-    Completions {
+Then open a new shell (or re-source the rc file).")]
+    Completion {
         /// Target shell. Defaults to detecting the current shell from $SHELL.
         shell: Option<clap_complete::Shell>,
     },
@@ -364,7 +364,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Update { check } => cmd_update(check),
-        Cmd::Completions { shell } => cmd_completions(shell),
+        Cmd::Completion { shell } => cmd_completion(shell),
     }
 }
 
@@ -382,10 +382,10 @@ fn init_tracing() {
 /// Writes a completion script for `shell` (or the $SHELL-detected one) to
 /// stdout. Output must stay pure — nothing but the script — since callers
 /// pipe it straight into `source` or redirect it into a completions file.
-fn cmd_completions(shell: Option<clap_complete::Shell>) -> Result<()> {
-    let shell = shell
-        .or_else(detect_shell)
-        .context("could not detect your shell from $SHELL — pass one explicitly, e.g. `sbxw completions zsh`")?;
+fn cmd_completion(shell: Option<clap_complete::Shell>) -> Result<()> {
+    let shell = shell.or_else(detect_shell).context(
+        "could not detect your shell from $SHELL — pass one explicitly, e.g. `sbxw completion zsh`",
+    )?;
     let mut cmd = Cli::command();
     let name = cmd.get_name().to_string();
     clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
