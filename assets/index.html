@@ -1293,6 +1293,21 @@ const listEl = document.getElementById('sandbox-list');
 const pendingCreations = new Map(); // name -> { el, timer }
 const readySandboxes = new Set();
 
+// If a visible pane is sitting empty (no sandbox attached), a freshly
+// created/duplicated sandbox attaches to it straight away instead of just
+// sitting in the sidebar as "ready" — no need to manually connect it when
+// there was somewhere obvious for it to go. Only kicks in with an actual
+// empty pane; if every pane is already busy, falls back to the old
+// "flag it ready, switch to it when you're ready" behaviour.
+function attachToEmptyPaneOrMarkReady(name) {
+  const emptyIdx = panes.slice(0, paneCount).findIndex(p => !p.sandbox);
+  if (emptyIdx !== -1) {
+    connectPane(emptyIdx, name, 'claude');
+  } else {
+    readySandboxes.add(name);
+  }
+}
+
 /** Builds (once) the pending-row DOM node + its running pixel-fill animation. */
 function addPendingSandbox(name) {
   const row = document.createElement('div');
@@ -1756,9 +1771,9 @@ document.getElementById('modal-create').addEventListener('click', () => {
       });
       const data = await res.json();
       if (data.ok) {
-        // Don't yank the user onto the new sandbox — just flag it ready in
-        // the list with a blue dot; they switch to it when they're ready.
-        readySandboxes.add(name);
+        // Attaches to an empty pane if one is sitting idle; otherwise just
+        // flags it ready in the list with a blue dot for a manual connect.
+        attachToEmptyPaneOrMarkReady(name);
         await loadSandboxes();
         showToast(`Sandbox “${name}” is ready`, 'ok');
       } else {
@@ -2125,7 +2140,7 @@ dupConfirm.addEventListener('click', () => {
       });
       const data = await res.json();
       if (data.ok) {
-        readySandboxes.add(newName);
+        attachToEmptyPaneOrMarkReady(newName);
         await loadSandboxes();
         showToast(`Sandbox “${newName}” duplicated from “${source}”`, 'ok');
       } else {
