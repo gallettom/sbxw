@@ -139,6 +139,12 @@ enum Cmd {
         /// Sandbox whose daemon to stop. Omit to stop all daemons and clean /etc/hosts.
         name: Option<String>,
     },
+    /// Check for a new sbxw release and install it in place of this binary.
+    Update {
+        /// Only check whether a newer version is available; don't install it.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -343,6 +349,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Update { check } => cmd_update(check),
     }
 }
 
@@ -354,6 +361,215 @@ fn init_tracing() {
         )
         .with_target(false)
         .init();
+}
+
+// ── Self-update ──────────────────────────────────────────────────────────
+// Mirrors install.sh's own download/OS-arch/sudo-fallback logic so
+// `sbxw update` behaves exactly like re-running the installer against the
+// latest release, without requiring curl to be piped through a shell script.
+const REPO: &str = "gallettom/sbxw";
+
+/// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
+/// and installs it in place of the currently running binary.
+fn cmd_update(check_only: bool) -> Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    println!("current version: v{current}");
+
+    println!("checking for updates…");
+    let latest_tag = latest_release_tag()?;
+    let latest = latest_tag.trim_start_matches('v');
+
+    if parse_version(latest) <= parse_version(current) {
+        println!("sbxw is already up to date.");
+        return Ok(());
+    }
+
+    println!("new version available: {latest_tag} (current: v{current})");
+    if check_only {
+        println!("run `sbxw update` to install it.");
+        return Ok(());
+    }
+
+    let (os, arch) = target_os_arch()?;
+    let artifact = format!("sbxw-{os}-{arch}");
+    let base = format!("https://github.com/{REPO}/releases/download/{latest_tag}");
+
+    let tmp_dir = std::env::temp_dir().join(format!("sbxw-update-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+    let tmp_bin = tmp_dir.join(&artifact);
+
+    println!("downloading {artifact} ({latest_tag})…");
+    curl_download(&format!("{base}/{artifact}"), &tmp_bin)
+        .with_context(|| format!("failed to download {artifact} for {latest_tag}"))?;
+
+    // Best-effort checksum verification against the release's sha256sums.txt
+    // (published alongside every release by .github/workflows/release.yml).
+    let tmp_sums = tmp_dir.join("sha256sums.txt");
+    if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
+        verify_checksum(&tmp_bin, &artifact, &tmp_sums)
+            .context("checksum verification failed — aborting update")?;
+        println!("checksum verified.");
+    } else {
+        eprintln!("warning: could not fetch sha256sums.txt — skipping checksum verification");
+    }
+
+    set_executable(&tmp_bin)?;
+
+    let exe = std::env::current_exe().context("could not resolve current executable path")?;
+    install_binary(&tmp_bin, &exe)?;
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+
+    println!("sbxw updated: v{current} → {latest_tag}");
+    println!("note: restart any running daemons to pick up the new build (`sbxw down` then `sbxw up …`).");
+    Ok(())
+}
+
+/// Fetches the latest release's tag name (e.g. "v1.0.8") from the GitHub API.
+fn latest_release_tag() -> Result<String> {
+    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", &url])
+        .output()
+        .context("failed to run curl — is it installed?")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "GitHub API request failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.stdout).context("could not parse GitHub API response")?;
+    json.get("tag_name")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .context("GitHub API response had no tag_name")
+}
+
+/// Parses a dotted version string (leading 'v' optional) into numeric
+/// components so "1.10.0" correctly compares greater than "1.9.0".
+fn parse_version(s: &str) -> Vec<u64> {
+    s.trim_start_matches('v')
+        .split('.')
+        .map(|p| p.parse().unwrap_or(0))
+        .collect()
+}
+
+/// Maps this build's OS/arch to the tokens used in release artifact names
+/// (see .github/workflows/release.yml — e.g. "sbxw-macos-arm64").
+fn target_os_arch() -> Result<(&'static str, &'static str)> {
+    let os = match std::env::consts::OS {
+        "macos" => "macos",
+        "linux" => "linux",
+        other => anyhow::bail!("unsupported OS: {other}"),
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "arm64",
+        other => anyhow::bail!("unsupported architecture: {other}"),
+    };
+    Ok((os, arch))
+}
+
+fn curl_download(url: &str, dest: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("curl")
+        .args(["-fsSL", url, "-o"])
+        .arg(dest)
+        .status()
+        .context("failed to run curl — is it installed?")?;
+    if !status.success() {
+        anyhow::bail!("curl exited with {status}");
+    }
+    Ok(())
+}
+
+/// Verifies `bin_path`'s sha256 against the entry for `artifact_name` in a
+/// downloaded sha256sums.txt (lines look like "<hash>  <filename>").
+fn verify_checksum(
+    bin_path: &std::path::Path,
+    artifact_name: &str,
+    sums_path: &std::path::Path,
+) -> Result<()> {
+    let sums = std::fs::read_to_string(sums_path)?;
+    let expected = sums
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let hash = parts.next()?;
+            let name = parts.next()?.trim_start_matches('*');
+            (name == artifact_name).then(|| hash.to_string())
+        })
+        .with_context(|| format!("no checksum entry for {artifact_name}"))?;
+
+    let actual = sha256_hex(bin_path)?;
+    if !actual.eq_ignore_ascii_case(&expected) {
+        anyhow::bail!("checksum mismatch: expected {expected}, got {actual}");
+    }
+    Ok(())
+}
+
+/// Computes a file's sha256 by shelling out to `sha256sum` (Linux) or
+/// `shasum -a 256` (macOS), avoiding a crypto crate dependency for one command.
+fn sha256_hex(path: &std::path::Path) -> Result<String> {
+    let out = if std::process::Command::new("sha256sum")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        std::process::Command::new("sha256sum").arg(path).output()
+    } else {
+        std::process::Command::new("shasum")
+            .args(["-a", "256"])
+            .arg(path)
+            .output()
+    }
+    .context("failed to run a sha256 checksum tool")?;
+    if !out.status.success() {
+        anyhow::bail!("could not compute checksum for {}", path.display());
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .context("unexpected checksum tool output")
+}
+
+fn set_executable(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+/// Installs `src` as `dest`. Shells out to `mv` (handles the cross-filesystem
+/// case, unlike `std::fs::rename`) and, if that fails for lack of permission,
+/// retries with `sudo mv` — the same fallback install.sh uses for
+/// `/usr/local/bin`.
+fn install_binary(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    let status = std::process::Command::new("mv")
+        .arg(src)
+        .arg(dest)
+        .status()
+        .context("failed to run mv")?;
+    if status.success() {
+        return Ok(());
+    }
+
+    let dir = dest.parent().unwrap_or(dest);
+    println!("sudo required to write to {}", dir.display());
+    let status = std::process::Command::new("sudo")
+        .arg("mv")
+        .arg(src)
+        .arg(dest)
+        .status()
+        .context("failed to run sudo mv")?;
+    if !status.success() {
+        anyhow::bail!("`mv` failed both with and without sudo (exit {status})");
+    }
+    Ok(())
 }
 
 /// Re-exec sbxw as a detached daemon, redirecting its output to a log file.

@@ -8,8 +8,10 @@
 //!   GET  /                          → HTML (initial_sandbox embedded)
 //!   GET  /api/sandboxes             → JSON list from `sbx ls`
 //!   POST /api/sandboxes/create      → create a new sandbox
+//!   POST /api/sandboxes/:name/duplicate → create a new sandbox on the same workspace
 //!   POST /api/sandboxes/:name/stop  → `sbx stop <name>`
 //!   GET  /api/fs?path=<dir>         → directory listing for the folder picker
+//!   POST /api/fs/pick               → OS-native folder picker (Finder/Explorer/zenity)
 //!   GET  /api/sandboxes/:name/artifacts             → non-code files under .sbxw-artifacts
 //!   GET  /api/sandboxes/:name/artifacts/download     → download one of those files
 //!   GET  /ws?sandbox=<name>         → WebSocket ↔ persistent PTY
@@ -75,6 +77,10 @@ struct SandboxItem {
     name: String,
     agent: String,
     status: String,
+    /// Host workspace directory, if known (see `workspace_for`). Lets the
+    /// frontend visually group sandboxes that share the same workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +112,7 @@ pub async fn serve(
         .route("/ws", get(ws_handler))
         .route("/api/sandboxes", get(api_list))
         .route("/api/sandboxes/create", post(api_create))
+        .route("/api/sandboxes/:name/duplicate", post(api_duplicate))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
         .route(
             "/api/sandboxes/:name/ports/publish",
@@ -124,6 +131,7 @@ pub async fn serve(
             post(api_paste_image).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
         .route("/api/fs", get(api_fs))
+        .route("/api/fs/pick", post(api_fs_pick))
         .route("/api/sandboxes/:name/artifacts", get(api_artifacts))
         .route(
             "/api/sandboxes/:name/artifacts/download",
@@ -148,10 +156,15 @@ async fn api_list() -> Json<Vec<SandboxItem>> {
     Json(
         items
             .into_iter()
-            .map(|s| SandboxItem {
-                name: s.name,
-                agent: s.agent,
-                status: s.status,
+            .map(|s| {
+                let workspace =
+                    crate::workspace_for(&s.name).map(|p| p.to_string_lossy().into_owned());
+                SandboxItem {
+                    name: s.name,
+                    agent: s.agent,
+                    status: s.status,
+                    workspace,
+                }
             })
             .collect(),
     )
@@ -435,6 +448,66 @@ async fn api_create(
     }
 }
 
+#[derive(Deserialize)]
+struct DuplicateBody {
+    new_name: String,
+}
+
+/// `POST /api/sandboxes/:name/duplicate` — provision a brand-new sandbox
+/// pointed at the *same* host workspace directory as `name` (bind-mounted,
+/// so both sandboxes see each other's file changes live). Just a name
+/// wizard on the frontend: no path/port picking, since everything else is
+/// inherited from the source sandbox's workspace + sbxw.toml.
+async fn api_duplicate(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<DuplicateBody>,
+) -> Json<serde_json::Value> {
+    let new_name = body.new_name.trim().to_string();
+    if new_name.is_empty()
+        || !new_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "name must be non-empty and contain only letters, digits, and hyphens"
+        }));
+    }
+
+    let Some(workspace) = crate::workspace_for(&name) else {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": format!("no known workspace for '{name}' — it may predate this sbxw version")
+        }));
+    };
+    let workspace = workspace.to_string_lossy().into_owned();
+
+    match sbx::exists(&new_name) {
+        Ok(true) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "error": format!("a sandbox named '{new_name}' already exists")
+            }))
+        }
+        Err(e) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Ok(false) => {}
+    }
+
+    let cfg = state.cfg.clone();
+    let use_api_key = state.use_api_key;
+    tracing::info!("web UI: duplicating sandbox '{name}' as '{new_name}' (workspace {workspace})");
+    match tokio::task::spawn_blocking(move || {
+        crate::provision_sandbox(&new_name, &workspace, &[], &cfg, &[], use_api_key)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
+        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    }
+}
+
 // ── Filesystem browser ────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -488,6 +561,93 @@ async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
         parent,
         entries,
     })
+}
+
+/// `POST /api/fs/pick` — pops the OS-native folder picker (Finder on macOS,
+/// the Explorer folder browser on Windows, zenity/kdialog on Linux) and
+/// returns the chosen absolute path. Runs on a blocking thread since the
+/// dialog blocks until the user responds.
+async fn api_fs_pick() -> Json<serde_json::Value> {
+    match tokio::task::spawn_blocking(pick_folder_native).await {
+        Ok(Ok(Some(path))) => Json(serde_json::json!({ "ok": true, "path": path })),
+        Ok(Ok(None)) => Json(serde_json::json!({ "ok": false, "cancelled": true })),
+        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    }
+}
+
+/// Blocks the calling thread until the user picks a folder or dismisses the
+/// dialog. Returns `Ok(None)` on cancel, `Err` if no native picker is
+/// available on this platform.
+fn pick_folder_native() -> Result<Option<String>> {
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    {
+        let out = Command::new("osascript")
+            .arg("-e")
+            .arg(r#"POSIX path of (choose folder with prompt "Select workspace folder")"#)
+            .output()
+            .context("failed to launch Finder folder picker")?;
+        if !out.status.success() {
+            // AppleScript exits non-zero when the user clicks Cancel.
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        const SCRIPT: &str = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = "Select workspace folder"
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dialog.SelectedPath
+}
+"#;
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .output()
+            .context("failed to launch Explorer folder picker")?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        if let Ok(out) = Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--directory",
+                "--title=Select workspace folder",
+            ])
+            .output()
+        {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            // zenity exits non-zero on cancel; treat that as "no selection"
+            // rather than "picker unavailable".
+            return Ok(if out.status.success() && !path.is_empty() {
+                Some(path)
+            } else {
+                None
+            });
+        }
+        if let Ok(out) = Command::new("kdialog")
+            .arg("--getexistingdirectory")
+            .arg(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
+            .output()
+        {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            return Ok(if out.status.success() && !path.is_empty() {
+                Some(path)
+            } else {
+                None
+            });
+        }
+        anyhow::bail!("no native folder picker found — install zenity or kdialog")
+    }
 }
 
 // ── Generated-files ("artifacts") panel ───────────────────────────────────────
