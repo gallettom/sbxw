@@ -20,39 +20,42 @@
 
   /* ── Header ── */
   header {
-    display: flex; align-items: center; gap: .75rem;
-    padding: .5rem 1rem;
+    display: flex; align-items: center; gap: .85rem;
+    padding: 0 1.1rem;
     background: #161b22; border-bottom: 1px solid #21262d;
-    flex-shrink: 0; height: 44px;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+    flex-shrink: 0; height: 48px;
   }
   .addr-badge {
-    font-size: 11px; color: #8b949e;
-    background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
-    padding: .2rem .55rem; cursor: pointer; user-select: none;
-    transition: border-color .15s, color .15s;
+    font-size: 12px; color: #9198a1; letter-spacing: .01em;
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: .3rem .65rem; cursor: pointer; user-select: none;
+    transition: border-color .15s, color .15s, background .15s;
   }
-  .addr-badge:hover { border-color: #30363d; color: #c9d1d9; }
+  .addr-badge:hover { border-color: #30363d; color: #e6edf3; background: #11161c; }
   .addr-badge.copied { border-color: #3fb950; color: #3fb950; }
   header .spacer { flex: 1; }
   .refresh-btn {
     display: flex; align-items: center; gap: .4rem;
     background: #21262d; border: 1px solid #30363d; border-radius: 6px;
     color: #c9d1d9; cursor: pointer;
-    padding: .3rem .75rem; font: inherit; font-size: 12px;
-    transition: background .1s, border-color .1s;
+    height: 28px; padding: 0 .8rem; font: inherit; font-size: 12px; font-weight: 500;
+    transition: background .1s, border-color .1s, color .1s;
   }
   .refresh-btn:hover { background: #30363d; border-color: #484f58; color: #e6edf3; }
+  .refresh-btn:active { background: #282e36; }
   .refresh-btn svg { flex-shrink: 0; }
 
   /* ── Layout switch (pane-count picker) ── */
   .layout-switch { position: relative; }
   .layout-switch-trigger {
-    display: inline-flex; align-items: center; gap: .35rem;
+    display: inline-flex; align-items: center; gap: .4rem;
     background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
-    height: 25px; padding: 0 .55rem; font-size: 11px; color: #8b949e;
+    height: 28px; padding: 0 .7rem; font-size: 12px; color: #9198a1;
     cursor: pointer; font-family: inherit;
+    transition: background .1s, border-color .1s, color .1s;
   }
-  .layout-switch-trigger:hover { background: #161b22; color: #c9d1d9; }
+  .layout-switch-trigger:hover { background: #1c2128; color: #e6edf3; border-color: #3d444d; }
   .layout-switch-trigger.open { border-color: #58a6ff; color: #c9d1d9; }
   .layout-switch-trigger svg { flex-shrink: 0; }
   .layout-switch-count { color: #58a6ff; font-weight: 700; }
@@ -192,17 +195,21 @@
     padding: .45rem .75rem;
     cursor: pointer;
     border-left: 2px solid transparent;
+    border-right: 2px solid transparent;
     user-select: none;
   }
   .sbx-item:hover { background: #161b22; }
-  .sbx-item.active { background: #161b22; border-left-color: #58a6ff; }
+  .sbx-item.active {
+    background: color-mix(in srgb, var(--group-color, transparent) 15%, #161b22);
+    border-right-color: #58a6ff;
+  }
   /* ── Workspace grouping — sandboxes sharing an identical workspace path
      are visually clustered under a small label, tinted with a color derived
      from the workspace path so the same group reads consistently across
      re-renders. ── */
   .sbx-group {
     margin: .2rem 0;
-    background: color-mix(in srgb, var(--group-color) 6%, transparent);
+    background: color-mix(in srgb, var(--group-color) 15%, transparent);
     border-radius: 4px;
   }
   .sbx-group-label {
@@ -1395,10 +1402,10 @@ function sandboxItemHtml(s, groupColor) {
        <button class="icon-btn files-btn" data-action="files" data-name="${s.name}" title="Generated files"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg></button>
        ${dupBtn}
        <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`;
-  // Group color loses to the active-pane blue border — only applied inline
-  // (and thus only overridable by leaving it off) when not active, since an
-  // inline style would otherwise beat the `.sbx-item.active` class rule.
-  const borderStyle = groupColor && !isActive ? ` style="border-left-color:${groupColor}"` : '';
+  // Active state now lives on border-right, group color on border-left, so
+  // the two no longer collide and the group color can stay on regardless
+  // of active state.
+  const borderStyle = groupColor ? ` style="border-left-color:${groupColor}"` : '';
   return `<div class="sbx-item${isActive ? ' active' : ''}" data-name="${s.name}"${borderStyle}>
     <div class="sbx-name">${s.name}${paneTag}${readyDot}</div>
     <div class="sbx-meta">
