@@ -30,6 +30,11 @@ pub struct Config {
     /// (`subscriptionType`). Match your actual plan: "pro", "max", "team",
     /// "enterprise", or "free". Wrong values mislabel the plan in-session.
     pub claude_subscription: String,
+    /// Default model written into the sandbox's Claude Code settings
+    /// (`/home/agent/.claude/settings.json`) on every `sbxw up`. Accepts a
+    /// full model id ("claude-sonnet-5") or an alias ("sonnet", "opus").
+    /// Empty => leave the sandbox's settings untouched.
+    pub claude_model: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -83,6 +88,7 @@ impl Default for Config {
             ],
             kits: vec![],
             claude_subscription: "pro".into(),
+            claude_model: "claude-sonnet-5".into(),
         }
     }
 }

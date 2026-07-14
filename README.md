@@ -7,7 +7,7 @@ policy.
 
 It **only ever calls `sbx`** — never `docker sandbox`.
 
-> Built and verified against the `sbx` 0.30 CLI reference
+> Built and verified against the `sbx` 0.35 CLI reference
 > (docs.docker.com/reference/cli/sbx). A few behaviours could not be confirmed
 > from the docs and are flagged below — check them with `sbx … --help` on your
 > machine before depending on them.
@@ -24,8 +24,10 @@ It **only ever calls `sbx`** — never `docker sandbox`.
    `sbx policy allow network "<list>"` (npm, pypi, packagist, github, docker
    registries, `api.anthropic.com`). Not `**`. **Runs before kits** so a kit's
    download commands have egress.
-3. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`
-   (idempotent). See [Kits](#kits).
+3. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`.
+   Since sbx 0.35 `kit add` **recreates the sandbox container** (state is
+   preserved), so kits already listed by `sbx inspect` are skipped instead of
+   blindly re-applied on every `up`. See [Kits](#kits).
 4. **Bidirectional code** — the workspace is the agent's Git working tree; edits
    from the agent appear on the host instantly and vice-versa. **Only that
    directory is shared** — the sandbox is a microVM with its own filesystem,
@@ -55,7 +57,7 @@ log, or `--no-web` to attach the agent in the current terminal instead.
 | `sbxw ports-ls [name] [--all]` | Show published port mappings for one or all sandboxes. |
 | `sbxw ls` | List all sandboxes with status. |
 | `sbxw stop <names…> [--all]` | Stop sandboxes (state kept; restartable). |
-| `sbxw rm <names…> [--all]` | Remove sandboxes permanently. |
+| `sbxw rm <names…> [--all]` | Remove sandboxes permanently (passes `--force`, so removal proceeds even if a session is attached — sbx 0.35 refuses otherwise). |
 | `sbxw logs <name> [-n N]` | Tail a running daemon's log. |
 | `sbxw down [name]` | Kill the daemon for `name`; with no name, kill all daemons **and** remove the `/etc/hosts` block. |
 | `sbxw update [--check]` | Install the latest release in place of this binary (or just check with `--check`). |
@@ -146,20 +148,32 @@ worst:
 1. **API key (confirmed, recommended).** `sbxw up … --use-api-key` reads
    `ANTHROPIC_API_KEY` and stores it with `sbx secret set -g anthropic` (value
    piped via stdin, never in argv). The agent auto-authenticates.
-2. **OAuth token (kit-based).** If `CLAUDE_CODE_OAUTH_TOKEN` (or
-   `CLAUDE_OAUTH_TOKEN`) is set, sbxw generates an ephemeral **mixin kit** whose
-   `initFiles` writes `~/.claude/.credentials.json` inside the sandbox, so the
-   agent is authenticated from first launch (applied via `--kit` at create time,
-   or `sbx kit add` on an existing sandbox). The canonical variable is
-   `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`); `CLAUDE_OAUTH_TOKEN` is
-   accepted as an alias.
+2. **OAuth token.** If `CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_OAUTH_TOKEN`) is
+   set, sbxw writes `~/.claude/.credentials.json` inside the sandbox so the
+   agent is authenticated from first launch. On **create** and on existing
+   **stopped** sandboxes this goes through an ephemeral **mixin kit** (`--kit`
+   / `sbx kit add`); on a **running** sandbox the file is refreshed directly
+   via `sbx exec` instead, because `sbx kit add` (0.35+) recreates the
+   container and would kill attached sessions. The canonical variable is
+   `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`); `CLAUDE_OAUTH_TOKEN`
+   is accepted as an alias.
 3. **Interactive.** Just run `/login` in the web terminal.
+
+Note: since sbx 0.35, host env vars are **no longer auto-injected** into
+sandboxes at runtime. If you relied on an exported `ANTHROPIC_API_KEY` reaching
+the sandbox by itself, that stopped working — use `--use-api-key` (which stores
+it via `sbx secret set`) or migrate it with `sbx secret import`.
 
 ## Kits
 
 Kits are `sbx`'s native, declarative extension point (tools, files, env, network,
 startup commands). List them in `sbxw.toml`; they're applied **after** the
-network policy on every `sbxw up`:
+network policy on `sbxw up`. Since sbx 0.35, `sbx kit add` **recreates the
+sandbox container** with the augmented kit set (state is preserved) and composes
+the kit's own network allow/deny rules into the sandbox policy — so sbxw skips
+kits that `sbx inspect` already lists, rather than re-applying them on every
+`up`. To force a re-apply (e.g. after editing a kit), run
+`sbx kit add <sandbox> <kit>` yourself:
 
 ```toml
 kits = [
@@ -184,7 +198,10 @@ Bundled kits:
   available and first invocation has no install step. See
   `assets/md-to-pdf-tools/README.md`.
 
-All three need extra egress domains (see each kit's README). Schema gotchas worth
+Since sbx 0.35 the domains a kit declares under `network.allowedDomains` are
+composed into the sandbox policy when the kit is added; domains a kit does *not*
+declare (e.g. apt mirrors) still need adding to `sbxw.toml`'s `network_allow` —
+see each kit's README. Schema gotchas worth
 knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), and
 `content` fields only allow the `${WORKDIR}` placeholder — use brace-free `$VAR`
 for shell variables.
@@ -215,5 +232,8 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   as `sbx run` (documented for `run`; assumed identical for `create`).
 - `sbx policy set-default` posture names (not used here; we use explicit
   `allow network`).
+- Exact output format of `sbx inspect` (0.35+). sbxw only does a substring
+  match on it to *skip* already-applied kits; if the kit name isn't found
+  (older sbx, format change), the kit is simply re-applied as before.
 
 (The kit schema, once flagged as unconfirmed, is now verified — see [Kits](#kits).)

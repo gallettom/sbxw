@@ -19,7 +19,10 @@
 //!     stored via `sbx secret set -g anthropic`.
 //!   * OAuth — set CLAUDE_CODE_OAUTH_TOKEN on the host; sbxw generates an
 //!     ephemeral mixin kit whose `initFiles` writes `~/.claude/.credentials.json`
-//!     in the sandbox, so the agent is authenticated from first launch.
+//!     in the sandbox, so the agent is authenticated from first launch. On an
+//!     already-*running* sandbox the file is refreshed via `sbx exec` instead,
+//!     since `sbx kit add` (0.35+) recreates the container and would kill any
+//!     attached session.
 
 mod config;
 mod hosts;
@@ -893,6 +896,30 @@ fn publish_all_ports(name: &str, cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Best-effort guess at the name a kit reference shows up as in `sbx inspect`:
+/// the `name:` field of a directory kit's spec.yaml, else the reference's last
+/// path segment stripped of any tag / `.zip` extension. Used only to *skip*
+/// re-applying kits (a false negative just re-applies, like pre-0.35 sbxw).
+fn kit_display_name(kit: &str) -> String {
+    let spec = std::path::Path::new(kit).join("spec.yaml");
+    if let Ok(s) = std::fs::read_to_string(spec) {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("name:") {
+                let n = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+                if !n.is_empty() {
+                    return n.to_string();
+                }
+            }
+        }
+    }
+    let last = kit.rsplit('/').next().unwrap_or(kit);
+    last.split(':')
+        .next()
+        .unwrap_or(last)
+        .trim_end_matches(".zip")
+        .to_string()
+}
+
 /// Returns true if a kit reference requires an explicit allowlist entry in sbx.
 /// Git URLs (http/https/git@/git://) and non-Docker Hub OCI registries (any
 /// hostname prefix other than docker.io) are blocked by default since sbx
@@ -960,41 +987,76 @@ pub(crate) fn provision_sandbox(
         }
     }
 
-    // 1. Prepare the OAuth kit if a token is available.
-    let oauth_token = resolve_oauth_token();
-    let kit_dir = if let Some(ref token) = oauth_token {
-        match write_oauth_kit(token, &cfg.claude_subscription) {
-            Ok(d) => {
-                tracing::info!("OAuth kit prepared at {}", d.display());
-                Some(d)
-            }
-            Err(e) => {
-                tracing::warn!("could not prepare OAuth kit (will fall back to /login): {e:#}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let kit_path = kit_dir.as_deref().and_then(|p| p.to_str());
+    // 1. Build the OAuth credentials payload if a token is available.
+    let credentials_json =
+        resolve_oauth_token().map(|t| oauth_credentials_json(&t, &cfg.claude_subscription));
 
     // 2. Create the sandbox if it doesn't exist yet.
-    if sbx::exists(name)? {
+    let existed = sbx::exists(name)?;
+    if existed {
         tracing::info!("sandbox '{name}' already exists — reusing it");
-        if let Some(kit) = kit_path {
-            tracing::info!("applying OAuth kit to existing sandbox via kit add");
-            if let Err(e) = sbx::kit_add(name, kit) {
-                tracing::warn!("OAuth kit add failed (use /login in-session instead): {e:#}");
+        if let Some(ref creds) = credentials_json {
+            if sbx::is_running(name).unwrap_or(false) {
+                // Running sandbox: refresh the credentials file in place over
+                // `sbx exec`. Since sbx 0.35, `kit add` recreates the sandbox
+                // container, which would kill any live agent/bash session
+                // attached through the web terminal — so no kit here.
+                tracing::info!("refreshing OAuth credentials in running sandbox via sbx exec");
+                if let Err(e) = sbx::write_oauth_credentials(name, creds) {
+                    tracing::warn!(
+                        "OAuth credential refresh failed (use /login in-session instead): {e:#}"
+                    );
+                }
+                // The OAuth kit also allowlists claude.ai egress; mirror that.
+                if let Err(e) = sbx::policy_allow_network(name, "claude.ai") {
+                    tracing::warn!("could not allow claude.ai egress: {e:#}");
+                }
+            } else {
+                // Stopped sandbox: `sbx exec` can't reach it, so go through
+                // `kit add`. The container re-creation this triggers (sbx
+                // 0.35+) preserves state, and nothing is attached to a
+                // stopped sandbox anyway.
+                tracing::info!("applying OAuth kit to existing (stopped) sandbox via kit add");
+                match write_oauth_kit(creds) {
+                    Ok(dir) => {
+                        if let Err(e) = sbx::kit_add(name, &dir.to_string_lossy()) {
+                            tracing::warn!(
+                                "OAuth kit add failed (use /login in-session instead): {e:#}"
+                            );
+                        }
+                        let _ = std::fs::remove_dir_all(&dir);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "could not prepare OAuth kit (will fall back to /login): {e:#}"
+                        );
+                    }
+                }
             }
         }
     } else {
         tracing::info!("creating sandbox '{name}' on workspace {workspace}");
-        sbx::create_claude(name, workspace, ro_strs, kit_path)?;
-    }
-
-    // Clean up the ephemeral kit directory now that sbx has consumed it.
-    if let Some(dir) = kit_dir {
-        let _ = std::fs::remove_dir_all(&dir);
+        let kit_dir = match credentials_json.as_deref().map(write_oauth_kit) {
+            Some(Ok(d)) => {
+                tracing::info!("OAuth kit prepared at {}", d.display());
+                Some(d)
+            }
+            Some(Err(e)) => {
+                tracing::warn!("could not prepare OAuth kit (will fall back to /login): {e:#}");
+                None
+            }
+            None => None,
+        };
+        sbx::create_claude(
+            name,
+            workspace,
+            ro_strs,
+            kit_dir.as_deref().and_then(|p| p.to_str()),
+        )?;
+        // Clean up the ephemeral kit directory now that sbx has consumed it.
+        if let Some(dir) = kit_dir {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     // 2b. Pre-trust the workspace so Claude Code doesn't show the "workspace
@@ -1013,6 +1075,14 @@ pub(crate) fn provision_sandbox(
         // for anything the agent does place there even if this fails.
         if let Err(e) = sbx::install_artifact_hook(name) {
             tracing::warn!("could not install artifacts-enforcement hook: {e:#}");
+        }
+        // 2d. Default model for the in-sandbox Claude Code (sbxw.toml's
+        // `claude_model`, "claude-sonnet-5" by default). Best-effort — the
+        // agent falls back to its own default if this fails.
+        if !cfg.claude_model.is_empty() {
+            if let Err(e) = sbx::set_default_model(name, &cfg.claude_model) {
+                tracing::warn!("could not set default model '{}': {e:#}", cfg.claude_model);
+            }
         }
     } else {
         tracing::warn!(
@@ -1035,10 +1105,20 @@ pub(crate) fn provision_sandbox(
     }
 
     // 3b. User-defined kits from sbxw.toml (applied in order via sbx kit add).
-    //     sbx kit add is idempotent — safe to run on every `sbxw up`.
+    //     Since sbx 0.35 `kit add` RECREATES the sandbox container (state is
+    //     preserved and the kit's own network rules are composed in), so
+    //     re-applying on every `sbxw up` is no longer free. `sbx inspect`
+    //     (0.35+) lists the sandbox's kits: kits it already lists are skipped.
+    //     On older sbx — or whenever inspect yields nothing usable — every kit
+    //     is applied, matching the previous behaviour.
     //     Runs AFTER network policy so kit startup commands have egress access.
     //     A kit reference is a directory (with spec.yaml), ZIP, or OCI ref (docker.io by default).
     //     Git URLs and non-Docker Hub OCI refs require: sbx settings set kit.allowedSources <prefix>
+    let inspect_out = if existed && !cfg.kits.is_empty() {
+        sbx::inspect_raw(name).unwrap_or_default()
+    } else {
+        String::new()
+    };
     for kit in &cfg.kits {
         if kit_needs_allowlist(kit) {
             tracing::warn!(
@@ -1046,7 +1126,15 @@ pub(crate) fn provision_sandbox(
                  sources to Docker Hub by default. Run `sbx settings set kit.allowedSources <prefix>` to allow it."
             );
         }
-        tracing::info!("applying kit: {kit}");
+        let kit_name = kit_display_name(kit);
+        if kit_name.len() >= 3 && inspect_out.contains(&kit_name) {
+            tracing::info!(
+                "kit '{kit}' already applied (listed by `sbx inspect`) — skipping; \
+                 run `sbx kit add {name} {kit}` to force a re-apply"
+            );
+            continue;
+        }
+        tracing::info!("applying kit: {kit} (sbx 0.35+ recreates the container; state is kept)");
         if let Err(e) = sbx::kit_add(name, kit) {
             tracing::warn!("kit '{kit}' failed to apply: {e:#}");
         }
@@ -1207,6 +1295,8 @@ fn cmd_up(
 /// We re-attach to the existing sandbox by name. The positional-name form
 /// (`sbx run <name>`) is deprecated as of the latest sbx release, so we use
 /// the `--name` flag, which re-attaches independent of the working directory.
+/// Since sbx 0.35 this also works for sandboxes created with a custom --kit
+/// (like sbxw's OAuth kit) without re-passing the kit reference.
 fn run_agent_foreground(name: &str) -> Result<()> {
     use std::process::Command;
     let status = Command::new("sbx").args(["run", "--name", name]).status()?;
@@ -1240,29 +1330,32 @@ fn resolve_oauth_token() -> Option<String> {
     None
 }
 
+/// JSON payload for Claude Code's `~/.claude/.credentials.json`.
+/// expiresAt: 2100-01-01T00:00:00Z in milliseconds.
+/// refreshToken is set to the access token as a best-effort fallback;
+/// the token is valid as-is so no refresh should be triggered.
+/// subscriptionType comes from sbxw.toml (`claude_subscription`); it labels
+/// the plan in-session, so it must match your actual tier.
+fn oauth_credentials_json(token: &str, subscription: &str) -> String {
+    format!(
+        r#"{{"claudeAiOauth":{{"accessToken":"{token}","refreshToken":"{token}","expiresAt":4102444800000,"scopes":["user:inference"],"subscriptionType":"{subscription}"}}}}"#
+    )
+}
+
 /// Write an ephemeral mixin kit directory whose spec.yaml injects the OAuth
-/// token into the sandbox via `initFiles`.
+/// credentials into the sandbox via `initFiles`.
 ///
-/// Claude Code sandboxes expose `CLAUDE_ENV_FILE=/etc/sandbox-persistent.sh`:
-/// a shell file sourced at agent startup. Writing the token there is the
-/// idiomatic path — it works for new sandboxes (`--kit` at create time) and
-/// for existing/stopped ones (`sbx kit add`).
+/// Used for new sandboxes (`--kit` at create time) and for existing *stopped*
+/// ones (`sbx kit add`). Running sandboxes get the credentials file written
+/// directly over `sbx exec` instead (see `sbx::write_oauth_credentials`),
+/// because `sbx kit add` recreates the container since sbx 0.35.
 ///
-/// The token is written into the spec.yaml on disk; the temp directory is
-/// deleted by the caller immediately after sbx consumes it.
-fn write_oauth_kit(token: &str, subscription: &str) -> Result<std::path::PathBuf> {
+/// The credentials are written into the spec.yaml on disk; the temp directory
+/// is deleted by the caller immediately after sbx consumes it.
+fn write_oauth_kit(credentials_json: &str) -> Result<std::path::PathBuf> {
     let dir = std::env::temp_dir().join(format!("sbxw-oauth-kit-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
 
-    // JSON for Claude Code's credentials file.
-    // expiresAt: 2100-01-01T00:00:00Z in milliseconds.
-    // refreshToken is set to the access token as a best-effort fallback;
-    // the token is valid as-is so no refresh should be triggered.
-    // subscriptionType comes from sbxw.toml (`claude_subscription`); it labels
-    // the plan in-session, so it must match your actual tier.
-    let credentials_json = format!(
-        r#"{{"claudeAiOauth":{{"accessToken":"{token}","refreshToken":"{token}","expiresAt":4102444800000,"scopes":["user:inference"],"subscriptionType":"{subscription}"}}}}"#
-    );
     std::fs::write(
         dir.join("spec.yaml"),
         format!(
@@ -1284,4 +1377,30 @@ fn write_oauth_kit(token: &str, subscription: &str) -> Result<std::path::PathBuf
     )?;
 
     Ok(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kit_display_name_reads_spec_yaml_name() {
+        let dir = std::env::temp_dir().join(format!("sbxw-test-kit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("spec.yaml"),
+            "schemaVersion: \"1\"\nkind: mixin\nname: \"my-kit\"\n",
+        )
+        .unwrap();
+        assert_eq!(kit_display_name(&dir.to_string_lossy()), "my-kit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kit_display_name_falls_back_to_reference_segment() {
+        assert_eq!(kit_display_name("owner/kit:1.2"), "kit");
+        assert_eq!(kit_display_name("ghcr.io/owner/toolkit:latest"), "toolkit");
+        assert_eq!(kit_display_name("/some/path/bundle.zip"), "bundle");
+        assert_eq!(kit_display_name("plain-kit"), "plain-kit");
+    }
 }

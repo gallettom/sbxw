@@ -1,18 +1,28 @@
 //! Thin, typed wrappers around the `sbx` CLI.
 //!
-//! Every command here maps to a *confirmed* `sbx` 0.30 subcommand. We never call
+//! Every command here maps to a *confirmed* `sbx` 0.35 subcommand. We never call
 //! `docker sandbox` — only the standalone `sbx` binary, as requested.
 //!
-//! Confirmed surface (docs.docker.com/reference/cli/sbx, v0.30):
+//! Confirmed surface (docs.docker.com/reference/cli/sbx, v0.35):
 //!   sbx create <agent> [PATH...] --name <name>
 //!   sbx run    <agent> [PATH...] [--name <name>] [-- AGENT_ARGS...]   (no --env flag)
-//!   sbx run    --name <name>                     (re-attach to existing sandbox)
+//!   sbx run    --name <name>   (re-attach; since 0.35 also works for sandboxes
+//!                               created with a custom --kit, without re-passing it)
 //!   sbx ls
+//!   sbx inspect SANDBOX        (since 0.35: lists kits, injected secrets, info)
 //!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
 //!   sbx policy allow|deny network [--sandbox NAME] RESOURCES  (comma list, *.dom, dom:443, **)
 //!   sbx policy init <posture>                      (was `set-default`, kept as deprecated alias)
 //!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin)
+//!
+//! Behaviour changes in 0.35 this module accounts for:
+//!   * `sbx kit add` RECREATES the sandbox container (state preserved) and
+//!     composes the kit's network allow/deny rules into the live policy.
+//!   * `sbx rm` refuses to delete a sandbox with an active session unless
+//!     `--force` is passed (we always pass it — see `rm_sandboxes`).
+//!   * Host env vars are no longer auto-injected at runtime; secrets must go
+//!     through `sbx secret set` / `sbx secret import` (we already use `set`).
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -131,9 +141,25 @@ pub fn create_claude(
     run_inherit(&refs)
 }
 
-/// `sbx kit add SANDBOX REFERENCE` — apply a kit to an already-running sandbox.
+/// `sbx kit add SANDBOX REFERENCE` — apply a kit to an existing sandbox.
+///
+/// Since sbx 0.35 this RECREATES the sandbox container with the augmented kit
+/// set (state is preserved) and composes the kit's network allow/deny rules
+/// into the sandbox policy. Recreation kills anything attached to a running
+/// sandbox (agent/bash PTY sessions), so callers should prefer `sbx exec`
+/// paths on running sandboxes and reserve `kit add` for stopped ones or for
+/// changes that genuinely need the kit machinery.
 pub fn kit_add(sandbox: &str, kit_path: &str) -> Result<()> {
     run_inherit(&["kit", "add", sandbox, kit_path])
+}
+
+/// `sbx inspect SANDBOX` — raw text output. Since sbx 0.35 this lists the
+/// sandbox's kits, injected secrets, and general sandbox information; sbxw
+/// uses it to skip re-applying kits that are already present (each re-apply
+/// would recreate the container). Best-effort: callers must tolerate errors
+/// and unknown formats (older sbx versions may not list kits at all).
+pub fn inspect_raw(name: &str) -> Result<String> {
+    run_capture(&["inspect", name])
 }
 
 /// Parsed row from `sbx ls`.
@@ -169,6 +195,11 @@ pub fn stop_sandbox(name: &str) -> Result<()> {
 }
 
 /// `sbx rm --force [--all | SANDBOX...]` — remove sandboxes permanently.
+///
+/// `--force` is load-bearing since sbx 0.35: `sbx rm` now refuses to delete a
+/// sandbox with an active session without it, and sbxw's own web daemon keeps
+/// an `sbx run --name` session attached — a non-forced rm would always fail
+/// from the web UI. Removal therefore proceeds even mid-session, by design.
 pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
     let mut args = vec!["rm", "--force"];
     if all {
@@ -426,6 +457,17 @@ pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Refresh Claude Code's OAuth credentials in a *running* sandbox by writing
+/// `~/.claude/.credentials.json` directly over `sbx exec`. This replaces the
+/// old `sbx kit add` path for running sandboxes: since sbx 0.35 `kit add`
+/// recreates the sandbox container, which would kill live agent/bash sessions
+/// attached through the web terminal.
+pub fn write_oauth_credentials(sandbox: &str, credentials_json: &str) -> Result<()> {
+    const DEST: &str = "/home/agent/.claude/.credentials.json";
+    write_file_stdin(sandbox, DEST, credentials_json.as_bytes())?;
+    exec_run(sandbox, &["chmod", "600", DEST])
+}
+
 /// Run a non-interactive command inside `sandbox` via `sbx exec`, inheriting stdio.
 fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
     let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
@@ -455,6 +497,26 @@ pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
     write_file_stdin(sandbox, "/tmp/.sbxw-trust.js", script.as_bytes())?;
     let result = exec_run(sandbox, &["node", "/tmp/.sbxw-trust.js"]);
     let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-trust.js"]);
+    result
+}
+
+/// Set the default model in the sandbox's user-level Claude Code settings
+/// (`/home/agent/.claude/settings.json`). Merges into whatever `settings.json`
+/// already exists rather than overwriting it, since that file also holds the
+/// permission/hook settings installed elsewhere. Safe to call repeatedly
+/// (e.g. on every `sbxw up`); sbxw.toml's `claude_model` is the source of
+/// truth for the default.
+pub fn set_default_model(sandbox: &str, model: &str) -> Result<()> {
+    let script = format!(
+        "const fs=require('fs');const p='/home/agent/.claude/settings.json';const m={};\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         d.model=m;\
+         fs.writeFileSync(p,JSON.stringify(d));",
+        serde_json::to_string(model)?
+    );
+    write_file_stdin(sandbox, "/tmp/.sbxw-model.js", script.as_bytes())?;
+    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-model.js"]);
+    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-model.js"]);
     result
 }
 

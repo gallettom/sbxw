@@ -907,6 +907,8 @@ fn get_or_create_session(
     } else if shell.is_empty() {
         // Re-attach by name. The positional form (`sbx run <name>`) is
         // deprecated; `--name` re-attaches regardless of working directory.
+        // Since sbx 0.35 this also works for sandboxes created with a custom
+        // --kit (like sbxw's OAuth kit) without re-passing the kit.
         cmd.args(["run", "--name", sandbox]);
     } else {
         cmd.args(["exec", "-it", sandbox, "--", shell]);

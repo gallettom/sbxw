@@ -13,6 +13,11 @@ web_shell = ""
 # label is correct: "pro", "max", "team", "enterprise", or "free".
 claude_subscription = "pro"
 
+# Default model for the in-sandbox Claude Code, written into
+# /home/agent/.claude/settings.json on every `sbxw up`. Full model id
+# ("claude-sonnet-5") or alias ("sonnet", "opus"). Empty => don't touch it.
+claude_model = "claude-sonnet-5"
+
 # One loopback IP per app => clean hostnames on their natural ports
 # (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
 # `ifconfig lo0 alias 127.0.0.X` (sudo). When false, everything shares 127.0.0.1.
