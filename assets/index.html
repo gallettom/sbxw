@@ -205,10 +205,10 @@
     background: color-mix(in srgb, var(--group-color, transparent) 15%, #161b22);
     border-right-color: #58a6ff;
   }
-  /* ── Workspace grouping — sandboxes sharing an identical workspace path
-     are visually clustered under a small label, tinted with a color derived
-     from the workspace path so the same group reads consistently across
-     re-renders. ── */
+  /* ── Sidebar grouping — sandboxes sharing an identical workspace path (and,
+     as one group of their own, chat sandboxes) are visually clustered under a
+     small label, tinted with a color derived from the workspace path so the
+     same group reads consistently across re-renders. ── */
   .sbx-group {
     margin: .2rem 0;
     background: color-mix(in srgb, var(--group-color) 15%, transparent);
@@ -618,6 +618,34 @@
         <span class="create-error hidden" id="dup-error"></span>
         <button class="btn-cancel" id="dup-modal-cancel">Cancel</button>
         <button class="btn-create" id="dup-modal-confirm" disabled>⧉ Duplicate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── New chat sandbox wizard ── -->
+  <div class="modal-overlay hidden" id="chat-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="chat-modal-title" style="width:380px">
+      <div class="modal-head">
+        <span class="modal-title" id="chat-modal-title">New chat sandbox</span>
+        <button class="modal-close" id="chat-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin:0 0 .2rem;color:#c9d1d9;font-size:13px;">
+          An agent on a fresh empty folder — none of your code is mounted.
+        </p>
+        <div>
+          <label class="field-label" for="chat-inp-name">Name <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+          <input id="chat-inp-name" class="field-input" type="text"
+                 pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <span style="color:#8b949e;font-size:11px;display:block;margin-top:.35rem">
+            Leave empty for <strong id="chat-name-suggestion" style="color:#c9d1d9;font-weight:600"></strong>.
+          </span>
+          <span class="create-error hidden" id="chat-name-error" style="align-self:flex-start;margin-top:.3rem;display:block"></span>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-cancel" id="chat-modal-cancel">Cancel</button>
+        <button class="btn-create" id="chat-modal-confirm">💬 Start</button>
       </div>
     </div>
   </div>
@@ -1366,22 +1394,37 @@ function workspaceGroupColor(key) {
   return `hsl(${hash % 360}, 55%, 62%)`;
 }
 
-// Reorders sandboxes so ones sharing a workspace sit next to each other,
-// without disturbing the relative position of everything else — each group
-// is spliced in at the position its first member originally occupied.
-function orderForGrouping(list, workspaceCounts) {
+// Chat sandboxes each get their own throwaway workspace, so path grouping can
+// never bring them together — they group on the API's `chat` flag instead,
+// under a sentinel key no real path can collide with, and keep a fixed accent
+// (they're one recognisable kind, not one folder among many).
+const CHAT_GROUP = ' chat';
+const CHAT_GROUP_COLOR = 'hsl(265, 60%, 68%)';
+
+function groupKeyOf(s) {
+  if (s.chat) return CHAT_GROUP;
+  return s.workspace || null;
+}
+
+function groupColorOf(key) {
+  return key === CHAT_GROUP ? CHAT_GROUP_COLOR : workspaceGroupColor(key);
+}
+
+// Reorders sandboxes so ones in the same group sit next to each other, without
+// disturbing the relative position of everything else — each group is spliced
+// in at the position its first member originally occupied.
+function orderForGrouping(list, groupCounts) {
   const firstIndex = new Map();
+  const keyOf = s => {
+    const k = groupKeyOf(s);
+    return (k && groupCounts.get(k) > 1) ? k : null;
+  };
   list.forEach((s, i) => {
-    if (s.workspace && workspaceCounts.get(s.workspace) > 1 && !firstIndex.has(s.workspace)) {
-      firstIndex.set(s.workspace, i);
-    }
+    const k = keyOf(s);
+    if (k && !firstIndex.has(k)) firstIndex.set(k, i);
   });
   return list
-    .map((s, i) => ({
-      s,
-      i,
-      key: (s.workspace && workspaceCounts.get(s.workspace) > 1) ? firstIndex.get(s.workspace) : i,
-    }))
+    .map((s, i) => ({ s, i, key: keyOf(s) !== null ? firstIndex.get(keyOf(s)) : i }))
     .sort((a, b) => (a.key - b.key) || (a.i - b.i))
     .map(x => x.s);
 }
@@ -1429,32 +1472,35 @@ function renderSidebar() {
     return;
   }
 
-  // Only sandboxes that share an *identical* workspace path with at least
-  // one other sandbox get grouped — a lone sandbox on a unique workspace
-  // renders exactly as before.
-  const workspaceCounts = new Map();
+  // Only sandboxes sharing a group key with at least one other — an identical
+  // workspace path, or being a chat sandbox — get grouped. A lone sandbox on a
+  // unique workspace renders exactly as before.
+  const groupCounts = new Map();
   sandboxes.forEach(s => {
-    if (s.workspace) workspaceCounts.set(s.workspace, (workspaceCounts.get(s.workspace) || 0) + 1);
+    const k = groupKeyOf(s);
+    if (k) groupCounts.set(k, (groupCounts.get(k) || 0) + 1);
   });
-  const ordered = orderForGrouping(sandboxes, workspaceCounts);
+  const ordered = orderForGrouping(sandboxes, groupCounts);
 
   let html = '';
   let openGroup = null;
   ordered.forEach(s => {
-    const grouped = s.workspace && workspaceCounts.get(s.workspace) > 1;
-    const groupKey = grouped ? s.workspace : null;
+    const key = groupKeyOf(s);
+    const groupKey = (key && groupCounts.get(key) > 1) ? key : null;
     if (groupKey !== openGroup) {
       if (openGroup !== null) html += '</div>';
       if (groupKey !== null) {
-        const color = workspaceGroupColor(groupKey);
-        html += `<div class="sbx-group" style="--group-color:${color}">
-          <div class="sbx-group-label" title="${groupKey}">
-            <span class="sbx-group-dot"></span>📁 ${workspaceBasename(groupKey)}
+        const isChat = groupKey === CHAT_GROUP;
+        const title = isChat ? 'Chat sandboxes — each on its own empty workspace' : groupKey;
+        const label = isChat ? '💬 Chats' : `📁 ${workspaceBasename(groupKey)}`;
+        html += `<div class="sbx-group" style="--group-color:${groupColorOf(groupKey)}">
+          <div class="sbx-group-label" title="${title}">
+            <span class="sbx-group-dot"></span>${label}
           </div>`;
       }
       openGroup = groupKey;
     }
-    html += sandboxItemHtml(s, groupKey ? workspaceGroupColor(groupKey) : null);
+    html += sandboxItemHtml(s, groupKey ? groupColorOf(groupKey) : null);
   });
   if (openGroup !== null) html += '</div>';
 
@@ -1754,11 +1800,83 @@ inpName.addEventListener('input', normalizeNameInput);
 document.getElementById('btn-new-sandbox').addEventListener('click', openModal);
 
 // ── Chat sandbox: an agent on an empty temp folder (no code access) ────────
-// One click spins up a throwaway sandbox whose workspace is a fresh temp dir,
-// so the agent has nothing to read or edit — a pure chat. Provisioned in the
-// background like a normal create (pending row + auto-attach on success).
-document.getElementById('btn-new-chat').addEventListener('click', () => {
-  const name = 'chat-' + Math.random().toString(16).slice(2, 8);
+// Spins up a throwaway sandbox whose workspace is a fresh temp dir, so the
+// agent has nothing to read or edit — a pure chat. The name is optional: the
+// modal pre-computes a `chat-xxxxxx` one and uses it when the field is left
+// empty, so the pending row always matches the sandbox the server creates.
+// Provisioned in the background like a normal create (pending row +
+// auto-attach on success).
+const chatOverlay   = document.getElementById('chat-modal-overlay');
+const chatInpName   = document.getElementById('chat-inp-name');
+const chatNameErr   = document.getElementById('chat-name-error');
+const chatSuggestEl = document.getElementById('chat-name-suggestion');
+const chatConfirm   = document.getElementById('chat-modal-confirm');
+let chatSuggestion = '';
+
+function openChatModal() {
+  chatSuggestion = 'chat-' + Math.random().toString(16).slice(2, 8);
+  chatSuggestEl.textContent = chatSuggestion;
+  chatInpName.value = '';
+  chatInpName.placeholder = chatSuggestion;
+  chatInpName.classList.remove('error');
+  chatNameErr.textContent = '';
+  chatNameErr.classList.add('hidden');
+  chatOverlay.classList.remove('hidden');
+  validateChatForm();
+  chatInpName.focus();
+}
+
+function closeChatModal() { chatOverlay.classList.add('hidden'); }
+
+// Empty is valid (the suggestion is used); a typed name has to be well-formed
+// and free — provisioning an existing name would adopt that sandbox instead of
+// starting a chat.
+function validateChatForm() {
+  const name = chatInpName.value.trim();
+  if (!name) { chatNameErr.classList.add('hidden'); chatConfirm.disabled = false; return; }
+  const taken = sandboxes.some(s => s.name === name);
+  if (taken) {
+    chatNameErr.textContent = `“${name}” already exists — pick another name`;
+    chatNameErr.classList.remove('hidden');
+  }
+  chatConfirm.disabled = taken || !/^[a-z0-9][a-z0-9-]*$/.test(name);
+}
+
+chatInpName.addEventListener('input', () => {
+  const el = chatInpName;
+  const before = el.value;
+  const start = el.selectionStart;
+  const hadInvalidChars = /[^a-zA-Z0-9-]/.test(before) || before.startsWith('-');
+  const cleaned = before.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/^-+/, '');
+  if (cleaned !== before) {
+    el.value = cleaned;
+    const pos = Math.min(start, cleaned.length);
+    el.setSelectionRange(pos, pos);
+  }
+  chatNameErr.textContent = hadInvalidChars
+    ? 'Lowercase letters, digits, and hyphens only — must start with a letter or digit'
+    : '';
+  chatNameErr.classList.toggle('hidden', !hadInvalidChars);
+  chatInpName.classList.remove('error');
+  validateChatForm();
+});
+
+chatInpName.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !chatConfirm.disabled) chatConfirm.click();
+});
+
+document.getElementById('btn-new-chat').addEventListener('click', openChatModal);
+document.getElementById('chat-modal-close').addEventListener('click', closeChatModal);
+document.getElementById('chat-modal-cancel').addEventListener('click', closeChatModal);
+chatOverlay.addEventListener('click', e => { if (e.target === chatOverlay) closeChatModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !chatOverlay.classList.contains('hidden')) closeChatModal();
+});
+
+chatConfirm.addEventListener('click', () => {
+  if (chatConfirm.disabled) return;
+  const name = chatInpName.value.trim() || chatSuggestion;
+  closeChatModal();
   addPendingSandbox(name);
   (async () => {
     try {

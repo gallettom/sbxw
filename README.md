@@ -74,8 +74,8 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **Create** a sandbox (＋) with a folder picker and inline **port-forwarding** rows
   (sandbox→host port, optional host IP, optional `/etc/hosts` alias). This goes
   through the *same* provisioning pipeline as the CLI.
-- **Start a chat sandbox** (💬) in one click — the browser equivalent of
-  `sbxw chat`. See below.
+- **Start a chat sandbox** (💬) — the browser equivalent of `sbxw chat`, with an
+  optional name (leave it empty for the generated `chat-xxxxxx`). See below.
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
@@ -95,8 +95,15 @@ sbxw rm brainstorm        # removes the sandbox and its empty workspace
 ```
 
 The web UI's 💬 button does the same thing (`POST /api/sandboxes/chat`); both go
-through one shared code path. The empty workspace is deleted when the sandbox is
-removed, from either the CLI or the UI.
+through one shared code path. It opens a small dialog where the name is
+optional — leave it empty and you get the same generated `chat-xxxxxx`, or type
+one to get `sbxw chat brainstorm`'s result from the browser. The empty workspace
+is deleted when the sandbox is removed, from either the CLI or the UI.
+
+In the sidebar, chat sandboxes are clustered under a **💬 Chats** group, the same
+way sandboxes sharing a workspace are grouped under their folder name. Each chat
+has its own throwaway workspace, so path-based grouping can't catch them; the
+API flags them with `chat: true` instead.
 
 Everything else is a normal sandbox: a chat sandbox still reads your
 `sbxw.toml`, so it applies the same kits and publishes the same `[[ports]]`. If

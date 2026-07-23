@@ -406,6 +406,11 @@ struct SandboxItem {
     /// frontend visually group sandboxes that share the same workspace.
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<String>,
+    /// Whether this is a chat sandbox (its workspace is a throwaway directory
+    /// under `chat_workspace_root()`). Every chat sandbox has a *different*
+    /// workspace, so workspace grouping can't catch them — the frontend groups
+    /// them on this flag instead.
+    chat: bool,
 }
 
 #[derive(Deserialize)]
@@ -771,6 +776,7 @@ async fn api_list() -> Json<Vec<SandboxItem>> {
         items
             .into_iter()
             .map(|s| {
+                let chat = crate::chat_workspace_of(&s.name).is_some();
                 let workspace =
                     crate::workspace_for(&s.name).map(|p| p.to_string_lossy().into_owned());
                 SandboxItem {
@@ -778,6 +784,7 @@ async fn api_list() -> Json<Vec<SandboxItem>> {
                     agent: s.agent,
                     status: s.status,
                     workspace,
+                    chat,
                 }
             })
             .collect(),
