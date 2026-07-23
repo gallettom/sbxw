@@ -259,7 +259,7 @@ printf "   sbxw chat                     # throwaway agent on an empty workspace
 printf "   sbxw bash <name>              # interactive shell in the sandbox\n"
 printf "   sbxw logs <name>              # tail daemon log\n"
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
-printf "   sbxw update                   # update sbxw itself to the latest release\n"
+printf "   sbxw update                   # update sbxw (and the island, if installed)\n"
 printf "   sbxw completion --help       # TAB-complete commands (bash/zsh/fish/…)\n"
 if [ -d "$KITS_DIR" ]; then
   printf "   kits: %s/\n" "$KITS_DIR"

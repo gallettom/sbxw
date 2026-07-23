@@ -170,10 +170,16 @@ Examples:
         name: Option<String>,
     },
     /// Check for a new sbxw release and install it in place of this binary.
+    ///
+    /// On macOS this also refreshes an already-installed SbxwIsland.app when the
+    /// release carries a newer build of it (see --no-island).
     Update {
         /// Only check whether a newer version is available; don't install it.
         #[arg(long)]
         check: bool,
+        /// Leave SbxwIsland.app alone (don't quit/replace/relaunch it).
+        #[arg(long)]
+        no_island: bool,
     },
     /// Print a shell completion script, so TAB completes subcommand and flag
     /// names instead of guessing (or running `sbxw help`).
@@ -452,7 +458,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Update { check } => cmd_update(check),
+        Cmd::Update { check, no_island } => cmd_update(check, no_island),
         Cmd::Completion { shell } => cmd_completion(shell),
     }
 }
@@ -502,28 +508,42 @@ const REPO: &str = "gallettom/sbxw";
 
 /// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
 /// and installs it in place of the currently running binary.
-fn cmd_update(check_only: bool) -> Result<()> {
+fn cmd_update(check_only: bool, no_island: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     println!("current version: v{current}");
 
     println!("checking for updates…");
     let latest_tag = latest_release_tag()?;
     let latest = latest_tag.trim_start_matches('v');
+    let base = format!("https://github.com/{REPO}/releases/download/{latest_tag}");
+
+    // The island versions apart from the CLI, so it can be stale even when the
+    // binary isn't — check it on both paths.
+    let island = |check: bool| {
+        if no_island {
+            return;
+        }
+        if let Err(e) = update_island(&base, check) {
+            eprintln!("warning: could not refresh SbxwIsland.app: {e:#}");
+            eprintln!("  install it manually from https://github.com/{REPO}/releases");
+        }
+    };
 
     if parse_version(latest) <= parse_version(current) {
         println!("sbxw is already up to date.");
+        island(check_only);
         return Ok(());
     }
 
     println!("new version available: {latest_tag} (current: v{current})");
     if check_only {
         println!("run `sbxw update` to install it.");
+        island(true);
         return Ok(());
     }
 
     let (os, arch) = target_os_arch()?;
     let artifact = format!("sbxw-{os}-{arch}");
-    let base = format!("https://github.com/{REPO}/releases/download/{latest_tag}");
 
     let tmp_dir = std::env::temp_dir().join(format!("sbxw-update-{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir)?;
@@ -551,8 +571,204 @@ fn cmd_update(check_only: bool) -> Result<()> {
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
     println!("sbxw updated: v{current} → {latest_tag}");
+    island(false);
     println!("note: restart any running daemons to pick up the new build (`sbxw down` then `sbxw up …`).");
     Ok(())
+}
+
+// ── macOS companion app (sbxw Island) ────────────────────────────────────
+// The bundle installed by install.sh lives outside the binary's reach, so it
+// used to stay on whatever build shipped the day it was installed. `sbxw
+// update` now refreshes it in place — but only if the user already has it:
+// updating must never install something they declined.
+const ISLAND_APP: &str = "SbxwIsland.app";
+/// Bundle executable name, i.e. what the running process is called.
+const ISLAND_PROC: &str = "SbxwIsland";
+
+/// Refreshes an installed `SbxwIsland.app` when the release ships a newer build
+/// of it. macOS-only, and a no-op when the app isn't installed. With
+/// `check_only` it reports what it would do without touching anything.
+///
+/// The app's version is independent of the release tag, so the release
+/// publishes `island-version.txt` next to the zip (see macos/build-app.sh) —
+/// that's what tells us the bundle is stale without downloading it first.
+fn update_island(base: &str, check_only: bool) -> Result<()> {
+    if std::env::consts::OS != "macos" {
+        return Ok(());
+    }
+    let Some(app) = installed_island_app() else {
+        return Ok(()); // not installed — nothing to refresh
+    };
+
+    let tmp_dir = std::env::temp_dir().join(format!("sbxw-island-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+    let cleanup = |dir: &std::path::Path| {
+        let _ = std::fs::remove_dir_all(dir);
+    };
+
+    let tmp_ver = tmp_dir.join("island-version.txt");
+    if curl_download(&format!("{base}/island-version.txt"), &tmp_ver).is_err() {
+        // Releases before the island got its own version don't publish it.
+        // Leaving the app alone beats bouncing it on every update.
+        cleanup(&tmp_dir);
+        println!("island: release has no version marker — leaving {ISLAND_APP} as is.");
+        return Ok(());
+    }
+    let latest = std::fs::read_to_string(&tmp_ver)?.trim().to_string();
+    let installed = island_bundle_version(&app);
+
+    if parse_version(&latest) <= parse_version(&installed) {
+        cleanup(&tmp_dir);
+        println!("island: {ISLAND_APP} is up to date (v{installed}).");
+        return Ok(());
+    }
+    println!("island: new build available: v{installed} → v{latest}");
+    if check_only {
+        cleanup(&tmp_dir);
+        return Ok(());
+    }
+
+    let artifact = "SbxwIsland-macos.zip";
+    let tmp_zip = tmp_dir.join(artifact);
+    println!("island: downloading {artifact}…");
+    curl_download(&format!("{base}/{artifact}"), &tmp_zip)
+        .with_context(|| format!("failed to download {artifact}"))?;
+
+    let tmp_sums = tmp_dir.join("sha256sums.txt");
+    if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
+        verify_checksum(&tmp_zip, artifact, &tmp_sums)
+            .context("checksum verification failed — leaving the installed app alone")?;
+    } else {
+        eprintln!("warning: could not fetch sha256sums.txt — skipping checksum verification");
+    }
+
+    // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
+    let status = std::process::Command::new("ditto")
+        .args(["-x", "-k"])
+        .arg(&tmp_zip)
+        .arg(&tmp_dir)
+        .status()
+        .context("failed to run ditto")?;
+    let staged = tmp_dir.join(ISLAND_APP);
+    if !status.success() || !staged.is_dir() {
+        cleanup(&tmp_dir);
+        anyhow::bail!("downloaded archive did not contain {ISLAND_APP}");
+    }
+
+    // Replacing the bundle under a running app leaves the old code running, so
+    // quit it first — and put it back afterwards only if it *was* running.
+    let was_running = island_running();
+    if was_running {
+        println!("island: quitting the running app…");
+        quit_island();
+    }
+
+    // Past the quit, a failure must not leave the user without their island:
+    // whatever bundle survives at `app` gets relaunched before we bail.
+    if let Err(e) = swap_bundle(&staged, &app) {
+        cleanup(&tmp_dir);
+        if was_running && app.is_dir() {
+            let _ = open_island(&app);
+        }
+        return Err(e);
+    }
+    // Ad-hoc-signed, not notarised: without this Gatekeeper refuses to open it.
+    let _ = std::process::Command::new("xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&app)
+        .status();
+    cleanup(&tmp_dir);
+
+    println!("island: {ISLAND_APP} updated: v{installed} → v{latest}");
+    if was_running {
+        let _ = open_island(&app);
+        println!("island: relaunched.");
+    }
+    Ok(())
+}
+
+/// Replaces the bundle at `app` with the freshly extracted one. `mv` rather
+/// than `std::fs::rename` for the cross-filesystem case (/tmp → ~/Applications).
+fn swap_bundle(staged: &std::path::Path, app: &std::path::Path) -> Result<()> {
+    std::fs::remove_dir_all(app)
+        .with_context(|| format!("could not remove {} (permissions?)", app.display()))?;
+    let status = std::process::Command::new("mv")
+        .arg(staged)
+        .arg(app)
+        .status()
+        .context("failed to run mv")?;
+    if !status.success() {
+        anyhow::bail!("could not install the new bundle at {}", app.display());
+    }
+    Ok(())
+}
+
+fn open_island(app: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new("open").arg(app).status()
+}
+
+/// Where install.sh puts the app, most-specific first. `None` when the user
+/// never installed it.
+fn installed_island_app() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join("Applications").join(ISLAND_APP));
+    }
+    candidates.push(PathBuf::from("/Applications").join(ISLAND_APP));
+    candidates.into_iter().find(|p| p.is_dir())
+}
+
+/// The installed bundle's CFBundleShortVersionString, or "0" when it can't be
+/// read (an old or hand-built bundle) — which makes it compare as stale.
+fn island_bundle_version(app: &std::path::Path) -> String {
+    let plist = app.join("Contents").join("Info");
+    let out = std::process::Command::new("defaults")
+        .arg("read")
+        .arg(&plist)
+        .arg("CFBundleShortVersionString")
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if v.is_empty() {
+                "0".into()
+            } else {
+                v
+            }
+        }
+        _ => "0".into(),
+    }
+}
+
+fn island_running() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-x", ISLAND_PROC])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Asks the app to quit (AppleScript, so it shuts down cleanly), then waits for
+/// the process to go away, escalating to a signal if it doesn't.
+fn quit_island() {
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &format!("quit app \"{ISLAND_PROC}\"")])
+        .status();
+    for _ in 0..30 {
+        if !island_running() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = std::process::Command::new("pkill")
+        .args(["-x", ISLAND_PROC])
+        .status();
+    for _ in 0..20 {
+        if !island_running() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// Fetches the latest release's tag name (e.g. "v1.0.8") from the GitHub API.
@@ -1562,5 +1778,27 @@ mod tests {
         assert_eq!(kit_display_name("ghcr.io/owner/toolkit:latest"), "toolkit");
         assert_eq!(kit_display_name("/some/path/bundle.zip"), "bundle");
         assert_eq!(kit_display_name("plain-kit"), "plain-kit");
+    }
+
+    /// The island staleness check compares the release's island-version.txt to
+    /// the installed bundle's CFBundleShortVersionString via `parse_version`.
+    #[test]
+    fn island_version_comparison_detects_stale_bundles() {
+        let stale = |installed: &str, latest: &str| {
+            parse_version(latest) > parse_version(installed) // triggers a refresh
+        };
+        assert!(stale("1.0.0", "1.1.0"));
+        assert!(stale("1.9.0", "1.10.0")); // numeric, not lexicographic
+        assert!(!stale("1.0.0", "1.0.0")); // same build: leave the app alone
+        assert!(!stale("1.1.0", "1.0.0")); // never downgrade
+                                           // Unreadable Info.plist ("0") and locally built bundles count as stale.
+        assert!(stale("0", "1.0.0"));
+        assert!(stale("0.0.0-dev", "1.0.0"));
+    }
+
+    #[test]
+    fn island_bundle_version_is_zero_when_unreadable() {
+        let missing = std::env::temp_dir().join("sbxw-test-no-such.app");
+        assert_eq!(island_bundle_version(&missing), "0");
     }
 }

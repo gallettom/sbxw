@@ -61,7 +61,7 @@ log, or `--no-web` to attach the agent in the current terminal instead.
 | `sbxw rm <names…> [--all]` | Remove sandboxes permanently (passes `--force`, so removal proceeds even if a session is attached — sbx 0.35 refuses otherwise). |
 | `sbxw logs <name> [-n N]` | Tail a running daemon's log. |
 | `sbxw down [name]` | Kill the daemon for `name`; with no name, kill all daemons **and** remove the `/etc/hosts` block. |
-| `sbxw update [--check]` | Install the latest release in place of this binary (or just check with `--check`). |
+| `sbxw update [--check] [--no-island]` | Install the latest release in place of this binary (or just check with `--check`). On macOS it also refreshes an already-installed `SbxwIsland.app` when the release ships a newer build of it — quitting and relaunching it if it was running; `--no-island` leaves the app alone. |
 | `sbxw completion [shell]` | Print `source <(sbxw completion <shell>)` material for bash/zsh/fish/elvish/powershell; see `sbxw completion --help`. |
 
 The web-only daemon's log/pid are keyed as `web` — `sbxw logs web`, `sbxw down web`.

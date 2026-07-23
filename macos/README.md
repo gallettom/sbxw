@@ -109,13 +109,20 @@ ad-hoc-signed), run the packaging script from this directory:
 
 ```bash
 ./build-app.sh dist
-#   → dist/SbxwIsland.app  and  dist/SbxwIsland-macos.zip
+#   → dist/SbxwIsland.app, dist/SbxwIsland-macos.zip, dist/island-version.txt
 ```
 
 The app is versioned independently of the `sbxw` CLI: the version baked into
 `Info.plist` comes from `ISLAND_VERSION` in `build-app.sh` (currently `1.0.0`),
 which is what the release workflow ships too. Bump it there when the island
 itself changes; `SBXW_ISLAND_VERSION=…` overrides it for a one-off build.
+
+That version is also written to `island-version.txt` and published next to the
+zip, which is how `sbxw update` decides whether an installed bundle is stale:
+it compares the file against the installed app's `CFBundleShortVersionString`,
+and only then downloads the zip, quits the app, replaces it, and relaunches it
+if it was running. Users who never installed the app are left alone, and
+`sbxw update --no-island` skips the whole step.
 
 ## Configuration
 

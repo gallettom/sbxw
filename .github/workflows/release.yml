@@ -86,7 +86,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: SbxwIsland-macos
-          path: dist/SbxwIsland-macos.zip
+          path: |
+            dist/SbxwIsland-macos.zip
+            dist/island-version.txt
 
   # ── Create GitHub Release and attach all binaries ─────────────────────────
   release:
@@ -117,5 +119,6 @@ jobs:
             sbxw-linux-*
             sbxw-kits.tar.gz
             SbxwIsland-macos.zip
+            island-version.txt
             sha256sums.txt
           generate_release_notes: true

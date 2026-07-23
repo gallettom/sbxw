@@ -13,6 +13,9 @@
 # Produces:
 #   OUTPUT_DIR/SbxwIsland.app          the bundle (runnable locally)
 #   OUTPUT_DIR/SbxwIsland-macos.zip    zipped bundle (the release artifact)
+#   OUTPUT_DIR/island-version.txt      the version, published alongside the zip
+#                                      so `sbxw update` can tell whether the
+#                                      installed app is stale without fetching it
 set -euo pipefail
 
 APP_NAME="SbxwIsland"
@@ -61,5 +64,10 @@ codesign --force --deep --sign - "$APP"
 rm -f "$OUT/$APP_NAME-macos.zip"
 ( cd "$OUT" && ditto -c -k --sequesterRsrc --keepParent "$APP_NAME.app" "$APP_NAME-macos.zip" )
 
+# Published next to the zip: `sbxw update` reads it to compare against the
+# installed bundle's CFBundleShortVersionString before re-downloading 5 MB.
+printf '%s\n' "$VERSION" > "$OUT/island-version.txt"
+
 echo "✓ $APP"
 echo "✓ $OUT/$APP_NAME-macos.zip"
+echo "✓ $OUT/island-version.txt ($VERSION)"
