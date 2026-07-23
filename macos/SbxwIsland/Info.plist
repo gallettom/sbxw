@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>sbxw Island</string>
+    <key>CFBundleDisplayName</key>
+    <string>sbxw Island</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.sbxw.island</string>
+    <key>CFBundleExecutable</key>
+    <string>SbxwIsland</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- Menu-bar accessory: no Dock icon (matches NSApp.setActivationPolicy(.accessory)). -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!-- Shown in the one-time Automation prompt when the island drives the
+         browser to bring the right sandbox tab to the front (see focusExistingTab). -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>sbxw Island controls your browser to bring the sandbox tab you clicked to the front.</string>
+</dict>
+</plist>

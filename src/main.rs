@@ -1076,6 +1076,27 @@ pub(crate) fn provision_sandbox(
         if let Err(e) = sbx::install_artifact_hook(name) {
             tracing::warn!("could not install artifacts-enforcement hook: {e:#}");
         }
+        // 2c-bis. Trusted session state: install hooks that POST Claude Code
+        // lifecycle events to the daemon (the island derives session state from
+        // these), and allow the sandbox to reach the host daemon. Best-effort —
+        // the island simply won't track a session whose events can't be delivered.
+        let web_port = cfg.web_addr.rsplit(':').next().unwrap_or("7681");
+        if let Err(e) = sbx::install_status_hooks(name, web_port) {
+            tracing::warn!("could not install status hooks: {e:#}");
+        }
+        // Subscription usage (5h / weekly %) via Claude Code's statusLine — it
+        // fetches the numbers itself and hands us structured JSON on stdin, so no
+        // OAuth token is reused out-of-band.
+        if let Err(e) = sbx::install_usage_statusline(name, web_port) {
+            tracing::warn!("could not install usage statusLine: {e:#}");
+        }
+        // The hook reaches the host daemon via host.docker.internal, but the
+        // proxy classifies that destination as `localhost:<port>` — so the
+        // allow rule must name the loopback host and port, not the DNS alias.
+        let hook_dest = format!("localhost:{web_port}");
+        if let Err(e) = sbx::policy_allow_network(name, &hook_dest) {
+            tracing::warn!("could not allow {hook_dest} egress for hooks: {e:#}");
+        }
         // 2d. Default model for the in-sandbox Claude Code (sbxw.toml's
         // `claude_model`, "claude-sonnet-5" by default). Best-effort — the
         // agent falls back to its own default if this fails.

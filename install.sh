@@ -47,6 +47,36 @@ install_completions() {
   printf "  Open a new shell (or: source %s) to activate it.\n" "$rc"
 }
 
+# Download the prebuilt macOS menu-bar app (sbxw Island) and install it into
+# ~/Applications. The bundle is ad-hoc-signed (not notarised), so we strip the
+# download quarantine to let Gatekeeper run it.
+install_island() {
+  url="$1"; app_dir="$2"
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL "$url" -o "$tmp/island.zip" 2>/dev/null; then
+    warn "No island build in ${VERSION} (skipping)."
+    rm -rf "$tmp"; return 0
+  fi
+  if command -v ditto >/dev/null 2>&1; then
+    ditto -x -k "$tmp/island.zip" "$tmp" 2>/dev/null || true
+  else
+    unzip -q "$tmp/island.zip" -d "$tmp" 2>/dev/null || true
+  fi
+  if [ ! -d "$tmp/SbxwIsland.app" ]; then
+    warn "Island archive missing SbxwIsland.app (skipping)."
+    rm -rf "$tmp"; return 0
+  fi
+  mkdir -p "$app_dir"
+  rm -rf "$app_dir/SbxwIsland.app"
+  mv "$tmp/SbxwIsland.app" "$app_dir/"
+  xattr -dr com.apple.quarantine "$app_dir/SbxwIsland.app" 2>/dev/null || true
+  rm -rf "$tmp"
+  info "island installed → ${app_dir}/SbxwIsland.app"
+  printf "  Launch it:  open '%s/SbxwIsland.app'\n" "$app_dir"
+  printf "  On first click-to-focus it asks permission to control your browser — allow it.\n"
+  printf "  Want it at startup? Add it under System Settings › General › Login Items.\n"
+}
+
 # ── Check sbx dependency ─────────────────────────────────────────────────────
 step "Checking prerequisites…"
 
@@ -165,6 +195,24 @@ else
   warn "No kits tarball in this release (skipping)."
 fi
 rm -f "$KITS_TMP"
+
+# ── macOS menu-bar island (optional) ─────────────────────────────────────────
+if [ "$OS" = "macos" ]; then
+  step "Menu-bar island (optional)…"
+  ISLAND_URL="https://github.com/${REPO}/releases/download/${VERSION}/SbxwIsland-macos.zip"
+  ISLAND_APP_DIR="$HOME/Applications"
+  if ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
+    warn "Non-interactive install — skipping the island."
+    printf "  Get it later from https://github.com/%s/releases (SbxwIsland-macos.zip).\n" "$REPO"
+  else
+    printf "Install the sbxw Island menu-bar app (live session state in the notch)? [y/N] " > /dev/tty
+    read -r REPLY < /dev/tty || REPLY=""
+    case "$REPLY" in
+      [yY]*) install_island "$ISLAND_URL" "$ISLAND_APP_DIR" ;;
+      *)     info "Skipped. Grab it any time from the releases page." ;;
+    esac
+  fi
+fi
 
 # ── Detect auth ───────────────────────────────────────────────────────────────
 HAS_API_KEY=0

@@ -2202,7 +2202,36 @@ dupConfirm.addEventListener('click', () => {
       panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
     }
   }
+  // A `#sandbox=<name>` fragment (e.g. opened from the macOS notch companion)
+  // wins over the restored layout: attach that sandbox to the focused pane.
+  applySandboxHash();
 })();
+
+// Deep-link: opening `…/#sandbox=<name>` focuses that session. Used by the
+// macOS notch companion to "jump to a session" from the island.
+function applySandboxHash() {
+  const m = location.hash.match(/sandbox=([^&]+)/);
+  if (!m) return;
+  const name = decodeURIComponent(m[1]);
+  readySandboxes.delete(name);
+  connectPane(focusedPane, name);
+  // Drop the `#sandbox=` fragment so the tab's URL stays the bare base URL.
+  // That lets a later island click re-open the same URL and have the browser
+  // focus *this* tab instead of treating a changed hash as a new page.
+  history.replaceState(null, '', location.pathname + location.search);
+}
+window.addEventListener('hashchange', applySandboxHash);
+
+// The macOS notch companion (island) asks an already-open tab to switch
+// sandboxes over this stream — so clicking a session focuses this tab rather
+// than spawning a new page. See `/api/focus` in src/web.rs.
+new EventSource('/api/focus-events').onmessage = ev => {
+  const name = ev.data;
+  if (!name) return;
+  window.focus();
+  readySandboxes.delete(name);
+  connectPane(focusedPane, name);
+};
 </script>
 </body>
 </html>

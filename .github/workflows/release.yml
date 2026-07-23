@@ -71,10 +71,29 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  # ── Build the macOS menu-bar companion app (sbxw Island) ──────────────────
+  island:
+    name: SbxwIsland-macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build .app bundle
+        env:
+          # Tag is like `v1.0.16`; Info.plist wants a bare version.
+          SBXW_ISLAND_VERSION: ${{ github.ref_name }}
+        run: |
+          SBXW_ISLAND_VERSION="${SBXW_ISLAND_VERSION#v}" macos/build-app.sh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SbxwIsland-macos
+          path: dist/SbxwIsland-macos.zip
+
   # ── Create GitHub Release and attach all binaries ─────────────────────────
   release:
     name: GitHub Release
-    needs: build
+    needs: [build, island]
     runs-on: ubuntu-latest
     steps:
       # Checkout first so the bundled kits under assets/ are available to package.
@@ -91,7 +110,7 @@ jobs:
         run: tar -czf sbxw-kits.tar.gz -C assets k8s-tools headroom
 
       - name: Generate checksums
-        run: sha256sum sbxw-macos-* sbxw-linux-* sbxw-kits.tar.gz > sha256sums.txt
+        run: sha256sum sbxw-macos-* sbxw-linux-* sbxw-kits.tar.gz SbxwIsland-macos.zip > sha256sums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -99,5 +118,6 @@ jobs:
             sbxw-macos-*
             sbxw-linux-*
             sbxw-kits.tar.gz
+            SbxwIsland-macos.zip
             sha256sums.txt
           generate_release_notes: true

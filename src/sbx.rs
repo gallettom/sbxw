@@ -560,3 +560,94 @@ pub fn install_artifact_hook(sandbox: &str) -> Result<()> {
     let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-hook-install.js"]);
     result
 }
+
+/// Path (inside the sandbox) the status-forwarding hook script is installed at.
+const STATUS_HOOK_PATH: &str = "/home/agent/.sbxw/status-hook.js";
+
+/// Claude Code hook events forwarded to the daemon for trusted session state.
+// The Claude Code lifecycle events the island derives session state from.
+// (There is no "PermissionRequest" event — permission prompts surface through
+// `Notification`, and structured questions through a `PreToolUse` for the
+// `AskUserQuestion` tool.)
+const STATUS_HOOK_EVENTS: &[&str] = &[
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Notification",
+    "Stop",
+];
+
+/// Install a user-level hook that POSTs every relevant Claude Code lifecycle
+/// event to the sbxw daemon (`http://host.docker.internal:<port>/api/hook`), so
+/// the island can derive session state from *trusted, structured* events rather
+/// than scraping the terminal. `web_port` is the daemon's port.
+///
+/// Fire-and-forget: the script never blocks Claude Code or influences a tool
+/// decision (see `assets/status-hook.js`). Merges into `settings.json` and
+/// removes any prior copy of this hook first, like `install_artifact_hook`.
+pub fn install_status_hooks(sandbox: &str, web_port: &str) -> Result<()> {
+    const HOOK_SCRIPT: &str = include_str!("../assets/status-hook.js");
+    let script = HOOK_SCRIPT.replace("__PORT__", web_port);
+    write_file_stdin(sandbox, STATUS_HOOK_PATH, script.as_bytes())?;
+
+    let merge_script = format!(
+        "const fs=require('fs');const p='/home/agent/.claude/settings.json';\
+         const hookPath={path};const events={events};\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         d.hooks=d.hooks||{{}};\
+         for(const ev of events){{\
+           d.hooks[ev]=(d.hooks[ev]||[]).filter(e=>\
+             !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
+           d.hooks[ev].push({{hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});\
+         }}\
+         fs.writeFileSync(p,JSON.stringify(d));",
+        path = serde_json::to_string(STATUS_HOOK_PATH)?,
+        events = serde_json::to_string(STATUS_HOOK_EVENTS)?,
+    );
+    write_file_stdin(
+        sandbox,
+        "/tmp/.sbxw-status-hook-install.js",
+        merge_script.as_bytes(),
+    )?;
+    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-status-hook-install.js"]);
+    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-status-hook-install.js"]);
+    result
+}
+
+/// Path (inside the sandbox) the usage statusLine script is installed at.
+const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
+
+/// Install a Claude Code `statusLine` command that prints a compact status line
+/// and (throttled) forwards the subscription rate limits to the daemon
+/// (`http://host.docker.internal:<port>/api/usage`). Claude Code fetches those
+/// numbers itself per the statusLine contract, so no OAuth token is reused
+/// out-of-band. Only Pro/Max sessions carry `rate_limits`; others degrade to
+/// model/cost only. A user-configured `statusLine` is preserved (we only set
+/// ours if none exists, or if the existing one is already ours).
+pub fn install_usage_statusline(sandbox: &str, web_port: &str) -> Result<()> {
+    const SCRIPT: &str = include_str!("../assets/usage-statusline.js");
+    let script = SCRIPT.replace("__PORT__", web_port);
+    write_file_stdin(sandbox, USAGE_STATUSLINE_PATH, script.as_bytes())?;
+
+    let command = format!("node {USAGE_STATUSLINE_PATH}");
+    let merge_script = format!(
+        "const fs=require('fs');const p='/home/agent/.claude/settings.json';\
+         const cmd={cmd};\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         if(!d.statusLine||((d.statusLine.command||'').includes('usage-statusline.js'))){{\
+           d.statusLine={{type:'command',command:cmd}};\
+         }}\
+         fs.writeFileSync(p,JSON.stringify(d));",
+        cmd = serde_json::to_string(&command)?,
+    );
+    write_file_stdin(
+        sandbox,
+        "/tmp/.sbxw-usage-install.js",
+        merge_script.as_bytes(),
+    )?;
+    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-usage-install.js"]);
+    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-usage-install.js"]);
+    result
+}

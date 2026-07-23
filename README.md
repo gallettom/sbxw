@@ -77,6 +77,71 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
 
+## Dynamic Island (macOS)
+
+An optional native companion app, **sbxw Island** (`macos/SbxwIsland`), turns
+your Mac's menu bar / MacBook notch into a Dynamic-Island-style panel that keeps
+track of every session — inspired by [vibeisland.app](https://vibeisland.app).
+Each session shows a live state (**working** · **waiting for input** · **idle** ·
+**ended**) with rich context: the last prompt you sent, the agent's current
+activity, an agent tag, and elapsed time.
+
+The notch shows a **persistent pill** hanging from it whenever something is
+happening — an agent glyph, the active session's task, and a session count
+(e.g. `👾 fix auth bug  3`) — and stays clean (hidden) when everything is idle.
+On top of that:
+
+- a **state change drops a toast** (full for 1 s, then a compact pill for 3 s,
+  then it disappears back to the summary);
+- when the agent **asks a question** (via Claude Code's `AskUserQuestion` tool),
+  the notch expands into an **interactive card** showing the question, a
+  decision table (each option's description), and a button per option
+  (**⌘1/⌘2/…**) — picking one sends the answer straight into the session;
+- **hovering** the notch reveals the full list — with each session's elapsed
+  time and, at the top, your **Claude subscription usage** (5-hour and weekly
+  window %) — auto-hiding 1 s after you leave.
+
+**Subscription usage comes from Claude Code's own `statusLine`, not the OAuth
+API.** sbxw installs a `statusLine` command (`assets/usage-statusline.js`) that
+Claude Code invokes with a structured JSON payload on stdin (per its
+[statusline contract](https://code.claude.com/docs/en/statusline)). Claude Code
+fetches the `/usage` numbers itself; the script just forwards the
+`rate_limits.{five_hour,seven_day}.used_percentage` it receives to the daemon
+(`POST /api/usage`, throttled) — no OAuth token is reused out-of-band. Shown
+only for Pro/Max sessions (API-key auth has no `rate_limits`), and only after a
+session's first API response.
+
+**Session state comes from Claude Code hooks, not terminal scraping.** At
+provisioning time sbxw installs a small hook (`assets/status-hook.js`) into each
+sandbox that POSTs every lifecycle event to the daemon over
+`host.docker.internal`. This yields *trusted, structured* state — no guessing
+from the terminal:
+
+| Hook event | State |
+| --- | --- |
+| `SessionStart` | `idle` |
+| `UserPromptSubmit` | `working` (captures your prompt) |
+| `PreToolUse` (`AskUserQuestion`) | `attention` + structured `question` |
+| `PreToolUse` / `PostToolUse` (other) | `working` (tool as activity) |
+| `Notification` | `attention` (permission / idle nudge) |
+| `Stop` | `idle` |
+| `SessionEnd` | `exited` |
+
+It's powered by these daemon endpoints:
+
+- `GET /api/sessions` — rich snapshot of current sessions.
+- `GET /api/events` — a Server-Sent Events stream of rich session updates, one
+  per hook-driven transition.
+- `GET /api/hook/log` — the recent raw hook events (inspection/debugging).
+- `GET /api/sandboxes` — polled so running sandboxes appear right away as `idle`.
+- `POST /api/answer` / `POST /api/input` — send a menu choice (or raw bytes)
+  back into a session's PTY.
+
+Running sandboxes appear as `idle` immediately; live state flows as soon as the
+in-sandbox agent emits hook events (the daemon must be reachable from the
+sandbox at `host.docker.internal:<port>`, which sbxw allows automatically).
+Build and usage instructions are in [`macos/README.md`](macos/README.md).
+
 ## Installation
 
 **Prerequisites:** the standalone [`sbx`](https://docs.docker.com/reference/cli/sbx)

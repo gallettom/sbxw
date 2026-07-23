@@ -1,6 +1,13 @@
 # Rust build output
 /target
 
+# Swift Package Manager build output (macOS island)
+.build/
+
+# Island packaging output (build-app.sh)
+/dist/
+/macos/dist/
+
 # macOS
 .DS_Store
 
