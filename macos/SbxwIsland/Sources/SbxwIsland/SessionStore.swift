@@ -62,7 +62,7 @@ final class SessionStore: ObservableObject {
     }
 
     func start() {
-        Log.log("start baseURL=\(Config.baseURL)")
+        Log.log("start baseURL=\(Config.baseURL) api=\(Config.apiBaseURL)")
         if streamTask == nil { streamTask = Task { await self.streamLoop() } }
         if pollTask == nil { pollTask = Task { await self.pollLoop() } }
     }

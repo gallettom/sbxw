@@ -66,13 +66,36 @@ struct SandboxItem: Codable {
 enum Config {
     private static let key = "sbxwBaseURL"
 
+    /// The daemon URL as the *user* knows it — the same address their browser
+    /// tab is on. Used for browser-facing work (deep links, matching the open
+    /// tab in `focusExistingTab`), never for our own HTTP calls: see `apiBaseURL`.
     static var baseURL: String {
         get { UserDefaults.standard.string(forKey: key) ?? "http://sbxw.localhost:7681" }
         set { UserDefaults.standard.set(newValue, forKey: key) }
     }
 
+    /// `baseURL` with a `*.localhost` host swapped for the loopback literal.
+    ///
+    /// App Transport Security blocks plain-HTTP loads to a *dotted* hostname
+    /// like `sbxw.localhost`, and does so even with `NSAllowsArbitraryLoads` in
+    /// the bundle's Info.plist — every request fails with `NSURLErrorDomain`
+    /// -1022 and the island sits forever on "Waiting for sbxw…". Numeric
+    /// loopback addresses are outside ATS's remit, so we dial 127.0.0.1
+    /// instead. Safe by definition: RFC 6761 reserves `.localhost` to resolve
+    /// to loopback, which is exactly what sbxw's /etc/hosts entry does.
+    ///
+    /// Only the *transport* changes — `baseURL` still names the host for
+    /// anything the browser sees, so tab matching keeps working.
+    static var apiBaseURL: String {
+        guard var parts = URLComponents(string: baseURL),
+              let host = parts.host, host.hasSuffix("localhost")
+        else { return baseURL }
+        parts.host = "127.0.0.1"
+        return parts.string ?? baseURL
+    }
+
     static func url(_ path: String) -> URL? {
-        URL(string: baseURL + path)
+        URL(string: apiBaseURL + path)
     }
 
     /// Deep-link that focuses `sandbox` in the browser UI (see the
