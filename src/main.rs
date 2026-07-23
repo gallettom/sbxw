@@ -77,6 +77,33 @@ enum Cmd {
         #[arg(long, hide = true)]
         daemon: bool,
     },
+    /// Start a throwaway chat sandbox: an agent with an empty workspace.
+    ///
+    /// Same as `sbxw up`, except the agent gets a fresh empty directory instead
+    /// of one of your projects — so it has none of your code to read or edit.
+    /// The workspace is deleted when the sandbox is removed.
+    #[command(after_help = "\
+Examples:
+  sbxw chat                 # throwaway sandbox with a generated chat-xxxxxx name
+  sbxw chat brainstorm      # ...or name it yourself
+  sbxw rm brainstorm        # removes the sandbox and its empty workspace")]
+    Chat {
+        /// Sandbox name. Omit to generate a unique `chat-xxxxxx` one.
+        name: Option<String>,
+        /// Path to the project config. Defaults to ./sbxw.toml.
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+        /// Don't start the web terminal; attach the agent in this terminal instead
+        /// (runs in the foreground, no daemon).
+        #[arg(long)]
+        no_web: bool,
+        /// If ANTHROPIC_API_KEY is set, store it as the global `anthropic` secret.
+        #[arg(long)]
+        use_api_key: bool,
+        /// Follow the daemon log in this terminal after starting (like `sbxw logs`).
+        #[arg(long)]
+        tail: bool,
+    },
     /// Tail the log of a running sbxw daemon.
     Logs {
         /// Sandbox name. Omit to tail the web-only daemon log.
@@ -185,6 +212,49 @@ fn main() -> Result<()> {
             } else {
                 // Default: launch the web terminal as a background daemon.
                 cmd_up_background(name, path, ro, config, use_api_key, tail)
+            }
+        }
+        Cmd::Chat {
+            name,
+            config,
+            no_web,
+            use_api_key,
+            tail,
+        } => {
+            // A chat sandbox is just `up` pointed at a fresh empty directory, so
+            // hand off to the very same code path once the workspace exists. The
+            // daemon re-exec that `cmd_up_background` performs is a plain `up` on
+            // that path — by then there is nothing chat-specific left to do.
+            let name = name.unwrap_or_else(mint_chat_name);
+            if !is_valid_sandbox_name(&name) {
+                anyhow::bail!(
+                    "name must be non-empty and contain only letters, digits, and hyphens"
+                );
+            }
+            let workspace = PathBuf::from(prepare_chat_workspace(&name)?);
+            eprintln!(
+                "chat sandbox '{name}' → empty workspace {}",
+                workspace.display()
+            );
+            if no_web {
+                init_tracing();
+                cmd_up(
+                    Some(name),
+                    Some(workspace),
+                    vec![],
+                    config,
+                    true,
+                    use_api_key,
+                )
+            } else {
+                cmd_up_background(
+                    Some(name),
+                    Some(workspace),
+                    vec![],
+                    config,
+                    use_api_key,
+                    tail,
+                )
             }
         }
         Cmd::Logs { name, lines } => {
@@ -330,7 +400,23 @@ fn main() -> Result<()> {
                 anyhow::bail!("specify at least one sandbox name, or use --all");
             }
             let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            // Resolve throwaway chat workspaces before the sandboxes go away, so
+            // they can be deleted alongside — same cleanup the web UI's delete
+            // does (see `api_rm`). `--all` empties the whole chat root, since by
+            // then no sandbox is left to own any of it.
+            let chat_dirs: Vec<PathBuf> = if all {
+                vec![chat_workspace_root()]
+            } else {
+                names.iter().filter_map(|n| chat_workspace_of(n)).collect()
+            };
             sbx::rm_sandboxes(&name_refs, all)?;
+            for dir in &chat_dirs {
+                if let Err(e) = std::fs::remove_dir_all(dir) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!("could not remove chat workspace {}: {e:#}", dir.display());
+                    }
+                }
+            }
             if all {
                 println!("all sandboxes removed");
             } else {
@@ -743,6 +829,59 @@ pub(crate) fn workspace_for(name: &str) -> Option<PathBuf> {
 /// (wireframes, docs, exports...) are expected to live. Purely a convention:
 /// sbxw doesn't enforce it, it just lists+serves whatever it finds there.
 pub(crate) const ARTIFACTS_DIR: &str = ".sbxw-artifacts";
+
+// ── Chat sandboxes ───────────────────────────────────────────────────────────
+//
+// A "chat" sandbox is a throwaway agent with no code to work on: its workspace
+// is a fresh empty directory instead of one of your projects, so the only files
+// the agent can see are the ones sbxw itself puts there (the `.sbxw-artifacts`
+// folder `provision_sandbox` seeds). Everything downstream — provisioning,
+// ports, kits, the web terminal — is the ordinary path; only the workspace
+// differs. Both entry points (`sbxw chat` and the web UI's 💬 button) go
+// through the helpers below so the two can't drift apart.
+//
+// Note that a chat sandbox still inherits the project's sbxw.toml, so it
+// publishes the same `[[ports]]`. Two sandboxes wanting the same host port will
+// contend for it; sbx's conflict recovery picks another one. Deliberate — a
+// chat sandbox is otherwise indistinguishable from a normal one.
+
+/// Root under which chat sandboxes get their empty, throwaway workspace.
+///
+/// Deliberately `/tmp` (not `std::env::temp_dir()`): on macOS the latter is
+/// `/var/folders/…`, which Docker Desktop doesn't share by default and so
+/// can't bind-mount. `/tmp` is shared (and already used for `sbxw-pastes`).
+pub(crate) fn chat_workspace_root() -> PathBuf {
+    PathBuf::from("/tmp/sbxw-chat")
+}
+
+/// Mint a unique-enough `chat-xxxxxx` name from the current time.
+pub(crate) fn mint_chat_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("chat-{:06x}", (nanos as u64) & 0xff_ffff)
+}
+
+/// Sandbox names go into shell commands, file names and hostnames, so keep them
+/// to an unambiguous alphabet.
+pub(crate) fn is_valid_sandbox_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Create the empty workspace for chat sandbox `name`, returning its path.
+pub(crate) fn prepare_chat_workspace(name: &str) -> Result<String> {
+    let dir = chat_workspace_root().join(name);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("could not create chat workspace {}", dir.display()))?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+/// Whether `name`'s recorded workspace is one of our throwaway chat directories
+/// — i.e. safe to delete outright when the sandbox is removed.
+pub(crate) fn chat_workspace_of(name: &str) -> Option<PathBuf> {
+    workspace_for(name).filter(|p| p.starts_with(chat_workspace_root()))
+}
 
 /// Path to the PID file for a named sandbox daemon.
 fn daemon_pid_path(name: &str) -> PathBuf {

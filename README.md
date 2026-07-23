@@ -51,6 +51,7 @@ log, or `--no-web` to attach the agent in the current terminal instead.
 | Command | What it does |
 |---|---|
 | `sbxw up [name] [path]` | Provision + serve. **Omit `name`** to start only the web daemon (browse/create/attach from the UI). |
+| `sbxw chat [name]` | Throwaway chat sandbox: same as `up`, but on an empty workspace so the agent has none of your code. **Omit `name`** for a generated `chat-xxxxxx`. |
 | `sbxw bash <name>` | Open an interactive bash shell in a sandbox (foreground). |
 | `sbxw web <name>` | Serve the web TTY only (no provisioning). |
 | `sbxw ports <name>` | Re-publish the configured ports for a running sandbox. |
@@ -73,9 +74,34 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **Create** a sandbox (＋) with a folder picker and inline **port-forwarding** rows
   (sandbox→host port, optional host IP, optional `/etc/hosts` alias). This goes
   through the *same* provisioning pipeline as the CLI.
+- **Start a chat sandbox** (💬) in one click — the browser equivalent of
+  `sbxw chat`. See below.
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
+
+## Chat sandboxes
+
+Sometimes you just want to talk to an agent, not point it at a codebase. A chat
+sandbox is a normal sandbox whose workspace is a **fresh empty directory**
+(`/tmp/sbxw-chat/<name>`) instead of one of your projects, so the only files the
+agent can see are the ones sbxw puts there itself — it has none of your code to
+read or edit.
+
+```bash
+sbxw chat                 # throwaway sandbox with a generated chat-xxxxxx name
+sbxw chat brainstorm      # ...or name it yourself
+sbxw rm brainstorm        # removes the sandbox and its empty workspace
+```
+
+The web UI's 💬 button does the same thing (`POST /api/sandboxes/chat`); both go
+through one shared code path. The empty workspace is deleted when the sandbox is
+removed, from either the CLI or the UI.
+
+Everything else is a normal sandbox: a chat sandbox still reads your
+`sbxw.toml`, so it applies the same kits and publishes the same `[[ports]]`. If
+a project sandbox already holds one of those host ports, sbx's conflict recovery
+gives the chat sandbox a different one.
 
 ## Dynamic Island (macOS)
 

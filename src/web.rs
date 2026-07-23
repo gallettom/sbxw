@@ -944,8 +944,7 @@ async fn api_stop(Path(name): Path<String>) -> Json<serde_json::Value> {
 async fn api_rm(Path(name): Path<String>) -> Json<serde_json::Value> {
     // If this is a chat sandbox, remember its throwaway temp workspace so we can
     // delete it once the sandbox itself is gone.
-    let chat_dir =
-        crate::workspace_for(&name).filter(|p| p.starts_with(chat_workspace_root()));
+    let chat_dir = crate::chat_workspace_of(&name);
     match tokio::task::spawn_blocking({
         let name = name.clone();
         move || sbx::rm_sandboxes(&[name.as_str()], false)
@@ -1035,7 +1034,7 @@ async fn api_create(
     let name = body.name.trim().to_string();
     let path = body.path.trim().to_string();
 
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !crate::is_valid_sandbox_name(&name) {
         return Json(serde_json::json!({
             "ok": false,
             "error": "name must be non-empty and contain only letters, digits, and hyphens"
@@ -1071,57 +1070,41 @@ async fn api_create(
     }
 }
 
-/// Root under which "chat" sandboxes get an empty, throwaway workspace. Nothing
-/// of the user's code lives here, so the agent has nothing to read or edit — a
-/// pure chat. Removed together with the sandbox (see `api_rm`).
-///
-/// Deliberately `/tmp` (not `std::env::temp_dir()`): on macOS the latter is
-/// `/var/folders/…`, which Docker Desktop doesn't share by default and so can't
-/// bind-mount. `/tmp` is shared (and already used for `sbxw-pastes`).
-fn chat_workspace_root() -> std::path::PathBuf {
-    std::path::PathBuf::from("/tmp/sbxw-chat")
-}
-
 #[derive(Deserialize)]
 struct ChatBody {
     #[serde(default)]
     name: Option<String>,
 }
 
-/// `POST /api/sandboxes/chat` — provision a sandbox whose workspace is a fresh
-/// empty temp folder (`<tmp>/sbxw-chat/<name>`). This gives a chat-only session
-/// the agent can't point at any project code. Same provisioning path as a normal
-/// sandbox, just aimed at scratch space instead of a real repo.
+/// `POST /api/sandboxes/chat` — the web UI's 💬 button. Provisions a sandbox on
+/// a fresh empty workspace, so the agent has none of your code to read or edit.
+/// The CLI's `sbxw chat` shares the helpers used here; see the chat section of
+/// `main.rs` for what a chat sandbox does and doesn't inherit.
 async fn api_chat(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ChatBody>,
 ) -> Json<serde_json::Value> {
     // Use the caller's name, or mint a unique `chat-xxxxxx`.
-    let name = match body.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let name = match body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(n) => n.to_string(),
-        None => {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            format!("chat-{:06x}", (nanos as u64) & 0xff_ffff)
-        }
+        None => crate::mint_chat_name(),
     };
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !crate::is_valid_sandbox_name(&name) {
         return Json(serde_json::json!({
             "ok": false,
             "error": "name must be non-empty and contain only letters, digits, and hyphens"
         }));
     }
 
-    let workspace_path = chat_workspace_root().join(&name);
-    if let Err(e) = std::fs::create_dir_all(&workspace_path) {
-        return Json(serde_json::json!({
-            "ok": false,
-            "error": format!("could not create temp workspace: {e}")
-        }));
-    }
-    let workspace = workspace_path.to_string_lossy().into_owned();
+    let workspace = match crate::prepare_chat_workspace(&name) {
+        Ok(w) => w,
+        Err(e) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+    };
 
     let cfg = state.cfg.clone();
     let use_api_key = state.use_api_key;

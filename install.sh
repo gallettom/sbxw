@@ -255,6 +255,7 @@ printf "   sbxw up                       # web UI only (create sandboxes from br
 printf "   sbxw --help                   # all commands\n"
 
 printf "\n${BOLD}Useful extras${RESET}\n"
+printf "   sbxw chat                     # throwaway agent on an empty workspace\n"
 printf "   sbxw bash <name>              # interactive shell in the sandbox\n"
 printf "   sbxw logs <name>              # tail daemon log\n"
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
