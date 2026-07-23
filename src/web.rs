@@ -501,6 +501,7 @@ pub async fn serve(
         .route("/api/usage", get(api_usage_get).post(api_usage_post))
         .route("/api/sandboxes", get(api_list))
         .route("/api/sandboxes/create", post(api_create))
+        .route("/api/sandboxes/chat", post(api_chat))
         .route("/api/sandboxes/:name/duplicate", post(api_duplicate))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
         .route(
@@ -941,13 +942,22 @@ async fn api_stop(Path(name): Path<String>) -> Json<serde_json::Value> {
 }
 
 async fn api_rm(Path(name): Path<String>) -> Json<serde_json::Value> {
-    match tokio::task::spawn_blocking(move || {
-        let n = name.clone();
-        sbx::rm_sandboxes(&[n.as_str()], false)
+    // If this is a chat sandbox, remember its throwaway temp workspace so we can
+    // delete it once the sandbox itself is gone.
+    let chat_dir =
+        crate::workspace_for(&name).filter(|p| p.starts_with(chat_workspace_root()));
+    match tokio::task::spawn_blocking({
+        let name = name.clone();
+        move || sbx::rm_sandboxes(&[name.as_str()], false)
     })
     .await
     {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
+        Ok(Ok(())) => {
+            if let Some(dir) = chat_dir {
+                let _ = std::fs::remove_dir_all(&dir);
+            }
+            Json(serde_json::json!({ "ok": true }))
+        }
         Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
         Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }
@@ -1056,6 +1066,73 @@ async fn api_create(
     .await
     {
         Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
+        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    }
+}
+
+/// Root under which "chat" sandboxes get an empty, throwaway workspace. Nothing
+/// of the user's code lives here, so the agent has nothing to read or edit — a
+/// pure chat. Removed together with the sandbox (see `api_rm`).
+///
+/// Deliberately `/tmp` (not `std::env::temp_dir()`): on macOS the latter is
+/// `/var/folders/…`, which Docker Desktop doesn't share by default and so can't
+/// bind-mount. `/tmp` is shared (and already used for `sbxw-pastes`).
+fn chat_workspace_root() -> std::path::PathBuf {
+    std::path::PathBuf::from("/tmp/sbxw-chat")
+}
+
+#[derive(Deserialize)]
+struct ChatBody {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// `POST /api/sandboxes/chat` — provision a sandbox whose workspace is a fresh
+/// empty temp folder (`<tmp>/sbxw-chat/<name>`). This gives a chat-only session
+/// the agent can't point at any project code. Same provisioning path as a normal
+/// sandbox, just aimed at scratch space instead of a real repo.
+async fn api_chat(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ChatBody>,
+) -> Json<serde_json::Value> {
+    // Use the caller's name, or mint a unique `chat-xxxxxx`.
+    let name = match body.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(n) => n.to_string(),
+        None => {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("chat-{:06x}", (nanos as u64) & 0xff_ffff)
+        }
+    };
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "name must be non-empty and contain only letters, digits, and hyphens"
+        }));
+    }
+
+    let workspace_path = chat_workspace_root().join(&name);
+    if let Err(e) = std::fs::create_dir_all(&workspace_path) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": format!("could not create temp workspace: {e}")
+        }));
+    }
+    let workspace = workspace_path.to_string_lossy().into_owned();
+
+    let cfg = state.cfg.clone();
+    let use_api_key = state.use_api_key;
+    let name_ret = name.clone();
+    tracing::info!("web UI: provisioning chat sandbox '{name}' at {workspace}");
+    match tokio::task::spawn_blocking(move || {
+        crate::provision_sandbox(&name, &workspace, &[], &cfg, &[], use_api_key)
+    })
+    .await
+    {
+        Ok(Ok(())) => Json(serde_json::json!({ "ok": true, "name": name_ret })),
         Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
         Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }

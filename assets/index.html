@@ -97,6 +97,8 @@
     border-radius: 4px;
   }
   .btn-new:hover { color: #e6edf3; background: #21262d; }
+  .sidebar-actions { display: flex; align-items: center; gap: 2px; }
+  #btn-new-chat { font-size: 13px; }
 
   /* ── Modal ── */
   .modal-overlay {
@@ -521,7 +523,11 @@
   <aside class="sidebar">
     <div class="sidebar-header">
       <span class="sidebar-label">Sandboxes</span>
-      <button class="btn-new" id="btn-new-sandbox" title="Create new sandbox">＋</button>
+      <span class="sidebar-actions">
+        <button class="btn-new" id="btn-new-chat"
+                title="New chat sandbox — empty temp folder, no access to your code">💬</button>
+        <button class="btn-new" id="btn-new-sandbox" title="Create new sandbox">＋</button>
+      </span>
     </div>
     <div id="sandbox-list"></div>
   </aside>
@@ -1746,6 +1752,36 @@ function normalizeNameInput() {
 inpName.addEventListener('input', normalizeNameInput);
 
 document.getElementById('btn-new-sandbox').addEventListener('click', openModal);
+
+// ── Chat sandbox: an agent on an empty temp folder (no code access) ────────
+// One click spins up a throwaway sandbox whose workspace is a fresh temp dir,
+// so the agent has nothing to read or edit — a pure chat. Provisioned in the
+// background like a normal create (pending row + auto-attach on success).
+document.getElementById('btn-new-chat').addEventListener('click', () => {
+  const name = 'chat-' + Math.random().toString(16).slice(2, 8);
+  addPendingSandbox(name);
+  (async () => {
+    try {
+      const res = await fetch('/api/sandboxes/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        attachToEmptyPaneOrMarkReady(data.name || name);
+        await loadSandboxes();
+        showToast(`Chat sandbox “${data.name || name}” is ready`, 'ok');
+      } else {
+        showToast(`Failed to start chat: ${data.error || 'unknown error'}`, 'error');
+      }
+    } catch (e) {
+      showToast('Failed to start chat: network error', 'error');
+    } finally {
+      removePendingSandbox(name);
+    }
+  })();
+});
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
 

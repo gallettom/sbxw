@@ -33,6 +33,22 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 sed "s/__VERSION__/$VERSION/g" "$PKG/Info.plist" > "$APP/Contents/Info.plist"
 
+# App icon: rasterize the 1024² sbxw mark into a multi-resolution AppIcon.icns
+# (Info.plist references "AppIcon" via CFBundleIconFile). sips + iconutil ship
+# with macOS, so no extra tooling is needed.
+if [ -f "$PKG/AppIcon.png" ]; then
+  ICONSET="$OUT/AppIcon.iconset"
+  rm -rf "$ICONSET"; mkdir -p "$ICONSET"
+  for sz in 16 32 128 256 512; do
+    sips -z "$sz" "$sz"                 "$PKG/AppIcon.png" --out "$ICONSET/icon_${sz}x${sz}.png"    >/dev/null
+    sips -z "$((sz*2))" "$((sz*2))"     "$PKG/AppIcon.png" --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+  rm -rf "$ICONSET"
+else
+  echo "warning: $PKG/AppIcon.png missing — building without an app icon" >&2
+fi
+
 # Ad-hoc signature: required for the binary to run at all on Apple Silicon, and
 # it gives the app a stable identity so its Automation permission sticks.
 codesign --force --deep --sign - "$APP"
