@@ -108,9 +108,14 @@ To produce the same distributable `.app` + zip the release ships (universal,
 ad-hoc-signed), run the packaging script from this directory:
 
 ```bash
-SBXW_ISLAND_VERSION=1.0.16 ./build-app.sh dist
+./build-app.sh dist
 #   → dist/SbxwIsland.app  and  dist/SbxwIsland-macos.zip
 ```
+
+The app is versioned independently of the `sbxw` CLI: the version baked into
+`Info.plist` comes from `ISLAND_VERSION` in `build-app.sh` (currently `1.0.0`),
+which is what the release workflow ships too. Bump it there when the island
+itself changes; `SBXW_ISLAND_VERSION=…` overrides it for a one-off build.
 
 ## Configuration
 

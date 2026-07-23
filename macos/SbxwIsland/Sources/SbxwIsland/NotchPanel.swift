@@ -32,14 +32,29 @@ final class NotchController: ObservableObject {
     private var hovering = false
     private var hideTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
+    /// Pending hover-intent reveal (see `hoverIntentDelay`).
+    private var hoverTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
-    /// Height of the physical notch (or the menu bar on non-notched Macs).
-    private(set) var topInset: CGFloat = 32
+    /// Whether the screen the island hangs from actually has a notch. Without
+    /// one there is nothing to route content around, so the island hugs the top
+    /// edge instead of leaving a notch-sized band of empty black.
+    @Published private(set) var hasNotch = false
+    /// Height of the physical notch, or a small lip on screens without one.
+    @Published private(set) var topInset: CGFloat = 32
     /// Width of the physical notch, so the collapsed summary can match it and
     /// read as an extension of the notch. Falls back to a compact default on
     /// Macs without a notch.
     private(set) var notchWidth: CGFloat = 180
+
+    /// Top lip used on notch-less screens: just enough that the content doesn't
+    /// start flush against the screen edge.
+    private static let flatTopInset: CGFloat = 8
+
+    /// Room the island's content leaves at the top. On a notched Mac that's the
+    /// notch, a touch less than the full safe-area inset so the island sits
+    /// tight to it; elsewhere it's the plain lip.
+    var topClearance: CGFloat { hasNotch ? max(topInset - 6, 0) : topInset }
 
     init(store: SessionStore) {
         self.store = store
@@ -63,15 +78,7 @@ final class NotchController: ObservableObject {
 
     func install() {
         guard panel == nil, let screen = notchedScreen() else { return }
-        topInset = screen.safeAreaInsets.top > 0
-            ? screen.safeAreaInsets.top
-            : NSStatusBar.system.thickness
-
-        // The notch is the gap between the two usable menu-bar areas. On a
-        // notch-less Mac these are nil — keep the compact default width.
-        if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
-            notchWidth = max(right.minX - left.maxX, 120)
-        }
+        adoptScreen(screen)
 
         let p = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: notchWidth, height: topInset),
@@ -96,6 +103,19 @@ final class NotchController: ObservableObject {
         panel = p
         relayout()
         p.orderFrontRegardless()
+
+        // Displays come and go (lid closed, monitor plugged in) and the island
+        // may end up on a screen with no notch — re-measure and re-place it.
+        NotificationCenter.default
+            .publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let screen = self.notchedScreen() else { return }
+                    self.adoptScreen(screen)
+                    self.relayout()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// Force the list open (menu-bar "Show statuses" action).
@@ -125,18 +145,36 @@ final class NotchController: ObservableObject {
 
     // MARK: - Hover
 
+    /// How long the pointer has to linger before the island opens. Without this
+    /// dwell, merely sweeping the mouse across the top edge — on the way to a
+    /// screen sitting above this one — pops the list open.
+    private static let hoverIntentDelay: Duration = .milliseconds(350)
+
     func hover(_ inside: Bool) {
         // Keep an interactive prompt on screen until it's answered.
         if case .question = display { return }
         hovering = inside
-        if inside {
-            // The user reached for the island: cancel any toast lifecycle and
-            // show the full list.
-            toastTask?.cancel()
-            expandToList()
+        hoverTask?.cancel()
+
+        guard inside else {
+            // Only the hover-revealed list retracts on leave; a toast keeps its
+            // own lifecycle, so a pointer passing by doesn't cut it short.
+            if display == .list { scheduleHide() }
+            return
         }
-        // On leave, scheduleHide collapses after `autoHideDelay` (1 s).
-        scheduleHide()
+
+        // Reveal only once the pointer has stayed put: a quick pass-through
+        // leaves (cancelling this task) long before it fires.
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.hoverIntentDelay)
+            guard let self, !Task.isCancelled, self.hovering else { return }
+            if case .question = self.display { return }
+            // The user reached for the island: drop any toast lifecycle and
+            // show the full list, then arm the usual auto-hide.
+            self.toastTask?.cancel()
+            self.expandToList()
+            self.scheduleHide()
+        }
     }
 
     // MARK: - Reactive question handling
@@ -239,6 +277,22 @@ final class NotchController: ObservableObject {
 
     private func notchedScreen() -> NSScreen? {
         NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main
+    }
+
+    /// Measure the screen the island hangs from. With a notch the island has to
+    /// route its content around it; without one (external display, notch-less
+    /// Mac) it only keeps a small lip, so toasts don't float below a band of
+    /// empty black.
+    private func adoptScreen(_ screen: NSScreen) {
+        hasNotch = screen.safeAreaInsets.top > 0
+        topInset = hasNotch ? screen.safeAreaInsets.top : Self.flatTopInset
+        // The notch is the gap between the two usable menu-bar areas. On a
+        // notch-less Mac these are nil — fall back to the compact default width.
+        if hasNotch, let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
+            notchWidth = max(right.minX - left.maxX, 120)
+        } else {
+            notchWidth = 180
+        }
     }
 
     /// Size the panel to the SwiftUI content. SwiftUI commits the new layout on

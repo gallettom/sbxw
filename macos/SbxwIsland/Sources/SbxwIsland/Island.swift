@@ -493,7 +493,8 @@ struct InvaderIcon: View {
 /// (a hairline hover strip) when nothing is working or waiting.
 struct SummaryPill: View {
     @ObservedObject var store: SessionStore
-    /// Notch height: the task row sits below this, the black fills behind it.
+    /// Notch height (a small lip on screens without a notch): the task row sits
+    /// below this, the black fills behind it.
     let topInset: CGFloat
 
     /// The session whose task to surface: a waiting one first (it needs you),
@@ -702,9 +703,9 @@ struct NotchContentView: View {
         }
     }
 
-    /// Clearance below the notch. A touch less than the full safe-area inset so
-    /// the island sits tighter to the notch (reduced top margin).
-    private var topClearance: CGFloat { max(controller.topInset - 6, 0) }
+    /// Clearance above the content: the notch on a notched Mac, a small lip on
+    /// screens without one (see NotchController.topClearance).
+    private var topClearance: CGFloat { controller.topClearance }
 
     /// Transparent room around the content so the drop shadow isn't clipped by
     /// the (content-sized) window. No room on top: the bubble hugs the notch and

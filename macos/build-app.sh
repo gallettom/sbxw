@@ -5,7 +5,10 @@
 # Usage:
 #   macos/build-app.sh [OUTPUT_DIR]
 # Env:
-#   SBXW_ISLAND_VERSION   version string baked into Info.plist (default 0.0.0-dev)
+#   SBXW_ISLAND_VERSION   override the version baked into Info.plist
+#
+# The app is versioned independently of the sbxw CLI (which the release tag
+# tracks): bump ISLAND_VERSION below when the island itself ships a change.
 #
 # Produces:
 #   OUTPUT_DIR/SbxwIsland.app          the bundle (runnable locally)
@@ -16,7 +19,8 @@ APP_NAME="SbxwIsland"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG="$HERE/$APP_NAME"
 OUT="${1:-$HERE/dist}"
-VERSION="${SBXW_ISLAND_VERSION:-0.0.0-dev}"
+ISLAND_VERSION="1.0.0"
+VERSION="${SBXW_ISLAND_VERSION:-$ISLAND_VERSION}"
 
 [ "$(uname -s)" = "Darwin" ] || { echo "build-app.sh only runs on macOS" >&2; exit 1; }
 
