@@ -126,10 +126,16 @@ struct SessionInfo {
     /// The user's last submitted prompt (from `UserPromptSubmit`).
     #[serde(skip_serializing_if = "Option::is_none")]
     last_input: Option<String>,
-    /// Pending question, when `state == attention` and the agent invoked the
-    /// `AskUserQuestion` tool.
+    /// First step of the pending prompt. Redundant with `steps[0]`, kept on the
+    /// wire so an island built before multi-step support still shows the card it
+    /// always showed instead of going blank.
     #[serde(skip_serializing_if = "Option::is_none")]
     question: Option<Question>,
+    /// Every step of the pending prompt, in tab order. `AskUserQuestion` can
+    /// carry several questions in one call — the terminal walks them as tabs
+    /// and submits once at the end, and so does the island.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    steps: Option<Vec<Question>>,
     /// Unix epoch ms of this event.
     ts: u64,
 }
@@ -143,7 +149,8 @@ struct SessionStatus {
     started_ms: u64,
     activity: Option<String>,
     last_input: Option<String>,
-    question: Option<Question>,
+    /// Steps of the pending `AskUserQuestion` prompt; empty when none is open.
+    prompt: Vec<Question>,
 }
 
 type Statuses = Arc<Mutex<HashMap<String, SessionStatus>>>;
@@ -172,7 +179,8 @@ fn build_info(key: &str, st: &SessionStatus) -> SessionInfo {
         started_ms: st.started_ms,
         activity: st.activity.clone(),
         last_input: st.last_input.clone(),
-        question: st.question.clone(),
+        question: st.prompt.first().cloned(),
+        steps: (!st.prompt.is_empty()).then(|| st.prompt.clone()),
         ts: now_ms(),
     }
 }
@@ -203,12 +211,34 @@ fn clip(s: &str, max: usize) -> String {
 
 /// Build the interactive prompt from an `AskUserQuestion` tool input, which
 /// carries the questions and their options as structured JSON — so no parsing
-/// of the terminal is needed. Uses the first question (the island shows one
-/// card); its options become the choices and their descriptions the decision
-/// table shown above them.
-fn question_from_ask(body: &serde_json::Value) -> Option<Question> {
-    let questions = body.get("tool_input")?.get("questions")?.as_array()?;
-    let q = questions.first()?;
+/// of the terminal is needed. Every question becomes a step, in the order the
+/// terminal lays them out as tabs; each one's options become the choices and
+/// their descriptions the decision table shown above them.
+///
+/// All-or-nothing: a step we can't represent (no text, fewer than two options)
+/// would desync the island's answers from the terminal's tabs, since the two
+/// are matched by position. Better to show no card at all and let the user
+/// answer in the browser.
+fn questions_from_ask(body: &serde_json::Value) -> Vec<Question> {
+    let Some(questions) = body
+        .get("tool_input")
+        .and_then(|i| i.get("questions"))
+        .and_then(|q| q.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut steps = Vec::new();
+    for q in questions {
+        let Some(step) = question_step(q) else {
+            return Vec::new();
+        };
+        steps.push(step);
+    }
+    steps
+}
+
+/// One question of an `AskUserQuestion` call, or `None` if it is unusable.
+fn question_step(q: &serde_json::Value) -> Option<Question> {
     let text = q
         .get("question")
         .and_then(|v| v.as_str())?
@@ -293,12 +323,12 @@ fn apply_hook(event: &str, tool: &str, body: &serde_json::Value, st: &mut Sessio
         "SessionStart" => {
             st.state = SessionState::Idle;
             st.started_ms = now_ms();
-            st.question = None;
+            st.prompt.clear();
             st.activity = None;
         }
         "UserPromptSubmit" => {
             st.state = SessionState::Working;
-            st.question = None;
+            st.prompt.clear();
             st.activity = None;
             if let Some(p) = body.get("prompt").and_then(|v| v.as_str()) {
                 st.last_input = Some(clip(p, 200));
@@ -306,22 +336,23 @@ fn apply_hook(event: &str, tool: &str, body: &serde_json::Value, st: &mut Sessio
         }
         "PreToolUse" => {
             if tool == "AskUserQuestion" {
-                if let Some(q) = question_from_ask(body) {
-                    st.activity = Some(clip(&q.text, 80));
-                    st.question = Some(q);
+                let steps = questions_from_ask(body);
+                if let Some(first) = steps.first() {
+                    st.activity = Some(clip(&first.text, 80));
+                    st.prompt = steps;
                     st.state = SessionState::Attention;
                 } else {
                     st.state = SessionState::Working;
                 }
             } else {
                 st.state = SessionState::Working;
-                st.question = None;
+                st.prompt.clear();
                 st.activity = Some(describe_tool(tool, body.get("tool_input")));
             }
         }
         "PostToolUse" => {
             if tool == "AskUserQuestion" {
-                st.question = None;
+                st.prompt.clear();
             }
             st.state = SessionState::Working;
         }
@@ -336,12 +367,12 @@ fn apply_hook(event: &str, tool: &str, body: &serde_json::Value, st: &mut Sessio
         }
         "Stop" => {
             st.state = SessionState::Idle;
-            st.question = None;
+            st.prompt.clear();
             st.activity = None;
         }
         "SessionEnd" => {
             st.state = SessionState::Exited;
-            st.question = None;
+            st.prompt.clear();
             return true;
         }
         _ => {}
@@ -738,12 +769,44 @@ async fn api_input(State(state): State<Arc<AppState>>, Json(body): Json<InputBod
 struct AnswerBody {
     sandbox: String,
     mode: Option<String>,
-    /// 1-based option number to select in the pending numbered menu.
-    index: u32,
+    /// 1-based option number to select in the pending numbered menu. Kept for
+    /// single-step prompts (and older islands); `indices` supersedes it.
+    index: Option<u32>,
+    /// One 1-based option number per step of a multi-question prompt, in tab
+    /// order.
+    indices: Option<Vec<u32>>,
 }
 
-/// Answer a session's pending numbered menu by writing "<index>\r" to its PTY,
-/// then clear the stored question so the island's prompt card dismisses.
+/// Pause between the keystrokes that answer a prompt, so the TUI has a frame to
+/// redraw — move its cursor, switch tab — before the next one lands.
+const ANSWER_KEY_DELAY: Duration = Duration::from_millis(60);
+
+/// Down arrow and Return, the only keys the prompt actually listens to.
+const KEY_DOWN: &[u8] = b"\x1b[B";
+const KEY_ENTER: &[u8] = b"\r";
+
+/// Guard against an answer index far past the end of a menu we have no record
+/// of: at worst we walk to the bottom of the list rather than spraying arrows.
+const MAX_MENU_STEPS: u32 = 20;
+
+/// Send one keystroke into a session's PTY, then let the TUI redraw.
+async fn send_key(sess: &Arc<PtySession>, key: &[u8]) {
+    {
+        let mut w = sess.writer.lock().unwrap();
+        let _ = w.write_all(key);
+        let _ = w.flush();
+    }
+    tokio::time::sleep(ANSWER_KEY_DELAY).await;
+}
+
+/// Answer a session's pending prompt by replaying the keystrokes a user would
+/// type, then clear the stored prompt so the island's card dismisses.
+///
+/// The prompt is a tab per question followed by a Submit tab, and it only
+/// answers to arrows and Return — *not* to the option numbers it displays. So
+/// picking option k means k-1 downs (each tab opens on its first option) then
+/// Return, which selects and moves to the next tab; once every question is
+/// answered the form sits on Submit, which one last Return confirms.
 async fn api_answer(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AnswerBody>,
@@ -754,14 +817,31 @@ async fn api_answer(
     let Some(sess) = session else {
         return StatusCode::NOT_FOUND;
     };
-    {
-        let mut w = sess.writer.lock().unwrap();
-        let _ = w.write_all(format!("{}\r", body.index).as_bytes());
-        let _ = w.flush();
+    let answers: Vec<u32> = match (body.indices, body.index) {
+        (Some(list), _) if !list.is_empty() => list,
+        (_, Some(index)) => vec![index],
+        _ => return StatusCode::BAD_REQUEST,
+    };
+    // How many options each step offers, so a stray index can't run away.
+    let sizes: Vec<u32> = state
+        .statuses
+        .lock()
+        .unwrap()
+        .get(&key)
+        .map(|st| st.prompt.iter().map(|q| q.options.len() as u32).collect())
+        .unwrap_or_default();
+    for (n, index) in answers.iter().enumerate() {
+        let limit = sizes.get(n).copied().unwrap_or(MAX_MENU_STEPS);
+        for _ in 1..(*index).clamp(1, limit.max(1)) {
+            send_key(&sess, KEY_DOWN).await;
+        }
+        send_key(&sess, KEY_ENTER).await;
     }
+    // Every question answered, the form is on its Submit tab.
+    send_key(&sess, KEY_ENTER).await;
     // Optimistically clear the prompt and mark the session working again.
     if let Some(st) = state.statuses.lock().unwrap().get_mut(&key) {
-        st.question = None;
+        st.prompt.clear();
         st.state = SessionState::Working;
     }
     emit_info(&state.events, &state.statuses, &key);
@@ -1581,6 +1661,12 @@ fn get_or_create_session(
         pixel_height: 0,
     })?;
 
+    // A chat sandbox's throwaway workspace lives under `/tmp` and may have been
+    // swept away since it was created; `sbx run`/`exec` would then fail to start
+    // the runtime with a 422. Re-create the empty directory first (no-op for a
+    // normal sandbox, or a chat one still present) so attaching just works.
+    crate::ensure_chat_workspace(sandbox);
+
     let mut cmd = CommandBuilder::new("sbx");
     if mode == "bash" {
         cmd.args(["exec", "-it", sandbox, "--", "bash"]);
@@ -1794,25 +1880,38 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn ask_body(question: &str, opts: &[(&str, &str)]) -> serde_json::Value {
+    fn ask_json(question: &str, opts: &[(&str, &str)]) -> serde_json::Value {
         let options: Vec<_> = opts
             .iter()
             .map(|(l, d)| json!({ "label": l, "description": d }))
             .collect();
+        json!({ "question": question, "options": options })
+    }
+
+    fn ask_body(question: &str, opts: &[(&str, &str)]) -> serde_json::Value {
+        ask_body_multi(&[(question, opts)])
+    }
+
+    /// A hook body carrying several questions, the way the terminal lays them
+    /// out as tabs.
+    fn ask_body_multi(steps: &[(&str, &[(&str, &str)])]) -> serde_json::Value {
+        let questions: Vec<_> = steps.iter().map(|(q, o)| ask_json(q, o)).collect();
         json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "AskUserQuestion",
-            "tool_input": { "questions": [ { "question": question, "options": options } ] }
+            "tool_input": { "questions": questions }
         })
     }
 
     #[test]
-    fn question_from_ask_builds_options_and_decision_table() {
+    fn questions_from_ask_builds_options_and_decision_table() {
         let body = ask_body(
             "Which deployment target?",
             &[("Production", "The live site"), ("Staging", "The test env")],
         );
-        let q = question_from_ask(&body).expect("a question");
+        let steps = questions_from_ask(&body);
+        assert_eq!(steps.len(), 1);
+        let q = &steps[0];
         assert_eq!(q.text, "Which deployment target?");
         assert_eq!(q.options, vec!["Production", "Staging"]);
         assert_eq!(
@@ -1825,9 +1924,33 @@ mod tests {
     }
 
     #[test]
-    fn question_from_ask_rejects_single_option() {
+    fn questions_from_ask_keeps_every_step_in_tab_order() {
+        let body = ask_body_multi(&[
+            ("Quel thème ?", &[("Foot", "le ballon rond"), ("Ciné", "")]),
+            ("Quelle difficulté ?", &[("Facile", ""), ("Moyen", "")]),
+        ]);
+        let steps = questions_from_ask(&body);
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].text, "Quel thème ?");
+        assert_eq!(steps[1].text, "Quelle difficulté ?");
+        assert_eq!(steps[1].options, vec!["Facile", "Moyen"]);
+    }
+
+    #[test]
+    fn questions_from_ask_rejects_single_option() {
         let body = ask_body("Only one?", &[("Yes", "")]);
-        assert!(question_from_ask(&body).is_none());
+        assert!(questions_from_ask(&body).is_empty());
+    }
+
+    /// Dropping just the bad step would shift every later answer onto the wrong
+    /// tab, so an unusable step voids the whole prompt.
+    #[test]
+    fn questions_from_ask_rejects_the_lot_when_a_step_is_unusable() {
+        let body = ask_body_multi(&[
+            ("Fine?", &[("A", ""), ("B", "")]),
+            ("Only one?", &[("Yes", "")]),
+        ]);
+        assert!(questions_from_ask(&body).is_empty());
     }
 
     #[test]
@@ -1851,7 +1974,7 @@ mod tests {
         assert!(!remove);
         assert_eq!(st.state, SessionState::Working);
         assert_eq!(st.last_input.as_deref(), Some("refais en un"));
-        assert!(st.question.is_none());
+        assert!(st.prompt.is_empty());
     }
 
     #[test]
@@ -1860,20 +1983,38 @@ mod tests {
         let body = ask_body("Pick one?", &[("A", "first"), ("B", "second")]);
         apply_hook("PreToolUse", "AskUserQuestion", &body, &mut st);
         assert_eq!(st.state, SessionState::Attention);
-        let q = st.question.expect("a question");
-        assert_eq!(q.text, "Pick one?");
-        assert_eq!(q.options, vec!["A", "B"]);
+        assert_eq!(st.prompt.len(), 1);
+        assert_eq!(st.prompt[0].text, "Pick one?");
+        assert_eq!(st.prompt[0].options, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn apply_hook_ask_question_keeps_all_steps() {
+        let mut st = SessionStatus::default();
+        let body = ask_body_multi(&[
+            ("Quel thème ?", &[("Foot", ""), ("Ciné", "")]),
+            ("Quelle difficulté ?", &[("Facile", ""), ("Moyen", "")]),
+        ]);
+        apply_hook("PreToolUse", "AskUserQuestion", &body, &mut st);
+        assert_eq!(st.state, SessionState::Attention);
+        assert_eq!(st.prompt.len(), 2);
+        // The activity line summarises the prompt with its first step.
+        assert_eq!(st.activity.as_deref(), Some("Quel thème ?"));
+        // Both steps reach the island; `question` stays the first one.
+        let info = build_info("box::claude", &st);
+        assert_eq!(info.question.expect("first step").text, "Quel thème ?");
+        assert_eq!(info.steps.expect("all steps").len(), 2);
     }
 
     #[test]
     fn apply_hook_other_tool_is_working_and_clears_question() {
         let mut st = SessionStatus {
             state: SessionState::Attention,
-            question: Some(Question {
+            prompt: vec![Question {
                 text: "old?".into(),
                 options: vec!["a".into(), "b".into()],
                 context: vec![],
-            }),
+            }],
             ..Default::default()
         };
         let body = json!({
@@ -1883,7 +2024,7 @@ mod tests {
         });
         apply_hook("PreToolUse", "Edit", &body, &mut st);
         assert_eq!(st.state, SessionState::Working);
-        assert!(st.question.is_none());
+        assert!(st.prompt.is_empty());
         assert_eq!(st.activity.as_deref(), Some("Edit y.rs"));
     }
 
@@ -1906,16 +2047,16 @@ mod tests {
     fn apply_hook_stop_goes_idle_and_clears_question() {
         let mut st = SessionStatus {
             state: SessionState::Attention,
-            question: Some(Question {
+            prompt: vec![Question {
                 text: "q?".into(),
                 options: vec!["a".into(), "b".into()],
                 context: vec![],
-            }),
+            }],
             ..Default::default()
         };
         apply_hook("Stop", "", &json!({ "hook_event_name": "Stop" }), &mut st);
         assert_eq!(st.state, SessionState::Idle);
-        assert!(st.question.is_none());
+        assert!(st.prompt.is_empty());
     }
 
     #[test]

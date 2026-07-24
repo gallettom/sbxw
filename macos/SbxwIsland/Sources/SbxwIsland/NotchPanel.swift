@@ -61,7 +61,7 @@ final class NotchController: ObservableObject {
         // Plain state changes toast; questions are surfaced by the observer below.
         store.onTransition = { [weak self] info in
             guard let self else { return }
-            if info.state == .attention, info.question != nil { return }
+            if info.state == .attention, !info.promptSteps.isEmpty { return }
             if case .question = self.display { return }
             self.showToast(info)
         }
@@ -98,6 +98,17 @@ final class NotchController: ObservableObject {
         p.ignoresMouseEvents = false
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         let host = NSHostingView(rootView: NotchContentView(controller: self, store: store))
+        // Don't let the hosting view drive the *window's* content-size extrema.
+        // That pass (`updateWindowContentSizeExtremaIfNecessary` → `minSize`)
+        // measures the SwiftUI content from inside AppKit's constraint-update
+        // cycle; measuring a card whose layout has its own geometry re-dirties
+        // the view graph, which posts a fresh `setNeedsUpdateConstraints:` to
+        // the window mid-pass. AppKit throws on that re-entrancy and
+        // NSApplication turns the exception into a crash — which is what took
+        // the island down every time a question card appeared. We size the
+        // panel ourselves in `relayout()`, so the intrinsic size (what that
+        // measurement reads) is the only option we need.
+        host.sizingOptions = [.intrinsicContentSize]
         p.contentView = host
         hosting = host
         panel = p
@@ -131,16 +142,48 @@ final class NotchController: ObservableObject {
         setDisplay(.question(info))
     }
 
-    /// Called after the user picks an answer; the incoming state event will
-    /// re-toast/collapse as needed.
-    func dismissAfterAnswer() {
-        collapse()
-    }
-
     /// Explicitly dismiss the prompt card (the user tapped ✕). The session stays
     /// waiting in the daemon; we just retract the notch.
     func dismissQuestion() {
         collapse()
+    }
+
+    // MARK: - Multi-step prompt draft
+
+    /// Answers picked so far in the open question card, one per step in tab
+    /// order.
+    ///
+    /// It lives here rather than in the card's `@State` for two reasons: the
+    /// card is re-created on every store publish, so its own state depends on
+    /// SwiftUI preserving view identity across those rebuilds; and the panel
+    /// has to re-measure whenever a step changes, which only this object can
+    /// do. `setDisplay` clears it, so every card starts from step one.
+    @Published private(set) var draftAnswers: [Int] = []
+
+    /// Record a choice for the step on screen: walk to the next question, or
+    /// submit the whole set once the last one is answered. Nothing reaches the
+    /// PTY until that final pick.
+    func pickAnswer(_ index: Int, for session: SessionInfo) {
+        let total = session.promptSteps.count
+        var next = draftAnswers
+        next.append(index)
+        Log.log("pick \(index) → step \(next.count)/\(total) for \(session.id)")
+        guard next.count < total else {
+            store.answer(session, indices: next)
+            collapse()
+            return
+        }
+        draftAnswers = next
+        // The next step is a different height, and no display change triggers
+        // the usual relayout.
+        relayout()
+    }
+
+    /// Step back to the previous question of a multi-part prompt.
+    func undoAnswer() {
+        guard !draftAnswers.isEmpty else { return }
+        draftAnswers.removeLast()
+        relayout()
     }
 
     // MARK: - Hover
@@ -183,7 +226,8 @@ final class NotchController: ObservableObject {
         guard panel != nil else { return }
         // Don't auto-surface a prompt the user already dismissed in the island.
         let pending = sessions.first {
-            $0.state == .attention && $0.question != nil && !store.acknowledged.contains($0.id)
+            $0.state == .attention && !$0.promptSteps.isEmpty
+                && !store.acknowledged.contains($0.id)
         }
         switch display {
         case .question(let current):
@@ -191,10 +235,11 @@ final class NotchController: ObservableObject {
             // ✕ (dismissQuestion), so acknowledgement alone doesn't collapse it —
             // that keeps "tap the row to open the card" from closing it instantly.
             if let cur = sessions.first(where: { $0.id == current.id }),
-               cur.state == .attention, cur.question != nil {
+               cur.state == .attention, !cur.promptSteps.isEmpty {
                 // Refresh only when the prompt itself changes (not on every
-                // activity/ts tick) to avoid constant relayouts.
-                if cur.question != current.question { setDisplay(.question(cur)) }
+                // activity/ts tick) to avoid constant relayouts. Compare every
+                // step: two prompts can open on the same first question.
+                if cur.promptSteps != current.promptSteps { setDisplay(.question(cur)) }
             } else if let p = pending {
                 setDisplay(.question(p)) // that one resolved; show the next
             } else {
@@ -244,6 +289,10 @@ final class NotchController: ObservableObject {
     }
 
     private func setDisplay(_ new: IslandDisplay) {
+        // Any card that opens starts on its first step. The only time an open
+        // card is re-set is when its prompt actually changed (see
+        // onSessionsChanged), and that prompt deserves fresh answers.
+        if !draftAnswers.isEmpty { draftAnswers = [] }
         // Retracting to the notch should be quick and clean; growing/morphing
         // gets the bouncy bubble. Drive the SwiftUI transition and the window
         // frame with matching curves.
@@ -295,6 +344,23 @@ final class NotchController: ObservableObject {
         }
     }
 
+    /// Measured size of the SwiftUI content. `fittingSize` is derived from the
+    /// constraints the hosting view installs, and with `sizingOptions` trimmed
+    /// to the intrinsic size that's the value to fall back on. Non-finite or
+    /// sentinel components (`noIntrinsicMetric` is -1) are dropped: they would
+    /// otherwise reach `setFrame`, which throws on a NaN dimension.
+    private nonisolated static func contentSize(of hosting: NSView) -> NSSize {
+        let fitting = hosting.fittingSize
+        let intrinsic = hosting.intrinsicContentSize
+        func best(_ a: CGFloat, _ b: CGFloat) -> CGFloat {
+            max(a.isFinite ? a : 0, b.isFinite ? b : 0)
+        }
+        return NSSize(
+            width: best(fitting.width, intrinsic.width),
+            height: best(fitting.height, intrinsic.height)
+        )
+    }
+
     /// Size the panel to the SwiftUI content. SwiftUI commits the new layout on
     /// the next runloop tick, so measure then. Growing bounces like a bubble;
     /// retracting (`collapsing`) uses a quick ease-in so it disappears cleanly
@@ -304,7 +370,7 @@ final class NotchController: ObservableObject {
             guard let self, let panel = self.panel, let hosting = self.hosting,
                 let screen = self.notchedScreen() else { return }
             hosting.layoutSubtreeIfNeeded()
-            let fit = hosting.fittingSize
+            let fit = Self.contentSize(of: hosting)
             let w = max(fit.width, 1)
             let h = max(fit.height, self.topInset)
             let frame = screen.frame

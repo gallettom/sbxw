@@ -16,8 +16,9 @@ Each session (one per sandbox × mode) has a state, shown with a colored dot:
 | State | Label | Dot | Meaning |
 |---|---|---|---|
 | `working` | working… | blue | the agent is running a turn (a tool, or thinking) |
-| `attention` | waiting for input | orange | the agent needs you — it asked a question or hit a permission / idle prompt |
-| `idle` | idle | gray | the agent finished its turn (a `Stop` hook) — waiting for your next prompt |
+| `attention` | waiting for input | orange | the agent needs you — it asked a question (`AskUserQuestion`) or hit a permission / idle prompt |
+| `idle` (talked to) | waiting for your reply | teal | Claude finished its turn and it's your move — the only cue for a **free-text question asked inline** (e.g. "Question 1: …?"), which fires no `AskUserQuestion` hook |
+| `idle` (untouched) | idle | gray | a sandbox that has never been prompted this session |
 | `exited` | ended | — | the session ended (row disappears) |
 
 Each session row is rich: the **sandbox name**, the **last prompt you sent**
@@ -42,6 +43,11 @@ hidden until something happens:
   question plus one button per option (**⌘1 / ⌘2 / …**). Picking one sends the
   answer straight into the session's terminal — no context switch. The card
   stays until you answer.
+
+  When the agent asks **several questions at once**, the card walks them one at
+  a time (the **1/2** badge, **⌘←** to go back) and keeps your earlier picks
+  visible. Nothing is written to the terminal until the last question is
+  answered, so abandoning the card leaves the session untouched.
 - **Hover** → the full session list, auto-collapsing **5 s** after the pointer
   leaves.
 

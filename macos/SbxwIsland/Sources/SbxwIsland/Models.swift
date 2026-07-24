@@ -26,10 +26,22 @@ struct SessionInfo: Codable, Equatable, Identifiable {
     let started_ms: UInt64
     let activity: String?
     let last_input: String?
+    /// First step of the pending prompt (what the row's subtitle shows).
     let question: Question?
+    /// Every step of the pending prompt, in the order the terminal lays them
+    /// out as tabs. Absent from a daemon that predates multi-step prompts.
+    let steps: [Question]?
     let ts: UInt64?
 
     var id: String { "\(sandbox)::\(mode)" }
+
+    /// The prompt as a list of steps — one entry for a single question, empty
+    /// when nothing is pending. Falls back to `question` so an older daemon
+    /// still produces a (single-step) card.
+    var promptSteps: [Question] {
+        if let steps, !steps.isEmpty { return steps }
+        return question.map { [$0] } ?? []
+    }
 
     /// Seconds since the session's PTY started (0 if unknown).
     var elapsed: TimeInterval {

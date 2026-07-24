@@ -129,7 +129,9 @@ On top of that:
 - when the agent **asks a question** (via Claude Code's `AskUserQuestion` tool),
   the notch expands into an **interactive card** showing the question, a
   decision table (each option's description), and a button per option
-  (**⌘1/⌘2/…**) — picking one sends the answer straight into the session;
+  (**⌘1/⌘2/…**) — picking one sends the answer straight into the session. A
+  prompt with several questions is walked step by step (**1/2**, **⌘←** to go
+  back) and submitted in one go once the last one is picked;
 - **hovering** the notch reveals the full list — with each session's elapsed
   time and, at the top, your **Claude subscription usage** (5-hour and weekly
   window %) — auto-hiding 1 s after you leave.
@@ -154,7 +156,7 @@ from the terminal:
 | --- | --- |
 | `SessionStart` | `idle` |
 | `UserPromptSubmit` | `working` (captures your prompt) |
-| `PreToolUse` (`AskUserQuestion`) | `attention` + structured `question` |
+| `PreToolUse` (`AskUserQuestion`) | `attention` + structured prompt (every question of the call) |
 | `PreToolUse` / `PostToolUse` (other) | `working` (tool as activity) |
 | `Notification` | `attention` (permission / idle nudge) |
 | `Stop` | `idle` |

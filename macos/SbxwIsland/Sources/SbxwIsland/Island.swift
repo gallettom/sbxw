@@ -29,6 +29,11 @@ extension View {
 
 // MARK: - State presentation
 
+/// The calm accent for "it's your turn to reply" — distinct from the amber of
+/// an explicit `attention` prompt, so a finished conversational turn reads as
+/// an invitation, not an alarm.
+let awaitingReplyColor = Color(red: 0.36, green: 0.80, blue: 0.72)
+
 extension SessionState {
     var dotColor: Color {
         switch self {
@@ -46,6 +51,26 @@ extension SessionState {
         case .idle: return "idle"
         case .exited: return "ended"
         }
+    }
+}
+
+extension SessionInfo {
+    /// Claude finished its turn and the ball is in your court — an idle *live*
+    /// session that has already been talked to. This is the only cue for a
+    /// free-text question Claude asks inline (e.g. "Question 1: …?"): it fires
+    /// no `AskUserQuestion` hook, so the daemon just sees the turn end and the
+    /// session go idle. A brand-new sandbox that has never been prompted stays
+    /// plainly idle (no `last_input`), so it isn't mislabelled.
+    var awaitingReply: Bool {
+        state == .idle && started_ms > 0 && (last_input?.isEmpty == false)
+    }
+
+    /// Dot/accent for a session that wants the human: amber when it explicitly
+    /// asked (`attention`), calm teal when it's simply your turn to reply.
+    var accentColor: Color {
+        if state == .attention { return .orange }
+        if awaitingReply { return awaitingReplyColor }
+        return state.dotColor
     }
 }
 
@@ -182,7 +207,7 @@ struct SessionRow: View {
     }
 
     private var hasQuestion: Bool {
-        session.state == .attention && session.question != nil
+        session.state == .attention && !session.promptSteps.isEmpty
     }
 
     /// Show a dismiss ✕ only while the row is actively asking for attention.
@@ -219,7 +244,7 @@ struct SessionRow: View {
                     if !session.agent.isEmpty {
                         Tag(text: session.mode == "bash" ? "bash" : session.agent)
                     }
-                    if waiting, session.question != nil {
+                    if waiting, !session.promptSteps.isEmpty {
                         Text("answer ›")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.orange)
@@ -264,21 +289,26 @@ struct SessionRow: View {
     private var dotColor: Color {
         (session.state == .attention && acknowledged)
             ? .white.opacity(0.35)
-            : session.state.dotColor
+            : session.accentColor
     }
 
-    /// The question when waiting, else the current activity (ignoring the
-    /// single-character fragments a redraw/typing produces), else the state.
+    /// The question when waiting, else "your turn" once Claude has replied, else
+    /// the current activity (ignoring the single-character fragments a
+    /// redraw/typing produces), else the state.
     private var subtitle: String {
-        if session.state == .attention, let q = session.question {
-            return q.text
+        if session.state == .attention, let q = session.promptSteps.first {
+            let steps = session.promptSteps.count
+            return steps > 1 ? "\(q.text) (1 of \(steps))" : q.text
         }
+        if session.awaitingReply { return "waiting for your reply" }
         if let a = session.activity, a.count >= 3 { return a }
         return session.state.label
     }
 
     private var subtitleColor: Color {
-        waiting ? .orange : .white.opacity(0.7)
+        if waiting { return .orange }
+        if session.awaitingReply { return awaitingReplyColor }
+        return .white.opacity(0.7)
     }
 }
 
@@ -388,16 +418,21 @@ struct UsageBar: View {
 struct ToastView: View {
     let session: SessionInfo
 
+    private var toastText: String {
+        if session.awaitingReply { return "waiting for your reply" }
+        return session.activity?.isEmpty == false ? session.activity! : session.state.label
+    }
+
     var body: some View {
         HStack(spacing: 10) {
-            Circle().fill(session.state.dotColor).frame(width: 10, height: 10)
+            Circle().fill(session.accentColor).frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.sandbox)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                Text(session.activity?.isEmpty == false ? session.activity! : session.state.label)
+                Text(toastText)
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(session.awaitingReply ? awaitingReplyColor : .white.opacity(0.7))
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -497,10 +532,13 @@ struct SummaryPill: View {
     /// below this, the black fills behind it.
     let topInset: CGFloat
 
-    /// The session whose task to surface: a waiting one first (it needs you),
-    /// else a working one.
+    /// The session whose task to surface, by how much it wants you: an explicit
+    /// prompt first, then a turn awaiting your reply, then a working one. Without
+    /// the middle case the collapsed notch showed nothing at all while Claude sat
+    /// waiting on an inline question — the very gap this closes.
     private var lead: SessionInfo? {
         store.sessions.first { $0.state == .attention && !store.acknowledged.contains($0.id) }
+            ?? store.sessions.first { $0.awaitingReply }
             ?? store.sessions.first { $0.state == .working }
     }
 
@@ -508,6 +546,15 @@ struct SummaryPill: View {
         if let input = s.last_input, !input.isEmpty { return input }
         if let a = s.activity, a.count >= 3 { return a }
         return s.sandbox
+    }
+
+    /// Glyph tint mirrors the lead's urgency: amber prompt, teal your-turn,
+    /// green working.
+    private var leadIconColor: Color {
+        guard let lead else { return Color(red: 0.44, green: 0.87, blue: 0.47) }
+        if lead.state == .attention { return Color(red: 1.0, green: 0.7, blue: 0.28) }
+        if lead.awaitingReply { return awaitingReplyColor }
+        return Color(red: 0.44, green: 0.87, blue: 0.47)
     }
 
     var body: some View {
@@ -518,9 +565,7 @@ struct SummaryPill: View {
                     // the notch look enclosed by the bubble.
                     Color.clear.frame(height: topInset)
                     HStack(spacing: 9) {
-                        InvaderIcon(color: lead.state == .attention
-                            ? Color(red: 1.0, green: 0.7, blue: 0.28)  // amber when waiting
-                            : Color(red: 0.44, green: 0.87, blue: 0.47)) // green when working
+                        InvaderIcon(color: leadIconColor)
                             .frame(width: 17, height: 13)
                         Text(task(lead))
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -560,54 +605,135 @@ struct SummaryPill: View {
     }
 }
 
-/// Interactive prompt card: shows the parsed question and one button per option
-/// (⌘1…9). Selecting one answers the session's PTY.
+/// Interactive prompt card: shows the pending question and one button per
+/// option (⌘1…9).
+///
+/// `AskUserQuestion` can ask several questions in one call — the terminal walks
+/// them as tabs and submits once at the end. The card mirrors that: it steps
+/// through the questions, holding the answers locally, and sends the whole set
+/// when the last one is picked. Nothing reaches the PTY before that, so an
+/// abandoned card leaves the session exactly as it found it.
 struct QuestionCard: View {
     let session: SessionInfo
     @ObservedObject var store: SessionStore
     @ObservedObject var controller: NotchController
 
+    /// One 1-based option number per step already answered, in tab order. Its
+    /// count is also the index of the step being asked. Owned by the controller
+    /// so it does not depend on SwiftUI keeping this card's identity across the
+    /// rebuilds every store publish triggers.
+    private var answers: [Int] { controller.draftAnswers }
+
+    private var steps: [Question] { session.promptSteps }
+
+    /// The step currently on screen (nil only in the instant between the last
+    /// answer and the card closing).
+    private var step: Question? {
+        steps.indices.contains(answers.count) ? steps[answers.count] : nil
+    }
+
+    private var isMultiStep: Bool { steps.count > 1 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "bubble.left.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-                Text("\(session.agent.isEmpty ? "Agent" : session.agent) asks")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                Spacer()
-                Text(session.sandbox)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.5))
-                Button {
-                    // Dismiss the prompt card and silence its notification; the
-                    // session keeps waiting in the daemon, we just stop nagging.
-                    store.acknowledge(session)
-                    controller.dismissQuestion()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help("Dismiss")
+            header
+            if isMultiStep, !answers.isEmpty {
+                recap
             }
-            if let q = session.question {
-                if !q.context.isEmpty {
-                    contextView(q.context)
+            if let step {
+                if !step.context.isEmpty {
+                    contextView(step.context)
                 }
-                Text(q.text)
+                Text(step.text)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(spacing: 5) {
-                    ForEach(Array(q.options.enumerated()), id: \.offset) { idx, option in
+                    ForEach(Array(step.options.enumerated()), id: \.offset) { idx, option in
                         optionButton(index: idx + 1, text: option)
                     }
                 }
+            }
+            footer
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+            Text("\(session.agent.isEmpty ? "Agent" : session.agent) asks")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            if isMultiStep {
+                Text("\(min(answers.count + 1, steps.count))/\(steps.count)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.white.opacity(0.14))
+                    .clipShape(Capsule())
+            }
+            Spacer()
+            Text(session.sandbox)
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.5))
+            Button {
+                // Dismiss the prompt card and silence its notification; the
+                // session keeps waiting in the daemon, we just stop nagging.
+                store.acknowledge(session)
+                controller.dismissQuestion()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .help("Dismiss")
+        }
+    }
+
+    /// What has been picked so far, so a later step still shows the earlier
+    /// choices — the terminal keeps them visible as answered tabs.
+    private var recap: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(answers.enumerated()), id: \.offset) { i, choice in
+                Text(label(step: i, choice: choice))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.18))
+                    .clipShape(Capsule())
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            if !answers.isEmpty {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        controller.undoAnswer()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .keyboardShortcut(.leftArrow, modifiers: .command)
             }
             Button {
                 openInBrowser(session.sandbox)
@@ -621,39 +747,65 @@ struct QuestionCard: View {
             }
             .buttonStyle(.plain)
             .pointerCursor()
-            .padding(.top, 2)
+            Spacer(minLength: 0)
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 2)
     }
 
+    /// The chosen option's label for an answered step.
+    private func label(step index: Int, choice: Int) -> String {
+        guard steps.indices.contains(index),
+              steps[index].options.indices.contains(choice - 1)
+        else { return "?" }
+        return steps[index].options[choice - 1]
+    }
+
+    /// How many context lines the card shows before summarising the rest. The
+    /// decision table is one line per option, so this only bites on unusually
+    /// long prompts — and the full text is one click away in the browser.
+    private static let maxContextLines = 8
+
     /// The on-screen preamble (a diff, a decision table…) shown above the prompt,
-    /// monospaced so tables stay aligned; scrolls if tall.
+    /// monospaced so tables stay aligned.
+    ///
+    /// Deliberately a plain stack rather than a `ScrollView`: the panel measures
+    /// its own content to size itself, and a scroll container has no natural
+    /// height *and* carries scroll geometry, so measuring it re-dirties the view
+    /// graph. Inside AppKit's constraint-update pass that re-entrancy raises an
+    /// exception and kills the app (see `NotchController.install`). Capping the
+    /// line count keeps the card bounded without one.
     private func contextView(_ lines: [String]) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+        let shown = Array(lines.prefix(Self.maxContextLines))
+        let hidden = lines.count - shown.count
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(8)
+            if hidden > 0 {
+                Text("+\(hidden) more")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .frame(maxHeight: 150)
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func optionButton(index: Int, text: String) -> some View {
         Button {
-            store.answer(session, index: index)
-            controller.dismissAfterAnswer()
+            withAnimation(.easeInOut(duration: 0.18)) {
+                controller.pickAnswer(index, for: session)
+            }
         } label: {
             HStack(spacing: 8) {
-                Text("⌘\(index)")
+                Text(index <= 9 ? "⌘\(index)" : "\(index).")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.6))
                     .frame(width: 24, alignment: .leading)
@@ -672,11 +824,15 @@ struct QuestionCard: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .keyboardShortcut(shortcut(index), modifiers: .command)
+        .keyboardShortcut(shortcut(index))
     }
 
-    private func shortcut(_ index: Int) -> KeyEquivalent {
-        KeyEquivalent(Character("\(index)"))
+    /// ⌘-digit for an option, or none past the ninth: `KeyEquivalent` wraps a
+    /// single `Character`, and `Character("10")` is a runtime trap. Options
+    /// beyond the ninth stay clickable, they just have no shortcut.
+    private func shortcut(_ index: Int) -> KeyboardShortcut? {
+        guard (1...9).contains(index) else { return nil }
+        return KeyboardShortcut(KeyEquivalent(Character("\(index)")), modifiers: .command)
     }
 }
 
@@ -781,7 +937,7 @@ struct NotchContentView: View {
             IslandView(store: store) { info in
                 // Tapping a waiting-with-prompt row opens its answer card;
                 // anything else jumps to the browser.
-                if info.state == .attention, info.question != nil {
+                if info.state == .attention, !info.promptSteps.isEmpty {
                     controller.showQuestion(info)
                 } else {
                     openInBrowser(info.sandbox)

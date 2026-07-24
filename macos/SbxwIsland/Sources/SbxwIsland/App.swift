@@ -34,7 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 }
 
 /// The menu-bar icon. Reflects the most urgent state across all sessions:
-/// waiting for input (bell badge) > working > idle.
+/// waiting for input (bell badge) > your turn to reply (speech bubble) >
+/// working > idle.
 struct MenuBarLabel: View {
     @ObservedObject var store: SessionStore
 
@@ -44,6 +45,9 @@ struct MenuBarLabel: View {
 
     private var symbol: String {
         if store.needsAttention { return "bell.badge.fill" }
+        // A quieter cue than the bell: Claude replied and it's your move (an
+        // inline question has no explicit prompt to nag about).
+        if store.sessions.contains(where: { $0.awaitingReply }) { return "bubble.left.fill" }
         if store.sessions.contains(where: { $0.state == .working }) { return "circle.hexagongrid.fill" }
         return "square.grid.2x2"
     }

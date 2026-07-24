@@ -80,10 +80,13 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Interaction (input back to the PTY)
 
-    /// Answer a session's pending numbered menu (1-based).
-    func answer(_ session: SessionInfo, index: Int) {
+    /// Answer a session's pending prompt: one 1-based option number per step,
+    /// in tab order. The daemon replays them as the keystrokes a user would
+    /// type, so a multi-question prompt is submitted in one go.
+    func answer(_ session: SessionInfo, indices: [Int]) {
+        Log.log("answer \(session.id) indices=\(indices)")
         post("/api/answer", body: [
-            "sandbox": session.sandbox, "mode": session.mode, "index": index,
+            "sandbox": session.sandbox, "mode": session.mode, "indices": indices,
         ])
     }
 
@@ -137,7 +140,7 @@ final class SessionStore: ObservableObject {
                 out.append(SessionInfo(
                     sandbox: item.name, mode: "claude", state: .idle,
                     agent: item.agent, started_ms: 0,
-                    activity: nil, last_input: nil, question: nil, ts: nil
+                    activity: nil, last_input: nil, question: nil, steps: nil, ts: nil
                 ))
             }
         }
@@ -309,14 +312,20 @@ final class SessionStore: ObservableObject {
     private func logRaw(_ line: String) {
         sseRawCount += 1
         if sseRawCount <= 30 || line.isEmpty || line.hasPrefix("data:") {
-            Log.log("SSE raw#\(sseRawCount): \(line.isEmpty ? "<blank>" : String(line.prefix(160)))")
+            // Long enough that a prompt payload's `steps` array is visible: at
+            // 160 chars it was cut off right where the interesting part starts.
+            Log.log("SSE raw#\(sseRawCount): \(line.isEmpty ? "<blank>" : String(line.prefix(500)))")
         }
     }
 
     private func applyRawEvent(_ json: String) {
         guard let data = json.data(using: .utf8) else { return }
         if let info = try? JSONDecoder().decode(SessionInfo.self, from: data) {
-            Log.log("event \(info.id) state=\(info.state.rawValue) q=\(info.question?.options.count ?? -1)")
+            // `nil` distinguishes a daemon that predates multi-step prompts
+            // (no `steps` key at all, so the island falls back to `question`)
+            // from one that really did send a single-question prompt.
+            let steps = info.steps.map { "\($0.count)" } ?? "nil"
+            Log.log("event \(info.id) state=\(info.state.rawValue) steps=\(steps)")
             apply(info)
         } else {
             Log.log("SSE decode FAIL: \(json.prefix(300))")

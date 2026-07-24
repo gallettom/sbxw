@@ -1099,6 +1099,36 @@ pub(crate) fn chat_workspace_of(name: &str) -> Option<PathBuf> {
     workspace_for(name).filter(|p| p.starts_with(chat_workspace_root()))
 }
 
+/// Re-create a chat sandbox's workspace directory if it has vanished.
+///
+/// Chat workspaces live under `/tmp/sbxw-chat` (see `chat_workspace_root`), and
+/// `/tmp` is periodically swept by the OS (tmpreaper, a reboot). Once the
+/// directory is gone, `sbx run` refuses to start the sandbox — its bind-mount
+/// source no longer exists — with a 422. But a chat workspace is empty and
+/// disposable by definition, so re-creating the bare directory restores exactly
+/// what the sandbox expects; the session simply starts on a clean slate.
+///
+/// Scoped strictly to chat workspaces: a *normal* sandbox whose workspace
+/// disappeared is a real problem (the user's project moved or was deleted), and
+/// silently re-creating an empty directory there would hide it. No-op for such
+/// sandboxes, and for a chat workspace that is still present.
+pub(crate) fn ensure_chat_workspace(name: &str) {
+    if let Some(dir) = chat_workspace_of(name) {
+        if !dir.exists() {
+            match std::fs::create_dir_all(&dir) {
+                Ok(()) => tracing::info!(
+                    "re-created vanished chat workspace {} for '{name}'",
+                    dir.display()
+                ),
+                Err(e) => tracing::warn!(
+                    "could not re-create chat workspace {}: {e:#}",
+                    dir.display()
+                ),
+            }
+        }
+    }
+}
+
 /// Path to the PID file for a named sandbox daemon.
 fn daemon_pid_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("sbxw-{name}.pid"))
