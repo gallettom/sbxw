@@ -18,6 +18,14 @@ enum IslandDisplay: Equatable {
     case list
 }
 
+/// A borderless `NSPanel` refuses key status, which makes any text field inside
+/// it impossible to type into — including the island's chat composer. The
+/// `.nonactivatingPanel` style already means "accept keys without activating the
+/// app", so opting in here is the whole fix.
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 /// Drives the notch "Dynamic Island": a borderless panel hugging the notch. It
 /// surfaces a pending question card on its own (no click needed), toasts plain
 /// state changes, and reveals the full list on hover. The panel sizes itself to
@@ -30,6 +38,9 @@ final class NotchController: ObservableObject {
     private var panel: NSPanel?
     private var hosting: NSHostingView<NotchContentView>?
     private var hovering = false
+    /// The chat composer holds keyboard focus: the list must stay put until the
+    /// user is done writing (see `setComposerActive`).
+    private var composerActive = false
     private var hideTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     /// Pending hover-intent reveal (see `hoverIntentDelay`).
@@ -72,6 +83,17 @@ final class NotchController: ObservableObject {
                 MainActor.assumeIsolated { self?.onSessionsChanged(sessions) }
             }
             .store(in: &cancellables)
+        // The composer changes the list's height as it swaps between the ＋ row,
+        // the field, a spinner and an error line. The panel is sized by hand
+        // (see `install`), so nothing else would follow that.
+        store.$chatPush
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.display == .list else { return }
+                    self.relayout()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Lifecycle
@@ -80,7 +102,7 @@ final class NotchController: ObservableObject {
         guard panel == nil, let screen = notchedScreen() else { return }
         adoptScreen(screen)
 
-        let p = NSPanel(
+        let p = KeyablePanel(
             contentRect: NSRect(x: 0, y: 0, width: notchWidth, height: topInset),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -148,6 +170,29 @@ final class NotchController: ObservableObject {
         collapse()
     }
 
+    /// The chat composer took or gave up keyboard focus.
+    ///
+    /// Two things have to happen for typing in the notch to work at all. The
+    /// panel must become key — a borderless one refuses by default, which is
+    /// what `KeyablePanel` overrides — and it must stop auto-retracting, or the
+    /// list would slide away mid-sentence (`scheduleHide` fires a second after
+    /// the pointer settles). Keying is deliberately tied to *focus* rather than
+    /// to the list being open, so merely hovering the island never steals keys
+    /// from whatever you were working in.
+    func setComposerActive(_ active: Bool) {
+        composerActive = active
+        if active {
+            hideTask?.cancel()
+            panel?.makeKeyAndOrderFront(nil)
+        } else {
+            // Hand keys back and resume the usual retract timer.
+            panel?.resignKey()
+            scheduleHide()
+        }
+        // Expanding the field (or folding it back) changes the content height.
+        relayout()
+    }
+
     // MARK: - Multi-step prompt draft
 
     /// Answers picked so far in the open question card, one per step in tab
@@ -194,9 +239,18 @@ final class NotchController: ObservableObject {
     private static let hoverIntentDelay: Duration = .milliseconds(350)
 
     func hover(_ inside: Bool) {
+        // Record where the pointer is even when we go on to ignore it. The flag
+        // is read later by the toast and auto-hide timers, and the early returns
+        // below used to skip this line — so a question card appearing between
+        // the pointer entering and leaving pinned `hovering` to `true` long
+        // after the pointer had gone, and every later auto-collapse saw a hover
+        // that wasn't happening and declined to retract.
+        hovering = inside
         // Keep an interactive prompt on screen until it's answered.
         if case .question = display { return }
-        hovering = inside
+        // Likewise a half-written chat: the pointer wandering off must not take
+        // the field (and the text in it) with it.
+        if composerActive { return }
         hoverTask?.cancel()
 
         guard inside else {
@@ -274,8 +328,17 @@ final class NotchController: ObservableObject {
             self.setDisplay(.miniToast(cur))
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
-            guard case .miniToast = self.display, !self.hovering else { return }
-            self.collapse()
+            guard case .miniToast = self.display else { return }
+            if self.hovering {
+                // Defer, don't abandon. Bailing out here (the old `!hovering`
+                // guard) consumed the pill's only timer, and nothing re-armed
+                // it — `hover(false)` reschedules for `.list` alone — so a
+                // pointer merely resting near the notch when the three seconds
+                // ran out left the mini pill on screen for good.
+                self.scheduleHide()
+            } else {
+                self.collapse()
+            }
         }
     }
 
@@ -313,6 +376,7 @@ final class NotchController: ObservableObject {
             try? await Task.sleep(for: Self.autoHideDelay)
             guard let self, !Task.isCancelled else { return }
             if case .question = self.display { return } // never auto-dismiss a prompt
+            if self.composerActive { return } // nor a chat being written
             if self.hovering {
                 self.expandToList()
                 self.scheduleHide()

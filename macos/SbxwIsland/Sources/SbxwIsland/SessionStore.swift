@@ -38,6 +38,15 @@ final class SessionStore: ObservableObject {
         let lastInput: String?
     }
 
+    /// Progress of the island composer's last chat push.
+    enum ChatPushState: Equatable {
+        case idle
+        case sending
+        case failed(String)
+    }
+
+    @Published private(set) var chatPush: ChatPushState = .idle
+
     /// Fired when a live session genuinely changes state (not on the repeated
     /// "working" keep-alives). Used to pop notch toasts / prompts.
     var onTransition: ((SessionInfo) -> Void)?
@@ -144,6 +153,54 @@ final class SessionStore: ObservableObject {
         post("/api/input", body: [
             "sandbox": session.sandbox, "mode": session.mode, "data": data,
         ])
+    }
+
+    /// Submit a message to the ephemeral chat agent.
+    ///
+    /// One call whether or not anything exists yet: the daemon creates the chat
+    /// sandbox, attaches the agent and waits for its TUI before typing (see
+    /// `/api/chat/push`). That makes the *first* push slow — a sandbox has to
+    /// boot — hence `chatPush` for the composer to show progress, and a timeout
+    /// far past URLSession's default patience.
+    func pushChat(_ text: String, name: String? = nil) {
+        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, chatPush != .sending else { return }
+        guard let url = Config.url("/api/chat/push") else {
+            chatPush = .failed("bad daemon URL")
+            return
+        }
+        var body: [String: Any] = ["text": message]
+        if let name { body["name"] = name }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 180
+
+        chatPush = .sending
+        Log.log("chat push: \(message.prefix(60))")
+        Task { [weak self] in
+            do {
+                let (data, _) = try await URLSession.shared.data(for: req)
+                let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                if obj?["ok"] as? Bool == true {
+                    Log.log("chat push ok → \(obj?["name"] as? String ?? "?")")
+                    self?.chatPush = .idle
+                } else {
+                    let msg = obj?["error"] as? String ?? "chat push failed"
+                    Log.log("chat push failed: \(msg)")
+                    self?.chatPush = .failed(msg)
+                }
+            } catch {
+                Log.log("chat push error: \(error.localizedDescription)")
+                self?.chatPush = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Clear a failed push so the composer stops showing the error.
+    func clearChatPushError() {
+        if case .failed = chatPush { chatPush = .idle }
     }
 
     private func post(_ path: String, body: [String: Any]) {

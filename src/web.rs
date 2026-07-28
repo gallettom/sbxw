@@ -538,6 +538,7 @@ pub async fn serve(
         .route("/api/sandboxes", get(api_list))
         .route("/api/sandboxes/create", post(api_create))
         .route("/api/sandboxes/chat", post(api_chat))
+        .route("/api/chat/push", post(api_chat_push))
         .route("/api/sandboxes/:name/duplicate", post(api_duplicate))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
         .route(
@@ -1206,6 +1207,163 @@ async fn api_chat(
         Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
         Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
     }
+}
+
+/// The shared "ephemeral chat" sandbox the island's composer talks to. One
+/// sandbox, reused: the point is a scratch agent that's always one keystroke
+/// away, not a new sandbox per message — so the second question lands in the
+/// same conversation as the first.
+const EPHEMERAL_CHAT: &str = "ephemeral-chat";
+
+/// How long the PTY must stay silent before we accept that the agent's TUI has
+/// finished drawing and won't swallow what we type into a half-painted screen.
+const CHAT_SETTLE: Duration = Duration::from_millis(900);
+
+/// Upper bound on waiting for that: a cold sandbox has to boot the agent first.
+const CHAT_READY_TIMEOUT: Duration = Duration::from_secs(45);
+
+#[derive(Deserialize)]
+struct ChatPushBody {
+    /// Message to submit to the chat agent.
+    text: String,
+    /// Sandbox to chat in. Defaults to the shared ephemeral one.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Wait until `sess` stops producing output, so a prompt isn't typed into a TUI
+/// that is still painting (Claude Code redraws its whole frame on startup and
+/// would drop the keystrokes).
+///
+/// Quiescence is measured on the broadcast channel rather than the replay ring
+/// buffer: that buffer is capacity-bounded, so once full its length stops
+/// changing and silence becomes indistinguishable from a flood.
+async fn wait_until_settled(sess: &Arc<PtySession>, fresh: bool) {
+    let mut rx = sess.tx.subscribe();
+    if fresh {
+        // A cold session emits nothing until the agent boots; timing the
+        // silence from now would "settle" instantly, before anything is
+        // listening. Wait for the first output, then for it to stop.
+        if tokio::time::timeout(CHAT_READY_TIMEOUT, rx.recv())
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+    let deadline = tokio::time::Instant::now() + CHAT_READY_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(CHAT_SETTLE, rx.recv()).await {
+            Err(_) => return,      // quiet for CHAT_SETTLE — the TUI is ready
+            Ok(Ok(_)) => continue, // still drawing
+            Ok(Err(_)) => return,  // lagged or closed; don't block on it
+        }
+    }
+}
+
+/// `POST /api/chat/push` — submit a message to the ephemeral chat agent,
+/// creating the sandbox and attaching its session first if they don't exist.
+///
+/// This is the island composer's one call: it has no sandbox picker and no
+/// terminal, so everything between "user typed a question" and "the agent is
+/// reading it" has to happen here. Reuses the same provisioning path as the web
+/// UI's 💬 button, so a chat started from the island is the same thing as one
+/// started from the browser.
+async fn api_chat_push(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ChatPushBody>,
+) -> Json<serde_json::Value> {
+    let text = body.text.trim().to_string();
+    if text.is_empty() {
+        return Json(serde_json::json!({ "ok": false, "error": "empty message" }));
+    }
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(EPHEMERAL_CHAT)
+        .to_string();
+    if !crate::is_valid_sandbox_name(&name) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "name must be non-empty and contain only letters, digits, and hyphens"
+        }));
+    }
+
+    // 1. Provision on first use only. Re-provisioning per message would redo
+    //    policy, hooks and trust on every keystroke-worth of chat.
+    let exists = {
+        let n = name.clone();
+        tokio::task::spawn_blocking(move || crate::sbx::exists(&n))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or(false)
+    };
+    if !exists {
+        let workspace = match crate::prepare_chat_workspace(&name) {
+            Ok(w) => w,
+            Err(e) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        };
+        let cfg = state.cfg.clone();
+        let use_api_key = state.use_api_key;
+        let n = name.clone();
+        tracing::info!("island: provisioning ephemeral chat sandbox '{name}' at {workspace}");
+        match tokio::task::spawn_blocking(move || {
+            crate::provision_sandbox(&n, &workspace, &[], &cfg, &[], use_api_key)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+            Err(_) => return Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+        }
+    }
+
+    // 2. Attach the agent. `sbx run --name` also starts a stopped sandbox, so
+    //    this covers "the chat sandbox exists but was stopped" for free.
+    let key = format!("{name}::claude");
+    let fresh = !state.sessions.lock().unwrap().contains_key(&key);
+    let sessions = state.sessions.clone();
+    let shell = state.shell.clone();
+    let n = name.clone();
+    let session = match tokio::task::spawn_blocking(move || {
+        get_or_create_session(&n, "claude", &shell, &sessions)
+    })
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(_) => return Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+    };
+
+    // 3. Let the TUI finish drawing, then type the message.
+    wait_until_settled(&session, fresh).await;
+    {
+        let mut w = session.writer.lock().unwrap();
+        let _ = w.write_all(text.as_bytes());
+        let _ = w.flush();
+    }
+
+    // 4. Submit — but only once the message has stopped echoing.
+    //
+    //    Return has to arrive as its own keystroke. Claude Code reads a burst of
+    //    closely-spaced bytes as a *paste*, and a newline inside a paste is
+    //    inserted into the message rather than sending it: the text landed in
+    //    the box and simply sat there. `api_answer`'s 60 ms is enough between
+    //    two isolated arrow keys, nowhere near enough after a block of text.
+    //    Waiting for the echo to go quiet also scales with the machine, which a
+    //    fixed guess would not.
+    wait_until_settled(&session, false).await;
+    {
+        let mut w = session.writer.lock().unwrap();
+        let _ = w.write_all(KEY_ENTER);
+        let _ = w.flush();
+    }
+    tracing::info!("island: pushed {} chars into '{name}'", text.len());
+
+    Json(serde_json::json!({ "ok": true, "name": name, "created": !exists }))
 }
 
 #[derive(Deserialize)]

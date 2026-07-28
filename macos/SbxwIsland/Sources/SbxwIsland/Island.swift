@@ -317,6 +317,11 @@ struct IslandView: View {
     @ObservedObject var store: SessionStore
     /// Row tap handler. Defaults to opening the sandbox in the browser.
     var onSelect: (SessionInfo) -> Void = { openInBrowser($0.sandbox) }
+    /// Told when the chat composer takes or gives up keyboard focus. The notch
+    /// panel uses it to become key (it can't be typed into otherwise) and to
+    /// hold the list open while the user writes; the menu-bar popover, where
+    /// focus is ordinary, leaves it at the default no-op.
+    var onComposerFocus: (Bool) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -352,9 +357,119 @@ struct IslandView: View {
                     )
                 }
             }
+            Divider()
+                .overlay(Color.white.opacity(0.08))
+                .padding(.horizontal, 8)
+                .padding(.top, 2)
+            ChatComposer(store: store, onFocusChange: onComposerFocus)
         }
         .padding(.vertical, 6)
         .frame(minWidth: 300)
+    }
+}
+
+/// Bottom-of-the-island composer: ask the throwaway chat agent something
+/// without opening a browser or picking a sandbox.
+///
+/// The ＋ expands an inline field; submitting hands the text to
+/// `SessionStore.pushChat`, which creates the shared `ephemeral-chat` sandbox
+/// on first use and reuses it afterwards — so a follow-up question lands in the
+/// same conversation rather than a fresh agent.
+struct ChatComposer: View {
+    @ObservedObject var store: SessionStore
+    var onFocusChange: (Bool) -> Void = { _ in }
+
+    @State private var open = false
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var sending: Bool { store.chatPush == .sending }
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if open {
+                HStack(spacing: 6) {
+                    Image(systemName: "bubble.left.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.4))
+                    TextField("Ask the chat agent…", text: $text)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white)
+                        .focused($focused)
+                        .disabled(sending)
+                        .onSubmit(send)
+                    if sending {
+                        ProgressView()
+                            .controlSize(.small)
+                            .help("Starting the chat sandbox…")
+                    } else {
+                        Button(action: send) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(
+                                    Color.white.opacity(trimmed.isEmpty ? 0.25 : 0.75)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .pointerCursor()
+                        .disabled(trimmed.isEmpty)
+                        .help("Send to the chat agent")
+                    }
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+            } else {
+                Button {
+                    open = true
+                    focused = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("New chat")
+                            .font(.system(size: 11))
+                        Spacer()
+                    }
+                    .foregroundStyle(.white.opacity(0.55))
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Ask the ephemeral chat agent a question")
+            }
+
+            if case .failed(let message) = store.chatPush {
+                Text(message)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                    .padding(.horizontal, 8)
+            }
+        }
+        // The panel has to know while the field holds focus: see onComposerFocus.
+        .onChange(of: focused) { _, isFocused in onFocusChange(isFocused) }
+        .onChange(of: text) { _, _ in store.clearChatPushError() }
+        // A push that succeeded retires the composer; a failed one stays open so
+        // the text isn't lost and can be retried.
+        .onChange(of: store.chatPush) { previous, current in
+            if previous == .sending, current == .idle {
+                text = ""
+                open = false
+                focused = false
+            }
+        }
+    }
+
+    private func send() {
+        let message = trimmed
+        guard !message.isEmpty, !sending else { return }
+        store.pushChat(message)
     }
 }
 
@@ -938,15 +1053,19 @@ struct NotchContentView: View {
         case .question(let info):
             QuestionCard(session: info, store: store, controller: controller)
         case .list:
-            IslandView(store: store) { info in
-                // Tapping a waiting-with-prompt row opens its answer card;
-                // anything else jumps to the browser.
-                if info.state == .attention, !info.promptSteps.isEmpty {
-                    controller.showQuestion(info)
-                } else {
-                    openInBrowser(info.sandbox)
-                }
-            }
+            IslandView(
+                store: store,
+                onSelect: { info in
+                    // Tapping a waiting-with-prompt row opens its answer card;
+                    // anything else jumps to the browser.
+                    if info.state == .attention, !info.promptSteps.isEmpty {
+                        controller.showQuestion(info)
+                    } else {
+                        openInBrowser(info.sandbox)
+                    }
+                },
+                onComposerFocus: { controller.setComposerActive($0) }
+            )
         }
     }
 }

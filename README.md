@@ -151,7 +151,33 @@ On top of that:
   back) and submitted in one go once the last one is picked;
 - **hovering** the notch reveals the full list — with each session's elapsed
   time and, at the top, your **Claude subscription usage** (5-hour and weekly
-  window %) — auto-hiding 1 s after you leave.
+  window %) — auto-hiding 1 s after you leave;
+- a **＋ New chat** row at the bottom of that list asks the throwaway chat agent
+  something without opening a browser or picking a sandbox. See below.
+
+### ＋ New chat (from the notch)
+
+The composer talks to one shared sandbox, `ephemeral-chat`: it's created on
+first use and **reused** afterwards, so a follow-up question lands in the same
+conversation rather than a fresh agent. If the sandbox exists but is stopped,
+attaching starts it.
+
+That's a single daemon call, `POST /api/chat/push` — the island has no sandbox
+picker and no terminal, so everything between "you typed a question" and "the
+agent is reading it" happens server-side: provision if missing, attach the
+agent, wait for its TUI, type, submit. Two details that are easy to get wrong:
+
+- **It waits for the terminal to go quiet before typing**, and again before
+  pressing Return. Quiescence is measured on the session's output stream, not
+  the replay ring buffer — that buffer is capacity-bounded, so once full its
+  length stops changing and silence becomes indistinguishable from a flood.
+- **Return has to arrive as its own keystroke.** Claude Code reads a burst of
+  closely-spaced bytes as a *paste*, and a newline inside a paste is inserted
+  into the message instead of sending it — the text lands in the box and just
+  sits there.
+
+The first push is slow (a sandbox has to boot); the composer shows a spinner,
+and keeps your text on failure so it can be retried.
 
 **Subscription usage comes from Claude Code's own `statusLine`, not the OAuth
 API.** sbxw installs a `statusLine` command (`assets/usage-statusline.js`) that
@@ -188,6 +214,9 @@ It's powered by these daemon endpoints:
 - `GET /api/sandboxes` — polled so running sandboxes appear right away as `idle`.
 - `POST /api/answer` / `POST /api/input` — send a menu choice (or raw bytes)
   back into a session's PTY.
+- `POST /api/chat/push` — `{ "text": "…" }`: submit a message to the shared
+  `ephemeral-chat` agent, creating the sandbox and attaching its session first
+  if needed (see [＋ New chat](#-new-chat-from-the-notch)).
 
 Running sandboxes appear as `idle` immediately; live state flows as soon as the
 in-sandbox agent emits hook events (the daemon must be reachable from the
