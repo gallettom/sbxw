@@ -340,7 +340,7 @@ struct IslandView: View {
                 ForEach(store.sessions) { session in
                     SessionRow(
                         session: session,
-                        acknowledged: store.acknowledged.contains(session.id),
+                        acknowledged: store.isAcknowledged(session),
                         onSelect: { s in
                             // Case 2: opening the sandbox counts as checking its
                             // notification, so dismiss it too.
@@ -537,8 +537,12 @@ struct SummaryPill: View {
     /// the middle case the collapsed notch showed nothing at all while Claude sat
     /// waiting on an inline question — the very gap this closes.
     private var lead: SessionInfo? {
-        store.sessions.first { $0.state == .attention && !store.acknowledged.contains($0.id) }
-            ?? store.sessions.first { $0.awaitingReply }
+        store.sessions.first { $0.state == .attention && !store.isAcknowledged($0) }
+            // Also skipped once dismissed: a prompt the user waved off ends its
+            // turn (`Stop` → idle with the last input still set), which reads as
+            // "waiting for your reply" and put the very session they'd just
+            // dismissed straight back on the notch in teal.
+            ?? store.sessions.first { $0.awaitingReply && !store.isAcknowledged($0) }
             ?? store.sessions.first { $0.state == .working }
     }
 

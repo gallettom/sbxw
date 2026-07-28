@@ -180,6 +180,7 @@ pub fn wait_until_running(name: &str, timeout: Duration) -> bool {
 }
 
 /// Everything `create_claude` needs beyond the sandbox name.
+#[derive(Clone, Copy)]
 pub struct CreateOpts<'a> {
     /// Host path the agent edits *in place* (bidirectional sync).
     pub workspace: &'a str,
@@ -204,6 +205,11 @@ pub struct CreateOpts<'a> {
 /// already serving but `neos.local:4200` refuses connections. `-p` closes it —
 /// the mapping exists from first boot. The thread still re-publishes, because
 /// mappings do not survive a stop/restart.
+///
+/// Note that `-p` makes creation **all-or-nothing**: sbx 409s the whole request
+/// if any one host port is already bound. Callers that would rather have a
+/// sandbox without its ports than no sandbox at all should go through
+/// `crate::create_with_port_fallback`.
 pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
     let mut args: Vec<String> = vec![
         "create".into(),

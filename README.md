@@ -40,6 +40,12 @@ It **only ever calls `sbx`** — never `docker sandbox`.
    sbxw waits until it reports `running` and then (re)publishes each mapping
    with `sbx ports <name> --publish …`. Ports are **not persistent** across a
    stop/restart, which is exactly why this is automated.
+   Publishing at creation is all-or-nothing — sbx 409s the whole request if one
+   host port is already bound (a dev server you left running on 4200 is enough).
+   sbxw won't lose the sandbox over that: it retries the create without the
+   mappings and lets the per-port publishing take over, where a conflict is a
+   warning naming that one port. Free the port (or change `host_port`) and run
+   `sbxw ports <name>` to pick it up.
 7. **Web terminal** — backgrounds a daemon serving a browser TTY (xterm.js)
    bridged over a WebSocket to a PTY. Each sandbox has two independent sessions:
    the **Claude** agent (`sbx run`) and a **Bash** shell (`sbx exec -it … bash`),

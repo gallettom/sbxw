@@ -47,7 +47,9 @@ struct MenuBarLabel: View {
         if store.needsAttention { return "bell.badge.fill" }
         // A quieter cue than the bell: Claude replied and it's your move (an
         // inline question has no explicit prompt to nag about).
-        if store.sessions.contains(where: { $0.awaitingReply }) { return "bubble.left.fill" }
+        if store.sessions.contains(where: { $0.awaitingReply && !store.isAcknowledged($0) }) {
+            return "bubble.left.fill"
+        }
         if store.sessions.contains(where: { $0.state == .working }) { return "circle.hexagongrid.fill" }
         return "square.grid.2x2"
     }

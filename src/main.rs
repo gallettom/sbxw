@@ -1379,6 +1379,47 @@ pub(crate) struct ExtraPort {
     pub alias: String,
 }
 
+/// `sbx create` with the configured port mappings, falling back to a create
+/// without them.
+///
+/// Publishing at creation is all-or-nothing: sbx rejects the whole request with
+/// a 409 if a single host port is already bound — something as ordinary as a
+/// dev server still running outside the sandbox on 4200. Losing the sandbox
+/// over that is the wrong trade, and it's a regression against how sbxw behaved
+/// when ports were only ever published afterwards. So on failure we retry
+/// bare, and leave the ports to the provisioning thread, which publishes them
+/// one at a time and downgrades a conflict to a per-port warning.
+fn create_with_port_fallback(name: &str, opts: &sbx::CreateOpts<'_>) -> Result<()> {
+    let first = match sbx::create_claude(name, opts) {
+        Ok(()) => return Ok(()),
+        Err(e) if opts.publish.is_empty() => return Err(e),
+        Err(e) => e,
+    };
+
+    // sbx may have kept the sandbox and failed only on the port mappings, or
+    // rolled the whole thing back. Retrying on top of a live sandbox would
+    // just collide with itself, so only retry when nothing is there.
+    if sbx::exists(name).unwrap_or(false) {
+        tracing::warn!(
+            "'{name}' was created but its ports could not be published at creation \
+             ({first:#}); they'll be retried individually once it's running"
+        );
+        return Ok(());
+    }
+
+    tracing::warn!(
+        "creating '{name}' with its port mappings failed ({first:#}) — \
+         retrying without them; each port is then published on its own, so a \
+         busy host port costs you that port instead of the whole sandbox"
+    );
+    let bare = sbx::CreateOpts {
+        publish: &[],
+        ..*opts
+    };
+    sbx::create_claude(name, &bare)
+        .with_context(|| format!("create with port mappings had failed with: {first:#}"))
+}
+
 pub(crate) fn provision_sandbox(
     name: &str,
     workspace: &str,
@@ -1473,7 +1514,7 @@ pub(crate) fn provision_sandbox(
             }
             None => None,
         };
-        sbx::create_claude(
+        create_with_port_fallback(
             name,
             &sbx::CreateOpts {
                 workspace,
@@ -1643,7 +1684,14 @@ pub(crate) fn provision_sandbox(
         // in case conflict recovery chose a different host port than we expect.
         for spec in &prov_specs {
             if let Err(e) = sbx::publish_port(&prov_name, spec) {
-                tracing::warn!("publish {spec} failed: {e:#}");
+                // Per-port and non-fatal on purpose: a host port that something
+                // else already holds should cost you that one alias, not the
+                // sandbox and not the other ports.
+                tracing::warn!(
+                    "could not publish {spec}: {e:#}\n\
+                     if that host port is taken, free it (or change host_port in \
+                     sbxw.toml) and run `sbxw ports {prov_name}`"
+                );
             } else {
                 tracing::info!("published {spec}");
             }

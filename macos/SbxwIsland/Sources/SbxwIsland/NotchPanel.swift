@@ -227,7 +227,7 @@ final class NotchController: ObservableObject {
         // Don't auto-surface a prompt the user already dismissed in the island.
         let pending = sessions.first {
             $0.state == .attention && !$0.promptSteps.isEmpty
-                && !store.acknowledged.contains($0.id)
+                && !store.isAcknowledged($0)
         }
         switch display {
         case .question(let current):

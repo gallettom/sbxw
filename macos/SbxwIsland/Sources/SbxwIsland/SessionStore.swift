@@ -14,11 +14,29 @@ final class SessionStore: ObservableObject {
     @Published private(set) var connected = false
     /// Latest account-wide subscription usage (polled from `/api/usage`).
     @Published private(set) var usage: UsageInfo?
-    /// Ids of sessions whose *current* "waiting for input" the user has dismissed
-    /// in the island. Purely local (the daemon still shows the session waiting);
-    /// it just silences the island's notification for that session. Cleared
-    /// automatically once the session stops waiting, so a fresh prompt re-notifies.
-    @Published private(set) var acknowledged: Set<String> = []
+    /// Sessions whose "waiting for input" the user has dismissed in the island,
+    /// mapped to *what* they dismissed (see `ackKey`). Purely local — the daemon
+    /// still shows the session waiting; this only silences the island.
+    ///
+    /// Keyed by content rather than just by session id because Claude Code's
+    /// hooks make the state flicker while a prompt sits unanswered: an
+    /// `AskUserQuestion` raises `attention`, then the turn ends and `Stop`
+    /// drops the session to `idle`, then a `Notification` nudge raises
+    /// `attention` again. Tying the dismissal to "is it still in attention"
+    /// meant that blip re-armed the notification and the ✕ came back on a
+    /// prompt the user had already dismissed. An acknowledgement now stands
+    /// until the session asks something genuinely different.
+    @Published private(set) var acknowledged: [String: Ack] = [:]
+
+    /// One dismissal: what it was about, and which turn it belonged to.
+    struct Ack: Equatable {
+        /// `ackKey` at dismissal time — empty for a bare waiting turn.
+        let key: String
+        /// The session's `last_input` then. Once the user submits again the turn
+        /// is new, so the dismissal no longer applies however quiet the session
+        /// looks.
+        let lastInput: String?
+    }
 
     /// Fired when a live session genuinely changes state (not on the repeated
     /// "working" keep-alives). Used to pop notch toasts / prompts.
@@ -49,16 +67,47 @@ final class SessionStore: ObservableObject {
     /// Any session waiting for input that the user hasn't dismissed — this is
     /// what drives the menu-bar bell badge and the notch's amber lead.
     var needsAttention: Bool {
-        sessions.contains { $0.state == .attention && !acknowledged.contains($0.id) }
+        sessions.contains { $0.state == .attention && !isAcknowledged($0) }
+    }
+
+    /// What a dismissal is *about*, so it can outlive the state flicker around
+    /// an unanswered prompt.
+    ///
+    /// Empty when the session isn't asking anything right now (idle, working, or
+    /// a bare `attention` with no message): those carry nothing new, so they
+    /// leave an existing acknowledgement standing rather than re-arming it.
+    private func ackKey(_ s: SessionInfo) -> String {
+        if !s.promptSteps.isEmpty {
+            // Every step, not just the first: two prompts can share a question
+            // and differ later on.
+            return "q:" + s.promptSteps
+                .map { $0.text + "\u{1F}" + $0.options.joined(separator: "\u{1E}") }
+                .joined(separator: "\u{1D}")
+        }
+        // A permission prompt / idle nudge (`Notification`) has no structured
+        // question — its message is what the user dismissed.
+        if s.state == .attention, let a = s.activity, !a.isEmpty { return "n:" + a }
+        return ""
+    }
+
+    /// Has the user dismissed what this session is currently asking?
+    func isAcknowledged(_ s: SessionInfo) -> Bool {
+        guard let ack = acknowledged[s.id] else { return false }
+        // A new user turn retires the dismissal outright.
+        guard ack.lastInput == s.last_input else { return false }
+        let current = ackKey(s)
+        return current.isEmpty || current == ack.key
     }
 
     /// Dismiss a session's current "waiting for input" notification in the island
     /// (the user checked it — via the row's ✕ or by opening the sandbox). No-op
     /// unless it's actually waiting.
     func acknowledge(_ session: SessionInfo) {
-        guard session.state == .attention, !acknowledged.contains(session.id) else { return }
-        acknowledged.insert(session.id)
-        Log.log("acknowledge \(session.id)")
+        guard session.state == .attention else { return }
+        let ack = Ack(key: ackKey(session), lastInput: session.last_input)
+        guard acknowledged[session.id] != ack else { return }
+        acknowledged[session.id] = ack
+        Log.log("acknowledge \(session.id) key=\(ack.key.prefix(60))")
     }
 
     func start() {
@@ -147,10 +196,13 @@ final class SessionStore: ObservableObject {
         out.sort { ($0.sandbox, $0.mode) < ($1.sandbox, $1.mode) }
         sessions = out
 
-        // Re-arm the notification for anything that is no longer waiting: keep an
-        // acknowledgement only while its session is still in `attention`.
-        let waitingIds = Set(out.filter { $0.state == .attention }.map(\.id))
-        let keptAcks = acknowledged.intersection(waitingIds)
+        // Re-arm the notification only when a session asks something *different*
+        // from what was dismissed — not merely because it stopped being in
+        // `attention` for a tick. Sessions that vanished drop their entry too.
+        var keptAcks: [String: Ack] = [:]
+        for s in out where isAcknowledged(s) {
+            keptAcks[s.id] = acknowledged[s.id]
+        }
         if keptAcks != acknowledged { acknowledged = keptAcks }
         let summary = out.map { "\($0.sandbox):\($0.state.rawValue)" }.joined(separator: ", ")
         Log.log("rebuild: \(out.count) rows (live=\(live.count), running=\(running.count)) [\(summary)]")
