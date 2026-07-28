@@ -111,8 +111,30 @@ final class SessionStore: ObservableObject {
     /// Dismiss a session's current "waiting for input" notification in the island
     /// (the user checked it — via the row's ✕ or by opening the sandbox). No-op
     /// unless it's actually waiting.
+    ///
+    /// "Waiting" covers a turn that simply *ended* as well as an explicit
+    /// `attention`: a session that answered keeps the collapsed notch on screen
+    /// (`SummaryPill.lead`), and while this guard was `attention`-only there was
+    /// no way to retire it — the pill outlived every reply for good. An idle
+    /// session's `ackKey` is empty, so the dismissal stands until you submit
+    /// again, which retires it through `isAcknowledged`.
+    /// Sessions a dismissal would actually do something to — what "dismiss all"
+    /// acts on, and what decides whether offering it makes sense at all.
+    var dismissable: [SessionInfo] {
+        sessions.filter { ($0.state == .attention || $0.awaitingReply) && !isAcknowledged($0) }
+    }
+
+    /// Dismiss everything that is currently asking for something. Clearing the
+    /// notch in one gesture instead of one ✕ per row.
+    func acknowledgeAll() {
+        let targets = dismissable
+        guard !targets.isEmpty else { return }
+        Log.log("acknowledge all (\(targets.count))")
+        for s in targets { acknowledge(s) }
+    }
+
     func acknowledge(_ session: SessionInfo) {
-        guard session.state == .attention else { return }
+        guard session.state == .attention || session.awaitingReply else { return }
         let ack = Ack(key: ackKey(session), lastInput: session.last_input)
         guard acknowledged[session.id] != ack else { return }
         acknowledged[session.id] = ack
@@ -246,7 +268,8 @@ final class SessionStore: ObservableObject {
                 out.append(SessionInfo(
                     sandbox: item.name, mode: "claude", state: .idle,
                     agent: item.agent, started_ms: 0,
-                    activity: nil, last_input: nil, question: nil, steps: nil, ts: nil
+                    activity: nil, last_input: nil, question: nil, steps: nil,
+                    reply: nil, ts: nil
                 ))
             }
         }

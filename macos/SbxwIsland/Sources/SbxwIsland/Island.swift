@@ -65,6 +65,26 @@ extension SessionInfo {
         state == .idle && started_ms > 0 && (last_input?.isEmpty == false)
     }
 
+    /// Whether this session should be captioned with what Claude *said* rather
+    /// than with a status or with your own prompt.
+    ///
+    /// Having a reply at all is the whole condition — no state test. A stale
+    /// answer can't leak through, because the daemon clears `reply` on
+    /// `UserPromptSubmit`: a session only carries one if a turn has *ended*
+    /// since you last spoke. So an `attention` session showing a reply is one
+    /// that answered and is now nudging you about it (Claude Code's idle
+    /// notification), which is precisely when the answer is what you want to
+    /// read — while a permission prompt, raised mid-turn, has no reply to show
+    /// and still surfaces its `activity`.
+    ///
+    /// A structured question outranks this and is handled ahead of it, since
+    /// that text is what you have to act on. Every surface that captions a
+    /// session shares this rule — the row, the pill under the notch, the mini
+    /// toast — so they can't disagree about the same session.
+    var showsReply: Bool {
+        replyLead != nil
+    }
+
     /// Dot/accent for a session that wants the human: amber when it explicitly
     /// asked (`attention`), calm teal when it's simply your turn to reply.
     var accentColor: Color {
@@ -200,19 +220,49 @@ struct SessionRow: View {
     /// Called when the user taps the row's ✕ to dismiss its waiting state. Absent
     /// (no ✕) where dismissal doesn't apply.
     var onDismiss: ((SessionInfo) -> Void)? = nil
+    /// Called when the accordion opens or closes. The notch panel sizes itself
+    /// by hand, so nothing would follow the row's new height otherwise.
+    var onHeightChange: () -> Void = {}
+
+    /// How long the pointer must rest on a row before its reply unfolds.
+    ///
+    /// Short: by the time a row can be hovered the list is already open, so
+    /// this dwell is only guarding against a sweep down the list — and leaving
+    /// a row cancels the pending unfold anyway, which does most of that work.
+    /// Matches the notch's own hover-intent threshold rather than inventing a
+    /// second feel for the same gesture.
+    private static let unfoldDelay: Duration = .milliseconds(250)
+    /// Wrapped lines the unfolded reply is allowed to occupy.
+    private static let unfoldLineLimit = 8
+
+    @State private var unfolded = false
+    @State private var unfoldTask: Task<Void, Never>?
 
     /// Still-waiting *and* not yet dismissed: the row reads as needing you.
     private var waiting: Bool {
         session.state == .attention && !acknowledged
     }
 
+    /// The reply in full, shown *in place of* the lead sentence once unfolded —
+    /// not appended to it, so nothing is repeated. nil when the row is already
+    /// showing everything, or when the reply isn't what the row is captioned
+    /// with (see `subtitle`).
+    private var unfoldedText: String? {
+        guard showsReply else { return nil }
+        return session.replyFull
+    }
+
+    private var canUnfold: Bool { unfoldedText != nil }
+
     private var hasQuestion: Bool {
         session.state == .attention && !session.promptSteps.isEmpty
     }
 
-    /// Show a dismiss ✕ only while the row is actively asking for attention.
+    /// Show a dismiss ✕ while the row wants something from you — an explicit
+    /// `attention`, or a turn that ended and is holding the collapsed notch
+    /// open. Both are dismissible, so both need the affordance.
     private var showDismiss: Bool {
-        waiting && onDismiss != nil
+        (waiting || (session.awaitingReply && !acknowledged)) && onDismiss != nil
     }
 
     var body: some View {
@@ -234,10 +284,21 @@ struct SessionRow: View {
                             .foregroundStyle(.white.opacity(0.55))
                             .lineLimit(1)
                     }
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(subtitleColor)
-                        .lineLimit(1)
+                    if unfolded, let full = unfoldedText {
+                        Text(full)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(Self.unfoldLineLimit)
+                            // Let it wrap: the interesting case is one long
+                            // line, not a pre-broken paragraph.
+                            .fixedSize(horizontal: false, vertical: true)
+                            .transition(.opacity)
+                    } else {
+                        Text(subtitle)
+                            .font(.system(size: 10))
+                            .foregroundStyle(subtitleColor)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 3) {
@@ -265,9 +326,40 @@ struct SessionRow: View {
         .buttonStyle(.plain)
         .pointerCursor()
         .help(hasQuestion ? "Answer \(session.sandbox)" : "Open \(session.sandbox) in the browser")
+        // Rest on a row and its reply unfolds; leaving folds it straight back.
+        // The dwell is what keeps a sweep down the list from opening every row.
+        .onHover { inside in
+            unfoldTask?.cancel()
+            guard canUnfold else { return }
+            if inside {
+                unfoldTask = Task { @MainActor in
+                    try? await Task.sleep(for: Self.unfoldDelay)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeOut(duration: 0.18)) { unfolded = true }
+                    onHeightChange()
+                }
+            } else if unfolded {
+                withAnimation(.easeIn(duration: 0.12)) { unfolded = false }
+                onHeightChange()
+            }
+        }
+        // A new reply while the row is open would leave stale lines showing.
+        .onChange(of: session.reply) { _, _ in
+            if unfolded {
+                unfolded = false
+                onHeightChange()
+            }
+        }
         // A separate button layered above the row: tapping it dismisses without
         // triggering the row's own tap.
-        .overlay(alignment: .trailing) {
+        //
+        // Pinned to the top, not centred: the row grows downwards when the reply
+        // accordion unfolds, and a centred ✕ would slide down with it — under the
+        // pointer that is doing the hovering. It stays level with the sandbox
+        // name instead, which is the one line whose position never changes. The
+        // top inset mirrors the status dot's, for the same reason: line up with
+        // the first row of text rather than the top of the padding box.
+        .overlay(alignment: .topTrailing) {
             if showDismiss {
                 Button {
                     onDismiss?(session)
@@ -275,6 +367,7 @@ struct SessionRow: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(.white.opacity(0.4))
+                        .padding(.top, 5)
                         .padding(.trailing, 8)
                         .contentShape(Rectangle())
                 }
@@ -287,9 +380,10 @@ struct SessionRow: View {
 
     /// A dismissed waiting row loses its amber dot (it's no longer nagging).
     private var dotColor: Color {
-        (session.state == .attention && acknowledged)
-            ? .white.opacity(0.35)
-            : session.accentColor
+        // Dismissed rows go quiet whichever way they were asking: `acknowledge`
+        // only ever records `attention` or a finished turn, so the flag alone is
+        // the signal.
+        acknowledged ? .white.opacity(0.35) : session.accentColor
     }
 
     /// The question when waiting, else "your turn" once Claude has replied, else
@@ -300,13 +394,28 @@ struct SessionRow: View {
             let steps = session.promptSteps.count
             return steps > 1 ? "\(q.text) (1 of \(steps))" : q.text
         }
+        // What Claude answered beats "waiting for your reply": the turn is over
+        // either way, and the answer is the part you actually want to read.
+        if showsReply, let lead = session.replyLead { return lead }
         if session.awaitingReply { return "waiting for your reply" }
         if let a = session.activity, a.count >= 3 { return a }
         return session.state.label
     }
 
+    /// Whether *this row* ended up captioned with the reply. A structured
+    /// question takes the caption ahead of it (see `subtitle`), and then neither
+    /// the accordion nor the prose colour applies — they'd be describing text
+    /// the row isn't showing.
+    private var showsReply: Bool {
+        if session.state == .attention, session.promptSteps.first != nil { return false }
+        return session.showsReply
+    }
+
     private var subtitleColor: Color {
         if waiting { return .orange }
+        // A reply is prose, not a status — it shouldn't wear the teal that means
+        // "your turn".
+        if showsReply { return .white.opacity(0.75) }
         if session.awaitingReply { return awaitingReplyColor }
         return .white.opacity(0.7)
     }
@@ -322,6 +431,9 @@ struct IslandView: View {
     /// hold the list open while the user writes; the menu-bar popover, where
     /// focus is ordinary, leaves it at the default no-op.
     var onComposerFocus: (Bool) -> Void = { _ in }
+    /// Called when a row's reply accordion opens or closes. Same reason as
+    /// `onComposerFocus`: the notch panel's frame is set by hand.
+    var onHeightChange: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -342,6 +454,14 @@ struct IslandView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 8)
             } else {
+                // Only offered when it would do something — with nothing
+                // pending it would be a dead control on every list.
+                if store.dismissable.count > 1 {
+                    DismissAllButton(count: store.dismissable.count) {
+                        store.acknowledgeAll()
+                        onHeightChange()
+                    }
+                }
                 ForEach(store.sessions) { session in
                     SessionRow(
                         session: session,
@@ -353,7 +473,8 @@ struct IslandView: View {
                             onSelect(s)
                         },
                         // Case 1: the explicit ✕ dismisses without navigating.
-                        onDismiss: { store.acknowledge($0) }
+                        onDismiss: { store.acknowledge($0) },
+                        onHeightChange: onHeightChange
                     )
                 }
             }
@@ -365,6 +486,37 @@ struct IslandView: View {
         }
         .padding(.vertical, 6)
         .frame(minWidth: 300)
+    }
+}
+
+/// "Clear all N" strip above the list: dismisses every session that is asking
+/// for something, so a pile-up doesn't have to be cleared one ✕ at a time.
+///
+/// Deliberately quiet — it sits above rows it is *about*, and shouting would
+/// make the list read as another notification.
+struct DismissAllButton: View {
+    let count: Int
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Spacer()
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 9, weight: .semibold))
+                Text("Clear all \(count)")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(.white.opacity(hovering ? 0.85 : 0.45))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .onHover { hovering = $0 }
+        .help("Dismiss every session waiting on you")
     }
 }
 
@@ -567,8 +719,12 @@ struct MiniToastView: View {
     let session: SessionInfo
     @ObservedObject var store: SessionStore
 
-    /// Prefer the user's last prompt, else the current activity, else the state.
+    /// Claude's answer once the turn is over, else the user's last prompt, else
+    /// the current activity, else the state. The answer comes first for the same
+    /// reason as on the row: echoing back what *you* typed is the one thing you
+    /// already know.
     private var text: String {
+        if session.showsReply, let lead = session.replyLead { return lead }
         if let input = session.last_input, !input.isEmpty { return input }
         if let a = session.activity, a.count >= 3 { return a }
         return session.state.label
@@ -661,7 +817,11 @@ struct SummaryPill: View {
             ?? store.sessions.first { $0.state == .working }
     }
 
+    /// Once the turn has ended, the pill carries Claude's answer rather than the
+    /// prompt that produced it — the collapsed notch is read at a glance, and a
+    /// finished session showing your own words back reads as if nothing happened.
     private func task(_ s: SessionInfo) -> String {
+        if s.showsReply, let lead = s.replyLead { return lead }
         if let input = s.last_input, !input.isEmpty { return input }
         if let a = s.activity, a.count >= 3 { return a }
         return s.sandbox
@@ -1064,7 +1224,8 @@ struct NotchContentView: View {
                         openInBrowser(info.sandbox)
                     }
                 },
-                onComposerFocus: { controller.setComposerActive($0) }
+                onComposerFocus: { controller.setComposerActive($0) },
+                onHeightChange: { controller.contentHeightChanged() }
             )
         }
     }

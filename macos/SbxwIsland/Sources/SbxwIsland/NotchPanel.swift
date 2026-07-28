@@ -170,6 +170,16 @@ final class NotchController: ObservableObject {
         collapse()
     }
 
+    /// The content grew or shrank on its own (a row's reply accordion opening,
+    /// say) rather than because the display mode changed. The panel is sized by
+    /// hand, so nothing else would follow it.
+    ///
+    /// `relayout` already measures on the next runloop tick, which is exactly
+    /// the wait this needs for SwiftUI to commit the new height first.
+    func contentHeightChanged() {
+        relayout()
+    }
+
     /// The chat composer took or gave up keyboard focus.
     ///
     /// Two things have to happen for typing in the notch to work at all. The
@@ -413,7 +423,8 @@ final class NotchController: ObservableObject {
     /// to the intrinsic size that's the value to fall back on. Non-finite or
     /// sentinel components (`noIntrinsicMetric` is -1) are dropped: they would
     /// otherwise reach `setFrame`, which throws on a NaN dimension.
-    private nonisolated static func contentSize(of hosting: NSView) -> NSSize {
+    @MainActor
+    private static func contentSize(of hosting: NSView) -> NSSize {
         let fitting = hosting.fittingSize
         let intrinsic = hosting.intrinsicContentSize
         func best(_ a: CGFloat, _ b: CGFloat) -> CGFloat {
@@ -431,33 +442,42 @@ final class NotchController: ObservableObject {
     /// without an overshoot that would clip the card against the shrinking window.
     private func relayout(collapsing: Bool = false) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, let panel = self.panel, let hosting = self.hosting,
-                let screen = self.notchedScreen() else { return }
-            hosting.layoutSubtreeIfNeeded()
-            let fit = Self.contentSize(of: hosting)
-            let w = max(fit.width, 1)
-            let h = max(fit.height, self.topInset)
-            let frame = screen.frame
-            let target = NSRect(x: frame.midX - w / 2, y: frame.maxY - h, width: w, height: h)
+            // This block only ever runs on the main queue, so state the
+            // isolation instead of marking the measurement `nonisolated` —
+            // reading NSView geometry from a non-isolated context is an error
+            // under Swift 6, and the deferral to the next runloop tick (which
+            // is what lets SwiftUI commit its layout first) has to stay.
+            MainActor.assumeIsolated {
+                guard let self, let panel = self.panel, let hosting = self.hosting,
+                    let screen = self.notchedScreen() else { return }
+                hosting.layoutSubtreeIfNeeded()
+                let fit = Self.contentSize(of: hosting)
+                let w = max(fit.width, 1)
+                let h = max(fit.height, self.topInset)
+                let frame = screen.frame
+                let target = NSRect(x: frame.midX - w / 2, y: frame.maxY - h, width: w, height: h)
 
-            // Only animate once the panel is on screen; the very first layout
-            // must land instantly (no from-zero slide).
-            guard panel.isVisible, panel.frame != target else {
-                panel.setFrame(target, display: true)
-                return
-            }
-            NSAnimationContext.runAnimationGroup { ctx in
-                if collapsing {
-                    ctx.duration = 0.22
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                } else {
-                    ctx.duration = 0.5
-                    // Pronounced overshoot (y ≫ 1 mid-curve): the panel inflates
-                    // past its target and settles, like a bubble bouncing in.
-                    ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.45, 0.28, 1.0)
+                // Only animate once the panel is on screen; the very first layout
+                // must land instantly (no from-zero slide).
+                guard panel.isVisible, panel.frame != target else {
+                    panel.setFrame(target, display: true)
+                    return
                 }
-                ctx.allowsImplicitAnimation = true
-                panel.animator().setFrame(target, display: true)
+                NSAnimationContext.runAnimationGroup { ctx in
+                    if collapsing {
+                        ctx.duration = 0.22
+                        ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                    } else {
+                        ctx.duration = 0.5
+                        // Pronounced overshoot (y ≫ 1 mid-curve): the panel
+                        // inflates past its target and settles, like a bubble
+                        // bouncing in.
+                        ctx.timingFunction = CAMediaTimingFunction(
+                            controlPoints: 0.34, 1.45, 0.28, 1.0)
+                    }
+                    ctx.allowsImplicitAnimation = true
+                    panel.animator().setFrame(target, display: true)
+                }
             }
         }
     }

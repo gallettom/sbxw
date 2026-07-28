@@ -136,6 +136,10 @@ struct SessionInfo {
     /// and submits once at the end, and so does the island.
     #[serde(skip_serializing_if = "Option::is_none")]
     steps: Option<Vec<Question>>,
+    /// Claude's last reply (multi-line, clipped). Absent until a turn ends, and
+    /// cleared the moment the next prompt is submitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply: Option<String>,
     /// Unix epoch ms of this event.
     ts: u64,
 }
@@ -151,6 +155,10 @@ struct SessionStatus {
     last_input: Option<String>,
     /// Steps of the pending `AskUserQuestion` prompt; empty when none is open.
     prompt: Vec<Question>,
+    /// What Claude last *said*, taken from the `last_assistant_message` Claude
+    /// Code puts on its `Stop` hook event. Newlines are kept — the island shows
+    /// the first sentence on the row and the first lines in its hover accordion.
+    reply: Option<String>,
 }
 
 type Statuses = Arc<Mutex<HashMap<String, SessionStatus>>>;
@@ -181,6 +189,7 @@ fn build_info(key: &str, st: &SessionStatus) -> SessionInfo {
         last_input: st.last_input.clone(),
         question: st.prompt.first().cloned(),
         steps: (!st.prompt.is_empty()).then(|| st.prompt.clone()),
+        reply: st.reply.clone(),
         ts: now_ms(),
     }
 }
@@ -198,6 +207,27 @@ fn emit_info(events: &broadcast::Sender<SessionInfo>, statuses: &Statuses, key: 
 }
 
 /// Trim a string to one line and at most `max` chars, for compact display.
+/// Clip prose while *keeping* its line structure — unlike `clip`, which reduces
+/// everything to the first line. The island needs several lines for the
+/// accordion it opens when you hover a row.
+fn clip_lines(s: &str, max_lines: usize, max_chars: usize) -> String {
+    let mut out = String::new();
+    for line in s.trim().lines().take(max_lines) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line.trim_end());
+        if out.chars().count() >= max_chars {
+            break;
+        }
+    }
+    if out.chars().count() > max_chars {
+        out = out.chars().take(max_chars).collect();
+        out.push('…');
+    }
+    out
+}
+
 fn clip(s: &str, max: usize) -> String {
     let one_line = s.split('\n').next().unwrap_or(s).trim();
     if one_line.chars().count() <= max {
@@ -325,11 +355,15 @@ fn apply_hook(event: &str, tool: &str, body: &serde_json::Value, st: &mut Sessio
             st.started_ms = now_ms();
             st.prompt.clear();
             st.activity = None;
+            st.reply = None;
         }
         "UserPromptSubmit" => {
             st.state = SessionState::Working;
             st.prompt.clear();
             st.activity = None;
+            // The previous answer is stale the moment a new turn starts; leaving
+            // it up would caption "working" with what Claude said last time.
+            st.reply = None;
             if let Some(p) = body.get("prompt").and_then(|v| v.as_str()) {
                 st.last_input = Some(clip(p, 200));
             }
@@ -369,6 +403,18 @@ fn apply_hook(event: &str, tool: &str, body: &serde_json::Value, st: &mut Sessio
             st.state = SessionState::Idle;
             st.prompt.clear();
             st.activity = None;
+            // Claude Code hands the finished turn's prose to the `Stop` hook
+            // itself, as `last_assistant_message`. Two things follow: we never
+            // read the transcript (which lags — at `Stop` the turn being ended
+            // is not flushed yet, so the last entry on disk is the *previous*
+            // answer), and the field reaches us through any hook script, even
+            // one installed in a sandbox long before this feature existed.
+            if let Some(text) = body.get("last_assistant_message").and_then(|v| v.as_str()) {
+                let text = clip_lines(text, 12, 700);
+                if !text.is_empty() {
+                    st.reply = Some(text);
+                }
+            }
         }
         "SessionEnd" => {
             st.state = SessionState::Exited;
@@ -2243,6 +2289,56 @@ mod tests {
         apply_hook("Stop", "", &json!({ "hook_event_name": "Stop" }), &mut st);
         assert_eq!(st.state, SessionState::Idle);
         assert!(st.prompt.is_empty());
+    }
+
+    #[test]
+    fn apply_hook_stop_captures_the_reply_and_a_new_prompt_clears_it() {
+        let mut st = SessionStatus::default();
+        apply_hook(
+            "Stop",
+            "",
+            &json!({
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Done — the port is free now.\nI also bumped the version.",
+            }),
+            &mut st,
+        );
+        let reply = st.reply.clone().expect("reply captured");
+        assert!(reply.starts_with("Done — the port is free now."));
+        // Line structure survives: the island's accordion needs more than one.
+        assert_eq!(reply.lines().count(), 2);
+
+        // Submitting again makes it stale, so it must not caption the new turn.
+        apply_hook(
+            "UserPromptSubmit",
+            "",
+            &json!({ "hook_event_name": "UserPromptSubmit", "prompt": "next" }),
+            &mut st,
+        );
+        assert_eq!(st.reply, None);
+    }
+
+    #[test]
+    fn apply_hook_stop_without_a_reply_keeps_the_previous_one() {
+        // A turn ending on a tool call has no prose; Claude Code then sends no
+        // `last_assistant_message` and the last real answer stays on the row.
+        let mut st = SessionStatus {
+            reply: Some("earlier answer".into()),
+            ..Default::default()
+        };
+        apply_hook("Stop", "", &json!({ "hook_event_name": "Stop" }), &mut st);
+        assert_eq!(st.reply.as_deref(), Some("earlier answer"));
+    }
+
+    #[test]
+    fn clip_lines_keeps_lines_and_bounds_length() {
+        let long = "one\ntwo\nthree\nfour\nfive";
+        assert_eq!(clip_lines(long, 3, 100), "one\ntwo\nthree");
+        let clipped = clip_lines(&"x".repeat(50), 3, 10);
+        assert_eq!(clipped.chars().count(), 11); // 10 + the ellipsis
+        assert!(clipped.ends_with('…'));
+        // Blank input must not become a lone newline.
+        assert_eq!(clip_lines("  \n \n ", 3, 100), "");
     }
 
     #[test]

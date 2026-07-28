@@ -153,7 +153,21 @@ On top of that:
   time and, at the top, your **Claude subscription usage** (5-hour and weekly
   window %) — auto-hiding 1 s after you leave;
 - a **＋ New chat** row at the bottom of that list asks the throwaway chat agent
-  something without opening a browser or picking a sandbox. See below.
+  something without opening a browser or picking a sandbox. See below;
+- each row waiting on you carries a **✕** to dismiss it, and a **Clear all N**
+  strip appears above the list once more than one is pending — dismissing is what
+  takes a session off the collapsed notch, and opening a sandbox counts as
+  dismissing it;
+- once a turn ends, every surface that captions that session — the row, the pill
+  under the notch, the mini toast — carries **what Claude actually answered**
+  rather than "idle" or the prompt you sent, and **resting the pointer on the row
+  unfolds the reply** over a few lines. The prose comes from the
+  `last_assistant_message` Claude Code puts on its own `Stop` event — no
+  transcript reading, and it arrives even through a hook script installed before
+  this feature existed. A **structured question** still outranks it — that text is
+  what you have to act on — but a session nudging you *about* an answer it already
+  gave shows the answer. Nothing stale can leak through: a new prompt clears the
+  reply, so a session only carries one if a turn has ended since you last spoke.
 
 ### ＋ New chat (from the notch)
 

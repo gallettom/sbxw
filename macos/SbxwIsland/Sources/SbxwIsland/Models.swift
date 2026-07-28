@@ -31,9 +31,44 @@ struct SessionInfo: Codable, Equatable, Identifiable {
     /// Every step of the pending prompt, in the order the terminal lays them
     /// out as tabs. Absent from a daemon that predates multi-step prompts.
     let steps: [Question]?
+    /// What Claude last said, read off the transcript when its turn ended.
+    /// Absent on an older daemon, and while a turn is in flight.
+    let reply: String?
     let ts: UInt64?
 
     var id: String { "\(sandbox)::\(mode)" }
+
+    /// Opening sentence of Claude's reply — the row's one-line caption.
+    ///
+    /// Split on sentence punctuation rather than on the first line: Claude's
+    /// answers often open with a long paragraph, and a whole line of it would
+    /// be truncated mid-word anyway.
+    var replyLead: String? {
+        guard let reply, !reply.isEmpty else { return nil }
+        let flat = reply.replacingOccurrences(of: "\n", with: " ")
+        var sentence = flat
+        if let end = flat.firstIndex(where: { ".!?".contains($0) }) {
+            let upTo = flat.index(after: end)
+            // A trailing "…" or a decimal point isn't the end of a thought.
+            if flat.distance(from: flat.startIndex, to: upTo) > 12 {
+                sentence = String(flat[..<upTo])
+            }
+        }
+        let trimmed = sentence.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// The whole reply, for the accordion a hovered row opens — nil when the
+    /// lead sentence already *is* the whole reply, so there is nothing to
+    /// unfold. Splitting on newlines instead would strand the common case: a
+    /// two-sentence answer arrives as one line, and everything past the first
+    /// sentence would be unreachable.
+    var replyFull: String? {
+        guard let reply else { return nil }
+        let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != replyLead else { return nil }
+        return trimmed
+    }
 
     /// The prompt as a list of steps — one entry for a single question, empty
     /// when nothing is pending. Falls back to `question` so an older daemon
