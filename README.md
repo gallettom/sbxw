@@ -35,8 +35,10 @@ It **only ever calls `sbx`** — never `docker sandbox`.
 5. **Host aliases** — writes a delimited block in `/etc/hosts` (and, in
    `ip_per_app` mode on macOS, `ifconfig lo0 alias` entries) so you reach apps at
    `http://neos.local:4200` etc. Privileged steps use `sudo` and prompt.
-6. **Ports** — once the sandbox is `running`, (re)publishes each mapping with
-   `sbx ports <name> --publish …`. Ports are **not persistent** across a
+6. **Ports** — a *new* sandbox is created with the mappings already attached
+   (`sbx create … -p …`), so they're live from first boot. For a reused one,
+   sbxw waits until it reports `running` and then (re)publishes each mapping
+   with `sbx ports <name> --publish …`. Ports are **not persistent** across a
    stop/restart, which is exactly why this is automated.
 7. **Web terminal** — backgrounds a daemon serving a browser TTY (xterm.js)
    bridged over a WebSocket to a PTY. Each sandbox has two independent sessions:
@@ -53,6 +55,8 @@ log, or `--no-web` to attach the agent in the current terminal instead.
 | `sbxw up [name] [path]` | Provision + serve. **Omit `name`** to start only the web daemon (browse/create/attach from the UI). |
 | `sbxw chat [name]` | Throwaway chat sandbox: same as `up`, but on an empty workspace so the agent has none of your code. **Omit `name`** for a generated `chat-xxxxxx`. |
 | `sbxw bash <name>` | Open an interactive bash shell in a sandbox (foreground). |
+| `sbxw ssh [name] [-- cmd…]` | SSH into a sandbox as `<name>.sbx`, or run one command in it. `--setup` registers the SSH host block first. See [SSH](#ssh-experimental). |
+| `sbxw skills import [--dry-run] [--force]` | Import your host agents' skills into the store shared by all sandboxes. See [Shared skills](#shared-skills). |
 | `sbxw web <name>` | Serve the web TTY only (no provisioning). |
 | `sbxw ports <name>` | Re-publish the configured ports for a running sandbox. |
 | `sbxw ports-ls [name] [--all]` | Show published port mappings for one or all sandboxes. |
@@ -79,6 +83,13 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
+  **Bash** normally attaches with `sbx exec`, which only reaches a *running*
+  sandbox; on a stopped one it connects over SSH instead, since that starts the
+  sandbox on the way in. (Previously it just failed, and you had to attach the
+  agent first purely to boot the thing.) That fallback needs
+  [SSH](#ssh-experimental) set up — the pane tells you so if it isn't.
+- **Copy the SSH command** (SSH button in the terminal bar) for the attached
+  sandbox — `ssh <name>.sbx`, ready to paste into a terminal or a remote-dev tool.
 
 ## Chat sandboxes
 
@@ -306,6 +317,62 @@ knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), a
 `content` fields only allow the `${WORKDIR}` placeholder — use brace-free `$VAR`
 for shell variables.
 
+## SSH (experimental)
+
+Sandboxes can be SSH targets. Register the host block once — sbx writes a
+managed `Host *.sbx` entry into your SSH config — then every sandbox answers at
+`<name>.sbx`:
+
+```bash
+sbxw ssh --setup              # one-time (wraps `sbx setup ssh`)
+sbxw ssh neos                 # interactive shell
+sbxw ssh neos -- git status   # one-shot command
+```
+
+`install.sh` offers to run the setup step for you, so a fresh install usually
+has this already; `sbxw ssh --setup` is the catch-up path if you declined or
+installed the binary by hand. It's idempotent — re-running it is harmless.
+
+Two things this gives you that `sbxw bash` doesn't:
+
+- **It starts things for you.** The connection brings up the sbx daemon *and* the
+  target sandbox on demand, so `sbxw ssh` works against a stopped sandbox.
+- **Remote development.** Any OpenSSH-compatible tool can attach — VS Code,
+  Cursor, Claude Desktop, ChatGPT:
+
+  ```bash
+  code --remote ssh-remote+neos.sbx /workspace
+  ```
+
+If the connection fails and no `*.sbx` entry is found in `~/.ssh/config`, sbxw
+says so and points you at `--setup` rather than leaving you with a bare
+`Connection refused`. SSH access is experimental and may need enabling in your
+sbx installation first.
+
+## Shared skills
+
+sbx keeps a **persistent skill store shared across sandboxes**, separate from
+this repo's kits. `sbxw skills import` fills it from the agents installed on
+your host:
+
+```bash
+sbxw skills import --dry-run   # preview what would be imported
+sbxw skills import             # do it
+sbxw skills import --force     # ...replacing skills already in the store
+```
+
+Imported skills survive `sbxw rm` and are mounted read-write into new sandboxes.
+Set `share_skills = false` in `sbxw.toml` to create sandboxes without the store
+(passes `--no-share-skills`), e.g. for a sandbox that should only ever see the
+skills its own kits provide. It's read at **creation** only — flipping it does
+nothing to sandboxes that already exist.
+
+How this relates to [kits](#kits): a kit can install *anything* (apt packages,
+binaries, startup commands) but applying one recreates the container. The skill
+store only carries skill files, and costs nothing to update. So `md-to-pdf-tools`
+still has to be a kit — the skill needs WeasyPrint and poppler underneath it —
+but a skill with no system dependencies belongs in the store instead.
+
 ## Config (`sbxw.toml`)
 
 See `sbxw.toml.example`. Key choice: `ip_per_app`.
@@ -322,6 +389,16 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   anything the agent should not modify.
 - The network policy is an explicit allowlist, never `**`. Tighten/loosen in
   `sbxw.toml`. You can audit live egress with `sbx policy log`.
+- When a `sbx` call fails, sbxw now folds **what sbx actually said** into the
+  error instead of reporting a bare exit status — so the structured
+  `Blocked by network policy` explanation (rule / origin / detail), and the
+  support message an organisation attaches to a governance denial, reach you
+  in the CLI and the web UI rather than dying in the daemon log.
+- **Behind a corporate proxy**, a blocked download is often not sbxw's
+  allowlist. `DOCKER_SANDBOXES_PROXY=system` routes sandbox egress through the
+  host OS proxy configuration (macOS/Windows), PAC URL included — try that
+  before widening `network_allow`. `sbx policy log` shows the real reason; an
+  `origin: corporate policy` line means `sbx policy allow` won't help.
 - Secrets travel via **stdin**, not argv, so they don't appear in `ps`.
 - `/etc/hosts` changes are confined to a marked block and removed by `sbxw down`.
 
@@ -335,5 +412,11 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
 - Exact output format of `sbx inspect` (0.35+). sbxw only does a substring
   match on it to *skip* already-applied kits; if the kit name isn't found
   (older sbx, format change), the kit is simply re-applied as before.
+- The flags taken from the newer release notes but not yet checked against a
+  live `sbx --help`: `sbx create -p/--publish`, `sbx create --no-share-skills`,
+  `sbx skills import [--dry-run|--force]`, and `sbx setup ssh`. Each has a
+  fallback if the flag turns out to be spelled differently — `create` failing
+  means `sbxw up` fails loudly rather than silently mis-provisioning, and the
+  port publishing is still done by the provisioning thread regardless.
 
 (The kit schema, once flagged as unconfirmed, is now verified — see [Kits](#kits).)

@@ -183,6 +183,37 @@ else
   esac
 fi
 
+# ── SSH access (optional) ────────────────────────────────────────────────────
+# `sbx setup ssh` writes a managed `Host *.sbx` block into ~/.ssh/config, which
+# is what makes `ssh <name>.sbx` — and therefore `sbxw ssh`, the web UI's SSH
+# button, and remote-dev tools like VS Code/Cursor — resolve at all. It is
+# idempotent, but we still skip it when the block is already there so a re-run
+# stays quiet.
+step "SSH access to sandboxes (optional)…"
+if grep -q '\.sbx' "$HOME/.ssh/config" 2>/dev/null; then
+  info "already configured in ${HOME}/.ssh/config — sandboxes reachable at <name>.sbx"
+elif ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
+  warn "Non-interactive install — skipping SSH setup."
+  printf "  Run 'sbxw ssh --setup' any time to enable 'ssh <name>.sbx'.\n"
+else
+  printf "Enable SSH access to sandboxes (ssh <name>.sbx, VS Code/Cursor remote)? [Y/n] " > /dev/tty
+  read -r REPLY < /dev/tty || REPLY=""
+  case "$REPLY" in
+    [nN]*)
+      info "Skipped. Run 'sbxw ssh --setup' any time to enable it later."
+      ;;
+    *)
+      # Experimental upstream: a failure here must not sink the install.
+      if sbx setup ssh; then
+        info "SSH configured — reach any sandbox with 'ssh <name>.sbx'"
+      else
+        warn "'sbx setup ssh' failed — your sbx may predate SSH support, or need it enabled."
+        printf "  sbxw works fine without it; retry later with 'sbxw ssh --setup'.\n"
+      fi
+      ;;
+  esac
+fi
+
 # ── Bundled kits (optional) ───────────────────────────────────────────────────
 step "Fetching bundled kits…"
 KITS_URL="https://github.com/${REPO}/releases/download/${VERSION}/sbxw-kits.tar.gz"
@@ -257,6 +288,8 @@ printf "   sbxw --help                   # all commands\n"
 printf "\n${BOLD}Useful extras${RESET}\n"
 printf "   sbxw chat                     # throwaway agent on an empty workspace\n"
 printf "   sbxw bash <name>              # interactive shell in the sandbox\n"
+printf "   sbxw ssh <name>               # ssh <name>.sbx (also starts a stopped sandbox)\n"
+printf "   sbxw skills import            # share your host agents' skills with sandboxes\n"
 printf "   sbxw logs <name>              # tail daemon log\n"
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
 printf "   sbxw update                   # update sbxw (and the island, if installed)\n"

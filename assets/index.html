@@ -983,7 +983,7 @@ function createPane(index) {
         <button class="mode-btn active" data-mode="claude">✦ Claude</button>
         <button class="mode-btn" data-mode="bash">❯ Bash</button>
       </div>
-      <button class="pane-btn" id="pssh-${index}" title="Copy SSH command (requires feature.ssh)" disabled>SSH</button>
+      <button class="pane-btn" id="pssh-${index}" title="Copy the ssh command for this sandbox (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
@@ -1032,8 +1032,17 @@ function createPane(index) {
   document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
   document.getElementById(`pssh-${index}`).addEventListener('click', () => {
     if (!pane.sandbox) return;
-    const cmd = `ssh ${pane.sandbox}@127.0.0.1 -p 2222`;
-    navigator.clipboard?.writeText(cmd).then(() => showToast('Copied: ' + cmd, 'ok'));
+    // sbx publishes each sandbox as `<name>.sbx` through the managed block that
+    // `sbx setup ssh` (i.e. `sbxw ssh --setup`) writes into ~/.ssh/config — it
+    // owns the port and user, so we must not invent either.
+    const cmd = `ssh ${pane.sandbox}.sbx`;
+    if (!navigator.clipboard) {
+      showToast('Clipboard unavailable — needs HTTPS or localhost. Run: ' + cmd, 'error');
+      return;
+    }
+    navigator.clipboard.writeText(cmd)
+      .then(() => showToast('Copied: ' + cmd, 'ok'))
+      .catch(() => showToast('Copy failed — run: ' + cmd, 'error'));
   });
 
   term.onData(data => {

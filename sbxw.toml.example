@@ -18,6 +18,12 @@ claude_subscription = "pro"
 # ("claude-sonnet-5") or alias ("sonnet", "opus"). Empty => don't touch it.
 claude_model = "claude-sonnet-5"
 
+# Mount sbx's shared skill store (filled by `sbxw skills import`) into the
+# sandboxes sbxw creates. true matches sbx's own default; false passes
+# `--no-share-skills`, so the agent sees only what its kits and workspace give
+# it. Read at CREATION only — flipping it doesn't affect existing sandboxes.
+share_skills = true
+
 # One loopback IP per app => clean hostnames on their natural ports
 # (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
 # `ifconfig lo0 alias 127.0.0.X` (sudo). When false, everything shares 127.0.0.1.

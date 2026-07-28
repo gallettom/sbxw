@@ -9,9 +9,11 @@
 //!      agent's working tree — edits flow both ways instantly (Git working-tree
 //!      model). Only that directory is shared; the microVM keeps its own FS;
 //!   3. set up host aliases (/etc/hosts + macOS lo0 aliases) for your apps;
-//!   4. start a provisioning thread that, once the sandbox is `running`,
-//!      (re)publishes ports (sbx restores them on restart; we republish as a guard
-//!      against conflict recovery changing the host port) and injects the Claude OAuth token;
+//!   4. publish ports — a new sandbox gets them at creation (`sbx create -p`),
+//!      so they're live from first boot; a provisioning thread then re-publishes
+//!      once the sandbox reports `running`, covering the reused/restarted case
+//!      (mappings don't survive a stop) and conflict recovery picking a
+//!      different host port. It also injects the Claude OAuth token;
 //!   5. serve a browser terminal attached to the agent (`sbx run <name>`).
 //!
 //! Authentication:
@@ -129,14 +131,36 @@ Examples:
         /// Sandbox name.
         name: String,
     },
-    /// Connect to a running sandbox via SSH (experimental).
-    /// Requires: sbx settings set feature.ssh true
+    /// Open an SSH session into a sandbox — or run one command in it (experimental).
+    ///
+    /// Sandboxes are reachable as `<name>.sbx` once `sbx setup ssh` has added its
+    /// managed block to your SSH config; `sbxw ssh --setup` runs that for you.
+    /// The connection starts the sbx daemon and the sandbox on demand, so unlike
+    /// `sbxw bash` this also works on a stopped sandbox.
+    #[command(after_help = "\
+Examples:
+  sbxw ssh --setup              # one-time: add the managed *.sbx block to ~/.ssh/config
+  sbxw ssh neos                 # interactive shell
+  sbxw ssh neos -- git status   # one-shot command
+  code --remote ssh-remote+neos.sbx /workspace   # VS Code / Cursor remote dev")]
     Ssh {
-        /// Sandbox name.
-        name: String,
-        /// SSH port (default: 2222).
-        #[arg(long, default_value = "2222")]
-        port: u16,
+        /// Sandbox name. Omit when using --setup.
+        name: Option<String>,
+        /// Run `sbx setup ssh` (registers `<name>.sbx` in your SSH config) and exit.
+        #[arg(long)]
+        setup: bool,
+        /// Command to run in the sandbox instead of an interactive shell.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// Import skills from your host agents into the store shared by all sandboxes.
+    ///
+    /// Thin passthrough to `sbx skills import`. Imported skills persist after a
+    /// sandbox is deleted and are mounted into new ones; set `share_skills = false`
+    /// in sbxw.toml to keep the store out of the sandboxes sbxw creates.
+    Skills {
+        #[command(subcommand)]
+        cmd: SkillsCmd,
     },
     /// List all sandboxes.
     Ls,
@@ -194,6 +218,19 @@ Then open a new shell (or re-source the rc file).")]
     Completion {
         /// Target shell. Defaults to detecting the current shell from $SHELL.
         shell: Option<clap_complete::Shell>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillsCmd {
+    /// Discover skills from supported host agents and copy them into the store.
+    Import {
+        /// Preview what would be imported without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace skills that already exist in the store.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -299,16 +336,14 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Ssh { name, port } => {
-            let target = format!("{name}@127.0.0.1");
-            let status = std::process::Command::new("ssh")
-                .args(["-p", &port.to_string(), &target])
-                .status()?;
-            if !status.success() {
-                anyhow::bail!("`ssh -p {port} {target}` exited with {status}");
-            }
-            Ok(())
-        }
+        Cmd::Ssh {
+            name,
+            setup,
+            command,
+        } => cmd_ssh(name, setup, &command),
+        Cmd::Skills { cmd } => match cmd {
+            SkillsCmd::Import { dry_run, force } => sbx::skills_import(dry_run, force),
+        },
         Cmd::Ls => {
             let sandboxes = sbx::list_sandboxes();
             if sandboxes.is_empty() {
@@ -1376,6 +1411,12 @@ pub(crate) fn provision_sandbox(
     let credentials_json =
         resolve_oauth_token().map(|t| oauth_credentials_json(&t, &cfg.claude_subscription));
 
+    // Effective port list = config defaults + ports added from the UI. Resolved
+    // up here (rather than just before publishing) so a fresh sandbox can be
+    // created with the mappings already in place — see `sbx::create_claude`.
+    let all_ports = merged_ports(cfg, extra_ports);
+    let port_specs = publish_specs(&all_ports, cfg.ip_per_app);
+
     // 2. Create the sandbox if it doesn't exist yet.
     let existed = sbx::exists(name)?;
     if existed {
@@ -1434,9 +1475,13 @@ pub(crate) fn provision_sandbox(
         };
         sbx::create_claude(
             name,
-            workspace,
-            ro_strs,
-            kit_dir.as_deref().and_then(|p| p.to_str()),
+            &sbx::CreateOpts {
+                workspace,
+                ro_mounts: ro_strs,
+                kit_path: kit_dir.as_deref().and_then(|p| p.to_str()),
+                publish: &port_specs,
+                share_skills: cfg.share_skills,
+            },
         )?;
         // Clean up the ephemeral kit directory now that sbx has consumed it.
         if let Some(dir) = kit_dir {
@@ -1559,9 +1604,6 @@ pub(crate) fn provision_sandbox(
         }
     }
 
-    // Effective port list = config defaults + ports added from the UI.
-    let all_ports = merged_ports(cfg, extra_ports);
-
     // 5. Host aliases for ports that declare a hostname, plus the web interface.
     let mut aliases = host_aliases(&all_ports, cfg.ip_per_app);
     let web_ip = cfg
@@ -1585,8 +1627,10 @@ pub(crate) fn provision_sandbox(
     tracing::info!("web interface → http://sbxw.localhost:{web_port}");
 
     // 6. Provisioning thread: wait for `running`, then (re)publish ALL ports.
+    //    A *fresh* sandbox already got them via `sbx create -p`; this covers the
+    //    reused/restarted one, where mappings don't survive a stop.
     let prov_name = name.to_string();
-    let prov_specs = publish_specs(&all_ports, cfg.ip_per_app);
+    let prov_specs = port_specs;
     std::thread::spawn(move || {
         // Wait up to ~60s for the sandbox to come up (started by `sbx run`).
         for _ in 0..120 {
@@ -1703,6 +1747,61 @@ fn cmd_up(
 /// the `--name` flag, which re-attaches independent of the working directory.
 /// Since sbx 0.35 this also works for sandboxes created with a custom --kit
 /// (like sbxw's OAuth kit) without re-passing the kit reference.
+/// Does the user's SSH config appear to carry sbx's managed `*.sbx` block?
+///
+/// A heuristic used only to decide whether to *hint* at `sbx setup ssh` after a
+/// failed connection — an `Include`d fragment would make this a false negative,
+/// which is why it never blocks the attempt.
+fn ssh_config_mentions_sbx() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    std::fs::read_to_string(PathBuf::from(home).join(".ssh").join("config"))
+        .map(|s| s.contains(".sbx"))
+        .unwrap_or(false)
+}
+
+/// `sbxw ssh` — connect to `<name>.sbx`, the host alias `sbx setup ssh` installs.
+///
+/// Deliberately does *not* second-guess the transport: sbx owns the SSH config
+/// block, the port, and the user, and the connection brings the daemon and the
+/// sandbox up on demand. sbxw only picks the hostname and reports a usable error.
+fn cmd_ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> {
+    if setup {
+        sbx::setup_ssh().context("`sbx setup ssh` failed")?;
+        println!("SSH configured — reach any sandbox with `ssh <name>.sbx`.");
+        if name.is_none() {
+            return Ok(());
+        }
+    }
+    let Some(name) = name else {
+        anyhow::bail!(
+            "specify a sandbox name, or pass --setup to register the `*.sbx` SSH host block"
+        );
+    };
+
+    let host = format!("{name}.sbx");
+    let mut args: Vec<&str> = vec![&host];
+    args.extend(command.iter().map(String::as_str));
+    let status = std::process::Command::new("ssh")
+        .args(&args)
+        .status()
+        .context("failed to spawn `ssh` — is an OpenSSH client installed?")?;
+    if status.success() {
+        return Ok(());
+    }
+    // 255 is ssh's own failure code (config/connection/auth), as opposed to the
+    // exit status of a command that ran fine on the other side and failed there.
+    if status.code() == Some(255) && !ssh_config_mentions_sbx() {
+        anyhow::bail!(
+            "`ssh {host}` failed and no `*.sbx` entry was found in ~/.ssh/config.\n\
+             Run `sbxw ssh --setup` once to register it (SSH access is experimental \
+             and may need enabling in your sbx installation first)."
+        );
+    }
+    anyhow::bail!("`ssh {host}` exited with {status}");
+}
+
 fn run_agent_foreground(name: &str) -> Result<()> {
     use std::process::Command;
     let status = Command::new("sbx").args(["run", "--name", name]).status()?;

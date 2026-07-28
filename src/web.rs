@@ -1636,7 +1636,7 @@ async fn handle_socket(
 /// Return the existing PTY session for (`sandbox`, `mode`), or create one.
 /// Sessions are keyed by "<sandbox>::<mode>" so the agent ("claude") and a
 /// bash shell coexist independently for the same sandbox.
-///   mode == "bash"  → `sbx exec -it <sandbox> -- bash`
+///   mode == "bash"  → `sbx exec -it <sandbox> -- bash`, or SSH if it's stopped
 ///   mode == "claude"→ `sbx run --name <sandbox>` (or the configured web_shell via exec)
 /// The session lives until the PTY process exits.
 fn get_or_create_session(
@@ -1667,18 +1667,46 @@ fn get_or_create_session(
     // normal sandbox, or a chat one still present) so attaching just works.
     crate::ensure_chat_workspace(sandbox);
 
-    let mut cmd = CommandBuilder::new("sbx");
-    if mode == "bash" {
-        cmd.args(["exec", "-it", sandbox, "--", "bash"]);
+    // `sbx exec` only reaches a *running* sandbox, while `sbx run` (the agent
+    // pane) starts a stopped one as a side effect. That asymmetry made the Bash
+    // button a dead end on a stopped sandbox: it failed, and the only way out
+    // was to attach the agent first just to boot the thing. An SSH connection
+    // brings up the daemon and the sandbox on demand, so use it for exactly
+    // that case — the running case stays on `sbx exec`, which needs no SSH
+    // setup at all.
+    let bash_over_ssh = mode == "bash" && !crate::sbx::is_running(sandbox).unwrap_or(true);
+
+    let mut cmd = if bash_over_ssh {
+        tracing::info!("'{sandbox}' is stopped — opening the Bash pane over SSH to start it");
+        // The banner names the one prerequisite *before* ssh can fail on it;
+        // `exec` keeps the shell from lingering as a useless parent process.
+        //
+        // The sandbox name is passed as a positional argument (`$1`) rather
+        // than interpolated into the script: it arrives from a WebSocket query
+        // parameter, so folding it into a `sh -c` string would be a command
+        // injection. Same reasoning as `sbx::write_file_stdin`. The printf
+        // format is single-quoted so no `$`/backtick in it is ever expanded.
+        const SSH_BANNER: &str = r#"printf '\033[2m[sbxw] %s is stopped - connecting over SSH to start it.\r\n[sbxw] If this fails, run: sbxw ssh --setup\033[0m\r\n' "$1"; exec ssh -t "$1.sbx""#;
+        let mut c = CommandBuilder::new("sh");
+        c.args(["-c", SSH_BANNER, "sh", sandbox]);
+        c
+    } else if mode == "bash" {
+        let mut c = CommandBuilder::new("sbx");
+        c.args(["exec", "-it", sandbox, "--", "bash"]);
+        c
     } else if shell.is_empty() {
         // Re-attach by name. The positional form (`sbx run <name>`) is
         // deprecated; `--name` re-attaches regardless of working directory.
         // Since sbx 0.35 this also works for sandboxes created with a custom
         // --kit (like sbxw's OAuth kit) without re-passing the kit.
-        cmd.args(["run", "--name", sandbox]);
+        let mut c = CommandBuilder::new("sbx");
+        c.args(["run", "--name", sandbox]);
+        c
     } else {
-        cmd.args(["exec", "-it", sandbox, "--", shell]);
-    }
+        let mut c = CommandBuilder::new("sbx");
+        c.args(["exec", "-it", sandbox, "--", shell]);
+        c
+    };
     cmd.env("TERM", "xterm-256color");
 
     let child = pair.slave.spawn_command(cmd)?;

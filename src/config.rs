@@ -35,6 +35,13 @@ pub struct Config {
     /// full model id ("claude-sonnet-5") or an alias ("sonnet", "opus").
     /// Empty => leave the sandbox's settings untouched.
     pub claude_model: String,
+    /// Mount sbx's shared skill store (populated by `sbxw skills import`) into
+    /// sandboxes sbxw creates. true matches sbx's own default; false passes
+    /// `--no-share-skills` to `sbx create`, so the agent sees only the skills
+    /// its kits and workspace provide.
+    ///
+    /// Only read at *creation*: flipping it has no effect on existing sandboxes.
+    pub share_skills: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -89,6 +96,7 @@ impl Default for Config {
             kits: vec![],
             claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5".into(),
+            share_skills: true,
         }
     }
 }

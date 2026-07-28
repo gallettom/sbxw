@@ -23,6 +23,13 @@
 //!     `--force` is passed (we always pass it — see `rm_sandboxes`).
 //!   * Host env vars are no longer auto-injected at runtime; secrets must go
 //!     through `sbx secret set` / `sbx secret import` (we already use `set`).
+//!
+//! Surface added from the newer release notes, NOT yet verified against a live
+//! `sbx --help` — check these before depending on them:
+//!   sbx create … -p/--publish SPEC        (publish at creation; see create_claude)
+//!   sbx create … --no-share-skills        (opt out of the shared skill store)
+//!   sbx skills import [--dry-run|--force] (import host agent skills into the store)
+//!   sbx setup ssh                         (managed `Host *.sbx` block => `ssh <name>.sbx`)
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -31,7 +38,41 @@ use std::time::{Duration, Instant};
 
 const BIN: &str = "sbx";
 
-/// Run `sbx <args...>`, inheriting stdio (for interactive-ish steps / logging).
+/// Longest tail of a failing command's stderr we fold into the error message.
+/// Generous on purpose: sbx's policy denials carry a multi-line explanation
+/// (rule, origin, detail) and, since the 2026 releases, an organisation's
+/// configured support message — truncating those defeats the point.
+const STDERR_TAIL_LIMIT: usize = 2000;
+
+/// Turn a failed `sbx` invocation into an error that carries *what sbx said*.
+///
+/// Without this, every failure collapsed into "`sbx …` exited with exit status: 1"
+/// and the actual diagnosis was dropped on the floor — which mattered most for
+/// the messages users can act on: `Blocked by network policy` blocks (rule /
+/// origin / detail) and governance denials carrying an org support message
+/// telling you who to contact. Those surface in the web UI, where nobody sees
+/// the daemon's stderr.
+fn command_error(args: &[&str], status: std::process::ExitStatus, stderr: &[u8]) -> anyhow::Error {
+    let msg = String::from_utf8_lossy(stderr);
+    let msg = msg.trim();
+    if msg.is_empty() {
+        return anyhow::anyhow!("`sbx {}` exited with {status}", args.join(" "));
+    }
+    // Keep the *tail*: sbx prints context first and the reason last.
+    let tail = match msg.char_indices().nth_back(STDERR_TAIL_LIMIT) {
+        Some((i, _)) => format!("…{}", &msg[i..]),
+        None => msg.to_string(),
+    };
+    anyhow::anyhow!("`sbx {}` exited with {status}:\n{tail}", args.join(" "))
+}
+
+/// Run `sbx <args...>`, inheriting stdio (for interactive / long, chatty steps
+/// such as `create` and `kit add`, where live progress output matters).
+///
+/// The child's stderr goes straight to this process's stderr, so a failure is
+/// already visible to whoever is watching the terminal or the daemon log — it
+/// just can't be folded into the returned error. Use `run_checked` instead for
+/// short commands whose error is surfaced programmatically (web UI, `Result`).
 fn run_inherit(args: &[&str]) -> Result<()> {
     tracing::debug!(target: "sbx", "sbx {}", args.join(" "));
     let status = Command::new(BIN)
@@ -40,6 +81,32 @@ fn run_inherit(args: &[&str]) -> Result<()> {
         .with_context(|| format!("failed to spawn `{BIN}` — is it on your PATH?"))?;
     if !status.success() {
         bail!("`sbx {}` exited with {}", args.join(" "), status);
+    }
+    Ok(())
+}
+
+/// Run a short, non-interactive `sbx <args...>` whose failure needs to be
+/// *reportable*: stdout is inherited (these commands print little), stderr is
+/// captured so it can be folded into the error via `command_error`.
+///
+/// `wait_with_output` drains the stderr pipe before reaping the child, so a
+/// command that writes more than one pipe buffer's worth can't deadlock.
+fn run_checked(args: &[&str]) -> Result<()> {
+    tracing::debug!(target: "sbx", "sbx {}", args.join(" "));
+    let out = Command::new(BIN)
+        .args(args)
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{BIN}` — is it on your PATH?"))?
+        .wait_with_output()?;
+    if !out.status.success() {
+        return Err(command_error(args, out.status, &out.stderr));
+    }
+    // sbx routes progress to stderr when stdout isn't a TTY; on success that's
+    // noise for the caller but useful when debugging a pipeline step.
+    let noise = String::from_utf8_lossy(&out.stderr);
+    if !noise.trim().is_empty() {
+        tracing::debug!(target: "sbx", "{}", noise.trim());
     }
     Ok(())
 }
@@ -55,7 +122,7 @@ fn run_capture(args: &[&str]) -> Result<String> {
         .output()
         .with_context(|| format!("failed to spawn `{BIN}`"))?;
     if !out.status.success() {
-        bail!("`sbx {}` exited with {}", args.join(" "), out.status);
+        return Err(command_error(args, out.status, &out.stderr));
     }
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if !stdout.is_empty() {
@@ -112,33 +179,78 @@ pub fn wait_until_running(name: &str, timeout: Duration) -> bool {
     false
 }
 
-/// `sbx create claude <workspace> --name <name> [--kit <kit_path>]`.
-/// `workspace` is the host path the agent edits *in place* (bidirectional sync).
-/// Extra read-only mounts can be appended with a ":ro" suffix per the sbx spec.
-/// If `kit_path` is given it is forwarded as `--kit`; the kit is applied before
-/// the agent starts, so env vars it sets are visible from the first process.
-pub fn create_claude(
-    name: &str,
-    workspace: &str,
-    ro_mounts: &[String],
-    kit_path: Option<&str>,
-) -> Result<()> {
+/// Everything `create_claude` needs beyond the sandbox name.
+pub struct CreateOpts<'a> {
+    /// Host path the agent edits *in place* (bidirectional sync).
+    pub workspace: &'a str,
+    /// Extra directories mounted read-only (a ":ro" suffix is added per the sbx spec).
+    pub ro_mounts: &'a [String],
+    /// Forwarded as `--kit`; applied before the agent starts, so env vars it
+    /// sets are visible from the first process.
+    pub kit_path: Option<&'a str>,
+    /// Port specs (`[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]`) forwarded as
+    /// `-p`. See the note on `create_claude`.
+    pub publish: &'a [String],
+    /// When false, pass `--no-share-skills` to keep the host's shared skill
+    /// store out of this sandbox.
+    pub share_skills: bool,
+}
+
+/// `sbx create claude <workspace> --name <name> [--kit K] [-p SPEC…] [--no-share-skills]`.
+///
+/// Ports are published *at creation* rather than only by the provisioning
+/// thread: that thread has to wait for the sandbox to report `running` before
+/// `sbx ports --publish` will work, which leaves a window where the agent is
+/// already serving but `neos.local:4200` refuses connections. `-p` closes it —
+/// the mapping exists from first boot. The thread still re-publishes, because
+/// mappings do not survive a stop/restart.
+pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
     let mut args: Vec<String> = vec![
         "create".into(),
         "claude".into(),
-        workspace.into(),
+        opts.workspace.into(),
         "--name".into(),
         name.into(),
     ];
-    for m in ro_mounts {
+    for m in opts.ro_mounts {
         args.push(format!("{m}:ro"));
     }
-    if let Some(kit) = kit_path {
+    if let Some(kit) = opts.kit_path {
         args.push("--kit".into());
         args.push(kit.into());
     }
+    for spec in opts.publish {
+        args.push("-p".into());
+        args.push(spec.clone());
+    }
+    if !opts.share_skills {
+        args.push("--no-share-skills".into());
+    }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_inherit(&refs)
+}
+
+/// `sbx skills import [--dry-run] [--force]` — discover skills from supported
+/// host agents and copy them into the persistent store that sandboxes mount.
+///
+/// A pure passthrough: the store is sbx-managed and shared across sandboxes, so
+/// sbxw has nothing of its own to add beyond saving you the context switch.
+/// Imported skills outlive the sandboxes that used them.
+pub fn skills_import(dry_run: bool, force: bool) -> Result<()> {
+    let mut args = vec!["skills", "import"];
+    if dry_run {
+        args.push("--dry-run");
+    }
+    if force {
+        args.push("--force");
+    }
+    run_inherit(&args)
+}
+
+/// `sbx setup ssh` — install the managed `Host *.sbx` block in the user's SSH
+/// config, making every existing sandbox reachable as `<name>.sbx`.
+pub fn setup_ssh() -> Result<()> {
+    run_checked(&["setup", "ssh"])
 }
 
 /// `sbx kit add SANDBOX REFERENCE` — apply a kit to an existing sandbox.
@@ -191,7 +303,7 @@ pub fn list_sandboxes() -> Vec<SandboxInfo> {
 
 /// `sbx stop SANDBOX` — stop without removing.
 pub fn stop_sandbox(name: &str) -> Result<()> {
-    run_inherit(&["stop", name])
+    run_checked(&["stop", name])
 }
 
 /// `sbx rm --force [--all | SANDBOX...]` — remove sandboxes permanently.
@@ -207,19 +319,19 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
     } else {
         args.extend_from_slice(names);
     }
-    run_inherit(&args)
+    run_checked(&args)
 }
 
 /// `sbx ports <name> --publish <spec>` where spec = [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO].
 /// sbx restores published ports on restart; we still re-publish as a belt-and-suspenders
 /// guard against conflict recovery choosing a different host port.
 pub fn publish_port(name: &str, spec: &str) -> Result<()> {
-    run_inherit(&["ports", name, "--publish", spec])
+    run_checked(&["ports", name, "--publish", spec])
 }
 
 /// `sbx ports <name> --unpublish <spec>` — remove a published port mapping.
 pub fn unpublish_port(name: &str, spec: &str) -> Result<()> {
-    run_inherit(&["ports", name, "--unpublish", spec])
+    run_checked(&["ports", name, "--unpublish", spec])
 }
 
 /// `sbx ports <name>` — list currently published ports (raw text).
@@ -374,8 +486,12 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
 }
 
 /// `sbx policy allow network --sandbox <sandbox> <resources>` (sandbox-scoped).
+///
+/// Uses `run_checked` so a refusal reaches the caller intact: a governance
+/// denial can carry an organisation-configured support message (who to contact)
+/// that is useless if it only ever lands in the daemon log.
 pub fn policy_allow_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_inherit(&[
+    run_checked(&[
         "policy",
         "allow",
         "network",
@@ -387,7 +503,7 @@ pub fn policy_allow_network(sandbox: &str, resources: &str) -> Result<()> {
 
 /// `sbx policy deny network --sandbox <sandbox> <resources>` (sandbox-scoped).
 pub fn policy_deny_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_inherit(&["policy", "deny", "network", "--sandbox", sandbox, resources])
+    run_checked(&["policy", "deny", "network", "--sandbox", sandbox, resources])
 }
 
 /// Store a service-scoped secret by piping the value on stdin (keeps it out of
@@ -472,7 +588,7 @@ pub fn write_oauth_credentials(sandbox: &str, credentials_json: &str) -> Result<
 fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
     let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
     full.extend_from_slice(args);
-    run_inherit(&full)
+    run_checked(&full)
 }
 
 /// Pre-seed `/home/agent/.claude.json` so Claude Code considers `workspace`
@@ -650,4 +766,51 @@ pub fn install_usage_statusline(sandbox: &str, web_port: &str) -> Result<()> {
     let result = exec_run(sandbox, &["node", "/tmp/.sbxw-usage-install.js"]);
     let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-usage-install.js"]);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Any exit status will do; we only ever format it.
+    fn failed_status() -> std::process::ExitStatus {
+        std::process::Command::new("sh")
+            .args(["-c", "exit 1"])
+            .status()
+            .expect("sh should be runnable")
+    }
+
+    #[test]
+    fn command_error_keeps_the_reason_sbx_printed() {
+        let stderr = b"Blocked by network policy: domain example.com\n  \
+                       origin: corporate policy\n  Ask platform@acme.example.";
+        let err = command_error(&["policy", "allow", "network"], failed_status(), stderr);
+        let msg = err.to_string();
+        assert!(msg.contains("sbx policy allow network"), "{msg}");
+        assert!(msg.contains("origin: corporate policy"), "{msg}");
+        assert!(msg.contains("Ask platform@acme.example"), "{msg}");
+    }
+
+    #[test]
+    fn command_error_falls_back_to_the_exit_status_when_sbx_said_nothing() {
+        let err = command_error(&["stop", "neos"], failed_status(), b"   \n  ");
+        assert_eq!(
+            err.to_string(),
+            "`sbx stop neos` exited with exit status: 1"
+        );
+    }
+
+    #[test]
+    fn command_error_truncates_from_the_front_keeping_the_tail() {
+        // sbx prints context first and the actionable reason last, so an
+        // over-long stderr must lose its head, not its tail.
+        let mut stderr = "noise\n".repeat(2000);
+        stderr.push_str("THE ACTUAL REASON");
+        let msg = command_error(&["ls"], failed_status(), stderr.as_bytes()).to_string();
+        assert!(msg.ends_with("THE ACTUAL REASON"), "{msg}");
+        assert!(msg.contains('…'), "expected an ellipsis marker: {msg}");
+        // The kept slice is bounded by the limit, not by how much sbx printed.
+        let kept = msg.split_once('…').expect("ellipsis").1;
+        assert_eq!(kept.chars().count(), STDERR_TAIL_LIMIT + 1);
+    }
 }
