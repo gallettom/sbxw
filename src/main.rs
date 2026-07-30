@@ -1484,7 +1484,7 @@ pub(crate) fn provision_sandbox(
                     );
                 }
                 // The OAuth kit also allowlists claude.ai egress; mirror that.
-                if let Err(e) = sbx::policy_allow_network(name, "claude.ai") {
+                if let Err(e) = sbx::policy_allow_network(Some(name), "claude.ai") {
                     tracing::warn!("could not allow claude.ai egress: {e:#}");
                 }
             } else {
@@ -1577,7 +1577,7 @@ pub(crate) fn provision_sandbox(
         // proxy classifies that destination as `localhost:<port>` — so the
         // allow rule must name the loopback host and port, not the DNS alias.
         let hook_dest = format!("localhost:{web_port}");
-        if let Err(e) = sbx::policy_allow_network(name, &hook_dest) {
+        if let Err(e) = sbx::policy_allow_network(Some(name), &hook_dest) {
             tracing::warn!("could not allow {hook_dest} egress for hooks: {e:#}");
         }
         // 2d. Default model for the in-sandbox Claude Code (sbxw.toml's
@@ -1600,12 +1600,14 @@ pub(crate) fn provision_sandbox(
     if !cfg.network_allow.is_empty() {
         let resources = cfg.network_allow.join(",");
         tracing::info!("network allowlist: {resources}");
-        sbx::policy_allow_network(name, &resources).context("failed to apply network allowlist")?;
+        sbx::policy_allow_network(Some(name), &resources)
+            .context("failed to apply network allowlist")?;
     }
     if !cfg.network_deny.is_empty() {
         let resources = cfg.network_deny.join(",");
         tracing::info!("network denylist: {resources}");
-        sbx::policy_deny_network(name, &resources).context("failed to apply network denylist")?;
+        sbx::policy_deny_network(Some(name), &resources)
+            .context("failed to apply network denylist")?;
     }
 
     // 3b. User-defined kits from sbxw.toml (applied in order via sbx kit add).

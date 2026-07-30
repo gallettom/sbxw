@@ -13,6 +13,12 @@
 //!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
 //!   sbx policy allow|deny network [--sandbox NAME] RESOURCES  (comma list, *.dom, dom:443, **)
+//!   sbx policy ls [SANDBOX] [--wide] [--json] [--type|--source|--decision …]
+//!                                                  (SANDBOX is POSITIONAL here,
+//!                                                  unlike allow/deny's --sandbox;
+//!                                                  --wide is the rule-level view)
+//!   sbx policy log [SANDBOX]                       (recent allow/deny decisions)
+//!   sbx policy inspect <policy-or-rule>            (full detail on one entry)
 //!   sbx policy init <posture>                      (was `set-default`, kept as deprecated alias)
 //!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin)
 //!
@@ -491,25 +497,273 @@ pub fn list_ports_parsed(name: &str) -> Vec<PortMapping> {
     out
 }
 
-/// `sbx policy allow network --sandbox <sandbox> <resources>` (sandbox-scoped).
+/// `sbx policy allow network [--sandbox <sandbox>] <resources>`.
+///
+/// `sandbox: None` writes a rule that applies to **every** sandbox on the host —
+/// sbx's global local policy. Callers that mean "this project" must pass
+/// `Some(name)`.
 ///
 /// Uses `run_checked` so a refusal reaches the caller intact: a governance
 /// denial can carry an organisation-configured support message (who to contact)
 /// that is useless if it only ever lands in the daemon log.
-pub fn policy_allow_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_checked(&[
-        "policy",
-        "allow",
-        "network",
-        "--sandbox",
-        sandbox,
-        resources,
-    ])
+pub fn policy_allow_network(sandbox: Option<&str>, resources: &str) -> Result<()> {
+    run_checked(&policy_rule_args("allow", sandbox, resources))
 }
 
-/// `sbx policy deny network --sandbox <sandbox> <resources>` (sandbox-scoped).
-pub fn policy_deny_network(sandbox: &str, resources: &str) -> Result<()> {
-    run_checked(&["policy", "deny", "network", "--sandbox", sandbox, resources])
+/// `sbx policy deny network [--sandbox <sandbox>] <resources>`. See
+/// `policy_allow_network` for what `None` means.
+pub fn policy_deny_network(sandbox: Option<&str>, resources: &str) -> Result<()> {
+    run_checked(&policy_rule_args("deny", sandbox, resources))
+}
+
+/// Argv for an allow/deny rule. Split out so both decisions place `--sandbox`
+/// identically and the ordering is covered by one test.
+fn policy_rule_args<'a>(
+    decision: &'a str,
+    sandbox: Option<&'a str>,
+    resources: &'a str,
+) -> Vec<&'a str> {
+    let mut args = vec!["policy", decision, "network"];
+    if let Some(name) = sandbox {
+        args.push("--sandbox");
+        args.push(name);
+    }
+    args.push(resources);
+    args
+}
+
+/// `sbx policy rm <rule>` — drop a single rule from a local policy.
+///
+/// Takes the **rule** id from `policy ls --wide`, never a policy id: `sbx policy
+/// inspect` accepts either, and handing a policy id to a command documented as
+/// "Remove a policy rule" is how you delete far more than you meant to. The
+/// caller is responsible for sourcing the id from a rule-id column.
+///
+/// Not verified against a live `sbx policy rm --help` — the argument shape is
+/// inferred from the command's description. A mismatch fails loudly with sbx's
+/// own message rather than removing the wrong thing.
+pub fn policy_rm_rule(rule: &str) -> Result<()> {
+    run_checked(&["policy", "rm", rule])
+}
+
+/// `sbx policy ls [SANDBOX] [--wide]` — the policy rules in force, including the
+/// ones a kit composed in.
+///
+/// The sandbox is **positional**, not a `--sandbox` flag (confirmed against
+/// `sbx policy ls --help`), and it changes what the command reports: without it
+/// you get one overview row per policy *for every sandbox on the host*, with it
+/// a summary of the rules that apply to that one. `wide` switches to the
+/// rule-level table — the only view that names the resources (domains) a rule
+/// covers rather than counting them.
+///
+/// If the scoped call fails (older sbx, unknown sandbox) we retry unscoped so
+/// the caller degrades to the host-wide listing instead of an error. The
+/// returned bool says which ran: "the rules for *this* sandbox" and "the rules
+/// for *every* sandbox" must never look alike in the UI. On total failure the
+/// scoped error wins — it is the one that explains the refusal.
+pub fn policy_ls(sandbox: &str, wide: bool) -> Result<(String, bool)> {
+    let mut scoped = vec!["policy", "ls", sandbox];
+    let mut unscoped = vec!["policy", "ls"];
+    if wide {
+        scoped.push("--wide");
+        unscoped.push("--wide");
+    }
+    match run_capture(&scoped) {
+        Ok(out) => Ok((out, true)),
+        Err(scoped_err) => match run_capture(&unscoped) {
+            Ok(out) => Ok((out, false)),
+            Err(_) => Err(scoped_err),
+        },
+    }
+}
+
+/// A parsed `sbx policy ls` table: its header names, and one entry per column
+/// per row.
+///
+/// Deliberately schema-less. Unlike `sbx ports`, the policy columns are not
+/// pinned by the CLI reference we built against, and sbx has already renamed
+/// commands in this area (`set-default` → `init`). Mapping them onto named
+/// fields would silently drop a column a future release adds, so we carry
+/// whatever sbx printed and let the UI render it.
+#[derive(Default)]
+pub struct PolicyTable {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+/// Parse a columnar `sbx policy ls` listing, e.g.
+///
+/// ```text
+/// TYPE      RESOURCE            ACTION   ORIGIN            STATUS
+/// domain    *.npmjs.org         allow    local policy      active
+/// domain    telemetry.acme.com  deny     corporate policy  active
+/// ```
+///
+/// Columns are located by where their headers start, not by splitting each row
+/// on whitespace: policy values contain spaces ("corporate policy", "inactive —
+/// superseded") and headers can too, so per-row splitting would shred them.
+///
+/// Returns an empty table for anything that isn't such a listing (a "no rules"
+/// notice, a future `--format` output, a prose error). Callers are expected to
+/// fall back to showing the raw text rather than claiming there are no rules.
+pub fn parse_policy_table(raw: &str) -> PolicyTable {
+    let mut lines = raw.lines().skip_while(|l| l.trim().is_empty());
+    let header = match lines.next() {
+        Some(h) => h,
+        None => return PolicyTable::default(),
+    };
+
+    let spans = header_spans(header);
+    if spans.len() < 2 {
+        return PolicyTable::default();
+    }
+
+    let columns: Vec<String> = spans.iter().map(|(name, _)| name.clone()).collect();
+    let starts: Vec<usize> = spans.iter().map(|(_, start)| *start).collect();
+
+    let rows = lines
+        .filter(|l| !l.trim().is_empty())
+        .map(|line| slice_at(line, &starts))
+        // A row that lands entirely in the first column is a separator or a
+        // trailing note, not data.
+        .filter(|cells| cells.iter().skip(1).any(|c| !c.is_empty()))
+        .collect();
+
+    PolicyTable { columns, rows }
+}
+
+/// `sbx policy log [SANDBOX]` — the connections sbx recently allowed or blocked,
+/// with the rule and reason behind each decision.
+///
+/// This is the only view that reports what actually happened rather than what is
+/// configured, so it answers "why was that request refused?". The sandbox
+/// argument is assumed positional, like `policy ls`'s; the unscoped retry covers
+/// the case where it isn't.
+pub fn policy_log(sandbox: &str) -> Result<(String, bool)> {
+    match run_capture(&["policy", "log", sandbox]) {
+        Ok(out) => Ok((out, true)),
+        Err(scoped_err) => match run_capture(&["policy", "log"]) {
+            Ok(out) => Ok((out, false)),
+            Err(_) => Err(scoped_err),
+        },
+    }
+}
+
+/// What a policy column holds, for the ones we know how to present. Anything
+/// else maps to `""` and is rendered as plain text, so a column sbx adds shows
+/// up instead of vanishing.
+///
+/// Covers both listings: `policy ls` (`POLICY  SOURCE  APPLIES TO  SUMMARY`,
+/// confirmed against real output) and `policy log`, whose columns are described
+/// as host / rule / reason / last-seen but not pinned — hence the aliases.
+pub fn policy_column_roles(columns: &[String]) -> Vec<&'static str> {
+    columns
+        .iter()
+        .map(|c| {
+            let c = c.trim().to_ascii_uppercase();
+            match () {
+                // Must precede the generic id arm: `policy rm` takes a *rule*
+                // id, and a policy id reaching it would delete a whole policy
+                // instead of one rule. The two are told apart here or nowhere.
+                _ if c == "RULE ID" || c == "RULE_ID" || c == "RULEID" => "rule_id",
+                _ if c == "POLICY" || c == "ID" || c.ends_with(" ID") => "id",
+                _ if c == "SOURCE" || c == "ORIGIN" => "source",
+                _ if c.starts_with("APPLIES") || c == "SCOPE" || c == "TARGET" => "applies",
+                _ if c == "SUMMARY" || c == "RULES" => "summary",
+                _ if c == "SANDBOX" => "sandbox",
+                _ if c == "HOST" || c == "DOMAIN" || c == "RESOURCE" => "host",
+                _ if c == "RULE" => "rule",
+                _ if c == "REASON" || c == "DETAIL" => "reason",
+                _ if c == "ACTION" || c == "DECISION" => "action",
+                _ if c == "TYPE" => "type",
+                _ if c == "STATUS" || c == "STATE" => "status",
+                _ if c.contains("SEEN") || c == "TIME" || c == "WHEN" => "when",
+                _ => "",
+            }
+        })
+        .collect()
+}
+
+/// Does a policy whose "applies to" cell reads `applies` govern `sandbox`?
+///
+/// sbx scopes a policy either to every sandbox (`all`) or to one by name
+/// (`sandbox:<name>`), and `policy ls` lists the policies of *all* sandboxes —
+/// so without this the panel for one sandbox shows a dozen rules that have
+/// nothing to do with it.
+///
+/// An unrecognised scope counts as applying. Showing one row too many is a
+/// cosmetic annoyance; hiding a rule that does govern the sandbox would make
+/// the panel lie about what egress is allowed.
+pub fn policy_applies_to(applies: &str, sandbox: &str) -> bool {
+    let applies = applies.trim();
+    match applies.split_once(':') {
+        Some(("sandbox", target)) => target.trim() == sandbox,
+        _ => true,
+    }
+}
+
+/// Header names and their starting character offsets, or empty if `line` does
+/// not look like a table header. Fields are separated by two or more spaces so
+/// that a multi-word header ("RULE NAME", "LAST SEEN") stays one column.
+fn header_spans(line: &str) -> Vec<(String, usize)> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out: Vec<(String, usize)> = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == ' ' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut end = i;
+        while i < chars.len() {
+            if chars[i] == ' ' {
+                // Two spaces in a row close the field; a single one is part of
+                // a multi-word header.
+                if chars.get(i + 1).is_none_or(|c| *c == ' ') {
+                    break;
+                }
+            } else {
+                end = i + 1;
+            }
+            i += 1;
+        }
+        out.push((chars[start..end].iter().collect(), start));
+    }
+
+    // Only an ALL-CAPS row is a header. Without this check the first *data*
+    // line of a non-table output would be mistaken for one.
+    let caps = out.iter().all(|(name, _)| {
+        name.chars().any(|c| c.is_ascii_uppercase())
+            && !name.contains(|c: char| c.is_ascii_lowercase())
+    });
+    if caps {
+        out
+    } else {
+        Vec::new()
+    }
+}
+
+/// Cut `line` at the given character offsets, trimming each cell. A value wider
+/// than its column bleeds into the next one; we accept that over dropping it,
+/// since sbx pads its tables to fit.
+fn slice_at(line: &str, starts: &[usize]) -> Vec<String> {
+    let chars: Vec<char> = line.chars().collect();
+    starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| {
+            let end = starts.get(i + 1).copied().unwrap_or(chars.len());
+            let start = start.min(chars.len());
+            let end = end.min(chars.len()).max(start);
+            chars[start..end]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .collect()
 }
 
 /// Store a service-scoped secret by piping the value on stdin (keeps it out of
@@ -810,6 +1064,127 @@ mod tests {
         // A missing or corrupt settings.json must parse as `{}`, not throw.
         assert!(script.contains("catch(e){}"), "{script}");
         assert!(script.contains(SETTINGS_PATH), "{script}");
+    }
+
+    #[test]
+    fn policy_table_keeps_values_that_contain_spaces() {
+        // "corporate policy" and "inactive — superseded" are single cells; a
+        // split_whitespace parse would tear them apart and shift every column.
+        let raw = "\
+TYPE     RESOURCE            ACTION  ORIGIN            STATUS
+domain   *.npmjs.org         allow   local policy      active
+domain   telemetry.acme.com  deny    corporate policy  inactive — superseded
+";
+        let table = parse_policy_table(raw);
+        assert_eq!(
+            table.columns,
+            ["TYPE", "RESOURCE", "ACTION", "ORIGIN", "STATUS"]
+        );
+        assert_eq!(
+            table.rows[0],
+            ["domain", "*.npmjs.org", "allow", "local policy", "active"]
+        );
+        assert_eq!(table.rows[1][3], "corporate policy");
+        assert_eq!(table.rows[1][4], "inactive — superseded");
+    }
+
+    #[test]
+    fn policy_table_keeps_multi_word_headers_in_one_column() {
+        let raw = "\
+RULE NAME   RESOURCE       LAST SEEN
+dev-allow   github.com     2 minutes ago
+";
+        let table = parse_policy_table(raw);
+        assert_eq!(table.columns, ["RULE NAME", "RESOURCE", "LAST SEEN"]);
+        assert_eq!(table.rows[0], ["dev-allow", "github.com", "2 minutes ago"]);
+    }
+
+    /// The listing sbx actually prints: one row per *policy document*, scoped
+    /// to one sandbox or to all of them.
+    #[test]
+    fn policy_table_parses_the_real_sbx_listing() {
+        let raw = "\
+POLICY                                SOURCE  APPLIES TO       SUMMARY
+057fdbc3-50f9-41dc-8ca5-9365f52962a0  kit     sandbox:test-1   network: 4 allow
+25a42ef4-e948-47a2-952b-b4d7aad8fbc1  local   sandbox:sbxw-2   network: 23 allow
+local-policy                          local   all              network: 159 allow; filesystem read: 1 allow
+";
+        let table = parse_policy_table(raw);
+        assert_eq!(
+            policy_column_roles(&table.columns),
+            ["id", "source", "applies", "summary"]
+        );
+        assert_eq!(table.rows.len(), 3);
+        assert_eq!(table.rows[2][0], "local-policy");
+        // The multi-clause summary must survive intact — it is the only place
+        // the listing says anything about what the policy actually does.
+        assert_eq!(
+            table.rows[2][3],
+            "network: 159 allow; filesystem read: 1 allow"
+        );
+    }
+
+    /// The scope flag decides whether a rule governs one sandbox or every one
+    /// of them, so its presence and placement are pinned by a test rather than
+    /// left to a reading of the call site.
+    #[test]
+    fn policy_rule_args_place_the_scope_flag() {
+        assert_eq!(
+            policy_rule_args("allow", Some("neos"), "github.com"),
+            [
+                "policy",
+                "allow",
+                "network",
+                "--sandbox",
+                "neos",
+                "github.com"
+            ]
+        );
+        // No `--sandbox` at all — anything else would silently scope a rule the
+        // caller meant to apply host-wide, or vice versa.
+        assert_eq!(
+            policy_rule_args("deny", None, "telemetry.example"),
+            ["policy", "deny", "network", "telemetry.example"]
+        );
+    }
+
+    /// A rule id and a policy id are different things to `policy rm`; only the
+    /// former may reach it, so they must not share a role.
+    #[test]
+    fn rule_id_and_policy_id_are_distinct_roles() {
+        let columns: Vec<String> = ["POLICY", "RULE ID", "RESOURCE", "DECISION"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            policy_column_roles(&columns),
+            ["id", "rule_id", "host", "action"]
+        );
+    }
+
+    #[test]
+    fn policy_scope_keeps_this_sandbox_and_the_global_ones() {
+        assert!(policy_applies_to("sandbox:sbxw-2", "sbxw-2"));
+        assert!(policy_applies_to("all", "sbxw-2"));
+        assert!(!policy_applies_to("sandbox:test-1", "sbxw-2"));
+        // A near-miss on the name must not slip through.
+        assert!(!policy_applies_to("sandbox:sbxw-22", "sbxw-2"));
+        // A scope syntax we don't know is shown, never hidden.
+        assert!(policy_applies_to("workspace:/src/app", "sbxw-2"));
+        assert!(policy_applies_to("", "sbxw-2"));
+    }
+
+    #[test]
+    fn policy_table_rejects_output_that_is_not_a_table() {
+        // The caller shows the raw text in this case; claiming an empty table
+        // would read as "no rules in force", which is the opposite of true.
+        assert!(parse_policy_table("No policy rules configured.\n")
+            .columns
+            .is_empty());
+        assert!(parse_policy_table("").columns.is_empty());
+        assert!(parse_policy_table("{\n  \"rules\": []\n}\n")
+            .columns
+            .is_empty());
     }
 
     #[test]

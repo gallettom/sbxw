@@ -87,6 +87,47 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **Start a chat sandbox** (💬) — the browser equivalent of `sbxw chat`, with an
   optional name (leave it empty for the generated `chat-xxxxxx`). See below.
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
+- **Inspect the network policy** in that same panel. Three `sbx` calls, because
+  no single one answers "what can this sandbox reach?":
+  - **Rules** (`sbx policy ls <name> --wide`) — one row per rule with the
+    resource it covers, i.e. the actual domains, `allow`/`deny` colour-coded.
+    Comes with a filter box, since a global policy runs to a couple of hundred
+    rules.
+  - **Recent egress** (`sbx policy log <name>`) — the hosts that were actually
+    allowed or blocked, with the rule and reason. The layer that answers "why was
+    that request refused?".
+  - **Policies governing this sandbox** (`sbx policy ls <name>`), folded away:
+    one card per policy with its source (`local` / `kit` / `org`) and rule
+    counts. A policy scoped to `all` gets a dashed border.
+  - plus the **domains sbxw allows on up**, from `sbxw.toml`.
+
+  The sandbox is a *positional* argument to `policy ls`/`log` (unlike
+  `policy allow`'s `--sandbox` flag). If a call fails, only its own section goes
+  — an older sbx without `--wide` still gets you the policy cards. If sbx prints
+  something sbxw can't parse as a table, you get its output verbatim rather than
+  a misleading empty list, and rows belonging to other sandboxes are filtered out
+  with a count of what was hidden.
+- **Add and remove network rules** from that panel:
+  - the form under the rules takes sbx's own resource syntax
+    (`example.com`, `*.acme.dev`, `host:443`, comma-separated) with an
+    allow/deny selector. Scoped to this sandbox by default; tick **all
+    sandboxes** to write it to the host-wide policy instead — that one asks for
+    confirmation, since it governs every sandbox including ones created later.
+    Runs `sbx policy allow|deny network [--sandbox <name>] <resources>`.
+  - **✕ on a rule** removes it via `sbx policy rm <rule-id>`, after a
+    confirmation that names the rule's blast radius. The id comes from the
+    listing's *rule-id* column specifically — a policy id would delete every rule
+    in that policy — so the button only appears when sbx reports one. Rules from
+    an `org` source show 🔒 instead: governance, which sbx won't let you remove.
+
+  Rules changed here are **not** written back to `sbxw.toml`, so the next
+  `sbxw up` re-applies the configured allowlist over the top. For a permanent
+  change, edit `network_allow` / `network_deny` there.
+
+  > `sbx policy rm`'s argument shape is inferred from its help text, not verified
+  > against a live run. If it turns out to differ, the button surfaces sbx's own
+  > error verbatim — it can't remove the wrong thing, since it only ever passes a
+  > rule id.
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
   **Bash** normally attaches with `sbx exec`, which only reaches a *running*

@@ -17,6 +17,9 @@
 //!   POST /api/sandboxes/create      → create a new sandbox
 //!   POST /api/sandboxes/:name/duplicate → create a new sandbox on the same workspace
 //!   POST /api/sandboxes/:name/stop  → `sbx stop <name>`
+//!   GET  /api/sandboxes/:name/policy → network rules in force (`sbx policy ls`)
+//!   POST /api/sandboxes/:name/policy/rules    → add an allow/deny network rule
+//!   POST /api/sandboxes/:name/policy/rules/rm → remove one rule by id
 //!   GET  /api/fs?path=<dir>         → directory listing for the folder picker
 //!   POST /api/fs/pick               → OS-native folder picker (Finder/Explorer/zenity)
 //!   GET  /api/sandboxes/:name/artifacts             → non-code files under .sbxw-artifacts
@@ -684,6 +687,9 @@ pub async fn serve(
         .route("/api/chat/push", post(api_chat_push))
         .route("/api/sandboxes/:name/duplicate", post(api_duplicate))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
+        .route("/api/sandboxes/:name/policy", get(api_policy_one))
+        .route("/api/sandboxes/:name/policy/rules", post(api_policy_add))
+        .route("/api/sandboxes/:name/policy/rules/rm", post(api_policy_rm))
         .route(
             "/api/sandboxes/:name/ports/publish",
             post(api_ports_publish),
@@ -1041,6 +1047,339 @@ async fn api_ports_one(Path(name): Path<String>) -> Json<SandboxPorts> {
         })
         .collect();
     Json(SandboxPorts { ports })
+}
+
+/// Payload of `GET /api/sandboxes/:name/policy`: three views of the same policy,
+/// from three `sbx` calls, plus what sbxw itself configured.
+///
+/// Three because no single sbx command answers the question. `policy ls
+/// <sandbox>` says which policies govern the sandbox and how many rules each
+/// holds; `--wide` names the resources those rules cover; `policy log` says what
+/// was actually allowed or blocked. Any one of them can fail on its own without
+/// taking the panel down.
+#[derive(Serialize)]
+struct SandboxPolicy {
+    ok: bool,
+    /// Overview: one entry per policy governing this sandbox.
+    policies: PolicyView,
+    /// Rule-level detail (`--wide`) — the view that names domains.
+    rules: PolicyView,
+    /// Recent allow/deny decisions (`policy log`).
+    log: PolicyView,
+    /// The allow/deny lists sbxw itself applies on `up`, from `sbxw.toml`.
+    /// Shown alongside the live rules because they are the part the user can
+    /// actually edit — and because they still explain the sandbox's egress when
+    /// `sbx policy` is unavailable entirely.
+    configured_allow: Vec<String>,
+    configured_deny: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// One parsed `sbx policy` listing.
+///
+/// Carries both the parsed table *and* the raw text: sbx's policy columns aren't
+/// pinned by the CLI reference sbxw was built against, so when parsing comes up
+/// empty the UI shows what sbx actually said instead of an implied (and
+/// dangerously wrong) "no egress rules".
+#[derive(Serialize, Default)]
+struct PolicyView {
+    /// Header names of the parsed listing; empty when it wasn't a table.
+    columns: Vec<String>,
+    /// What each column holds (`id`, `source`, `applies`, `summary`, `host`,
+    /// `action`, …; `""` when unrecognised), so the UI can lay the listing out
+    /// by meaning instead of by position. Same length as `columns`.
+    roles: Vec<&'static str>,
+    /// Only the rows concerning *this* sandbox (see `scope_policy_rows`).
+    rows: Vec<Vec<String>>,
+    /// How many rows were dropped as belonging to other sandboxes. Reported
+    /// rather than silently swallowed: "3 rules" reads very differently when you
+    /// know 10 were filtered out.
+    other_sandboxes: usize,
+    /// Rows beyond the display limit, dropped to keep the panel a panel.
+    truncated: usize,
+    /// True when sbx accepted the sandbox argument. False means these are the
+    /// host-wide rules, which must not be presented as this sandbox's.
+    sandbox_scoped: bool,
+    raw: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Most rows a view renders. The rule-level and log views are both unbounded in
+/// principle — a global policy can hold a couple of hundred rules — and past
+/// this the panel stops being glanceable. The UI says how many were dropped.
+const VIEW_ROW_LIMIT: usize = 200;
+
+/// Drop the rows of a policy listing that belong to *other* sandboxes, and
+/// report how many went. Handles both shapes: `policy ls`'s `APPLIES TO`
+/// (`sandbox:<name>` / `all`) and a bare `SANDBOX` column, which is normalised
+/// to the former so one rule decides both.
+fn scope_policy_rows(
+    rows: Vec<Vec<String>>,
+    roles: &[&'static str],
+    sandbox: &str,
+) -> (Vec<Vec<String>>, usize) {
+    let col = roles
+        .iter()
+        .position(|r| *r == "applies")
+        .map(|i| (i, false))
+        .or_else(|| {
+            roles
+                .iter()
+                .position(|r| *r == "sandbox")
+                .map(|i| (i, true))
+        });
+
+    let (i, bare) = match col {
+        Some(c) => c,
+        // Nothing to scope on: show everything rather than guess.
+        None => return (rows, 0),
+    };
+
+    let total = rows.len();
+    let kept: Vec<Vec<String>> = rows
+        .into_iter()
+        .filter(|r| match r.get(i) {
+            None => true,
+            Some(cell) if bare && !cell.trim().is_empty() => {
+                sbx::policy_applies_to(&format!("sandbox:{}", cell.trim()), sandbox)
+            }
+            Some(cell) => sbx::policy_applies_to(cell, sandbox),
+        })
+        .collect();
+
+    let dropped = total - kept.len();
+    (kept, dropped)
+}
+
+/// Turn one `sbx policy` listing into a `PolicyView`. Never fails outward: a
+/// sbx that doesn't support the command yields a view carrying the reason, and
+/// the panel omits that section instead of breaking.
+fn policy_view(listed: Result<(String, bool)>, sandbox: &str) -> PolicyView {
+    let (raw, sandbox_scoped) = match listed {
+        Ok(v) => v,
+        Err(e) => {
+            return PolicyView {
+                error: Some(format!("{e:#}")),
+                ..Default::default()
+            }
+        }
+    };
+
+    let table = sbx::parse_policy_table(&raw);
+    let roles = sbx::policy_column_roles(&table.columns);
+    // sbx already scopes the listing when it accepts the sandbox argument; this
+    // is what makes the unscoped fallback usable, and it is a no-op otherwise.
+    let (mut rows, other_sandboxes) = scope_policy_rows(table.rows, &roles, sandbox);
+    let truncated = rows.len().saturating_sub(VIEW_ROW_LIMIT);
+    rows.truncate(VIEW_ROW_LIMIT);
+
+    PolicyView {
+        columns: table.columns,
+        roles,
+        rows,
+        other_sandboxes,
+        truncated,
+        sandbox_scoped,
+        raw: raw.trim_end().to_string(),
+        error: None,
+    }
+}
+
+/// `GET /api/sandboxes/:name/policy` — the network policy in force for one
+/// sandbox: which policies govern it, the rules they hold, and what those rules
+/// recently allowed or blocked.
+///
+/// A failure is not fatal here: whatever the other views returned is still sent,
+/// down to just the `sbxw.toml` lists, so the panel always says *something*
+/// truthful about this sandbox's egress.
+async fn api_policy_one(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Json<SandboxPolicy> {
+    let configured_allow = state.cfg.network_allow.clone();
+    let configured_deny = state.cfg.network_deny.clone();
+
+    // This endpoint answers with its own shape, not the `{ok, error}` envelope
+    // `reject_invalid_name` produces, so it applies the same rule by hand.
+    if !crate::is_valid_sandbox_name(&name) {
+        return Json(SandboxPolicy {
+            ok: false,
+            policies: PolicyView::default(),
+            rules: PolicyView::default(),
+            log: PolicyView::default(),
+            configured_allow,
+            configured_deny,
+            error: Some(crate::INVALID_NAME_MSG.to_string()),
+        });
+    }
+
+    // Three shell-outs for one panel, so they share a single blocking thread
+    // rather than each holding one of the pool's.
+    let queried = tokio::task::spawn_blocking(move || {
+        let policies = policy_view(sbx::policy_ls(&name, false), &name);
+        let rules = policy_view(sbx::policy_ls(&name, true), &name);
+        let log = policy_view(sbx::policy_log(&name), &name);
+        (policies, rules, log)
+    })
+    .await;
+
+    match queried {
+        Ok((policies, rules, log)) => {
+            // "ok" means the panel has something to show, not that every call
+            // succeeded — each view reports its own failure.
+            let ok = policies.error.is_none() || rules.error.is_none() || log.error.is_none();
+            let error = if ok { None } else { policies.error.clone() };
+            Json(SandboxPolicy {
+                ok,
+                policies,
+                rules,
+                log,
+                configured_allow,
+                configured_deny,
+                error,
+            })
+        }
+        Err(e) => Json(SandboxPolicy {
+            ok: false,
+            policies: PolicyView::default(),
+            rules: PolicyView::default(),
+            log: PolicyView::default(),
+            configured_allow,
+            configured_deny,
+            error: Some(format!("policy lookup task failed: {e}")),
+        }),
+    }
+}
+
+#[derive(Deserialize)]
+struct PolicyRuleBody {
+    /// Resources in sbx's own syntax: `example.com`, `*.example.com`,
+    /// `host:443`, or a comma-separated list of them.
+    resources: String,
+    /// `"allow"` (default) or `"deny"`.
+    decision: Option<String>,
+    /// Write the rule to the host-wide policy — every sandbox, present and
+    /// future — instead of scoping it to this one. Defaults to false: the
+    /// narrower scope is the one you can't regret.
+    global: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct PolicyRmBody {
+    /// A **rule** id from the `--wide` listing, never a policy id.
+    rule: String,
+}
+
+/// Longest policy argument accepted. A resource list is a handful of hostnames;
+/// anything past this is a mistake or an attempt to do something else.
+const POLICY_ARG_LIMIT: usize = 512;
+
+/// Clean one policy argument, or explain why it can't be used.
+///
+/// sbx arguments are passed as argv (never through a shell), so the risk isn't
+/// injection — it's a value starting with `-` being parsed as a *flag*, which
+/// could turn `policy rm <rule>` into `policy rm --something`. Empty and
+/// oversized values are rejected for the same "don't send sbx nonsense" reason.
+fn clean_policy_arg(value: &str, what: &str) -> std::result::Result<String, String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Err(format!("{what} is required"));
+    }
+    if v.len() > POLICY_ARG_LIMIT {
+        return Err(format!(
+            "{what} is too long (max {POLICY_ARG_LIMIT} characters)"
+        ));
+    }
+    if v.starts_with('-') {
+        return Err(format!(
+            "{what} must not start with '-' — sbx would read it as a flag"
+        ));
+    }
+    Ok(v.to_string())
+}
+
+/// Normalise a comma-separated resource list: trim each entry, drop empties,
+/// and apply `clean_policy_arg` to every one of them. "a.com, b.com" is what a
+/// person types; "a.com,b.com" is what sbx wants.
+fn clean_resource_list(raw: &str) -> std::result::Result<String, String> {
+    let cleaned = clean_policy_arg(raw, "resource")?;
+    let parts: Vec<String> = cleaned
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| clean_policy_arg(p, "resource"))
+        .collect::<std::result::Result<_, _>>()?;
+    if parts.is_empty() {
+        return Err("resource is required".into());
+    }
+    Ok(parts.join(","))
+}
+
+/// `POST /api/sandboxes/:name/policy/rules` — add an allow or deny network rule.
+///
+/// Scoped to this sandbox unless `global` is set, in which case it lands in the
+/// host-wide policy and governs every sandbox. sbx's own refusal (governance,
+/// org policy) is passed straight back to the browser.
+async fn api_policy_add(
+    Path(name): Path<String>,
+    Json(body): Json<PolicyRuleBody>,
+) -> Json<serde_json::Value> {
+    if let Some(err) = reject_invalid_name(&name) {
+        return err;
+    }
+    let resources = match clean_resource_list(&body.resources) {
+        Ok(r) => r,
+        Err(e) => return err_json(e),
+    };
+    let deny = match body.decision.as_deref().unwrap_or("allow") {
+        "allow" => false,
+        "deny" => true,
+        other => return err_json(format!("unknown decision '{other}' — use allow or deny")),
+    };
+    let global = body.global.unwrap_or(false);
+
+    // A rule change is a change to what the sandbox can reach: worth a line in
+    // the daemon log whether or not anyone is watching the browser.
+    tracing::info!(
+        "web UI: adding {} network rule for {} — {resources}",
+        if deny { "deny" } else { "allow" },
+        if global {
+            "ALL sandboxes".into()
+        } else {
+            format!("sandbox '{name}'")
+        },
+    );
+
+    blocking_ok(move || {
+        let scope = if global { None } else { Some(name.as_str()) };
+        if deny {
+            sbx::policy_deny_network(scope, &resources)
+        } else {
+            sbx::policy_allow_network(scope, &resources)
+        }
+    })
+    .await
+}
+
+/// `POST /api/sandboxes/:name/policy/rules/rm` — remove one rule by id.
+///
+/// The id must come from a rule-id column (see `sbx::policy_rm_rule`); the
+/// frontend only offers the button when the listing has one.
+async fn api_policy_rm(
+    Path(name): Path<String>,
+    Json(body): Json<PolicyRmBody>,
+) -> Json<serde_json::Value> {
+    if let Some(err) = reject_invalid_name(&name) {
+        return err;
+    }
+    let rule = match clean_policy_arg(&body.rule, "rule id") {
+        Ok(r) => r,
+        Err(e) => return err_json(e),
+    };
+    tracing::info!("web UI: removing policy rule {rule} (from sandbox '{name}' panel)");
+    blocking_ok(move || sbx::policy_rm_rule(&rule)).await
 }
 
 #[derive(Deserialize)]
@@ -2493,6 +2832,28 @@ mod tests {
         );
         assert!(remove);
         assert_eq!(st.state, SessionState::Exited);
+    }
+
+    /// A resource starting with `-` would be parsed by sbx as a flag, so it is
+    /// refused rather than passed through — before and after the comma split.
+    #[test]
+    fn policy_args_reject_flag_lookalikes_and_empties() {
+        assert!(clean_policy_arg("--sandbox", "rule id").is_err());
+        assert!(clean_policy_arg("   ", "rule id").is_err());
+        assert!(clean_policy_arg(&"x".repeat(POLICY_ARG_LIMIT + 1), "rule id").is_err());
+        assert_eq!(clean_policy_arg(" r-0005 ", "rule id").unwrap(), "r-0005");
+
+        assert!(clean_resource_list("github.com,--force").is_err());
+        assert!(clean_resource_list(" , , ").is_err());
+    }
+
+    /// What a person types versus what sbx wants.
+    #[test]
+    fn resource_lists_are_normalised_for_sbx() {
+        assert_eq!(
+            clean_resource_list(" github.com , *.npmjs.org ,, host:443 ").unwrap(),
+            "github.com,*.npmjs.org,host:443"
+        );
     }
 
     /// The frontend branches on `ok` alone, so every envelope must carry it —
