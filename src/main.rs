@@ -36,8 +36,61 @@ use clap::{CommandFactory, Parser, Subcommand};
 use config::Config;
 use hosts::HostAlias;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// Provisioning messages parked until the terminal is ours again, or `None`
+/// when they should be logged as they happen.
+///
+/// The port-publishing thread outlives the moment the agent starts, by design:
+/// it waits for the sandbox to report `running`, and on a fresh or stopped one
+/// that is `sbx run` itself booting it. In daemon mode its output goes to the
+/// log file and nobody minds. With `--no-web` it lands on a terminal the agent
+/// has already switched to raw mode — where a bare `\n` moves down without
+/// returning to column 0, so each line starts one step further right (the
+/// "staircase"), on top of a full-screen TUI that is now corrupted.
+///
+/// Fixing the newlines alone would only make the interruption tidier. The
+/// terminal belongs to the agent, so in foreground mode these lines wait here
+/// and are printed once it exits.
+static DEFERRED_PROVISIONING: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Park provisioning output instead of logging it (foreground/`--no-web`).
+fn defer_provisioning_output() {
+    *DEFERRED_PROVISIONING.lock().unwrap() = Some(Vec::new());
+}
+
+/// Report a provisioning message — live, or parked (see `DEFERRED_PROVISIONING`).
+fn provisioning_report(warn: bool, msg: String) {
+    if let Some(parked) = DEFERRED_PROVISIONING.lock().unwrap().as_mut() {
+        parked.push(if warn {
+            format!("WARN  {msg}")
+        } else {
+            format!("      {msg}")
+        });
+        return;
+    }
+    if warn {
+        tracing::warn!("{msg}");
+    } else {
+        tracing::info!("{msg}");
+    }
+}
+
+/// Print whatever the provisioning thread parked, now that the terminal is
+/// line-disciplined again, and go back to logging live. A thread still running
+/// past this point finds an empty sink and logs normally — which is correct,
+/// since by then nothing is holding the terminal.
+fn flush_provisioning_output() {
+    let parked = DEFERRED_PROVISIONING.lock().unwrap().take();
+    let Some(lines) = parked.filter(|l| !l.is_empty()) else {
+        return;
+    };
+    eprintln!("\n─ provisioning notes (while the agent held the terminal) ─");
+    for line in lines {
+        eprintln!("{line}");
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -321,8 +374,7 @@ fn main() -> Result<()> {
             init_tracing();
             let cfg = Config::load_or_default(&config)?;
             let addr = cfg.web_addr.clone();
-            let shell = cfg.web_shell.clone();
-            run_web(&addr, name, shell, Arc::new(cfg), false)
+            run_web(&addr, name, Arc::new(cfg), false)
         }
         Cmd::Bash { name } => {
             // Foreground bash shell: `sbx exec -it <name> -- bash`, inheriting this terminal.
@@ -1700,19 +1752,22 @@ pub(crate) fn provision_sandbox(
                 // Per-port and non-fatal on purpose: a host port that something
                 // else already holds should cost you that one alias, not the
                 // sandbox and not the other ports.
-                tracing::warn!(
-                    "could not publish {spec}: {e:#}\n\
-                     if that host port is taken, free it (or change host_port in \
-                     sbxw.toml) and run `sbxw ports {prov_name}`"
+                provisioning_report(
+                    true,
+                    format!(
+                        "could not publish {spec}: {e:#}\n\
+                         if that host port is taken, free it (or change host_port in \
+                         sbxw.toml) and run `sbxw ports {prov_name}`"
+                    ),
                 );
             } else {
-                tracing::info!("published {spec}");
+                provisioning_report(false, format!("published {spec}"));
             }
         }
         // Show what the daemon actually has published, for confirmation.
         if let Ok(table) = sbx::list_ports(&prov_name) {
             for line in table.lines() {
-                tracing::info!(target: "sbx", "ports | {line}");
+                provisioning_report(false, format!("ports | {line}"));
             }
         }
     });
@@ -1742,7 +1797,6 @@ fn cmd_up(
         return run_web(
             &cfg.web_addr.clone(),
             String::new(),
-            cfg.web_shell.clone(),
             Arc::new(cfg),
             use_api_key,
         );
@@ -1784,20 +1838,27 @@ fn cmd_up(
         })
         .collect();
 
+    // The port-publishing thread `provision_sandbox` leaves behind reports long
+    // after the agent has claimed the terminal, so in foreground mode it has to
+    // be muzzled *before* provisioning starts, not after.
+    if no_web {
+        defer_provisioning_output();
+    }
+
     provision_sandbox(&name, &ws_str, &ro_strs, &cfg, &[], use_api_key)?;
 
     // Start the agent: either via the web terminal or in this terminal.
     if no_web {
-        tracing::info!("attaching agent in this terminal (no web). Ctrl-C to detach.");
-        run_agent_foreground(&name)
+        tracing::info!(
+            "attaching agent in this terminal (no web). Ctrl-C to detach.\n\
+             port publishing continues in the background — anything it reports \
+             is shown when the agent exits."
+        );
+        let attached = run_agent_foreground(&name);
+        flush_provisioning_output();
+        attached
     } else {
-        run_web(
-            &cfg.web_addr.clone(),
-            name,
-            cfg.web_shell.clone(),
-            Arc::new(cfg),
-            use_api_key,
-        )
+        run_web(&cfg.web_addr.clone(), name, Arc::new(cfg), use_api_key)
     }
 }
 
@@ -1873,14 +1934,10 @@ fn run_agent_foreground(name: &str) -> Result<()> {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn run_web(
-    addr: &str,
-    name: String,
-    shell: String,
-    cfg: Arc<Config>,
-    use_api_key: bool,
-) -> Result<()> {
-    web::serve(addr, name, shell, cfg, use_api_key).await
+async fn run_web(addr: &str, name: String, cfg: Arc<Config>, use_api_key: bool) -> Result<()> {
+    // `web_shell` reaches the daemon through `cfg` alone: passing it separately
+    // as well left two copies of one setting to keep in step.
+    web::serve(addr, name, cfg, use_api_key).await
 }
 
 /// Returns the OAuth token from the host environment, if set and non-empty.
@@ -1948,6 +2005,32 @@ fn write_oauth_kit(credentials_json: &str) -> Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one test touching `DEFERRED_PROVISIONING`; it is process-global, so
+    /// nothing else may park output concurrently.
+    #[test]
+    fn provisioning_output_parks_while_the_agent_holds_the_terminal() {
+        defer_provisioning_output();
+        provisioning_report(true, "could not publish 4200:4200".into());
+        provisioning_report(false, "published 8000:8000".into());
+
+        // Parked, not printed: the terminal is the agent's until it exits.
+        {
+            let sink = DEFERRED_PROVISIONING.lock().unwrap();
+            let lines = sink.as_ref().expect("still deferring");
+            assert_eq!(lines.len(), 2);
+            assert!(lines[0].starts_with("WARN  "), "{:?}", lines[0]);
+            assert!(lines[1].contains("published 8000:8000"));
+        }
+
+        flush_provisioning_output();
+
+        // Draining also ends the deferral: a thread still publishing after the
+        // agent exits should log live rather than pile up unseen.
+        assert!(DEFERRED_PROVISIONING.lock().unwrap().is_none());
+        provisioning_report(false, "late arrival".into());
+        assert!(DEFERRED_PROVISIONING.lock().unwrap().is_none());
+    }
 
     #[test]
     fn kit_display_name_reads_spec_yaml_name() {

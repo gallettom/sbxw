@@ -54,6 +54,13 @@ It **only ever calls `sbx`** — never `docker sandbox`.
 `sbxw up` prints the daemon pid + URL and detaches. Use `--tail` to follow its
 log, or `--no-web` to attach the agent in the current terminal instead.
 
+With `--no-web` the terminal belongs to the agent, so step 6's port publishing —
+which by design finishes *after* `sbx run` has booted the sandbox — doesn't write
+to it. Its reports are held and printed when the agent exits. Otherwise they
+landed on top of the agent's full-screen UI, and in raw mode (no `ONLCR`) each
+newline dropped a line without returning to column 0, stepping the text
+diagonally across the screen.
+
 ## Commands
 
 | Command | What it does |
@@ -137,6 +144,21 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   [SSH](#ssh-experimental) set up — the pane tells you so if it isn't.
 - **Copy the SSH command** (SSH button in the terminal bar) for the attached
   sandbox — `ssh <name>.sbx`, ready to paste into a terminal or a remote-dev tool.
+- **Open the host monitor** (the screen icon in the sidebar header) in the
+  focused pane: sbx's own all-sandboxes
+  dashboard, run in a PTY and streamed to the browser like any other pane, so a
+  full-screen TUI works as it does in a terminal. It is *not* a sandbox session —
+  it runs on the host, is shared by every viewer, and is filed under a
+  pseudo-sandbox (`__host__`) that no real name can collide with, since sandbox
+  names may not contain underscores. The Claude/Bash toggles and the SSH button
+  hide for it: there is no sandbox behind that pane.
+
+  Clicking it again puts the pane back on the sandbox it took over.
+
+  What it runs is `monitor_cmd` in `sbxw.toml`, as argv — **one fixed configured
+  command, deliberately not a "run anything on the host" box**. The default is
+  bare `["sbx"]`: with no subcommand the CLI opens its own dashboard. Set it to
+  `[]` and the button disappears.
 
 ## Chat sandboxes
 

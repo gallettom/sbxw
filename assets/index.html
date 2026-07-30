@@ -99,6 +99,14 @@
   .btn-new:hover { color: #e6edf3; background: #21262d; }
   .sidebar-actions { display: flex; align-items: center; gap: 2px; }
   #btn-new-chat { font-size: 13px; }
+  /* The monitor glyph is an SVG, not a character: centre it in the button so it
+     sits on the same baseline as the emoji buttons next to it. */
+  #btn-monitor { display: flex; align-items: center; padding: .15rem .2rem; color: #8b949e; }
+  /* Author `display` beats the browser's own `[hidden] { display: none }`, so
+     with no `monitor_cmd` configured the button would come back. Restate it. */
+  #btn-monitor[hidden] { display: none; }
+  #btn-monitor:hover { color: #e6edf3; }
+  #btn-monitor svg { display: block; }
 
   /* ── Modal ── */
   .modal-overlay {
@@ -626,6 +634,18 @@
     <div class="sidebar-header">
       <span class="sidebar-label">Sandboxes</span>
       <span class="sidebar-actions">
+        <button class="btn-new" id="btn-monitor" hidden
+                title="Host monitor — every sandbox at once, in the focused pane">
+          <!-- A screen on a stand. Drawn rather than an emoji so it inherits
+               the hover colour and looks the same on every platform, like the
+               Refresh glyph in the header. -->
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="1.1" y="2.1" width="13.8" height="9.3" rx="1.6"
+                  stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6.2 14.1h3.6M8 11.4v2.7"
+                  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
         <button class="btn-new" id="btn-new-chat"
                 title="New chat sandbox — empty temp folder, no access to your code">💬</button>
         <button class="btn-new" id="btn-new-sandbox" title="Create new sandbox">＋</button>
@@ -860,6 +880,12 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js"></script>
 <script>
 const INITIAL_SANDBOX = "__SANDBOX__";
+// The host monitor is one fixed command from sbxw.toml (`monitor_cmd`); with
+// none configured there is nothing to open, so the button never appears.
+const MONITOR_CMD = "__MONITOR__";
+// Pseudo-sandbox the monitor session is filed under, host-side. Underscores
+// can't occur in a real sandbox name, so it can never shadow one.
+const MONITOR_SANDBOX = '__host__';
 
 // ── Toast ─────────────────────────────────────────────────────────────────
 let pasteToastTimer = null;
@@ -1116,6 +1142,9 @@ function createPane(index) {
   const pane = {
     index, el, termEl, term, fit,
     ws: null, sandbox: null, mode: 'claude',
+    // Sandbox this pane was on before the monitor took it over, so the
+    // Monitor button toggles.
+    beforeMonitor: null,
     getLastSelection: () => lastSelection,
   };
 
@@ -1210,22 +1239,56 @@ function handlePaneData(pane, ev) {
   }
 }
 
+// Which mode a pane must use when connecting to `name`, given what the caller
+// asked for and what the pane is showing now.
+//
+// A pane's mode is sticky across reconnects — that is what makes the Bash
+// toggle survive switching sandboxes. But `monitor` belongs to the host pane
+// alone, and every "just connect me to this sandbox" path (a sidebar click, an
+// island focus, a #sandbox= link) passes no mode at all. A sticky `monitor`
+// therefore carried over: the pane reopened the *monitor* under the sandbox's
+// name, and since monitor mode hides the Claude/Bash toggles there was no way
+// back short of closing the pane. The target decides the mode, not the pane's
+// current contents.
+function paneModeFor(name, requested, current) {
+  if (name === MONITOR_SANDBOX) return 'monitor';
+  if (requested) return requested;
+  return current === 'monitor' ? 'claude' : current;
+}
+
 function connectPane(idx, name, mode) {
   if (!name || idx >= panes.length) return;
   // Refuse to duplicate a sandbox already open in a different visible pane.
   if (panes.slice(0, paneCount).some((p, i) => i !== idx && p.sandbox === name)) return;
   const pane = panes[idx];
-  if (mode) setPaneMode(idx, mode, false);
+  const monitor = name === MONITOR_SANDBOX;
+  const from = { sandbox: pane.sandbox, mode: pane.mode };
+
+  setPaneMode(idx, paneModeFor(name, mode, pane.mode), false);
+
+  // Where the Monitor button sends you back to. Only a real sandbox is worth
+  // remembering, and leaving the monitor clears it.
+  pane.beforeMonitor = monitor
+    ? (from.sandbox && from.sandbox !== MONITOR_SANDBOX ? from : pane.beforeMonitor)
+    : null;
+
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
   // Full reset, not just clear(): a previous session (e.g. a TUI that enabled
   // xterm mouse-tracking) can leave DECSET modes on, which would otherwise
   // survive into the new session and turn mouse moves into stray input.
   pane.term.reset();
   pane.sandbox = name;
-  document.getElementById(`plabel-${idx}`).textContent = name;
+  const label = document.getElementById(`plabel-${idx}`);
+  // The command is the tooltip, not the label: `monitor_cmd` is bare `sbx`,
+  // which as a pane title says nothing about what the pane is.
+  label.textContent = monitor ? 'monitor' : name;
+  label.title = monitor ? `host monitor — ${MONITOR_CMD}` : '';
   document.getElementById(`pconn-${idx}`).textContent = 'connecting…';
   document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
-  document.getElementById(`pssh-${idx}`).disabled = false;
+  // The monitor runs on the host: there is no sandbox to ssh into, and the
+  // Claude/Bash toggles would point at the pseudo-sandbox it is filed under.
+  document.getElementById(`pssh-${idx}`).disabled = monitor;
+  pane.el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
   renderSidebar();
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -1314,6 +1377,9 @@ function closePane(idx) {
   document.getElementById(`pconn-${idx}`).textContent = '';
   document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
   document.getElementById(`pssh-${idx}`).disabled = true;
+  // A closed monitor pane must not leave its hidden mode buttons behind for
+  // whatever gets connected here next.
+  closing.el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = false; });
 
   // Shift panes[idx+1..paneCount-1] one slot to the left.
   // After each step the source slot is nulled so it can safely be overwritten
@@ -1914,6 +1980,25 @@ function normalizeNameInput() {
 inpName.addEventListener('input', normalizeNameInput);
 
 document.getElementById('btn-new-sandbox').addEventListener('click', openModal);
+
+// ── Host monitor ──────────────────────────────────────────────────────────
+// One PTY on the host running `monitor_cmd`, shared by every viewer — not a
+// sandbox session, and deliberately not a general "run something on the host"
+// pane: the daemon binds to localhost, and one fixed configured command is a
+// far smaller thing to expose than a shell.
+const btnMonitor = document.getElementById('btn-monitor');
+if (MONITOR_CMD) {
+  btnMonitor.hidden = false;
+  btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in the focused pane`;
+  btnMonitor.addEventListener('click', () => {
+    // A toggle: from the monitor it puts the pane back on the sandbox it took
+    // over, which is the way out most people reach for first.
+    const pane = panes[focusedPane];
+    const back = pane?.mode === 'monitor' && pane.beforeMonitor;
+    if (back) connectPane(focusedPane, back.sandbox, back.mode);
+    else connectPane(focusedPane, MONITOR_SANDBOX, 'monitor');
+  });
+}
 
 // ── Chat sandbox: an agent on an empty temp folder (no code access) ────────
 // Spins up a throwaway sandbox whose workspace is a fresh temp dir, so the
@@ -2844,7 +2929,10 @@ dupConfirm.addEventListener('click', () => {
   const n = (saved?.n >= 1 && saved?.n <= maxPanes) ? saved.n : 1;
   setLayout(n);
   await loadSandboxes();
-  const exists = name => sandboxes.some(s => s.name === name);
+  // The monitor pane has no sandbox to still exist, so it restores on the
+  // command being configured instead.
+  const exists = name =>
+    name === MONITOR_SANDBOX ? !!MONITOR_CMD : sandboxes.some(s => s.name === name);
 
   if (saved?.panes?.length) {
     // Restore saved pane connections for sandboxes that still exist.

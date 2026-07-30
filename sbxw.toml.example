@@ -24,6 +24,13 @@ claude_model = "claude-sonnet-5"
 # it. Read at CREATION only — flipping it doesn't affect existing sandboxes.
 share_skills = true
 
+# Command behind the web UI's Monitor pane, as argv (no shell involved).
+# Bare `sbx` opens the CLI's own all-sandboxes dashboard. It runs on the HOST,
+# outside every sandbox, which is why it is one fixed command and not a
+# free-form box: the daemon listens on localhost and this is the whole of what
+# the browser can start there. Set it to [] to drop the button entirely.
+monitor_cmd = ["sbx"]
+
 # One loopback IP per app => clean hostnames on their natural ports
 # (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
 # `ifconfig lo0 alias 127.0.0.X` (sudo). When false, everything shares 127.0.0.1.

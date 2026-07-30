@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::hosts::{self, HostAlias};
 use crate::sbx;
 use crate::ExtraPort;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use axum::{
     body::Bytes,
     extract::{
@@ -199,6 +199,18 @@ fn now_ms() -> u64 {
 fn session_key(sandbox: &str, mode: &str) -> String {
     format!("{sandbox}::{mode}")
 }
+
+/// Mode of the host-wide monitor pane, and the pseudo-sandbox it is filed
+/// under. The monitor watches *every* sandbox from the host, so it belongs to
+/// none of them and needs a key of its own.
+///
+/// The underscores are what make it safe: `is_valid_sandbox_name` accepts only
+/// letters, digits and hyphens, so no real sandbox can ever collide with this
+/// key — and every endpoint that takes a name still rejects it, which is why
+/// the monitor is reachable through the WebSocket alone and not, say, through
+/// `rm`.
+const MONITOR_KEY_MODE: &str = "monitor";
+const MONITOR_SANDBOX: &str = "__host__";
 
 /// Split a session key "<sandbox>::<mode>" back into its parts.
 fn split_key(key: &str) -> (&str, &str) {
@@ -556,7 +568,6 @@ struct UsageInfo {
 #[derive(Clone)]
 struct AppState {
     initial_sandbox: String,
-    shell: String,
     sessions: Sessions,
     /// Broadcast bus of rich session updates (see `/api/events`).
     events: broadcast::Sender<SessionInfo>,
@@ -593,7 +604,8 @@ struct SandboxItem {
 #[derive(Deserialize)]
 struct WsQuery {
     sandbox: Option<String>,
-    /// "claude" (default) attaches the agent; "bash" opens a shell via sbx exec.
+    /// "claude" (default) attaches the agent, "bash" opens a shell via sbx exec,
+    /// "monitor" runs the host dashboard and ignores `sandbox`.
     mode: Option<String>,
 }
 
@@ -602,7 +614,6 @@ const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
 pub async fn serve(
     addr: &str,
     initial_sandbox: String,
-    shell: String,
     cfg: Arc<Config>,
     use_api_key: bool,
 ) -> Result<()> {
@@ -658,7 +669,6 @@ pub async fn serve(
 
     let state = Arc::new(AppState {
         initial_sandbox,
-        shell,
         sessions: Arc::new(Mutex::new(HashMap::new())),
         events,
         focus,
@@ -722,7 +732,17 @@ pub async fn serve(
 }
 
 async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
-    Html(INDEX_HTML_TEMPLATE.replace("__SANDBOX__", &state.initial_sandbox))
+    // The monitor command is echoed into the page so the button can label
+    // itself with what it will actually run — and stay hidden when nothing is
+    // configured. Quotes are stripped rather than escaped: it lands inside a
+    // JS string literal, and a command with a quote in it isn't worth a
+    // serialiser here.
+    let monitor = state.cfg.monitor_cmd.join(" ").replace(['"', '\\'], "");
+    Html(
+        INDEX_HTML_TEMPLATE
+            .replace("__SANDBOX__", &state.initial_sandbox)
+            .replace("__MONITOR__", &monitor),
+    )
 }
 
 /// Live stream of session state transitions (Server-Sent Events). The macOS
@@ -1860,10 +1880,10 @@ async fn api_chat_push(
         state.sessions.lock().unwrap().remove(&key);
     }
     let sessions = state.sessions.clone();
-    let shell = state.shell.clone();
+    let cfg = state.cfg.clone();
     let n = name.clone();
     let session =
-        match try_blocking(move || get_or_create_session(&n, "claude", &shell, &sessions)).await {
+        match try_blocking(move || get_or_create_session(&n, "claude", &cfg, &sessions)).await {
             Ok(s) => s,
             Err(rejected) => return rejected,
         };
@@ -2285,21 +2305,27 @@ async fn ws_handler(
     Query(params): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
-    let sandbox = params
-        .sandbox
-        .unwrap_or_else(|| state.initial_sandbox.clone());
-    // "bash" → shell session; anything else → the agent ("claude").
+    // "bash" → shell session; "monitor" → the host dashboard, which ignores the
+    // sandbox parameter entirely; anything else → the agent ("claude").
     let mode = match params.mode.as_deref() {
         Some("bash") => "bash",
+        Some(MONITOR_KEY_MODE) => MONITOR_KEY_MODE,
         _ => "claude",
     }
     .to_string();
+    let sandbox = if mode == MONITOR_KEY_MODE {
+        MONITOR_SANDBOX.to_string()
+    } else {
+        params
+            .sandbox
+            .unwrap_or_else(|| state.initial_sandbox.clone())
+    };
     ws.on_upgrade(move |socket| {
         handle_socket(
             socket,
             sandbox,
             mode,
-            state.shell.clone(),
+            state.cfg.clone(),
             state.sessions.clone(),
         )
     })
@@ -2309,10 +2335,10 @@ async fn handle_socket(
     socket: WebSocket,
     sandbox: String,
     mode: String,
-    shell: String,
+    cfg: Arc<Config>,
     sessions: Sessions,
 ) {
-    if let Err(e) = bridge(socket, sandbox, mode, shell, sessions).await {
+    if let Err(e) = bridge(socket, sandbox, mode, cfg, sessions).await {
         tracing::warn!("tty bridge ended: {e:#}");
     }
 }
@@ -2320,13 +2346,14 @@ async fn handle_socket(
 /// Return the existing PTY session for (`sandbox`, `mode`), or create one.
 /// Sessions are keyed by "<sandbox>::<mode>" so the agent ("claude") and a
 /// bash shell coexist independently for the same sandbox.
-///   mode == "bash"  → `sbx exec -it <sandbox> -- bash`, or SSH if it's stopped
-///   mode == "claude"→ `sbx run --name <sandbox>` (or the configured web_shell via exec)
+///   mode == "bash"   → `sbx exec -it <sandbox> -- bash`, or SSH if it's stopped
+///   mode == "claude" → `sbx run --name <sandbox>` (or the configured web_shell via exec)
+///   mode == "monitor"→ `cfg.monitor_cmd` on the **host**, under `MONITOR_KEY`
 /// The session lives until the PTY process exits.
 fn get_or_create_session(
     sandbox: &str,
     mode: &str,
-    shell: &str,
+    cfg: &Config,
     sessions: &Sessions,
 ) -> Result<Arc<PtySession>> {
     let key = session_key(sandbox, mode);
@@ -2336,14 +2363,17 @@ fn get_or_create_session(
         return Ok(s.clone());
     }
 
-    // Slow path: spin up a new PTY.
-    let pty = native_pty_system();
-    let pair = pty.openpty(PtySize {
-        rows: 30,
-        cols: 100,
-        pixel_width: 0,
-        pixel_height: 0,
-    })?;
+    // The monitor runs on the host and watches every sandbox, so it is neither
+    // created from nor scoped to one. Everything below that touches `sandbox`
+    // would be meaningless (or wrong) for it, hence the early split.
+    if mode == MONITOR_KEY_MODE {
+        if cfg.monitor_cmd.is_empty() {
+            bail!("no monitor command configured — set `monitor_cmd` in sbxw.toml");
+        }
+        let mut cmd = CommandBuilder::new(&cfg.monitor_cmd[0]);
+        cmd.args(&cfg.monitor_cmd[1..]);
+        return spawn_pty_session(cmd, key, sessions);
+    }
 
     // A chat sandbox's throwaway workspace lives under `/tmp` and may have been
     // swept away since it was created; `sbx run`/`exec` would then fail to start
@@ -2360,7 +2390,7 @@ fn get_or_create_session(
     // setup at all.
     let bash_over_ssh = mode == "bash" && !crate::sbx::is_running(sandbox).unwrap_or(true);
 
-    let mut cmd = if bash_over_ssh {
+    let cmd = if bash_over_ssh {
         tracing::info!("'{sandbox}' is stopped — opening the Bash pane over SSH to start it");
         // The banner names the one prerequisite *before* ssh can fail on it;
         // `exec` keeps the shell from lingering as a useless parent process.
@@ -2378,7 +2408,7 @@ fn get_or_create_session(
         let mut c = CommandBuilder::new("sbx");
         c.args(["exec", "-it", sandbox, "--", "bash"]);
         c
-    } else if shell.is_empty() {
+    } else if cfg.web_shell.is_empty() {
         // Re-attach by name. The positional form (`sbx run <name>`) is
         // deprecated; `--name` re-attaches regardless of working directory.
         // Since sbx 0.35 this also works for sandboxes created with a custom
@@ -2388,9 +2418,32 @@ fn get_or_create_session(
         c
     } else {
         let mut c = CommandBuilder::new("sbx");
-        c.args(["exec", "-it", sandbox, "--", shell]);
+        c.args(["exec", "-it", sandbox, "--", &cfg.web_shell]);
         c
     };
+
+    spawn_pty_session(cmd, key, sessions)
+}
+
+/// Open a PTY, run `cmd` in it, and register the session under `key`.
+///
+/// Shared by every mode: the sandbox panes and the host monitor differ only in
+/// which command they launch, and everything after that — the replay ring, the
+/// broadcast channel, the debounced bell, the reader thread that unregisters
+/// the session on exit — is identical.
+fn spawn_pty_session(
+    mut cmd: CommandBuilder,
+    key: String,
+    sessions: &Sessions,
+) -> Result<Arc<PtySession>> {
+    let pty = native_pty_system();
+    let pair = pty.openpty(PtySize {
+        rows: 30,
+        cols: 100,
+        pixel_width: 0,
+        pixel_height: 0,
+    })?;
+
     cmd.env("TERM", "xterm-256color");
 
     let child = pair.slave.spawn_command(cmd)?;
@@ -2470,7 +2523,7 @@ async fn bridge(
     socket: WebSocket,
     sandbox: String,
     mode: String,
-    shell: String,
+    cfg: Arc<Config>,
     sessions: Sessions,
 ) -> Result<()> {
     let (mut ws_tx, mut ws_rx) = socket.split();
@@ -2479,9 +2532,9 @@ async fn bridge(
     let session = tokio::task::spawn_blocking({
         let sandbox = sandbox.clone();
         let mode = mode.clone();
-        let shell = shell.clone();
+        let cfg = cfg.clone();
         let sessions = sessions.clone();
-        move || get_or_create_session(&sandbox, &mode, &shell, &sessions)
+        move || get_or_create_session(&sandbox, &mode, &cfg, &sessions)
     })
     .await??;
 

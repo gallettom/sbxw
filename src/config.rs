@@ -42,6 +42,16 @@ pub struct Config {
     ///
     /// Only read at *creation*: flipping it has no effect on existing sandboxes.
     pub share_skills: bool,
+    /// Command the web UI's **Monitor** pane runs, as argv — no shell, so no
+    /// quoting rules and no injection surface. It runs on the *host*, outside
+    /// any sandbox, which is why it is one fixed configured command rather than
+    /// a free-form "run anything here" box.
+    ///
+    /// Empty disables the pane (the sidebar button disappears).
+    ///
+    /// The default is bare `sbx`: with no subcommand the CLI opens its own
+    /// all-sandboxes dashboard.
+    pub monitor_cmd: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -97,6 +107,7 @@ impl Default for Config {
             claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5".into(),
             share_skills: true,
+            monitor_cmd: vec!["sbx".into()],
         }
     }
 }
