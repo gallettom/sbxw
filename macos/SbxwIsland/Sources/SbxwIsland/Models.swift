@@ -58,16 +58,14 @@ struct SessionInfo: Codable, Equatable, Identifiable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// The whole reply, for the accordion a hovered row opens — nil when the
-    /// lead sentence already *is* the whole reply, so there is nothing to
-    /// unfold. Splitting on newlines instead would strand the common case: a
-    /// two-sentence answer arrives as one line, and everything past the first
-    /// sentence would be unreachable.
-    var replyFull: String? {
+    /// Claude's reply, trimmed — nil when there isn't one. What a row's open
+    /// accordion prints, in full: it is the only surface with room for the whole
+    /// answer, and the row drops its one-line caption while it is open, so there
+    /// is nothing to trim against.
+    var replyText: String? {
         guard let reply else { return nil }
         let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != replyLead else { return nil }
-        return trimmed
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// The prompt as a list of steps — one entry for a single question, empty

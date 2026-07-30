@@ -270,9 +270,7 @@ fn main() -> Result<()> {
             // that path — by then there is nothing chat-specific left to do.
             let name = name.unwrap_or_else(mint_chat_name);
             if !is_valid_sandbox_name(&name) {
-                anyhow::bail!(
-                    "name must be non-empty and contain only letters, digits, and hyphens"
-                );
+                anyhow::bail!(INVALID_NAME_MSG);
             }
             let workspace = PathBuf::from(prepare_chat_workspace(&name)?);
             eprintln!(
@@ -1027,7 +1025,7 @@ fn cmd_up_background(
     // Write PID file so `sbxw down [name]` can kill this daemon later.
     let _ = std::fs::write(daemon_pid_path(key), pid.to_string());
 
-    let web_port = web_addr.rsplit(':').next().unwrap_or("7681");
+    let web_port = web_port_of(&web_addr);
     eprintln!("sbxw  pid {pid}  →  http://sbxw.localhost:{web_port}");
     eprintln!("logs  {}  (sbxw logs {key})", log.display());
     eprintln!("stop  sbxw down {key}");
@@ -1119,6 +1117,11 @@ pub(crate) fn mint_chat_name() -> String {
 pub(crate) fn is_valid_sandbox_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
+
+/// What to tell the user when `is_valid_sandbox_name` says no. Shared with the
+/// web UI so the CLI and the browser explain the same rule the same way.
+pub(crate) const INVALID_NAME_MSG: &str =
+    "name must be non-empty and contain only letters, digits, and hyphens";
 
 /// Create the empty workspace for chat sandbox `name`, returning its path.
 pub(crate) fn prepare_chat_workspace(name: &str) -> Result<String> {
@@ -1265,6 +1268,12 @@ fn merged_ports(cfg: &Config, extra: &[ExtraPort]) -> Vec<PortTriple> {
                 .map(|p| (p.host_port, p.sandbox_port, p.alias.clone())),
         )
         .collect()
+}
+
+/// Port half of a `web_addr` ("127.0.0.1:7681" → "7681"). `rsplit` rather than
+/// `split` so an IPv6 literal yields the port, not the first hextet.
+fn web_port_of(addr: &str) -> &str {
+    addr.rsplit(':').next().unwrap_or("7681")
 }
 
 /// Host IP a port binds to: a distinct loopback per app (`ip_per_app`), else 127.0.0.1.
@@ -1530,6 +1539,10 @@ pub(crate) fn provision_sandbox(
         }
     }
 
+    // The daemon's port: both the in-sandbox hooks (which POST to it) and the
+    // egress rule that lets them through have to name the same one.
+    let web_port = web_port_of(&cfg.web_addr);
+
     // 2b. Pre-trust the workspace so Claude Code doesn't show the "workspace
     // has not been trusted" banner and ignore .claude/settings.local.json's
     // permissions.allow entries on first launch. Requires the container to
@@ -1551,7 +1564,6 @@ pub(crate) fn provision_sandbox(
         // lifecycle events to the daemon (the island derives session state from
         // these), and allow the sandbox to reach the host daemon. Best-effort —
         // the island simply won't track a session whose events can't be delivered.
-        let web_port = cfg.web_addr.rsplit(':').next().unwrap_or("7681");
         if let Err(e) = sbx::install_status_hooks(name, web_port) {
             tracing::warn!("could not install status hooks: {e:#}");
         }
@@ -1659,7 +1671,6 @@ pub(crate) fn provision_sandbox(
             ip: web_ip,
         });
     }
-    let web_port = cfg.web_addr.rsplit(':').next().unwrap_or("7681");
     hosts::ensure_loopback_aliases(&aliases)?;
     hosts::sync_hosts_block(&aliases)?;
     for (host_port, sandbox_port, alias) in all_ports.iter().filter(|(_, _, a)| !a.is_empty()) {
@@ -1971,6 +1982,16 @@ mod tests {
                                            // Unreadable Info.plist ("0") and locally built bundles count as stale.
         assert!(stale("0", "1.0.0"));
         assert!(stale("0.0.0-dev", "1.0.0"));
+    }
+
+    #[test]
+    fn web_port_of_extracts_the_port() {
+        assert_eq!(web_port_of("127.0.0.1:7681"), "7681");
+        assert_eq!(web_port_of("0.0.0.0:9000"), "9000");
+        // IPv6 literals are colon-heavy — the *last* colon is the one that counts.
+        assert_eq!(web_port_of("[::1]:7681"), "7681");
+        // No port at all: fall back to the default rather than the whole host.
+        assert_eq!(web_port_of("7681"), "7681");
     }
 
     #[test]

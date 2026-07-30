@@ -151,17 +151,34 @@ On top of that:
   back) and submitted in one go once the last one is picked;
 - **hovering** the notch reveals the full list — with each session's elapsed
   time and, at the top, your **Claude subscription usage** (5-hour and weekly
-  window %) — auto-hiding 1 s after you leave;
-- a **＋ New chat** row at the bottom of that list asks the throwaway chat agent
-  something without opening a browser or picking a sandbox. See below;
+  window %) — auto-hiding 1 s after you leave (5 s with a row open, so a reply
+  can be finished after the pointer wanders off). The reveal target is **the
+  notch itself**, not the whole bubble: the collapsed island hangs 280 pt wide
+  over the menu bar of whatever app you are in, and crossing the top edge on the
+  way to *that* app's menus used to unfold it in your face. Aim at the notch and
+  it opens; pass beside it and it stays put. It is also **click-through until it
+  has something to click** — the collapsed pill and the toasts announce, they
+  don't offer, so clicks fall through to the menu bar underneath; only the list
+  and a question card take the pointer. And a **click anywhere else retracts the
+  open list at once** — the timer is for a pointer that wandered, a click is a
+  decision. (A question card is exempt: it stays until answered or dismissed with
+  its ✕, so a stray click can't lose a prompt.) A click-through window receives no
+  mouse events at all, so both the reveal and that retraction are driven by
+  `NSEvent` monitors rather than by the view's own hover. Mouse monitoring needs
+  no Accessibility permission — only keyboard monitoring does;
+- every row carries a **chevron** that opens it: Claude's **full reply** and a
+  **field to write back into that sandbox**, without a browser tab or a terminal.
+  See below;
+- a **＋ New chat** row at the bottom of that list starts a *fresh* throwaway
+  chat agent without opening a browser or picking a workspace. See below;
 - each row waiting on you carries a **✕** to dismiss it, and a **Clear all N**
   strip appears above the list once more than one is pending — dismissing is what
   takes a session off the collapsed notch, and opening a sandbox counts as
   dismissing it;
 - once a turn ends, every surface that captions that session — the row, the pill
   under the notch, the mini toast — carries **what Claude actually answered**
-  rather than "idle" or the prompt you sent, and **resting the pointer on the row
-  unfolds the reply** over a few lines. The prose comes from the
+  rather than "idle" or the prompt you sent; **opening the row** shows the reply
+  in full. The prose comes from the
   `last_assistant_message` Claude Code puts on its own `Stop` event — no
   transcript reading, and it arrives even through a hook script installed before
   this feature existed. A **structured question** still outranks it — that text is
@@ -169,17 +186,28 @@ On top of that:
   gave shows the answer. Nothing stale can leak through: a new prompt clears the
   reply, so a session only carries one if a turn has ended since you last spoke.
 
-### ＋ New chat (from the notch)
+### Chatting from the notch
 
-The composer talks to one shared sandbox, `ephemeral-chat`: it's created on
-first use and **reused** afterwards, so a follow-up question lands in the same
-conversation rather than a fresh agent. If the sandbox exists but is stopped,
-attaching starts it.
+Two gestures, and the difference between them is the point:
 
-That's a single daemon call, `POST /api/chat/push` — the island has no sandbox
-picker and no terminal, so everything between "you typed a question" and "the
-agent is reading it" happens server-side: provision if missing, attach the
-agent, wait for its TUI, type, submit. Two details that are easy to get wrong:
+- **Open a row** (the chevron) to write into a sandbox that already exists. The
+  drawer shows Claude's full reply and a field under it; sending keeps the field
+  open, because the answer arrives right above it.
+- **＋ New chat** starts a *new* throwaway sandbox — `ephemeral-chat`, then
+  `ephemeral-chat-2`, `-3`, … — numbered by availability, so a name freed with
+  `sbxw rm` is offered again rather than the counter climbing forever. Carrying
+  on an existing conversation is the row drawer's job, one click away on that
+  chat's own row.
+
+Because every ＋ costs a container, the composer **warns from four sandboxes up**
+that each one holds disk and memory, and points at the two ways out (reply in a
+chat you already have, or remove what you're done with). Sandboxes are cheap to
+make and not free to keep.
+
+Both gestures are the same daemon call, `POST /api/chat/push` — the island has no
+sandbox picker and no terminal, so everything between "you typed a question" and
+"the agent is reading it" happens server-side: provision if missing, attach the
+agent, wait for its TUI, type, submit. Three details that are easy to get wrong:
 
 - **It waits for the terminal to go quiet before typing**, and again before
   pressing Return. Quiescence is measured on the session's output stream, not
@@ -189,9 +217,17 @@ agent, wait for its TUI, type, submit. Two details that are easy to get wrong:
   closely-spaced bytes as a *paste*, and a newline inside a paste is inserted
   into the message instead of sending it — the text lands in the box and just
   sits there.
+- **A warm session is not charged for a cold start.** Typing into a sandbox whose
+  agent is already attached and drawn skips the `sbx ls` existence probe (the
+  live PTY is the proof) and times silence in ~180 ms rather than the 900 ms a
+  first frame needs — the wait that made a second message feel as slow as the
+  first. To stay honest at a short window it waits for the echo to *start* before
+  timing its silence: a PTY that hasn't turned the write around yet reads as
+  quiet, and Return would join the paste. The echo window itself stays looser
+  (350 ms), since a long message comes back in chunks.
 
-The first push is slow (a sandbox has to boot); the composer shows a spinner,
-and keeps your text on failure so it can be retried.
+Creating a chat is still slow (a sandbox has to boot); the composer shows a
+spinner, and keeps your text on failure so it can be retried.
 
 **Subscription usage comes from Claude Code's own `statusLine`, not the OAuth
 API.** sbxw installs a `statusLine` command (`assets/usage-statusline.js`) that
@@ -228,9 +264,12 @@ It's powered by these daemon endpoints:
 - `GET /api/sandboxes` — polled so running sandboxes appear right away as `idle`.
 - `POST /api/answer` / `POST /api/input` — send a menu choice (or raw bytes)
   back into a session's PTY.
-- `POST /api/chat/push` — `{ "text": "…" }`: submit a message to the shared
-  `ephemeral-chat` agent, creating the sandbox and attaching its session first
-  if needed (see [＋ New chat](#-new-chat-from-the-notch)).
+- `POST /api/chat/push` — `{ "text": "…", "name"?: "sandbox", "fresh"?: true }`:
+  submit a message to a chat agent, creating the sandbox and attaching its
+  session first if needed. `name` types into that sandbox; `fresh` mints the next
+  free `ephemeral-chat[-N]`; neither falls back to the shared `ephemeral-chat`
+  (what older island builds send). See
+  [Chatting from the notch](#chatting-from-the-notch).
 
 Running sandboxes appear as `idle` immediately; live state flows as soon as the
 in-sandbox agent emits hook events (the daemon must be reachable from the

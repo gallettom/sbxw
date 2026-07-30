@@ -22,7 +22,7 @@ APP_NAME="SbxwIsland"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG="$HERE/$APP_NAME"
 OUT="${1:-$HERE/dist}"
-ISLAND_VERSION="1.0.8"
+ISLAND_VERSION="1.0.9"
 VERSION="${SBXW_ISLAND_VERSION:-$ISLAND_VERSION}"
 
 [ "$(uname -s)" = "Darwin" ] || { echo "build-app.sh only runs on macOS" >&2; exit 1; }

@@ -18,6 +18,22 @@ enum IslandDisplay: Equatable {
     case list
 }
 
+extension IslandDisplay {
+    /// Whether this mode has anything to click.
+    ///
+    /// The list and a question card do. The collapsed pill and both toasts are
+    /// read-only: they announce, they don't offer. That distinction is what says
+    /// whether the panel should take mouse events at all — it hangs over the menu
+    /// bar of whatever app you are working in, and a window that eats clicks it
+    /// has no use for is a window in your way.
+    var isInteractive: Bool {
+        switch self {
+        case .list, .question: return true
+        case .collapsed, .toast, .miniToast: return false
+        }
+    }
+}
+
 /// A borderless `NSPanel` refuses key status, which makes any text field inside
 /// it impossible to type into — including the island's chat composer. The
 /// `.nonactivatingPanel` style already means "accept keys without activating the
@@ -41,11 +57,16 @@ final class NotchController: ObservableObject {
     /// The chat composer holds keyboard focus: the list must stay put until the
     /// user is done writing (see `setComposerActive`).
     private var composerActive = false
+    /// At least one row has its accordion open (see `setRowsExpanded`).
+    private var rowsExpanded = false
     private var hideTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
     /// Pending hover-intent reveal (see `hoverIntentDelay`).
     private var hoverTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
+    /// Pointer-tracking monitors (see `trackPointer`). Kept for as long as the
+    /// panel itself, which is the life of the process.
+    private var mouseMonitors: [Any] = []
 
     /// Whether the screen the island hangs from actually has a notch. Without
     /// one there is nothing to route content around, so the island hugs the top
@@ -53,10 +74,10 @@ final class NotchController: ObservableObject {
     @Published private(set) var hasNotch = false
     /// Height of the physical notch, or a small lip on screens without one.
     @Published private(set) var topInset: CGFloat = 32
-    /// Width of the physical notch, so the collapsed summary can match it and
-    /// read as an extension of the notch. Falls back to a compact default on
-    /// Macs without a notch.
-    private(set) var notchWidth: CGFloat = 180
+    /// Width of the physical notch: the panel's first size, and the width of the
+    /// band that reveals the island on hover (see `revealBand`). Falls back to a
+    /// compact default on Macs without a notch.
+    private var notchWidth: CGFloat = 180
 
     /// Top lip used on notch-less screens: just enough that the content doesn't
     /// start flush against the screen edge.
@@ -83,9 +104,10 @@ final class NotchController: ObservableObject {
                 MainActor.assumeIsolated { self?.onSessionsChanged(sessions) }
             }
             .store(in: &cancellables)
-        // The composer changes the list's height as it swaps between the ＋ row,
-        // the field, a spinner and an error line. The panel is sized by hand
-        // (see `install`), so nothing else would follow that.
+        // Composers change the list's height as they swap between the ＋ row, the
+        // field, a spinner and an error line — the one at the bottom and every
+        // open row's alike. The panel is sized by hand (see `install`), so
+        // nothing else would follow that.
         store.$chatPush
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -117,7 +139,9 @@ final class NotchController: ObservableObject {
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hidesOnDeactivate = false
-        p.ignoresMouseEvents = false
+        // Click-through until there is something to click (see `isInteractive`
+        // and `setDisplay`). It starts collapsed, so it starts transparent.
+        p.ignoresMouseEvents = !display.isInteractive
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         let host = NSHostingView(rootView: NotchContentView(controller: self, store: store))
         // Don't let the hosting view drive the *window's* content-size extrema.
@@ -136,6 +160,7 @@ final class NotchController: ObservableObject {
         panel = p
         relayout()
         p.orderFrontRegardless()
+        trackPointer()
 
         // Displays come and go (lid closed, monitor plugged in) and the island
         // may end up on a screen with no notch — re-measure and re-place it.
@@ -203,6 +228,17 @@ final class NotchController: ObservableObject {
         relayout()
     }
 
+    /// A row's accordion opened or closed.
+    ///
+    /// Only the auto-hide leash changes: an open drawer is a deliberate "I'm
+    /// reading this", and one second after the pointer leaves is not long enough
+    /// to have been worth the click. Deliberately *not* a pin — that belongs to a
+    /// focused composer alone, or a forgotten open row would leave the island
+    /// hanging under the notch for good.
+    func setRowsExpanded(_ expanded: Bool) {
+        rowsExpanded = expanded
+    }
+
     // MARK: - Multi-step prompt draft
 
     /// Answers picked so far in the open question card, one per step in tab
@@ -248,7 +284,129 @@ final class NotchController: ObservableObject {
     /// screen sitting above this one — pops the list open.
     private static let hoverIntentDelay: Duration = .milliseconds(350)
 
+    /// Watch the pointer ourselves, because in the modes that matter the panel
+    /// cannot.
+    ///
+    /// A click-through window (`ignoresMouseEvents`) receives *no* mouse events,
+    /// so SwiftUI's `.onHover` inside it never fires — the reveal has to come from
+    /// somewhere else. Neither monitor asks for Accessibility: that is only
+    /// required to monitor the *keyboard*.
+    private func trackPointer() {
+        // Moves reveal. Deliberately no `.mouseDragged`: while a button is held
+        // the pointer is doing something — holding a menu open, dragging a
+        // selection — and the island staying down through it is exactly right.
+        monitorPointer([.mouseMoved]) { [weak self] point in
+            self?.pointerMoved(to: point)
+        }
+        // Clicks retract (see `clickedOutside`).
+        monitorPointer([.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] point in
+            self?.clickedOutside(point)
+        }
+    }
+
+    /// Report the pointer's screen position for every event matching `mask`.
+    ///
+    /// Two monitors, because each is blind to what the other sees: the global one
+    /// only reports events headed for *other* applications, the local one only
+    /// those headed for ours. The island has to react to both — a click in another
+    /// app and a click on our own menu-bar icon are the same gesture as far as the
+    /// notch is concerned.
+    private func monitorPointer(
+        _ mask: NSEvent.EventTypeMask,
+        report: @escaping @MainActor (NSPoint) -> Void
+    ) {
+        // Read the location now, at event time, rather than in the hop below,
+        // where the pointer may already have moved on.
+        let deliver = {
+            let location = NSEvent.mouseLocation
+            DispatchQueue.main.async { MainActor.assumeIsolated { report(location) } }
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { _ in deliver() }) {
+            mouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { event in
+            deliver()
+            return event // pass it on: we are observing, not intercepting
+        }) {
+            mouseMonitors.append(local)
+        }
+    }
+
+    /// A click landed somewhere else while the list was open: retract at once.
+    ///
+    /// The auto-hide timer is for a pointer that *wandered*; a click elsewhere is
+    /// a decision, and taking a second to honour it is exactly what makes the
+    /// island feel like it is in the way.
+    ///
+    /// Scoped to the list. A question card stays until it is answered or its ✕ is
+    /// used — that is deliberate everywhere else in this file, and an errant click
+    /// must not lose a prompt. The toasts are click-through and run their own
+    /// three-second course.
+    ///
+    /// A focused composer is no exception, even though it otherwise pins the list
+    /// open: while it has focus the panel is *key*, so leaving it up over the app
+    /// you just clicked into would go on swallowing your keystrokes. The
+    /// half-written message is lost — the same as when the auto-hide fires — and
+    /// the alternative is worse. Its focus flag has to be cleared by hand: the
+    /// field is torn down with the view, which reports no focus change on the way
+    /// out, and a stale `composerActive` would pin every later list open for good.
+    private func clickedOutside(_ screenPoint: NSPoint) {
+        guard display == .list, let panel, !panel.frame.contains(screenPoint) else { return }
+        if composerActive {
+            composerActive = false
+            panel.resignKey()
+        }
+        // The pointer is elsewhere by definition, and a dwell still counting down
+        // would otherwise re-open what we are closing.
+        hovering = false
+        hoverTask?.cancel()
+        collapse()
+    }
+
+    /// The pointer moved.
+    private func pointerMoved(to screenPoint: NSPoint) {
+        guard let panel else { return }
+        if display.isInteractive {
+            // The content's `.onHover` owns this mode — the whole surface holds
+            // the island open, margin included, and second-guessing it here would
+            // fight it. Only one thing is worth saying: a pointer that is plainly
+            // outside the window is not hovering it. Without that backstop a
+            // missed `mouseExited` leaves `hovering` stuck true, `scheduleHide`
+            // re-arms on it forever, and the island hangs under the notch — the
+            // one failure mode this panel must never have.
+            if hovering, !panel.frame.contains(screenPoint) { hover(false) }
+            return
+        }
+        hover(revealBand(of: panel).contains(screenPoint))
+    }
+
+    /// The band whose hover reveals the island, in screen coordinates: the
+    /// panel's full height, but only the notch's width, centred on it.
+    ///
+    /// The collapsed bubble hangs 280 pt wide (332 counting the invisible margin
+    /// its shadow needs) over the menu bar of whatever app you are working in, and
+    /// a pointer crossing the top edge on the way to *that* app's menus used to
+    /// unfold the island in your face. Aiming at the notch is the gesture; passing
+    /// beside it is not.
+    ///
+    /// Only the width narrows. The full height matters: with nothing running the
+    /// collapsed content is a 2 pt hairline, and the shadow's margin below it is
+    /// the whole reason there is anything to hover.
+    private func revealBand(of panel: NSPanel) -> NSRect {
+        let frame = panel.frame
+        let width = min(notchWidth, frame.width)
+        return NSRect(
+            x: frame.midX - width / 2, y: frame.minY,
+            width: width, height: frame.height
+        )
+    }
+
     func hover(_ inside: Bool) {
+        // Reported on every mouse move by `pointerMoved`, not just on a crossing,
+        // and nothing below this line is idempotent: re-entering would cancel and
+        // restart the dwell timer on every twitch of the pointer, so the island
+        // would open only once the pointer had stopped dead. Changes only.
+        guard inside != hovering else { return }
         // Record where the pointer is even when we go on to ignore it. The flag
         // is read later by the toast and auto-hide timers, and the early returns
         // below used to skip this line — so a question card appearing between
@@ -366,6 +524,16 @@ final class NotchController: ObservableObject {
         // card is re-set is when its prompt actually changed (see
         // onSessionsChanged), and that prompt deserves fresh answers.
         if !draftAnswers.isEmpty { draftAnswers = [] }
+        // Leaving the list tears its rows down (NotchContentView keys the
+        // content on the mode), so whatever they had open goes with them. Without
+        // this the flag would stay true and every later list would inherit the
+        // longer leash.
+        if new != .list { rowsExpanded = false }
+        // Take mouse events only for the modes that have something to click, so
+        // an announcement can't swallow a click meant for the app underneath
+        // (see `IslandDisplay.isInteractive`). Set before the animation, not
+        // after: the panel is over the menu bar for the whole of it.
+        panel?.ignoresMouseEvents = !new.isInteractive
         // Retracting to the notch should be quick and clean; growing/morphing
         // gets the bouncy bubble. Drive the SwiftUI transition and the window
         // frame with matching curves.
@@ -380,10 +548,18 @@ final class NotchController: ObservableObject {
     /// How long a toast / revealed list stays before auto-collapsing.
     private static let autoHideDelay: Duration = .seconds(1)
 
+    /// The same, for a list with an open row accordion: long enough to finish
+    /// reading a reply after the pointer has wandered off, still short enough
+    /// that the island always comes back on its own.
+    private static let expandedHideDelay: Duration = .seconds(5)
+
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.autoHideDelay)
+            let delay = self?.rowsExpanded == true
+                ? Self.expandedHideDelay
+                : Self.autoHideDelay
+            try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
             if case .question = self.display { return } // never auto-dismiss a prompt
             if self.composerActive { return } // nor a chat being written

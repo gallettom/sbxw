@@ -1,6 +1,37 @@
 import Foundation
 import Combine
 
+/// Where an island composer's message goes.
+///
+/// The island has more than one composer now — one per open row accordion, plus
+/// the "New chat" strip at the bottom — and they mean different things, so the
+/// target is explicit rather than "the chat sandbox".
+enum ChatTarget: Equatable, Hashable {
+    /// An existing sandbox: type into the agent already living there.
+    case sandbox(String)
+    /// A brand-new throwaway chat sandbox, named by the daemon
+    /// (`ephemeral-chat`, then `ephemeral-chat-2`, `-3`, …).
+    case newChat
+
+    /// Key this target's progress is filed under in `SessionStore.chatPush`.
+    /// The empty string is safe for `newChat`: a sandbox name never is (the
+    /// daemon rejects it), so the two can't collide.
+    var key: String {
+        switch self {
+        case .sandbox(let name): return name
+        case .newChat: return ""
+        }
+    }
+
+    /// How the target reads in a log line.
+    var label: String {
+        switch self {
+        case .sandbox(let name): return name
+        case .newChat: return "a new chat"
+        }
+    }
+}
+
 /// Keeps the island in sync with the sbxw daemon, merging two sources:
 ///
 ///  1. **Live sessions** — seeded from `GET /api/sessions`, then followed on
@@ -38,14 +69,17 @@ final class SessionStore: ObservableObject {
         let lastInput: String?
     }
 
-    /// Progress of the island composer's last chat push.
+    /// Progress of a composer's last chat push.
     enum ChatPushState: Equatable {
         case idle
         case sending
         case failed(String)
     }
 
-    @Published private(set) var chatPush: ChatPushState = .idle
+    /// Push progress per target (see `ChatTarget.key`). Keyed rather than
+    /// single-valued because every open row carries its own composer: one shared
+    /// state would put another row's spinner — or another row's error — in yours.
+    @Published private(set) var chatPush: [String: ChatPushState] = [:]
 
     /// Fired when a live session genuinely changes state (not on the repeated
     /// "working" keep-alives). Used to pop notch toasts / prompts.
@@ -177,52 +211,64 @@ final class SessionStore: ObservableObject {
         ])
     }
 
-    /// Submit a message to the ephemeral chat agent.
+    /// Progress of `target`'s last push — `.idle` for one never pushed to.
+    func chatState(_ target: ChatTarget) -> ChatPushState {
+        chatPush[target.key] ?? .idle
+    }
+
+    /// Submit a message to a chat agent.
     ///
-    /// One call whether or not anything exists yet: the daemon creates the chat
-    /// sandbox, attaches the agent and waits for its TUI before typing (see
-    /// `/api/chat/push`). That makes the *first* push slow — a sandbox has to
-    /// boot — hence `chatPush` for the composer to show progress, and a timeout
-    /// far past URLSession's default patience.
-    func pushChat(_ text: String, name: String? = nil) {
+    /// One call whether or not anything exists yet: the daemon creates the
+    /// sandbox if needed, attaches the agent and waits for its TUI before typing
+    /// (see `/api/chat/push`). Typing into a sandbox that is already up returns
+    /// in a blink; a `.newChat` has to boot one first, hence `chatPush` for the
+    /// composer to show progress, and a timeout far past URLSession's default
+    /// patience.
+    func pushChat(_ text: String, to target: ChatTarget) {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty, chatPush != .sending else { return }
+        guard !message.isEmpty, chatState(target) != .sending else { return }
         guard let url = Config.url("/api/chat/push") else {
-            chatPush = .failed("bad daemon URL")
+            chatPush[target.key] = .failed("bad daemon URL")
             return
         }
         var body: [String: Any] = ["text": message]
-        if let name { body["name"] = name }
+        switch target {
+        case .sandbox(let name): body["name"] = name
+        // The daemon picks the name — it is the one that knows which
+        // `ephemeral-chat-N` is free.
+        case .newChat: body["fresh"] = true
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 180
 
-        chatPush = .sending
-        Log.log("chat push: \(message.prefix(60))")
+        let key = target.key
+        chatPush[key] = .sending
+        Log.log("chat push → \(target.label): \(message.prefix(60))")
         Task { [weak self] in
             do {
                 let (data, _) = try await URLSession.shared.data(for: req)
                 let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 if obj?["ok"] as? Bool == true {
                     Log.log("chat push ok → \(obj?["name"] as? String ?? "?")")
-                    self?.chatPush = .idle
+                    self?.chatPush[key] = .idle
                 } else {
                     let msg = obj?["error"] as? String ?? "chat push failed"
                     Log.log("chat push failed: \(msg)")
-                    self?.chatPush = .failed(msg)
+                    self?.chatPush[key] = .failed(msg)
                 }
             } catch {
                 Log.log("chat push error: \(error.localizedDescription)")
-                self?.chatPush = .failed(error.localizedDescription)
+                self?.chatPush[key] = .failed(error.localizedDescription)
             }
         }
     }
 
     /// Clear a failed push so the composer stops showing the error.
-    func clearChatPushError() {
-        if case .failed = chatPush { chatPush = .idle }
+    func clearChatPushError(_ target: ChatTarget) {
+        if case .failed = chatState(target) { chatPush[target.key] = .idle }
     }
 
     private func post(_ path: String, body: [String: Any]) {

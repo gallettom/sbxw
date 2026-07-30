@@ -213,49 +213,70 @@ func openInBrowser(_ sandbox: String) {
 
 struct SessionRow: View {
     let session: SessionInfo
+    /// Needed by the drawer's composer, which writes into this row's sandbox.
+    @ObservedObject var store: SessionStore
     /// Whether the user has already dismissed this session's waiting notification.
     var acknowledged: Bool = false
+    /// Whether this row's accordion is open. Owned by the list rather than by
+    /// the row (see `IslandView.expanded`), so it survives the store's rebuilds
+    /// and the panel can be told that something is open.
+    var expanded: Bool = false
     /// Called when the row is tapped (e.g. show the prompt card, or jump).
     var onSelect: (SessionInfo) -> Void = { openInBrowser($0.sandbox) }
     /// Called when the user taps the row's ✕ to dismiss its waiting state. Absent
     /// (no ✕) where dismissal doesn't apply.
     var onDismiss: ((SessionInfo) -> Void)? = nil
-    /// Called when the accordion opens or closes. The notch panel sizes itself
-    /// by hand, so nothing would follow the row's new height otherwise.
-    var onHeightChange: () -> Void = {}
+    /// Called when the accordion chevron is clicked.
+    var onToggle: () -> Void = {}
+    /// Told when the drawer's composer takes or gives up keyboard focus — same
+    /// contract as `IslandView.onComposerFocus`, and for the same reason: the
+    /// notch panel must not retract mid-sentence.
+    var onComposerFocus: (Bool) -> Void = { _ in }
 
-    /// How long the pointer must rest on a row before its reply unfolds.
-    ///
-    /// Short: by the time a row can be hovered the list is already open, so
-    /// this dwell is only guarding against a sweep down the list — and leaving
-    /// a row cancels the pending unfold anyway, which does most of that work.
-    /// Matches the notch's own hover-intent threshold rather than inventing a
-    /// second feel for the same gesture.
-    private static let unfoldDelay: Duration = .milliseconds(250)
-    /// Wrapped lines the unfolded reply is allowed to occupy.
-    private static let unfoldLineLimit = 8
-
-    @State private var unfolded = false
-    @State private var unfoldTask: Task<Void, Never>?
+    /// Wrapped lines the open drawer gives Claude's reply. Past this the answer
+    /// is a document, not a notification — read it in the browser.
+    private static let replyLineLimit = 10
 
     /// Still-waiting *and* not yet dismissed: the row reads as needing you.
     private var waiting: Bool {
         session.state == .attention && !acknowledged
     }
 
-    /// The reply in full, shown *in place of* the lead sentence once unfolded —
-    /// not appended to it, so nothing is repeated. nil when the row is already
-    /// showing everything, or when the reply isn't what the row is captioned
-    /// with (see `subtitle`).
-    private var unfoldedText: String? {
-        guard showsReply else { return nil }
-        return session.replyFull
-    }
+    /// What the open drawer prints above its composer: the reply entire.
+    ///
+    /// Not "the rest of it after the lead sentence" — the header gives its
+    /// caption up while this is on screen (see `showsCaption`), so the answer
+    /// lives in exactly one place instead of opening with a truncated echo of
+    /// itself.
+    private var drawerReply: String? { session.replyText }
 
-    private var canUnfold: Bool { unfoldedText != nil }
+    /// Whether the header keeps its one-line caption.
+    ///
+    /// It doesn't when the drawer below is printing the very reply that caption
+    /// summarises: the same sentence twice, once cut off at a word, reads as a
+    /// stutter. A caption that is *not* the reply — a pending question, an
+    /// activity — is not repeated by the drawer and stays.
+    private var showsCaption: Bool {
+        !(expanded && canOpen && showsReply)
+    }
 
     private var hasQuestion: Bool {
         session.state == .attention && !session.promptSteps.isEmpty
+    }
+
+    /// Whether this row has an accordion at all.
+    ///
+    /// A Bash pane is a terminal handle, not a conversation: no hooks fire for
+    /// it, so it never carries a reply — and `/api/chat/push` always types into
+    /// the sandbox's *agent*, so a field here would quietly send your message to
+    /// a different session than the row you opened. Nothing to show and nothing
+    /// safe to send: no handle.
+    private var canOpen: Bool { session.mode != "bash" }
+
+    /// Room the header leaves on the right for the controls overlaid on it, at
+    /// 20 pt apiece.
+    private var controlsInset: CGFloat {
+        8 + (canOpen ? 20 : 0) + (showDismiss ? 20 : 0)
     }
 
     /// Show a dismiss ✕ while the row wants something from you — an explicit
@@ -266,6 +287,22 @@ struct SessionRow: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if expanded && canOpen {
+                drawer
+            }
+        }
+        // A faint wash marks which row the open drawer belongs to; the list can
+        // have several open at once.
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(expanded ? 0.05 : 0))
+        )
+        .padding(.horizontal, 2)
+    }
+
+    private var header: some View {
         Button {
             onSelect(session)
         } label: {
@@ -284,16 +321,7 @@ struct SessionRow: View {
                             .foregroundStyle(.white.opacity(0.55))
                             .lineLimit(1)
                     }
-                    if unfolded, let full = unfoldedText {
-                        Text(full)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(Self.unfoldLineLimit)
-                            // Let it wrap: the interesting case is one long
-                            // line, not a pre-broken paragraph.
-                            .fixedSize(horizontal: false, vertical: true)
-                            .transition(.opacity)
-                    } else {
+                    if showsCaption {
                         Text(subtitle)
                             .font(.system(size: 10))
                             .foregroundStyle(subtitleColor)
@@ -318,64 +346,92 @@ struct SessionRow: View {
             }
             .padding(.vertical, 5)
             .padding(.leading, 8)
-            // Leave room on the right for the dismiss ✕ overlay when shown.
-            .padding(.trailing, showDismiss ? 26 : 8)
+            // Leave room on the right for the controls overlaid below.
+            .padding(.trailing, controlsInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointerCursor()
         .help(hasQuestion ? "Answer \(session.sandbox)" : "Open \(session.sandbox) in the browser")
-        // Rest on a row and its reply unfolds; leaving folds it straight back.
-        // The dwell is what keeps a sweep down the list from opening every row.
-        .onHover { inside in
-            unfoldTask?.cancel()
-            guard canUnfold else { return }
-            if inside {
-                unfoldTask = Task { @MainActor in
-                    try? await Task.sleep(for: Self.unfoldDelay)
-                    guard !Task.isCancelled else { return }
-                    withAnimation(.easeOut(duration: 0.18)) { unfolded = true }
-                    onHeightChange()
-                }
-            } else if unfolded {
-                withAnimation(.easeIn(duration: 0.12)) { unfolded = false }
-                onHeightChange()
-            }
-        }
-        // A new reply while the row is open would leave stale lines showing.
-        .onChange(of: session.reply) { _, _ in
-            if unfolded {
-                unfolded = false
-                onHeightChange()
-            }
-        }
-        // A separate button layered above the row: tapping it dismisses without
-        // triggering the row's own tap.
+        // Separate buttons layered above the row: tapping one must not trigger
+        // the row's own tap.
         //
-        // Pinned to the top, not centred: the row grows downwards when the reply
-        // accordion unfolds, and a centred ✕ would slide down with it — under the
-        // pointer that is doing the hovering. It stays level with the sandbox
-        // name instead, which is the one line whose position never changes. The
-        // top inset mirrors the status dot's, for the same reason: line up with
-        // the first row of text rather than the top of the padding box.
+        // Pinned to the top, not centred: the row grows downwards when the
+        // drawer opens, and centred controls would slide down with it — away
+        // from the pointer that just clicked. They stay level with the sandbox
+        // name instead, the one line whose position never changes. The top inset
+        // mirrors the status dot's, for the same reason: line up with the first
+        // row of text rather than the top of the padding box.
+        //
+        // The chevron is the outermost of the two so that the ✕ coming and going
+        // never moves it.
         .overlay(alignment: .topTrailing) {
-            if showDismiss {
-                Button {
-                    onDismiss?(session)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .padding(.top, 5)
-                        .padding(.trailing, 8)
-                        .contentShape(Rectangle())
+            HStack(spacing: 0) {
+                if showDismiss {
+                    Button {
+                        onDismiss?(session)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .frame(width: 20, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .pointerCursor()
+                    .help("Dismiss waiting notification for \(session.sandbox)")
                 }
-                .buttonStyle(.plain)
-                .pointerCursor()
-                .help("Dismiss waiting notification for \(session.sandbox)")
+                if canOpen {
+                    disclosure
+                }
             }
+            .padding(.top, 4)
+            .padding(.trailing, 6)
         }
+    }
+
+    /// The accordion's handle: the row's full reply and its composer are behind
+    /// a deliberate click, not a hover. Resting the pointer somewhere is not a
+    /// decision — it unfolded rows on the way past, and it could not open
+    /// anything you then had to *type* into.
+    private var disclosure: some View {
+        Button(action: onToggle) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(expanded ? 0.85 : 0.4))
+                .rotationEffect(.degrees(expanded ? 90 : 0))
+                .frame(width: 20, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help(expanded
+            ? "Close \(session.sandbox)"
+            : "Read the full reply and write to \(session.sandbox)")
+    }
+
+    /// What the open accordion reveals: Claude's answer in full, and a field to
+    /// answer it from here.
+    private var drawer: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if let reply = drawerReply {
+                Text(reply)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(Self.replyLineLimit)
+                    // Let it wrap: the interesting case is one long line, not a
+                    // pre-broken paragraph.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            RowChat(sandbox: session.sandbox, store: store, onFocusChange: onComposerFocus)
+        }
+        // Lines up under the sandbox name, past the status dot.
+        .padding(.leading, 25)
+        .padding(.trailing, 8)
+        .padding(.bottom, 6)
+        .transition(.opacity)
     }
 
     /// A dismissed waiting row loses its amber dot (it's no longer nagging).
@@ -403,9 +459,10 @@ struct SessionRow: View {
     }
 
     /// Whether *this row* ended up captioned with the reply. A structured
-    /// question takes the caption ahead of it (see `subtitle`), and then neither
-    /// the accordion nor the prose colour applies — they'd be describing text
-    /// the row isn't showing.
+    /// question takes the caption ahead of it (see `subtitle`), and then the
+    /// prose colour doesn't apply — it would be describing text the row isn't
+    /// showing. `showsCaption` reads it for the same reason: only a caption that
+    /// *is* the reply is the one the open drawer makes redundant.
     private var showsReply: Bool {
         if session.state == .attention, session.promptSteps.first != nil { return false }
         return session.showsReply
@@ -426,14 +483,38 @@ struct IslandView: View {
     @ObservedObject var store: SessionStore
     /// Row tap handler. Defaults to opening the sandbox in the browser.
     var onSelect: (SessionInfo) -> Void = { openInBrowser($0.sandbox) }
-    /// Told when the chat composer takes or gives up keyboard focus. The notch
+    /// Told when a chat composer takes or gives up keyboard focus. The notch
     /// panel uses it to become key (it can't be typed into otherwise) and to
     /// hold the list open while the user writes; the menu-bar popover, where
     /// focus is ordinary, leaves it at the default no-op.
     var onComposerFocus: (Bool) -> Void = { _ in }
-    /// Called when a row's reply accordion opens or closes. Same reason as
+    /// Called when a row's accordion opens or closes. Same reason as
     /// `onComposerFocus`: the notch panel's frame is set by hand.
     var onHeightChange: () -> Void = {}
+    /// Told whether any row is currently open. The notch panel gives an island
+    /// with an open drawer a longer leash before it retracts.
+    var onExpandedChange: (Bool) -> Void = { _ in }
+
+    /// Session ids whose accordion is open.
+    ///
+    /// Held by the list, not by each row: the panel has to know whether
+    /// *anything* is open, and a row's own `@State` would be at the mercy of
+    /// SwiftUI keeping its identity across the rebuild every store publish
+    /// triggers.
+    @State private var expanded: Set<String> = []
+
+    /// Open or close a row's drawer.
+    private func toggle(_ session: SessionInfo) {
+        withAnimation(.easeOut(duration: 0.18)) {
+            if expanded.contains(session.id) {
+                expanded.remove(session.id)
+            } else {
+                expanded.insert(session.id)
+            }
+        }
+        onExpandedChange(!expanded.isEmpty)
+        onHeightChange()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -465,7 +546,9 @@ struct IslandView: View {
                 ForEach(store.sessions) { session in
                     SessionRow(
                         session: session,
+                        store: store,
                         acknowledged: store.isAcknowledged(session),
+                        expanded: expanded.contains(session.id),
                         onSelect: { s in
                             // Case 2: opening the sandbox counts as checking its
                             // notification, so dismiss it too.
@@ -474,7 +557,8 @@ struct IslandView: View {
                         },
                         // Case 1: the explicit ✕ dismisses without navigating.
                         onDismiss: { store.acknowledge($0) },
-                        onHeightChange: onHeightChange
+                        onToggle: { toggle(session) },
+                        onComposerFocus: onComposerFocus
                     )
                 }
             }
@@ -486,6 +570,21 @@ struct IslandView: View {
         }
         .padding(.vertical, 6)
         .frame(minWidth: 300)
+        .onChange(of: store.sessions) { _, sessions in
+            // A sandbox that goes away takes its drawer with it. Without this the
+            // id would sit in the set for good and the panel would believe
+            // something is still open — the notch would never retract again.
+            let liveIDs = Set(sessions.map(\.id))
+            if !expanded.isSubset(of: liveIDs) {
+                expanded.formIntersection(liveIDs)
+                onExpandedChange(!expanded.isEmpty)
+            }
+            // An open drawer's own text changes under it — Claude answers, and
+            // the reply it is printing grows by several lines. Nothing else would
+            // resize the panel for that; a relayout that finds the same height is
+            // a no-op, so paying it per update is cheap.
+            if !expanded.isEmpty { onHeightChange() }
+        }
     }
 }
 
@@ -520,13 +619,125 @@ struct DismissAllButton: View {
     }
 }
 
-/// Bottom-of-the-island composer: ask the throwaway chat agent something
-/// without opening a browser or picking a sandbox.
+/// The message field every island composer is built from — the row drawers and
+/// the "New chat" strip at the bottom. One view so the same gesture can't end up
+/// with two different feels.
+struct ChatField: View {
+    let placeholder: String
+    @Binding var text: String
+    /// The owner's focus flag, so it can drive focus and report it upwards.
+    var focus: FocusState<Bool>.Binding
+    let sending: Bool
+    /// What the send button and the spinner explain about *this* composer.
+    let sendHelp: String
+    let sendingHelp: String
+    let send: () -> Void
+
+    private var empty: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "bubble.left.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.4))
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(.white)
+                .focused(focus)
+                .disabled(sending)
+                .onSubmit(send)
+            if sending {
+                ProgressView()
+                    .controlSize(.small)
+                    .help(sendingHelp)
+            } else {
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(empty ? 0.25 : 0.75))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .disabled(empty)
+                .help(sendHelp)
+            }
+        }
+    }
+}
+
+/// A one-line error under a composer.
+struct ChatError: View {
+    let message: String
+    var body: some View {
+        Text(message)
+            .font(.system(size: 10))
+            .foregroundStyle(.orange)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The composer inside an open row: write to *that* sandbox's agent from the
+/// island, without a browser tab or a terminal.
+///
+/// The field stays put after a send (only the text clears) — the answer will
+/// arrive in the drawer right above it, and a conversation is rarely one
+/// message long.
+struct RowChat: View {
+    let sandbox: String
+    @ObservedObject var store: SessionStore
+    var onFocusChange: (Bool) -> Void = { _ in }
+
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var target: ChatTarget { .sandbox(sandbox) }
+    private var state: SessionStore.ChatPushState { store.chatState(target) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ChatField(
+                placeholder: "Reply to \(sandbox)…",
+                text: $text,
+                focus: $focused,
+                sending: state == .sending,
+                sendHelp: "Send to \(sandbox)",
+                sendingHelp: "Sending to \(sandbox)…",
+                send: send
+            )
+            if case .failed(let message) = state {
+                ChatError(message: message)
+            }
+        }
+        // The panel has to know while the field holds focus: see onComposerFocus.
+        .onChange(of: focused) { _, isFocused in onFocusChange(isFocused) }
+        .onChange(of: text) { _, _ in store.clearChatPushError(target) }
+        // Clear on success only; a failed push keeps the text so it can be
+        // retried rather than retyped.
+        .onChange(of: state) { previous, current in
+            if previous == .sending, current == .idle { text = "" }
+        }
+    }
+
+    private func send() {
+        store.pushChat(text, to: target)
+    }
+}
+
+/// Bottom-of-the-island composer: start a *brand-new* throwaway chat agent
+/// without opening a browser or picking a workspace.
 ///
 /// The ＋ expands an inline field; submitting hands the text to
-/// `SessionStore.pushChat`, which creates the shared `ephemeral-chat` sandbox
-/// on first use and reuses it afterwards — so a follow-up question lands in the
-/// same conversation rather than a fresh agent.
+/// `SessionStore.pushChat(_:to:)` as `.newChat`, and the daemon provisions the
+/// next free `ephemeral-chat[-N]` for it. "New chat" therefore means what it
+/// says — carrying on an existing conversation is the row drawer's job, one
+/// click away on the chat's own row.
+///
+/// That does mean this button costs a container every time, so past
+/// `crowdedThreshold` sandboxes it says so before you press it again.
 struct ChatComposer: View {
     @ObservedObject var store: SessionStore
     var onFocusChange: (Bool) -> Void = { _ in }
@@ -535,43 +746,34 @@ struct ChatComposer: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    private var sending: Bool { store.chatPush == .sending }
-    private var trimmed: String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Number of live sandboxes from which the composer starts warning. Four is
+    /// where a laptop starts to notice: each sandbox is a container with its own
+    /// writable layers, its own agent process and its own workspace on disk.
+    private static let crowdedThreshold = 4
+
+    private var target: ChatTarget { .newChat }
+    private var state: SessionStore.ChatPushState { store.chatState(target) }
+    private var crowded: Bool { store.sessions.count >= Self.crowdedThreshold }
+
+    /// Typed as `String` rather than left to `Text`'s overloads, which would have
+    /// to choose between a localized key and prose for a concatenation.
+    private var crowdedText: String {
+        "\(store.sessions.count) sandboxes up — each one holds disk and memory. "
+            + "Reply in a chat above instead, or remove the ones you're done with."
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             if open {
-                HStack(spacing: 6) {
-                    Image(systemName: "bubble.left.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.4))
-                    TextField("Ask the chat agent…", text: $text)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white)
-                        .focused($focused)
-                        .disabled(sending)
-                        .onSubmit(send)
-                    if sending {
-                        ProgressView()
-                            .controlSize(.small)
-                            .help("Starting the chat sandbox…")
-                    } else {
-                        Button(action: send) {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 13))
-                                .foregroundStyle(
-                                    Color.white.opacity(trimmed.isEmpty ? 0.25 : 0.75)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .pointerCursor()
-                        .disabled(trimmed.isEmpty)
-                        .help("Send to the chat agent")
-                    }
-                }
+                ChatField(
+                    placeholder: "Ask a new chat agent…",
+                    text: $text,
+                    focus: $focused,
+                    sending: state == .sending,
+                    sendHelp: "Start a new ephemeral chat",
+                    sendingHelp: "Creating the chat sandbox…",
+                    send: send
+                )
                 .padding(.vertical, 4)
                 .padding(.horizontal, 8)
             } else {
@@ -593,23 +795,23 @@ struct ChatComposer: View {
                 }
                 .buttonStyle(.plain)
                 .pointerCursor()
-                .help("Ask the ephemeral chat agent a question")
+                .help("Start a new ephemeral chat sandbox")
             }
 
-            if case .failed(let message) = store.chatPush {
-                Text(message)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
+            if crowded {
+                crowdedNote
+            }
+
+            if case .failed(let message) = state {
+                ChatError(message: message)
                     .padding(.horizontal, 8)
             }
         }
-        // The panel has to know while the field holds focus: see onComposerFocus.
         .onChange(of: focused) { _, isFocused in onFocusChange(isFocused) }
-        .onChange(of: text) { _, _ in store.clearChatPushError() }
+        .onChange(of: text) { _, _ in store.clearChatPushError(target) }
         // A push that succeeded retires the composer; a failed one stays open so
         // the text isn't lost and can be retried.
-        .onChange(of: store.chatPush) { previous, current in
+        .onChange(of: state) { previous, current in
             if previous == .sending, current == .idle {
                 text = ""
                 open = false
@@ -618,10 +820,24 @@ struct ChatComposer: View {
         }
     }
 
+    /// Said plainly and without a scold: what another sandbox costs, and the two
+    /// ways out. Shown whether or not the field is open — it is about the button,
+    /// not about the message being written.
+    private var crowdedNote: some View {
+        HStack(alignment: .top, spacing: 5) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9))
+            Text(crowdedText)
+                .font(.system(size: 9))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.orange.opacity(0.85))
+        .padding(.horizontal, 8)
+        .help("Sandboxes are cheap to make and not free to keep")
+    }
+
     private func send() {
-        let message = trimmed
-        guard !message.isEmpty, !sending else { return }
-        store.pushChat(message)
+        store.pushChat(text, to: target)
     }
 }
 
@@ -1117,7 +1333,11 @@ struct QuestionCard: View {
 
 /// Root view hosted in the notch panel. Switches between collapsed (a hover
 /// target hidden behind the notch), a toast, an interactive question, and the
-/// full list. Its `.onHover` drives reveal/auto-hide.
+/// full list.
+///
+/// Its `.onHover` drives the auto-hide of the two modes that take mouse events.
+/// The others are click-through, so nothing here sees the pointer and the reveal
+/// comes from `NotchController.pointerMoved` instead.
 struct NotchContentView: View {
     @ObservedObject var controller: NotchController
     @ObservedObject var store: SessionStore
@@ -1146,6 +1366,7 @@ struct NotchContentView: View {
     /// the (content-sized) window. No room on top: the bubble hugs the notch and
     /// the shadow falls downward.
     private let shadowPad: CGFloat = 26
+
 
     /// Distinguishes the current mode (and which session) so switching between
     /// toast/question/list cross-fades the inner content.
@@ -1195,6 +1416,11 @@ struct NotchContentView: View {
         .padding(.horizontal, shadowPad)
         .padding(.bottom, shadowPad)
         .contentShape(Rectangle())
+        // Only reaches us in the modes that take mouse events at all — the list
+        // and a question card, where the whole surface should hold the island
+        // open. While the island is a mere indicator the panel is click-through,
+        // so it sees no pointer and the reveal comes from
+        // `NotchController`'s own screen-coordinate tracking instead.
         .onHover { controller.hover($0) }
         // The animation curve (bouncy on grow, clean on retract) is chosen by
         // NotchController.setDisplay via withAnimation, so no `.animation(value:)`
@@ -1225,7 +1451,8 @@ struct NotchContentView: View {
                     }
                 },
                 onComposerFocus: { controller.setComposerActive($0) },
-                onHeightChange: { controller.contentHeightChanged() }
+                onHeightChange: { controller.contentHeightChanged() },
+                onExpandedChange: { controller.setRowsExpanded($0) }
             )
         }
     }

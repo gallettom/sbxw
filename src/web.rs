@@ -69,8 +69,28 @@ struct PtySession {
     replay: Arc<Mutex<VecDeque<u8>>>,
     /// Fires whenever the PTY emits a BEL (0x07) — the agent's "I need you" signal.
     bell_tx: broadcast::Sender<()>,
-    /// Child process handle — kept alive so the process is properly reaped on exit.
-    _child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// Child process handle — kept alive so the process is properly reaped on
+    /// exit, and polled by `alive`.
+    child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+}
+
+impl PtySession {
+    /// Whether the PTY's process is still running.
+    ///
+    /// A session entry outlives its process — nothing removes it from the map
+    /// when the agent exits — so "there is a session for this sandbox" is not
+    /// the same as "there is something to type into". Anything that treats the
+    /// map as evidence about the *sandbox* has to ask this too. Unreadable exit
+    /// status counts as alive: the pessimistic answer here is the one that only
+    /// costs an extra check, never a lost message.
+    fn alive(&self) -> bool {
+        self.child
+            .lock()
+            .unwrap()
+            .try_wait()
+            .map(|status| status.is_none())
+            .unwrap_or(true)
+    }
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Arc<PtySession>>>>;
@@ -171,9 +191,86 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Key a session is stored under: the agent ("claude") and a bash shell coexist
+/// independently for the same sandbox, so both parts are needed to address one.
+fn session_key(sandbox: &str, mode: &str) -> String {
+    format!("{sandbox}::{mode}")
+}
+
 /// Split a session key "<sandbox>::<mode>" back into its parts.
 fn split_key(key: &str) -> (&str, &str) {
     key.split_once("::").unwrap_or((key, ""))
+}
+
+// ── JSON envelopes ───────────────────────────────────────────────────────────
+//
+// Every mutating endpoint answers in one shape — `{ok: true, …}` or
+// `{ok: false, error: "…"}` — because the frontend branches on `ok` alone. The
+// helpers below are what keep that promise from being re-typed (and drifted
+// from) at every handler.
+
+/// Bare acknowledgement of success.
+fn ok_json() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// Success carrying extra fields, e.g. the name of what was just created.
+fn ok_json_with(fields: serde_json::Value) -> Json<serde_json::Value> {
+    let mut body = serde_json::json!({ "ok": true });
+    if let (Some(obj), Some(extra)) = (body.as_object_mut(), fields.as_object()) {
+        obj.extend(extra.clone());
+    }
+    Json(body)
+}
+
+/// Failure carrying a human-readable reason. `sbx`'s own stderr reaches the user
+/// through here (see `sbx::command_error`), so it must never be swallowed.
+fn err_json(msg: impl std::fmt::Display) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "ok": false, "error": msg.to_string() }))
+}
+
+/// Run a blocking `sbx`/filesystem operation off the async runtime and render
+/// its outcome as the envelope above: `on_ok` shapes the success body, while a
+/// returned error — or a panicked task — becomes `{ok: false, error}`.
+async fn blocking<T, F, G>(f: F, on_ok: G) -> Json<serde_json::Value>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+    G: FnOnce(T) -> Json<serde_json::Value>,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(value)) => on_ok(value),
+        Ok(Err(e)) => err_json(format!("{e:#}")),
+        Err(_) => err_json("task panic"),
+    }
+}
+
+/// `blocking` for the common case: nothing to report beyond "it worked".
+async fn blocking_ok<F>(f: F) -> Json<serde_json::Value>
+where
+    F: FnOnce() -> Result<()> + Send + 'static,
+{
+    blocking(f, |()| ok_json()).await
+}
+
+/// `blocking` for use *mid-handler*, where success has to feed the next step:
+/// yields the value, or the ready-made error envelope for the caller to return.
+async fn try_blocking<T, F>(f: F) -> std::result::Result<T, Json<serde_json::Value>>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(err_json(format!("{e:#}"))),
+        Err(_) => Err(err_json("task panic")),
+    }
+}
+
+/// The one rule for a sandbox name, and the one message explaining it — shared
+/// so every endpoint that accepts a name rejects the same inputs identically.
+fn reject_invalid_name(name: &str) -> Option<Json<serde_json::Value>> {
+    (!crate::is_valid_sandbox_name(name)).then(|| err_json(crate::INVALID_NAME_MSG))
 }
 
 /// Build the rich payload for a session from its current status.
@@ -729,7 +826,7 @@ async fn api_hook(
     if sandbox.is_empty() || event.is_empty() {
         return StatusCode::OK;
     }
-    let key = format!("{sandbox}::claude");
+    let key = session_key(&sandbox, "claude");
     let remove = {
         let mut map = state.statuses.lock().unwrap();
         let st = map.entry(key.clone()).or_default();
@@ -798,8 +895,7 @@ struct InputBody {
 /// answer prompts without opening the browser. Local-only (the daemon binds
 /// loopback).
 async fn api_input(State(state): State<Arc<AppState>>, Json(body): Json<InputBody>) -> StatusCode {
-    let mode = body.mode.as_deref().unwrap_or("claude");
-    let key = format!("{}::{}", body.sandbox, mode);
+    let key = session_key(&body.sandbox, body.mode.as_deref().unwrap_or("claude"));
     let session = state.sessions.lock().unwrap().get(&key).cloned();
     match session {
         Some(sess) => {
@@ -858,8 +954,7 @@ async fn api_answer(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AnswerBody>,
 ) -> StatusCode {
-    let mode = body.mode.as_deref().unwrap_or("claude");
-    let key = format!("{}::{}", body.sandbox, mode);
+    let key = session_key(&body.sandbox, body.mode.as_deref().unwrap_or("claude"));
     let session = state.sessions.lock().unwrap().get(&key).cloned();
     let Some(sess) = session else {
         return StatusCode::NOT_FOUND;
@@ -963,86 +1058,71 @@ struct PublishBody {
     alias: Option<String>,
 }
 
+/// Add or replace `alias` → `ip` in the sbxw /etc/hosts block, returning a
+/// warning string if the entry didn't actually land. Reported separately from
+/// the publish so a sudo/tty failure doesn't hide the port going live.
+fn upsert_host_alias(alias: &str, ip: &str) -> Option<String> {
+    let manual = format!("run manually: echo '{ip}\\t{alias}' | sudo tee -a /etc/hosts");
+    let mut entries: Vec<HostAlias> = hosts::read_hosts_block()
+        .into_iter()
+        .filter(|a| a.hostname != alias)
+        .collect();
+    entries.push(HostAlias {
+        hostname: alias.to_string(),
+        ip: ip.to_string(),
+    });
+    if let Err(e) = hosts::sync_hosts_block(&entries) {
+        return Some(format!("failed to update /etc/hosts ({e:#}) — {manual}"));
+    }
+    // `sync_hosts_block` reporting success isn't proof: it writes through `sudo
+    // tee`, so read the block back and check the entry is really there.
+    hosts::read_hosts_block()
+        .iter()
+        .all(|a| a.hostname != alias)
+        .then(|| format!("/etc/hosts write succeeded but alias not found — {manual}"))
+}
+
 async fn api_ports_publish(
     Path(name): Path<String>,
     Json(body): Json<PublishBody>,
 ) -> Json<serde_json::Value> {
-    match tokio::task::spawn_blocking(move || {
-        let host_port = body.host_port.unwrap_or(body.sandbox_port);
-        let host_ip = body.host_ip.clone().unwrap_or_else(|| "127.0.0.1".into());
+    blocking(
+        move || {
+            let host_port = body.host_port.unwrap_or(body.sandbox_port);
+            let host_ip = body.host_ip.clone().unwrap_or_else(|| "127.0.0.1".into());
 
-        // 1. Ensure the host IP exists on lo0 BEFORE sbx tries to bind to it.
-        let lo_entry = HostAlias {
-            hostname: String::new(),
-            ip: host_ip.clone(),
-        };
-        hosts::ensure_loopback_aliases(&[lo_entry])
+            // 1. Ensure the host IP exists on lo0 BEFORE sbx tries to bind to it.
+            hosts::ensure_loopback_aliases(&[HostAlias {
+                hostname: String::new(),
+                ip: host_ip.clone(),
+            }])
             .context("failed to create loopback alias — run: sudo ifconfig lo0 alias <ip> up")?;
 
-        // 2. Publish the port now that the IP is bound.
-        let spec = format!("{host_ip}:{host_port}:{}", body.sandbox_port);
-        sbx::publish_port(&name, &spec)?;
+            // 2. Publish the port now that the IP is bound.
+            let spec = format!("{host_ip}:{host_port}:{}", body.sandbox_port);
+            sbx::publish_port(&name, &spec)?;
 
-        // 3. If an alias was requested, upsert it in the sbxw /etc/hosts block.
-        //    Reported separately so a sudo/tty failure doesn't hide the publish success.
-        let hosts_result: Option<String> = if let Some(ref alias) = body.alias {
-            let alias = alias.trim();
-            if !alias.is_empty() {
-                let new_entry = HostAlias {
-                    hostname: alias.to_string(),
-                    ip: host_ip.clone(),
-                };
-                let mut entries: Vec<HostAlias> = hosts::read_hosts_block()
-                    .into_iter()
-                    .filter(|a| a.hostname != new_entry.hostname)
-                    .collect();
-                entries.push(new_entry);
-                match hosts::sync_hosts_block(&entries) {
-                    Ok(()) => {
-                        // Verify the write actually landed.
-                        let written = hosts::read_hosts_block();
-                        if written.iter().any(|a| a.hostname == alias) {
-                            None // success
-                        } else {
-                            Some(format!(
-                                "/etc/hosts write succeeded but alias not found — \
-                                 run manually: echo '{host_ip}\\t{alias}' | sudo tee -a /etc/hosts"
-                            ))
-                        }
-                    }
-                    Err(e) => Some(format!(
-                        "failed to update /etc/hosts ({e:#}) — \
-                         run manually: echo '{host_ip}\\t{alias}' | sudo tee -a /etc/hosts"
-                    )),
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        Ok::<_, anyhow::Error>(hosts_result)
-    })
+            // 3. If an alias was requested, upsert it in the sbxw /etc/hosts block.
+            Ok(body
+                .alias
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .and_then(|alias| upsert_host_alias(alias, &host_ip)))
+        },
+        |warning| match warning {
+            None => ok_json(),
+            Some(warn) => ok_json_with(serde_json::json!({ "hosts_warning": warn })),
+        },
+    )
     .await
-    {
-        Ok(Ok(None)) => Json(serde_json::json!({ "ok": true })),
-        Ok(Ok(Some(warn))) => Json(serde_json::json!({ "ok": true, "hosts_warning": warn })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
 }
 
 async fn api_ports_unpublish(
     Path(name): Path<String>,
     Json(body): Json<PortSpecBody>,
 ) -> Json<serde_json::Value> {
-    let spec = body.spec.clone();
-    match tokio::task::spawn_blocking(move || sbx::unpublish_port(&name, &spec)).await {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
+    blocking_ok(move || sbx::unpublish_port(&name, &body.spec)).await
 }
 
 // ── /etc/hosts aliases ────────────────────────────────────────────────────────
@@ -1068,32 +1148,24 @@ async fn api_hosts_read() -> Json<Vec<HostEntry>> {
 }
 
 async fn api_stop(Path(name): Path<String>) -> Json<serde_json::Value> {
-    match tokio::task::spawn_blocking(move || sbx::stop_sandbox(&name)).await {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
+    blocking_ok(move || sbx::stop_sandbox(&name)).await
 }
 
 async fn api_rm(Path(name): Path<String>) -> Json<serde_json::Value> {
-    // If this is a chat sandbox, remember its throwaway temp workspace so we can
-    // delete it once the sandbox itself is gone.
+    // If this is a chat sandbox, resolve its throwaway temp workspace *before*
+    // the sandbox goes away — that's what records the mapping — so it can be
+    // deleted alongside once the removal succeeds.
     let chat_dir = crate::chat_workspace_of(&name);
-    match tokio::task::spawn_blocking({
-        let name = name.clone();
-        move || sbx::rm_sandboxes(&[name.as_str()], false)
-    })
-    .await
-    {
-        Ok(Ok(())) => {
+    blocking(
+        move || sbx::rm_sandboxes(&[name.as_str()], false),
+        |()| {
             if let Some(dir) = chat_dir {
                 let _ = std::fs::remove_dir_all(&dir);
             }
-            Json(serde_json::json!({ "ok": true }))
-        }
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
+            ok_json()
+        },
+    )
+    .await
 }
 
 // ── Pasted image upload ───────────────────────────────────────────────────────
@@ -1120,26 +1192,22 @@ async fn api_paste_image(
     body: Bytes,
 ) -> Json<serde_json::Value> {
     if body.is_empty() {
-        return Json(serde_json::json!({ "ok": false, "error": "empty image" }));
+        return err_json("empty image");
     }
     let ext = headers
-        .get(axum::http::header::CONTENT_TYPE)
+        .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(ext_for_mime)
         .unwrap_or("png");
     // Millisecond timestamp keeps names unique and chronologically sortable.
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let dest = format!("/tmp/sbxw-pastes/paste-{ts}.{ext}");
+    let dest = format!("/tmp/sbxw-pastes/paste-{}.{ext}", now_ms());
     let data = body.to_vec();
     let dest_ret = dest.clone();
-    match tokio::task::spawn_blocking(move || sbx::write_file_stdin(&name, &dest, &data)).await {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true, "path": dest_ret })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
+    blocking(
+        move || sbx::write_file_stdin(&name, &dest, &data),
+        |()| ok_json_with(serde_json::json!({ "path": dest_ret })),
+    )
+    .await
 }
 
 // ── Sandbox creation ──────────────────────────────────────────────────────────
@@ -1168,14 +1236,11 @@ async fn api_create(
     let name = body.name.trim().to_string();
     let path = body.path.trim().to_string();
 
-    if !crate::is_valid_sandbox_name(&name) {
-        return Json(serde_json::json!({
-            "ok": false,
-            "error": "name must be non-empty and contain only letters, digits, and hyphens"
-        }));
+    if let Some(rejected) = reject_invalid_name(&name) {
+        return rejected;
     }
     if !std::path::Path::new(&path).is_dir() {
-        return Json(serde_json::json!({ "ok": false, "error": "path is not a directory" }));
+        return err_json("path is not a directory");
     }
 
     let cfg = state.cfg.clone();
@@ -1193,15 +1258,10 @@ async fn api_create(
         "web UI: provisioning sandbox '{name}' at {path} ({} extra ports)",
         extra_ports.len()
     );
-    match tokio::task::spawn_blocking(move || {
+    blocking_ok(move || {
         crate::provision_sandbox(&name, &path, &[], &cfg, &extra_ports, use_api_key)
     })
     .await
-    {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
 }
 
 #[derive(Deserialize)]
@@ -1228,45 +1288,65 @@ async fn api_chat(
         Some(n) => n.to_string(),
         None => crate::mint_chat_name(),
     };
-    if !crate::is_valid_sandbox_name(&name) {
-        return Json(serde_json::json!({
-            "ok": false,
-            "error": "name must be non-empty and contain only letters, digits, and hyphens"
-        }));
+    if let Some(rejected) = reject_invalid_name(&name) {
+        return rejected;
     }
 
     let workspace = match crate::prepare_chat_workspace(&name) {
         Ok(w) => w,
-        Err(e) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(e) => return err_json(format!("{e:#}")),
     };
 
     let cfg = state.cfg.clone();
     let use_api_key = state.use_api_key;
     let name_ret = name.clone();
     tracing::info!("web UI: provisioning chat sandbox '{name}' at {workspace}");
-    match tokio::task::spawn_blocking(move || {
-        crate::provision_sandbox(&name, &workspace, &[], &cfg, &[], use_api_key)
-    })
+    blocking(
+        move || crate::provision_sandbox(&name, &workspace, &[], &cfg, &[], use_api_key),
+        |()| ok_json_with(serde_json::json!({ "name": name_ret })),
+    )
     .await
-    {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true, "name": name_ret })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
 }
 
-/// The shared "ephemeral chat" sandbox the island's composer talks to. One
-/// sandbox, reused: the point is a scratch agent that's always one keystroke
-/// away, not a new sandbox per message — so the second question lands in the
-/// same conversation as the first.
+/// Base name for the island's "ephemeral chat" sandboxes: a scratch agent
+/// that's always one keystroke away, with no project mounted.
+///
+/// The first one takes this name bare; asking for another mints
+/// `ephemeral-chat-2`, `-3`, … (see `next_ephemeral_chat`). Sending *into* an
+/// existing chat is a different gesture — it names the sandbox — so a follow-up
+/// question still lands in the same conversation.
 const EPHEMERAL_CHAT: &str = "ephemeral-chat";
 
-/// How long the PTY must stay silent before we accept that the agent's TUI has
-/// finished drawing and won't swallow what we type into a half-painted screen.
+/// How long a *cold* PTY must stay silent before we accept that the agent's TUI
+/// has finished drawing and won't swallow what we type into a half-painted
+/// screen. Generous, because a first frame arrives in fits and starts.
 const CHAT_SETTLE: Duration = Duration::from_millis(900);
 
-/// Upper bound on waiting for that: a cold sandbox has to boot the agent first.
+/// The same, for a session that is already attached and drawn. Nothing is
+/// booting, so this is only guarding against landing mid-redraw — and it is
+/// paid on *every* message, which is what made chatting on into an existing
+/// sandbox feel sluggish at the cold-start figure.
+const CHAT_SETTLE_WARM: Duration = Duration::from_millis(180);
+
+/// Upper bound on waiting for a cold TUI: a cold sandbox has to boot the agent
+/// first.
 const CHAT_READY_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long to wait for the typed message to start echoing back. Short: the
+/// bytes are already written, so this is a round-trip through the PTY, not a
+/// boot. Capped so a session that echoes nothing at all (a dead PTY) costs a
+/// blink rather than `CHAT_READY_TIMEOUT`.
+const CHAT_ECHO_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Silence that ends the echo of a typed message, before Return is sent as its
+/// own keystroke.
+///
+/// Deliberately looser than `CHAT_SETTLE_WARM`: this is the step that breaks
+/// quietly. Call it too early and Return joins the paste, which Claude Code
+/// inserts into the message instead of sending it — the text sits in the box and
+/// nothing happens. A long message echoes in chunks, so the window has to absorb
+/// a stutter between them, not just the round-trip.
+const CHAT_ECHO_QUIET: Duration = Duration::from_millis(350);
 
 #[derive(Deserialize)]
 struct ChatPushBody {
@@ -1275,117 +1355,191 @@ struct ChatPushBody {
     /// Sandbox to chat in. Defaults to the shared ephemeral one.
     #[serde(default)]
     name: Option<String>,
+    /// Send this into a brand-new ephemeral chat sandbox instead, named by the
+    /// daemon (`ephemeral-chat`, `ephemeral-chat-2`, …). Ignored when `name`
+    /// says where the message goes.
+    #[serde(default)]
+    fresh: bool,
 }
 
-/// Wait until `sess` stops producing output, so a prompt isn't typed into a TUI
-/// that is still painting (Claude Code redraws its whole frame on startup and
-/// would drop the keystrokes).
+/// The name a brand-new ephemeral chat should take: `EPHEMERAL_CHAT`, else the
+/// first free `ephemeral-chat-N` counting from 2.
+///
+/// Numbering is by availability, not by a high-water mark: chat sandboxes are
+/// disposable, so removing `-2` and asking for another chat should reuse that
+/// name rather than climb forever. `taken` holds every sandbox name, not just
+/// the chat ones — the answer has to be free for *any* sandbox.
+fn next_ephemeral_chat(taken: &std::collections::HashSet<String>) -> String {
+    if !taken.contains(EPHEMERAL_CHAT) {
+        return EPHEMERAL_CHAT.to_string();
+    }
+    (2..)
+        .map(|n| format!("{EPHEMERAL_CHAT}-{n}"))
+        .find(|candidate| !taken.contains(candidate))
+        .unwrap_or_else(|| EPHEMERAL_CHAT.to_string())
+}
+
+/// Wait until the PTY stops producing output, so a prompt isn't typed into a
+/// TUI that is still painting (Claude Code redraws its whole frame on startup
+/// and would drop the keystrokes).
 ///
 /// Quiescence is measured on the broadcast channel rather than the replay ring
 /// buffer: that buffer is capacity-bounded, so once full its length stops
 /// changing and silence becomes indistinguishable from a flood.
-async fn wait_until_settled(sess: &Arc<PtySession>, fresh: bool) {
-    let mut rx = sess.tx.subscribe();
-    if fresh {
-        // A cold session emits nothing until the agent boots; timing the
-        // silence from now would "settle" instantly, before anything is
-        // listening. Wait for the first output, then for it to stop.
-        if tokio::time::timeout(CHAT_READY_TIMEOUT, rx.recv())
-            .await
-            .is_err()
-        {
+///
+/// `rx` is passed in rather than subscribed here so a caller can subscribe
+/// *before* the write it is about to wait on. Doing it the other way round
+/// loses the race: the echo can land between the write and the subscription,
+/// leaving `first` waiting for output that has already been and gone.
+///
+/// `first: Some(bound)` waits for the initial byte (up to `bound`) before
+/// timing any silence — for a session that has yet to emit anything, where
+/// timing silence from now would "settle" instantly. `None` starts the clock
+/// immediately, which is what an already-drawn, possibly perfectly quiet
+/// session needs.
+async fn settle(rx: &mut broadcast::Receiver<Vec<u8>>, first: Option<Duration>, quiet: Duration) {
+    if let Some(bound) = first {
+        if tokio::time::timeout(bound, rx.recv()).await.is_err() {
             return;
         }
     }
     let deadline = tokio::time::Instant::now() + CHAT_READY_TIMEOUT;
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(CHAT_SETTLE, rx.recv()).await {
-            Err(_) => return,      // quiet for CHAT_SETTLE — the TUI is ready
+        match tokio::time::timeout(quiet, rx.recv()).await {
+            Err(_) => return,      // quiet for long enough — the TUI is ready
             Ok(Ok(_)) => continue, // still drawing
             Ok(Err(_)) => return,  // lagged or closed; don't block on it
         }
     }
 }
 
-/// `POST /api/chat/push` — submit a message to the ephemeral chat agent,
-/// creating the sandbox and attaching its session first if they don't exist.
+/// `POST /api/chat/push` — submit a message to a chat agent, creating the
+/// sandbox and attaching its session first if they don't exist.
 ///
 /// This is the island composer's one call: it has no sandbox picker and no
 /// terminal, so everything between "user typed a question" and "the agent is
 /// reading it" has to happen here. Reuses the same provisioning path as the web
 /// UI's 💬 button, so a chat started from the island is the same thing as one
 /// started from the browser.
+///
+/// Three shapes of request, and only the first is expected to be slow:
+///
+///  - `fresh: true` — mint a new `ephemeral-chat[-N]`: provision, boot, type.
+///  - `name: "<sandbox>"` — a row's inline composer typing into a sandbox that
+///    is, almost always, already attached. This is the hot path.
+///  - neither — the legacy island build's shared `ephemeral-chat`.
 async fn api_chat_push(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ChatPushBody>,
 ) -> Json<serde_json::Value> {
     let text = body.text.trim().to_string();
     if text.is_empty() {
-        return Json(serde_json::json!({ "ok": false, "error": "empty message" }));
+        return err_json("empty message");
     }
-    let name = body
+    let named = body
         .name
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(EPHEMERAL_CHAT)
-        .to_string();
-    if !crate::is_valid_sandbox_name(&name) {
-        return Json(serde_json::json!({
-            "ok": false,
-            "error": "name must be non-empty and contain only letters, digits, and hyphens"
-        }));
+        .map(str::to_string);
+    // Whether this request is allowed to *create* the sandbox it targets — only
+    // when the daemon chose the name. "Write to this sandbox" must never be a way
+    // to conjure one: a row whose sandbox was removed a moment ago would
+    // otherwise silently rebuild it under the same name with an empty throwaway
+    // workspace, none of the project it is named after.
+    let (name, may_create) = match named {
+        Some(n) => (n, false),
+        None if body.fresh => {
+            let taken = tokio::task::spawn_blocking(crate::sbx::list_sandboxes)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            (next_ephemeral_chat(&taken), true)
+        }
+        // What an island build predating per-row composers sends.
+        None => (EPHEMERAL_CHAT.to_string(), true),
+    };
+    if let Some(rejected) = reject_invalid_name(&name) {
+        return rejected;
     }
+    let key = session_key(&name, "claude");
 
     // 1. Provision on first use only. Re-provisioning per message would redo
     //    policy, hooks and trust on every keystroke-worth of chat.
-    let exists = {
+    //
+    //    An attached, still-running session is proof enough that the sandbox is
+    //    there, and it lets the common case skip `sbx ls` — a process spawn that
+    //    was the single most expensive step of typing into a chat already up.
+    let attached = state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&key)
+        .is_some_and(|s| s.alive());
+    let exists = attached || {
         let n = name.clone();
-        tokio::task::spawn_blocking(move || crate::sbx::exists(&n))
+        try_blocking(move || crate::sbx::exists(&n))
             .await
-            .ok()
-            .and_then(Result::ok)
             .unwrap_or(false)
     };
     if !exists {
+        if !may_create {
+            return err_json(format!(
+                "no sandbox named '{name}' — it may have been removed"
+            ));
+        }
         let workspace = match crate::prepare_chat_workspace(&name) {
             Ok(w) => w,
-            Err(e) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+            Err(e) => return err_json(format!("{e:#}")),
         };
         let cfg = state.cfg.clone();
         let use_api_key = state.use_api_key;
         let n = name.clone();
         tracing::info!("island: provisioning ephemeral chat sandbox '{name}' at {workspace}");
-        match tokio::task::spawn_blocking(move || {
+        if let Err(rejected) = try_blocking(move || {
             crate::provision_sandbox(&n, &workspace, &[], &cfg, &[], use_api_key)
         })
         .await
         {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-            Err(_) => return Json(serde_json::json!({ "ok": false, "error": "task panic" })),
+            return rejected;
         }
     }
 
     // 2. Attach the agent. `sbx run --name` also starts a stopped sandbox, so
     //    this covers "the chat sandbox exists but was stopped" for free.
-    let key = format!("{name}::claude");
-    let fresh = !state.sessions.lock().unwrap().contains_key(&key);
+    //
+    //    Drop whatever is filed under this key unless it is the live session we
+    //    just proved: nothing prunes one whose PTY has exited (see
+    //    `PtySession::alive`), and `get_or_create_session` hands back what it
+    //    finds. Typing into that corpse loses the message — and costs
+    //    `CHAT_READY_TIMEOUT` first, waiting for a first frame that can never
+    //    come. Also covers a recycled chat name: `ephemeral-chat-2` removed, then
+    //    minted again, with the old session still in the map.
+    if !attached {
+        state.sessions.lock().unwrap().remove(&key);
+    }
     let sessions = state.sessions.clone();
     let shell = state.shell.clone();
     let n = name.clone();
-    let session = match tokio::task::spawn_blocking(move || {
-        get_or_create_session(&n, "claude", &shell, &sessions)
-    })
-    .await
-    {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => return Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    };
+    let session =
+        match try_blocking(move || get_or_create_session(&n, "claude", &shell, &sessions)).await {
+            Ok(s) => s,
+            Err(rejected) => return rejected,
+        };
 
-    // 3. Let the TUI finish drawing, then type the message.
-    wait_until_settled(&session, fresh).await;
+    // 3. Let the TUI finish drawing, then type the message. Subscribe first: the
+    //    same receiver carries the echo in step 4, and one subscribed after the
+    //    write could miss it (see `settle`).
+    let mut rx = session.tx.subscribe();
+    if attached {
+        settle(&mut rx, None, CHAT_SETTLE_WARM).await;
+    } else {
+        // Nothing has been drawn yet — wait for the first frame, then for it to
+        // stop.
+        settle(&mut rx, Some(CHAT_READY_TIMEOUT), CHAT_SETTLE).await;
+    }
     {
         let mut w = session.writer.lock().unwrap();
         let _ = w.write_all(text.as_bytes());
@@ -1401,7 +1555,11 @@ async fn api_chat_push(
     //    two isolated arrow keys, nowhere near enough after a block of text.
     //    Waiting for the echo to go quiet also scales with the machine, which a
     //    fixed guess would not.
-    wait_until_settled(&session, false).await;
+    //
+    //    Waiting for the echo to *start* before timing its silence is what keeps
+    //    this honest at a short quiet window: without it, a PTY that hasn't
+    //    turned the write around yet reads as quiet, and Return joins the paste.
+    settle(&mut rx, Some(CHAT_ECHO_TIMEOUT), CHAT_ECHO_QUIET).await;
     {
         let mut w = session.writer.lock().unwrap();
         let _ = w.write_all(KEY_ENTER);
@@ -1409,7 +1567,7 @@ async fn api_chat_push(
     }
     tracing::info!("island: pushed {} chars into '{name}'", text.len());
 
-    Json(serde_json::json!({ "ok": true, "name": name, "created": !exists }))
+    ok_json_with(serde_json::json!({ "name": name, "created": !exists }))
 }
 
 #[derive(Deserialize)]
@@ -1428,48 +1586,30 @@ async fn api_duplicate(
     Json(body): Json<DuplicateBody>,
 ) -> Json<serde_json::Value> {
     let new_name = body.new_name.trim().to_string();
-    if new_name.is_empty()
-        || !new_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
-        return Json(serde_json::json!({
-            "ok": false,
-            "error": "name must be non-empty and contain only letters, digits, and hyphens"
-        }));
+    if let Some(rejected) = reject_invalid_name(&new_name) {
+        return rejected;
     }
 
     let Some(workspace) = crate::workspace_for(&name) else {
-        return Json(serde_json::json!({
-            "ok": false,
-            "error": format!("no known workspace for '{name}' — it may predate this sbxw version")
-        }));
+        return err_json(format!(
+            "no known workspace for '{name}' — it may predate this sbxw version"
+        ));
     };
     let workspace = workspace.to_string_lossy().into_owned();
 
     match sbx::exists(&new_name) {
-        Ok(true) => {
-            return Json(serde_json::json!({
-                "ok": false,
-                "error": format!("a sandbox named '{new_name}' already exists")
-            }))
-        }
-        Err(e) => return Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Ok(true) => return err_json(format!("a sandbox named '{new_name}' already exists")),
+        Err(e) => return err_json(format!("{e:#}")),
         Ok(false) => {}
     }
 
     let cfg = state.cfg.clone();
     let use_api_key = state.use_api_key;
     tracing::info!("web UI: duplicating sandbox '{name}' as '{new_name}' (workspace {workspace})");
-    match tokio::task::spawn_blocking(move || {
+    blocking_ok(move || {
         crate::provision_sandbox(&new_name, &workspace, &[], &cfg, &[], use_api_key)
     })
     .await
-    {
-        Ok(Ok(())) => Json(serde_json::json!({ "ok": true })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
 }
 
 // ── Filesystem browser ────────────────────────────────────────────────────────
@@ -1532,12 +1672,13 @@ async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
 /// returns the chosen absolute path. Runs on a blocking thread since the
 /// dialog blocks until the user responds.
 async fn api_fs_pick() -> Json<serde_json::Value> {
-    match tokio::task::spawn_blocking(pick_folder_native).await {
-        Ok(Ok(Some(path))) => Json(serde_json::json!({ "ok": true, "path": path })),
-        Ok(Ok(None)) => Json(serde_json::json!({ "ok": false, "cancelled": true })),
-        Ok(Err(e)) => Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
-        Err(_) => Json(serde_json::json!({ "ok": false, "error": "task panic" })),
-    }
+    blocking(pick_folder_native, |picked| match picked {
+        Some(path) => ok_json_with(serde_json::json!({ "path": path })),
+        // Dismissing the dialog isn't an error, but it isn't a path either — the
+        // frontend distinguishes the two to stay silent on cancel.
+        None => Json(serde_json::json!({ "ok": false, "cancelled": true })),
+    })
+    .await
 }
 
 /// Blocks the calling thread until the user picks a folder or dismisses the
@@ -1704,7 +1845,7 @@ fn collect_artifacts(dir: &std::path::Path) -> Vec<ArtifactEntry> {
     if dir.is_dir() {
         walk_artifacts(dir, dir, &mut out, 0);
     }
-    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out.sort_by_key(|e| std::cmp::Reverse(e.modified)); // newest first
     out
 }
 
@@ -1849,10 +1990,10 @@ fn get_or_create_session(
     shell: &str,
     sessions: &Sessions,
 ) -> Result<Arc<PtySession>> {
-    let session_key = format!("{sandbox}::{mode}");
+    let key = session_key(sandbox, mode);
 
     // Fast path: session already exists.
-    if let Some(s) = sessions.lock().unwrap().get(&session_key) {
+    if let Some(s) = sessions.lock().unwrap().get(&key) {
         return Ok(s.clone());
     }
 
@@ -1932,20 +2073,20 @@ fn get_or_create_session(
         master,
         replay: replay.clone(),
         bell_tx: bell_tx.clone(),
-        _child: Mutex::new(child),
+        child: Mutex::new(child),
     });
 
     sessions
         .lock()
         .unwrap()
-        .insert(session_key.clone(), session.clone());
+        .insert(key.clone(), session.clone());
 
     // Background reader thread — pure terminal I/O: PTY output → replay buffer →
     // WebSocket broadcast, plus a debounced BEL signal for the browser's
     // "attention" toast. Session *state* is derived from Claude Code hooks
     // (`api_hook`), not from this stream, so there is no scraping here.
     let sessions_ref = sessions.clone();
-    let sandbox_key = session_key.clone();
+    let sandbox_key = key.clone();
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         // Debounces the bell signal — agents can emit several BELs in a row
@@ -2354,10 +2495,95 @@ mod tests {
         assert_eq!(st.state, SessionState::Exited);
     }
 
+    /// The frontend branches on `ok` alone, so every envelope must carry it —
+    /// and a success with extra fields must not lose them to the merge.
+    #[test]
+    fn json_envelopes_keep_their_shape() {
+        assert_eq!(ok_json().0, json!({ "ok": true }));
+        assert_eq!(
+            ok_json_with(json!({ "name": "chat-01", "created": true })).0,
+            json!({ "ok": true, "name": "chat-01", "created": true })
+        );
+        assert_eq!(
+            err_json("path is not a directory").0,
+            json!({ "ok": false, "error": "path is not a directory" })
+        );
+    }
+
+    /// `sbx`'s stderr reaches the user only if the whole context chain is
+    /// rendered — `to_string()` would show just the outermost layer and drop the
+    /// policy/governance detail `sbx::command_error` went to the trouble of
+    /// keeping.
+    #[test]
+    fn err_json_renders_the_whole_anyhow_context_chain() {
+        let err = anyhow::anyhow!("Blocked by network policy: domain example.com")
+            .context("failed to apply network allowlist");
+        let body = err_json(format!("{err:#}")).0;
+        let msg = body["error"].as_str().expect("error string");
+        assert!(msg.contains("failed to apply network allowlist"), "{msg}");
+        assert!(msg.contains("Blocked by network policy"), "{msg}");
+    }
+
+    #[test]
+    fn reject_invalid_name_accepts_valid_and_explains_invalid() {
+        assert!(reject_invalid_name("neos-2").is_none());
+        let rejected = reject_invalid_name("bad name!").expect("rejected");
+        assert_eq!(rejected.0["ok"], json!(false));
+        assert_eq!(rejected.0["error"], json!(crate::INVALID_NAME_MSG));
+    }
+
+    #[test]
+    fn session_keys_round_trip() {
+        let key = session_key("neos", "bash");
+        assert_eq!(key, "neos::bash");
+        assert_eq!(split_key(&key), ("neos", "bash"));
+    }
+
     #[test]
     fn clip_truncates_and_single_lines() {
         assert_eq!(clip("hello", 10), "hello");
         assert_eq!(clip("first line\nsecond", 40), "first line");
         assert_eq!(clip("abcdefghij", 5), "abcde…");
+    }
+
+    fn taken(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn next_ephemeral_chat_numbers_from_two() {
+        assert_eq!(next_ephemeral_chat(&taken(&[])), "ephemeral-chat");
+        // Unrelated sandboxes don't push the numbering along.
+        assert_eq!(next_ephemeral_chat(&taken(&["neos"])), "ephemeral-chat");
+        assert_eq!(
+            next_ephemeral_chat(&taken(&["ephemeral-chat"])),
+            "ephemeral-chat-2"
+        );
+        assert_eq!(
+            next_ephemeral_chat(&taken(&["ephemeral-chat", "ephemeral-chat-2"])),
+            "ephemeral-chat-3"
+        );
+    }
+
+    /// Chat sandboxes are disposable, so a name freed by `sbx rm` is offered
+    /// again instead of the counter climbing past it forever.
+    #[test]
+    fn next_ephemeral_chat_reuses_a_freed_name() {
+        assert_eq!(
+            next_ephemeral_chat(&taken(&["ephemeral-chat", "ephemeral-chat-3"])),
+            "ephemeral-chat-2"
+        );
+    }
+
+    /// Every minted name has to survive the same validation the endpoint applies
+    /// to a caller-supplied one.
+    #[test]
+    fn next_ephemeral_chat_names_are_valid_sandbox_names() {
+        let mut used = taken(&[]);
+        for _ in 0..12 {
+            let name = next_ephemeral_chat(&used);
+            assert!(crate::is_valid_sandbox_name(&name), "{name}");
+            assert!(used.insert(name), "minted a name twice");
+        }
     }
 }

@@ -597,6 +597,36 @@ fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
     run_checked(&full)
 }
 
+/// Path (inside the sandbox) of Claude Code's user-level settings file — the one
+/// every helper below merges into.
+const SETTINGS_PATH: &str = "/home/agent/.claude/settings.json";
+
+/// Run a one-shot Node script inside `sandbox`: write it to `tmp_path`, run it,
+/// then remove it. The removal is best-effort and never masks the script's own
+/// outcome, which is what the caller cares about.
+fn run_node_script(sandbox: &str, tmp_path: &str, script: &str) -> Result<()> {
+    write_file_stdin(sandbox, tmp_path, script.as_bytes())?;
+    let result = exec_run(sandbox, &["node", tmp_path]);
+    let _ = exec_run(sandbox, &["rm", "-f", tmp_path]);
+    result
+}
+
+/// Wrap `body` — JavaScript mutating the parsed settings object `d` — in the
+/// read-modify-write boilerplate every settings helper needs.
+///
+/// Merging rather than overwriting is load-bearing: that single file also holds
+/// the model, hook and statusLine settings installed by the *other* helpers here,
+/// plus whatever the user configured in-session. A missing or corrupt file parses
+/// as `{}`, so a first run and a repeat run behave identically.
+fn settings_merge_script(body: &str) -> String {
+    format!(
+        "const fs=require('fs');const p='{SETTINGS_PATH}';\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         {body}\
+         fs.writeFileSync(p,JSON.stringify(d));"
+    )
+}
+
 /// Pre-seed `/home/agent/.claude.json` so Claude Code considers `workspace`
 /// already trusted the first time it starts in this sandbox. Without this,
 /// a fresh sandbox shows the "workspace has not been trusted" banner and
@@ -608,6 +638,8 @@ fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
 /// Claude Code also keeps onboarding/account state in that same file.
 /// Safe to call repeatedly (e.g. on every `sbxw up`).
 pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
+    // Not `settings_merge_script`: trust lives in `.claude.json`, a different
+    // file from the `settings.json` every other helper here merges into.
     let script = format!(
         "const fs=require('fs');const p='/home/agent/.claude.json';const w={};\
          let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
@@ -616,10 +648,7 @@ pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
          fs.writeFileSync(p,JSON.stringify(d));",
         serde_json::to_string(workspace)?
     );
-    write_file_stdin(sandbox, "/tmp/.sbxw-trust.js", script.as_bytes())?;
-    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-trust.js"]);
-    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-trust.js"]);
-    result
+    run_node_script(sandbox, "/tmp/.sbxw-trust.js", &script)
 }
 
 /// Set the default model in the sandbox's user-level Claude Code settings
@@ -629,17 +658,8 @@ pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
 /// (e.g. on every `sbxw up`); sbxw.toml's `claude_model` is the source of
 /// truth for the default.
 pub fn set_default_model(sandbox: &str, model: &str) -> Result<()> {
-    let script = format!(
-        "const fs=require('fs');const p='/home/agent/.claude/settings.json';const m={};\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
-         d.model=m;\
-         fs.writeFileSync(p,JSON.stringify(d));",
-        serde_json::to_string(model)?
-    );
-    write_file_stdin(sandbox, "/tmp/.sbxw-model.js", script.as_bytes())?;
-    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-model.js"]);
-    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-model.js"]);
-    result
+    let script = settings_merge_script(&format!("d.model={};", serde_json::to_string(model)?));
+    run_node_script(sandbox, "/tmp/.sbxw-model.js", &script)
 }
 
 /// Path (inside the sandbox) the enforcement hook script is installed at.
@@ -663,24 +683,15 @@ pub fn install_artifact_hook(sandbox: &str) -> Result<()> {
     const HOOK_SCRIPT: &str = include_str!("../assets/enforce-artifacts.js");
     write_file_stdin(sandbox, ARTIFACT_HOOK_PATH, HOOK_SCRIPT.as_bytes())?;
 
-    let merge_script = format!(
-        "const fs=require('fs');const p='/home/agent/.claude/settings.json';const hookPath={};\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+    let merge_script = settings_merge_script(&format!(
+        "const hookPath={};\
          d.hooks=d.hooks||{{}};\
          d.hooks.PreToolUse=(d.hooks.PreToolUse||[]).filter(e=>\
            !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
-         d.hooks.PreToolUse.push({{matcher:'Write',hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});\
-         fs.writeFileSync(p,JSON.stringify(d));",
+         d.hooks.PreToolUse.push({{matcher:'Write',hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});",
         serde_json::to_string(ARTIFACT_HOOK_PATH)?
-    );
-    write_file_stdin(
-        sandbox,
-        "/tmp/.sbxw-hook-install.js",
-        merge_script.as_bytes(),
-    )?;
-    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-hook-install.js"]);
-    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-hook-install.js"]);
-    result
+    ));
+    run_node_script(sandbox, "/tmp/.sbxw-hook-install.js", &merge_script)
 }
 
 /// Path (inside the sandbox) the status-forwarding hook script is installed at.
@@ -714,28 +725,18 @@ pub fn install_status_hooks(sandbox: &str, web_port: &str) -> Result<()> {
     let script = HOOK_SCRIPT.replace("__PORT__", web_port);
     write_file_stdin(sandbox, STATUS_HOOK_PATH, script.as_bytes())?;
 
-    let merge_script = format!(
-        "const fs=require('fs');const p='/home/agent/.claude/settings.json';\
-         const hookPath={path};const events={events};\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+    let merge_script = settings_merge_script(&format!(
+        "const hookPath={path};const events={events};\
          d.hooks=d.hooks||{{}};\
          for(const ev of events){{\
            d.hooks[ev]=(d.hooks[ev]||[]).filter(e=>\
              !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
            d.hooks[ev].push({{hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});\
-         }}\
-         fs.writeFileSync(p,JSON.stringify(d));",
+         }}",
         path = serde_json::to_string(STATUS_HOOK_PATH)?,
         events = serde_json::to_string(STATUS_HOOK_EVENTS)?,
-    );
-    write_file_stdin(
-        sandbox,
-        "/tmp/.sbxw-status-hook-install.js",
-        merge_script.as_bytes(),
-    )?;
-    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-status-hook-install.js"]);
-    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-status-hook-install.js"]);
-    result
+    ));
+    run_node_script(sandbox, "/tmp/.sbxw-status-hook-install.js", &merge_script)
 }
 
 /// Path (inside the sandbox) the usage statusLine script is installed at.
@@ -754,24 +755,14 @@ pub fn install_usage_statusline(sandbox: &str, web_port: &str) -> Result<()> {
     write_file_stdin(sandbox, USAGE_STATUSLINE_PATH, script.as_bytes())?;
 
     let command = format!("node {USAGE_STATUSLINE_PATH}");
-    let merge_script = format!(
-        "const fs=require('fs');const p='/home/agent/.claude/settings.json';\
-         const cmd={cmd};\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+    let merge_script = settings_merge_script(&format!(
+        "const cmd={cmd};\
          if(!d.statusLine||((d.statusLine.command||'').includes('usage-statusline.js'))){{\
            d.statusLine={{type:'command',command:cmd}};\
-         }}\
-         fs.writeFileSync(p,JSON.stringify(d));",
+         }}",
         cmd = serde_json::to_string(&command)?,
-    );
-    write_file_stdin(
-        sandbox,
-        "/tmp/.sbxw-usage-install.js",
-        merge_script.as_bytes(),
-    )?;
-    let result = exec_run(sandbox, &["node", "/tmp/.sbxw-usage-install.js"]);
-    let _ = exec_run(sandbox, &["rm", "-f", "/tmp/.sbxw-usage-install.js"]);
-    result
+    ));
+    run_node_script(sandbox, "/tmp/.sbxw-usage-install.js", &merge_script)
 }
 
 #[cfg(test)]
@@ -804,6 +795,21 @@ mod tests {
             err.to_string(),
             "`sbx stop neos` exited with exit status: 1"
         );
+    }
+
+    /// The wrapper must *merge*: read the existing settings, apply the body, and
+    /// write back. Overwriting instead would make each helper clobber the ones
+    /// that ran before it (model vs. hooks vs. statusLine, all in one file).
+    #[test]
+    fn settings_merge_script_reads_modifies_then_writes() {
+        let script = settings_merge_script("d.model=\"claude-sonnet-5\";");
+        let read_at = script.find("readFileSync").expect("reads the current file");
+        let body_at = script.find("d.model=").expect("applies the body");
+        let write_at = script.find("writeFileSync").expect("writes it back");
+        assert!(read_at < body_at && body_at < write_at, "{script}");
+        // A missing or corrupt settings.json must parse as `{}`, not throw.
+        assert!(script.contains("catch(e){}"), "{script}");
+        assert!(script.contains(SETTINGS_PATH), "{script}");
     }
 
     #[test]
