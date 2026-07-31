@@ -92,11 +92,56 @@ fn flush_provisioning_output() {
     }
 }
 
+/// Banner for `--help`: the site's logo at terminal scale — a shell prompt and
+/// the wordmark, in the colours the favicon already uses (`>_` and `xw` green
+/// `#3fb950`, `sb` blue `#58a6ff`, as 256-colour approximations).
+///
+/// No card around it: boxing the wordmark capped how wide the letters could be,
+/// and `x`/`w` are the two that need the room — squeezed into four columns their
+/// diagonals collapse into a solid block and stop reading as letters. Off the
+/// leash they get five and six columns and are legible again.
+///
+/// Colour is dropped when stdout isn't a terminal (a pipe, a file, a CI log) or
+/// when `NO_COLOR` is set, so `sbxw --help > file` stays plain text.
+///
+/// `install.sh` prints the same badge in `sh`; the two are separate by
+/// necessity, so keep them in step by eye.
+fn banner() -> String {
+    use std::io::IsTerminal;
+    let colour = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let (blue, green, reset) = if colour {
+        ("\x1b[1;38;5;75m", "\x1b[1;38;5;77m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
+    // Half blocks (▀▄█) put two pixel rows in one text row, which is what lets
+    // the wordmark be twice the height of a line of text without taking over the
+    // screen: five pixel rows land in three.
+    // Columns are (prompt, sb, xw) so each row is coloured in three pieces.
+    const ROWS: [(&str, &str, &str); 3] = [
+        ("▀█▄   ", "█▀▀▀ █▀▀▄", "▀▄ ▄▀ █    █"),
+        (" ▄█▀  ", "▀▀▀█ █▀▀▄", " ▄▀▄  █ ▄▄ █"),
+        ("▀▀ ▀▀▀", "▀▀▀▀ ▀▀▀ ", "▀   ▀  ▀  ▀ "),
+    ];
+
+    let mut out = String::from("\n");
+    for (prompt, sb, xw) in ROWS {
+        out.push_str(&format!(
+            "  {green}{prompt}{reset}  {blue}{sb}{green} {xw}{reset}\n"
+        ));
+    }
+    // No trailing newline: clap puts its own blank line after `before_help`,
+    // and two of them leaves the badge floating.
+    out.pop();
+    out
+}
+
 #[derive(Parser)]
 #[command(
     name = "sbxw",
     version,
-    about = "Light wrapper around `sbx` for Claude Code dev sandboxes"
+    about = "Light wrapper around `sbx` for Claude Code dev sandboxes",
+    before_help = banner()
 )]
 struct Cli {
     #[command(subcommand)]
@@ -372,6 +417,9 @@ fn main() -> Result<()> {
         }
         Cmd::Web { name, config } => {
             init_tracing();
+            // The daemon drives sbx as hard as the pipeline does, and it is a
+            // separate entry point — `up`'s check never runs for it.
+            sbx::assert_available()?;
             let cfg = Config::load_or_default(&config)?;
             let addr = cfg.web_addr.clone();
             run_web(&addr, name, Arc::new(cfg), false)

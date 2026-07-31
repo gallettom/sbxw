@@ -30,8 +30,10 @@
 //!   * Host env vars are no longer auto-injected at runtime; secrets must go
 //!     through `sbx secret set` / `sbx secret import` (we already use `set`).
 //!
-//! Surface added from the newer release notes, NOT yet verified against a live
-//! `sbx --help` — check these before depending on them:
+//! Surface added after 0.35, which is why `MIN_SBX_VERSION` is 0.37 and not the
+//! 0.35 the core pipeline strictly needs. Individually still unverified against
+//! a live `sbx --help` — but each one *degrades* rather than failing loudly, so
+//! the version floor is what keeps their absence from going unnoticed:
 //!   sbx create … -p/--publish SPEC        (publish at creation; see create_claude)
 //!   sbx create … --no-share-skills        (opt out of the shared skill store)
 //!   sbx skills import [--dry-run|--force] (import host agent skills into the store)
@@ -137,12 +139,122 @@ fn run_capture(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-/// Is `sbx` reachable at all?
+/// Oldest `sbx` sbxw is known to work against.
+///
+/// Two tiers of requirement sit behind this one number, and the higher one
+/// wins, because the check exists to prevent surprises and not merely crashes:
+///
+/// * **0.35, or sbxw misprovisions.** `kit add` recreating the container (why
+///   sbxw skips kits `inspect` already lists), `rm` refusing an attached session
+///   without `--force` (which sbxw always passes), `run --name` re-attaching a
+///   sandbox created with a custom kit. Older than that, these don't fail
+///   cleanly: a kit is silently re-applied on every `up`, an `rm` refuses with
+///   no explanation.
+/// * **0.37, or half of sbxw quietly isn't there.** `create -p` (ports live from
+///   first boot), `create --no-share-skills`, `skills import`, `setup ssh`, and
+///   the policy panel's `policy ls [SANDBOX] --wide` / `policy log`. Every one of
+///   those either degrades or is opt-in — `create_with_port_fallback` even
+///   retries bare when `-p` is rejected — which is exactly the problem. Between
+///   0.35 and 0.37 you get a working sandbox and a tool missing features it says
+///   it has, explained only by scattered warnings.
+pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 37, 0);
+
+/// There is deliberately **no** upper bound. Newer sbx releases have so far
+/// added surface rather than moved it, and the parts that did move (the policy
+/// panel's `ls --wide` / `log`) already degrade view by view. Refusing to run
+/// against a version merely newer than this file would be the "déconvenue" the
+/// check exists to prevent.
+const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
+
+/// Is `sbx` reachable, and recent enough?
+///
+/// A version we can't parse is a warning, never a refusal: the output format of
+/// `sbx version` is not something sbxw should get to veto on.
 pub fn assert_available() -> Result<()> {
-    run_capture(&["version"]).context(
+    let raw = run_capture(&["version"]).context(
         "`sbx version` failed — install the standalone sbx binary and ensure it is on PATH",
     )?;
+
+    if std::env::var_os(SKIP_VERSION_CHECK_ENV).is_some() {
+        tracing::debug!("sbx version check skipped via {SKIP_VERSION_CHECK_ENV}");
+        return Ok(());
+    }
+
+    let (min_a, min_b, min_c) = MIN_SBX_VERSION;
+    match parse_version(&raw) {
+        Some(found) if found < MIN_SBX_VERSION => {
+            let (a, b, c) = found;
+            bail!(
+                "this sbx is {a}.{b}.{c}, but sbxw needs {min_a}.{min_b}.{min_c} or newer.\n\
+                 Upgrade sbx, or set {SKIP_VERSION_CHECK_ENV}=1 to run anyway — below \
+                 0.37 you lose ports published at creation, SSH, shared skills and parts \
+                 of the network-policy panel; below 0.35 `kit add`, `rm` and `run --name` \
+                 behave differently and sbxw misprovisions rather than failing loudly."
+            );
+        }
+        Some((a, b, c)) => tracing::debug!("sbx {a}.{b}.{c} (needs >= {min_a}.{min_b}.{min_c})"),
+        None => tracing::warn!(
+            "could not read a version out of `sbx version` — continuing, but sbxw is built \
+             for sbx {min_a}.{min_b}.{min_c} or newer"
+        ),
+    }
     Ok(())
+}
+
+/// First `MAJOR.MINOR[.PATCH]` in `raw`, so the check doesn't depend on how
+/// `sbx version` frames it (`sbx version 0.35.0`, `Version: v0.40.1`, a table…).
+///
+/// A missing patch reads as `.0`, and any suffix (`-rc1`, `+build`) is ignored:
+/// the comparison is a floor, and a release candidate for 0.36 is not older
+/// than 0.35. Four-digit leading numbers are skipped so a build date printed
+/// before the version can't be mistaken for one.
+fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
+    let bytes: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        // A digit run only starts a candidate if it isn't the tail of a longer
+        // token (the "256" in "sha256") — except after a `v`, which is how half
+        // the CLIs in existence print a version.
+        if i > 0 && bytes[i - 1].is_ascii_alphanumeric() && !matches!(bytes[i - 1], 'v' | 'V') {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            continue;
+        }
+        let start = i;
+        let mut nums: Vec<u32> = Vec::new();
+        loop {
+            let from = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if from == i {
+                break;
+            }
+            match bytes[from..i].iter().collect::<String>().parse::<u32>() {
+                Ok(n) => nums.push(n),
+                Err(_) => break, // absurdly long digit run: not a version
+            }
+            if nums.len() == 3 || i >= bytes.len() || bytes[i] != '.' {
+                break;
+            }
+            i += 1; // consume the dot and read the next component
+        }
+        // "0.35" and "0.35.0" are both versions; a bare "12" is not, and a
+        // four-digit lead is a year.
+        if nums.len() >= 2 && nums[0] < 1000 {
+            return Some((nums[0], nums[1], *nums.get(2).unwrap_or(&0)));
+        }
+        if i == start {
+            i += 1;
+        }
+    }
+    None
 }
 
 /// Return true if a sandbox with this exact name already exists (any state).
@@ -1022,6 +1134,43 @@ pub fn install_usage_statusline(sandbox: &str, web_port: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `sbx version`'s exact framing isn't pinned by anything sbxw controls, so
+    /// the floor check must survive it changing.
+    #[test]
+    fn version_is_found_however_sbx_frames_it() {
+        assert_eq!(parse_version("sbx version 0.35.0"), Some((0, 35, 0)));
+        assert_eq!(parse_version("v0.40.1\n"), Some((0, 40, 1)));
+        assert_eq!(parse_version("Version:  1.2\n"), Some((1, 2, 0)));
+        // A pre-release of 0.36 is not older than 0.35 — the suffix is noise.
+        assert_eq!(parse_version("sbx version 0.36.0-rc1"), Some((0, 36, 0)));
+        assert_eq!(
+            parse_version("sbx CLI\n  Version: 0.41.2\n  Commit: abc123\n"),
+            Some((0, 41, 2))
+        );
+        // A build date printed first must not be read as the version.
+        assert_eq!(
+            parse_version("built 2026.07.30\nsbx version 0.35.1"),
+            Some((0, 35, 1))
+        );
+        // Digits inside a word aren't a version, and neither is a bare number.
+        assert_eq!(parse_version("sha256 checksum only"), None);
+        assert_eq!(parse_version("sbx build 12"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    /// Tuple ordering is the whole comparison, so it is worth stating once.
+    #[test]
+    fn version_floor_compares_component_wise() {
+        assert!(parse_version("0.34.9").unwrap() < MIN_SBX_VERSION);
+        // The tier that only *degrades* is still below the floor: silently
+        // missing features is what this check is for.
+        assert!(parse_version("0.36.9").unwrap() < MIN_SBX_VERSION);
+        assert!(parse_version("0.37.0").unwrap() >= MIN_SBX_VERSION);
+        assert!(parse_version("0.37").unwrap() >= MIN_SBX_VERSION);
+        assert!(parse_version("0.100.0").unwrap() > MIN_SBX_VERSION);
+        assert!(parse_version("1.0.0").unwrap() > MIN_SBX_VERSION);
+    }
 
     /// Any exit status will do; we only ever format it.
     fn failed_status() -> std::process::ExitStatus {

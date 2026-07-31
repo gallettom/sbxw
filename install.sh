@@ -11,11 +11,14 @@ INSTALL_DIR="${SBXW_INSTALL_DIR:-/usr/local/bin}"
 KITS_DIR="${SBXW_KITS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/sbxw/kits}"
 
 # ── Colours (disabled when not a tty) ────────────────────────────────────────
-if [ -t 1 ]; then
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
   BOLD='\033[1m'; RESET='\033[0m'
+  # Wordmark tones, matching the favicon: sb #58a6ff, xw #3fb950.
+  MARK_B='\033[1;38;5;75m'; MARK_G='\033[1;38;5;77m'
 else
   RED=''; YELLOW=''; GREEN=''; BOLD=''; RESET=''
+  MARK_B=''; MARK_G=''
 fi
 
 info()  { printf "${GREEN}✓${RESET} %s\n" "$*"; }
@@ -76,6 +79,20 @@ install_island() {
   printf "  On first click-to-focus it asks permission to control your browser — allow it.\n"
   printf "  Want it at startup? Add it under System Settings › General › Login Items.\n"
 }
+
+# ── Wordmark ─────────────────────────────────────────────────────────────────
+# The site's logo at terminal scale: the prompt and the wordmark, in the
+# favicon's colours. Half blocks (▀▄█) carry two pixel rows per text row, so the
+# letters stand twice a line's height without taking over the screen. No card
+# around it — boxing the wordmark capped the letter widths, and `x`/`w` need the
+# room or their diagonals collapse into an unreadable block. `banner()` in
+# src/main.rs prints the same badge for `sbxw --help`; keep the two in step.
+# Block characters are literal UTF-8, like the ✓/⚠ above — POSIX printf has no
+# portable \xNN escape.
+printf "\n"
+printf "  ${MARK_G}▀█▄   ${RESET}  ${MARK_B}█▀▀▀ █▀▀▄${MARK_G} ▀▄ ▄▀ █    █${RESET}\n"
+printf "  ${MARK_G} ▄█▀  ${RESET}  ${MARK_B}▀▀▀█ █▀▀▄${MARK_G}  ▄▀▄  █ ▄▄ █${RESET}\n"
+printf "  ${MARK_G}▀▀ ▀▀▀${RESET}  ${MARK_B}▀▀▀▀ ▀▀▀ ${MARK_G} ▀   ▀  ▀  ▀ ${RESET}\n"
 
 # ── Check sbx dependency ─────────────────────────────────────────────────────
 step "Checking prerequisites…"
@@ -189,28 +206,47 @@ fi
 # button, and remote-dev tools like VS Code/Cursor — resolve at all. It is
 # idempotent, but we still skip it when the block is already there so a re-run
 # stays quiet.
-step "SSH access to sandboxes (optional)…"
+step "SSH access to sandboxes…"
+
+# Experimental upstream, so a failure here must never sink the install.
+setup_ssh() {
+  if sbx setup ssh; then
+    info "SSH configured — reach any sandbox with 'ssh <name>.sbx'"
+  else
+    warn "'sbx setup ssh' failed — your sbx may predate SSH support, or need it enabled."
+    printf "  sbxw works fine without it; retry later with 'sbxw ssh --setup'.\n"
+  fi
+}
+
+# SBXW_SETUP_SSH answers the question when there is nobody to ask, and skips it
+# when there is: 1/yes configures, 0/no leaves the SSH config alone.
+case "${SBXW_SETUP_SSH:-}" in
+  0|n|N|no|NO|false) SSH_CHOICE=no ;;
+  1|y|Y|yes|YES|true) SSH_CHOICE=yes ;;
+  *) SSH_CHOICE=ask ;;
+esac
+
 if grep -q '\.sbx' "$HOME/.ssh/config" 2>/dev/null; then
   info "already configured in ${HOME}/.ssh/config — sandboxes reachable at <name>.sbx"
+elif [ "$SSH_CHOICE" = no ]; then
+  info "SBXW_SETUP_SSH=0 — skipped. Run 'sbxw ssh --setup' to enable it later."
+elif [ "$SSH_CHOICE" = yes ]; then
+  setup_ssh
 elif ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
-  warn "Non-interactive install — skipping SSH setup."
-  printf "  Run 'sbxw ssh --setup' any time to enable 'ssh <name>.sbx'.\n"
+  # `curl … | sh` is the documented install, and it used to land here and skip:
+  # the SSH button in the web UI and `sbxw ssh` then failed for the majority of
+  # installs, with the fix buried in a line of installer output nobody reads.
+  # The prompt below already defaults to yes, so applying that same default is
+  # what an interactive run would have done anyway. What it writes is a managed,
+  # sbx-owned `Host *.sbx` block, which matches no host you already have.
+  info "Non-interactive install — enabling SSH access (SBXW_SETUP_SSH=0 to skip)."
+  setup_ssh
 else
   printf "Enable SSH access to sandboxes (ssh <name>.sbx, VS Code/Cursor remote)? [Y/n] " > /dev/tty
   read -r REPLY < /dev/tty || REPLY=""
   case "$REPLY" in
-    [nN]*)
-      info "Skipped. Run 'sbxw ssh --setup' any time to enable it later."
-      ;;
-    *)
-      # Experimental upstream: a failure here must not sink the install.
-      if sbx setup ssh; then
-        info "SSH configured — reach any sandbox with 'ssh <name>.sbx'"
-      else
-        warn "'sbx setup ssh' failed — your sbx may predate SSH support, or need it enabled."
-        printf "  sbxw works fine without it; retry later with 'sbxw ssh --setup'.\n"
-      fi
-      ;;
+    [nN]*) info "Skipped. Run 'sbxw ssh --setup' any time to enable it later." ;;
+    *) setup_ssh ;;
   esac
 fi
 

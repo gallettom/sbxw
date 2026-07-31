@@ -7,10 +7,54 @@ policy.
 
 It **only ever calls `sbx`** — never `docker sandbox`.
 
-> Built and verified against the `sbx` 0.35 CLI reference
-> (docs.docker.com/reference/cli/sbx). A few behaviours could not be confirmed
-> from the docs and are flagged below — check them with `sbx … --help` on your
-> machine before depending on them.
+> The core pipeline was built against the `sbx` 0.35 CLI reference
+> (docs.docker.com/reference/cli/sbx); everything sbxw has grown since needs
+> **0.37 or newer**, which it checks at startup — see below. A few behaviours
+> could not be confirmed from the docs and are flagged in the text — check them
+> with `sbx … --help` on your machine before depending on them.
+
+## Requires sbx 0.37.0 or newer
+
+`sbxw up`, `sbxw chat` and `sbxw web` run `sbx version` first and stop with a
+clear message if it's older. Two different requirements sit behind that number,
+and the higher one wins because the check is there to prevent *surprises*, not
+just crashes.
+
+**0.35, or sbxw misprovisions.** These are the behaviours the pipeline is built
+on:
+
+- `sbx kit add` **recreates** the container, which is why sbxw skips kits
+  `sbx inspect` already lists instead of re-applying them on every `up`;
+- `sbx rm` refuses a sandbox with an attached session unless `--force` is passed,
+  which sbxw always does — the web daemon holds a session;
+- `sbx run --name` re-attaches a sandbox created with a custom kit (sbxw's OAuth
+  kit) without re-passing it.
+
+Older than that, these don't fail cleanly, they *misbehave*: a kit re-applied on
+every `up`, an `rm` that refuses with no explanation.
+
+**0.37, or half of sbxw quietly isn't there.** Ports published at creation
+(`create -p`), `--no-share-skills`, `sbxw skills import`, `sbxw ssh --setup`, and
+the network-policy panel's `policy ls <name> --wide` / `policy log`. Every one of
+these degrades or is opt-in — sbxw even retries `create` without the mappings
+when `-p` is rejected — which is exactly why the floor is here. Between 0.35 and
+0.37 you get a working sandbox and a tool missing features it says it has,
+explained only by scattered warnings.
+
+There is deliberately **no upper bound**: newer sbx releases have added surface
+rather than moved it, and the parts that did move (the policy panel's `ls
+--wide` and `log`) already degrade view by view. A version sbxw can't parse is a
+warning, not a refusal — the format of `sbx version` isn't sbxw's to veto.
+
+To run against an older sbx anyway:
+
+```bash
+SBXW_SKIP_SBX_VERSION_CHECK=1 sbxw up neos
+```
+
+An environment variable rather than an `sbxw.toml` key on purpose: this is a
+break-glass for one run, not a property of your project that should be committed
+and forgotten.
 
 ## What it does
 
@@ -355,6 +399,7 @@ binary, so that's all you need.
 curl -fsSL https://raw.githubusercontent.com/gallettom/sbxw/main/install.sh | sh
 # pin a version:    | sh -s v1.0.0
 # custom dir:       SBXW_INSTALL_DIR=$HOME/.local/bin   ... | sh
+# leave SSH alone:  SBXW_SETUP_SSH=0                    ... | sh
 ```
 
 This requires a published [GitHub release](https://github.com/gallettom/sbxw/releases).
@@ -480,9 +525,17 @@ sbxw ssh neos                 # interactive shell
 sbxw ssh neos -- git status   # one-shot command
 ```
 
-`install.sh` offers to run the setup step for you, so a fresh install usually
-has this already; `sbxw ssh --setup` is the catch-up path if you declined or
-installed the binary by hand. It's idempotent — re-running it is harmless.
+`install.sh` does this for you. An interactive run asks (defaulting to yes); a
+piped one — `curl … | sh`, which is how most people install — has nobody to ask
+and applies that same default, since otherwise the SSH button in the web UI and
+`sbxw ssh` would fail for the majority of installs, with the fix buried in a line
+of installer output nobody reads. What gets written is a managed, sbx-owned
+`Host *.sbx` block, which matches no host you already have.
+
+Set `SBXW_SETUP_SSH=0` to leave your SSH config untouched, or `SBXW_SETUP_SSH=1`
+to configure it without being asked. `sbxw ssh --setup` is the catch-up path if
+you declined or installed the binary by hand; it's idempotent, so re-running it
+is harmless.
 
 Two things this gives you that `sbxw bash` doesn't:
 
