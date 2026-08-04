@@ -1313,6 +1313,8 @@ function setFocusedPane(idx) {
   panes.forEach((p, i) => p.el.classList.toggle('focused', i === idx));
   focusedPane = idx;
   panes[idx]?.term.focus();
+  // Which pane is watched decides whether its `attention` liseret shows at all.
+  applyAgentStates();
 }
 
 function setPaneMode(idx, mode, save = true) {
@@ -3149,10 +3151,14 @@ new EventSource('/api/focus-events').onmessage = ev => {
 // `sandbox`. Both carry the same three classes and run the same animations;
 // only where the strip is anchored differs (under the pane bar, along the top
 // of the row).
-function paintLiseret(el, sandbox) {
+function paintLiseret(el, sandbox, watched = false) {
   const st = sandbox ? agentStates.get(`${sandbox}::claude`) : null;
   el.classList.toggle('agent-working', st === 'working');
-  el.classList.toggle('agent-attention', st === 'attention');
+  // `attention` is a summons — pointless on the pane you are already reading,
+  // where the question is on screen in full. Suppressed while it is watched
+  // rather than acknowledged once and cleared: leave that pane, or leave the
+  // tab, and the amber comes back, because the session still wants an answer.
+  el.classList.toggle('agent-attention', st === 'attention' && !watched);
 
   const flash = sandbox ? doneFlashes.get(sandbox) : null;
   if (!flash) {
@@ -3170,8 +3176,16 @@ function paintLiseret(el, sandbox) {
 }
 
 function applyAgentStates() {
+  // "Watched" is the focused pane *and* a focused window: with the tab in the
+  // background nobody is reading anything, and a summons raised then is exactly
+  // the one that has to still be there when you come back to it.
+  const windowFocused = document.hasFocus();
   // A bash pane is a shell you drive yourself — no agent, so nothing to show.
-  panes.forEach(p => paintLiseret(p.el, p.mode === 'claude' ? p.sandbox : null));
+  panes.forEach((p, i) => paintLiseret(
+    p.el,
+    p.mode === 'claude' ? p.sandbox : null,
+    i === focusedPane && windowFocused,
+  ));
   listEl.querySelectorAll('.sbx-item').forEach(row => paintLiseret(row, row.dataset.name));
 }
 
@@ -3225,6 +3239,12 @@ fetch('/api/sessions')
 new EventSource('/api/events').onmessage = ev => {
   try { ingestSession(JSON.parse(ev.data)); } catch (_) {}
 };
+
+// Leaving the tab un-watches the focused pane, coming back watches it again —
+// so a session that raised `attention` while you were elsewhere is still
+// flagged when you return, and stops being flagged the moment you read it.
+window.addEventListener('focus', applyAgentStates);
+window.addEventListener('blur', applyAgentStates);
 </script>
 </body>
 </html>
