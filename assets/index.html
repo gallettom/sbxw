@@ -1089,9 +1089,19 @@ function updateLayoutSwitch() {
 function mouseToCell(e, pane) {
   const el = pane.termEl;
   if (!el) return null;
-  const r    = el.getBoundingClientRect();
   const cols = pane.term.cols || 80;
   const rows = pane.term.rows || 24;
+  // Measure against `.xterm-screen`, not the pane container. The fit addon
+  // rounds down (`rows = floor(available / cellHeight)`), so the container
+  // keeps up to a full row of leftover height at the bottom — dividing *its*
+  // height by `rows` yields a cell that is too tall, the row index comes out
+  // too low, and the selection lands above the pointer by a drift that grows
+  // as you move down the pane. xterm sizes `.xterm-screen` to exactly
+  // cols×rows cells (renderer: canvas.width = cell.width * cols), so this
+  // division is slack-free; its rect also excludes the viewport scrollbar,
+  // which the container's width wrongly counts as terminal columns.
+  const screen = el.querySelector('.xterm-screen');
+  const r    = (screen || el).getBoundingClientRect();
   const cw   = r.width  / cols;
   const ch   = r.height / rows;
   if (!cw || !ch) return null;
