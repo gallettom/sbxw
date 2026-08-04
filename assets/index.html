@@ -213,6 +213,21 @@
     background: color-mix(in srgb, var(--group-color, transparent) 15%, #161b22);
     border-right-color: #58a6ff;
   }
+
+  /* ── Agent activity, on the row's top edge ──
+     Where the strip sits, only. The three states it can be in are shared with
+     the pane liseret and live with it, further down under "Agent activity".
+     The row's two side borders are already spoken for and stay that way: the
+     group colour on the left, `active` — the row your pane is on — on the
+     right. Activity gets the top edge, which nothing else uses, so the two
+     readings never overwrite each other. Stopping at `left/right: 0` keeps the
+     strip inside both borders: absolute offsets are measured from the padding
+     box, so it ends exactly where they begin. */
+  .sbx-item { position: relative; }
+  .sbx-item::after {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    pointer-events: none; opacity: 0; background-repeat: no-repeat;
+  }
   /* ── Sidebar grouping — sandboxes sharing an identical workspace path (and,
      as one group of their own, chat sandboxes) are visually clustered under a
      small label, tinted with a color derived from the workspace path so the
@@ -476,6 +491,92 @@
     flex-shrink: 0; height: 32px; font-size: 12px;
   }
   .pane.focused .pane-bar { border-bottom-color: #58a6ff; }
+
+  /* ── Agent activity, painted on that same underline ──
+     The focused pane's blue line, promoted to an at-a-glance activity readout:
+     a 2px strip under the bar that travels while the agent is mid-turn, pulses
+     amber when it wants you, and lands one green sweep when a turn finishes.
+     It overlays the border rather than replacing it, so "which pane has focus"
+     and "which agent is busy" stay two separate signals on one piece of chrome.
+     States come from the Claude Code hooks over /api/events — the strip moves
+     only when the agent really is working, never on mere terminal output.
+
+     The sidebar rows carry the same strip along their top edge (positioned up
+     with `.sbx-item`), which is why the state rules below name both hosts: they
+     are one language spoken on two surfaces, and splitting them into a
+     horizontal and a vertical dialect only let the two drift apart. */
+  .pane-bar { position: relative; }
+  .pane-bar::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+    pointer-events: none; opacity: 0; background-repeat: no-repeat;
+  }
+
+  /* Working: a comet crossing left to right, forever. Sized at 45% of the strip
+     so the travel reads as motion rather than as a blinking full-width line. */
+  .pane.agent-working .pane-bar::after,
+  .sbx-item.agent-working::after {
+    opacity: 1;
+    background-image: linear-gradient(90deg, transparent, #58a6ff 45%, #79c0ff 50%, #58a6ff 55%, transparent);
+    background-size: 45% 100%;
+    animation: liseret-run 1.5s linear infinite;
+  }
+  /* Percentage background-position spans (container − image), i.e. 55% of the
+     strip here, so the ±120%/220% overshoot is what parks the comet fully out
+     of sight at each end instead of letting it pop in mid-strip. */
+  @keyframes liseret-run {
+    from { background-position: -120% 0; }
+    to   { background-position:  220% 0; }
+  }
+
+  /* Attention: amber, and breathing in place. A different colour *and* a
+     different motion, so "needs you" is never a busy line you glance past. */
+  .pane.agent-attention .pane-bar::after,
+  .sbx-item.agent-attention::after {
+    background-image: linear-gradient(90deg, transparent, #d29922 20%, #f0b849 50%, #d29922 80%, transparent);
+    background-size: 100% 100%;
+    animation: liseret-breathe 1.1s ease-in-out infinite;
+  }
+  @keyframes liseret-breathe { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+  /* Done: one green sweep, then the line settles full-width and fades out over
+     a few seconds. Transient on purpose — the useful moment is "this one just
+     landed while you were reading another pane", and a permanent green line on
+     every finished pane would say nothing. Keep the 4.5s in step with
+     DONE_FLASH_MS in the script. */
+  .pane.agent-done .pane-bar::after,
+  .sbx-item.agent-done::after {
+    background-image: linear-gradient(90deg, transparent, #3fb950 45%, #56d364 50%, #3fb950 55%, transparent);
+    animation: liseret-land 4.5s ease-out both;
+    /* After the shorthand, which resets it. Negative values let a host that
+       joins mid-flash — a sidebar row rebuilt by renderSidebar(), a pane
+       switched onto a sandbox already flashing — pick the sweep up where it
+       stands instead of replaying it. See paintLiseret. */
+    animation-delay: var(--liseret-delay, 0ms);
+  }
+  @keyframes liseret-land {
+    0%   { opacity: 1;   background-size:  45% 100%; background-position: -120% 0; }
+    15%  { opacity: 1;   background-size:  45% 100%; background-position:  220% 0; }
+    16%  { opacity: .85; background-size: 100% 100%; background-position:   50% 0; }
+    70%  { opacity: .85; background-size: 100% 100%; background-position:   50% 0; }
+    100% { opacity: 0;   background-size: 100% 100%; background-position:   50% 0; }
+  }
+
+  /* Same three states, held still: the colour carries the meaning on its own,
+     and a wall of panes sliding at once is exactly what this setting asks to
+     be spared. */
+  @media (prefers-reduced-motion: reduce) {
+    .pane.agent-working .pane-bar::after,
+    .pane.agent-attention .pane-bar::after,
+    .pane.agent-done .pane-bar::after,
+    .sbx-item.agent-working::after,
+    .sbx-item.agent-attention::after,
+    .sbx-item.agent-done::after {
+      animation: none; opacity: 1; background-size: 100% 100%; background-position: 50% 0;
+    }
+    .pane.agent-working .pane-bar::after,
+    .sbx-item.agent-working::after { opacity: .8; }
+  }
+
   .pane-bar .dot { width: 7px; height: 7px; }
   .pane-bar .dot.term-connected    { background: #58a6ff; box-shadow: 0 0 5px #58a6ff66; }
   .pane-bar .dot.term-disconnected { background: #484f58; }
@@ -989,6 +1090,15 @@ let panes = [];
 let focusedPane = 0;
 let paneCount = 1;
 
+// Agent activity per session, painted on each pane's liseret. Declared up here
+// with the rest of the pane state, and not beside the `/api/events` subscriber
+// that feeds it at the bottom of the script: `connectPane` and `setPaneMode`
+// read these, and a `const` is in its temporal dead zone until the top-level
+// body reaches it. See the "Agent activity" section for what fills them.
+const agentStates = new Map();  // "<sandbox>::<mode>" -> "working"|"idle"|"attention"
+const doneFlashes = new Map();  // sandbox -> { at: epoch ms, timer } for the green flash
+const DONE_FLASH_MS = 4500;     // keep in step with the liseret-land durations
+
 // ── Grid layout (dynamic pane count) ────────────────────────────────────
 // The layout switch used to be hardcoded to 1-4 panes. 4 remains the
 // guaranteed baseline (matches the old behaviour, regardless of window
@@ -1210,6 +1320,7 @@ function setPaneMode(idx, mode, save = true) {
   if (!pane) return;
   pane.mode = mode;
   pane.el.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  applyAgentStates();
   if (save) saveLayout();
 }
 
@@ -1288,6 +1399,9 @@ function connectPane(idx, name, mode) {
   // survive into the new session and turn mouse moves into stray input.
   pane.term.reset();
   pane.sandbox = name;
+  // The liseret describes whoever is in the pane *now* — repainting drops the
+  // outgoing session's state and picks up the incoming one's, mid-flash included.
+  applyAgentStates();
   const label = document.getElementById(`plabel-${idx}`);
   // The command is the tooltip, not the label: `monitor_cmd` is bare `sbx`,
   // which as a pane title says nothing about what the pane is.
@@ -1700,6 +1814,10 @@ function renderSidebar() {
   // Re-parent (not rebuild) the persisted pending-row nodes so their running
   // fill animation keeps going instead of restarting on every re-render.
   pendingCreations.forEach(p => listEl.appendChild(p.el));
+  // The rows above were just rebuilt from a string and carry no agent classes;
+  // repaint them from the live session state rather than baking it into the
+  // HTML, so an event arriving between two renders still lands.
+  applyAgentStates();
 }
 
 // Clicking a sandbox item (not a button) connects it to the focused pane.
@@ -3004,6 +3122,108 @@ new EventSource('/api/focus-events').onmessage = ev => {
   window.focus();
   readySandboxes.delete(name);
   connectPane(focusedPane, name);
+};
+
+// ── Agent activity on the liserets ────────────────────────────────────────
+// `/api/events` carries one SessionInfo per state change, folded from the
+// Claude Code hooks the sandbox POSTs to `/api/hook` (see assets/status-hook.js)
+// — the same feed the macOS island reads. Keeping the latest state per session
+// and painting it on both liserets turns the window into a status board: which
+// agents are mid-turn, which one wants you, which just landed. The panes answer
+// it for what you have open; the sidebar answers it for everything else, which
+// is where an agent grinding away in a sandbox you closed the pane on shows up.
+//
+// Sessions are keyed `<sandbox>::claude` — the hooks never file one under any
+// other mode. So a sidebar row keys off its sandbox alone, while a pane is
+// painted only in `claude` mode: a bash pane is a shell you are driving
+// yourself, and animating it would claim an agent works in a terminal with none.
+//
+// Both strips are the same animation on a different edge — under the pane bar,
+// along the top of the row — so the classes below are host-agnostic and the CSS
+// decides where the line goes. See the "Agent activity" block in the stylesheet.
+//
+// `agentStates`, `doneFlashes` and `DONE_FLASH_MS` live with the pane state near
+// the top of the script, for the hoisting reason documented there.
+
+// Paint one liseret host — a `.pane` or a `.sbx-item` — for the session of
+// `sandbox`. Both carry the same three classes and run the same animations;
+// only where the strip is anchored differs (under the pane bar, along the top
+// of the row).
+function paintLiseret(el, sandbox) {
+  const st = sandbox ? agentStates.get(`${sandbox}::claude`) : null;
+  el.classList.toggle('agent-working', st === 'working');
+  el.classList.toggle('agent-attention', st === 'attention');
+
+  const flash = sandbox ? doneFlashes.get(sandbox) : null;
+  if (!flash) {
+    el.classList.remove('agent-done');
+    el.style.removeProperty('--liseret-delay');
+  } else if (!el.classList.contains('agent-done')) {
+    // renderSidebar() rebuilds every row from an HTML string, so a row created
+    // during a flash starts with a fresh animation and would replay the sweep
+    // from the top on each re-render. A negative delay drops it straight into
+    // the point the others are at. Only on the way in: re-assigning the delay
+    // to an element already animating would restart it.
+    el.style.setProperty('--liseret-delay', `${flash.at - Date.now()}ms`);
+    el.classList.add('agent-done');
+  }
+}
+
+function applyAgentStates() {
+  // A bash pane is a shell you drive yourself — no agent, so nothing to show.
+  panes.forEach(p => paintLiseret(p.el, p.mode === 'claude' ? p.sandbox : null));
+  listEl.querySelectorAll('.sbx-item').forEach(row => paintLiseret(row, row.dataset.name));
+}
+
+// Every element currently standing in for `sandbox`: the panes showing its
+// agent, and its sidebar row.
+function liseretElements(sandbox) {
+  const els = panes.filter(p => p.sandbox === sandbox && p.mode === 'claude').map(p => p.el);
+  const row = listEl.querySelector(`.sbx-item[data-name="${CSS.escape(sandbox)}"]`);
+  if (row) els.push(row);
+  return els;
+}
+
+function flashDone(sandbox) {
+  clearTimeout(doneFlashes.get(sandbox)?.timer);
+  // Re-adding a class an element already carries does not restart its
+  // animation, so back-to-back turns would land only the first sweep. Clearing
+  // it and reading a layout property forces the reflow that arms the next one.
+  liseretElements(sandbox).forEach(el => {
+    el.classList.remove('agent-done');
+    el.style.removeProperty('--liseret-delay');
+    void el.offsetWidth;
+  });
+  doneFlashes.set(sandbox, {
+    at: Date.now(),
+    timer: setTimeout(() => { doneFlashes.delete(sandbox); applyAgentStates(); }, DONE_FLASH_MS),
+  });
+  applyAgentStates();
+}
+
+// `seed` marks the initial snapshot: those states are already true rather than
+// freshly reached, so a session that has been idle since yesterday must not
+// flash green just because you reloaded the tab.
+function ingestSession(info, seed = false) {
+  if (!info || !info.sandbox) return;
+  const key = `${info.sandbox}::${info.mode || 'claude'}`;
+  const prev = agentStates.get(key);
+  if (info.state === 'exited') agentStates.delete(key);
+  else agentStates.set(key, info.state);
+  // "Finished thinking" is a transition, not a state — `idle` is also where a
+  // session sits between prompts, and that is not news.
+  if (!seed && info.state === 'idle' && (prev === 'working' || prev === 'attention'))
+    flashDone(info.sandbox);
+  applyAgentStates();
+}
+
+fetch('/api/sessions')
+  .then(r => r.json())
+  .then(list => list.forEach(i => ingestSession(i, true)))
+  .catch(() => {});
+
+new EventSource('/api/events').onmessage = ev => {
+  try { ingestSession(JSON.parse(ev.data)); } catch (_) {}
 };
 </script>
 </body>
