@@ -575,6 +575,11 @@ struct AppState {
     /// delivered to open web tabs over `/api/focus-events` so a click reuses an
     /// existing tab instead of spawning a new one.
     focus: broadcast::Sender<String>,
+    /// The same bus in the opposite direction: "a browser tab is now watching
+    /// this sandbox's terminal", delivered to the island over
+    /// `/api/watch-events` so it can retire a notification the user has already
+    /// gone and read (see `api_watching`).
+    watching: broadcast::Sender<String>,
     /// Current state per session, for the `/api/sessions` snapshot.
     statuses: Statuses,
     /// Recent hook events (POC).
@@ -622,6 +627,7 @@ pub async fn serve(
     // a quiet timer.
     let (events, _) = broadcast::channel::<SessionInfo>(256);
     let (focus, _) = broadcast::channel::<String>(16);
+    let (watching, _) = broadcast::channel::<String>(16);
     let statuses: Statuses = Arc::new(Mutex::new(HashMap::new()));
 
     // Reconcile against reality: a sandbox stopped or removed out-of-band never
@@ -672,6 +678,7 @@ pub async fn serve(
         sessions: Arc::new(Mutex::new(HashMap::new())),
         events,
         focus,
+        watching,
         statuses,
         hook_log: Arc::new(Mutex::new(VecDeque::new())),
         usage: Arc::new(Mutex::new(UsageInfo::default())),
@@ -685,6 +692,8 @@ pub async fn serve(
         .route("/api/events", get(api_events))
         .route("/api/focus", post(api_focus))
         .route("/api/focus-events", get(api_focus_events))
+        .route("/api/watching", post(api_watching))
+        .route("/api/watch-events", get(api_watch_events))
         .route("/api/sessions", get(api_sessions))
         .route("/api/input", post(api_input))
         .route("/api/answer", post(api_answer))
@@ -789,6 +798,44 @@ async fn api_focus_events(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
     let stream = BroadcastStream::new(state.focus.subscribe()).filter_map(|res| async move {
+        // `Err` here is a lagged receiver — skip the gap rather than closing.
+        let name = res.ok()?;
+        Some(Ok(SseEvent::default().data(name)))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[derive(Deserialize)]
+struct WatchReq {
+    sandbox: String,
+}
+
+/// `POST /api/watching` — the web UI reporting that the user is now reading
+/// this sandbox's terminal (its pane holds the focus, in a focused window).
+///
+/// Deliberately an *event* and not a stored flag. A flag would need a heartbeat
+/// and per-tab bookkeeping to survive a closed tab, and a stale one would go on
+/// silencing a sandbox nobody is watching. What consumers actually want is the
+/// moment the user arrived: the island turns it into the same acknowledgement
+/// its own ✕ produces, which its content keying already retires as soon as the
+/// session asks something new.
+async fn api_watching(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WatchReq>,
+) -> Json<serde_json::Value> {
+    let clients = state.watching.receiver_count();
+    // `send` errors only when there are no subscribers; nothing to do then.
+    let _ = state.watching.send(req.sandbox);
+    Json(serde_json::json!({ "clients": clients }))
+}
+
+/// Live stream of "this sandbox is being watched" reports (see `api_watching`).
+/// The macOS island subscribes here; each event's `data:` payload is the bare
+/// sandbox name.
+async fn api_watch_events(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
+    let stream = BroadcastStream::new(state.watching.subscribe()).filter_map(|res| async move {
         // `Err` here is a lagged receiver — skip the gap rather than closing.
         let name = res.ok()?;
         Some(Ok(SseEvent::default().data(name)))

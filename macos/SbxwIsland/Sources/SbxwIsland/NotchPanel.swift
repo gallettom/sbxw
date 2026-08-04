@@ -97,6 +97,22 @@ final class NotchController: ObservableObject {
             if case .question = self.display { return }
             self.showToast(info)
         }
+        // The user went to read this sandbox's terminal in the browser. An open
+        // card survives a plain acknowledgement on purpose (see
+        // `onSessionsChanged`) — that guard exists so opening a row from the
+        // island doesn't close the card you just opened. It must not apply here:
+        // this acknowledgement comes from the user leaving for the other window,
+        // and a card still hanging over the menu bar is then pointing at a
+        // question they are already reading in full.
+        store.onWatched = { [weak self] sandbox in
+            guard let self else { return }
+            switch self.display {
+            case .question(let current), .toast(let current), .miniToast(let current):
+                if current.sandbox == sandbox { self.collapse() }
+            default:
+                break
+            }
+        }
         // Auto-surface / refresh / dismiss the pending question card. Re-evaluate
         // on acknowledgement changes too, so dismissing one clears the notch.
         store.$sessions.combineLatest(store.$acknowledged)

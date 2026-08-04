@@ -3187,6 +3187,31 @@ function applyAgentStates() {
     i === focusedPane && windowFocused,
   ));
   listEl.querySelectorAll('.sbx-item').forEach(row => paintLiseret(row, row.dataset.name));
+
+  const watched = panes[focusedPane];
+  announceWatching(
+    windowFocused && watched?.mode === 'claude' ? watched.sandbox || null : null,
+  );
+}
+
+// Tell the daemon which sandbox's terminal the user is reading, so the macOS
+// island can retire a notification for a session they have already come to look
+// at (see `/api/watching`). Only on change: applyAgentStates runs on every hook
+// event, and the daemon wants the moment you arrived, not a running commentary.
+//
+// Nothing is sent when the answer is "none". The signal is an arrival, not a
+// state the daemon tracks, so "stopped watching" has no consumer — and staying
+// quiet keeps a tab that merely lost focus from talking to the island at all.
+let announcedWatch = null;
+function announceWatching(sandbox) {
+  if (sandbox === announcedWatch) return;
+  announcedWatch = sandbox;
+  if (!sandbox) return;
+  fetch('/api/watching', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sandbox }),
+  }).catch(() => {});
 }
 
 // Every element currently standing in for `sandbox`: the panes showing its

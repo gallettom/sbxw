@@ -85,6 +85,11 @@ final class SessionStore: ObservableObject {
     /// "working" keep-alives). Used to pop notch toasts / prompts.
     var onTransition: ((SessionInfo) -> Void)?
 
+    /// Fired when a browser tab reports it is now showing a sandbox's terminal
+    /// (see `/api/watch-events`). The notch uses it to take down a card the
+    /// user walked away from the island to go and read.
+    var onWatched: ((String) -> Void)?
+
     private var live: [String: SessionInfo] = [:]
     private var running: [SandboxItem] = []
     /// Names of sandboxes `sbx ls` currently reports as running — the authority
@@ -103,6 +108,7 @@ final class SessionStore: ObservableObject {
 
     private var streamTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
+    private var watchTask: Task<Void, Never>?
     private var sseRawCount = 0
 
     var attentionCount: Int { sessions.filter { $0.state == .attention }.count }
@@ -175,15 +181,37 @@ final class SessionStore: ObservableObject {
         Log.log("acknowledge \(session.id) key=\(ack.key.prefix(60))")
     }
 
+    /// A browser tab is now showing this sandbox's terminal (`/api/watch-events`).
+    ///
+    /// Going to the tty to see what is happening *is* checking the notification,
+    /// so it retires exactly as the row's ✕ would — the island should not still
+    /// be pointing at a question the user is already reading in full. Every
+    /// session of that sandbox, since the sandbox is what the user opened, and
+    /// `acknowledge` no-ops on the ones that aren't waiting for anything.
+    ///
+    /// Nothing about this is permanent: the acknowledgement is keyed on what was
+    /// being asked, so a genuinely new question raises the island again even
+    /// though the tab never stopped watching.
+    func acknowledgeWatched(_ sandbox: String) {
+        let targets = sessions.filter { $0.sandbox == sandbox }
+        if !targets.isEmpty {
+            Log.log("watched \(sandbox) — acknowledging \(targets.count) session(s)")
+            for s in targets { acknowledge(s) }
+        }
+        onWatched?(sandbox)
+    }
+
     func start() {
         Log.log("start baseURL=\(Config.baseURL) api=\(Config.apiBaseURL)")
         if streamTask == nil { streamTask = Task { await self.streamLoop() } }
         if pollTask == nil { pollTask = Task { await self.pollLoop() } }
+        if watchTask == nil { watchTask = Task { await self.watchLoop() } }
     }
 
     func stop() {
         streamTask?.cancel(); streamTask = nil
         pollTask?.cancel(); pollTask = nil
+        watchTask?.cancel(); watchTask = nil
         connected = false
     }
 
@@ -485,6 +513,59 @@ final class SessionStore: ObservableObject {
             client.disconnect()
         }
         Log.log("SSE stream ended")
+    }
+
+    // MARK: - "The user went to look" stream
+
+    /// Follow `/api/watch-events` for as long as the store is running, with the
+    /// same backoff as the session stream. Kept apart from `streamLoop` on
+    /// purpose: this one must not touch `connected`, which reports whether the
+    /// island is receiving *session* state — the thing the UI falls back on when
+    /// the daemon goes away.
+    private func watchLoop() async {
+        var backoffSeconds: UInt64 = 1
+        while !Task.isCancelled {
+            do {
+                try await watchStream()
+                backoffSeconds = 1
+            } catch {
+                Log.log("watch SSE error: \(error)")
+            }
+            if Task.isCancelled { break }
+            try? await Task.sleep(nanoseconds: backoffSeconds * 1_000_000_000)
+            backoffSeconds = min(backoffSeconds * 2, 15)
+        }
+    }
+
+    /// Each event's payload is a bare sandbox name, not JSON — the same shape as
+    /// `/api/focus-events`, travelling the other way.
+    private func watchStream() async throws {
+        guard let url = Config.url("/api/watch-events") else { return }
+        let client = SSEClient()
+
+        defer { client.disconnect() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                client.onEvent = { name in
+                    let sandbox = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !sandbox.isEmpty else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { self.acknowledgeWatched(sandbox) }
+                    }
+                }
+                client.onClose = { error in
+                    if let error, (error as NSError).code != NSURLErrorCancelled {
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume()
+                    }
+                }
+                client.connect(url: url)
+            }
+        } onCancel: {
+            client.disconnect()
+        }
+        Log.log("watch stream ended")
     }
 
     private func logRaw(_ line: String) {
