@@ -19,13 +19,18 @@ enum IslandDisplay: Equatable {
 }
 
 extension IslandDisplay {
-    /// Whether this mode has anything to click.
+    /// Whether this mode owns the pointer outright: the whole panel takes mouse
+    /// events, and its content's `.onHover` drives the auto-hide.
     ///
-    /// The list and a question card do. The collapsed pill and both toasts are
-    /// read-only: they announce, they don't offer. That distinction is what says
-    /// whether the panel should take mouse events at all — it hangs over the menu
-    /// bar of whatever app you are working in, and a window that eats clicks it
-    /// has no use for is a window in your way.
+    /// The list and a question card do. Both toasts are read-only: they announce,
+    /// they don't offer. The collapsed bubble is the in-between case and is not
+    /// covered here — it takes clicks only over the part of the panel it actually
+    /// draws, and only when it draws anything (see
+    /// `NotchController.updateClickThrough`).
+    ///
+    /// All of it in service of one rule: the panel hangs over the menu bar of
+    /// whatever app you are working in, and a window that eats clicks it has no
+    /// use for is a window in your way.
     var isInteractive: Bool {
         switch self {
         case .list, .question: return true
@@ -155,9 +160,10 @@ final class NotchController: ObservableObject {
         p.isOpaque = false
         p.backgroundColor = .clear
         p.hidesOnDeactivate = false
-        // Click-through until there is something to click (see `isInteractive`
-        // and `setDisplay`). It starts collapsed, so it starts transparent.
-        p.ignoresMouseEvents = !display.isInteractive
+        // Click-through until there is something to click (see
+        // `updateClickThrough`). It starts collapsed with no session, so it
+        // starts transparent.
+        p.ignoresMouseEvents = true
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         let host = NSHostingView(rootView: NotchContentView(controller: self, store: store))
         // Don't let the hosting view drive the *window's* content-size extrema.
@@ -196,6 +202,20 @@ final class NotchController: ObservableObject {
     func reveal() {
         expandToList()
         scheduleHide()
+    }
+
+    /// The collapsed bubble was clicked: open the list at once, skipping the
+    /// hover dwell the pointer would otherwise have to sit through.
+    ///
+    /// The pointer is on the island by construction, so say so. Without it the
+    /// one-second auto-hide can retract the list the user is looking straight at:
+    /// while collapsed the hover flag follows the *notch band* (`revealBand`),
+    /// which the bubble is far wider than, so a click on its shoulder leaves
+    /// `hovering` false with only SwiftUI's `.onHover` on the just-swapped-in list
+    /// to correct it in time.
+    func revealFromPill() {
+        hovering = true
+        reveal()
     }
 
     /// Show a session's interactive prompt card. It stays until answered.
@@ -382,6 +402,7 @@ final class NotchController: ObservableObject {
     /// The pointer moved.
     private func pointerMoved(to screenPoint: NSPoint) {
         guard let panel else { return }
+        updateClickThrough(at: screenPoint)
         if display.isInteractive {
             // The content's `.onHover` owns this mode — the whole surface holds
             // the island open, margin included, and second-guessing it here would
@@ -415,6 +436,69 @@ final class NotchController: ObservableObject {
             x: frame.midX - width / 2, y: frame.minY,
             width: width, height: frame.height
         )
+    }
+
+    /// The bubble the collapsed island actually *draws*, in screen coordinates.
+    ///
+    /// The panel is bigger than what you see: the content carries transparent
+    /// padding on three sides so its drop shadow isn't clipped by the
+    /// content-sized window (`NotchContentView.shadowPad`). That margin is
+    /// nothing to click, so it stays out of the hit area.
+    private func pillRect(of panel: NSPanel) -> NSRect {
+        let pad = NotchContentView.shadowPad
+        let frame = panel.frame
+        return NSRect(
+            x: frame.minX + pad, y: frame.minY + pad,
+            width: max(frame.width - 2 * pad, 0),
+            height: max(frame.height - pad, 0)
+        )
+    }
+
+    // MARK: - Click-through
+
+    /// Decide whether the panel swallows mouse events, from the current mode and
+    /// where the pointer is.
+    ///
+    /// The list and a question card take everything. The collapsed island used to
+    /// take nothing — but once it grew a summary bubble that was wrong: a black
+    /// pill naming the session Claude is working on sat there fully drawn and
+    /// perfectly unclickable, and clicks meant for it fell through to the menu bar
+    /// of the app behind. So while the bubble is drawn (`store.summaryLead`) the
+    /// panel accepts the pointer, and only over the bubble itself: the shadow
+    /// margin around it, and the hairline the pill shrinks to when nothing is
+    /// running, must go on passing clicks through to whatever is underneath.
+    ///
+    /// Pointer-position-dependent because that hit area is a rectangle inside the
+    /// window, and a window is all-or-nothing about `ignoresMouseEvents`. The two
+    /// monitors in `trackPointer` keep it current from either side: while we are
+    /// click-through the moves belong to the app below (global monitor), and once
+    /// we are not they belong to us (local monitor).
+    private func updateClickThrough(
+        for display: IslandDisplay? = nil,
+        at screenPoint: NSPoint = NSEvent.mouseLocation
+    ) {
+        guard let panel else { return }
+        let display = display ?? self.display
+        let takesEvents: Bool
+        if display.isInteractive {
+            takesEvents = true
+        } else if display == .collapsed, store.summaryLead != nil {
+            takesEvents = pillRect(of: panel).contains(screenPoint)
+        } else {
+            takesEvents = false // a toast announces; it doesn't offer
+        }
+        if panel.ignoresMouseEvents == takesEvents { panel.ignoresMouseEvents = !takesEvents }
+    }
+
+    /// Hover reported by the panel's own content (`NotchContentView.onHover`).
+    ///
+    /// Ignored while collapsed: that surface covers the shadow margin too, and it
+    /// is live only when the pointer sits on the bubble — neither matches the
+    /// notch-width band that decides the reveal, which `pointerMoved` owns and
+    /// applies uniformly whether or not the panel happens to be taking events.
+    func hoverFromContent(_ inside: Bool) {
+        guard display != .collapsed else { return }
+        hover(inside)
     }
 
     func hover(_ inside: Bool) {
@@ -545,11 +629,13 @@ final class NotchController: ObservableObject {
         // this the flag would stay true and every later list would inherit the
         // longer leash.
         if new != .list { rowsExpanded = false }
-        // Take mouse events only for the modes that have something to click, so
-        // an announcement can't swallow a click meant for the app underneath
-        // (see `IslandDisplay.isInteractive`). Set before the animation, not
-        // after: the panel is over the menu bar for the whole of it.
-        panel?.ignoresMouseEvents = !new.isInteractive
+        // Take mouse events only where there is something to click, so an
+        // announcement can't swallow a click meant for the app underneath (see
+        // `updateClickThrough`). Set before the animation, not after: the panel is
+        // over the menu bar for the whole of it — so the mode is handed over
+        // explicitly rather than read from `display`, which is only assigned
+        // (inside the animation) below.
+        updateClickThrough(for: new)
         // Retracting to the notch should be quick and clean; growing/morphing
         // gets the bouncy bubble. Drive the SwiftUI transition and the window
         // frame with matching curves.
@@ -648,6 +734,10 @@ final class NotchController: ObservableObject {
                 let h = max(fit.height, self.topInset)
                 let frame = screen.frame
                 let target = NSRect(x: frame.midX - w / 2, y: frame.maxY - h, width: w, height: h)
+                // The hit area of the collapsed bubble is derived from the panel
+                // frame, and the frame is what just changed (the pill grows and
+                // shrinks with its lead session's task).
+                defer { self.updateClickThrough() }
 
                 // Only animate once the panel is on screen; the very first layout
                 // must land instantly (no from-zero slide).

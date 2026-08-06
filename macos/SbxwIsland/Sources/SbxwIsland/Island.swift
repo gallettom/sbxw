@@ -1018,20 +1018,14 @@ struct SummaryPill: View {
     /// Notch height (a small lip on screens without a notch): the task row sits
     /// below this, the black fills behind it.
     let topInset: CGFloat
+    /// The bubble was clicked. A closure rather than the controller itself: this
+    /// view redraws on every session tick, and observing the controller too would
+    /// add its own publishes to that.
+    let onTap: () -> Void
 
-    /// The session whose task to surface, by how much it wants you: an explicit
-    /// prompt first, then a turn awaiting your reply, then a working one. Without
-    /// the middle case the collapsed notch showed nothing at all while Claude sat
-    /// waiting on an inline question — the very gap this closes.
-    private var lead: SessionInfo? {
-        store.sessions.first { $0.state == .attention && !store.isAcknowledged($0) }
-            // Also skipped once dismissed: a prompt the user waved off ends its
-            // turn (`Stop` → idle with the last input still set), which reads as
-            // "waiting for your reply" and put the very session they'd just
-            // dismissed straight back on the notch in teal.
-            ?? store.sessions.first { $0.awaitingReply && !store.isAcknowledged($0) }
-            ?? store.sessions.first { $0.state == .working }
-    }
+    /// The session whose task to surface (see `SessionStore.summaryLead`, which
+    /// the panel reads too so it knows whether the bubble is there to be clicked).
+    private var lead: SessionInfo? { store.summaryLead }
 
     /// Once the turn has ended, the pill carries Claude's answer rather than the
     /// prompt that produced it — the collapsed notch is read at a glance, and a
@@ -1091,6 +1085,13 @@ struct SummaryPill: View {
                     )
                     .fill(Color.black)
                 )
+                // A visible bubble is a thing you can press: open the list at
+                // once, without waiting out the hover dwell. Only reaches us
+                // while the pill is drawn — with no lead the panel is
+                // click-through and this whole branch doesn't exist
+                // (see `NotchController.updateClickThrough`).
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onTap)
                 .transition(.opacity)
             } else {
                 Color.clear.frame(height: 2)
@@ -1365,7 +1366,10 @@ struct NotchContentView: View {
     /// Transparent room around the content so the drop shadow isn't clipped by
     /// the (content-sized) window. No room on top: the bubble hugs the notch and
     /// the shadow falls downward.
-    private let shadowPad: CGFloat = 26
+    ///
+    /// Shared with `NotchController`, which subtracts it from the panel frame to
+    /// get the *drawn* bubble's rectangle (see `pillRect`).
+    static let shadowPad: CGFloat = 26
 
 
     /// Distinguishes the current mode (and which session) so switching between
@@ -1386,7 +1390,11 @@ struct NotchContentView: View {
                 // Persistent notch bubble: the black fills up to the top edge so
                 // the notch sits *inside* it (inclusion), with the task row below
                 // the notch. Empty (a hairline hover strip) when nothing runs.
-                SummaryPill(store: store, topInset: controller.topInset)
+                SummaryPill(
+                    store: store,
+                    topInset: controller.topInset,
+                    onTap: { controller.revealFromPill() }
+                )
             } else {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: topClearance) // clear the notch
@@ -1413,15 +1421,17 @@ struct NotchContentView: View {
         // Soft drop shadow (replaces the window's hard shadow rim). The padding
         // gives it room so it isn't clipped by the content-sized window.
         .shadow(color: .black.opacity(0.5), radius: 16, x: 0, y: 8)
-        .padding(.horizontal, shadowPad)
-        .padding(.bottom, shadowPad)
+        .padding(.horizontal, Self.shadowPad)
+        .padding(.bottom, Self.shadowPad)
         .contentShape(Rectangle())
         // Only reaches us in the modes that take mouse events at all — the list
         // and a question card, where the whole surface should hold the island
-        // open. While the island is a mere indicator the panel is click-through,
-        // so it sees no pointer and the reveal comes from
-        // `NotchController`'s own screen-coordinate tracking instead.
-        .onHover { controller.hover($0) }
+        // open. A toast is click-through, so it sees no pointer, and the
+        // collapsed bubble deliberately routes its hover through
+        // `NotchController`'s own screen-coordinate tracking instead: this
+        // surface spans the shadow margin as well, which is wider than the notch
+        // band the reveal is meant to answer to (see `hoverFromContent`).
+        .onHover { controller.hoverFromContent($0) }
         // The animation curve (bouncy on grow, clean on retract) is chosen by
         // NotchController.setDisplay via withAnimation, so no `.animation(value:)`
         // here — that would apply the same curve to the retract.

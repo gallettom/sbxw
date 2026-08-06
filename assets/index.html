@@ -1313,7 +1313,8 @@ function setFocusedPane(idx) {
   panes.forEach((p, i) => p.el.classList.toggle('focused', i === idx));
   focusedPane = idx;
   panes[idx]?.term.focus();
-  // Which pane is watched decides whether its `attention` liseret shows at all.
+  // Which sandbox is being read decides whether its `attention` liseret shows
+  // at all — on this pane, and on its sidebar row.
   applyAgentStates();
 }
 
@@ -3151,13 +3152,19 @@ new EventSource('/api/focus-events').onmessage = ev => {
 // `sandbox`. Both carry the same three classes and run the same animations;
 // only where the strip is anchored differs (under the pane bar, along the top
 // of the row).
-function paintLiseret(el, sandbox, watched = false) {
+function paintLiseret(el, sandbox, watchedSandbox = null) {
   const st = sandbox ? agentStates.get(`${sandbox}::claude`) : null;
   el.classList.toggle('agent-working', st === 'working');
-  // `attention` is a summons — pointless on the pane you are already reading,
-  // where the question is on screen in full. Suppressed while it is watched
-  // rather than acknowledged once and cleared: leave that pane, or leave the
-  // tab, and the amber comes back, because the session still wants an answer.
+  // `attention` is a summons — pointless once you are reading the very terminal
+  // it points at, where the question is on screen in full. Suppressed on every
+  // strip standing for that sandbox, its sidebar row included: the row asks
+  // "which sandbox wants me", and one you are sitting in front of does not.
+  //
+  // Suppressed while watched rather than acknowledged once and cleared: leave
+  // the pane, or leave the tab, and the amber comes back, because the session
+  // still wants an answer. A bash pane has no sandbox for this purpose (`null`),
+  // and must not read as watched just because nothing else is.
+  const watched = !!sandbox && sandbox === watchedSandbox;
   el.classList.toggle('agent-attention', st === 'attention' && !watched);
 
   const flash = sandbox ? doneFlashes.get(sandbox) : null;
@@ -3176,22 +3183,26 @@ function paintLiseret(el, sandbox, watched = false) {
 }
 
 function applyAgentStates() {
-  // "Watched" is the focused pane *and* a focused window: with the tab in the
-  // background nobody is reading anything, and a summons raised then is exactly
+  // The one sandbox whose terminal the user is actually reading: the focused
+  // pane's, in `claude` mode, in a focused window. That last condition is not
+  // fussiness — with the tab in the background the focused pane is still marked
+  // focused and nobody is reading anything, and a summons raised then is exactly
   // the one that has to still be there when you come back to it.
-  const windowFocused = document.hasFocus();
+  //
+  // A sandbox rather than a pane index, because that is the unit the summons is
+  // about: reading it settles it on every strip that speaks for it — a second
+  // pane on the same sandbox, and the sidebar row. It is also what the daemon is
+  // told (`announceWatching`), so the island retires the same notification.
+  const focused = panes[focusedPane];
+  const watchedSandbox = document.hasFocus() && focused?.mode === 'claude'
+    ? focused.sandbox || null
+    : null;
   // A bash pane is a shell you drive yourself — no agent, so nothing to show.
-  panes.forEach((p, i) => paintLiseret(
-    p.el,
-    p.mode === 'claude' ? p.sandbox : null,
-    i === focusedPane && windowFocused,
-  ));
-  listEl.querySelectorAll('.sbx-item').forEach(row => paintLiseret(row, row.dataset.name));
+  panes.forEach(p => paintLiseret(p.el, p.mode === 'claude' ? p.sandbox : null, watchedSandbox));
+  listEl.querySelectorAll('.sbx-item')
+    .forEach(row => paintLiseret(row, row.dataset.name, watchedSandbox));
 
-  const watched = panes[focusedPane];
-  announceWatching(
-    windowFocused && watched?.mode === 'claude' ? watched.sandbox || null : null,
-  );
+  announceWatching(watchedSandbox);
 }
 
 // Tell the daemon which sandbox's terminal the user is reading, so the macOS

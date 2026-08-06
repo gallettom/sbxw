@@ -119,6 +119,25 @@ final class SessionStore: ObservableObject {
         sessions.contains { $0.state == .attention && !isAcknowledged($0) }
     }
 
+    /// The session the collapsed notch bubble speaks for, by how much it wants
+    /// you: an explicit prompt first, then a turn awaiting your reply, then a
+    /// working one. Without the middle case the collapsed notch showed nothing at
+    /// all while Claude sat waiting on an inline question.
+    ///
+    /// Nil means the bubble draws nothing (a hairline hover strip), which is also
+    /// what tells the notch panel whether there is anything up there to click —
+    /// hence a store property rather than the pill's own business (see
+    /// `SummaryPill` and `NotchController.updateClickThrough`).
+    var summaryLead: SessionInfo? {
+        sessions.first { $0.state == .attention && !isAcknowledged($0) }
+            // Also skipped once dismissed: a prompt the user waved off ends its
+            // turn (`Stop` → idle with the last input still set), which reads as
+            // "waiting for your reply" and put the very session they'd just
+            // dismissed straight back on the notch in teal.
+            ?? sessions.first { $0.awaitingReply && !isAcknowledged($0) }
+            ?? sessions.first { $0.state == .working }
+    }
+
     /// What a dismissal is *about*, so it can outlive the state flicker around
     /// an unanswered prompt.
     ///
