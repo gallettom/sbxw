@@ -1562,9 +1562,13 @@ async fn api_rm(Path(name): Path<String>) -> Json<serde_json::Value> {
     // the sandbox goes away — that's what records the mapping — so it can be
     // deleted alongside once the removal succeeds.
     let chat_dir = crate::chat_workspace_of(&name);
+    let owner = name.clone();
     blocking(
         move || sbx::rm_sandboxes(&[name.as_str()], false),
-        |()| {
+        move |()| {
+            // Same cleanup as the CLI's `sbxw rm`: the OAuth kit is kept on
+            // disk for sbx to re-resolve, so removal is what ends it.
+            crate::forget_oauth_kit(&owner);
             if let Some(dir) = chat_dir {
                 let _ = std::fs::remove_dir_all(&dir);
             }

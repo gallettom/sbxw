@@ -46,6 +46,28 @@ rather than moved it, and the parts that did move (the policy panel's `ls
 --wide` and `log`) already degrade view by view. A version sbxw can't parse is a
 warning, not a refusal — the format of `sbx version` isn't sbxw's to veto.
 
+**0.38 moved three things, and sbxw follows both spellings.** The floor stayed
+at 0.37 because none of these is a capability sbxw needs — each is the *same*
+thing said differently, so a gate on the detected version is enough and nobody
+gets forced to upgrade:
+
+| What 0.38 changed | On 0.38+ | On 0.37 |
+| --- | --- | --- |
+| `secret set` scope — global is the default, sandbox scope moved to `--sandbox NAME`; the old positional and `-g`/`--global` forms now emit deprecation warnings | no flag / `--sandbox` | `-g` / positional |
+| Kit spec **v2** — v1 still loads through a legacy path, but its loader rejects v1 field names and vice versa, so a spec must commit to one | `schemaVersion: "2"` (`permissions.network.allow`, `setup.files`) | `schemaVersion: "1"` (`network.allowedDomains`, `commands.initFiles`) |
+| `policy allow\|deny network` refuses with *"managed by your organization"* when org governance owns the rule | warned, `up` continues under the org's rules | n/a |
+| A container swap recomposes from the sandbox's template, re-resolving earlier kits by their original path | the OAuth kit is kept on disk, and a stale reference is repaired in place — see [Auth](#auth-read-this--its-the-gnarly-bit) | unaffected |
+| `kit add` refuses a kit declaring startup commands, pointing at `sbx create --kit` instead | every configured kit goes in at creation; adding one later asks you to recreate — see [Kits](#kits) | unaffected |
+
+A version sbxw can't read picks the 0.37 column: it is the one that works on
+both sides of the gate.
+
+The `assets/` kits stay on `schemaVersion: "1"` on purpose — they are static
+files, so unlike the kit sbxw generates they cannot pick a grammar per host, and
+v1 is the one 0.37 and 0.38 both read. Migrate them when the floor moves to
+0.38: `network.allowedDomains` → `permissions.network.allow`,
+`commands.initFiles` → `setup.files`, `commands.startup` → `setup.startup`.
+
 To run against an older sbx anyway:
 
 ```bash
@@ -453,17 +475,39 @@ be injected *before* the agent launches. The wrapper offers three paths, best to
 worst:
 
 1. **API key (confirmed, recommended).** `sbxw up … --use-api-key` reads
-   `ANTHROPIC_API_KEY` and stores it with `sbx secret set -g anthropic` (value
-   piped via stdin, never in argv). The agent auto-authenticates.
+   `ANTHROPIC_API_KEY` and stores it as a **global** `anthropic` secret (value
+   piped via stdin, never in argv). That is `sbx secret set anthropic` on 0.38+,
+   where global is the default scope, and `sbx secret set -g anthropic` below
+   it — sbxw picks the spelling the host understands. The agent
+   auto-authenticates.
 2. **OAuth token.** If `CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_OAUTH_TOKEN`) is
    set, sbxw writes `~/.claude/.credentials.json` inside the sandbox so the
    agent is authenticated from first launch. On **create** and on existing
-   **stopped** sandboxes this goes through an ephemeral **mixin kit** (`--kit`
-   / `sbx kit add`); on a **running** sandbox the file is refreshed directly
+   **stopped** sandboxes this goes through a **mixin kit** (`--kit` /
+   `sbx kit add`); on a **running** sandbox the file is refreshed directly
    via `sbx exec` instead, because `sbx kit add` (0.35+) recreates the
    container and would kill attached sessions. The canonical variable is
    `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`); `CLAUDE_OAUTH_TOKEN`
    is accepted as an alias.
+
+   That kit lives at `~/.sbxw/state/kits/<name>-oauth/` and **stays there for
+   as long as the sandbox does** — `sbxw rm` is what deletes it. It used to be
+   a temp directory removed seconds later, which sbx 0.38 turned into a trap:
+   a container swap now recomposes the sandbox from its template and
+   re-resolves every kit applied before it *by its original path*, so a kit
+   directory that no longer exists makes every later `sbx kit add` fail — and
+   the error names the kit you were adding, not the one that actually went
+   missing:
+
+   ```text
+   ERROR: re-resolve original kit 0 ("/var/folders/…/sbxw-oauth-kit-36226"):
+          kit reference "…": path does not exist
+   ```
+
+   Sandboxes created by an earlier sbxw already carry such a reference. You
+   don't need to recreate them: `sbxw up` recognises exactly this failure,
+   restores the kit at the path sbx is asking for, and retries once. The file
+   holds a live OAuth token, so it is written `0600` in a `0700` directory.
 3. **Interactive.** Just run `/login` in the web terminal.
 
 Note: since sbx 0.35, host env vars are **no longer auto-injected** into
@@ -474,13 +518,34 @@ it via `sbx secret set`) or migrate it with `sbx secret import`.
 ## Kits
 
 Kits are `sbx`'s native, declarative extension point (tools, files, env, network,
-startup commands). List them in `sbxw.toml`; they're applied **after** the
-network policy on `sbxw up`. Since sbx 0.35, `sbx kit add` **recreates the
-sandbox container** with the augmented kit set (state is preserved) and composes
-the kit's own network allow/deny rules into the sandbox policy — so sbxw skips
-kits that `sbx inspect` already lists, rather than re-applying them on every
-`up`. To force a re-apply (e.g. after editing a kit), run
-`sbx kit add <sandbox> <kit>` yourself:
+startup commands). List them in `sbxw.toml`.
+
+**They go in at creation.** `sbxw up` passes every configured kit to
+`sbx create --kit` (repeated once per kit, credentials kit first), because
+creation is the only moment sbx applies a kit *whole*. Since 0.38, adding one
+afterwards with `sbx kit add` is refused outright if the kit declares startup
+commands — the recreate flow behind it doesn't run them, so rather than apply
+half a kit, sbx tells you to recreate the sandbox:
+
+```text
+ERROR: kit "md-to-pdf-tools" declares commands.startup, which the kit-add
+       recreate flow does not yet apply; recreate the sandbox from scratch
+       via `sbx rm` + `sbx create --kit` to use this kit
+```
+
+All three bundled kits declare startup commands — that is how they install
+anything — so this is the normal case, not a corner one. **Adding a kit to
+`sbxw.toml` for a sandbox that already exists therefore means recreating it:**
+`sbxw rm <name>` then `sbxw up <name>`. sbxw says so and changes nothing rather
+than putting the sandbox through a container swap that cannot succeed; it never
+recreates on its own, since anything outside the workspace mount would be lost.
+
+Kits *without* startup commands are still added in place on `sbxw up` (this is
+how the OAuth credentials kit reaches a stopped sandbox). That path recreates
+the container (sbx 0.35+, state preserved) and composes the kit's own network
+rules into the sandbox policy, so sbxw skips kits `sbx inspect` already lists
+instead of re-applying them every `up`. To force a re-apply after editing such a
+kit, run `sbx kit add <sandbox> <kit>` yourself:
 
 ```toml
 kits = [
@@ -548,6 +613,12 @@ Two things this gives you that `sbxw bash` doesn't:
   code --remote ssh-remote+neos.sbx /workspace
   ```
 
+  In **Claude Desktop**, *Add SSH connection* → put the alias in **SSH Host**
+  (`neos.sbx`, which is what "or a host from `~/.ssh/config`" means) and leave
+  **SSH Port** and **Identity File** empty. The managed block supplies the user,
+  the key and a ProxyCommand — sandboxes are not reachable on TCP 22, so filling
+  those fields in overrides the only thing that makes the connection work.
+
 If the connection fails and no `*.sbx` entry is found in `~/.ssh/config`, sbxw
 says so and points you at `--setup` rather than leaving you with a bare
 `Connection refused`. SSH access is experimental and may need enabling in your
@@ -604,6 +675,12 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   before widening `network_allow`. `sbx policy log` shows the real reason; an
   `origin: corporate policy` line means `sbx policy allow` won't help.
 - Secrets travel via **stdin**, not argv, so they don't appear in `ps`.
+- Your **OAuth token is on disk** in `~/.sbxw/state/kits/<name>-oauth/spec.yaml`
+  (`0600`, in a `0700` directory) for as long as the sandbox exists — sbx
+  re-resolves that path on every container swap, so it can't be deleted right
+  after use. `sbxw rm <name>` removes it. Prefer `--use-api-key` if you'd rather
+  the credential lived only in sbx's own keychain; the token is the same secret
+  the sandbox already holds at `~/.claude/.credentials.json` either way.
 - `/etc/hosts` changes are confined to a marked block and removed by `sbxw down`.
 
 ## Unconfirmed against docs (verify locally)
@@ -615,7 +692,12 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   `allow network`).
 - Exact output format of `sbx inspect` (0.35+). sbxw only does a substring
   match on it to *skip* already-applied kits; if the kit name isn't found
-  (older sbx, format change), the kit is simply re-applied as before.
+  (older sbx, format change), the kit is simply re-applied as before. The match
+  is confined to inspect's kits section (a `Kits:` block, or a `kits` key if the
+  output is JSON) because 0.38 added the sandbox's **custom secrets** to what
+  inspect reports, and a secret sharing a kit's name would otherwise skip a kit
+  that had never been applied. A layout with neither — a KITS *column*, say —
+  falls back to searching the whole output, as before.
 - The flags taken from the newer release notes but not yet checked against a
   live `sbx --help`: `sbx create -p/--publish`, `sbx create --no-share-skills`,
   `sbx skills import [--dry-run|--force]`, and `sbx setup ssh`. Each has a

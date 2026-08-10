@@ -5,7 +5,9 @@
 //!
 //! What `sbxw up <name> [path]` does, in order:
 //!   1. apply a restrictive local-dev network policy (`sbx policy allow network`);
-//!   2. create the sandbox if missing, mounting <path> (default: cwd) as the
+//!   2. create the sandbox if missing — with every configured kit passed to
+//!      `sbx create --kit`, creation being the only moment sbx applies a kit
+//!      whole — mounting <path> (default: cwd) as the
 //!      agent's working tree — edits flow both ways instantly (Git working-tree
 //!      model). Only that directory is shared; the microVM keeps its own FS;
 //!   3. set up host aliases (/etc/hosts + macOS lo0 aliases) for your apps;
@@ -18,9 +20,10 @@
 //!
 //! Authentication:
 //!   * API key — pass `--use-api-key`; requires ANTHROPIC_API_KEY on the host,
-//!     stored via `sbx secret set -g anthropic`.
+//!     stored as a global `anthropic` secret (`sbx secret set`, whose scope
+//!     flags changed in 0.38 — see `sbx::secret_scope_args`).
 //!   * OAuth — set CLAUDE_CODE_OAUTH_TOKEN on the host; sbxw generates an
-//!     ephemeral mixin kit whose `initFiles` writes `~/.claude/.credentials.json`
+//!     ephemeral mixin kit whose init files write `~/.claude/.credentials.json`
 //!     in the sandbox, so the agent is authenticated from first launch. On an
 //!     already-*running* sandbox the file is refreshed via `sbx exec` instead,
 //!     since `sbx kit add` (0.35+) recreates the container and would kill any
@@ -548,7 +551,17 @@ fn main() -> Result<()> {
             } else {
                 names.iter().filter_map(|n| chat_workspace_of(n)).collect()
             };
+            // The OAuth kit outlives every other command precisely so sbx can
+            // re-resolve it; removal is the one point where it should go.
+            let oauth_owners: Vec<String> = if all {
+                sbx::list_sandboxes().into_iter().map(|s| s.name).collect()
+            } else {
+                names.clone()
+            };
             sbx::rm_sandboxes(&name_refs, all)?;
+            for n in &oauth_owners {
+                forget_oauth_kit(n);
+            }
             for dir in &chat_dirs {
                 if let Err(e) = std::fs::remove_dir_all(dir) {
                     if e.kind() != std::io::ErrorKind::NotFound {
@@ -1449,6 +1462,214 @@ fn kit_display_name(kit: &str) -> String {
         .to_string()
 }
 
+/// The part of `sbx inspect` output that lists the sandbox's kits, or the whole
+/// blob when no such part can be identified.
+///
+/// The kit-skip test is a substring search, and sbx 0.38 added the sandbox's
+/// **custom secrets** to what `inspect` reports. Searching the whole blob for a
+/// kit name therefore now collides with a secret (or any other field) that
+/// merely contains it, and the failure is the silent kind: sbxw concludes the
+/// kit is already applied and never applies it. Narrowing the haystack to the
+/// kits section fixes that.
+///
+/// It degrades rather than guessing: `inspect`'s exact layout is not pinned by
+/// the CLI reference and may well be a table with a KITS *column*, where no
+/// section exists to find. In that case the caller gets the full text and the
+/// old behaviour — never worse than today, better wherever the section is
+/// recognisable.
+fn inspect_kits_section(raw: &str) -> String {
+    if let Some(section) = json_kits_section(raw).or_else(|| text_kits_section(raw)) {
+        return section;
+    }
+    tracing::debug!("`sbx inspect` has no recognisable kits section; matching the whole output");
+    raw.to_string()
+}
+
+/// `kits` out of a JSON `sbx inspect`, serialized back to text to be searched.
+fn json_kits_section(raw: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let obj = value.as_object()?;
+    let kits = obj
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("kits") || k.eq_ignore_ascii_case("kit"))?
+        .1;
+    Some(kits.to_string())
+}
+
+/// The `Kits:` block of a plain-text `sbx inspect`: the remainder of the label
+/// line plus every following line indented deeper than it, which is how nested
+/// values are set off from the next top-level field.
+fn text_kits_section(raw: &str) -> Option<String> {
+    let indent = |l: &str| l.len() - l.trim_start().len();
+
+    let mut lines = raw.lines();
+    let (label_indent, first) = lines.find_map(|line| {
+        let trimmed = line.trim_start();
+        let (label, rest) = trimmed.split_once(':')?;
+        let label = label.trim_end();
+        // "Kits", "kits", "Kit" — but not "Kit sources" or a sentence that
+        // happens to open with those letters.
+        (label.eq_ignore_ascii_case("kits") || label.eq_ignore_ascii_case("kit"))
+            .then(|| (indent(line), rest.trim().to_string()))
+    })?;
+
+    let mut section = vec![first];
+    for line in lines {
+        if !line.trim().is_empty() && indent(line) <= label_indent {
+            break;
+        }
+        section.push(line.trim().to_string());
+    }
+    Some(section.join("\n"))
+}
+
+/// Apply a bring-up network rule, surviving a host whose organisation owns it.
+///
+/// Since sbx 0.38 `policy allow|deny network` refuses with "managed by your
+/// organization" when org governance overrides the local policy. That is a
+/// correctly configured host, not a broken one: the org's rules are already in
+/// force and are the ones that count. Failing `sbxw up` over it would leave
+/// governed users unable to start a sandbox sbx itself considers fine, so the
+/// refusal is a warning — and every *other* failure still aborts, because a
+/// sandbox whose egress silently didn't apply is the surprise this check exists
+/// to prevent.
+fn apply_bringup_policy(kind: &str, result: Result<()>) -> Result<()> {
+    let Err(e) = result else { return Ok(()) };
+
+    let msg = format!("{e:#}");
+    let lower = msg.to_lowercase();
+    if lower.contains("managed by your organization")
+        || lower.contains("managed by your organisation")
+    {
+        tracing::warn!(
+            "network {kind} not applied — your organization manages this policy; \
+             the sandbox runs under the org's rules instead:\n{msg}"
+        );
+        return Ok(());
+    }
+    Err(e).with_context(|| format!("failed to apply network {kind}"))
+}
+
+/// The path of a *stale sbxw OAuth kit* named in a failed `sbx kit add`, if the
+/// failure is that one and nothing else.
+///
+/// Sandboxes created before the kit directory became durable recorded a path in
+/// the OS temp dir that sbxw then deleted. Since 0.38 every container swap
+/// re-resolves it, so those sandboxes reject **all** later `kit add` calls,
+/// permanently, with the unrelated kit named as the thing that failed.
+///
+/// The path is recoverable from sbx's own message, so the repair is to put the
+/// spec back where the sandbox is looking for it. Deliberately narrow — the
+/// path must carry sbxw's own `sbxw-oauth-kit-` basename, must be absent, and
+/// its parent must already exist — because this writes to a path parsed out of
+/// a subprocess's stderr. Anything else is reported, not repaired.
+fn stale_oauth_kit_path(err: &str) -> Option<PathBuf> {
+    if !err.contains("does not exist") {
+        return None;
+    }
+    err.split('"')
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("sbxw-oauth-kit-"))
+                && !p.exists()
+                && p.parent().is_some_and(|parent| parent.is_dir())
+        })
+}
+
+/// `sbx kit add`, repairing a stale sbxw OAuth kit reference once and retrying.
+///
+/// Without the retry the user sees a kit they just configured fail to apply and
+/// an error naming a temp directory they have never heard of, with no way back
+/// short of recreating the sandbox.
+fn kit_add_repairing_oauth(name: &str, kit: &str, credentials_json: Option<&str>) -> Result<()> {
+    let Err(first) = sbx::kit_add(name, kit) else {
+        return Ok(());
+    };
+    let Some(stale) = stale_oauth_kit_path(&format!("{first:#}")) else {
+        return Err(first);
+    };
+
+    tracing::warn!(
+        "sandbox '{name}' still refers to an OAuth kit sbxw used to delete after \
+         creation ({}); restoring it so the sandbox can be recomposed",
+        stale.display()
+    );
+
+    // No token this run: restore a kit that merely *resolves*. It keeps the
+    // same name and its claude.ai rule, and leaves the credentials already in
+    // the container alone — which a fresh spec with no token would too, but
+    // this way nothing here depends on having one.
+    let spec = match credentials_json {
+        Some(creds) => oauth_kit_spec(creds),
+        None => oauth_kit_spec_without_credentials(),
+    };
+    std::fs::create_dir_all(&stale)
+        .with_context(|| format!("could not restore OAuth kit at {}", stale.display()))?;
+    restrict_permissions(&stale, 0o700);
+    let spec_path = stale.join("spec.yaml");
+    std::fs::write(&spec_path, spec)
+        .with_context(|| format!("could not write {}", spec_path.display()))?;
+    restrict_permissions(&spec_path, 0o600);
+
+    sbx::kit_add(name, kit).with_context(|| {
+        format!(
+            "retried after restoring the stale OAuth kit at {}; the first attempt failed with: {first:#}",
+            stale.display()
+        )
+    })
+}
+
+/// Does this kit declare startup commands — `commands.startup` in spec v1,
+/// `setup.startup` in v2?
+///
+/// It matters because sbx 0.38's `kit add` **refuses** such a kit: the recreate
+/// flow behind it does not run startup commands, so rather than apply the kit
+/// half-way it tells you to recreate the sandbox with `sbx create --kit`. All
+/// three kits sbxw ships declare startup commands — that is how they install
+/// anything — so this is the common case, not a corner one.
+///
+/// Only directory kits can be read; a ZIP or an OCI reference answers `false`
+/// and the refusal is discovered from sbx's own error instead.
+fn kit_declares_startup(kit: &str) -> bool {
+    let Ok(spec) = std::fs::read_to_string(std::path::Path::new(kit).join("spec.yaml")) else {
+        return false;
+    };
+    spec.lines().any(|l| l.trim() == "startup:")
+}
+
+/// Is this failed `sbx kit add` the "recreate the sandbox instead" refusal?
+fn kit_add_needs_recreate(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("does not yet apply") || lower.contains("recreate the sandbox from scratch")
+}
+
+/// Explain the one thing the user has to do, since sbxw will not do it for
+/// them: recreating destroys a sandbox, which is not a call a provisioning step
+/// gets to make silently.
+fn warn_kit_needs_recreate(name: &str, kit: &str, sbx_said: Option<&str>) {
+    let detail = sbx_said.map(|s| format!("\n{s}")).unwrap_or_default();
+    tracing::warn!(
+        "kit '{kit}' declares startup commands, which `sbx kit add` cannot apply to an \
+         existing sandbox (sbx 0.38+) — '{name}' is unchanged. Recreate it to pick the kit \
+         up: `sbxw rm {name}` then `sbxw up {name}`, which passes every configured kit to \
+         `sbx create --kit`. Anything outside the workspace mount is lost in the process.{detail}"
+    );
+}
+
+/// Warn when a kit reference is one sbx will not fetch without configuration.
+fn warn_if_kit_source_needs_allowlist(kit: &str) {
+    if kit_needs_allowlist(kit) {
+        tracing::warn!(
+            "kit '{kit}' is a Git URL or non-Docker Hub registry — sbx now restricts kit \
+             sources to Docker Hub by default. Run `sbx settings set kit.allowedSources \
+             <prefix>` to allow it."
+        );
+    }
+}
+
 /// Returns true if a kit reference requires an explicit allowlist entry in sbx.
 /// Git URLs (http/https/git@/git://) and non-Docker Hub OCI registries (any
 /// hostname prefix other than docker.io) are blocked by default since sbx
@@ -1529,6 +1750,51 @@ fn create_with_port_fallback(name: &str, opts: &sbx::CreateOpts<'_>) -> Result<(
         .with_context(|| format!("create with port mappings had failed with: {first:#}"))
 }
 
+/// `sbx create` with every configured kit, falling back to creating with only
+/// the OAuth kit if sbx rejects the rest.
+///
+/// Repeating `--kit` is how sbx composes several kits at creation, and it is
+/// the only way to apply one that declares startup commands. But sbxw's floor
+/// is 0.37 and this has only been read back from 0.38's documentation, so a
+/// version that spells it differently must not cost you the sandbox: on
+/// failure, retry with the kit that carries your credentials and let the
+/// `kit add` loop deal with the others (reporting whatever sbx says about
+/// each). Returns whether the full set went in.
+fn create_with_kit_fallback(
+    name: &str,
+    opts: &sbx::CreateOpts<'_>,
+    oauth_kit: Option<&std::path::Path>,
+) -> Result<bool> {
+    let first = match create_with_port_fallback(name, opts) {
+        Ok(()) => return Ok(true),
+        Err(e) => e,
+    };
+    // One kit at most already: nothing to drop, so the failure is real.
+    if opts.kits.len() <= 1 || sbx::exists(name).unwrap_or(false) {
+        return Err(first);
+    }
+
+    tracing::warn!(
+        "creating '{name}' with its {} kits failed ({first:#}) — retrying with just the \
+         credentials kit; the rest are applied afterwards, and any that declares startup \
+         commands will ask to be applied at creation instead",
+        opts.kits.len()
+    );
+    let only_oauth: Vec<String> = oauth_kit
+        .map(|p| p.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
+    create_with_port_fallback(
+        name,
+        &sbx::CreateOpts {
+            kits: &only_oauth,
+            ..*opts
+        },
+    )
+    .with_context(|| format!("create with all kits had failed with: {first:#}"))?;
+    Ok(false)
+}
+
 pub(crate) fn provision_sandbox(
     name: &str,
     workspace: &str,
@@ -1569,6 +1835,9 @@ pub(crate) fn provision_sandbox(
 
     // 2. Create the sandbox if it doesn't exist yet.
     let existed = sbx::exists(name)?;
+    // Set when creation carried the configured kits, so the `kit add` loop
+    // below has nothing left to do.
+    let mut created_with_kits = false;
     if existed {
         tracing::info!("sandbox '{name}' already exists — reusing it");
         if let Some(ref creds) = credentials_json {
@@ -1593,14 +1862,17 @@ pub(crate) fn provision_sandbox(
                 // 0.35+) preserves state, and nothing is attached to a
                 // stopped sandbox anyway.
                 tracing::info!("applying OAuth kit to existing (stopped) sandbox via kit add");
-                match write_oauth_kit(creds) {
+                match write_oauth_kit(name, creds) {
                     Ok(dir) => {
-                        if let Err(e) = sbx::kit_add(name, &dir.to_string_lossy()) {
+                        // Kept on disk: sbx re-resolves this path on every
+                        // later container swap (see `oauth_kit_dir`).
+                        if let Err(e) =
+                            kit_add_repairing_oauth(name, &dir.to_string_lossy(), Some(creds))
+                        {
                             tracing::warn!(
                                 "OAuth kit add failed (use /login in-session instead): {e:#}"
                             );
                         }
-                        let _ = std::fs::remove_dir_all(&dir);
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -1612,7 +1884,10 @@ pub(crate) fn provision_sandbox(
         }
     } else {
         tracing::info!("creating sandbox '{name}' on workspace {workspace}");
-        let kit_dir = match credentials_json.as_deref().map(write_oauth_kit) {
+        let kit_dir = match credentials_json
+            .as_deref()
+            .map(|creds| write_oauth_kit(name, creds))
+        {
             Some(Ok(d)) => {
                 tracing::info!("OAuth kit prepared at {}", d.display());
                 Some(d)
@@ -1623,20 +1898,36 @@ pub(crate) fn provision_sandbox(
             }
             None => None,
         };
-        create_with_port_fallback(
+        // Every kit at once, OAuth first: creation is the only moment sbx
+        // applies a kit whole (see `sbx::CreateOpts::kits`). Doing it here also
+        // means a fresh sandbox is never recreated by a follow-up `kit add`.
+        let mut kits: Vec<String> = kit_dir
+            .as_deref()
+            .map(|d| d.to_string_lossy().into_owned())
+            .into_iter()
+            .collect();
+        kits.extend(cfg.kits.iter().cloned());
+        for kit in &cfg.kits {
+            warn_if_kit_source_needs_allowlist(kit);
+        }
+
+        // Kits are on the sandbox unless the fallback had to drop them; the
+        // loop below picks up whatever creation could not carry.
+        created_with_kits = create_with_kit_fallback(
             name,
             &sbx::CreateOpts {
                 workspace,
                 ro_mounts: ro_strs,
-                kit_path: kit_dir.as_deref().and_then(|p| p.to_str()),
+                kits: &kits,
                 publish: &port_specs,
                 share_skills: cfg.share_skills,
             },
+            kit_dir.as_deref(),
         )?;
-        // Clean up the ephemeral kit directory now that sbx has consumed it.
-        if let Some(dir) = kit_dir {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
+        // The kit directory deliberately stays: sbx recorded its *path*, and
+        // re-resolves it on every later container swap (see `oauth_kit_dir`).
+        // `sbxw rm` is what cleans it up.
+        drop(kit_dir);
     }
 
     // The daemon's port: both the in-sandbox hooks (which POST to it) and the
@@ -1700,38 +1991,43 @@ pub(crate) fn provision_sandbox(
     if !cfg.network_allow.is_empty() {
         let resources = cfg.network_allow.join(",");
         tracing::info!("network allowlist: {resources}");
-        sbx::policy_allow_network(Some(name), &resources)
-            .context("failed to apply network allowlist")?;
+        apply_bringup_policy(
+            "allowlist",
+            sbx::policy_allow_network(Some(name), &resources),
+        )?;
     }
     if !cfg.network_deny.is_empty() {
         let resources = cfg.network_deny.join(",");
         tracing::info!("network denylist: {resources}");
-        sbx::policy_deny_network(Some(name), &resources)
-            .context("failed to apply network denylist")?;
+        apply_bringup_policy("denylist", sbx::policy_deny_network(Some(name), &resources))?;
     }
 
-    // 3b. User-defined kits from sbxw.toml (applied in order via sbx kit add).
-    //     Since sbx 0.35 `kit add` RECREATES the sandbox container (state is
-    //     preserved and the kit's own network rules are composed in), so
-    //     re-applying on every `sbxw up` is no longer free. `sbx inspect`
-    //     (0.35+) lists the sandbox's kits: kits it already lists are skipped.
-    //     On older sbx — or whenever inspect yields nothing usable — every kit
-    //     is applied, matching the previous behaviour.
+    // 3b. User-defined kits from sbxw.toml, for a sandbox that already existed.
+    //     A sandbox sbxw just created already has them — they went in as
+    //     `sbx create --kit` (see `created_with_kits`), which is the only path
+    //     that applies a kit whole.
+    //
+    //     Adding one to an existing sandbox goes through `sbx kit add`, which
+    //     since 0.35 RECREATES the container (state preserved, the kit's own
+    //     network rules composed in), so re-applying on every `sbxw up` is not
+    //     free: `sbx inspect` (0.35+) lists the sandbox's kits and the ones it
+    //     already names are skipped. On older sbx — or whenever inspect yields
+    //     nothing usable — every kit is applied, matching earlier behaviour.
+    //     The match is scoped to inspect's kits section: since 0.38 inspect
+    //     also reports the sandbox's custom secrets, and a kit name that
+    //     happens to appear in one of those would skip a kit never applied.
+    //
     //     Runs AFTER network policy so kit startup commands have egress access.
     //     A kit reference is a directory (with spec.yaml), ZIP, or OCI ref (docker.io by default).
     //     Git URLs and non-Docker Hub OCI refs require: sbx settings set kit.allowedSources <prefix>
-    let inspect_out = if existed && !cfg.kits.is_empty() {
-        sbx::inspect_raw(name).unwrap_or_default()
+    let pending_kits: &[String] = if created_with_kits { &[] } else { &cfg.kits };
+    let inspect_out = if !pending_kits.is_empty() {
+        inspect_kits_section(&sbx::inspect_raw(name).unwrap_or_default())
     } else {
         String::new()
     };
-    for kit in &cfg.kits {
-        if kit_needs_allowlist(kit) {
-            tracing::warn!(
-                "kit '{kit}' is a Git URL or non-Docker Hub registry — sbx now restricts kit \
-                 sources to Docker Hub by default. Run `sbx settings set kit.allowedSources <prefix>` to allow it."
-            );
-        }
+    for kit in pending_kits {
+        warn_if_kit_source_needs_allowlist(kit);
         let kit_name = kit_display_name(kit);
         if kit_name.len() >= 3 && inspect_out.contains(&kit_name) {
             tracing::info!(
@@ -1740,9 +2036,23 @@ pub(crate) fn provision_sandbox(
             );
             continue;
         }
+        // 0.38's `kit add` refuses a kit declaring startup commands outright,
+        // and the refusal comes *after* it has swapped the container. When the
+        // spec is readable we know that in advance, so don't put the sandbox
+        // through a recreate that cannot succeed.
+        if kit_declares_startup(kit) {
+            warn_kit_needs_recreate(name, kit, None);
+            continue;
+        }
         tracing::info!("applying kit: {kit} (sbx 0.35+ recreates the container; state is kept)");
-        if let Err(e) = sbx::kit_add(name, kit) {
-            tracing::warn!("kit '{kit}' failed to apply: {e:#}");
+        match kit_add_repairing_oauth(name, kit, credentials_json.as_deref()) {
+            Ok(()) => {}
+            // Same refusal, for a kit whose spec sbxw could not read (a ZIP or
+            // an OCI reference) — sbx is the one that knows, so it says so.
+            Err(e) if kit_add_needs_recreate(&format!("{e:#}")) => {
+                warn_kit_needs_recreate(name, kit, Some(&format!("{e:#}")));
+            }
+            Err(e) => tracing::warn!("kit '{kit}' failed to apply: {e:#}"),
         }
     }
 
@@ -2013,41 +2323,141 @@ fn oauth_credentials_json(token: &str, subscription: &str) -> String {
     )
 }
 
-/// Write an ephemeral mixin kit directory whose spec.yaml injects the OAuth
-/// credentials into the sandbox via `initFiles`.
+/// Where the OAuth mixin kit for `name` lives on the host.
+///
+/// Stable per sandbox, and under `state_dir()` rather than the OS temp dir,
+/// because **sbx keeps the reference, not a copy**. Since 0.38 a container swap
+/// (`sbx kit add`) recomposes the sandbox from its template, which re-resolves
+/// every kit applied before it *by its original path*. A kit directory that has
+/// been deleted — or sat in a temp dir a reboot cleared — fails that resolution
+/// and takes the unrelated kit being added down with it:
+///
+/// ```text
+/// ERROR: re-resolve original kit 0 ("/var/folders/…/sbxw-oauth-kit-36226"):
+///        kit reference "…": path does not exist
+/// ```
+///
+/// So this directory has to outlive the command that created it and stay put
+/// for as long as the sandbox does. `sbxw rm` deletes it (see
+/// `forget_oauth_kit`); nothing else should.
+fn oauth_kit_dir(name: &str) -> PathBuf {
+    state_dir().join("kits").join(format!("{name}-oauth"))
+}
+
+/// Write the mixin kit whose spec.yaml injects `name`'s OAuth credentials, and
+/// return its directory.
 ///
 /// Used for new sandboxes (`--kit` at create time) and for existing *stopped*
 /// ones (`sbx kit add`). Running sandboxes get the credentials file written
 /// directly over `sbx exec` instead (see `sbx::write_oauth_credentials`),
 /// because `sbx kit add` recreates the container since sbx 0.35.
 ///
-/// The credentials are written into the spec.yaml on disk; the temp directory
-/// is deleted by the caller immediately after sbx consumes it.
-fn write_oauth_kit(credentials_json: &str) -> Result<std::path::PathBuf> {
-    let dir = std::env::temp_dir().join(format!("sbxw-oauth-kit-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
+/// Rewriting in place is what keeps a re-resolve honest: the path sbx recorded
+/// stays valid, and picks up the current token rather than the one the sandbox
+/// was born with.
+///
+/// The file holds a live OAuth token, so it is written `0600` inside a `0700`
+/// directory — this is a durable copy now, not one deleted seconds later.
+fn write_oauth_kit(name: &str, credentials_json: &str) -> Result<PathBuf> {
+    let dir = oauth_kit_dir(name);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("could not create OAuth kit dir {}", dir.display()))?;
+    restrict_permissions(&dir, 0o700);
 
-    std::fs::write(
-        dir.join("spec.yaml"),
+    let spec = dir.join("spec.yaml");
+    std::fs::write(&spec, oauth_kit_spec(credentials_json))
+        .with_context(|| format!("could not write {}", spec.display()))?;
+    restrict_permissions(&spec, 0o600);
+    Ok(dir)
+}
+
+/// Drop the OAuth kit directory for `name`. Called when the sandbox is removed:
+/// until then the reference has to keep resolving (see `oauth_kit_dir`).
+pub(crate) fn forget_oauth_kit(name: &str) {
+    let dir = oauth_kit_dir(name);
+    if let Err(e) = std::fs::remove_dir_all(&dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("could not remove OAuth kit {}: {e:#}", dir.display());
+        }
+    }
+}
+
+/// Best-effort `chmod`. A no-op off Unix, where the token's protection is the
+/// containing user profile rather than a mode bit.
+fn restrict_permissions(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+}
+
+/// The OAuth mixin's spec.yaml, in whichever kit grammar the host's sbx reads.
+///
+/// sbx 0.38 introduced **spec v2**, which restructures exactly the two sections
+/// this kit uses: `network.allowedDomains` became `permissions.network.allow`
+/// and `commands.initFiles` became `setup.files`. The v2 loader *rejects* v1
+/// field names rather than tolerating them, and the v1 loader knows nothing of
+/// the v2 ones, so the two spellings cannot be merged into one hedged document
+/// — the version has to pick one. v1 still loads on 0.38 through a legacy path,
+/// which is why an unreadable `sbx version` falls back to it: it is the grammar
+/// that works on both.
+fn oauth_kit_spec(credentials_json: &str) -> String {
+    oauth_kit_spec_inner(Some(credentials_json))
+}
+
+/// The same kit minus the credentials file: same name, same claude.ai rule.
+/// Used only to make a dangling reference resolve again when no token is
+/// available this run (see `kit_add_repairing_oauth`).
+fn oauth_kit_spec_without_credentials() -> String {
+    oauth_kit_spec_inner(None)
+}
+
+fn oauth_kit_spec_inner(credentials_json: Option<&str>) -> String {
+    let header = "kind: mixin\n\
+                  name: claude-oauth\n\
+                  description: Injects OAuth credentials for Claude Code\n\n";
+
+    if sbx::version_at_least(sbx::KIT_SPEC_V2_SINCE) {
+        let files = credentials_json.map_or_else(String::new, |creds| {
+            format!(
+                "\nsetup:\n\
+                 \x20 files:\n\
+                 \x20   - path: /home/agent/.claude/.credentials.json\n\
+                 \x20     content: '{creds}'\n\
+                 \x20     mode: \"0600\"\n"
+            )
+        });
+        return format!(
+            "schemaVersion: \"2\"\n\
+             {header}\
+             permissions:\n\
+             \x20 network:\n\
+             \x20   allow:\n\
+             \x20     - claude.ai\n\
+             {files}"
+        );
+    }
+
+    let files = credentials_json.map_or_else(String::new, |creds| {
         format!(
-            "schemaVersion: \"1\"\n\
-             kind: mixin\n\
-             name: claude-oauth\n\
-             description: Injects OAuth credentials for Claude Code\n\
-             \n\
-             network:\n\
-             \x20 allowedDomains:\n\
-             \x20   - claude.ai\n\
-             \n\
-             commands:\n\
+            "\ncommands:\n\
              \x20 initFiles:\n\
              \x20   - path: /home/agent/.claude/.credentials.json\n\
-             \x20     content: '{credentials_json}'\n\
+             \x20     content: '{creds}'\n\
              \x20     mode: \"0600\"\n"
-        ),
-    )?;
-
-    Ok(dir)
+        )
+    });
+    format!(
+        "schemaVersion: \"1\"\n\
+         {header}\
+         network:\n\
+         \x20 allowedDomains:\n\
+         \x20   - claude.ai\n\
+         {files}"
+    )
 }
 
 #[cfg(test)]
@@ -2090,6 +2500,239 @@ mod tests {
         )
         .unwrap();
         assert_eq!(kit_display_name(&dir.to_string_lossy()), "my-kit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The regression 0.38 opened: `inspect` began reporting custom secrets, so
+    /// a secret named after a kit made sbxw skip a kit it had never applied.
+    #[test]
+    fn a_secret_named_like_a_kit_no_longer_passes_for_the_kit() {
+        let inspect = "Name: neos\n\
+                       Status: running\n\
+                       Kits:\n\
+                       \x20 - claude-oauth\n\
+                       Secrets:\n\
+                       \x20 - headroom\n\
+                       \x20 - anthropic\n";
+
+        let section = inspect_kits_section(inspect);
+        assert!(section.contains("claude-oauth"), "{section}");
+        assert!(!section.contains("headroom"), "{section}");
+        assert!(!section.contains("anthropic"), "{section}");
+    }
+
+    #[test]
+    fn inspect_kits_section_reads_the_json_form_too() {
+        let section = inspect_kits_section(
+            r#"{"name":"neos","kits":["md-to-pdf-tools"],"secrets":["headroom"]}"#,
+        );
+        assert!(section.contains("md-to-pdf-tools"), "{section}");
+        assert!(!section.contains("headroom"), "{section}");
+    }
+
+    /// Unknown layouts (a KITS *column*, say) must keep today's behaviour
+    /// rather than reporting "no kits" and recreating the container every `up`.
+    #[test]
+    fn an_unrecognised_inspect_layout_falls_back_to_the_whole_output() {
+        let table = "NAME  AGENT   KITS\nneos  claude  md-to-pdf-tools\n";
+        assert_eq!(inspect_kits_section(table), table);
+    }
+
+    /// A governed host is a working host: `sbxw up` must not die because the
+    /// organisation, not this machine, owns the network policy.
+    #[test]
+    fn org_governed_policy_warns_while_other_failures_still_abort() {
+        let governed = Err(anyhow::anyhow!(
+            "`sbx policy allow network` exited with exit status: 1:\n\
+             this rule is managed by your organization — contact platform@acme.example"
+        ));
+        assert!(apply_bringup_policy("allowlist", governed).is_ok());
+
+        let broken = Err(anyhow::anyhow!("no such sandbox: neos"));
+        let err = apply_bringup_policy("allowlist", broken).unwrap_err();
+        assert!(format!("{err:#}").contains("failed to apply network allowlist"));
+    }
+
+    /// Every kit sbxw ships declares startup commands — that is how they
+    /// install anything — so `kit add` refusing them is the common case.
+    #[test]
+    fn the_bundled_kits_are_all_startup_kits() {
+        for kit in ["k8s-tools", "headroom", "md-to-pdf-tools"] {
+            let dir = format!("assets/{kit}");
+            assert!(
+                kit_declares_startup(&dir),
+                "{dir} was expected to declare startup commands"
+            );
+        }
+        // Nothing to read is not a claim that there is nothing to run.
+        assert!(!kit_declares_startup("assets/does-not-exist"));
+        assert!(!kit_declares_startup("ghcr.io/owner/kit:1.0"));
+    }
+
+    /// A `startup:` key must be recognised in either grammar, and a kit that
+    /// merely mentions the word must not be.
+    #[test]
+    fn startup_is_detected_in_both_kit_grammars() {
+        let dir = std::env::temp_dir().join(format!("sbxw-startup-{}", std::process::id()));
+        let write = |body: &str| {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("spec.yaml"), body).unwrap();
+            kit_declares_startup(&dir.to_string_lossy())
+        };
+
+        assert!(write("commands:\n  startup:\n    - command: [\"true\"]\n"));
+        assert!(write("setup:\n  startup:\n    - command: [\"true\"]\n"));
+        assert!(!write("description: runs a startup script for you\n"));
+        assert!(!write("setup:\n  files:\n    - path: /tmp/startup\n"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_recreate_refusal_is_told_apart_from_other_failures() {
+        assert!(kit_add_needs_recreate(
+            "ERROR: kit \"md-to-pdf-tools\" declares commands.startup, which the kit-add \
+             recreate flow does not yet apply; recreate the sandbox from scratch via \
+             `sbx rm` + `sbx create --kit` to use this kit"
+        ));
+        assert!(!kit_add_needs_recreate("path does not exist"));
+        assert!(!kit_add_needs_recreate("no such sandbox: neos"));
+    }
+
+    /// The real 0.38 failure: a container swap re-resolves the OAuth kit sbxw
+    /// used to delete, and the *unrelated* kit being added is what reports it.
+    #[test]
+    fn a_stale_oauth_kit_is_recognised_in_sbxs_own_message() {
+        let dir = std::env::temp_dir().join("sbxw-oauth-kit-36226");
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = format!(
+            "`sbx kit add test /kits/md-to-pdf-tools` exited with exit status: 1:\n\
+             ERROR: re-resolve original kit 0 (\"{}\"): kit reference \"{}\": path does not exist",
+            dir.display(),
+            dir.display()
+        );
+        assert_eq!(stale_oauth_kit_path(&err), Some(dir));
+    }
+
+    /// The repair writes to a path parsed out of a subprocess's stderr, so
+    /// every guard on it earns its keep.
+    #[test]
+    fn the_repair_declines_anything_but_a_missing_sbxw_oauth_kit() {
+        let missing = std::env::temp_dir().join("sbxw-oauth-kit-1");
+        let _ = std::fs::remove_dir_all(&missing);
+        let quoted = |p: &std::path::Path| {
+            format!(
+                "re-resolve original kit 0 (\"{}\"): path does not exist",
+                p.display()
+            )
+        };
+
+        // Someone else's kit, merely missing.
+        let theirs = std::env::temp_dir().join("some-other-kit");
+        assert_eq!(stale_oauth_kit_path(&quoted(&theirs)), None);
+
+        // Ours, but the failure is not a missing path.
+        assert_eq!(
+            stale_oauth_kit_path(&format!(
+                "re-resolve original kit 0 (\"{}\"): permission denied",
+                missing.display()
+            )),
+            None
+        );
+
+        // Ours and missing, but its parent is gone too — we create the kit
+        // directory, never the tree above it.
+        let orphan = std::env::temp_dir()
+            .join("sbxw-no-such-parent-xyz")
+            .join("sbxw-oauth-kit-2");
+        assert_eq!(stale_oauth_kit_path(&quoted(&orphan)), None);
+
+        // A relative path is never a kit reference sbx recorded.
+        assert_eq!(
+            stale_oauth_kit_path(
+                "re-resolve original kit 0 (\"sbxw-oauth-kit-3\"): does not exist"
+            ),
+            None
+        );
+
+        // And one that still exists needs no repair.
+        std::fs::create_dir_all(&missing).unwrap();
+        assert_eq!(stale_oauth_kit_path(&quoted(&missing)), None);
+        let _ = std::fs::remove_dir_all(&missing);
+    }
+
+    /// Restoring a dangling reference must not depend on having a token: the
+    /// point is only that the path resolves again.
+    #[test]
+    fn the_credential_free_kit_still_names_itself_and_keeps_its_rule() {
+        let spec = oauth_kit_spec_without_credentials();
+        assert!(spec.contains("name: claude-oauth"), "{spec}");
+        assert!(spec.contains("claude.ai"), "{spec}");
+        assert!(!spec.contains("credentials.json"), "{spec}");
+
+        // Same grammar as the real one, whichever that is on this host.
+        let with = oauth_kit_spec(r#"{"claudeAiOauth":{"accessToken":"t"}}"#);
+        let version_line = |s: &str| s.lines().next().unwrap_or_default().to_string();
+        assert_eq!(version_line(&spec), version_line(&with));
+    }
+
+    /// The OAuth kit's whole purpose is to still be there later.
+    #[test]
+    fn the_oauth_kit_is_written_where_it_can_be_re_resolved() {
+        let name = format!("sbxw-test-{}", std::process::id());
+        let dir = write_oauth_kit(&name, r#"{"claudeAiOauth":{"accessToken":"t"}}"#).unwrap();
+
+        assert_eq!(dir, oauth_kit_dir(&name));
+        assert!(dir.starts_with(state_dir()), "{}", dir.display());
+        assert!(dir.join("spec.yaml").exists());
+
+        // Rewriting in place keeps the path sbx recorded valid.
+        let again = write_oauth_kit(&name, r#"{"claudeAiOauth":{"accessToken":"fresh"}}"#).unwrap();
+        assert_eq!(again, dir);
+        let spec = std::fs::read_to_string(dir.join("spec.yaml")).unwrap();
+        assert!(spec.contains("fresh"), "{spec}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join("spec.yaml"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "the spec holds a live OAuth token");
+        }
+
+        forget_oauth_kit(&name);
+        assert!(!dir.exists());
+        // Removing what is already gone is not an error.
+        forget_oauth_kit(&name);
+    }
+
+    /// The two kit grammars are mutually exclusive: 0.38's v2 loader rejects v1
+    /// field names, and the v1 loader knows none of v2's.
+    #[test]
+    fn the_oauth_kit_is_written_in_one_grammar_or_the_other() {
+        // Whichever the host selects, the spec must be internally consistent.
+        let spec = oauth_kit_spec(r#"{"claudeAiOauth":{"accessToken":"t"}}"#);
+        assert!(spec.contains("accessToken"), "{spec}");
+
+        if spec.contains("schemaVersion: \"2\"") {
+            assert!(spec.contains("permissions:"), "{spec}");
+            assert!(spec.contains("setup:"), "{spec}");
+            assert!(!spec.contains("allowedDomains"), "{spec}");
+            assert!(!spec.contains("initFiles"), "{spec}");
+        } else {
+            assert!(spec.contains("schemaVersion: \"1\""), "{spec}");
+            assert!(spec.contains("allowedDomains"), "{spec}");
+            assert!(spec.contains("initFiles"), "{spec}");
+            assert!(!spec.contains("permissions:"), "{spec}");
+        }
+
+        // And `kit_display_name` must still find the name in either grammar.
+        let dir = std::env::temp_dir().join(format!("sbxw-oauth-spec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("spec.yaml"), &spec).unwrap();
+        assert_eq!(kit_display_name(&dir.to_string_lossy()), "claude-oauth");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

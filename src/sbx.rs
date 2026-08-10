@@ -20,7 +20,9 @@
 //!   sbx policy log [SANDBOX]                       (recent allow/deny decisions)
 //!   sbx policy inspect <policy-or-rule>            (full detail on one entry)
 //!   sbx policy init <posture>                      (was `set-default`, kept as deprecated alias)
-//!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin)
+//!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin;
+//!                                                  see `secret_set_stdin` — 0.38
+//!                                                  replaced both scope forms)
 //!
 //! Behaviour changes in 0.35 this module accounts for:
 //!   * `sbx kit add` RECREATES the sandbox container (state preserved) and
@@ -38,10 +40,23 @@
 //!   sbx create … --no-share-skills        (opt out of the shared skill store)
 //!   sbx skills import [--dry-run|--force] (import host agent skills into the store)
 //!   sbx setup ssh                         (managed `Host *.sbx` block => `ssh <name>.sbx`)
+//!
+//! Changes in 0.38 this module accounts for, each behind a version gate rather
+//! than a floor bump, so an 0.37 host keeps working (see `version_at_least`):
+//!   * `secret set` scopes global by *default*; sandbox scope moved to
+//!     `--sandbox NAME`, and the old positional / `-g` forms now warn.
+//!   * kit spec **v2** (`schemaVersion: "2"`) — v1 still loads, via a legacy
+//!     path. sbxw writes its own kits in whichever grammar the host understands.
+//!   * `policy allow|deny network` refuses with "managed by your organization"
+//!     when org governance owns the rule; that is a governed host, not a broken
+//!     one, and bring-up treats it as such.
+//!   * `inspect` also reports the sandbox's custom secrets, which widens what a
+//!     bare substring search for a kit name can collide with.
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 const BIN: &str = "sbx";
@@ -166,6 +181,57 @@ pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 37, 0);
 /// check exists to prevent.
 const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
+/// The sbx release sbxw is *current* with, as opposed to the oldest it accepts.
+///
+/// 0.38 is where `secret set` moved its scope onto `--sandbox`, kits grew spec
+/// v2, and `policy allow` learned to say an organisation owns a rule. None of
+/// that is required — every one of them is gated below and falls back to the
+/// 0.37 shape — so this is documentation with a value, not a second floor.
+pub const CURRENT_SBX_VERSION: (u32, u32, u32) = (0, 38, 0);
+
+/// 0.38 scopes `secret set` globally by default and takes `--sandbox NAME` for
+/// the other case. The positional-sandbox and `-g`/`--global` forms sbxw used
+/// still work but print deprecation warnings, so they are worth leaving behind
+/// before they are removed outright.
+const SECRET_SCOPE_FLAGS_SINCE: (u32, u32, u32) = (0, 38, 0);
+
+/// 0.38 introduced kit spec v2. v1 keeps loading through a legacy path, which
+/// is why sbxw can still emit it for an older host rather than raising a floor.
+pub const KIT_SPEC_V2_SINCE: (u32, u32, u32) = (0, 38, 0);
+
+/// Parsed `sbx version`, read at most once per process.
+static SBX_VERSION: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
+
+/// The running sbx's version, or `None` if it could not be run or parsed.
+///
+/// `assert_available` seeds this, so the common path costs nothing; the lazy
+/// branch exists for the callers that never go through the startup check.
+pub fn sbx_version() -> Option<(u32, u32, u32)> {
+    *SBX_VERSION.get_or_init(|| {
+        run_capture(&["version"])
+            .ok()
+            .as_deref()
+            .and_then(parse_version)
+    })
+}
+
+/// Is the running sbx at least `want`?
+///
+/// A version sbxw could not read answers **false**, deliberately: every gate
+/// here chooses between a current form and a still-supported older one, so
+/// "unknown" has to mean the form that works on both. Guessing the other way
+/// would turn an unreadable `sbx version` into a hard failure, which is exactly
+/// what `assert_available` refuses to do.
+pub fn version_at_least(want: (u32, u32, u32)) -> bool {
+    at_least(sbx_version(), want)
+}
+
+/// `version_at_least` without the process-global cache, so the "unknown reads
+/// as old" rule is testable on its own.
+fn at_least(found: Option<(u32, u32, u32)>, want: (u32, u32, u32)) -> bool {
+    found.is_some_and(|found| found >= want)
+}
+
 /// Is `sbx` reachable, and recent enough?
 ///
 /// A version we can't parse is a warning, never a refusal: the output format of
@@ -175,13 +241,18 @@ pub fn assert_available() -> Result<()> {
         "`sbx version` failed — install the standalone sbx binary and ensure it is on PATH",
     )?;
 
+    // Seed the cache even when the floor check is skipped: the feature gates
+    // still need to know which sbx they are talking to.
+    let parsed = parse_version(&raw);
+    let _ = SBX_VERSION.set(parsed);
+
     if std::env::var_os(SKIP_VERSION_CHECK_ENV).is_some() {
         tracing::debug!("sbx version check skipped via {SKIP_VERSION_CHECK_ENV}");
         return Ok(());
     }
 
     let (min_a, min_b, min_c) = MIN_SBX_VERSION;
-    match parse_version(&raw) {
+    match parsed {
         Some(found) if found < MIN_SBX_VERSION => {
             let (a, b, c) = found;
             bail!(
@@ -192,7 +263,16 @@ pub fn assert_available() -> Result<()> {
                  behave differently and sbxw misprovisions rather than failing loudly."
             );
         }
-        Some((a, b, c)) => tracing::debug!("sbx {a}.{b}.{c} (needs >= {min_a}.{min_b}.{min_c})"),
+        Some((a, b, c)) => {
+            tracing::debug!("sbx {a}.{b}.{c} (needs >= {min_a}.{min_b}.{min_c})");
+            if (a, b, c) < CURRENT_SBX_VERSION {
+                let (c_a, c_b, c_c) = CURRENT_SBX_VERSION;
+                tracing::debug!(
+                    "sbx {a}.{b}.{c} is older than {c_a}.{c_b}.{c_c}: kits are written in the \
+                     legacy v1 grammar and secrets are scoped with the pre-0.38 flags"
+                );
+            }
+        }
         None => tracing::warn!(
             "could not read a version out of `sbx version` — continuing, but sbxw is built \
              for sbx {min_a}.{min_b}.{min_c} or newer"
@@ -304,9 +384,15 @@ pub struct CreateOpts<'a> {
     pub workspace: &'a str,
     /// Extra directories mounted read-only (a ":ro" suffix is added per the sbx spec).
     pub ro_mounts: &'a [String],
-    /// Forwarded as `--kit`; applied before the agent starts, so env vars it
-    /// sets are visible from the first process.
-    pub kit_path: Option<&'a str>,
+    /// Forwarded as one `--kit` per entry, in order, and applied before the
+    /// agent starts, so env vars they set are visible from the first process.
+    ///
+    /// Every kit the sandbox is meant to have belongs here rather than in a
+    /// later `sbx kit add`: since 0.38 the recreate path behind `kit add`
+    /// **refuses a kit that declares startup commands** ("does not yet apply"),
+    /// telling you to `sbx rm` + `sbx create --kit` instead. Creation is the
+    /// only moment a kit is applied whole.
+    pub kits: &'a [String],
     /// Port specs (`[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]`) forwarded as
     /// `-p`. See the note on `create_claude`.
     pub publish: &'a [String],
@@ -315,7 +401,7 @@ pub struct CreateOpts<'a> {
     pub share_skills: bool,
 }
 
-/// `sbx create claude <workspace> --name <name> [--kit K] [-p SPEC…] [--no-share-skills]`.
+/// `sbx create claude <workspace> --name <name> [--kit K…] [-p SPEC…] [--no-share-skills]`.
 ///
 /// Ports are published *at creation* rather than only by the provisioning
 /// thread: that thread has to wait for the sandbox to report `running` before
@@ -339,9 +425,9 @@ pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
     for m in opts.ro_mounts {
         args.push(format!("{m}:ro"));
     }
-    if let Some(kit) = opts.kit_path {
+    for kit in opts.kits {
         args.push("--kit".into());
-        args.push(kit.into());
+        args.push(kit.clone());
     }
     for spec in opts.publish {
         args.push("-p".into());
@@ -385,8 +471,13 @@ pub fn setup_ssh() -> Result<()> {
 /// sandbox (agent/bash PTY sessions), so callers should prefer `sbx exec`
 /// paths on running sandboxes and reserve `kit add` for stopped ones or for
 /// changes that genuinely need the kit machinery.
+/// `run_checked`, not `run_inherit`, since 0.38: the failure mode that matters
+/// here names a *different* kit than the one being added — a stale reference
+/// re-resolved during the container swap — and callers cannot diagnose or
+/// repair that from an exit status alone. stdout is still inherited, so 0.38's
+/// live kit-install progress reaches the terminal.
 pub fn kit_add(sandbox: &str, kit_path: &str) -> Result<()> {
-    run_inherit(&["kit", "add", sandbox, kit_path])
+    run_checked(&["kit", "add", sandbox, kit_path])
 }
 
 /// `sbx inspect SANDBOX` — raw text output. Since sbx 0.35 this lists the
@@ -878,9 +969,33 @@ fn slice_at(line: &str, starts: &[usize]) -> Vec<String> {
         .collect()
 }
 
+/// The scope arguments for `sbx secret set`, in the grammar `modern` selects.
+///
+/// sbx 0.38 made **global the default** and moved sandbox scope onto
+/// `--sandbox NAME`; the forms sbxw used until now — a bare positional sandbox,
+/// and `-g` for global — still work there but print a deprecation warning on
+/// every call, and a warning nobody can act on is one people learn to ignore.
+///
+/// So: on 0.38+ a global secret passes *nothing at all* and a sandbox-scoped
+/// one passes the flag; below that, the old spellings, which is the only thing
+/// those releases understand. Both branches mean the same two scopes.
+fn secret_scope_args(modern: bool, global: bool, sandbox: Option<&str>) -> Vec<String> {
+    match (modern, global, sandbox) {
+        // 0.38+: global is what you get when you say nothing.
+        (true, false, Some(name)) => vec!["--sandbox".into(), name.into()],
+        (true, _, _) => vec![],
+        (false, true, _) => vec!["-g".into()],
+        (false, false, Some(name)) => vec![name.into()],
+        (false, false, None) => vec![],
+    }
+}
+
 /// Store a service-scoped secret by piping the value on stdin (keeps it out of
 /// argv / shell history). `service` must be one of sbx's known services
 /// (anthropic, openai, github, ...). For a global secret pass `global = true`.
+///
+/// The scope is spelled differently either side of sbx 0.38 — see
+/// `secret_scope_args`.
 pub fn secret_set_stdin(
     service: &str,
     value: &str,
@@ -888,11 +1003,11 @@ pub fn secret_set_stdin(
     sandbox: Option<&str>,
 ) -> Result<()> {
     let mut args: Vec<String> = vec!["secret".into(), "set".into()];
-    if global {
-        args.push("-g".into());
-    } else if let Some(s) = sandbox {
-        args.push(s.into());
-    }
+    args.extend(secret_scope_args(
+        version_at_least(SECRET_SCOPE_FLAGS_SINCE),
+        global,
+        sandbox,
+    ));
     args.push(service.into());
 
     tracing::debug!(target: "sbx", "sbx {} (secret via stdin)", args.join(" "));
@@ -1189,6 +1304,38 @@ mod tests {
         assert!(msg.contains("sbx policy allow network"), "{msg}");
         assert!(msg.contains("origin: corporate policy"), "{msg}");
         assert!(msg.contains("Ask platform@acme.example"), "{msg}");
+    }
+
+    /// 0.38 turned both spellings sbxw used into deprecation warnings: global
+    /// stopped needing `-g` and sandbox scope moved onto `--sandbox`.
+    #[test]
+    fn secret_scope_follows_the_grammar_of_the_running_sbx() {
+        // 0.38+: global says nothing at all, sandbox scope takes the flag.
+        assert!(secret_scope_args(true, true, None).is_empty());
+        assert!(secret_scope_args(true, true, Some("neos")).is_empty());
+        assert_eq!(
+            secret_scope_args(true, false, Some("neos")),
+            vec!["--sandbox".to_string(), "neos".to_string()]
+        );
+
+        // Below it, the older spellings — the only ones those releases parse.
+        assert_eq!(secret_scope_args(false, true, None), vec!["-g".to_string()]);
+        assert_eq!(
+            secret_scope_args(false, false, Some("neos")),
+            vec!["neos".to_string()]
+        );
+    }
+
+    /// A version sbxw cannot read must select the grammar that works on *both*
+    /// sides of the gate, never the newer one.
+    #[test]
+    fn an_unreadable_version_is_not_at_least_anything() {
+        assert!(!at_least(None, KIT_SPEC_V2_SINCE));
+        assert!(!at_least(None, (0, 1, 0)));
+
+        assert!(at_least(Some((0, 38, 0)), KIT_SPEC_V2_SINCE));
+        assert!(at_least(Some((0, 41, 2)), KIT_SPEC_V2_SINCE));
+        assert!(!at_least(Some((0, 37, 9)), KIT_SPEC_V2_SINCE));
     }
 
     #[test]
