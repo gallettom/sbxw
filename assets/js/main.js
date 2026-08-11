@@ -47,18 +47,36 @@
   applySandboxHash();
 })();
 
-// Deep-link: opening `…/#sandbox=<name>` focuses that session. Used by the
-// macOS notch companion to "jump to a session" from the island.
+// "Jump to this sandbox" — the one thing an island click asks of the tab.
+//
+// Deliberately the smallest gesture that answers it: a sandbox already on
+// screen only needs its pane focused. Reconnecting it would close a healthy
+// WebSocket and `term.reset()` a terminal the user is reading, which is a blink
+// of the session at best and a mid-flight refit at worst. Only a sandbox that
+// is nowhere gets attached, to the focused pane.
+function focusSandbox(name) {
+  if (!name) return;
+  const open = panes.slice(0, paneCount).findIndex(p => p.sandbox === name);
+  if (open < 0) { connectPane(focusedPane, name); return; }
+  setFocusedPane(open);
+  // The one reconnect worth doing: a pane whose socket has died has no live
+  // terminal to preserve, and landing on it would show a frozen screen.
+  const pane = panes[open];
+  if (!pane.ws || pane.ws.readyState > WebSocket.OPEN) connectPane(open, name, pane.mode);
+}
+
+// Deep-link: opening `…/#sandbox=<name>` focuses that session. Only used to
+// cold-start a tab — an island click with a tab already open goes over the SSE
+// stream below instead, precisely so that no navigation (and no reload) is
+// involved.
 function applySandboxHash() {
   const m = location.hash.match(/sandbox=([^&]+)/);
   if (!m) return;
-  const name = decodeURIComponent(m[1]);
-  readySandboxes.delete(name);
-  connectPane(focusedPane, name);
   // Drop the `#sandbox=` fragment so the tab's URL stays the bare base URL.
   // That lets a later island click re-open the same URL and have the browser
   // focus *this* tab instead of treating a changed hash as a new page.
   history.replaceState(null, '', location.pathname + location.search);
+  focusSandbox(decodeURIComponent(m[1]));
 }
 window.addEventListener('hashchange', applySandboxHash);
 
@@ -66,11 +84,9 @@ window.addEventListener('hashchange', applySandboxHash);
 // sandboxes over this stream — so clicking a session focuses this tab rather
 // than spawning a new page. See `/api/focus` in src/web.rs.
 new EventSource('/api/focus-events').onmessage = ev => {
-  const name = ev.data;
-  if (!name) return;
+  if (!ev.data) return;
   window.focus();
-  readySandboxes.delete(name);
-  connectPane(focusedPane, name);
+  focusSandbox(ev.data);
 };
 
 // ── Agent activity on the liserets ────────────────────────────────────────
@@ -209,3 +225,14 @@ new EventSource('/api/events').onmessage = ev => {
 // flagged when you return, and stops being flagged the moment you read it.
 window.addEventListener('focus', applyAgentStates);
 window.addEventListener('blur', applyAgentStates);
+
+// Coming back to the tab re-announces every pane's size instead of merely
+// re-checking it. A PTY is shared by everyone watching that sandbox, so the one
+// thing this tab cannot notice while it is away is somebody else resizing it —
+// no box changes here, and the observer has nothing to fire on. Forgetting what
+// each socket was told turns the return into the moment we say it again.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  panes.slice(0, paneCount).forEach(p => { if (p.ws) p.ws.sentSize = null; });
+  refitPanes('tab visible');
+});

@@ -303,10 +303,6 @@ final class SessionStore: ObservableObject {
     func pushChat(_ text: String, to target: ChatTarget) {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, chatState(target) != .sending else { return }
-        guard let url = Config.url("/api/chat/push") else {
-            chatPush[target.key] = .failed("bad daemon URL")
-            return
-        }
         var body: [String: Any] = ["text": message]
         switch target {
         case .sandbox(let name): body["name"] = name
@@ -314,11 +310,11 @@ final class SessionStore: ObservableObject {
         // `ephemeral-chat-N` is free.
         case .newChat: body["fresh"] = true
         }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 180
+        // 180s, not URLSession's default 60: a `.newChat` boots a sandbox first.
+        guard let req = Config.jsonRequest("/api/chat/push", body: body, timeout: 180) else {
+            chatPush[target.key] = .failed("bad daemon URL")
+            return
+        }
 
         let key = target.key
         chatPush[key] = .sending
@@ -348,11 +344,7 @@ final class SessionStore: ObservableObject {
     }
 
     private func post(_ path: String, body: [String: Any]) {
-        guard let url = Config.url(path) else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let req = Config.jsonRequest(path, body: body) else { return }
         Task { _ = try? await URLSession.shared.data(for: req) }
     }
 

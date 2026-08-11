@@ -25,10 +25,9 @@ function setLayout(n) {
   panes.forEach((p, i) => { p.el.style.display = i < n ? '' : 'none'; });
   applyGridTemplate(n);
 
-  setTimeout(() => {
-    panes.slice(0, n).forEach(p => { p.fit.fit(); sendPaneResize(p); });
-    setFocusedPane(focusedPane < n ? focusedPane : 0);
-  }, 50);
+  // No refit here: the grid template just changed every pane's box, which is
+  // what `observePaneSize` watches for.
+  setFocusedPane(focusedPane < n ? focusedPane : 0);
 
   document.querySelectorAll('#layout-switch-panel button').forEach(btn => {
     btn.classList.toggle('active', parseInt(btn.dataset.n) === n);
@@ -125,10 +124,12 @@ function closePane(idx) {
 
   if (focusedPane >= paneCount) setFocusedPane(paneCount - 1);
 
-  // Resize all visible panes; the PTY will redraw on receiving the new size.
-  setTimeout(() => {
-    panes.slice(0, paneCount).forEach(p => { p.fit.fit(); sendPaneResize(p); });
-  }, 50);
+  // The one refit the observer cannot infer: the loop above moved *sockets*
+  // between panes, and on an uneven grid a socket can land on a pane of a
+  // different cell count without any box changing. Each moved socket carries the
+  // size it was told, so this reconciles exactly those and stays silent for the
+  // rest — no delay needed, the grid template above is already applied.
+  refitPanes('pane closed');
 
   renderSidebar();
   saveLayout();

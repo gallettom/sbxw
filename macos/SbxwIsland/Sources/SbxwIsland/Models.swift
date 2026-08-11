@@ -233,6 +233,24 @@ enum Config {
         URL(string: apiBaseURL + path)
     }
 
+    /// A JSON POST to the daemon, built the one way the island builds them.
+    /// Returned as a `let` on purpose: a `Task` closure is `@Sendable`, and
+    /// capturing a mutable local in one is an error, so every caller would
+    /// otherwise wrap the construction in a closure of its own.
+    static func jsonRequest(
+        _ path: String,
+        body: [String: Any],
+        timeout: TimeInterval = 60
+    ) -> URLRequest? {
+        guard let url = url(path) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = timeout
+        return req
+    }
+
     /// Deep-link that focuses `sandbox` in the browser UI (see the
     /// `#sandbox=` handler in `assets/index.html`).
     static func deepLink(sandbox: String) -> URL? {

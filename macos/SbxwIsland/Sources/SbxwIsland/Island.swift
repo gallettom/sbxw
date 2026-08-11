@@ -116,6 +116,14 @@ private func escapeAppleScript(_ s: String) -> String {
         .replacingOccurrences(of: "\"", with: "\\\"")
 }
 
+/// The app that would open the sbxw UI — the user's default browser, unless they
+/// have assigned one to this URL. One answer for everyone who needs it, so the
+/// tab hunt below and `activateBrowser` can never name different apps.
+private func browserAppURL() -> URL? {
+    guard let probe = URL(string: Config.baseURL) else { return nil }
+    return NSWorkspace.shared.urlForApplication(toOpen: probe)
+}
+
 /// Find and foreground the browser tab already showing the sbxw UI (its URL
 /// starts with the base URL). Returns `true` if such a tab was found and
 /// activated. Browsers block programmatic tab focus from the page itself, so
@@ -126,8 +134,7 @@ private func escapeAppleScript(_ s: String) -> String {
 /// vocabularies, so we branch on the default browser's bundle id. Call on the
 /// main thread (it drives NSWorkspace and NSAppleScript).
 func focusExistingTab() -> Bool {
-    guard let probe = URL(string: Config.baseURL),
-          let appURL = NSWorkspace.shared.urlForApplication(toOpen: probe) else { return false }
+    guard let appURL = browserAppURL() else { return false }
     let appName = escapeAppleScript(appURL.deletingPathExtension().lastPathComponent)
     let bundleID = Bundle(url: appURL)?.bundleIdentifier ?? ""
     let base = escapeAppleScript(Config.baseURL)
@@ -182,33 +189,67 @@ func focusExistingTab() -> Bool {
     return result.stringValue == "ok"
 }
 
+/// Bring the browser forward *without* navigating. Used when a tab already has
+/// the sandbox: opening any URL at that point, even the one the tab is on, risks
+/// a reload.
+///
+/// `bringToFront` does the actual raising, and this is exactly the case its
+/// `unhide()` exists for — a browser hidden with ⌘H is still running, still
+/// holds the tab that just switched, and would otherwise stay hidden while the
+/// menu bar claimed it had come forward. If it isn't running there is nothing to
+/// reveal, and nothing to do: a tab answered the focus request, so it is.
+/// Matched on bundle identifier rather than on `bundleURL`: the URL
+/// LaunchServices hands back and the one a running app reports differ by a
+/// trailing slash often enough that comparing them is a coin toss.
+private func activateBrowser() {
+    guard let appURL = browserAppURL(),
+          let id = Bundle(url: appURL)?.bundleIdentifier,
+          let running = NSWorkspace.shared.runningApplications
+              .first(where: { $0.bundleIdentifier == id })
+    else { return }
+    bringToFront(running)
+}
+
 /// Bring a sandbox's terminal to the foreground in the browser.
 ///
-/// First we ask every open sbxw tab, over `/api/focus`, to switch to this
-/// sandbox in place (SSE) — no navigation, no flicker. Then we bring the
-/// browser's existing sbxw tab forward via AppleScript, reusing it instead of
-/// spawning a new page. Only if no such tab exists do we cold-start one with the
-/// full `#sandbox=` deep link.
+/// Two cases, told apart by `/api/focus` reporting how many tabs received the
+/// request:
+///
+/// - **A tab is open** (`clients > 0`): it has switched itself in place, over
+///   SSE. All that is left is to *reveal* it — the AppleScript tab hunt, or
+///   plain app activation if that is unavailable. Nothing here loads a URL,
+///   because navigating an open tab reloads the whole UI: the panes are torn
+///   down and restored from the saved layout, which is the "clicking the island
+///   scrambles my layout" everybody has met.
+/// - **No tab is open**: cold-start one with the `#sandbox=` deep link, which is
+///   the only path that should ever open a URL.
 func openInBrowser(_ sandbox: String) {
-    // Fire-and-forget: switch the pane in any already-open tab.
-    if let focusURL = Config.url("/api/focus") {
-        let req: URLRequest = {
-            var r = URLRequest(url: focusURL)
-            r.httpMethod = "POST"
-            r.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            r.httpBody = try? JSONSerialization.data(withJSONObject: ["sandbox": sandbox])
-            r.timeoutInterval = 2
-            return r
-        }()
-        Task { _ = try? await URLSession.shared.data(for: req) }
+    // Half a second is an age on loopback: past it the daemon is not answering,
+    // and a cold start is a better guess than an island that feels dead.
+    guard let req = Config.jsonRequest("/api/focus", body: ["sandbox": sandbox], timeout: 0.5)
+    else {
+        coldStartTab(sandbox)
+        return
     }
-    // Bring the right tab forward (or open one if none exists). Small delay so
-    // the SSE switch above has landed before the tab is revealed.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-        if !focusExistingTab(), let url = Config.deepLink(sandbox: sandbox) {
-            NSWorkspace.shared.open(url)
+    Task { @MainActor in
+        var switched = false
+        if let result = try? await URLSession.shared.data(for: req),
+           let obj = (try? JSONSerialization.jsonObject(with: result.0)) as? [String: Any] {
+            switched = (obj["clients"] as? Int ?? 0) > 0
+        }
+        if switched {
+            if !focusExistingTab() { activateBrowser() }
+        } else {
+            coldStartTab(sandbox)
         }
     }
+}
+
+/// Open a tab on the `#sandbox=` deep link — the one path here that loads a URL,
+/// and so the one that must never run while a tab is already open.
+private func coldStartTab(_ sandbox: String) {
+    guard let url = Config.deepLink(sandbox: sandbox) else { return }
+    NSWorkspace.shared.open(url)
 }
 
 /// Open the session `info` actually lives in.

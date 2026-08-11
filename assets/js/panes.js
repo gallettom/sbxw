@@ -161,7 +161,6 @@ function createPane(index) {
   term.loadAddon(fit);
   if (typeof CanvasAddon !== 'undefined') term.loadAddon(new CanvasAddon.CanvasAddon());
   term.open(termEl);
-  fit.fit();
 
   let lastSelection = '';
   term.onSelectionChange(() => { const s = term.getSelection(); if (s) lastSelection = s; });
@@ -174,6 +173,10 @@ function createPane(index) {
     beforeMonitor: null,
     getLastSelection: () => lastSelection,
   };
+
+  // From here on the pane keeps itself fitted to its box; nothing else has to
+  // remember to re-fit it after a layout change.
+  observePaneSize(pane);
 
   // Focus pane on click inside it
   el.addEventListener('mousedown', () => setFocusedPane(index));
@@ -223,9 +226,88 @@ function setPaneMode(idx, mode, save = true) {
   if (save) saveLayout();
 }
 
+const termSize = pane => `${pane.term.cols}x${pane.term.rows}`;
+
+// Tell the PTY this pane's size, and record it *on the socket that carried it*.
+// A send on a socket that is not open yet is dropped by the browser without a
+// word, so a fresh socket having no record is the accurate starting state rather
+// than a thing to remember to reset — and when `closePane` shifts a socket to
+// another pane, what it was told travels with it.
 function sendPaneResize(pane) {
-  if (pane.ws && pane.ws.readyState === WebSocket.OPEN)
-    pane.ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols, rows: pane.term.rows }));
+  if (!pane.ws || pane.ws.readyState !== WebSocket.OPEN) {
+    termLog(pane, 'resize DROPPED (socket not open)');
+    return;
+  }
+  pane.ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols, rows: pane.term.rows }));
+  pane.ws.sentSize = termSize(pane);
+  termLog(pane, 'resize sent');
+}
+
+// Sizing trace, off unless asked for: `sbxwTermLog()` turns it on and remembers
+// across reloads, `sbxwTermLog(false)` stops it, `sbxwSizes()` prints the current
+// state once. It answers the only question a terminal drawn at the wrong width
+// raises — whether the mistake is in the measurement, in xterm, or in the PTY
+// (`/api/ptys` answers for that last one).
+let TERM_LOG = localStorage.getItem('sbxw:termlog') === '1';
+function sbxwTermLog(on = true) {
+  TERM_LOG = on;
+  try { on ? localStorage.setItem('sbxw:termlog', '1') : localStorage.removeItem('sbxw:termlog'); } catch (_) {}
+}
+function termLog(pane, what, box) {
+  if (!TERM_LOG) return;
+  const cell = pane.term._core?._renderService?.dimensions?.css?.cell;
+  console.log(
+    `[sbxw] pane ${pane.index} ${pane.sandbox || '—'} ${what}: ` +
+    `term ${termSize(pane)}, sent ${pane.ws?.sentSize || 'nothing'}, ` +
+    `box ${box || `${pane.termEl.offsetWidth}x${pane.termEl.offsetHeight}`}px, ` +
+    `cell ${cell ? `${cell.width?.toFixed(2)}x${cell.height?.toFixed(2)}` : '?'}px, ` +
+    `dpr ${window.devicePixelRatio}, hidden ${document.hidden}`
+  );
+}
+function sbxwSizes() { panes.slice(0, paneCount).forEach(p => termLog(p, 'state')); }
+
+// Re-measure one pane and reconcile the PTY with it.
+//
+// A TUI drawn into a fraction of its pane is always the two sides disagreeing:
+// xterm has one width, the PTY (shared by every viewer of that sandbox) has
+// another, and the TUI draws to the PTY's. The comparison is therefore against
+// what the socket was told, not against the previous fit: a resize can be
+// prepared and then dropped for want of an open socket, and a PTY inherited from
+// an earlier page has been told nothing at all.
+function fitPane(pane, why = 'fit') {
+  // One read of the box, before the fit writes to it — and the only thing that
+  // can say whether there is anything to measure. A hidden tab has no layout,
+  // and fitting from it would propose xterm's 80×24 default as if it were real.
+  const box = `${pane.termEl.offsetWidth}x${pane.termEl.offsetHeight}`;
+  if (!pane.termEl.offsetWidth || !pane.termEl.offsetHeight) {
+    termLog(pane, `${why} SKIPPED (no box to measure)`, box);
+    return;
+  }
+  pane.fit.fit();
+  termLog(pane, why, box);
+  if (termSize(pane) !== pane.ws?.sentSize) sendPaneResize(pane);
+}
+
+function refitPanes(why = 'refit') {
+  panes.slice(0, paneCount).forEach(p => fitPane(p, why));
+}
+
+// Keep a pane fitted to whatever box the layout gives it, whenever that changes:
+// window resized, devtools opened, grid switched, a hidden tab finally laid out.
+// One observer replaces every "fit 50ms after the thing that resized it" guess —
+// including the first fit, since observing an element reports its size straight
+// away. Being idempotent, it cannot make a correctly-sized terminal blink.
+//
+// Coalesced to one frame: the observer fires per box change, and fitting three
+// panes on a window drag should not send three resizes each.
+function observePaneSize(pane) {
+  if (typeof ResizeObserver === 'undefined') return;
+  let queued = false;
+  new ResizeObserver(() => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; fitPane(pane, 'box changed'); });
+  }).observe(pane.termEl);
 }
 
 // ── Attention notifications ────────────────────────────────────────────────
@@ -319,7 +401,10 @@ function connectPane(idx, name, mode) {
   pane.ws.onopen = () => {
     document.getElementById(`pdot-${idx}`).className = 'dot term-connected';
     document.getElementById(`pconn-${idx}`).textContent = 'connected';
-    pane.fit.fit(); sendPaneResize(pane);
+    // A brand-new socket has been told nothing, so this always announces the
+    // size — unless the pane has no box to measure, in which case it declines
+    // and the observer does it the moment there is one.
+    fitPane(pane, 'socket open');
     if (focusedPane === idx) pane.term.focus();
     loadSandboxes();
   };

@@ -978,6 +978,7 @@ pub async fn serve(
         .route("/api/watching", post(api_watching))
         .route("/api/watch-events", get(api_watch_events))
         .route("/api/sessions", get(api_sessions))
+        .route("/api/ptys", get(api_ptys))
         .route("/api/input", post(api_input))
         .route("/api/answer", post(api_answer))
         .route("/api/hook", post(api_hook))
@@ -1048,6 +1049,44 @@ async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
             .replace("__SANDBOX__", &state.initial_sandbox)
             .replace("__MONITOR__", &monitor),
     )
+}
+
+/// `GET /api/ptys` — the size every live PTY actually has, straight from
+/// `TIOCGWINSZ`.
+///
+/// Diagnostic: when a TUI draws into a fraction of its pane, the question is
+/// whether the browser's terminal and the PTY disagree, and this is the side
+/// that cannot be read from the browser. Kept out of `/api/sessions`, which
+/// answers from `statuses` — hook-derived agent lifecycle, a different map with
+/// different keys (a bash PTY has no status, a status outlives its PTY).
+async fn api_ptys(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json::Value>> {
+    // Cloned out of the map so the ioctls below don't run under its lock.
+    let entries: Vec<(String, Arc<PtySession>)> = state
+        .sessions
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    // `get_size` and `alive` are syscalls behind a std mutex — off the runtime,
+    // as everywhere else in this file that touches one.
+    let list = tokio::task::spawn_blocking(move || {
+        entries
+            .into_iter()
+            .map(|(key, s)| {
+                let size = s.master.lock().ok().and_then(|m| m.get_size().ok());
+                serde_json::json!({
+                    "key": key,
+                    "cols": size.map(|z| z.cols),
+                    "rows": size.map(|z| z.rows),
+                    "alive": s.alive(),
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    Json(list)
 }
 
 /// Live stream of session state transitions (Server-Sent Events). The macOS
@@ -3072,6 +3111,7 @@ async fn bridge(
     // Forward WebSocket input → PTY, and handle resize messages.
     let writer = session.writer.clone();
     let master = session.master.clone();
+    let key = session_key(&sandbox, &mode);
 
     while let Some(Ok(msg)) = ws_rx.next().await {
         match msg {
@@ -3094,14 +3134,38 @@ async fn bridge(
                         let cols = v.get("cols").and_then(|c| c.as_u64()).unwrap_or(100) as u16;
                         let rows = v.get("rows").and_then(|r| r.as_u64()).unwrap_or(30) as u16;
                         let m = master.clone();
+                        let key = key.clone();
                         let _ = tokio::task::spawn_blocking(move || {
                             if let Ok(m) = m.lock() {
-                                let _ = m.resize(PtySize {
+                                let before = m.get_size().ok();
+                                let res = m.resize(PtySize {
                                     rows,
                                     cols,
                                     pixel_width: 0,
                                     pixel_height: 0,
                                 });
+                                // The one place the browser's idea of the
+                                // terminal size meets the PTY's, so a TUI drawn
+                                // to the wrong width can be pinned on one side
+                                // or the other (`/api/ptys` reads the same
+                                // truth on demand). Only a size that actually
+                                // moved is worth a line: clients re-announce
+                                // freely, and those are no-ops the kernel does
+                                // not even signal.
+                                let moved = before.is_none_or(|b| b.cols != cols || b.rows != rows);
+                                match res {
+                                    Ok(()) if moved => tracing::info!(
+                                        "resize {key}: {} → {cols}x{rows}",
+                                        before.map_or_else(
+                                            || "?".to_string(),
+                                            |b| format!("{}x{}", b.cols, b.rows)
+                                        )
+                                    ),
+                                    Ok(()) => {}
+                                    Err(e) => {
+                                        tracing::warn!("resize {key} to {cols}x{rows} failed: {e}")
+                                    }
+                                }
                             }
                         })
                         .await;
