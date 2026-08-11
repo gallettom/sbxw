@@ -393,11 +393,14 @@ struct SessionRow: View {
         8 + (canOpen ? 20 : 0) + (showDismiss ? 20 : 0)
     }
 
-    /// Show a dismiss ✕ while the row wants something from you — an explicit
-    /// `attention`, or a turn that ended and is holding the collapsed notch
-    /// open. Both are dismissible, so both need the affordance.
+    /// Show a dismiss ✕ while the row is holding the notch: an explicit
+    /// `attention`, a turn that ended, or one still working. All three keep the
+    /// collapsed bubble on screen, so all three need the affordance — a working
+    /// row having none was how a long turn became impossible to wave off.
     private var showDismiss: Bool {
-        (waiting || (session.awaitingReply && !acknowledged)) && onDismiss != nil
+        let holdsNotch = waiting
+            || ((session.awaitingReply || session.state == .working) && !acknowledged)
+        return holdsNotch && onDismiss != nil
     }
 
     var body: some View {
@@ -695,7 +698,7 @@ struct IslandView: View {
                 // pending it would be a dead control on every list.
                 if store.dismissable.count > 1 {
                     DismissAllButton(count: store.dismissable.count) {
-                        store.acknowledgeAll()
+                        store.dismissAll()
                         onHeightChange()
                     }
                 }
@@ -703,7 +706,9 @@ struct IslandView: View {
                     SessionRow(
                         session: session,
                         store: store,
-                        acknowledged: store.isAcknowledged(session),
+                        // One flag for "the user has waved this row off",
+                        // whichever of the two mechanisms holds the dismissal.
+                        acknowledged: store.isAcknowledged(session) || store.isWorkingHushed(session),
                         // Only a sandbox running more than one agent needs its
                         // rows told apart; a lone session wears no badge.
                         sharesSandbox: store.sharesSandbox(session),
@@ -711,11 +716,11 @@ struct IslandView: View {
                         onSelect: { s in
                             // Case 2: opening the sandbox counts as checking its
                             // notification, so dismiss it too.
-                            store.acknowledge(s)
+                            store.dismiss(s)
                             onSelect(s)
                         },
                         // Case 1: the explicit ✕ dismisses without navigating.
-                        onDismiss: { store.acknowledge($0) },
+                        onDismiss: { store.dismiss($0) },
                         onToggle: { toggle(session) },
                         onComposerFocus: onComposerFocus
                     )

@@ -120,8 +120,9 @@ final class NotchController: ObservableObject {
         }
         // Auto-surface / refresh / dismiss the pending question card. Re-evaluate
         // on acknowledgement changes too, so dismissing one clears the notch.
-        store.$sessions.combineLatest(store.$acknowledged)
-            .sink { [weak self] sessions, _ in
+        // …and on hushes, which retire the collapsed bubble the same way.
+        store.$sessions.combineLatest(store.$acknowledged, store.$hushedWorking)
+            .sink { [weak self] sessions, _, _ in
                 MainActor.assumeIsolated { self?.onSessionsChanged(sessions) }
             }
             .store(in: &cancellables)

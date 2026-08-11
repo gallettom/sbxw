@@ -59,6 +59,18 @@ final class SessionStore: ObservableObject {
     /// until the session asks something genuinely different.
     @Published private(set) var acknowledged: [String: Ack] = [:]
 
+    /// Working sessions the user has waved off, by session id → the input that
+    /// was in flight when they did.
+    ///
+    /// Kept apart from `acknowledged` on purpose. That map is about *questions*,
+    /// and its rules exist to carry a waved-off prompt through the end of its
+    /// turn — an empty key leaves the dismissal standing precisely so a prompt
+    /// you shrugged off doesn't come back as "waiting for your reply". A working
+    /// session is asking nothing, so hushing one means only "stop occupying the
+    /// notch while you work": the turn's *answer* is news again, and those rules
+    /// would have swallowed it.
+    @Published private(set) var hushedWorking: [String: String] = [:]
+
     /// One dismissal: what it was about, and which turn it belonged to.
     struct Ack: Equatable {
         /// `ackKey` at dismissal time — empty for a bare waiting turn.
@@ -135,7 +147,10 @@ final class SessionStore: ObservableObject {
             // "waiting for your reply" and put the very session they'd just
             // dismissed straight back on the notch in teal.
             ?? sessions.first { $0.awaitingReply && !isAcknowledged($0) }
-            ?? sessions.first { $0.state == .working }
+            // A long turn used to nail the bubble to the notch: `working` is a
+            // state rather than a request, so nothing could retire it and no
+            // gesture in the app tried to. It is hushable now — for that turn.
+            ?? sessions.first { $0.state == .working && !isWorkingHushed($0) }
     }
 
     /// What a dismissal is *about*, so it can outlive the state flicker around
@@ -167,9 +182,41 @@ final class SessionStore: ObservableObject {
         return current.isEmpty || current == ack.key
     }
 
-    /// Dismiss a session's current "waiting for input" notification in the island
-    /// (the user checked it — via the row's ✕ or by opening the sandbox). No-op
-    /// unless it's actually waiting.
+    /// Has the user waved off this session's *working* bubble, for the turn it
+    /// is still on? A new prompt changes `last_input` and the bubble is back.
+    func isWorkingHushed(_ s: SessionInfo) -> Bool {
+        s.state == .working && hushedWorking[s.id] == (s.last_input ?? "")
+    }
+
+    /// Sessions a dismissal would actually do something to — what "dismiss all"
+    /// acts on, and what decides whether offering it makes sense at all.
+    var dismissable: [SessionInfo] {
+        sessions.filter {
+            (($0.state == .attention || $0.awaitingReply) && !isAcknowledged($0))
+                || ($0.state == .working && !isWorkingHushed($0))
+        }
+    }
+
+    /// Take a row off the notch, whatever kind of attention it is holding: the
+    /// question it is asking, the answer it is sitting on, or the work it is
+    /// making noise about. One gesture for the user, two mechanisms underneath —
+    /// each half no-ops where it doesn't apply.
+    func dismiss(_ session: SessionInfo) {
+        acknowledge(session)
+        hushWorking(session)
+    }
+
+    /// Clear the notch in one gesture instead of one ✕ per row.
+    func dismissAll() {
+        let targets = dismissable
+        guard !targets.isEmpty else { return }
+        Log.log("dismiss all (\(targets.count))")
+        for s in targets { dismiss(s) }
+    }
+
+    /// Retire a session's current "waiting for input" notification (the user
+    /// checked it — via the row's ✕ or by opening the sandbox). No-op unless it
+    /// is actually waiting.
     ///
     /// "Waiting" covers a turn that simply *ended* as well as an explicit
     /// `attention`: a session that answered keeps the collapsed notch on screen
@@ -177,27 +224,22 @@ final class SessionStore: ObservableObject {
     /// no way to retire it — the pill outlived every reply for good. An idle
     /// session's `ackKey` is empty, so the dismissal stands until you submit
     /// again, which retires it through `isAcknowledged`.
-    /// Sessions a dismissal would actually do something to — what "dismiss all"
-    /// acts on, and what decides whether offering it makes sense at all.
-    var dismissable: [SessionInfo] {
-        sessions.filter { ($0.state == .attention || $0.awaitingReply) && !isAcknowledged($0) }
-    }
-
-    /// Dismiss everything that is currently asking for something. Clearing the
-    /// notch in one gesture instead of one ✕ per row.
-    func acknowledgeAll() {
-        let targets = dismissable
-        guard !targets.isEmpty else { return }
-        Log.log("acknowledge all (\(targets.count))")
-        for s in targets { acknowledge(s) }
-    }
-
     func acknowledge(_ session: SessionInfo) {
         guard session.state == .attention || session.awaitingReply else { return }
         let ack = Ack(key: ackKey(session), lastInput: session.last_input)
         guard acknowledged[session.id] != ack else { return }
         acknowledged[session.id] = ack
         Log.log("acknowledge \(session.id) key=\(ack.key.prefix(60))")
+    }
+
+    /// The `working` counterpart: silence the notch for the turn in flight,
+    /// without touching what the session may later ask.
+    func hushWorking(_ session: SessionInfo) {
+        guard session.state == .working else { return }
+        let turn = session.last_input ?? ""
+        guard hushedWorking[session.id] != turn else { return }
+        hushedWorking[session.id] = turn
+        Log.log("hush working \(session.id)")
     }
 
     /// A browser tab is now showing this sandbox's terminal (`/api/watch-events`).
@@ -210,12 +252,14 @@ final class SessionStore: ObservableObject {
     ///
     /// Nothing about this is permanent: the acknowledgement is keyed on what was
     /// being asked, so a genuinely new question raises the island again even
-    /// though the tab never stopped watching.
+    /// though the tab never stopped watching. A working session is hushed for
+    /// the same reason and on the same terms: watching it work is not a thing
+    /// the notch needs to announce.
     func acknowledgeWatched(_ sandbox: String) {
         let targets = sessions.filter { $0.sandbox == sandbox }
         if !targets.isEmpty {
-            Log.log("watched \(sandbox) — acknowledging \(targets.count) session(s)")
-            for s in targets { acknowledge(s) }
+            Log.log("watched \(sandbox) — dismissing \(targets.count) session(s)")
+            for s in targets { dismiss(s) }
         }
         onWatched?(sandbox)
     }
@@ -408,6 +452,16 @@ final class SessionStore: ObservableObject {
             keptAcks[s.id] = acknowledged[s.id]
         }
         if keptAcks != acknowledged { acknowledged = keptAcks }
+        // Hushes are dropped only with the session itself. Not on "no longer
+        // working", deliberately: a turn dips through `idle` for a tick between
+        // steps, and re-arming there would put the bubble back mid-turn — the
+        // same blip the acknowledgement keys above exist to ride out.
+        // `isWorkingHushed` already ignores an entry that no longer applies.
+        var keptHushes: [String: String] = [:]
+        for s in out {
+            if let hush = hushedWorking[s.id] { keptHushes[s.id] = hush }
+        }
+        if keptHushes != hushedWorking { hushedWorking = keptHushes }
         let summary = out.map { "\($0.sandbox):\($0.state.rawValue)" }.joined(separator: ", ")
         Log.log("rebuild: \(out.count) rows (live=\(live.count), running=\(running.count)) [\(summary)]")
     }
