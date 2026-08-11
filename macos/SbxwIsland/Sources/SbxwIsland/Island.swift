@@ -211,18 +211,91 @@ func openInBrowser(_ sandbox: String) {
     }
 }
 
+/// Open the session `info` actually lives in.
+///
+/// A session started over SSH is not in the browser terminal — that terminal
+/// holds the *other* agent of the same sandbox, so sending the user there would
+/// answer the wrong question a second time. When a Claude client is running,
+/// bring it forward instead; it is the only surface that has the conversation.
+///
+/// Matched by bundle identifier at runtime rather than against a hard-coded id,
+/// because the island cannot verify what Claude Desktop ships as, and guessing
+/// wrong would silently do nothing. If no such app is running we fall back to
+/// the browser, which at least lands on the right sandbox.
+/// Bring another app's window to the front — not merely make the app *active*.
+///
+/// `NSRunningApplication.activate` switches which app owns the menu bar and
+/// stops there: the window stays where it was in the stacking order, and an app
+/// that was hidden stays hidden. From the island that reads as a bug — the top
+/// bar says Claude, the window never appears.
+///
+/// Asking LaunchServices to open the already-running bundle with
+/// `activates: true` is the equivalent of clicking its Dock icon, which is the
+/// gesture that actually unhides and raises. `unhide()` first because a hidden
+/// app has nothing to raise, and the `activate` call is kept as the fallback for
+/// an app whose bundle URL we cannot read.
+private func bringToFront(_ app: NSRunningApplication) {
+    app.unhide()
+    guard let url = app.bundleURL else {
+        app.activate(options: [.activateAllWindows])
+        return
+    }
+    let config = NSWorkspace.OpenConfiguration()
+    config.activates = true
+    NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+        if let error {
+            Log.log("bringToFront \(app.localizedName ?? "?") failed: \(error.localizedDescription)")
+            // Better the menu bar than nothing.
+            DispatchQueue.main.async { app.activate(options: [.activateAllWindows]) }
+        }
+    }
+}
+
+func openWhereItRuns(_ info: SessionInfo) {
+    guard info.isRemote else {
+        openInBrowser(info.sandbox)
+        return
+    }
+    let mine = Bundle.main.bundleIdentifier
+    let candidates = NSWorkspace.shared.runningApplications.filter {
+        $0.activationPolicy == .regular && $0.bundleIdentifier != mine
+    }
+    let claude = candidates.first { app in
+        let id = (app.bundleIdentifier ?? "").lowercased()
+        let name = (app.localizedName ?? "").lowercased()
+        return id.contains("claude") || name.contains("claude")
+    }
+    if let claude {
+        Log.log("open session \(info.id) in \(claude.localizedName ?? "Claude")")
+        bringToFront(claude)
+        return
+    }
+    // Name what *was* running: if the match ever fails, the log has to say
+    // enough to fix the test in one round trip instead of guessing again.
+    Log.log(
+        "open session \(info.id): no Claude app among "
+            + candidates.map { "\($0.localizedName ?? "?")/\($0.bundleIdentifier ?? "?")" }
+                .joined(separator: ", ")
+            + " — falling back to the browser"
+    )
+    openInBrowser(info.sandbox)
+}
+
 struct SessionRow: View {
     let session: SessionInfo
     /// Needed by the drawer's composer, which writes into this row's sandbox.
     @ObservedObject var store: SessionStore
     /// Whether the user has already dismissed this session's waiting notification.
     var acknowledged: Bool = false
+    /// Whether another agent session is live in the same sandbox — the only
+    /// case where a row has to say which of the two it is.
+    var sharesSandbox: Bool = false
     /// Whether this row's accordion is open. Owned by the list rather than by
     /// the row (see `IslandView.expanded`), so it survives the store's rebuilds
     /// and the panel can be told that something is open.
     var expanded: Bool = false
     /// Called when the row is tapped (e.g. show the prompt card, or jump).
-    var onSelect: (SessionInfo) -> Void = { openInBrowser($0.sandbox) }
+    var onSelect: (SessionInfo) -> Void = { openWhereItRuns($0) }
     /// Called when the user taps the row's ✕ to dismiss its waiting state. Absent
     /// (no ✕) where dismissal doesn't apply.
     var onDismiss: ((SessionInfo) -> Void)? = nil
@@ -312,9 +385,33 @@ struct SessionRow: View {
                     .frame(width: 8, height: 8)
                     .padding(.top, 4)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.sandbox)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
+                    HStack(spacing: 5) {
+                        Text(session.sandbox)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white)
+                        // Two agents can share a container — the one sbxw
+                        // attached and anything started over SSH. Their rows
+                        // are otherwise the same sandbox name twice, so each
+                        // says where it came from. Only when there is something
+                        // to disambiguate: a lone session needs no badge.
+                        if sharesSandbox, let origin = session.originLabel {
+                            HStack(spacing: 3) {
+                                Image(systemName: session.isRemote
+                                    ? "macwindow"
+                                    : "apple.terminal")
+                                    .font(.system(size: 8))
+                                Text(origin)
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            }
+                            .foregroundStyle(.white.opacity(0.6))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Capsule())
+                            .help(session.cwdLabel.map { "Runs in \(origin), from \($0)" }
+                                ?? "Runs in \(origin)")
+                        }
+                    }
                     if let input = session.last_input, !input.isEmpty {
                         Text("You: \(input)")
                             .font(.system(size: 10))
@@ -425,7 +522,25 @@ struct SessionRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            RowChat(sandbox: session.sandbox, store: store, onFocusChange: onComposerFocus)
+            // The composer addresses the *sandbox*, and `/api/chat/push` types
+            // into the one PTY sbxw holds for it. On a row sbxw cannot address
+            // — a second agent attached over SSH — that PTY belongs to the
+            // other session, so a field here would send your message to a
+            // different conversation than the row you opened. Same reason a
+            // Bash pane has no composer; the reply above is still worth
+            // reading, so only the field goes.
+            if session.canAnswer {
+                RowChat(sandbox: session.sandbox, store: store, onFocusChange: onComposerFocus)
+            } else {
+                Label(
+                    session.isRemote
+                        ? "This session runs in Claude Desktop — type in it there."
+                        : "Another agent shares this sandbox — type in its own session.",
+                    systemImage: session.isRemote ? "macwindow" : "person.2.fill"
+                )
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.5))
+            }
         }
         // Lines up under the sandbox name, past the status dot.
         .padding(.leading, 25)
@@ -482,7 +597,7 @@ struct SessionRow: View {
 struct IslandView: View {
     @ObservedObject var store: SessionStore
     /// Row tap handler. Defaults to opening the sandbox in the browser.
-    var onSelect: (SessionInfo) -> Void = { openInBrowser($0.sandbox) }
+    var onSelect: (SessionInfo) -> Void = { openWhereItRuns($0) }
     /// Told when a chat composer takes or gives up keyboard focus. The notch
     /// panel uses it to become key (it can't be typed into otherwise) and to
     /// hold the list open while the user writes; the menu-bar popover, where
@@ -548,6 +663,9 @@ struct IslandView: View {
                         session: session,
                         store: store,
                         acknowledged: store.isAcknowledged(session),
+                        // Only a sandbox running more than one agent needs its
+                        // rows told apart; a lone session wears no badge.
+                        sharesSandbox: store.sharesSandbox(session),
                         expanded: expanded.contains(session.id),
                         onSelect: { s in
                             // Case 2: opening the sandbox counts as checking its
@@ -1144,16 +1262,64 @@ struct QuestionCard: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
-                VStack(spacing: 5) {
-                    ForEach(Array(step.options.enumerated()), id: \.offset) { idx, option in
-                        optionButton(index: idx + 1, text: option)
+                if session.canAnswer {
+                    VStack(spacing: 5) {
+                        ForEach(Array(step.options.enumerated()), id: \.offset) { idx, option in
+                            optionButton(index: idx + 1, text: option)
+                        }
                     }
+                } else {
+                    readOnlyOptions(step)
                 }
             }
             footer
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The choices, shown but not offered.
+    ///
+    /// The prompt is still worth seeing — it is why the island lit up — but
+    /// this sandbox runs more than one agent, and sbxw holds a single PTY it
+    /// cannot map to a session. Picking here would answer whichever terminal it
+    /// happens to own, which may be the other one's question. So the card says
+    /// where the answer belongs instead of guessing.
+    private func readOnlyOptions(_ step: Question) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(step.options.enumerated()), id: \.offset) { idx, option in
+                HStack(spacing: 6) {
+                    Text("\(idx + 1)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .frame(width: 14)
+                    Text(option)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+            }
+            HStack(spacing: 5) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 9))
+                Text(sharedSandboxNote)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(.white.opacity(0.55))
+            .padding(.top, 2)
+        }
+    }
+
+    private var sharedSandboxNote: String {
+        let seat = session.cwdLabel.map { " (\($0))" } ?? ""
+        if session.isRemote {
+            return "This session runs in Claude Desktop\(seat) — sbxw holds no terminal for "
+                + "it. Answer there."
+        }
+        return "\(session.sandbox) is running more than one agent and sbxw can't tell which "
+            + "terminal asked. Answer in the session itself\(seat)."
     }
 
     private var header: some View {
@@ -1232,11 +1398,13 @@ struct QuestionCard: View {
                 .keyboardShortcut(.leftArrow, modifiers: .command)
             }
             Button {
-                openInBrowser(session.sandbox)
+                // Where the session *is*, which for an SSH one is the Claude
+                // client — the browser terminal holds the other agent.
+                openWhereItRuns(session)
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up.forward.app")
-                    Text("Go to browser")
+                    Text(session.isRemote ? "Go to Desktop" : "Go to browser")
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.55))
@@ -1453,11 +1621,15 @@ struct NotchContentView: View {
                 store: store,
                 onSelect: { info in
                     // Tapping a waiting-with-prompt row opens its answer card;
-                    // anything else jumps to the browser.
+                    // anything else jumps to wherever that session actually
+                    // runs — the browser terminal for sbxw's own, the Claude
+                    // client for one it merely watches. `openWhereItRuns`, not
+                    // `openInBrowser`: this closure overrides the row's default,
+                    // so it is the only routing that runs on this path.
                     if info.state == .attention, !info.promptSteps.isEmpty {
                         controller.showQuestion(info)
                     } else {
-                        openInBrowser(info.sandbox)
+                        openWhereItRuns(info)
                     }
                 },
                 onComposerFocus: { controller.setComposerActive($0) },

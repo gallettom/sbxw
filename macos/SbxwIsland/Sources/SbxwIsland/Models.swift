@@ -34,9 +34,73 @@ struct SessionInfo: Codable, Equatable, Identifiable {
     /// What Claude last said, read off the transcript when its turn ended.
     /// Absent on an older daemon, and while a turn is in flight.
     let reply: String?
+    /// Claude Code's own session id. Absent on an older daemon, and on a
+    /// sandbox row synthesised from the running-sandboxes poll.
+    var session_id: String? = nil
+    /// The directory this session runs in — what tells two agents of the same
+    /// sandbox apart on screen.
+    var cwd: String? = nil
+    /// Whose session this is — `tty` (the terminal sbxw attached), `remote` (a
+    /// client driving it: Claude Desktop, an editor, a shell on `<name>.sbx`)
+    /// or `unknown`. Established inside the sandbox, not guessed.
+    var origin: String? = nil
+    /// Whether the daemon can answer this session's prompt by typing into a
+    /// terminal it owns. Absent on an older daemon, which only ever reported
+    /// one session per sandbox and could always answer it.
+    var answerable: Bool? = nil
     let ts: UInt64?
 
-    var id: String { "\(sandbox)::\(mode)" }
+    /// One container can hold several agents — sbxw's own, plus any driven by
+    /// an attached client (Claude Desktop, an editor). They are distinct
+    /// sessions and get a row each, so the session id is part of the identity.
+    var id: String { "\(sandbox)::\(mode)::\(session_id ?? "")" }
+
+    /// Identity of the *sandbox pane*, without the session. What the running
+    /// sandboxes poll and the focus/watch plumbing address.
+    var sandboxKey: String { "\(sandbox)::\(mode)" }
+
+    /// Can the island answer this prompt for you?
+    ///
+    /// Defaults to true so a daemon that predates the field behaves as it
+    /// always did: it reported one session per sandbox, and that one was always
+    /// sbxw's own. The daemon enforces this too — the island not offering the
+    /// button is the courtesy, the refusal is the guarantee.
+    var canAnswer: Bool { answerable ?? true }
+
+    /// Is this session driven by a client rather than by sbxw — Claude Desktop,
+    /// an editor, a shell on `<name>.sbx`? Only ever true on evidence: an origin
+    /// the sandbox could not establish reads as "not remote" rather than as a
+    /// suspicion.
+    ///
+    /// `ssh` is the name this carried before it was widened: Claude Desktop
+    /// turned out not to use SSH at all, it runs its own server in the
+    /// container. The app and the daemon ship as separate binaries and update
+    /// independently, so a version of one that predates the rename must not
+    /// leave the other showing nothing at all — which is exactly what an
+    /// unrecognised value does, silently.
+    var isRemote: Bool { origin == "remote" || origin == "ssh" }
+
+    /// The badge a row wears when its sandbox holds more than one agent, so the
+    /// same name is not printed twice with nothing to tell them apart.
+    ///
+    /// Says *whose session it is*, which is the question being asked — a
+    /// directory name could not answer it, and a folder called `Desktop`
+    /// actively answered the wrong one.
+    /// The daemon's `remote` is deliberately broader than this label: it also
+    /// covers a plain `ssh <name>.sbx` from a terminal or an editor. "Desktop"
+    /// names the case that actually occurs, and reads as the thing you would
+    /// switch to; the wire value stays accurate underneath.
+    var originLabel: String? {
+        switch origin {
+        case "remote", "ssh": return "Desktop"
+        case "tty": return "tty"
+        // `unknown` and a missing origin genuinely have nothing to say. Any
+        // *other* value comes from a daemon newer than this app: show it as it
+        // came rather than swallowing the row's only distinguishing mark.
+        case let other?: return other == "unknown" ? nil : other
+        case nil: return nil
+        }
+    }
 
     /// Opening sentence of Claude's reply — the row's one-line caption.
     ///
@@ -74,6 +138,32 @@ struct SessionInfo: Codable, Equatable, Identifiable {
     var promptSteps: [Question] {
         if let steps, !steps.isEmpty { return steps }
         return question.map { [$0] } ?? []
+    }
+
+    /// `cwd` shortened for a row: the sandbox's home collapses to `~`, and a
+    /// long path keeps its last two components.
+    ///
+    /// A *path*, deliberately, and never the bare last component. A session
+    /// sitting in `~/Desktop` would otherwise be badged "Desktop", which reads
+    /// as the Claude Desktop client rather than as a directory — and on a
+    /// shared sandbox those are exactly the two things a reader is trying to
+    /// tell apart, so the one label would answer the wrong question. The badge
+    /// carries `originLabel` now; this is the secondary detail, in a tooltip.
+    var cwdLabel: String? {
+        guard let cwd, !cwd.isEmpty else { return nil }
+        // The container's home, not the Mac's: these paths are reported by a
+        // hook running inside the sandbox, where the agent user is `agent`.
+        var path = cwd
+        for home in ["/home/agent", "/root"] {
+            if path == home { return "~" }
+            if path.hasPrefix(home + "/") {
+                path = "~" + String(path.dropFirst(home.count))
+                break
+            }
+        }
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.count > 2 else { return path }
+        return "…/" + parts.suffix(2).joined(separator: "/")
     }
 
     /// Seconds since the session's PTY started (0 if unknown).

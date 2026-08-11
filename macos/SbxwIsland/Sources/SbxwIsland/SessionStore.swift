@@ -244,7 +244,16 @@ final class SessionStore: ObservableObject {
     /// Answer a session's pending prompt: one 1-based option number per step,
     /// in tab order. The daemon replays them as the keystrokes a user would
     /// type, so a multi-question prompt is submitted in one go.
+    ///
+    /// Refused for a session sbxw cannot address: with two agents in one
+    /// container the daemon owns a PTY but cannot say which of them it drives,
+    /// and an answer typed into the wrong terminal answers the wrong question.
+    /// The daemon rejects it too (`409`) — this only avoids the round trip.
     func answer(_ session: SessionInfo, indices: [Int]) {
+        guard session.canAnswer else {
+            Log.log("answer \(session.id) refused — sandbox has more than one agent session")
+            return
+        }
         Log.log("answer \(session.id) indices=\(indices)")
         post("/api/answer", body: [
             "sandbox": session.sandbox, "mode": session.mode, "indices": indices,
@@ -252,10 +261,30 @@ final class SessionStore: ObservableObject {
     }
 
     /// Write raw input into a session's PTY.
+    ///
+    /// Addressed by sandbox and mode, so on a sandbox running several agents it
+    /// reaches whichever one sbxw attached — not necessarily the row this was
+    /// called for. Guarded here for the same reason `answer` is, even though
+    /// nothing calls it today: the trap is in the signature, which takes a
+    /// session and cannot honour it.
     func input(_ session: SessionInfo, data: String) {
+        guard session.canAnswer else {
+            Log.log("input \(session.id) refused — sandbox has more than one agent session")
+            return
+        }
         post("/api/input", body: [
             "sandbox": session.sandbox, "mode": session.mode, "data": data,
         ])
+    }
+
+    /// Is another agent session live in the same sandbox as `session`?
+    ///
+    /// What decides whether a row needs to announce where it came from: with
+    /// one session the sandbox name says everything, with two it says nothing.
+    func sharesSandbox(_ session: SessionInfo) -> Bool {
+        sessions.contains {
+            $0.sandbox == session.sandbox && $0.mode == session.mode && $0.id != session.id
+        }
     }
 
     /// Progress of `target`'s last push — `.idle` for one never pushed to.
@@ -350,10 +379,14 @@ final class SessionStore: ObservableObject {
         }
 
         var out: [SessionInfo] = []
+        // By *pane*, not by session id: a sandbox with any live agent needs no
+        // idle placeholder, and matching on the full id would let a session
+        // carrying one (`neos::claude::5f2c`) sit beside a phantom idle row for
+        // the same sandbox (`neos::claude::`).
         var seen = Set<String>()
-        for (key, info) in live {
+        for (_, info) in live {
             out.append(info)
-            seen.insert(key)
+            seen.insert(info.sandboxKey)
         }
         for item in running {
             let key = "\(item.name)::claude"
@@ -366,7 +399,13 @@ final class SessionStore: ObservableObject {
                 ))
             }
         }
-        out.sort { ($0.sandbox, $0.mode) < ($1.sandbox, $1.mode) }
+        // Siblings of one sandbox order by start time, then session id, so two
+        // agents in one container keep a stable position between rebuilds
+        // instead of swapping rows on every publish.
+        out.sort {
+            ($0.sandbox, $0.mode, $0.started_ms, $0.session_id ?? "")
+                < ($1.sandbox, $1.mode, $1.started_ms, $1.session_id ?? "")
+        }
         sessions = out
 
         // Re-arm the notification only when a session asks something *different*

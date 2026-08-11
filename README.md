@@ -208,8 +208,17 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   sandbox on the way in. (Previously it just failed, and you had to attach the
   agent first purely to boot the thing.) That fallback needs
   [SSH](#ssh-experimental) set up — the pane tells you so if it isn't.
-- **Copy the SSH command** (SSH button in the terminal bar) for the attached
-  sandbox — `ssh <name>.sbx`, ready to paste into a terminal or a remote-dev tool.
+- **SSH connection details** (SSH button in the terminal bar) for the attached
+  sandbox: a popover hung off the button, with one copy button per field of a
+  client's *Add SSH connection* form — **Name**, **SSH Host** (`<name>.sbx`), and
+  **SSH Port** / **Identity File** shown greyed as *leave empty*, because the
+  managed `Host *.sbx` block supplies the user, the key and a ProxyCommand and
+  filling those two overrides the only thing that makes the connection work. A
+  last row gives the whole thing as one shell command, `ssh <name>.sbx`. The
+  fields are copyable separately because they go into separate boxes — pasting
+  the command and re-splitting it by hand is the step this replaces. A reference
+  card is not a decision, so it dims nothing: click the button again, click
+  away, or press Escape.
 - **Open the host monitor** (the screen icon in the sidebar header) in the
   focused pane: sbx's own all-sandboxes
   dashboard, run in a PTY and streamed to the browser like any other pane, so a
@@ -278,6 +287,50 @@ On top of that:
   (**⌘1/⌘2/…**) — picking one sends the answer straight into the session. A
   prompt with several questions is walked step by step (**1/2**, **⌘←** to go
   back) and submitted in one go once the last one is picked;
+- **several agents in one sandbox each get a row, and the island says which is
+  which.** A container can hold more than one Claude Code session — the one sbxw
+  attached, plus anything started over SSH (Claude Desktop, an editor, a shell
+  on `<name>.sbx`). They all read the same in-sandbox `~/.claude/settings.json`,
+  so they all report to the daemon; sessions are keyed by Claude Code's own
+  `session_id` so they no longer overwrite each other's state.
+
+  Which is which is **established, not guessed**, from three signals — any one
+  marker of a client is enough, and the working directory settles the rest:
+
+  1. **The process the client runs in the container.** sbxw's own session is
+     `node < claude`; Claude Desktop's is `node < 2.1.222 < server` — it runs its
+     own server inside the sandbox, the way an editor's remote extension does.
+     An `sshd` ancestor counts the same way, for a plain `ssh <name>.sbx`.
+  2. **sshd's environment** — `SSH_CONNECTION` / `SSH_CLIENT` / `SSH_TTY`,
+     conclusive when present. Claude Desktop sets none of them, so their absence
+     proves nothing. (`SSH_AUTH_SOCK` is deliberately excluded: sbx forwards an
+     agent into every sandbox, so it is always set and would label everything
+     remote.) Names are reported, never values — `SSH_CONNECTION` carries the
+     client's IP.
+  3. **The working directory.** sbxw records the workspace each sandbox was
+     created with and the agent it attaches starts there, while a client lands
+     wherever it chose (`/home/agent/workspace` for Claude Desktop). Needs no
+     hook support, so it also covers sandboxes provisioned before any of this.
+
+  Rows are badged `tty` or `Desktop` accordingly, and **clicking a `Desktop` row
+  brings the Claude client forward** rather than the browser terminal, which
+  holds the *other* agent. The daemon's own value is `remote`, which is broader:
+  it also covers a plain `ssh <name>.sbx` from a terminal or an editor. The
+  island names the case that actually occurs and reads as the thing you would
+  switch to; the wire stays accurate underneath.
+
+  The hook is rewritten into the container at provisioning time, so a sandbox
+  that is merely re-attached keeps the one it was created with. When the daemon
+  sees an event from a hook too old to answer the question it says so once, and
+  names the fix (`sbxw up <name>`).
+
+  Only the `tty` session can be typed into from the island: sbxw holds one PTY
+  per sandbox and that is the session it drives. An `ssh` row shows its prompt
+  with the options greyed out and points you at the client. When the evidence is
+  missing — an unreadable `/proc`, a hook older than this, or two sessions both
+  claiming the tty — *neither* row is answerable, because answering the wrong
+  terminal answers someone else's question. The daemon enforces the same rule
+  (`409`), so an older island build cannot type past it either;
 - **hovering** the notch reveals the full list — with each session's elapsed
   time and, at the top, your **Claude subscription usage** (5-hour and weekly
   window %) — auto-hiding 1 s after you leave (5 s with a row open, so a reply

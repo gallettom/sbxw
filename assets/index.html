@@ -134,6 +134,45 @@
   .modal-close:hover { color: #e6edf3; background: #21262d; }
   .modal-body { padding: .9rem 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: .65rem; }
   .modal-foot { padding: .75rem 1rem; border-top: 1px solid #21262d; display: flex; justify-content: flex-end; gap: .5rem; flex-shrink: 0; }
+  /* ── SSH connection details ──
+     A popover hung off the SSH button rather than a modal: this is a reference
+     card you copy two values out of, not a decision to make, so it has no
+     business dimming the terminal behind it. `position: fixed` keeps it out of
+     the pane's overflow clipping; JS places it (see `positionSshPop`). */
+  .ssh-pop {
+    position: fixed; z-index: 300; top: 0; left: 0;
+    width: 420px; max-width: 92vw;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(1, 4, 9, .8);
+    padding: .6rem .75rem;
+    display: flex; flex-direction: column; gap: .45rem;
+  }
+  .ssh-pop.hidden { display: none; }
+  .ssh-pop-head { display: flex; align-items: center; justify-content: space-between; }
+  .ssh-pop-title { color: #e6edf3; font-weight: 600; font-size: 12px; }
+  .ssh-row { display: flex; align-items: center; gap: .5rem; padding: .35rem 0; }
+  .ssh-row + .ssh-row { border-top: 1px solid #21262d; }
+  .ssh-row .ssh-key {
+    color: #8b949e; font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .05em; flex: 0 0 104px;
+  }
+  .ssh-row .ssh-val {
+    flex: 1; min-width: 0; background: #0d1117; border: 1px solid #30363d;
+    border-radius: 6px; color: #e6edf3; padding: .3rem .55rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+    overflow-x: auto; white-space: nowrap;
+  }
+  /* A field that must stay empty is shown, not hidden: knowing *not* to fill
+     it is the point. It reads as absent rather than as a value to copy. */
+  .ssh-row.ssh-empty .ssh-val {
+    color: #6e7681; font-style: italic; background: transparent; border-style: dashed;
+  }
+  .ssh-copy {
+    flex: 0 0 auto; background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+    color: #c9d1d9; font: inherit; font-size: 11px; padding: .3rem .55rem; cursor: pointer;
+  }
+  .ssh-copy:hover { background: #30363d; color: #e6edf3; }
+  .ssh-copy.copied { border-color: #238636; color: #3fb950; }
   .field-label { color: #8b949e; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem; display: block; }
   .field-input {
     width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
@@ -822,6 +861,29 @@
     </div>
   </div>
 
+  <!-- ── SSH connection details ──
+       What to type into an SSH client's "add a connection" form (Claude
+       Desktop's is the one this is shaped after), plus the one-liner for a
+       terminal. Every value is copyable on its own, because they go into
+       separate fields — copying the whole command and re-splitting it by hand
+       is exactly the step this replaces. -->
+  <div class="ssh-pop hidden" id="ssh-pop" role="dialog" aria-labelledby="ssh-pop-title">
+    <div class="ssh-pop-head">
+      <span class="ssh-pop-title" id="ssh-pop-title">SSH connection</span>
+      <button class="modal-close" id="ssh-pop-close" aria-label="Close">✕</button>
+    </div>
+    <p style="margin:0;color:#8b949e;font-size:11px;line-height:1.5;">
+      Fields for a client's <em>Add SSH connection</em> form. The managed
+      <code>Host *.sbx</code> block already carries the user, the key and a
+      ProxyCommand, so the greyed fields must stay <strong>empty</strong>.
+    </p>
+    <div id="ssh-fields"></div>
+    <p style="margin:0;color:#6e7681;font-size:10px;line-height:1.5;">
+      Needs <code>sbxw ssh --setup</code> once on this Mac — it writes the
+      managed block into <code>~/.ssh/config</code>.
+    </p>
+  </div>
+
   <!-- ── Duplicate sandbox wizard ── -->
   <div class="modal-overlay hidden" id="dup-modal-overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dup-modal-title" style="width:360px">
@@ -1236,7 +1298,7 @@ function createPane(index) {
         <button class="mode-btn active" data-mode="claude">✦ Claude</button>
         <button class="mode-btn" data-mode="bash">❯ Bash</button>
       </div>
-      <button class="pane-btn" id="pssh-${index}" title="Copy the ssh command for this sandbox (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
+      <button class="pane-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
@@ -1286,19 +1348,8 @@ function createPane(index) {
     if (pane.sandbox) connectPane(index, pane.sandbox, pane.mode);
   });
   document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
-  document.getElementById(`pssh-${index}`).addEventListener('click', () => {
-    if (!pane.sandbox) return;
-    // sbx publishes each sandbox as `<name>.sbx` through the managed block that
-    // `sbx setup ssh` (i.e. `sbxw ssh --setup`) writes into ~/.ssh/config — it
-    // owns the port and user, so we must not invent either.
-    const cmd = `ssh ${pane.sandbox}.sbx`;
-    if (!navigator.clipboard) {
-      showToast('Clipboard unavailable — needs HTTPS or localhost. Run: ' + cmd, 'error');
-      return;
-    }
-    navigator.clipboard.writeText(cmd)
-      .then(() => showToast('Copied: ' + cmd, 'ok'))
-      .catch(() => showToast('Copy failed — run: ' + cmd, 'error'));
+  document.getElementById(`pssh-${index}`).addEventListener('click', ev => {
+    if (pane.sandbox) toggleSshPop(pane.sandbox, ev.currentTarget);
   });
 
   term.onData(data => {
@@ -2902,6 +2953,145 @@ filesOverlay.addEventListener('click', e => { if (e.target === filesOverlay) clo
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !filesOverlay.classList.contains('hidden')) closeFilesModal();
 });
+
+// ── SSH connection details ────────────────────────────────────────────────
+const sshPop = document.getElementById('ssh-pop');
+/// The button the popover is currently hanging off, or null when it is closed.
+/// Doubles as the "ignore this click" test for the close-on-outside handler.
+let sshAnchor = null;
+
+/// Copy `text`, reporting on the button itself rather than only in a toast:
+/// with several copy buttons in one dialog, "which one did I just press?" is
+/// the question a shared toast cannot answer.
+function copyField(btn, text) {
+  const done = ok => {
+    btn.textContent = ok ? 'Copied' : 'Failed';
+    btn.classList.toggle('copied', ok);
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1400);
+  };
+  // The clipboard API needs a secure context; sbxw is served over plain HTTP on
+  // a loopback name, which qualifies — but not if the page was reached by LAN
+  // IP, so the failure is real and has to say what to do instead.
+  if (!navigator.clipboard) {
+    done(false);
+    showToast('Clipboard needs localhost or HTTPS — select the value and copy it', 'error');
+    return;
+  }
+  navigator.clipboard.writeText(text).then(() => done(true)).catch(() => {
+    done(false);
+    showToast('Copy failed — select the value and copy it', 'error');
+  });
+}
+
+/// Place the popover under its button, flipping above when the viewport floor
+/// is closer than the popover is tall, and clamping to the window either way.
+/// Measured after the content is built and while `visibility: hidden`, since a
+/// `display: none` element has no size to measure.
+function positionSshPop(anchor) {
+  // Panes are rebuilt wholesale on layout changes, which can take the button
+  // out of the document while its card is still up. Nothing to hang off, so
+  // the card goes too rather than floating in the corner it was placed in.
+  if (!anchor.isConnected) {
+    closeSshPop();
+    return;
+  }
+  sshPop.style.visibility = 'hidden';
+  sshPop.classList.remove('hidden');
+  const a = anchor.getBoundingClientRect();
+  const p = sshPop.getBoundingClientRect();
+  const gap = 6;
+  const margin = 8;
+
+  let top = a.bottom + gap;
+  if (top + p.height > window.innerHeight - margin) {
+    top = Math.max(margin, a.top - gap - p.height);
+  }
+  // Right-aligned on the button: it sits at the right end of the pane bar, so
+  // growing leftwards is what keeps the card on screen.
+  let left = Math.min(a.right - p.width, window.innerWidth - p.width - margin);
+  left = Math.max(margin, left);
+
+  sshPop.style.top = `${Math.round(top)}px`;
+  sshPop.style.left = `${Math.round(left)}px`;
+  sshPop.style.visibility = '';
+}
+
+function toggleSshPop(sandbox, anchor) {
+  if (sshAnchor === anchor && !sshPop.classList.contains('hidden')) {
+    closeSshPop();
+    return;
+  }
+  openSshPop(sandbox, anchor);
+}
+
+function openSshPop(sandbox, anchor) {
+  const host = `${sandbox}.sbx`;
+  // sbx publishes each sandbox as `<name>.sbx` through the managed block that
+  // `sbx setup ssh` (i.e. `sbxw ssh --setup`) writes into ~/.ssh/config — it
+  // owns the user, the key and the ProxyCommand, so we must not invent any of
+  // them, and the client must not be given a port or an identity file either.
+  const rows = [
+    { key: 'Name',          value: sandbox, hint: 'Any label; the sandbox name keeps them straight.' },
+    { key: 'SSH Host',      value: host,    hint: 'The alias from ~/.ssh/config — no user@ needed.' },
+    { key: 'SSH Port',      empty: 'leave empty', hint: 'Not port 22: the managed block dials a ProxyCommand.' },
+    { key: 'Identity File', empty: 'leave empty', hint: 'The managed block supplies the key.' },
+    { key: 'Terminal',      value: `ssh ${host}`, hint: 'The same connection, from a shell.' },
+  ];
+
+  document.getElementById('ssh-pop-title').textContent = `SSH — ${sandbox}`;
+  const box = document.getElementById('ssh-fields');
+  box.replaceChildren();
+  for (const row of rows) {
+    const el = document.createElement('div');
+    el.className = 'ssh-row' + (row.empty ? ' ssh-empty' : '');
+    el.title = row.hint;
+
+    const key = document.createElement('span');
+    key.className = 'ssh-key';
+    key.textContent = row.key;
+
+    const val = document.createElement('div');
+    val.className = 'ssh-val';
+    // textContent, never innerHTML: a sandbox name is validated elsewhere, but
+    // this dialog must not be the one place where that stops being true.
+    val.textContent = row.empty || row.value;
+
+    el.append(key, val);
+    if (!row.empty) {
+      const btn = document.createElement('button');
+      btn.className = 'ssh-copy';
+      btn.type = 'button';
+      btn.textContent = 'Copy';
+      btn.setAttribute('aria-label', `Copy ${row.key}`);
+      btn.addEventListener('click', () => copyField(btn, row.value));
+      el.append(btn);
+    }
+    box.append(el);
+  }
+  sshAnchor = anchor;
+  positionSshPop(anchor);
+}
+
+function closeSshPop() {
+  sshPop.classList.add('hidden');
+  sshAnchor = null;
+}
+
+document.getElementById('ssh-pop-close').addEventListener('click', closeSshPop);
+// Close on a click anywhere else. `pointerdown` on the capture phase so it
+// still fires over the terminal, which swallows its own mouse events; the
+// anchor is excluded because its own handler already toggles.
+document.addEventListener('pointerdown', e => {
+  if (!sshAnchor) return;
+  if (sshPop.contains(e.target) || sshAnchor.contains(e.target)) return;
+  closeSshPop();
+}, true);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && sshAnchor) closeSshPop();
+});
+// A popover pinned to fixed coordinates goes stale the moment the layout moves.
+// Re-place it rather than leaving a card floating away from its button.
+window.addEventListener('resize', () => { if (sshAnchor) positionSshPop(sshAnchor); });
 
 // ── Remove sandbox ────────────────────────────────────────────────────────
 const rmOverlay  = document.getElementById('rm-modal-overlay');

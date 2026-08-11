@@ -163,6 +163,21 @@ struct SessionInfo {
     /// cleared the moment the next prompt is submitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     reply: Option<String>,
+    /// Claude Code's own session id. Absent from a session reported by an
+    /// in-sandbox hook script older than this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    /// The directory this session runs in. Two agents in one container are
+    /// otherwise indistinguishable on screen, and the cwd is usually what tells
+    /// them apart — Claude Code also scopes its transcripts by it, so it is the
+    /// same string that decides what `/resume` offers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    /// Where this session was started from: `tty` (sbxw's own terminal), `ssh`
+    /// (Claude Desktop, an editor, a shell on `<name>.sbx`), or `unknown`.
+    origin: SessionOrigin,
+    /// Can the island answer this session's prompt for you? See `is_answerable`.
+    answerable: bool,
     /// Unix epoch ms of this event.
     ts: u64,
 }
@@ -182,6 +197,14 @@ struct SessionStatus {
     /// Code puts on its `Stop` hook event. Newlines are kept — the island shows
     /// the first sentence on the row and the first lines in its hover accordion.
     reply: Option<String>,
+    /// Claude Code's session id, as reported by its hook payload. Empty for a
+    /// hook script that predates it.
+    session_id: String,
+    /// Working directory of the session, from the same payload.
+    cwd: Option<String>,
+    /// Where the session was started from, derived from the process ancestry
+    /// its hook reported (see `classify_origin`).
+    origin: SessionOrigin,
 }
 
 type Statuses = Arc<Mutex<HashMap<String, SessionStatus>>>;
@@ -214,7 +237,145 @@ const MONITOR_SANDBOX: &str = "__host__";
 
 /// Split a session key "<sandbox>::<mode>" back into its parts.
 fn split_key(key: &str) -> (&str, &str) {
-    key.split_once("::").unwrap_or((key, ""))
+    let (sandbox, rest) = key.split_once("::").unwrap_or((key, ""));
+    // An agent key carries its Claude Code session id after an `@`; the mode is
+    // what precedes it. Sandbox names are `[A-Za-z0-9-]` only (see
+    // `crate::is_valid_sandbox_name`), so `@` can never be part of one.
+    (sandbox, rest.split('@').next().unwrap_or(rest))
+}
+
+/// Key an *agent* session's hook-driven state is stored under.
+///
+/// Claude Code gives every session a `session_id`, and one container can hold
+/// several: the agent sbxw attached through its own PTY, plus anything started
+/// over SSH — Claude Desktop, a terminal, an editor. They all read the same
+/// `~/.claude/settings.json`, so they all fire sbxw's hooks. Keyed by sandbox
+/// alone they overwrote each other and the island showed one incoherent state
+/// for two agents; keyed by session they get a row each.
+///
+/// A hook that carries no session id (an older in-sandbox hook script) keeps
+/// the plain `<sandbox>::claude` key, which is exactly what it used to get.
+fn agent_status_key(sandbox: &str, session_id: &str) -> String {
+    let base = session_key(sandbox, "claude");
+    if session_id.is_empty() {
+        base
+    } else {
+        format!("{base}@{session_id}")
+    }
+}
+
+/// Where a Claude Code session was started from.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Default, Debug)]
+#[serde(rename_all = "lowercase")]
+enum SessionOrigin {
+    /// Attached by sbxw itself, through the PTY behind the browser terminal.
+    Tty,
+    /// Driven by an attached client rather than by sbxw: Claude Desktop, an
+    /// editor, a shell on `<name>.sbx`. Named for what is observable — the
+    /// session is not sbxw's — because the transport is not: Claude Desktop
+    /// runs its own `server` process in the container and sets no sshd
+    /// environment at all.
+    Remote,
+    /// The hook could not read its process tree, or predates `ancestry`.
+    #[default]
+    Unknown,
+}
+
+/// Everything a hook event says about where its session came from.
+pub struct OriginEvidence<'a> {
+    /// What the in-sandbox hook is capable of reporting; 0 for one that
+    /// predates the question entirely.
+    pub hook_version: u64,
+    /// Names of sshd-set variables found in the session's environment.
+    pub ssh_env: &'a [String],
+    /// Process ancestry, innermost first.
+    pub ancestry: &'a [String],
+    /// The session's working directory.
+    pub cwd: Option<&'a str>,
+    /// The workspace sbxw recorded for this sandbox.
+    pub workspace: Option<&'a str>,
+}
+
+/// Decide whether a session is the one sbxw attached, from the evidence a hook
+/// event carries. Any single marker of a client is enough; the working
+/// directory settles what is left.
+///
+///  1. **A client process in the ancestry.** Observed on a real sandbox: sbxw's
+///     own session is `node < claude`, while Claude Desktop's is
+///     `node < 2.1.222 < server` — it runs its own server in the container, the
+///     way an editor's remote extension does. An `sshd` ancestor counts the
+///     same way, for a plain `ssh <name>.sbx`.
+///  2. **sshd's environment.** `SSH_CONNECTION` / `SSH_CLIENT` / `SSH_TTY`,
+///     set per session by sshd and inherited through the agent. Conclusive when
+///     present — but Claude Desktop sets none of them, so its absence proves
+///     nothing. (`SSH_AUTH_SOCK` is deliberately not among them: sbx forwards an
+///     agent into every sandbox, so it is always set — see the hook.)
+///  3. **The working directory.** sbxw records the workspace each sandbox was
+///     created with and the agent it attaches starts there, while a client
+///     lands wherever it chose (`/home/agent/workspace` for Claude Desktop).
+///     Needs no hook support, so it covers sandboxes provisioned before any of
+///     this — and it is what actually separates the two today.
+///
+/// A hook that reported nothing at all leaves `Unknown`, never `Tty`: the whole
+/// point is to stop assuming a session is sbxw's own, and silence is not
+/// evidence. A hook that *looked* has said something, so version 2 and above
+/// may conclude `Tty` when every marker is absent.
+fn classify_origin(ev: &OriginEvidence<'_>) -> SessionOrigin {
+    let client_ancestor = ev.ancestry.iter().any(|name| {
+        let n = name.trim().to_ascii_lowercase();
+        // `server` is how a remote client's in-container half presents itself;
+        // sshd covers someone arriving on `<name>.sbx` by hand.
+        n == "server" || n == "sshd" || n == "ssh" || n.starts_with("sshd:")
+    });
+    if client_ancestor || !ev.ssh_env.is_empty() {
+        return SessionOrigin::Remote;
+    }
+    match classify_origin_by_cwd(ev.cwd, ev.workspace) {
+        SessionOrigin::Unknown if ev.hook_version >= 2 => SessionOrigin::Tty,
+        other => other,
+    }
+}
+
+/// Classify from the session's working directory instead, for a sandbox whose
+/// in-container hook predates `ancestry`.
+///
+/// sbxw records the workspace it created each sandbox with, and the agent it
+/// attaches starts there — while a session arriving over SSH lands wherever its
+/// client put it (`/home/agent/workspace`, a home directory, anywhere). So a
+/// cwd equal to the recorded workspace is the session sbxw started.
+///
+/// Weaker than sshd's environment and deliberately kept behind it: nothing
+/// stops an SSH session from `cd`-ing into the workspace, and then both look
+/// like the tty's. That misreading is *safe* — `is_answerable` requires exactly
+/// one `Tty` session, so two of them make the sandbox read-only rather than
+/// making sbxw type into the wrong terminal. The dangerous direction is the one
+/// this cannot produce: an SSH session sitting somewhere else never passes for
+/// the tty's.
+fn classify_origin_by_cwd(cwd: Option<&str>, workspace: Option<&str>) -> SessionOrigin {
+    match (cwd, workspace) {
+        (Some(cwd), Some(workspace)) if !cwd.is_empty() && !workspace.is_empty() => {
+            // Trailing slashes only: these are two recordings of one path, not
+            // arbitrary user input to be normalised.
+            if cwd.trim_end_matches('/') == workspace.trim_end_matches('/') {
+                SessionOrigin::Tty
+            } else {
+                SessionOrigin::Remote
+            }
+        }
+        _ => SessionOrigin::Unknown,
+    }
+}
+
+/// Every agent status key currently held for `sandbox`.
+fn agent_keys_for(statuses: &HashMap<String, SessionStatus>, sandbox: &str) -> Vec<String> {
+    statuses
+        .keys()
+        .filter(|k| {
+            let (s, mode) = split_key(k);
+            s == sandbox && mode == "claude"
+        })
+        .cloned()
+        .collect()
 }
 
 // ── JSON envelopes ───────────────────────────────────────────────────────────
@@ -288,8 +449,51 @@ fn reject_invalid_name(name: &str) -> Option<Json<serde_json::Value>> {
     (!crate::is_valid_sandbox_name(name)).then(|| err_json(crate::INVALID_NAME_MSG))
 }
 
+/// Can the island answer this session's prompt on your behalf?
+///
+/// Answering means typing arrow keys and Enter into a PTY, so it is only
+/// legitimate when sbxw's PTY is unambiguously the terminal that asked. Two
+/// situations qualify, and nothing else:
+///
+///  * the sandbox has a single agent session — there is only one terminal it
+///    could be, which is every ordinary sbxw sandbox;
+///  * several sessions share the container but exactly one of them was started
+///    from the tty sbxw attached (see `classify_origin`), so the PTY it holds
+///    is that session's and no other's.
+///
+/// Everything else is read-only. Two `Tty` sessions, or none, or a chain the
+/// hook could not read, all leave sbxw unable to say which terminal asked —
+/// and typing an answer into the wrong one answers someone else's question,
+/// which is worse than not answering at all. The island still *shows* those
+/// rows; it just stops offering a button it cannot honour.
+///
+/// `has_pty` is passed in rather than looked up so this never holds the
+/// `statuses` lock while taking the `sessions` one — the two are taken in the
+/// opposite order elsewhere, and a nested pair is how that becomes a deadlock.
+fn is_answerable(statuses: &HashMap<String, SessionStatus>, has_pty: bool, key: &str) -> bool {
+    let (sandbox, mode) = split_key(key);
+    if !has_pty || mode != "claude" {
+        return false;
+    }
+    let siblings = agent_keys_for(statuses, sandbox);
+    if siblings.len() == 1 {
+        return true;
+    }
+    // Shared container: only the one session sbxw itself started, and only
+    // while it is the only such session.
+    let from_tty: Vec<&String> = siblings
+        .iter()
+        .filter(|k| {
+            statuses
+                .get(*k)
+                .is_some_and(|st| st.origin == SessionOrigin::Tty)
+        })
+        .collect();
+    from_tty.len() == 1 && from_tty[0] == key
+}
+
 /// Build the rich payload for a session from its current status.
-fn build_info(key: &str, st: &SessionStatus) -> SessionInfo {
+fn build_info(key: &str, st: &SessionStatus, answerable: bool) -> SessionInfo {
     let (sandbox, mode) = split_key(key);
     SessionInfo {
         sandbox: sandbox.to_string(),
@@ -302,18 +506,45 @@ fn build_info(key: &str, st: &SessionStatus) -> SessionInfo {
         question: st.prompt.first().cloned(),
         steps: (!st.prompt.is_empty()).then(|| st.prompt.clone()),
         reply: st.reply.clone(),
+        session_id: (!st.session_id.is_empty()).then(|| st.session_id.clone()),
+        cwd: st.cwd.clone(),
+        origin: st.origin,
+        answerable,
         ts: now_ms(),
     }
 }
 
 /// Broadcast the current state of `key`, if it still exists.
-fn emit_info(events: &broadcast::Sender<SessionInfo>, statuses: &Statuses, key: &str) {
-    let info = statuses
+///
+/// Every sibling agent session in the same sandbox is re-emitted too: whether a
+/// row can be answered depends on how many of them there are, so the arrival or
+/// departure of one changes the others' payload without changing their state.
+fn emit_info(
+    events: &broadcast::Sender<SessionInfo>,
+    statuses: &Statuses,
+    sessions: &Sessions,
+    key: &str,
+) {
+    let (sandbox, _) = split_key(key);
+    let has_pty = sessions
         .lock()
         .unwrap()
-        .get(key)
-        .map(|st| build_info(key, st));
-    if let Some(info) = info {
+        .contains_key(&session_key(sandbox, "claude"));
+    let infos: Vec<SessionInfo> = {
+        let map = statuses.lock().unwrap();
+        let mut keys = agent_keys_for(&map, sandbox);
+        if !keys.iter().any(|k| k == key) {
+            keys.push(key.to_string());
+        }
+        keys.iter()
+            .filter_map(|k| {
+                let st = map.get(k)?;
+                Some(build_info(k, st, is_answerable(&map, has_pty, k)))
+            })
+            .collect()
+    };
+    for info in infos {
+        // `send` errors only when nobody is listening; nothing to do then.
         let _ = events.send(info);
     }
 }
@@ -584,6 +815,10 @@ struct AppState {
     statuses: Statuses,
     /// Recent hook events (POC).
     hook_log: HookLog,
+    /// Sandboxes whose in-container hook has been seen reporting no process
+    /// ancestry, so the "refresh it" advice is logged once each and not on
+    /// every tool call.
+    stale_hooks: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Latest subscription usage (see `/api/usage`).
     usage: Arc<Mutex<UsageInfo>>,
     cfg: Arc<Config>,
@@ -629,6 +864,9 @@ pub async fn serve(
     let (focus, _) = broadcast::channel::<String>(16);
     let (watching, _) = broadcast::channel::<String>(16);
     let statuses: Statuses = Arc::new(Mutex::new(HashMap::new()));
+    // Hoisted above the reconciler because emitting a session's state now needs
+    // to know whether sbxw holds a PTY for its sandbox (see `is_answerable`).
+    let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
 
     // Reconcile against reality: a sandbox stopped or removed out-of-band never
     // sends a `SessionEnd` hook, so its status would linger. Every 15 s, drop
@@ -639,6 +877,7 @@ pub async fn serve(
     {
         let events = events.clone();
         let statuses = statuses.clone();
+        let sessions = sessions.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
             loop {
@@ -665,7 +904,7 @@ pub async fn serve(
                     if let Some(st) = statuses.lock().unwrap().get_mut(&key) {
                         st.state = SessionState::Exited;
                     }
-                    emit_info(&events, &statuses, &key);
+                    emit_info(&events, &statuses, &sessions, &key);
                     statuses.lock().unwrap().remove(&key);
                     tracing::info!("reconcile: dropped stale session '{key}' (sandbox gone)");
                 }
@@ -675,12 +914,13 @@ pub async fn serve(
 
     let state = Arc::new(AppState {
         initial_sandbox,
-        sessions: Arc::new(Mutex::new(HashMap::new())),
+        sessions,
         events,
         focus,
         watching,
         statuses,
         hook_log: Arc::new(Mutex::new(VecDeque::new())),
+        stale_hooks: Arc::new(Mutex::new(std::collections::HashSet::new())),
         usage: Arc::new(Mutex::new(UsageInfo::default())),
         cfg,
         use_api_key,
@@ -847,11 +1087,24 @@ async fn api_watch_events(
 /// (e.g. the notch app on launch) sees what already exists without waiting for
 /// the next transition.
 async fn api_sessions(State(state): State<Arc<AppState>>) -> Json<Vec<SessionInfo>> {
+    let with_pty: std::collections::HashSet<String> =
+        state.sessions.lock().unwrap().keys().cloned().collect();
     let mut out: Vec<SessionInfo> = {
         let map = state.statuses.lock().unwrap();
-        map.iter().map(|(key, st)| build_info(key, st)).collect()
+        map.iter()
+            .map(|(key, st)| {
+                let has_pty = with_pty.contains(&session_key(split_key(key).0, "claude"));
+                build_info(key, st, is_answerable(&map, has_pty, key))
+            })
+            .collect()
     };
-    out.sort_by(|a, b| a.sandbox.cmp(&b.sandbox).then(a.mode.cmp(&b.mode)));
+    out.sort_by(|a, b| {
+        a.sandbox
+            .cmp(&b.sandbox)
+            .then(a.mode.cmp(&b.mode))
+            .then(a.started_ms.cmp(&b.started_ms))
+            .then(a.session_id.cmp(&b.session_id))
+    });
     Json(out)
 }
 
@@ -899,15 +1152,77 @@ async fn api_hook(
     if sandbox.is_empty() || event.is_empty() {
         return StatusCode::OK;
     }
-    let key = session_key(&sandbox, "claude");
+    // Claude Code stamps every hook event with the session it came from, so two
+    // agents sharing a container get a row each instead of overwriting one.
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let cwd = body
+        .get("cwd")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // Who started this session, from the process tree the hook walked inside
+    // the container. Only ever *upgraded* away from `Unknown`: the chain is
+    // read per event, and one unreadable read must not demote a session whose
+    // origin was already established.
+    let strings = |field: &str| -> Vec<String> {
+        body.get(field)
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let hook_version = body
+        .get("hook_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+
+    // The hook script is written into the container at provisioning time, so a
+    // rebuilt sbxw does not reach a sandbox that is merely re-attached — and
+    // the symptom (rows that never say where they came from) gives no hint of
+    // the cause. Say it once per sandbox rather than on every tool call.
+    if hook_version < 2 && state.stale_hooks.lock().unwrap().insert(sandbox.clone()) {
+        tracing::warn!(
+            "sandbox '{sandbox}' runs a status hook too old to report where its session came \
+             from; falling back to the workspace path. Run `sbxw up {sandbox}` to reinstall it."
+        );
+    }
+
+    let workspace = crate::workspace_for(&sandbox);
+    let origin = classify_origin(&OriginEvidence {
+        hook_version,
+        ssh_env: &strings("ssh_env"),
+        ancestry: &strings("ancestry"),
+        cwd: cwd.as_deref(),
+        workspace: workspace.as_ref().and_then(|p| p.to_str()),
+    });
+
+    let key = agent_status_key(&sandbox, &session_id);
     let remove = {
         let mut map = state.statuses.lock().unwrap();
         let st = map.entry(key.clone()).or_default();
+        st.session_id = session_id;
+        if cwd.is_some() {
+            st.cwd = cwd;
+        }
+        if origin != SessionOrigin::Unknown {
+            st.origin = origin;
+        }
         apply_hook(&event, &tool, &body, st)
     };
-    emit_info(&state.events, &state.statuses, &key);
+    emit_info(&state.events, &state.statuses, &state.sessions, &key);
     if remove {
         state.statuses.lock().unwrap().remove(&key);
+        // A session ending can make its sibling answerable again, so the
+        // sandbox's remaining rows need re-emitting after the removal.
+        emit_info(&state.events, &state.statuses, &state.sessions, &key);
     }
     StatusCode::OK
 }
@@ -967,6 +1282,11 @@ struct InputBody {
 /// Write raw input into a live session's PTY. Used by the notch companion to
 /// answer prompts without opening the browser. Local-only (the daemon binds
 /// loopback).
+/// Write raw bytes into a PTY. Deliberately *not* guarded the way `api_answer`
+/// and `api_chat_push` are: those two infer a session ("the one that asked",
+/// "the sandbox's agent") and that inference is what breaks when a container
+/// runs several agents. This one infers nothing — the caller names the terminal
+/// it wants — so it stays the escape hatch for driving sbxw's own PTY.
 async fn api_input(State(state): State<Arc<AppState>>, Json(body): Json<InputBody>) -> StatusCode {
     let key = session_key(&body.sandbox, body.mode.as_deref().unwrap_or("claude"));
     let session = state.sessions.lock().unwrap().get(&key).cloned();
@@ -1032,6 +1352,34 @@ async fn api_answer(
     let Some(sess) = session else {
         return StatusCode::NOT_FOUND;
     };
+    // Which session's prompt is this? Enforced here and not only in the island:
+    // answering types into a PTY, and with two agents in one container nothing
+    // says which of them sbxw's PTY is driving (see `is_answerable`). An island
+    // too old to know that would otherwise answer one session's question in the
+    // other's terminal.
+    let status_key = {
+        let map = state.statuses.lock().unwrap();
+        let keys = agent_keys_for(&map, &body.sandbox);
+        let answerable: Vec<String> = keys
+            .iter()
+            .filter(|k| is_answerable(&map, true, k))
+            .cloned()
+            .collect();
+        // `is_answerable` is the single rule, so the endpoint cannot drift from
+        // what the island was told: exactly one row may be typed into.
+        match answerable.len() {
+            1 => answerable.into_iter().next().unwrap_or_default(),
+            _ => {
+                tracing::warn!(
+                    "refusing to answer '{}': {} agent sessions share this sandbox and none is \
+                     identifiably the one sbxw attached — answer in its own session",
+                    body.sandbox,
+                    keys.len()
+                );
+                return StatusCode::CONFLICT;
+            }
+        }
+    };
     let answers: Vec<u32> = match (body.indices, body.index) {
         (Some(list), _) if !list.is_empty() => list,
         (_, Some(index)) => vec![index],
@@ -1042,7 +1390,7 @@ async fn api_answer(
         .statuses
         .lock()
         .unwrap()
-        .get(&key)
+        .get(&status_key)
         .map(|st| st.prompt.iter().map(|q| q.options.len() as u32).collect())
         .unwrap_or_default();
     for (n, index) in answers.iter().enumerate() {
@@ -1055,11 +1403,11 @@ async fn api_answer(
     // Every question answered, the form is on its Submit tab.
     send_key(&sess, KEY_ENTER).await;
     // Optimistically clear the prompt and mark the session working again.
-    if let Some(st) = state.statuses.lock().unwrap().get_mut(&key) {
+    if let Some(st) = state.statuses.lock().unwrap().get_mut(&status_key) {
         st.prompt.clear();
         st.state = SessionState::Working;
     }
-    emit_info(&state.events, &state.statuses, &key);
+    emit_info(&state.events, &state.statuses, &state.sessions, &status_key);
     StatusCode::OK
 }
 
@@ -1873,6 +2221,29 @@ async fn api_chat_push(
     };
     if let Some(rejected) = reject_invalid_name(&name) {
         return rejected;
+    }
+    // Same question as answering a prompt (see `is_answerable`): this types
+    // into the PTY sbxw holds for the sandbox, so "the sandbox's agent" has to
+    // name exactly one session. Several are fine as long as one of them is the
+    // tty's — that is the one this PTY drives. Zero is fine too: the ordinary
+    // case of a sandbox whose agent this endpoint is about to bring up.
+    {
+        let map = state.statuses.lock().unwrap();
+        let agents = agent_keys_for(&map, &name);
+        let from_tty = agents
+            .iter()
+            .filter(|k| {
+                map.get(*k)
+                    .is_some_and(|st| st.origin == SessionOrigin::Tty)
+            })
+            .count();
+        if agents.len() > 1 && from_tty != 1 {
+            return err_json(format!(
+                "'{name}' is running {} agent sessions and none is identifiably sbxw's own, \
+                 so sbxw cannot tell which one you mean — type in the session itself",
+                agents.len()
+            ));
+        }
     }
     let key = session_key(&name, "claude");
 
@@ -2817,9 +3188,283 @@ mod tests {
         // The activity line summarises the prompt with its first step.
         assert_eq!(st.activity.as_deref(), Some("Quel thème ?"));
         // Both steps reach the island; `question` stays the first one.
-        let info = build_info("box::claude", &st);
+        let info = build_info("box::claude", &st, true);
         assert_eq!(info.question.expect("first step").text, "Quel thème ?");
         assert_eq!(info.steps.expect("all steps").len(), 2);
+    }
+
+    /// One container can hold several agents — sbxw's own PTY session, plus
+    /// anything attached over SSH. They must not share a slot.
+    #[test]
+    fn two_agents_in_one_sandbox_get_a_key_each() {
+        let a = agent_status_key("neos", "5f2c-aaaa");
+        let b = agent_status_key("neos", "9e10-bbbb");
+        assert_ne!(a, b);
+
+        // The sandbox and the mode still read out of both, which is what the
+        // reconciler and every consumer index on.
+        for key in [&a, &b] {
+            assert_eq!(split_key(key), ("neos", "claude"));
+        }
+
+        // A hook script too old to send a session id keeps the historical key.
+        assert_eq!(agent_status_key("neos", ""), "neos::claude");
+        assert_eq!(split_key("neos::claude"), ("neos", "claude"));
+        // And a bash session is untouched by any of this.
+        assert_eq!(split_key("neos::bash"), ("neos", "bash"));
+    }
+
+    /// Where a session came from, decided on evidence rather than assumed.
+    /// Every chain below is copied from a real `/api/hook/log`.
+    #[test]
+    fn a_client_is_recognised_by_the_process_it_runs_in_the_container() {
+        let strs = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ev = |ssh: &[&str], ancestry: &[&str], cwd, workspace| {
+            classify_origin(&OriginEvidence {
+                hook_version: 2,
+                ssh_env: &strs(ssh),
+                ancestry: &strs(ancestry),
+                cwd,
+                workspace,
+            })
+        };
+
+        let ws = Some("/Users/thomas/Desktop");
+
+        // The agent sbxw attached: the claude CLI, in the workspace.
+        assert_eq!(ev(&[], &["node", "claude"], ws, ws), SessionOrigin::Tty);
+
+        // Claude Desktop: it runs its own server in the container and sets no
+        // sshd environment whatsoever, so `ssh_env` is empty for both — the
+        // ancestry is what gives it away.
+        assert_eq!(
+            ev(
+                &[],
+                &["node", "2.1.222", "server"],
+                Some("/home/agent/workspace"),
+                ws
+            ),
+            SessionOrigin::Remote
+        );
+        // …and it stays recognised even sitting in the workspace, which the cwd
+        // test alone could not have caught.
+        assert_eq!(
+            ev(&[], &["node", "2.1.222", "server"], ws, ws),
+            SessionOrigin::Remote
+        );
+
+        // Someone arriving by hand on <name>.sbx: sshd, either way it shows.
+        assert_eq!(
+            ev(&["SSH_CONNECTION"], &["node", "claude"], ws, ws),
+            SessionOrigin::Remote
+        );
+        assert_eq!(
+            ev(&[], &["node", "claude", "sshd"], ws, ws),
+            SessionOrigin::Remote
+        );
+
+        // ssh-agent forwards keys, it does not start sessions — and sbx sets
+        // SSH_AUTH_SOCK in every sandbox, which is why it is not in `ssh_env`.
+        assert_eq!(
+            ev(&[], &["node", "claude", "ssh-agent"], ws, ws),
+            SessionOrigin::Tty
+        );
+
+        // The pre-`hook_version` sandboxes in the same log, carrying no markers
+        // at all: the working directory still separates them.
+        let old = |ancestry: &[&str], cwd| {
+            classify_origin(&OriginEvidence {
+                hook_version: 0,
+                ssh_env: &[],
+                ancestry: &strs(ancestry),
+                cwd,
+                workspace: ws,
+            })
+        };
+        assert_eq!(old(&["node", "claude"], ws), SessionOrigin::Tty);
+        assert_eq!(
+            old(&[], Some("/home/agent/workspace")),
+            SessionOrigin::Remote
+        );
+    }
+
+    /// Silence is not evidence: a hook too old to look must not be read as
+    /// "not over SSH", or every foreign session is promoted to answerable.
+    #[test]
+    fn a_hook_that_could_not_look_says_unknown_not_tty() {
+        let none: Vec<String> = vec![];
+        let old = OriginEvidence {
+            hook_version: 0,
+            ssh_env: &none,
+            ancestry: &none,
+            cwd: None,
+            workspace: None,
+        };
+        assert_eq!(classify_origin(&old), SessionOrigin::Unknown);
+
+        // A hook that looked and found nothing has said something.
+        let looked = OriginEvidence {
+            hook_version: 2,
+            ..old
+        };
+        assert_eq!(classify_origin(&looked), SessionOrigin::Tty);
+    }
+
+    /// Sandboxes provisioned before the hook reported its ancestry — which is
+    /// every sandbox already running when this shipped — are classified by
+    /// where the session sits instead. Taken from a real `/api/hook/log`:
+    /// sbxw's own agent starts in the workspace the sandbox was created with.
+    #[test]
+    fn a_hook_without_ancestry_falls_back_to_the_recorded_workspace() {
+        let workspace = "/Users/thomas/Downloads/sbxw 2";
+        assert_eq!(
+            classify_origin_by_cwd(Some(workspace), Some(workspace)),
+            SessionOrigin::Tty
+        );
+        // A trailing slash is the same directory recorded twice, not a
+        // different one.
+        assert_eq!(
+            classify_origin_by_cwd(
+                Some("/Users/thomas/Desktop/"),
+                Some("/Users/thomas/Desktop")
+            ),
+            SessionOrigin::Tty
+        );
+        // Where Claude Desktop's SSH session landed in the real log.
+        assert_eq!(
+            classify_origin_by_cwd(Some("/home/agent/workspace"), Some(workspace)),
+            SessionOrigin::Remote
+        );
+        // Nothing to compare against says nothing.
+        assert_eq!(
+            classify_origin_by_cwd(None, Some(workspace)),
+            SessionOrigin::Unknown
+        );
+        assert_eq!(
+            classify_origin_by_cwd(Some(workspace), None),
+            SessionOrigin::Unknown
+        );
+        assert_eq!(
+            classify_origin_by_cwd(Some(""), Some("")),
+            SessionOrigin::Unknown
+        );
+    }
+
+    /// The fallback's unsafe direction must be impossible: an SSH session can
+    /// only ever be *mistaken for the tty's* by sitting in the workspace, and
+    /// then both do, which `is_answerable` refuses outright.
+    #[test]
+    fn an_ssh_session_that_cds_into_the_workspace_locks_the_sandbox_instead() {
+        let workspace = "/Users/thomas/Downloads/sbxw 2";
+        let mut map: HashMap<String, SessionStatus> = HashMap::new();
+        for (sid, cwd) in [("aaaa", workspace), ("bbbb", workspace)] {
+            map.insert(
+                agent_status_key("neos", sid),
+                SessionStatus {
+                    origin: classify_origin_by_cwd(Some(cwd), Some(workspace)),
+                    ..Default::default()
+                },
+            );
+        }
+        for sid in ["aaaa", "bbbb"] {
+            assert!(!is_answerable(&map, true, &agent_status_key("neos", sid)));
+        }
+    }
+
+    /// Answering types into a PTY, so it is offered only when sbxw's PTY is
+    /// unambiguously the terminal that asked.
+    #[test]
+    fn a_prompt_is_answerable_only_when_one_agent_owns_the_terminal() {
+        let mut map: HashMap<String, SessionStatus> = HashMap::new();
+        let mine = agent_status_key("neos", "aaaa");
+        map.insert(mine.clone(), SessionStatus::default());
+
+        // The ordinary case: one agent, one PTY.
+        assert!(is_answerable(&map, true, &mine));
+        // No PTY (the browser terminal is closed): nothing to type into.
+        assert!(!is_answerable(&map, false, &mine));
+
+        // Claude Desktop attaches over SSH and starts a second agent. Both
+        // origins are known, so the tty's row keeps its buttons and the SSH
+        // one — whose terminal sbxw does not hold — does not.
+        let theirs = agent_status_key("neos", "bbbb");
+        map.insert(
+            mine.clone(),
+            SessionStatus {
+                origin: SessionOrigin::Tty,
+                ..Default::default()
+            },
+        );
+        map.insert(
+            theirs.clone(),
+            SessionStatus {
+                origin: SessionOrigin::Remote,
+                ..Default::default()
+            },
+        );
+        assert!(is_answerable(&map, true, &mine));
+        assert!(!is_answerable(&map, true, &theirs));
+
+        // Without that evidence the pair is unreadable again, and *neither*
+        // may be answered: an unknown origin never stands in for the tty.
+        map.insert(mine.clone(), SessionStatus::default());
+        assert!(!is_answerable(&map, true, &mine));
+        assert!(!is_answerable(&map, true, &theirs));
+
+        // Two sessions both claiming the tty is equally unusable — sbxw holds
+        // one PTY and cannot hand it to two.
+        for k in [&mine, &theirs] {
+            map.insert(
+                k.to_string(),
+                SessionStatus {
+                    origin: SessionOrigin::Tty,
+                    ..Default::default()
+                },
+            );
+        }
+        assert!(!is_answerable(&map, true, &mine));
+        assert!(!is_answerable(&map, true, &theirs));
+
+        // A single session is answerable whatever its origin: there is only one
+        // terminal it could be.
+        map.remove(&theirs);
+        map.insert(mine.clone(), SessionStatus::default());
+        assert!(is_answerable(&map, true, &mine));
+
+        // A sandbox next door is a different question entirely.
+        map.insert(agent_status_key("other", "cccc"), SessionStatus::default());
+        assert!(is_answerable(&map, true, &mine));
+
+        // A shell is never answerable: there is no prompt to answer.
+        map.insert(session_key("neos", "bash"), SessionStatus::default());
+        assert!(!is_answerable(&map, true, &session_key("neos", "bash")));
+        assert!(is_answerable(&map, true, &mine));
+    }
+
+    /// The island needs to tell two rows of one sandbox apart, and the cwd is
+    /// what does it — the same string Claude Code scopes its transcripts by.
+    #[test]
+    fn a_session_carries_its_identity_to_the_island() {
+        let st = SessionStatus {
+            session_id: "5f2c-aaaa".into(),
+            cwd: Some("/Users/you/src/neos".into()),
+            ..Default::default()
+        };
+        let info = build_info(&agent_status_key("neos", "5f2c-aaaa"), &st, false);
+        assert_eq!(info.sandbox, "neos");
+        assert_eq!(info.mode, "claude");
+        assert_eq!(info.session_id.as_deref(), Some("5f2c-aaaa"));
+        assert_eq!(info.cwd.as_deref(), Some("/Users/you/src/neos"));
+        assert!(!info.answerable);
+
+        // An older in-sandbox hook sends no session id; the field is then
+        // absent from the wire rather than present and empty.
+        let plain = build_info("neos::claude", &SessionStatus::default(), true);
+        assert!(plain.session_id.is_none());
+        assert!(plain.answerable);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("session_id").is_none(), "{json}");
+        assert_eq!(json.get("answerable").and_then(|v| v.as_bool()), Some(true));
     }
 
     #[test]
