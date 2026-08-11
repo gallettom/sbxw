@@ -851,6 +851,48 @@ struct WsQuery {
 
 const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
 
+/// The page's stylesheet and scripts, compiled into the binary alongside the
+/// HTML shell that loads them. Split out of `index.html` so each part can be
+/// read on its own; the shell is the only templated file, which is why the two
+/// injected values live in an inline `<script>` there rather than in a module.
+///
+/// Served from a table rather than a `/{file}` route: the paths are a closed
+/// set known at compile time, so there is nothing to resolve at runtime and no
+/// path to traverse.
+/// The scripts load in this order and share one global scope, exactly as they
+/// did when they were a single inline block — `main.js` last, since it is the
+/// one that runs rather than declares.
+const JS: &str = "application/javascript; charset=utf-8";
+const STATIC_ASSETS: &[(&str, &str, &str)] = &[
+    (
+        "/app.css",
+        "text/css; charset=utf-8",
+        include_str!("../assets/app.css"),
+    ),
+    ("/js/util.js", JS, include_str!("../assets/js/util.js")),
+    ("/js/panes.js", JS, include_str!("../assets/js/panes.js")),
+    (
+        "/js/pane-controls.js",
+        JS,
+        include_str!("../assets/js/pane-controls.js"),
+    ),
+    (
+        "/js/sandboxes.js",
+        JS,
+        include_str!("../assets/js/sandboxes.js"),
+    ),
+    ("/js/create.js", JS, include_str!("../assets/js/create.js")),
+    ("/js/ports.js", JS, include_str!("../assets/js/ports.js")),
+    ("/js/files.js", JS, include_str!("../assets/js/files.js")),
+    ("/js/ssh.js", JS, include_str!("../assets/js/ssh.js")),
+    (
+        "/js/lifecycle.js",
+        JS,
+        include_str!("../assets/js/lifecycle.js"),
+    ),
+    ("/js/main.js", JS, include_str!("../assets/js/main.js")),
+];
+
 pub async fn serve(
     addr: &str,
     initial_sandbox: String,
@@ -928,6 +970,7 @@ pub async fn serve(
 
     let app = Router::new()
         .route("/", get(index_handler))
+        .merge(static_assets())
         .route("/ws", get(ws_handler))
         .route("/api/events", get(api_events))
         .route("/api/focus", post(api_focus))
@@ -978,6 +1021,19 @@ pub async fn serve(
     tracing::info!("web TTY listening on http://{addr}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Routes for `STATIC_ASSETS`. Everything is baked into the binary, so each one
+/// is a constant response with its content type.
+fn static_assets() -> Router<Arc<AppState>> {
+    let mut router = Router::new();
+    for (path, content_type, body) in STATIC_ASSETS {
+        router = router.route(
+            path,
+            get(move || async move { ([(header::CONTENT_TYPE, *content_type)], *body) }),
+        );
+    }
+    router
 }
 
 async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
