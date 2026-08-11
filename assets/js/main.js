@@ -1,52 +1,3 @@
-// ── Init ──────────────────────────────────────────────────────────────────
-(async () => {
-  const maxPanes = computeMaxPanes();
-  renderLayoutSwitch(maxPanes);
-  const saved = loadLayout();
-  const n = (saved?.n >= 1 && saved?.n <= maxPanes) ? saved.n : 1;
-  setLayout(n);
-  await loadSandboxes();
-  // The monitor pane has no sandbox to still exist, so it restores on the
-  // command being configured instead.
-  const exists = name =>
-    name === MONITOR_SANDBOX ? !!MONITOR_CMD : sandboxes.some(s => s.name === name);
-
-  if (saved?.panes?.length) {
-    // Restore saved pane connections for sandboxes that still exist.
-    let connected = false;
-    saved.panes.slice(0, n).forEach((state, i) => {
-      if (state.sandbox && exists(state.sandbox)) {
-        connectPane(i, state.sandbox, state.mode || 'claude');
-        connected = true;
-      }
-    });
-    if (!connected) {
-      // No saved sandbox exists anymore — fall back to default.
-      const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
-      if (initial) {
-        connectPane(0, initial);
-      } else {
-        document.getElementById('pconn-0').textContent =
-          sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
-        panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
-      }
-    }
-  } else {
-    // No saved layout — use default behaviour.
-    const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
-    if (initial) {
-      connectPane(0, initial);
-    } else {
-      document.getElementById('pconn-0').textContent =
-        sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
-      panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
-    }
-  }
-  // A `#sandbox=<name>` fragment (e.g. opened from the macOS notch companion)
-  // wins over the restored layout: attach that sandbox to the focused pane.
-  applySandboxHash();
-})();
-
 // "Jump to this sandbox" — the one thing an island click asks of the tab.
 //
 // Deliberately the smallest gesture that answers it: a sandbox already on
@@ -236,3 +187,57 @@ document.addEventListener('visibilitychange', () => {
   panes.slice(0, paneCount).forEach(p => { if (p.ws) p.ws.sentSize = null; });
   refitPanes('tab visible');
 });
+
+// ── Init ──────────────────────────────────────────────────────────────────
+// Last in the last script, and it has to stay there: laying out the panes
+// paints the liserets, which reads the module-level state above (`announcedWatch`
+// and friends). Booting from the top of this file would run that before those
+// `let`s are initialised — a TDZ ReferenceError, not an `undefined` to shrug
+// off. Function declarations hoist, top-level bindings do not.
+(async () => {
+  const maxPanes = computeMaxPanes();
+  renderLayoutSwitch(maxPanes);
+  const saved = loadLayout();
+  const n = (saved?.n >= 1 && saved?.n <= maxPanes) ? saved.n : 1;
+  setLayout(n);
+  await loadSandboxes();
+  // The monitor pane has no sandbox to still exist, so it restores on the
+  // command being configured instead.
+  const exists = name =>
+    name === MONITOR_SANDBOX ? !!MONITOR_CMD : sandboxes.some(s => s.name === name);
+
+  if (saved?.panes?.length) {
+    // Restore saved pane connections for sandboxes that still exist.
+    let connected = false;
+    saved.panes.slice(0, n).forEach((state, i) => {
+      if (state.sandbox && exists(state.sandbox)) {
+        connectPane(i, state.sandbox, state.mode || 'claude');
+        connected = true;
+      }
+    });
+    if (!connected) {
+      // No saved sandbox exists anymore — fall back to default.
+      const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
+      if (initial) {
+        connectPane(0, initial);
+      } else {
+        document.getElementById('pconn-0').textContent =
+          sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
+        panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
+      }
+    }
+  } else {
+    // No saved layout — use default behaviour.
+    const initial = (INITIAL_SANDBOX && exists(INITIAL_SANDBOX)) ? INITIAL_SANDBOX : sandboxes[0]?.name;
+    if (initial) {
+      connectPane(0, initial);
+    } else {
+      document.getElementById('pconn-0').textContent =
+        sandboxes.length ? 'select a sandbox →' : 'create a sandbox with ＋';
+      panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
+    }
+  }
+  // A `#sandbox=<name>` fragment (e.g. opened from the macOS notch companion)
+  // wins over the restored layout: attach that sandbox to the focused pane.
+  applySandboxHash();
+})();
