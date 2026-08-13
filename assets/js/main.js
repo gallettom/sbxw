@@ -31,18 +31,40 @@ function applySandboxHash() {
 }
 window.addEventListener('hashchange', applySandboxHash);
 
+// `/api/stream` multiplexes every SSE feed the browser UI needs onto one
+// HTTP connection (named events: `session`, `focus`, `clients`) — see
+// `api_stream` in src/web.rs for why: plain HTTP has no multiplexing, and
+// three separate long-lived EventSources per tab meant two tabs already used
+// 8 of the browser's 6-per-origin connection slots, so a third tab's `GET /`
+// had nowhere to go and just hung. One connection per tab fixes that.
+const sbxwStream = new EventSource('/api/stream');
+
 // The macOS notch companion (island) asks an already-open tab to switch
 // sandboxes over this stream — so clicking a session focuses this tab rather
 // than spawning a new page. See `/api/focus` in src/web.rs.
-new EventSource('/api/focus-events').onmessage = ev => {
+sbxwStream.addEventListener('focus', ev => {
   if (!ev.data) return;
   window.focus();
   focusSandbox(ev.data);
-};
+});
+
+// sbxw expects exactly one browser tab talking to it — a second one shares
+// the same two runtime worker threads and the same PTY per sandbox instead of
+// getting its own, which is what makes everything (the file browser
+// especially) grind to a halt. The `clients` event reports how many tabs are
+// currently connected; warn in the header the moment there's more than one.
+const multiClientWarning = document.getElementById('multi-client-warning');
+const multiClientCountLabel = document.getElementById('multi-client-count-label');
+sbxwStream.addEventListener('clients', ev => {
+  const n = parseInt(ev.data, 10) || 0;
+  multiClientCountLabel.textContent = n;
+  multiClientWarning.hidden = n <= 1;
+});
 
 // ── Agent activity on the liserets ────────────────────────────────────────
-// `/api/events` carries one SessionInfo per state change, folded from the hooks
-// the sandbox POSTs to `/api/hook` — the same feed the macOS island reads.
+// The `session` event on `/api/stream` carries one SessionInfo per state
+// change, folded from the hooks the sandbox POSTs to `/api/hook` — the same
+// data the macOS island reads directly off `/api/events`.
 // Painting the latest state on both strips turns the window into a status
 // board: the panes answer for what you have open, the sidebar for everything
 // else, which is where an agent working in a sandbox you closed shows up.
@@ -167,9 +189,9 @@ fetch('/api/sessions')
   .then(list => list.forEach(i => ingestSession(i, true)))
   .catch(() => {});
 
-new EventSource('/api/events').onmessage = ev => {
+sbxwStream.addEventListener('session', ev => {
   try { ingestSession(JSON.parse(ev.data)); } catch (_) {}
-};
+});
 
 // Leaving the tab un-watches the focused pane, coming back watches it again —
 // so a session that raised `attention` while you were elsewhere is still

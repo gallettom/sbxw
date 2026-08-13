@@ -6,7 +6,9 @@
 //!
 //! Routes:
 //!   GET  /                          → HTML (initial_sandbox embedded)
-//!   GET  /api/events                → SSE stream of rich session updates
+//!   GET  /api/events                → SSE stream of rich session updates (macOS island)
+//!   GET  /api/stream                → SSE: session updates + focus requests + open-tab count,
+//!                                      multiplexed for the browser UI (see `api_stream`)
 //!   GET  /api/sessions              → snapshot of current session info
 //!   POST /api/input                 → write raw bytes into a session's PTY
 //!   POST /api/answer                → answer a session's numbered prompt
@@ -54,8 +56,8 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{broadcast, watch};
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 /// Output bytes kept per sandbox for replay on reconnect (256 KB).
 const REPLAY_BYTES: usize = 256 * 1024;
@@ -821,6 +823,15 @@ struct AppState {
     stale_hooks: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Latest subscription usage (see `/api/usage`).
     usage: Arc<Mutex<UsageInfo>>,
+    /// Count of open `/api/stream` connections — one per browser tab currently
+    /// loaded (see `api_stream`, which folds this into the same connection as
+    /// the session/focus SSE feeds). sbxw is built around a single client: two
+    /// runtime worker threads, one PTY per sandbox, and a handful of the
+    /// browser's six-per-origin HTTP/1.1 connection slots, all shared by
+    /// however many tabs attach. A second tab doesn't get its own slice of any
+    /// of that, it just contends with the first for all of it. The web UI
+    /// shows a warning as soon as this exceeds one.
+    client_count: watch::Sender<usize>,
     cfg: Arc<Config>,
     use_api_key: bool,
 }
@@ -861,13 +872,21 @@ const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
 /// path to traverse.
 /// The scripts load in this order and share one global scope, exactly as they
 /// did when they were a single inline block — `main.js` last, since it is the
-/// one that runs rather than declares.
+/// one that runs rather than declares. `singleton.js` is the odd one out: it
+/// is the only one loaded by a static `<script>` tag in the HTML shell, and
+/// it injects the rest of this list itself, once it decides this tab should
+/// actually boot (see the duplicate-tab interstitial in index.html).
 const JS: &str = "application/javascript; charset=utf-8";
 const STATIC_ASSETS: &[(&str, &str, &str)] = &[
     (
         "/app.css",
         "text/css; charset=utf-8",
         include_str!("../assets/app.css"),
+    ),
+    (
+        "/js/singleton.js",
+        JS,
+        include_str!("../assets/js/singleton.js"),
     ),
     ("/js/util.js", JS, include_str!("../assets/js/util.js")),
     ("/js/panes.js", JS, include_str!("../assets/js/panes.js")),
@@ -905,6 +924,7 @@ pub async fn serve(
     let (events, _) = broadcast::channel::<SessionInfo>(256);
     let (focus, _) = broadcast::channel::<String>(16);
     let (watching, _) = broadcast::channel::<String>(16);
+    let (client_count, _) = watch::channel::<usize>(0);
     let statuses: Statuses = Arc::new(Mutex::new(HashMap::new()));
     // Hoisted above the reconciler because emitting a session's state now needs
     // to know whether sbxw holds a PTY for its sandbox (see `is_answerable`).
@@ -964,6 +984,7 @@ pub async fn serve(
         hook_log: Arc::new(Mutex::new(VecDeque::new())),
         stale_hooks: Arc::new(Mutex::new(std::collections::HashSet::new())),
         usage: Arc::new(Mutex::new(UsageInfo::default())),
+        client_count,
         cfg,
         use_api_key,
     });
@@ -974,9 +995,9 @@ pub async fn serve(
         .route("/ws", get(ws_handler))
         .route("/api/events", get(api_events))
         .route("/api/focus", post(api_focus))
-        .route("/api/focus-events", get(api_focus_events))
         .route("/api/watching", post(api_watching))
         .route("/api/watch-events", get(api_watch_events))
+        .route("/api/stream", get(api_stream))
         .route("/api/sessions", get(api_sessions))
         .route("/api/ptys", get(api_ptys))
         .route("/api/input", post(api_input))
@@ -1126,20 +1147,6 @@ async fn api_focus(
     Json(serde_json::json!({ "clients": clients }))
 }
 
-/// Live stream of "focus this sandbox" requests (see `api_focus`). The web UI
-/// subscribes here and switches its focused pane to the named sandbox; each
-/// event's `data:` payload is the bare sandbox name.
-async fn api_focus_events(
-    State(state): State<Arc<AppState>>,
-) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
-    let stream = BroadcastStream::new(state.focus.subscribe()).filter_map(|res| async move {
-        // `Err` here is a lagged receiver — skip the gap rather than closing.
-        let name = res.ok()?;
-        Some(Ok(SseEvent::default().data(name)))
-    });
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
 #[derive(Deserialize)]
 struct WatchReq {
     sandbox: String,
@@ -1175,6 +1182,85 @@ async fn api_watch_events(
         let name = res.ok()?;
         Some(Ok(SseEvent::default().data(name)))
     });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Multiplexes the three SSE feeds a browser tab needs — rich session
+/// updates, "the island wants this tab to focus a sandbox", and the open-tab
+/// count — onto a single HTTP connection via named SSE events (`session`,
+/// `focus`, `clients`).
+///
+/// Plain HTTP has no multiplexing (no TLS here, so no ALPN, so no h2), and
+/// browsers cap concurrent connections to one origin at 6. Three separate
+/// long-lived `EventSource`s per tab meant two tabs already claimed 8 of
+/// those 6 sockets, so a third tab's very first `GET /` had nowhere to go —
+/// it just queued in the browser, forever, since the sockets ahead of it
+/// never close. One connection per tab instead of three buys the headroom
+/// back. `/api/events` and `/api/watch-events` stay mounted unchanged: the
+/// macOS island still reads those directly over its own connection pool,
+/// which this doesn't touch.
+async fn api_stream(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<SseEvent>(64);
+
+    state.client_count.send_modify(|n| *n += 1);
+    // Sent from inside the pump task too (on every subsequent change), but the
+    // very first value has to be pushed explicitly — a `watch` receiver only
+    // wakes on *changes*, and this connection arrived after the increment
+    // above already happened.
+    let _ = tx
+        .try_send(SseEvent::default().event("clients").data(state.client_count.borrow().to_string()));
+
+    let mut session_rx = state.events.subscribe();
+    let mut focus_rx = state.focus.subscribe();
+    let mut clients_rx = state.client_count.subscribe();
+    let count_state = state.clone();
+
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                // Fires the moment `rx` below is dropped — i.e. the SSE
+                // response itself ended (tab closed, navigated away, socket
+                // dropped). Without this branch the loop would only find out
+                // via a `send()` failure, which needs *some* session/focus/
+                // clients event to come along first — on a quiet server that
+                // could be arbitrarily late, leaving the count (and the
+                // header warning) stuck wrong indefinitely.
+                _ = tx.closed() => break,
+                res = session_rx.recv() => match res {
+                    Ok(info) => {
+                        let ev = SseEvent::default()
+                            .event("session")
+                            .json_data(&info)
+                            .unwrap_or_else(|_| SseEvent::default().event("session"));
+                        if tx.send(ev).await.is_err() { break; }
+                    }
+                    // Lagged: skip the gap rather than closing the connection.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                res = focus_rx.recv() => match res {
+                    Ok(name) => {
+                        if tx.send(SseEvent::default().event("focus").data(name)).await.is_err() { break; }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                changed = clients_rx.changed() => {
+                    if changed.is_err() { break; }
+                    let n = *clients_rx.borrow();
+                    if tx.send(SseEvent::default().event("clients").data(n.to_string())).await.is_err() { break; }
+                }
+            }
+        }
+        // The receiving half (`rx` below) only drops when the SSE response
+        // itself does — tab closed, navigated away, connection dropped — so
+        // this is exactly "one fewer tab talking to the server".
+        count_state.client_count.send_modify(|n| *n = n.saturating_sub(1));
+    });
+
+    let stream = ReceiverStream::new(rx).map(Ok::<_, std::convert::Infallible>);
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
@@ -2522,7 +2608,7 @@ struct FsResponse {
     entries: Vec<FsEntry>,
 }
 
-async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
+fn read_fs_dir(params: FsQuery) -> FsResponse {
     let base = params
         .path
         .map(std::path::PathBuf::from)
@@ -2550,11 +2636,27 @@ async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
 
     entries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Json(FsResponse {
+    FsResponse {
         path: dir.to_string_lossy().into_owned(),
         parent,
         entries,
-    })
+    }
+}
+
+// Directory reads (`canonicalize`, `read_dir`) are synchronous syscalls; run them
+// on the blocking pool so they can't stall the runtime's worker threads (only 2 —
+// see `#[tokio::main]`) out from under every other client's SSE stream and PTY
+// bridge when several web UI tabs are open at once.
+async fn api_fs(Query(params): Query<FsQuery>) -> Json<FsResponse> {
+    Json(
+        tokio::task::spawn_blocking(move || read_fs_dir(params))
+            .await
+            .unwrap_or(FsResponse {
+                path: String::new(),
+                parent: None,
+                entries: Vec::new(),
+            }),
+    )
 }
 
 /// `POST /api/fs/pick` — pops the OS-native folder picker (Finder on macOS,

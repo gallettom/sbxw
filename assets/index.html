@@ -11,6 +11,27 @@
 </head>
 <body>
 
+<!-- ── Duplicate-tab interstitial ──
+     Shown only when `/js/singleton.js` finds another sbxw tab already open in
+     this same browser (over BroadcastChannel — see that file). Rendered
+     before any of the heavy app scripts load, so a duplicate tab costs
+     nothing: no SSE, no WebSocket, no xterm. Hidden by default; JS reveals
+     it, never CSS. -->
+<div class="singleton-overlay" id="singleton-overlay" hidden>
+  <div class="singleton-panel">
+    <div class="singleton-title">sbxw is already open</div>
+    <p class="singleton-body">
+      Another tab in this browser is already connected. sbxw isn't built to
+      be shared by several tabs at once — opening a second one here will slow
+      both down.
+    </p>
+    <div class="singleton-actions">
+      <button class="btn-cancel" id="singleton-anyway">Open here anyway</button>
+      <button class="btn-create" id="singleton-focus">Focus that tab</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Background-job corner indicators (non-blocking) ── -->
 <div class="bg-jobs" id="bg-jobs"></div>
 
@@ -24,6 +45,16 @@
   </svg>
 
   <span class="addr-badge" id="addr-badge" title="Click to copy URL">—</span>
+
+  <!-- sbxw expects exactly one browser tab talking to it — a second one
+       shares the same two runtime worker threads and the same PTY per
+       sandbox instead of getting its own, which is what makes everything
+       (the file browser especially) grind to a halt. Shown/hidden by the
+       `clients` event on the `/api/stream` SSE connection in main.js. -->
+  <span class="multi-client-warning" id="multi-client-warning" hidden
+        title="Another sbxw tab or window is connected to this server. sbxw isn't built to be shared by several tabs at once — expect things to slow down until only one is left. Click to ask any other tab in this browser to focus itself.">
+    ⚠ <span id="multi-client-count-label">2</span> sbxw tabs open
+  </span>
 
   <span class="spacer"></span>
 
@@ -322,9 +353,6 @@
 
 <div class="paste-toast" id="paste-toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js"></script>
 <script>
 const INITIAL_SANDBOX = "__SANDBOX__";
 // The host monitor is one fixed command from sbxw.toml (`monitor_cmd`); with
@@ -334,15 +362,12 @@ const MONITOR_CMD = "__MONITOR__";
 // can't occur in a real sandbox name, so it can never shadow one.
 const MONITOR_SANDBOX = '__host__';
 </script>
-<script src="/js/util.js"></script>
-<script src="/js/panes.js"></script>
-<script src="/js/pane-controls.js"></script>
-<script src="/js/sandboxes.js"></script>
-<script src="/js/create.js"></script>
-<script src="/js/ports.js"></script>
-<script src="/js/files.js"></script>
-<script src="/js/ssh.js"></script>
-<script src="/js/lifecycle.js"></script>
-<script src="/js/main.js"></script>
+<!-- Every other script — xterm.js and the app itself — is loaded by
+     singleton.js, and only once it decides this tab should actually boot
+     (see the interstitial above). Keeping them out of static <script> tags
+     is what makes a duplicate tab cheap: it never opens the SSE/WebSocket
+     connections or pulls in xterm at all unless the user picks "Open here
+     anyway". -->
+<script src="/js/singleton.js"></script>
 </body>
 </html>

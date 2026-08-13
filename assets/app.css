@@ -24,7 +24,52 @@
   }
   .addr-badge:hover { border-color: #30363d; color: #e6edf3; background: #11161c; }
   .addr-badge.copied { border-color: #3fb950; color: #3fb950; }
+  .multi-client-warning {
+    display: flex; align-items: center; gap: .3rem;
+    font-size: 12px; font-weight: 600; color: #d29922;
+    background: #3c2d0d; border: 1px solid #d29922; border-radius: 6px;
+    padding: .3rem .65rem; cursor: pointer; white-space: nowrap;
+    animation: multi-client-pulse 2s ease-in-out infinite;
+  }
+  .multi-client-warning:hover { background: #4a3710; }
+  .multi-client-warning[hidden] { display: none; }
+  @keyframes multi-client-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .6; }
+  }
   header .spacer { flex: 1; }
+
+  /* ── Duplicate-tab interstitial (see singleton.js) ── */
+  .singleton-overlay {
+    position: fixed; inset: 0;
+    background: rgba(1, 4, 9, .85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 500;
+  }
+  .singleton-overlay[hidden] { display: none; }
+  .singleton-panel {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    width: 420px; max-width: 92vw;
+    padding: 1.1rem 1.2rem;
+    box-shadow: 0 24px 64px rgba(1, 4, 9, .9);
+  }
+  .singleton-title {
+    color: #e6edf3; font-weight: 600; font-size: 15px; margin-bottom: .5rem;
+  }
+  .singleton-body {
+    color: #9198a1; font-size: 12.5px; line-height: 1.55; margin: 0 0 1rem;
+  }
+  .singleton-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+  .singleton-actions .btn-create:disabled { opacity: .7; cursor: default; }
+
+  /* A second tab asking to be found flashes the whole page — `window.focus()`
+     alone is frequently ignored by browsers for a tab that isn't already
+     active, so this is the part that's actually reliable to notice. */
+  html.sbxw-flash body { animation: sbxw-flash-anim .9s ease; }
+  @keyframes sbxw-flash-anim {
+    0%, 100% { background: #0d1117; }
+    20%, 60% { background: #3c2d0d; }
+  }
   .refresh-btn {
     display: flex; align-items: center; gap: .4rem;
     background: #21262d; border: 1px solid #30363d; border-radius: 6px;
@@ -264,6 +309,18 @@
   .sbx-group {
     margin: .2rem 0;
     background: color-mix(in srgb, var(--group-color) 15%, transparent);
+    border-radius: 4px;
+  }
+  /* Chat sandboxes always sort first (see orderForGrouping) — pin their group
+     to the top of the scroll area too, so it never scrolls out of view behind
+     older workspace groups. Needs an opaque-ish background (mixed against the
+     sidebar's own bg, not transparent) so items scrolling underneath don't
+     show through the sticky header. */
+  .sbx-group-chat {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: color-mix(in srgb, var(--group-color) 15%, #0d1117);
     border-radius: 4px;
   }
   .sbx-group-label {

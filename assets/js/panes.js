@@ -4,7 +4,7 @@ let focusedPane = 0;
 let paneCount = 1;
 
 // Agent activity per session, painted on each pane's liseret. Declared up here
-// with the rest of the pane state, and not beside the `/api/events` subscriber
+// with the rest of the pane state, and not beside the `/api/stream` subscriber
 // that feeds it at the bottom of the script: `connectPane` and `setPaneMode`
 // read these, and a `const` is in its temporal dead zone until the top-level
 // body reaches it. See the "Agent activity" section for what fills them.
