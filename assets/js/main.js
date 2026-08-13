@@ -177,14 +177,33 @@ new EventSource('/api/events').onmessage = ev => {
 window.addEventListener('focus', applyAgentStates);
 window.addEventListener('blur', applyAgentStates);
 
-// Coming back to the tab re-announces every pane's size instead of merely
-// re-checking it. A PTY is shared by everyone watching that sandbox, so the one
-// thing this tab cannot notice while it is away is somebody else resizing it —
-// no box changes here, and the observer has nothing to fire on. Forgetting what
-// each socket was told turns the return into the moment we say it again.
-document.addEventListener('visibilitychange', () => {
+// Coming back to the tab reconciles every pane's size against the live PTY
+// instead of blindly re-announcing it. A PTY is shared by everyone watching
+// that sandbox, so the one thing this tab cannot notice while it is away is
+// somebody else resizing it — no box changes here, and the observer has
+// nothing to fire on. But forgetting what every socket was told (nulling
+// `sentSize` outright) made *every* pane re-announce on *every* return,
+// whether or not its size actually moved — and after a long sleep or a
+// reconnect, several panes come back at once. Each unnecessary resize is a
+// real SIGWINCH to that sandbox's PTY, and a CLI agent (Claude Code among
+// them) redraws its whole screen off the back of one — a wave of full-screen
+// redraws across every open pane for no reason. `/api/ptys` reads the PTY's
+// actual size, the same truth `sentSize` is meant to track, so reconcile
+// against that instead of discarding it: only a pane whose size truly drifted
+// while this tab was away ends up sending anything.
+document.addEventListener('visibilitychange', async () => {
   if (document.hidden) return;
-  panes.slice(0, paneCount).forEach(p => { if (p.ws) p.ws.sentSize = null; });
+  let live = new Map();
+  try {
+    const res = await fetch('/api/ptys');
+    live = new Map((await res.json()).map(e => [e.key, e]));
+  } catch (_) { /* fall back to each pane's last-known sentSize below */ }
+  panes.slice(0, paneCount).forEach(p => {
+    if (!p.ws) return;
+    const entry = p.sandbox ? live.get(`${p.sandbox}::${p.mode}`) : null;
+    if (entry && entry.cols != null && entry.rows != null)
+      p.ws.sentSize = `${entry.cols}x${entry.rows}`;
+  });
   refitPanes('tab visible');
 });
 

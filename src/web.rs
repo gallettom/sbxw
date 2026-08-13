@@ -1488,9 +1488,23 @@ async fn api_answer(
         .get(&status_key)
         .map(|st| st.prompt.iter().map(|q| q.options.len() as u32).collect())
         .unwrap_or_default();
+    tracing::info!(
+        "answer '{}': indices={:?}, sizes={:?}",
+        body.sandbox,
+        answers,
+        sizes
+    );
     for (n, index) in answers.iter().enumerate() {
         let limit = sizes.get(n).copied().unwrap_or(MAX_MENU_STEPS);
-        for _ in 1..(*index).clamp(1, limit.max(1)) {
+        let downs = (*index).clamp(1, limit.max(1)) - 1;
+        if *index > limit {
+            tracing::warn!(
+                "answer '{}': step {n} index {index} exceeds {limit} known option(s) — clamped to {}",
+                body.sandbox,
+                downs + 1
+            );
+        }
+        for _ in 0..downs {
             send_key(&sess, KEY_DOWN).await;
         }
         send_key(&sess, KEY_ENTER).await;
