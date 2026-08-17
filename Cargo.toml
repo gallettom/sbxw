@@ -1,6 +1,6 @@
 [package]
 name = "sbxw"
-version = "1.0.48"
+version = "1.0.49"
 edition = "2021"
 description = "Ultra-light wrapper around `sbx` (Docker Sandboxes) for local dev with Claude Code"
 
