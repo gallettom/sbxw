@@ -14,6 +14,9 @@ enum IslandDisplay: Equatable {
     case miniToast(SessionInfo)
     /// An interactive prompt waiting to be answered.
     case question(SessionInfo)
+    /// A cross-sandbox information request waiting on a routing or a release
+    /// decision (see `RelayCard`).
+    case relay(RelayRequest)
     /// The full list of sessions (revealed on hover).
     case list
 }
@@ -22,7 +25,7 @@ extension IslandDisplay {
     /// Whether this mode owns the pointer outright: the whole panel takes mouse
     /// events, and its content's `.onHover` drives the auto-hide.
     ///
-    /// The list and a question card do. Both toasts are read-only: they announce,
+    /// The list and the two cards do. Both toasts are read-only: they announce,
     /// they don't offer. The collapsed bubble is the in-between case and is not
     /// covered here — it takes clicks only over the part of the panel it actually
     /// draws, and only when it draws anything (see
@@ -33,8 +36,17 @@ extension IslandDisplay {
     /// use for is a window in your way.
     var isInteractive: Bool {
         switch self {
-        case .list, .question: return true
+        case .list, .question, .relay: return true
         case .collapsed, .toast, .miniToast: return false
+        }
+    }
+
+    /// Whether this mode is a decision the user is in the middle of, which
+    /// nothing may auto-dismiss or interrupt.
+    var isCard: Bool {
+        switch self {
+        case .question, .relay: return true
+        case .collapsed, .toast, .miniToast, .list: return false
         }
     }
 }
@@ -56,6 +68,8 @@ final class NotchController: ObservableObject {
     @Published private(set) var display: IslandDisplay = .collapsed
 
     let store: SessionStore
+    /// Cross-sandbox information requests (see `RelayStore`, `RelayCard`).
+    let relay: RelayStore
     private var panel: NSPanel?
     private var hosting: NSHostingView<NotchContentView>?
     private var hovering = false
@@ -79,10 +93,14 @@ final class NotchController: ObservableObject {
     @Published private(set) var hasNotch = false
     /// Height of the physical notch, or a small lip on screens without one.
     @Published private(set) var topInset: CGFloat = 32
-    /// Width of the physical notch: the panel's first size, and the width of the
-    /// band that reveals the island on hover (see `revealBand`). Falls back to a
-    /// compact default on Macs without a notch.
-    private var notchWidth: CGFloat = 180
+    /// Width of the physical notch: the panel's first size, the width of the
+    /// band that reveals the island on hover (see `revealBand`), and — since the
+    /// collapsed bubble is drawn at exactly this width (`NotchContentView.width`)
+    /// — the width of the bubble itself. Falls back to a compact default on Macs
+    /// without a notch. `@Published` because a screen change can set it again
+    /// after the bubble is already on screen (see `adoptScreen`), and the drawn
+    /// width has to follow.
+    @Published private(set) var notchWidth: CGFloat = 180
 
     /// Top lip used on notch-less screens: just enough that the content doesn't
     /// start flush against the screen edge.
@@ -93,14 +111,24 @@ final class NotchController: ObservableObject {
     /// tight to it; elsewhere it's the plain lip.
     var topClearance: CGFloat { hasNotch ? max(topInset - 6, 0) : topInset }
 
-    init(store: SessionStore) {
+    init(store: SessionStore, relay: RelayStore) {
         self.store = store
+        self.relay = relay
         // Plain state changes toast; questions are surfaced by the observer below.
         store.onTransition = { [weak self] info in
             guard let self else { return }
             if info.state == .attention, !info.promptSteps.isEmpty { return }
-            if case .question = self.display { return }
+            // Neither card is interrupted by an announcement: both are decisions
+            // in progress, and a toast over one would take the panel with it.
+            if self.display.isCard { return }
             self.showToast(info)
+        }
+        // A relay request that newly needs the human. Surfaced on arrival rather
+        // than on every event about it, so a card the user closed stays closed
+        // until the request genuinely moves on (see `RelayStore.onArrival`).
+        relay.onArrival = { [weak self] req in
+            guard let self else { return }
+            self.showRelay(req)
         }
         // The user went to read this sandbox's terminal in the browser. An open
         // card survives a plain acknowledgement on purpose (see
@@ -124,6 +152,15 @@ final class NotchController: ObservableObject {
         store.$sessions.combineLatest(store.$acknowledged, store.$hushedWorking)
             .sink { [weak self] sessions, _, _ in
                 MainActor.assumeIsolated { self?.onSessionsChanged(sessions) }
+            }
+            .store(in: &cancellables)
+        // Keep an open relay card in step with its request: the sandbox
+        // answered, delivery failed and it fell back to pending, or somebody
+        // settled it from the browser. Only the card on screen is affected —
+        // *surfacing* one is `onArrival`'s job, which fires once per turn.
+        relay.$requests
+            .sink { [weak self] requests in
+                MainActor.assumeIsolated { self?.onRelayChanged(requests) }
             }
             .store(in: &cancellables)
         // Composers change the list's height as they swap between the ＋ row, the
@@ -229,7 +266,51 @@ final class NotchController: ObservableObject {
     /// Explicitly dismiss the prompt card (the user tapped ✕). The session stays
     /// waiting in the daemon; we just retract the notch.
     func dismissQuestion() {
-        collapse()
+        collapseAndSurfaceNext()
+    }
+
+    /// Show a cross-sandbox request's card. It stays until routed, settled, or
+    /// waved off — never on a timer: an agent is blocked behind it.
+    ///
+    /// Yields to any card already open — a prompt, or another request. They are
+    /// all decisions, none is more urgent than the others, and swapping the
+    /// buttons under a pointer already on its way to one of them is the one
+    /// outcome worth ruling out. Whatever is deferred waits in the banner at the
+    /// top of the list, and `collapseAndSurfaceNext` picks it up as soon as the
+    /// card on screen is done with.
+    ///
+    /// The guard is on the *display*, so an explicit tap on the banner still
+    /// opens the request it names: by then the list is what's on screen.
+    func showRelay(_ req: RelayRequest) {
+        if display.isCard { return }
+        hideTask?.cancel()
+        toastTask?.cancel()
+        setDisplay(.relay(req))
+    }
+
+    /// Retract the relay card. Called after a decision, and by its ✕ — which
+    /// means "later": `RelayStore` records the dismissal, the daemon keeps the
+    /// request, and the asking agent keeps waiting.
+    func dismissRelay() {
+        if case .relay = display { collapseAndSurfaceNext() }
+    }
+
+    /// Follow an open relay card's request, and close the card once the request
+    /// stops wanting anything from the user.
+    ///
+    /// Deliberately narrow: it never *opens* a card. A request only surfaces
+    /// through `RelayStore.onArrival`, so a card the user closed with "later"
+    /// stays closed while its request sits there unchanged.
+    private func onRelayChanged(_ requests: [RelayRequest]) {
+        guard panel != nil, case .relay(let current) = display else { return }
+        guard let live = requests.first(where: { $0.id == current.id }), live.needsYou else {
+            // Settled, routed away, or gone: nothing left to decide here.
+            collapseAndSurfaceNext()
+            return
+        }
+        // Re-set only on a real change, so the panel is not re-measured for
+        // every event that merely restates the request.
+        if live != current { setDisplay(.relay(live)) }
     }
 
     /// The content grew or shrank on its own (a row's reply accordion opening,
@@ -421,11 +502,16 @@ final class NotchController: ObservableObject {
     /// The band whose hover reveals the island, in screen coordinates: the
     /// panel's full height, but only the notch's width, centred on it.
     ///
-    /// The collapsed bubble hangs 280 pt wide (332 counting the invisible margin
-    /// its shadow needs) over the menu bar of whatever app you are working in, and
-    /// a pointer crossing the top edge on the way to *that* app's menus used to
-    /// unfold the island in your face. Aiming at the notch is the gesture; passing
-    /// beside it is not.
+    /// This now lines up with what the collapsed bubble actually draws — both
+    /// are `notchWidth` — so hovering the visible bubble is precisely what
+    /// triggers the reveal. It wasn't always so: the bubble used to be drawn
+    /// wider than the notch, and this band stayed narrow on its own so a pointer
+    /// merely passing the top edge on the way to *that* app's menus didn't
+    /// unfold the island in your face. Aiming at the notch was the gesture,
+    /// passing beside it wasn't — kept here as its own function, rather than
+    /// folded away now that the two widths match, because the panel's frame can
+    /// still be wider than `notchWidth` (the shadow margin), and this is what
+    /// excludes that margin from the hover target.
     ///
     /// Only the width narrows. The full height matters: with nothing running the
     /// collapsed content is a 2 pt hairline, and the shadow's margin below it is
@@ -515,8 +601,9 @@ final class NotchController: ObservableObject {
         // after the pointer had gone, and every later auto-collapse saw a hover
         // that wasn't happening and declined to retract.
         hovering = inside
-        // Keep an interactive prompt on screen until it's answered.
-        if case .question = display { return }
+        // Keep an interactive card — a prompt, or a relay request — on screen
+        // until it is decided.
+        if display.isCard { return }
         // Likewise a half-written chat: the pointer wandering off must not take
         // the field (and the text in it) with it.
         if composerActive { return }
@@ -534,7 +621,7 @@ final class NotchController: ObservableObject {
         hoverTask = Task { [weak self] in
             try? await Task.sleep(for: Self.hoverIntentDelay)
             guard let self, !Task.isCancelled, self.hovering else { return }
-            if case .question = self.display { return }
+            if self.display.isCard { return }
             // The user reached for the island: drop any toast lifecycle and
             // show the full list, then arm the usual auto-hide.
             self.toastTask?.cancel()
@@ -578,8 +665,32 @@ final class NotchController: ObservableObject {
             }
         case .toast, .miniToast:
             if let p = pending { showQuestion(p) }
+        case .relay:
+            break // a decision in progress; the prompt waits its turn
         case .list:
             break // don't interrupt an explicit hover-list
+        }
+    }
+
+    /// Retract a card and hand the notch to whatever else is waiting.
+    ///
+    /// Without this step a decision closing is the end of it: `onSessionsChanged`
+    /// only runs on a *session* change, so a prompt that was already pending
+    /// while a relay card held the notch would sit there unshown until some
+    /// unrelated session happened to tick — which an idle one may not do for
+    /// minutes. Same in reverse for a relay request deferred behind a prompt.
+    ///
+    /// The order is the same one the cards yield in: an agent's own prompt
+    /// first, then a relay request.
+    private func collapseAndSurfaceNext() {
+        collapse()
+        guard panel != nil else { return }
+        if let p = store.sessions.first(where: {
+            $0.state == .attention && !$0.promptSteps.isEmpty && !store.isAcknowledged($0)
+        }) {
+            showQuestion(p)
+        } else if let req = relay.pendingForYou.first {
+            showRelay(req)
         }
     }
 
@@ -664,7 +775,7 @@ final class NotchController: ObservableObject {
                 : Self.autoHideDelay
             try? await Task.sleep(for: delay)
             guard let self, !Task.isCancelled else { return }
-            if case .question = self.display { return } // never auto-dismiss a prompt
+            if self.display.isCard { return } // never auto-dismiss a decision
             if self.composerActive { return } // nor a chat being written
             if self.hovering {
                 self.expandToList()

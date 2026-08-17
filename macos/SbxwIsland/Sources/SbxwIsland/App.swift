@@ -30,7 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     static var shared: AppDelegate?
 
     let store = SessionStore()
-    private lazy var notch = NotchController(store: store)
+    /// Cross-sandbox information requests. Its own store and its own SSE
+    /// connection: a relay request belongs to two sessions at once and outlives
+    /// either, so it is not something `SessionStore` could hold a row for.
+    let relay = RelayStore()
+    private lazy var notch = NotchController(store: store, relay: relay)
     /// Settings live in a real window, not a sheet. `MenuBarExtra(.window)`
     /// closes its popover the moment it loses focus — which is exactly when a
     /// sheet appears — so the sheet outlived the view that owned it: its
@@ -43,8 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // menu should talk to.
         AppDelegate.shared = self
         NSApp.setActivationPolicy(.accessory)
-        notch.install()   // wires store.onTransition before events start
+        notch.install()   // wires store.onTransition + relay.onArrival before events start
         store.start()
+        relay.start()
     }
 
     func revealNotch() {
@@ -242,7 +247,11 @@ struct SettingsView: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
                     Config.baseURL = baseURL.trimmingCharacters(in: .whitespaces)
+                    // Both streams follow the daemon URL; leaving the relay one
+                    // pointed at the old address would keep the island's
+                    // sessions and its requests on two different daemons.
                     AppDelegate.shared?.store.restart()
+                    AppDelegate.shared?.relay.restart()
                     onClose()
                 }
                 .keyboardShortcut(.defaultAction)

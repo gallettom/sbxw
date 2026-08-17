@@ -400,6 +400,21 @@ On top of that:
   (**⌘1/⌘2/…**) — picking one sends the answer straight into the session. A
   prompt with several questions is walked step by step (**1/2**, **⌘←** to go
   back) and submitted in one go once the last one is picked;
+- **a sandbox asking another one gets its own card.** When an agent reaches for
+  the [relay](#asking-another-sandbox-the-relay), the notch expands into the
+  question and one button per running sandbox (**⌘1/⌘2/…**) — picking one sends
+  it. When the answer comes back the card returns, showing what was written and
+  offering to release it or refuse. In between, while the question is out with
+  another agent, the notch says nothing: that wait belongs to an agent, not to
+  you, and a card you cannot act on has no business over the menu bar. It shows
+  up as a line at the top of the hover list instead, which is also where a card
+  closed with ✕ ("later") waits.
+
+  The island **will not release an answer it cannot show you in full.** The
+  browser popup lets you edit one before it goes — trim it, cut a secret out of
+  it — and the notch has no editor, so one click there would send text verbatim.
+  Past ten lines the card drops the button and points at the browser instead.
+
 - **several agents in one sandbox each get a row, and the island says which is
   which.** A container can hold more than one Claude Code session — the one sbxw
   attached, plus anything started over SSH (Claude Desktop, an editor, a shell

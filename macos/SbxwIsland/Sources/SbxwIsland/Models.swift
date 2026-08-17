@@ -173,6 +173,88 @@ struct SessionInfo: Codable, Equatable, Identifiable {
     }
 }
 
+/// Mirrors sbxw's `RelayState` (see `src/relay.rs`).
+///
+/// Decoded leniently: the app and the daemon ship as separate binaries and
+/// update independently, so a state this build has never heard of must not make
+/// the whole request undecodable — it lands as `unknown` and the card treats it
+/// as "nothing for you to do", which is the safe reading of a state it cannot
+/// reason about.
+enum RelayState: String, Codable, Equatable {
+    /// Open, and nobody has been asked yet — the human picks who gets it.
+    case pending
+    /// Out with a sandbox, whose agent has not answered.
+    case routed
+    /// Answered, and the answer is held for review. Nothing released yet.
+    case answered
+    /// The human released an answer to the asker.
+    case approved
+    /// The human refused. Nothing released, then or later.
+    case denied
+    /// A state from a newer daemon.
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = RelayState(rawValue: raw) ?? .unknown
+    }
+}
+
+/// One cross-sandbox information request (mirrors sbxw's `RelayRequest`), from
+/// `GET /api/relay` and the `/api/relay/events` stream.
+///
+/// An agent asked for something outside its own workspace; every hop from here
+/// is the human's. See the relay section of the README.
+struct RelayRequest: Codable, Equatable, Identifiable {
+    let id: String
+    /// Sandbox that asked.
+    let from: String
+    /// The question, as the asking agent wrote it. Untrusted text: shown to a
+    /// person, never acted on here.
+    let question: String
+    /// Sandbox a human routed it to, once one has been chosen.
+    var to: String? = nil
+    /// The answer. Only ever present on the human-facing endpoints — and only
+    /// released to the asker once `state` is `.approved`.
+    var answer: String? = nil
+    let state: RelayState
+    /// Why it was refused, or what went wrong delivering it.
+    var note: String? = nil
+    let created_ms: UInt64
+    let updated_ms: UInt64
+
+    /// Still live: nobody has settled it.
+    var isOpen: Bool { state != .approved && state != .denied }
+
+    /// Waiting on *you* right now — the only two states worth a card.
+    ///
+    /// `routed` is deliberately excluded: the question is out with another
+    /// agent, which can take minutes, and holding the notch for that would be
+    /// occupying the menu bar with something you cannot act on. It is the same
+    /// rule the browser popup follows when it shrinks to a corner card.
+    var needsYou: Bool { state == .pending || state == .answered }
+
+    /// The answer, trimmed — nil when there is nothing held.
+    var answerText: String? {
+        guard let answer else { return nil }
+        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// First line of the question, short enough for a one-line row.
+    var gist: String {
+        let line = question.split(separator: "\n").first.map(String.init) ?? question
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.count > 60 ? String(trimmed.prefix(60)) + "…" : trimmed
+    }
+
+    /// Seconds since the request was opened.
+    var elapsed: TimeInterval {
+        guard created_ms > 0 else { return 0 }
+        return max(0, Date().timeIntervalSince1970 - Double(created_ms) / 1000.0)
+    }
+}
+
 /// Account-wide Claude subscription usage (mirrors sbxw's `UsageInfo`), from
 /// `GET /api/usage`. Percentages are 0–100; nil when unknown (API-key auth, or
 /// before a session's first API response).

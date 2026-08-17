@@ -25,7 +25,8 @@
 //!   POST /api/relay/ask             → a sandbox opens a question for another sandbox
 //!   POST /api/relay/wait            → …and parks on it until a human settles it
 //!   POST /api/relay/reply           → the routed-to sandbox files its answer for review
-//!   GET  /api/relay                 → every live request (browser UI)
+//!   GET  /api/relay                 → every live request (browser UI, island)
+//!   GET  /api/relay/events          → SSE stream of relay requests (macOS island)
 //!   POST /api/relay/:id/route       → a human sends a question to a sandbox
 //!   POST /api/relay/:id/approve     → a human releases the answer to the asker
 //!   POST /api/relay/:id/deny        → a human refuses; nothing is released
@@ -1045,8 +1046,9 @@ pub async fn serve(
         .route("/api/relay/ask", post(api_relay_ask))
         .route("/api/relay/wait", post(api_relay_wait))
         .route("/api/relay/reply", post(api_relay_reply))
-        // …and these, only by the human at the browser UI.
+        // …and these, only by the human — at the browser UI or on the island.
         .route("/api/relay", get(api_relay_list))
+        .route("/api/relay/events", get(api_relay_events))
         .route("/api/relay/:id/route", post(api_relay_route))
         .route("/api/relay/:id/approve", post(api_relay_approve))
         .route("/api/relay/:id/deny", post(api_relay_deny))
@@ -2356,6 +2358,12 @@ const CHAT_READY_TIMEOUT: Duration = Duration::from_secs(45);
 /// blink rather than `CHAT_READY_TIMEOUT`.
 const CHAT_ECHO_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The same, for a block of text delivered without bracketed-paste markers —
+/// where "the paste has ended" is inferred from timing on both sides and the
+/// Return has to clear Claude Code's own coalescing window, not just the echo.
+/// Only reached on an app that hasn't asked for the markers (see `PASTE_START`).
+const CHAT_ECHO_QUIET_BULK: Duration = Duration::from_millis(900);
+
 /// Silence that ends the echo of a typed message, before Return is sent as its
 /// own keystroke.
 ///
@@ -2639,32 +2647,110 @@ async fn push_text(state: &Arc<AppState>, sandbox: &str, text: &str) -> Result<(
             "'{sandbox}' has no live agent session — its Claude Code process is not running"
         ));
     }
+    // A block of text is a *paste*, and how it is delivered decides whether the
+    // Return that follows submits it or lands inside it (see `PASTE_START`).
+    let bulky = text.contains('\n') || text.len() > BULK_TEXT_BYTES;
+    let bracketed = bulky && bracketed_paste_enabled(&session);
     {
         let mut w = session.writer.lock().unwrap();
-        let _ = w.write_all(text.as_bytes());
+        if bracketed {
+            let _ = w.write_all(PASTE_START);
+            let _ = w.write_all(text.as_bytes());
+            let _ = w.write_all(PASTE_END);
+        } else {
+            let _ = w.write_all(text.as_bytes());
+        }
         let _ = w.flush();
     }
+    tracing::debug!(
+        "push_text → '{sandbox}': {} bytes, bulky={bulky}, bracketed={bracketed}",
+        text.len()
+    );
 
     // Submit — but only once the message has stopped echoing.
     //
-    // Return has to arrive as its own keystroke. Claude Code reads a burst of
-    // closely-spaced bytes as a *paste*, and a newline inside a paste is
-    // inserted into the message rather than sending it: the text landed in the
-    // box and simply sat there. `api_answer`'s 60 ms is enough between two
-    // isolated arrow keys, nowhere near enough after a block of text. Waiting
-    // for the echo to go quiet also scales with the machine, which a fixed
-    // guess would not.
+    // Return has to arrive as its own keystroke, *after* the paste is closed.
+    // Claude Code reads a burst of closely-spaced bytes as a paste, and a
+    // newline arriving while that burst is still being coalesced is inserted
+    // into the message instead of sending it: the text lands in the box and
+    // simply sits there, as `[Pasted text #1 +18 lines]`. `api_answer`'s 60 ms
+    // is enough between two isolated arrow keys, nowhere near enough after a
+    // block of text. Waiting for the echo to go quiet also scales with the
+    // machine, which a fixed guess would not.
     //
     // Waiting for the echo to *start* before timing its silence is what keeps
     // this honest at a short quiet window: without it, a PTY that hasn't turned
     // the write around yet reads as quiet, and Return joins the paste.
-    settle(&mut rx, Some(CHAT_ECHO_TIMEOUT), CHAT_ECHO_QUIET).await;
+    //
+    // The window is longer for an unbracketed block, where the end of the paste
+    // is only ever a guess about timing — that is exactly the case that failed.
+    let quiet = if bulky && !bracketed {
+        CHAT_ECHO_QUIET_BULK
+    } else {
+        CHAT_ECHO_QUIET
+    };
+    settle(&mut rx, Some(CHAT_ECHO_TIMEOUT), quiet).await;
     {
         let mut w = session.writer.lock().unwrap();
         let _ = w.write_all(KEY_ENTER);
         let _ = w.flush();
     }
     Ok(())
+}
+
+/// Bracketed paste, both halves of it.
+///
+/// `?2004h` / `?2004l` is the *app* telling the terminal "wrap pastes for me";
+/// `200~` / `201~` is the terminal doing so. sbxw writes into the PTY master, so
+/// it is playing the terminal here: when the app has asked, sending the markers
+/// is exactly what a real one does when you hit ⌘V.
+///
+/// This matters because the alternative is a guess. Without markers Claude Code
+/// infers a paste from arrival timing, and the Return meant to submit the
+/// message can land inside that window and be swallowed into it — which is how a
+/// relayed question ended up sitting in the prompt as `[Pasted text #1 +18
+/// lines]`, typed but never sent. `201~` ends the paste on a byte rather than on
+/// a stopwatch, so the Return after it can only be a Return.
+///
+/// Never sent blind: an app that has *not* enabled the mode would take the
+/// markers as literal input, so `bracketed_paste_enabled` reads the answer off
+/// what the app itself printed.
+const BRACKETED_PASTE_ON: &[u8] = b"\x1b[?2004h";
+const BRACKETED_PASTE_OFF: &[u8] = b"\x1b[?2004l";
+const PASTE_START: &[u8] = b"\x1b[200~";
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// Above this, a single-line message is still delivered as a burst and read as a
+/// paste. Well under the terminal's own line buffer, and far above anything a
+/// person types into the island's composer.
+const BULK_TEXT_BYTES: usize = 200;
+
+/// Has the app on the other end of this PTY asked for bracketed paste?
+///
+/// Answered from its own output — the replay ring buffer holds what it wrote —
+/// rather than assumed. The *last* of the two sequences wins: an app can turn
+/// the mode off for a full-screen mode and back on for its prompt, and only the
+/// most recent one says what is true now.
+fn bracketed_paste_enabled(session: &Arc<PtySession>) -> bool {
+    let buf: Vec<u8> = session.replay.lock().unwrap().iter().copied().collect();
+    match (
+        last_index_of(&buf, BRACKETED_PASTE_ON),
+        last_index_of(&buf, BRACKETED_PASTE_OFF),
+    ) {
+        (Some(on), Some(off)) => on > off,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// Index of the last occurrence of `needle` in `hay`.
+fn last_index_of(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    (0..=(hay.len() - needle.len()))
+        .rev()
+        .find(|&i| &hay[i..i + needle.len()] == needle)
 }
 
 // ── Cross-sandbox relay ───────────────────────────────────────────────────
@@ -2835,6 +2921,27 @@ async fn api_relay_reply(
 /// side sees requests whole, held answers included: reviewing one is the job.
 async fn api_relay_list(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "requests": state.relay.list() }))
+}
+
+/// `GET /api/relay/events` — the same feed the browser gets multiplexed into
+/// `/api/stream`, on a connection of its own for the macOS island.
+///
+/// Separate rather than folded into `/api/events`: that stream carries bare
+/// `SessionInfo` payloads with no event names, so a second shape on it would be
+/// told apart by whichever decoder happened to succeed. The island already runs
+/// one connection per feed (`/api/watch-events` is the precedent) and is not
+/// subject to the browser's six-per-origin limit that made the tab multiplex.
+async fn api_relay_events(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
+    let stream = BroadcastStream::new(state.relay.subscribe()).filter_map(|res| async move {
+        // `Err` here is a lagged receiver — skip the gap rather than closing.
+        let req = res.ok()?;
+        Some(Ok(SseEvent::default()
+            .json_data(&req)
+            .unwrap_or_else(|_| SseEvent::default())))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// The message typed into the target's session. Framed as *data with a
@@ -3988,6 +4095,75 @@ mod tests {
         assert_eq!(favourite_labels(&["/home/t/code".into()]), vec!["code"]);
         // Nothing to take a name from: the path itself has to do.
         assert_eq!(favourite_labels(&["/".into()]), vec!["/"]);
+    }
+
+    /// Which of the two bracketed-paste sequences came *last* is the whole
+    /// answer: an app turns the mode off for a full-screen view and back on for
+    /// its prompt, and reading the wrong one either strands the markers as
+    /// literal text or drops back to the timing guess that swallowed a Return.
+    #[test]
+    fn bracketed_paste_is_read_from_the_last_thing_the_app_said() {
+        let on = |s: &str| {
+            let buf = s.as_bytes().to_vec();
+            match (
+                last_index_of(&buf, BRACKETED_PASTE_ON),
+                last_index_of(&buf, BRACKETED_PASTE_OFF),
+            ) {
+                (Some(a), Some(b)) => a > b,
+                (Some(_), None) => true,
+                _ => false,
+            }
+        };
+        assert!(!on(""), "an app that said nothing gets no markers");
+        assert!(!on("plain output with no modes at all"));
+        assert!(on("\u{1b}[?2004h> "), "enabled and still enabled");
+        assert!(!on("\u{1b}[?2004h\u{1b}[?2004l"), "turned back off");
+        assert!(
+            on("\u{1b}[?2004h\u{1b}[?2004l…\u{1b}[?2004h"),
+            "off, then on again"
+        );
+        // A sequence that merely *looks* close must not count.
+        assert!(!on("\u{1b}[?2004"), "truncated");
+        assert!(!on("\u{1b}[?1004h"), "a different mode");
+    }
+
+    #[test]
+    fn last_index_of_finds_the_final_match_and_nothing_else() {
+        assert_eq!(last_index_of(b"abcabc", b"abc"), Some(3));
+        assert_eq!(last_index_of(b"abc", b"abc"), Some(0));
+        assert_eq!(
+            last_index_of(b"abc", b"abcd"),
+            None,
+            "needle longer than hay"
+        );
+        assert_eq!(last_index_of(b"", b"a"), None);
+        assert_eq!(
+            last_index_of(b"abc", b""),
+            None,
+            "an empty needle matches nothing"
+        );
+        assert_eq!(
+            last_index_of(b"aaa", b"aa"),
+            Some(1),
+            "overlapping, last wins"
+        );
+    }
+
+    /// The message a routed question carries is exactly what broke: multi-line,
+    /// well past the burst threshold, and therefore a paste however it is sent.
+    #[test]
+    fn a_relayed_question_is_always_bulky_enough_to_need_the_markers() {
+        let relay = Relay::new();
+        let req = relay.open("neos", "how is the datetime field provisioned?", 1_000);
+        let msg = relay_request_message(&req);
+        assert!(msg.contains('\n'), "multi-line");
+        assert!(msg.len() > BULK_TEXT_BYTES, "{} bytes", msg.len());
+
+        // …while what a person types into the island's composer is not, so the
+        // path that already worked keeps its short window.
+        let typed = "can you check the staging config?";
+        assert!(!typed.contains('\n'));
+        assert!(typed.len() <= BULK_TEXT_BYTES);
     }
 
     /// A `--timeout` typo must not wedge an agent's tool call for an hour.

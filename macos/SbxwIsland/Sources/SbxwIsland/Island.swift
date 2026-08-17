@@ -640,6 +640,16 @@ struct SessionRow: View {
 /// The full list of session rows.
 struct IslandView: View {
     @ObservedObject var store: SessionStore
+    /// Cross-sandbox requests, for the banner above the list — the way back to a
+    /// card closed with "later", and the only place a question already out with
+    /// another sandbox is visible at all.
+    ///
+    /// Optional because this same list is also the menu-bar popover's body,
+    /// where there is no notch card for the banner to open. Absent, no banner is
+    /// drawn and nothing else changes.
+    var relay: RelayStore? = nil
+    /// Told which request the banner was tapped for.
+    var onOpenRelay: (RelayRequest) -> Void = { _ in }
     /// Row tap handler. Defaults to opening the sandbox in the browser.
     var onSelect: (SessionInfo) -> Void = { openWhereItRuns($0) }
     /// Told when a chat composer takes or gives up keyboard focus. The notch
@@ -685,6 +695,11 @@ struct IslandView: View {
                     .overlay(Color.white.opacity(0.08))
                     .padding(.horizontal, 8)
                     .padding(.bottom, 2)
+            }
+            // Above the sessions: an agent waiting on *you* to pass a question
+            // along outranks the list of what everything is doing.
+            if let relay {
+                RelayBanner(relay: relay, onOpen: onOpenRelay)
             }
             if store.sessions.isEmpty {
                 Text(store.connected ? "No active sessions" : "Waiting for sbxw…")
@@ -1172,34 +1187,24 @@ struct InvaderIcon: View {
 }
 
 /// Persistent notch bubble shown while the island is collapsed: an agent glyph,
-/// the representative active session's task, and a session count. The black fill
+/// the name of the sandbox asking for you, and a session count. The black fill
 /// rises to the top screen edge so the physical notch sits *inside* the bubble
 /// (a sense of inclusion, not a pill floating below it). Depth comes from the
-/// soft drop shadow applied by NotchContentView — no border. Renders nothing
-/// (a hairline hover strip) when nothing is working or waiting.
+/// soft drop shadow applied by NotchContentView — no border. Renders nothing (a
+/// hairline hover strip) when nothing is working or waiting.
 struct SummaryPill: View {
     @ObservedObject var store: SessionStore
-    /// Notch height (a small lip on screens without a notch): the task row sits
-    /// below this, the black fills behind it.
+    /// Notch height (a small lip on screens without a notch): the name row sits
+    /// below this, the black fill behind it.
     let topInset: CGFloat
     /// The bubble was clicked. A closure rather than the controller itself: this
     /// view redraws on every session tick, and observing the controller too would
     /// add its own publishes to that.
     let onTap: () -> Void
 
-    /// The session whose task to surface (see `SessionStore.summaryLead`, which
+    /// The session the bubble speaks for (see `SessionStore.summaryLead`, which
     /// the panel reads too so it knows whether the bubble is there to be clicked).
     private var lead: SessionInfo? { store.summaryLead }
-
-    /// Once the turn has ended, the pill carries Claude's answer rather than the
-    /// prompt that produced it — the collapsed notch is read at a glance, and a
-    /// finished session showing your own words back reads as if nothing happened.
-    private func task(_ s: SessionInfo) -> String {
-        if s.showsReply, let lead = s.replyLead { return lead }
-        if let input = s.last_input, !input.isEmpty { return input }
-        if let a = s.activity, a.count >= 3 { return a }
-        return s.sandbox
-    }
 
     /// Glyph tint mirrors the lead's urgency: amber prompt, teal your-turn,
     /// green working.
@@ -1214,13 +1219,23 @@ struct SummaryPill: View {
         Group {
             if let lead {
                 VStack(spacing: 0) {
-                    // The notch lives in this strip; the black behind it makes
-                    // the notch look enclosed by the bubble.
+                    // The notch lives in this strip; the black fill behind it
+                    // makes the notch look enclosed by the bubble.
                     Color.clear.frame(height: topInset)
                     HStack(spacing: 9) {
                         InvaderIcon(color: leadIconColor)
                             .frame(width: 17, height: 13)
-                        Text(task(lead))
+                        // The sandbox this bubble is about — not a preview of
+                        // what its agent said. A task/reply preview reads fine at
+                        // the pill's old, generous width; squeezed to the notch's
+                        // own width it truncates into something unreadable and,
+                        // worse, still changes on every tick (a new prompt, a
+                        // growing reply), which made the pill feel like it was
+                        // flickering even when nothing you'd act on had happened.
+                        // The sandbox name is what answers "which one wants me?"
+                        // at a glance, and it's stable for as long as the bubble
+                        // is even up.
+                        Text(lead.sandbox)
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white)
                             .lineLimit(1)
@@ -1240,7 +1255,10 @@ struct SummaryPill: View {
                 }
                 .frame(maxWidth: .infinity)
                 // Square top (flush with the screen edge, around the notch),
-                // generously rounded bottom — no border, just a drop shadow.
+                // generously rounded bottom — no border, just a drop shadow. The
+                // width matches the true notch cutout (`controller.notchWidth`,
+                // via `NotchContentView.width`) where there is one to measure; on
+                // a screen with none it's a plausible fallback instead.
                 .background(
                     UnevenRoundedRectangle(
                         topLeadingRadius: 0, bottomLeadingRadius: 22,
@@ -1557,21 +1575,30 @@ struct NotchContentView: View {
     @ObservedObject var controller: NotchController
     @ObservedObject var store: SessionStore
 
-    /// Panel width per mode. The collapsed strip and the full toast share a
-    /// width so the *appearance* (collapsed→toast) only grows vertically — a
-    /// bubble dropping from the notch, never a sideways slide. Mode-to-mode
-    /// changes while visible (toast→mini) animate as a centred contraction.
+    /// Panel width per mode.
     private var width: CGFloat {
         switch controller.display {
-        // The collapsed pill hangs from the notch (wider than it, like the
-        // reference); everything else expands outward from there.
-        case .collapsed: return 280
+        // The collapsed pill and the mini toast are the two "resting" sizes —
+        // the shrunken tail end of an announcement and the idle state it
+        // settles into are meant to read as the same object, not two different
+        // widths handed off to each other. Only the full toast (an announcement
+        // still worth reading in full) stays wide.
+        case .collapsed, .miniToast: return collapsedWidth
         case .toast: return 380
-        case .miniToast: return 260
         case .question: return 520
+        // The same width as a prompt card: both are decisions, and the question
+        // being relayed is prose that needs the room.
+        case .relay: return 520
         case .list: return 420
         }
     }
+
+    /// The notch's own width plus a small margin (10 pt a side) rather than a
+    /// flush match — enough breathing room that the sandbox name and count
+    /// badge don't sit right at the rounded corners. Drives both `.collapsed`
+    /// and `.miniToast` from one place so they can't drift apart into two
+    /// slightly different "resting" widths.
+    private var collapsedWidth: CGFloat { controller.notchWidth + 20 }
 
     /// Clearance above the content: the notch on a notched Mac, a small lip on
     /// screens without one (see NotchController.topClearance).
@@ -1594,6 +1621,9 @@ struct NotchContentView: View {
         case .toast(let i): return "toast-\(i.id)"
         case .miniToast(let i): return "mini-\(i.id)"
         case .question(let i): return "question-\(i.id)"
+        // Keyed by state as well as id: the card's whole shape changes when the
+        // answer lands, and that deserves the cross-fade a bare id would skip.
+        case .relay(let r): return "relay-\(r.id)-\(r.state.rawValue)"
         case .list: return "list"
         }
     }
@@ -1602,7 +1632,7 @@ struct NotchContentView: View {
         Group {
             if case .collapsed = controller.display {
                 // Persistent notch bubble: the black fills up to the top edge so
-                // the notch sits *inside* it (inclusion), with the task row below
+                // the notch sits *inside* it (inclusion), with the name row below
                 // the notch. Empty (a hairline hover strip) when nothing runs.
                 SummaryPill(
                     store: store,
@@ -1662,9 +1692,15 @@ struct NotchContentView: View {
             MiniToastView(session: info, store: store)
         case .question(let info):
             QuestionCard(session: info, store: store, controller: controller)
+        case .relay(let req):
+            RelayCard(
+                request: req, store: store, relay: controller.relay, controller: controller
+            )
         case .list:
             IslandView(
                 store: store,
+                relay: controller.relay,
+                onOpenRelay: { controller.showRelay($0) },
                 onSelect: { info in
                     // Tapping a waiting-with-prompt row opens its answer card;
                     // anything else jumps to wherever that session actually
