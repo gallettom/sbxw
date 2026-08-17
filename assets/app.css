@@ -222,11 +222,19 @@
   }
   .fs-list {
     border: 1px solid #21262d; border-radius: 6px;
-    max-height: 180px; overflow-y: auto; background: #0d1117;
+    /* Fixed, not `max-height`: a box that sizes to its contents makes the whole
+       modal jump every time you switch to a folder with a different number of
+       subfolders. A little empty space in a small directory is the cheaper of
+       the two. */
+    height: 180px; overflow-y: auto; background: #0d1117;
+    transition: opacity .12s;
   }
+  /* Only ever applied after FS_SLOW_MS (see create.js) — a local directory
+     answers too fast for this to be anything but a flash. */
+  .fs-list.loading { opacity: .55; }
   .fs-item {
     display: flex; align-items: center; gap: .45rem;
-    padding: .3rem .65rem; cursor: pointer; font-size: 12px; color: #c9d1d9;
+    padding: .25rem .5rem .25rem .65rem; cursor: pointer; font-size: 12px; color: #c9d1d9;
     border-bottom: 1px solid #0d1117;
   }
   .fs-item:last-child { border-bottom: none; }
@@ -769,3 +777,158 @@
     border-color: transparent;
     background: var(--c, #58a6ff);
   }
+
+  /* ── Cross-sandbox information requests (see js/relay.js) ── */
+  /* The header badge is the way back to a popup dismissed with "Later". It
+     borrows the multi-client warning's shape but not its urgency colour: a
+     waiting request is a decision to make, not something going wrong. */
+  .relay-badge {
+    display: flex; align-items: center; gap: .3rem;
+    font: inherit; font-size: 12px; font-weight: 600; color: #d2a8ff;
+    background: #2b1f3d; border: 1px solid #8957e5; border-radius: 6px;
+    padding: .3rem .65rem; cursor: pointer; white-space: nowrap;
+  }
+  .relay-badge::before { content: '⇄'; font-weight: 400; }
+  .relay-badge:hover { background: #3a2a52; }
+  .relay-badge[hidden] { display: none; }
+  .relay-queue {
+    margin-left: auto; margin-right: .6rem;
+    color: #8b949e; font-size: 11px; white-space: nowrap;
+  }
+  .relay-queue[hidden] { display: none; }
+
+  /* Who is asking. The sandbox name is a chip rather than running text: it is
+     the one thing to read before the question itself. */
+  .relay-from { display: flex; align-items: baseline; gap: .4rem; flex-wrap: wrap; }
+  .relay-badge-sbx {
+    background: #21262d; border: 1px solid #8957e5; border-radius: 5px;
+    color: #d2a8ff; font-size: 12px; font-weight: 600; padding: .1rem .45rem;
+  }
+  .relay-from-text { color: #8b949e; font-size: 12px; }
+
+  /* The question is another agent's words. Quoted, never styled as sbxw's own
+     copy, so a question written to look like an instruction still reads as
+     something a stranger said. */
+  .relay-quote {
+    margin: 0; padding: .55rem .7rem;
+    background: #0d1117; border: 1px solid #30363d; border-left: 3px solid #8957e5;
+    border-radius: 6px; color: #e6edf3; font-size: 12.5px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 26vh; overflow-y: auto;
+  }
+  .relay-section-label {
+    color: #8b949e; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .relay-or { border-top: 1px solid #21262d; padding-top: .65rem; }
+  .relay-note { margin: 0; color: #d29922; font-size: 11.5px; }
+  .relay-empty { margin: 0; color: #8b949e; font-size: 12px; line-height: 1.5; }
+
+  /* One button per candidate sandbox — the whole gesture of the feature, so
+     they are big enough to hit without reading twice. */
+  .relay-targets { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .relay-target {
+    display: flex; align-items: center; gap: .4rem;
+    background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+    color: #e6edf3; font: inherit; font-size: 12px; font-weight: 600;
+    padding: .35rem .7rem; cursor: pointer;
+  }
+  .relay-target:hover { background: #30363d; border-color: #8957e5; }
+  .relay-target-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #3fb950;
+  }
+  .relay-target-dot[data-chat] { background: #a371f7; }
+
+  .relay-answer {
+    width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+    color: #e6edf3; padding: .5rem .65rem; font: inherit; font-size: 12.5px;
+    line-height: 1.5; resize: vertical;
+  }
+  .relay-answer:focus { outline: none; border-color: #58a6ff; }
+
+  .relay-waiting {
+    display: flex; align-items: center; gap: .5rem;
+    color: #c9d1d9; font-size: 12px; line-height: 1.5;
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: .5rem .7rem;
+  }
+  .relay-spinner {
+    flex: 0 0 auto; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid #30363d; border-top-color: #a371f7;
+    animation: relay-spin .8s linear infinite;
+  }
+  @keyframes relay-spin { to { transform: rotate(360deg); } }
+
+  .relay-settled { font-size: 12.5px; }
+  .relay-settled.ok { color: #3fb950; }
+  .relay-settled.no { color: #8b949e; }
+
+  /* Refusing is a real outcome, not a cancel — it reads as destructive-ish
+     without competing with the primary action for attention. */
+  .relay-deny {
+    background: #21262d; color: #f85149; border: 1px solid #6e2b28; border-radius: 6px;
+    padding: .3rem .75rem; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .relay-deny:hover { background: #3d1d1c; border-color: #f85149; }
+
+  /* A routed request, shrunk into the background-job corner while the other
+     sandbox's agent thinks. Same card as a background job because that is what
+     it now is — the difference is that this one is clickable and comes back. */
+  .relay-dock {
+    cursor: pointer; max-width: 300px;
+    border-color: #8957e5 !important;
+  }
+  .relay-dock:hover { background: #1c2333; }
+  .relay-dock .relay-dock-text { min-width: 0; }
+  .relay-dock .relay-dock-title {
+    color: #d2a8ff; font-size: 11px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .relay-dock .relay-dock-sub {
+    color: #8b949e; font-size: 10.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ── Favourite workspace folders (create-sandbox picker) ── */
+  /* Shortcuts into the roots a developer keeps projects under, so the browser
+     below is left doing the part that differs each time. */
+  .fs-favs { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .35rem; }
+  .fs-favs[hidden] { display: none; }
+  .fs-fav {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: #0d1117; border: 1px solid #30363d; border-radius: 999px;
+    color: #c9d1d9; font: inherit; font-size: 11.5px; cursor: pointer;
+    padding: .25rem .65rem; max-width: 100%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .fs-fav:hover { background: #21262d; border-color: #58a6ff; color: #e6edf3; }
+  .fs-fav-star { color: #d29922; font-size: 12px; flex-shrink: 0; }
+  /* Starred but not there right now — an unplugged drive, a moved project.
+     Still clickable: the listing below explains the failure better than a
+     disabled chip explains its own absence. */
+  .fs-fav.missing { color: #6e7681; border-style: dashed; }
+  .fs-fav.missing .fs-fav-star { color: #484f58; }
+
+  /* The star lives on each row: you pin a root you are about to browse *into*,
+     so it has to be reachable without entering it first. Big enough to hit and
+     to read — it was 13px of #6e7681 in the path bar, which is how it went
+     unnoticed. */
+  .fs-item .fs-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* Off: an outline — gold border, hollow glyph, transparent inside.
+     On: the same shape filled in. The state is carried by the fill rather than
+     by a colour difference alone, so it survives a glance down a long list. */
+  .fs-row-star {
+    flex: 0 0 auto; cursor: pointer; font: inherit; line-height: 1;
+    font-size: 13px; padding: .25rem .40rem; border-radius: 5px;
+    background: transparent; color: #d29922;
+    border: 1px solid rgba(210, 153, 34, .45);
+    transition: background .1s, border-color .1s, color .1s;
+  }
+  .fs-row-star:hover {
+    border-color: #e3b341; background: rgba(210, 153, 34, .16); color: #e3b341;
+  }
+  .fs-row-star.on {
+    background: #d29922; border-color: #d29922; color: #0d1117; font-weight: 700;
+  }
+  .fs-row-star.on:hover { background: #e3b341; border-color: #e3b341; }
+  .fs-row-star:focus-visible { outline: 1px solid #58a6ff; outline-offset: 1px; }

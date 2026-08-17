@@ -1,3 +1,12 @@
+// Escape text for interpolation into an HTML string, attribute values
+// included. Loaded first, so every panel that builds markup from values sbxw
+// does not itself constrain — filesystem paths, policy rows out of `sbx`, an
+// agent's question — can reach for it.
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 // ── Toast ─────────────────────────────────────────────────────────────────
 let pasteToastTimer = null;
 function showToast(msg, kind) {

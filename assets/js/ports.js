@@ -47,10 +47,7 @@ function renderHostsTable(hostEntries) {
 // Policy text comes from sbx (and, for a governance denial, from whatever an
 // organisation configured), so it is escaped rather than interpolated raw —
 // unlike the port/hostname values above, which sbxw itself constrains.
-function escHtml(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+// `escHtml` lives in util.js, which every other panel needing it also loads.
 
 // `allow`/`deny` get a colour wherever they appear — matching on the value, not
 // on a column name, so a renamed or reordered `sbx policy ls` column still

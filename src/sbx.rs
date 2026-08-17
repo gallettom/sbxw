@@ -1220,6 +1220,128 @@ pub fn install_status_hooks(sandbox: &str, web_port: &str) -> Result<()> {
     run_node_script(sandbox, "/tmp/.sbxw-status-hook-install.js", &merge_script)
 }
 
+/// Path (inside the sandbox) the cross-sandbox relay CLI is installed at.
+const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
+
+/// The same relay, wrapped as an MCP server so it appears in the agent's *tool
+/// list* rather than only in prose it read at startup. Sits beside the CLI
+/// because it `require`s it (`./relay.js`).
+const RELAY_MCP_PATH: &str = "/home/agent/.sbxw/relay-mcp.js";
+
+/// Name the MCP server is registered under, and therefore the prefix its tools
+/// appear with. Kept short: it is read on every turn.
+const RELAY_MCP_NAME: &str = "sbxw-relay";
+
+/// Claude Code's user-level memory file — read at the start of every session in
+/// this sandbox, whatever project is open. Where the relay is *documented*,
+/// since a tool nothing mentions is a tool no agent ever runs.
+const USER_MEMORY_PATH: &str = "/home/agent/.claude/CLAUDE.md";
+
+/// Fences around sbxw's section of `USER_MEMORY_PATH`. That file also belongs to
+/// the user and to the agent (`#` memories land there), so every install
+/// replaces what sits *between* these and leaves the rest alone.
+const RELAY_DOC_BEGIN: &str = "<!-- sbxw:relay:begin -->";
+const RELAY_DOC_END: &str = "<!-- sbxw:relay:end -->";
+
+/// What the agent is told about the relay, verbatim, in its user memory.
+///
+/// This is the *trigger*, not the manual — the tool's own description (see
+/// `assets/relay-mcp.js`) explains how to use it, and the message the daemon
+/// types into a target session carries the answering side's instructions. What
+/// memory adds is recognising the moment, because the moment does not announce
+/// itself: it looks like an ordinary dead end, and the reflex it has to beat is
+/// "tell the user I can't see it" — which reads as diligence, not as a miss.
+///
+/// Deliberately short and unhedged. An earlier version led with "use it
+/// sparingly", and a session that had established the code it needed was in an
+/// unmounted repo went on to offer the user a codebase search instead of asking.
+/// A brake reads the same whether or not the case in front of it is the one
+/// worth spending on, so the restraint moved into the tool description, where it
+/// is read *while deciding to call it* rather than while deciding whether to
+/// consider it at all.
+fn relay_doc() -> String {
+    format!(
+        "{RELAY_DOC_BEGIN}\n\
+         ## When the answer isn't in this workspace\n\
+         \n\
+         Other sandboxes run on this machine, each with its own agent and its own\n\
+         project, and you can ask them — a human routes the question and approves\n\
+         the answer. Use the **`ask_other_sandbox`** tool (MCP server\n\
+         `{RELAY_MCP_NAME}`) for this.\n\
+         \n\
+         The moment to reach for it is easy to miss, so name it explicitly: you\n\
+         have searched, and what you need is in a repo, service or project that\n\
+         is not mounted here. **Ask before you tell the user you cannot see it,\n\
+         and before you offer to go looking elsewhere.** Finding the boundary of\n\
+         your workspace is not the answer to a question — it is the point at\n\
+         which to ask one.\n\
+         \n\
+         Same thing from a shell, if the tool is unavailable:\n\
+         `node {RELAY_TOOL_PATH} ask \"your question\"` (then `wait <id>`).\n\
+         \n\
+         The question is read by a human and then by an agent that knows nothing\n\
+         of this conversation, so make it self-contained. Never send secrets or\n\
+         file contents you were not asked to share.\n\
+         {RELAY_DOC_END}\n"
+    )
+}
+
+/// Install the cross-sandbox relay, in three parts: the CLI, the MCP server
+/// that puts it in the agent's tool list, and the paragraph in the agent's user
+/// memory that says when to reach for it. `web_port` is the daemon's port — the
+/// same one the status hook already reaches, so no extra network rule is needed.
+///
+/// All three, because they answer different failures. The CLI is the thing that
+/// works; the MCP server is what makes it *considered* (an agent weighs its
+/// tools every turn and its memory only sometimes); the memory paragraph is what
+/// names the moment, which otherwise looks like an ordinary dead end.
+///
+/// The memory file is rewritten around sbxw's fenced section rather than
+/// overwritten: Claude Code writes `#` memories into that same file, and the
+/// user may have put their own standing instructions there. `.claude.json` is
+/// merged for the same reason.
+pub fn install_relay_tool(sandbox: &str, web_port: &str) -> Result<()> {
+    const TOOL: &str = include_str!("../assets/relay-tool.js");
+    const MCP: &str = include_str!("../assets/relay-mcp.js");
+    let script = TOOL.replace("__PORT__", web_port);
+    write_file_stdin(sandbox, RELAY_TOOL_PATH, script.as_bytes())?;
+    // The MCP wrapper reads the daemon's port from the CLI it requires, so only
+    // one copy of it is ever templated in.
+    write_file_stdin(sandbox, RELAY_MCP_PATH, MCP.as_bytes())?;
+
+    // Register the server at *user* scope — every project in this sandbox, not
+    // just the one that happens to be open. That lives at the top level of
+    // `.claude.json` under `mcpServers` (the same file `trust_workspace`
+    // merges into), which is why this is a merge and not a write: that file
+    // also holds the trust flags, onboarding state and the agent's own config.
+    let mcp_script = format!(
+        "const fs=require('fs');const p='/home/agent/.claude.json';\
+         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
+         d.mcpServers=d.mcpServers||{{}};\
+         d.mcpServers[{name}]={{type:'stdio',command:'node',args:[{path}],env:{{}}}};\
+         fs.writeFileSync(p,JSON.stringify(d));",
+        name = serde_json::to_string(RELAY_MCP_NAME)?,
+        path = serde_json::to_string(RELAY_MCP_PATH)?,
+    );
+    run_node_script(sandbox, "/tmp/.sbxw-relay-mcp-install.js", &mcp_script)?;
+
+    let merge_script = format!(
+        "const fs=require('fs');const p={path};\
+         const begin={begin},end={end},doc={doc};\
+         let cur='';try{{cur=fs.readFileSync(p,'utf8')}}catch(e){{}}\
+         const from=cur.indexOf(begin),to=cur.indexOf(end);\
+         let rest=(from>=0&&to>from)?cur.slice(0,from)+cur.slice(to+end.length):cur;\
+         rest=rest.replace(/\\n{{3,}}/g,'\\n\\n').trim();\
+         fs.mkdirSync(require('path').dirname(p),{{recursive:true}});\
+         fs.writeFileSync(p,(rest?rest+'\\n\\n':'')+doc);",
+        path = serde_json::to_string(USER_MEMORY_PATH)?,
+        begin = serde_json::to_string(RELAY_DOC_BEGIN)?,
+        end = serde_json::to_string(RELAY_DOC_END)?,
+        doc = serde_json::to_string(&relay_doc())?,
+    );
+    run_node_script(sandbox, "/tmp/.sbxw-relay-install.js", &merge_script)
+}
+
 /// Path (inside the sandbox) the usage statusLine script is installed at.
 const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
 
@@ -1336,6 +1458,49 @@ mod tests {
         assert!(at_least(Some((0, 38, 0)), KIT_SPEC_V2_SINCE));
         assert!(at_least(Some((0, 41, 2)), KIT_SPEC_V2_SINCE));
         assert!(!at_least(Some((0, 37, 9)), KIT_SPEC_V2_SINCE));
+    }
+
+    /// `relay-mcp.js` reaches its transport with `require("./relay.js")`, so the
+    /// two are only ever one edit away from a server that starts, connects,
+    /// lists no tools nobody notices are missing, and fails on the first call.
+    /// Nothing else in the build would catch that: they are opaque strings here.
+    #[test]
+    fn the_relay_mcp_server_is_installed_beside_the_cli_it_requires() {
+        let dir_of = |p: &str| p.rsplit_once('/').expect("absolute path").0.to_string();
+        assert_eq!(dir_of(RELAY_MCP_PATH), dir_of(RELAY_TOOL_PATH));
+        assert!(RELAY_TOOL_PATH.ends_with("/relay.js"), "{RELAY_TOOL_PATH}");
+
+        let mcp = include_str!("../assets/relay-mcp.js");
+        assert!(mcp.contains(r#"require("./relay.js")"#), "sibling require");
+        // The CLI has to stay requirable — it grew a `main()` first, and running
+        // it on import would make the MCP server ask a question at startup.
+        let cli = include_str!("../assets/relay-tool.js");
+        assert!(cli.contains("require.main === module"), "main is guarded");
+        assert!(cli.contains("module.exports"), "the transport is exported");
+    }
+
+    /// The agent's memory is where the *moment* is named — the tool description
+    /// covers everything else. This pins the phrasing that earns its place:
+    /// without it, a session that has just found the edge of its workspace
+    /// reports that edge to the user instead of asking past it.
+    #[test]
+    fn the_memory_block_names_the_moment_rather_than_the_mechanism() {
+        let doc = relay_doc();
+        assert!(doc.starts_with(RELAY_DOC_BEGIN), "fenced for re-install");
+        assert!(doc.trim_end().ends_with(RELAY_DOC_END));
+        assert!(doc.contains("ask_other_sandbox"), "names the tool");
+        assert!(
+            doc.contains("before you tell the user you cannot see it"),
+            "names the moment it is for: {doc}"
+        );
+        // The shell fallback has to keep working when MCP doesn't.
+        assert!(doc.contains(RELAY_TOOL_PATH), "keeps the CLI fallback");
+        // And it must not re-introduce the brake that suppressed it: restraint
+        // belongs in the tool description, read while deciding to *call* it.
+        assert!(
+            !doc.to_lowercase().contains("sparingly"),
+            "the memory block must not discourage the tool it exists to trigger"
+        );
     }
 
     #[test]

@@ -56,6 +56,12 @@
     ⚠ <span id="multi-client-count-label">2</span> sbxw tabs open
   </span>
 
+  <!-- Cross-sandbox information requests waiting on you. Hidden while there
+       are none; clicking it brings the popup back after a "Later". -->
+  <button class="relay-badge" id="relay-badge" hidden
+          title="An agent is asking another sandbox for information and needs you to route it.">
+  </button>
+
   <span class="spacer"></span>
 
   <!-- Pane-count picker: the trigger shows the current count, and clicking it
@@ -128,6 +134,12 @@
             <label class="field-label" style="margin:0">Workspace folder</label>
             <button class="btn-add-port" id="btn-browse-native" type="button">📂 Browse…</button>
           </div>
+          <!-- Starred folders: one click into the root a project lives under,
+               so the browser below is left doing the part that actually
+               differs each time — picking the subfolder. Filled by
+               /js/create.js from /api/fs/favourites; the row is absent
+               entirely until something is starred. -->
+          <div class="fs-favs" id="fs-favs" hidden></div>
           <div class="fs-path" id="fs-path">—</div>
           <div class="fs-list" id="fs-list">
             <div class="fs-loading">Loading…</div>
@@ -344,6 +356,22 @@
         </button>
         <button class="btn-cancel" id="files-modal-close2">Close</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ── Cross-sandbox information request (human in the loop) ──
+       Raised when an agent asks for something outside its own workspace. The
+       body and footer are rebuilt per state by /js/relay.js: route it to a
+       sandbox, read what comes back, then approve or refuse. -->
+  <div class="modal-overlay hidden" id="relay-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="relay-modal-title" style="width:560px">
+      <div class="modal-head">
+        <span class="modal-title" id="relay-modal-title">Information request</span>
+        <span class="relay-queue" id="relay-queue" hidden></span>
+        <button class="modal-close" id="relay-modal-close" aria-label="Later">✕</button>
+      </div>
+      <div class="modal-body" id="relay-modal-body"></div>
+      <div class="modal-foot" id="relay-modal-foot"></div>
     </div>
   </div>
 

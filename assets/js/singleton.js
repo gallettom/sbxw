@@ -34,6 +34,9 @@ const SBXW_APP_SCRIPTS = [
   '/js/ssh.js',
   '/js/lifecycle.js',
   '/js/main.js',
+  // After main.js: the relay popup subscribes to the SSE stream that file
+  // opens, and paints its buttons from the sandbox list sandboxes.js holds.
+  '/js/relay.js',
 ];
 
 function sbxwLoadScript(src) {

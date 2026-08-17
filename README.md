@@ -131,7 +131,7 @@ diagonally across the screen.
 
 | Command | What it does |
 |---|---|
-| `sbxw up [name] [path]` | Provision + serve. **Omit `name`** to start only the web daemon (browse/create/attach from the UI). |
+| `sbxw up [name] [path]` | Provision + serve. **Omit `name`** to start only the web daemon (browse/create/attach from the UI) — or pass `--add-sandbox` to derive one from the workspace directory name instead (`-copy`, `-copy-1`, ... on a clash with a different path already using that name). |
 | `sbxw chat [name]` | Throwaway chat sandbox: same as `up`, but on an empty workspace so the agent has none of your code. **Omit `name`** for a generated `chat-xxxxxx`. |
 | `sbxw bash <name>` | Open an interactive bash shell in a sandbox (foreground). |
 | `sbxw ssh [name] [-- cmd…]` | SSH into a sandbox as `<name>.sbx`, or run one command in it. `--setup` registers the SSH host block first. See [SSH](#ssh-experimental). |
@@ -157,8 +157,14 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - **Create** a sandbox (＋) with a folder picker and inline **port-forwarding** rows
   (sandbox→host port, optional host IP, optional `/etc/hosts` alias). This goes
   through the *same* provisioning pipeline as the CLI.
+- **Star the folders you keep projects under** (☆ on each row of the picker) and
+  they become one-click shortcuts above it. See below.
 - **Start a chat sandbox** (💬) — the browser equivalent of `sbxw chat`, with an
   optional name (leave it empty for the generated `chat-xxxxxx`). See below.
+- **Route an agent's question to another sandbox**, when one asks for something
+  it can't see from its own workspace: a popup shows the question and one button
+  per running sandbox, and the answer that comes back is yours to edit, release
+  or refuse. See [Asking another sandbox](#asking-another-sandbox-the-relay).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
 - **Inspect the network policy** in that same panel. Three `sbx` calls, because
   no single one answers "what can this sandbox reach?":
@@ -235,6 +241,35 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   bare `["sbx"]`: with no subcommand the CLI opens its own dashboard. Set it to
   `[]` and the button disappears.
 
+### Favourite folders
+
+The picker opens at `$HOME`, and most people keep their projects two or three
+levels below it — the same two or three clicks before every single sandbox.
+Every folder in the listing carries a **☆** on its right: click it to pin that
+folder, without having to walk into it first. Starred folders show up as chips
+above the picker, and clicking one drops you straight into it with its
+subfolders listed. The part that actually differs each time — *which* project —
+is then one more click, which is the whole point: you star the root, not the
+project.
+
+- The list lives on the host, in `~/.sbxw/state/favourites.json` (a plain JSON
+  array of paths, hand-editable). Not in the browser: these name directories on
+  *that machine*, so they have to survive a different browser, a cleared
+  profile, or the tab being opened from another device.
+- Paths are stored canonically, so `~/dev`, `~/dev/` and a symlink to it are one
+  favourite — and the star lights up whenever you land there, however you got
+  there.
+- Two favourites ending in the same folder name (`~/work/projects` and
+  `~/perso/projects` — exactly the pair someone stars) get their parent folded
+  into the chip. Only the clashing ones: lengthening every label to
+  disambiguate two of them makes the row harder to scan.
+- A starred folder that isn't there right now — an unplugged drive, a moved
+  project — is shown greyed rather than dropped, and can still be unstarred.
+  The list is yours; silently editing it is how a temporarily unreachable
+  favourite disappears for good.
+- Twelve maximum. Past that the row stops being a shortcut and becomes a wall of
+  near-identical names.
+
 ## Chat sandboxes
 
 Sometimes you just want to talk to an agent, not point it at a codebase. A chat
@@ -264,6 +299,84 @@ Everything else is a normal sandbox: a chat sandbox still reads your
 `sbxw.toml`, so it applies the same kits and publishes the same `[[ports]]`. If
 a project sandbox already holds one of those host ports, sbx's conflict recovery
 gives the chat sandbox a different one.
+
+## Asking another sandbox (the relay)
+
+Sandboxes are isolated on purpose, which is also their limitation: the agent
+working on the frontend cannot see the API repo next door, so it guesses, or it
+stops and asks *you* to go and look. The relay is the third option — it asks the
+other sandbox, and **you decide every hop**.
+
+```
+sandbox A ──ask──▶ sbxw ──▶ 🧑 popup ──route──▶ sandbox B
+                                 ▲                  │
+sandbox A ◀──approve── 🧑 review ◀──────answer──────┘
+```
+
+Nothing here happens on its own. There is no timeout that picks a recipient, and
+no path where an answer reaches the asker without someone clicking a button.
+
+**The agent's side.** The agent asks **on its own**, without being told to. Every
+sandbox gets an MCP server (`sbxw-relay`, registered at user scope in
+`~/.claude.json`) exposing two tools — `ask_other_sandbox` and
+`check_sandbox_question` — plus the same thing as a CLI at `~/.sbxw/relay.js`:
+
+```bash
+node ~/.sbxw/relay.js ask "what shape does GET /v1/orders return in staging?"
+```
+
+It is a tool and not just a CLI for a reason worth stating, because it looks like
+duplication. With only the CLI and a note in the agent's memory, a session that
+had searched its workspace, established that the code it needed lived in a repo
+that wasn't mounted, and was about to say so, reached instead for the nearest
+thing *in its tool list* (a codebase search) and offered that to the user. The
+relay never came up. A tool is weighed every turn; a paragraph competes with the
+whole conversation. The memory block was also rewritten: it used to open with
+"use it sparingly", which reads the same whether or not the case in front of it
+is the one worth spending on. Restraint now lives in the tool's description,
+where it is read while deciding to *call* it rather than while deciding whether
+to consider it at all.
+
+The call parks for ~90 s and then returns whatever the request has become — the
+approved answer, a refusal, or "still open, pick it up later with
+`check_sandbox_question`". It is bounded rather than blocking so an agent's tool
+call never hangs on a human who has stepped away. If the answer is approved while
+nobody is waiting on it, sbxw types it into the asking session instead, the same
+way the island's composer does.
+
+**Your side.** A popup opens in the web UI with the question and one button per
+running sandbox. Click one and the question is typed into that sandbox's agent,
+framed as untrusted data with the id it must answer with.
+
+The popup then **gets out of the way**: the wait is on an agent now, not on you,
+so the request shrinks to a card in the bottom-right corner (next to the
+background-job indicators) and you carry on working in any other sandbox. Click
+the card to go back to it — to re-route it elsewhere or refuse it — and **the
+answer raises it again by itself**, in the foreground, when it lands. A routing
+that fails to deliver comes back the same way, with the reason.
+
+The answer arrives in the popup **editable** — trim it, cut a secret out of it,
+or replace it entirely — and only *then* does the asker receive it.
+
+- **Refuse** is a full stop: nothing is released, then or later, and the asking
+  agent is told not to re-send it. (An ignored request just gets asked again; a
+  refused one doesn't.)
+- **Later** (or `Esc`) leaves the request open and parks it behind a header
+  badge. Click the badge to come back to it. The badge counts only what is
+  waiting on *you* — a request already out with a sandbox has its corner card
+  instead.
+- You can also **answer it yourself** without involving a second sandbox — type
+  into the box under a pending question and send.
+- Routing to a sandbox whose agent can't be started bounces the request back to
+  you with the reason, rather than looking delivered.
+
+**What a sandbox cannot do**, which is the point of routing everything through a
+person: name its own recipient, list or read anyone else's requests, see an
+answer a human has not released, or reply to a question it was not handed. The
+daemon can't verify which container an HTTP call came from, so a sandbox's claim
+about who it is is taken at its word — that is only safe because nothing acts on
+it alone. State lives in memory (`src/relay.rs`); a settled request is kept 30
+minutes for a late pickup, an unanswered one 6 hours.
 
 ## Dynamic Island (macOS)
 
@@ -735,6 +848,11 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   the credential lived only in sbx's own keychain; the token is the same secret
   the sandbox already holds at `~/.claude/.credentials.json` either way.
 - `/etc/hosts` changes are confined to a marked block and removed by `sbxw down`.
+- The **relay** never moves information between two sandboxes without a person
+  clicking for it, and an answer is editable before it is released — see
+  [Asking another sandbox](#asking-another-sandbox-the-relay). A question is
+  another agent's text arriving in your agent's prompt, so it is delivered
+  quoted and labelled as untrusted input; read it before you route it.
 
 ## Unconfirmed against docs (verify locally)
 

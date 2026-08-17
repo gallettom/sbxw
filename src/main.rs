@@ -31,14 +31,15 @@
 
 mod config;
 mod hosts;
+mod relay;
 mod sbx;
 mod web;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use config::Config;
 use hosts::HostAlias;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -156,13 +157,20 @@ enum Cmd {
     /// Create (if needed), provision, and start the web terminal in the background.
     /// Omit the name to just start the web daemon (browse/create sandboxes from the UI).
     Up {
-        /// Sandbox name. Omit to start only the web daemon.
+        /// Sandbox name. Omit to start only the web daemon (or, with
+        /// `--add-sandbox`, to derive one from the workspace directory name).
         name: Option<String>,
         /// Code path the agent edits in place. Defaults to the current directory.
         path: Option<PathBuf>,
         /// Extra directories to mount read-only (repeatable).
         #[arg(long = "ro", value_name = "DIR")]
         ro: Vec<PathBuf>,
+        /// When no name is given, derive one from the workspace directory name
+        /// instead of starting the web-only daemon. On a clash with a
+        /// different path already using that name, appends `-copy`,
+        /// `-copy-1`, `-copy-2`, ... Ignored if a name is given explicitly.
+        #[arg(long = "add-sandbox")]
+        add_sandbox: bool,
         /// Path to the project config. Defaults to ./sbxw.toml.
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
@@ -347,7 +355,13 @@ fn main() -> Result<()> {
             use_api_key,
             tail,
             daemon,
+            add_sandbox,
         } => {
+            // Resolved once, up front: `cmd_up_background` keys the daemon's
+            // log/pid files off `name`, so a derived name has to be settled
+            // before it (and its own `--daemon` re-exec) ever see it — not
+            // recomputed independently on each side, which could disagree.
+            let name = resolve_up_name(name, &path, add_sandbox)?;
             if daemon || no_web {
                 // Running as the daemon process itself, or in foreground-only mode:
                 // init logging (goes to the redirected log file or this terminal).
@@ -1187,6 +1201,173 @@ pub(crate) fn workspace_for(name: &str) -> Option<PathBuf> {
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
+// ── Favourite workspace folders ──────────────────────────────────────────────
+//
+// Where the create-sandbox picker starts from. A developer keeps their projects
+// under one or two roots (`~/dev`, `~/work/clients`), and the picker opening at
+// `$HOME` every time makes them walk the same three clicks to reach a folder
+// they will pick again tomorrow. Starring those roots turns that walk into one
+// click, and the *subfolder* choice — the part that actually differs each time —
+// is what the browser is then left doing.
+//
+// Kept host-side rather than in the browser's storage because these name
+// directories on *this machine*: they must survive a different browser, a
+// cleared profile, or the tab being opened from another device entirely, which
+// is exactly when re-deriving them by hand is most annoying.
+
+/// Path to the file holding the favourite folder list — a plain JSON array of
+/// absolute paths, editable by hand if it ever comes to that.
+fn favourites_path() -> PathBuf {
+    state_dir().join("favourites.json")
+}
+
+/// Upper bound on how many folders can be starred. The chips share one row
+/// under the picker; past a dozen the row is a wall of near-identical names and
+/// picking from it is slower than browsing was.
+pub(crate) const MAX_FAVOURITES: usize = 12;
+
+/// The starred folders, in the order they were added. Unreadable or corrupt
+/// state reads as "none": the picker still works, it just starts at `$HOME`.
+pub(crate) fn favourite_folders() -> Vec<String> {
+    favourites_in(&favourites_path())
+}
+
+/// Star or unstar `path`, returning the list as it now stands.
+pub(crate) fn set_favourite_folder(path: &str, favourite: bool) -> Result<Vec<String>> {
+    set_favourite_in(&favourites_path(), path, favourite)
+}
+
+// The two above are the whole API; the two below take the state file as an
+// argument so they can be tested without a process-global `$HOME`.
+
+fn favourites_in(file: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Star or unstar `path` in `file`, returning the list as it now stands.
+///
+/// Adding canonicalizes first — `~/dev`, `~/dev/`, and a symlink to it are one
+/// favourite, not three, and the stored path is the one `/api/fs` will report
+/// when browsing there, so the star lights up on arrival. Removing deliberately
+/// does *not*: a folder that has been deleted or lives on an unplugged drive
+/// can't be canonicalized, and un-starring it is precisely what you want to do.
+fn set_favourite_in(file: &std::path::Path, path: &str, favourite: bool) -> Result<Vec<String>> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        bail!("no folder given");
+    }
+    let mut list = favourites_in(file);
+
+    if !favourite {
+        let canonical = std::fs::canonicalize(raw)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        list.retain(|p| p != raw && (canonical.is_empty() || p != &canonical));
+    } else {
+        let resolved =
+            std::fs::canonicalize(raw).with_context(|| format!("cannot star '{raw}'"))?;
+        if !resolved.is_dir() {
+            bail!("'{raw}' is not a folder");
+        }
+        let resolved = resolved.to_string_lossy().into_owned();
+        if !list.contains(&resolved) {
+            if list.len() >= MAX_FAVOURITES {
+                bail!(
+                    "you already have {MAX_FAVOURITES} favourite folders — unstar one to add another"
+                );
+            }
+            list.push(resolved);
+        }
+    }
+
+    let body = serde_json::to_string_pretty(&list)?;
+    std::fs::write(file, body).with_context(|| format!("could not write {}", file.display()))?;
+    Ok(list)
+}
+
+/// Resolves `--add-sandbox`: if a name was already given, or the flag wasn't
+/// passed, returns `name` untouched (so the caller's existing "no name →
+/// web-only daemon" behaviour is unaffected). Otherwise derives one from the
+/// workspace directory so a developer never has to type or remember a name.
+fn resolve_up_name(
+    name: Option<String>,
+    path: &Option<PathBuf>,
+    add_sandbox: bool,
+) -> Result<Option<String>> {
+    if name.is_some() || !add_sandbox {
+        return Ok(name);
+    }
+    let workspace = match path {
+        Some(p) => p.clone(),
+        None => std::env::current_dir()?,
+    };
+    let workspace = std::fs::canonicalize(&workspace)
+        .with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;
+    let derived = derive_sandbox_name(&workspace);
+    eprintln!("sbxw  --add-sandbox → using sandbox name '{derived}'");
+    Ok(Some(derived))
+}
+
+/// Turns a workspace path into a sandbox name: the sanitized directory
+/// basename, deduplicated against `workspace_for`'s records so two different
+/// paths never silently share (and fight over) the same sandbox.
+///
+/// A name already recorded for *this* path is a cache hit, not a clash — that
+/// is `sbxw up`'s normal reuse-if-exists case, so the plain base name comes
+/// back unchanged. A name recorded for a *different* path is a clash, walked
+/// through `<base>-copy`, `<base>-copy-1`, `<base>-copy-2`, ... until a free
+/// or matching one turns up. `workspace_for` can lag a removed sandbox (`sbxw
+/// rm` doesn't clear the record), so this occasionally skips a name that is
+/// actually free again — harmless, since `sbx create --name` on a free name
+/// just creates fresh under whatever we picked.
+fn derive_sandbox_name(workspace: &Path) -> String {
+    let base = workspace
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sandbox".to_string());
+    let base = sanitize_sandbox_name_component(&base);
+
+    let mut candidate = base.clone();
+    let mut clashes = 0u32;
+    loop {
+        match workspace_for(&candidate) {
+            None => return candidate,
+            Some(existing) if existing == workspace => return candidate,
+            Some(_) => {
+                clashes += 1;
+                candidate = if clashes == 1 {
+                    format!("{base}-copy")
+                } else {
+                    format!("{base}-copy-{}", clashes - 1)
+                };
+            }
+        }
+    }
+}
+
+/// Replaces anything outside `is_valid_sandbox_name`'s alphabet with `-`, so
+/// a derived name is always accepted without the caller re-checking it.
+fn sanitize_sandbox_name_component(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "sandbox".to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// Subdirectory (relative to the workspace root) where non-code deliverables
 /// (wireframes, docs, exports...) are expected to live. Purely a convention:
 /// sbxw doesn't enforce it, it just lists+serves whatever it finds there.
@@ -1964,6 +2145,13 @@ pub(crate) fn provision_sandbox(
         if let Err(e) = sbx::install_usage_statusline(name, web_port) {
             tracing::warn!("could not install usage statusLine: {e:#}");
         }
+        // 2c-ter. The cross-sandbox relay: a CLI this agent can run to ask
+        // *another* sandbox's agent something, with a human routing the question
+        // and releasing the answer (see `assets/relay-tool.js` and `/api/relay/*`).
+        // Best-effort — without it the agent simply has no one to ask.
+        if let Err(e) = sbx::install_relay_tool(name, web_port) {
+            tracing::warn!("could not install the cross-sandbox relay: {e:#}");
+        }
         // The hook reaches the host daemon via host.docker.internal, but the
         // proxy classifies that destination as `localhost:<port>` — so the
         // allow rule must name the loopback host and port, not the DNS alias.
@@ -2464,6 +2652,114 @@ fn oauth_kit_spec_inner(credentials_json: Option<&str>) -> String {
 mod tests {
     use super::*;
 
+    /// A scratch directory of its own for one test, with the favourites file
+    /// inside it — so nothing here touches the real `$HOME`.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sbxw-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// The picker stores what `/api/fs` reports, which is the canonical path.
+    /// Anything else and the star silently fails to light up on arrival — the
+    /// folder *is* starred, it just never looks it, and the same root gets
+    /// starred again under a second spelling.
+    #[test]
+    fn starring_a_folder_stores_it_canonically_and_only_once() {
+        let dir = scratch("fav-canonical");
+        let file = dir.join("favourites.json");
+        let projects = dir.join("projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let canonical = projects
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let once = set_favourite_in(&file, projects.to_str().unwrap(), true).unwrap();
+        assert_eq!(once, vec![canonical.clone()]);
+
+        // The same folder by a trailing slash and by a detour through `..`:
+        // one favourite, not three.
+        let again = set_favourite_in(&file, &format!("{}/", projects.display()), true).unwrap();
+        assert_eq!(again, vec![canonical.clone()]);
+        let detour = format!("{}/projects/../projects", dir.display());
+        assert_eq!(
+            set_favourite_in(&file, &detour, true).unwrap(),
+            vec![canonical]
+        );
+
+        // And it survives the round trip through the file.
+        assert_eq!(favourites_in(&file).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The case that would strand someone: a starred project folder that was
+    /// moved or lives on a drive that isn't plugged in. It can't be
+    /// canonicalized, so un-starring must work on the stored string alone —
+    /// otherwise the one entry you want gone is the one that can't be removed.
+    #[test]
+    fn a_folder_that_no_longer_exists_can_still_be_unstarred() {
+        let dir = scratch("fav-missing");
+        let file = dir.join("favourites.json");
+        let gone = dir.join("external-drive");
+        std::fs::create_dir_all(&gone).unwrap();
+        let stored = set_favourite_in(&file, gone.to_str().unwrap(), true).unwrap();
+        assert_eq!(stored.len(), 1);
+
+        std::fs::remove_dir_all(&gone).unwrap();
+        // Still listed — the list is the user's, and an unplugged drive is not
+        // a reason to edit it behind their back.
+        assert_eq!(favourites_in(&file).len(), 1);
+
+        let after = set_favourite_in(&file, &stored[0], false).unwrap();
+        assert!(after.is_empty(), "{after:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two things that are not a folder to star: a file, and nothing at all.
+    #[test]
+    fn only_an_actual_folder_can_be_starred() {
+        let dir = scratch("fav-notdir");
+        let file = dir.join("favourites.json");
+        let readme = dir.join("README.md");
+        std::fs::write(&readme, "x").unwrap();
+
+        assert!(set_favourite_in(&file, readme.to_str().unwrap(), true).is_err());
+        assert!(set_favourite_in(&file, "  ", true).is_err());
+        assert!(set_favourite_in(&file, &format!("{}/nope", dir.display()), true).is_err());
+        assert!(favourites_in(&file).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The row of chips is one line under the picker; past a dozen it stops
+    /// being a shortcut. The refusal has to say what to do about it.
+    #[test]
+    fn the_favourites_list_is_capped_with_an_actionable_message() {
+        let dir = scratch("fav-cap");
+        let file = dir.join("favourites.json");
+        for i in 0..MAX_FAVOURITES {
+            let d = dir.join(format!("p{i}"));
+            std::fs::create_dir_all(&d).unwrap();
+            set_favourite_in(&file, d.to_str().unwrap(), true).unwrap();
+        }
+        assert_eq!(favourites_in(&file).len(), MAX_FAVOURITES);
+
+        let overflow = dir.join("one-too-many");
+        std::fs::create_dir_all(&overflow).unwrap();
+        let err = set_favourite_in(&file, overflow.to_str().unwrap(), true)
+            .expect_err("the cap should refuse")
+            .to_string();
+        assert!(err.contains("unstar one"), "{err}");
+
+        // Re-starring one already in the list is not a new entry, so the cap
+        // must not refuse it.
+        let existing = favourites_in(&file)[0].clone();
+        assert!(set_favourite_in(&file, &existing, true).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The one test touching `DEFERRED_PROVISIONING`; it is process-global, so
     /// nothing else may park output concurrently.
     #[test]
@@ -2774,5 +3070,59 @@ mod tests {
     fn island_bundle_version_is_zero_when_unreadable() {
         let missing = std::env::temp_dir().join("sbxw-test-no-such.app");
         assert_eq!(island_bundle_version(&missing), "0");
+    }
+
+    #[test]
+    fn sandbox_name_sanitization_keeps_only_the_valid_alphabet() {
+        assert_eq!(sanitize_sandbox_name_component("my-project"), "my-project");
+        assert_eq!(
+            sanitize_sandbox_name_component("my project!"),
+            "my-project-"
+        );
+        assert_eq!(sanitize_sandbox_name_component(""), "sandbox");
+        assert!(is_valid_sandbox_name(&sanitize_sandbox_name_component(
+            "a/b_c.d é"
+        )));
+    }
+
+    /// Two different paths whose basenames collide must not end up sharing a
+    /// derived name — that would mean two unrelated projects fighting over one
+    /// sandbox. Same path, called twice, must be stable (the normal
+    /// reuse-if-exists case), not pile up `-copy` suffixes on itself.
+    #[test]
+    fn derived_sandbox_names_dedupe_on_a_clash_and_are_stable_on_reuse() {
+        let tag = std::process::id();
+        let base = std::env::temp_dir().join(format!("sbxw-test-derive-{tag}"));
+        let project_a = base.join("widgets");
+        let project_b_root = base.join("other");
+        let project_b = project_b_root.join("widgets"); // same basename, different path
+        std::fs::create_dir_all(&project_a).unwrap();
+        std::fs::create_dir_all(&project_b).unwrap();
+
+        // Clean slate: neither name is recorded yet.
+        let _ = std::fs::remove_file(workspace_record_path("widgets"));
+        let _ = std::fs::remove_file(workspace_record_path("widgets-copy"));
+
+        let name_a = derive_sandbox_name(&project_a);
+        assert_eq!(name_a, "widgets");
+
+        // `provision_sandbox` is what normally writes this; simulate it so the
+        // next call sees project_a's name as taken.
+        std::fs::write(
+            workspace_record_path(&name_a),
+            project_a.to_string_lossy().as_ref(),
+        )
+        .unwrap();
+
+        // Same path again: reuse, not a new suffix.
+        assert_eq!(derive_sandbox_name(&project_a), "widgets");
+
+        // Different path, same basename: clashes, falls through to -copy.
+        let name_b = derive_sandbox_name(&project_b);
+        assert_eq!(name_b, "widgets-copy");
+
+        let _ = std::fs::remove_file(workspace_record_path("widgets"));
+        let _ = std::fs::remove_file(workspace_record_path("widgets-copy"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
