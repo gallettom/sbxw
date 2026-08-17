@@ -1089,9 +1089,16 @@ struct ToastView: View {
         HStack(spacing: 10) {
             Circle().fill(session.accentColor).frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 2) {
+                // `.lineLimit(1)` here, not just on the line below: harmless
+                // padding at the old 380 pt width, load-bearing now that the
+                // toast shares the notch's own — a longer sandbox name would
+                // otherwise wrap to a second line and grow the toast taller
+                // rather than truncate.
                 Text(session.sandbox)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text(toastText)
                     .font(.system(size: 11))
                     .foregroundStyle(session.awaitingReply ? awaitingReplyColor : .white.opacity(0.7))
@@ -1108,22 +1115,17 @@ struct ToastView: View {
     }
 }
 
-/// Compact pill the toast shrinks into: agent glyph + short text + a count of
-/// how many sessions are live. Mirrors the minimized notification look.
+/// Compact pill the toast shrinks into: agent glyph + the sandbox asking for
+/// you + how many sessions want you (`SessionStore.dismissable`). Mirrors the
+/// minimized notification look, and — sharing `SummaryPill`'s width now
+/// (`NotchContentView.collapsedWidth`) — its content too: a task/reply preview
+/// truncated into noise at that width, and kept changing on every tick besides.
+/// The sandbox name is what answers "which one wants me?", stays put for as
+/// long as the pill is up, and is what `SummaryPill` settles into a moment
+/// later anyway — so nothing changes when the shrink finishes.
 struct MiniToastView: View {
     let session: SessionInfo
     @ObservedObject var store: SessionStore
-
-    /// Claude's answer once the turn is over, else the user's last prompt, else
-    /// the current activity, else the state. The answer comes first for the same
-    /// reason as on the row: echoing back what *you* typed is the one thing you
-    /// already know.
-    private var text: String {
-        if session.showsReply, let lead = session.replyLead { return lead }
-        if let input = session.last_input, !input.isEmpty { return input }
-        if let a = session.activity, a.count >= 3 { return a }
-        return session.state.label
-    }
 
     var body: some View {
         HStack(spacing: 9) {
@@ -1131,13 +1133,17 @@ struct MiniToastView: View {
                 ? Color(red: 1.0, green: 0.7, blue: 0.28)
                 : Color(red: 0.44, green: 0.87, blue: 0.47))
                 .frame(width: 17, height: 13)
-            Text(text)
+            Text(session.sandbox)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 6)
-            Text("\(store.sessions.count)")
+            // Same metric as `SummaryPill`'s badge (see its comment): how many
+            // sessions want you, not how many sandboxes exist. The two share a
+            // shape and a width now, so they'd better agree on what the number
+            // in the corner means too.
+            Text("\(store.dismissable.count)")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.75))
                 .padding(.horizontal, 6)
@@ -1187,11 +1193,12 @@ struct InvaderIcon: View {
 }
 
 /// Persistent notch bubble shown while the island is collapsed: an agent glyph,
-/// the name of the sandbox asking for you, and a session count. The black fill
-/// rises to the top screen edge so the physical notch sits *inside* the bubble
-/// (a sense of inclusion, not a pill floating below it). Depth comes from the
-/// soft drop shadow applied by NotchContentView — no border. Renders nothing (a
-/// hairline hover strip) when nothing is working or waiting.
+/// the name of the sandbox asking for you, and how many sessions want you
+/// (`SessionStore.dismissable`). The black fill rises to the top screen edge so
+/// the physical notch sits *inside* the bubble (a sense of inclusion, not a
+/// pill floating below it). Depth comes from the soft drop shadow applied by
+/// NotchContentView — no border. Renders nothing (a hairline hover strip) when
+/// nothing is working or waiting.
 struct SummaryPill: View {
     @ObservedObject var store: SessionStore
     /// Notch height (a small lip on screens without a notch): the name row sits
@@ -1241,7 +1248,11 @@ struct SummaryPill: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                         Spacer(minLength: 8)
-                        Text("\(store.sessions.count)")
+                        // How many sessions want you — `lead` is only ever one
+                        // of them — not how many sandboxes happen to exist.
+                        // `dismissable` is the same set "Clear all N" acts on,
+                        // so this badge and that button always agree.
+                        Text("\(store.dismissable.count)")
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.7))
                             .padding(.horizontal, 7)
@@ -1578,13 +1589,17 @@ struct NotchContentView: View {
     /// Panel width per mode.
     private var width: CGFloat {
         switch controller.display {
-        // The collapsed pill and the mini toast are the two "resting" sizes —
-        // the shrunken tail end of an announcement and the idle state it
-        // settles into are meant to read as the same object, not two different
-        // widths handed off to each other. Only the full toast (an announcement
-        // still worth reading in full) stays wide.
-        case .collapsed, .miniToast: return collapsedWidth
-        case .toast: return 380
+        // The notch bubble never grows past the notch's own width, whichever of
+        // its three shapes it's wearing: a state-change announcement (`.toast`),
+        // its shrunken tail end (`.miniToast`), or the idle pill it settles into
+        // (`.collapsed`). They used to widen in that order — 380, then 260, then
+        // whatever the pill was — which is what made "the island" read as bigger
+        // than "the minified island" the moment anything happened: a session
+        // starting to work, or finishing a turn and waiting on you, both open on
+        // a full-width toast before narrowing down. All three are one object at
+        // one width now; only a genuine decision (`.question`, `.relay`) or the
+        // hover list is worth the extra room.
+        case .collapsed, .toast, .miniToast: return collapsedWidth
         case .question: return 520
         // The same width as a prompt card: both are decisions, and the question
         // being relayed is prose that needs the room.
@@ -1594,11 +1609,38 @@ struct NotchContentView: View {
     }
 
     /// The notch's own width plus a small margin (10 pt a side) rather than a
-    /// flush match — enough breathing room that the sandbox name and count
-    /// badge don't sit right at the rounded corners. Drives both `.collapsed`
-    /// and `.miniToast` from one place so they can't drift apart into two
-    /// slightly different "resting" widths.
+    /// flush match — enough breathing room that a sandbox name and its trailing
+    /// chip (a count badge, an agent tag) don't sit right at the rounded
+    /// corners. Drives `.collapsed`, `.toast` and `.miniToast` from one place so
+    /// they can't drift apart into three slightly different "same object"
+    /// widths.
     private var collapsedWidth: CGFloat { controller.notchWidth + 20 }
+
+    /// Background shape for every mode *except* `.collapsed` (which draws its
+    /// own, inside `SummaryPill`). `.toast` and `.miniToast` now get the exact
+    /// same square-top, rounded-bottom shape as the pill — flush with the
+    /// physical notch rather than curving away from it — since they already
+    /// share its width and are meant to read as the same object shrinking and
+    /// growing, not three different silhouettes handed off to each other.
+    /// Everything wider (`.question`, `.relay`, `.list`) keeps a plain, evenly
+    /// rounded rectangle: those genuinely expand outward, so there's no notch
+    /// left to stay flush with.
+    private var backgroundShape: UnevenRoundedRectangle {
+        switch controller.display {
+        case .toast, .miniToast:
+            return UnevenRoundedRectangle(
+                topLeadingRadius: 0, bottomLeadingRadius: 22,
+                bottomTrailingRadius: 22, topTrailingRadius: 0,
+                style: .continuous
+            )
+        case .collapsed, .question, .relay, .list:
+            return UnevenRoundedRectangle(
+                topLeadingRadius: 18, bottomLeadingRadius: 18,
+                bottomTrailingRadius: 18, topTrailingRadius: 18,
+                style: .continuous
+            )
+        }
+    }
 
     /// Clearance above the content: the notch on a notched Mac, a small lip on
     /// screens without one (see NotchController.topClearance).
@@ -1649,11 +1691,8 @@ struct NotchContentView: View {
                 }
                 // Solid fill (no translucency edge, no stroke) — depth comes
                 // from the drop shadow below, not a border.
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.black)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background(backgroundShape.fill(Color.black))
+                .clipShape(backgroundShape)
                 // Inflate from the notch like a bubble; fade cleanly on close.
                 .transition(.asymmetric(
                     insertion: .scale(scale: 0.72, anchor: .top).combined(with: .opacity),
