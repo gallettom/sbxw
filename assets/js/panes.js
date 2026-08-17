@@ -145,38 +145,30 @@ function createPane(index) {
       </div>
       <button class="pane-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
+      <button class="pane-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
     <div class="pane-term" id="pterm-${index}"></div>`;
   document.getElementById('main-area').appendChild(el);
 
   const termEl = document.getElementById(`pterm-${index}`);
-  const term = new Terminal({
-    cursorBlink: true, fontSize: 13,
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    theme: { background: '#000000', foreground: '#c9d1d9', cursor: '#58a6ff' },
-    scrollback: 10000,
-  });
-  const fit = new FitAddon.FitAddon();
-  term.loadAddon(fit);
-  if (typeof CanvasAddon !== 'undefined') term.loadAddon(new CanvasAddon.CanvasAddon());
-  term.open(termEl);
-
-  let lastSelection = '';
-  term.onSelectionChange(() => { const s = term.getSelection(); if (s) lastSelection = s; });
 
   const pane = {
-    index, el, termEl, term, fit,
+    index, el, termEl,
     ws: null, sandbox: null, mode: 'claude',
     // Sandbox this pane was on before the monitor took it over, so the
     // Monitor button toggles.
     beforeMonitor: null,
-    getLastSelection: () => lastSelection,
+    lastSelection: '',
+    getLastSelection: () => pane.lastSelection,
   };
 
-  // From here on the pane keeps itself fitted to its box; nothing else has to
-  // remember to re-fit it after a layout change.
-  observePaneSize(pane);
+  // Builds pane.term/pane.fit and wires them up. Split out of createPane so
+  // recreatePaneTerminal() can call it again on a pane that already exists,
+  // to throw away a terminal whose internal state (not just its content) has
+  // gone bad — something reconnecting the socket into the same xterm
+  // instance can never fix.
+  setupTerminal(pane);
 
   // Focus pane on click inside it
   el.addEventListener('mousedown', () => setFocusedPane(index));
@@ -195,17 +187,68 @@ function createPane(index) {
   document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
     if (pane.sandbox) connectPane(index, pane.sandbox, pane.mode);
   });
+  document.getElementById(`prefresh-${index}`).addEventListener('click', () => recreatePaneTerminal(index));
   document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
   document.getElementById(`pssh-${index}`).addEventListener('click', ev => {
     if (pane.sandbox) toggleSshPop(pane.sandbox, ev.currentTarget);
   });
 
+  return pane;
+}
+
+// Builds a fresh xterm Terminal (+ addons) into `pane.termEl` and points
+// pane.term/pane.fit at it. Called once from createPane, and again from
+// recreatePaneTerminal() on an existing pane — so every wire-up here must
+// read `pane.*` rather than close over locals that a second call would
+// shadow instead of replace.
+function setupTerminal(pane) {
+  const term = new Terminal({
+    cursorBlink: true, fontSize: 13,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    theme: { background: '#000000', foreground: '#c9d1d9', cursor: '#58a6ff' },
+    scrollback: 10000,
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  if (typeof CanvasAddon !== 'undefined') term.loadAddon(new CanvasAddon.CanvasAddon());
+  term.open(pane.termEl);
+
+  term.onSelectionChange(() => { const s = term.getSelection(); if (s) pane.lastSelection = s; });
   term.onData(data => {
     if (pane.ws && pane.ws.readyState === WebSocket.OPEN)
       pane.ws.send(new TextEncoder().encode(data));
   });
 
-  return pane;
+  pane.term = term;
+  pane.fit = fit;
+
+  // From here on the pane keeps itself fitted to its box; nothing else has to
+  // remember to re-fit it after a layout change.
+  observePaneSize(pane);
+}
+
+// ── Destroy-and-recreate ─────────────────────────────────────────────────
+// The "layout is broken, I can't scroll history anymore" failure lives in
+// xterm's own internal render/viewport state, not in the socket or the PTY —
+// Reconnect already tears down and reopens the WebSocket into the *same*
+// Terminal instance, and that alone doesn't clear it. So this goes further:
+// dispose the whole Terminal (DOM, renderer, addons) and build a brand new
+// one in its place, exactly as if the pane had just been created. The PTY
+// itself is untouched — connectPane's fresh socket then replays the
+// session's last 256 KB of output (see PtySession::replay in src/web.rs) to
+// repaint it, so a live agent session picks back up rather than going blank.
+function recreatePaneTerminal(idx) {
+  const pane = panes[idx];
+  if (!pane) return;
+  const { sandbox, mode } = pane;
+
+  if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
+  pane.term.dispose();
+  pane.termEl.innerHTML = '';
+  pane.lastSelection = '';
+  setupTerminal(pane);
+
+  if (sandbox) connectPane(idx, sandbox, mode);
 }
 
 function setFocusedPane(idx) {
@@ -302,12 +345,19 @@ function refitPanes(why = 'refit') {
 // panes on a window drag should not send three resizes each.
 function observePaneSize(pane) {
   if (typeof ResizeObserver === 'undefined') return;
+  // recreatePaneTerminal() calls setupTerminal() — and so this — again on a
+  // pane whose termEl already has an observer from the first time around;
+  // without disconnecting it first, a repeated rebuild would pile up one more
+  // observer on every click, each firing fitPane redundantly.
+  pane.resizeObserver?.disconnect();
   let queued = false;
-  new ResizeObserver(() => {
+  const ro = new ResizeObserver(() => {
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => { queued = false; fitPane(pane, 'box changed'); });
-  }).observe(pane.termEl);
+  });
+  ro.observe(pane.termEl);
+  pane.resizeObserver = ro;
 }
 
 // ── Attention notifications ────────────────────────────────────────────────
