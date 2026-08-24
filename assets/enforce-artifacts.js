@@ -36,11 +36,23 @@ process.stdin.on('end', () => {
     const base = path.basename(abs).toLowerCase();
     const artifactsDir = path.join(cwd, '.sbxw-artifacts');
     const insideArtifactsDir = abs === artifactsDir || abs.startsWith(artifactsDir + path.sep);
+    // The convention is a *project* rule, so it only governs the project. A
+    // path outside the workspace — the agent's own ~/.claude state, a scratch
+    // file in /tmp — has no .sbxw-artifacts/ to be redirected into, and the
+    // message would have offered one anyway, quoting a `../../../..` relative
+    // path as the offending name.
+    const insideWorkspace = abs.startsWith(cwd + path.sep);
 
     let alreadyExists = false;
     try { alreadyExists = fs.existsSync(abs); } catch (e) { /* fail open */ }
 
-    if (!insideArtifactsDir && !alreadyExists && EXTENSIONS.has(ext) && !EXEMPT_BASENAMES.has(base)) {
+    if (
+      insideWorkspace &&
+      !insideArtifactsDir &&
+      !alreadyExists &&
+      EXTENSIONS.has(ext) &&
+      !EXEMPT_BASENAMES.has(base)
+    ) {
       const rel = path.relative(cwd, abs) || abs;
       // PreToolUse contract (per `claude /hooks`): exit code 2 blocks the
       // tool call and feeds stderr back to the model as the reason; stdout

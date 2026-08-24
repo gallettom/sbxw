@@ -27,7 +27,7 @@ it fails on. What sbxw now assumes, unconditionally:
 | `create`/`run` `-e KEY=VALUE`, `--env-file` | `[env]` and `env_files` in `sbxw.toml` — baked in at creation, applied to the agent session on every attach |
 | `sbx env create` | `sbxw env run`, which provisions from a committed `.sbxenv.yaml` |
 | `sbx prune` | `sbxw prune` |
-| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the three kits under `assets/` |
+| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the four kits under `assets/` |
 | `secret set --sandbox NAME` | the Anthropic secret, without the deprecation warning the old spellings printed |
 | `SANDBOX_NAME` | the in-sandbox hooks naming their own sandbox |
 | `create --kit` repeated | every configured kit applied at creation, which is the only moment sbx applies one whole |
@@ -163,6 +163,16 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   per running sandbox, and the answer that comes back is yours to edit, release
   or refuse. See [Asking another sandbox](#asking-another-sandbox-the-relay).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
+- **Read the project's code map** — the **Map** button in a pane's top bar opens
+  the linked markdown under `.sbxw-artifacts/codemap/` as a small vault:
+  `[[wiki links]]` are clickable, every section lists what points *at* it
+  (backlinks), the outline jumps within a file, search spans the whole map, and
+  a **Graph** tab lays the files out as a force-directed graph you can drag.
+  A dead link is drawn struck through in red rather than silently as text — a
+  map that has drifted from the code says so on sight. Read-only, and served
+  from the two endpoints the Files panel already uses, so it reaches nothing
+  outside `.sbxw-artifacts`. Sandboxes with no map get told how to write one
+  (`/codemap`, from the [codemap kit](#kits)).
 - **Export the sandbox as a `.sbxenv.yaml`** — the **Env** button in a pane's
   top bar, beside **SSH** and behaving the same way: a card hanging off the
   button, closed by Escape or by clicking away. Live preview, an editable
@@ -740,7 +750,7 @@ ERROR: kit "md-to-pdf-tools" declares commands.startup, which the kit-add
        via `sbx rm` + `sbx create --kit` to use this kit
 ```
 
-All three bundled kits declare startup commands — that is how they install
+All four bundled kits declare startup commands — that is how they install
 anything — so this is the normal case, not a corner one. **Adding a kit to
 `sbxw.toml` for a sandbox that already exists therefore means recreating it:**
 `sbxw rm <name>` then `sbxw up <name>`. sbxw says so and changes nothing rather
@@ -776,13 +786,21 @@ Bundled kits:
   WeasyPrint + poppler-utils + Pillow stack it needs, so the skill is
   available and first invocation has no install step. See
   `assets/md-to-pdf-tools/README.md`.
+- **`assets/codemap`** — ships the `/codemap` command, a format reference and an
+  offline checker, and points the agent's user memory at
+  `.sbxw-artifacts/codemap/`, so an agent **looks for a repository's code map
+  before reading its source** and knows how to write one when there is none.
+  The map is markdown in [lat.md](https://github.com/vercel-labs/lat.md) format
+  — `[[wiki links]]` between sections, links into source symbols, `@lat:`
+  comments tying code back to the idea it implements. Needs no network. See
+  `assets/codemap/README.md`.
 
 The domains a kit declares under `permissions.network.allow` are composed into
 the sandbox policy when the kit is added; domains a kit does *not*
 declare (e.g. apt mirrors) still need adding to `sbxw.toml`'s `network_allow` —
 see each kit's README.
 
-The three bundled kits are **spec v2** (`schemaVersion: "2"`), like the OAuth
+The four bundled kits are **spec v2** (`schemaVersion: "2"`), like the OAuth
 kit sbxw generates: `permissions.network.allow`, `setup.files`, `setup.startup`.
 The v2 loader rejects v1 field names outright, so a spec commits to one grammar
 — if you adapt a kit written against v1, rename all three sections, not one.

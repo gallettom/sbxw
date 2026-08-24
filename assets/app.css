@@ -1035,3 +1035,144 @@
   }
   .fs-row-star.on:hover { background: #e3b341; border-color: #e3b341; }
   .fs-row-star:focus-visible { outline: 1px solid #58a6ff; outline-offset: 1px; }
+
+  /* ── Code map viewer ──
+     Three columns inside one wide modal: files on the left, the rendered
+     document in the middle, backlinks and outline on the right. The colours
+     are the ones the rest of the UI already uses; what's new is only the
+     markdown typography and the graph. */
+  .codemap-modal { width: 1180px; max-width: 96vw; height: 84vh; max-height: 84vh; }
+  .codemap-toolbar {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .55rem 1rem; border-bottom: 1px solid #21262d; flex-shrink: 0;
+  }
+  .codemap-toolbar .spacer { flex: 1; }
+  /* The segmented-control rules are scoped to .pane-bar, so Document/Graph
+     would otherwise fall back to native buttons wedged against each other.
+     Same treatment, plus a hairline between the two segments. */
+  .codemap-toolbar .mode-switch button {
+    background: transparent; border: none; border-radius: 0;
+    padding: .25rem .8rem; font-size: 11px; color: #8b949e; cursor: pointer;
+    font-family: inherit;
+  }
+  .codemap-toolbar .mode-switch button + button { border-left: 1px solid #30363d; }
+  .codemap-toolbar .mode-switch button:hover { background: #161b22; color: #c9d1d9; }
+  .codemap-toolbar .mode-switch button.active { background: #21262d; color: #e6edf3; }
+  .codemap-search { width: 220px; padding: .3rem .55rem; font-size: 12px; }
+  .codemap-dir { color: #6e7681; font-size: 11.5px; }
+  .codemap-stats { color: #6e7681; font-size: 11.5px; white-space: nowrap; }
+  .codemap-body {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: 210px minmax(0, 1fr) 240px;
+  }
+  .codemap-files, .codemap-side { overflow-y: auto; padding: .6rem .5rem; }
+  .codemap-files { border-right: 1px solid #21262d; }
+  .codemap-side { border-left: 1px solid #21262d; }
+  .codemap-doc { overflow-y: auto; padding: .9rem 1.4rem 2rem; min-width: 0; }
+
+  .cm-file {
+    display: flex; align-items: center; gap: .4rem;
+    padding: .28rem .45rem; border-radius: 5px; cursor: pointer;
+    color: #c9d1d9; font-size: 12px;
+  }
+  .cm-file:hover { background: #1c2128; }
+  .cm-file.active { background: #1f6feb22; color: #e6edf3; }
+  .cm-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cm-file-meta { color: #6e7681; font-size: 11px; }
+  .cm-file-hit {
+    padding: .2rem .45rem .2rem 1.1rem; cursor: pointer;
+    color: #8b949e; font-size: 11px; border-radius: 5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cm-file-hit:hover { background: #1c2128; color: #c9d1d9; }
+  .cm-side-label {
+    color: #6e7681; font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: .06em; margin: .8rem .45rem .35rem;
+  }
+  .cm-side-label:first-child { margin-top: .2rem; }
+  .cm-back { padding: .28rem .45rem; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .cm-back:hover { background: #1c2128; }
+  .cm-back-from { color: #58a6ff; display: block; }
+  .cm-back-sec { color: #6e7681; font-size: 11px; display: block; }
+  .cm-outline {
+    padding: .2rem .45rem; border-radius: 5px; cursor: pointer;
+    color: #8b949e; font-size: 11.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cm-outline:hover { background: #1c2128; color: #c9d1d9; }
+  .cm-outline.l2 { padding-left: 1rem; }
+  .cm-outline.l3 { padding-left: 1.6rem; }
+  .cm-outline.l4, .cm-outline.l5, .cm-outline.l6 { padding-left: 2.2rem; }
+  .cm-empty { color: #6e7681; font-size: 12.5px; line-height: 1.7; max-width: 46ch; margin: 2rem auto; }
+  .cm-empty code { color: #c9d1d9; }
+  .cm-empty-small { color: #6e7681; font-size: 11.5px; font-style: italic; padding: .2rem .45rem; }
+  .cm-error { color: #f85149; }
+
+  /* Markdown typography. Sans-serif on purpose: the rest of the UI is
+     monospace because it shows terminals and paths, but this is prose, and
+     prose in a monospace column is a wall. */
+  .cm-article {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 13.5px; line-height: 1.65; color: #c9d1d9; max-width: 78ch;
+  }
+  .cm-article h1, .cm-article h2, .cm-article h3,
+  .cm-article h4, .cm-article h5, .cm-article h6 {
+    color: #e6edf3; line-height: 1.3; margin: 1.5em 0 .5em; scroll-margin-top: .5rem;
+  }
+  .cm-article h1 { font-size: 1.5em; margin-top: 0; border-bottom: 1px solid #21262d; padding-bottom: .3em; }
+  .cm-article h2 { font-size: 1.22em; border-bottom: 1px solid #21262d; padding-bottom: .25em; }
+  .cm-article h3 { font-size: 1.06em; }
+  .cm-article h4, .cm-article h5, .cm-article h6 { font-size: 1em; color: #b8c2cc; }
+  .cm-article p { margin: .7em 0; }
+  .cm-article ul, .cm-article ol { margin: .6em 0; padding-left: 1.4em; }
+  .cm-article li { margin: .25em 0; }
+  .cm-article blockquote {
+    margin: .8em 0; padding: .1em 1em; border-left: 3px solid #30363d; color: #8b949e;
+  }
+  .cm-article hr { border: none; border-top: 1px solid #21262d; margin: 1.4em 0; }
+  .cm-article code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .88em; background: #0d1117; border: 1px solid #21262d;
+    border-radius: 4px; padding: .05em .35em;
+  }
+  .cm-article pre {
+    background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+    padding: .7rem .85rem; overflow-x: auto; margin: .8em 0;
+  }
+  .cm-article pre code { background: none; border: none; padding: 0; font-size: 12px; }
+  .cm-table { border-collapse: collapse; margin: .8em 0; font-size: 12.5px; }
+  .cm-table th, .cm-table td { border: 1px solid #21262d; padding: .35rem .6rem; text-align: left; }
+  .cm-table th { background: #0d1117; color: #e6edf3; }
+
+  /* A wiki link that resolves is blue and clickable; one that doesn't is
+     struck through in red, because a dead link in a map is a finding, not a
+     rendering accident. */
+  .cm-link { color: #58a6ff; text-decoration: none; cursor: pointer; border-bottom: 1px solid #58a6ff44; }
+  .cm-link:hover { border-bottom-color: #58a6ff; }
+  .cm-link.broken { color: #f85149; border-bottom: 1px dashed #f8514966; cursor: help; }
+  .cm-ext { color: #58a6ff; }
+  .cm-code-link {
+    display: inline-block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .86em; color: #a5d6ff; background: #0d1117;
+    border: 1px solid #21262d; border-radius: 4px; padding: .05em .4em; cursor: pointer;
+  }
+  .cm-code-link:hover { border-color: #30363d; }
+  .cm-code-link.copied { border-color: #3fb950; color: #3fb950; }
+  .codemap-side .cm-code-link {
+    display: block; margin: .2rem .45rem; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ── Graph ── */
+  .cm-graph { width: 100%; height: 100%; display: block; cursor: grab; }
+  .cm-graph-edges line { stroke: #30363d; }
+  .cm-node { cursor: pointer; }
+  .cm-node circle { fill: #1f6feb33; stroke: #58a6ff; stroke-width: 1.4; }
+  .cm-node:hover circle { fill: #1f6feb66; }
+  .cm-node.current circle { fill: #3fb95033; stroke: #3fb950; }
+  .cm-node text {
+    fill: #8b949e; font-size: 10.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    pointer-events: none; user-select: none;
+  }
+  .cm-node:hover text { fill: #e6edf3; }

@@ -107,7 +107,7 @@ jobs:
       # The web UI (assets/index.html) is embedded in the binary at build time,
       # so only the kit directories need shipping.
       - name: Package kits
-        run: tar -czf sbxw-kits.tar.gz -C assets k8s-tools headroom
+        run: tar -czf sbxw-kits.tar.gz -C assets k8s-tools headroom codemap
 
       - name: Generate checksums
         run: sha256sum sbxw-macos-* sbxw-linux-* sbxw-kits.tar.gz SbxwIsland-macos.zip > sha256sums.txt

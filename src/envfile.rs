@@ -59,20 +59,38 @@ pub struct Port {
     pub protocol: Option<String>,
 }
 
-/// An extra directory mounted alongside the primary workspace.
-pub struct Mount {
-    pub path: String,
-    pub read_only: bool,
+impl From<&crate::sbx::PortMapping> for Port {
+    /// A published mapping, as an environment file would spell it.
+    ///
+    /// The two defaults are dropped rather than written out: sbx's own default
+    /// host interface is loopback and its default protocol is `tcp`, so naming
+    /// either adds noise to a file a person reads. This conversion used to be
+    /// inlined at two call sites that disagreed about exactly that — one kept
+    /// `hostIP: 127.0.0.1`, the other dropped it — which meant `sbxw env run`
+    /// and the Env panel described the same sandbox differently.
+    fn from(m: &crate::sbx::PortMapping) -> Self {
+        Port {
+            sandbox: m.sandbox_port,
+            host: Some(m.host_port),
+            host_ip: (!m.host_ip.is_empty() && m.host_ip != "127.0.0.1").then(|| m.host_ip.clone()),
+            protocol: (!m.proto.is_empty() && m.proto != "tcp").then(|| m.proto.clone()),
+        }
+    }
 }
 
 /// Everything `render` needs — already resolved, so this struct has no opinion
 /// about where paths came from.
+///
+/// No `additionalWorkspaces`: sbxw's extra mounts come from `sbxw up --ro`,
+/// which is argv rather than config, so neither export path has any to write.
+/// The field existed, hard-coded empty at both call sites, until it was
+/// removed — read support for the key lives on in `Spec::additional`, which
+/// `sbxw env run` genuinely uses.
 #[derive(Default)]
 pub struct EnvFile {
     pub name: String,
     pub agent: String,
     pub workspace: String,
-    pub additional: Vec<Mount>,
     pub kits: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub ports: Vec<Port>,
@@ -114,16 +132,6 @@ impl EnvFile {
         let _ = writeln!(out, "name: {}", scalar(&self.name));
         let _ = writeln!(out, "agent: {}", scalar(&self.agent));
         let _ = writeln!(out, "workspace: {}", scalar(&self.workspace));
-
-        if !self.additional.is_empty() {
-            out.push_str("\nadditionalWorkspaces:\n");
-            for m in &self.additional {
-                let _ = writeln!(out, "  - path: {}", scalar(&m.path));
-                if m.read_only {
-                    out.push_str("    readOnly: true\n");
-                }
-            }
-        }
 
         if !self.kits.is_empty() {
             out.push_str("\nkits:\n");
@@ -396,8 +404,12 @@ pub struct Spec {
     pub name: Option<String>,
     pub agent: Option<String>,
     /// As written in the file, before being resolved against `base_dir`.
+    ///
+    /// The object form's `clone` flag is deliberately *not* extracted: sbxw
+    /// never acts on it, and `set_workspace` preserves the mapping when it
+    /// rewrites the path, so sbx reads the flag itself. A field here would only
+    /// suggest sbxw handles clone mode.
     pub workspace: Option<String>,
-    pub clone: bool,
     pub additional: Vec<MountSpec>,
     pub kits: Vec<String>,
     pub env: BTreeMap<String, String>,
@@ -439,16 +451,10 @@ impl Loaded {
             _ => None,
         };
 
-        let (workspace, clone) = match get("workspace") {
-            Some(Value::String(s)) => (Some(s.clone()), false),
-            Some(Value::Mapping(w)) => (
-                as_str(w.get(Value::String("path".into()))),
-                matches!(
-                    w.get(Value::String("clone".into())),
-                    Some(Value::Bool(true))
-                ),
-            ),
-            _ => (None, false),
+        let workspace = match get("workspace") {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Mapping(w)) => as_str(w.get(Value::String("path".into()))),
+            _ => None,
         };
 
         let additional = match get("additionalWorkspaces") {
@@ -537,7 +543,6 @@ impl Loaded {
             name: as_str(get("name")),
             agent: as_str(get("agent")),
             workspace,
-            clone,
             additional,
             kits,
             env,
@@ -737,17 +742,24 @@ mod tests {
         assert_eq!(spec.env.get("C").map(String::as_str), Some("3"));
     }
 
+    /// The object form's path is read; its `clone` flag is left in the document
+    /// for sbx, and survives a rewrite because `set_workspace` keeps the mapping.
     #[test]
-    fn the_workspace_object_form_carries_clone() {
-        let spec = load_str(
+    fn the_workspace_object_form_yields_its_path_and_keeps_clone_for_sbx() {
+        let mut loaded = load_str(
             "agent: claude\nworkspace:\n  path: ./neos\n  clone: true\n",
             &env_of(&[]),
             "clone",
-        )
-        .spec()
-        .unwrap();
-        assert_eq!(spec.workspace.as_deref(), Some("./neos"));
-        assert!(spec.clone);
+        );
+        assert_eq!(loaded.spec().unwrap().workspace.as_deref(), Some("./neos"));
+
+        loaded.set_workspace("/abs/neos");
+        let out = loaded.to_yaml().unwrap();
+        assert!(
+            out.contains("clone: true"),
+            "clone survived rewrite:\n{out}"
+        );
+        assert!(out.contains("/abs/neos"), "{out}");
     }
 
     #[test]
@@ -803,6 +815,82 @@ mod tests {
             out.contains("sandbox: 4200"),
             "the sandbox port is untouched:\n{out}"
         );
+    }
+
+    /// `sbxw env export` → `sbxw env run` is a real round trip across the two
+    /// YAML mechanisms in this module — `render` hand-writes it, `load` parses
+    /// it back — and nothing crossed that seam. A quoting rule that `scalar`
+    /// got wrong would surface here and nowhere else.
+    #[test]
+    fn a_rendered_file_parses_back_into_the_same_spec() {
+        let written = EnvFile {
+            name: "neos".into(),
+            agent: "claude".into(),
+            workspace: "${SBXW_PROJECTS_ROOT:-/home/you/dev}/neos".into(),
+            kits: vec![
+                "docker.io/sbx/playwright-kit:latest".into(),
+                "${SBXW_PROJECTS_ROOT:-/home/you/dev}/kits/headroom".into(),
+            ],
+            env: BTreeMap::from([
+                ("NODE_ENV".into(), "test".into()),
+                // The values that make `scalar`'s quoting load-bearing.
+                ("FEATURE".into(), "no".into()),
+                ("PORT".into(), "8".into()),
+                ("QUOTED".into(), "it's".into()),
+            ]),
+            ports: vec![
+                Port {
+                    sandbox: 4200,
+                    host: Some(4201),
+                    host_ip: None,
+                    protocol: None,
+                },
+                Port {
+                    sandbox: 8000,
+                    host: None,
+                    host_ip: None,
+                    protocol: None,
+                },
+            ],
+            notes: vec!["a note that must not become a field".into()],
+        };
+        let text = written.render("sbxw test");
+
+        let dir = scratch("roundtrip");
+        let f = dir.join(".sbxenv.yaml");
+        std::fs::write(&f, &text).unwrap();
+        // Read back on a machine where the variable is *not* set, which is the
+        // case the fallback exists for.
+        let spec = load(&[f], &|_| None)
+            .expect("the export parses")
+            .spec()
+            .unwrap();
+
+        assert_eq!(spec.name.as_deref(), Some("neos"));
+        assert_eq!(spec.agent.as_deref(), Some("claude"));
+        // The whole point of exporting `${VAR:-/abs/path}`: with no variable
+        // set, the file still resolves to a real directory.
+        assert_eq!(spec.workspace.as_deref(), Some("/home/you/dev/neos"));
+        assert_eq!(spec.kits[1], "/home/you/dev/kits/headroom");
+        // A registry reference has no variable in it and comes back verbatim.
+        assert_eq!(spec.kits[0], "docker.io/sbx/playwright-kit:latest");
+        assert_eq!(spec.env, written.env, "every value kept its type and text");
+        assert_eq!(spec.ports, written.ports, "including the absent host port");
+        // The header is comments, so it contributes no keys at all.
+        assert!(spec.delegated.is_empty());
+
+        // On a machine that *does* set the variable, it beats the fallback —
+        // which is what makes one committed file work in two checkout layouts.
+        let f2 = dir.join("second.sbxenv.yaml");
+        std::fs::write(&f2, &text).unwrap();
+        let elsewhere = load(&[f2], &|name| {
+            (name == "SBXW_PROJECTS_ROOT").then(|| "/srv/repos".to_string())
+        })
+        .unwrap()
+        .spec()
+        .unwrap();
+        assert_eq!(elsewhere.workspace.as_deref(), Some("/srv/repos/neos"));
+        assert_eq!(elsewhere.kits[1], "/srv/repos/kits/headroom");
     }
 
     #[test]
@@ -916,27 +1004,6 @@ mod tests {
     }
 
     #[test]
-    fn read_only_mounts_say_so_and_writable_ones_stay_quiet() {
-        let out = EnvFile {
-            additional: vec![
-                Mount {
-                    path: "../docs".into(),
-                    read_only: true,
-                },
-                Mount {
-                    path: "../shared".into(),
-                    read_only: false,
-                },
-            ],
-            ..minimal()
-        }
-        .render("sbxw 1.0");
-        assert!(out.contains("  - path: ../docs\n    readOnly: true\n"));
-        assert!(out.contains("  - path: ../shared\n"));
-        assert_eq!(out.matches("readOnly").count(), 1);
-    }
-
-    #[test]
     fn omissions_are_recorded_in_the_file_itself() {
         // The point of the export is that it is honest about being partial.
         let out = EnvFile {
@@ -952,7 +1019,7 @@ mod tests {
     fn an_empty_section_is_absent_rather_than_empty() {
         // `kits:` with nothing under it is null, not [], and the loader is strict.
         let out = minimal().render("sbxw 1.0");
-        for field in ["kits:", "env:", "ports:", "additionalWorkspaces:"] {
+        for field in ["kits:", "env:", "ports:"] {
             assert!(!out.contains(field), "{field} should not appear at all");
         }
     }

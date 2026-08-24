@@ -1,0 +1,939 @@
+schemaVersion: "2"
+kind: mixin
+name: codemap
+description: >
+  Ships the /codemap command, the codemap skill and an offline checker, and
+  points the agent's user memory at .sbxw-artifacts/codemap/ — so a sandbox
+  agent looks for a repository's code map before reading its source, and knows
+  how to write one when there is none. Format is lat.md's (wiki links, code
+  links, @lat: back references), so a repo can graduate to the real CLI without
+  rewriting anything. Idempotent: safe to re-run on every container start.
+
+# Nothing here reaches the network — the kit only writes files into the sandbox.
+# The domains are declared for the optional upgrade path in this kit's README
+# (npm i -g lat.md, for repos that want semantic search over their map).
+permissions:
+  network:
+    allow:
+      - registry.npmjs.org
+      - "*.npmjs.org"
+
+setup:
+  files:
+    # User-level command, not project-level: it lands in every sandbox that
+    # applies this kit, whatever project is mounted as the workspace, so /codemap
+    # never has to be committed into a target repo.
+    - path: /home/agent/.claude/commands/codemap.md
+      mode: "0644"
+      content: |
+        Write or refresh this project's code map — a small knowledge graph in markdown that tells the next agent what this codebase does, why it is built this way, and where each idea lives.
+
+        Scope for this run: $ARGUMENTS  (empty means the whole repository)
+
+        The map lives in `.sbxw-artifacts/codemap/`, so sbxw's web UI lists it and the
+        next session finds it without being told. It is written in the **lat.md format**
+        — `/home/agent/.sbxw/codemap/FORMAT.md` is the full reference; the essentials are
+        repeated below.
+
+        ## 0. Situate yourself
+
+        - `ls .sbxw-artifacts/codemap/ 2>/dev/null` — if it exists this is a **refresh**:
+          read `codemap.md` (the index) and every file you are about to touch *before*
+          changing anything. Never rewrite a map you have not read.
+        - If the repo instead has a `lat.md/` directory at its root, it already uses the
+          real tool. Work there, keep its conventions, and validate with `lat check`
+          instead of this kit's checker. Do not create a second map.
+        - Confirm the repository root — every path you write is relative to it.
+
+        ## 1. Reconnaissance, before writing a word
+
+        Spend your first calls on the sources with the highest information density.
+        Roughly in order:
+
+        - `README`, then the build manifest (`Cargo.toml`, `package.json`, `pyproject.toml`,
+          `go.mod`) — they name the moving parts and the commands that drive them.
+        - `git log --oneline -30`, then
+          `git log --format= --name-only -300 | sort | uniq -c | sort -rn | head -25` —
+          what actually changes is what actually matters. Frozen files rarely need a map.
+        - The tree: top-level `ls`, then file counts per directory. Find the entry points
+          (`main`, `index`, `lib`, `cli`, `server`) and the test directories.
+        - Prose that already exists: `docs/`, `CLAUDE.md`, `AGENTS.md`, ADRs, and module
+          doc comments (Rust `//!` headers, Python module docstrings, JSDoc file blocks).
+          These are usually the only place the *why* was ever written down. Long doc
+          comments at the top of a file are the single best source in most repos.
+        - Then read the two or three files that everything else depends on.
+
+        For each area you intend to map, be able to answer: what is it for, what does it
+        guarantee, and what would surprise someone who only read the code? The third
+        question is the one worth the map.
+
+        ## 2. Decide the shape
+
+        - **One file per domain or subsystem, never one per source file.** A first pass
+          is usually 4–8 files. A map nobody can hold in their head is a second codebase.
+        - `codemap.md` is the index: one bullet per file, `- [[name]] — one sentence`.
+        - Add subdirectories only when a topic grows past three files; each subdirectory
+          gets its own index, **named after the directory** (`api/api.md`).
+        - Name files after concepts (`auth.md`, `scheduling.md`), not after paths.
+        - If the project has tests worth describing as behaviour, give them `tests.md`
+          with `require-code-mention: true` in the frontmatter (see step 4).
+
+        ## 3. Write the sections
+
+        Format rules the checker enforces. Write to them from the first line — they are
+        cheap to satisfy while writing and expensive to retrofit across a finished map:
+
+        - **Every section opens with a leading paragraph** — one or two sentences
+          immediately after the heading, before any child heading, list or code block,
+          **≤250 characters, a hard limit** (wiki-link text doesn't count). Write that
+          sentence *first*, then the detail underneath it. It is the section's identity:
+          what a future agent reads in search results and previews, and often all it
+          reads. If the overview needs three clauses, the section is really two sections.
+        - **Source paths are relative to the repository root.** Not to the map file, not
+          a bare file name — the same path `git ls-files` would print.
+
+          ```
+          wrong:  [[../../src/lib/models/models.ts#FieldConfiguration]]
+          wrong:  [[models.ts#FieldConfiguration]]
+          right:  [[src/lib/models/models.ts#FieldConfiguration]]
+          ```
+
+        - **Wiki links tie the graph together**: `[[file#Heading#Subheading]]` for a
+          section, `[[file#Heading|nicer words]]` to rename the anchor text, and
+          `[[src/auth.ts#validateToken]]`, `[[src/main.rs#Server#run]]`,
+          `[[lib/utils.py#parse_args]]` to point at real symbols in source.
+        - The file's `#` H1 may be left implicit in a link: `[[cli#mcp]]` reaches
+          `cli.md` → `# CLI` → `## mcp`.
+        - **A heading is an address, so it is matched verbatim** — backticks and
+          punctuation included. `## The `childEvent` contract` can only be reached by
+          `[[components#The `childEvent` contract]]`, which nobody writes correctly
+          twice. Prefer plain heading text and put the code in the paragraph below it.
+          Links to markdown outside the map (`[[../../README.md]]`) don't resolve at
+          all: say it in prose, or link the section that covers it.
+
+        What belongs in a map:
+
+        - Decisions and the reasoning behind them — especially the ones a reader would
+          otherwise undo by accident.
+        - Invariants, constraints, and the failure modes the code defends against.
+        - Domain vocabulary: the words this team uses, and what they mean here.
+        - Contracts and protocols between parts, including who owns what state.
+        - Anything that surprised *you* while reading. That surprise is the map's value.
+
+        What does not:
+
+        - A walkthrough of what the code plainly says. The code is the walkthrough.
+        - Generated API documentation, or an inventory of every function.
+        - TODOs, session notes, plans, or anything that goes stale in a week.
+
+        Write only what you verified in the tree, and anchor claims with code links. If
+        you are guessing, either check it or leave it out — a confident wrong map costs
+        more than no map. When a question stays open, say so in a sentence and name what
+        you could not confirm.
+
+        ## 4. Anchor the code back to the map (where it pays)
+
+        Add `// @lat: [[section-id]]` (or `# @lat:` in Python) directly above the
+        definition a section explains — one comment per section, at the code that
+        carries the meaning, not at the top of the file.
+
+        Do this where a reader would otherwise be lost, not everywhere: a handful of
+        well-placed anchors beats a carpet of them. **Ask the user before adding these
+        if the repo is not yours to edit** — they change source files, unlike the map.
+
+        For test specs under `require-code-mention: true`, each leaf section must be
+        referenced by exactly one `@lat:` comment next to the test that covers it; the
+        checker reports any spec no test claims.
+
+        ## 5. Validate — early, then again at the end
+
+        ```bash
+        node /home/agent/.sbxw/codemap/check-codemap.mjs
+        ```
+
+        **Run it as soon as the index and the first content file exist**, not after the
+        last one. Every rule it enforces is one you are about to repeat in every
+        remaining file, and a habit caught on file one costs a minute — the same habit
+        caught on file six costs a rewrite of all six. Then run it again at the end, and
+        fix everything it reports until it is clean.
+
+        It checks that every directory has its index, that every section opens with an
+        overview, and that every wiki link, code link and `@lat:` reference still points
+        at something that exists. When a link is close to something real it names the
+        fix: the exact heading spelling, or the repo-root path you meant. Its closing
+        "never mentioned in the map" list is a hint, not an error — map what carries
+        meaning, skip what doesn't.
+
+        The three ways a first pass usually fails, all avoidable:
+
+        1. **Overviews written as summaries.** 900-character opening paragraphs. Lead
+           with the sentence, follow with the detail.
+        2. **Source paths copied from the wrong vantage point** — `../../src/…` or a bare
+           file name. They are repo-root-relative.
+        3. **Links to headings that contain code**, quoted without their backticks.
+
+        ## 6. Report back
+
+        Tell the user, briefly: what you mapped, what you deliberately left out and why,
+        and anything you could not verify. If you added `@lat:` comments, say which files
+        you touched.
+
+        ## Refreshing a map that already exists
+
+        - Read the index and the affected files first; edit in place, keep the sections
+          that are still true, and delete what has become false. Do not append a second
+          account of the same thing.
+        - When code moved, fix the links rather than dropping them — a broken link is a
+          signal the checker will surface; a deleted one is silence.
+        - After changing behaviour, architecture or tests in a mapped repo, update the
+          map in the same session and re-run the checker. A map nobody maintains is worse
+          than no map, because it is still believed.
+    # The reference half: the command above says what to do, this says how the
+    # format works. Deliberately NOT shipped as a Claude Code skill. A skill would
+    # collide with the command for the /codemap name (both would list, identically),
+    # and ~/.claude/skills is a read-write mount of sbx's shared skill store, so a
+    # kit writing there leaks the file to the host and to every other sandbox. A
+    # skill with no system dependencies belongs in that store via `sbxw skills
+    # import`, not in a kit.
+    - path: /home/agent/.sbxw/codemap/FORMAT.md
+      mode: "0644"
+      content: |
+        # Code map format
+
+        A code map is a small set of cross-linked markdown files describing **what** a
+        project does and **why** — domain concepts, design decisions, invariants, test
+        specs. It is not a copy of the code; it is the layer the code cannot express.
+        It lives in `.sbxw-artifacts/codemap/` and follows the
+        [lat.md](https://github.com/vercel-labs/lat.md) format, so a repository that
+        later adopts the real `lat` CLI keeps everything it has already written.
+
+        ## Reading a map
+
+        Start at `.sbxw-artifacts/codemap/codemap.md` — the index, one line per file.
+        Follow `[[wiki links]]` to the section you need instead of grepping: the map is
+        where intent lives, grep is for finding code. In source files, an
+        `// @lat: [[section]]` comment points back at the section explaining that code.
+
+        The map states what was true when it was written. If the tree disagrees with it,
+        the tree wins — and the map is now wrong where you looked, so fix it as you pass.
+
+        ## Section structure
+
+        Every section opens with a **leading paragraph**: one or two sentences right
+        after the heading, before any child heading, list or code block, at most **250
+        characters** (text inside `[[…]]` doesn't count). It is the section's identity —
+        what search results, previews and other agents read first.
+
+        ```markdown
+        # Good Section
+
+        Brief overview of what this section documents and why it matters.
+
+        More detail can follow in later paragraphs, lists or code blocks.
+
+        ## Child heading
+
+        Details about this child topic.
+        ```
+
+        A section that starts straight into a child heading is invalid — the parent has
+        said nothing, and a link to it resolves to an empty promise.
+
+        ## Section ids
+
+        A section is addressed by file path plus heading chain:
+
+        - Full: `.sbxw-artifacts/codemap/api/auth#OAuth Flow#Refresh`
+        - Short: `auth#OAuth Flow#Refresh` — the bare file stem works when it is unique
+        - The file's H1 may be left implicit: `[[cli#mcp]]` reaches `cli.md` → `# CLI` → `## mcp`
+
+        Headings are addresses, and they are matched **verbatim** — backticks and
+        punctuation included. A heading like ``## The `childEvent` contract`` is only
+        reachable as ``[[components#The `childEvent` contract]]``. That works, but it is
+        a link nobody writes correctly twice: prefer plain heading text and put the code
+        in the paragraph below.
+
+        ## Wiki links
+
+        `[[target]]` links a section; `[[target|alias]]` renames the anchor text.
+
+        ```markdown
+        See [[cli#init]] for setup.
+        The parser validates [[markdown#Wiki Links|link syntax]].
+        ```
+
+        Links can point straight at source symbols, which is what keeps a map honest.
+        **Paths are relative to the repository root** — never to the map file, never a
+        bare file name: `[[src/lib/models/models.ts#FieldConfiguration]]`, not
+        `[[../../src/lib/models/models.ts#…]]` and not `[[models.ts#…]]`.
+
+        ```markdown
+        [[src/config.ts#getConfigDir]]     — function
+        [[src/server.ts#App#listen]]       — class method
+        [[lib/utils.py#parse_args]]        — Python function
+        [[src/lib.rs#Greeter#greet]]       — Rust impl method
+        [[src/app.go#Greeter#Greet]]       — Go method
+        [[src/app.h#Greeter]]              — C struct
+        [[src/config.ts]]                  — the file itself
+        ```
+
+        ## Code refs
+
+        Tie a source definition back to the section that explains it:
+
+        ```typescript
+        // @lat: [[auth#OAuth Flow]]
+        export function validateToken(token: string) { … }
+        ```
+
+        ```python
+        # @lat: [[auth#OAuth Flow]]
+        def validate_token(token): ...
+        ```
+
+        One comment per section, placed at the code that carries the meaning — not at the
+        top of the file — and only where a reader would otherwise be lost.
+
+        ## Indexes
+
+        Every directory in the map has an index file **named after the directory**:
+        `.sbxw-artifacts/codemap/codemap.md` for the root, `…/api/api.md` for `api/`. It
+        lists every file and subdirectory beside it, one bullet each:
+
+        ```markdown
+        Short paragraph saying what this part of the map covers.
+
+        - [[auth]] — authentication and session rules
+        - [[api]] — HTTP surface, versioning and error contracts
+        ```
+
+        ## Test specs
+
+        A file whose frontmatter sets `require-code-mention: true` becomes a contract:
+        every leaf section must be claimed by exactly one `@lat:` comment in test code.
+
+        ```markdown
+        ---
+        lat:
+          require-code-mention: true
+        ---
+        # Tests
+
+        Behaviour specifications for the authentication surface.
+
+        ## User login
+
+        Credential validation and error handling for the login endpoint.
+
+        ### Rejects expired tokens
+
+        Tokens past their expiry are rejected with 401, even if otherwise well formed.
+        ```
+
+        ```python
+        # @lat: [[tests#User login#Rejects expired tokens]]
+        def test_rejects_expired_tokens(): ...
+        ```
+
+        Every spec section needs a real description — one sentence on what it verifies
+        and why. A bare heading is not a spec.
+
+        ## What belongs, what doesn't
+
+        Write: decisions and their reasons, invariants and constraints, domain
+        vocabulary, contracts between parts, failure modes, and whatever surprised you
+        while reading the code.
+
+        Don't write: walkthroughs of what the code plainly says, generated API listings,
+        TODOs, or session notes. And never write a claim you have not checked against
+        the tree.
+
+        ## Validating
+
+        ```bash
+        node /home/agent/.sbxw/codemap/check-codemap.mjs            # whole repo
+        node /home/agent/.sbxw/codemap/check-codemap.mjs --dir lat.md   # a lat.md/ vault
+        ```
+
+        Checks indexes, leading paragraphs, wiki links, code links, `@lat:` refs and
+        `require-code-mention` coverage. Symbol lookup is regex-based: it can miss an
+        exotic declaration, but it never invents one. Run it after every edit to the map,
+        and treat a failure as work that is not finished.
+
+        If the project has the real CLI installed (`npm i -g lat.md`) and keeps its map
+        in `lat.md/` at the repo root, use `lat check`, `lat search` and `lat section`
+        instead — same format, more power.
+
+        `/codemap` walks through building or refreshing a map end to end; this file is
+        the reference it leans on.
+    # What keeps a map from rotting quietly. No dependencies and no network, so
+    # it runs in any sandbox; deliberately free of dollar-brace, which kit
+    # content fields reject.
+    - path: /home/agent/.sbxw/codemap/check-codemap.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // check-codemap.mjs — offline validator for a code map written in the lat.md
+        // format (https://github.com/vercel-labs/lat.md).
+        //
+        // Checks what keeps a map worth trusting: every directory has an index, every
+        // section opens with an overview, and every [[wiki link]] and `@lat:` back
+        // reference still points at something that exists. Symbol lookup inside source
+        // files is regex-based — a heuristic that can miss an exotic declaration, but
+        // never invents one.
+        //
+        //   node check-codemap.mjs [--dir .sbxw-artifacts/codemap] [--root .] [--quiet]
+        //
+        // Exit codes: 0 clean, 1 errors found, 2 nothing to check.
+        //
+        // Written without template literals on purpose: sbx kit `content` fields reject
+        // dollar-brace, which is what a JS template literal is made of.
+
+        import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+        import { join, relative, resolve, extname, sep } from "node:path";
+        import { execSync } from "node:child_process";
+
+        const argv = process.argv.slice(2);
+        const flag = (name, dflt) => {
+          const i = argv.indexOf(name);
+          return i === -1 || i + 1 >= argv.length ? dflt : argv[i + 1];
+        };
+        const ROOT = resolve(flag("--root", "."));
+        const MAP = flag("--dir", ".sbxw-artifacts/codemap").replace(/\/+$/, "");
+        const MAP_ABS = resolve(ROOT, MAP);
+        const MAP_NAME = MAP.split("/").pop().replace(/\.md$/, "");
+        const QUIET = argv.includes("--quiet");
+
+        const SOURCE_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".go", ".c", ".h",
+          ".java", ".kt", ".rb", ".php", ".swift", ".cs", ".scala", ".sh"];
+        const SYMBOL_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs", ".go", ".c", ".h"];
+        const SKIP = new Set([".git", "node_modules", "target", "dist", "build", ".next", ".venv",
+          "vendor", "__pycache__", ".cache"]);
+        const LEAD_MAX = 250;
+
+        const errors = [];
+        const warnings = [];
+        const fail = (where, msg, hint) => errors.push({ where, msg, hint });
+        const warn = (where, msg, hint) => warnings.push({ where, msg, hint });
+
+        if (!existsSync(MAP_ABS)) {
+          console.error("No map at " + MAP + "/ — run /codemap to write one, or pass --dir <path>.");
+          process.exit(2);
+        }
+
+        /* ─── markdown parsing ──────────────────────────────────────────────────── */
+
+        // Blank out fenced code blocks, so a heading or a link inside one is not read
+        // as real. Inline code is NOT blanked: a heading may legitimately contain a
+        // `code span`, and blanking it would rename the section. Whether an inline span
+        // hides a link is decided per match instead — see LINK_OR_CODE.
+        const maskFences = (text) => {
+          let fence = null;
+          return text.split("\n").map((line) => {
+            const m = line.match(/^\s{0,3}(```+|~~~+)/);
+            if (fence) {
+              if (m && line.trimStart().startsWith(fence)) fence = null;
+              return "";
+            }
+            if (m) { fence = m[1]; return ""; }
+            return line;
+          });
+        };
+
+        // Links and inline code spans, matched in one pass. Whichever starts first
+        // wins, which is exactly the rule that separates `[[refs]]` (a quoted example,
+        // swallowed by the code span) from [[a#`b` c]] (a link whose heading contains
+        // code). Anything that isn't a link match is left alone.
+        const LINK_OR_CODE = /\[\[[^\]]+\]\]|`+[^`]*`+/g;
+        const linksIn = (line) => {
+          const found = [];
+          for (const m of line.matchAll(LINK_OR_CODE)) {
+            if (m[0].startsWith("[[")) found.push(m[0].slice(2, -2));
+          }
+          return found;
+        };
+
+        const parseFrontmatter = (text) => {
+          if (!text.startsWith("---\n")) return { body: text, skipped: 0, requireCodeMention: false };
+          const close = text.indexOf("\n---", 3);
+          if (close === -1) return { body: text, skipped: 0, requireCodeMention: false };
+          const head = text.slice(4, close);
+          const after = text.indexOf("\n", close + 1) + 1;
+          return {
+            body: text.slice(after),
+            skipped: text.slice(0, after).split("\n").length - 1,
+            requireCodeMention: /require-code-mention:\s*true/.test(head),
+          };
+        };
+
+        // Section node: { title, chain, level, line, body[], children[] }
+        //
+        // The masked copy decides *whether* a line is a heading (so a `#` inside a
+        // fenced block is not one); the title itself always comes from the raw line.
+        // Reading the title off the mask blanks any `code span` in it, which silently
+        // renames the section — and with it every link that addresses it.
+        const parseSections = (text) => {
+          const { body, skipped, requireCodeMention } = parseFrontmatter(text);
+          const raw = body.split("\n");
+          const root = { title: null, chain: [], level: 0, line: 1, body: [], children: [] };
+          const stack = [root];
+          maskFences(body).forEach((masked, i) => {
+            const m = /^\s{0,3}#{1,6}(\s|$)/.test(masked)
+              ? raw[i].match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/)
+              : null;
+            if (!m) { stack[stack.length - 1].body.push(raw[i]); return; }
+            const level = m[1].length;
+            const title = m[2].trim();
+            while (stack.length > 1 && stack[stack.length - 1].level >= level) stack.pop();
+            const parent = stack[stack.length - 1];
+            const node = { title, chain: parent.chain.concat([title]), level,
+              line: i + 1 + skipped, body: [], children: [] };
+            parent.children.push(node);
+            stack.push(node);
+          });
+          return { root, requireCodeMention };
+        };
+
+        const walk = (dir, out = []) => {
+          for (const name of readdirSync(dir)) {
+            if (SKIP.has(name)) continue;
+            const p = join(dir, name);
+            if (statSync(p).isDirectory()) walk(p, out);
+            else out.push(p);
+          }
+          return out;
+        };
+
+        /* ─── load the map ──────────────────────────────────────────────────────── */
+
+        const files = new Map();   // "sub/dir/name" without .md  ->  record
+        for (const abs of walk(MAP_ABS)) {
+          const rel = relative(MAP_ABS, abs).split(sep).join("/");
+          if (!rel.endsWith(".md")) {
+            fail(MAP + "/" + rel, "only .md files belong in the map",
+              "keep other deliverables elsewhere under .sbxw-artifacts/");
+            continue;
+          }
+          const text = readFileSync(abs, "utf8");
+          const parsed = parseSections(text);
+          files.set(rel.slice(0, -3), {
+            key: rel.slice(0, -3), rel, text,
+            root: parsed.root, requireCodeMention: parsed.requireCodeMention,
+          });
+        }
+        if (files.size === 0) {
+          console.error(MAP + "/ has no markdown files.");
+          process.exit(2);
+        }
+
+        const byStem = new Map();
+        for (const key of files.keys()) {
+          const stem = key.split("/").pop();
+          if (!byStem.has(stem)) byStem.set(stem, []);
+          byStem.get(stem).push(key);
+        }
+
+        const eachSection = (file, fn) => (function visit(n) { fn(n); n.children.forEach(visit); })(file.root);
+        const idOf = (file, node) => [MAP + "/" + file.key].concat(node.chain).join("#");
+        const at = (file, node) => MAP + "/" + file.rel + ":" + node.line;
+
+        /* ─── rule: every section opens with an overview ────────────────────────── */
+
+        const withoutLinks = (s) => s.replace(/\[\[[^\]]*\]\]/g, "");
+
+        for (const file of files.values()) {
+          eachSection(file, (node) => {
+            // A file that opens straight into its H1 is fine — that heading carries the
+            // overview. Only a file with no content and no heading is empty.
+            if (!node.chain.length && node.children.length) return;
+            const label = node.chain.length ? idOf(file, node) : MAP + "/" + file.key + " (file intro)";
+            const where = at(file, node);
+            const para = [];
+            for (const line of node.body) {
+              if (line.trim() === "") { if (para.length) break; continue; }
+              para.push(line.trim());
+            }
+            if (para.length === 0) {
+              fail(where, '"' + label + '" has no leading paragraph',
+                "one sentence right after the heading, before any child heading or list");
+              return;
+            }
+            if (/^([-*+]\s|\d+\.\s|>|\||```|~~~|<)/.test(para[0])) {
+              warn(where, '"' + label + '" opens with a list, quote or code block instead of a sentence',
+                "a plain sentence reads better in search results and previews");
+              return;
+            }
+            // The length cap keeps a section's essence quotable. An index file's intro
+            // has no heading of its own and is exempt.
+            if (!node.chain.length) return;
+            const len = withoutLinks(para.join(" ")).trim().length;
+            if (len > LEAD_MAX)
+              fail(where, 'leading paragraph of "' + label + '" is ' + len + " chars (max " + LEAD_MAX + ")",
+                "keep the overview to a sentence or two; detail goes in the next paragraph");
+          });
+        }
+
+        /* ─── rule: one index per directory, listing everything in it ───────────── */
+
+        const dirs = new Set([""]);
+        for (const key of files.keys()) {
+          const parts = key.split("/");
+          for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+        }
+
+        for (const dir of dirs) {
+          const dirName = dir === "" ? MAP_NAME : dir.split("/").pop();
+          const indexKey = dir === "" ? MAP_NAME : dir + "/" + dirName;
+          const expected = new Set();
+          for (const key of files.keys()) {
+            if (dir !== "" && key.indexOf(dir + "/") !== 0) continue;
+            const rest = dir === "" ? key : key.slice(dir.length + 1);
+            const head = rest.split("/")[0];
+            if (rest.indexOf("/") !== -1 || key !== indexKey) expected.add(head);
+          }
+          const index = files.get(indexKey);
+          if (!index) {
+            const snippet = Array.from(expected).sort()
+              .map((e) => "- [[" + e + "]] — what it covers, in one sentence").join("\n");
+            fail(MAP + "/" + (dir ? dir + "/" : "") + dirName + ".md",
+              "no index file for " + (dir === "" ? MAP + "/" : dir + "/"),
+              "create it — an index is named after its own directory — starting from:\n" + snippet);
+            continue;
+          }
+          const listed = new Set();
+          for (const line of maskFences(index.text))
+            for (const raw of linksIn(line))
+              listed.add(raw.split(/[|#]/)[0].trim().replace(/\.md$/, "").split("/").pop());
+          for (const e of expected)
+            if (!listed.has(e))
+              fail(MAP + "/" + index.rel, 'the index does not list "' + e + '"',
+                "add:  - [[" + e + "]] — …");
+          for (const l of listed)
+            if (!expected.has(l) && !byStem.has(l) && l !== dirName)
+              fail(MAP + "/" + index.rel, 'the index lists "' + l + '", which no longer exists',
+                "drop the stale entry");
+        }
+
+        /* ─── source symbols (heuristic) ────────────────────────────────────────── */
+
+        const patternsFor = (ext, name) => {
+          // Escape every non-word character — a dollar-brace class would be rejected
+          // by the kit loader that ships this file.
+          const n = name.replace(/[^A-Za-z0-9_]/g, (ch) => "\\" + ch);
+          const js = ["\\b(?:function|class|const|let|var|type|interface|enum)\\s+" + n + "\\b",
+            "^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?(?:get|set|static|\\*)?\\s*" + n + "\\s*[(<]",
+            "\\b" + n + "\\s*[:=]\\s*(?:async\\s*)?[(<]"];
+          if ([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"].includes(ext)) return js;
+          if (ext === ".py") return ["^\\s*(?:async\\s+)?def\\s+" + n + "\\b", "^\\s*class\\s+" + n + "\\b",
+            "^" + n + "\\s*[:=]"];
+          if (ext === ".rs") return ["\\b(?:fn|struct|enum|trait|const|static|type|mod)\\s+" + n + "\\b",
+            "macro_rules!\\s*" + n + "\\b", "\\bimpl\\b[^\\n{]*\\b" + n + "\\b"];
+          if (ext === ".go") return ["\\bfunc\\s+(?:\\([^)]*\\)\\s*)?" + n + "\\b",
+            "\\b(?:type|const|var)\\s+" + n + "\\b"];
+          if (ext === ".c" || ext === ".h") return ["\\b" + n + "\\s*\\(", "\\b(?:struct|enum|union)\\s+" + n + "\\b",
+            "#\\s*define\\s+" + n + "\\b", "\\b" + n + "\\s*(?:\\[[^\\]]*\\])?\\s*[;=]"];
+          return js;
+        };
+
+        // Every tracked file in the repo, keyed by basename: the raw material for
+        // "did you mean src/lib/models/models.ts?". Built once, and only when
+        // something has already failed to resolve.
+        let repoIndex = null;
+        const repoFilesByName = () => {
+          if (repoIndex) return repoIndex;
+          repoIndex = new Map();
+          let files;
+          try {
+            files = execSync("git ls-files -z", { cwd: ROOT, encoding: "utf8",
+              maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+              .split("\0").filter(Boolean);
+          } catch (e) {
+            files = walk(ROOT).map((p) => relative(ROOT, p).split(sep).join("/"));
+          }
+          for (const f of files) {
+            const base = f.split("/").pop();
+            if (!repoIndex.has(base)) repoIndex.set(base, []);
+            repoIndex.get(base).push(f);
+          }
+          return repoIndex;
+        };
+
+        const sources = new Map();
+        const readSource = (rel) => {
+          if (sources.has(rel)) return sources.get(rel);
+          let text = null;
+          try {
+            const abs = resolve(ROOT, rel);
+            if (statSync(abs).isFile()) text = readFileSync(abs, "utf8");
+          } catch (e) { /* missing */ }
+          sources.set(rel, text);
+          return text;
+        };
+
+        const checkCodeLink = (target, where) => {
+          const parts = target.split("#");
+          const path = parts[0];
+          const symbols = parts.slice(1);
+          const text = readSource(path);
+          if (text === null) {
+            const hits = repoFilesByName().get(path.split("/").pop()) || [];
+            const rest = symbols.length ? "#" + symbols.join("#") : "";
+            const hint = hits.length === 1
+              ? "did you mean [[" + hits[0] + rest + "]]? paths are relative to the repository root"
+              : hits.length > 1
+                ? "paths are relative to the repository root — candidates: " + hits.slice(0, 5).join(", ")
+                : "paths are relative to the repository root, not to the map file";
+            fail(where, "[[" + target + "]] — no such file: " + path, hint);
+            return;
+          }
+          const ext = extname(path);
+          if (symbols.length && !SYMBOL_EXTS.includes(ext)) {
+            warn(where, "[[" + target + "]] — symbols in " + ext + " files are not checked",
+              "the file exists; the symbol is taken on trust");
+            return;
+          }
+          for (const sym of symbols)
+            if (!patternsFor(ext, sym).some((p) => new RegExp(p, "m").test(text)))
+              fail(where, "[[" + target + "]] — no definition of \"" + sym + "\" in " + path,
+                "renamed or deleted? point the link at whatever replaced it");
+        };
+
+        /* ─── rule: wiki links resolve ──────────────────────────────────────────── */
+
+        const resolveSection = (target) => {
+          const parts = target.split("#");
+          const chain = parts.slice(1);
+          let p = parts[0].trim().replace(/^\.\//, "").replace(/\.md$/, "");
+          if (p.indexOf(MAP + "/") === 0) p = p.slice(MAP.length + 1);
+          let key = files.has(p) ? p : null;
+          if (!key && p.indexOf("/") === -1) {
+            const cands = byStem.get(p) || [];
+            if (cands.length === 1) key = cands[0];
+            else if (cands.length > 1)
+              return { error: '"' + p + '" is ambiguous — ' + cands.join(", "), hint: "use the full path form" };
+          }
+          if (!key) return { error: 'no map file named "' + parts[0] + '"' };
+          const file = files.get(key);
+
+          // Walk the heading chain from `start`; matching is case-insensitive.
+          const descend = (start) => {
+            let node = start;
+            for (const part of chain) {
+              const want = part.trim().toLowerCase();
+              const next = node.children.find((c) => c.title.toLowerCase() === want);
+              if (!next) return { failedAt: node, want: part.trim() };
+              node = next;
+            }
+            return { node };
+          };
+
+          const first = descend(file.root);
+          if (first.node) return { file, node: first.node };
+          // The H1 may be left implicit: [[cli#mcp]] means cli.md → "# CLI" → "## mcp".
+          for (const h1 of file.root.children) {
+            const viaRoot = descend(h1);
+            if (viaRoot.node) return { file, node: viaRoot.node };
+          }
+          // Nothing matched. Most misses are a link that dropped the backticks or the
+          // punctuation of a heading it otherwise names correctly, so before listing
+          // what exists, look for the one heading that differs only in those.
+          const flat = [];
+          (function collect(node) {
+            for (const child of node.children) { flat.push(child); collect(child); }
+          })(file.root);
+          const norm = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+          const wanted = norm(chain.join(" "));
+          const tail = norm(chain[chain.length - 1]);
+          const close = flat.filter((sec) => norm(sec.chain.join(" ")) === wanted || norm(sec.title) === tail);
+          const under = MAP + "/" + file.key + first.failedAt.chain.map((c) => "#" + c).join("");
+          const spelling = parts[0].trim();
+          // Quote the short form the map itself uses: a lone H1 stays implicit.
+          const suggestChain = file.root.children.length === 1 ? close.length && close[0].chain.slice(1) : close.length && close[0].chain;
+          const hint = close.length === 1
+            ? 'did you mean [[' + spelling + "#" + suggestChain.join("#")
+              + ']]? a heading is matched verbatim — backticks and punctuation included'
+            : flat.length
+              ? "headings in that file: " + flat.slice(0, 8).map((sec) => sec.chain.join("#")).join(", ")
+              : "that file has no headings";
+          return { error: 'no section "' + first.want + '" under ' + under, hint };
+        };
+
+        let links = 0;
+        for (const file of files.values()) {
+          maskFences(file.text).forEach((line, i) => {
+            for (const raw of linksIn(line)) {
+              const target = raw.split("|")[0].trim();
+              if (!target) continue;
+              links++;
+              const where = MAP + "/" + file.rel + ":" + (i + 1);
+              if (SOURCE_EXTS.includes(extname(target.split("#")[0]))) { checkCodeLink(target, where); continue; }
+              const r = resolveSection(target);
+              if (r.error) fail(where, "broken link [[" + target + "]] — " + r.error, r.hint);
+            }
+          });
+        }
+
+        /* ─── rule: @lat back references ────────────────────────────────────────── */
+
+        let tracked = [];
+        try {
+          // stderr silenced: outside a repository this is an expected miss, not news.
+          tracked = execSync("git ls-files -z", { cwd: ROOT, encoding: "utf8",
+            maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })
+            .split("\0").filter(Boolean);
+        } catch (e) {
+          tracked = walk(ROOT).map((p) => relative(ROOT, p).split(sep).join("/"));
+        }
+        const codeFiles = tracked.filter((p) => SOURCE_EXTS.includes(extname(p))
+          && p.indexOf(MAP + "/") !== 0 && !p.split("/").some((s) => SKIP.has(s)));
+
+        const mentions = new Map();
+        let refs = 0;
+        for (const p of codeFiles) {
+          const text = readSource(p);
+          if (text === null || text.indexOf("@lat:") === -1) continue;
+          text.split("\n").forEach((line, i) => {
+            const m = line.match(/(?:\/\/|#|--|;|\*)\s*@lat:\s*\[\[([^\]]+)\]\]/);
+            if (!m) return;
+            refs++;
+            const target = m[1].split("|")[0].trim();
+            const where = p + ":" + (i + 1);
+            const r = resolveSection(target);
+            if (r.error) { fail(where, "@lat: [[" + target + "]] — " + r.error, r.hint); return; }
+            const id = idOf(r.file, r.node);
+            if (!mentions.has(id)) mentions.set(id, []);
+            mentions.get(id).push(where);
+          });
+        }
+
+        for (const file of files.values()) {
+          if (!file.requireCodeMention) continue;
+          eachSection(file, (node) => {
+            if (node.children.length || !node.chain.length) return;      // leaves only
+            const hits = mentions.get(idOf(file, node)) || [];
+            const name = node.chain.join(" › ");
+            if (hits.length === 0) {
+              // Quote the short form the map itself uses: a lone H1 stays implicit.
+              const chain = file.root.children.length === 1 ? node.chain.slice(1) : node.chain;
+              const short = [file.key.split("/").pop()].concat(chain).join("#");
+              fail(at(file, node), 'spec "' + name + '" is not referenced by any code',
+                "add next to the covering test:  // @lat: [[" + short + "]]");
+            } else if (hits.length > 1) {
+              warn(at(file, node), 'spec "' + name + '" is referenced ' + hits.length + " times",
+                "one reference per spec: " + hits.join(", "));
+            }
+          });
+        }
+
+        /* ─── coverage hint: source trees the map never mentions ────────────────── */
+
+        const mentioned = new Set();
+        for (const file of files.values())
+          for (const m of file.text.matchAll(/\[\[([^\]|#]+)/g)) mentioned.add(m[1].trim().split("/")[0]);
+        const topDirs = new Map();
+        for (const p of codeFiles) {
+          const top = p.indexOf("/") === -1 ? "." : p.split("/")[0];
+          topDirs.set(top, (topDirs.get(top) || 0) + 1);
+        }
+        const unmapped = Array.from(topDirs.entries())
+          .filter((e) => e[1] >= 3 && e[0] !== "." && !mentioned.has(e[0]))
+          .sort((a, b) => b[1] - a[1]);
+
+        /* ─── report ────────────────────────────────────────────────────────────── */
+
+        const print = (items, label) => {
+          if (!items.length) return;
+          console.log("\n" + label + " (" + items.length + "):\n");
+          for (const it of items) {
+            console.log("  " + it.where);
+            console.log("    " + it.msg);
+            if (it.hint) console.log(it.hint.split("\n").map((l) => "      " + l).join("\n"));
+            console.log("");
+          }
+        };
+
+        let sections = 0;
+        for (const f of files.values()) eachSection(f, (n) => { if (n.chain.length) sections++; });
+
+        print(errors, "Errors");
+        print(warnings, "Warnings");
+
+        if (unmapped.length && !QUIET) {
+          console.log("\nNever mentioned in the map (" + unmapped.length + "):\n");
+          for (const e of unmapped.slice(0, 10)) console.log("  " + e[0] + "/  — " + e[1] + " source files");
+          console.log("\n  Not an error: map what carries meaning, skip what doesn't.\n");
+        }
+
+        if (!QUIET || errors.length) {
+          console.log(MAP + "/: " + files.size + " files, " + sections + " sections, "
+            + links + " links, " + refs + " @lat refs");
+          console.log(errors.length
+            ? "FAIL — " + errors.length + " error(s), " + warnings.length + " warning(s)"
+            : "OK — " + warnings.length + " warning(s)");
+        }
+        process.exit(errors.length ? 1 : 0);
+    # The trigger. A map nobody looks for is a map nobody reads, and the moment
+    # to look does not announce itself - it looks like an ordinary "let me go read
+    # the source". Kept as its own file so the prose stays prose.
+    - path: /home/agent/.sbxw/codemap/memory-block.md
+      mode: "0644"
+      content: |
+        ## Before you read a repo, read its map
+
+        A project here may carry a **code map**: `.sbxw-artifacts/codemap/`, a few linked
+        markdown files saying what it does, why it is built this way, and where each idea
+        lives in the tree. Check for it before you start reading source.
+
+        - **`.sbxw-artifacts/codemap/codemap.md` is the index.** One read replaces a
+          dozen greps, and it carries the *why*, which no amount of grepping recovers.
+          Follow its `[[wiki links]]` to the part you need; `@lat:` comments in source
+          point back at the section that explains them.
+        - **The tree wins over the map.** The map records what was true when it was
+          written — where it disagrees with the code, believe the code, and fix the map
+          as you pass. Leaving a known-wrong section is worse than having no map.
+        - **No map, and you have just worked out how this repo fits together? Run
+          `/codemap` before you finish.** That understanding is the expensive part of the
+          session and it dies with the session otherwise.
+        - **In a mapped repo, changing behaviour, architecture or tests means updating
+          the map in the same session**, then re-running
+          `node /home/agent/.sbxw/codemap/check-codemap.mjs` until it is clean.
+
+        `/home/agent/.sbxw/codemap/FORMAT.md` has the format in full: sections,
+        `[[wiki links]]`, code links and test specs.
+    - path: /home/agent/.sbxw/codemap/install-memory.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // Splice the codemap section into the agent's user-level memory
+        // (/home/agent/.claude/CLAUDE.md), the file Claude Code reads at the start of
+        // every session in this sandbox whatever project is open.
+        //
+        // Rewrites only what sits between its own fences: that file also belongs to the
+        // user and to the agent (`#` memories land there), and sbxw's relay keeps its
+        // own fenced section in it. Idempotent — safe on every container start.
+
+        import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+        import { dirname } from "node:path";
+
+        const MEMORY = "/home/agent/.claude/CLAUDE.md";
+        const BLOCK = "/home/agent/.sbxw/codemap/memory-block.md";
+        const BEGIN = "<!-- sbxw:codemap:begin -->";
+        const END = "<!-- sbxw:codemap:end -->";
+
+        const doc = readFileSync(BLOCK, "utf8").trim();
+
+        let current = "";
+        try { current = readFileSync(MEMORY, "utf8"); } catch (e) { /* first run */ }
+
+        const from = current.indexOf(BEGIN);
+        const to = current.indexOf(END);
+        let rest = from >= 0 && to > from ? current.slice(0, from) + current.slice(to + END.length) : current;
+        rest = rest.replace(/\n{3,}/g, "\n\n").trim();
+
+        mkdirSync(dirname(MEMORY), { recursive: true });
+        writeFileSync(MEMORY, (rest ? rest + "\n\n" : "") + BEGIN + "\n" + doc + "\n" + END + "\n");
+
+        console.log("  [codemap] /codemap + codemap skill installed; user memory points at .sbxw-artifacts/codemap/");
+
+  startup:
+    - command: ["node", "/home/agent/.sbxw/codemap/install-memory.mjs"]

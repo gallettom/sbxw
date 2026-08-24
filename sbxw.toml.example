@@ -85,6 +85,9 @@ env_files = []
 # Examples (each requires uncommenting its network_allow entries above):
 #   assets/k8s-tools — install k3d + kubectl + skaffold
 #   assets/headroom  — token-compression proxy in front of Claude (saves tokens)
+#   assets/codemap   — /codemap: agents read (and write) a repo's code map in
+#                      .sbxw-artifacts/codemap/ before reading its source.
+#                      Needs no network of its own.
 #
 # kits = [
 #   "path/to/sbxw/assets/headroom",

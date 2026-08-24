@@ -23,12 +23,9 @@ const envfileDest      = document.getElementById('envfile-dest');
 const envfileError     = document.getElementById('envfile-error');
 const envfileOverwrite = document.getElementById('envfile-overwrite');
 
-/// The button the card is currently hanging off, or null when it is closed.
-/// Doubles as the "ignore this click" test for the close-on-outside handler.
-let envAnchor = null;
-/// Which sandbox the card is showing. Kept apart from `envAnchor` so a slow
-/// response for a previous sandbox can be discarded instead of painted over
-/// the current one.
+/// Which sandbox the card is showing. A slow response for a previous sandbox is
+/// discarded rather than painted over the current one, so this is checked again
+/// after every await.
 let envfileTarget = null;
 
 function envfileShowError(msg) {
@@ -90,7 +87,7 @@ async function envfileRender({ save = false } = {}) {
     }
     // The card grew or shrank by however much YAML came back; re-place it so it
     // doesn't hang off the bottom of the window.
-    if (envAnchor) positionEnvPop(envAnchor);
+    envCard.reposition();
   } catch (e) {
     if (envfileTarget === name) envfileShowError(`request failed: ${e}`);
   } finally {
@@ -98,42 +95,27 @@ async function envfileRender({ save = false } = {}) {
   }
 }
 
-function positionEnvPop(anchor) {
-  if (!positionPopover(envPop, anchor)) closeEnvPop();
-}
+const envCard = bindPopover(envPop, {
+  closeButton: 'env-pop-close',
+  onOpen: sandbox => {
+    envfileTarget = sandbox;
+    document.getElementById('env-pop-title').textContent = `Environment file — ${sandbox}`;
+    // Cleared first, then filled by the render: a slow response must never show
+    // the previous sandbox's file under the new title.
+    envfileYaml.value = '';
+    envfileDest.textContent = '';
+    envfileDest.title = '';
+    envfileRootNote.textContent = '';
+    envfileRootInput.value = '';
+    envfileOverwrite.checked = false;
+    envfileClearError();
+    envfileRender();
+  },
+  onClose: () => { envfileTarget = null; },
+});
 
-function toggleEnvPop(sandbox, anchor) {
-  if (envAnchor === anchor && !envPop.classList.contains('hidden')) {
-    closeEnvPop();
-    return;
-  }
-  openEnvPop(sandbox, anchor);
-}
+function toggleEnvPop(sandbox, anchor) { envCard.toggle(anchor, sandbox); }
 
-function openEnvPop(sandbox, anchor) {
-  envfileTarget = sandbox;
-  envAnchor = anchor;
-  document.getElementById('env-pop-title').textContent = `Environment file — ${sandbox}`;
-  // Cleared first, then filled by the render: a slow response must never show
-  // the previous sandbox's file under the new title.
-  envfileYaml.value = '';
-  envfileDest.textContent = '';
-  envfileDest.title = '';
-  envfileRootNote.textContent = '';
-  envfileRootInput.value = '';
-  envfileOverwrite.checked = false;
-  envfileClearError();
-  positionEnvPop(anchor);
-  envfileRender();
-}
-
-function closeEnvPop() {
-  envPop.classList.add('hidden');
-  envAnchor = null;
-  envfileTarget = null;
-}
-
-document.getElementById('env-pop-close').addEventListener('click', closeEnvPop);
 document.getElementById('envfile-preview').addEventListener('click', () => envfileRender());
 document.getElementById('envfile-save').addEventListener('click', () => envfileRender({ save: true }));
 document.getElementById('envfile-copy').addEventListener('click', e => {
@@ -144,17 +126,3 @@ document.getElementById('envfile-copy').addEventListener('click', e => {
 envfileRootInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); envfileRender(); }
 });
-
-// Close on a click anywhere else. `pointerdown` on the capture phase so it
-// still fires over the terminal, which swallows its own mouse events; the
-// anchor is excluded because its own handler already toggles.
-document.addEventListener('pointerdown', e => {
-  if (!envAnchor) return;
-  if (envPop.contains(e.target) || envAnchor.contains(e.target)) return;
-  closeEnvPop();
-}, true);
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && envAnchor) closeEnvPop();
-});
-// A card pinned to fixed coordinates goes stale the moment the layout moves.
-window.addEventListener('resize', () => { if (envAnchor) positionEnvPop(envAnchor); });

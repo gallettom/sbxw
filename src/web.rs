@@ -1034,6 +1034,11 @@ const STATIC_ASSETS: &[(&str, &str, &str)] = &[
     ("/js/create.js", JS, include_str!("../assets/js/create.js")),
     ("/js/ports.js", JS, include_str!("../assets/js/ports.js")),
     ("/js/files.js", JS, include_str!("../assets/js/files.js")),
+    (
+        "/js/codemap.js",
+        JS,
+        include_str!("../assets/js/codemap.js"),
+    ),
     ("/js/ssh.js", JS, include_str!("../assets/js/ssh.js")),
     (
         "/js/envfile.js",
@@ -2192,7 +2197,6 @@ async fn api_envfile(
         Ok(Ok((r, written))) => Json(serde_json::json!({
             "ok": true,
             "yaml": r.yaml,
-            "workspace": r.workspace,
             "dest": r.dest,
             "projectsRoot": r.projects_root,
             "rootVar": r.root_var,
@@ -2279,27 +2283,6 @@ struct PublishBody {
     alias: Option<String>,
 }
 
-/// Add or replace `alias` → `ip` in the sbxw /etc/hosts block, returning a
-/// warning string if the entry didn't actually land. Reported separately from
-/// the publish so a sudo/tty failure doesn't hide the port going live.
-fn upsert_host_alias(alias: &str, ip: &str) -> Option<String> {
-    let manual = "run `sbxw hosts sync` in a terminal to apply it";
-    let wanted = [HostAlias {
-        hostname: alias.to_string(),
-        ip: ip.to_string(),
-    }];
-    if let Err(e) = hosts::merge_hosts_block(&wanted) {
-        crate::remember_pending_aliases(&wanted);
-        return Some(format!("failed to update /etc/hosts ({e:#}) — {manual}"));
-    }
-    // `merge_hosts_block` reporting success isn't proof: it writes through
-    // `sudo tee`, so read the block back and check the entry is really there.
-    (!hosts::missing_aliases(&wanted).is_empty()).then(|| {
-        crate::remember_pending_aliases(&wanted);
-        format!("/etc/hosts write succeeded but alias not found — {manual}")
-    })
-}
-
 async fn api_ports_publish(
     Path(name): Path<String>,
     Json(body): Json<PublishBody>,
@@ -2320,13 +2303,24 @@ async fn api_ports_publish(
             let spec = format!("{host_ip}:{host_port}:{}", body.sandbox_port);
             sbx::publish_port(&name, &spec)?;
 
-            // 3. If an alias was requested, upsert it in the sbxw /etc/hosts block.
+            // 3. If an alias was requested, upsert it in the sbxw /etc/hosts
+            //    block — through the same helper `sbxw up` uses, so the parking
+            //    rule that decides whether a UI-added alias survives a failed
+            //    sudo lives in exactly one place. Reported separately from the
+            //    publish so a sudo/tty failure doesn't hide the port going live.
             Ok(body
                 .alias
                 .as_deref()
                 .map(str::trim)
                 .filter(|a| !a.is_empty())
-                .and_then(|alias| upsert_host_alias(alias, &host_ip)))
+                .and_then(|alias| {
+                    crate::apply_host_aliases(&[HostAlias {
+                        hostname: alias.to_string(),
+                        ip: host_ip.clone(),
+                    }])
+                    .into_iter()
+                    .next()
+                }))
         },
         |warning| match warning {
             None => ok_json(),

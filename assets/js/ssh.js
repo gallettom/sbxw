@@ -1,83 +1,18 @@
 // ── SSH connection details ────────────────────────────────────────────────
+//
+// Content only: the card's lifecycle (anchor, placement, Escape, outside-click,
+// resize, mutual exclusion) comes from `bindPopover` in util.js.
 const sshPop = document.getElementById('ssh-pop');
-/// The button the popover is currently hanging off, or null when it is closed.
-/// Doubles as the "ignore this click" test for the close-on-outside handler.
-let sshAnchor = null;
 
-/// Copy `text`, reporting on the button itself rather than only in a toast:
-/// with several copy buttons in one dialog, "which one did I just press?" is
-/// the question a shared toast cannot answer.
-function copyField(btn, text) {
-  const done = ok => {
-    btn.textContent = ok ? 'Copied' : 'Failed';
-    btn.classList.toggle('copied', ok);
-    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1400);
-  };
-  // The clipboard API needs a secure context; sbxw is served over plain HTTP on
-  // a loopback name, which qualifies — but not if the page was reached by LAN
-  // IP, so the failure is real and has to say what to do instead.
-  if (!navigator.clipboard) {
-    done(false);
-    showToast('Clipboard needs localhost or HTTPS — select the value and copy it', 'error');
-    return;
-  }
-  navigator.clipboard.writeText(text).then(() => done(true)).catch(() => {
-    done(false);
-    showToast('Copy failed — select the value and copy it', 'error');
-  });
-}
+const sshCard = bindPopover(sshPop, {
+  closeButton: 'ssh-pop-close',
+  onOpen: sandbox => fillSshFields(sandbox),
+});
 
-/// Place a popover under its button, flipping above when the viewport floor is
-/// closer than the popover is tall, and clamping to the window either way.
-/// Measured after the content is built and while `visibility: hidden`, since a
-/// `display: none` element has no size to measure.
-///
-/// Shared by every pane-bar card (SSH, environment file): they hang off buttons
-/// at the same end of the same bar and have the same one way to go wrong, so
-/// they get one implementation rather than a copy each.
-///
-/// Returns false when the anchor has left the document — a layout change
-/// rebuilds panes, which can take the button out from under a card that is
-/// still up. The caller closes; only it knows what "closed" means for its own
-/// state.
-function positionPopover(pop, anchor) {
-  if (!anchor.isConnected) return false;
+function toggleSshPop(sandbox, anchor) { sshCard.toggle(anchor, sandbox); }
+function closeSshPop() { sshCard.close(); }
 
-  pop.style.visibility = 'hidden';
-  pop.classList.remove('hidden');
-  const a = anchor.getBoundingClientRect();
-  const p = pop.getBoundingClientRect();
-  const gap = 6;
-  const margin = 8;
-
-  let top = a.bottom + gap;
-  if (top + p.height > window.innerHeight - margin) {
-    top = Math.max(margin, a.top - gap - p.height);
-  }
-  // Right-aligned on the button: it sits at the right end of the pane bar, so
-  // growing leftwards is what keeps the card on screen.
-  let left = Math.min(a.right - p.width, window.innerWidth - p.width - margin);
-  left = Math.max(margin, left);
-
-  pop.style.top = `${Math.round(top)}px`;
-  pop.style.left = `${Math.round(left)}px`;
-  pop.style.visibility = '';
-  return true;
-}
-
-function positionSshPop(anchor) {
-  if (!positionPopover(sshPop, anchor)) closeSshPop();
-}
-
-function toggleSshPop(sandbox, anchor) {
-  if (sshAnchor === anchor && !sshPop.classList.contains('hidden')) {
-    closeSshPop();
-    return;
-  }
-  openSshPop(sandbox, anchor);
-}
-
-function openSshPop(sandbox, anchor) {
+function fillSshFields(sandbox) {
   const host = `${sandbox}.sbx`;
   // sbx publishes each sandbox as `<name>.sbx` through the managed block that
   // `sbx setup ssh` (i.e. `sbxw ssh --setup`) writes into ~/.ssh/config — it
@@ -121,27 +56,4 @@ function openSshPop(sandbox, anchor) {
     }
     box.append(el);
   }
-  sshAnchor = anchor;
-  positionSshPop(anchor);
 }
-
-function closeSshPop() {
-  sshPop.classList.add('hidden');
-  sshAnchor = null;
-}
-
-document.getElementById('ssh-pop-close').addEventListener('click', closeSshPop);
-// Close on a click anywhere else. `pointerdown` on the capture phase so it
-// still fires over the terminal, which swallows its own mouse events; the
-// anchor is excluded because its own handler already toggles.
-document.addEventListener('pointerdown', e => {
-  if (!sshAnchor) return;
-  if (sshPop.contains(e.target) || sshAnchor.contains(e.target)) return;
-  closeSshPop();
-}, true);
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && sshAnchor) closeSshPop();
-});
-// A popover pinned to fixed coordinates goes stale the moment the layout moves.
-// Re-place it rather than leaving a card floating away from its button.
-window.addEventListener('resize', () => { if (sshAnchor) positionSshPop(sshAnchor); });

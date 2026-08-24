@@ -191,6 +191,16 @@ const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 /// A version we can't parse is a warning, never a refusal: the output format of
 /// `sbx version` is not something sbxw should get to veto on.
 pub fn assert_available() -> Result<()> {
+    // Once per process. `sbxw env run --no-web` reaches this twice — once on its
+    // own way in, once through `cmd_up` — and the answer cannot change between
+    // them, so the second call would be a process spawn spent re-reading a
+    // constant. (The version *cache* went with the feature gates; this is only
+    // the "already checked" latch.)
+    static CHECKED: OnceLock<()> = OnceLock::new();
+    if CHECKED.get().is_some() {
+        return Ok(());
+    }
+
     let raw = run_capture(&["version"]).context(
         "`sbx version` failed — install the standalone sbx binary and ensure it is on PATH",
     )?;
@@ -199,6 +209,7 @@ pub fn assert_available() -> Result<()> {
 
     if std::env::var_os(SKIP_VERSION_CHECK_ENV).is_some() {
         tracing::debug!("sbx version check skipped via {SKIP_VERSION_CHECK_ENV}");
+        let _ = CHECKED.set(());
         return Ok(());
     }
 
@@ -222,6 +233,10 @@ pub fn assert_available() -> Result<()> {
              for sbx {min_a}.{min_b}.{min_c} or newer"
         ),
     }
+    // Only latched once the floor is satisfied, so a failing check keeps
+    // failing for every caller rather than passing on the strength of an
+    // earlier one.
+    let _ = CHECKED.set(());
     Ok(())
 }
 

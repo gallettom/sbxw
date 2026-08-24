@@ -1264,15 +1264,7 @@ fn cmd_up_background(
     // block that already has the config's aliases in it, so provisioning finds
     // nothing to change and never needs root at all.
     if let Some(ref cfg) = cfg {
-        let mut aliases = host_aliases(&merged_ports(cfg, &[]), cfg.ip_per_app);
-        let web_ip = web_addr.split(':').next().unwrap_or("127.0.0.1");
-        if web_ip.starts_with("127.") {
-            aliases.push(HostAlias {
-                hostname: "sbxw.localhost".into(),
-                ip: web_ip.to_string(),
-            });
-        }
-        aliases.extend(pending_aliases());
+        let aliases = wanted_aliases(cfg, &[]);
         for w in apply_host_aliases(&aliases) {
             eprintln!("warning: {w}");
         }
@@ -1751,6 +1743,46 @@ fn web_port_of(addr: &str) -> &str {
     addr.rsplit(':').next().unwrap_or("7681")
 }
 
+/// Host half of a `web_addr` ("127.0.0.1:7681" → "127.0.0.1").
+///
+/// The IPv6 lesson `web_port_of` learned, applied to the other half: this used
+/// to be `split(':').next()` written out at three call sites, which on
+/// `[::1]:7681` returns `"["`. Nothing crashed — `"[".starts_with("127.")` is
+/// simply false, so the `sbxw.localhost` alias was never added and the web UI
+/// quietly had no hostname.
+///
+/// Splitting at the *last* colon leaves the brackets on, so they come off here;
+/// what the callers want is something they can compare against `127.` and put
+/// in `/etc/hosts`.
+fn web_ip_of(addr: &str) -> &str {
+    match addr.rsplit_once(':') {
+        Some((host, _)) => host.trim_start_matches('[').trim_end_matches(']'),
+        None => addr,
+    }
+}
+
+/// Every hostname sbxw wants in `/etc/hosts`: the configured port aliases, the
+/// web UI's own name when it is on loopback, and anything a previous run parked
+/// because it could not get root.
+///
+/// One assembly, because there were three — `cmd_up_background`, `hosts sync`
+/// and `provision_sandbox` each built the list inline, and the rule about which
+/// web address earns an alias had to be right in all three.
+fn wanted_aliases(cfg: &Config, extra_ports: &[ExtraPort]) -> Vec<HostAlias> {
+    let mut aliases = host_aliases(&merged_ports(cfg, extra_ports), cfg.ip_per_app);
+    let web_ip = web_ip_of(&cfg.web_addr);
+    // Only a loopback address gets the name: `sbxw.localhost` pointing at a LAN
+    // IP would be a claim about somebody else's machine.
+    if web_ip.starts_with("127.") {
+        aliases.push(HostAlias {
+            hostname: "sbxw.localhost".into(),
+            ip: web_ip.to_string(),
+        });
+    }
+    aliases.extend(pending_aliases());
+    aliases
+}
+
 /// Host IP a port binds to: a distinct loopback per app (`ip_per_app`), else 127.0.0.1.
 fn host_ip_for(ip_per_app: bool, index: usize) -> String {
     if ip_per_app {
@@ -1846,7 +1878,7 @@ fn pending_aliases() -> Vec<HostAlias> {
 /// failure here is reported and parked for `sbxw hosts sync`, never fatal.
 /// `hosts::merge_hosts_block` also keeps entries other sandboxes put there, so
 /// in the steady state there is nothing to write and no sudo to need.
-fn apply_host_aliases(aliases: &[HostAlias]) -> Vec<String> {
+pub(crate) fn apply_host_aliases(aliases: &[HostAlias]) -> Vec<String> {
     let mut warnings = Vec::new();
     if let Err(e) = hosts::ensure_loopback_aliases(aliases) {
         warnings.push(format!("{e:#}"));
@@ -1909,15 +1941,7 @@ fn cmd_hosts(action: HostsAction, config: PathBuf) -> Result<()> {
         }
         HostsAction::Sync => {
             let cfg = Config::load_or_default(&config)?;
-            let mut aliases = host_aliases(&merged_ports(&cfg, &[]), cfg.ip_per_app);
-            let web_ip = cfg.web_addr.split(':').next().unwrap_or("127.0.0.1");
-            if web_ip.starts_with("127.") {
-                aliases.push(HostAlias {
-                    hostname: "sbxw.localhost".into(),
-                    ip: web_ip.to_string(),
-                });
-            }
-            aliases.extend(pending_aliases());
+            let aliases = wanted_aliases(&cfg, &[]);
             hosts::ensure_loopback_aliases(&aliases)?;
             hosts::merge_hosts_block(&aliases)?;
             let missing = hosts::missing_aliases(&aliases);
@@ -2470,12 +2494,18 @@ pub(crate) fn provision_sandbox(
         // the variable — a sandbox carrying one would ignore `claude_model`
         // forever. Only sbxw's own leftover is removed; a `/model` choice that
         // says something else stays.
-        if !cfg.claude_model.is_empty() {
-            if let Err(e) = sbx::drop_stale_settings_model(name, &cfg.claude_model) {
-                tracing::warn!(
+        let marker = model_migrated_marker(name);
+        if !cfg.claude_model.is_empty() && !marker.exists() {
+            match sbx::drop_stale_settings_model(name, &cfg.claude_model) {
+                // Recorded so the next bring-up spends nothing on it. A missing
+                // marker only ever costs a repeat of an idempotent no-op.
+                Ok(()) => {
+                    let _ = std::fs::write(&marker, "");
+                }
+                Err(e) => tracing::warn!(
                     "could not clear the old settings.json model key: {e:#} — if this \
                      sandbox predates ANTHROPIC_DEFAULT_MODEL it may stay on its old model"
-                );
+                ),
             }
         }
     } else {
@@ -2568,19 +2598,7 @@ pub(crate) fn provision_sandbox(
     }
 
     // 5. Host aliases for ports that declare a hostname, plus the web interface.
-    let mut aliases = host_aliases(&all_ports, cfg.ip_per_app);
-    let web_ip = cfg
-        .web_addr
-        .split(':')
-        .next()
-        .unwrap_or("127.0.0.1")
-        .to_string();
-    if web_ip.starts_with("127.") {
-        aliases.push(HostAlias {
-            hostname: "sbxw.localhost".into(),
-            ip: web_ip,
-        });
-    }
+    let aliases = wanted_aliases(cfg, extra_ports);
     // Non-fatal on purpose: the sandbox exists and works by now, and /etc/hosts
     // is a convenience on top of it. Failing here used to abort provisioning
     // *after* the sandbox was created — the web UI then saw an error, never
@@ -2776,7 +2794,7 @@ fn cmd_env_run(
                 .collect();
             loaded.set_kits(&kits);
 
-            let dir = state_dir().join("env").join(&name);
+            let dir = env_state_dir(&name);
             std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
             let derived = dir.join(".sbxenv.yaml");
             std::fs::write(&derived, loaded.to_yaml()?)
@@ -2843,7 +2861,7 @@ fn cmd_env_run(
         ..spec
     };
 
-    let (cfg, borrowed) = config_from_spec(&effective, load_config(&config)?);
+    let (cfg, borrowed) = config_from_spec(&effective, &base, load_config(&config)?);
     if !borrowed.is_empty() {
         let from = if config.exists() {
             config.display().to_string()
@@ -2859,7 +2877,7 @@ fn cmd_env_run(
     // A config of its own on disk, because the web daemon is a separate process
     // that re-reads one: it has to see the same merge this run computed, not
     // the sbxw.toml the merge was only half of.
-    let merged_path = state_dir().join("env").join(&name).join("sbxw.toml");
+    let merged_path = env_state_dir(&name).join("sbxw.toml");
     if let Some(parent) = merged_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -2910,7 +2928,7 @@ fn display_sources(sources: &[PathBuf]) -> String {
 /// exactly the setup where somebody edits the wrong one and watches nothing
 /// happen; printing the borrowed values at creation time is what makes that
 /// visible on the run where it matters.
-fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<String>) {
+fn config_from_spec(spec: &envfile::Spec, base: &Path, mut cfg: Config) -> (Config, Vec<String>) {
     let mut report = Vec::new();
 
     if spec.ports.is_empty() {
@@ -2982,7 +3000,17 @@ fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<Strin
     // deliberate: it skips the ones `sbx inspect` already lists, so this is a
     // no-op that also repairs a sandbox whose kit went missing.
     if !spec.kits.is_empty() {
-        cfg.kits = spec.kits.clone();
+        // Resolved against the environment file's own directory *before* they
+        // are written into the merged config. That config lands in
+        // `state/env/<name>/`, and `load_config` re-anchors relative entries to
+        // whatever directory it read them from — so a raw `./kits/headroom`
+        // would come back as `state/env/<name>/kits/headroom`, a path that has
+        // never existed.
+        cfg.kits = spec
+            .kits
+            .iter()
+            .map(|k| resolve_kit_ref(base, k.clone()))
+            .collect();
     } else if !cfg.kits.is_empty() {
         report.push(format!("kits ({})", cfg.kits.join(", ")));
     }
@@ -3134,7 +3162,32 @@ fn projects_root_for(workspace: &Path) -> Option<PathBuf> {
     workspace.starts_with(&root).then_some(root)
 }
 
-/// The `workspace:` value for an exported file: the path routed through
+/// The root a workspace's path is expressed against, and whether it came from
+/// the environment rather than being guessed.
+///
+/// One chain, because two copies of it disagreed: the panel showed a
+/// `projectsRoot` derived here while the `workspace:` line under it came from
+/// `portable_workspace_with`'s own copy, so any edit to one made the UI report
+/// a root the file wasn't using.
+///
+/// An explicit root that does not contain the workspace is refused — it cannot
+/// be *this* workspace's root, and honouring it would emit
+/// `${ROOT}/../../elsewhere`.
+fn resolve_projects_root(workspace: &Path, explicit: Option<&Path>) -> (PathBuf, bool) {
+    if let Some(r) = explicit.filter(|r| workspace.starts_with(r)) {
+        return (r.to_path_buf(), false);
+    }
+    if let Some(r) = projects_root_for(workspace) {
+        return (r, true);
+    }
+    let fallback = workspace
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workspace.to_path_buf());
+    (fallback, false)
+}
+
+/// The `workspace:` value for an exported path: routed through
 /// `SBXW_PROJECTS_ROOT`, with the exporting machine's own root as the fallback.
 ///
 /// ```text
@@ -3152,24 +3205,12 @@ fn projects_root_for(workspace: &Path) -> Option<PathBuf> {
 ///
 /// The suffix is everything below the root, so a repository nested two levels
 /// down keeps its shape.
-fn portable_workspace(workspace: &Path) -> String {
-    portable_workspace_with(workspace, None)
-}
-
-/// `portable_workspace`, with the root supplied rather than discovered — the
-/// web UI lets you edit it, and an edit that only changed the *fallback* while
-/// the suffix stayed wrong would be a confusing half-measure.
 ///
-/// A root that doesn't contain the workspace is refused the same way the
-/// environment variable is: it cannot be the root *of this workspace*, and
-/// honouring it would emit `${ROOT}/../../elsewhere/neos`.
+/// The root is supplied rather than discovered, because the web UI lets you
+/// edit it and an edit that changed only the *fallback* while the suffix stayed
+/// wrong would be a confusing half-measure. See `resolve_projects_root`.
 fn portable_workspace_with(workspace: &Path, root: Option<&Path>) -> String {
-    let root = root
-        .filter(|r| workspace.starts_with(r))
-        .map(Path::to_path_buf)
-        .or_else(|| projects_root_for(workspace))
-        .or_else(|| workspace.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| workspace.to_path_buf());
+    let (root, _) = resolve_projects_root(workspace, root);
     let suffix = workspace
         .strip_prefix(&root)
         .map(|p| p.to_string_lossy().into_owned())
@@ -3179,27 +3220,6 @@ fn portable_workspace_with(workspace: &Path, root: Option<&Path>) -> String {
         format!("${{{PROJECTS_ROOT_ENV}:-{root}}}")
     } else {
         format!("${{{PROJECTS_ROOT_ENV}:-{root}}}/{suffix}")
-    }
-}
-
-/// Express one resolved path the way the environment file should carry it:
-/// relative to the file's own directory when it sits under it, absolute when it
-/// doesn't.
-///
-/// Relative is what makes the file portable — `./neos` means the same thing on
-/// a colleague's machine, `/Users/you/dev/neos` does not. But sbxw's inputs are
-/// absolute by the time they get here and some of them genuinely live elsewhere
-/// (a kit checked out beside the project, a read-only mount from another
-/// repository), and an absolute path that works is better than a `../../..`
-/// chain that only works from one directory.
-fn path_for_env_file(base: &Path, target: &Path) -> String {
-    match target.strip_prefix(base) {
-        // `./x` rather than `x`: sbx resolves relative paths against the file's
-        // directory either way, but the leading `./` is what tells a *reader*
-        // this is a path and not a registry reference.
-        Ok(rel) if rel.as_os_str().is_empty() => ".".into(),
-        Ok(rel) => format!("./{}", rel.to_string_lossy()),
-        Err(_) => target.to_string_lossy().into_owned(),
     }
 }
 
@@ -3236,55 +3256,20 @@ fn cmd_env_export(
 
     let dest = out.unwrap_or_else(|| default_env_export_path(&workspace));
     let to_stdout = dest.as_os_str() == "-";
-    // Paths inside the file are relative to the file's directory, so that has to
-    // be settled before anything is rendered.
-    let base = if to_stdout {
-        default_env_export_path(&workspace)
-            .parent()
-            .unwrap_or(&workspace)
-            .to_path_buf()
-    } else {
-        config_dir_of(&dest)?
-    };
-
-    let ports = merged_ports(&cfg, &[]);
-    let file = envfile::EnvFile {
-        name,
-        agent: "claude".into(),
-        workspace: portable_workspace(&workspace),
-        // `--ro` mounts are a flag on `sbxw up`, not a config key, so there is
-        // nothing here to read them from; a colleague adds them to the file (or
-        // you re-run with them once and copy the block).
-        additional: vec![],
-        kits: cfg
-            .kits
-            .iter()
-            .map(|k| {
-                let p = Path::new(k);
-                if p.is_absolute() {
-                    path_for_env_file(&base, p)
-                } else {
-                    // A registry or git reference — `load_config` left it alone
-                    // precisely because it is not a path, so neither do we.
-                    k.clone()
-                }
-            })
-            .collect(),
-        env: cfg.effective_env(),
-        ports: ports
-            .iter()
-            .enumerate()
-            .map(|(i, (host, sbox, _))| envfile::Port {
-                sandbox: *sbox,
-                host: Some(*host),
-                host_ip: cfg.ip_per_app.then(|| host_ip_for(true, i)),
-                protocol: None,
-            })
-            .collect(),
-        notes: env_export_notes(&cfg, &ports),
-    };
-
-    let rendered = file.render(&format!("sbxw {}", env!("CARGO_PKG_VERSION")));
+    // One root for the whole file, taken from the workspace — not one per path.
+    // With `None`, every path resolved its own root (a kit beside the project
+    // got `${ROOT:-/p/kits}/headroom` while the workspace got `${ROOT:-/p}/neos`),
+    // so setting the variable moved them inconsistently. The web export always
+    // passed a single root; this is the CLI catching up.
+    let (root, _) = resolve_projects_root(&workspace, None);
+    let file = env_file_for(
+        &name,
+        &cfg,
+        &workspace,
+        ports_from_config(&cfg),
+        Some(&root),
+    );
+    let rendered = file.render(&env_file_generator());
 
     if to_stdout {
         print!("{rendered}");
@@ -3312,10 +3297,94 @@ fn cmd_env_export(
     Ok(())
 }
 
+/// Ports as an environment file spells them, from `sbxw.toml`'s own list.
+fn ports_from_config(cfg: &Config) -> Vec<envfile::Port> {
+    merged_ports(cfg, &[])
+        .iter()
+        .enumerate()
+        .map(|(i, (host, sbox, _))| envfile::Port {
+            sandbox: *sbox,
+            host: Some(*host),
+            host_ip: cfg.ip_per_app.then(|| host_ip_for(true, i)),
+            protocol: None,
+        })
+        .collect()
+}
+
+/// The `/etc/hosts` alias `sbxw.toml` gives a sandbox port, if any.
+///
+/// An environment file has no field for it, so this is the only way the name
+/// survives an export — matched on the sandbox port, which is the half that
+/// does not move when a host port is renegotiated.
+fn alias_for(cfg: &Config, sandbox_port: u16) -> String {
+    cfg.ports
+        .iter()
+        .find(|c| c.sandbox_port == sandbox_port)
+        .map(|c| c.alias.clone())
+        .unwrap_or_default()
+}
+
+/// Build the environment file for `name`, from a config and a set of ports.
+///
+/// The one place an `EnvFile` is assembled. It used to be two — `cmd_env_export`
+/// and `render_env_file_for` each built the struct field by field — and they had
+/// already drifted: the same project exported `kits: ./local-kit` from the CLI
+/// and `kits: ${SBXW_PROJECTS_ROOT:-…}/local-kit` from the browser. What
+/// genuinely differs between the callers is only where the ports come from, so
+/// that is the parameter; everything else is shared by construction.
+///
+/// Paths go through `${SBXW_PROJECTS_ROOT}` for kits as well as the workspace:
+/// a kit checked out beside the project is exactly as machine-specific as the
+/// project, and the variable is what the panel's whole UX is built around.
+fn env_file_for(
+    name: &str,
+    cfg: &Config,
+    workspace: &Path,
+    ports: Vec<envfile::Port>,
+    root: Option<&Path>,
+) -> envfile::EnvFile {
+    let triples: Vec<PortTriple> = ports
+        .iter()
+        .map(|p| {
+            (
+                p.host.unwrap_or(p.sandbox),
+                p.sandbox,
+                alias_for(cfg, p.sandbox),
+            )
+        })
+        .collect();
+    envfile::EnvFile {
+        name: name.to_string(),
+        agent: "claude".into(),
+        workspace: portable_workspace_with(workspace, root),
+        kits: cfg
+            .kits
+            .iter()
+            .map(|k| {
+                let p = Path::new(k);
+                if p.is_absolute() {
+                    portable_workspace_with(p, root)
+                } else {
+                    // A registry or git reference — `load_config` left it alone
+                    // precisely because it is not a path, so neither do we.
+                    k.clone()
+                }
+            })
+            .collect(),
+        env: cfg.effective_env(),
+        ports,
+        notes: env_export_notes(cfg, &triples),
+    }
+}
+
+/// The `# Generated by …` line every exported file carries.
+fn env_file_generator() -> String {
+    format!("sbxw {}", env!("CARGO_PKG_VERSION"))
+}
+
 /// One rendered environment file, plus what the UI needs to explain it.
 pub(crate) struct RenderedEnvFile {
     pub yaml: String,
-    pub workspace: String,
     /// Where `save` would write it: beside the workspace, never inside it.
     pub dest: String,
     /// The root the `workspace:` expression is expressed against.
@@ -3350,77 +3419,16 @@ pub(crate) fn render_env_file_for(
     // is stopped (nothing published) or an sbx whose `ports` output we can't parse.
     let live = sbx::list_ports_parsed(name);
     let ports: Vec<envfile::Port> = if live.is_empty() {
-        merged_ports(cfg, &[])
-            .iter()
-            .enumerate()
-            .map(|(i, (host, sbox, _))| envfile::Port {
-                sandbox: *sbox,
-                host: Some(*host),
-                host_ip: cfg.ip_per_app.then(|| host_ip_for(true, i)),
-                protocol: None,
-            })
-            .collect()
+        ports_from_config(cfg)
     } else {
-        live.iter()
-            .map(|m| envfile::Port {
-                sandbox: m.sandbox_port,
-                host: Some(m.host_port),
-                // Loopback is sbx's own default; writing it down adds noise.
-                host_ip: (m.host_ip != "127.0.0.1" && !m.host_ip.is_empty())
-                    .then(|| m.host_ip.clone()),
-                protocol: (m.proto != "tcp" && !m.proto.is_empty()).then(|| m.proto.clone()),
-            })
-            .collect()
+        live.iter().map(envfile::Port::from).collect()
     };
 
-    let triples: Vec<PortTriple> = ports
-        .iter()
-        .map(|p| {
-            let alias = cfg
-                .ports
-                .iter()
-                .find(|c| c.sandbox_port == p.sandbox)
-                .map(|c| c.alias.clone())
-                .unwrap_or_default();
-            (p.host.unwrap_or(p.sandbox), p.sandbox, alias)
-        })
-        .collect();
-
-    let root = root_override
-        .filter(|r| workspace.starts_with(r))
-        .map(Path::to_path_buf)
-        .or_else(|| projects_root_for(&workspace));
-    let root_from_env = root_override.is_none() && root.is_some();
-    let effective_root = root
-        .clone()
-        .or_else(|| workspace.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| workspace.clone());
-
-    let file = envfile::EnvFile {
-        name: name.to_string(),
-        agent: "claude".into(),
-        workspace: portable_workspace_with(&workspace, root.as_deref()),
-        additional: vec![],
-        kits: cfg
-            .kits
-            .iter()
-            .map(|k| {
-                let p = Path::new(k);
-                if p.is_absolute() {
-                    portable_workspace_with(p, root.as_deref())
-                } else {
-                    k.clone()
-                }
-            })
-            .collect(),
-        env: cfg.effective_env(),
-        ports,
-        notes: env_export_notes(cfg, &triples),
-    };
+    let (effective_root, root_from_env) = resolve_projects_root(&workspace, root_override);
+    let file = env_file_for(name, cfg, &workspace, ports, Some(&effective_root));
 
     Ok(RenderedEnvFile {
-        yaml: file.render(&format!("sbxw {}", env!("CARGO_PKG_VERSION"))),
-        workspace: workspace.to_string_lossy().into_owned(),
+        yaml: file.render(&env_file_generator()),
         dest: default_env_export_path(&workspace)
             .to_string_lossy()
             .into_owned(),
@@ -3607,13 +3615,16 @@ fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
     }
     let joined = config_dir.join(p);
     if kit.starts_with("./") || kit.starts_with("../") || joined.exists() {
-        // `components()` folds away the `.` that `join("./x")` leaves in the
-        // middle of the path. Cosmetic for sbx, which resolves it either way,
-        // but these paths are also what `sbxw env export` writes into a file a
-        // person reads — and `./neos/./local-kit` reads like a bug.
-        return joined
-            .components()
-            .collect::<PathBuf>()
+        // Tidied, because these paths are also what `sbxw env export` writes
+        // into a file a person reads and commits: `./neos/./local-kit` or
+        // `/p/neos/../kits/headroom` both read like a bug.
+        //
+        // `canonicalize` when the path is real — it is the only thing that can
+        // resolve `..` correctly through a symlink. When it isn't (a kit not
+        // checked out yet), fall back to folding away the `.` components, which
+        // is all that can be done without guessing.
+        return std::fs::canonicalize(&joined)
+            .unwrap_or_else(|_| joined.components().collect::<PathBuf>())
             .to_string_lossy()
             .into_owned();
     }
@@ -3875,12 +3886,46 @@ fn write_oauth_kit(name: &str, credentials_json: &str) -> Result<PathBuf> {
 /// Drop the OAuth kit directory for `name`. Called when the sandbox is removed:
 /// until then the reference has to keep resolving (see `oauth_kit_dir`).
 pub(crate) fn forget_oauth_kit(name: &str) {
-    let dir = oauth_kit_dir(name);
-    if let Err(e) = std::fs::remove_dir_all(&dir) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("could not remove OAuth kit {}: {e:#}", dir.display());
+    forget_sandbox_state(name)
+}
+
+/// Everything sbxw keeps on the host *about* one sandbox, removed together.
+///
+/// There were two teardown paths (`sbxw rm`, `sbxw prune`) each enumerating the
+/// artefacts by hand, so a new kind of state cost an edit in both and forgetting
+/// one was silent — which is what happened when `sbxw env run` started writing
+/// `state/env/<name>/`: it survived `rm`, and a later sandbox reusing the name
+/// inherited a stale merged config.
+///
+/// Best-effort throughout: this runs after the sandbox is already gone, and a
+/// leftover file is worth a warning, not a failed command.
+pub(crate) fn forget_sandbox_state(name: &str) {
+    for dir in [oauth_kit_dir(name), env_state_dir(name)] {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("could not remove {}: {e:#}", dir.display());
+            }
         }
     }
+    for file in [workspace_record_path(name), model_migrated_marker(name)] {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// Where `sbxw env run` keeps the documents it derives for one sandbox.
+fn env_state_dir(name: &str) -> PathBuf {
+    state_dir().join("env").join(name)
+}
+
+/// Marks that the pre-`ANTHROPIC_DEFAULT_MODEL` `model` key has been dealt with
+/// for this sandbox.
+///
+/// The migration is one-shot by nature — its own doc says every later call is a
+/// no-op — but "no-op" still cost three `sbx exec` spawns (write a script, run
+/// it, delete it) on *every* bring-up, forever, on every sandbox. A marker
+/// turns that into one local `exists()`.
+fn model_migrated_marker(name: &str) -> PathBuf {
+    state_dir().join(format!("{name}.model-migrated"))
 }
 
 /// Best-effort `chmod`. A no-op off Unix, where the token's protection is the
@@ -4250,7 +4295,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (cfg, report) = config_from_spec(&spec, base);
+        let (cfg, report) = config_from_spec(&spec, Path::new("/env"), base);
 
         // The file's port wins…
         assert_eq!(cfg.ports.len(), 1);
@@ -4333,25 +4378,103 @@ mod tests {
         assert!(!dest.starts_with("/home/you/dev/neos"));
     }
 
-    /// Paths in the file are relative when that keeps them portable, and
-    /// absolute when relative would be a lie.
+    /// `web_port_of` learned the IPv6 lesson and wrote it in a comment; the
+    /// other half of the same string was then split by hand at three sites,
+    /// where `[::1]:7681` yields `"["` — so `starts_with("127.")` is false and
+    /// the `sbxw.localhost` alias silently never gets added.
     #[test]
-    fn env_file_paths_are_relative_where_relative_still_means_the_same_thing() {
-        let base = Path::new("/home/you/dev");
+    fn both_halves_of_a_web_addr_survive_an_ipv6_literal() {
+        assert_eq!(web_ip_of("127.0.0.1:7681"), "127.0.0.1");
+        assert_eq!(web_port_of("127.0.0.1:7681"), "7681");
+
+        assert_eq!(web_ip_of("[::1]:7681"), "::1");
+        assert_eq!(web_port_of("[::1]:7681"), "7681");
+
+        assert_eq!(web_ip_of("0.0.0.0:7681"), "0.0.0.0");
+        // Not loopback, so it earns no alias — the check the three call sites
+        // make, and the one that was broken.
+        assert!(!web_ip_of("[::1]:7681").starts_with("127."));
+        assert!(web_ip_of("127.0.0.2:7681").starts_with("127."));
+    }
+
+    /// One spelling for every path in an exported file. The CLI export used to
+    /// write kits relative to the file's directory while the web panel wrote
+    /// them through the variable, so the same project produced two different
+    /// `kits:` lines depending on which one you used.
+    #[test]
+    fn every_exported_path_goes_through_the_root_variable() {
+        let cfg = Config {
+            kits: vec![
+                "/home/you/dev/kits/headroom".into(),
+                "docker.io/sbx/playwright-kit:latest".into(),
+            ],
+            ports: vec![],
+            ..Config::default()
+        };
+        let ws = Path::new("/home/you/dev/neos");
+        let root = Path::new("/home/you/dev");
+
+        let file = env_file_for("neos", &cfg, ws, ports_from_config(&cfg), Some(root));
+        assert_eq!(file.workspace, "${SBXW_PROJECTS_ROOT:-/home/you/dev}/neos");
         assert_eq!(
-            path_for_env_file(base, Path::new("/home/you/dev/neos")),
-            "./neos"
+            file.kits[0],
+            "${SBXW_PROJECTS_ROOT:-/home/you/dev}/kits/headroom"
+        );
+        // A registry reference is not a path and must survive untouched.
+        assert_eq!(file.kits[1], "docker.io/sbx/playwright-kit:latest");
+    }
+
+    /// One root for the whole file, not one per path — otherwise setting
+    /// `SBXW_PROJECTS_ROOT` moves the workspace and its kits to different
+    /// places, which is worse than not using the variable at all.
+    #[test]
+    fn every_path_in_one_file_shares_one_root() {
+        let cfg = Config {
+            kits: vec!["/p/kits/headroom".into()],
+            ports: vec![],
+            ..Config::default()
+        };
+        let ws = Path::new("/p/neos");
+        let (root, _) = resolve_projects_root(ws, None);
+
+        let file = env_file_for("neos", &cfg, ws, ports_from_config(&cfg), Some(&root));
+        assert_eq!(file.workspace, "${SBXW_PROJECTS_ROOT:-/p}/neos");
+        assert_eq!(file.kits[0], "${SBXW_PROJECTS_ROOT:-/p}/kits/headroom");
+
+        // Both suffixes hang off the same root, so one variable relocates the
+        // whole file coherently.
+        for path in [&file.workspace, &file.kits[0]] {
+            assert!(
+                path.starts_with("${SBXW_PROJECTS_ROOT:-/p}/"),
+                "{path} does not share the file's root"
+            );
+        }
+    }
+
+    /// The root the panel *reports* and the root the file *uses* came from two
+    /// copies of the same chain; they must not be able to disagree.
+    #[test]
+    fn the_reported_root_is_the_one_the_workspace_line_uses() {
+        let ws = Path::new("/home/you/dev/acme/neos");
+
+        let (root, from_env) = resolve_projects_root(ws, Some(Path::new("/home/you/dev")));
+        assert_eq!(root, Path::new("/home/you/dev"));
+        assert!(
+            !from_env,
+            "an explicit root did not come from the environment"
         );
         assert_eq!(
-            path_for_env_file(base, Path::new("/home/you/dev/a/b")),
-            "./a/b"
+            portable_workspace_with(ws, Some(&root)),
+            "${SBXW_PROJECTS_ROOT:-/home/you/dev}/acme/neos"
         );
-        assert_eq!(path_for_env_file(base, base), ".");
-        // Outside the file's directory: an absolute path that works beats a
-        // `../..` chain that only works from one place.
+
+        // A root that doesn't contain the workspace cannot be its root; both
+        // the report and the line fall back to the parent.
+        let (root, _) = resolve_projects_root(ws, Some(Path::new("/opt/other")));
+        assert_eq!(root, Path::new("/home/you/dev/acme"));
         assert_eq!(
-            path_for_env_file(base, Path::new("/opt/kits/headroom")),
-            "/opt/kits/headroom"
+            portable_workspace_with(ws, Some(&root)),
+            "${SBXW_PROJECTS_ROOT:-/home/you/dev/acme}/neos"
         );
     }
 

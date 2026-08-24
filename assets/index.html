@@ -405,6 +405,43 @@
     </div>
   </div>
 
+  <!-- ── Code map modal ──
+       The markdown knowledge graph under .sbxw-artifacts/codemap/, made
+       navigable: [[wiki links]] resolve, backlinks are listed, and the whole
+       map can be seen at once as a graph. Purely a reader — it never writes.
+       Opened from a pane's "Map" button (see /js/panes.js, /js/codemap.js). -->
+  <div class="modal-overlay hidden" id="codemap-modal-overlay">
+    <div class="modal codemap-modal" role="dialog" aria-modal="true" aria-labelledby="codemap-title">
+      <div class="modal-head">
+        <span class="modal-title" id="codemap-title">Code map — <span id="codemap-name"></span></span>
+        <button class="modal-close" id="codemap-close" aria-label="Close">✕</button>
+      </div>
+      <div class="codemap-toolbar">
+        <input id="codemap-search" class="field-input codemap-search" type="text"
+               placeholder="Search the map…" autocomplete="off" spellcheck="false">
+        <span class="codemap-dir" id="codemap-dir">.sbxw-artifacts/codemap/</span>
+        <span class="spacer"></span>
+        <span class="codemap-stats" id="codemap-stats"></span>
+        <div class="mode-switch" role="tablist">
+          <button class="mode-btn active" id="codemap-view-doc">Document</button>
+          <button class="mode-btn" id="codemap-view-graph">Graph</button>
+        </div>
+      </div>
+      <div class="codemap-body">
+        <aside class="codemap-files" id="codemap-files"></aside>
+        <section class="codemap-doc" id="codemap-doc"></section>
+        <aside class="codemap-side" id="codemap-side"></aside>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between;align-items:center">
+        <button id="codemap-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Refresh
+        </button>
+        <button class="btn-cancel" id="codemap-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Help modal ──
        Answers the one question sbxw cannot answer for itself: an empty sandbox
        list. Everything in here is a *host-side* command — sbxw only ever shows
