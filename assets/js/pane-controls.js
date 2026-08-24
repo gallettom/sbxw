@@ -60,6 +60,7 @@ function closePane(idx) {
   document.getElementById(`pconn-${idx}`).textContent = '';
   document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
   document.getElementById(`pssh-${idx}`).disabled = true;
+  document.getElementById(`penv-${idx}`).disabled = true;
   // A closed monitor pane must not leave its hidden mode buttons behind for
   // whatever gets connected here next.
   closing.el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = false; });
@@ -95,6 +96,7 @@ function closePane(idx) {
     document.getElementById(`pconn-${dst.index}`).textContent =
       dst.ws?.readyState === WebSocket.OPEN ? 'connected' : (src.sandbox ? 'disconnected' : '');
     document.getElementById(`pssh-${dst.index}`).disabled = !src.sandbox;
+    document.getElementById(`penv-${dst.index}`).disabled = !src.sandbox;
     setPaneMode(dst.index, src.mode, false);
     // Full reset, not just clear(): dst now displays a different live session,
     // and any mouse-tracking mode left on from dst's previous content must not
@@ -109,6 +111,7 @@ function closePane(idx) {
     document.getElementById(`pconn-${src.index}`).textContent = '';
     document.getElementById(`pdot-${src.index}`).className = 'dot term-disconnected';
     document.getElementById(`pssh-${src.index}`).disabled = true;
+    document.getElementById(`penv-${src.index}`).disabled = true;
   }
 
   // Hide the now-empty last slot and decrement the count.

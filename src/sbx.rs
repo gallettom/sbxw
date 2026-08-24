@@ -1,57 +1,65 @@
 //! Thin, typed wrappers around the `sbx` CLI.
 //!
-//! Every command here maps to a *confirmed* `sbx` 0.35 subcommand. We never call
-//! `docker sandbox` — only the standalone `sbx` binary, as requested.
+//! Every command here maps to a subcommand confirmed against the published
+//! reference (docs.docker.com/reference/cli/sbx) for **sbx 0.39**, which is
+//! also `MIN_SBX_VERSION`. We never call `docker sandbox` — only the standalone
+//! `sbx` binary, as requested.
 //!
-//! Confirmed surface (docs.docker.com/reference/cli/sbx, v0.35):
-//!   sbx create <agent> [PATH...] --name <name>
-//!   sbx run    <agent> [PATH...] [--name <name>] [-- AGENT_ARGS...]   (no --env flag)
-//!   sbx run    --name <name>   (re-attach; since 0.35 also works for sandboxes
-//!                               created with a custom --kit, without re-passing it)
-//!   sbx ls
-//!   sbx inspect SANDBOX        (since 0.35: lists kits, injected secrets, info)
-//!   sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
-//!   sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
-//!   sbx policy allow|deny network [--sandbox NAME] RESOURCES  (comma list, *.dom, dom:443, **)
-//!   sbx policy ls [SANDBOX] [--wide] [--json] [--type|--source|--decision …]
-//!                                                  (SANDBOX is POSITIONAL here,
-//!                                                  unlike allow/deny's --sandbox;
-//!                                                  --wide is the rule-level view)
-//!   sbx policy log [SANDBOX]                       (recent allow/deny decisions)
-//!   sbx policy inspect <policy-or-rule>            (full detail on one entry)
-//!   sbx policy init <posture>                      (was `set-default`, kept as deprecated alias)
-//!   sbx secret set [-g | SANDBOX] <service>        (service-keyed, via stdin;
-//!                                                  see `secret_set_stdin` — 0.38
-//!                                                  replaced both scope forms)
+//! One version, no gates. sbxw used to accept 0.37+ and branch at runtime for
+//! everything 0.38 and 0.39 added; that is gone, along with every fallback path
+//! it implied. What the code assumes is simply what 0.39 does.
 //!
-//! Behaviour changes in 0.35 this module accounts for:
+//! ```text
+//! sbx create <agent> [PATH...] --name <name>
+//!            [--kit REF]…      (repeatable; the only way to apply a kit whole)
+//!            [-p SPEC]…        (publish at creation — all-or-nothing, see create_claude)
+//!            [-e KEY=VALUE]…   (repeatable; bare KEY takes the host's value)
+//!            [--env-file FILE]… (--env beats any file; a later file beats an earlier one)
+//! sbx run    <agent> [PATH...] [--name <name>] [-e …] [-- AGENT_ARGS...]
+//! sbx run    --name <name>     (re-attach, incl. sandboxes created with --kit;
+//!                               -e applies to the agent session, so it takes
+//!                               effect on a re-attach too)
+//! sbx ls
+//! sbx inspect SANDBOX          (lists kits, injected secrets, info)
+//! sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
+//! sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
+//! sbx prune  [--dry-run] [--filter since=DURATION] [-f]   (stopped sandboxes only)
+//! sbx env    create|run|exec|rm [PATH...]                 (.sbxenv.yaml; experimental)
+//! sbx policy allow|deny network [--sandbox NAME] RESOURCES (comma list, *.dom, dom:443, **)
+//! sbx policy ls [SANDBOX] [--wide] [--json] [--type|--source|--decision …]
+//!                              (SANDBOX is POSITIONAL here, unlike allow/deny's
+//!                               --sandbox; --wide is the rule-level view)
+//! sbx policy log [SANDBOX]     (recent allow/deny decisions)
+//! sbx policy inspect <policy-or-rule>
+//! sbx secret set [--sandbox NAME] <service>               (service-keyed, via stdin)
+//! sbx skills import [--dry-run|--force]
+//! sbx setup ssh [remove]       (managed `Host *.sbx` block => `ssh <name>.sbx`)
+//! ```
+//!
+//! Behaviours this module is built on, all of them 0.39's:
 //!   * `sbx kit add` RECREATES the sandbox container (state preserved) and
-//!     composes the kit's network allow/deny rules into the live policy.
+//!     composes the kit's network allow/deny rules into the live policy — which
+//!     is why sbxw applies kits at *creation* and skips ones `inspect` already
+//!     lists. `kit add` also refuses a kit declaring startup commands outright.
 //!   * `sbx rm` refuses to delete a sandbox with an active session unless
 //!     `--force` is passed (we always pass it — see `rm_sandboxes`).
-//!   * Host env vars are no longer auto-injected at runtime; secrets must go
-//!     through `sbx secret set` / `sbx secret import` (we already use `set`).
-//!
-//! Surface added after 0.35, which is why `MIN_SBX_VERSION` is 0.37 and not the
-//! 0.35 the core pipeline strictly needs. Individually still unverified against
-//! a live `sbx --help` — but each one *degrades* rather than failing loudly, so
-//! the version floor is what keeps their absence from going unnoticed:
-//!   sbx create … -p/--publish SPEC        (publish at creation; see create_claude)
-//!   sbx create … --no-share-skills        (opt out of the shared skill store)
-//!   sbx skills import [--dry-run|--force] (import host agent skills into the store)
-//!   sbx setup ssh                         (managed `Host *.sbx` block => `ssh <name>.sbx`)
-//!
-//! Changes in 0.38 this module accounts for, each behind a version gate rather
-//! than a floor bump, so an 0.37 host keeps working (see `version_at_least`):
-//!   * `secret set` scopes global by *default*; sandbox scope moved to
-//!     `--sandbox NAME`, and the old positional / `-g` forms now warn.
-//!   * kit spec **v2** (`schemaVersion: "2"`) — v1 still loads, via a legacy
-//!     path. sbxw writes its own kits in whichever grammar the host understands.
+//!   * Kit spec **v2** (`schemaVersion: "2"`) is what sbxw writes. Its loader
+//!     rejects v1 field names, so a spec commits to one grammar; see
+//!     `crate::oauth_kit_spec`.
 //!   * `policy allow|deny network` refuses with "managed by your organization"
 //!     when org governance owns the rule; that is a governed host, not a broken
 //!     one, and bring-up treats it as such.
 //!   * `inspect` also reports the sandbox's custom secrets, which widens what a
 //!     bare substring search for a kit name can collide with.
+//!   * A sandbox names itself in `SANDBOX_NAME` / `SANDBOX_ID`; `SANDBOX_VM_ID`
+//!     still carries the name but is deprecated. The in-sandbox JS under
+//!     `assets/` reads the current spelling first.
+//!   * **An unrecognised command, subcommand or flag is an error.** Before 0.39
+//!     it printed help and exited 0, which is why this file used to hedge on
+//!     whether a flag existed. Now a command that succeeds really ran — and a
+//!     flag sbx does not know costs the whole call, which is why the one flag
+//!     with no published reference is probed rather than assumed (see
+//!     `create_supports`).
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -154,25 +162,22 @@ fn run_capture(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-/// Oldest `sbx` sbxw is known to work against.
+/// Oldest `sbx` sbxw works against — and, since there are no feature gates left
+/// below it, simply the version sbxw is written for.
 ///
-/// Two tiers of requirement sit behind this one number, and the higher one
-/// wins, because the check exists to prevent surprises and not merely crashes:
+/// The floor used to be 0.37 with everything from 0.38 and 0.39 behind runtime
+/// gates, so one binary could serve three releases. That is gone: the gates
+/// cost a branch and a fallback at every call site, and each fallback was a
+/// second code path nobody ran. 0.39 is what this file assumes end to end —
+/// `create -e/--env-file`, `prune`, `env create`, kit spec v2, `secret set
+/// --sandbox`, `SANDBOX_NAME` — and none of it is conditional any more.
 ///
-/// * **0.35, or sbxw misprovisions.** `kit add` recreating the container (why
-///   sbxw skips kits `inspect` already lists), `rm` refusing an attached session
-///   without `--force` (which sbxw always passes), `run --name` re-attaching a
-///   sandbox created with a custom kit. Older than that, these don't fail
-///   cleanly: a kit is silently re-applied on every `up`, an `rm` refuses with
-///   no explanation.
-/// * **0.37, or half of sbxw quietly isn't there.** `create -p` (ports live from
-///   first boot), `create --no-share-skills`, `skills import`, `setup ssh`, and
-///   the policy panel's `policy ls [SANDBOX] --wide` / `policy log`. Every one of
-///   those either degrades or is opt-in — `create_with_port_fallback` even
-///   retries bare when `-p` is rejected — which is exactly the problem. Between
-///   0.35 and 0.37 you get a working sandbox and a tool missing features it says
-///   it has, explained only by scattered warnings.
-pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 37, 0);
+/// What that buys, beyond the deletions: an unrecognised flag or subcommand is
+/// a hard error from 0.39 on (before, it printed help and exited 0). Code that
+/// can assume 0.39 can therefore trust a command's success, which is why the
+/// probes and retries that used to paper over "maybe this flag exists" are gone
+/// too.
+pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 39, 0);
 
 /// There is deliberately **no** upper bound. Newer sbx releases have so far
 /// added surface rather than moved it, and the parts that did move (the policy
@@ -180,57 +185,6 @@ pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 37, 0);
 /// against a version merely newer than this file would be the "déconvenue" the
 /// check exists to prevent.
 const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
-
-/// The sbx release sbxw is *current* with, as opposed to the oldest it accepts.
-///
-/// 0.38 is where `secret set` moved its scope onto `--sandbox`, kits grew spec
-/// v2, and `policy allow` learned to say an organisation owns a rule. None of
-/// that is required — every one of them is gated below and falls back to the
-/// 0.37 shape — so this is documentation with a value, not a second floor.
-pub const CURRENT_SBX_VERSION: (u32, u32, u32) = (0, 38, 0);
-
-/// 0.38 scopes `secret set` globally by default and takes `--sandbox NAME` for
-/// the other case. The positional-sandbox and `-g`/`--global` forms sbxw used
-/// still work but print deprecation warnings, so they are worth leaving behind
-/// before they are removed outright.
-const SECRET_SCOPE_FLAGS_SINCE: (u32, u32, u32) = (0, 38, 0);
-
-/// 0.38 introduced kit spec v2. v1 keeps loading through a legacy path, which
-/// is why sbxw can still emit it for an older host rather than raising a floor.
-pub const KIT_SPEC_V2_SINCE: (u32, u32, u32) = (0, 38, 0);
-
-/// Parsed `sbx version`, read at most once per process.
-static SBX_VERSION: OnceLock<Option<(u32, u32, u32)>> = OnceLock::new();
-
-/// The running sbx's version, or `None` if it could not be run or parsed.
-///
-/// `assert_available` seeds this, so the common path costs nothing; the lazy
-/// branch exists for the callers that never go through the startup check.
-pub fn sbx_version() -> Option<(u32, u32, u32)> {
-    *SBX_VERSION.get_or_init(|| {
-        run_capture(&["version"])
-            .ok()
-            .as_deref()
-            .and_then(parse_version)
-    })
-}
-
-/// Is the running sbx at least `want`?
-///
-/// A version sbxw could not read answers **false**, deliberately: every gate
-/// here chooses between a current form and a still-supported older one, so
-/// "unknown" has to mean the form that works on both. Guessing the other way
-/// would turn an unreadable `sbx version` into a hard failure, which is exactly
-/// what `assert_available` refuses to do.
-pub fn version_at_least(want: (u32, u32, u32)) -> bool {
-    at_least(sbx_version(), want)
-}
-
-/// `version_at_least` without the process-global cache, so the "unknown reads
-/// as old" rule is testable on its own.
-fn at_least(found: Option<(u32, u32, u32)>, want: (u32, u32, u32)) -> bool {
-    found.is_some_and(|found| found >= want)
-}
 
 /// Is `sbx` reachable, and recent enough?
 ///
@@ -241,10 +195,7 @@ pub fn assert_available() -> Result<()> {
         "`sbx version` failed — install the standalone sbx binary and ensure it is on PATH",
     )?;
 
-    // Seed the cache even when the floor check is skipped: the feature gates
-    // still need to know which sbx they are talking to.
     let parsed = parse_version(&raw);
-    let _ = SBX_VERSION.set(parsed);
 
     if std::env::var_os(SKIP_VERSION_CHECK_ENV).is_some() {
         tracing::debug!("sbx version check skipped via {SKIP_VERSION_CHECK_ENV}");
@@ -257,21 +208,14 @@ pub fn assert_available() -> Result<()> {
             let (a, b, c) = found;
             bail!(
                 "this sbx is {a}.{b}.{c}, but sbxw needs {min_a}.{min_b}.{min_c} or newer.\n\
-                 Upgrade sbx, or set {SKIP_VERSION_CHECK_ENV}=1 to run anyway — below \
-                 0.37 you lose ports published at creation, SSH, shared skills and parts \
-                 of the network-policy panel; below 0.35 `kit add`, `rm` and `run --name` \
-                 behave differently and sbxw misprovisions rather than failing loudly."
+                 Upgrade sbx, or set {SKIP_VERSION_CHECK_ENV}=1 to run anyway — but expect \
+                 failures rather than degraded behaviour: sbxw no longer carries fallbacks \
+                 for older releases, so `create --env`, `prune`, `env create`, kit spec v2 \
+                 and `secret set --sandbox` are all passed as-is."
             );
         }
         Some((a, b, c)) => {
             tracing::debug!("sbx {a}.{b}.{c} (needs >= {min_a}.{min_b}.{min_c})");
-            if (a, b, c) < CURRENT_SBX_VERSION {
-                let (c_a, c_b, c_c) = CURRENT_SBX_VERSION;
-                tracing::debug!(
-                    "sbx {a}.{b}.{c} is older than {c_a}.{c_b}.{c_c}: kits are written in the \
-                     legacy v1 grammar and secrets are scoped with the pre-0.38 flags"
-                );
-            }
         }
         None => tracing::warn!(
             "could not read a version out of `sbx version` — continuing, but sbxw is built \
@@ -388,7 +332,7 @@ pub struct CreateOpts<'a> {
     /// agent starts, so env vars they set are visible from the first process.
     ///
     /// Every kit the sandbox is meant to have belongs here rather than in a
-    /// later `sbx kit add`: since 0.38 the recreate path behind `kit add`
+    /// later `sbx kit add`: the recreate path behind `kit add`
     /// **refuses a kit that declares startup commands** ("does not yet apply"),
     /// telling you to `sbx rm` + `sbx create --kit` instead. Creation is the
     /// only moment a kit is applied whole.
@@ -399,6 +343,19 @@ pub struct CreateOpts<'a> {
     /// When false, pass `--no-share-skills` to keep the host's shared skill
     /// store out of this sandbox.
     pub share_skills: bool,
+    /// `KEY=VALUE` pairs forwarded as `-e`, and files forwarded as
+    /// `--env-file`. sbx resolves the precedence between them itself (`--env`
+    /// beats any file; a later file beats an earlier one), so both are passed
+    /// through in order and nothing is merged here.
+    ///
+    /// At creation these are *baked into the sandbox*, so every later process
+    /// in it sees them. The same flags on `run` apply to the agent session
+    /// instead, which is how an edit reaches a sandbox that already exists —
+    /// see `run_attach_args`.
+    pub env: &'a [String],
+    /// Paths passed as `--env-file`, already resolved against `sbxw.toml`'s
+    /// directory. See `env`.
+    pub env_files: &'a [String],
 }
 
 /// `sbx create claude <workspace> --name <name> [--kit K…] [-p SPEC…] [--no-share-skills]`.
@@ -415,6 +372,54 @@ pub struct CreateOpts<'a> {
 /// sandbox without its ports than no sandbox at all should go through
 /// `crate::create_with_port_fallback`.
 pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
+    // Probed rather than assumed, and only when it would be used — see
+    // `create_supports`.
+    let no_share_skills = !opts.share_skills && {
+        let supported = create_supports("--no-share-skills");
+        if !supported {
+            tracing::warn!(
+                "`sbx create` on this host has no --no-share-skills flag, so share_skills = \
+                 false cannot be honoured: '{name}' gets the shared skill store. Creating it \
+                 anyway — losing the sandbox over a skills mount would be the worse trade."
+            );
+        }
+        supported
+    };
+    let args = create_args(name, opts, no_share_skills);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_inherit(&refs)
+}
+
+/// Does `sbx create --help` list `flag`?
+///
+/// A feature probe rather than a version gate, because this one is not a
+/// version question. `--no-share-skills` came from release notes and has never
+/// appeared in the published `sbx create` reference — the 0.39 options are
+/// `--clone --cpus --deny-network -e/--env --env-file --kit -m/--memory --name
+/// -p/--publish -q/--quiet -t/--template`, and no skills flag among them. It
+/// may have been renamed, or never shipped under that spelling.
+///
+/// Until 0.39 guessing wrong was survivable: an unrecognised argument printed
+/// help and exited 0. 0.39 made that an error, so a single unknown flag now
+/// fails the whole `create` — and `share_skills = false` would cost you the
+/// sandbox rather than the setting. Reading `--help` is the cheap way to be
+/// sure, and it is only paid for by the configs that ask for the flag.
+///
+/// A `--help` that cannot be run answers **false**: not passing a flag loses a
+/// preference, passing one sbx doesn't know loses the sandbox.
+fn create_supports(flag: &str) -> bool {
+    static HELP: OnceLock<String> = OnceLock::new();
+    HELP.get_or_init(|| run_capture(&["create", "--help"]).unwrap_or_default())
+        .contains(flag)
+}
+
+/// The argv `create_claude` runs, split out so the flag grammar is testable
+/// without a live `sbx`.
+///
+/// `no_share_skills` is resolved by the caller rather than probed here: it is
+/// the one flag whose existence is uncertain, and a test wants to pin both
+/// answers without a live `sbx create --help`.
+fn create_args(name: &str, opts: &CreateOpts<'_>, no_share_skills: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "create".into(),
         "claude".into(),
@@ -433,9 +438,64 @@ pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
         args.push("-p".into());
         args.push(spec.clone());
     }
-    if !opts.share_skills {
+    if no_share_skills {
         args.push("--no-share-skills".into());
     }
+    // Files first, then `-e`. sbx's precedence is `--env` over any `--env-file`
+    // whatever the order, so writing the argv in that order costs nothing and
+    // makes a log line read the way the rule does.
+    for file in opts.env_files {
+        args.push("--env-file".into());
+        args.push(file.clone());
+    }
+    for pair in opts.env {
+        args.push("-e".into());
+        args.push(pair.clone());
+    }
+    args
+}
+
+/// Argv for re-attaching the agent: `sbx run --name <name> [--env-file F…]
+/// [-e KEY=VALUE…]`.
+///
+/// The positional form (`sbx run <name>`) is deprecated; `--name` re-attaches
+/// from any working directory, and it also works for a sandbox created with a
+/// custom `--kit` (sbxw's OAuth kit) without re-passing it.
+///
+/// The env flags are here, and not only on `create`, because sbx applies them
+/// **to the agent session** — "takes effect on a re-attach too", in its own
+/// words. That is what makes `env` in sbxw.toml a live setting rather than a
+/// creation-time one: edit it, reopen the pane, and the agent has the new
+/// value. (A `sbx exec` pane — the Bash tab, or `web_shell` — still sees only
+/// what was baked in at creation, since it is not the agent session.)
+pub fn run_attach_args(name: &str, env: &[String], env_files: &[String]) -> Vec<String> {
+    let mut args = vec!["run".to_string(), "--name".to_string(), name.to_string()];
+    for file in env_files {
+        args.push("--env-file".into());
+        args.push(file.clone());
+    }
+    for pair in env {
+        args.push("-e".into());
+        args.push(pair.clone());
+    }
+    args
+}
+
+/// `sbx env create PATH...` — provision a sandbox from environment files,
+/// without attaching to it (sbx 0.39+, experimental).
+///
+/// `create` and not `run`: `run` would drop into the agent's shell, and sbxw
+/// wants the sandbox created so its own provisioning can follow and its own
+/// terminal can attach. This is the one call in `sbxw env run` that reads the
+/// environment file's `secrets`, `bindings`, `registries` and `mcp` — the parts
+/// sbxw has no way to apply itself.
+///
+/// stdio is inherited: creation is long and chatty (image pulls, kit installs,
+/// secret resolution that may prompt a vault), and a caller watching a terminal
+/// should see it happen.
+pub fn env_create(paths: &[String]) -> Result<()> {
+    let mut args = vec!["env".to_string(), "create".to_string()];
+    args.extend(paths.iter().cloned());
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_inherit(&refs)
 }
@@ -465,26 +525,26 @@ pub fn setup_ssh() -> Result<()> {
 
 /// `sbx kit add SANDBOX REFERENCE` — apply a kit to an existing sandbox.
 ///
-/// Since sbx 0.35 this RECREATES the sandbox container with the augmented kit
+/// This RECREATES the sandbox container with the augmented kit
 /// set (state is preserved) and composes the kit's network allow/deny rules
 /// into the sandbox policy. Recreation kills anything attached to a running
 /// sandbox (agent/bash PTY sessions), so callers should prefer `sbx exec`
 /// paths on running sandboxes and reserve `kit add` for stopped ones or for
 /// changes that genuinely need the kit machinery.
-/// `run_checked`, not `run_inherit`, since 0.38: the failure mode that matters
+/// `run_checked`, not `run_inherit`: the failure mode that matters
 /// here names a *different* kit than the one being added — a stale reference
 /// re-resolved during the container swap — and callers cannot diagnose or
-/// repair that from an exit status alone. stdout is still inherited, so 0.38's
+/// repair that from an exit status alone. stdout is still inherited, so the
 /// live kit-install progress reaches the terminal.
 pub fn kit_add(sandbox: &str, kit_path: &str) -> Result<()> {
     run_checked(&["kit", "add", sandbox, kit_path])
 }
 
-/// `sbx inspect SANDBOX` — raw text output. Since sbx 0.35 this lists the
+/// `sbx inspect SANDBOX` — raw text output. This lists the
 /// sandbox's kits, injected secrets, and general sandbox information; sbxw
 /// uses it to skip re-applying kits that are already present (each re-apply
 /// would recreate the container). Best-effort: callers must tolerate errors
-/// and unknown formats (older sbx versions may not list kits at all).
+/// and unknown formats: a layout change here must not break provisioning.
 pub fn inspect_raw(name: &str) -> Result<String> {
     run_capture(&["inspect", name])
 }
@@ -523,7 +583,7 @@ pub fn stop_sandbox(name: &str) -> Result<()> {
 
 /// `sbx rm --force [--all | SANDBOX...]` — remove sandboxes permanently.
 ///
-/// `--force` is load-bearing since sbx 0.35: `sbx rm` now refuses to delete a
+/// `--force` is load-bearing: `sbx rm` refuses to delete a
 /// sandbox with an active session without it, and sbxw's own web daemon keeps
 /// an `sbx run --name` session attached — a non-forced rm would always fail
 /// from the web UI. Removal therefore proceeds even mid-session, by design.
@@ -535,6 +595,36 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
         args.extend_from_slice(names);
     }
     run_checked(&args)
+}
+
+/// `sbx prune [--dry-run] [--filter since=DURATION] --force` (sbx 0.39+).
+///
+/// The safe half of `rm --all`: a *running* sandbox is never a candidate, so
+/// this cannot take out the one you are working in — which is the whole reason
+/// it exists as a separate command instead of a flag on `rm`.
+///
+/// `--force` is always passed, for the same reason `rm_sandboxes` passes it:
+/// prune asks for confirmation on a TTY, and sbxw's callers (the daemon, a
+/// non-interactive `sbxw prune`) have nowhere to answer. The confirmation
+/// therefore happens *before* this is called — `--dry-run` is what makes that
+/// possible, and `sbxw prune` shows it first unless told not to.
+///
+/// `since` is sbx's own spelling and its own duration parser: `since=168h` means
+/// "stopped for longer than a week". A sandbox whose stop time the daemon can't
+/// report is left alone by sbx, not by sbxw.
+pub fn prune(since: Option<&str>, dry_run: bool) -> Result<String> {
+    let filter = since.map(|d| format!("since={d}"));
+    let mut args = vec!["prune"];
+    if dry_run {
+        args.push("--dry-run");
+    } else {
+        args.push("--force");
+    }
+    if let Some(f) = filter.as_deref() {
+        args.push("--filter");
+        args.push(f);
+    }
+    run_capture(&args)
 }
 
 /// `sbx ports <name> --publish <spec>` where spec = [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO].
@@ -759,7 +849,7 @@ pub fn policy_rm_rule(rule: &str) -> Result<()> {
 /// rule-level table — the only view that names the resources (domains) a rule
 /// covers rather than counting them.
 ///
-/// If the scoped call fails (older sbx, unknown sandbox) we retry unscoped so
+/// If the scoped call fails (an unknown sandbox, most likely) we retry unscoped so
 /// the caller degrades to the host-wide listing instead of an error. The
 /// returned bool says which ran: "the rules for *this* sandbox" and "the rules
 /// for *every* sandbox" must never look alike in the UI. On total failure the
@@ -969,24 +1059,17 @@ fn slice_at(line: &str, starts: &[usize]) -> Vec<String> {
         .collect()
 }
 
-/// The scope arguments for `sbx secret set`, in the grammar `modern` selects.
+/// The scope arguments for `sbx secret set`.
 ///
-/// sbx 0.38 made **global the default** and moved sandbox scope onto
-/// `--sandbox NAME`; the forms sbxw used until now — a bare positional sandbox,
-/// and `-g` for global — still work there but print a deprecation warning on
-/// every call, and a warning nobody can act on is one people learn to ignore.
-///
-/// So: on 0.38+ a global secret passes *nothing at all* and a sandbox-scoped
-/// one passes the flag; below that, the old spellings, which is the only thing
-/// those releases understand. Both branches mean the same two scopes.
-fn secret_scope_args(modern: bool, global: bool, sandbox: Option<&str>) -> Vec<String> {
-    match (modern, global, sandbox) {
-        // 0.38+: global is what you get when you say nothing.
-        (true, false, Some(name)) => vec!["--sandbox".into(), name.into()],
-        (true, _, _) => vec![],
-        (false, true, _) => vec!["-g".into()],
-        (false, false, Some(name)) => vec![name.into()],
-        (false, false, None) => vec![],
+/// Global is the default and says nothing at all; sandbox scope takes
+/// `--sandbox NAME`. The older spellings — a bare positional sandbox, and `-g`
+/// for global — are gone: they print a
+/// deprecation warning on every call, and a warning nobody can act on is one
+/// people learn to ignore.
+fn secret_scope_args(global: bool, sandbox: Option<&str>) -> Vec<String> {
+    match (global, sandbox) {
+        (false, Some(name)) => vec!["--sandbox".into(), name.into()],
+        _ => vec![],
     }
 }
 
@@ -994,8 +1077,7 @@ fn secret_scope_args(modern: bool, global: bool, sandbox: Option<&str>) -> Vec<S
 /// argv / shell history). `service` must be one of sbx's known services
 /// (anthropic, openai, github, ...). For a global secret pass `global = true`.
 ///
-/// The scope is spelled differently either side of sbx 0.38 — see
-/// `secret_scope_args`.
+/// See `secret_scope_args` for how the scope is spelled.
 pub fn secret_set_stdin(
     service: &str,
     value: &str,
@@ -1003,11 +1085,7 @@ pub fn secret_set_stdin(
     sandbox: Option<&str>,
 ) -> Result<()> {
     let mut args: Vec<String> = vec!["secret".into(), "set".into()];
-    args.extend(secret_scope_args(
-        version_at_least(SECRET_SCOPE_FLAGS_SINCE),
-        global,
-        sandbox,
-    ));
+    args.extend(secret_scope_args(global, sandbox));
     args.push(service.into());
 
     tracing::debug!(target: "sbx", "sbx {} (secret via stdin)", args.join(" "));
@@ -1062,7 +1140,7 @@ pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
 
 /// Refresh Claude Code's OAuth credentials in a *running* sandbox by writing
 /// `~/.claude/.credentials.json` directly over `sbx exec`. This replaces the
-/// old `sbx kit add` path for running sandboxes: since sbx 0.35 `kit add`
+/// old `sbx kit add` path for running sandboxes: `kit add`
 /// recreates the sandbox container, which would kill live agent/bash sessions
 /// attached through the web terminal.
 pub fn write_oauth_credentials(sandbox: &str, credentials_json: &str) -> Result<()> {
@@ -1132,14 +1210,30 @@ pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
     run_node_script(sandbox, "/tmp/.sbxw-trust.js", &script)
 }
 
-/// Set the default model in the sandbox's user-level Claude Code settings
-/// (`/home/agent/.claude/settings.json`). Merges into whatever `settings.json`
-/// already exists rather than overwriting it, since that file also holds the
-/// permission/hook settings installed elsewhere. Safe to call repeatedly
-/// (e.g. on every `sbxw up`); sbxw.toml's `claude_model` is the source of
-/// truth for the default.
-pub fn set_default_model(sandbox: &str, model: &str) -> Result<()> {
-    let script = settings_merge_script(&format!("d.model={};", serde_json::to_string(model)?));
+/// Remove a `model` key from the sandbox's `settings.json` — but only when it
+/// still holds `written_by_sbxw`.
+///
+/// The model now travels as `ANTHROPIC_DEFAULT_MODEL` (see
+/// `crate::config::Config::claude_model`), which Claude Code consults *last*:
+/// a `model` value in any settings file outranks it. Sandboxes sbxw
+/// provisioned before that change have exactly such a value — one sbxw itself
+/// wrote — so without this they would be deaf to the variable and stuck on
+/// whatever `claude_model` said the day they were created.
+///
+/// The equality test is what makes the deletion safe. A `model` that still
+/// matches the configured one is sbxw's own leftover, or a user who picked the
+/// same model — either way the variable puts back the same answer. A `model`
+/// that *differs* is somebody's deliberate `/model`, and gets left alone;
+/// preserving that choice is the entire point of moving down a precedence
+/// level.
+///
+/// Best-effort and idempotent: the key is gone after the first successful run,
+/// and every later call is a no-op.
+pub fn drop_stale_settings_model(sandbox: &str, written_by_sbxw: &str) -> Result<()> {
+    let script = settings_merge_script(&format!(
+        "if(d.model==={}){{delete d.model;}}",
+        serde_json::to_string(written_by_sbxw)?
+    ));
     run_node_script(sandbox, "/tmp/.sbxw-model.js", &script)
 }
 
@@ -1399,12 +1493,13 @@ mod tests {
     /// Tuple ordering is the whole comparison, so it is worth stating once.
     #[test]
     fn version_floor_compares_component_wise() {
+        // Everything below the floor is now a refusal, not a degradation:
+        // nothing in this file falls back to an older shape any more.
         assert!(parse_version("0.34.9").unwrap() < MIN_SBX_VERSION);
-        // The tier that only *degrades* is still below the floor: silently
-        // missing features is what this check is for.
-        assert!(parse_version("0.36.9").unwrap() < MIN_SBX_VERSION);
-        assert!(parse_version("0.37.0").unwrap() >= MIN_SBX_VERSION);
-        assert!(parse_version("0.37").unwrap() >= MIN_SBX_VERSION);
+        assert!(parse_version("0.38.9").unwrap() < MIN_SBX_VERSION);
+        assert!(parse_version("0.39.0").unwrap() >= MIN_SBX_VERSION);
+        // A missing patch reads as `.0`, so "0.39" is the floor, not below it.
+        assert!(parse_version("0.39").unwrap() >= MIN_SBX_VERSION);
         assert!(parse_version("0.100.0").unwrap() > MIN_SBX_VERSION);
         assert!(parse_version("1.0.0").unwrap() > MIN_SBX_VERSION);
     }
@@ -1428,36 +1523,106 @@ mod tests {
         assert!(msg.contains("Ask platform@acme.example"), "{msg}");
     }
 
-    /// 0.38 turned both spellings sbxw used into deprecation warnings: global
-    /// stopped needing `-g` and sandbox scope moved onto `--sandbox`.
+    /// Global is the default and sandbox scope takes `--sandbox`; the older
+    /// positional and `-g` spellings are no longer emitted.
     #[test]
-    fn secret_scope_follows_the_grammar_of_the_running_sbx() {
-        // 0.38+: global says nothing at all, sandbox scope takes the flag.
-        assert!(secret_scope_args(true, true, None).is_empty());
-        assert!(secret_scope_args(true, true, Some("neos")).is_empty());
+    fn a_global_secret_says_nothing_and_a_scoped_one_takes_the_flag() {
+        // Global is the default, so it passes no scope argument at all — and it
+        // wins even when a sandbox name is supplied alongside it.
+        assert!(secret_scope_args(true, None).is_empty());
+        assert!(secret_scope_args(true, Some("neos")).is_empty());
         assert_eq!(
-            secret_scope_args(true, false, Some("neos")),
+            secret_scope_args(false, Some("neos")),
             vec!["--sandbox".to_string(), "neos".to_string()]
         );
+        // Neither global nor named: nothing to say, and sbx defaults to global.
+        assert!(secret_scope_args(false, None).is_empty());
+    }
 
-        // Below it, the older spellings — the only ones those releases parse.
-        assert_eq!(secret_scope_args(false, true, None), vec!["-g".to_string()]);
+    fn opts<'a>(env: &'a [String], env_files: &'a [String]) -> CreateOpts<'a> {
+        CreateOpts {
+            workspace: "/w",
+            ro_mounts: &[],
+            kits: &[],
+            publish: &[],
+            share_skills: true,
+            env,
+            env_files,
+        }
+    }
+
+    /// `--env-file` is written before `-e` because that is the order sbx's own
+    /// precedence reads in (`--env` beats any file, whatever the order), so a
+    /// log line never has to be reordered in the reader's head.
+    #[test]
+    fn env_files_are_passed_before_the_pairs_that_outrank_them() {
+        let env = vec!["A=1".to_string(), "B=2".to_string()];
+        let files = vec!["/p/.env".to_string()];
+
+        let modern = create_args("neos", &opts(&env, &files), false);
         assert_eq!(
-            secret_scope_args(false, false, Some("neos")),
-            vec!["neos".to_string()]
+            modern[5..],
+            [
+                "--env-file",
+                "/p/.env", // files first…
+                "-e",
+                "A=1",
+                "-e",
+                "B=2", // …then the pairs that outrank them
+            ]
         );
     }
 
-    /// A version sbxw cannot read must select the grammar that works on *both*
-    /// sides of the gate, never the newer one.
+    /// The attach carries the env too, because `sbx run -e` applies to the
+    /// agent *session* — that is what lets an edited `env` reach a sandbox that
+    /// already exists — no recreate involved.
     #[test]
-    fn an_unreadable_version_is_not_at_least_anything() {
-        assert!(!at_least(None, KIT_SPEC_V2_SINCE));
-        assert!(!at_least(None, (0, 1, 0)));
+    fn the_attach_carries_env_so_an_edit_reaches_an_existing_sandbox() {
+        let env = vec!["A=1".to_string()];
+        let files = vec!["/p/.env".to_string()];
 
-        assert!(at_least(Some((0, 38, 0)), KIT_SPEC_V2_SINCE));
-        assert!(at_least(Some((0, 41, 2)), KIT_SPEC_V2_SINCE));
-        assert!(!at_least(Some((0, 37, 9)), KIT_SPEC_V2_SINCE));
+        assert_eq!(
+            run_attach_args("neos", &env, &files),
+            [
+                "run",
+                "--name",
+                "neos",
+                "--env-file",
+                "/p/.env",
+                "-e",
+                "A=1"
+            ]
+        );
+        // `--name`, never the deprecated positional form, and nothing else when
+        // there is no env to carry.
+        assert_eq!(run_attach_args("neos", &[], &[]), ["run", "--name", "neos"]);
+    }
+
+    /// A value is sbx's to interpret, not sbxw's: a bare `KEY` means "take it
+    /// from my environment" and an empty one blanks the variable. Both have to
+    /// survive the trip verbatim.
+    #[test]
+    fn env_values_are_passed_through_untouched() {
+        let env = vec![
+            "HOME_TOKEN".to_string(),
+            "EMPTY=".to_string(),
+            "SPACED=a b".to_string(),
+            "EQUALS=k=v".to_string(),
+        ];
+        let args = create_args("neos", &opts(&env, &[]), false);
+        assert_eq!(
+            args[5..],
+            [
+                "-e",
+                "HOME_TOKEN",
+                "-e",
+                "EMPTY=",
+                "-e",
+                "SPACED=a b",
+                "-e",
+                "EQUALS=k=v"
+            ]
+        );
     }
 
     /// `relay-mcp.js` reaches its transport with `require("./relay.js")`, so the
@@ -1515,6 +1680,34 @@ mod tests {
     /// The wrapper must *merge*: read the existing settings, apply the body, and
     /// write back. Overwriting instead would make each helper clobber the ones
     /// that ran before it (model vs. hooks vs. statusLine, all in one file).
+    /// The deletion is conditional, and the condition is what keeps a
+    /// deliberate `/model` alive. An unconditional `delete d.model` would read
+    /// as "reset to the configured default" and quietly throw away the one
+    /// setting this whole change exists to preserve.
+    #[test]
+    fn the_stale_model_key_is_only_dropped_when_it_is_sbxws_own() {
+        let script = settings_merge_script(&format!(
+            "if(d.model==={}){{delete d.model;}}",
+            serde_json::to_string("claude-opus-5").unwrap()
+        ));
+        assert!(
+            script.contains(r#"if(d.model==="claude-opus-5"){delete d.model;}"#),
+            "{script}"
+        );
+        // Read-modify-write, not truncate: that file also holds the hooks and
+        // statusLine installed by the other helpers.
+        assert!(script.contains("readFileSync"), "{script}");
+        assert!(script.contains("writeFileSync"), "{script}");
+        // The model name is JSON-encoded, so an alias with a quote in it cannot
+        // break out of the comparison.
+        let nasty = settings_merge_script(&format!(
+            "if(d.model==={}){{delete d.model;}}",
+            serde_json::to_string(r#"a"); process.exit(1); ("#).unwrap()
+        ));
+        assert!(!nasty.contains("process.exit(1);ature"), "{nasty}");
+        assert!(nasty.contains(r#"\""#), "the quote is escaped: {nasty}");
+    }
+
     #[test]
     fn settings_merge_script_reads_modifies_then_writes() {
         let script = settings_merge_script("d.model=\"claude-sonnet-5\";");

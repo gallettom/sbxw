@@ -1,4 +1,4 @@
-schemaVersion: "1"
+schemaVersion: "2"
 kind: mixin
 name: md-to-pdf-tools
 description: >
@@ -11,18 +11,19 @@ description: >
 # *.pythonhosted.org are already in sbxw's default network_allow, but the apt
 # mirrors are not — add them to sbxw.toml's network_allow (see this kit's
 # README) or the apt-get step will 403.
-network:
-  allowedDomains:
-    - deb.debian.org
-    - security.debian.org
-    - archive.ubuntu.com
-    - security.ubuntu.com
-    - ports.ubuntu.com
-    - pypi.org
-    - files.pythonhosted.org
+permissions:
+  network:
+    allow:
+      - deb.debian.org
+      - security.debian.org
+      - archive.ubuntu.com
+      - security.ubuntu.com
+      - ports.ubuntu.com
+      - pypi.org
+      - files.pythonhosted.org
 
-commands:
-  initFiles:
+setup:
+  files:
     # User-level command, not project-level: this lands in every sandbox that
     # applies this kit regardless of which project is mounted as the
     # workspace, so /md-to-pdf never needs to be committed into target repos.

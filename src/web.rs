@@ -71,6 +71,125 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 /// Output bytes kept per sandbox for replay on reconnect (256 KB).
 const REPLAY_BYTES: usize = 256 * 1024;
 
+/// Remove the sequences a terminal is expected to *answer* from a byte stream.
+///
+/// The replay ring holds raw PTY output, questions included: a shell prompt
+/// asks where the cursor is (`CSI 6n`) on nearly every redraw, a TUI asks what
+/// the terminal is (`CSI c`) when it starts. Replayed into a fresh xterm, those
+/// bytes are not history — the parser sees live requests and answers every one
+/// of them back down the WebSocket, into the PTY, onto the shell's stdin. With
+/// an agent's TUI in front, it eats them; at a bash prompt they land on the
+/// command line as `37;3R37;3R…`, one per query in 256 KB of scrollback.
+///
+/// Repainting the screen needs none of them, so the replay drops them and the
+/// live stream (where an answer is genuinely wanted) keeps them.
+fn strip_terminal_queries(input: &[u8]) -> Vec<u8> {
+    const ESC: u8 = 0x1b;
+    const BEL: u8 = 0x07;
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] != ESC || i + 1 >= input.len() {
+            out.push(input[i]);
+            i += 1;
+            continue;
+        }
+        match input[i + 1] {
+            // CSI: parameter bytes, then intermediates, then one final byte.
+            b'[' => {
+                let params_start = i + 2;
+                let mut j = params_start;
+                while j < input.len() && (0x30..=0x3f).contains(&input[j]) {
+                    j += 1;
+                }
+                let params_end = j;
+                while j < input.len() && (0x20..=0x2f).contains(&input[j]) {
+                    j += 1;
+                }
+                let Some(&final_byte) = input.get(j) else {
+                    // Truncated by the ring's 256 KB cap: nothing to classify.
+                    out.extend_from_slice(&input[i..]);
+                    break;
+                };
+                if !is_csi_query(
+                    &input[params_start..params_end],
+                    &input[params_end..j],
+                    final_byte,
+                ) {
+                    out.extend_from_slice(&input[i..=j]);
+                }
+                i = j + 1;
+            }
+            // OSC and DCS: a payload up to ST (`ESC \`), or BEL for OSC.
+            kind @ (b']' | b'P') => {
+                let payload_start = i + 2;
+                let mut j = payload_start;
+                let mut end = None;
+                while j < input.len() {
+                    if kind == b']' && input[j] == BEL {
+                        end = Some((j, j + 1));
+                        break;
+                    }
+                    if input[j] == ESC && input.get(j + 1) == Some(&b'\\') {
+                        end = Some((j, j + 2));
+                        break;
+                    }
+                    j += 1;
+                }
+                let Some((payload_end, next)) = end else {
+                    out.extend_from_slice(&input[i..]);
+                    break;
+                };
+                let payload = &input[payload_start..payload_end];
+                let query = if kind == b']' {
+                    // A colour/clipboard read is the field `?` on its own.
+                    payload.rsplit(|&b| b == b';').next() == Some(b"?")
+                } else {
+                    // XTGETTCAP (`+q`) and DECRQSS (`$q`).
+                    payload.starts_with(b"+q") || payload.starts_with(b"$q")
+                };
+                if !query {
+                    out.extend_from_slice(&input[i..next]);
+                }
+                i = next;
+            }
+            // Anything else after ESC is copied byte by byte.
+            _ => {
+                out.push(input[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Whether one CSI sequence asks the terminal for something.
+fn is_csi_query(params: &[u8], intermediates: &[u8], final_byte: u8) -> bool {
+    // The first numeric parameter, for the window-report family.
+    let first_param = || {
+        params
+            .split(|&b| b == b';')
+            .next()
+            .and_then(|p| std::str::from_utf8(p).ok())
+            .and_then(|p| p.parse::<u16>().ok())
+    };
+    match final_byte {
+        // Device Status Report (`5n`, `6n`, `?6n`) — the cursor-position one is
+        // what floods a bash prompt. Every DSR variant is a question.
+        b'n' => true,
+        // Device Attributes (`c`, `>c`, `=c`).
+        b'c' => true,
+        // DECRQM, mode query: `CSI ? Ps $ p`.
+        b'p' => intermediates == b"$",
+        // XTVERSION is `CSI > Ps q`; plain `CSI Ps SP q` is DECSCUSR, which
+        // sets the cursor shape and must survive.
+        b'q' => params.first() == Some(&b'>'),
+        // Window/size reports. 22 and 23 push/pop the title and are not asks.
+        b't' => matches!(first_param(), Some(11 | 13..=16 | 18..=21)),
+        _ => false,
+    }
+}
+
 /// Persistent PTY state shared across all WebSocket connections to the same sandbox.
 struct PtySession {
     /// Broadcast sender: every connected WebSocket subscribes to this.
@@ -917,6 +1036,12 @@ const STATIC_ASSETS: &[(&str, &str, &str)] = &[
     ("/js/files.js", JS, include_str!("../assets/js/files.js")),
     ("/js/ssh.js", JS, include_str!("../assets/js/ssh.js")),
     (
+        "/js/envfile.js",
+        JS,
+        include_str!("../assets/js/envfile.js"),
+    ),
+    ("/js/help.js", JS, include_str!("../assets/js/help.js")),
+    (
         "/js/lifecycle.js",
         JS,
         include_str!("../assets/js/lifecycle.js"),
@@ -1054,6 +1179,10 @@ pub async fn serve(
         .route("/api/relay/:id/deny", post(api_relay_deny))
         .route("/api/sandboxes/:name/duplicate", post(api_duplicate))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
+        .route(
+            "/api/sandboxes/:name/envfile",
+            get(api_envfile).post(api_envfile),
+        )
         .route("/api/sandboxes/:name/policy", get(api_policy_one))
         .route("/api/sandboxes/:name/policy/rules", post(api_policy_add))
         .route("/api/sandboxes/:name/policy/rules/rm", post(api_policy_rm))
@@ -1999,6 +2128,82 @@ fn clean_resource_list(raw: &str) -> std::result::Result<String, String> {
 /// Scoped to this sandbox unless `global` is set, in which case it lands in the
 /// host-wide policy and governs every sandbox. sbx's own refusal (governance,
 /// org policy) is passed straight back to the browser.
+/// Body of `POST /api/sandboxes/:name/envfile`.
+#[derive(Deserialize)]
+struct EnvFileBody {
+    /// Repository root the `workspace:` expression is written against. Empty
+    /// or absent means "work it out" (the `SBXW_PROJECTS_ROOT` variable, else
+    /// the workspace's parent).
+    root: Option<String>,
+    /// Absent means preview only; `true` writes the file to disk.
+    save: Option<bool>,
+    /// Overwrite an existing file.
+    force: Option<bool>,
+}
+
+/// `GET|POST /api/sandboxes/:name/envfile` — the environment file for one
+/// sandbox, previewed or written.
+///
+/// Both verbs render; only `save: true` touches the disk. The preview is what
+/// makes the repository root editable in the first place: you change the root,
+/// see the `workspace:` line change, and only then write the file.
+///
+/// The ports come from `sbx ports` rather than from `sbxw.toml`, so this
+/// exports the sandbox that exists rather than the one the config describes —
+/// including a port added from this very dialog.
+async fn api_envfile(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<EnvFileBody>>,
+) -> Json<serde_json::Value> {
+    if let Some(err) = reject_invalid_name(&name) {
+        return err;
+    }
+    let body = body.map(|Json(b)| b);
+    let root = body
+        .as_ref()
+        .and_then(|b| b.root.clone())
+        .filter(|r| !r.trim().is_empty());
+    let save = body.as_ref().and_then(|b| b.save).unwrap_or(false);
+    let force = body.as_ref().and_then(|b| b.force).unwrap_or(false);
+    let cfg = state.cfg.clone();
+
+    let out = tokio::task::spawn_blocking(move || {
+        let root = root.map(std::path::PathBuf::from);
+        let rendered = crate::render_env_file_for(&name, &cfg, root.as_deref())?;
+        if !save {
+            return Ok::<_, anyhow::Error>((rendered, None));
+        }
+        let dest = std::path::PathBuf::from(&rendered.dest);
+        if dest.exists() && !force {
+            anyhow::bail!(
+                "{} already exists — tick overwrite to replace it",
+                dest.display()
+            );
+        }
+        std::fs::write(&dest, &rendered.yaml)
+            .with_context(|| format!("writing {}", dest.display()))?;
+        tracing::info!("web UI: wrote environment file {}", dest.display());
+        Ok((rendered, Some(dest.to_string_lossy().into_owned())))
+    })
+    .await;
+
+    match out {
+        Ok(Ok((r, written))) => Json(serde_json::json!({
+            "ok": true,
+            "yaml": r.yaml,
+            "workspace": r.workspace,
+            "dest": r.dest,
+            "projectsRoot": r.projects_root,
+            "rootVar": r.root_var,
+            "rootFromEnv": r.root_from_env,
+            "written": written,
+        })),
+        Ok(Err(e)) => err_json(format!("{e:#}")),
+        Err(e) => err_json(format!("environment file task failed: {e}")),
+    }
+}
+
 async fn api_policy_add(
     Path(name): Path<String>,
     Json(body): Json<PolicyRuleBody>,
@@ -2078,24 +2283,21 @@ struct PublishBody {
 /// warning string if the entry didn't actually land. Reported separately from
 /// the publish so a sudo/tty failure doesn't hide the port going live.
 fn upsert_host_alias(alias: &str, ip: &str) -> Option<String> {
-    let manual = format!("run manually: echo '{ip}\\t{alias}' | sudo tee -a /etc/hosts");
-    let mut entries: Vec<HostAlias> = hosts::read_hosts_block()
-        .into_iter()
-        .filter(|a| a.hostname != alias)
-        .collect();
-    entries.push(HostAlias {
+    let manual = "run `sbxw hosts sync` in a terminal to apply it";
+    let wanted = [HostAlias {
         hostname: alias.to_string(),
         ip: ip.to_string(),
-    });
-    if let Err(e) = hosts::sync_hosts_block(&entries) {
+    }];
+    if let Err(e) = hosts::merge_hosts_block(&wanted) {
+        crate::remember_pending_aliases(&wanted);
         return Some(format!("failed to update /etc/hosts ({e:#}) — {manual}"));
     }
-    // `sync_hosts_block` reporting success isn't proof: it writes through `sudo
-    // tee`, so read the block back and check the entry is really there.
-    hosts::read_hosts_block()
-        .iter()
-        .all(|a| a.hostname != alias)
-        .then(|| format!("/etc/hosts write succeeded but alias not found — {manual}"))
+    // `merge_hosts_block` reporting success isn't proof: it writes through
+    // `sudo tee`, so read the block back and check the entry is really there.
+    (!hosts::missing_aliases(&wanted).is_empty()).then(|| {
+        crate::remember_pending_aliases(&wanted);
+        format!("/etc/hosts write succeeded but alias not found — {manual}")
+    })
 }
 
 async fn api_ports_publish(
@@ -2278,10 +2480,23 @@ async fn api_create(
         "web UI: provisioning sandbox '{name}' at {path} ({} extra ports)",
         extra_ports.len()
     );
-    blocking_ok(move || {
-        crate::provision_sandbox(&name, &path, &[], &cfg, &extra_ports, use_api_key)
-    })
+    blocking(
+        move || crate::provision_sandbox(&name, &path, &[], &cfg, &extra_ports, use_api_key),
+        warnings_json,
+    )
     .await
+}
+
+/// Success envelope for a provisioning call: the sandbox is up either way, so
+/// anything that went wrong beside it (an /etc/hosts alias that needed a
+/// password nobody could type) rides along as a warning instead of an error —
+/// the UI still attaches the new sandbox to a pane.
+fn warnings_json(warnings: Vec<String>) -> Json<serde_json::Value> {
+    if warnings.is_empty() {
+        ok_json()
+    } else {
+        ok_json_with(serde_json::json!({ "warnings": warnings }))
+    }
 }
 
 #[derive(Deserialize)]
@@ -2323,7 +2538,7 @@ async fn api_chat(
     tracing::info!("web UI: provisioning chat sandbox '{name}' at {workspace}");
     blocking(
         move || crate::provision_sandbox(&name, &workspace, &[], &cfg, &[], use_api_key),
-        |()| ok_json_with(serde_json::json!({ "name": name_ret })),
+        |warnings| ok_json_with(serde_json::json!({ "name": name_ret, "warnings": warnings })),
     )
     .await
 }
@@ -3164,9 +3379,10 @@ async fn api_duplicate(
     let cfg = state.cfg.clone();
     let use_api_key = state.use_api_key;
     tracing::info!("web UI: duplicating sandbox '{name}' as '{new_name}' (workspace {workspace})");
-    blocking_ok(move || {
-        crate::provision_sandbox(&new_name, &workspace, &[], &cfg, &[], use_api_key)
-    })
+    blocking(
+        move || crate::provision_sandbox(&new_name, &workspace, &[], &cfg, &[], use_api_key),
+        warnings_json,
+    )
     .await
 }
 
@@ -3720,10 +3936,18 @@ fn get_or_create_session(
     } else if cfg.web_shell.is_empty() {
         // Re-attach by name. The positional form (`sbx run <name>`) is
         // deprecated; `--name` re-attaches regardless of working directory.
-        // Since sbx 0.35 this also works for sandboxes created with a custom
+        // This also works for sandboxes created with a custom
         // --kit (like sbxw's OAuth kit) without re-passing the kit.
+        //
+        // It also carries sbxw.toml's env, because sbx applies those flags to
+        // the *agent session* — so reopening this pane is how an edited `env`
+        // reaches a sandbox that already exists. See `sbx::run_attach_args`.
         let mut c = CommandBuilder::new("sbx");
-        c.args(["run", "--name", sandbox]);
+        c.args(crate::sbx::run_attach_args(
+            sandbox,
+            &cfg.env_pairs(),
+            &cfg.env_files,
+        ));
         c
     } else {
         let mut c = CommandBuilder::new("sbx");
@@ -3856,7 +4080,7 @@ async fn bridge(
     // Clone out of the lock before awaiting (MutexGuard is not Send).
     let replay_snapshot: Vec<u8> = {
         let r = session.replay.lock().unwrap();
-        r.iter().cloned().collect()
+        strip_terminal_queries(&r.iter().copied().collect::<Vec<u8>>())
     };
     if !replay_snapshot.is_empty() {
         ws_tx.send(Message::Binary(replay_snapshot)).await.ok();
@@ -3979,6 +4203,69 @@ mod tests {
     use super::*;
     use crate::relay::{Relay, RelayState};
     use serde_json::json;
+
+    /// The bug this exists for: 256 KB of scrollback holds hundreds of `CSI 6n`
+    /// from the shell prompt, and replaying them into a rebuilt terminal makes
+    /// it answer every single one back into the PTY — `37;3R37;3R…` typed onto
+    /// a bash command line.
+    #[test]
+    fn a_replay_asks_the_terminal_nothing() {
+        let history = b"user@box:~$ \x1b[6nls\r\n\x1b[?6n\x1b[5n\x1b[c\x1b[>c";
+        assert_eq!(
+            strip_terminal_queries(history),
+            b"user@box:~$ ls\r\n".to_vec()
+        );
+    }
+
+    /// Everything that paints has to come through untouched — a replay whose
+    /// colours, cursor moves or title are missing is worse than the flood.
+    #[test]
+    fn a_replay_keeps_everything_that_paints() {
+        for painting in [
+            &b"\x1b[1;32mgreen\x1b[0m"[..],
+            &b"\x1b[2J\x1b[H"[..],
+            &b"\x1b[10;40H"[..],
+            // DECSCUSR: final `q` like XTVERSION, but it *sets* the cursor.
+            &b"\x1b[2 q"[..],
+            &b"\x1b]0;a title\x07"[..],
+            &b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\"[..],
+            &b"\x1b[22;0t\x1b[23;0t"[..],
+            &b"\x1b[?2004h\x1b[?25l"[..],
+        ] {
+            assert_eq!(
+                strip_terminal_queries(painting),
+                painting.to_vec(),
+                "{:?} must survive the replay filter",
+                String::from_utf8_lossy(painting)
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_question_shapes_go_too() {
+        // DECRQM, XTVERSION, a window-size report, an OSC colour read, and
+        // XTGETTCAP — each answered by xterm.js, each pointless on a repaint.
+        let asks = b"a\x1b[?2026$pb\x1b[>0qc\x1b[18td\x1b]11;?\x1b\\e\x1bP+q544e\x1b\\f";
+        assert_eq!(strip_terminal_queries(asks), b"abcdef".to_vec());
+    }
+
+    /// The ring buffer cuts at 256 KB wherever that lands, so both ends of a
+    /// replay can hold half a sequence. Half of something is not a question,
+    /// and dropping bytes we cannot classify would corrupt the repaint.
+    #[test]
+    fn a_sequence_cut_by_the_ring_is_left_alone() {
+        assert_eq!(
+            strip_terminal_queries(b"text\x1b[6"),
+            b"text\x1b[6".to_vec()
+        );
+        assert_eq!(strip_terminal_queries(b"text\x1b"), b"text\x1b".to_vec());
+        assert_eq!(
+            strip_terminal_queries(b"text\x1b]11;?"),
+            b"text\x1b]11;?".to_vec()
+        );
+        // A trailing fragment of an answered query still goes, up to the cut.
+        assert_eq!(strip_terminal_queries(b"6n\x1b[6n"), b"6n".to_vec());
+    }
 
     /// The whole review step rests on this: an answer exists server-side from
     /// the moment the target replies, and the asking sandbox must not see it

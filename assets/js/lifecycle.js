@@ -135,7 +135,14 @@ dupConfirm.addEventListener('click', () => {
       if (data.ok) {
         attachToEmptyPaneOrMarkReady(newName);
         await loadSandboxes();
-        showToast(`Sandbox “${newName}” duplicated from “${source}”`, 'ok');
+        // Same as create: the copy exists even if an /etc/hosts alias beside
+        // it could not be written, and the warning is what says how to fix it.
+        const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+        showToast(
+          warnings.length
+            ? `Sandbox “${newName}” duplicated — ⚠ ${warnings[warnings.length - 1]}`
+            : `Sandbox “${newName}” duplicated from “${source}”`,
+          warnings.length ? 'error' : 'ok');
       } else {
         showToast(`Failed to duplicate “${source}”: ${data.error || 'unknown error'}`, 'error');
       }

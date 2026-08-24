@@ -119,7 +119,13 @@ function readStdin() {
   });
 }
 
-const me = process.env.SANDBOX_VM_ID || os.hostname();
+// The sandbox's own name. sbx 0.39 added SANDBOX_NAME (alongside SANDBOX_ID)
+// and deprecated SANDBOX_VM_ID — which still carries the name on 0.39, and is
+// the only one of the two that exists below it. So: current spelling first,
+// deprecated one as the fallback. os.hostname() agrees with both today, but
+// only because sbx happens to set it, so it stays the last resort.
+const me =
+  process.env.SANDBOX_NAME || process.env.SANDBOX_VM_ID || os.hostname();
 
 /// Describe where a request stands, in the terms the *asking* agent needs: what
 /// it may now use, and how to come back if the answer has not been released yet.

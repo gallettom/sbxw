@@ -20,16 +20,20 @@
 //!
 //! Authentication:
 //!   * API key — pass `--use-api-key`; requires ANTHROPIC_API_KEY on the host,
-//!     stored as a global `anthropic` secret (`sbx secret set`, whose scope
-//!     flags changed in 0.38 — see `sbx::secret_scope_args`).
-//!   * OAuth — set CLAUDE_CODE_OAUTH_TOKEN on the host; sbxw generates an
-//!     ephemeral mixin kit whose init files write `~/.claude/.credentials.json`
-//!     in the sandbox, so the agent is authenticated from first launch. On an
+//!     stored as a global `anthropic` secret (`sbx secret set` — see
+//!     `sbx::secret_scope_args` for how the scope is spelled).
+//!   * OAuth — set CLAUDE_CODE_OAUTH_TOKEN on the host; sbxw generates a mixin
+//!     kit whose setup files write `~/.claude/.credentials.json` in the
+//!     sandbox, so the agent is authenticated from first launch. On an
 //!     already-*running* sandbox the file is refreshed via `sbx exec` instead,
-//!     since `sbx kit add` (0.35+) recreates the container and would kill any
+//!     because `sbx kit add` recreates the container and would kill any
 //!     attached session.
+//!
+//! Requires **sbx 0.39 or newer** and assumes it throughout — there are no
+//! runtime fallbacks for older releases. See `sbx::MIN_SBX_VERSION`.
 
 mod config;
+mod envfile;
 mod hosts;
 mod relay;
 mod sbx;
@@ -297,6 +301,51 @@ Examples:
         #[arg(long)]
         all: bool,
     },
+    /// Remove every *stopped* sandbox (requires sbx 0.39+).
+    ///
+    /// The safe counterpart to `sbxw rm --all`: a running sandbox is never a
+    /// candidate, so this can't take out the one you are working in. It shows
+    /// what it would remove and asks before doing it.
+    #[command(after_help = "\
+Examples:
+  sbxw prune                     # list the stopped sandboxes, then ask
+  sbxw prune --since 168h        # ...only those stopped for over a week
+  sbxw prune --dry-run           # list them and stop there
+  sbxw prune --yes               # no prompt (scripts, cron)")]
+    Prune {
+        /// Only sandboxes stopped for longer than this (sbx duration, e.g. 168h).
+        #[arg(long, value_name = "DURATION")]
+        since: Option<String>,
+        /// List what would be removed and exit without removing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Run or write a `.sbxenv.yaml` environment file (requires sbx 0.39+).
+    ///
+    /// An environment file is sbx's own committable project setup: agent,
+    /// workspace, mounts, kits, env, secrets, MCP servers, ports. `run` brings
+    /// a sandbox up from one — sbx creates it, sbxw adds the policy,
+    /// credentials, hooks, aliases and browser terminal the format cannot
+    /// express. `export` writes one out from this project's sbxw.toml.
+    Env {
+        #[command(subcommand)]
+        cmd: EnvCmd,
+    },
+    /// Inspect or re-apply the sbxw /etc/hosts aliases.
+    ///
+    /// Editing /etc/hosts needs root. The web daemon has no terminal to answer
+    /// a `sudo` password prompt on, so anything it could not write is parked
+    /// and applied here, where sudo can ask.
+    Hosts {
+        #[command(subcommand)]
+        action: Option<HostsAction>,
+        /// Path to sbxw.toml (its aliases are applied alongside the parked ones).
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+    },
     /// Kill the sbxw web daemon and clean up /etc/hosts aliases.
     Down {
         /// Sandbox whose daemon to stop. Omit to stop all daemons and clean /etc/hosts.
@@ -331,6 +380,76 @@ Then open a new shell (or re-source the rc file).")]
 }
 
 #[derive(Subcommand)]
+enum EnvCmd {
+    /// Bring a sandbox up from a `.sbxenv.yaml`, with sbxw's pipeline around it.
+    ///
+    /// `sbx env create` creates the sandbox from the file — workspace, kits,
+    /// env, secrets, MCP servers, ports — and sbxw does the rest it always
+    /// does: egress policy, OAuth credentials, hooks, `/etc/hosts` aliases and
+    /// the browser terminal. Host ports are checked *before* anything is
+    /// created, because a port sbx cannot publish costs you the whole sandbox.
+    ///
+    /// The environment file wins wherever it says something; `sbxw.toml` fills
+    /// in what the format cannot express, and the run says which of its values
+    /// it used.
+    #[command(after_help = "\
+Examples:
+  sbxw env run                      # .sbxenv.yaml in the current directory
+  sbxw env run ../neos-env          # ...or in that directory
+  sbxw env run base.yaml local.yaml # merged in order, later files win
+  sbxw env run --yes                # take free ports without asking
+  sbxw env run --no-web             # attach here instead of the browser")]
+    Run {
+        /// Directories or environment files, merged in order. Defaults to the
+        /// current directory.
+        paths: Vec<PathBuf>,
+        /// Path to the fallback config. Defaults to ./sbxw.toml.
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+        /// Don't start the web terminal; attach the agent in this terminal.
+        #[arg(long)]
+        no_web: bool,
+        /// Accept the suggested replacement for a busy host port without asking.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// If ANTHROPIC_API_KEY is set, store it as the global `anthropic` secret.
+        #[arg(long)]
+        use_api_key: bool,
+        /// Follow the daemon log in this terminal after starting.
+        #[arg(long)]
+        tail: bool,
+    },
+    /// Generate a `.sbxenv.yaml` next to the workspace from sbxw.toml.
+    #[command(after_help = "\
+Examples:
+  sbxw env export                       # write ../.sbxenv.yaml for ./ as the workspace
+  sbxw env export --name neos ~/dev/neos
+  sbxw env export -o -                  # print it instead of writing a file
+
+Then, on any machine with sbx 0.39+ and no sbxw:
+  sbx env run                           # from the directory holding the file")]
+    Export {
+        /// Workspace the agent edits. Defaults to the current directory.
+        path: Option<PathBuf>,
+        /// Sandbox name to write into the file. Defaults to the workspace's
+        /// directory name, which is what `sbxw up --add-sandbox` would derive.
+        #[arg(long)]
+        name: Option<String>,
+        /// Path to the project config. Defaults to ./sbxw.toml.
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+        /// Where to write it. Defaults to `.sbxenv.yaml` in the workspace's
+        /// *parent*, which is where sbx wants it — see the command's notes.
+        /// `-` writes to stdout.
+        #[arg(long, short = 'o', value_name = "FILE")]
+        out: Option<PathBuf>,
+        /// Overwrite an existing file.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum SkillsCmd {
     /// Discover skills from supported host agents and copy them into the store.
     Import {
@@ -341,6 +460,17 @@ enum SkillsCmd {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(clap::Subcommand, Clone, Copy, Default)]
+enum HostsAction {
+    /// Print the sbxw block, plus anything still waiting to be applied.
+    #[default]
+    Show,
+    /// Apply the config's aliases and everything a daemon could not write.
+    Sync,
+    /// Remove the whole sbxw block from /etc/hosts.
+    Clear,
 }
 
 fn main() -> Result<()> {
@@ -437,7 +567,7 @@ fn main() -> Result<()> {
             // The daemon drives sbx as hard as the pipeline does, and it is a
             // separate entry point — `up`'s check never runs for it.
             sbx::assert_available()?;
-            let cfg = Config::load_or_default(&config)?;
+            let cfg = load_config(&config)?;
             let addr = cfg.web_addr.clone();
             run_web(&addr, name, Arc::new(cfg), false)
         }
@@ -592,6 +722,32 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Prune {
+            since,
+            dry_run,
+            yes,
+        } => {
+            sbx::assert_available()?;
+            cmd_prune(since.as_deref(), dry_run, yes)
+        }
+        Cmd::Env { cmd } => match cmd {
+            EnvCmd::Run {
+                paths,
+                config,
+                no_web,
+                yes,
+                use_api_key,
+                tail,
+            } => cmd_env_run(paths, config, no_web, yes, use_api_key, tail),
+            EnvCmd::Export {
+                path,
+                name,
+                config,
+                out,
+                force,
+            } => cmd_env_export(path, name, config, out, force),
+        },
+        Cmd::Hosts { action, config } => cmd_hosts(action.unwrap_or_default(), config),
         Cmd::Down { name } => {
             match name {
                 Some(n) => kill_daemon(&n)?,
@@ -1094,11 +1250,36 @@ fn cmd_up_background(
     let key = name.as_deref().unwrap_or("web");
     let log = daemon_log_path(key);
 
-    // Load config just to show the web address in the status line.
-    let web_addr = Config::load_or_default(&config)
-        .ok()
-        .map(|c| c.web_addr)
+    // Load config for the status line's web address — and for the aliases we
+    // settle below, before detaching.
+    let cfg = Config::load_or_default(&config).ok();
+    let web_addr = cfg
+        .as_ref()
+        .map(|c| c.web_addr.clone())
         .unwrap_or_else(|| "127.0.0.1:7681".into());
+
+    // Write the /etc/hosts aliases *here*, in the terminal the user just typed
+    // in, rather than leaving them to the daemon: this is the only moment a
+    // `sudo` password prompt has somebody in front of it. The daemon inherits a
+    // block that already has the config's aliases in it, so provisioning finds
+    // nothing to change and never needs root at all.
+    if let Some(ref cfg) = cfg {
+        let mut aliases = host_aliases(&merged_ports(cfg, &[]), cfg.ip_per_app);
+        let web_ip = web_addr.split(':').next().unwrap_or("127.0.0.1");
+        if web_ip.starts_with("127.") {
+            aliases.push(HostAlias {
+                hostname: "sbxw.localhost".into(),
+                ip: web_ip.to_string(),
+            });
+        }
+        aliases.extend(pending_aliases());
+        for w in apply_host_aliases(&aliases) {
+            eprintln!("warning: {w}");
+        }
+        if hosts::missing_aliases(&aliases).is_empty() {
+            let _ = std::fs::remove_file(pending_hosts_path());
+        }
+    }
 
     // Create / truncate the log file before spawning so it exists for `tail -f`.
     let log_file = std::fs::OpenOptions::new()
@@ -1608,6 +1789,152 @@ fn host_aliases(ports: &[PortTriple], ip_per_app: bool) -> Vec<HostAlias> {
         .collect()
 }
 
+/// Where aliases that could not be written to /etc/hosts are parked until
+/// somebody runs `sbxw hosts sync` from a terminal. One `<ip>\t<hostname>` per
+/// line, same shape as the /etc/hosts block itself.
+fn pending_hosts_path() -> PathBuf {
+    state_dir().join("pending-hosts")
+}
+
+/// Remember aliases the daemon wanted but could not write, so the recovery
+/// command can apply them without having to guess: ports added from the web UI
+/// exist in no config file, and would otherwise be lost with the error message.
+pub(crate) fn remember_pending_aliases(aliases: &[HostAlias]) {
+    let mut lines: Vec<String> = std::fs::read_to_string(pending_hosts_path())
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    for a in aliases {
+        if a.hostname.is_empty() {
+            continue;
+        }
+        let line = format!("{}\t{}", a.ip, a.hostname);
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    let _ = std::fs::create_dir_all(state_dir());
+    let _ = std::fs::write(pending_hosts_path(), lines.join("\n") + "\n");
+}
+
+/// Read back what `remember_pending_aliases` parked.
+fn pending_aliases() -> Vec<HostAlias> {
+    std::fs::read_to_string(pending_hosts_path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            match (parts.next(), parts.next()) {
+                (Some(ip), Some(hostname)) => Some(HostAlias {
+                    ip: ip.to_string(),
+                    hostname: hostname.to_string(),
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Put `aliases` into /etc/hosts (and on lo0, in ip-per-app mode), returning a
+/// warning per step that did not work instead of an error.
+///
+/// Both steps need root, and the web daemon has no terminal to answer a
+/// password prompt on: once sudo's cached password expires — minutes after the
+/// install that asked for it — every privileged step it tries fails. So a
+/// failure here is reported and parked for `sbxw hosts sync`, never fatal.
+/// `hosts::merge_hosts_block` also keeps entries other sandboxes put there, so
+/// in the steady state there is nothing to write and no sudo to need.
+fn apply_host_aliases(aliases: &[HostAlias]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Err(e) = hosts::ensure_loopback_aliases(aliases) {
+        warnings.push(format!("{e:#}"));
+    }
+    if let Err(e) = hosts::merge_hosts_block(aliases) {
+        warnings.push(format!("/etc/hosts not updated: {e:#}"));
+    }
+    let missing = hosts::missing_aliases(aliases);
+    if !missing.is_empty() {
+        remember_pending_aliases(aliases);
+        if warnings.is_empty() {
+            // Write reported success yet the entries aren't there — worth its
+            // own line, since the cause isn't the one everything else is.
+            warnings.push(format!(
+                "/etc/hosts write reported success but {} is still missing — \
+                 run `sbxw hosts sync` in a terminal",
+                missing.join(", ")
+            ));
+        }
+        warnings.push(format!(
+            "these hostnames won't resolve yet: {} (run `sbxw hosts sync` in a terminal)",
+            missing.join(", ")
+        ));
+    }
+    for w in &warnings {
+        tracing::warn!("{w}");
+    }
+    warnings
+}
+
+/// `sbxw hosts [sync|show|clear]` — the terminal-side half of alias handling.
+///
+/// The point of `sync` is that it runs where a human is: `sudo` may prompt,
+/// which the daemon can never let it do. It applies the config's aliases plus
+/// anything a daemon parked in `pending-hosts`, then forgets the parked list.
+fn cmd_hosts(action: HostsAction, config: PathBuf) -> Result<()> {
+    match action {
+        HostsAction::Show => {
+            let entries = hosts::read_hosts_block();
+            if entries.is_empty() {
+                println!("no sbxw entries in /etc/hosts");
+            }
+            for a in &entries {
+                println!("{}\t{}", a.ip, a.hostname);
+            }
+            let pending = pending_aliases();
+            if !pending.is_empty() {
+                println!("\npending (run `sbxw hosts sync` to apply):");
+                for a in &pending {
+                    println!("{}\t{}", a.ip, a.hostname);
+                }
+            }
+            Ok(())
+        }
+        HostsAction::Clear => {
+            hosts::clear_hosts_block()?;
+            let _ = std::fs::remove_file(pending_hosts_path());
+            println!("removed the sbxw /etc/hosts block");
+            Ok(())
+        }
+        HostsAction::Sync => {
+            let cfg = Config::load_or_default(&config)?;
+            let mut aliases = host_aliases(&merged_ports(&cfg, &[]), cfg.ip_per_app);
+            let web_ip = cfg.web_addr.split(':').next().unwrap_or("127.0.0.1");
+            if web_ip.starts_with("127.") {
+                aliases.push(HostAlias {
+                    hostname: "sbxw.localhost".into(),
+                    ip: web_ip.to_string(),
+                });
+            }
+            aliases.extend(pending_aliases());
+            hosts::ensure_loopback_aliases(&aliases)?;
+            hosts::merge_hosts_block(&aliases)?;
+            let missing = hosts::missing_aliases(&aliases);
+            if !missing.is_empty() {
+                anyhow::bail!("still missing from /etc/hosts: {}", missing.join(", "));
+            }
+            // Only now: the parked list is the only record of UI-added aliases.
+            let _ = std::fs::remove_file(pending_hosts_path());
+            for a in &aliases {
+                println!("{}\t{}", a.ip, a.hostname);
+            }
+            println!("/etc/hosts is up to date");
+            Ok(())
+        }
+    }
+}
+
 fn publish_all_ports(name: &str, cfg: &Config) -> Result<()> {
     let ports = merged_ports(cfg, &[]);
     for spec in publish_specs(&ports, cfg.ip_per_app) {
@@ -1622,7 +1949,7 @@ fn publish_all_ports(name: &str, cfg: &Config) -> Result<()> {
 /// Best-effort guess at the name a kit reference shows up as in `sbx inspect`:
 /// the `name:` field of a directory kit's spec.yaml, else the reference's last
 /// path segment stripped of any tag / `.zip` extension. Used only to *skip*
-/// re-applying kits (a false negative just re-applies, like pre-0.35 sbxw).
+/// re-applying kits, so a false negative costs a redundant re-apply, nothing more.
 fn kit_display_name(kit: &str) -> String {
     let spec = std::path::Path::new(kit).join("spec.yaml");
     if let Ok(s) = std::fs::read_to_string(spec) {
@@ -1646,7 +1973,7 @@ fn kit_display_name(kit: &str) -> String {
 /// The part of `sbx inspect` output that lists the sandbox's kits, or the whole
 /// blob when no such part can be identified.
 ///
-/// The kit-skip test is a substring search, and sbx 0.38 added the sandbox's
+/// The kit-skip test is a substring search, and `inspect` also reports the sandbox's
 /// **custom secrets** to what `inspect` reports. Searching the whole blob for a
 /// kit name therefore now collides with a secret (or any other field) that
 /// merely contains it, and the failure is the silent kind: sbxw concludes the
@@ -1706,7 +2033,7 @@ fn text_kits_section(raw: &str) -> Option<String> {
 
 /// Apply a bring-up network rule, surviving a host whose organisation owns it.
 ///
-/// Since sbx 0.38 `policy allow|deny network` refuses with "managed by your
+/// `policy allow|deny network` refuses with "managed by your
 /// organization" when org governance overrides the local policy. That is a
 /// correctly configured host, not a broken one: the org's rules are already in
 /// force and are the ones that count. Failing `sbxw up` over it would leave
@@ -1735,7 +2062,7 @@ fn apply_bringup_policy(kind: &str, result: Result<()>) -> Result<()> {
 /// failure is that one and nothing else.
 ///
 /// Sandboxes created before the kit directory became durable recorded a path in
-/// the OS temp dir that sbxw then deleted. Since 0.38 every container swap
+/// the OS temp dir that sbxw then deleted. Every container swap
 /// re-resolves it, so those sandboxes reject **all** later `kit add` calls,
 /// permanently, with the unrelated kit named as the thing that failed.
 ///
@@ -1803,10 +2130,14 @@ fn kit_add_repairing_oauth(name: &str, kit: &str, credentials_json: Option<&str>
     })
 }
 
-/// Does this kit declare startup commands — `commands.startup` in spec v1,
-/// `setup.startup` in v2?
+/// Does this kit declare startup commands — `setup.startup` in spec v2, or
+/// `commands.startup` in the v1 a third-party kit may still be written in?
 ///
-/// It matters because sbx 0.38's `kit add` **refuses** such a kit: the recreate
+/// Both spellings are accepted *on read* even though sbxw only ever writes v2:
+/// this reads a file somebody else may own, and the question is what the kit
+/// does, not which grammar its author chose.
+///
+/// It matters because `kit add` **refuses** such a kit: the recreate
 /// flow behind it does not run startup commands, so rather than apply the kit
 /// half-way it tells you to recreate the sandbox with `sbx create --kit`. All
 /// three kits sbxw ships declare startup commands — that is how they install
@@ -1834,7 +2165,7 @@ fn warn_kit_needs_recreate(name: &str, kit: &str, sbx_said: Option<&str>) {
     let detail = sbx_said.map(|s| format!("\n{s}")).unwrap_or_default();
     tracing::warn!(
         "kit '{kit}' declares startup commands, which `sbx kit add` cannot apply to an \
-         existing sandbox (sbx 0.38+) — '{name}' is unchanged. Recreate it to pick the kit \
+         existing sandbox — '{name}' is unchanged. Recreate it to pick the kit \
          up: `sbxw rm {name}` then `sbxw up {name}`, which passes every configured kit to \
          `sbx create --kit`. Anything outside the workspace mount is lost in the process.{detail}"
     );
@@ -1931,51 +2262,6 @@ fn create_with_port_fallback(name: &str, opts: &sbx::CreateOpts<'_>) -> Result<(
         .with_context(|| format!("create with port mappings had failed with: {first:#}"))
 }
 
-/// `sbx create` with every configured kit, falling back to creating with only
-/// the OAuth kit if sbx rejects the rest.
-///
-/// Repeating `--kit` is how sbx composes several kits at creation, and it is
-/// the only way to apply one that declares startup commands. But sbxw's floor
-/// is 0.37 and this has only been read back from 0.38's documentation, so a
-/// version that spells it differently must not cost you the sandbox: on
-/// failure, retry with the kit that carries your credentials and let the
-/// `kit add` loop deal with the others (reporting whatever sbx says about
-/// each). Returns whether the full set went in.
-fn create_with_kit_fallback(
-    name: &str,
-    opts: &sbx::CreateOpts<'_>,
-    oauth_kit: Option<&std::path::Path>,
-) -> Result<bool> {
-    let first = match create_with_port_fallback(name, opts) {
-        Ok(()) => return Ok(true),
-        Err(e) => e,
-    };
-    // One kit at most already: nothing to drop, so the failure is real.
-    if opts.kits.len() <= 1 || sbx::exists(name).unwrap_or(false) {
-        return Err(first);
-    }
-
-    tracing::warn!(
-        "creating '{name}' with its {} kits failed ({first:#}) — retrying with just the \
-         credentials kit; the rest are applied afterwards, and any that declares startup \
-         commands will ask to be applied at creation instead",
-        opts.kits.len()
-    );
-    let only_oauth: Vec<String> = oauth_kit
-        .map(|p| p.to_string_lossy().into_owned())
-        .into_iter()
-        .collect();
-    create_with_port_fallback(
-        name,
-        &sbx::CreateOpts {
-            kits: &only_oauth,
-            ..*opts
-        },
-    )
-    .with_context(|| format!("create with all kits had failed with: {first:#}"))?;
-    Ok(false)
-}
-
 pub(crate) fn provision_sandbox(
     name: &str,
     workspace: &str,
@@ -1983,7 +2269,7 @@ pub(crate) fn provision_sandbox(
     cfg: &Config,
     extra_ports: &[ExtraPort],
     use_api_key: bool,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     // 0. Record the workspace path for this sandbox name (best-effort — used
     // by the web UI's artifacts panel), and make sure the conventional
     // deliverables folder exists so it's discoverable from the first session.
@@ -2014,6 +2300,8 @@ pub(crate) fn provision_sandbox(
     let all_ports = merged_ports(cfg, extra_ports);
     let port_specs = publish_specs(&all_ports, cfg.ip_per_app);
 
+    let env_pairs = cfg.env_pairs();
+
     // 2. Create the sandbox if it doesn't exist yet.
     let existed = sbx::exists(name)?;
     // Set when creation carried the configured kits, so the `kit add` loop
@@ -2021,10 +2309,23 @@ pub(crate) fn provision_sandbox(
     let mut created_with_kits = false;
     if existed {
         tracing::info!("sandbox '{name}' already exists — reusing it");
+        // An existing sandbox keeps what was *baked in* at creation, but the
+        // same flags go onto every `sbx run` attach (see `sbx::run_attach_args`)
+        // and apply to the agent session — so an edited `env` reaches the agent
+        // without recreating anything. Only a non-agent process (the Bash pane,
+        // `web_shell`) is still on the creation-time set.
+        if !env_pairs.is_empty() || !cfg.env_files.is_empty() {
+            tracing::info!(
+                "'{name}' already exists: sbxw.toml's env reaches the agent on attach, but \
+                 the sandbox itself keeps what it was created with — a Bash pane won't see \
+                 a variable added since. `sbxw rm {name}` and bring it up again to bake in \
+                 the current set."
+            );
+        }
         if let Some(ref creds) = credentials_json {
             if sbx::is_running(name).unwrap_or(false) {
                 // Running sandbox: refresh the credentials file in place over
-                // `sbx exec`. Since sbx 0.35, `kit add` recreates the sandbox
+                // `sbx exec`: `kit add` recreates the sandbox
                 // container, which would kill any live agent/bash session
                 // attached through the web terminal — so no kit here.
                 tracing::info!("refreshing OAuth credentials in running sandbox via sbx exec");
@@ -2039,9 +2340,8 @@ pub(crate) fn provision_sandbox(
                 }
             } else {
                 // Stopped sandbox: `sbx exec` can't reach it, so go through
-                // `kit add`. The container re-creation this triggers (sbx
-                // 0.35+) preserves state, and nothing is attached to a
-                // stopped sandbox anyway.
+                // `kit add`. The container re-creation this triggers preserves
+                // state, and nothing is attached to a stopped sandbox anyway.
                 tracing::info!("applying OAuth kit to existing (stopped) sandbox via kit add");
                 match write_oauth_kit(name, creds) {
                     Ok(dir) => {
@@ -2092,9 +2392,11 @@ pub(crate) fn provision_sandbox(
             warn_if_kit_source_needs_allowlist(kit);
         }
 
-        // Kits are on the sandbox unless the fallback had to drop them; the
-        // loop below picks up whatever creation could not carry.
-        created_with_kits = create_with_kit_fallback(
+        // Every kit goes in here or the create fails outright. `--kit` is
+        // repeatable and documented as such, so there is nothing left to hedge
+        // against — sbxw used to retry with only the credentials kit because it
+        // could not be sure older releases composed several.
+        create_with_port_fallback(
             name,
             &sbx::CreateOpts {
                 workspace,
@@ -2102,9 +2404,11 @@ pub(crate) fn provision_sandbox(
                 kits: &kits,
                 publish: &port_specs,
                 share_skills: cfg.share_skills,
+                env: &env_pairs,
+                env_files: &cfg.env_files,
             },
-            kit_dir.as_deref(),
         )?;
+        created_with_kits = true;
         // The kit directory deliberately stays: sbx recorded its *path*, and
         // re-resolves it on every later container swap (see `oauth_kit_dir`).
         // `sbxw rm` is what cleans it up.
@@ -2159,12 +2463,19 @@ pub(crate) fn provision_sandbox(
         if let Err(e) = sbx::policy_allow_network(Some(name), &hook_dest) {
             tracing::warn!("could not allow {hook_dest} egress for hooks: {e:#}");
         }
-        // 2d. Default model for the in-sandbox Claude Code (sbxw.toml's
-        // `claude_model`, "claude-sonnet-5" by default). Best-effort — the
-        // agent falls back to its own default if this fails.
+        // 2d. The default model rides in as `ANTHROPIC_DEFAULT_MODEL` with the
+        // rest of the environment (see `Config::effective_env`), so there is
+        // nothing to install here. What is left is undoing the *old* mechanism:
+        // sbxw used to write `model` into settings.json, and that key outranks
+        // the variable — a sandbox carrying one would ignore `claude_model`
+        // forever. Only sbxw's own leftover is removed; a `/model` choice that
+        // says something else stays.
         if !cfg.claude_model.is_empty() {
-            if let Err(e) = sbx::set_default_model(name, &cfg.claude_model) {
-                tracing::warn!("could not set default model '{}': {e:#}", cfg.claude_model);
+            if let Err(e) = sbx::drop_stale_settings_model(name, &cfg.claude_model) {
+                tracing::warn!(
+                    "could not clear the old settings.json model key: {e:#} — if this \
+                     sandbox predates ANTHROPIC_DEFAULT_MODEL it may stay on its old model"
+                );
             }
         }
     } else {
@@ -2196,14 +2507,13 @@ pub(crate) fn provision_sandbox(
     //     that applies a kit whole.
     //
     //     Adding one to an existing sandbox goes through `sbx kit add`, which
-    //     since 0.35 RECREATES the container (state preserved, the kit's own
-    //     network rules composed in), so re-applying on every `sbxw up` is not
-    //     free: `sbx inspect` (0.35+) lists the sandbox's kits and the ones it
-    //     already names are skipped. On older sbx — or whenever inspect yields
-    //     nothing usable — every kit is applied, matching earlier behaviour.
-    //     The match is scoped to inspect's kits section: since 0.38 inspect
-    //     also reports the sandbox's custom secrets, and a kit name that
-    //     happens to appear in one of those would skip a kit never applied.
+    //     RECREATES the container (state preserved, the kit's own network rules
+    //     composed in), so re-applying on every `sbxw up` is not free: `sbx
+    //     inspect` lists the sandbox's kits and the ones it already names are
+    //     skipped. Whenever inspect yields nothing usable, every kit is applied
+    //     — the safe direction. The match is scoped to inspect's kits section,
+    //     because inspect also reports the sandbox's custom secrets and a kit
+    //     name appearing in one of those would skip a kit never applied.
     //
     //     Runs AFTER network policy so kit startup commands have egress access.
     //     A kit reference is a directory (with spec.yaml), ZIP, or OCI ref (docker.io by default).
@@ -2224,7 +2534,7 @@ pub(crate) fn provision_sandbox(
             );
             continue;
         }
-        // 0.38's `kit add` refuses a kit declaring startup commands outright,
+        // `kit add` refuses a kit declaring startup commands outright,
         // and the refusal comes *after* it has swapped the container. When the
         // spec is readable we know that in advance, so don't put the sandbox
         // through a recreate that cannot succeed.
@@ -2232,7 +2542,7 @@ pub(crate) fn provision_sandbox(
             warn_kit_needs_recreate(name, kit, None);
             continue;
         }
-        tracing::info!("applying kit: {kit} (sbx 0.35+ recreates the container; state is kept)");
+        tracing::info!("applying kit: {kit} (this recreates the container; state is kept)");
         match kit_add_repairing_oauth(name, kit, credentials_json.as_deref()) {
             Ok(()) => {}
             // Same refusal, for a kit whose spec sbxw could not read (a ZIP or
@@ -2271,8 +2581,11 @@ pub(crate) fn provision_sandbox(
             ip: web_ip,
         });
     }
-    hosts::ensure_loopback_aliases(&aliases)?;
-    hosts::sync_hosts_block(&aliases)?;
+    // Non-fatal on purpose: the sandbox exists and works by now, and /etc/hosts
+    // is a convenience on top of it. Failing here used to abort provisioning
+    // *after* the sandbox was created — the web UI then saw an error, never
+    // attached the new sandbox to a pane, and left it sitting in the sidebar.
+    let warnings = apply_host_aliases(&aliases);
     for (host_port, sandbox_port, alias) in all_ports.iter().filter(|(_, _, a)| !a.is_empty()) {
         tracing::info!("alias ready: http://{alias}:{host_port} (sandbox :{sandbox_port})");
     }
@@ -2318,7 +2631,1026 @@ pub(crate) fn provision_sandbox(
         }
     });
 
+    Ok(warnings)
+}
+
+/// Where an exported `.sbxenv.yaml` goes when `-o` doesn't say: the workspace's
+/// **parent**, not the workspace.
+///
+/// sbx is explicit about this and the reason is not tidiness. The agent can
+/// write anywhere in a direct-mounted workspace, so an environment file inside
+/// one is a file the agent can rewrite — and it is the file that decides what
+/// the *next* sandbox gets: which kits, which mounts, which ports. Outside, it
+/// is host-side configuration the sandbox cannot reach.
+///
+/// (sbxw.toml has the same shape of exposure and sbxw does not move it, because
+/// it is a project's own file and moving it would break every existing setup.
+/// It is worth knowing about: an agent that edits `network_allow` widens its own
+/// egress on your next `sbxw up`. The README says so too.)
+fn default_env_export_path(workspace: &Path) -> PathBuf {
+    workspace.parent().unwrap_or(workspace).join(".sbxenv.yaml")
+}
+
+/// `sbxw env run` — create from a `.sbxenv.yaml`, then run sbxw's own pipeline
+/// over the result.
+///
+/// The division of labour is the point. `sbx env create` is the only thing that
+/// can apply an environment file whole — secrets, bindings, registries, MCP
+/// servers, kits, mounts — so it does the creation. Everything sbxw adds and
+/// the format cannot express (egress policy, OAuth credentials, hooks, the
+/// `/etc/hosts` aliases, the browser terminal) comes after, through the same
+/// `provision_sandbox` every other entry point uses, on a sandbox that by then
+/// already exists.
+///
+/// Ports are settled **before** sbx is called, never after. A port sbx cannot
+/// publish doesn't cost you the port, it costs you the sandbox — creation fails
+/// and the new sandbox is removed — while the secrets it provisioned first stay
+/// behind. And there is no way to fix it from the outside: `env create` has no
+/// port flag, and a second file can only *add* ports because the merge
+/// concatenates lists. So the file itself is rewritten, into a scratch copy,
+/// with every path made absolute so it can live outside the original directory.
+fn cmd_env_run(
+    paths: Vec<PathBuf>,
+    config: PathBuf,
+    no_web: bool,
+    yes: bool,
+    use_api_key: bool,
+    tail: bool,
+) -> Result<()> {
+    // `assert_available` already refuses anything below the floor, and `sbx env`
+    // arrived in that same release — so there is nothing extra to check here.
+    sbx::assert_available()?;
+
+    let cwd = std::env::current_dir()?;
+    let files = envfile::resolve_paths(&paths, &cwd)?;
+    let mut loaded = envfile::load(&files, &|name| std::env::var(name).ok())?;
+    let spec = loaded.spec()?;
+
+    for name in &loaded.unresolved {
+        eprintln!(
+            "sbxw  warning: ${{{name}}} has no value on this host — left as written, so sbx \
+             will see it unresolved too"
+        );
+    }
+
+    // Paths in the file are relative to the *first* file's directory, which is
+    // sbx's rule and therefore sbxw's. Owned, because the document it came from
+    // is rewritten further down.
+    let base = loaded.base_dir.clone();
+    let workspace = match spec.workspace.as_deref() {
+        Some(w) => {
+            let p = Path::new(w);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                base.join(p)
+            }
+        }
+        None => base.clone(),
+    };
+    let workspace = std::fs::canonicalize(&workspace).with_context(|| {
+        format!(
+            "the environment file's workspace does not exist: {}",
+            workspace.display()
+        )
+    })?;
+    let agent = spec.agent.clone().unwrap_or_else(|| "claude".into());
+
+    // sbx would default the name to `<agent>-<basename>`; sbxw pins it instead,
+    // so finding the sandbox afterwards is a lookup and not a re-derivation of
+    // whatever sanitising sbx applies.
+    let name = match spec.name.clone() {
+        Some(n) => n,
+        None => {
+            let base_name = workspace
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "sandbox".into());
+            sanitize_sandbox_name_component(&format!("{agent}-{base_name}"))
+        }
+    };
+    if !is_valid_sandbox_name(&name) {
+        bail!(INVALID_NAME_MSG);
+    }
+
+    println!(
+        "sbxw  {} → sandbox '{name}'",
+        display_sources(&loaded.sources)
+    );
+
+    // ── Creation, once, and only if there is nothing there yet ───────────────
+    if sbx::exists(&name)? {
+        println!(
+            "sbxw  '{name}' already exists — not re-created. sbx applies an environment \
+             file's workspaces, kits, ports and secrets at creation only, so `sbxw rm {name}` \
+             first if the file has changed in those."
+        );
+    } else {
+        let (ports, moved) = negotiate_ports(&spec.ports, !yes)?;
+        let pinned_name = spec.name.is_none();
+        let rewrite = moved || pinned_name;
+
+        let create_args: Vec<String> = if rewrite {
+            loaded.set_ports(&ports);
+            if pinned_name {
+                loaded.set_name(&name);
+            }
+            // The scratch copy lives outside `base`, so every relative path in
+            // it has to be absolute or it would resolve against the wrong
+            // directory. The kit resolver is the same one `sbxw.toml` uses, so
+            // an OCI reference stays a reference.
+            loaded.set_workspace(&workspace.to_string_lossy());
+            let mounts: Vec<envfile::MountSpec> = spec
+                .additional
+                .iter()
+                .map(|m| envfile::MountSpec {
+                    path: base.join(&m.path).to_string_lossy().into_owned(),
+                    read_only: m.read_only,
+                })
+                .collect();
+            loaded.set_additional(&mounts);
+            let kits: Vec<String> = spec
+                .kits
+                .iter()
+                .map(|k| resolve_kit_ref(&base, k.clone()))
+                .collect();
+            loaded.set_kits(&kits);
+
+            let dir = state_dir().join("env").join(&name);
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            let derived = dir.join(".sbxenv.yaml");
+            std::fs::write(&derived, loaded.to_yaml()?)
+                .with_context(|| format!("writing {}", derived.display()))?;
+            if moved {
+                println!(
+                    "sbxw  ports adjusted — running from a rewritten copy at {}",
+                    derived.display()
+                );
+            }
+            vec![derived.to_string_lossy().into_owned()]
+        } else {
+            files
+                .iter()
+                .map(|f| f.to_string_lossy().into_owned())
+                .collect()
+        };
+
+        if !spec.delegated.is_empty() {
+            println!(
+                "sbxw  handing {} to sbx — sbxw does not read those",
+                spec.delegated.join(", ")
+            );
+        }
+        sbx::env_create(&create_args)?;
+
+        // The name is pinned into the document precisely so this holds. If it
+        // doesn't, stopping here is the only safe move: the provisioning pass
+        // below creates a sandbox when it can't find one, and it would use
+        // `sbx create` — a *second* sandbox, without the secrets, bindings and
+        // MCP servers the environment file just provisioned into the first.
+        if !sbx::exists(&name)? {
+            bail!(
+                "`sbx env create` reported success but no sandbox named '{name}' exists. \
+                 Check `sbx ls`: if it created one under another name, remove it and give \
+                 the environment file an explicit `name:` matching it."
+            );
+        }
+    }
+
+    // ── Everything the format cannot carry ───────────────────────────────────
+    // The ports the *sandbox* has, not the ones the file asked for. They differ
+    // whenever a busy host port was renegotiated above, and whenever the file
+    // asked for an ephemeral one — whose value only exists once sbx has
+    // published it. Getting this wrong points an `/etc/hosts` alias at a port
+    // nothing is listening on, which looks exactly like a broken dev server.
+    let published: Vec<envfile::Port> = sbx::list_ports_parsed(&name)
+        .into_iter()
+        .map(|m| envfile::Port {
+            sandbox: m.sandbox_port,
+            host: Some(m.host_port),
+            host_ip: (!m.host_ip.is_empty()).then_some(m.host_ip),
+            protocol: (!m.proto.is_empty() && m.proto != "tcp").then_some(m.proto),
+        })
+        .collect();
+    let effective = envfile::Spec {
+        ports: if published.is_empty() {
+            // Nothing to read back — an sbx that reports ports differently, or
+            // a sandbox with none. The file's own list is the best guess left.
+            spec.ports.clone()
+        } else {
+            published
+        },
+        ..spec
+    };
+
+    let (cfg, borrowed) = config_from_spec(&effective, load_config(&config)?);
+    if !borrowed.is_empty() {
+        let from = if config.exists() {
+            config.display().to_string()
+        } else {
+            "sbxw's defaults".into()
+        };
+        println!("sbxw  taken from {from}:");
+        for line in &borrowed {
+            println!("        · {line}");
+        }
+    }
+
+    // A config of its own on disk, because the web daemon is a separate process
+    // that re-reads one: it has to see the same merge this run computed, not
+    // the sbxw.toml the merge was only half of.
+    let merged_path = state_dir().join("env").join(&name).join("sbxw.toml");
+    if let Some(parent) = merged_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&merged_path, cfg.to_toml()?)
+        .with_context(|| format!("writing {}", merged_path.display()))?;
+
+    if no_web {
+        init_tracing();
+        cmd_up(
+            Some(name),
+            Some(workspace),
+            vec![],
+            merged_path,
+            true,
+            use_api_key,
+        )
+    } else {
+        cmd_up_background(
+            Some(name),
+            Some(workspace),
+            vec![],
+            merged_path,
+            use_api_key,
+            tail,
+        )
+    }
+}
+
+/// The environment files a run was built from, as one short line.
+fn display_sources(sources: &[PathBuf]) -> String {
+    sources
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// Fold an environment file's spec onto `sbxw.toml`, and say what came from
+/// where.
+///
+/// The rule you chose: **the environment file wins, `sbxw.toml` is the
+/// fallback.** It applies field by field, because the two files describe
+/// overlapping but unequal things — the format has ports and env, it has no
+/// egress allowlist, no `/etc/hosts` alias and no model. So a key the
+/// environment file doesn't mention isn't "unset", it is delegated downwards.
+///
+/// The returned report is not decoration. Two files describing one sandbox is
+/// exactly the setup where somebody edits the wrong one and watches nothing
+/// happen; printing the borrowed values at creation time is what makes that
+/// visible on the run where it matters.
+fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<String>) {
+    let mut report = Vec::new();
+
+    if spec.ports.is_empty() {
+        if !cfg.ports.is_empty() {
+            report.push(format!(
+                "ports ({}) — the environment file declares none",
+                cfg.ports
+                    .iter()
+                    .map(|p| format!("{}:{}", p.host_port, p.sandbox_port))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    } else {
+        // An alias is the one thing the format cannot carry, so it is looked up
+        // by sandbox port rather than lost: a file that publishes 4200 gets
+        // `neos.local` back if sbxw.toml called 4200 that.
+        let mut borrowed = Vec::new();
+        cfg.ports = spec
+            .ports
+            .iter()
+            .map(|p| {
+                let alias = cfg
+                    .ports
+                    .iter()
+                    .find(|c| c.sandbox_port == p.sandbox)
+                    .map(|c| c.alias.clone())
+                    .unwrap_or_default();
+                if !alias.is_empty() {
+                    borrowed.push(format!("{alias} → :{}", p.host.unwrap_or(p.sandbox)));
+                }
+                config::PortMap {
+                    alias,
+                    sandbox_port: p.sandbox,
+                    // An ephemeral port isn't known until sbx has published it;
+                    // the provisioning pass reads the real mapping back.
+                    host_port: p.host.unwrap_or(p.sandbox),
+                }
+            })
+            .collect();
+        if !borrowed.is_empty() {
+            report.push(format!("/etc/hosts aliases ({})", borrowed.join(", ")));
+        }
+    }
+
+    if !spec.env.is_empty() {
+        let overridden: Vec<&String> = spec
+            .env
+            .keys()
+            .filter(|k| cfg.env.contains_key(*k))
+            .collect();
+        if !overridden.is_empty() {
+            report.push(format!(
+                "env — the environment file overrides {}",
+                overridden
+                    .iter()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for (k, v) in &spec.env {
+            cfg.env.insert(k.clone(), v.clone());
+        }
+    }
+
+    // Kits are already on the sandbox by the time this config is used — sbx
+    // applied them at creation. Handing them to the provisioning pass anyway is
+    // deliberate: it skips the ones `sbx inspect` already lists, so this is a
+    // no-op that also repairs a sandbox whose kit went missing.
+    if !spec.kits.is_empty() {
+        cfg.kits = spec.kits.clone();
+    } else if !cfg.kits.is_empty() {
+        report.push(format!("kits ({})", cfg.kits.join(", ")));
+    }
+
+    if !cfg.network_allow.is_empty() {
+        report.push(format!(
+            "the egress allowlist ({} rules) — an environment file has no field for it",
+            cfg.network_allow.len()
+        ));
+    }
+    if !cfg.network_deny.is_empty() {
+        report.push(format!(
+            "the egress denylist ({} rules)",
+            cfg.network_deny.len()
+        ));
+    }
+    if !cfg.claude_model.is_empty() && !spec.env.contains_key("ANTHROPIC_DEFAULT_MODEL") {
+        report.push(format!(
+            "claude_model ({}) — passed as ANTHROPIC_DEFAULT_MODEL",
+            cfg.claude_model
+        ));
+    }
+    if cfg.ip_per_app {
+        report.push("ip_per_app (one loopback IP per app)".into());
+    }
+
+    (cfg, report)
+}
+
+/// Can this host port still be bound?
+///
+/// Binding and immediately dropping is racy by nature — something can take the
+/// port in the gap before sbx gets there. It is still worth doing, because the
+/// race is rare and the thing it prevents is not: an environment file whose
+/// port is already taken doesn't cost you the port, it costs you the sandbox
+/// (sbx removes it) *and* leaves the secrets it provisioned first behind.
+/// Checking first turns the common case from a failed create into a question.
+fn host_port_is_free(ip: &str, port: u16) -> bool {
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+    let addr: SocketAddr = match ip.parse() {
+        Ok(ip) => SocketAddr::new(ip, port),
+        // An interface sbxw can't parse is one it can't test; assume free and
+        // let sbx be the judge.
+        Err(_) => SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
+    };
+    TcpListener::bind(addr).is_ok()
+}
+
+/// The first free host port at or after `from`, if there is one nearby.
+///
+/// Bounded rather than open-ended: if a hundred consecutive ports are busy the
+/// answer is not the hundred-and-first, it is that something is wrong and a
+/// person should look.
+fn next_free_host_port(ip: &str, from: u16) -> Option<u16> {
+    (from..from.saturating_add(100)).find(|p| host_port_is_free(ip, *p))
+}
+
+/// Settle the host ports an environment file asks for, before sbx is called.
+///
+/// Returns the ports to use and whether anything moved. A port with no `host`
+/// is left alone — that is the file asking for an ephemeral port, which cannot
+/// collide. A UDP mapping is left alone too: sbxw tests with a TCP bind, and a
+/// test that cannot be performed must not be reported as a result.
+///
+/// With a terminal, each conflict is a question with the next free port as the
+/// default. Without one — a daemon, CI, a hook — it takes that port and says
+/// so, because the alternative is a run that stops for an answer nobody is
+/// there to give.
+fn negotiate_ports(
+    ports: &[envfile::Port],
+    interactive: bool,
+) -> Result<(Vec<envfile::Port>, bool)> {
+    use std::io::{IsTerminal, Write as _};
+
+    let mut out = Vec::with_capacity(ports.len());
+    let mut moved = false;
+    for p in ports {
+        let Some(want) = p.host else {
+            out.push(p.clone());
+            continue;
+        };
+        let ip = p.host_ip.as_deref().unwrap_or("127.0.0.1");
+        let udp = p.protocol.as_deref().is_some_and(|s| s.starts_with("udp"));
+        if udp || host_port_is_free(ip, want) {
+            out.push(p.clone());
+            continue;
+        }
+
+        let suggestion = next_free_host_port(ip, want.saturating_add(1));
+        let chosen = if interactive && std::io::stdin().is_terminal() {
+            let hint = suggestion.map(|s| s.to_string()).unwrap_or_default();
+            eprint!(
+                "  ! host port {want} ({ip}) is busy — port for sandbox:{} [{hint}] ",
+                p.sandbox
+            );
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer)?;
+            match answer.trim() {
+                "" => suggestion.context(
+                    "no free host port near the one in the environment file, and no answer given",
+                )?,
+                other => other
+                    .parse::<u16>()
+                    .with_context(|| format!("'{other}' is not a port number"))?,
+            }
+        } else {
+            let s = suggestion.with_context(|| {
+                format!("host port {want} is busy and no free port was found near it")
+            })?;
+            eprintln!(
+                "  ! host port {want} ({ip}) is busy — using {s} for sandbox:{}",
+                p.sandbox
+            );
+            s
+        };
+
+        moved |= chosen != want;
+        out.push(envfile::Port {
+            host: Some(chosen),
+            ..p.clone()
+        });
+    }
+    Ok((out, moved))
+}
+
+/// The variable an exported environment file routes its workspace through, so
+/// the same committed file works on machines that keep their repositories in
+/// different places.
+///
+/// `install.sh` offers to set it; nothing breaks if nobody does, because every
+/// reference is written with a fallback (see `portable_workspace`).
+pub(crate) const PROJECTS_ROOT_ENV: &str = "SBXW_PROJECTS_ROOT";
+
+/// The developer's repository root, if they have declared one and this
+/// workspace is actually under it.
+///
+/// The second half matters: a stale or unrelated `SBXW_PROJECTS_ROOT` must not
+/// produce `${SBXW_PROJECTS_ROOT}/../../elsewhere/neos`. If the variable
+/// doesn't contain this workspace it is simply not the right root for it, and
+/// the workspace's own parent is used instead.
+fn projects_root_for(workspace: &Path) -> Option<PathBuf> {
+    let raw = std::env::var(PROJECTS_ROOT_ENV).ok()?;
+    let root = PathBuf::from(raw.trim());
+    if root.as_os_str().is_empty() {
+        return None;
+    }
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    workspace.starts_with(&root).then_some(root)
+}
+
+/// The `workspace:` value for an exported file: the path routed through
+/// `SBXW_PROJECTS_ROOT`, with the exporting machine's own root as the fallback.
+///
+/// ```text
+/// ${SBXW_PROJECTS_ROOT:-/Users/thomas/Downloads}/neos
+/// ```
+///
+/// Both halves earn their place. The **variable** is what makes the file
+/// portable: a colleague who keeps repositories somewhere else exports it once
+/// and every project's file resolves. The **fallback** is what stops the file
+/// from being a trap: it works on the exporting machine, and on a colleague's
+/// too if they happen to use the same layout, so nothing has to be configured
+/// before the file will run at all. The price is one absolute path from the
+/// exporter's machine sitting in a committed file — pass a root that contains
+/// no personal detail, or accept it as the cost of a file that works.
+///
+/// The suffix is everything below the root, so a repository nested two levels
+/// down keeps its shape.
+fn portable_workspace(workspace: &Path) -> String {
+    portable_workspace_with(workspace, None)
+}
+
+/// `portable_workspace`, with the root supplied rather than discovered — the
+/// web UI lets you edit it, and an edit that only changed the *fallback* while
+/// the suffix stayed wrong would be a confusing half-measure.
+///
+/// A root that doesn't contain the workspace is refused the same way the
+/// environment variable is: it cannot be the root *of this workspace*, and
+/// honouring it would emit `${ROOT}/../../elsewhere/neos`.
+fn portable_workspace_with(workspace: &Path, root: Option<&Path>) -> String {
+    let root = root
+        .filter(|r| workspace.starts_with(r))
+        .map(Path::to_path_buf)
+        .or_else(|| projects_root_for(workspace))
+        .or_else(|| workspace.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| workspace.to_path_buf());
+    let suffix = workspace
+        .strip_prefix(&root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let root = root.to_string_lossy();
+    if suffix.is_empty() {
+        format!("${{{PROJECTS_ROOT_ENV}:-{root}}}")
+    } else {
+        format!("${{{PROJECTS_ROOT_ENV}:-{root}}}/{suffix}")
+    }
+}
+
+/// Express one resolved path the way the environment file should carry it:
+/// relative to the file's own directory when it sits under it, absolute when it
+/// doesn't.
+///
+/// Relative is what makes the file portable — `./neos` means the same thing on
+/// a colleague's machine, `/Users/you/dev/neos` does not. But sbxw's inputs are
+/// absolute by the time they get here and some of them genuinely live elsewhere
+/// (a kit checked out beside the project, a read-only mount from another
+/// repository), and an absolute path that works is better than a `../../..`
+/// chain that only works from one directory.
+fn path_for_env_file(base: &Path, target: &Path) -> String {
+    match target.strip_prefix(base) {
+        // `./x` rather than `x`: sbx resolves relative paths against the file's
+        // directory either way, but the leading `./` is what tells a *reader*
+        // this is a path and not a registry reference.
+        Ok(rel) if rel.as_os_str().is_empty() => ".".into(),
+        Ok(rel) => format!("./{}", rel.to_string_lossy()),
+        Err(_) => target.to_string_lossy().into_owned(),
+    }
+}
+
+/// `sbxw env export` — sbxw.toml, rendered as the `.sbxenv.yaml` sbx 0.39 reads.
+///
+/// One-way and non-authoritative: sbxw keeps provisioning from sbxw.toml, and
+/// this exists so a contributor with plain `sbx` (or a CI runner) can bring up
+/// the same sandbox. `crate::envfile` has the reasons sbxw doesn't simply run on
+/// environment files instead.
+fn cmd_env_export(
+    path: Option<PathBuf>,
+    name: Option<String>,
+    config: PathBuf,
+    out: Option<PathBuf>,
+    force: bool,
+) -> Result<()> {
+    // Deliberately no `assert_available` here: exporting needs no sbx at all.
+    // The file is read on whatever machine runs it, and writing one on a host
+    // without sbx — or with an older one — is a perfectly good reason to run
+    // this command.
+    let cfg = load_config(&config)?;
+
+    let workspace = match path {
+        Some(p) => p,
+        None => std::env::current_dir()?,
+    };
+    let workspace = std::fs::canonicalize(&workspace)
+        .with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;
+
+    let name = name.unwrap_or_else(|| derive_sandbox_name(&workspace));
+    if !is_valid_sandbox_name(&name) {
+        bail!(INVALID_NAME_MSG);
+    }
+
+    let dest = out.unwrap_or_else(|| default_env_export_path(&workspace));
+    let to_stdout = dest.as_os_str() == "-";
+    // Paths inside the file are relative to the file's directory, so that has to
+    // be settled before anything is rendered.
+    let base = if to_stdout {
+        default_env_export_path(&workspace)
+            .parent()
+            .unwrap_or(&workspace)
+            .to_path_buf()
+    } else {
+        config_dir_of(&dest)?
+    };
+
+    let ports = merged_ports(&cfg, &[]);
+    let file = envfile::EnvFile {
+        name,
+        agent: "claude".into(),
+        workspace: portable_workspace(&workspace),
+        // `--ro` mounts are a flag on `sbxw up`, not a config key, so there is
+        // nothing here to read them from; a colleague adds them to the file (or
+        // you re-run with them once and copy the block).
+        additional: vec![],
+        kits: cfg
+            .kits
+            .iter()
+            .map(|k| {
+                let p = Path::new(k);
+                if p.is_absolute() {
+                    path_for_env_file(&base, p)
+                } else {
+                    // A registry or git reference — `load_config` left it alone
+                    // precisely because it is not a path, so neither do we.
+                    k.clone()
+                }
+            })
+            .collect(),
+        env: cfg.effective_env(),
+        ports: ports
+            .iter()
+            .enumerate()
+            .map(|(i, (host, sbox, _))| envfile::Port {
+                sandbox: *sbox,
+                host: Some(*host),
+                host_ip: cfg.ip_per_app.then(|| host_ip_for(true, i)),
+                protocol: None,
+            })
+            .collect(),
+        notes: env_export_notes(&cfg, &ports),
+    };
+
+    let rendered = file.render(&format!("sbxw {}", env!("CARGO_PKG_VERSION")));
+
+    if to_stdout {
+        print!("{rendered}");
+        return Ok(());
+    }
+    if dest.exists() && !force {
+        bail!(
+            "{} already exists — pass --force to overwrite it",
+            dest.display()
+        );
+    }
+    if dest.starts_with(&workspace) {
+        eprintln!(
+            "sbxw  warning: {} is inside the workspace, so the agent can edit the file that \
+             configures its own next sandbox. sbx recommends keeping it outside.",
+            dest.display()
+        );
+    }
+    std::fs::write(&dest, &rendered).with_context(|| format!("writing {}", dest.display()))?;
+    println!("wrote {}", dest.display());
+    println!(
+        "run it with:  cd {} && sbx env run",
+        dest.parent().unwrap_or(Path::new(".")).display()
+    );
     Ok(())
+}
+
+/// One rendered environment file, plus what the UI needs to explain it.
+pub(crate) struct RenderedEnvFile {
+    pub yaml: String,
+    pub workspace: String,
+    /// Where `save` would write it: beside the workspace, never inside it.
+    pub dest: String,
+    /// The root the `workspace:` expression is expressed against.
+    pub projects_root: String,
+    pub root_var: &'static str,
+    /// True when that root came from the environment rather than being guessed
+    /// from the workspace's parent.
+    pub root_from_env: bool,
+}
+
+/// Render the environment file for an **existing sandbox**.
+///
+/// The CLI export reads `sbxw.toml` and reports the ports the config asks for.
+/// This reads the ports the sandbox actually has, from `sbx ports`, which is
+/// the better answer whenever the two differ — a port added from the web UI, a
+/// host port that moved because the one in the config was busy. The aliases are
+/// still `sbxw.toml`'s, because sbx has no field for them and nothing else
+/// knows that 4200 is called `neos.local`.
+pub(crate) fn render_env_file_for(
+    name: &str,
+    cfg: &Config,
+    root_override: Option<&Path>,
+) -> Result<RenderedEnvFile> {
+    let workspace = workspace_for(name).with_context(|| {
+        format!(
+            "sbxw doesn't know which workspace '{name}' was created on — bring it up once \
+             with sbxw and the record is written"
+        )
+    })?;
+
+    // Live mappings first; the config's list is the fallback for a sandbox that
+    // is stopped (nothing published) or an sbx whose `ports` output we can't parse.
+    let live = sbx::list_ports_parsed(name);
+    let ports: Vec<envfile::Port> = if live.is_empty() {
+        merged_ports(cfg, &[])
+            .iter()
+            .enumerate()
+            .map(|(i, (host, sbox, _))| envfile::Port {
+                sandbox: *sbox,
+                host: Some(*host),
+                host_ip: cfg.ip_per_app.then(|| host_ip_for(true, i)),
+                protocol: None,
+            })
+            .collect()
+    } else {
+        live.iter()
+            .map(|m| envfile::Port {
+                sandbox: m.sandbox_port,
+                host: Some(m.host_port),
+                // Loopback is sbx's own default; writing it down adds noise.
+                host_ip: (m.host_ip != "127.0.0.1" && !m.host_ip.is_empty())
+                    .then(|| m.host_ip.clone()),
+                protocol: (m.proto != "tcp" && !m.proto.is_empty()).then(|| m.proto.clone()),
+            })
+            .collect()
+    };
+
+    let triples: Vec<PortTriple> = ports
+        .iter()
+        .map(|p| {
+            let alias = cfg
+                .ports
+                .iter()
+                .find(|c| c.sandbox_port == p.sandbox)
+                .map(|c| c.alias.clone())
+                .unwrap_or_default();
+            (p.host.unwrap_or(p.sandbox), p.sandbox, alias)
+        })
+        .collect();
+
+    let root = root_override
+        .filter(|r| workspace.starts_with(r))
+        .map(Path::to_path_buf)
+        .or_else(|| projects_root_for(&workspace));
+    let root_from_env = root_override.is_none() && root.is_some();
+    let effective_root = root
+        .clone()
+        .or_else(|| workspace.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| workspace.clone());
+
+    let file = envfile::EnvFile {
+        name: name.to_string(),
+        agent: "claude".into(),
+        workspace: portable_workspace_with(&workspace, root.as_deref()),
+        additional: vec![],
+        kits: cfg
+            .kits
+            .iter()
+            .map(|k| {
+                let p = Path::new(k);
+                if p.is_absolute() {
+                    portable_workspace_with(p, root.as_deref())
+                } else {
+                    k.clone()
+                }
+            })
+            .collect(),
+        env: cfg.effective_env(),
+        ports,
+        notes: env_export_notes(cfg, &triples),
+    };
+
+    Ok(RenderedEnvFile {
+        yaml: file.render(&format!("sbxw {}", env!("CARGO_PKG_VERSION"))),
+        workspace: workspace.to_string_lossy().into_owned(),
+        dest: default_env_export_path(&workspace)
+            .to_string_lossy()
+            .into_owned(),
+        projects_root: effective_root.to_string_lossy().into_owned(),
+        root_var: PROJECTS_ROOT_ENV,
+        root_from_env,
+    })
+}
+
+/// The header comments an exported file carries: every part of sbxw's pipeline
+/// that has no field in the format, with the command that reproduces it.
+///
+/// This is the honest half of the export. An environment file that silently
+/// dropped the egress allowlist would describe a sandbox with `**` egress —
+/// a *more* permissive one than sbxw builds, which is the worst direction for
+/// an omission to go in.
+fn env_export_notes(cfg: &Config, ports: &[PortTriple]) -> Vec<String> {
+    let mut notes = Vec::new();
+
+    if !cfg.network_allow.is_empty() || !cfg.network_deny.is_empty() {
+        let mut note = String::from(
+            "the egress allowlist — policy is `sbx policy`, not a file field.\n\
+             Run once per sandbox, on the host:",
+        );
+        if !cfg.network_allow.is_empty() {
+            note.push_str(&format!(
+                "\n  sbx policy allow network \"{}\"",
+                cfg.network_allow.join(",")
+            ));
+        }
+        if !cfg.network_deny.is_empty() {
+            note.push_str(&format!(
+                "\n  sbx policy deny network \"{}\"",
+                cfg.network_deny.join(",")
+            ));
+        }
+        note.push_str(
+            "\nWithout them the sandbox falls back to the host's default policy,\n\
+             which may be broader than what sbxw would have given it.",
+        );
+        notes.push(note);
+    }
+
+    notes.push(
+        "OAuth credentials. sbxw injects CLAUDE_CODE_OAUTH_TOKEN as a kit at creation;\n\
+         `sbx env run` does not. Run /login inside the sandbox, or add a secrets:\n\
+         entry whose `command:` resolves the token on the host."
+            .into(),
+    );
+
+    let aliases: Vec<String> = ports
+        .iter()
+        .filter(|(_, _, a)| !a.is_empty())
+        .map(|(host, _, a)| format!("{a}:{host}"))
+        .collect();
+    if !aliases.is_empty() {
+        notes.push(format!(
+            "the /etc/hosts aliases ({}) — sbxw writes those on the host.\n\
+             The ports below are published either way; only the names are missing.",
+            aliases.join(", ")
+        ));
+    }
+
+    if !cfg.share_skills {
+        notes.push(
+            "share_skills = false (`sbx create --no-share-skills`). An environment file\n\
+             has no field for it, so `sbx env run` mounts the shared skill store."
+                .into(),
+        );
+    }
+
+    notes.push(
+        "the browser terminal, the artifacts panel and the network-policy panel.\n\
+         Those are sbxw itself — `sbx env run` attaches the agent to your terminal."
+            .into(),
+    );
+
+    notes
+}
+
+/// `sbxw prune` — `sbx prune`, plus the two things on disk that sbx doesn't
+/// know a sandbox owned.
+///
+/// A sandbox sbxw created leaves a credentials kit behind (deliberately: sbx
+/// stores its *path* and re-resolves it on every container swap — see
+/// `oauth_kit_dir`), and a `sbxw chat` sandbox also owns a throwaway workspace
+/// directory. `sbxw rm` cleans up both because it knows the names it removed.
+/// `sbx prune` chooses its own, so this reads the sandbox list either side of
+/// the call and cleans up whatever disappeared — a name-set difference rather
+/// than parsing prune's listing, so it survives any change to that output.
+///
+/// The preview is a real `--dry-run` call rather than sbxw's own guess at which
+/// sandboxes qualify: `since` is sbx's duration parser and sbx's stop-time
+/// bookkeeping, and a second opinion here could only ever disagree with what
+/// the next call actually removes.
+fn cmd_prune(since: Option<&str>, dry_run: bool, yes: bool) -> Result<()> {
+    use std::io::IsTerminal;
+
+    let preview = sbx::prune(since, true)?;
+    let preview = preview.trim_end();
+    if !preview.is_empty() {
+        println!("{preview}");
+    }
+    if dry_run {
+        return Ok(());
+    }
+    // sbx tells us nothing machine-readable about "how many", so the emptiness
+    // check is on the names we can see for ourselves.
+    let before: Vec<String> = sbx::list_sandboxes().into_iter().map(|s| s.name).collect();
+
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            bail!(
+                "`sbxw prune` removes sandboxes permanently and there is no terminal to \
+                 confirm on — re-run with --yes (or --dry-run to only look)"
+            );
+        }
+        eprint!("remove the stopped sandboxes listed above? [y/N] ");
+        use std::io::Write as _;
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes") {
+            println!("nothing removed");
+            return Ok(());
+        }
+    }
+
+    let out = sbx::prune(since, false)?;
+    let out = out.trim_end();
+    if !out.is_empty() {
+        println!("{out}");
+    }
+
+    let after: std::collections::HashSet<String> =
+        sbx::list_sandboxes().into_iter().map(|s| s.name).collect();
+    for gone in before.iter().filter(|n| !after.contains(*n)) {
+        forget_oauth_kit(gone);
+        if let Some(dir) = chat_workspace_of(gone) {
+            if let Err(e) = std::fs::remove_dir_all(&dir) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "sbxw  warning: could not remove chat workspace {}: {e:#}",
+                        dir.display()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The directory a relative path in `sbxw.toml` is relative *to* — the config
+/// file's own, not the current one, so `sbxw up -c ../other/sbxw.toml` resolves
+/// that project's kits rather than this shell's.
+fn config_dir_of(config: &Path) -> Result<PathBuf> {
+    let abs = if config.is_absolute() {
+        config.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(config)
+    };
+    Ok(abs.parent().unwrap_or(&abs).to_path_buf())
+}
+
+/// Resolve one `kits = [...]` entry against the config's directory — when, and
+/// only when, it is a local path.
+///
+/// A kit reference is four things at once (sbx's own list: a local directory, a
+/// ZIP, an OCI registry reference, a `git+https://` / `git+ssh://` URL), and
+/// only the first two are paths. Joining the others onto the project directory
+/// turns `docker.io/sbx/playwright-kit:latest` into
+/// `/home/you/project/docker.io/sbx/playwright-kit:latest`, which sbx then
+/// reports as a missing directory — the reference was fine, sbxw broke it.
+///
+/// So: absolute and URL-shaped references pass through; `./x` and `../x` are
+/// unambiguously paths and always resolve; a bare `x/y` resolves *only if the
+/// result exists on disk*, and is otherwise left for sbx to read as a registry
+/// reference. That last rule is the one that matters, because a bare name is
+/// exactly where a directory and an OCI ref look alike.
+fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
+    let p = Path::new(&kit);
+    if p.is_absolute() || kit.contains("://") {
+        return kit;
+    }
+    let joined = config_dir.join(p);
+    if kit.starts_with("./") || kit.starts_with("../") || joined.exists() {
+        // `components()` folds away the `.` that `join("./x")` leaves in the
+        // middle of the path. Cosmetic for sbx, which resolves it either way,
+        // but these paths are also what `sbxw env export` writes into a file a
+        // person reads — and `./neos/./local-kit` reads like a bug.
+        return joined
+            .components()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned();
+    }
+    kit
+}
+
+/// `Config::load_or_default` plus the path resolution that every entry point
+/// which provisions a sandbox needs.
+///
+/// It lives here rather than in `Config::load_or_default` because resolution
+/// needs the config file's directory, and a `Config` doesn't remember where it
+/// came from. It used to be inline in `cmd_up`, which meant `sbxw web` and the
+/// web-only daemon — both of which create sandboxes — read the *unresolved*
+/// list, so a relative kit path worked or failed depending on which command you
+/// happened to type.
+fn load_config(config: &Path) -> Result<Config> {
+    let mut cfg = Config::load_or_default(config)?;
+    let dir = config_dir_of(config)?;
+    cfg.kits = cfg
+        .kits
+        .into_iter()
+        .map(|k| resolve_kit_ref(&dir, k))
+        .collect();
+    // `--env-file` is only ever a file, so it has none of the ambiguity above.
+    cfg.env_files = cfg
+        .env_files
+        .into_iter()
+        .map(|f| {
+            let p = Path::new(&f);
+            if p.is_absolute() {
+                f
+            } else {
+                dir.join(p).to_string_lossy().into_owned()
+            }
+        })
+        .collect();
+    Ok(cfg)
 }
 
 fn cmd_up(
@@ -2330,7 +3662,7 @@ fn cmd_up(
     use_api_key: bool,
 ) -> Result<()> {
     sbx::assert_available()?;
-    let cfg = Config::load_or_default(&config)?;
+    let cfg = load_config(&config)?;
 
     // Web-only mode: no sandbox name given. Just start the web daemon so the
     // user can browse / create / attach sandboxes from the UI. Nothing is
@@ -2362,28 +3694,6 @@ fn cmd_up(
         .collect::<std::io::Result<_>>()
         .context("a --ro path does not exist")?;
 
-    // Resolve kit paths relative to the config file's directory so that
-    // relative paths in sbxw.toml work regardless of where sbxw was invoked.
-    let config_abs = if config.is_absolute() {
-        config.clone()
-    } else {
-        std::env::current_dir()?.join(&config)
-    };
-    let config_dir = config_abs.parent().unwrap_or(config_abs.as_path());
-    let mut cfg = cfg;
-    cfg.kits = cfg
-        .kits
-        .into_iter()
-        .map(|k| {
-            let p = std::path::Path::new(&k);
-            if p.is_absolute() {
-                k
-            } else {
-                config_dir.join(p).to_string_lossy().into_owned()
-            }
-        })
-        .collect();
-
     // The port-publishing thread `provision_sandbox` leaves behind reports long
     // after the agent has claimed the terminal, so in foreground mode it has to
     // be muzzled *before* provisioning starts, not after.
@@ -2400,7 +3710,7 @@ fn cmd_up(
              port publishing continues in the background — anything it reports \
              is shown when the agent exits."
         );
-        let attached = run_agent_foreground(&name);
+        let attached = run_agent_foreground(&name, &cfg);
         flush_provisioning_output();
         attached
     } else {
@@ -2413,7 +3723,7 @@ fn cmd_up(
 /// We re-attach to the existing sandbox by name. The positional-name form
 /// (`sbx run <name>`) is deprecated as of the latest sbx release, so we use
 /// the `--name` flag, which re-attaches independent of the working directory.
-/// Since sbx 0.35 this also works for sandboxes created with a custom --kit
+/// This also works for sandboxes created with a custom --kit
 /// (like sbxw's OAuth kit) without re-passing the kit reference.
 /// Does the user's SSH config appear to carry sbx's managed `*.sbx` block?
 ///
@@ -2470,9 +3780,12 @@ fn cmd_ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> 
     anyhow::bail!("`ssh {host}` exited with {status}");
 }
 
-fn run_agent_foreground(name: &str) -> Result<()> {
+fn run_agent_foreground(name: &str, cfg: &Config) -> Result<()> {
     use std::process::Command;
-    let status = Command::new("sbx").args(["run", "--name", name]).status()?;
+    // Same argv as the web terminal's agent pane — including sbxw.toml's env,
+    // which `sbx run` applies to the agent session. See `sbx::run_attach_args`.
+    let args = sbx::run_attach_args(name, &cfg.env_pairs(), &cfg.env_files);
+    let status = Command::new("sbx").args(&args).status()?;
     if !status.success() {
         anyhow::bail!("`sbx run --name {name}` exited with {status}");
     }
@@ -2514,7 +3827,7 @@ fn oauth_credentials_json(token: &str, subscription: &str) -> String {
 /// Where the OAuth mixin kit for `name` lives on the host.
 ///
 /// Stable per sandbox, and under `state_dir()` rather than the OS temp dir,
-/// because **sbx keeps the reference, not a copy**. Since 0.38 a container swap
+/// because **sbx keeps the reference, not a copy**. A container swap
 /// (`sbx kit add`) recomposes the sandbox from its template, which re-resolves
 /// every kit applied before it *by its original path*. A kit directory that has
 /// been deleted — or sat in a temp dir a reboot cleared — fails that resolution
@@ -2538,7 +3851,7 @@ fn oauth_kit_dir(name: &str) -> PathBuf {
 /// Used for new sandboxes (`--kit` at create time) and for existing *stopped*
 /// ones (`sbx kit add`). Running sandboxes get the credentials file written
 /// directly over `sbx exec` instead (see `sbx::write_oauth_credentials`),
-/// because `sbx kit add` recreates the container since sbx 0.35.
+/// because `sbx kit add` recreates the container.
 ///
 /// Rewriting in place is what keeps a re-resolve honest: the path sbx recorded
 /// stays valid, and picks up the current token rather than the one the sandbox
@@ -2582,16 +3895,13 @@ fn restrict_permissions(path: &std::path::Path, mode: u32) {
     let _ = (path, mode);
 }
 
-/// The OAuth mixin's spec.yaml, in whichever kit grammar the host's sbx reads.
+/// The OAuth mixin's spec.yaml, in kit spec **v2**.
 ///
-/// sbx 0.38 introduced **spec v2**, which restructures exactly the two sections
-/// this kit uses: `network.allowedDomains` became `permissions.network.allow`
-/// and `commands.initFiles` became `setup.files`. The v2 loader *rejects* v1
-/// field names rather than tolerating them, and the v1 loader knows nothing of
-/// the v2 ones, so the two spellings cannot be merged into one hedged document
-/// — the version has to pick one. v1 still loads on 0.38 through a legacy path,
-/// which is why an unreadable `sbx version` falls back to it: it is the grammar
-/// that works on both.
+/// v2 is the only grammar sbxw emits. It restructures exactly the two sections
+/// this kit uses — `network.allowedDomains` became `permissions.network.allow`,
+/// `commands.initFiles` became `setup.files` — and its loader *rejects* v1
+/// field names rather than tolerating them, so a spec has to commit to one.
+/// sbxw used to pick per host; with the floor at 0.39 there is one answer.
 fn oauth_kit_spec(credentials_json: &str) -> String {
     oauth_kit_spec_inner(Some(credentials_json))
 }
@@ -2604,46 +3914,24 @@ fn oauth_kit_spec_without_credentials() -> String {
 }
 
 fn oauth_kit_spec_inner(credentials_json: Option<&str>) -> String {
-    let header = "kind: mixin\n\
-                  name: claude-oauth\n\
-                  description: Injects OAuth credentials for Claude Code\n\n";
-
-    if sbx::version_at_least(sbx::KIT_SPEC_V2_SINCE) {
-        let files = credentials_json.map_or_else(String::new, |creds| {
-            format!(
-                "\nsetup:\n\
-                 \x20 files:\n\
-                 \x20   - path: /home/agent/.claude/.credentials.json\n\
-                 \x20     content: '{creds}'\n\
-                 \x20     mode: \"0600\"\n"
-            )
-        });
-        return format!(
-            "schemaVersion: \"2\"\n\
-             {header}\
-             permissions:\n\
-             \x20 network:\n\
-             \x20   allow:\n\
-             \x20     - claude.ai\n\
-             {files}"
-        );
-    }
-
     let files = credentials_json.map_or_else(String::new, |creds| {
         format!(
-            "\ncommands:\n\
-             \x20 initFiles:\n\
+            "\nsetup:\n\
+             \x20 files:\n\
              \x20   - path: /home/agent/.claude/.credentials.json\n\
              \x20     content: '{creds}'\n\
              \x20     mode: \"0600\"\n"
         )
     });
     format!(
-        "schemaVersion: \"1\"\n\
-         {header}\
-         network:\n\
-         \x20 allowedDomains:\n\
-         \x20   - claude.ai\n\
+        "schemaVersion: \"2\"\n\
+         kind: mixin\n\
+         name: claude-oauth\n\
+         description: Injects OAuth credentials for Claude Code\n\n\
+         permissions:\n\
+         \x20 network:\n\
+         \x20   allow:\n\
+         \x20     - claude.ai\n\
          {files}"
     )
 }
@@ -2799,7 +4087,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The regression 0.38 opened: `inspect` began reporting custom secrets, so
+    /// The trap `inspect` sets: it also reports custom secrets, so
     /// a secret named after a kit made sbxw skip a kit it had never applied.
     #[test]
     fn a_secret_named_like_a_kit_no_longer_passes_for_the_kit() {
@@ -2849,6 +4137,264 @@ mod tests {
         assert!(format!("{err:#}").contains("failed to apply network allowlist"));
     }
 
+    /// The workspace goes through a variable *with* a fallback: the variable
+    /// is what makes a committed file portable, the fallback is what stops it
+    /// from being a trap on a machine where nobody set one.
+    #[test]
+    fn a_portable_workspace_keeps_the_suffix_below_the_root() {
+        let ws = Path::new("/home/you/dev/acme/neos");
+        assert_eq!(
+            portable_workspace_with(ws, Some(Path::new("/home/you/dev"))),
+            "${SBXW_PROJECTS_ROOT:-/home/you/dev}/acme/neos"
+        );
+        // No root given: the workspace's own parent, which always resolves.
+        assert_eq!(
+            portable_workspace_with(ws, None),
+            "${SBXW_PROJECTS_ROOT:-/home/you/dev/acme}/neos"
+        );
+        // A root that doesn't contain the workspace cannot be its root, and
+        // honouring it would emit `${ROOT}/../../elsewhere`.
+        assert_eq!(
+            portable_workspace_with(ws, Some(Path::new("/opt/other"))),
+            "${SBXW_PROJECTS_ROOT:-/home/you/dev/acme}/neos"
+        );
+    }
+
+    /// A busy host port is renegotiated *before* sbx is called. Getting this
+    /// wrong doesn't cost a port, it costs the sandbox: sbx removes the one it
+    /// was creating and leaves the secrets it provisioned first behind.
+    #[test]
+    fn a_busy_host_port_is_moved_and_a_free_one_is_left_alone() {
+        use std::net::TcpListener;
+        let held = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let busy = held.local_addr().unwrap().port();
+
+        let ports = vec![
+            envfile::Port {
+                sandbox: 4200,
+                host: Some(busy),
+                host_ip: None,
+                protocol: None,
+            },
+            // No host port: the file asked for an ephemeral one, which cannot
+            // collide and must not be touched.
+            envfile::Port {
+                sandbox: 8000,
+                host: None,
+                host_ip: None,
+                protocol: None,
+            },
+        ];
+        // `false` = non-interactive, which is also what a daemon or CI gets.
+        let (out, moved) = negotiate_ports(&ports, false).expect("negotiate");
+
+        assert!(moved, "the busy port was reported as moved");
+        assert_ne!(out[0].host, Some(busy), "it actually moved");
+        assert!(
+            out[0].host.unwrap() > busy,
+            "to a port after the one asked for"
+        );
+        assert_eq!(out[0].sandbox, 4200, "the sandbox port is not negotiable");
+        assert_eq!(out[1].host, None, "an ephemeral port stays ephemeral");
+
+        drop(held);
+        let (again, moved) = negotiate_ports(&ports, false).expect("negotiate");
+        assert!(!moved, "nothing moves once the port is free");
+        assert_eq!(again[0].host, Some(busy));
+    }
+
+    /// A UDP mapping can't be tested with a TCP bind, and a test that cannot be
+    /// performed must not be reported as a result.
+    #[test]
+    fn a_udp_mapping_is_left_for_sbx_to_judge() {
+        use std::net::TcpListener;
+        let held = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let busy = held.local_addr().unwrap().port();
+        let ports = vec![envfile::Port {
+            sandbox: 51820,
+            host: Some(busy),
+            host_ip: None,
+            protocol: Some("udp".into()),
+        }];
+        let (out, moved) = negotiate_ports(&ports, false).expect("negotiate");
+        assert!(!moved);
+        assert_eq!(out[0].host, Some(busy));
+    }
+
+    /// Two files describing one sandbox is exactly where somebody edits the
+    /// wrong one and watches nothing happen. What was borrowed gets printed.
+    #[test]
+    fn the_environment_file_wins_and_sbxw_toml_fills_the_gaps() {
+        let base = Config {
+            network_allow: vec!["github.com".into()],
+            claude_model: "claude-sonnet-5".into(),
+            ports: vec![config::PortMap {
+                alias: "neos.local".into(),
+                sandbox_port: 4200,
+                host_port: 4200,
+            }],
+            env: std::collections::BTreeMap::from([
+                ("NODE_ENV".into(), "development".into()),
+                ("ONLY_TOML".into(), "kept".into()),
+            ]),
+            ..Config::default()
+        };
+        let spec = envfile::Spec {
+            ports: vec![envfile::Port {
+                sandbox: 4200,
+                host: Some(4201),
+                host_ip: None,
+                protocol: None,
+            }],
+            env: std::collections::BTreeMap::from([("NODE_ENV".into(), "test".into())]),
+            ..Default::default()
+        };
+
+        let (cfg, report) = config_from_spec(&spec, base);
+
+        // The file's port wins…
+        assert_eq!(cfg.ports.len(), 1);
+        assert_eq!(cfg.ports[0].host_port, 4201);
+        // …but keeps the alias, which the format has no field for. Pointing it
+        // at 4200 would name a port nothing is listening on.
+        assert_eq!(cfg.ports[0].alias, "neos.local");
+        assert_eq!(cfg.env.get("NODE_ENV").map(String::as_str), Some("test"));
+        assert_eq!(cfg.env.get("ONLY_TOML").map(String::as_str), Some("kept"));
+
+        let report = report.join("\n");
+        assert!(report.contains("neos.local → :4201"), "{report}");
+        assert!(report.contains("egress allowlist"), "{report}");
+        assert!(report.contains("claude-sonnet-5"), "{report}");
+        assert!(
+            report.contains("NODE_ENV"),
+            "the override is named: {report}"
+        );
+    }
+
+    /// A kit reference is four things at once, and only two of them are paths.
+    /// Joining an OCI reference onto the project directory is how
+    /// `docker.io/sbx/playwright-kit:latest` became a missing directory.
+    #[test]
+    fn only_kit_references_that_are_paths_are_resolved_against_the_config() {
+        let dir = scratch("kit-refs");
+        std::fs::create_dir_all(dir.join("assets/headroom")).unwrap();
+        let at = |s: &str| dir.join(s).to_string_lossy().into_owned();
+
+        // Registry and git references are not paths and must survive intact.
+        for r#ref in [
+            "docker.io/sbx/playwright-kit:latest",
+            "ghcr.io/owner/kit:1.0",
+            "git+https://github.com/docker/sbx-kits-contrib",
+            "git+ssh://git@github.com/owner/kit",
+        ] {
+            assert_eq!(
+                resolve_kit_ref(&dir, r#ref.to_string()),
+                r#ref,
+                "{ref} is not a path"
+            );
+        }
+
+        // An explicit relative path always resolves, existing or not — the `./`
+        // is the author saying which of the four kinds they meant. The marker
+        // has done its job by then and is folded out of the result.
+        assert_eq!(
+            resolve_kit_ref(&dir, "./assets/headroom".into()),
+            at("assets/headroom")
+        );
+        assert_eq!(
+            resolve_kit_ref(&dir, "../side/kit".into()),
+            at("../side/kit")
+        );
+
+        // A bare name resolves only when it turns out to be a real directory.
+        assert_eq!(
+            resolve_kit_ref(&dir, "assets/headroom".into()),
+            at("assets/headroom")
+        );
+        assert_eq!(
+            resolve_kit_ref(&dir, "assets/nothing-here".into()),
+            "assets/nothing-here"
+        );
+
+        // Absolute stays absolute, wherever the config happens to live.
+        let abs = at("assets/headroom");
+        assert_eq!(resolve_kit_ref(Path::new("/elsewhere"), abs.clone()), abs);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The environment file goes *beside* the workspace, never inside it: the
+    /// agent can rewrite anything it mounts, and this file decides what the next
+    /// sandbox gets.
+    #[test]
+    fn an_exported_environment_file_lands_outside_the_workspace() {
+        let dest = default_env_export_path(Path::new("/home/you/dev/neos"));
+        assert_eq!(dest, Path::new("/home/you/dev/.sbxenv.yaml"));
+        assert!(!dest.starts_with("/home/you/dev/neos"));
+    }
+
+    /// Paths in the file are relative when that keeps them portable, and
+    /// absolute when relative would be a lie.
+    #[test]
+    fn env_file_paths_are_relative_where_relative_still_means_the_same_thing() {
+        let base = Path::new("/home/you/dev");
+        assert_eq!(
+            path_for_env_file(base, Path::new("/home/you/dev/neos")),
+            "./neos"
+        );
+        assert_eq!(
+            path_for_env_file(base, Path::new("/home/you/dev/a/b")),
+            "./a/b"
+        );
+        assert_eq!(path_for_env_file(base, base), ".");
+        // Outside the file's directory: an absolute path that works beats a
+        // `../..` chain that only works from one place.
+        assert_eq!(
+            path_for_env_file(base, Path::new("/opt/kits/headroom")),
+            "/opt/kits/headroom"
+        );
+    }
+
+    /// An export that dropped the allowlist would describe a *more* permissive
+    /// sandbox than sbxw builds, so every omission is named in the file.
+    #[test]
+    fn the_export_notes_name_what_the_format_cannot_carry() {
+        let cfg = Config {
+            network_allow: vec!["github.com".into(), "pypi.org".into()],
+            network_deny: vec!["telemetry.example".into()],
+            claude_model: "claude-sonnet-5".into(),
+            share_skills: false,
+            ..Config::default()
+        };
+        let ports = vec![(4200u16, 4200u16, "neos.local".to_string())];
+        let notes = env_export_notes(&cfg, &ports).join("\n");
+
+        assert!(notes.contains("sbx policy allow network \"github.com,pypi.org\""));
+        assert!(notes.contains("sbx policy deny network \"telemetry.example\""));
+        // The model is no longer a *note*: it rides in the file's own `env:`
+        // block as ANTHROPIC_DEFAULT_MODEL, so an export carries it for real
+        // rather than describing what the reader would have to do by hand.
+        assert!(!notes.contains("claude-sonnet-5"), "{notes}");
+        assert!(notes.contains("neos.local:4200"));
+        assert!(notes.contains("--no-share-skills"));
+        assert!(notes.contains("CLAUDE_CODE_OAUTH_TOKEN"));
+
+        // Nothing to say about a setting left at its default.
+        let quiet = env_export_notes(
+            &Config {
+                network_allow: vec![],
+                network_deny: vec![],
+                claude_model: String::new(),
+                ports: vec![],
+                ..Config::default()
+            },
+            &[],
+        )
+        .join("\n");
+        assert!(!quiet.contains("sbx policy"));
+        assert!(!quiet.contains("--no-share-skills"));
+    }
+
     /// Every kit sbxw ships declares startup commands — that is how they
     /// install anything — so `kit add` refusing them is the common case.
     #[test]
@@ -2865,8 +4411,9 @@ mod tests {
         assert!(!kit_declares_startup("ghcr.io/owner/kit:1.0"));
     }
 
-    /// A `startup:` key must be recognised in either grammar, and a kit that
-    /// merely mentions the word must not be.
+    /// A `startup:` key must be recognised in either grammar — sbxw writes v2,
+    /// but a third-party kit it reads may still be v1 — and a kit that merely
+    /// mentions the word must not be.
     #[test]
     fn startup_is_detected_in_both_kit_grammars() {
         let dir = std::env::temp_dir().join(format!("sbxw-startup-{}", std::process::id()));
@@ -2895,7 +4442,7 @@ mod tests {
         assert!(!kit_add_needs_recreate("no such sandbox: neos"));
     }
 
-    /// The real 0.38 failure: a container swap re-resolves the OAuth kit sbxw
+    /// The real failure this guards: a container swap re-resolves the OAuth kit sbxw
     /// used to delete, and the *unrelated* kit being added is what reports it.
     #[test]
     fn a_stale_oauth_kit_is_recognised_in_sbxs_own_message() {
@@ -2966,10 +4513,12 @@ mod tests {
         assert!(spec.contains("claude.ai"), "{spec}");
         assert!(!spec.contains("credentials.json"), "{spec}");
 
-        // Same grammar as the real one, whichever that is on this host.
+        // Same grammar as the credential-carrying one — they are one document
+        // with an optional section, and a mismatch would load nowhere.
         let with = oauth_kit_spec(r#"{"claudeAiOauth":{"accessToken":"t"}}"#);
         let version_line = |s: &str| s.lines().next().unwrap_or_default().to_string();
         assert_eq!(version_line(&spec), version_line(&with));
+        assert_eq!(version_line(&spec), "schemaVersion: \"2\"");
     }
 
     /// The OAuth kit's whole purpose is to still be there later.
@@ -3004,27 +4553,20 @@ mod tests {
         forget_oauth_kit(&name);
     }
 
-    /// The two kit grammars are mutually exclusive: 0.38's v2 loader rejects v1
-    /// field names, and the v1 loader knows none of v2's.
+    /// The v2 loader *rejects* v1 field names, so a spec that mixed the two
+    /// would load nowhere. sbxw emits v2 and only v2.
     #[test]
-    fn the_oauth_kit_is_written_in_one_grammar_or_the_other() {
-        // Whichever the host selects, the spec must be internally consistent.
+    fn the_oauth_kit_is_written_in_spec_v2() {
         let spec = oauth_kit_spec(r#"{"claudeAiOauth":{"accessToken":"t"}}"#);
         assert!(spec.contains("accessToken"), "{spec}");
+        assert!(spec.contains("schemaVersion: \"2\""), "{spec}");
+        assert!(spec.contains("permissions:"), "{spec}");
+        assert!(spec.contains("setup:"), "{spec}");
+        // The v1 spellings must not survive anywhere in the document.
+        assert!(!spec.contains("allowedDomains"), "{spec}");
+        assert!(!spec.contains("initFiles"), "{spec}");
 
-        if spec.contains("schemaVersion: \"2\"") {
-            assert!(spec.contains("permissions:"), "{spec}");
-            assert!(spec.contains("setup:"), "{spec}");
-            assert!(!spec.contains("allowedDomains"), "{spec}");
-            assert!(!spec.contains("initFiles"), "{spec}");
-        } else {
-            assert!(spec.contains("schemaVersion: \"1\""), "{spec}");
-            assert!(spec.contains("allowedDomains"), "{spec}");
-            assert!(spec.contains("initFiles"), "{spec}");
-            assert!(!spec.contains("permissions:"), "{spec}");
-        }
-
-        // And `kit_display_name` must still find the name in either grammar.
+        // And `kit_display_name` must still find the name in it.
         let dir = std::env::temp_dir().join(format!("sbxw-oauth-spec-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("spec.yaml"), &spec).unwrap();

@@ -81,6 +81,10 @@
     <div class="layout-switch-panel" id="layout-switch-panel" hidden></div>
   </div>
 
+  <!-- Opens the help modal below. Sits next to Refresh because the two are
+       the pair you reach for when the sidebar looks wrong. -->
+  <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart" aria-label="Help">?</button>
+
   <button id="btn-refresh" class="refresh-btn">
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
       <path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
@@ -211,6 +215,47 @@
     </p>
   </div>
 
+  <!-- ── Environment file card ──
+       Hangs off the pane bar's "Env" button, like the SSH card next to it, and
+       for the same reason: it is about the sandbox in *this* pane, and it is a
+       thing you read and copy rather than a form you fill in.
+
+       The repository root is editable here because the whole point of routing
+       the workspace through a variable is that it differs per machine — and
+       seeing the `workspace:` line change under the field is what makes that
+       setting checkable instead of guessable. -->
+  <div class="ssh-pop env-pop hidden" id="env-pop" role="dialog" aria-labelledby="env-pop-title">
+    <div class="ssh-pop-head">
+      <span class="ssh-pop-title" id="env-pop-title">Environment file</span>
+      <button class="modal-close" id="env-pop-close" aria-label="Close">✕</button>
+    </div>
+    <p class="envfile-hint">
+      This sandbox's workspace and its published ports, in the format
+      <code>sbx env run</code> reads. Commit it beside the repository so a
+      colleague brings up the same sandbox — <code>sbxw env run</code> adds the
+      policy, credentials and hooks on top.
+    </p>
+    <div class="envfile-root-row">
+      <label class="field-label" for="envfile-root" style="margin:0">Root</label>
+      <input id="envfile-root" class="port-input w-alias" type="text" spellcheck="false"
+             autocapitalize="off" autocomplete="off"
+             title="The workspace path is written relative to this, through a variable">
+      <button class="refresh-btn" id="envfile-preview" style="font-size:11px;padding:.2rem .6rem">Preview</button>
+    </div>
+    <span class="envfile-root-note" id="envfile-root-note"></span>
+    <textarea id="envfile-yaml" class="envfile-yaml" readonly spellcheck="false"
+              aria-label="Generated environment file"></textarea>
+    <div class="envfile-actions">
+      <span class="envfile-dest" id="envfile-dest"></span>
+      <label class="envfile-force">
+        <input type="checkbox" id="envfile-overwrite"> overwrite
+      </label>
+      <button class="refresh-btn" id="envfile-copy" style="font-size:11px;padding:.2rem .6rem">Copy</button>
+      <button class="btn-add-mapping" id="envfile-save">Save file</button>
+    </div>
+    <span class="ports-error-msg hidden" id="envfile-error"></span>
+  </div>
+
   <!-- ── Duplicate sandbox wizard ── -->
   <div class="modal-overlay hidden" id="dup-modal-overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dup-modal-title" style="width:360px">
@@ -314,6 +359,7 @@
           <div id="policy-modal-content">
             <div class="ports-empty-msg">Loading…</div>
           </div>
+
         </div>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
@@ -355,6 +401,67 @@
           Refresh
         </button>
         <button class="btn-cancel" id="files-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Help modal ──
+       Answers the one question sbxw cannot answer for itself: an empty sandbox
+       list. Everything in here is a *host-side* command — sbxw only ever shows
+       what the `sbx` CLI hands it, so when the CLI has nothing, so does the UI.
+       Opened from the header's "?" button or from the sidebar's empty state
+       (see /js/help.js). -->
+  <div class="modal-overlay hidden" id="help-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-modal-title" style="width:540px">
+      <div class="modal-head">
+        <span class="modal-title" id="help-modal-title">Help — no sandboxes showing?</span>
+        <button class="modal-close" id="help-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-lead">
+          The sidebar lists exactly what the <code>sbx</code> CLI reports. An empty list
+          nearly always means <code>sbx</code> has nothing to report — not that your
+          sandboxes are gone. Run the commands below on the machine sbxw itself runs on
+          (a terminal on your host, <em>not</em> a sandbox pane), then hit
+          <strong>Refresh</strong>.
+        </p>
+
+        <div class="help-step">
+          <div class="help-step-head"><span class="help-step-num">1</span> Log in to <code>sbx</code></div>
+          <p class="help-step-body">
+            An unauthenticated CLI lists no sandboxes at all. This is a one-time step per
+            machine, and it opens a browser to finish.
+          </p>
+          <div class="help-cmd">
+            <code>sbx login</code>
+            <button class="ssh-copy" data-help-copy="sbx login">Copy</button>
+          </div>
+        </div>
+
+        <div class="help-step">
+          <div class="help-step-head"><span class="help-step-num">2</span> Restart the <code>sbx</code> daemon</div>
+          <p class="help-step-body">
+            Already logged in and the list is still empty? The daemon behind the CLI is
+            wedged or not running. Start it again in the background — it keeps running
+            after you close the terminal, and writes what happened to
+            <code>~/.sbx/daemon-restart.log</code>.
+          </p>
+          <div class="help-cmd">
+            <code>nohup sbx daemon start &gt;&gt; ~/.sbx/daemon-restart.log 2&gt;&amp;1 &amp;</code>
+            <button class="ssh-copy" data-help-copy="nohup sbx daemon start &gt;&gt; ~/.sbx/daemon-restart.log 2&gt;&amp;1 &amp;">Copy</button>
+          </div>
+          <p class="help-step-body">
+            Give it a couple of seconds, press <strong>Refresh</strong>, and check
+            <code>sbx ls</code>. If that still comes back empty, the log file above says why.
+          </p>
+        </div>
+      </div>
+      <div class="modal-foot" style="justify-content:space-between;align-items:center">
+        <button id="help-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Refresh sandboxes
+        </button>
+        <button class="btn-cancel" id="help-modal-close2">Close</button>
       </div>
     </div>
   </div>

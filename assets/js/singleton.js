@@ -32,6 +32,10 @@ const SBXW_APP_SCRIPTS = [
   '/js/ports.js',
   '/js/files.js',
   '/js/ssh.js',
+  // After ssh.js: reuses its `copyField` and its `positionPopover`.
+  '/js/envfile.js',
+  // After ssh.js: the help dialog's copy buttons reuse its `copyField`.
+  '/js/help.js',
   '/js/lifecycle.js',
   '/js/main.js',
   // After main.js: the relay popup subscribes to the SSE stream that file

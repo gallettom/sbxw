@@ -1,14 +1,15 @@
-schemaVersion: "1"
+schemaVersion: "2"
 kind: mixin
 name: k8s-dev-tools
 description: Installs k3d, kubectl and skaffold into ~/.local/bin (idempotent, arch-aware).
-network:
-  allowedDomains:
-    - dl.k8s.io
-    - storage.googleapis.com
-    - get.k3d.io
-commands:
-  initFiles:
+permissions:
+  network:
+    allow:
+      - dl.k8s.io
+      - storage.googleapis.com
+      - get.k3d.io
+setup:
+  files:
     - path: /home/agent/.local/bin/sbxw-install-k8s
       mode: "0755"
       content: |

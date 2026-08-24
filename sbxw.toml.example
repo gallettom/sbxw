@@ -13,9 +13,13 @@ web_shell = ""
 # label is correct: "pro", "max", "team", "enterprise", or "free".
 claude_subscription = "pro"
 
-# Default model for the in-sandbox Claude Code, written into
-# /home/agent/.claude/settings.json on every `sbxw up`. Full model id
-# ("claude-sonnet-5") or alias ("sonnet", "opus"). Empty => don't touch it.
+# Model new sessions start on, passed as ANTHROPIC_DEFAULT_MODEL. Full model id
+# ("claude-sonnet-5") or alias ("sonnet", "opus"). Empty => don't set it.
+#
+# A real default: it applies only when nothing else picks a model, so a /model
+# chosen in-session now survives the next `sbxw up` instead of being overwritten.
+# Needs Claude Code 2.1.236+ inside the sandbox (it comes from the sbx template,
+# not from sbxw); on an older one the variable is ignored silently.
 claude_model = "claude-sonnet-5"
 
 # Mount sbx's shared skill store (filled by `sbxw skills import`) into the
@@ -58,6 +62,12 @@ network_allow = [
 # default. Useful to carve exceptions out of a broad allow rule.
 network_deny = []
 
+# Files of KEY=VALUE lines handed to sbx as `--env-file`, in order.
+# Relative paths resolve against THIS file's directory. sbx settles precedence
+# itself: the [env] table below beats every file, and a later file beats an
+# earlier one — sbxw merges nothing.
+env_files = []
+
 # ── Kits ──────────────────────────────────────────────────────────────────────
 # Kits to apply via `sbx kit add` after the sandbox is created (and on every
 # `sbxw up`). Applied in order, AFTER the network policy so a kit's startup
@@ -80,6 +90,24 @@ network_deny = []
 #   "path/to/sbxw/assets/headroom",
 #   "path/to/sbxw/assets/k8s-tools",
 # ]
+
+# ── Environment variables ────────────────────────────────────────────────────
+# Put variables in the sandbox: `sbx create -e KEY=VALUE` at creation (baked in,
+# so every process sees them) and `sbx run -e` on every attach (so editing this
+# and reopening the agent pane is enough — no recreate). A Bash pane is not the
+# agent session, so it only ever sees the creation-time set.
+#
+# NOT for secrets. The value lands in `sbx create`'s argv (visible in the host's
+# process list) and in a file most projects commit. Tokens belong in
+# `sbx secret set` — which is how sbxw already handles the Anthropic one.
+#
+# IMPORTANT: `[env]` is a TOML *table*. Every root key above must come BEFORE
+# it, exactly as with [[ports]] — a root key written after this line would be
+# read as an environment variable instead.
+#
+# [env]
+# NODE_ENV = "development"
+# API_URL = "http://api.neos.local:8000"
 
 # Apps to expose. `sandbox_port` is what your dev server listens on INSIDE the
 # sandbox — remember to bind it to 0.0.0.0 (ng serve --host 0.0.0.0).

@@ -439,7 +439,17 @@ document.getElementById('modal-create').addEventListener('click', () => {
         // flags it ready in the list with a blue dot for a manual connect.
         attachToEmptyPaneOrMarkReady(name);
         await loadSandboxes();
-        showToast(`Sandbox “${name}” is ready`, 'ok');
+        // The sandbox is up even when something beside it did not work — an
+        // /etc/hosts alias needing a password nobody could type is the usual
+        // one. The toast holds a single message, so the warning replaces the
+        // success line rather than being pushed off by it; the last warning is
+        // the one that says what to run.
+        const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+        showToast(
+          warnings.length
+            ? `Sandbox “${name}” is ready — ⚠ ${warnings[warnings.length - 1]}`
+            : `Sandbox “${name}” is ready`,
+          warnings.length ? 'error' : 'ok');
       } else {
         showToast(`Failed to create “${name}”: ${data.error || 'unknown error'}`, 'error');
       }

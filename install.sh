@@ -50,6 +50,34 @@ install_completions() {
   printf "  Open a new shell (or: source %s) to activate it.\n" "$rc"
 }
 
+# Records the directory the developer keeps repositories in, as
+# SBXW_PROJECTS_ROOT, in the shell's rc file.
+#
+# It exists for `sbxw env export`: the generated .sbxenv.yaml writes its
+# workspace as ${SBXW_PROJECTS_ROOT:-/this/machine/path}/<repo>, so a file
+# committed by one developer resolves on another's machine even though they
+# keep their checkouts somewhere else. The fallback means nothing breaks
+# without it — this only makes the files portable.
+install_projects_root() {
+  root="$1"
+  case "$(basename "${SHELL:-}" 2>/dev/null || true)" in
+    zsh)  rc="$HOME/.zshrc";  line="export SBXW_PROJECTS_ROOT=\"$root\"" ;;
+    bash) rc="$HOME/.bashrc"; line="export SBXW_PROJECTS_ROOT=\"$root\"" ;;
+    fish) rc="$HOME/.config/fish/config.fish"; line="set -gx SBXW_PROJECTS_ROOT \"$root\"" ;;
+    *) warn "Unsupported shell — set SBXW_PROJECTS_ROOT=$root yourself."; return 0 ;;
+  esac
+
+  mkdir -p "$(dirname "$rc")"
+  if [ -f "$rc" ] && grep -q "SBXW_PROJECTS_ROOT" "$rc" 2>/dev/null; then
+    info "SBXW_PROJECTS_ROOT already set in ${rc} — left alone."
+    printf "  Edit it there, or change it per sandbox in the web UI's ports dialog.\n"
+    return 0
+  fi
+  printf '\n# Where sbxw env export anchors workspace paths\n%s\n' "$line" >> "$rc"
+  info "added to ${rc}"
+  printf "  Open a new shell (or: source %s) to activate it.\n" "$rc"
+}
+
 # Download the prebuilt macOS menu-bar app (sbxw Island) and install it into
 # ~/Applications. The bundle is ad-hoc-signed (not notarised), so we strip the
 # download quarantine to let Gatekeeper run it.
@@ -200,6 +228,43 @@ else
   esac
 fi
 
+# ── Repository root (optional) ───────────────────────────────────────────────
+# Only useful alongside `sbxw env export`, so the prompt says what it buys and
+# defaults to "no": a developer who never exports an environment file has no
+# reason to acquire an environment variable.
+step "Repository root…"
+if ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
+  info "Non-interactive — skipping (set SBXW_PROJECTS_ROOT later if you export environment files)."
+elif [ -n "${SBXW_PROJECTS_ROOT:-}" ]; then
+  info "SBXW_PROJECTS_ROOT is already set to ${SBXW_PROJECTS_ROOT}"
+else
+  printf "  'sbxw env export' writes a .sbxenv.yaml your team can commit. Anchoring it to\n"
+  printf "  a variable is what makes it resolve on machines that keep repos elsewhere.\n"
+  DEFAULT_ROOT="$HOME"
+  for d in "$HOME/dev" "$HOME/Projects" "$HOME/src" "$HOME/code" "$HOME/Developer"; do
+    [ -d "$d" ] && { DEFAULT_ROOT="$d"; break; }
+  done
+  printf "Set SBXW_PROJECTS_ROOT (where you keep your repositories)? [y/N] " > /dev/tty
+  read -r REPLY < /dev/tty || REPLY=""
+  case "$REPLY" in
+    [yY]*)
+      printf "  Directory [%s]: " "$DEFAULT_ROOT" > /dev/tty
+      read -r ROOT_REPLY < /dev/tty || ROOT_REPLY=""
+      [ -z "$ROOT_REPLY" ] && ROOT_REPLY="$DEFAULT_ROOT"
+      # Expand a leading ~ ourselves: `read` does not.
+      case "$ROOT_REPLY" in "~/"*) ROOT_REPLY="$HOME/${ROOT_REPLY#\~/}" ;; "~") ROOT_REPLY="$HOME" ;; esac
+      if [ -d "$ROOT_REPLY" ]; then
+        install_projects_root "$ROOT_REPLY"
+      else
+        warn "$ROOT_REPLY is not a directory — skipped."
+      fi
+      ;;
+    *)
+      info "Skipped. Exports still work; they just carry this machine's path as the fallback."
+      ;;
+  esac
+fi
+
 # ── SSH access (optional) ────────────────────────────────────────────────────
 # `sbx setup ssh` writes a managed `Host *.sbx` block into ~/.ssh/config, which
 # is what makes `ssh <name>.sbx` — and therefore `sbxw ssh`, the web UI's SSH
@@ -327,6 +392,7 @@ printf "   sbxw bash <name>              # interactive shell in the sandbox\n"
 printf "   sbxw ssh <name>               # ssh <name>.sbx (also starts a stopped sandbox)\n"
 printf "   sbxw skills import            # share your host agents' skills with sandboxes\n"
 printf "   sbxw logs <name>              # tail daemon log\n"
+printf "   sbxw hosts sync               # (re)apply the /etc/hosts aliases (asks for sudo)\n"
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
 printf "   sbxw update                   # update sbxw (and the island, if installed)\n"
 printf "   sbxw completion --help       # TAB-complete commands (bash/zsh/fish/…)\n"

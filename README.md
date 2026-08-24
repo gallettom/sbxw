@@ -7,66 +7,43 @@ policy.
 
 It **only ever calls `sbx`** — never `docker sandbox`.
 
-> The core pipeline was built against the `sbx` 0.35 CLI reference
-> (docs.docker.com/reference/cli/sbx); everything sbxw has grown since needs
-> **0.37 or newer**, which it checks at startup — see below. A few behaviours
-> could not be confirmed from the docs and are flagged in the text — check them
-> with `sbx … --help` on your machine before depending on them.
+> Built against the `sbx` **0.39** CLI reference
+> (docs.docker.com/reference/cli/sbx), and it assumes 0.39 throughout — there
+> are no fallbacks for older releases. It checks at startup; see below.
 
-## Requires sbx 0.37.0 or newer
+## Requires sbx 0.39.0 or newer
 
-`sbxw up`, `sbxw chat` and `sbxw web` run `sbx version` first and stop with a
-clear message if it's older. Two different requirements sit behind that number,
-and the higher one wins because the check is there to prevent *surprises*, not
-just crashes.
+`sbxw up`, `sbxw chat`, `sbxw web`, `sbxw env run` and `sbxw prune` run
+`sbx version` first and stop with a clear message if it's older.
 
-**0.35, or sbxw misprovisions.** These are the behaviours the pipeline is built
-on:
+This used to be a floor of 0.37 with everything newer behind runtime gates, so
+one binary could serve three releases. That is gone. Each gate was a branch plus
+a fallback at every call site, and every fallback was a second code path nobody
+ran — the kind of code that rots silently and is only discovered by the person
+it fails on. What sbxw now assumes, unconditionally:
 
-- `sbx kit add` **recreates** the container, which is why sbxw skips kits
-  `sbx inspect` already lists instead of re-applying them on every `up`;
-- `sbx rm` refuses a sandbox with an attached session unless `--force` is passed,
-  which sbxw always does — the web daemon holds a session;
-- `sbx run --name` re-attaches a sandbox created with a custom kit (sbxw's OAuth
-  kit) without re-passing it.
+| Feature | Used for |
+| --- | --- |
+| `create`/`run` `-e KEY=VALUE`, `--env-file` | `[env]` and `env_files` in `sbxw.toml` — baked in at creation, applied to the agent session on every attach |
+| `sbx env create` | `sbxw env run`, which provisions from a committed `.sbxenv.yaml` |
+| `sbx prune` | `sbxw prune` |
+| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the three kits under `assets/` |
+| `secret set --sandbox NAME` | the Anthropic secret, without the deprecation warning the old spellings printed |
+| `SANDBOX_NAME` | the in-sandbox hooks naming their own sandbox |
+| `create --kit` repeated | every configured kit applied at creation, which is the only moment sbx applies one whole |
 
-Older than that, these don't fail cleanly, they *misbehave*: a kit re-applied on
-every `up`, an `rm` that refuses with no explanation.
+One 0.39 change is what makes the rest safe to assume: **an unrecognised
+command, subcommand or flag is now an error.** Before 0.39 it printed help and
+exited 0, so a probe that "worked" told you nothing. Code that can assume 0.39
+can trust that a command which succeeded actually ran — which is why the
+speculative retries sbxw used to carry (a create retried with fewer kits, a
+policy view retried unscoped because the flag might not exist) are gone.
 
-**0.37, or half of sbxw quietly isn't there.** Ports published at creation
-(`create -p`), `--no-share-skills`, `sbxw skills import`, `sbxw ssh --setup`, and
-the network-policy panel's `policy ls <name> --wide` / `policy log`. Every one of
-these degrades or is opt-in — sbxw even retries `create` without the mappings
-when `-p` is rejected — which is exactly why the floor is here. Between 0.35 and
-0.37 you get a working sandbox and a tool missing features it says it has,
-explained only by scattered warnings.
-
-There is deliberately **no upper bound**: newer sbx releases have added surface
-rather than moved it, and the parts that did move (the policy panel's `ls
---wide` and `log`) already degrade view by view. A version sbxw can't parse is a
-warning, not a refusal — the format of `sbx version` isn't sbxw's to veto.
-
-**0.38 moved three things, and sbxw follows both spellings.** The floor stayed
-at 0.37 because none of these is a capability sbxw needs — each is the *same*
-thing said differently, so a gate on the detected version is enough and nobody
-gets forced to upgrade:
-
-| What 0.38 changed | On 0.38+ | On 0.37 |
-| --- | --- | --- |
-| `secret set` scope — global is the default, sandbox scope moved to `--sandbox NAME`; the old positional and `-g`/`--global` forms now emit deprecation warnings | no flag / `--sandbox` | `-g` / positional |
-| Kit spec **v2** — v1 still loads through a legacy path, but its loader rejects v1 field names and vice versa, so a spec must commit to one | `schemaVersion: "2"` (`permissions.network.allow`, `setup.files`) | `schemaVersion: "1"` (`network.allowedDomains`, `commands.initFiles`) |
-| `policy allow\|deny network` refuses with *"managed by your organization"* when org governance owns the rule | warned, `up` continues under the org's rules | n/a |
-| A container swap recomposes from the sandbox's template, re-resolving earlier kits by their original path | the OAuth kit is kept on disk, and a stale reference is repaired in place — see [Auth](#auth-read-this--its-the-gnarly-bit) | unaffected |
-| `kit add` refuses a kit declaring startup commands, pointing at `sbx create --kit` instead | every configured kit goes in at creation; adding one later asks you to recreate — see [Kits](#kits) | unaffected |
-
-A version sbxw can't read picks the 0.37 column: it is the one that works on
-both sides of the gate.
-
-The `assets/` kits stay on `schemaVersion: "1"` on purpose — they are static
-files, so unlike the kit sbxw generates they cannot pick a grammar per host, and
-v1 is the one 0.37 and 0.38 both read. Migrate them when the floor moves to
-0.38: `network.allowedDomains` → `permissions.network.allow`,
-`commands.initFiles` → `setup.files`, `commands.startup` → `setup.startup`.
+The one thing still *probed* rather than assumed is `sbx create
+--no-share-skills`: it came from release notes and has never appeared in the
+published reference. Since an unknown flag now fails the whole `create`, sbxw
+reads `sbx create --help` once before passing it — see [Shared
+skills](#shared-skills).
 
 To run against an older sbx anyway:
 
@@ -74,9 +51,11 @@ To run against an older sbx anyway:
 SBXW_SKIP_SBX_VERSION_CHECK=1 sbxw up neos
 ```
 
-An environment variable rather than an `sbxw.toml` key on purpose: this is a
-break-glass for one run, not a property of your project that should be committed
-and forgotten.
+Expect failures rather than degraded behaviour: the flags above are passed
+as-is, and an sbx that doesn't know them now refuses the whole command. This is
+a break-glass for one run, which is why it's an environment variable and not an
+`sbxw.toml` key — not a property of your project that should be committed and
+forgotten.
 
 ## What it does
 
@@ -85,14 +64,16 @@ and forgotten.
 1. **Create** — if the sandbox doesn't exist:
    `sbx create claude <path> --name <name>` (extra `--ro DIR` mounts are appended
    as read-only workspaces, i.e. `DIR:ro`). `<path>` defaults to the current
-   directory. If it already exists it's reused.
+   directory. If it already exists it's reused. Ports, kits and — on sbx 0.39+ —
+   `[env]` / `env_files` all go in here, because creation is the only moment sbx
+   applies them whole. See [Environment variables](#environment-variables-sbx-039).
 2. **Network policy** — applies a restrictive local-dev egress allowlist via
    `sbx policy allow network "<list>"` (npm, pypi, packagist, github, docker
    registries, `api.anthropic.com`). Not `**`. **Runs before kits** so a kit's
    download commands have egress.
 3. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`.
-   Since sbx 0.35 `kit add` **recreates the sandbox container** (state is
-   preserved), so kits already listed by `sbx inspect` are skipped instead of
+   `kit add` **recreates the sandbox container** (state is preserved), so kits
+   already listed by `sbx inspect` are skipped instead of
    blindly re-applied on every `up`. See [Kits](#kits).
 4. **Bidirectional code** — the workspace is the agent's Git working tree; edits
    from the agent appear on the host instantly and vice-versa. **Only that
@@ -100,7 +81,19 @@ and forgotten.
    network and Docker daemon, so nothing else on your host is exposed.
 5. **Host aliases** — writes a delimited block in `/etc/hosts` (and, in
    `ip_per_app` mode on macOS, `ifconfig lo0 alias` entries) so you reach apps at
-   `http://neos.local:4200` etc. Privileged steps use `sudo` and prompt.
+   `http://neos.local:4200` etc. Privileged steps use `sudo` and prompt, so they
+   run **before** the daemon detaches, in the terminal you typed `sbxw up` in —
+   a background daemon has nowhere to show a password prompt, and sudo's cached
+   password expires minutes after it was given. Aliases are *merged* into the
+   block, so provisioning a second sandbox neither evicts the first one's alias
+   nor needs a password to re-add it. Anything the daemon still could not write
+   (an alias added from the web UI's create dialog, say) is reported as a
+   warning next to the sandbox — which is created regardless — and parked for
+   `sbxw hosts sync`. On macOS the daemon first tries the system's own
+   authentication panel (`osascript … with administrator privileges`, shown as
+   *osascript wants to make changes*), which is the one password prompt a
+   process with no terminal can still put in front of you; dismissing it just
+   leaves the alias parked.
 6. **Ports** — a *new* sandbox is created with the mappings already attached
    (`sbx create … -p …`), so they're live from first boot. For a reused one,
    sbxw waits until it reports `running` and then (re)publishes each mapping
@@ -141,8 +134,12 @@ diagonally across the screen.
 | `sbxw ports-ls [name] [--all]` | Show published port mappings for one or all sandboxes. |
 | `sbxw ls` | List all sandboxes with status. |
 | `sbxw stop <names…> [--all]` | Stop sandboxes (state kept; restartable). |
-| `sbxw rm <names…> [--all]` | Remove sandboxes permanently (passes `--force`, so removal proceeds even if a session is attached — sbx 0.35 refuses otherwise). |
+| `sbxw rm <names…> [--all]` | Remove sandboxes permanently (passes `--force`, so removal proceeds even if a session is attached, which sbx otherwise refuses). |
+| `sbxw prune [--since D] [--dry-run] [--yes]` | Remove every **stopped** sandbox — a running one is never a candidate, so this can't take out the one you're in. Lists them and asks first. `--since 168h` keeps anything stopped more recently. |
+| `sbxw env run [paths…]` | Bring a sandbox up from a `.sbxenv.yaml`: `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
+| `sbxw env export [path]` | Write a `.sbxenv.yaml` beside the workspace, with the workspace anchored to `$SBXW_PROJECTS_ROOT` so the file is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
 | `sbxw logs <name> [-n N]` | Tail a running daemon's log. |
+| `sbxw hosts [show\|sync\|clear]` | Show the `/etc/hosts` block (plus anything a daemon parked), re-apply it — the one place `sudo` can ask for a password — or remove it. |
 | `sbxw down [name]` | Kill the daemon for `name`; with no name, kill all daemons **and** remove the `/etc/hosts` block. |
 | `sbxw update [--check] [--no-island]` | Install the latest release in place of this binary (or just check with `--check`). On macOS it also refreshes an already-installed `SbxwIsland.app` when the release ships a newer build of it — quitting and relaunching it if it was running; `--no-island` leaves the app alone. |
 | `sbxw completion [shell]` | Print `source <(sbxw completion <shell>)` material for bash/zsh/fish/elvish/powershell; see `sbxw completion --help`. |
@@ -166,6 +163,13 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   per running sandbox, and the answer that comes back is yours to edit, release
   or refuse. See [Asking another sandbox](#asking-another-sandbox-the-relay).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
+- **Export the sandbox as a `.sbxenv.yaml`** — the **Env** button in a pane's
+  top bar, beside **SSH** and behaving the same way: a card hanging off the
+  button, closed by Escape or by clicking away. Live preview, an editable
+  repository root (the `${SBXW_PROJECTS_ROOT:-…}` the workspace is anchored to),
+  Copy, and Save. It reads the ports the sandbox *actually* has, so it exports
+  what is running rather than what the config asks for. See
+  [Environment files](#environment-files-sbxenvyaml).
 - **Inspect the network policy** in that same panel. Three `sbx` calls, because
   no single one answers "what can this sandbox reach?":
   - **Rules** (`sbx policy ls <name> --wide`) — one row per rule with the
@@ -182,7 +186,7 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 
   The sandbox is a *positional* argument to `policy ls`/`log` (unlike
   `policy allow`'s `--sandbox` flag). If a call fails, only its own section goes
-  — an older sbx without `--wide` still gets you the policy cards. If sbx prints
+  — a `--wide` call that fails still gets you the policy cards. If sbx prints
   something sbxw can't parse as a table, you get its output verbatim rather than
   a misleading empty list, and rows belonging to other sandboxes are filtered out
   with a count of what was hidden.
@@ -207,6 +211,14 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   > against a live run. If it turns out to differ, the button surfaces sbx's own
   > error verbatim — it can't remove the wrong thing, since it only ever passes a
   > rule id.
+- **Reconnect / ↻ (rebuild)** in the terminal bar — the first reopens the pane's
+  WebSocket, the second also throws the xterm widget away and builds a new one
+  (for a display that has gone bad in ways a reconnect can't clear). Both replay
+  the session's last 256 KB, which is *repainted*, never re-asked: the questions
+  a terminal is meant to answer — `CSI 6n` from every shell prompt, `CSI c` from
+  a TUI starting up — are stripped from the replay. Left in, a fresh parser
+  reads them as live requests and answers each one back into the PTY, which at a
+  bash prompt means a few hundred `37;3R` typed onto your command line.
 - **Toggle Claude ↔ Bash** in the terminal bar — both sessions persist server-side,
   so switching back and forth keeps each one's scrollback and running process.
   **Bash** normally attaches with `sbx exec`, which only reaches a *running*
@@ -240,6 +252,22 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   command, deliberately not a "run anything on the host" box**. The default is
   bare `["sbx"]`: with no subcommand the CLI opens its own dashboard. Set it to
   `[]` and the button disappears.
+
+### Help — an empty sandbox list
+
+The sidebar shows exactly what `sbx ls` reports, so an empty list is ambiguous:
+you have no sandboxes, or the CLI can't see the ones you do. The **?** button in
+the header (also reachable from the sidebar's own empty state) opens a dialog
+with the two host-side fixes, each with a copy button:
+
+1. `sbx login` — an unauthenticated CLI lists nothing at all.
+2. Logged in and still empty? Restart the daemon behind the CLI:
+   `nohup sbx daemon start >> ~/.sbx/daemon-restart.log 2>&1 &`, then hit
+   **Refresh** (the dialog has its own, so you can check without closing it).
+   The log file says why if it doesn't come up.
+
+Both run on the machine sbxw runs on — a terminal on the host, *not* a sandbox
+pane, which has no `sbx` and no session of yours to log in.
 
 ### Favourite folders
 
@@ -657,24 +685,22 @@ worst:
 
 1. **API key (confirmed, recommended).** `sbxw up … --use-api-key` reads
    `ANTHROPIC_API_KEY` and stores it as a **global** `anthropic` secret (value
-   piped via stdin, never in argv). That is `sbx secret set anthropic` on 0.38+,
-   where global is the default scope, and `sbx secret set -g anthropic` below
-   it — sbxw picks the spelling the host understands. The agent
-   auto-authenticates.
+   piped via stdin, never in argv) — `sbx secret set anthropic`, where global
+   is the default scope. The agent auto-authenticates.
 2. **OAuth token.** If `CLAUDE_CODE_OAUTH_TOKEN` (or `CLAUDE_OAUTH_TOKEN`) is
    set, sbxw writes `~/.claude/.credentials.json` inside the sandbox so the
    agent is authenticated from first launch. On **create** and on existing
    **stopped** sandboxes this goes through a **mixin kit** (`--kit` /
    `sbx kit add`); on a **running** sandbox the file is refreshed directly
-   via `sbx exec` instead, because `sbx kit add` (0.35+) recreates the
-   container and would kill attached sessions. The canonical variable is
+   via `sbx exec` instead, because `sbx kit add` recreates the container and
+   would kill attached sessions. The canonical variable is
    `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`); `CLAUDE_OAUTH_TOKEN`
    is accepted as an alias.
 
    That kit lives at `~/.sbxw/state/kits/<name>-oauth/` and **stays there for
    as long as the sandbox does** — `sbxw rm` is what deletes it. It used to be
-   a temp directory removed seconds later, which sbx 0.38 turned into a trap:
-   a container swap now recomposes the sandbox from its template and
+   a temp directory removed seconds later, which is a trap:
+   a container swap recomposes the sandbox from its template and
    re-resolves every kit applied before it *by its original path*, so a kit
    directory that no longer exists makes every later `sbx kit add` fail — and
    the error names the kit you were adding, not the one that actually went
@@ -691,10 +717,10 @@ worst:
    holds a live OAuth token, so it is written `0600` in a `0700` directory.
 3. **Interactive.** Just run `/login` in the web terminal.
 
-Note: since sbx 0.35, host env vars are **no longer auto-injected** into
-sandboxes at runtime. If you relied on an exported `ANTHROPIC_API_KEY` reaching
-the sandbox by itself, that stopped working — use `--use-api-key` (which stores
-it via `sbx secret set`) or migrate it with `sbx secret import`.
+Note: host env vars are **not** auto-injected into sandboxes. An exported
+`ANTHROPIC_API_KEY` does not reach the sandbox by itself — use `--use-api-key`
+(which stores it via `sbx secret set`), migrate it with `sbx secret import`, or,
+for non-secret values, put it in `sbxw.toml`'s `[env]`.
 
 ## Kits
 
@@ -703,8 +729,8 @@ startup commands). List them in `sbxw.toml`.
 
 **They go in at creation.** `sbxw up` passes every configured kit to
 `sbx create --kit` (repeated once per kit, credentials kit first), because
-creation is the only moment sbx applies a kit *whole*. Since 0.38, adding one
-afterwards with `sbx kit add` is refused outright if the kit declares startup
+creation is the only moment sbx applies a kit *whole*. Adding one afterwards
+with `sbx kit add` is refused outright if the kit declares startup
 commands — the recreate flow behind it doesn't run them, so rather than apply
 half a kit, sbx tells you to recreate the sandbox:
 
@@ -723,7 +749,7 @@ recreates on its own, since anything outside the workspace mount would be lost.
 
 Kits *without* startup commands are still added in place on `sbxw up` (this is
 how the OAuth credentials kit reaches a stopped sandbox). That path recreates
-the container (sbx 0.35+, state preserved) and composes the kit's own network
+the container (state preserved) and composes the kit's own network
 rules into the sandbox policy, so sbxw skips kits `sbx inspect` already lists
 instead of re-applying them every `up`. To force a re-apply after editing such a
 kit, run `sbx kit add <sandbox> <kit>` yourself:
@@ -751,13 +777,18 @@ Bundled kits:
   available and first invocation has no install step. See
   `assets/md-to-pdf-tools/README.md`.
 
-Since sbx 0.35 the domains a kit declares under `network.allowedDomains` are
-composed into the sandbox policy when the kit is added; domains a kit does *not*
+The domains a kit declares under `permissions.network.allow` are composed into
+the sandbox policy when the kit is added; domains a kit does *not*
 declare (e.g. apt mirrors) still need adding to `sbxw.toml`'s `network_allow` —
-see each kit's README. Schema gotchas worth
-knowing: `startup` entries are exec-style arrays (`command: ["bash", "…"]`), and
-`content` fields only allow the `${WORKDIR}` placeholder — use brace-free `$VAR`
-for shell variables.
+see each kit's README.
+
+The three bundled kits are **spec v2** (`schemaVersion: "2"`), like the OAuth
+kit sbxw generates: `permissions.network.allow`, `setup.files`, `setup.startup`.
+The v2 loader rejects v1 field names outright, so a spec commits to one grammar
+— if you adapt a kit written against v1, rename all three sections, not one.
+Other schema gotchas worth knowing: `startup` entries are exec-style arrays
+(`command: ["bash", "…"]`), and `content` fields only allow the `${WORKDIR}`
+placeholder — use brace-free `$VAR` for shell variables.
 
 ## SSH (experimental)
 
@@ -823,6 +854,12 @@ Set `share_skills = false` in `sbxw.toml` to create sandboxes without the store
 skills its own kits provide. It's read at **creation** only — flipping it does
 nothing to sandboxes that already exist.
 
+`--no-share-skills` is the one flag sbxw takes from release notes that has never
+appeared in the published `sbx create` reference, and since 0.39 an unknown flag
+fails the whole command. So sbxw reads `sbx create --help` once before passing
+it: if the flag isn't there you get the sandbox *with* the store and a warning
+that the setting couldn't be honoured, rather than no sandbox at all.
+
 How this relates to [kits](#kits): a kit can install *anything* (apt packages,
 binaries, startup commands) but applying one recreates the container. The skill
 store only carries skill files, and costs nothing to update. So `md-to-pdf-tools`
@@ -839,12 +876,200 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   macOS), so the alias resolves to a dedicated IP and you use the app's natural
   port — `http://neos.local:4200` with no remapping.
 
+### The default model
+
+`claude_model` reaches the sandbox as **`ANTHROPIC_DEFAULT_MODEL`**, alongside
+`[env]` — so it is baked in at creation, re-applied on every attach, and carried
+into an exported `.sbxenv.yaml` without a special case anywhere.
+
+It used to be written as `model` into the sandbox's `~/.claude/settings.json`.
+That looked equivalent and wasn't: in Claude Code's precedence, a settings-file
+`model` sits **above** the choice `/model` saves, so every `sbxw up` quietly
+undid whatever you had picked in-session. `ANTHROPIC_DEFAULT_MODEL` sits below
+it — Claude Code starts on it *only* when nothing else selects a model — which
+is what `claude_model` always claimed to be.
+
+Two consequences worth knowing:
+
+- **It needs Claude Code 2.1.236+ inside the sandbox.** That version comes from
+  the sbx template, not from sbxw, so sbxw can't check it the way it checks
+  `sbx` itself. On an older one the variable is ignored in silence and sessions
+  start on Claude Code's own default.
+- **Sandboxes created before this change carry the old `model` key**, which
+  would outrank the variable forever. On the next `sbxw up`, sbxw removes that
+  key — but only when it still holds exactly what `claude_model` says, i.e.
+  sbxw's own leftover. A `model` that says something else is a deliberate
+  `/model` and is left alone.
+
+Spelling `ANTHROPIC_DEFAULT_MODEL` yourself in `[env]` overrides `claude_model`.
+
+### Environment variables (sbx 0.39+)
+
+```toml
+env_files = [".env.sandbox"]   # root key — must come before [env]
+
+[env]
+NODE_ENV = "development"
+API_URL  = "http://api.neos.local:8000"
+```
+
+Both reach the sandbox twice, and the difference matters:
+
+- **At creation** (`sbx create -e` / `--env-file`) they are *baked into the
+  sandbox*, so every process in it sees them — the agent, a Bash pane, a dev
+  server you start by hand.
+- **On every attach** (`sbx run -e`) they apply to the **agent session**. So
+  editing `[env]` and reopening the agent pane is enough; nothing is recreated.
+  A Bash pane is not the agent session, so it still shows the creation-time set
+  until you `sbxw rm` and bring the sandbox back up.
+
+sbx settles precedence, not sbxw: `[env]` beats every file, and a later file
+beats an earlier one. Relative `env_files` paths resolve against `sbxw.toml`.
+
+Two things to watch:
+
+- `[env]` is a TOML **table**. Every root key has to come before it — a key
+  written after `[env]` is read as an environment variable. Same trap as
+  `[[ports]]`.
+- **Not for secrets.** The value lands in `sbx create`'s argv, visible in the
+  host's process list, and in a file most projects commit. Tokens go through
+  `sbx secret set` — which is already how sbxw handles the Anthropic one — or a
+  `.sbxenv.yaml` `secrets:` entry that resolves on the host.
+
+On an sbx older than 0.39 both are dropped with a warning naming what didn't go
+in. There is no older spelling to fall back to: before 0.39 the only way to put
+a variable in a sandbox was a kit writing a shell rc file, which is a container
+recreate for a one-line change.
+
+## Environment files (`.sbxenv.yaml`)
+
+sbx 0.39 introduced its own committable project setup — `.sbxenv.yaml`, read by
+`sbx env run|create|exec|rm` — covering agent, workspace, extra mounts, kits,
+env vars, secrets, MCP servers, ports and registry credentials. sbxw both
+**writes** one and **runs** on one.
+
+### `sbxw env run` — bring a sandbox up from the file
+
+```bash
+sbxw env run                        # .sbxenv.yaml in the current directory
+sbxw env run ../neos-env            # ...or in that directory
+sbxw env run base.yaml local.yaml   # merged in order, later files win
+```
+
+It is not a passthrough. `sbx env create` does the **creation**, because it is
+the only thing that can apply an environment file whole — secrets, bindings,
+registries, MCP servers, kits, mounts. Everything sbxw adds and the format has
+no field for runs afterwards, through the same idempotent pipeline `sbxw up`
+uses: egress policy, OAuth credentials, hooks, `/etc/hosts` aliases, the
+browser terminal. That split is forced by sbx's own behaviour — `sbx env run`
+re-applies only `env` and MCP to a sandbox that already exists, so anything
+built on "run it again and it's fixed" has to live outside it.
+
+**Ports are settled before sbx is called, never retried after.** That is the
+whole port story, and it is not a preference:
+
+- a port sbx can't publish doesn't cost you the port, it costs you the
+  **sandbox** — creation fails and the new sandbox is removed;
+- the secrets it provisioned *first* are left behind, so a naive retry loop
+  accumulates credentials;
+- there is no way to fix it from outside: `env create` has no port flag, and a
+  second file can only *add* ports, because the merge **concatenates lists**.
+
+So sbxw checks each host port itself, asks, and rewrites the document once:
+
+```
+$ sbxw env run
+sbxw  /home/you/dev/neos-env/.sbxenv.yaml → sandbox 'neos'
+  ! host port 4200 (127.0.0.1) is busy — port for sandbox:4200 [4201] ⏎
+sbxw  ports adjusted — running from a rewritten copy at ~/.sbxw/state/env/neos/.sbxenv.yaml
+sbxw  handing secrets, mcp to sbx — sbxw does not read those
+sbxw  taken from sbxw.toml:
+        · /etc/hosts aliases (neos.local → :4201)
+        · the egress allowlist (15 rules) — an environment file has no field for it
+        · claude_model (claude-sonnet-5) — passed as ANTHROPIC_DEFAULT_MODEL
+```
+
+With no terminal to ask on — a daemon, CI, a hook — it takes the next free port
+and logs it instead of stopping for an answer nobody is there to give. `--yes`
+forces that behaviour on a terminal too. Your committed file is never edited:
+the rewrite goes to a scratch copy under `~/.sbxw/state/env/<name>/`, with paths
+made absolute so it resolves from there, and every key sbxw doesn't model
+(`secrets`, `bindings`, `registries`, `mcp`, `sandboxOptions`) travels through
+the round trip untouched.
+
+**The environment file wins; `sbxw.toml` is the fallback.** Field by field,
+because the two describe overlapping but unequal things — the format has ports
+and env, it has no egress allowlist, no `/etc/hosts` alias and no model. A key
+the environment file doesn't mention isn't unset, it is delegated downwards. The
+run prints what it borrowed, which is what keeps "I edited the wrong file" from
+being a silent afternoon.
+
+One thing survives the merge on purpose: an **alias**. `neos.local` exists in no
+sbx field, so when the environment file publishes 4200 and `sbxw.toml` calls
+4200 `neos.local`, the alias is kept and re-pointed at whatever host port the
+sandbox actually got — read back from `sbx ports`, not assumed from the file.
+
+### `sbxw env export` — write the file
+
+From the CLI, for a project:
+
+```bash
+sbxw env export                 # writes ../.sbxenv.yaml for ./ as the workspace
+sbxw env export -o -            # print it instead
+```
+
+Or from the **web UI**, per pane: the **Env** button in the pane's top bar
+opens a card (same shape as the SSH one next to it) with a preview, an editable
+repository root, Copy, and Save. That version is the better one when the two
+differ, because it reads the ports the sandbox actually has — including one you
+added from the ports dialog, or one that moved because the configured host port
+was busy — rather than the ports the config asks for.
+
+**The workspace is written through a variable**, so one committed file works on
+machines that keep their repositories in different places:
+
+```yaml
+workspace: '${SBXW_PROJECTS_ROOT:-/Users/you/dev}/neos'
+```
+
+Both halves earn their place. The variable is what makes the file portable — a
+colleague exports `SBXW_PROJECTS_ROOT` once and every project resolves. The
+fallback is what stops it being a trap: it works out of the box on the exporting
+machine, and on anyone with the same layout, so nothing has to be configured
+before the file runs at all. The price is one absolute path from your machine in
+a committed file; pick a root with nothing personal in it, or accept it as the
+cost of a file that works. `install.sh` offers to set the variable, and the web
+UI lets you change the root per export and see the `workspace:` line change
+before saving.
+
+Everything that *didn't* fit is written into the file's header, with the command
+that reproduces it — the allowlist as an `sbx policy allow network` line, the
+OAuth injection, the aliases, the model. An export that silently dropped the
+allowlist would describe a sandbox with *broader* egress than sbxw builds, which
+is the worst direction for an omission to go in.
+
+The file lands in the workspace's **parent**, not the workspace, and that is not
+tidiness: the agent can write anywhere in a direct-mounted directory, so an
+environment file inside one is a file the agent can rewrite — and it is the file
+that decides what the *next* sandbox gets. Same reasoning as sbx's own
+[guidance](https://docs.docker.com/ai/sandboxes/configuration/environment-files/).
+
+Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
+
 ## Security notes
 
 - Workspace mount is scoped to the single project directory; use `--ro` for
   anything the agent should not modify.
 - The network policy is an explicit allowlist, never `**`. Tighten/loosen in
   `sbxw.toml`. You can audit live egress with `sbx policy log`.
+- **`sbxw.toml` usually sits inside the workspace**, which means the agent can
+  edit it — including `network_allow`, which is read again on your next
+  `sbxw up`. That is a widening the agent can propose but not perform: it takes
+  effect only when you run `sbxw up` yourself, and `sbx policy ls <name>` shows
+  what a sandbox actually has. If you'd rather it were out of reach, keep the
+  config outside the mounted directory and point at it with `--config`. (This is
+  the same hazard sbx names for `.sbxenv.yaml`, which is why `sbxw env export`
+  writes *beside* the workspace rather than into it.)
 - When a `sbx` call fails, sbxw now folds **what sbx actually said** into the
   error instead of reporting a bare exit status — so the structured
   `Blocked by network policy` explanation (rule / origin / detail), and the
@@ -863,6 +1088,13 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   the credential lived only in sbx's own keychain; the token is the same secret
   the sandbox already holds at `~/.claude/.credentials.json` either way.
 - `/etc/hosts` changes are confined to a marked block and removed by `sbxw down`.
+  Off a terminal, `sudo` runs with `-n`: the daemon never steals your shell's
+  terminal to prompt on, it fails fast and says what to run instead. sbxw holds
+  **no standing privilege** — no sudoers rule, no root helper installed; every
+  privileged write is one you authorised, in a terminal or in the macOS panel.
+  The content of that write is staged in a `0600` file under `~/.sbxw/state`
+  (opened `O_EXCL`, so a planted path fails rather than being followed) and
+  copied into place by `/bin/cp`, which keeps `/etc/hosts` root-owned `644`.
 - The **relay** never moves information between two sandboxes without a person
   clicking for it, and an answer is editable before it is released — see
   [Asking another sandbox](#asking-another-sandbox-the-relay). A question is
@@ -876,19 +1108,26 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
   as `sbx run` (documented for `run`; assumed identical for `create`).
 - `sbx policy set-default` posture names (not used here; we use explicit
   `allow network`).
-- Exact output format of `sbx inspect` (0.35+). sbxw only does a substring
+- Exact output format of `sbx inspect`. sbxw only does a substring
   match on it to *skip* already-applied kits; if the kit name isn't found
-  (older sbx, format change), the kit is simply re-applied as before. The match
+  (a format change), the kit is simply re-applied as before. The match
   is confined to inspect's kits section (a `Kits:` block, or a `kits` key if the
-  output is JSON) because 0.38 added the sandbox's **custom secrets** to what
-  inspect reports, and a secret sharing a kit's name would otherwise skip a kit
-  that had never been applied. A layout with neither — a KITS *column*, say —
+  output is JSON) because inspect also reports the sandbox's **custom secrets**,
+  and a secret sharing a kit's name would otherwise skip a kit that had never
+  been applied. A layout with neither — a KITS *column*, say —
   falls back to searching the whole output, as before.
-- The flags taken from the newer release notes but not yet checked against a
-  live `sbx --help`: `sbx create -p/--publish`, `sbx create --no-share-skills`,
-  `sbx skills import [--dry-run|--force]`, and `sbx setup ssh`. Each has a
-  fallback if the flag turns out to be spelled differently — `create` failing
-  means `sbxw up` fails loudly rather than silently mis-provisioning, and the
-  port publishing is still done by the provisioning thread regardless.
+- ~~The flags taken from the newer release notes but not yet checked against a
+  live `sbx --help`~~ — checked against the published 0.39 CLI reference:
+  `sbx create -p/--publish` ✅, `sbx skills import` ✅, `sbx setup ssh` ✅ (it
+  also has a `remove` subcommand), `sbx policy ls` / `policy log` ✅.
+  `sbx create --no-share-skills` is the one that did **not** turn up: the 0.39
+  reference lists `--clone --cpus --deny-network -e/--env --env-file --kit
+  -m/--memory --name -p/--publish -q/--quiet -t/--template` and no skills flag.
+  Since 0.39 also made an unknown flag a hard error, sbxw now probes `sbx create
+  --help` before passing it — see the 0.39 notes above. The original caveat
+  below still applies to everything else: each has a fallback if the flag turns
+  out to be spelled differently — `create` failing means `sbxw up` fails loudly
+  rather than silently mis-provisioning, and the port publishing is still done
+  by the provisioning thread regardless.
 
 (The kit schema, once flagged as unconfirmed, is now verified — see [Kits](#kits).)

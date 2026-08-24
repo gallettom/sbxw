@@ -144,6 +144,7 @@ function createPane(index) {
         <button class="mode-btn" data-mode="bash">❯ Bash</button>
       </div>
       <button class="pane-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
+      <button class="pane-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
       <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
       <button class="pane-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
@@ -191,6 +192,9 @@ function createPane(index) {
   document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
   document.getElementById(`pssh-${index}`).addEventListener('click', ev => {
     if (pane.sandbox) toggleSshPop(pane.sandbox, ev.currentTarget);
+  });
+  document.getElementById(`penv-${index}`).addEventListener('click', ev => {
+    if (pane.sandbox) toggleEnvPop(pane.sandbox, ev.currentTarget);
   });
 
   return pane;
@@ -441,6 +445,7 @@ function connectPane(idx, name, mode) {
   // The monitor runs on the host: there is no sandbox to ssh into, and the
   // Claude/Bash toggles would point at the pseudo-sandbox it is filed under.
   document.getElementById(`pssh-${idx}`).disabled = monitor;
+  document.getElementById(`penv-${idx}`).disabled = monitor;
   pane.el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
   renderSidebar();
 

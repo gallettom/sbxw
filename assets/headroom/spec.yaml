@@ -1,4 +1,4 @@
-schemaVersion: "1"
+schemaVersion: "2"
 kind: mixin
 name: headroom
 description: >
@@ -10,19 +10,20 @@ description: >
 # pip pulls from PyPI; `headroom init` clones a plugin marketplace from GitHub.
 # Both are already covered by sbxw's default network_allow (pypi/pythonhosted,
 # github/githubusercontent), so no extra domains are required.
-network:
-  allowedDomains:
-    - pypi.org
-    - files.pythonhosted.org
-    - github.com
-    - deb.debian.org
-    - security.debian.org
-    - archive.ubuntu.com
-    - security.ubuntu.com
-    - ports.ubuntu.com
+permissions:
+  network:
+    allow:
+      - pypi.org
+      - files.pythonhosted.org
+      - github.com
+      - deb.debian.org
+      - security.debian.org
+      - archive.ubuntu.com
+      - security.ubuntu.com
+      - ports.ubuntu.com
 
-commands:
-  initFiles:
+setup:
+  files:
     - path: /home/agent/.local/bin/sbxw-headroom
       mode: "0755"
       content: |

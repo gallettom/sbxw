@@ -63,7 +63,10 @@ process.stdin.on("end", () => {
       seven_day_pct: sd,
       five_hour_resets_at: (rl.five_hour && rl.five_hour.resets_at) || null,
       seven_day_resets_at: (rl.seven_day && rl.seven_day.resets_at) || null,
-      sandbox: process.env.SANDBOX_VM_ID || os.hostname(),
+      // See status-hook.js: SANDBOX_NAME is the 0.39 spelling, SANDBOX_VM_ID
+      // the deprecated one that older sbx sets.
+      sandbox:
+        process.env.SANDBOX_NAME || process.env.SANDBOX_VM_ID || os.hostname(),
     }),
   );
   const req = http.request(

@@ -93,7 +93,13 @@ process.stdin.on("end", () => {
   } catch (_) {
     evt = { raw };
   }
-  evt.sandbox = process.env.SANDBOX_VM_ID || os.hostname();
+  // The sandbox's own name. sbx 0.39 added SANDBOX_NAME (alongside SANDBOX_ID)
+  // and deprecated SANDBOX_VM_ID — which still carries the name on 0.39, and is
+  // the only one of the two that exists below it. So: current spelling first,
+  // deprecated one as the fallback. os.hostname() agrees with both today, but
+  // only because sbx happens to set it, so it stays the last resort.
+  evt.sandbox =
+    process.env.SANDBOX_NAME || process.env.SANDBOX_VM_ID || os.hostname();
   // Who started this session (see `ancestry`). Sent raw rather than classified
   // here: the daemon owns the rule, so it can be corrected without reinstalling
   // the hook into every existing sandbox.

@@ -27,21 +27,26 @@ function copyField(btn, text) {
   });
 }
 
-/// Place the popover under its button, flipping above when the viewport floor
-/// is closer than the popover is tall, and clamping to the window either way.
+/// Place a popover under its button, flipping above when the viewport floor is
+/// closer than the popover is tall, and clamping to the window either way.
 /// Measured after the content is built and while `visibility: hidden`, since a
 /// `display: none` element has no size to measure.
-function positionSshPop(anchor) {
-  // A layout change rebuilds panes, which can take the button out of the
-  // document while its card is up. Nothing to hang off, so the card goes too.
-  if (!anchor.isConnected) {
-    closeSshPop();
-    return;
-  }
-  sshPop.style.visibility = 'hidden';
-  sshPop.classList.remove('hidden');
+///
+/// Shared by every pane-bar card (SSH, environment file): they hang off buttons
+/// at the same end of the same bar and have the same one way to go wrong, so
+/// they get one implementation rather than a copy each.
+///
+/// Returns false when the anchor has left the document — a layout change
+/// rebuilds panes, which can take the button out from under a card that is
+/// still up. The caller closes; only it knows what "closed" means for its own
+/// state.
+function positionPopover(pop, anchor) {
+  if (!anchor.isConnected) return false;
+
+  pop.style.visibility = 'hidden';
+  pop.classList.remove('hidden');
   const a = anchor.getBoundingClientRect();
-  const p = sshPop.getBoundingClientRect();
+  const p = pop.getBoundingClientRect();
   const gap = 6;
   const margin = 8;
 
@@ -54,9 +59,14 @@ function positionSshPop(anchor) {
   let left = Math.min(a.right - p.width, window.innerWidth - p.width - margin);
   left = Math.max(margin, left);
 
-  sshPop.style.top = `${Math.round(top)}px`;
-  sshPop.style.left = `${Math.round(left)}px`;
-  sshPop.style.visibility = '';
+  pop.style.top = `${Math.round(top)}px`;
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.visibility = '';
+  return true;
+}
+
+function positionSshPop(anchor) {
+  if (!positionPopover(sshPop, anchor)) closeSshPop();
 }
 
 function toggleSshPop(sandbox, anchor) {
