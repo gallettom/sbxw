@@ -37,14 +37,26 @@
 
 <header>
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 30" height="30" role="img" aria-label="sbxw">
-    <rect width="80" height="30" rx="7" fill="#161b22" stroke="#30363d" stroke-width="1.25"/>
     <text x="8" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700"> <tspan fill="#3fb950">>_ </tspan> </text>
     <text x="30" y="21" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="15" font-weight="700">
      <tspan fill="#58a6ff">sb</tspan><tspan fill="#3fb950">xw</tspan>
     </text>
   </svg>
-
-  <span class="addr-badge" id="addr-badge" title="Click to copy URL">—</span>
+  <!-- Pane-count picker: the trigger shows the current count, and clicking it
+        opens a popover with the selectable counts (1..max). max depends on
+        viewport size and is recomputed on every resize. -->
+  <div class="layout-switch" id="layout-switch">
+    <button class="layout-switch-trigger" id="layout-switch-btn" title="Number of terminals" aria-haspopup="true" aria-expanded="false">
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1" y="2" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+        <polyline points="3.7,5.5 6.7,8 3.7,10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="8" y1="10.8" x2="12.3" y2="10.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+      <span id="layout-switch-label" class="layout-switch-count">1</span>
+      <span> terms</span>
+    </button>
+    <div class="layout-switch-panel" id="layout-switch-panel" hidden></div>
+  </div>
 
   <!-- sbxw expects exactly one browser tab talking to it — a second one
        shares the same two runtime worker threads and the same PTY per
@@ -64,34 +76,20 @@
 
   <span class="spacer"></span>
 
-  <!-- Pane-count picker: the trigger shows the current count, and clicking it
-       opens a popover with the selectable counts (1..max). max depends on
-       viewport size and is recomputed on every resize. -->
-  <div class="layout-switch" id="layout-switch">
-    <button class="layout-switch-trigger" id="layout-switch-btn" title="Number of terminals" aria-haspopup="true" aria-expanded="false">
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <rect x="1" y="1" width="6.5" height="6.5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-        <rect x="8.5" y="1" width="6.5" height="6.5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-        <rect x="1" y="8.5" width="6.5" height="6.5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-        <rect x="8.5" y="8.5" width="6.5" height="6.5" rx="1" stroke="currentColor" stroke-width="1.4"/>
-      </svg>
-      <span>Current Layout:</span>
-      <span id="layout-switch-label" class="layout-switch-count">1</span>
-    </button>
-    <div class="layout-switch-panel" id="layout-switch-panel" hidden></div>
-  </div>
+
+  <!-- Host monitor — every sandbox at once, in a pane of its own. Up here
+       rather than in the sidebar because it opens a view of *all* sandboxes,
+       not one of the rows listed below it; spelled out rather than drawn,
+       because it is the only header control whose name is not obvious from
+       its shape. Hidden until `monitor_cmd` says there is one. -->
+  <button id="btn-monitor" class="monitor-btn" hidden
+          title="Host monitor — every sandbox at once, in a pane of its own">
+    Monitor Sandboxes
+  </button>
 
   <!-- Opens the help modal below. Sits next to Refresh because the two are
        the pair you reach for when the sidebar looks wrong. -->
-  <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart" aria-label="Help">?</button>
-
-  <button id="btn-refresh" class="refresh-btn">
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-    Refresh
-  </button>
+  <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart" aria-label="Help">Help</button>
 </header>
 
 <div class="layout">
@@ -99,25 +97,65 @@
     <div class="sidebar-header">
       <span class="sidebar-label">Sandboxes</span>
       <span class="sidebar-actions">
-        <button class="btn-new" id="btn-monitor" hidden
-                title="Host monitor — every sandbox at once, in the focused pane">
-          <!-- A screen on a stand. Drawn rather than an emoji so it inherits
-               the hover colour and looks the same on every platform, like the
-               Refresh glyph in the header. -->
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <rect x="1.1" y="2.1" width="13.8" height="9.3" rx="1.6"
-                  stroke="currentColor" stroke-width="1.5"/>
-            <path d="M6.2 14.1h3.6M8 11.4v2.7"
-                  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        <button id="btn-refresh" class="btn-refresh">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <button class="btn-new" id="btn-new-chat"
-                title="New chat sandbox — empty temp folder, no access to your code">💬</button>
-        <button class="btn-new" id="btn-new-sandbox" title="Create new sandbox">＋</button>
+        <button class="btn-new" id="btn-new-sandbox" title="New sandbox">＋</button>
       </span>
     </div>
     <div id="sandbox-list"></div>
   </aside>
+
+  <!-- ── New sandbox: which kind? ──
+       The ＋ button opens this rather than the workspace wizard directly. Both
+       kinds of sandbox are a "new sandbox" to anyone who hasn't used one yet,
+       and the difference between them — whether your code is inside it — is
+       the sort of thing you want to read *before* the form, not guess from an
+       emoji in the sidebar. Picking a card closes this and opens that kind's
+       own modal. -->
+  <div class="modal-overlay hidden" id="kind-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="kind-modal-title" style="width:440px">
+      <div class="modal-head">
+        <span class="modal-title" id="kind-modal-title">New sandbox</span>
+        <button class="modal-close" id="kind-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="kind-lead">
+          Both run an agent in an isolated container. What differs is what the
+          agent can see.
+        </p>
+        <div class="kind-grid">
+          <button type="button" class="kind-card" id="kind-workspace">
+            <span class="kind-card-icon" aria-hidden="true">📂</span>
+            <span class="kind-card-title">Workspace sandbox</span>
+            <span class="kind-card-lead">An agent on one of your project folders.</span>
+            <ul class="kind-card-points">
+              <li>Mounts a folder from your machine</li>
+              <li>Reads, edits and runs your code</li>
+              <li>Port forwarding, SSH and the file browser</li>
+              <li>You choose the name and the folder</li>
+            </ul>
+            <span class="kind-card-go">Choose folder →</span>
+          </button>
+          <button type="button" class="kind-card" id="kind-chat">
+            <span class="kind-card-icon" aria-hidden="true">💬</span>
+            <span class="kind-card-title">Chat sandbox</span>
+            <span class="kind-card-lead">An agent on a fresh empty folder.</span>
+            <ul class="kind-card-points">
+              <li>None of your code is mounted</li>
+              <li>Nothing of yours to read or change</li>
+              <li>Nothing to configure — the name is optional</li>
+              <li>Throwaway: for asking, not for building</li>
+            </ul>
+            <span class="kind-card-go">Start chatting →</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Create sandbox modal ── -->
   <div class="modal-overlay hidden" id="modal-overlay">
@@ -165,6 +203,10 @@
         </div>
       </div>
       <div class="modal-foot">
+        <!-- Both wizards are now reached through the kind chooser, so both give
+             the way back to it. Pushed to the left edge, away from Cancel: one
+             returns you to the choice, the other abandons it. -->
+        <button class="btn-back" id="modal-back">← Back</button>
         <span class="create-error hidden" id="create-error"></span>
         <button class="btn-cancel" id="modal-cancel">Cancel</button>
         <button class="btn-create" id="modal-create" disabled>✓ Create</button>
@@ -301,6 +343,7 @@
         </div>
       </div>
       <div class="modal-foot">
+        <button class="btn-back" id="chat-modal-back">← Back</button>
         <button class="btn-cancel" id="chat-modal-cancel">Cancel</button>
         <button class="btn-create" id="chat-modal-confirm">💬 Start</button>
       </div>
@@ -376,7 +419,7 @@
   <div class="modal-overlay hidden" id="files-modal-overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title" style="width:520px">
       <div class="modal-head">
-        <span class="modal-title" id="files-modal-title">Files — <span id="files-modal-name"></span></span>
+        <span class="modal-title" id="files-modal-title">Project — <span id="files-modal-name"></span></span>
         <button class="modal-close" id="files-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body" style="gap:0;padding-bottom:.5rem">
@@ -396,10 +439,34 @@
         </table>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
-        <button id="files-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
-          <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Refresh
-        </button>
+        <div style="display:flex;gap:.4rem;align-items:center">
+          <button id="files-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Refresh
+          </button>
+          <!-- The map is an action on the project, not a row in a table of
+               downloadable files: it has no size, and "open" is not "download".
+               It sits beside Refresh so the table above stays homogeneous. -->
+          <button id="files-modal-codemap" class="refresh-btn"
+                  style="font-size:11px;padding:.2rem .6rem" disabled>
+            <!-- Three linked nodes — a cycle, not a tree: a code map is a
+                 graph of markdown files that point at each other, and the
+                 viewer's own Graph tab draws it the same way. Deliberately not
+                 Feather's `share-2` shape, which reads as "share".
+
+                 13px rather than the 11px of the Refresh button beside it:
+                 rasterised at 11 the three edges close up into a blob. Edges
+                 stop at each disc's rim rather than running to its centre. -->
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M5 4.2H11M4.2 5.59L7.2 10.81M11.8 5.59L8.8 10.81"
+                    stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              <circle cx="3.4" cy="4.2" r="1.6" fill="currentColor"/>
+              <circle cx="12.6" cy="4.2" r="1.6" fill="currentColor"/>
+              <circle cx="8" cy="12.2" r="1.6" fill="currentColor"/>
+            </svg>
+            Code map
+          </button>
+        </div>
         <button class="btn-cancel" id="files-modal-close2">Close</button>
       </div>
     </div>

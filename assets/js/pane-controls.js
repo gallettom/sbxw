@@ -56,14 +56,12 @@ function closePane(idx) {
   if (closing.ws) { try { closing.ws.close(); } catch (_) {} closing.ws = null; }
   closing.sandbox = null;
   closing.term.clear();
-  document.getElementById(`plabel-${idx}`).textContent = '—';
   document.getElementById(`pconn-${idx}`).textContent = '';
   document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
-  document.getElementById(`pssh-${idx}`).disabled = true;
-  document.getElementById(`penv-${idx}`).disabled = true;
-  // A closed monitor pane must not leave its hidden mode buttons behind for
-  // whatever gets connected here next.
-  closing.el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = false; });
+  closing.beforeMonitor = null;
+  // Also what puts a closed monitor pane's hidden mode buttons back, so they
+  // don't stay hidden for whatever gets connected here next.
+  applyPaneChrome(idx, null);
 
   // Shift panes[idx+1..paneCount-1] one slot to the left.
   // After each step the source slot is nulled so it can safely be overwritten
@@ -75,6 +73,9 @@ function closePane(idx) {
     dst.sandbox = src.sandbox;
     dst.mode    = src.mode;
     dst.ws      = src.ws;
+    // Travels with the session: it says where *this* session's pane goes back
+    // to when the monitor button is pressed again, not where dst used to be.
+    dst.beforeMonitor = src.beforeMonitor;
 
     if (dst.ws) {
       // Rewire incoming data to the destination terminal element.
@@ -90,13 +91,11 @@ function closePane(idx) {
     }
 
     // Update the destination pane bar.
-    document.getElementById(`plabel-${dst.index}`).textContent = src.sandbox || '—';
     document.getElementById(`pdot-${dst.index}`).className = 'dot ' +
       (dst.ws?.readyState === WebSocket.OPEN ? 'term-connected' : 'term-disconnected');
     document.getElementById(`pconn-${dst.index}`).textContent =
       dst.ws?.readyState === WebSocket.OPEN ? 'connected' : (src.sandbox ? 'disconnected' : '');
-    document.getElementById(`pssh-${dst.index}`).disabled = !src.sandbox;
-    document.getElementById(`penv-${dst.index}`).disabled = !src.sandbox;
+    applyPaneChrome(dst.index, src.sandbox);
     setPaneMode(dst.index, src.mode, false);
     // Full reset, not just clear(): dst now displays a different live session,
     // and any mouse-tracking mode left on from dst's previous content must not
@@ -106,12 +105,11 @@ function closePane(idx) {
     // Null out the source so it becomes a clean empty slot.
     src.sandbox = null;
     src.ws      = null;
+    src.beforeMonitor = null;
     src.term.clear();
-    document.getElementById(`plabel-${src.index}`).textContent = '—';
     document.getElementById(`pconn-${src.index}`).textContent = '';
     document.getElementById(`pdot-${src.index}`).className = 'dot term-disconnected';
-    document.getElementById(`pssh-${src.index}`).disabled = true;
-    document.getElementById(`penv-${src.index}`).disabled = true;
+    applyPaneChrome(src.index, null);
   }
 
   // Hide the now-empty last slot and decrement the count.
@@ -179,17 +177,3 @@ document.addEventListener('mouseup', e => {
   if (!dragSel?.dragging) { dragSel = null; return; }
   dragSel = null;
 }, true);
-
-// ── Address badge (copy URL) ──────────────────────────────────────────────
-const addrBadge = document.getElementById('addr-badge');
-addrBadge.textContent = location.host;
-addrBadge.addEventListener('click', () => {
-  navigator.clipboard?.writeText(location.href).then(() => {
-    addrBadge.textContent = 'copied!';
-    addrBadge.classList.add('copied');
-    setTimeout(() => {
-      addrBadge.textContent = location.host;
-      addrBadge.classList.remove('copied');
-    }, 1500);
-  });
-});

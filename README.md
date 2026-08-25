@@ -151,28 +151,41 @@ The web-only daemon's log/pid are keyed as `web` — `sbxw logs web`, `sbxw down
 Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you can:
 
 - **Switch sandboxes** in the sidebar; connect, **stop**, **reload**, or **remove** (✕).
-- **Create** a sandbox (＋) with a folder picker and inline **port-forwarding** rows
+- **Create** a sandbox (＋). One button for both kinds: it opens a chooser that
+  spells out the difference — a **workspace sandbox** on a folder of yours, or a
+  **chat sandbox** on an empty one — and hands over to that kind's own dialog.
+- The workspace dialog has a folder picker and inline **port-forwarding** rows
   (sandbox→host port, optional host IP, optional `/etc/hosts` alias). This goes
   through the *same* provisioning pipeline as the CLI.
 - **Star the folders you keep projects under** (☆ on each row of the picker) and
   they become one-click shortcuts above it. See below.
-- **Start a chat sandbox** (💬) — the browser equivalent of `sbxw chat`, with an
+- The **chat sandbox** card is the browser equivalent of `sbxw chat`, with an
   optional name (leave it empty for the generated `chat-xxxxxx`). See below.
 - **Route an agent's question to another sandbox**, when one asks for something
   it can't see from its own workspace: a popup shows the question and one button
   per running sandbox, and the answer that comes back is yours to edit, release
   or refuse. See [Asking another sandbox](#asking-another-sandbox-the-relay).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
-- **Read the project's code map** — the **Map** button in a pane's top bar opens
-  the linked markdown under `.sbxw-artifacts/codemap/` as a small vault:
+- **Read the project's code map** — the **Code map** button in the **Project**
+  panel (📁 in the sidebar) opens the linked markdown under
+  `.sbxw-artifacts/codemap/` as a small vault:
   `[[wiki links]]` are clickable, every section lists what points *at* it
   (backlinks), the outline jumps within a file, search spans the whole map, and
   a **Graph** tab lays the files out as a force-directed graph you can drag.
   A dead link is drawn struck through in red rather than silently as text — a
   map that has drifted from the code says so on sight. Read-only, and served
-  from the two endpoints the Files panel already uses, so it reaches nothing
+  from the two endpoints the Project panel already uses, so it reaches nothing
   outside `.sbxw-artifacts`. Sandboxes with no map get told how to write one
   (`/codemap`, from the [codemap kit](#kits)).
+
+  It lives *there*, and not in a pane's top bar, because a map describes the
+  **workspace** rather than the sandbox or the pane — two sandboxes duplicated
+  from one project share the same map. It is a *button* rather than a row in the
+  table, because a map is not a file you download: it has no size, and "open" is
+  not "download". Its own files are folded out of the list because a real map is
+  dozens of markdown files, and listing them buried the deliverables they sit
+  beside. With no map yet the button stays visible but disabled, naming the
+  command that writes one.
 - **Export the sandbox as a `.sbxenv.yaml`** — the **Env** button in a pane's
   top bar, beside **SSH** and behaving the same way: a card hanging off the
   button, closed by Escape or by clicking away. Live preview, an editable
@@ -247,7 +260,7 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   the command and re-splitting it by hand is the step this replaces. A reference
   card is not a decision, so it dims nothing: click the button again, click
   away, or press Escape.
-- **Open the host monitor** (the screen icon in the sidebar header) in the
+- **Open the host monitor** (**Monitor Sandboxes** in the header) in the
   focused pane: sbx's own all-sandboxes
   dashboard, run in a PTY and streamed to the browser like any other pane, so a
   full-screen TUI works as it does in a terminal. It is *not* a sandbox session —
@@ -322,9 +335,9 @@ sbxw chat brainstorm      # ...or name it yourself
 sbxw rm brainstorm        # removes the sandbox and its empty workspace
 ```
 
-The web UI's 💬 button does the same thing (`POST /api/sandboxes/chat`); both go
-through one shared code path. It opens a small dialog where the name is
-optional — leave it empty and you get the same generated `chat-xxxxxx`, or type
+The web UI's **Chat sandbox** card, under the sidebar's ＋, does the same thing
+(`POST /api/sandboxes/chat`); both go through one shared code path. It opens a
+small dialog where the name is optional — leave it empty and you get the same generated `chat-xxxxxx`, or type
 one to get `sbxw chat brainstorm`'s result from the browser. The empty workspace
 is deleted when the sandbox is removed, from either the CLI or the UI.
 

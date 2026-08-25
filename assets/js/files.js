@@ -1,4 +1,9 @@
-// ── Generated files ("artifacts") ─────────────────────────────────────────
+// ── Project panel ─────────────────────────────────────────────────────────
+//
+// What this repository has produced: its code map first, then the deliverables
+// under `.sbxw-artifacts/`. Named after its subject rather than its mechanism —
+// it used to be "Generated files", which described how the list is built rather
+// than what anyone opens it for.
 const filesOverlay = document.getElementById('files-modal-overlay');
 const filesNameEl  = document.getElementById('files-modal-name');
 const filesDirEl   = document.getElementById('files-modal-dir');
@@ -34,6 +39,20 @@ function renderFilesTable(entries) {
   }).join('');
 }
 
+/// Enable the footer's map button for what this project actually has.
+///
+/// Disabled rather than hidden when there is no map: a button that vanishes
+/// teaches nothing, while a disabled one with a tooltip says the map is a thing
+/// this project could have and names the command that writes it.
+function renderCodemapButton(map) {
+  const btn = document.getElementById('files-modal-codemap');
+  btn.disabled = !map;
+  btn.title = map
+    ? `Open the code map — ${map.files} file${map.files === 1 ? '' : 's'} under `
+      + `.sbxw-artifacts/${map.dir}/, updated ${humanTime(map.modified)}`
+    : 'No code map yet — run /codemap in this sandbox to write one';
+}
+
 async function fetchArtifacts(name) {
   filesTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>';
   try {
@@ -41,6 +60,7 @@ async function fetchArtifacts(name) {
     const data = await res.json();
     filesDirEl.textContent = data.dir || '.sbxw-artifacts';
     renderFilesTable(data.entries || []);
+    renderCodemapButton(data.codemap || null);
   } catch (_) {
     filesTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg" style="color:#f85149">Error fetching files</td></tr>';
   }
@@ -54,6 +74,13 @@ function openFilesModal(name) {
 }
 
 function closeFilesModal() { filesOverlay.classList.add('hidden'); filesTarget = null; }
+
+document.getElementById('files-modal-codemap').addEventListener('click', () => {
+  if (!filesTarget) return;
+  const sandbox = filesTarget;
+  closeFilesModal();
+  openCodemapModal(sandbox);
+});
 
 document.getElementById('files-modal-close').addEventListener('click', closeFilesModal);
 document.getElementById('files-modal-close2').addEventListener('click', closeFilesModal);

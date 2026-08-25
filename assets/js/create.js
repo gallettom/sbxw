@@ -281,24 +281,80 @@ function normalizeNameInput() {
 
 inpName.addEventListener('input', normalizeNameInput);
 
-document.getElementById('btn-new-sandbox').addEventListener('click', openModal);
+// ── Which kind of sandbox? ────────────────────────────────────────────────
+// The sidebar's ＋ is the single way in: it opens the chooser, and the chooser
+// opens one of the two wizards. Two buttons sitting side by side made the
+// choice before it was explained — an emoji is a poor place to learn that one
+// of them mounts your code and the other deliberately does not.
+const kindOverlay = document.getElementById('kind-modal-overlay');
+
+function openKindModal() { kindOverlay.classList.remove('hidden'); }
+function closeKindModal() { kindOverlay.classList.add('hidden'); }
+
+document.getElementById('btn-new-sandbox').addEventListener('click', openKindModal);
+document.getElementById('kind-modal-close').addEventListener('click', closeKindModal);
+kindOverlay.addEventListener('click', e => { if (e.target === kindOverlay) closeKindModal(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !kindOverlay.classList.contains('hidden')) closeKindModal();
+});
+
+// Each card hands straight over to that kind's own modal — the chooser is a
+// signpost, not a step you have to confirm your way out of.
+document.getElementById('kind-workspace').addEventListener('click', () => {
+  closeKindModal();
+  openModal();
+});
+document.getElementById('kind-chat').addEventListener('click', () => {
+  closeKindModal();
+  openChatModal();
+});
+
+// …and back the other way, from either wizard.
+document.getElementById('modal-back').addEventListener('click', () => {
+  closeModal();
+  openKindModal();
+});
+document.getElementById('chat-modal-back').addEventListener('click', () => {
+  closeChatModal();
+  openKindModal();
+});
 
 // ── Host monitor ──────────────────────────────────────────────────────────
 // One PTY on the host running `monitor_cmd`, shared by every viewer — not a
 // sandbox session, and deliberately not a general "run something on the host"
 // pane: the daemon binds to localhost, and one fixed configured command is a
 // far smaller thing to expose than a shell.
+//
+// The button sits in the header, beside Refresh: it shows every sandbox at
+// once, which is a different thing from the sandbox rows in the sidebar it
+// used to sit above.
 const btnMonitor = document.getElementById('btn-monitor');
 if (MONITOR_CMD) {
   btnMonitor.hidden = false;
-  btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in the focused pane`;
+  btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in its own pane`;
   btnMonitor.addEventListener('click', () => {
-    // A toggle: from the monitor it puts the pane back on the sandbox it took
-    // over, which is the way out most people reach for first.
-    const pane = panes[focusedPane];
-    const back = pane?.mode === 'monitor' && pane.beforeMonitor;
-    if (back) connectPane(focusedPane, back.sandbox, back.mode);
-    else connectPane(focusedPane, MONITOR_SANDBOX, 'monitor');
+    // A toggle, and it undoes exactly what opening did: a monitor that arrived
+    // in a pane of its own leaves by closing that pane; one that had to take a
+    // pane over puts it back on the sandbox it evicted.
+    const open = panes.slice(0, paneCount).findIndex(p => p.sandbox === MONITOR_SANDBOX);
+    if (open >= 0) {
+      const back = panes[open].beforeMonitor;
+      if (back) connectPane(open, back.sandbox, back.mode);
+      else closePane(open);
+      return;
+    }
+    // The monitor asks for a pane of its own rather than evicting whatever the
+    // focused one is showing — reading it is usually a glance *alongside* a
+    // session, not instead of it. Only a grid with no room left falls back to
+    // the takeover, where `beforeMonitor` remembers the way back.
+    if (paneCount < computeMaxPanes()) {
+      setLayout(paneCount + 1);
+      const idx = paneCount - 1;
+      setFocusedPane(idx);
+      connectPane(idx, MONITOR_SANDBOX, 'monitor');
+    } else {
+      connectPane(focusedPane, MONITOR_SANDBOX, 'monitor');
+    }
   });
 }
 
@@ -368,7 +424,6 @@ chatInpName.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !chatConfirm.disabled) chatConfirm.click();
 });
 
-document.getElementById('btn-new-chat').addEventListener('click', openChatModal);
 document.getElementById('chat-modal-close').addEventListener('click', closeChatModal);
 document.getElementById('chat-modal-cancel').addEventListener('click', closeChatModal);
 chatOverlay.addEventListener('click', e => { if (e.target === chatOverlay) closeChatModal(); });

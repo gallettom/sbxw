@@ -4242,10 +4242,13 @@ mod tests {
         assert_eq!(out[0].sandbox, 4200, "the sandbox port is not negotiable");
         assert_eq!(out[1].host, None, "an ephemeral port stays ephemeral");
 
+        // Deliberately no "…and once the port is free again, nothing moves":
+        // releasing a listener and asserting the port is still free races both
+        // TIME_WAIT and the other tests in this binary, which bind ephemeral
+        // ports of their own. `host_port_is_free` is the part that answers that
+        // question, and it is tested against a listener that is still held.
+        assert!(!host_port_is_free("127.0.0.1", busy), "still held here");
         drop(held);
-        let (again, moved) = negotiate_ports(&ports, false).expect("negotiate");
-        assert!(!moved, "nothing moves once the port is free");
-        assert_eq!(again[0].host, Some(busy));
     }
 
     /// A UDP mapping can't be tested with a TCP bind, and a test that cannot be

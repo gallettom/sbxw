@@ -976,10 +976,18 @@ struct SandboxItem {
     /// frontend visually group sandboxes that share the same workspace.
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<String>,
-    /// Whether this is a chat sandbox (its workspace is a throwaway directory
-    /// under `chat_workspace_root()`). Every chat sandbox has a *different*
-    /// workspace, so workspace grouping can't catch them — the frontend groups
-    /// them on this flag instead.
+    /// Whether this is a genuine chat sandbox — its workspace is a throwaway
+    /// directory under `chat_workspace_root()` *and* that directory is its own
+    /// (named after it, per `prepare_chat_workspace`). Every chat sandbox has a
+    /// *different* workspace, so workspace grouping can't catch them — the
+    /// frontend groups them on this flag instead.
+    ///
+    /// A duplicate made *from* a chat sandbox keeps pointing at the source's
+    /// throwaway directory (duplicating reuses the source's workspace as-is),
+    /// so the directory's basename is the source's name, not its own. That
+    /// duplicate isn't a disposable chat scratchpad anymore — it's a real
+    /// sandbox that happens to sit on an ex-chat workspace — so it's excluded
+    /// here and falls back to ordinary workspace-path grouping instead.
     chat: bool,
 }
 
@@ -1815,7 +1823,13 @@ async fn api_list() -> Json<Vec<SandboxItem>> {
         items
             .into_iter()
             .map(|s| {
-                let chat = crate::chat_workspace_of(&s.name).is_some();
+                let chat = crate::chat_workspace_of(&s.name)
+                    .map(|dir| {
+                        dir.file_name()
+                            .map(|n| n == s.name.as_str())
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
                 let workspace =
                     crate::workspace_for(&s.name).map(|p| p.to_string_lossy().into_owned());
                 SandboxItem {
@@ -3657,10 +3671,48 @@ struct ArtifactEntry {
     modified: u64,
 }
 
+/// The code map, folded into one entry.
+///
+/// A map is a *directory* of linked markdown — a real one runs to dozens of
+/// files — so listing it file by file buried the actual deliverables it sits
+/// next to and offered no way to read it as the graph it is. It is summarised
+/// here and opened in its own viewer instead.
+#[derive(Serialize)]
+struct CodemapSummary {
+    /// Directory under `.sbxw-artifacts`, e.g. `codemap`.
+    dir: String,
+    files: usize,
+    /// Newest mtime among its files, Unix seconds.
+    modified: u64,
+}
+
 #[derive(Serialize)]
 struct ArtifactsResponse {
     dir: String,
     entries: Vec<ArtifactEntry>,
+    /// `null` when this project has no map yet.
+    codemap: Option<CodemapSummary>,
+}
+
+/// The map's own directory name, by the convention the codemap kit writes.
+const CODEMAP_DIR: &str = "codemap";
+
+/// Split the map's files out of the artifact list.
+///
+/// Returns the summary, leaving `entries` holding only what a person put there
+/// deliberately. Nothing is hidden: the same files stay downloadable through
+/// their own paths, and the viewer is what reads them.
+fn split_codemap(entries: &mut Vec<ArtifactEntry>) -> Option<CodemapSummary> {
+    let prefix = format!("{CODEMAP_DIR}/");
+    let (map, rest): (Vec<_>, Vec<_>) = std::mem::take(entries)
+        .into_iter()
+        .partition(|e| e.path.starts_with(&prefix));
+    *entries = rest;
+    (!map.is_empty()).then(|| CodemapSummary {
+        dir: CODEMAP_DIR.to_string(),
+        files: map.len(),
+        modified: map.iter().map(|e| e.modified).max().unwrap_or(0),
+    })
 }
 
 fn has_allowed_extension(path: &std::path::Path) -> bool {
@@ -3732,16 +3784,19 @@ async fn api_artifacts(Path(name): Path<String>) -> Json<ArtifactsResponse> {
         return Json(ArtifactsResponse {
             dir: String::new(),
             entries: Vec::new(),
+            codemap: None,
         });
     };
     let dir = workspace.join(crate::ARTIFACTS_DIR);
     let dir_str = dir.to_string_lossy().into_owned();
-    let entries = tokio::task::spawn_blocking(move || collect_artifacts(&dir))
+    let mut entries = tokio::task::spawn_blocking(move || collect_artifacts(&dir))
         .await
         .unwrap_or_default();
+    let codemap = split_codemap(&mut entries);
     Json(ArtifactsResponse {
         dir: dir_str,
         entries,
+        codemap,
     })
 }
 
@@ -5032,6 +5087,54 @@ mod tests {
         let rejected = reject_invalid_name("bad name!").expect("rejected");
         assert_eq!(rejected.0["ok"], json!(false));
         assert_eq!(rejected.0["error"], json!(crate::INVALID_NAME_MSG));
+    }
+
+    fn artifact(path: &str, modified: u64) -> ArtifactEntry {
+        ArtifactEntry {
+            path: path.to_string(),
+            name: path.rsplit('/').next().unwrap_or(path).to_string(),
+            size: 1,
+            modified,
+        }
+    }
+
+    /// A real code map is dozens of linked files. Listed one by one they bury
+    /// the deliverables somebody actually put in `.sbxw-artifacts/`, which is
+    /// what that panel is for.
+    #[test]
+    fn the_code_map_is_folded_out_of_the_artifact_list() {
+        let mut entries = vec![
+            artifact("codemap/codemap.md", 30),
+            artifact("codemap/api/auth.md", 50),
+            artifact("ARCHITECTURE.md", 10),
+            artifact("wireframe.png", 20),
+        ];
+        let map = split_codemap(&mut entries).expect("a map was there");
+
+        assert_eq!(map.dir, "codemap");
+        assert_eq!(map.files, 2);
+        assert_eq!(map.modified, 50, "the newest file dates the map");
+        assert_eq!(
+            entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            ["ARCHITECTURE.md", "wireframe.png"],
+            "only what a person put there deliberately is left"
+        );
+    }
+
+    /// No map is the normal state of a fresh project, and must not invent one.
+    #[test]
+    fn a_project_without_a_map_reports_none_and_keeps_its_files() {
+        let mut entries = vec![artifact("notes.md", 1)];
+        assert!(split_codemap(&mut entries).is_none());
+        assert_eq!(entries.len(), 1);
+
+        // A file merely *named* like the directory is not the directory.
+        let mut decoy = vec![artifact("codemap.md", 1), artifact("codemaps/x.md", 2)];
+        assert!(
+            split_codemap(&mut decoy).is_none(),
+            "prefix match is on `codemap/`"
+        );
+        assert_eq!(decoy.len(), 2);
     }
 
     #[test]

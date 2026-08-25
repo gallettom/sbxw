@@ -145,7 +145,6 @@ function createPane(index) {
       </div>
       <button class="pane-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
-      <button class="pane-btn" id="pmap-${index}" title="Code map — the linked markdown under .sbxw-artifacts/codemap/ that says what this project does and why (write one with /codemap)" disabled>Map</button>
       <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
       <button class="pane-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
@@ -196,9 +195,6 @@ function createPane(index) {
   });
   document.getElementById(`penv-${index}`).addEventListener('click', ev => {
     if (pane.sandbox) toggleEnvPop(pane.sandbox, ev.currentTarget);
-  });
-  document.getElementById(`pmap-${index}`).addEventListener('click', () => {
-    if (pane.sandbox) openCodemapModal(pane.sandbox);
   });
 
   return pane;
@@ -414,6 +410,25 @@ function paneModeFor(name, requested, current) {
   return current === 'monitor' ? 'claude' : current;
 }
 
+// The pane bar as it depends on *what* a pane holds rather than on which
+// sandbox: its title, and the buttons that need a sandbox behind them. An empty
+// pane has nothing to ssh into or describe; the monitor runs on the host, so it
+// has no sandbox to ssh into, no env file, and no workspace for the Claude/Bash
+// toggles (which would otherwise point at the pseudo-sandbox it is filed under)
+// to read a map from. One function because three paths set this: connecting a
+// pane, emptying one, and shifting a live session into one when a pane closes.
+function applyPaneChrome(idx, name) {
+  const monitor = name === MONITOR_SANDBOX;
+  const label = document.getElementById(`plabel-${idx}`);
+  // The command is the tooltip, not the label: `monitor_cmd` is bare `sbx`,
+  // which as a pane title says nothing about what the pane is.
+  label.textContent = monitor ? 'monitor' : (name || '—');
+  label.title = monitor ? `host monitor — ${MONITOR_CMD}` : '';
+  document.getElementById(`pssh-${idx}`).disabled = !name || monitor;
+  document.getElementById(`penv-${idx}`).disabled = !name || monitor;
+  panes[idx].el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
+}
+
 function connectPane(idx, name, mode) {
   if (!name || idx >= panes.length) return;
   // Refuse to duplicate a sandbox already open in a different visible pane.
@@ -439,21 +454,9 @@ function connectPane(idx, name, mode) {
   // The liseret describes whoever is in the pane *now* — repainting drops the
   // outgoing session's state and picks up the incoming one's, mid-flash included.
   applyAgentStates();
-  const label = document.getElementById(`plabel-${idx}`);
-  // The command is the tooltip, not the label: `monitor_cmd` is bare `sbx`,
-  // which as a pane title says nothing about what the pane is.
-  label.textContent = monitor ? 'monitor' : name;
-  label.title = monitor ? `host monitor — ${MONITOR_CMD}` : '';
   document.getElementById(`pconn-${idx}`).textContent = 'connecting…';
   document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
-  // The monitor runs on the host: there is no sandbox to ssh into, and the
-  // Claude/Bash toggles would point at the pseudo-sandbox it is filed under.
-  document.getElementById(`pssh-${idx}`).disabled = monitor;
-  document.getElementById(`penv-${idx}`).disabled = monitor;
-  // The map is read from the sandbox's workspace, which the host monitor
-  // doesn't have one of.
-  document.getElementById(`pmap-${idx}`).disabled = monitor;
-  pane.el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
+  applyPaneChrome(idx, name);
   renderSidebar();
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
