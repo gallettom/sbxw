@@ -26,6 +26,7 @@ const FALLBACK_PROTOCOL = "2025-06-18";
 /// What an unsettled request is picked up with, in this client's terms.
 const HOW_TO_WAIT = id => `call \`check_sandbox_question\` with request_id "${id}"`;
 
+
 // ── Tools ─────────────────────────────────────────────────────────────────
 //
 // The descriptions below are the load-bearing part of this file. They are
@@ -78,16 +79,67 @@ const TOOLS = [
     },
   },
   {
-    name: "check_sandbox_question",
+    name: "ask_user_for_screenshot",
     description:
-      "Pick up a question you asked earlier with `ask_other_sandbox` that had not been settled " +
-      "when the call returned. Returns the approved answer, the refusal, or that it is still " +
-      "waiting. Use it when you reach the point where you actually need that answer — not in a " +
-      "loop.",
+      "Ask the person at the keyboard to show you what something LOOKS LIKE, when you have " +
+      "changed the visual side of a project and cannot see the result.\n" +
+      "\n" +
+      "Reach for this when the thing you would need in order to know whether you got it right is " +
+      "a picture: a layout you just moved, a component you restyled, spacing or alignment you " +
+      "adjusted, a chart or an animation, a screen that only exists once the app is running, a " +
+      "rendering bug the user is describing in words that are not converging. Concretely: use it " +
+      "BEFORE reporting a visual change as done on the strength of the diff alone, and BEFORE a " +
+      "third round of \"is it better now?\". One look settles what several exchanges of prose " +
+      "will not.\n" +
+      "\n" +
+      "Not for anything you can see for yourself. If this project can be run and captured from " +
+      "here — a test that renders, a browser you can drive, a snapshot suite — do that instead; " +
+      "this interrupts a person, and their attention is the scarcest thing you spend.\n" +
+      "\n" +
+      "Say what to capture and why, in one sentence: which screen, which state, which width. " +
+      "They see your words and choose to paste an image, capture a window, describe it in text " +
+      "instead — or refuse. **A refusal is final and costs you nothing to accept**: carry on, say " +
+      "plainly what you changed and what you expect it to look like, and let them correct you. " +
+      "Never ask twice for the same view.\n" +
+      "\n" +
+      "Returns within ~90 s with the image, or with a request id to pick up later via " +
+      "`check_sandbox_question` — carry on with what does not depend on seeing it meanwhile. The " +
+      "picture also lands as a file in this sandbox, so you can look again later without asking " +
+      "again.",
     inputSchema: {
       type: "object",
       properties: {
-        request_id: { type: "string", description: "The id reported by `ask_other_sandbox`." },
+        reason: {
+          type: "string",
+          description:
+            "What you need to see and why, in a sentence a person can act on without reading " +
+            "your conversation. Name the screen or component, the state it should be in, and " +
+            "what you changed — e.g. \"the settings header at mobile width, after I moved the " +
+            "save button into the toolbar\".",
+        },
+        timeout_seconds: {
+          type: "number",
+          description:
+            "How long to wait before reporting back that it is still open. Default 90, max 300.",
+        },
+      },
+      required: ["reason"],
+    },
+  },
+  {
+    name: "check_sandbox_question",
+    description:
+      "Pick up a request you opened earlier with `ask_other_sandbox` or `ask_user_for_screenshot` " +
+      "that had not been settled when the call returned. Returns the approved answer, the " +
+      "screenshot, the refusal, or that it is still waiting. Use it when you reach the point " +
+      "where you actually need that answer — not in a loop.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: {
+          type: "string",
+          description: "The id reported by `ask_other_sandbox` or `ask_user_for_screenshot`.",
+        },
         timeout_seconds: {
           type: "number",
           description: "How long to wait before reporting back. Default 90, max 600.",
@@ -100,43 +152,76 @@ const TOOLS = [
 
 // ── Dispatch ──────────────────────────────────────────────────────────────
 
-function clampTimeout(v) {
+function clampTimeout(v, max) {
   const n = Number(v);
-  if (!Number.isFinite(n) || n <= 0) return relay.DEFAULT_TIMEOUT;
-  return Math.min(Math.round(n), relay.MAX_TIMEOUT);
+  if (!Number.isFinite(n) || n <= 0) return Math.min(relay.DEFAULT_TIMEOUT, max);
+  return Math.min(Math.round(n), max);
 }
 
-/// Every tool result is text. An error in *reaching* the daemon is reported as
-/// a failed tool call (`isError`), never as a protocol error: the session
-/// should carry on without the relay, not fall over because of it.
+/// A text-only tool result. An error in *reaching* the daemon is reported as a
+/// failed tool call (`isError`), never as a protocol error: the session should
+/// carry on without the relay, not fall over because of it.
 function textResult(text, isError) {
   return { content: [{ type: "text", text }], isError: !!isError };
 }
 
+/// What came of a request, in the two forms a client can render.
+///
+/// A released screenshot goes back as an `image` block — the whole reason this
+/// server exists alongside the CLI, since an agent reading a shell's stdout can
+/// be told a picture arrived but cannot look at it. The prose follows, and says
+/// where the same image was saved so a later turn can re-read it without
+/// interrupting anyone again.
+function outcomeResult(res) {
+  const { text } = relay.collect(res, HOW_TO_WAIT(res.id));
+  const content = [];
+  if (res.image && res.image.b64) {
+    content.push({ type: "image", data: res.image.b64, mimeType: res.image.mime });
+  }
+  content.push({ type: "text", text });
+  return { content, isError: false };
+}
+
 async function callTool(name, args) {
-  const timeout = clampTimeout((args || {}).timeout_seconds);
-  const budget = (timeout + 10) * 1000;
+  args = args || {};
 
   if (name === "ask_other_sandbox") {
-    const question = String((args || {}).question || "").trim();
+    const timeout = clampTimeout(args.timeout_seconds, relay.MAX_TIMEOUT);
+    const question = String(args.question || "").trim();
     if (!question) return textResult("No question given.", true);
     const res = await relay.request(
       "/api/relay/ask",
       { from: relay.me, question, timeout },
-      budget,
+      (timeout + 10) * 1000,
     );
-    return textResult(relay.describeOutcome(res, HOW_TO_WAIT(res.id)));
+    return outcomeResult(res);
+  }
+
+  if (name === "ask_user_for_screenshot") {
+    const timeout = clampTimeout(args.timeout_seconds, relay.SHOT_MAX_TIMEOUT);
+    // `reason` is this tool's word for it, `question` is the relay's — one
+    // request shape carries both kinds, and the daemon shows this text to a
+    // person exactly as it shows a question.
+    const reason = String(args.reason || "").trim();
+    if (!reason) return textResult("No reason given — say what you need to see.", true);
+    const res = await relay.request(
+      "/api/relay/shot",
+      { from: relay.me, question: reason, timeout },
+      (timeout + 10) * 1000,
+    );
+    return outcomeResult(res);
   }
 
   if (name === "check_sandbox_question") {
-    const id = String((args || {}).request_id || "").trim();
+    const timeout = clampTimeout(args.timeout_seconds, relay.MAX_TIMEOUT);
+    const id = String(args.request_id || "").trim();
     if (!id) return textResult("No request_id given.", true);
     const res = await relay.request(
       "/api/relay/wait",
       { from: relay.me, id, timeout },
-      budget,
+      (timeout + 10) * 1000,
     );
-    return textResult(relay.describeOutcome(res, HOW_TO_WAIT(res.id)));
+    return outcomeResult(res);
   }
 
   return textResult(`Unknown tool "${name}".`, true);

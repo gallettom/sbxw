@@ -1,29 +1,43 @@
-// sbxw relay — the one way an agent in a sandbox can ask an agent in *another*
-// sandbox for information, with a human deciding every hop.
+// sbxw relay — the one way an agent in a sandbox can ask for something it
+// cannot get to from where it is, with a human deciding every hop.
+//
+// Two things are asked for. Information held in *another sandbox's* workspace,
+// which a person routes to an agent there and releases the answer of; and a
+// *screenshot* of what is on that person's own screen, which nobody but them
+// can supply.
 //
 // Nothing here talks to another sandbox. It talks to the sbxw daemon on the
 // host, which shows the request in the browser UI and waits for a person to
 // route it, then to release the answer. A sandbox therefore cannot pick its
 // correspondent, cannot see who answered unless the human sends it, and cannot
-// receive a word that was not approved — the network policy alone would not buy
-// that, since it only decides *whether* a host is reachable, not what may cross.
+// receive a word — or a pixel — that was not approved. The network policy alone
+// would not buy that, since it only decides *whether* a host is reachable, not
+// what may cross.
 //
-// Three verbs, all through `http://host.docker.internal:__PORT__`:
+// Four verbs, all through `http://host.docker.internal:__PORT__`:
 //
 //   node relay.js ask "question…" [--timeout 90]
+//   node relay.js shot "what you need to see…" [--timeout 90]
 //   node relay.js wait <id> [--timeout 90]
 //   node relay.js reply <id> "answer…" | --stdin
 //
-// `ask` and `wait` return as soon as the request settles, and otherwise after
-// `--timeout` seconds with the request still open — a bounded call rather than
-// an agent's tool blocking for as long as a human takes to look. The id it
-// prints is how the same question is picked up again later with `wait`.
+// `ask`, `shot` and `wait` return as soon as the request settles, and otherwise
+// after `--timeout` seconds with the request still open — a bounded call rather
+// than an agent's tool blocking for as long as a human takes to look. The id it
+// prints is how the same request is picked up again later with `wait`.
+//
+// A released screenshot arrives as base64 in the JSON and is written to a file
+// here, in the sandbox, by `saveShot` below. That is the only route an image
+// takes: the daemon never writes into a sandbox, so nothing exists on this
+// filesystem that a human did not approve on its way past.
 //
 // Also the transport for the MCP server next door (`relay-mcp.js`), which
-// `require`s this file for `request`/`reportOutcome` — everything below runs
-// only when this file is the program being executed.
+// `require`s this file for `request`/`collect` — everything below runs only
+// when this file is the program being executed.
 const http = require("http");
 const os = require("os");
+const fs = require("fs");
+const path = require("path");
 
 const PORT = __PORT__;
 const HOST = "host.docker.internal";
@@ -37,11 +51,28 @@ const DEFAULT_TIMEOUT = 90;
 /// Hard ceiling, so a `--timeout` typo cannot wedge a tool call for an hour.
 const MAX_TIMEOUT = 600;
 
+/// Lower ceiling for a screenshot. A question is out with another agent that
+/// may be thinking for minutes; a screenshot is one person deciding whether to
+/// press a key. Past a few minutes they are not at the keyboard, and an agent
+/// holding a call open for them is an agent doing nothing.
+const SHOT_MAX_TIMEOUT = 300;
+
+/// Where a released screenshot is written. Under `~/.sbxw` with the rest of what
+/// sbxw installs in a sandbox, so an agent that finds one knows where it came
+/// from, and so nothing lands in the workspace the human is working in.
+const SHOT_DIR = path.join(os.homedir(), ".sbxw", "shots");
+
+/// File extension per image type sbxw passes on. An agent reads the path this
+/// produces, and a picture named `.png` that is a JPEG is a small trap to leave
+/// lying around.
+const SHOT_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+
 function usage(msg) {
   if (msg) process.stderr.write("sbxw relay: " + msg + "\n");
   process.stderr.write(
     "usage:\n" +
       "  node relay.js ask <question> [--timeout <seconds>]\n" +
+      "  node relay.js shot <what you need to see> [--timeout <seconds>]\n" +
       "  node relay.js wait <request-id> [--timeout <seconds>]\n" +
       "  node relay.js reply <request-id> (<answer> | --stdin)\n",
   );
@@ -49,13 +80,13 @@ function usage(msg) {
 }
 
 /// Pull `--timeout <n>` out of `args`, leaving the positional arguments behind.
-function takeTimeout(args) {
+function takeTimeout(args, max = MAX_TIMEOUT) {
   const i = args.indexOf("--timeout");
-  if (i < 0) return DEFAULT_TIMEOUT;
+  if (i < 0) return Math.min(DEFAULT_TIMEOUT, max);
   const raw = parseInt(args[i + 1], 10);
   args.splice(i, 2);
   if (!Number.isFinite(raw) || raw <= 0) usage("--timeout wants a positive number of seconds");
-  return Math.min(raw, MAX_TIMEOUT);
+  return Math.min(raw, max);
 }
 
 function request(path, body, timeoutMs) {
@@ -127,16 +158,60 @@ function readStdin() {
 const me =
   process.env.SANDBOX_NAME || process.env.SANDBOX_VM_ID || os.hostname();
 
+/// Write a released screenshot to a file, and return its path.
+///
+/// An image is the one thing an agent cannot be handed as text: it has to
+/// become a file before anything can read it. Failing to write one is not
+/// fatal — an MCP client is looking at the picture inline either way — so this
+/// answers `null` rather than throwing, and the prose below says what happened.
+function saveShot(res) {
+  const image = res && res.image;
+  if (!image || !image.b64) return null;
+  try {
+    fs.mkdirSync(SHOT_DIR, { recursive: true });
+    const file = path.join(SHOT_DIR, `${res.id}.${SHOT_EXT[image.mime] || "png"}`);
+    fs.writeFileSync(file, Buffer.from(image.b64, "base64"));
+    return file;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Describe where a request stands, in the terms the *asking* agent needs: what
-/// it may now use, and how to come back if the answer has not been released yet.
-function describeOutcome(res, howToWait) {
+/// it may now use, and how to come back if nothing has been released yet.
+///
+/// `shotPath` is where the image ended up, when there was one — passed in
+/// rather than written here so that this function stays a description of a
+/// state and `collect` stays the single place a file gets created.
+function describeOutcome(res, howToWait, shotPath) {
   const id = res.id;
+  const shot = res.kind === "screenshot";
   // How to come back to an unsettled request. Differs by caller: a shell agent
   // re-runs this CLI, an MCP client calls the tool next door, and telling
   // either one to do the other's thing is how a request gets abandoned.
   const again = howToWait || `run \`node ~/.sbxw/relay.js wait ${id}\``;
+  const capitalised = `${again[0].toUpperCase()}${again.slice(1)}`;
+  const caption = res.answer ? `\n\nThey added: ${res.answer}\n` : "\n";
   switch (res.state) {
     case "approved":
+      if (res.image) {
+        return (
+          `The human sent a screenshot for request ${id}.\n` +
+          (shotPath
+            ? `It is saved at:\n\n${shotPath}\n\nRead that file to see it.`
+            : "It could not be written to disk here, so read it from the tool result.") +
+          caption
+        );
+      }
+      if (shot) {
+        // Asked for a picture, answered in words. Saying so plainly stops an
+        // agent hunting for a file that was never sent.
+        return (
+          `Request ${id}: the human answered in words rather than with an image:\n\n` +
+          res.answer +
+          "\n\nThat is what you have to go on. Do not ask for the picture again.\n"
+        );
+      }
       // With no `to`, nobody was asked: the human answered it themselves, and
       // saying "sandbox null" would be worse than saying nothing.
       return (
@@ -147,6 +222,13 @@ function describeOutcome(res, howToWait) {
         "\n"
       );
     case "denied":
+      if (shot) {
+        return (
+          `Request ${id}: the human declined to send a screenshot${res.note ? ": " + res.note : "."}\n` +
+          "Carry on without seeing it — say what you changed and what it should look like, and\n" +
+          "let them correct you. Do not ask for another one.\n"
+        );
+      }
       return (
         `Request ${id} was declined by the human${res.note ? ": " + res.note : "."}\n` +
         "Do not re-send it. Carry on without this information, or ask the human directly.\n"
@@ -159,14 +241,26 @@ function describeOutcome(res, howToWait) {
     case "routed":
       return (
         `Request ${id} was sent to sandbox "${res.to}", which has not answered yet.\n` +
-        `${again[0].toUpperCase()}${again.slice(1)} to keep waiting.\n`
+        `${capitalised} to keep waiting.\n`
       );
     default:
-      return (
-        `Request ${id} is waiting for the human to route it to a sandbox.\n` +
-        `${again[0].toUpperCase()}${again.slice(1)} to keep waiting.\n`
-      );
+      return shot
+        ? `Request ${id} is waiting for the human to attach a screenshot.\n` +
+            `${capitalised} to keep waiting, or carry on with what does not depend on seeing it.\n`
+        : `Request ${id} is waiting for the human to route it to a sandbox.\n` +
+            `${capitalised} to keep waiting.\n`;
   }
+}
+
+/// Turn a settled (or not) response into everything the agent needs from it: the
+/// image on disk, if one was released, and the prose that says where it is.
+///
+/// The only place `saveShot` is called. Both front ends — this CLI and the MCP
+/// server next door — go through here, so neither can end up describing a file
+/// the other one forgot to write.
+function collect(res, howToWait) {
+  const shotPath = saveShot(res);
+  return { shotPath, text: describeOutcome(res, howToWait, shotPath) };
 }
 
 async function main() {
@@ -174,16 +268,16 @@ async function main() {
   const verb = args.shift();
   if (!verb) usage();
 
-  if (verb === "ask") {
-    const timeout = takeTimeout(args);
+  if (verb === "ask" || verb === "shot") {
+    const timeout = takeTimeout(args, verb === "shot" ? SHOT_MAX_TIMEOUT : MAX_TIMEOUT);
     const question = args.join(" ").trim();
-    if (!question) usage("nothing to ask");
+    if (!question) usage(verb === "shot" ? "say what you need to see" : "nothing to ask");
     const res = await request(
-      "/api/relay/ask",
+      verb === "shot" ? "/api/relay/shot" : "/api/relay/ask",
       { from: me, question, timeout },
       (timeout + 10) * 1000,
     );
-    process.stdout.write(describeOutcome(res));
+    process.stdout.write(collect(res).text);
     return;
   }
 
@@ -192,7 +286,7 @@ async function main() {
     const id = (args.shift() || "").trim();
     if (!id) usage("which request?");
     const res = await request("/api/relay/wait", { from: me, id, timeout }, (timeout + 10) * 1000);
-    process.stdout.write(describeOutcome(res));
+    process.stdout.write(collect(res).text);
     return;
   }
 
@@ -223,4 +317,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { request, describeOutcome, me, DEFAULT_TIMEOUT, MAX_TIMEOUT };
+module.exports = {
+  request,
+  collect,
+  describeOutcome,
+  me,
+  DEFAULT_TIMEOUT,
+  MAX_TIMEOUT,
+  SHOT_MAX_TIMEOUT,
+};

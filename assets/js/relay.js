@@ -1,10 +1,17 @@
-// ── Cross-sandbox information requests ────────────────────────────────────
+// ── Requests an agent cannot settle on its own ────────────────────────────
 //
-// An agent in one sandbox asked for something it cannot see from where it is.
-// This is the human's half of that: the question arrives here, you choose which
-// other sandbox (if any) is asked, you read what comes back, and nothing
-// reaches the asker until you say so. See `src/relay.rs` for the state machine
-// and `assets/relay-tool.js` for the CLI the agents run.
+// An agent in one sandbox asked for something it cannot get to from where it
+// is. This is the human's half of that, and it comes in two shapes:
+//
+//  - a **question** about another sandbox's workspace — you choose which other
+//    sandbox (if any) is asked, you read what comes back, and nothing reaches
+//    the asker until you say so;
+//  - a **screenshot** of what is on your screen — nobody else can supply that,
+//    so there is no routing step at all: you attach an image, describe it in
+//    words instead, or refuse.
+//
+// See `src/relay.rs` for the state machine and `assets/relay-tool.js` for the
+// CLI the agents run.
 //
 // The popup is the *only* place any of this is visible, so it is deliberately
 // interrupting: a request that nobody sees is an agent blocked on a person who
@@ -14,10 +21,30 @@
 
 const relayRequests = new Map(); // id -> request, newest state wins
 const relayOverlay = document.getElementById('relay-modal-overlay');
+const relayTitleEl = document.getElementById('relay-modal-title');
 const relayBodyEl = document.getElementById('relay-modal-body');
 const relayFootEl = document.getElementById('relay-modal-foot');
 const relayQueueEl = document.getElementById('relay-queue');
 const relayBadgeEl = document.getElementById('relay-badge');
+
+// Images attached but not yet sent, by request id.
+//
+// Kept here rather than on the request itself because the server does not know
+// they exist: attaching is a local act, and it stays local until "Send" turns
+// it into an approval. Which is also what makes replacing one free — you can
+// paste, look at it, and paste a better one, with nothing having left the tab.
+const relayShots = new Map(); // id -> { url, label }
+
+// Longest edge an attached image is scaled to before it is sent. A screenshot
+// is read for its layout, not its pixel grid, and a retina capture of a 4K
+// display is several megabytes of JSON to say the same thing.
+const RELAY_SHOT_MAX_EDGE = 1600;
+
+// Ceiling on the base64 that goes over the wire, mirroring `MAX_SHOT_B64` in
+// `src/relay.rs`. Enforced on both sides on purpose: here so the person finds
+// out while they can still pick a smaller window, there because the daemon
+// cannot trust a browser to have done it.
+const RELAY_SHOT_MAX_B64 = 6 * 1024 * 1024;
 
 // Which request is on screen. Sticky: new arrivals queue behind whatever you
 // are already deciding on rather than swapping the buttons under your cursor.
@@ -89,14 +116,77 @@ function relayTargetButtons(req, label) {
           <div class="relay-targets">${buttons}</div>`;
 }
 
-/** The question, always presented as someone else's words rather than as ours. */
+/** Is this one of the requests only the person at the keyboard can settle? */
+function relayIsShot(req) {
+  return req.kind === 'screenshot';
+}
+
+/**
+ * What was asked, always presented as someone else's words rather than as ours.
+ *
+ * The line above the quote is the only thing sbxw says in its own voice here,
+ * and it does the work of framing: what the agent wants, and why it is you
+ * being asked rather than anyone else.
+ */
 function relayQuestionBlock(req) {
+  const why = relayIsShot(req)
+    ? `can't see its own screen, and asks — via you — for a look at what it just changed.`
+    : `asks — via you — for information it can't see from its own workspace.`;
   return `
     <div class="relay-from">
       <span class="relay-badge-sbx">${relayEsc(req.from)}</span>
-      <span class="relay-from-text">asks — via you — for information it can't see from its own workspace.</span>
+      <span class="relay-from-text">${why}</span>
     </div>
     <pre class="relay-quote">${relayEsc(req.question)}</pre>`;
+}
+
+/**
+ * The attach-an-image half of a screenshot request.
+ *
+ * Four ways in, because the natural gesture differs by person and by platform:
+ * take the image the OS screenshot key already put on the clipboard, drop a
+ * file, pick one, or let the browser capture a window here and now. Each is a
+ * button or a target you can see — nothing here depends on knowing that a
+ * keystroke would have worked. They all end at the same place (`relayAttach`),
+ * and the preview is the confirmation: you send what you can see, never what
+ * you hope you copied.
+ */
+function relayShotSection(req) {
+  const held = relayShots.get(req.id);
+  const zone = held
+    ? `<img class="relay-shot-img" src="${held.url}" alt="">
+       <div class="relay-shot-meta">${relayEsc(held.label)} — drop or paste another to replace it</div>`
+    : `<div class="relay-shot-hint">
+         <strong>Drop an image here</strong> — or click to choose a file
+       </div>`;
+  return `
+    <div class="relay-shot-zone${held ? ' has-shot' : ''}" id="relay-shot-zone"
+         title="Drop an image, or click to choose a file">${zone}</div>
+    <div class="relay-shot-actions">
+      ${relayCanPaste() ? `<button class="relay-target" data-relay-action="paste">Paste from clipboard</button>` : ''}
+      ${relayCanCapture() ? `<button class="relay-target" data-relay-action="capture">Capture a window…</button>` : ''}
+      <button class="relay-target" data-relay-action="choose">Choose a file…</button>
+      ${held ? `<button class="relay-target" data-relay-action="drop-shot">Remove</button>` : ''}
+    </div>
+    <input type="file" id="relay-shot-file" accept="image/png,image/jpeg,image/webp" hidden>`;
+}
+
+// Both of the browser-side capture routes are gated on a *secure context*,
+// which localhost satisfies and a LAN address (a `web_addr` opened up to the
+// network) does not — so their availability is a property of how you reached
+// sbxw, not of your browser. Either button is left out rather than shown and
+// refused: an offer that cannot be taken up is worse than no offer, and
+// dropping a file is always on screen.
+
+/** Whether this tab may read the clipboard on a click. */
+function relayCanPaste() {
+  return !!(window.isSecureContext && navigator.clipboard && navigator.clipboard.read);
+}
+
+/** Whether this tab may capture a window. */
+function relayCanCapture() {
+  return !!(window.isSecureContext && navigator.mediaDevices
+            && navigator.mediaDevices.getDisplayMedia);
 }
 
 /**
@@ -177,11 +267,28 @@ function relayRender() {
   const others = queue.filter(r => r.id !== req.id).length;
   relayQueueEl.hidden = others === 0;
   relayQueueEl.textContent = others === 1 ? '1 more waiting' : `${others} more waiting`;
+  relayTitleEl.textContent = relayIsShot(req) ? 'Screenshot request' : 'Information request';
 
   let body = relayQuestionBlock(req);
   let foot = '';
 
-  if (req.state === 'pending') {
+  const settled = req.state === 'approved' || req.state === 'denied';
+
+  if (relayIsShot(req) && !settled) {
+    // `pending` is the only live state a screenshot request has: the server
+    // refuses to route one, so there is nothing to wait on and nothing to
+    // review — just you, an image, and two buttons.
+    if (req.note) body += `<p class="relay-note">${relayEsc(req.note)}</p>`;
+    body += relayShotSection(req);
+    body += `
+      <div class="relay-section-label relay-or">or describe it instead</div>
+      <textarea class="relay-answer" id="relay-own-answer" rows="2"
+                placeholder="Words work too — say what it looks like, and ${relayEsc(req.from)} carries on with that."></textarea>`;
+    foot = `
+      <button class="btn-cancel" data-relay-action="dismiss">Later</button>
+      <button class="relay-deny" data-relay-action="deny">Refuse</button>
+      <button class="btn-create" data-relay-action="approve-own" disabled>Send to ${relayEsc(req.from)}</button>`;
+  } else if (req.state === 'pending') {
     if (req.note) body += `<p class="relay-note">${relayEsc(req.note)}</p>`;
     body += relayTargetButtons(req, 'Ask one of these sandboxes');
     body += `
@@ -225,19 +332,30 @@ function relayRender() {
   relayBodyEl.innerHTML = body;
   relayFootEl.innerHTML = foot;
 
-  // "Send my answer" only means something once there is one.
+  // "Send" only means something once there is something to send — which, on a
+  // screenshot request, an attached image already satisfies with the textarea
+  // left empty.
   const ownAnswer = document.getElementById('relay-own-answer');
   if (ownAnswer) {
     const sendBtn = relayFootEl.querySelector('[data-relay-action="approve-own"]');
     const sync = () => {
-      relayEditing = ownAnswer.value.trim().length > 0;
-      sendBtn.disabled = !relayEditing;
+      const typed = ownAnswer.value.trim().length > 0;
+      relayEditing = typed;
+      sendBtn.disabled = !typed && !relayShots.has(req.id);
     };
     ownAnswer.addEventListener('input', sync);
     sync();
   }
   const review = document.getElementById('relay-review-answer');
   if (review) review.addEventListener('input', () => { relayEditing = true; });
+
+  // A file input cannot be delegated: the change fires on the element itself.
+  const file = document.getElementById('relay-shot-file');
+  if (file) {
+    file.addEventListener('change', () => {
+      if (file.files && file.files[0]) relayAttach(req.id, file.files[0], file.files[0].name);
+    });
+  }
 }
 
 // ── Open / close ──────────────────────────────────────────────────────────
@@ -273,6 +391,179 @@ function relayAdvance() {
   else relayClose();
 }
 
+// ── Attaching an image ────────────────────────────────────────────────────
+
+/**
+ * Scale an image down and turn it into the `data:` URL that gets sent.
+ *
+ * PNG first, because a screenshot is flat colour and text where PNG is both
+ * smaller and sharper than JPEG. The fallback exists for the case PNG is worst
+ * at — a photograph, or a screen full of gradients and video — where it can run
+ * several times over the cap that the same picture as JPEG sits comfortably
+ * under. Choosing by *result* rather than by guessing at the content is the
+ * only rule that gets both right.
+ */
+async function relayShrink(source) {
+  const bitmap = await createImageBitmap(source);
+  const scale = Math.min(1, RELAY_SHOT_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  if (bitmap.close) bitmap.close();
+
+  let url = canvas.toDataURL('image/png');
+  if (url.length > RELAY_SHOT_MAX_B64) url = canvas.toDataURL('image/jpeg', 0.85);
+  return { url, w, h };
+}
+
+/**
+ * Repaint the popup without losing a half-typed caption.
+ *
+ * Attaching an image rebuilds the body, and the textarea goes with it. Someone
+ * who wrote "this is the 375px breakpoint" and *then* pasted the screenshot
+ * would watch their sentence disappear — so the text is carried across, and the
+ * synthetic `input` re-runs the enable/disable pass that was listening on it.
+ */
+function relayRenderKeepingCaption() {
+  const caption = document.getElementById('relay-own-answer')?.value || '';
+  relayRender();
+  const box = document.getElementById('relay-own-answer');
+  if (box && caption) {
+    box.value = caption;
+    box.dispatchEvent(new Event('input'));
+  }
+}
+
+/** Hold an image against `id`, ready to send. The preview is the receipt. */
+async function relayAttach(id, source, label) {
+  try {
+    const { url, w, h } = await relayShrink(source);
+    if (url.length > RELAY_SHOT_MAX_B64) {
+      showToast('That image is too large to send — try a single window', 'error');
+      return;
+    }
+    relayShots.set(id, { url, label: `${label || 'image'} · ${w}×${h}` });
+    relayRenderKeepingCaption();
+  } catch (_) {
+    showToast('That did not come through as an image', 'error');
+  }
+}
+
+/**
+ * Read the clipboard on a click, rather than waiting to be pasted into.
+ *
+ * ⌘V still works (the listener below), but it is not something to *rely* on
+ * here: the popup shares a tab with a live terminal, the keystroke belongs to
+ * whatever holds focus, and a person looking at a modal with a screenshot
+ * already on their clipboard should not have to guess which of the two is
+ * listening. A button is the version of that gesture with no ambiguity in it —
+ * and the click is also the user activation the API insists on.
+ */
+async function relayPasteFromClipboard(id) {
+  if (!relayCanPaste()) {
+    showToast('Reading the clipboard needs sbxw opened on localhost', 'error');
+    return;
+  }
+  let items;
+  try {
+    items = await navigator.clipboard.read();
+  } catch (_) {
+    // Permission refused, or a browser that only allows the keystroke. Both
+    // leave ⌘V working, so that is what to say.
+    showToast('The browser would not hand over the clipboard — press ⌘V instead', 'error');
+    return;
+  }
+  for (const item of items) {
+    const type = item.types.find(t => t.startsWith('image/'));
+    if (!type) continue;
+    try {
+      await relayAttach(id, await item.getType(type), 'from clipboard');
+      return;
+    } catch (_) {
+      // Unreadable item; another one on the clipboard may still be an image.
+    }
+  }
+  showToast('Nothing on the clipboard is an image', 'error');
+}
+
+/**
+ * Capture a window (or a screen) through the browser itself.
+ *
+ * Worth the extra path because it removes the step where the whole thing goes
+ * wrong: an agent is waiting *now*, and "go and take a screenshot, then come
+ * back and paste it" is where a person leaves the popup and forgets. The picker
+ * the browser puts up is also the permission — sbxw never chooses what is
+ * captured, and cannot see the screen the rest of the time.
+ */
+async function relayCapture(id) {
+  if (!relayCanCapture()) {
+    showToast('Capture needs sbxw opened on localhost — paste or drop an image instead', 'error');
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (_) {
+    return; // Picker dismissed. Changing your mind is not an error.
+  }
+  try {
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    await video.play();
+    // A frame has to have actually arrived before the canvas has anything to
+    // copy; `play()` resolving only means the pipeline started. Two frames, so
+    // what is captured is a painted one rather than the first blank buffer.
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await relayAttach(id, video, 'captured');
+  } finally {
+    stream.getTracks().forEach(t => t.stop());
+  }
+}
+
+/** The first image on a DataTransfer or clipboard, if there is one. */
+function relayImageFrom(data) {
+  const items = [...((data && data.items) || [])];
+  const item = items.find(i => i.kind === 'file' && i.type.startsWith('image/'));
+  return item ? item.getAsFile() : null;
+}
+
+// ⌘V as well as the button, for the muscle memory of whoever just pressed the
+// OS screenshot key: anywhere in the popup, with no field to focus first.
+// Scoped to a screenshot request that is actually on screen, so it never
+// swallows a paste meant for a terminal or a textarea.
+document.addEventListener('paste', ev => {
+  if (relayOverlay.classList.contains('hidden')) return;
+  const req = relayCurrent();
+  if (!req || !relayIsShot(req) || req.state !== 'pending') return;
+  const file = relayImageFrom(ev.clipboardData);
+  if (!file) return;
+  ev.preventDefault();
+  relayAttach(req.id, file, 'pasted');
+});
+
+relayOverlay.addEventListener('dragover', ev => {
+  const req = relayCurrent();
+  if (!req || !relayIsShot(req)) return;
+  ev.preventDefault();
+  const zone = ev.target.closest('#relay-shot-zone');
+  if (zone) zone.classList.add('over');
+});
+relayOverlay.addEventListener('dragleave', ev => {
+  const zone = ev.target.closest('#relay-shot-zone');
+  if (zone) zone.classList.remove('over');
+});
+relayOverlay.addEventListener('drop', ev => {
+  const req = relayCurrent();
+  if (!req || !relayIsShot(req) || req.state !== 'pending') return;
+  ev.preventDefault();
+  const file = relayImageFrom(ev.dataTransfer);
+  if (file) relayAttach(req.id, file, file.name);
+});
+
 // ── Actions ───────────────────────────────────────────────────────────────
 
 async function relayPost(path, body) {
@@ -302,6 +593,13 @@ relayOverlay.addEventListener('click', async ev => {
     return;
   }
 
+  // The drop zone is a button in everything but markup — clicking it (or the
+  // preview already in it) picks a file, so the three ways in are one target.
+  if (ev.target.closest('#relay-shot-zone')) {
+    document.getElementById('relay-shot-file')?.click();
+    return;
+  }
+
   const action = ev.target.closest('[data-relay-action]')?.dataset.relayAction;
   if (!action) return;
 
@@ -311,14 +609,32 @@ relayOverlay.addEventListener('click', async ev => {
     relayClose();
     relayRender();
   } else if (action === 'deny') {
-    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/deny`, {})) relayEditing = false;
+    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/deny`, {})) {
+      relayEditing = false;
+      // Refusing has to take the image with it, or the next request to reach
+      // this popup would find a screenshot from the one you just declined.
+      relayShots.delete(req.id);
+    }
+  } else if (action === 'paste') {
+    relayPasteFromClipboard(req.id);
+  } else if (action === 'capture') {
+    relayCapture(req.id);
+  } else if (action === 'choose') {
+    document.getElementById('relay-shot-file')?.click();
+  } else if (action === 'drop-shot') {
+    relayShots.delete(req.id);
+    relayRenderKeepingCaption();
   } else if (action === 'approve' || action === 'approve-own') {
     const box = document.getElementById(
       action === 'approve' ? 'relay-review-answer' : 'relay-own-answer');
     const answer = (box?.value || '').trim();
-    if (!answer) { showToast('Nothing to send', 'error'); return; }
-    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, { answer })) {
+    const image = relayShots.get(req.id)?.url;
+    // Either one is enough. A screenshot needs no caption, and a person who
+    // would rather describe what they see than show it has answered too.
+    if (!answer && !image) { showToast('Nothing to send', 'error'); return; }
+    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, { answer, image })) {
       relayEditing = false;
+      relayShots.delete(req.id);
     }
   }
 });
@@ -350,6 +666,9 @@ function relayIngest(req, seed = false) {
 
   const settled = req.state === 'approved' || req.state === 'denied';
   if (settled) {
+    // Whatever was attached has either been sent or refused; either way this
+    // tab has no further use for a copy of someone's screen.
+    relayShots.delete(req.id);
     if (relayCurrentId === req.id) {
       relayRender();
       clearTimeout(relayLingerTimer);

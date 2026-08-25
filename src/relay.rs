@@ -1,9 +1,18 @@
-//! Cross-sandbox information requests, with a human on every hop.
+//! Requests an agent cannot settle from inside its own sandbox, with a human on
+//! every hop.
 //!
-//! An agent in one sandbox asks a question (`assets/relay-tool.js`); a person
-//! in the web UI decides which *other* sandbox — if any — is asked; that
-//! sandbox's agent answers; the same person decides whether the answer is
-//! released. Only then does the asking side learn anything.
+//! Two things are asked for here, and they differ only in who can possibly
+//! answer. A **question** (`RelayKind::Question`) is about a workspace this
+//! agent cannot see: a person in the web UI decides which *other* sandbox — if
+//! any — is asked, that sandbox's agent answers, and the same person decides
+//! whether the answer is released. A **screenshot** (`RelayKind::Screenshot`) is
+//! about something only the person at the keyboard can see — what the change
+//! actually looks like on screen — so it is never handed to another sandbox at
+//! all; it is answered, or refused, by the human it interrupted.
+//!
+//! Both travel the same queue, the same popup and the same approval, because
+//! the interesting part is identical: an agent is blocked on a person, and
+//! nothing crosses until that person says so.
 //!
 //! The two rules that shape everything here:
 //!
@@ -20,6 +29,12 @@
 //! This module is the state machine and nothing else: no HTTP, no PTY. `web.rs`
 //! owns the endpoints, the SSE fan-out, and the typing of messages into the
 //! target session.
+//!
+//! A note on what a request *carries*. An answer is text and a screenshot is an
+//! image, but neither is read here — a question is data for another agent, an
+//! answer is data for the asking one, and an image is base64 the daemon never
+//! decodes. Everything in this file moves payloads between states; nothing in
+//! it looks inside one.
 
 use serde::Serialize;
 use std::{
@@ -58,22 +73,77 @@ impl RelayState {
     }
 }
 
+/// What is being asked for, and therefore who could possibly supply it.
+///
+/// This is not a label on an otherwise identical request: it decides whether
+/// `Routed` and `Answered` are reachable at all. Nobody but the person at the
+/// keyboard can see the screen, so a `Screenshot` that got routed to another
+/// sandbox would be a question no agent there is able to answer — which is why
+/// the transitions below refuse it outright rather than leaving the UI to know
+/// better.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RelayKind {
+    /// Information from another sandbox's workspace.
+    #[default]
+    Question,
+    /// An image of what is on the human's screen.
+    Screenshot,
+}
+
+/// An image a human attached to a screenshot request.
+///
+/// Held as the base64 the browser sent rather than as decoded bytes. The daemon
+/// is a courier for this payload exactly as it is for a question's text: every
+/// byte it does not interpret is an image decoder it does not run on data a
+/// browser handed it, and the sandbox that asked has to decode the picture
+/// anyway. What is checked at the door is the envelope — see
+/// `web::parse_shot`.
+#[derive(Clone, Debug)]
+pub(crate) struct Shot {
+    /// `image/png`, `image/jpeg` or `image/webp`.
+    pub(crate) mime: String,
+    /// The image itself, base64, without the `data:` prefix.
+    pub(crate) b64: String,
+}
+
+/// How an attached image is serialized: as *whether there is one*.
+///
+/// The browser and the island are the only readers of a whole `RelayRequest`,
+/// and neither needs the pixels — the popup already holds the copy it just
+/// pasted, and the notch has nothing to do with it. Sending presence instead
+/// also keeps a megabyte of base64 out of every SSE frame this request will
+/// ever produce, on a channel that repaints on each transition.
+fn shot_presence<S: serde::Serializer>(shot: &Option<Shot>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_bool(shot.is_some())
+}
+
 /// One question and everything that has happened to it.
 #[derive(Clone, Serialize, Debug)]
 pub(crate) struct RelayRequest {
     pub(crate) id: String,
     /// Sandbox that asked.
     pub(crate) from: String,
-    /// The question, as the asking agent wrote it. Untrusted text: it is shown
-    /// to a person and typed into another agent's session, never interpreted
-    /// here.
+    /// What is being asked for. Fixed at `open` — a request never changes what
+    /// it is, only where it stands.
+    pub(crate) kind: RelayKind,
+    /// The question, as the asking agent wrote it — or, for a screenshot, why
+    /// it wants one and what it hopes to see. Untrusted text either way: it is
+    /// shown to a person and typed into another agent's session, never
+    /// interpreted here.
     pub(crate) question: String,
     /// Sandbox a human routed it to, once one has been chosen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) to: Option<String>,
-    /// The answer — held while `Answered`, released only by `Approved`.
+    /// The answer — held while `Answered`, released only by `Approved`. On a
+    /// screenshot request this is the human's caption, if they wrote one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) answer: Option<String>,
+    /// The image a human attached, under exactly the same rule as `answer`:
+    /// present on the server from the moment it is pasted, the asker's only
+    /// once approval says so.
+    #[serde(rename = "has_shot", serialize_with = "shot_presence")]
+    pub(crate) shot: Option<Shot>,
     pub(crate) state: RelayState,
     /// Why a request was denied, or what went wrong delivering it. Shown to
     /// both humans and agents, so it says what to do rather than what failed.
@@ -108,6 +178,21 @@ pub(crate) const MAX_QUESTION: usize = 4000;
 /// Cap on an answer's length, same reasoning from the other direction.
 pub(crate) const MAX_ANSWER: usize = 16000;
 
+/// Cap on the base64 of an attached screenshot — a little over 4 MB of actual
+/// image.
+///
+/// A backstop, not a budget: the browser downscales what it uploads (see
+/// `assets/js/relay.js`), so a screenshot that arrives anywhere near this is one
+/// that skipped that path. It has to be generous enough for a full retina
+/// window and small enough that the JSON it rides in stays a message rather
+/// than a transfer.
+pub(crate) const MAX_SHOT_B64: usize = 6 * 1024 * 1024;
+
+/// Image types a screenshot may be. Short on purpose: an agent has to decode
+/// whatever comes out the other end, and this is the list every one of them
+/// reads without being told.
+pub(crate) const SHOT_MIMES: &[&str] = &["image/png", "image/jpeg", "image/webp"];
+
 /// Every live request, plus the bus the UI watches.
 pub(crate) struct Relay {
     requests: Mutex<HashMap<String, RelayRequest>>,
@@ -137,15 +222,24 @@ impl Relay {
     }
 
     /// Open a request. Always succeeds — deciding whether a question deserves
-    /// asking is the human's job, not this function's.
-    pub(crate) fn open(&self, from: &str, question: &str, now: u64) -> RelayRequest {
+    /// asking, or an interruption deserves a screenshot, is the human's job and
+    /// not this function's.
+    pub(crate) fn open(
+        &self,
+        from: &str,
+        kind: RelayKind,
+        question: &str,
+        now: u64,
+    ) -> RelayRequest {
         let id = format!("r-{}", self.seq.fetch_add(1, Ordering::Relaxed));
         let req = RelayRequest {
             id: id.clone(),
             from: from.to_string(),
+            kind,
             question: question.to_string(),
             to: None,
             answer: None,
+            shot: None,
             state: RelayState::Pending,
             note: None,
             created_ms: now,
@@ -198,6 +292,11 @@ impl Relay {
             if req.state.is_final() {
                 return Err(format!("request {id} is already settled"));
             }
+            if req.kind == RelayKind::Screenshot {
+                return Err(format!(
+                    "request {id} asks for a screenshot — no other sandbox can see this screen"
+                ));
+            }
             if req.from == to {
                 return Err(format!("'{to}' is the sandbox that asked"));
             }
@@ -225,6 +324,10 @@ impl Relay {
 
     /// The routed-to sandbox answers. `from` is checked against the routing: a
     /// sandbox can only answer the question it was actually handed.
+    ///
+    /// No `RelayKind` check is needed, and adding one would be a second rule
+    /// saying the same thing: a screenshot request cannot be routed, so it has
+    /// no `to` for any sandbox's name to match.
     pub(crate) fn reply(
         &self,
         id: &str,
@@ -246,13 +349,22 @@ impl Relay {
         })
     }
 
-    /// A human releases an answer to the asker — either the one under review,
-    /// or their own text, which is also how a question gets answered without
-    /// involving a second sandbox at all.
+    /// A human releases what the asker gets — the answer under review, their
+    /// own text, an image they attached, or a caption alongside it. This is also
+    /// how a question gets answered without involving a second sandbox at all,
+    /// and it is the *only* way a screenshot request ever settles in the asker's
+    /// favour.
+    ///
+    /// One rule covers both kinds: something has to be going out. Which of the
+    /// two payloads it is stays deliberately untyped here — a screenshot with a
+    /// caption and a question answered with a picture are both perfectly sensible
+    /// things for a person to send, and refusing them would be this function
+    /// second-guessing the human it exists to serve.
     pub(crate) fn approve(
         &self,
         id: &str,
         answer: Option<&str>,
+        shot: Option<Shot>,
         now: u64,
     ) -> Result<RelayRequest, String> {
         self.mutate(id, now, |req| {
@@ -262,8 +374,11 @@ impl Relay {
             if let Some(text) = answer {
                 req.answer = Some(text.to_string());
             }
-            if req.answer.is_none() {
-                return Err("there is no answer to approve yet".to_string());
+            if let Some(image) = shot {
+                req.shot = Some(image);
+            }
+            if req.answer.is_none() && req.shot.is_none() {
+                return Err("there is nothing to send yet".to_string());
             }
             req.state = RelayState::Approved;
             Ok(())
@@ -283,8 +398,12 @@ impl Relay {
                 return Err(format!("request {id} is already settled"));
             }
             // The held answer never reaches the asker, so it is dropped here
-            // rather than kept where an approval could later release it.
+            // rather than kept where an approval could later release it. The
+            // image is cleared alongside it so that "denied" is a statement
+            // about the whole request rather than about the one field that
+            // happens to be fillable before approval today.
             req.answer = None;
+            req.shot = None;
             req.state = RelayState::Denied;
             req.note = note.map(str::to_string);
             Ok(())
@@ -412,7 +531,12 @@ mod tests {
     #[test]
     fn an_answer_only_exists_once_a_human_has_released_it() {
         let r = relay();
-        let req = r.open("alpha", "what shape is /v1/orders?", 1_000);
+        let req = r.open(
+            "alpha",
+            RelayKind::Question,
+            "what shape is /v1/orders?",
+            1_000,
+        );
         assert_eq!(req.state, RelayState::Pending);
         assert!(req.answer.is_none());
 
@@ -426,7 +550,7 @@ mod tests {
         // waiting rather than returning what is on the table.
         assert!(!answered.state.is_final());
 
-        let approved = r.approve(&req.id, None, 4_000).unwrap();
+        let approved = r.approve(&req.id, None, None, 4_000).unwrap();
         assert_eq!(approved.state, RelayState::Approved);
         assert_eq!(approved.answer.as_deref(), Some("{ id, total }"));
     }
@@ -435,7 +559,7 @@ mod tests {
     #[test]
     fn approving_with_text_replaces_what_the_target_wrote() {
         let r = relay();
-        let req = r.open("alpha", "the staging URL?", 1_000);
+        let req = r.open("alpha", RelayKind::Question, "the staging URL?", 1_000);
         r.route(&req.id, "beta", 2_000).unwrap();
         r.reply(
             &req.id,
@@ -445,7 +569,7 @@ mod tests {
         )
         .unwrap();
         let approved = r
-            .approve(&req.id, Some("https://staging.internal"), 4_000)
+            .approve(&req.id, Some("https://staging.internal"), None, 4_000)
             .unwrap();
         assert_eq!(approved.answer.as_deref(), Some("https://staging.internal"));
     }
@@ -454,14 +578,19 @@ mod tests {
     #[test]
     fn a_human_can_answer_a_pending_request_themselves() {
         let r = relay();
-        let req = r.open("alpha", "which region do we deploy to?", 1_000);
-        let approved = r.approve(&req.id, Some("eu-west-1"), 2_000).unwrap();
+        let req = r.open(
+            "alpha",
+            RelayKind::Question,
+            "which region do we deploy to?",
+            1_000,
+        );
+        let approved = r.approve(&req.id, Some("eu-west-1"), None, 2_000).unwrap();
         assert_eq!(approved.state, RelayState::Approved);
         assert_eq!(approved.answer.as_deref(), Some("eu-west-1"));
         // …but not out of thin air: with nothing written, there is nothing to
         // release.
-        let bare = r.open("alpha", "and the account id?", 3_000);
-        assert!(r.approve(&bare.id, None, 4_000).is_err());
+        let bare = r.open("alpha", RelayKind::Question, "and the account id?", 3_000);
+        assert!(r.approve(&bare.id, None, None, 4_000).is_err());
     }
 
     /// The rule that keeps this from being a bus: answering is scoped to the
@@ -469,7 +598,7 @@ mod tests {
     #[test]
     fn only_the_routed_sandbox_can_answer() {
         let r = relay();
-        let req = r.open("alpha", "?", 1_000);
+        let req = r.open("alpha", RelayKind::Question, "?", 1_000);
         assert!(r.reply(&req.id, "beta", "…", 2_000).is_err());
         r.route(&req.id, "beta", 3_000).unwrap();
         assert!(r.reply(&req.id, "gamma", "…", 4_000).is_err());
@@ -481,7 +610,7 @@ mod tests {
     #[test]
     fn rerouting_drops_the_previous_answer() {
         let r = relay();
-        let req = r.open("alpha", "?", 1_000);
+        let req = r.open("alpha", RelayKind::Question, "?", 1_000);
         r.route(&req.id, "beta", 2_000).unwrap();
         r.reply(&req.id, "beta", "beta's take", 3_000).unwrap();
         let rerouted = r.route(&req.id, "gamma", 4_000).unwrap();
@@ -496,7 +625,7 @@ mod tests {
     #[test]
     fn denial_is_terminal_and_discards_the_answer() {
         let r = relay();
-        let req = r.open("alpha", "the prod credentials?", 1_000);
+        let req = r.open("alpha", RelayKind::Question, "the prod credentials?", 1_000);
         r.route(&req.id, "beta", 2_000).unwrap();
         r.reply(&req.id, "beta", "hunter2", 3_000).unwrap();
         let denied = r
@@ -504,7 +633,7 @@ mod tests {
             .unwrap();
         assert_eq!(denied.state, RelayState::Denied);
         assert!(denied.answer.is_none());
-        assert!(r.approve(&req.id, None, 5_000).is_err());
+        assert!(r.approve(&req.id, None, None, 5_000).is_err());
         assert!(r.route(&req.id, "gamma", 6_000).is_err());
         assert!(r.reply(&req.id, "beta", "hunter2", 7_000).is_err());
     }
@@ -514,8 +643,8 @@ mod tests {
     #[tokio::test]
     async fn waiting_is_scoped_to_the_sandbox_that_asked() {
         let r = relay();
-        let req = r.open("alpha", "?", 1_000);
-        r.approve(&req.id, Some("released"), 2_000).unwrap();
+        let req = r.open("alpha", RelayKind::Question, "?", 1_000);
+        r.approve(&req.id, Some("released"), None, 2_000).unwrap();
         assert!(r
             .wait(&req.id, "beta", Duration::from_millis(10))
             .await
@@ -533,7 +662,7 @@ mod tests {
     #[tokio::test]
     async fn a_timed_out_wait_reports_the_open_state_and_deregisters() {
         let r = relay();
-        let req = r.open("alpha", "?", 1_000);
+        let req = r.open("alpha", RelayKind::Question, "?", 1_000);
         r.route(&req.id, "beta", 2_000).unwrap();
         let out = r
             .wait(&req.id, "alpha", Duration::from_millis(20))
@@ -549,7 +678,7 @@ mod tests {
     #[tokio::test]
     async fn an_approval_wakes_the_waiting_ask() {
         let r = std::sync::Arc::new(relay());
-        let req = r.open("alpha", "?", 1_000);
+        let req = r.open("alpha", RelayKind::Question, "?", 1_000);
         let waiter = {
             let r = r.clone();
             let id = req.id.clone();
@@ -559,7 +688,8 @@ mod tests {
         // exercises the broadcast rather than the pre-check in `wait`.
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!r.is_unattended(&req.id), "the waiter should be registered");
-        r.approve(&req.id, Some("here you go"), 2_000).unwrap();
+        r.approve(&req.id, Some("here you go"), None, 2_000)
+            .unwrap();
 
         let out = waiter.await.unwrap().unwrap();
         assert_eq!(out.state, RelayState::Approved);
@@ -571,9 +701,9 @@ mod tests {
     #[test]
     fn pruning_outlives_a_late_pickup_but_not_an_abandoned_request() {
         let r = relay();
-        let fresh = r.open("alpha", "?", 0);
-        let settled = r.open("alpha", "?", 0);
-        r.approve(&settled.id, Some("x"), 0).unwrap();
+        let fresh = r.open("alpha", RelayKind::Question, "?", 0);
+        let settled = r.open("alpha", RelayKind::Question, "?", 0);
+        r.approve(&settled.id, Some("x"), None, 0).unwrap();
 
         let hour = 60 * 60 * 1000;
         assert_eq!(r.prune(10 * 60 * 1000), 0, "nothing is stale after 10 min");
@@ -584,5 +714,102 @@ mod tests {
             "an open request waits for its human"
         );
         assert_eq!(r.prune(7 * hour), 1, "…but not forever");
+    }
+
+    fn shot() -> Shot {
+        Shot {
+            mime: "image/png".to_string(),
+            b64: "iVBORw0KGgo=".to_string(),
+        }
+    }
+
+    /// The short life of a screenshot request: opened, answered by the person it
+    /// interrupted, released. No sandbox is involved at any point.
+    #[test]
+    fn a_screenshot_request_is_settled_by_the_human_alone() {
+        let r = relay();
+        let req = r.open(
+            "alpha",
+            RelayKind::Screenshot,
+            "how does the header look?",
+            1_000,
+        );
+        assert_eq!(req.state, RelayState::Pending);
+
+        let approved = r
+            .approve(&req.id, Some("mobile width"), Some(shot()), 2_000)
+            .unwrap();
+        assert_eq!(approved.state, RelayState::Approved);
+        assert_eq!(approved.shot.as_ref().unwrap().mime, "image/png");
+        // The caption rides along with the image rather than replacing it.
+        assert_eq!(approved.answer.as_deref(), Some("mobile width"));
+    }
+
+    /// The rule that makes the kind more than a label. Routing one of these
+    /// would hand a person's screen to an agent that cannot see it, and the
+    /// human would be left waiting on a sandbox that has nothing to say.
+    #[test]
+    fn a_screenshot_request_cannot_be_sent_to_another_sandbox() {
+        let r = relay();
+        let req = r.open(
+            "alpha",
+            RelayKind::Screenshot,
+            "what does it look like?",
+            1_000,
+        );
+        assert!(r.route(&req.id, "beta", 2_000).is_err());
+        // And with no routing there is nothing for a sandbox to answer into.
+        assert!(r.reply(&req.id, "beta", "looks fine to me", 3_000).is_err());
+        assert_eq!(r.get(&req.id).unwrap().state, RelayState::Pending);
+    }
+
+    /// Approval needs something to send, in whichever form. A screenshot request
+    /// answered in words is a human choosing to describe rather than show — a
+    /// perfectly good outcome, and not one this layer overrules.
+    #[test]
+    fn approving_needs_a_payload_but_not_a_particular_one() {
+        let r = relay();
+        let empty = r.open("alpha", RelayKind::Screenshot, "?", 1_000);
+        assert!(r.approve(&empty.id, None, None, 2_000).is_err());
+
+        let described = r.open("alpha", RelayKind::Screenshot, "?", 3_000);
+        let approved = r
+            .approve(
+                &described.id,
+                Some("the header wraps at 400px"),
+                None,
+                4_000,
+            )
+            .unwrap();
+        assert_eq!(approved.state, RelayState::Approved);
+        assert!(approved.shot.is_none());
+    }
+
+    /// Refusing is a full stop for pixels too: "not this window" must not be
+    /// something a later approval can walk back by attaching an image to the
+    /// same request.
+    #[test]
+    fn denial_closes_the_door_on_a_screenshot() {
+        let r = relay();
+        let req = r.open("alpha", RelayKind::Screenshot, "?", 1_000);
+        let denied = r
+            .deny(&req.id, Some("that window has customer data"), 2_000)
+            .unwrap();
+        assert_eq!(denied.state, RelayState::Denied);
+        assert!(denied.shot.is_none());
+        assert!(r.approve(&req.id, None, Some(shot()), 3_000).is_err());
+    }
+
+    /// What the SSE stream and the popup are told about an image: that there is
+    /// one. The bytes travel only in the reply to the sandbox that asked.
+    #[test]
+    fn the_broadcast_carries_presence_not_pixels() {
+        let r = relay();
+        let req = r.open("alpha", RelayKind::Screenshot, "?", 1_000);
+        let approved = r.approve(&req.id, None, Some(shot()), 2_000).unwrap();
+        let json = serde_json::to_string(&approved).unwrap();
+        assert!(json.contains("\"has_shot\":true"));
+        assert!(json.contains("\"kind\":\"screenshot\""));
+        assert!(!json.contains("iVBORw0KGgo"));
     }
 }

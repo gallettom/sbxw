@@ -1354,12 +1354,19 @@ const RELAY_DOC_END: &str = "<!-- sbxw:relay:end -->";
 
 /// What the agent is told about the relay, verbatim, in its user memory.
 ///
-/// This is the *trigger*, not the manual — the tool's own description (see
+/// This is the *trigger*, not the manual — each tool's own description (see
 /// `assets/relay-mcp.js`) explains how to use it, and the message the daemon
 /// types into a target session carries the answering side's instructions. What
-/// memory adds is recognising the moment, because the moment does not announce
-/// itself: it looks like an ordinary dead end, and the reflex it has to beat is
-/// "tell the user I can't see it" — which reads as diligence, not as a miss.
+/// memory adds is recognising the moment, because neither moment announces
+/// itself.
+///
+/// Two of them, and they fail the same way for opposite reasons. The first
+/// looks like an ordinary dead end, and the reflex it has to beat is "tell the
+/// user I can't see it" — which reads as diligence, not as a miss. The second
+/// does not look like a dead end at all: the change compiled, the diff is
+/// right, and an agent that has never seen the screen has no prompt telling it
+/// that "right" and "looks right" are different claims. So the second paragraph
+/// names the thing being confused rather than a symptom to watch for.
 ///
 /// Deliberately short and unhedged. An earlier version led with "use it
 /// sparingly", and a session that had established the code it needed was in an
@@ -1391,6 +1398,27 @@ fn relay_doc() -> String {
          The question is read by a human and then by an agent that knows nothing\n\
          of this conversation, so make it self-contained. Never send secrets or\n\
          file contents you were not asked to share.\n\
+         \n\
+         ## When you can't see what you changed\n\
+         \n\
+         You cannot see this project's screen. When the work was visual — a\n\
+         layout, a style, a component, anything whose correctness is a matter of\n\
+         how it looks — **ask to be shown it** with the\n\
+         **`ask_user_for_screenshot`** tool, before you call it done and before\n\
+         a third round of \"is it better now?\".\n\
+         \n\
+         The moment is easy to miss because nothing is failing: the change is\n\
+         made, the diff is right, and it still might look wrong. \"The code is\n\
+         correct\" and \"it looks correct\" are different claims, and only one of\n\
+         them is yours to make from here.\n\
+         \n\
+         From a shell: `node {RELAY_TOOL_PATH} shot \"what you need to see\"`.\n\
+         \n\
+         Say which screen, which state, which width. The user may refuse — that\n\
+         is an ordinary answer, not a setback: carry on, say what you changed\n\
+         and what you expect it to look like, and let them correct you. Don't\n\
+         ask twice for the same view, and don't ask at all for something you can\n\
+         run and capture yourself.\n\
          {RELAY_DOC_END}\n"
     )
 }
@@ -1673,8 +1701,19 @@ mod tests {
             doc.contains("before you tell the user you cannot see it"),
             "names the moment it is for: {doc}"
         );
-        // The shell fallback has to keep working when MCP doesn't.
+        // The visual half, whose moment is the harder of the two to notice:
+        // nothing has failed, so there is no dead end to run into.
+        assert!(doc.contains("ask_user_for_screenshot"), "names the tool");
+        assert!(
+            doc.contains("different claims"),
+            "names what the moment is a confusion between: {doc}"
+        );
+        // A refusal has to read as an answer, or an agent treats it as an
+        // obstacle and spends the user's attention getting around it.
+        assert!(doc.contains("may refuse"), "{doc}");
+        // The shell fallback has to keep working when MCP doesn't — for both.
         assert!(doc.contains(RELAY_TOOL_PATH), "keeps the CLI fallback");
+        assert!(doc.contains("shot \"what you need to see\""), "{doc}");
         // And it must not re-introduce the brake that suppressed it: restraint
         // belongs in the tool description, read while deciding to *call* it.
         assert!(

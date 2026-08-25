@@ -80,6 +80,9 @@ final class NotchController: ObservableObject {
     private var rowsExpanded = false
     private var hideTask: Task<Void, Never>?
     private var toastTask: Task<Void, Never>?
+    /// Pending self-retract of an announced screenshot card (see
+    /// `scheduleShotRetract`).
+    private var shotCardTask: Task<Void, Never>?
     /// Pending hover-intent reveal (see `hoverIntentDelay`).
     private var hoverTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
@@ -281,17 +284,65 @@ final class NotchController: ObservableObject {
     ///
     /// The guard is on the *display*, so an explicit tap on the banner still
     /// opens the request it names: by then the list is what's on screen.
-    func showRelay(_ req: RelayRequest) {
+    /// Put a relay request on the notch.
+    ///
+    /// `announcing` is the difference between the island raising this by itself
+    /// and the user asking for it from the banner. Only an announcement retires
+    /// itself (see `scheduleShotRetract`); a card someone deliberately opened
+    /// stays until they are done with it.
+    func showRelay(_ req: RelayRequest, announcing: Bool = true) {
         if display.isCard { return }
         hideTask?.cancel()
         toastTask?.cancel()
         setDisplay(.relay(req))
+        if announcing { scheduleShotRetract(req) } else { shotCardTask?.cancel() }
+    }
+
+    /// How long an announced screenshot request holds the notch. Long enough to
+    /// read a two-line request and reach for the button under it; short enough
+    /// that it is gone before you go looking for the window to capture.
+    private static let shotCardSeconds: Double = 8
+
+    /// A screenshot request announces itself and then gets out of the way.
+    ///
+    /// Every other card holds the notch until it is answered, which is right
+    /// when the answer is *on* the notch: a question can be routed, an answer
+    /// released, from the card itself. This one cannot be answered here at all —
+    /// the image goes in from the browser — so after it has been read the card
+    /// is not waiting for anything.
+    ///
+    /// And it is asking for a picture of *this screen*. A panel parked over the
+    /// menu bar while the user goes to capture a window is not merely idle; it
+    /// is about to be in the photograph. Retiring itself is the one behaviour
+    /// that can't get in the way of the thing it is asking for.
+    ///
+    /// This does not contradict `IslandDisplay.isCard`, which is about nothing
+    /// *else* being allowed to shove a decision aside. Here the card is putting
+    /// itself away, and the banner in the hover list is still the way back.
+    private func scheduleShotRetract(_ req: RelayRequest) {
+        shotCardTask?.cancel()
+        guard req.isScreenshot else { return }
+        shotCardTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.shotCardSeconds))
+            guard let self, !Task.isCancelled else { return }
+            // Only if it is still the thing on screen. Hovering swaps the notch
+            // to the list, so someone reading it is covered by this too.
+            guard case .relay(let current) = self.display, current.id == req.id else { return }
+            // Recorded as a dismissal, not just collapsed: this *is* the island
+            // saying "later" on the user's behalf, so the request must also drop
+            // out of `pendingForYou` — otherwise settling some other request
+            // would surface this one right back over the menu bar. The banner
+            // ignores dismissals by design and stays the way back.
+            self.relay.dismiss(current)
+            self.collapse()
+        }
     }
 
     /// Retract the relay card. Called after a decision, and by its ✕ — which
     /// means "later": `RelayStore` records the dismissal, the daemon keeps the
     /// request, and the asking agent keeps waiting.
     func dismissRelay() {
+        shotCardTask?.cancel()
         if case .relay = display { collapseAndSurfaceNext() }
     }
 

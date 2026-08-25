@@ -165,6 +165,11 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   it can't see from its own workspace: a popup shows the question and one button
   per running sandbox, and the answer that comes back is yours to edit, release
   or refuse. See [Asking another sandbox](#asking-another-sandbox-the-relay).
+- **Show an agent what it just built**, when it asks: the same popup takes a
+  screenshot you paste, drop, pick or capture from a window, previews it, and
+  sends it to the sandbox that asked. Words instead of a picture, or a flat
+  refusal, are equally valid answers. See
+  [Asking *you* for a screenshot](#asking-you-for-a-screenshot).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
 - **Read the project's code map** — the **Code map** button in the **Project**
   panel (📁 in the sidebar) opens the linked markdown under
@@ -369,11 +374,13 @@ no path where an answer reaches the asker without someone clicking a button.
 
 **The agent's side.** The agent asks **on its own**, without being told to. Every
 sandbox gets an MCP server (`sbxw-relay`, registered at user scope in
-`~/.claude.json`) exposing two tools — `ask_other_sandbox` and
-`check_sandbox_question` — plus the same thing as a CLI at `~/.sbxw/relay.js`:
+`~/.claude.json`) exposing three tools — `ask_other_sandbox`,
+`ask_user_for_screenshot` and `check_sandbox_question` — plus the same thing as a
+CLI at `~/.sbxw/relay.js`:
 
 ```bash
-node ~/.sbxw/relay.js ask "what shape does GET /v1/orders return in staging?"
+node ~/.sbxw/relay.js ask  "what shape does GET /v1/orders return in staging?"
+node ~/.sbxw/relay.js shot "the settings header at mobile width, after I moved the save button"
 ```
 
 It is a tool and not just a CLI for a reason worth stating, because it looks like
@@ -429,6 +436,56 @@ about who it is is taken at its word — that is only safe because nothing acts 
 it alone. State lives in memory (`src/relay.rs`); a settled request is kept 30
 minutes for a late pickup, an unanswered one 6 hours.
 
+### Asking *you* for a screenshot
+
+The same queue carries a second kind of request, for the thing no other sandbox
+can supply: a look at your screen.
+
+An agent cannot see what it just built. It changed a layout, moved a button,
+adjusted spacing — and everything it *can* check says yes: the code compiles,
+the diff is what it intended, the tests pass. "The code is correct" and "it looks
+correct" are different claims, and only one of them is available from inside a
+container. So the agent can ask to be shown:
+
+```
+sandbox A ──shot──▶ sbxw ──▶ 🧑 popup ──paste / drop / capture──▶ sandbox A
+```
+
+There is **no routing step**. A screenshot request is never handed to another
+sandbox — nobody else is looking at your screen — so it has one live state and
+two outcomes: you send something, or you refuse.
+
+**Your side.** The popup shows what the agent wants to see, and takes an image
+four ways: **paste from the clipboard** (a button — where your OS screenshot key
+already put it; ⌘V works too), **drop** a file on it, **choose** one, or
+**capture a window** right there, through the browser's own picker. The clipboard
+and capture buttons appear only when the tab may use them, which means reaching
+sbxw on localhost rather than a LAN address. Whatever arrives is previewed before it goes —
+you send what you can see — and scaled to 1600px on the way out, since a
+screenshot is read for its layout and not its pixel grid.
+
+Two other answers are just as good, and the popup treats them that way:
+
+- **Describe it in words** instead. The agent is told plainly that it was
+  answered in prose rather than shown a picture, so it works from the
+  description instead of hunting for a file.
+- **Refuse.** An ordinary answer, not a failure — the agent is told to carry on,
+  to say what it changed and what it expects, and to let you correct it. It is
+  also told not to ask again for the same view.
+
+**What the agent gets.** Through MCP, the image comes back *in the tool result*,
+so the agent actually looks at it — which is the whole reason the MCP server
+exists next to the CLI. It is also written to `~/.sbxw/shots/<request-id>.png`
+inside the asking sandbox, so a later turn can re-read it without interrupting
+you a second time. The daemon never writes into a sandbox to do this: the base64
+travels in the approved reply and the sandbox's own CLI writes the file, so
+nothing lands on that filesystem that did not go past you first.
+
+The same rules as a question apply to the image: it is held until you release
+it, a refusal discards it, and only the sandbox that asked can ever receive it.
+The daemon never decodes it — it checks the envelope (a `data:` URL, one of
+PNG/JPEG/WebP, under the size cap) and passes the bytes on.
+
 ## Dynamic Island (macOS)
 
 An optional native companion app, **sbxw Island** (`macos/SbxwIsland`), turns
@@ -465,6 +522,19 @@ On top of that:
   browser popup lets you edit one before it goes — trim it, cut a secret out of
   it — and the notch has no editor, so one click there would send text verbatim.
   Past ten lines the card drops the button and points at the browser instead.
+
+  **A sandbox asking for a screenshot gets a card of its own**, with no target
+  buttons on it: there is nobody to route it to. It says what the agent needs to
+  see and offers the two things the notch can honestly do — hand you to the
+  browser, where an image can actually be pasted, or refuse from right there.
+  Declining needs no editor, and an agent that is refused stops waiting.
+
+  That card also **puts itself away** after a few seconds, which no other card
+  does. The others hold the notch because they can be answered *on* it; this one
+  cannot, and it is asking for a picture of the very screen it is sitting on — a
+  panel left over the menu bar while you go and capture a window ends up in the
+  photograph. It announces, then retracts to the line at the top of the hover
+  list, which stays the way back to it.
 
 - **several agents in one sandbox each get a row, and the island says which is
   which.** A container can hold more than one Claude Code session — the one sbxw
@@ -1131,6 +1201,11 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   [Asking another sandbox](#asking-another-sandbox-the-relay). A question is
   another agent's text arriving in your agent's prompt, so it is delivered
   quoted and labelled as untrusted input; read it before you route it.
+- A **screenshot** is a picture of your screen going into an agent's context, so
+  it goes nowhere until you attach it yourself, to one named sandbox, having seen
+  the preview of exactly what you are sending. sbxw cannot capture your screen —
+  the browser's own picker is the permission, and it is asked for per capture.
+  Refusing is a first-class answer, and it discards what was attached.
 
 ## Unconfirmed against docs (verify locally)
 

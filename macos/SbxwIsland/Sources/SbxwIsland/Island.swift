@@ -1739,7 +1739,9 @@ struct NotchContentView: View {
             IslandView(
                 store: store,
                 relay: controller.relay,
-                onOpenRelay: { controller.showRelay($0) },
+                // Opened on purpose from the banner, so it is not an
+                // announcement and does not retire itself.
+                onOpenRelay: { controller.showRelay($0, announcing: false) },
                 onSelect: { info in
                     // Tapping a waiting-with-prompt row opens its answer card;
                     // anything else jumps to wherever that session actually

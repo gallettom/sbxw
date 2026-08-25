@@ -200,17 +200,43 @@ enum RelayState: String, Codable, Equatable {
     }
 }
 
-/// One cross-sandbox information request (mirrors sbxw's `RelayRequest`), from
-/// `GET /api/relay` and the `/api/relay/events` stream.
+/// What a request is asking for (mirrors sbxw's `RelayKind`).
 ///
-/// An agent asked for something outside its own workspace; every hop from here
-/// is the human's. See the relay section of the README.
+/// Optional wherever it is read, and tolerant of a value it does not know, for
+/// two different reasons. A daemon older than this app sends no `kind` at all,
+/// and a newer one may send a third: neither should cost the island a card it
+/// could otherwise show, so an absent or unrecognised kind falls back to the
+/// behaviour that was right when there was only one — treat it as a question.
+enum RelayKind: String, Codable, Equatable {
+    /// Information from another sandbox's workspace: routable, reviewable.
+    case question
+    /// A picture of the human's screen. Nobody else can supply it, so there is
+    /// nothing to route and nothing to review.
+    case screenshot
+    /// A kind from a newer daemon.
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = RelayKind(rawValue: raw) ?? .unknown
+    }
+}
+
+/// One request an agent could not settle from inside its own sandbox (mirrors
+/// sbxw's `RelayRequest`), from `GET /api/relay` and the `/api/relay/events`
+/// stream.
+///
+/// An agent asked for something it cannot reach — information in another
+/// sandbox's workspace, or a look at the screen it cannot see. Every hop from
+/// here is the human's. See the relay section of the README.
 struct RelayRequest: Codable, Equatable, Identifiable {
     let id: String
     /// Sandbox that asked.
     let from: String
-    /// The question, as the asking agent wrote it. Untrusted text: shown to a
-    /// person, never acted on here.
+    /// What it is asking for. Absent on a daemon that predates screenshots.
+    var kind: RelayKind? = nil
+    /// The question, as the asking agent wrote it — or, for a screenshot, what
+    /// it needs to see. Untrusted text: shown to a person, never acted on here.
     let question: String
     /// Sandbox a human routed it to, once one has been chosen.
     var to: String? = nil
@@ -225,6 +251,11 @@ struct RelayRequest: Codable, Equatable, Identifiable {
 
     /// Still live: nobody has settled it.
     var isOpen: Bool { state != .approved && state != .denied }
+
+    /// Asking to be shown something rather than told it — which changes what the
+    /// card can offer, since there is no sandbox to route it to and the image
+    /// has to be attached in the browser.
+    var isScreenshot: Bool { kind == .screenshot }
 
     /// Waiting on *you* right now — the only two states worth a card.
     ///

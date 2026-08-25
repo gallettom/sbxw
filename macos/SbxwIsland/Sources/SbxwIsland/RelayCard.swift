@@ -1,12 +1,16 @@
 import SwiftUI
 
-/// The notch card for a cross-sandbox information request: an agent asked for
-/// something outside its own workspace, and this is the human's half of it.
+/// The notch card for a request an agent could not settle on its own, and this
+/// is the human's half of it.
 ///
-/// Two shapes, one per state that wants you:
+/// Three shapes, one per state that wants you:
 ///
 ///  - **pending** — the question, and one button per sandbox that could answer
 ///    it. Picking one sends it; nothing has been shared yet.
+///  - **pending, and a screenshot** — no targets, because nobody else can see
+///    your screen. The card says what is wanted and hands you to the browser,
+///    which is where an image can actually be pasted; refusing, the other real
+///    answer, stays right here.
 ///  - **answered** — what came back, and the decision to release it or not.
 ///
 /// A `routed` request draws no card at all: it is out with another agent, which
@@ -52,7 +56,8 @@ struct RelayCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             switch request.state {
-            case .pending: routingSection
+            case .pending:
+                if request.isScreenshot { screenshotSection } else { routingSection }
             case .answered: reviewSection
             default: EmptyView()
             }
@@ -65,16 +70,22 @@ struct RelayCard: View {
 
     // MARK: - Header
 
+    /// What this sandbox wants from you, in five words above its own question.
+    private var headline: String {
+        if request.state == .answered { return "is waiting on your review" }
+        return request.isScreenshot ? "can't see what it changed" : "wants to ask another sandbox"
+    }
+
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "arrow.left.arrow.right")
+            Image(systemName: request.isScreenshot ? "camera.viewfinder" : "arrow.left.arrow.right")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.purple)
             Text(request.from)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(1)
-            Text(request.state == .answered ? "is waiting on your review" : "wants to ask another sandbox")
+            Text(headline)
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.6))
                 .lineLimit(1)
@@ -153,6 +164,50 @@ struct RelayCard: View {
         .pointerCursor()
         .disabled(busy)
         .keyboardShortcut(shortcut(index))
+    }
+
+    // MARK: - Pending, and it wants a picture
+
+    /// No targets, because there is nobody to route this to — and no image
+    /// picker, because the notch is not a place you can paste into.
+    ///
+    /// So the card does the two things it *can* do honestly: it says what is
+    /// being asked, and it puts the two real answers one click apart. "Attach"
+    /// hands you to the browser popup, which can take a paste, a drop, a file or
+    /// a window capture; "Refuse" settles it from here, because declining needs
+    /// no editor and an agent that is refused stops waiting.
+    private var screenshotSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Only you can answer this — nothing else on this machine can see your screen.")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                // Same handoff as the footer's "Open in browser", and dismissed
+                // the same way for the same reason (see `footer`).
+                relay.dismiss(request)
+                controller.dismissRelay()
+                openInBrowser(request.from)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                    Text("Attach a screenshot in the browser")
+                        .lineLimit(1)
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.purple.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .disabled(busy)
+            .keyboardShortcut(.return, modifiers: .command)
+        }
     }
 
     // MARK: - Answered: release it or not
@@ -245,37 +300,44 @@ struct RelayCard: View {
             if request.state == .pending {
                 refuseButton
             }
-            Button {
-                // Handing this off to the browser popup — where the same
-                // request is reviewable and editable — is "later" from the
-                // notch's point of view: dismiss it here exactly as the ✕
-                // would, rather than leaving the card sitting open behind the
-                // tab the user just switched to.
-                //
-                // `relay.dismiss`, not `controller.dismissRelay()` alone: the
-                // former records *what* was dismissed (this state), so if the
-                // request moves on without the user watching for it in the
-                // browser — the sandbox answers, say — the card is owed a
-                // reappearance and `apply(_:)` gives it one. Collapsing the
-                // panel without that record would leave the notch silent on
-                // the next arrival too, on the assumption the user is still
-                // looking at a tab they may have long since closed.
-                relay.dismiss(request)
-                controller.dismissRelay()
-                openInBrowser(request.from)
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.forward.app")
-                    Text("Open in browser")
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.55))
+            // A screenshot request already leads with the trip to the browser,
+            // and the same link twice in one card reads as two different places
+            // to go.
+            if !request.isScreenshot {
+                openInBrowserButton
             }
-            .buttonStyle(.plain)
-            .pointerCursor()
             Spacer(minLength: 0)
         }
         .padding(.top, 2)
+    }
+
+    private var openInBrowserButton: some View {
+        Button {
+            // Handing this off to the browser popup — where the same request is
+            // reviewable and editable — is "later" from the notch's point of
+            // view: dismiss it here exactly as the ✕ would, rather than leaving
+            // the card sitting open behind the tab the user just switched to.
+            //
+            // `relay.dismiss`, not `controller.dismissRelay()` alone: the former
+            // records *what* was dismissed (this state), so if the request moves
+            // on without the user watching for it in the browser — the sandbox
+            // answers, say — the card is owed a reappearance and `apply(_:)`
+            // gives it one. Collapsing the panel without that record would leave
+            // the notch silent on the next arrival too, on the assumption the
+            // user is still looking at a tab they may have long since closed.
+            relay.dismiss(request)
+            controller.dismissRelay()
+            openInBrowser(request.from)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.up.forward.app")
+                Text("Open in browser")
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.55))
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -371,9 +433,11 @@ struct RelayBanner: View {
 
     private var waitingLabel: String {
         let n = waiting.count
-        return n == 1
-            ? "\(waiting[0].from) is asking another sandbox"
-            : "\(n) sandbox requests need you"
+        guard n == 1 else { return "\(n) sandbox requests need you" }
+        let req = waiting[0]
+        return req.isScreenshot
+            ? "\(req.from) is asking for a screenshot"
+            : "\(req.from) is asking another sandbox"
     }
 
     private var outstandingLabel: String {
