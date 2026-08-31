@@ -104,8 +104,15 @@ fn command_error(args: &[&str], status: std::process::ExitStatus, stderr: &[u8])
 /// already visible to whoever is watching the terminal or the daemon log — it
 /// just can't be folded into the returned error. Use `run_checked` instead for
 /// short commands whose error is surfaced programmatically (web UI, `Result`).
+///
+/// Unless somebody is listening for progress (`crate::progress`), in which case
+/// "live progress output" has a second audience and the terminal is not it —
+/// see `run_reporting`.
 fn run_inherit(args: &[&str]) -> Result<()> {
     tracing::debug!(target: "sbx", "sbx {}", args.join(" "));
+    if let Some(sink) = crate::progress::sink() {
+        return run_reporting(args, sink);
+    }
     let status = Command::new(BIN)
         .args(args)
         .status()
@@ -114,6 +121,122 @@ fn run_inherit(args: &[&str]) -> Result<()> {
         bail!("`sbx {}` exited with {}", args.join(" "), status);
     }
     Ok(())
+}
+
+/// `run_inherit` for a bring-up that has somewhere to *show* the output: each
+/// line the child prints is forwarded to `sink` as a detail under whichever
+/// step is running, instead of landing on a terminal nobody is watching (the
+/// daemon's log file, in the web UI's case).
+///
+/// This is what makes an image pull visible in the browser — the one step of a
+/// first bring-up that takes minutes, and the one the old single "Creating…"
+/// row could not tell apart from being stuck.
+///
+/// Piping also takes the TTY away from sbx, which is what makes its output
+/// forwardable at all: on a terminal it redraws progress in place with escape
+/// sequences, off one it prints plain lines. And since the pipes exist anyway,
+/// a failure here can finally carry what sbx said, the way `run_checked`'s does
+/// — that used to be the trade for inheriting stdio.
+fn run_reporting(args: &[&str], sink: crate::progress::Sink) -> Result<()> {
+    let mut child = Command::new(BIN)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn `{BIN}` — is it on your PATH?"))?;
+
+    // Both streams drained at once, on two threads: sbx writes progress to
+    // whichever one it likes, and a pipe nobody reads fills up and blocks the
+    // child — which on a `create` would be a bring-up hung on its own output.
+    let out = child.stdout.take();
+    let err = child.stderr.take();
+    let err_sink = sink.clone();
+    let stderr_reader = std::thread::spawn(move || forward_output(err, &err_sink));
+    forward_output(out, &sink);
+    let tail = stderr_reader.join().unwrap_or_default();
+
+    let status = child.wait()?;
+    if !status.success() {
+        if tail.is_empty() {
+            bail!("`sbx {}` exited with {}", args.join(" "), status);
+        }
+        return Err(command_error(args, status, tail.join("\n").as_bytes()));
+    }
+    Ok(())
+}
+
+/// How many trailing stderr lines a failed `run_reporting` keeps for its error.
+/// The reason sbx refused is in the last few; everything above is the progress
+/// that already went to the browser line by line.
+const REPORTED_TAIL_LINES: usize = 12;
+
+/// Read `stream` to the end, reporting every line as progress. Returns the last
+/// `REPORTED_TAIL_LINES` of it, for the caller to fold into an error.
+///
+/// Split on `\r` as well as `\n`: a progress bar that has lost its TTY still
+/// tends to return to column 0 rather than open a new line, and on `\n` alone
+/// the whole download arrives as one line at the end — exactly the moment it
+/// stops being progress.
+fn forward_output<R: std::io::Read + Send + 'static>(
+    stream: Option<R>,
+    sink: &crate::progress::Sink,
+) -> Vec<String> {
+    let Some(stream) = stream else {
+        return Vec::new();
+    };
+    let mut reader = std::io::BufReader::new(stream);
+    let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut line = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        match std::io::Read::read(&mut reader, &mut byte) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        if byte[0] != b'\n' && byte[0] != b'\r' {
+            line.push(byte[0]);
+            continue;
+        }
+        let text = strip_ansi(&String::from_utf8_lossy(&line));
+        line.clear();
+        if text.trim().is_empty() {
+            continue;
+        }
+        // Also into the daemon log, at debug: inheriting stdio used to put this
+        // there unconditionally, and a bring-up you are debugging after the
+        // fact has no browser tab left to have watched.
+        tracing::debug!(target: "sbx", "{}", text.trim());
+        crate::progress::detail(sink, &text);
+        if tail.len() == REPORTED_TAIL_LINES {
+            tail.pop_front();
+        }
+        tail.push_back(text.trim().to_string());
+    }
+    tail.into()
+}
+
+/// Drop ANSI escape sequences from a line of child output. Colour codes survive
+/// a terminal and not a browser's text node, where they show up as `[32m`.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        // CSI (`\x1b[…m`) ends on a byte in @–~; anything else (a bare `\x1bM`,
+        // an OSC we won't see off a TTY) ends on its own next character.
+        if let Some('[') = chars.next() {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Run a short, non-interactive `sbx <args...>` whose failure needs to be
@@ -494,6 +617,67 @@ pub fn run_attach_args(name: &str, env: &[String], env_files: &[String]) -> Vec<
         args.push(pair.clone());
     }
     args
+}
+
+/// Path (inside the sandbox) of the `/codemap` command the codemap kit
+/// installs. Its presence is what makes a code map something this sandbox can
+/// be asked for at all — see `codemap_run_args`.
+pub const CODEMAP_COMMAND_PATH: &str = "/home/agent/.claude/commands/codemap.md";
+
+/// The same, for the lens half of the kit. Two paths rather than one check on
+/// the directory: a sandbox provisioned before the lens command existed has the
+/// map command and not this one, and "the kit is not applied" would be the
+/// wrong thing to tell whoever is standing in front of it.
+pub const CODEMAP_LENS_COMMAND_PATH: &str = "/home/agent/.claude/commands/codemap-lens.md";
+
+/// Argv for a background session that writes one of the codemap kit's
+/// documents: `sbx exec <name> -- bash -lc <script> sbxw-codemap <name> <port>
+/// <prompt>`.
+///
+/// Headless (`claude -p`) rather than a pane, because nothing here is a
+/// conversation: the click asks for a document, writing it takes minutes, and a
+/// person who had to sit and watch would be watching a session they cannot
+/// help. What they get instead is the sandbox's *state* — see `crate::codemap`
+/// — and their own agent pane, still theirs.
+///
+/// The prompt is one slash command: `/codemap`, or `/codemap-lens <brief>`.
+/// Those commands are hundreds of lines of standing instructions installed by
+/// the kit (`assets/codemap/spec.yaml`), and the daemon paraphrasing any part
+/// of them here would be a second, worse copy of a prompt that already exists.
+/// Everything the daemon has to add is what the command takes as `$ARGUMENTS` —
+/// the map's scope, the lens's brief — and nothing else belongs on that line.
+///
+/// So the one thing the daemon does have to say — where to report finishing —
+/// travels as an environment variable the command already knows to look for,
+/// not as words in the prompt. `bash -lc` runs a login shell, which is what
+/// picks up the sandbox's persistent environment (`/etc/sandbox-persistent.sh`)
+/// and therefore `claude` on PATH.
+///
+/// Name, port and prompt are positional arguments (`$1`, `$2`, `$3`) rather
+/// than interpolated into the script: a name reaching this from an HTTP path
+/// folded into a `-c` string would be a command injection, and a lens brief —
+/// which is a sentence a human typed into a browser — even more so. Same
+/// reasoning as `write_file_stdin`, and as the Bash pane's SSH banner in
+/// `web.rs`.
+pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String> {
+    const SCRIPT: &str = "\
+        export SBXW_CODEMAP_DONE=\"http://host.docker.internal:$2/api/sandboxes/$1/codemap/done\"; \
+        exec claude -p \"$3\" --permission-mode bypassPermissions";
+    [
+        "exec",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        SCRIPT,
+        "sbxw-codemap",
+        name,
+        web_port,
+        prompt,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 /// `sbx env create PATH...` — provision a sandbox from environment files,
@@ -1171,6 +1355,16 @@ fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
     run_checked(&full)
 }
 
+/// Is `path` a file inside `sandbox`?
+///
+/// False for "no such file" and for "the question could not be asked" alike —
+/// a stopped sandbox, an `sbx` that failed. Both mean the same thing to the one
+/// caller: whatever was going to depend on that file cannot be started, and the
+/// caller is the one holding the better error for why.
+pub fn file_exists(sandbox: &str, path: &str) -> bool {
+    exec_run(sandbox, &["test", "-f", path]).is_ok()
+}
+
 /// Path (inside the sandbox) of Claude Code's user-level settings file — the one
 /// every helper below merges into.
 const SETTINGS_PATH: &str = "/home/agent/.claude/settings.json";
@@ -1414,7 +1608,10 @@ fn relay_doc() -> String {
          \n\
          From a shell: `node {RELAY_TOOL_PATH} shot \"what you need to see\"`.\n\
          \n\
-         Say which screen, which state, which width. The user may refuse — that\n\
+         Say which screen, which state, which width — and if one picture will\n\
+         not settle it, name every view you need in the same ask (\"at 375px\n\
+         and at 1280px\"): they can attach several images to one reply, and\n\
+         that is one interruption instead of three. The user may refuse — that\n\
          is an ordinary answer, not a setback: carry on, say what you changed\n\
          and what you expect it to look like, and let them correct you. Don't\n\
          ask twice for the same view, and don't ask at all for something you can\n\
@@ -1508,6 +1705,42 @@ pub fn install_usage_statusline(sandbox: &str, web_port: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Progress lines are shown as text, so an escape sequence that would have
+    /// coloured a terminal has to go — a browser renders it as `[32m`.
+    #[test]
+    fn ansi_escapes_are_stripped_from_reported_output() {
+        assert_eq!(strip_ansi("\x1b[32mpulling\x1b[0m image"), "pulling image");
+        assert_eq!(strip_ansi("layer 1/4\x1b[2K"), "layer 1/4");
+        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
+    }
+
+    /// A progress bar that has lost its TTY still returns to column 0 rather
+    /// than opening a new line; on `\n` alone the whole pull would arrive as
+    /// one line once it was over.
+    #[test]
+    fn carriage_returns_split_progress_into_separate_lines() {
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let sink_seen = seen.clone();
+        let sink: crate::progress::Sink = std::sync::Arc::new(move |p| {
+            if let crate::progress::Progress::Detail { text } = p {
+                sink_seen.lock().unwrap().push(text);
+            }
+        });
+        let tail = forward_output(
+            Some(std::io::Cursor::new(
+                "pulling 10%\rpulling 60%\rpulling 100%\ndone\n"
+                    .as_bytes()
+                    .to_vec(),
+            )),
+            &sink,
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["pulling 10%", "pulling 60%", "pulling 100%", "done"]
+        );
+        assert_eq!(tail.last().unwrap(), "done");
+    }
 
     /// `sbx version`'s exact framing isn't pinned by anything sbxw controls, so
     /// the floor check must survive it changing.
@@ -1893,6 +2126,37 @@ local-policy                          local   all              network: 159 allo
         assert!(parse_policy_table("{\n  \"rules\": []\n}\n")
             .columns
             .is_empty());
+    }
+
+    /// The sandbox name reaches `codemap_run_args` from an HTTP path and the
+    /// prompt carries a lens brief typed into a browser, so both have to arrive
+    /// at the shell as *arguments* and never as script text — either one spliced
+    /// into the `-c` string would run whatever it contained. (Names are
+    /// validated long before this, which is exactly why the property is easy to
+    /// lose: nothing downstream would notice. A brief is not validated at all,
+    /// beyond its length.)
+    #[test]
+    fn the_codemap_session_passes_its_arguments_as_arguments_not_as_script() {
+        let args = codemap_run_args("neos", "7681", "/codemap-lens a `whoami` reader");
+        let script = &args[5];
+        assert!(!script.contains("neos"), "{script}");
+        assert!(!script.contains("7681"), "{script}");
+        assert!(!script.contains("whoami"), "{script}");
+        // $0 is a label for error messages; $1..$3 are what the script reads.
+        assert_eq!(
+            &args[6..],
+            [
+                "sbxw-codemap",
+                "neos",
+                "7681",
+                "/codemap-lens a `whoami` reader"
+            ]
+        );
+        assert!(
+            script.contains("$1") && script.contains("$2") && script.contains("\"$3\""),
+            "{script}"
+        );
+        assert_eq!(&args[..5], ["exec", "neos", "--", "bash", "-lc"]);
     }
 
     #[test]

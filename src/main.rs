@@ -32,9 +32,11 @@
 //! Requires **sbx 0.39 or newer** and assumes it throughout — there are no
 //! runtime fallbacks for older releases. See `sbx::MIN_SBX_VERSION`.
 
+mod codemap;
 mod config;
 mod envfile;
 mod hosts;
+mod progress;
 mod relay;
 mod sbx;
 mod web;
@@ -2286,6 +2288,48 @@ fn create_with_port_fallback(name: &str, opts: &sbx::CreateOpts<'_>) -> Result<(
         .with_context(|| format!("create with port mappings had failed with: {first:#}"))
 }
 
+/// The steps `provision_sandbox` is about to take, in order — announced before
+/// it takes the first one (see `src/progress.rs`).
+///
+/// Written out here rather than derived from the run itself because that is the
+/// point: the list is what tells a browser tab that the bring-up sitting on
+/// "Creating the sandbox" for two minutes has five steps still to come and has
+/// not quietly stopped. Two of them are conditional in exactly the way the body
+/// below is, so this reads the same config it does.
+fn provision_plan(existed: bool, cfg: &Config) -> Vec<progress::Step> {
+    let mut steps = vec![
+        progress::Step::new(progress::WORKSPACE, "Preparing the workspace"),
+        progress::Step::new(
+            progress::CREATE,
+            if existed {
+                "Reusing the existing sandbox"
+            } else {
+                // The long one on a cold host: `sbx create` pulls the image,
+                // and its own output arrives underneath as detail lines.
+                "Creating the sandbox"
+            },
+        ),
+        progress::Step::new(progress::BOOT, "Waiting for the sandbox to start"),
+        progress::Step::new(progress::TOOLING, "Installing the agent tooling"),
+    ];
+    if !cfg.network_allow.is_empty() || !cfg.network_deny.is_empty() {
+        steps.push(progress::Step::new(
+            progress::POLICY,
+            "Applying the network policy",
+        ));
+    }
+    // A sandbox sbxw just created got its kits from `sbx create --kit`, inside
+    // the step above; only an existing one has a `kit add` pass of its own.
+    if existed && !cfg.kits.is_empty() {
+        steps.push(progress::Step::new(progress::KITS, "Applying kits"));
+    }
+    steps.push(progress::Step::new(
+        progress::PORTS,
+        "Publishing ports and host aliases",
+    ));
+    steps
+}
+
 pub(crate) fn provision_sandbox(
     name: &str,
     workspace: &str,
@@ -2294,9 +2338,19 @@ pub(crate) fn provision_sandbox(
     extra_ports: &[ExtraPort],
     use_api_key: bool,
 ) -> Result<Vec<String>> {
+    // Asked first, before anything is written, because it decides two of the
+    // steps announced below — a sandbox that already exists is not created and
+    // gets its kits through a different path. Nothing asks again; the answer is
+    // carried down to section 2. Moving it up also means a host whose `sbx`
+    // cannot answer leaves no `.sbxw-artifacts/` behind for a sandbox that was
+    // never going to come up.
+    let existed = sbx::exists(name)?;
+    progress::plan(provision_plan(existed, cfg));
+
     // 0. Record the workspace path for this sandbox name (best-effort — used
     // by the web UI's artifacts panel), and make sure the conventional
     // deliverables folder exists so it's discoverable from the first session.
+    progress::step(progress::WORKSPACE);
     let _ = std::fs::write(workspace_record_path(name), workspace);
     let artifacts_dir = std::path::Path::new(workspace).join(ARTIFACTS_DIR);
     if !artifacts_dir.exists() {
@@ -2326,8 +2380,8 @@ pub(crate) fn provision_sandbox(
 
     let env_pairs = cfg.env_pairs();
 
-    // 2. Create the sandbox if it doesn't exist yet.
-    let existed = sbx::exists(name)?;
+    // 2. Create the sandbox if it doesn't exist yet (`existed`, up top).
+    progress::step(progress::CREATE);
     // Set when creation carried the configured kits, so the `kit add` loop
     // below has nothing left to do.
     let mut created_with_kits = false;
@@ -2447,7 +2501,9 @@ pub(crate) fn provision_sandbox(
     // has not been trusted" banner and ignore .claude/settings.local.json's
     // permissions.allow entries on first launch. Requires the container to
     // actually be running for `sbx exec` to reach it.
+    progress::step(progress::BOOT);
     if sbx::wait_until_running(name, Duration::from_secs(30)) {
+        progress::step(progress::TOOLING);
         if let Err(e) = sbx::trust_workspace(name, workspace) {
             tracing::warn!(
                 "could not pre-trust workspace (accept the trust dialog manually instead): {e:#}"
@@ -2517,6 +2573,9 @@ pub(crate) fn provision_sandbox(
     // 3. Network policy (sandbox-scoped; requires the sandbox to exist).
     //    MUST run before kits: a kit's `startup` commands often download tools
     //    and need the egress allowlist already in place, or they 403.
+    if !cfg.network_allow.is_empty() || !cfg.network_deny.is_empty() {
+        progress::step(progress::POLICY);
+    }
     if !cfg.network_allow.is_empty() {
         let resources = cfg.network_allow.join(",");
         tracing::info!("network allowlist: {resources}");
@@ -2550,6 +2609,7 @@ pub(crate) fn provision_sandbox(
     //     Git URLs and non-Docker Hub OCI refs require: sbx settings set kit.allowedSources <prefix>
     let pending_kits: &[String] = if created_with_kits { &[] } else { &cfg.kits };
     let inspect_out = if !pending_kits.is_empty() {
+        progress::step(progress::KITS);
         inspect_kits_section(&sbx::inspect_raw(name).unwrap_or_default())
     } else {
         String::new()
@@ -2598,6 +2658,7 @@ pub(crate) fn provision_sandbox(
     }
 
     // 5. Host aliases for ports that declare a hostname, plus the web interface.
+    progress::step(progress::PORTS);
     let aliases = wanted_aliases(cfg, extra_ports);
     // Non-fatal on purpose: the sandbox exists and works by now, and /etc/hosts
     // is a convenience on top of it. Failing here used to abort provisioning
@@ -3984,6 +4045,68 @@ fn oauth_kit_spec_inner(credentials_json: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plan is what a browser tab shows before the bring-up has done
+    /// anything, so its conditional steps have to match the ones the body
+    /// actually takes — the two read the same config, and a drift between them
+    /// is a step that never starts or a tick that never lands.
+    #[test]
+    fn the_announced_plan_matches_the_steps_taken() {
+        let ids = |existed, cfg: &Config| -> Vec<&'static str> {
+            provision_plan(existed, cfg)
+                .into_iter()
+                .map(|s| s.id)
+                .collect()
+        };
+        let bare = Config {
+            network_allow: vec![],
+            network_deny: vec![],
+            kits: vec![],
+            ..Config::default()
+        };
+        assert_eq!(
+            ids(false, &bare),
+            [
+                progress::WORKSPACE,
+                progress::CREATE,
+                progress::BOOT,
+                progress::TOOLING,
+                progress::PORTS
+            ]
+        );
+
+        let with_kits = Config {
+            kits: vec!["some-kit".into()],
+            ..bare.clone()
+        };
+        // A fresh sandbox gets its kits from `sbx create --kit`, inside the
+        // create step; only an existing one has a `kit add` pass of its own.
+        assert!(!ids(false, &with_kits).contains(&progress::KITS));
+        assert!(ids(true, &with_kits).contains(&progress::KITS));
+
+        let policed = Config {
+            network_deny: vec!["evil.example".into()],
+            ..bare.clone()
+        };
+        assert!(!ids(false, &bare).contains(&progress::POLICY));
+        assert!(ids(false, &policed).contains(&progress::POLICY));
+    }
+
+    /// Creating and reusing are different enough to say so: the label is the
+    /// only place the difference shows once the sandbox is up either way.
+    #[test]
+    fn the_create_step_says_which_of_the_two_it_is() {
+        let cfg = Config::default();
+        let label = |existed| {
+            provision_plan(existed, &cfg)
+                .into_iter()
+                .find(|s| s.id == progress::CREATE)
+                .unwrap()
+                .label
+        };
+        assert_eq!(label(false), "Creating the sandbox");
+        assert_eq!(label(true), "Reusing the existing sandbox");
+    }
 
     /// A scratch directory of its own for one test, with the favourites file
     /// inside it — so nothing here touches the real `$HOME`.

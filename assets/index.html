@@ -229,7 +229,7 @@
       </div>
       <div class="modal-foot">
         <button class="btn-cancel" id="rm-modal-cancel">Cancel</button>
-        <button id="rm-modal-confirm" style="background:#da3633;color:#fff;border:1px solid #f85149;border-radius:6px;padding:.3rem .9rem;font:inherit;font-size:12px;cursor:pointer;font-weight:600;">Remove</button>
+        <button class="btn-danger" id="rm-modal-confirm">Remove</button>
       </div>
     </div>
   </div>
@@ -282,7 +282,7 @@
       <input id="envfile-root" class="port-input w-alias" type="text" spellcheck="false"
              autocapitalize="off" autocomplete="off"
              title="The workspace path is written relative to this, through a variable">
-      <button class="refresh-btn" id="envfile-preview" style="font-size:11px;padding:.2rem .6rem">Preview</button>
+      <button class="refresh-btn" id="envfile-preview">Preview</button>
     </div>
     <span class="envfile-root-note" id="envfile-root-note"></span>
     <textarea id="envfile-yaml" class="envfile-yaml" readonly spellcheck="false"
@@ -292,7 +292,7 @@
       <label class="envfile-force">
         <input type="checkbox" id="envfile-overwrite"> overwrite
       </label>
-      <button class="refresh-btn" id="envfile-copy" style="font-size:11px;padding:.2rem .6rem">Copy</button>
+      <button class="refresh-btn" id="envfile-copy">Copy</button>
       <button class="btn-add-mapping" id="envfile-save">Save file</button>
     </div>
     <span class="ports-error-msg hidden" id="envfile-error"></span>
@@ -406,7 +406,7 @@
         </div>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
-        <button id="ports-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+        <button id="ports-modal-refresh" class="refresh-btn">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Refresh
         </button>
@@ -415,7 +415,9 @@
     </div>
   </div>
 
-  <!-- ── Generated files ("artifacts") modal ── -->
+  <!-- ── Project ("artifacts") modal ──
+       Opened from the 📁 button beside the sandbox name in a pane's top bar
+       (see /js/panes.js, /js/files.js). -->
   <div class="modal-overlay hidden" id="files-modal-overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title" style="width:520px">
       <div class="modal-head">
@@ -440,15 +442,14 @@
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
         <div style="display:flex;gap:.4rem;align-items:center">
-          <button id="files-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+          <button id="files-modal-refresh" class="refresh-btn">
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Refresh
           </button>
           <!-- The map is an action on the project, not a row in a table of
                downloadable files: it has no size, and "open" is not "download".
                It sits beside Refresh so the table above stays homogeneous. -->
-          <button id="files-modal-codemap" class="refresh-btn"
-                  style="font-size:11px;padding:.2rem .6rem" disabled>
+          <button id="files-modal-codemap" class="refresh-btn" disabled>
             <!-- Three linked nodes — a cycle, not a tree: a code map is a
                  graph of markdown files that point at each other, and the
                  viewer's own Graph tab draws it the same way. Deliberately not
@@ -464,7 +465,10 @@
               <circle cx="12.6" cy="4.2" r="1.6" fill="currentColor"/>
               <circle cx="8" cy="12.2" r="1.6" fill="currentColor"/>
             </svg>
-            Code map
+            <!-- The label is the button's state, not a fixed name: a project
+                 with no map is offered one instead of being told it has none
+                 (see renderCodemapButton in /js/files.js). -->
+            <span id="files-modal-codemap-label">Code map</span>
           </button>
         </div>
         <button class="btn-cancel" id="files-modal-close2">Close</button>
@@ -475,8 +479,10 @@
   <!-- ── Code map modal ──
        The markdown knowledge graph under .sbxw-artifacts/codemap/, made
        navigable: [[wiki links]] resolve, backlinks are listed, and the whole
-       map can be seen at once as a graph. Purely a reader — it never writes.
-       Opened from a pane's "Map" button (see /js/panes.js, /js/codemap.js). -->
+       map can be seen at once as a graph. It reads; the one thing it writes,
+       it writes by asking the sandbox's own agent (see the lens bar below).
+       Opened from the Project panel's "Code map" button (see /js/files.js,
+       /js/codemap.js). -->
   <div class="modal-overlay hidden" id="codemap-modal-overlay">
     <div class="modal codemap-modal" role="dialog" aria-modal="true" aria-labelledby="codemap-title">
       <div class="modal-head">
@@ -489,10 +495,61 @@
         <span class="codemap-dir" id="codemap-dir">.sbxw-artifacts/codemap/</span>
         <span class="spacer"></span>
         <span class="codemap-stats" id="codemap-stats"></span>
+        <!-- Which retelling you are reading. The map itself is always the first
+             option and always exists; a lens is added by /codemap-lens. -->
+        <select id="codemap-lens-select" class="field-input codemap-lens-select"
+                title="Read the map, or one of its lenses"></select>
+        <!-- The one thing this panel writes, and it sits where the eye already
+             is — beside the picker it fills, not in a strip under the toolbar
+             where it read as a footnote to the map. -->
+        <button class="lens-btn" id="codemap-lens-toggle"
+                aria-expanded="false" aria-controls="codemap-lens-form">
+          <!-- A prism: one ray in, a fanned spectrum out. The map goes in
+               once; each lens is one band of what comes out. -->
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M7.4 2.2 2.3 12.4h10.2L7.4 2.2Z" stroke="currentColor"
+                  stroke-width="1.3" stroke-linejoin="round"/>
+            <path d="M1 7.3h4.1M9.6 6.2l5 -1.4M9.9 7.6h4.9M9.6 9h4.6"
+                  stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          Write a lens…
+        </button>
         <div class="mode-switch" role="tablist">
           <button class="mode-btn active" id="codemap-view-doc">Document</button>
           <button class="mode-btn" id="codemap-view-graph">Graph</button>
         </div>
+      </div>
+      <!-- ── Lens bar ──
+           A code map is written for whoever reads code. A product owner, a new
+           joiner or a security reviewer each need the same repository told a
+           different way, and none of them needs `src/auth.rs#validateToken`.
+           Rather than argue about which audience the map serves, this asks the
+           sandbox's agent to write another one beside it: same facts, different
+           reader. The brief is the whole input — who is reading, and what they
+           need out of it; the agent names the lens itself once it has read the
+           map.
+
+           The button that opens this lives up in the toolbar; the bar itself
+           drops down only while there is a form to fill in or a note to read,
+           so a map nobody is retelling gets the whole modal. -->
+      <div class="codemap-lens hidden" id="codemap-lens-bar">
+        <form class="codemap-lens-form hidden" id="codemap-lens-form">
+          <textarea id="codemap-lens-objective" class="field-input codemap-lens-input"
+                    rows="2" spellcheck="false"
+                    placeholder="Who is reading, and what do they need from it? e.g. “A product owner: what each part delivers, for whom, and what it costs to change — no file paths.”"></textarea>
+          <!-- Names the dependency at the moment of use: this runs a slash
+               command, and a sandbox without the codemap kit does not have it. -->
+          <p class="codemap-lens-hint">Runs <code>/codemap-lens</code> in a background
+            session — the command ships with the codemap kit, and your agent pane stays
+            yours. The agent reads the map, writes the lens beside it and names it; the
+            map itself is never touched.</p>
+          <div class="codemap-lens-actions">
+            <span class="codemap-lens-count" id="codemap-lens-count"></span>
+            <button type="button" class="btn-cancel" id="codemap-lens-cancel">Cancel</button>
+            <button type="submit" class="btn-create" id="codemap-lens-go">Write the lens</button>
+          </div>
+        </form>
+        <span class="codemap-lens-note" id="codemap-lens-note"></span>
       </div>
       <div class="codemap-body">
         <aside class="codemap-files" id="codemap-files"></aside>
@@ -500,7 +557,7 @@
         <aside class="codemap-side" id="codemap-side"></aside>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
-        <button id="codemap-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+        <button id="codemap-refresh" class="refresh-btn">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Refresh
         </button>
@@ -544,6 +601,11 @@
 
         <div class="help-step">
           <div class="help-step-head"><span class="help-step-num">2</span> Restart the <code>sbx</code> daemon</div>
+          <p class="help-step-body"> Try first to run sbx to see if it suggest you to restart it (After an update)
+          <div class="help-cmd">
+            <code>sbx</code>
+            <button class="ssh-copy" data-help-copy="sbx;">Copy</button>
+          </div>
           <p class="help-step-body">
             Already logged in and the list is still empty? The daemon behind the CLI is
             wedged or not running. Start it again in the background — it keeps running
@@ -561,7 +623,7 @@
         </div>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
-        <button id="help-modal-refresh" class="refresh-btn" style="font-size:11px;padding:.2rem .6rem">
+        <button id="help-modal-refresh" class="refresh-btn">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Refresh sandboxes
         </button>

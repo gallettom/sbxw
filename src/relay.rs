@@ -30,11 +30,11 @@
 //! owns the endpoints, the SSE fan-out, and the typing of messages into the
 //! target session.
 //!
-//! A note on what a request *carries*. An answer is text and a screenshot is an
-//! image, but neither is read here — a question is data for another agent, an
-//! answer is data for the asking one, and an image is base64 the daemon never
-//! decodes. Everything in this file moves payloads between states; nothing in
-//! it looks inside one.
+//! A note on what a request *carries*. An answer is text and a screenshot is
+//! one or more images, but neither is read here — a question is data for
+//! another agent, an answer is data for the asking one, and an image is base64
+//! the daemon never decodes. Everything in this file moves payloads between
+//! states; nothing in it looks inside one.
 
 use serde::Serialize;
 use std::{
@@ -87,7 +87,7 @@ pub(crate) enum RelayKind {
     /// Information from another sandbox's workspace.
     #[default]
     Question,
-    /// An image of what is on the human's screen.
+    /// Images of what is on the human's screen.
     Screenshot,
 }
 
@@ -107,15 +107,15 @@ pub(crate) struct Shot {
     pub(crate) b64: String,
 }
 
-/// How an attached image is serialized: as *whether there is one*.
+/// How attached images are serialized: as *how many there are*.
 ///
 /// The browser and the island are the only readers of a whole `RelayRequest`,
-/// and neither needs the pixels — the popup already holds the copy it just
-/// pasted, and the notch has nothing to do with it. Sending presence instead
-/// also keeps a megabyte of base64 out of every SSE frame this request will
-/// ever produce, on a channel that repaints on each transition.
-fn shot_presence<S: serde::Serializer>(shot: &Option<Shot>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_bool(shot.is_some())
+/// and neither needs the pixels — the popup already holds the copies it just
+/// pasted, and the notch has nothing to do with them. Sending the count instead
+/// also keeps several megabytes of base64 out of every SSE frame this request
+/// will ever produce, on a channel that repaints on each transition.
+fn shot_count<S: serde::Serializer>(shots: &[Shot], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u64(shots.len() as u64)
 }
 
 /// One question and everything that has happened to it.
@@ -139,11 +139,17 @@ pub(crate) struct RelayRequest {
     /// screenshot request this is the human's caption, if they wrote one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) answer: Option<String>,
-    /// The image a human attached, under exactly the same rule as `answer`:
-    /// present on the server from the moment it is pasted, the asker's only
+    /// The images a human attached, under exactly the same rule as `answer`:
+    /// present on the server from the moment they are pasted, the asker's only
     /// once approval says so.
-    #[serde(rename = "has_shot", serialize_with = "shot_presence")]
-    pub(crate) shot: Option<Shot>,
+    ///
+    /// A list because one look is often not the answer: a before and an after,
+    /// two breakpoints, the three steps of a flow. They travel together because
+    /// they are one reply — a person who attaches four views has answered once,
+    /// and splitting that into four approvals would ask them the same question
+    /// four times.
+    #[serde(rename = "shot_count", serialize_with = "shot_count")]
+    pub(crate) shots: Vec<Shot>,
     pub(crate) state: RelayState,
     /// Why a request was denied, or what went wrong delivering it. Shown to
     /// both humans and agents, so it says what to do rather than what failed.
@@ -178,7 +184,7 @@ pub(crate) const MAX_QUESTION: usize = 4000;
 /// Cap on an answer's length, same reasoning from the other direction.
 pub(crate) const MAX_ANSWER: usize = 16000;
 
-/// Cap on the base64 of an attached screenshot — a little over 4 MB of actual
+/// Cap on the base64 of one attached screenshot — a little over 4 MB of actual
 /// image.
 ///
 /// A backstop, not a budget: the browser downscales what it uploads (see
@@ -187,6 +193,23 @@ pub(crate) const MAX_ANSWER: usize = 16000;
 /// window and small enough that the JSON it rides in stays a message rather
 /// than a transfer.
 pub(crate) const MAX_SHOT_B64: usize = 6 * 1024 * 1024;
+
+/// How many images one screenshot request may carry.
+///
+/// The limit is the reader, not the wire: every one of these lands in an
+/// agent's context as an image block, and past a handful the extra views stop
+/// clarifying what was asked and start crowding out the conversation that
+/// prompted the question. A person with more than six things to show has a
+/// different request to make.
+pub(crate) const MAX_SHOTS: usize = 6;
+
+/// Cap on the base64 of *all* the images on one request together.
+///
+/// Six at the per-image cap would be a 36 MB reply, which is a transfer no
+/// matter how it is framed. This is the number that actually bounds the body a
+/// human's approval can post and the payload an agent gets handed back; the
+/// per-image cap only keeps any single one of them sane.
+pub(crate) const MAX_SHOTS_B64: usize = 16 * 1024 * 1024;
 
 /// Image types a screenshot may be. Short on purpose: an agent has to decode
 /// whatever comes out the other end, and this is the list every one of them
@@ -239,7 +262,7 @@ impl Relay {
             question: question.to_string(),
             to: None,
             answer: None,
-            shot: None,
+            shots: Vec::new(),
             state: RelayState::Pending,
             note: None,
             created_ms: now,
@@ -350,21 +373,24 @@ impl Relay {
     }
 
     /// A human releases what the asker gets — the answer under review, their
-    /// own text, an image they attached, or a caption alongside it. This is also
-    /// how a question gets answered without involving a second sandbox at all,
-    /// and it is the *only* way a screenshot request ever settles in the asker's
-    /// favour.
+    /// own text, the images they attached, or a caption alongside them. This is
+    /// also how a question gets answered without involving a second sandbox at
+    /// all, and it is the *only* way a screenshot request ever settles in the
+    /// asker's favour.
     ///
     /// One rule covers both kinds: something has to be going out. Which of the
     /// two payloads it is stays deliberately untyped here — a screenshot with a
-    /// caption and a question answered with a picture are both perfectly sensible
+    /// caption and a question answered with pictures are both perfectly sensible
     /// things for a person to send, and refusing them would be this function
     /// second-guessing the human it exists to serve.
+    ///
+    /// `shots` is the whole set as the human left it, so approving replaces
+    /// rather than appends: what they can see in the popup is what goes.
     pub(crate) fn approve(
         &self,
         id: &str,
         answer: Option<&str>,
-        shot: Option<Shot>,
+        shots: Vec<Shot>,
         now: u64,
     ) -> Result<RelayRequest, String> {
         self.mutate(id, now, |req| {
@@ -374,10 +400,10 @@ impl Relay {
             if let Some(text) = answer {
                 req.answer = Some(text.to_string());
             }
-            if let Some(image) = shot {
-                req.shot = Some(image);
+            if !shots.is_empty() {
+                req.shots = shots;
             }
-            if req.answer.is_none() && req.shot.is_none() {
+            if req.answer.is_none() && req.shots.is_empty() {
                 return Err("there is nothing to send yet".to_string());
             }
             req.state = RelayState::Approved;
@@ -399,11 +425,11 @@ impl Relay {
             }
             // The held answer never reaches the asker, so it is dropped here
             // rather than kept where an approval could later release it. The
-            // image is cleared alongside it so that "denied" is a statement
+            // images are cleared alongside it so that "denied" is a statement
             // about the whole request rather than about the one field that
             // happens to be fillable before approval today.
             req.answer = None;
-            req.shot = None;
+            req.shots.clear();
             req.state = RelayState::Denied;
             req.note = note.map(str::to_string);
             Ok(())
@@ -550,7 +576,7 @@ mod tests {
         // waiting rather than returning what is on the table.
         assert!(!answered.state.is_final());
 
-        let approved = r.approve(&req.id, None, None, 4_000).unwrap();
+        let approved = r.approve(&req.id, None, vec![], 4_000).unwrap();
         assert_eq!(approved.state, RelayState::Approved);
         assert_eq!(approved.answer.as_deref(), Some("{ id, total }"));
     }
@@ -569,7 +595,7 @@ mod tests {
         )
         .unwrap();
         let approved = r
-            .approve(&req.id, Some("https://staging.internal"), None, 4_000)
+            .approve(&req.id, Some("https://staging.internal"), vec![], 4_000)
             .unwrap();
         assert_eq!(approved.answer.as_deref(), Some("https://staging.internal"));
     }
@@ -584,13 +610,15 @@ mod tests {
             "which region do we deploy to?",
             1_000,
         );
-        let approved = r.approve(&req.id, Some("eu-west-1"), None, 2_000).unwrap();
+        let approved = r
+            .approve(&req.id, Some("eu-west-1"), vec![], 2_000)
+            .unwrap();
         assert_eq!(approved.state, RelayState::Approved);
         assert_eq!(approved.answer.as_deref(), Some("eu-west-1"));
         // …but not out of thin air: with nothing written, there is nothing to
         // release.
         let bare = r.open("alpha", RelayKind::Question, "and the account id?", 3_000);
-        assert!(r.approve(&bare.id, None, None, 4_000).is_err());
+        assert!(r.approve(&bare.id, None, vec![], 4_000).is_err());
     }
 
     /// The rule that keeps this from being a bus: answering is scoped to the
@@ -633,7 +661,7 @@ mod tests {
             .unwrap();
         assert_eq!(denied.state, RelayState::Denied);
         assert!(denied.answer.is_none());
-        assert!(r.approve(&req.id, None, None, 5_000).is_err());
+        assert!(r.approve(&req.id, None, vec![], 5_000).is_err());
         assert!(r.route(&req.id, "gamma", 6_000).is_err());
         assert!(r.reply(&req.id, "beta", "hunter2", 7_000).is_err());
     }
@@ -644,7 +672,7 @@ mod tests {
     async fn waiting_is_scoped_to_the_sandbox_that_asked() {
         let r = relay();
         let req = r.open("alpha", RelayKind::Question, "?", 1_000);
-        r.approve(&req.id, Some("released"), None, 2_000).unwrap();
+        r.approve(&req.id, Some("released"), vec![], 2_000).unwrap();
         assert!(r
             .wait(&req.id, "beta", Duration::from_millis(10))
             .await
@@ -688,7 +716,7 @@ mod tests {
         // exercises the broadcast rather than the pre-check in `wait`.
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!r.is_unattended(&req.id), "the waiter should be registered");
-        r.approve(&req.id, Some("here you go"), None, 2_000)
+        r.approve(&req.id, Some("here you go"), vec![], 2_000)
             .unwrap();
 
         let out = waiter.await.unwrap().unwrap();
@@ -703,7 +731,7 @@ mod tests {
         let r = relay();
         let fresh = r.open("alpha", RelayKind::Question, "?", 0);
         let settled = r.open("alpha", RelayKind::Question, "?", 0);
-        r.approve(&settled.id, Some("x"), None, 0).unwrap();
+        r.approve(&settled.id, Some("x"), vec![], 0).unwrap();
 
         let hour = 60 * 60 * 1000;
         assert_eq!(r.prune(10 * 60 * 1000), 0, "nothing is stale after 10 min");
@@ -716,10 +744,10 @@ mod tests {
         assert_eq!(r.prune(7 * hour), 1, "…but not forever");
     }
 
-    fn shot() -> Shot {
+    fn shot(b64: &str) -> Shot {
         Shot {
             mime: "image/png".to_string(),
-            b64: "iVBORw0KGgo=".to_string(),
+            b64: b64.to_string(),
         }
     }
 
@@ -737,12 +765,38 @@ mod tests {
         assert_eq!(req.state, RelayState::Pending);
 
         let approved = r
-            .approve(&req.id, Some("mobile width"), Some(shot()), 2_000)
+            .approve(
+                &req.id,
+                Some("mobile width"),
+                vec![shot("iVBORw0KGgo=")],
+                2_000,
+            )
             .unwrap();
         assert_eq!(approved.state, RelayState::Approved);
-        assert_eq!(approved.shot.as_ref().unwrap().mime, "image/png");
+        assert_eq!(approved.shots.len(), 1);
+        assert_eq!(approved.shots[0].mime, "image/png");
         // The caption rides along with the image rather than replacing it.
         assert_eq!(approved.answer.as_deref(), Some("mobile width"));
+    }
+
+    /// One question, several views. A person showing a before and an after —
+    /// or three widths of the same screen — is answering once, so the images
+    /// settle the request together and arrive in the order they were attached.
+    #[test]
+    fn a_screenshot_request_can_be_answered_with_several_images() {
+        let r = relay();
+        let req = r.open("alpha", RelayKind::Screenshot, "before and after?", 1_000);
+        let approved = r
+            .approve(
+                &req.id,
+                None,
+                vec![shot("YmVmb3Jl"), shot("YWZ0ZXI="), shot("d2lkZQ==")],
+                2_000,
+            )
+            .unwrap();
+        assert_eq!(approved.state, RelayState::Approved);
+        let order: Vec<&str> = approved.shots.iter().map(|s| s.b64.as_str()).collect();
+        assert_eq!(order, ["YmVmb3Jl", "YWZ0ZXI=", "d2lkZQ=="]);
     }
 
     /// The rule that makes the kind more than a label. Routing one of these
@@ -770,19 +824,19 @@ mod tests {
     fn approving_needs_a_payload_but_not_a_particular_one() {
         let r = relay();
         let empty = r.open("alpha", RelayKind::Screenshot, "?", 1_000);
-        assert!(r.approve(&empty.id, None, None, 2_000).is_err());
+        assert!(r.approve(&empty.id, None, vec![], 2_000).is_err());
 
         let described = r.open("alpha", RelayKind::Screenshot, "?", 3_000);
         let approved = r
             .approve(
                 &described.id,
                 Some("the header wraps at 400px"),
-                None,
+                vec![],
                 4_000,
             )
             .unwrap();
         assert_eq!(approved.state, RelayState::Approved);
-        assert!(approved.shot.is_none());
+        assert!(approved.shots.is_empty());
     }
 
     /// Refusing is a full stop for pixels too: "not this window" must not be
@@ -796,19 +850,28 @@ mod tests {
             .deny(&req.id, Some("that window has customer data"), 2_000)
             .unwrap();
         assert_eq!(denied.state, RelayState::Denied);
-        assert!(denied.shot.is_none());
-        assert!(r.approve(&req.id, None, Some(shot()), 3_000).is_err());
+        assert!(denied.shots.is_empty());
+        assert!(r
+            .approve(&req.id, None, vec![shot("iVBORw0KGgo=")], 3_000)
+            .is_err());
     }
 
-    /// What the SSE stream and the popup are told about an image: that there is
-    /// one. The bytes travel only in the reply to the sandbox that asked.
+    /// What the SSE stream and the popup are told about the images: how many
+    /// there are. The bytes travel only in the reply to the sandbox that asked.
     #[test]
-    fn the_broadcast_carries_presence_not_pixels() {
+    fn the_broadcast_carries_a_count_not_pixels() {
         let r = relay();
         let req = r.open("alpha", RelayKind::Screenshot, "?", 1_000);
-        let approved = r.approve(&req.id, None, Some(shot()), 2_000).unwrap();
+        let approved = r
+            .approve(
+                &req.id,
+                None,
+                vec![shot("iVBORw0KGgo="), shot("YWZ0ZXI=")],
+                2_000,
+            )
+            .unwrap();
         let json = serde_json::to_string(&approved).unwrap();
-        assert!(json.contains("\"has_shot\":true"));
+        assert!(json.contains("\"shot_count\":2"));
         assert!(json.contains("\"kind\":\"screenshot\""));
         assert!(!json.contains("iVBORw0KGgo"));
     }

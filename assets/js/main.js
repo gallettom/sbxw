@@ -48,6 +48,17 @@ sbxwStream.addEventListener('focus', ev => {
   focusSandbox(ev.data);
 });
 
+// A sandbox is being created: the steps it plans to take, the one running now,
+// and what `sbx` is printing under it — the image pull, mostly, which is the
+// part that takes minutes. Painted onto the pending row in the sidebar (see
+// `applyProvisionEvent`), for whichever tab is open rather than only the one
+// that clicked Create.
+sbxwStream.addEventListener('provision', ev => {
+  let data;
+  try { data = JSON.parse(ev.data); } catch (_) { return; }
+  applyProvisionEvent(data);
+});
+
 // sbxw expects exactly one browser tab talking to it — a second one shares
 // the same two runtime worker threads and the same PTY per sandbox instead of
 // getting its own, which is what makes everything (the file browser
@@ -192,6 +203,20 @@ fetch('/api/sessions')
 sbxwStream.addEventListener('session', ev => {
   try { ingestSession(JSON.parse(ev.data)); } catch (_) {}
 });
+
+// A sandbox started, finished or failed to write its code map — the one piece
+// of agent work sbxw starts itself, in a session with no pane to watch. Painted
+// by `applyCodemapRun` (in /js/sandboxes.js) onto the sandbox's row and a
+// corner card; the snapshot below is what a tab reloaded mid-run rebuilds from,
+// since a stream only carries what happens after you connect to it.
+sbxwStream.addEventListener('codemap', ev => {
+  try { applyCodemapRun(JSON.parse(ev.data)); } catch (_) {}
+});
+
+fetch('/api/codemap')
+  .then(r => r.json())
+  .then(list => list.forEach(run => applyCodemapRun(run, true)))
+  .catch(() => {});
 
 // Leaving the tab un-watches the focused pane, coming back watches it again —
 // so a session that raised `attention` while you were elsewhere is still

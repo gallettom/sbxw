@@ -17,7 +17,7 @@
 // Four verbs, all through `http://host.docker.internal:__PORT__`:
 //
 //   node relay.js ask "question…" [--timeout 90]
-//   node relay.js shot "what you need to see…" [--timeout 90]
+//   node relay.js shot "what you need to see…" [--timeout 90]   (one or more images back)
 //   node relay.js wait <id> [--timeout 90]
 //   node relay.js reply <id> "answer…" | --stdin
 //
@@ -26,10 +26,12 @@
 // than an agent's tool blocking for as long as a human takes to look. The id it
 // prints is how the same request is picked up again later with `wait`.
 //
-// A released screenshot arrives as base64 in the JSON and is written to a file
-// here, in the sandbox, by `saveShot` below. That is the only route an image
-// takes: the daemon never writes into a sandbox, so nothing exists on this
-// filesystem that a human did not approve on its way past.
+// A released screenshot arrives as base64 in the JSON — one image or several,
+// since a person answering "how does it look?" often has a before and an after
+// — and each is written to a file here, in the sandbox, by `saveShots` below.
+// That is the only route an image takes: the daemon never writes into a
+// sandbox, so nothing exists on this filesystem that a human did not approve on
+// its way past.
 //
 // Also the transport for the MCP server next door (`relay-mcp.js`), which
 // `require`s this file for `request`/`collect` — everything below runs only
@@ -57,9 +59,14 @@ const MAX_TIMEOUT = 600;
 /// holding a call open for them is an agent doing nothing.
 const SHOT_MAX_TIMEOUT = 300;
 
-/// Where a released screenshot is written. Under `~/.sbxw` with the rest of what
+/// Where released screenshots are written. Under `~/.sbxw` with the rest of what
 /// sbxw installs in a sandbox, so an agent that finds one knows where it came
 /// from, and so nothing lands in the workspace the human is working in.
+///
+/// One file per image, numbered from 1 in the order they were attached —
+/// `r-7-1.png`, `r-7-2.png` — even when there is only one. A single rule beats
+/// a special case: an agent reading a path can tell which of the set it is
+/// looking at, and nothing has to know in advance how many there were.
 const SHOT_DIR = path.join(os.homedir(), ".sbxw", "shots");
 
 /// File extension per image type sbxw passes on. An agent reads the path this
@@ -158,34 +165,41 @@ function readStdin() {
 const me =
   process.env.SANDBOX_NAME || process.env.SANDBOX_VM_ID || os.hostname();
 
-/// Write a released screenshot to a file, and return its path.
+/// Write every released screenshot to a file, and return their paths.
 ///
 /// An image is the one thing an agent cannot be handed as text: it has to
 /// become a file before anything can read it. Failing to write one is not
-/// fatal — an MCP client is looking at the picture inline either way — so this
-/// answers `null` rather than throwing, and the prose below says what happened.
-function saveShot(res) {
-  const image = res && res.image;
-  if (!image || !image.b64) return null;
-  try {
-    fs.mkdirSync(SHOT_DIR, { recursive: true });
-    const file = path.join(SHOT_DIR, `${res.id}.${SHOT_EXT[image.mime] || "png"}`);
-    fs.writeFileSync(file, Buffer.from(image.b64, "base64"));
-    return file;
-  } catch (_) {
-    return null;
+/// fatal — an MCP client is looking at the pictures inline either way — so this
+/// answers with the paths it managed and the prose below says what happened.
+function saveShots(res) {
+  const images = (res && res.images) || [];
+  const paths = [];
+  for (let i = 0; i < images.length; i++) {
+    const image = images[i];
+    if (!image || !image.b64) continue;
+    try {
+      fs.mkdirSync(SHOT_DIR, { recursive: true });
+      const file = path.join(SHOT_DIR, `${res.id}-${i + 1}.${SHOT_EXT[image.mime] || "png"}`);
+      fs.writeFileSync(file, Buffer.from(image.b64, "base64"));
+      paths.push(file);
+    } catch (_) {
+      // One unwritable file is not a reason to lose the rest.
+    }
   }
+  return paths;
 }
 
 /// Describe where a request stands, in the terms the *asking* agent needs: what
 /// it may now use, and how to come back if nothing has been released yet.
 ///
-/// `shotPath` is where the image ended up, when there was one — passed in
+/// `shotPaths` is where the images ended up, when there were any — passed in
 /// rather than written here so that this function stays a description of a
 /// state and `collect` stays the single place a file gets created.
-function describeOutcome(res, howToWait, shotPath) {
+function describeOutcome(res, howToWait, shotPaths) {
   const id = res.id;
   const shot = res.kind === "screenshot";
+  const images = (res.images || []).length;
+  const paths = shotPaths || [];
   // How to come back to an unsettled request. Differs by caller: a shell agent
   // re-runs this CLI, an MCP client calls the tool next door, and telling
   // either one to do the other's thing is how a request gets abandoned.
@@ -194,12 +208,22 @@ function describeOutcome(res, howToWait, shotPath) {
   const caption = res.answer ? `\n\nThey added: ${res.answer}\n` : "\n";
   switch (res.state) {
     case "approved":
-      if (res.image) {
+      if (images) {
+        // Named one by one rather than counted: the agent has to open them,
+        // and a count it cannot turn into paths is a count it cannot use.
+        const many = images > 1;
         return (
-          `The human sent a screenshot for request ${id}.\n` +
-          (shotPath
-            ? `It is saved at:\n\n${shotPath}\n\nRead that file to see it.`
-            : "It could not be written to disk here, so read it from the tool result.") +
+          `The human sent ${many ? images + " screenshots" : "a screenshot"} for request ${id}.\n` +
+          (paths.length
+            ? `${many ? "They are" : "It is"} saved at:\n\n` +
+              paths.join("\n") +
+              `\n\nRead ${many ? "those files, in that order, to see them all" : "that file to see it"}.` +
+              (paths.length < images
+                ? `\n\n(${images - paths.length} of them could not be written to disk here — ` +
+                  "read those from the tool result.)"
+                : "")
+            : `${many ? "They" : "It"} could not be written to disk here, so read ` +
+              `${many ? "them" : "it"} from the tool result.`) +
           caption
         );
       }
@@ -207,9 +231,9 @@ function describeOutcome(res, howToWait, shotPath) {
         // Asked for a picture, answered in words. Saying so plainly stops an
         // agent hunting for a file that was never sent.
         return (
-          `Request ${id}: the human answered in words rather than with an image:\n\n` +
+          `Request ${id}: the human answered in words rather than with images:\n\n` +
           res.answer +
-          "\n\nThat is what you have to go on. Do not ask for the picture again.\n"
+          "\n\nThat is what you have to go on. Do not ask to be shown it again.\n"
         );
       }
       // With no `to`, nobody was asked: the human answered it themselves, and
@@ -224,7 +248,7 @@ function describeOutcome(res, howToWait, shotPath) {
     case "denied":
       if (shot) {
         return (
-          `Request ${id}: the human declined to send a screenshot${res.note ? ": " + res.note : "."}\n` +
+          `Request ${id}: the human declined to send screenshots${res.note ? ": " + res.note : "."}\n` +
           "Carry on without seeing it — say what you changed and what it should look like, and\n" +
           "let them correct you. Do not ask for another one.\n"
         );
@@ -245,7 +269,7 @@ function describeOutcome(res, howToWait, shotPath) {
       );
     default:
       return shot
-        ? `Request ${id} is waiting for the human to attach a screenshot.\n` +
+        ? `Request ${id} is waiting for the human to attach screenshots.\n` +
             `${capitalised} to keep waiting, or carry on with what does not depend on seeing it.\n`
         : `Request ${id} is waiting for the human to route it to a sandbox.\n` +
             `${capitalised} to keep waiting.\n`;
@@ -253,14 +277,14 @@ function describeOutcome(res, howToWait, shotPath) {
 }
 
 /// Turn a settled (or not) response into everything the agent needs from it: the
-/// image on disk, if one was released, and the prose that says where it is.
+/// images on disk, if any were released, and the prose that says where they are.
 ///
-/// The only place `saveShot` is called. Both front ends — this CLI and the MCP
+/// The only place `saveShots` is called. Both front ends — this CLI and the MCP
 /// server next door — go through here, so neither can end up describing a file
 /// the other one forgot to write.
 function collect(res, howToWait) {
-  const shotPath = saveShot(res);
-  return { shotPath, text: describeOutcome(res, howToWait, shotPath) };
+  const shotPaths = saveShots(res);
+  return { shotPaths, text: describeOutcome(res, howToWait, shotPaths) };
 }
 
 async function main() {

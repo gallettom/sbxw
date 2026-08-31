@@ -137,6 +137,14 @@ function createPane(index) {
     <div class="pane-bar">
       <span class="dot term-disconnected" id="pdot-${index}" title="Terminal connection"></span>
       <span class="sandbox-label" id="plabel-${index}">—</span>
+      <!-- Beside the name, not over with SSH/Env/Reconnect on the right: those
+           act on the *session* in this pane, while a project is a fact about
+           the sandbox the name belongs to — the same workspace, whichever pane
+           happens to be showing it. -->
+      <button class="pane-btn pane-files-btn" id="pfiles-${index}" disabled
+              title="Project — this sandbox's code map and the deliverables under .sbxw-artifacts/">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg>
+      </button>
       <span class="conn-label" id="pconn-${index}"></span>
       <span class="spacer"></span>
       <div class="mode-switch" role="tablist">
@@ -195,6 +203,9 @@ function createPane(index) {
   });
   document.getElementById(`penv-${index}`).addEventListener('click', ev => {
     if (pane.sandbox) toggleEnvPop(pane.sandbox, ev.currentTarget);
+  });
+  document.getElementById(`pfiles-${index}`).addEventListener('click', () => {
+    if (pane.sandbox) openFilesModal(pane.sandbox);
   });
 
   return pane;
@@ -412,8 +423,9 @@ function paneModeFor(name, requested, current) {
 
 // The pane bar as it depends on *what* a pane holds rather than on which
 // sandbox: its title, and the buttons that need a sandbox behind them. An empty
-// pane has nothing to ssh into or describe; the monitor runs on the host, so it
-// has no sandbox to ssh into, no env file, and no workspace for the Claude/Bash
+// pane has nothing to ssh into, describe, or open a project for; the monitor
+// runs on the host, so it has no sandbox to ssh into, no env file, and no
+// workspace — neither a project of its own nor anything for the Claude/Bash
 // toggles (which would otherwise point at the pseudo-sandbox it is filed under)
 // to read a map from. One function because three paths set this: connecting a
 // pane, emptying one, and shifting a live session into one when a pane closes.
@@ -426,6 +438,9 @@ function applyPaneChrome(idx, name) {
   label.title = monitor ? `host monitor — ${MONITOR_CMD}` : '';
   document.getElementById(`pssh-${idx}`).disabled = !name || monitor;
   document.getElementById(`penv-${idx}`).disabled = !name || monitor;
+  // The monitor runs on the host and has no workspace, so it has no project
+  // either — the same reason SSH and Env go dark on it.
+  document.getElementById(`pfiles-${idx}`).disabled = !name || monitor;
   panes[idx].el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
 }
 

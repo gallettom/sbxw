@@ -7,8 +7,8 @@
 //    sandbox (if any) is asked, you read what comes back, and nothing reaches
 //    the asker until you say so;
 //  - a **screenshot** of what is on your screen — nobody else can supply that,
-//    so there is no routing step at all: you attach an image, describe it in
-//    words instead, or refuse.
+//    so there is no routing step at all: you attach one image or several,
+//    describe it in words instead, or refuse.
 //
 // See `src/relay.rs` for the state machine and `assets/relay-tool.js` for the
 // CLI the agents run.
@@ -27,13 +27,15 @@ const relayFootEl = document.getElementById('relay-modal-foot');
 const relayQueueEl = document.getElementById('relay-queue');
 const relayBadgeEl = document.getElementById('relay-badge');
 
-// Images attached but not yet sent, by request id.
+// Images attached but not yet sent, by request id — a list per request, in the
+// order they were attached, which is the order the agent receives them in.
 //
 // Kept here rather than on the request itself because the server does not know
 // they exist: attaching is a local act, and it stays local until "Send" turns
-// it into an approval. Which is also what makes replacing one free — you can
-// paste, look at it, and paste a better one, with nothing having left the tab.
-const relayShots = new Map(); // id -> { url, label }
+// it into an approval. Which is also what makes building the set free — you can
+// paste, look, add the after-shot, drop the one that came out blurry, and
+// nothing has left the tab until you say so.
+const relayShots = new Map(); // id -> [{ url, label }]
 
 // Longest edge an attached image is scaled to before it is sent. A screenshot
 // is read for its layout, not its pixel grid, and a retina capture of a 4K
@@ -45,6 +47,13 @@ const RELAY_SHOT_MAX_EDGE = 1600;
 // out while they can still pick a smaller window, there because the daemon
 // cannot trust a browser to have done it.
 const RELAY_SHOT_MAX_B64 = 6 * 1024 * 1024;
+
+// How many images one reply may carry, and what they may weigh together —
+// `MAX_SHOTS` and `MAX_SHOTS_B64` in `src/relay.rs`. Mirrored here for the same
+// reason as the per-image cap: refused at the door is a toast you can act on
+// while the popup is still open, refused at the daemon is a round trip.
+const RELAY_MAX_SHOTS = 6;
+const RELAY_SHOTS_MAX_B64 = 16 * 1024 * 1024;
 
 // Which request is on screen. Sticky: new arrivals queue behind whatever you
 // are already deciding on rather than swapping the buttons under your cursor.
@@ -140,35 +149,65 @@ function relayQuestionBlock(req) {
     <pre class="relay-quote">${relayEsc(req.question)}</pre>`;
 }
 
+/** The images attached to `id` so far, oldest first. Never null. */
+function relayHeld(id) {
+  return relayShots.get(id) || [];
+}
+
 /**
  * The attach-an-image half of a screenshot request.
  *
  * Four ways in, because the natural gesture differs by person and by platform:
  * take the image the OS screenshot key already put on the clipboard, drop a
- * file, pick one, or let the browser capture a window here and now. Each is a
- * button or a target you can see — nothing here depends on knowing that a
- * keystroke would have worked. They all end at the same place (`relayAttach`),
- * and the preview is the confirmation: you send what you can see, never what
- * you hope you copied.
+ * file (or several), pick one, or let the browser capture a window here and
+ * now. Each is a button or a target you can see — nothing here depends on
+ * knowing that a keystroke would have worked. They all end at the same place
+ * (`relayAttach`), and the previews are the confirmation: you send what you can
+ * see, never what you hope you copied.
+ *
+ * Each gesture *adds*, because the answer to "how does it look?" is often more
+ * than one picture — a before and an after, two breakpoints, three steps of a
+ * flow. The set is numbered on screen in the order the agent will receive it,
+ * and each thumbnail carries its own ✕ so a bad capture costs one click rather
+ * than starting the set again.
  */
 function relayShotSection(req) {
-  const held = relayShots.get(req.id);
-  const zone = held
-    ? `<img class="relay-shot-img" src="${held.url}" alt="">
-       <div class="relay-shot-meta">${relayEsc(held.label)} — drop or paste another to replace it</div>`
+  const held = relayHeld(req.id);
+  const room = RELAY_MAX_SHOTS - held.length;
+  const grid = held.length
+    ? `<div class="relay-shot-grid" data-count="${held.length}">${held.map((shot, i) => `
+        <figure class="relay-shot-item">
+          <img class="relay-shot-img" src="${shot.url}" alt="">
+          <button class="relay-shot-remove" data-relay-action="drop-shot" data-shot="${i}"
+                  title="Remove this one">✕</button>
+          <figcaption class="relay-shot-meta">${i + 1}. ${relayEsc(shot.label)}</figcaption>
+        </figure>`).join('')}</div>`
+    : '';
+  // The zone stays on screen with images already attached — that is where the
+  // next one goes — but shrinks to a strip, since by then the previews are what
+  // the space is for.
+  const hint = held.length
+    ? `<div class="relay-shot-hint">
+         <strong>Add another</strong> — drop, paste or click${held.length > 1 ? ` · ${held.length} attached` : ''}
+       </div>`
     : `<div class="relay-shot-hint">
-         <strong>Drop an image here</strong> — or click to choose a file
+         <strong>Drop images here</strong> — or click to choose files
        </div>`;
+  const zone = room > 0
+    ? `<div class="relay-shot-zone${held.length ? ' compact' : ''}" id="relay-shot-zone"
+            title="Drop images, or click to choose files">${hint}</div>`
+    : `<p class="relay-note">That is ${RELAY_MAX_SHOTS} images — the most one reply carries.
+       Remove one to swap it for another.</p>`;
   return `
-    <div class="relay-shot-zone${held ? ' has-shot' : ''}" id="relay-shot-zone"
-         title="Drop an image, or click to choose a file">${zone}</div>
+    ${grid}
+    ${zone}
     <div class="relay-shot-actions">
-      ${relayCanPaste() ? `<button class="relay-target" data-relay-action="paste">Paste from clipboard</button>` : ''}
-      ${relayCanCapture() ? `<button class="relay-target" data-relay-action="capture">Capture a window…</button>` : ''}
-      <button class="relay-target" data-relay-action="choose">Choose a file…</button>
-      ${held ? `<button class="relay-target" data-relay-action="drop-shot">Remove</button>` : ''}
+      ${room > 0 && relayCanPaste() ? `<button class="relay-target" data-relay-action="paste">Paste from clipboard</button>` : ''}
+      ${room > 0 && relayCanCapture() ? `<button class="relay-target" data-relay-action="capture">Capture a window…</button>` : ''}
+      ${room > 0 ? `<button class="relay-target" data-relay-action="choose">Choose a file…</button>` : ''}
+      ${held.length ? `<button class="relay-target" data-relay-action="drop-shots">Remove all</button>` : ''}
     </div>
-    <input type="file" id="relay-shot-file" accept="image/png,image/jpeg,image/webp" hidden>`;
+    <input type="file" id="relay-shot-file" accept="image/png,image/jpeg,image/webp" multiple hidden>`;
 }
 
 // Both of the browser-side capture routes are gated on a *secure context*,
@@ -341,7 +380,7 @@ function relayRender() {
     const sync = () => {
       const typed = ownAnswer.value.trim().length > 0;
       relayEditing = typed;
-      sendBtn.disabled = !typed && !relayShots.has(req.id);
+      sendBtn.disabled = !typed && !relayHeld(req.id).length;
     };
     ownAnswer.addEventListener('input', sync);
     sync();
@@ -353,7 +392,12 @@ function relayRender() {
   const file = document.getElementById('relay-shot-file');
   if (file) {
     file.addEventListener('change', () => {
-      if (file.files && file.files[0]) relayAttach(req.id, file.files[0], file.files[0].name);
+      if (!file.files || !file.files.length) return;
+      const chosen = [...file.files];
+      // Cleared so the same file can be picked again — after removing it, say.
+      // `change` does not fire on an input whose value has not changed.
+      file.value = '';
+      relayAttachAll(req.id, chosen);
     });
   }
 }
@@ -437,19 +481,55 @@ function relayRenderKeepingCaption() {
   }
 }
 
-/** Hold an image against `id`, ready to send. The preview is the receipt. */
-async function relayAttach(id, source, label) {
+/**
+ * Hold an image against `id`, ready to send. The preview is the receipt.
+ *
+ * Adds to whatever is already attached, and refuses at the two limits the
+ * daemon would refuse at anyway — one image too heavy, or the set as a whole
+ * past what a reply carries. Refusing here is worth the duplicated constants:
+ * the person is looking at the popup with the previews in front of them, and
+ * can drop the one that was making the same point twice.
+ *
+ * `render` is false while a batch is being attached — dropping four files
+ * repaints once at the end rather than four times.
+ */
+async function relayAttach(id, source, label, render = true) {
+  const held = relayHeld(id);
+  if (held.length >= RELAY_MAX_SHOTS) {
+    showToast(`${RELAY_MAX_SHOTS} images is the most one reply carries`, 'error');
+    return false;
+  }
   try {
     const { url, w, h } = await relayShrink(source);
     if (url.length > RELAY_SHOT_MAX_B64) {
       showToast('That image is too large to send — try a single window', 'error');
-      return;
+      return false;
     }
-    relayShots.set(id, { url, label: `${label || 'image'} · ${w}×${h}` });
-    relayRenderKeepingCaption();
+    const weight = held.reduce((sum, shot) => sum + shot.url.length, url.length);
+    if (weight > RELAY_SHOTS_MAX_B64) {
+      showToast('That is more than one reply carries — remove one first', 'error');
+      return false;
+    }
+    relayShots.set(id, held.concat({ url, label: `${label || 'image'} · ${w}×${h}` }));
+    if (render) relayRenderKeepingCaption();
+    return true;
   } catch (_) {
     showToast('That did not come through as an image', 'error');
+    return false;
   }
+}
+
+/**
+ * Attach a whole batch — a multi-file drop, or a picker several files were
+ * chosen in — in the order they were given, then repaint once.
+ *
+ * Sequential rather than `Promise.all`: the order the images arrive in is what
+ * the agent is told they are in, and a race would shuffle a before and an
+ * after.
+ */
+async function relayAttachAll(id, files) {
+  for (const file of files) await relayAttach(id, file, file.name, false);
+  relayRenderKeepingCaption();
 }
 
 /**
@@ -476,17 +556,21 @@ async function relayPasteFromClipboard(id) {
     showToast('The browser would not hand over the clipboard — press ⌘V instead', 'error');
     return;
   }
+  let attached = 0;
   for (const item of items) {
     const type = item.types.find(t => t.startsWith('image/'));
     if (!type) continue;
     try {
-      await relayAttach(id, await item.getType(type), 'from clipboard');
-      return;
+      if (await relayAttach(id, await item.getType(type), 'from clipboard', false)) attached++;
     } catch (_) {
       // Unreadable item; another one on the clipboard may still be an image.
     }
   }
-  showToast('Nothing on the clipboard is an image', 'error');
+  if (!attached) {
+    showToast('Nothing on the clipboard is an image', 'error');
+    return;
+  }
+  relayRenderKeepingCaption();
 }
 
 /**
@@ -524,11 +608,12 @@ async function relayCapture(id) {
   }
 }
 
-/** The first image on a DataTransfer or clipboard, if there is one. */
-function relayImageFrom(data) {
-  const items = [...((data && data.items) || [])];
-  const item = items.find(i => i.kind === 'file' && i.type.startsWith('image/'));
-  return item ? item.getAsFile() : null;
+/** Every image on a DataTransfer or clipboard, in the order it offers them. */
+function relayImagesFrom(data) {
+  return [...((data && data.items) || [])]
+    .filter(i => i.kind === 'file' && i.type.startsWith('image/'))
+    .map(i => i.getAsFile())
+    .filter(Boolean);
 }
 
 // ⌘V as well as the button, for the muscle memory of whoever just pressed the
@@ -539,10 +624,10 @@ document.addEventListener('paste', ev => {
   if (relayOverlay.classList.contains('hidden')) return;
   const req = relayCurrent();
   if (!req || !relayIsShot(req) || req.state !== 'pending') return;
-  const file = relayImageFrom(ev.clipboardData);
-  if (!file) return;
+  const files = relayImagesFrom(ev.clipboardData);
+  if (!files.length) return;
   ev.preventDefault();
-  relayAttach(req.id, file, 'pasted');
+  relayAttachAll(req.id, files);
 });
 
 relayOverlay.addEventListener('dragover', ev => {
@@ -560,8 +645,8 @@ relayOverlay.addEventListener('drop', ev => {
   const req = relayCurrent();
   if (!req || !relayIsShot(req) || req.state !== 'pending') return;
   ev.preventDefault();
-  const file = relayImageFrom(ev.dataTransfer);
-  if (file) relayAttach(req.id, file, file.name);
+  const files = relayImagesFrom(ev.dataTransfer);
+  if (files.length) relayAttachAll(req.id, files);
 });
 
 // ── Actions ───────────────────────────────────────────────────────────────
@@ -622,17 +707,21 @@ relayOverlay.addEventListener('click', async ev => {
   } else if (action === 'choose') {
     document.getElementById('relay-shot-file')?.click();
   } else if (action === 'drop-shot') {
+    const at = Number(ev.target.closest('[data-shot]')?.dataset.shot);
+    relayShots.set(req.id, relayHeld(req.id).filter((_, i) => i !== at));
+    relayRenderKeepingCaption();
+  } else if (action === 'drop-shots') {
     relayShots.delete(req.id);
     relayRenderKeepingCaption();
   } else if (action === 'approve' || action === 'approve-own') {
     const box = document.getElementById(
       action === 'approve' ? 'relay-review-answer' : 'relay-own-answer');
     const answer = (box?.value || '').trim();
-    const image = relayShots.get(req.id)?.url;
+    const images = relayHeld(req.id).map(shot => shot.url);
     // Either one is enough. A screenshot needs no caption, and a person who
     // would rather describe what they see than show it has answered too.
-    if (!answer && !image) { showToast('Nothing to send', 'error'); return; }
-    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, { answer, image })) {
+    if (!answer && !images.length) { showToast('Nothing to send', 'error'); return; }
+    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, { answer, images })) {
       relayEditing = false;
       relayShots.delete(req.id);
     }

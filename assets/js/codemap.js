@@ -410,6 +410,7 @@
   const state = {
     sandbox: null,
     root: null,          // map directory under .sbxw-artifacts, e.g. "codemap"
+    maps: [],            // every readable map: the code map, then its lenses
     docs: new Map(),     // key -> doc
     others: [],          // markdown outside the map, viewable but not linked
     backlinks: new Map(),
@@ -422,10 +423,15 @@
   };
 
   const $ = (id) => document.getElementById(id);
-  const api = (path) => `/api/sandboxes/${encodeURIComponent(state.sandbox)}/artifacts${path}`;
+  const sandboxApi = (path) => `/api/sandboxes/${encodeURIComponent(state.sandbox)}${path}`;
+  const api = (path) => sandboxApi(`/artifacts${path}`);
 
-  // Which directory holds the map: `codemap/` by convention, otherwise any
-  // directory carrying the index file the format requires (dir/dir.md).
+  // Which directory holds the map, when the server didn't say.
+  //
+  // It normally does: `/artifacts` folds `codemap/` out of the file list and
+  // hands it back as `codemap`, entries and all. This is the fallback for a
+  // project that keeps its map somewhere else — any directory carrying the
+  // index file the format requires (dir/dir.md).
   function findMapRoot(entries) {
     const dirs = new Set(entries
       .filter((e) => e.path.includes('/'))
@@ -438,7 +444,23 @@
     return null;
   }
 
-  async function loadMap(name) {
+  const isMarkdown = (e) => /\.(md|markdown)$/i.test(e.path);
+
+  // Every map this project has, in the order the picker offers them: the code
+  // map first — it is the source the lenses are written from — then each lens,
+  // newest first, as the server listed them.
+  function mapsFrom(data) {
+    const maps = [];
+    if (data.codemap) maps.push({ ...data.codemap, label: 'Code map', lens: false });
+    for (const l of data.lenses || []) {
+      maps.push({ ...l, label: l.slug.replace(/-/g, ' '), lens: true });
+    }
+    return maps;
+  }
+
+  // `root` picks which of them to read; the default is whatever the picker is
+  // showing, or the code map on a first open.
+  async function loadMap(name, root) {
     state.sandbox = name;
     state.docs = new Map();
     state.others = [];
@@ -449,22 +471,33 @@
     $('codemap-side').innerHTML = '';
 
     let entries = [];
+    let data = {};
     try {
       const res = await fetch(api(''));
-      const data = await res.json();
-      entries = (data.entries || []).filter((e) => /\.(md|markdown)$/i.test(e.path));
+      data = await res.json();
+      entries = (data.entries || []).filter(isMarkdown);
     } catch (_) {
       $('codemap-doc').innerHTML = '<p class="cm-empty cm-error">Could not reach this sandbox.</p>';
       return;
     }
 
-    state.root = findMapRoot(entries);
+    state.maps = mapsFrom(data);
+    // A map the server named keeps the files it handed over; the fallback has
+    // to go and find them in the general list.
+    const chosen = state.maps.find((m) => m.dir === root) || state.maps[0] || null;
+    let inMap;
+    if (chosen) {
+      state.root = chosen.dir;
+      inMap = (chosen.entries || []).filter(isMarkdown);
+    } else {
+      state.root = findMapRoot(entries);
+      inMap = state.root ? entries.filter((e) => e.path.startsWith(`${state.root}/`)) : [];
+    }
+    state.others = entries.filter((e) => !inMap.includes(e));
+    renderLensPicker();
     $('codemap-dir').textContent = state.root
       ? `.sbxw-artifacts/${state.root}/`
       : '.sbxw-artifacts/';
-
-    const inMap = state.root ? entries.filter((e) => e.path.startsWith(`${state.root}/`)) : [];
-    state.others = entries.filter((e) => !inMap.includes(e));
 
     const texts = await Promise.all(inMap.map(async (e) => {
       try {
@@ -495,10 +528,152 @@
         <p>A map is a few linked markdown files under
         <code>.sbxw-artifacts/codemap/</code> describing what the project does and
         why — the layer the source can't state itself.</p>
-        <p>Run <code>/codemap</code> in the agent pane to write one, then reopen
-        this panel.</p>
+        <p><strong>Generate code map</strong>, in the project panel this opened
+        from, asks this sandbox's agent for one — in a background session, so
+        the pane stays yours while it writes.</p>
       </div>`;
     $('codemap-side').innerHTML = '';
+  }
+
+  /* ── Lenses ───────────────────────────────────────────────────────────
+     A lens is the same repository told for one reader — a product owner, a new
+     joiner, whoever the brief names. It is written by the sandbox's own agent
+     into `.sbxw-artifacts/codemap-lenses/<slug>/`, beside the map rather than
+     inside it, and read here through exactly the same viewer: a lens is a map,
+     so it gets wiki links, backlinks and a graph for free.
+
+     Nothing in this file writes one. The browser hands the brief to the daemon,
+     the daemon starts a background session running `/codemap-lens`, and the
+     agent — the only party that can read the map and judge what a product owner
+     needs from it — writes it while your pane stays yours. The run is the
+     daemon's state, the same as the map's: it reaches this panel through
+     `applyRun` below, and the picker reloads itself when the lens lands. */
+
+  // Matches the daemon's own cap (`LENS_OBJECTIVE_MAX`). Said here too so the
+  // count is live rather than a rejection after the click.
+  const LENS_MAX = 400;
+
+  function renderLensPicker() {
+    const sel = $('codemap-lens-select');
+    sel.classList.toggle('hidden', !state.maps.length);
+    sel.innerHTML = state.maps.map((m) => `
+      <option value="${escapeHtml(m.dir)}"${m.dir === state.root ? ' selected' : ''}>
+        ${escapeHtml(m.lens ? `Lens · ${m.label}` : m.label)}
+      </option>`).join('');
+    // Nothing to retell yet: a lens paraphrases a map, and there is no map.
+    const toggle = $('codemap-lens-toggle');
+    const hasMap = state.maps.some((m) => !m.lens) || (!state.maps.length && state.root);
+    toggle.disabled = !hasMap;
+    toggle.title = hasMap
+      ? 'Ask this sandbox\'s agent to retell the map for one reader'
+      : 'Write the map first — Generate code map, in the project panel — then a lens has something to retell';
+    if (!hasMap) closeLensForm();
+  }
+
+  function setLensNote(text, kind) {
+    const note = $('codemap-lens-note');
+    note.textContent = text || '';
+    note.className = `codemap-lens-note${kind ? ` ${kind}` : ''}`;
+    syncLensBar();
+  }
+
+  // The bar exists for the form and the note; with neither, it is a border and
+  // a row of padding taken off the map. The button that opens it lives in the
+  // toolbar and is always there, so nothing is hidden by hiding this.
+  function syncLensBar() {
+    const open = !$('codemap-lens-form').classList.contains('hidden');
+    const noted = !!$('codemap-lens-note').textContent;
+    $('codemap-lens-bar').classList.toggle('hidden', !open && !noted);
+  }
+
+  function openLensForm() {
+    $('codemap-lens-form').classList.remove('hidden');
+    $('codemap-lens-toggle').setAttribute('aria-expanded', 'true');
+    syncLensBar();
+    updateLensCount();
+    $('codemap-lens-objective').focus();
+  }
+
+  function closeLensForm() {
+    $('codemap-lens-form').classList.add('hidden');
+    $('codemap-lens-toggle').setAttribute('aria-expanded', 'false');
+    syncLensBar();
+  }
+
+  function updateLensCount() {
+    const el = $('codemap-lens-objective');
+    const n = el.value.trim().length;
+    const count = $('codemap-lens-count');
+    count.textContent = n ? `${n} / ${LENS_MAX} characters` : '';
+    count.classList.toggle('over', n > LENS_MAX);
+    $('codemap-lens-go').disabled = !n || n > LENS_MAX;
+  }
+
+  async function submitLens() {
+    const objective = $('codemap-lens-objective').value.trim();
+    if (!objective || objective.length > LENS_MAX) return;
+    $('codemap-lens-go').disabled = true;
+    setLensNote('Starting a session…');
+    let data = {};
+    try {
+      const res = await fetch(sandboxApi('/codemap/lens'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ objective }),
+      });
+      data = await res.json();
+    } catch (_) {
+      data = { ok: false, error: 'could not reach the daemon' };
+    }
+    if (!data.ok) {
+      setLensNote(data.error || 'the session could not be started', 'error');
+      updateLensCount();
+      return;
+    }
+    // Deliberately not a progress bar: a lens is minutes of the agent's
+    // reading, with no step anyone here can count. What the daemon does report
+    // is the run's phase, and `applyRun` below is where the rest of this note's
+    // life happens — including the reload when the lens lands.
+    closeLensForm();
+    $('codemap-lens-objective').value = '';
+    updateLensCount();
+    setLensNote(
+      `Writing it in a background session · the agent names it, under `
+      + `.sbxw-artifacts/${data.dir}/`, 'ok');
+  }
+
+  /**
+   * A background run for this sandbox changed phase.
+   *
+   * Called from `applyCodemapRun` (in /js/sandboxes.js), which owns the tab's
+   * copy of the daemon's state — this panel is one more thing painted from it,
+   * like the sidebar badge and the corner card. Only the sandbox on screen is
+   * any of its business.
+   *
+   * `seed` marks a run that was already true when this panel opened: it paints
+   * "still writing" and nothing else, because a lens that landed an hour ago is
+   * not news and its files are in the listing this panel just read.
+   */
+  function applyRun(run, seed = false) {
+    if (!run || run.sandbox !== state.sandbox) return;
+    if ($('codemap-modal-overlay').classList.contains('hidden')) return;
+    const lens = run.kind === 'lens';
+    if (run.phase === 'writing') {
+      setLensNote(lens
+        ? 'Writing a lens in a background session — this takes a few minutes'
+        : 'Rewriting the map in a background session — this takes a few minutes');
+      return;
+    }
+    if (seed) return;
+    if (run.phase === 'done') {
+      setLensNote(lens ? 'Lens written — it is in the picker above' : 'Map rewritten', 'ok');
+      // Reload rather than ask for a Refresh: what changed is a document in the
+      // panel you are looking at, and the picker cannot list a lens it has
+      // never heard of. Stays on what you were reading (`state.root`).
+      loadMap(state.sandbox, state.root);
+    } else {
+      setLensNote(run.note || 'the session ended without writing one', 'error');
+    }
   }
 
   function updateStats() {
@@ -737,7 +912,16 @@
     $('codemap-name').textContent = name;
     $('codemap-search').value = '';
     state.filter = '';
+    state.maps = [];
+    closeLensForm();
+    setLensNote('');
+    $('codemap-lens-objective').value = '';
+    updateLensCount();
     loadMap(name);
+    // Opened onto a sandbox already writing something: say so, rather than
+    // leaving the toolbar looking idle while a session works. Seeded, so a run
+    // that finished before this panel opened stays out of it.
+    if (typeof codemapRun === 'function') applyRun(codemapRun(name), true);
   }
 
   function close() {
@@ -755,7 +939,26 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !overlay.classList.contains('hidden')) close();
     });
-    $('codemap-refresh').addEventListener('click', () => { if (state.sandbox) loadMap(state.sandbox); });
+    // Refresh keeps you on the retelling you were reading: a lens the agent has
+    // just rewritten is exactly what you pressed it for.
+    $('codemap-refresh').addEventListener('click', () => {
+      if (state.sandbox) loadMap(state.sandbox, state.root);
+    });
+    $('codemap-lens-select').addEventListener('change', (e) => {
+      if (state.sandbox) loadMap(state.sandbox, e.target.value);
+    });
+    $('codemap-lens-toggle').addEventListener('click', () => {
+      if ($('codemap-lens-form').classList.contains('hidden')) openLensForm();
+      else closeLensForm();
+    });
+    $('codemap-lens-cancel').addEventListener('click', closeLensForm);
+    $('codemap-lens-objective').addEventListener('input', updateLensCount);
+    // ⌘/Ctrl-Return submits, the way the composer next door does; a bare Return
+    // stays a newline, since a brief is prose.
+    $('codemap-lens-objective').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitLens(); }
+    });
+    $('codemap-lens-form').addEventListener('submit', (e) => { e.preventDefault(); submitLens(); });
     $('codemap-view-doc').addEventListener('click', () => {
       if (state.current) openDoc(state.current);
       else if (state.docs.size) openDoc([...state.docs.keys()][0]);
@@ -799,12 +1002,15 @@
   }
 
   if (typeof document !== 'undefined') init();
-  if (typeof window !== 'undefined') window.openCodemapModal = open;
+  if (typeof window !== 'undefined') {
+    window.openCodemapModal = open;
+    window.codemapViewerRun = applyRun;
+  }
   // Node can require this file to exercise the parsing and layout directly.
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       parseDoc, resolveLink, buildBacklinks, buildGraph, renderMarkdown, renderInline,
-      findMapRoot, tickGraph, seedLayout, slug, isCodeTarget,
+      findMapRoot, mapsFrom, tickGraph, seedLayout, slug, isCodeTarget,
     };
   }
 })();

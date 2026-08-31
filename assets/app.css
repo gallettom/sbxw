@@ -56,7 +56,8 @@
   /* ── Header ── */
   header {
     display: flex; align-items: center; gap: 1.8rem;
-    padding: 0 1.1rem;
+    padding-left: 0.25rem;
+    padding-right: 1.1rem;
     background: var(--c-surface); border-bottom: 1px solid var(--c-elevated);
     box-shadow: 0 1px 0 rgba(0, 0, 0, .35);
     flex-shrink: 0; height: 48px;
@@ -107,23 +108,55 @@
     0%, 100% { background: var(--c-bg); }
     20%, 60% { background: var(--c-amber-tint); }
   }
-  .refresh-btn:hover { background: var(--c-border); border-color: var(--c-dim); color: var(--c-text-bright); }
-  .refresh-btn:active { background: var(--c-active-bg); }
-  .refresh-btn svg { flex-shrink: 0; }
+  /* ── The neutral button ──
+     Close, Refresh, Code map, Preview, Copy, Monitor, ? — every button that is
+     always safe to press and is not the one thing the dialog is for. One rule,
+     because they sit next to each other: a modal's footer holds Refresh and
+     Code map on the left and Close on the right, and three of the four used to
+     be told apart by nothing anyone chose.
 
-  /* Twin of the Refresh button, sat before the help circle. Text rather than a
-     glyph: "a screen on a stand" reads as a monitor only once you already know
-     that is what this opens. */
-  .monitor-btn, .help-btn {
-    display: flex; align-items: center;
-    background: var(--c-elevated); border: 1px solid var(--c-border); border-radius: 6px;
-    color: var(--c-text); cursor: pointer;
-    height: 28px; padding: 0 .8rem; font: inherit; font-size: 12px; font-weight: 500;
+     `.refresh-btn` in particular had no base rule at all — only a :hover — so
+     it rendered as a bare native button beside a Close that didn't, which is
+     the difference you could see in the Project panel. Size is the only thing
+     left to the rules below: the header's are taller, and the footer's are
+     exactly a Close. */
+  .btn-cancel, .refresh-btn, .monitor-btn, .help-btn {
+    display: inline-flex; align-items: center; gap: .3rem;
+    background: var(--c-elevated); color: var(--c-text);
+    border: 1px solid var(--c-border); border-radius: 6px;
+    padding: .3rem .75rem; font: inherit; font-size: 12px; cursor: pointer;
     white-space: nowrap;
     transition: background .1s, border-color .1s, color .1s;
   }
-  .monitor-btn:hover, .help-btn:hover { background: var(--c-border); border-color: var(--c-dim); color: var(--c-text-bright); }
-  .monitor-btn:active, .help-btn:active { background: var(--c-active-bg); }
+  .btn-cancel:hover, .refresh-btn:hover, .monitor-btn:hover, .help-btn:hover {
+    background: var(--c-border); border-color: var(--c-dim); color: var(--c-text-bright);
+  }
+  .btn-cancel:active, .refresh-btn:active, .monitor-btn:active, .help-btn:active {
+    background: var(--c-active-bg);
+  }
+  /* Disabled is a state of the button, not of one of its uses: the Code map
+     button is disabled for as long as a map is being written, which is minutes
+     at a time and the one moment there is nothing to ask it for. */
+  .btn-cancel:disabled, .refresh-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .refresh-btn svg { flex-shrink: 0; }
+  /* …and while that runs, the button *is* the status line: amber, and pulsing
+     at the same slow rate as every other "an agent is busy on this" signal in
+     the window, so it reads as work in flight rather than as a broken control.
+     `!important` beats the `:disabled` fade above, which would otherwise make
+     the one button carrying live information the faintest thing in the panel. */
+  .refresh-btn.working {
+    color: var(--c-amber); border-color: var(--c-amber);
+    opacity: 1 !important;
+    animation: sbx-ready-pulse 1.6s ease-in-out infinite;
+  }
+
+  /* Twin of the Refresh button, sat before the help circle. Text rather than a
+     glyph: "a screen on a stand" reads as a monitor only once you already know
+     that is what this opens. Taller than the modal ones and no wider: it is
+     sized to the header row it sits in. */
+  .monitor-btn, .help-btn {
+    height: 28px; padding: 0 .8rem; font-weight: 500;
+  }
   /* Author `display` beats the browser's own `[hidden] { display: none }`, so
      with no `monitor_cmd` configured the button would come back. Restate it. */
   .monitor-btn[hidden], .help-btn[hidden] { display: none; }
@@ -404,10 +437,6 @@
   .port-col-label {
     font-size: 10px; color: var(--c-text-dim); text-align: center;
   }
-  .btn-cancel {
-    background: var(--c-elevated); color: var(--c-text); border: 1px solid var(--c-border); border-radius: 6px;
-    padding: .3rem .75rem; font: inherit; font-size: 12px; cursor: pointer;
-  }
   /* Sat on the left of the footer, unfilled: going back up a step is not one of
      the two things you came here to press. */
   .btn-back {
@@ -416,13 +445,20 @@
     padding: .3rem .6rem; font: inherit; font-size: 12px; cursor: pointer;
   }
   .btn-back:hover { color: var(--c-text-bright); background: var(--c-elevated); }
-  .btn-cancel:hover { background: var(--c-border); }
   .btn-create {
     background: var(--c-green-deep); color: var(--c-white); border: 1px solid var(--c-green-strong); border-radius: 6px;
     padding: .3rem .9rem; font: inherit; font-size: 12px; cursor: pointer; font-weight: 600;
   }
   .btn-create:hover { background: var(--c-green-strong); }
   .btn-create:disabled { opacity: .5; cursor: not-allowed; }
+  /* The confirm button of a destructive dialog — a `.btn-create` in red. It was
+     the one button in the app carrying its whole appearance inline, hex codes
+     and all, so it was also the one that could not follow a token change. */
+  .btn-danger {
+    background: #da3633; color: var(--c-white); border: 1px solid var(--c-red); border-radius: 6px;
+    padding: .3rem .9rem; font: inherit; font-size: 12px; cursor: pointer; font-weight: 600;
+  }
+  .btn-danger:hover { background: var(--c-red); }
   .create-error { color: var(--c-red); font-size: 11px; align-self: center; }
   .sbx-item {
     padding: .45rem .75rem;
@@ -506,12 +542,72 @@
     animation: sbx-ready-pulse 1.6s ease-in-out infinite;
   }
   @keyframes sbx-ready-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  /* Shown while a background session writes this sandbox's code map. Amber and
+     lower-case, matching the pane badges rather than the status dots: it is a
+     job running in the sandbox, not a state the sandbox is in. */
+  .sbx-map-badge {
+    display: inline-block; font-size: 9px; color: var(--c-amber);
+    background: var(--c-amber-tint); border: 1px solid var(--c-amber); border-radius: 4px;
+    padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
+    animation: sbx-ready-pulse 1.6s ease-in-out infinite;
+  }
   /* ── Pending sandbox row — last item in the list while creation runs ── */
   .sbx-item-pending {
-    display: flex; align-items: center; gap: .55rem;
     padding: .45rem .75rem;
     border-left: 2px solid transparent;
     cursor: default;
+  }
+  .sbx-pending-head {
+    display: flex; align-items: center; gap: .55rem;
+  }
+  /* The steps the bring-up announced, ticked off as it goes (see
+     src/progress.rs). Indented under the pixel logo rather than beside it:
+     the list is what the row is about once creation is under way, and the
+     logo is only there to say something is still running. */
+  .sbx-pending-steps {
+    list-style: none; margin: .4rem 0 .1rem; padding: 0 0 0 .35rem;
+    border-left: 1px solid var(--c-border);
+    display: flex; flex-direction: column; gap: .18rem;
+  }
+  .sbx-step {
+    display: grid;
+    grid-template-columns: 12px 1fr;
+    align-items: baseline;
+    column-gap: .35rem;
+    font-size: 11px;
+    color: var(--c-text-dim);
+  }
+  .sbx-step-mark {
+    justify-self: center;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--c-dim);
+    align-self: center;
+  }
+  .sbx-step.done { color: var(--c-text-muted); }
+  .sbx-step.done .sbx-step-mark {
+    background: none;
+    /* A tick drawn from the box itself: two borders, rotated. Cheaper than a
+       glyph, which at 11px lands on a different baseline in every font the
+       mono stack may fall back to. */
+    width: 3px; height: 6px; border-radius: 0;
+    border: solid var(--c-green); border-width: 0 1.5px 1.5px 0;
+    transform: translateY(-1px) rotate(45deg);
+  }
+  .sbx-step.running { color: var(--c-text-bright); }
+  .sbx-step.running .sbx-step-mark {
+    background: var(--c-blue); box-shadow: 0 0 5px #58a6ff99;
+    animation: sbx-ready-pulse 1.6s ease-in-out infinite;
+  }
+  .sbx-step-label { min-width: 0; }
+  /* What sbx last printed under the running step — an image pull's progress,
+     usually. One line, clipped: it is a status line, and a wrapped paragraph
+     would push the sandbox list around every time the percentage moved. */
+  .sbx-step-detail {
+    grid-column: 2;
+    margin-top: .1rem;
+    color: var(--c-text-dim);
+    font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .sbx-pending-logo {
     display: grid;
@@ -548,12 +644,10 @@
   .sbx-actions button.ports-btn:hover   { color: var(--c-blue); border-color: var(--c-blue); background: var(--c-blue-tint); }
   .sbx-actions button.dup-btn { color: var(--c-purple); }
   .sbx-actions button.dup-btn:hover     { color: var(--c-purple); border-color: var(--c-purple); background: var(--c-purple-tint); }
-  .sbx-actions button.files-btn { color: var(--c-amber); }
-  .sbx-actions button.files-btn:hover   { color: var(--c-amber); border-color: var(--c-amber); background: var(--c-amber-tint); }
   /* Pinned to the row's right edge regardless of what precedes it — running
      rows carry an extra restart button and "■ Stop"/"▶ Connect" aren't the
      same width, so without this the delete target drifts item to item. */
-  .sbx-actions button.rm-btn    { color: var(--c-red); margin-left: auto; }
+  .sbx-actions button.rm-btn    { color: var(--c-red); }
   .sbx-actions button.rm-btn:hover    { background: var(--c-red-tint); border-color: var(--c-red); }
   .ports-section-label {
     color: var(--c-text-muted); font-size: 11px; font-weight: 600;
@@ -866,6 +960,17 @@
   .pane-bar .dot.term-connected    { background: var(--c-blue); box-shadow: 0 0 5px #58a6ff66; }
   .pane-bar .dot.term-disconnected { background: var(--c-dim); }
   .pane-bar .sandbox-label { color: var(--c-text-bright); font-weight: 500; }
+  /* Project, attached to the name it belongs to. Icon-only and amber — the
+     colour it wore in the sidebar, so the folder is recognisably the same
+     button in its new home — and sized to sit level with the label rather than
+     to match the session buttons at the other end of the bar. */
+  .pane-bar .pane-files-btn {
+    display: inline-flex; align-items: center;
+    padding: .15rem .35rem; color: var(--c-amber);
+  }
+  .pane-bar .pane-files-btn:hover:not(:disabled) {
+    background: var(--c-amber-tint); border-color: var(--c-amber);
+  }
   .pane-bar .conn-label { color: var(--c-text-muted); font-size: 11px; }
   .pane-bar .spacer { flex: 1; }
   .pane-btn {
@@ -1031,10 +1136,11 @@
   }
   .relay-target-dot[data-chat] { background: var(--c-purple-alt); }
 
-  /* The drop zone for a screenshot request. Dashed and empty until there is an
-     image, then it *is* the image: the preview is what tells you that what you
-     copied is what you are about to send. Clicking anywhere in it picks a file,
-     so the three gestures (paste, drop, click) land on one target. */
+  /* The drop zone for a screenshot request. Dashed and empty until there are
+     images, then it shrinks to a strip above them and keeps saying "another" —
+     attaching adds rather than replaces, so the zone is never done being
+     useful. Clicking anywhere in it picks files, so the three gestures (paste,
+     drop, click) land on one target. */
   .relay-shot-zone {
     display: flex; align-items: center; justify-content: center;
     min-height: 96px; padding: .7rem; cursor: pointer;
@@ -1044,18 +1150,39 @@
   .relay-shot-zone:hover, .relay-shot-zone.over {
     border-color: var(--c-purple-strong); background: #1a1626;
   }
-  .relay-shot-zone.has-shot {
-    flex-direction: column; gap: .4rem; border-style: solid; padding: .4rem;
-  }
+  .relay-shot-zone.compact { min-height: 0; padding: .45rem; }
   .relay-shot-hint { color: var(--c-text-muted); font-size: 12px; line-height: 1.5; }
   .relay-shot-hint strong { color: var(--c-text-bright); font-weight: 600; }
+
+  /* The set as it will be sent. One image gets the room it needs to be read;
+     several trade size for being seen side by side, which is the point of
+     sending several — a before beside an after is a comparison, and one above
+     the fold with the other scrolled off is not. */
+  .relay-shot-grid {
+    display: grid; gap: .4rem;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .relay-shot-grid[data-count="1"] { grid-template-columns: 1fr; }
+  .relay-shot-item {
+    position: relative; margin: 0; display: flex; flex-direction: column; gap: .25rem;
+  }
   /* Capped rather than scaled to fit: a screenshot is read for its detail, and
-     the popup can give it a third of the viewport without pushing the buttons
-     off the bottom. */
+     the popup can give a single one a third of the viewport without pushing the
+     buttons off the bottom. */
   .relay-shot-img {
-    max-width: 100%; max-height: 34vh; border-radius: 4px;
+    max-width: 100%; max-height: 16vh; border-radius: 4px;
     border: 1px solid var(--c-border); display: block;
   }
+  .relay-shot-grid[data-count="1"] .relay-shot-img { max-height: 34vh; }
+  /* The ✕ sits on the image rather than under it: with six thumbnails the
+     question "remove which one?" has to be answered by where you click. */
+  .relay-shot-remove {
+    position: absolute; top: .2rem; right: .2rem;
+    width: 20px; height: 20px; padding: 0; line-height: 18px; text-align: center;
+    background: rgba(0, 0, 0, .65); border: 1px solid var(--c-border); border-radius: 50%;
+    color: var(--c-text-bright); font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .relay-shot-remove:hover { background: var(--c-red); border-color: transparent; }
   .relay-shot-meta { color: var(--c-text-muted); font-size: 11px; }
   .relay-shot-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 
@@ -1175,9 +1302,77 @@
   .codemap-toolbar .mode-switch button + button { border-left: 1px solid var(--c-border); }
   .codemap-toolbar .mode-switch button:hover { background: var(--c-surface); color: var(--c-text); }
   .codemap-toolbar .mode-switch button.active { background: var(--c-elevated); color: var(--c-text-bright); }
-  .codemap-search { width: 220px; padding: .3rem .55rem; font-size: 12px; }
-  .codemap-dir { color: var(--c-text-dim); font-size: 11.5px; }
-  .codemap-stats { color: var(--c-text-dim); font-size: 11.5px; white-space: nowrap; }
+  .codemap-search { width: 220px; min-width: 120px; padding: .3rem .55rem; font-size: 12px; }
+  /* The row is full: a search box, a path, counts, the picker, Write a lens and
+     the view switch. The controls keep their size and the two read-only strings
+     give way — truncated with an ellipsis rather than pushing a button off the
+     modal on a narrow window. */
+  .codemap-dir, .codemap-stats {
+    color: var(--c-text-dim); font-size: 11.5px;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .codemap-lens-select {
+    width: auto; max-width: 180px; flex-shrink: 0; padding: .25rem .4rem; font-size: 11.5px;
+    color: var(--c-text); cursor: pointer;
+  }
+  .codemap-toolbar .lens-btn, .codemap-toolbar .mode-switch { flex-shrink: 0; }
+  /* Hidden rather than absent when a project has no lenses and no map to make
+     one from: an empty select is a control that says nothing. */
+  .codemap-lens-select.hidden { display: none; }
+
+  /* The one action in this modal that writes something, so it is the one
+     control here that carries a colour. Purple rather than the green of
+     "Create": this asks the agent for a document, it does not make a sandbox.
+     It sits in the toolbar beside the picker it fills — down in the lens bar,
+     in the flat grey of Refresh, it read as a caption to the map. */
+  .lens-btn {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: var(--c-purple-tint); color: var(--c-purple);
+    border: 1px solid var(--c-purple-strong); border-radius: 6px;
+    padding: .3rem .75rem; font: inherit; font-size: 12px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+    transition: background .1s, border-color .1s, color .1s;
+  }
+  .lens-btn:hover { background: var(--c-purple-strong); color: var(--c-white); }
+  .lens-btn:active { background: var(--c-purple-alt); }
+  /* Open, it is the thing the bar below belongs to — filled, so the two read as
+     one control. */
+  .lens-btn[aria-expanded="true"] {
+    background: var(--c-purple-strong); color: var(--c-white); border-color: var(--c-purple-alt);
+  }
+  .lens-btn:disabled {
+    opacity: .5; cursor: not-allowed;
+    background: var(--c-purple-tint); color: var(--c-purple); border-color: var(--c-purple-strong);
+  }
+  .lens-btn svg { flex-shrink: 0; }
+
+  /* ── Lens bar ──
+     What the button in the toolbar opens: a brief, a hint and two actions,
+     dropped between the toolbar and the map. It is present only while it has
+     something to say — the form is open, or a note is waiting — because a strip
+     holding nothing is a row of the map's height spent on a border. It sits
+     above the body rather than inside a sidebar because what it writes is a
+     *sibling* of what you are reading, not a part of it. */
+  .codemap-lens {
+    flex-shrink: 0; border-bottom: 1px solid var(--c-elevated);
+    padding: .5rem 1rem; background: var(--c-surface);
+  }
+  .codemap-lens.hidden { display: none; }
+  .codemap-lens-note { display: block; font-size: 11.5px; color: var(--c-text-dim); min-width: 0; }
+  .codemap-lens-note:empty { display: none; }
+  /* A note under an open form is a second thing to read; under a closed one it
+     is the whole bar. */
+  .codemap-lens-form:not(.hidden) + .codemap-lens-note { padding-top: .45rem; }
+  .codemap-lens-note.ok { color: var(--c-green); }
+  .codemap-lens-note.error { color: var(--c-red); }
+  .codemap-lens-form { display: flex; flex-direction: column; gap: .4rem; }
+  .codemap-lens-form.hidden { display: none; }
+  .codemap-lens-input { font-size: 12.5px; line-height: 1.5; resize: vertical; }
+  .codemap-lens-hint { margin: 0; font-size: 11px; color: var(--c-text-dim); line-height: 1.5; }
+  .codemap-lens-hint code { color: var(--c-text-muted); }
+  .codemap-lens-actions { display: flex; align-items: center; gap: .5rem; justify-content: flex-end; }
+  .codemap-lens-count { margin-right: auto; font-size: 11px; color: var(--c-text-dim); }
+  .codemap-lens-count.over { color: var(--c-red); }
   .codemap-body {
     flex: 1; min-height: 0;
     display: grid; grid-template-columns: 210px minmax(0, 1fr) 240px;

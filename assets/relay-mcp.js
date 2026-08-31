@@ -82,7 +82,8 @@ const TOOLS = [
     name: "ask_user_for_screenshot",
     description:
       "Ask the person at the keyboard to show you what something LOOKS LIKE, when you have " +
-      "changed the visual side of a project and cannot see the result.\n" +
+      "changed the visual side of a project and cannot see the result. They can send several " +
+      "images in one reply, so ask for every view that settles the question at once.\n" +
       "\n" +
       "Reach for this when the thing you would need in order to know whether you got it right is " +
       "a picture: a layout you just moved, a component you restyled, spacing or alignment you " +
@@ -97,15 +98,19 @@ const TOOLS = [
       "this interrupts a person, and their attention is the scarcest thing you spend.\n" +
       "\n" +
       "Say what to capture and why, in one sentence: which screen, which state, which width. " +
-      "They see your words and choose to paste an image, capture a window, describe it in text " +
-      "instead — or refuse. **A refusal is final and costs you nothing to accept**: carry on, say " +
-      "plainly what you changed and what you expect it to look like, and let them correct you. " +
-      "Never ask twice for the same view.\n" +
+      "If one picture will not settle it, name the views you need in that same sentence — a " +
+      "before and an after, two breakpoints, the three steps of a flow — and they can attach " +
+      "them all to the one reply. That is one interruption instead of three; asking again later " +
+      "for the view you should have named now is the expensive way. They see your words and " +
+      "choose to paste images, capture a window, describe it in text instead — or refuse. " +
+      "**A refusal is final and costs you nothing to accept**: carry on, say plainly what you " +
+      "changed and what you expect it to look like, and let them correct you. Never ask twice " +
+      "for the same view.\n" +
       "\n" +
-      "Returns within ~90 s with the image, or with a request id to pick up later via " +
-      "`check_sandbox_question` — carry on with what does not depend on seeing it meanwhile. The " +
-      "picture also lands as a file in this sandbox, so you can look again later without asking " +
-      "again.",
+      "Returns within ~90 s with whatever they sent — one image or several, in the order they " +
+      "attached them — or with a request id to pick up later via `check_sandbox_question`; carry " +
+      "on with what does not depend on seeing it meanwhile. The pictures also land as files in " +
+      "this sandbox, so you can look again later without asking again.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,7 +120,9 @@ const TOOLS = [
             "What you need to see and why, in a sentence a person can act on without reading " +
             "your conversation. Name the screen or component, the state it should be in, and " +
             "what you changed — e.g. \"the settings header at mobile width, after I moved the " +
-            "save button into the toolbar\".",
+            "save button into the toolbar\". Ask for every view you need in this one sentence " +
+            "— e.g. \"the same header at 375px and at 1280px\" — since they can send several " +
+            "images at once.",
         },
         timeout_seconds: {
           type: "number",
@@ -131,7 +138,7 @@ const TOOLS = [
     description:
       "Pick up a request you opened earlier with `ask_other_sandbox` or `ask_user_for_screenshot` " +
       "that had not been settled when the call returned. Returns the approved answer, the " +
-      "screenshot, the refusal, or that it is still waiting. Use it when you reach the point " +
+      "screenshots, the refusal, or that it is still waiting. Use it when you reach the point " +
       "where you actually need that answer — not in a loop.",
     inputSchema: {
       type: "object",
@@ -167,16 +174,20 @@ function textResult(text, isError) {
 
 /// What came of a request, in the two forms a client can render.
 ///
-/// A released screenshot goes back as an `image` block — the whole reason this
+/// Released screenshots go back as `image` blocks — the whole reason this
 /// server exists alongside the CLI, since an agent reading a shell's stdout can
-/// be told a picture arrived but cannot look at it. The prose follows, and says
-/// where the same image was saved so a later turn can re-read it without
-/// interrupting anyone again.
+/// be told a picture arrived but cannot look at it. One block per image, in the
+/// order they were attached, because that order is the answer when the person
+/// sent a before and an after. The prose follows, and says where the same
+/// images were saved so a later turn can re-read them without interrupting
+/// anyone again.
 function outcomeResult(res) {
   const { text } = relay.collect(res, HOW_TO_WAIT(res.id));
   const content = [];
-  if (res.image && res.image.b64) {
-    content.push({ type: "image", data: res.image.b64, mimeType: res.image.mime });
+  for (const image of res.images || []) {
+    if (image && image.b64) {
+      content.push({ type: "image", data: image.b64, mimeType: image.mime });
+    }
   }
   content.push({ type: "text", text });
   return { content, isError: false };

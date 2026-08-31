@@ -159,38 +159,97 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   through the *same* provisioning pipeline as the CLI.
 - **Star the folders you keep projects under** (☆ on each row of the picker) and
   they become one-click shortcuts above it. See below.
+- **Watch the bring-up happen** — the row that appears in the sidebar while a
+  sandbox is being created lists the steps it will take and ticks them off,
+  with `sbx`'s own output (the image pull, mostly) streaming under whichever one
+  is running. See below.
 - The **chat sandbox** card is the browser equivalent of `sbxw chat`, with an
   optional name (leave it empty for the generated `chat-xxxxxx`). See below.
 - **Route an agent's question to another sandbox**, when one asks for something
   it can't see from its own workspace: a popup shows the question and one button
   per running sandbox, and the answer that comes back is yours to edit, release
   or refuse. See [Asking another sandbox](#asking-another-sandbox-the-relay).
-- **Show an agent what it just built**, when it asks: the same popup takes a
-  screenshot you paste, drop, pick or capture from a window, previews it, and
-  sends it to the sandbox that asked. Words instead of a picture, or a flat
-  refusal, are equally valid answers. See
+- **Show an agent what it just built**, when it asks: the same popup takes
+  screenshots you paste, drop, pick or capture from a window — one, or a whole
+  set — previews them, and sends them to the sandbox that asked. Words instead
+  of a picture, or a flat refusal, are equally valid answers. See
   [Asking *you* for a screenshot](#asking-you-for-a-screenshot).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
 - **Read the project's code map** — the **Code map** button in the **Project**
-  panel (📁 in the sidebar) opens the linked markdown under
-  `.sbxw-artifacts/codemap/` as a small vault:
+  panel (📁 beside the sandbox name in a pane's top bar) opens the linked
+  markdown under `.sbxw-artifacts/codemap/` as a small vault:
   `[[wiki links]]` are clickable, every section lists what points *at* it
   (backlinks), the outline jumps within a file, search spans the whole map, and
   a **Graph** tab lays the files out as a force-directed graph you can drag.
   A dead link is drawn struck through in red rather than silently as text — a
   map that has drifted from the code says so on sight. Read-only, and served
   from the two endpoints the Project panel already uses, so it reaches nothing
-  outside `.sbxw-artifacts`. Sandboxes with no map get told how to write one
-  (`/codemap`, from the [codemap kit](#kits)).
+  outside `.sbxw-artifacts`.
 
-  It lives *there*, and not in a pane's top bar, because a map describes the
-  **workspace** rather than the sandbox or the pane — two sandboxes duplicated
-  from one project share the same map. It is a *button* rather than a row in the
-  table, because a map is not a file you download: it has no size, and "open" is
-  not "download". Its own files are folded out of the list because a real map is
+  The panel itself opens from 📁 in a pane's top bar, sat against the sandbox
+  name rather than with SSH / Env / Reconnect at the other end of that bar:
+  those act on the *session* in the pane, while a project is a fact about the
+  **workspace** the name belongs to — two sandboxes duplicated from one project
+  share the same map. The map is a *button* inside the panel rather than a row
+  in its table, because a map is not a file you download: it has no size, and
+  "open" is not "download". Its own files are folded out of the list because a real map is
   dozens of markdown files, and listing them buried the deliverables they sit
-  beside. With no map yet the button stays visible but disabled, naming the
-  command that writes one.
+  beside.
+- **Ask for one, when there is none** — the same button reads **Generate code
+  map** on a project without one, and starts a *background session* in that
+  sandbox that runs `/codemap` (from the [codemap kit](#kits)). It used to sit
+  there disabled, naming the command and leaving you to go and type it: the case
+  where the button has the most to offer was the one case it did nothing.
+
+  Background, like the lens beside it: writing a map is a long uninterrupted
+  read of a whole repository, and taking over the agent pane for it would cost
+  you the session you were in the middle of, for output you cannot usefully
+  steer — so the pane stays yours, and what you get instead is the sandbox's
+  **state**. While it writes, the sandbox's sidebar row carries an amber `map…`
+  badge, a corner card names the run, and the button itself becomes its status
+  line; the map appearing in the panel is the end of it.
+
+  The agent reports finishing itself, by POSTing to
+  `/api/sandboxes/<name>/codemap/done` — the URL arrives in its environment as
+  `$SBXW_CODEMAP_DONE`, and the kit's `/codemap` command tells it when to use it.
+  That is earlier and better informed than the session's exit status, which
+  knows whether a process ended and nothing about whether a map was written; the
+  exit is kept as the backstop for the run that never gets that far. Three
+  refusals come back before any of it starts, because each otherwise fails
+  minutes later as a note on a run that never had a chance: a stopped sandbox,
+  one whose agent has no `/codemap` command because the kit is not applied, and
+  one already writing — a sandbox holds one codemap run at a time, map or lens,
+  because a lens is written *from* the map and must not read one that is moving
+  under it.
+- **Have the map retold for someone who doesn't read code** — **Write a lens…**,
+  in that same panel's toolbar. A code map is written for whoever reads code; a
+  product owner, a new joiner or a security reviewer each need the same
+  repository told a different way. Type who is reading and what they need —
+  *"a product owner: what each part delivers, for whom, and what it costs to
+  change"* — and the agent writes it into
+  `.sbxw-artifacts/codemap-lenses/<slug>/`, beside the map and never inside it.
+  Each lens then appears in the picker next to the map and is read through the
+  same viewer, links, graph and all.
+
+  The agent names it, once it has read the map: that directory is the lens's
+  title in the picker, and a title cut from the brief's opening words
+  (`a-product-owner-what-each`) is no title at all. Naming is a reading task, so
+  it belongs to the party that did the reading.
+
+  The browser writes nothing: it hands the brief to the daemon, which runs
+  `/codemap-lens` in a background session of the sandbox's agent — the only
+  party that can read the map and judge what a product owner needs out of it.
+  That session used to be your agent pane, on the argument that a few minutes of
+  work you may want to argue with belongs in front of you. It took over the
+  session you were in the middle of, and what came back was a document rather
+  than a conversation — so a lens now runs where the map does, reports through
+  the same `$SBXW_CODEMAP_DONE`, and shows the same way while it writes: a
+  `lens…` badge on the row, a corner card, and a picker that reloads itself the
+  moment the lens lands. The command it runs comes from the
+  [codemap kit](#kits), which spends most of its length on the one failure that
+  matters: a business document wants revenue, users and deadlines, a repository
+  has none of them, and the answer is to name them as missing rather than to
+  fill them in.
 - **Export the sandbox as a `.sbxenv.yaml`** — the **Env** button in a pane's
   top bar, beside **SSH** and behaving the same way: a card hanging off the
   button, closed by Escape or by clicking away. Live preview, an editable
@@ -296,6 +355,51 @@ with the two host-side fixes, each with a copy button:
 
 Both run on the machine sbxw runs on — a terminal on the host, *not* a sandbox
 pane, which has no `sbx` and no session of yours to log in.
+
+### While a sandbox comes up
+
+Creating a sandbox is one click and, on a host that has never pulled the image,
+several minutes. That used to be a single sidebar row saying *Creating…* until
+it either turned into a sandbox or turned into an error toast — and a slow
+download looks exactly like a wedged one from there.
+
+So the row shows the work instead. The daemon announces the steps **before it
+starts the first one**, and the row draws all of them, the ones still to come
+included:
+
+```
+sbxw  neos                     Creating… 2/5
+      ✓ Preparing the workspace
+      ● Creating the sandbox
+          pulling docker.io/…/sandbox-claude: 214.7MB / 512.3MB
+        Waiting for the sandbox to start
+        Installing the agent tooling
+        Publishing ports and host aliases
+```
+
+- The steps are the pipeline's own, so the list says what the pause is *for*:
+  waiting for the container to report `running` is a different wait from
+  installing hooks into it, and both are different from an image arriving over
+  the network.
+- Two of them are conditional in the same way the pipeline is — the network
+  policy step only appears when `sbxw.toml` has one, and *Applying kits* only
+  for a sandbox that already existed, since a fresh one gets its kits from
+  `sbx create --kit` inside the create step.
+- The line underneath the running step is **`sbx`'s own output**, forwarded as
+  it arrives. This is the point of the exercise: an image pull that is moving
+  says so, several times a second.
+- It survives a reload. The steps come over the same SSE stream as everything
+  else in the UI (`/api/stream`, a `provision` event), so a tab that was opened
+  or refreshed mid-bring-up picks the row back up at the next step — which is
+  exactly what you do when a creation seems stuck.
+- Every way in gets it: the create dialog, the chat dialog, **Duplicate**, and
+  the island's ephemeral chat all go through the one pipeline, and it is the
+  pipeline that reports.
+
+The CLI is untouched by this: with nobody listening, `sbx create` keeps the
+terminal and prints as it always did. It is only when a browser is watching
+that its output is piped and forwarded — which also, finally, lets a failed
+`sbx create` say *why* in the UI instead of just "exited with status 1".
 
 ### Favourite folders
 
@@ -448,21 +552,29 @@ correct" are different claims, and only one of them is available from inside a
 container. So the agent can ask to be shown:
 
 ```
-sandbox A ──shot──▶ sbxw ──▶ 🧑 popup ──paste / drop / capture──▶ sandbox A
+sandbox A ──shot──▶ sbxw ──▶ 🧑 popup ──paste / drop / capture ×N──▶ sandbox A
 ```
 
 There is **no routing step**. A screenshot request is never handed to another
 sandbox — nobody else is looking at your screen — so it has one live state and
 two outcomes: you send something, or you refuse.
 
-**Your side.** The popup shows what the agent wants to see, and takes an image
+**Your side.** The popup shows what the agent wants to see, and takes images
 four ways: **paste from the clipboard** (a button — where your OS screenshot key
-already put it; ⌘V works too), **drop** a file on it, **choose** one, or
+already put it; ⌘V works too), **drop** files on it, **choose** them, or
 **capture a window** right there, through the browser's own picker. The clipboard
 and capture buttons appear only when the tab may use them, which means reaching
 sbxw on localhost rather than a LAN address. Whatever arrives is previewed before it goes —
 you send what you can see — and scaled to 1600px on the way out, since a
 screenshot is read for its layout and not its pixel grid.
+
+**One answer, as many pictures as it takes.** Every gesture *adds* rather than
+replaces, up to six images and 16 MB of them: a before and an after, the same
+screen at two breakpoints, the three steps of a flow. They are numbered on
+screen in the order the agent will receive them, each with its own ✕, and they
+settle the request together — one interruption, however many views it took. The
+agent is told there are several and reads them in that order, which is what
+makes "before" and "after" mean anything.
 
 Two other answers are just as good, and the popup treats them that way:
 
@@ -473,18 +585,20 @@ Two other answers are just as good, and the popup treats them that way:
   to say what it changed and what it expects, and to let you correct it. It is
   also told not to ask again for the same view.
 
-**What the agent gets.** Through MCP, the image comes back *in the tool result*,
-so the agent actually looks at it — which is the whole reason the MCP server
-exists next to the CLI. It is also written to `~/.sbxw/shots/<request-id>.png`
-inside the asking sandbox, so a later turn can re-read it without interrupting
-you a second time. The daemon never writes into a sandbox to do this: the base64
-travels in the approved reply and the sandbox's own CLI writes the file, so
-nothing lands on that filesystem that did not go past you first.
+**What the agent gets.** Through MCP, the images come back *in the tool result*,
+one block each, so the agent actually looks at them — which is the whole reason
+the MCP server exists next to the CLI. They are also written to
+`~/.sbxw/shots/<request-id>-1.png`, `-2.png`, … inside the asking sandbox, so a
+later turn can re-read them without interrupting you a second time. The daemon
+never writes into a sandbox to do this: the base64 travels in the approved reply
+and the sandbox's own CLI writes the files, so nothing lands on that filesystem
+that did not go past you first.
 
-The same rules as a question apply to the image: it is held until you release
-it, a refusal discards it, and only the sandbox that asked can ever receive it.
-The daemon never decodes it — it checks the envelope (a `data:` URL, one of
-PNG/JPEG/WebP, under the size cap) and passes the bytes on.
+The same rules as a question apply to the images: they are held until you
+release them, a refusal discards them, and only the sandbox that asked can ever
+receive them. The daemon never decodes them — it checks each envelope (a `data:`
+URL, one of PNG/JPEG/WebP, under the size cap) and the set as a whole (at most
+six, 16 MB together), then passes the bytes on.
 
 ## Dynamic Island (macOS)
 
@@ -869,14 +983,24 @@ Bundled kits:
   WeasyPrint + poppler-utils + Pillow stack it needs, so the skill is
   available and first invocation has no install step. See
   `assets/md-to-pdf-tools/README.md`.
-- **`assets/codemap`** — ships the `/codemap` command, a format reference and an
-  offline checker, and points the agent's user memory at
-  `.sbxw-artifacts/codemap/`, so an agent **looks for a repository's code map
-  before reading its source** and knows how to write one when there is none.
+- **`assets/codemap`** — ships the `/codemap` command, a format reference, an
+  offline checker, and three Claude Code hooks, so an agent **reads a
+  repository's code map before its source** and knows how to write one when
+  there is none. The hooks are what stop that from being advice: the map's index
+  is injected into the session at `SessionStart`, recalled before the session's
+  first `Grep`/`Glob`, and — in a repository with no map, after a session that
+  demonstrably read the tree — a `Stop` hook asks the agent to *offer* one, once
+  per repository per 12h. It asks for the offer and forbids the map: writing it
+  stays the user's call.
   The map is markdown in [lat.md](https://github.com/vercel-labs/lat.md) format
   — `[[wiki links]]` between sections, links into source symbols, `@lat:`
-  comments tying code back to the idea it implements. Needs no network. See
-  `assets/codemap/README.md`.
+  comments tying code back to the idea it implements. `/codemap-lens` comes with
+  it: the same map retold for one reader, into
+  `.sbxw-artifacts/codemap-lenses/<slug>/` — what the web UI's *Write a lens…*
+  button runs. Both are what the web UI's Code map panel starts, each in a
+  background session, and both know to report back to `$SBXW_CODEMAP_DONE` when
+  the document is written.
+  Needs no network. See `assets/codemap/README.md`.
 
 The domains a kit declares under `permissions.network.allow` are composed into
 the sandbox policy when the kit is added; domains a kit does *not*
@@ -1202,10 +1326,12 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   another agent's text arriving in your agent's prompt, so it is delivered
   quoted and labelled as untrusted input; read it before you route it.
 - A **screenshot** is a picture of your screen going into an agent's context, so
-  it goes nowhere until you attach it yourself, to one named sandbox, having seen
-  the preview of exactly what you are sending. sbxw cannot capture your screen —
-  the browser's own picker is the permission, and it is asked for per capture.
-  Refusing is a first-class answer, and it discards what was attached.
+  nothing goes anywhere until you attach it yourself, to one named sandbox,
+  having seen the preview of every image you are sending — a set is sent whole,
+  so what is on screen when you click is exactly what leaves. sbxw cannot
+  capture your screen — the browser's own picker is the permission, and it is
+  asked for per capture. Refusing is a first-class answer, and it discards what
+  was attached.
 
 ## Unconfirmed against docs (verify locally)
 

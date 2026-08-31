@@ -2,12 +2,15 @@ schemaVersion: "2"
 kind: mixin
 name: codemap
 description: >
-  Ships the /codemap command, the codemap skill and an offline checker, and
-  points the agent's user memory at .sbxw-artifacts/codemap/ — so a sandbox
-  agent looks for a repository's code map before reading its source, and knows
-  how to write one when there is none. Format is lat.md's (wiki links, code
-  links, @lat: back references), so a repo can graduate to the real CLI without
-  rewriting anything. Idempotent: safe to re-run on every container start.
+  Ships /codemap, /codemap-lens, a format reference, an offline checker, and
+  three Claude Code hooks that do what prose alone never did: the map's index is
+  injected at session start, recalled on the session's first search, and offered
+  — never written unasked — when a session ends in a repository it just read and
+  could not map. So a sandbox agent reads a repository's map before its source,
+  knows how to write one when there is none, and can retell it for a reader who
+  does not read code. Format is lat.md's (wiki links, code links, @lat: back references),
+  so a repo can graduate to the real CLI without rewriting anything.
+  Idempotent: safe to re-run on every container start.
 
 # Nothing here reaches the network — the kit only writes files into the sandbox.
 # The domains are declared for the optional upgrade path in this kit's README
@@ -178,6 +181,22 @@ setup:
         and anything you could not verify. If you added `@lat:` comments, say which files
         you touched.
 
+        **If `$SBXW_CODEMAP_DONE` is set**, this run was started from sbxw's web UI: there
+        is no pane anyone is reading, and that URL is where the person who clicked is
+        waiting. POST to it the moment the map is written and the checker is clean —
+        before anything optional you still mean to do, because until it arrives the UI
+        can only say "still writing".
+
+        ```bash
+        curl -fsS -X POST "$SBXW_CODEMAP_DONE" -H 'content-type: application/json' \
+          -d '{"ok":true,"note":"7 files under .sbxw-artifacts/codemap/"}'
+        ```
+
+        Send `{"ok":false,"note":"…"}` instead if you are stopping *without* a map, and
+        say in one line why. Reporting either way is what turns the run into an outcome
+        someone can read; saying nothing leaves sbxw to infer one from your exit status,
+        which knows whether the process ended and nothing whatsoever about the map.
+
         ## Refreshing a map that already exists
 
         - Read the index and the affected files first; edit in place, keep the sections
@@ -188,6 +207,167 @@ setup:
         - After changing behaviour, architecture or tests in a mapped repo, update the
           map in the same session and re-run the checker. A map nobody maintains is worse
           than no map, because it is still believed.
+    # The lens half: the map, retold for one reader who is not the next agent.
+    # Kept as its own command rather than a flag on /codemap because it writes
+    # somewhere else and answers to somebody else — and because the web UI's Code
+    # map panel runs it, brief and all, in a background session when a human asks
+    # for one there. Like /codemap it therefore has to report back to
+    # $SBXW_CODEMAP_DONE: nobody is reading its output.
+    - path: /home/agent/.claude/commands/codemap-lens.md
+      mode: "0644"
+      content: |
+        Retell this project's code map for one reader, as a separate document beside it.
+
+        Brief for this run: $ARGUMENTS
+
+        A code map is written for whoever reads code. A product owner, a new joiner, a
+        security reviewer or an auditor each need the same repository told a different
+        way, and none of them needs `src/auth.rs#validate_token`. A **lens** is that
+        retelling: same facts, one audience, its own directory.
+
+        sbxw's Code map panel runs this command with the brief you were given, in a
+        background session nobody is watching, and waits to hear that the lens is
+        written (see the last step). It can also be run by hand in a pane.
+
+        ## 0. Name the lens — this is yours to get right
+
+        The brief is prose: who is reading, and what they need out of it. Nothing in it
+        is a directory name. **You choose the name**, and it is not a formality — the
+        lens's directory *is* its title everywhere it is read: the Code map panel lists
+        `codemap-lenses/product-owner/` as "Lens · product owner", and that line is all a
+        reader has to go on when they pick between four of them.
+
+        So do not slice it off the front of the brief. "A product owner: what each part
+        delivers…" is a brief; `a-product-owner-what-each-part` is not a title. Name it
+        after you have read the brief and the map, from what the document turned out to
+        be:
+
+        - two or three kebab-case words, ASCII, no trailing dash — the reader and their
+          purpose: `product-owner`, `security-review`, `new-joiner-backend`,
+          `incident-response`, `data-retention`;
+        - name the *audience or the question*, never the format: not `lens`, `overview`,
+          `document`, `codemap`, and not the project's own name — every lens here is a
+          lens of this project;
+        - already have one for that audience? Refresh it under the same name rather than
+          adding a near-duplicate beside it (see the last section).
+
+        `--into <slug>`, when it is present, overrides all of that: a human naming the
+        directory by hand, usually to land on top of a lens that already exists. Use it
+        verbatim.
+
+        Say which name you chose, and why that one, when you report back.
+
+        ## 1. Read the map. All of it.
+
+        - `.sbxw-artifacts/codemap/codemap.md` is the index; read it and every file it
+          lists. A lens is written **from the map**, not from a fresh reading of the
+          source — the map is where the reasoning was written down, and re-deriving it
+          wastes the session the map exists to save.
+        - No map? Stop and say so: `/codemap` writes one, and there is nothing to retell
+          until it exists. Do not silently write a lens from the source instead.
+        - Where the map is thin on something the brief needs, go and check the tree for
+          that one thing. Note in your report that you did.
+
+        ## 2. Write it where it belongs
+
+        Everything goes under `.sbxw-artifacts/codemap-lenses/<slug>/`, and **nothing
+        else is touched**. The map is the source: a lens never edits it, never adds to
+        it, and never moves a file out of it. Two more rules the viewer and the checker
+        both depend on:
+
+        - the index file is named after its directory — `<slug>/<slug>.md` — and lists
+          every other file beside it, one bullet each;
+        - three to six files is a lens. It is a shorter document than the map, not a
+          longer one: a reader who wanted the full account would read the map.
+
+        Open the index with a frontmatter block recording what this is, so nobody a
+        month from now has to guess which brief produced it:
+
+        ```
+        ---
+        lens: product-owner
+        brief: what a product owner needs — value delivered, for whom, cost to change
+        source: .sbxw-artifacts/codemap/
+        written: 2026-03-04
+        ---
+        ```
+
+        ## 3. Rewrite, do not summarise
+
+        The temptation is to shorten every section by a third and call it a lens. That
+        produces a worse map, not a different document. Reorganise instead:
+
+        - **Lead with what this reader came for.** For a product owner that is what the
+          system delivers and to whom; the architecture is background, if it appears at
+          all. For a new joiner it is where to start and what will surprise them. Let
+          the brief decide the running order, not the map's.
+        - **Speak their vocabulary.** The map's domain terms are usually the right ones
+          — they came from the team. Module names, symbol names and file paths usually
+          are not.
+        - **Drop what this reader cannot act on.** Code links (`[[src/auth.ts#login]]`)
+          belong in a lens only when the reader reads code. Keep `[[wiki links]]`
+          *between the lens's own files*: they are what makes it navigable in the panel.
+        - **Keep the section shape.** Every section still opens with a leading paragraph
+          of at most 250 characters, because the checker and the viewer both read it.
+
+        ## 4. Never invent the part the map does not have
+
+        This is the failure mode that matters, and a business-facing lens is where it
+        bites: a map records what the code does, and a product owner's document wants
+        revenue, users, priorities and deadlines — none of which are in the repository.
+
+        - Every claim traces to the map or to something you verified in the tree.
+        - What the reader will want and the project does not record, **name as missing**
+          rather than filling in: a short "What this document cannot tell you" section
+          at the end of the index costs you three lines and is the most honest part of
+          the document.
+        - No invented metrics, customer names, dates, roadmaps or dollar figures. Not
+          even as an illustration — an example figure in a business document is quoted
+          back as a real one within the week.
+        - Translating a technical guarantee into its business consequence is the job
+          ("a request is retried three times before it fails" → "a transient network
+          fault does not lose the order"). Inventing the consequence is not.
+
+        ## 5. Validate, then report
+
+        ```bash
+        node /home/agent/.sbxw/codemap/check-codemap.mjs --dir .sbxw-artifacts/codemap-lenses/<slug>
+        ```
+
+        Same checker, pointed at the lens: it holds the index rule, the overview limit
+        and the links to account. Its "never mentioned" list means less here than for a
+        map — a lens leaves things out on purpose — but a broken link still is one.
+
+        Then tell the user, in a few lines: which brief you wrote to, the name you gave
+        the lens and why, what you led with, what you deliberately left out, and what you
+        had to mark as unknown. Say that it is in the Code map panel's lens picker under
+        that name, beside the map.
+
+        **If `$SBXW_CODEMAP_DONE` is set**, this run was started from sbxw's web UI:
+        there is no pane anyone is reading, and that URL is where the person who clicked
+        is waiting. POST to it the moment the lens is written and the checker is clean —
+        before anything optional you still mean to do, because until it arrives the UI
+        can only say "still writing".
+
+        ```bash
+        curl -fsS -X POST "$SBXW_CODEMAP_DONE" -H 'content-type: application/json' \
+          -d '{"ok":true,"note":"4 files under .sbxw-artifacts/codemap-lenses/product-owner/"}'
+        ```
+
+        Name the directory you chose in the note: it is the lens's title, the panel
+        reloads its picker on this call, and the note is what the person reads to know
+        which of the entries is the one they just asked for. Send
+        `{"ok":false,"note":"…"}` instead if you are stopping *without* a lens — no map
+        to retell is the usual reason — and say so in one line, because saying nothing
+        leaves sbxw to infer an outcome from your exit status, which knows whether a
+        process ended and nothing about whether a document was written.
+
+        ## Refreshing a lens that already exists
+
+        Read it first, then edit in place — same slug, same directory. A second lens for
+        the same audience is how a project ends up with three documents that disagree.
+        If the brief has genuinely changed, say so in the frontmatter rather than
+        leaving the old one describing itself wrongly.
     # The reference half: the command above says what to do, this says how the
     # format works. Deliberately NOT shipped as a Claude Code skill. A skill would
     # collide with the command for the /codemap name (both would list, identically),
@@ -878,25 +1058,36 @@ setup:
     - path: /home/agent/.sbxw/codemap/memory-block.md
       mode: "0644"
       content: |
-        ## Before you read a repo, read its map
+        ## Search the map before you search the tree
 
         A project here may carry a **code map**: `.sbxw-artifacts/codemap/`, a few linked
         markdown files saying what it does, why it is built this way, and where each idea
-        lives in the tree. Check for it before you start reading source.
+        lives in the tree. When there is one, its index was put into this session's
+        context before your first turn — you did not have to go looking, and neither
+        should your next search.
 
-        - **`.sbxw-artifacts/codemap/codemap.md` is the index.** One read replaces a
-          dozen greps, and it carries the *why*, which no amount of grepping recovers.
-          Follow its `[[wiki links]]` to the part you need; `@lat:` comments in source
-          point back at the section that explains them.
+        - **A question about *where* or *why* is a question for the map.** One section
+          replaces a dozen greps, and it carries the *why*, which no amount of grepping
+          recovers. Read it first, then search the tree for the detail it points you at.
+          Follow its `[[wiki links]]`: `[[name]]` is `.sbxw-artifacts/codemap/name.md`,
+          and `@lat:` comments in source point back at the section that explains them.
         - **The tree wins over the map.** The map records what was true when it was
           written — where it disagrees with the code, believe the code, and fix the map
           as you pass. Leaving a known-wrong section is worse than having no map.
-        - **No map, and you have just worked out how this repo fits together? Run
-          `/codemap` before you finish.** That understanding is the expensive part of the
-          session and it dies with the session otherwise.
+        - **No map, and you have just worked out how this repo fits together? Offer to
+          run `/codemap` before you finish** — that understanding is the expensive part
+          of the session and it dies with the session otherwise. Offer it: name what you
+          would map, in a sentence, and let the user answer. Do not write a map nobody
+          asked for, and take "no" for an answer. `/codemap <area>` maps one subsystem,
+          which is usually the better offer after a focused session.
         - **In a mapped repo, changing behaviour, architecture or tests means updating
           the map in the same session**, then re-running
           `node /home/agent/.sbxw/codemap/check-codemap.mjs` until it is clean.
+        - **`.sbxw-artifacts/codemap-lenses/` is not the map.** Each subdirectory there
+          is the map retold for one reader — a product owner, a new joiner — by
+          `/codemap-lens`. Derived, deliberately partial, and possibly stale: read it to
+          learn who was asking for what, never to learn what the code does. When the map
+          changes, offer to refresh the lenses; do not let them drift in silence.
 
         `/home/agent/.sbxw/codemap/FORMAT.md` has the format in full: sections,
         `[[wiki links]]`, code links and test specs.
@@ -933,7 +1124,481 @@ setup:
         mkdirSync(dirname(MEMORY), { recursive: true });
         writeFileSync(MEMORY, (rest ? rest + "\n\n" : "") + BEGIN + "\n" + doc + "\n" + END + "\n");
 
-        console.log("  [codemap] /codemap + codemap skill installed; user memory points at .sbxw-artifacts/codemap/");
+        console.log("  [codemap] /codemap + /codemap-lens installed; user memory points at .sbxw-artifacts/codemap/");
+    # The three hooks below are what makes the kit act rather than advise. The
+    # commands and the memory block work when the agent reaches for them; a hook
+    # does not wait to be reached for.
+    - path: /home/agent/.sbxw/codemap/hook-lib.mjs
+      mode: "0644"
+      content: |
+        // Common ground for the kit's three hooks: what a hook is handed, where this
+        // repository's map is, and the state file that keeps a nudge from becoming
+        // nagging.
+        //
+        // The hooks share it rather than each carrying its own copy, because "is this
+        // repo mapped?" has to give all three the same answer — a Stop hook offering to
+        // write a map a SessionStart hook has just injected is worse than either hook
+        // alone.
+        //
+        // Written without template literals on purpose: sbx kit `content` fields reject
+        // dollar-brace, which is what a JS template literal is made of.
+
+        import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+        import { dirname, join, resolve } from "node:path";
+
+        export const MAP_REL = ".sbxw-artifacts/codemap";
+        export const LENS_REL = ".sbxw-artifacts/codemap-lenses";
+        export const CHECKER = "/home/agent/.sbxw/codemap/check-codemap.mjs";
+
+        const STATE = "/home/agent/.sbxw/codemap/state.json";
+        const WEEK = 7 * 24 * 60 * 60 * 1000;
+
+        /** Claude Code hands a hook its payload as JSON on stdin.
+         *
+         * Anything unreadable comes back as an empty object, and the read gives up
+         * after five seconds: a hook that throws or hangs on its own input breaks every
+         * session in the sandbox, which is a far worse failure than a missed nudge.
+         */
+        export function readInput() {
+          return new Promise((done) => {
+            let raw = "";
+            const finish = (v) => { done(v); };
+            setTimeout(() => finish({}), 5000).unref();
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (c) => { raw += c; });
+            process.stdin.on("end", () => { try { finish(JSON.parse(raw)); } catch (e) { finish({}); } });
+            process.stdin.on("error", () => finish({}));
+          });
+        }
+
+        /** The repository the session is working in: the nearest ancestor of `cwd`
+         * holding a `.git`, falling back to `cwd` itself. A map belongs to a project,
+         * and every path in it is relative to that project's root. */
+        export function repoRoot(cwd) {
+          const start = resolve(cwd || process.cwd());
+          let dir = start;
+          for (;;) {
+            if (existsSync(join(dir, ".git"))) return dir;
+            const up = dirname(dir);
+            if (up === dir) return start;
+            dir = up;
+          }
+        }
+
+        const isDir = (p) => { try { return statSync(p).isDirectory(); } catch (e) { return false; } };
+
+        /** What this repository already carries, if anything:
+         *
+         *  - `{ kind: "codemap", index }` — a map written by this kit.
+         *  - `{ kind: "lat", index }`     — a real lat.md vault. The kit defers to it:
+         *     it is the same format run by the actual tool, and offering to write a
+         *     second map beside it is the one thing /codemap is told never to do.
+         *
+         * `null` is the unmapped case, and the only one the Stop hook acts on.
+         */
+        export function findMap(root) {
+          const index = join(root, MAP_REL, "codemap.md");
+          if (existsSync(index)) return { kind: "codemap", index: index };
+          const lat = join(root, "lat.md");
+          if (isDir(lat)) {
+            const named = ["lat.md.md", "index.md", "README.md"].map((n) => join(lat, n));
+            return { kind: "lat", index: named.find((p) => existsSync(p)) || null };
+          }
+          return null;
+        }
+
+        /** The map's sections, by file name — what a reader would pick from. */
+        export function sections(root) {
+          try {
+            return readdirSync(join(root, MAP_REL))
+              .filter((n) => n.endsWith(".md") && n !== "codemap.md")
+              .sort();
+          } catch (e) { return []; }
+        }
+
+        /** Every lens written beside the map, by directory name. */
+        export function lenses(root) {
+          try {
+            return readdirSync(join(root, LENS_REL), { withFileTypes: true })
+              .filter((e) => e.isDirectory())
+              .map((e) => e.name)
+              .sort();
+          } catch (e) { return []; }
+        }
+
+        export function clip(text, max) {
+          return text.length <= max ? text : text.slice(0, max) + "\n… (clipped — read the file for the rest)";
+        }
+
+        /** How long ago this hook last fired for `key`, in ms; `Infinity` if never. */
+        export function since(bucket, key) {
+          let state = {};
+          try { state = JSON.parse(readFileSync(STATE, "utf8")); } catch (e) { /* never fired */ }
+          const at = (state[bucket] || {})[key];
+          return typeof at === "number" ? Date.now() - at : Infinity;
+        }
+
+        /** Record that it fired now, dropping anything older than a week so the file
+         * does not grow a line per session for the life of the sandbox. */
+        export function stamp(bucket, key, now) {
+          let state = {};
+          try { state = JSON.parse(readFileSync(STATE, "utf8")); } catch (e) { /* first fire */ }
+          const b = state[bucket] = state[bucket] || {};
+          for (const k of Object.keys(b)) if (now - b[k] > WEEK) delete b[k];
+          b[key] = now;
+          try {
+            mkdirSync(dirname(STATE), { recursive: true });
+            writeFileSync(STATE, JSON.stringify(state));
+          } catch (e) { /* a nudge is not worth failing a session over */ }
+        }
+
+        /** sbxw's own background codemap sessions run with this set (see
+         * `sbx::codemap_run_args`). They are writing the map: nudging them to read one
+         * is noise, and offering them one is a loop. */
+        export const isBackgroundRun = () => Boolean(process.env.SBXW_CODEMAP_DONE);
+
+        /** The off switch, for a sandbox that wants the commands without the prompting:
+         * `echo "export SBXW_CODEMAP_NUDGE=0" >> /etc/sandbox-persistent.sh`. */
+        export const nudgingOff = () => process.env.SBXW_CODEMAP_NUDGE === "0";
+    - path: /home/agent/.sbxw/codemap/hook-session-start.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // SessionStart — hand the agent the map's index instead of hoping it looks.
+        //
+        // The memory block asks every session to check `.sbxw-artifacts/codemap/` before
+        // reading source. That is prose competing with an eager first grep, and prose
+        // loses: the moment to check does not announce itself. So this hook does the
+        // check — one `existsSync` — and, when the answer is yes, puts the index in the
+        // session's context before the first turn. The agent no longer has to remember
+        // to look; it has already read it.
+        //
+        // Silent when there is no map. Offering to write one is the Stop hook's job,
+        // which fires when the session has proved it needed one.
+        //
+        // Written without template literals: see hook-lib.mjs.
+
+        import { readFileSync } from "node:fs";
+        import { CHECKER, LENS_REL, MAP_REL, clip, findMap, lenses, readInput, repoRoot, sections } from "./hook-lib.mjs";
+
+        // Enough for an index of a large map, small enough that it never dominates the
+        // session it is meant to shorten.
+        const MAX_INDEX = 6000;
+
+        const input = await readInput();
+        const root = repoRoot(input.cwd);
+        const map = findMap(root);
+        if (!map) process.exit(0);
+
+        const lines = [];
+        if (map.kind === "lat") {
+          lines.push(
+            "This repository keeps a lat.md vault at lat.md/ — the same knowledge-graph format as a code map, run by the real tool.",
+            "Read it before searching the tree for what a project does or why, and validate any change you make to it with `lat check`.",
+          );
+        } else {
+          lines.push(
+            "This repository has a code map at " + MAP_REL + "/ — the written record of what each part does and *why*. The why is the half no amount of grepping recovers, so:",
+            "",
+            "- **Read the map before you search the tree.** For where an idea lives, or why something is built this way, one section beats a dozen greps. Follow its links: [[name]] is " + MAP_REL + "/name.md, and `@lat:` comments in source point back at the section that explains them.",
+            "- **The tree wins where they disagree.** The map records what was true when it was written. Believe the code, and fix the section as you pass — a known-wrong map is worse than no map.",
+            "- **A change to behaviour, architecture or tests is a change to the map**, in the same session, checked with: node " + CHECKER,
+            "",
+          );
+          const named = sections(root);
+          if (named.length) lines.push("Sections beside the index: " + named.join(", "), "");
+          lines.push("The index, verbatim:", "");
+          try {
+            lines.push(clip(readFileSync(map.index, "utf8").trim(), MAX_INDEX));
+          } catch (e) {
+            lines.push("(" + MAP_REL + "/codemap.md could not be read — open it yourself.)");
+          }
+        }
+
+        const names = lenses(root);
+        if (names.length) {
+          lines.push(
+            "",
+            "Lenses in " + LENS_REL + "/: " + names.join(", ") + ". Each is the map retold for one reader — derived, partial, possibly stale. Read one to learn who was asking for what, never to learn what the code does.",
+          );
+        }
+
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: lines.join("\n") },
+        }));
+    - path: /home/agent/.sbxw/codemap/hook-search.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // PreToolUse on Grep/Glob/Bash — the one moment when "check the map first" is
+        // actionable, because the agent is about to do the thing the map replaces.
+        //
+        // It runs on Grep and Glob, and on Bash when the command is a search
+        // (grep/rg/ag/ack/find/fd) — in a bypass-permissions sandbox the agent greps
+        // and finds through the shell far more than through the two tools, so a hook
+        // that only watched the tools missed most sessions. Same command shapes the
+        // Stop hook counts. What it does with the answer to "is this repo mapped?":
+        //
+        //  - Mapped: it points at the map. The SessionStart hook already put the index
+        //    in context, so this is a second line — it earns its place in a long
+        //    session where that injection is many turns back or was dropped by a
+        //    compaction, and in the subagent spawned to search that starts by searching.
+        //  - Unmapped: at the first search of the session it asks the agent to offer
+        //    /codemap to the user — the point where the session has shown it is going
+        //    to need one. Whatever the user then answers, nothing here fires again: the
+        //    offer is stamped against the repo, which also keeps the Stop hook from
+        //    making the same offer a second time in the same session.
+        //
+        // Deliberately toothless throughout. It returns context and never a permission
+        // decision, so the search always runs, and it acts at most once per session.
+        //
+        // Written without template literals: see hook-lib.mjs.
+
+        import { MAP_REL, findMap, isBackgroundRun, nudgingOff, readInput, repoRoot, sections, since, stamp } from "./hook-lib.mjs";
+
+        // Shared with the Stop hook's "offered" bucket: long enough that a refusal is
+        // respected for the rest of the working day, short enough that tomorrow's
+        // session may ask again.
+        const OFFER_COOLDOWN = 12 * 60 * 60 * 1000;
+
+        // A Bash command that is a tree search — the same set the Stop hook scores.
+        const SHELL_SEARCH = /\b(grep|rg|ag|ack|find|fd)\b/;
+
+        const ok = (extra) => {
+          if (extra) {
+            process.stdout.write(JSON.stringify({
+              hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: extra },
+            }));
+          }
+          process.exit(0);
+        };
+
+        const input = await readInput();
+        if (isBackgroundRun() || nudgingOff()) ok(null);
+
+        // On Bash, only a search command counts. A nudge on every `ls` and `cat` is one
+        // the agent learns to skip, and this hook has one shot per session to spend.
+        if (String(input.tool_name || "") === "Bash") {
+          const cmd = input.tool_input && typeof input.tool_input.command === "string" ? input.tool_input.command : "";
+          if (!SHELL_SEARCH.test(cmd)) ok(null);
+        }
+
+        const session = String(input.session_id || "");
+        if (!session || since("searched", session) !== Infinity) ok(null);
+        stamp("searched", session, Date.now());
+
+        const root = repoRoot(input.cwd);
+        const map = findMap(root);
+
+        // Unmapped: ask for an offer, once per repository per cooldown. Never a block —
+        // whatever the user decides, this is the last the session hears of it.
+        if (!map) {
+          if (since("offered", root) < OFFER_COOLDOWN) ok(null);
+          stamp("offered", root, Date.now());
+          ok([
+            "This repository has no code map (" + MAP_REL + "/) and you are about to search it. A map answers where an idea lives and why it is built that way in one read; a search recovers the where slowly and the why not at all.",
+            "",
+            "Do not write it now, and do not block on this. Before you finish, add a sentence to what you were going to say: name what you would map, and offer to run /codemap — or /codemap <area> for a single subsystem, usually the better offer after a focused session. Then let the user answer: writing it is their call and \"no\" ends the matter.",
+            "",
+            "(codemap kit, search hook — once per repository per 12h. SBXW_CODEMAP_NUDGE=0 turns it off.)",
+          ].join("\n"));
+        }
+
+        // A real lat.md vault: defer to it.
+        if (map.kind === "lat") ok("This repository keeps a lat.md vault at lat.md/. If this search is for where something lives or why it works this way, read the vault first — it answers that in one read.");
+
+        // Mapped by the kit: point at the map.
+        const named = sections(root);
+        ok([
+          "Before this search: this repository is mapped. " + MAP_REL + "/codemap.md is the index"
+            + (named.length ? ", beside " + named.join(", ") : "") + ".",
+          "If what you are after is where an idea lives, or why something is built this way, the map answers it in one read and a search does not. Read the relevant section, then search the tree for the detail it points you at — and believe the tree wherever the two disagree.",
+        ].join("\n"));
+    - path: /home/agent/.sbxw/codemap/hook-stop.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // Stop — the moment the memory block could only describe.
+        //
+        // "No map, and you have just worked out how this repo fits together? Run
+        // /codemap before you finish" asks the agent to notice a moment that never
+        // announces itself, and to notice it at the moment it is trying to stop. It
+        // almost never fires. This hook fires it instead: at Stop, in an unmapped
+        // repository, after a session that demonstrably read the source, it blocks the
+        // turn once and asks the agent to *offer*.
+        //
+        // Three things keep it from becoming nagging:
+        //
+        //  - It asks for an offer, never for the map. The agent says one sentence and
+        //    stops; writing it is the user's call and "no" ends the matter.
+        //  - It fires once per repository per COOLDOWN, recorded before the block is
+        //    emitted — so a refusal is not re-litigated the next time the session ends.
+        //  - It needs evidence. A session that answered a question without reading the
+        //    tree has no understanding worth writing down.
+        //
+        // Written without template literals: see hook-lib.mjs.
+
+        import { readFileSync, statSync } from "node:fs";
+        import { MAP_REL, findMap, isBackgroundRun, nudgingOff, readInput, repoRoot, since, stamp } from "./hook-lib.mjs";
+
+        // Long enough that a refusal is respected for the rest of the working day,
+        // short enough that tomorrow's session may ask again — the answer depends on
+        // what that session did, not on what yesterday's decided.
+        const COOLDOWN = 12 * 60 * 60 * 1000;
+
+        // How much of the session counts as "worked out how this fits together":
+        // distinct source files opened, plus searches (capped, since ten greps for one
+        // symbol is one question). MIN_FILES is the floor under it — a session that only
+        // searched read nothing it could map.
+        const MIN_SCORE = 6;
+        const MIN_FILES = 3;
+        const MAX_SEARCH_CREDIT = 5;
+
+        // Only the tail of a long transcript is scanned: evidence accumulates, so the
+        // last few megabytes decide the same answer as the whole file, and a hook is not
+        // the place to read a hundred of them.
+        const MAX_TRANSCRIPT = 12 * 1024 * 1024;
+
+        const SOURCE = /\.(rs|ts|tsx|js|jsx|mjs|cjs|py|go|java|kt|rb|php|swift|cs|scala|c|h|cpp|hpp|sh|sql|proto|toml|yaml|yml)$/;
+        const IGNORE = /(^|\/)(node_modules|target|dist|build|vendor|__pycache__|\.git|\.sbxw-artifacts)(\/|$)/;
+        const READERS = new Set(["Read", "Edit", "MultiEdit", "Write", "NotebookEdit"]);
+        const SEARCHERS = new Set(["Grep", "Glob"]);
+        // Paths inside a shell command. In a sandbox running with permissions bypassed
+        // the agent reads with `cat` and `sed -n` far more often than with Read, so a
+        // scan that only counted tool calls would score every such session at zero.
+        const IN_SHELL = /[\w./~-]*[\w-]+\.[A-Za-z0-9]+/g;
+        const SHELL_SEARCH = /\b(grep|rg|ag|ack|find|fd)\b/;
+
+        const collect = (files, name, input) => {
+          if (!input || typeof input !== "object") return 0;
+          if (READERS.has(name)) {
+            for (const key of ["file_path", "notebook_path"]) {
+              const p = input[key];
+              if (typeof p === "string" && SOURCE.test(p) && !IGNORE.test(p)) files.add(p);
+            }
+            return 0;
+          }
+          if (SEARCHERS.has(name)) return 1;
+          if (name === "Bash" && typeof input.command === "string") {
+            for (const m of input.command.match(IN_SHELL) || []) {
+              if (SOURCE.test(m) && !IGNORE.test(m)) files.add(m);
+            }
+            return SHELL_SEARCH.test(input.command) ? 1 : 0;
+          }
+          return 0;
+        };
+
+        /** What this session read, as a score against MIN_SCORE. */
+        function explored(path) {
+          const files = new Set();
+          let searches = 0;
+          let text = "";
+          try {
+            const size = statSync(path).size;
+            const fd = readFileSync(path);
+            text = (size > MAX_TRANSCRIPT ? fd.subarray(size - MAX_TRANSCRIPT) : fd).toString("utf8");
+          } catch (e) {
+            return { files: files, score: 0 };
+          }
+          for (const line of text.split("\n")) {
+            if (!line.includes("tool_use")) continue;
+            let entry;
+            try { entry = JSON.parse(line); } catch (e) { continue; } // a clipped first line
+            const content = entry && entry.message && entry.message.content;
+            if (!Array.isArray(content)) continue;
+            for (const block of content) {
+              if (block && block.type === "tool_use") searches += collect(files, block.name, block.input);
+            }
+          }
+          return { files: files, score: files.size + Math.min(searches, MAX_SEARCH_CREDIT) };
+        }
+
+        const input = await readInput();
+        // stop_hook_active means this turn is already running because a Stop hook
+        // blocked it. Blocking again is how a session gets stuck in one.
+        if (input.stop_hook_active || isBackgroundRun() || nudgingOff()) process.exit(0);
+
+        const root = repoRoot(input.cwd);
+        if (findMap(root)) process.exit(0);
+        if (since("offered", root) < COOLDOWN) process.exit(0);
+
+        const read = explored(String(input.transcript_path || ""));
+        if (read.files.size < MIN_FILES || read.score < MIN_SCORE) process.exit(0);
+
+        // Recorded before the block, not after: if the agent's offer never reaches the
+        // user, or the user says no, the next Stop must pass in silence.
+        stamp("offered", root, Date.now());
+
+        process.stdout.write(JSON.stringify({
+          decision: "block",
+          reason: [
+            "This repository has no code map (" + MAP_REL + "/) and this session read " + read.files.size
+              + " of its source files. What you worked out about how it fits together is the expensive part of this session, and it dies with the session.",
+            "",
+            "Do not write the map now. Before you finish, add one or two sentences to what you were already going to say: name what you would map, and offer to run /codemap. Then stop, and let the user answer — writing it is their call, and \"no\" is a complete answer you must not revisit.",
+            "",
+            "Worth knowing when you word the offer: `/codemap <area>` maps one subsystem rather than the whole repository, which is usually the better offer after a focused session. sbxw's Project panel runs the same command in a background session, so accepting need not cost the user this pane.",
+            "",
+            "(codemap kit, Stop hook — once per repository per 12h. SBXW_CODEMAP_NUDGE=0 turns it off.)",
+          ].join("\n"),
+        }));
+    - path: /home/agent/.sbxw/codemap/install-hooks.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // Register the kit's three hooks in Claude Code's user-level settings
+        // (/home/agent/.claude/settings.json), the file it reads for every session in
+        // this sandbox whatever project is open.
+        //
+        // The commands and the memory block are documentation: they work when the agent
+        // reaches for them. The hooks are the part that does not depend on reaching —
+        // they put the map in front of a session that is about to search without it, and
+        // ask for an offer from a session about to end without one.
+        //
+        // Merges rather than overwrites, and removes its own previous entries first, so
+        // re-running on every container start is a no-op. That file also holds the
+        // model, the statusLine and sbxw's own status hooks; a corrupt one is left
+        // exactly as found rather than replaced with a fresh object, since these three
+        // hooks are not worth the rest of a user's configuration.
+
+        import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+        import { dirname } from "node:path";
+
+        const SETTINGS = "/home/agent/.claude/settings.json";
+        const KIT = "/home/agent/.sbxw/codemap/";
+
+        // Event, script, and the tools it applies to (null = every call of the event).
+        const HOOKS = [
+          ["SessionStart", KIT + "hook-session-start.mjs", null],
+          ["PreToolUse", KIT + "hook-search.mjs", "Bash|Grep|Glob"],
+          ["Stop", KIT + "hook-stop.mjs", null],
+        ];
+
+        let settings = {};
+        try {
+          settings = JSON.parse(readFileSync(SETTINGS, "utf8"));
+        } catch (e) {
+          if (e.code !== "ENOENT") {
+            console.log("  [codemap] " + SETTINGS + " is not readable JSON — hooks not installed, settings left alone");
+            process.exit(0);
+          }
+        }
+
+        const ours = (entry, path) =>
+          (entry.hooks || []).some((h) => (h.args || []).includes(path) || String(h.command || "").includes(path));
+
+        settings.hooks = settings.hooks || {};
+        for (const [event, path, matcher] of HOOKS) {
+          const entry = { hooks: [{ type: "command", command: "node", args: [path] }] };
+          if (matcher) entry.matcher = matcher;
+          settings.hooks[event] = (settings.hooks[event] || []).filter((e) => !ours(e, path));
+          settings.hooks[event].push(entry);
+        }
+
+        mkdirSync(dirname(SETTINGS), { recursive: true });
+        writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
+        console.log("  [codemap] hooks installed: the map is injected at session start, recalled on first search, and offered at the end of an unmapped session");
 
   startup:
     - command: ["node", "/home/agent/.sbxw/codemap/install-memory.mjs"]
+    - command: ["node", "/home/agent/.sbxw/codemap/install-hooks.mjs"]

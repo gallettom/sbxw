@@ -106,6 +106,18 @@ process.stdin.on("end", () => {
   evt.hook_version = HOOK_VERSION;
   evt.ssh_env = sshEnvNames();
   evt.ancestry = ancestry();
+  // Sessions sbxw itself started in the background — writing a code map or a
+  // lens on it — say so, and the daemon files their events nowhere. Nobody attached
+  // them, no pane shows them, and there is no terminal in which their prompts
+  // could be answered; folded into the sandbox's session state they would light
+  // its row as an agent at work and, worse, raise summonses the island offers
+  // to answer on a PTY that is not theirs.
+  //
+  // Keyed on the reporting URL the daemon puts in that session's environment
+  // (see `sbx::codemap_run_args`), which is inherited by this hook and set for
+  // no other session — including one where a human typed /codemap themselves,
+  // which is an ordinary session in every way that matters here.
+  if (process.env.SBXW_CODEMAP_DONE) evt.background = "codemap";
   log(
     "fire event=" + (evt.hook_event_name || "?") +
       " ssh=" + (evt.ssh_env.join(",") || "-") +

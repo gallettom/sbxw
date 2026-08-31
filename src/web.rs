@@ -7,8 +7,9 @@
 //! Routes:
 //!   GET  /                          → HTML (initial_sandbox embedded)
 //!   GET  /api/events                → SSE stream of rich session updates (macOS island)
-//!   GET  /api/stream                → SSE: session updates + focus requests + open-tab count,
-//!                                      multiplexed for the browser UI (see `api_stream`)
+//!   GET  /api/stream                → SSE: session updates + focus requests + open-tab count
+//!                                      + relay + bring-up progress, multiplexed
+//!                                      for the browser UI (see `api_stream`)
 //!   GET  /api/sessions              → snapshot of current session info
 //!   POST /api/input                 → write raw bytes into a session's PTY
 //!   POST /api/answer                → answer a session's numbered prompt
@@ -36,6 +37,10 @@
 //!   POST /api/fs/pick               → OS-native folder picker (Finder/Explorer/zenity)
 //!   GET  /api/sandboxes/:name/artifacts             → non-code files under .sbxw-artifacts
 //!   GET  /api/sandboxes/:name/artifacts/download     → download one of those files
+//!   POST /api/sandboxes/:name/codemap/lens          → start a background session that retells the map for an audience
+//!   POST /api/sandboxes/:name/codemap               → start a background session that writes the map
+//!   POST /api/sandboxes/:name/codemap/done          → that agent reports the document is written
+//!   GET  /api/codemap               → what each sandbox is writing, and how the last runs ended
 //!   GET  /ws?sandbox=<name>         → WebSocket ↔ persistent PTY
 
 use crate::config::Config;
@@ -964,6 +969,13 @@ struct AppState {
     /// Open cross-sandbox information requests, each waiting on a human (see
     /// `src/relay.rs` and the `/api/relay/*` handlers).
     relay: Arc<crate::relay::Relay>,
+    /// Broadcast bus of bring-up progress — what a sandbox being created is
+    /// doing right now, step by step (see `provision_streaming`).
+    provision: broadcast::Sender<ProvisionEvent>,
+    /// Which sandboxes are writing their code map right now, and how the last
+    /// run of each ended (see `src/codemap.rs` and the `/api/…/codemap`
+    /// handlers).
+    codemap: Arc<crate::codemap::Runs>,
     cfg: Arc<Config>,
     use_api_key: bool,
 }
@@ -1076,6 +1088,10 @@ pub async fn serve(
     let (events, _) = broadcast::channel::<SessionInfo>(256);
     let (focus, _) = broadcast::channel::<String>(16);
     let (watching, _) = broadcast::channel::<String>(16);
+    // Deeper than the other buses: a bring-up's detail lines are an image pull
+    // reporting itself a few times a second, and a tab that lags behind one of
+    // those should skip a frame of a progress line, not a step.
+    let (provision, _) = broadcast::channel::<ProvisionEvent>(512);
     let (client_count, _) = watch::channel::<usize>(0);
     let statuses: Statuses = Arc::new(Mutex::new(HashMap::new()));
     // Hoisted above the reconciler because emitting a session's state now needs
@@ -1157,6 +1173,8 @@ pub async fn serve(
         usage: Arc::new(Mutex::new(UsageInfo::default())),
         client_count,
         relay: relay.clone(),
+        provision,
+        codemap: Arc::new(crate::codemap::Runs::new()),
         cfg,
         use_api_key,
     });
@@ -1190,7 +1208,14 @@ pub async fn serve(
         .route("/api/relay", get(api_relay_list))
         .route("/api/relay/events", get(api_relay_events))
         .route("/api/relay/:id/route", post(api_relay_route))
-        .route("/api/relay/:id/approve", post(api_relay_approve))
+        .route(
+            "/api/relay/:id/approve",
+            // An approval can carry several screenshots, which is well past the
+            // 2 MB default — and the cap that matters is the relay's own
+            // (`MAX_SHOTS_B64`), which answers in words a person can act on
+            // rather than with a bare 413.
+            post(api_relay_approve).layer(DefaultBodyLimit::max(24 * 1024 * 1024)),
+        )
         .route("/api/relay/:id/deny", post(api_relay_deny))
         .route("/api/sandboxes/:name/duplicate", post(api_duplicate))
         .route("/api/sandboxes/:name/ports", get(api_ports_one))
@@ -1228,6 +1253,10 @@ pub async fn serve(
             "/api/sandboxes/:name/artifacts/download",
             get(api_artifact_download),
         )
+        .route("/api/sandboxes/:name/codemap/lens", post(api_codemap_lens))
+        .route("/api/sandboxes/:name/codemap", post(api_codemap_start))
+        .route("/api/sandboxes/:name/codemap/done", post(api_codemap_done))
+        .route("/api/codemap", get(api_codemap_runs))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -1376,10 +1405,11 @@ async fn api_watch_events(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-/// Multiplexes the three SSE feeds a browser tab needs — rich session
-/// updates, "the island wants this tab to focus a sandbox", and the open-tab
-/// count — onto a single HTTP connection via named SSE events (`session`,
-/// `focus`, `clients`).
+/// Multiplexes every SSE feed a browser tab needs — rich session updates, "the
+/// island wants this tab to focus a sandbox", the open-tab count, cross-sandbox
+/// requests, bring-up progress and code map runs — onto a single HTTP
+/// connection via named SSE events (`session`, `focus`, `clients`, `relay`,
+/// `provision`, `codemap`).
 ///
 /// Plain HTTP has no multiplexing (no TLS here, so no ALPN, so no h2), and
 /// browsers cap concurrent connections to one origin at 6. Three separate
@@ -1410,6 +1440,8 @@ async fn api_stream(
     let mut focus_rx = state.focus.subscribe();
     let mut clients_rx = state.client_count.subscribe();
     let mut relay_rx = state.relay.subscribe();
+    let mut provision_rx = state.provision.subscribe();
+    let mut codemap_rx = state.codemap.subscribe();
     let count_state = state.clone();
 
     tokio::spawn(async move {
@@ -1456,6 +1488,36 @@ async fn api_stream(
                             .event("relay")
                             .json_data(&req)
                             .unwrap_or_else(|_| SseEvent::default().event("relay"));
+                        if tx.send(ev).await.is_err() { break; }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                // A sandbox is being created: its plan, the step running now,
+                // and the line `sbx` last printed under it. Lagging skips a
+                // frame of a progress line and the next event repaints — the
+                // steps are named, not counted, so nothing is lost by a gap.
+                res = provision_rx.recv() => match res {
+                    Ok(ev) => {
+                        let ev = SseEvent::default()
+                            .event("provision")
+                            .json_data(&ev)
+                            .unwrap_or_else(|_| SseEvent::default().event("provision"));
+                        if tx.send(ev).await.is_err() { break; }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                // A sandbox started, finished or failed to write its code map.
+                // Whole runs rather than deltas, like `relay` above: each one
+                // says everything about that sandbox's map, so a tab that
+                // missed a frame still ends up right.
+                res = codemap_rx.recv() => match res {
+                    Ok(run) => {
+                        let ev = SseEvent::default()
+                            .event("codemap")
+                            .json_data(&run)
+                            .unwrap_or_else(|_| SseEvent::default().event("codemap"));
                         if tx.send(ev).await.is_err() { break; }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -1542,6 +1604,16 @@ async fn api_hook(
 
     // Hooks only fire for the agent session; nothing to do without a sandbox.
     if sandbox.is_empty() || event.is_empty() {
+        return StatusCode::OK;
+    }
+    // A session sbxw started in the background (see `spawn_codemap_session`) is
+    // not the sandbox's agent: nobody attached it, no pane shows it, and no
+    // terminal here holds its stdin. Folded into the sandbox's session state it
+    // would paint the row as an agent at work — duplicating what the map badge
+    // already says, more precisely — and hand the island prompts it would offer
+    // to answer through a PTY belonging to a different session entirely. Logged
+    // above and dropped here, so `/api/hook/log` still shows it happened.
+    if body.get("background").and_then(|v| v.as_str()).is_some() {
         return StatusCode::OK;
     }
     // Claude Code stamps every hook event with the session it came from, so two
@@ -2444,6 +2516,69 @@ async fn api_paste_image(
 
 // ── Sandbox creation ──────────────────────────────────────────────────────────
 
+/// One line of a bring-up's running commentary, on its way to the browser: what
+/// `crate::progress` reported, plus the sandbox it is about.
+///
+/// The name is added *here* rather than passed down through every reporting
+/// call because a bring-up already knows which sandbox it is — it is the one
+/// this handler was asked to create. Flattened on the wire, so a tab reads
+/// `{sandbox, kind, …}` and switches on `kind`.
+#[derive(Clone, Serialize)]
+struct ProvisionEvent {
+    sandbox: String,
+    #[serde(flatten)]
+    progress: crate::progress::Progress,
+}
+
+/// Run a bring-up with its steps streamed to every open tab.
+///
+/// Every entry point that provisions goes through here — the create dialog, the
+/// chat dialog, duplicate, and the island's ephemeral chat — so "creating a
+/// sandbox shows what it is doing" is one behaviour rather than one per button.
+/// Callers keep only their own success envelope; the progress plumbing, and the
+/// closing `Done` that retires the row whichever way it went, live once.
+///
+/// Returns the bring-up's warnings, or the ready-made error envelope to hand
+/// back — the shape `try_blocking` already uses for the same reason.
+async fn provision_streaming<F>(
+    state: &Arc<AppState>,
+    name: &str,
+    provision: F,
+) -> std::result::Result<Vec<String>, Json<serde_json::Value>>
+where
+    F: FnOnce() -> Result<Vec<String>> + Send + 'static,
+{
+    let bus = state.provision.clone();
+    let sandbox = name.to_string();
+    let sink_bus = bus.clone();
+    let sink_sandbox = sandbox.clone();
+    // `send` fails only when nothing is subscribed — a bring-up nobody is
+    // watching is still a bring-up, so its outcome is not tied to an audience.
+    let sink: crate::progress::Sink = Arc::new(move |p| {
+        let _ = sink_bus.send(ProvisionEvent {
+            sandbox: sink_sandbox.clone(),
+            progress: p,
+        });
+    });
+
+    let outcome =
+        tokio::task::spawn_blocking(move || crate::progress::with_sink(sink, provision)).await;
+
+    let (result, error) = match outcome {
+        Ok(Ok(warnings)) => (Ok(warnings), None),
+        Ok(Err(e)) => {
+            let msg = format!("{e:#}");
+            (Err(err_json(msg.clone())), Some(msg))
+        }
+        Err(_) => (Err(err_json("task panic")), Some("task panic".to_string())),
+    };
+    let _ = bus.send(ProvisionEvent {
+        sandbox,
+        progress: crate::progress::Progress::Done { error },
+    });
+    result
+}
+
 #[derive(Deserialize)]
 struct PortEntry {
     sandbox_port: u16,
@@ -2490,11 +2625,15 @@ async fn api_create(
         "web UI: provisioning sandbox '{name}' at {path} ({} extra ports)",
         extra_ports.len()
     );
-    blocking(
-        move || crate::provision_sandbox(&name, &path, &[], &cfg, &extra_ports, use_api_key),
-        warnings_json,
-    )
+    let sandbox = name.clone();
+    match provision_streaming(&state, &sandbox, move || {
+        crate::provision_sandbox(&name, &path, &[], &cfg, &extra_ports, use_api_key)
+    })
     .await
+    {
+        Ok(warnings) => warnings_json(warnings),
+        Err(rejected) => rejected,
+    }
 }
 
 /// Success envelope for a provisioning call: the sandbox is up either way, so
@@ -2546,11 +2685,15 @@ async fn api_chat(
     let use_api_key = state.use_api_key;
     let name_ret = name.clone();
     tracing::info!("web UI: provisioning chat sandbox '{name}' at {workspace}");
-    blocking(
-        move || crate::provision_sandbox(&name, &workspace, &[], &cfg, &[], use_api_key),
-        |warnings| ok_json_with(serde_json::json!({ "name": name_ret, "warnings": warnings })),
-    )
+    let sandbox = name.clone();
+    match provision_streaming(&state, &sandbox, move || {
+        crate::provision_sandbox(&name, &workspace, &[], &cfg, &[], use_api_key)
+    })
     .await
+    {
+        Ok(warnings) => ok_json_with(serde_json::json!({ "name": name_ret, "warnings": warnings })),
+        Err(rejected) => rejected,
+    }
 }
 
 /// Base name for the island's "ephemeral chat" sandboxes: a scratch agent
@@ -2772,7 +2915,7 @@ async fn api_chat_push(
         let use_api_key = state.use_api_key;
         let n = name.clone();
         tracing::info!("island: provisioning ephemeral chat sandbox '{name}' at {workspace}");
-        if let Err(rejected) = try_blocking(move || {
+        if let Err(rejected) = provision_streaming(&state, &name, move || {
             crate::provision_sandbox(&n, &workspace, &[], &cfg, &[], use_api_key)
         })
         .await
@@ -3032,12 +3175,16 @@ struct RelayApproveBody {
     /// "release what the target wrote".
     #[serde(default)]
     answer: Option<String>,
-    /// A screenshot the human attached, as the `data:` URL the browser built
-    /// from what they pasted, dropped, picked or captured. Attaching and
+    /// The screenshots the human attached, as the `data:` URLs the browser
+    /// built from what they pasted, dropped, picked or captured. Attaching and
     /// releasing are one act — there is no second person to review an image
     /// against, since the one who chose it is the one being asked.
+    ///
+    /// A list, in the order they were attached: showing a before and an after,
+    /// or the same screen at three widths, is one answer to one question, and
+    /// the order is part of what it says.
     #[serde(default)]
-    image: Option<String>,
+    images: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -3063,6 +3210,14 @@ fn relay_timeout(requested: Option<u64>) -> Duration {
 /// early — the single leak that would make the whole review step decorative.
 fn relay_agent_view(req: &crate::relay::RelayRequest) -> serde_json::Value {
     let released = req.state == crate::relay::RelayState::Approved;
+    let images: Vec<serde_json::Value> = if released {
+        req.shots
+            .iter()
+            .map(|shot| serde_json::json!({ "mime": shot.mime, "b64": shot.b64 }))
+            .collect()
+    } else {
+        Vec::new()
+    };
     serde_json::json!({
         "id": req.id,
         "kind": req.kind,
@@ -3070,13 +3225,16 @@ fn relay_agent_view(req: &crate::relay::RelayRequest) -> serde_json::Value {
         "to": req.to,
         "note": req.note,
         "answer": released.then(|| req.answer.clone()).flatten(),
-        // The one place an image leaves the daemon, under the same gate as the
+        // The one place images leave the daemon, under the same gate as the
         // answer and on the same endpoints — a screenshot is a payload the human
         // released, not a resource the sandbox may go and fetch.
-        "image": released
-            .then_some(req.shot.as_ref())
-            .flatten()
-            .map(|shot| serde_json::json!({ "mime": shot.mime, "b64": shot.b64 })),
+        "images": images,
+        // The first of them again, on its own, for a sandbox still running the
+        // relay CLI from before this was a list. That copy is reinstalled on
+        // every `sbxw up`, so the skew is one running session long — but during
+        // it, the difference is between showing an agent one of the pictures
+        // and showing it none.
+        "image": images.first(),
     })
 }
 
@@ -3115,6 +3273,38 @@ fn parse_shot(data_url: &str) -> Result<crate::relay::Shot, String> {
         mime,
         b64: b64.to_string(),
     })
+}
+
+/// The same door, for the whole set a person attached at once.
+///
+/// Two limits the single-image check cannot see: how many there are, and what
+/// they weigh together. Both are refusals of the *set* rather than of one
+/// picture, so they are phrased as "send fewer" — the person is looking at the
+/// popup with every one of them on screen and can drop the ones that were
+/// making the same point twice.
+fn parse_shots(data_urls: &[String]) -> Result<Vec<crate::relay::Shot>, String> {
+    let wanted: Vec<&String> = data_urls.iter().filter(|u| !u.trim().is_empty()).collect();
+    if wanted.len() > crate::relay::MAX_SHOTS {
+        return Err(format!(
+            "that is more than {} images — send the ones that show it best",
+            crate::relay::MAX_SHOTS
+        ));
+    }
+    let mut shots = Vec::with_capacity(wanted.len());
+    let mut total = 0usize;
+    for url in wanted {
+        let shot = parse_shot(url)?;
+        total += shot.b64.len();
+        if total > crate::relay::MAX_SHOTS_B64 {
+            return Err(
+                "those images are too large to send together — remove one, or capture windows \
+                 rather than whole screens"
+                    .into(),
+            );
+        }
+        shots.push(shot);
+    }
+    Ok(shots)
 }
 
 /// Trim and length-cap text arriving from an agent, so one request cannot fill
@@ -3292,7 +3482,7 @@ fn relay_outcome_message(req: &crate::relay::RelayRequest) -> String {
             .unwrap_or_default();
         return match req.kind {
             crate::relay::RelayKind::Screenshot => format!(
-                "[sbxw relay · request {id}] The human declined to send the screenshot you asked \
+                "[sbxw relay · request {id}] The human declined to send the screenshots you asked \
                  for earlier (\"{gist}\"){note}. Nothing was captured. Carry on without seeing it \
                  — say plainly what you changed and what it should look like, and let them tell \
                  you if it is wrong. Do not ask for another one."
@@ -3315,16 +3505,20 @@ fn relay_outcome_message(req: &crate::relay::RelayRequest) -> String {
     // An image cannot be typed into a terminal, so this message is a *pointer*
     // to one. The CLI is what turns it into a file, which is also the only form
     // an agent can go on to read — see `assets/relay-tool.js`.
-    if req.shot.is_some() {
+    if !req.shots.is_empty() {
+        let what = match req.shots.len() {
+            1 => "a screenshot".to_string(),
+            n => format!("{n} screenshots"),
+        };
         return format!(
-            "[sbxw relay · request {id}] The human attached a screenshot for the request you \
-             opened earlier (\"{gist}\"). The image itself is not in this message — collect it \
-             with:\n\
+            "[sbxw relay · request {id}] The human attached {what} for the request you \
+             opened earlier (\"{gist}\"). The images themselves are not in this message — \
+             collect them with:\n\
              \n\
              node ~/.sbxw/relay.js wait {id}\n\
              \n\
-             That saves it under ~/.sbxw/shots/ and prints the path; read that file to see \
-             it.{caption}"
+             That saves them under ~/.sbxw/shots/ and prints the paths; read those files to see \
+             them.{caption}"
         );
     }
 
@@ -3362,22 +3556,21 @@ fn relay_outcome_message(req: &crate::relay::RelayRequest) -> String {
     }
 }
 
-/// Type a relay message into `sandbox` in the background.
+/// Type a message into `sandbox`'s agent in the background.
 ///
 /// Detached because delivery is slow by nature — a cold sandbox has to boot its
 /// agent, and `push_text` waits for the TUI to settle before and after typing —
-/// while the human who just clicked is owed an immediate answer. The outcome
-/// reaches them over the SSE stream instead: `on_fail` puts the request back in
-/// their hands rather than leaving it looking delivered.
-fn spawn_relay_delivery(
-    state: Arc<AppState>,
-    sandbox: String,
-    text: String,
-    on_fail: Option<String>,
-) {
+/// while the human who just clicked is owed an immediate answer.
+///
+/// `on_fail` is the relay's: a request whose delivery failed must go back into
+/// the human's hands over the SSE stream rather than sit there looking
+/// delivered. Callers with nothing to undo pass `None` and the failure is a log
+/// line — for those the pane itself is the receipt, since whatever was typed is
+/// typed where the human can see it.
+fn spawn_push(state: Arc<AppState>, sandbox: String, text: String, on_fail: Option<String>) {
     tokio::spawn(async move {
         if let Err(e) = push_text(&state, &sandbox, &text).await {
-            tracing::warn!("relay: could not deliver to '{sandbox}': {e}");
+            tracing::warn!("could not deliver to '{sandbox}': {e}");
             if let Some(id) = on_fail {
                 let _ = state.relay.unroute(
                     &id,
@@ -3405,7 +3598,7 @@ async fn api_relay_route(
         Err(e) => return err_json(e),
     };
     tracing::info!("relay: {id} routed to '{to}'");
-    spawn_relay_delivery(
+    spawn_push(
         state.clone(),
         to,
         relay_request_message(&req),
@@ -3426,18 +3619,15 @@ async fn api_relay_approve(
         .as_deref()
         .map(|a| relay_clip(a, crate::relay::MAX_ANSWER))
         .filter(|a| !a.is_empty());
-    let shot = match body.image.as_deref().filter(|i| !i.trim().is_empty()) {
-        Some(data_url) => match parse_shot(data_url) {
-            Ok(shot) => Some(shot),
-            Err(e) => return err_json(e),
-        },
-        None => None,
+    let shots = match parse_shots(&body.images) {
+        Ok(shots) => shots,
+        Err(e) => return err_json(e),
     };
     // Whether anyone is listening has to be read *before* the approval: settling
     // the request is exactly what makes every parked `wait` return and stop
     // counting.
     let unattended = state.relay.is_unattended(&id);
-    let req = match state.relay.approve(&id, edited.as_deref(), shot, now_ms()) {
+    let req = match state.relay.approve(&id, edited.as_deref(), shots, now_ms()) {
         Ok(req) => req,
         Err(e) => return err_json(e),
     };
@@ -3446,7 +3636,7 @@ async fn api_relay_approve(
         // The asking agent's own call already came back empty and it moved on,
         // so nothing is waiting to collect this. Typing it in is the only way it
         // is ever read.
-        spawn_relay_delivery(
+        spawn_push(
             state.clone(),
             req.from.clone(),
             relay_outcome_message(&req),
@@ -3475,7 +3665,7 @@ async fn api_relay_deny(
     };
     tracing::info!("relay: {id} denied");
     if unattended {
-        spawn_relay_delivery(
+        spawn_push(
             state.clone(),
             req.from.clone(),
             relay_outcome_message(&req),
@@ -3521,11 +3711,15 @@ async fn api_duplicate(
     let cfg = state.cfg.clone();
     let use_api_key = state.use_api_key;
     tracing::info!("web UI: duplicating sandbox '{name}' as '{new_name}' (workspace {workspace})");
-    blocking(
-        move || crate::provision_sandbox(&new_name, &workspace, &[], &cfg, &[], use_api_key),
-        warnings_json,
-    )
+    let sandbox = new_name.clone();
+    match provision_streaming(&state, &sandbox, move || {
+        crate::provision_sandbox(&new_name, &workspace, &[], &cfg, &[], use_api_key)
+    })
     .await
+    {
+        Ok(warnings) => warnings_json(warnings),
+        Err(rejected) => rejected,
+    }
 }
 
 // ── Filesystem browser ────────────────────────────────────────────────────────
@@ -3805,19 +3999,29 @@ struct ArtifactEntry {
     modified: u64,
 }
 
-/// The code map, folded into one entry.
+/// A directory of linked markdown, folded into one entry.
 ///
-/// A map is a *directory* of linked markdown — a real one runs to dozens of
-/// files — so listing it file by file buried the actual deliverables it sits
-/// next to and offered no way to read it as the graph it is. It is summarised
-/// here and opened in its own viewer instead.
+/// A map is a *directory* — a real one runs to dozens of files — so listing it
+/// file by file buried the actual deliverables it sits next to and offered no
+/// way to read it as the graph it is. It is summarised here and opened in its
+/// own viewer instead.
+///
+/// The files come along in `entries`: the viewer is a browser page with no
+/// access to the workspace beyond this API, so folding the map out of the main
+/// list without handing it over here would not tidy the list, it would hide the
+/// map from the one thing that reads it.
 #[derive(Serialize)]
-struct CodemapSummary {
-    /// Directory under `.sbxw-artifacts`, e.g. `codemap`.
+struct MapSummary {
+    /// Directory under `.sbxw-artifacts`, e.g. `codemap` or
+    /// `codemap-lenses/product-owner`.
     dir: String,
+    /// Last path segment — the map's directory, a lens's slug.
+    slug: String,
     files: usize,
     /// Newest mtime among its files, Unix seconds.
     modified: u64,
+    /// The map's own files, newest first, exactly as they were listed.
+    entries: Vec<ArtifactEntry>,
 }
 
 #[derive(Serialize)]
@@ -3825,28 +4029,74 @@ struct ArtifactsResponse {
     dir: String,
     entries: Vec<ArtifactEntry>,
     /// `null` when this project has no map yet.
-    codemap: Option<CodemapSummary>,
+    codemap: Option<MapSummary>,
+    /// Retellings of the map written for one audience, newest first. Empty
+    /// until somebody asks for one.
+    lenses: Vec<MapSummary>,
+    /// This sandbox's latest attempt at writing a map, if it made one this
+    /// daemon saw (see `src/codemap.rs`). It is what tells an empty `codemap`
+    /// apart from one that is *being written right now* — the same absence, ten
+    /// minutes apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<crate::codemap::Run>,
 }
 
 /// The map's own directory name, by the convention the codemap kit writes.
 const CODEMAP_DIR: &str = "codemap";
 
-/// Split the map's files out of the artifact list.
+/// Where `/codemap-lens` writes its retellings, one subdirectory per lens.
 ///
-/// Returns the summary, leaving `entries` holding only what a person put there
-/// deliberately. Nothing is hidden: the same files stay downloadable through
-/// their own paths, and the viewer is what reads them.
-fn split_codemap(entries: &mut Vec<ArtifactEntry>) -> Option<CodemapSummary> {
-    let prefix = format!("{CODEMAP_DIR}/");
+/// Beside the map rather than inside it, deliberately: a lens is a *derived*
+/// document — it drops sections, merges others and speaks a different
+/// vocabulary — so filing it under `codemap/` would put prose the checker
+/// cannot validate, and links it cannot resolve, inside the map it paraphrases.
+const LENS_DIR: &str = "codemap-lenses";
+
+/// Take everything under `dir/` out of `entries`, as its own summary.
+///
+/// Returns `None` when nothing lives there — a project with no map, or no
+/// lenses — leaving `entries` untouched. Nothing is hidden either way: the same
+/// files stay downloadable through their own paths.
+fn take_map(entries: &mut Vec<ArtifactEntry>, dir: &str) -> Option<MapSummary> {
+    let prefix = format!("{dir}/");
     let (map, rest): (Vec<_>, Vec<_>) = std::mem::take(entries)
         .into_iter()
         .partition(|e| e.path.starts_with(&prefix));
     *entries = rest;
-    (!map.is_empty()).then(|| CodemapSummary {
-        dir: CODEMAP_DIR.to_string(),
+    (!map.is_empty()).then(|| MapSummary {
+        dir: dir.to_string(),
+        slug: dir.rsplit('/').next().unwrap_or(dir).to_string(),
         files: map.len(),
         modified: map.iter().map(|e| e.modified).max().unwrap_or(0),
+        entries: map,
     })
+}
+
+/// Take every lens directory out of the artifact list, newest first.
+///
+/// A lens is one level down (`codemap-lenses/<slug>/…`); loose files dropped
+/// directly into `codemap-lenses/` belong to no lens and are left in the list
+/// rather than invented into one.
+fn take_lenses(entries: &mut Vec<ArtifactEntry>) -> Vec<MapSummary> {
+    let prefix = format!("{LENS_DIR}/");
+    let mut slugs: Vec<String> = Vec::new();
+    for e in entries.iter() {
+        let Some(rest) = e.path.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some((slug, _)) = rest.split_once('/') else {
+            continue; // a file sitting loose in codemap-lenses/
+        };
+        if !slug.is_empty() && !slugs.iter().any(|s| s == slug) {
+            slugs.push(slug.to_string());
+        }
+    }
+    let mut lenses: Vec<MapSummary> = slugs
+        .iter()
+        .filter_map(|slug| take_map(entries, &format!("{prefix}{slug}")))
+        .collect();
+    lenses.sort_by_key(|l| std::cmp::Reverse(l.modified));
+    lenses
 }
 
 fn has_allowed_extension(path: &std::path::Path) -> bool {
@@ -3913,12 +4163,18 @@ fn collect_artifacts(dir: &std::path::Path) -> Vec<ArtifactEntry> {
     out
 }
 
-async fn api_artifacts(Path(name): Path<String>) -> Json<ArtifactsResponse> {
+async fn api_artifacts(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Json<ArtifactsResponse> {
+    let run = state.codemap.get(&name);
     let Some(workspace) = crate::workspace_for(&name) else {
         return Json(ArtifactsResponse {
             dir: String::new(),
             entries: Vec::new(),
             codemap: None,
+            lenses: Vec::new(),
+            run,
         });
     };
     let dir = workspace.join(crate::ARTIFACTS_DIR);
@@ -3926,11 +4182,14 @@ async fn api_artifacts(Path(name): Path<String>) -> Json<ArtifactsResponse> {
     let mut entries = tokio::task::spawn_blocking(move || collect_artifacts(&dir))
         .await
         .unwrap_or_default();
-    let codemap = split_codemap(&mut entries);
+    let codemap = take_map(&mut entries, CODEMAP_DIR);
+    let lenses = take_lenses(&mut entries);
     Json(ArtifactsResponse {
         dir: dir_str,
         entries,
         codemap,
+        lenses,
+        run,
     })
 }
 
@@ -4006,6 +4265,331 @@ async fn api_artifact_download(
         data,
     )
         .into_response()
+}
+
+/// Longest objective the lens endpoint will carry.
+///
+/// A brief is a sentence or two — who is reading, and what they need out of it
+/// — not the document itself. The cap is a size limit on the *ask*: it is the
+/// tail of a prompt whose first word is `/codemap-lens`, and the command it
+/// names is where the instructions actually live.
+const LENS_OBJECTIVE_MAX: usize = 400;
+
+#[derive(Deserialize)]
+struct LensBody {
+    /// What the reader needs, in the human's own words.
+    objective: String,
+}
+
+/// `POST /api/sandboxes/:name/codemap/lens` — have this sandbox's agent retell
+/// the code map for one audience.
+///
+/// The daemon writes nothing: the agent is the only party here that can read
+/// the map and judge what a product owner needs out of it. What changed is
+/// where it does that. A lens used to be typed into the agent pane, on the
+/// argument that a few minutes of work you may want to argue with belongs in
+/// front of you — but it took over the session you were in the middle of, and
+/// what it produced there was a document, not a conversation. So it runs in a
+/// background session like the map beside it (`sbx::codemap_run_args`), the
+/// pane stays yours, and the run is state the whole UI can read: a badge, a
+/// corner card, a toast when it lands.
+///
+/// The brief goes over whole and unnamed. The daemon used to derive the lens's
+/// directory from the brief's opening words and pass it as `--into`: that
+/// bought the browser a path to quote back, and cost the lens its title, since
+/// the picker shows the directory and the opening words of a brief are not a
+/// title. Naming is a reading task — it belongs to whoever has read the map —
+/// so the agent picks it, and the browser says only where lenses land.
+async fn api_codemap_lens(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<LensBody>,
+) -> Json<serde_json::Value> {
+    if let Some(rejected) = reject_invalid_name(&name) {
+        return rejected;
+    }
+    // One line: the brief is the tail of a `claude -p` prompt whose first word
+    // has to stay a slash command. Collapsed rather than rejected, because a
+    // browser textarea wraps and a human pressing Enter mid-thought is not an
+    // error worth a refusal.
+    let objective = body
+        .objective
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if objective.is_empty() {
+        return err_json("say what the lens is for — who is reading, and what they need from it");
+    }
+    if objective.chars().count() > LENS_OBJECTIVE_MAX {
+        return err_json(format!(
+            "that brief is {} characters; keep it under {LENS_OBJECTIVE_MAX} — \
+             a sentence naming the reader and what they need",
+            objective.chars().count()
+        ));
+    }
+    if let Err(rejected) = codemap_ready(
+        &name,
+        &state,
+        crate::sbx::CODEMAP_LENS_COMMAND_PATH,
+        "/codemap-lens",
+    )
+    .await
+    {
+        return rejected;
+    }
+    let run = match state
+        .codemap
+        .begin(&name, crate::codemap::Kind::Lens, now_ms())
+    {
+        Ok(run) => run,
+        Err(e) => return err_json(e),
+    };
+    tracing::info!("codemap: '{name}' is writing a lens under {LENS_DIR}/");
+    spawn_codemap_session(
+        state,
+        name,
+        crate::codemap::Kind::Lens,
+        format!("/codemap-lens {objective}"),
+    );
+    ok_json_with(serde_json::json!({ "run": run, "dir": LENS_DIR }))
+}
+
+/// The refusals a background codemap run owes the click that started it, said
+/// before a session exists to fail inside.
+///
+/// All three otherwise surface minutes later as a note on a run that never had
+/// a chance: a sandbox that is not running, an agent with no such command
+/// because the kit was never applied, and a sandbox already writing something
+/// else. Here they are an answer to the click that names the fix.
+///
+/// Worth the two `sbx` calls it costs, and worth being one function: the map
+/// and the lens differ only in which command file has to be there.
+async fn codemap_ready(
+    name: &str,
+    state: &Arc<AppState>,
+    command_path: &'static str,
+    command: &'static str,
+) -> std::result::Result<(), Json<serde_json::Value>> {
+    // Answered before the two `sbx` calls below, which a second click would
+    // spend only to be refused anyway. `begin` refuses it again at the end,
+    // which is the check that actually decides — this one is for the cost.
+    if let Some(kind) = state.codemap.writing(name) {
+        return Err(err_json(crate::codemap::already_writing(name, kind)));
+    }
+    let n = name.to_string();
+    try_blocking(move || {
+        if !crate::sbx::is_running(&n)? {
+            bail!("'{n}' is not running — start it first, then ask again");
+        }
+        if !crate::sbx::file_exists(&n, command_path) {
+            bail!(
+                "'{n}' has no {command} command — add the codemap kit to this project \
+                 (`kits = [\"…/assets/codemap\"]` in sbxw.toml) and run `sbxw up`"
+            );
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// How long a background codemap run may take before the daemon stops waiting
+/// for it.
+///
+/// Generous, because writing a map for a large repository legitimately takes
+/// tens of minutes, and a cap that fires on a run that was going to succeed
+/// costs the whole run. One cap for both kinds: a lens is the shorter job by
+/// far, but nothing here is timing it — the number exists to bound a session
+/// that has stopped making progress, and that is the same number either way. It exists for the other case only: a session that is
+/// never going to finish must not leave the UI saying "writing…" until the
+/// daemon is restarted.
+const CODEMAP_MAX: Duration = Duration::from_secs(45 * 60);
+
+/// How many lines of a finished session's output are kept as the run's note.
+///
+/// The tail rather than the head: what a headless agent prints last is its own
+/// account of what it did, and what a failing one prints last is why it
+/// stopped. Everything before that is progress nobody is reading afterwards.
+const CODEMAP_NOTE_LINES: usize = 3;
+
+/// The last few non-blank lines of a session's output, as one line.
+fn output_tail(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(CODEMAP_NOTE_LINES)..].join(" ")
+}
+
+/// Run the background session that writes one of `name`'s codemap documents,
+/// and report how it ended.
+///
+/// `prompt` is the whole of what the agent is told (`/codemap`, or
+/// `/codemap-lens <brief>`); `kind` is what this daemon calls it afterwards, in
+/// a log line and in the run the browser reads.
+///
+/// The reporting is a backstop, not the mechanism: the agent says it is done
+/// through `api_codemap_done` the moment the document is written, which is
+/// earlier and better informed than an exit status. This is what covers the run
+/// that never gets that far — `sbx` missing, the sandbox stopping under it, a
+/// session refused its permissions — and `Runs::finish` ignores whichever of
+/// the two arrives second.
+fn spawn_codemap_session(
+    state: Arc<AppState>,
+    name: String,
+    kind: crate::codemap::Kind,
+    prompt: String,
+) {
+    let args =
+        crate::sbx::codemap_run_args(&name, crate::web_port_of(&state.cfg.web_addr), &prompt);
+    tokio::spawn(async move {
+        let what = kind.what();
+        let ended = |ok: bool, note: String| {
+            state.codemap.finish(&name, ok, Some(&note), now_ms());
+            if ok {
+                tracing::info!("codemap: '{name}' finished {what} — {note}");
+            } else {
+                tracing::warn!("codemap: '{name}' failed to write {what} — {note}");
+            }
+        };
+        // `kill_on_drop` is what makes the timeout below a real one: dropping
+        // the future the child is owned by is the only handle left on it once
+        // `wait_with_output` has taken it.
+        let child = tokio::process::Command::new("sbx")
+            .args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn();
+        let child = match child {
+            Ok(child) => child,
+            Err(e) => return ended(false, format!("could not start a session: {e}")),
+        };
+        match tokio::time::timeout(CODEMAP_MAX, child.wait_with_output()).await {
+            Err(_) => ended(
+                false,
+                format!(
+                    "still going after {} minutes — stopped",
+                    CODEMAP_MAX.as_secs() / 60
+                ),
+            ),
+            Ok(Err(e)) => ended(false, format!("the session could not be waited on: {e}")),
+            Ok(Ok(out)) if out.status.success() => ended(true, output_tail(&out.stdout)),
+            Ok(Ok(out)) => {
+                // A headless agent that fails says so on stdout as often as on
+                // stderr, so take whichever spoke last rather than assuming.
+                let tail = match output_tail(&out.stderr) {
+                    t if t.is_empty() => output_tail(&out.stdout),
+                    t => t,
+                };
+                ended(false, format!("{} — {tail}", out.status))
+            }
+        }
+    });
+}
+
+/// `POST /api/sandboxes/:name/codemap` — write this project's code map.
+///
+/// The map is written by the sandbox's own agent, in a background session
+/// (`sbx::codemap_run_args`): it is the only party that can read the repository
+/// and judge what is worth saying about it, and the daemon's part is to start
+/// it, remember that it is running, and say so — see `src/codemap.rs`.
+///
+/// Background rather than the agent pane — as the lens beside it now is too. A
+/// map is a long, uninterrupted read of a whole repository, and taking over the
+/// pane for it would cost the human the session they were in the middle of, for
+/// output they cannot usefully steer anyway.
+async fn api_codemap_start(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Json<serde_json::Value> {
+    if let Some(rejected) = reject_invalid_name(&name) {
+        return rejected;
+    }
+    if let Err(rejected) =
+        codemap_ready(&name, &state, crate::sbx::CODEMAP_COMMAND_PATH, "/codemap").await
+    {
+        return rejected;
+    }
+
+    // Claimed before the session is spawned, so two clicks a moment apart
+    // cannot both find nothing running and start a session each.
+    let run = match state
+        .codemap
+        .begin(&name, crate::codemap::Kind::Map, now_ms())
+    {
+        Ok(run) => run,
+        Err(e) => return err_json(e),
+    };
+    tracing::info!("codemap: '{name}' is writing its map under {CODEMAP_DIR}/");
+    spawn_codemap_session(
+        state,
+        name,
+        crate::codemap::Kind::Map,
+        "/codemap".to_string(),
+    );
+    ok_json_with(serde_json::json!({ "run": run, "dir": CODEMAP_DIR }))
+}
+
+#[derive(Deserialize, Default)]
+struct CodemapDoneBody {
+    /// Absent means it worked: an agent that reports at all reports having
+    /// finished, and only one that failed has any reason to say otherwise.
+    ok: Option<bool>,
+    /// One line about what was written, or about what stopped it.
+    note: Option<String>,
+}
+
+/// `POST /api/sandboxes/:name/codemap/done` — the agent says it has written
+/// what it was asked for.
+///
+/// One endpoint for both kinds, because the daemon already knows which run is
+/// in flight and the agent has no reason to say. This is the *good* end of a
+/// run, and it is the agent's to report because it is the only party that
+/// knows: a map or a lens is finished when the last file is written and the
+/// checker is clean, which is some way before the session that wrote it gets
+/// around to exiting.
+///
+/// A report with no run behind it is accepted rather than refused. An agent
+/// that wrote a map because a human typed `/codemap` in its own pane is doing
+/// exactly what it was told to; there is simply nothing here to close, and the
+/// artifact listing is what tells that story anyway.
+async fn api_codemap_done(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    // Optional, because the useful part of this call is that it was made at
+    // all. A bare `curl -X POST $SBXW_CODEMAP_DONE` — no body, no content type
+    // — is a report that the map is written, and refusing it over an envelope
+    // would leave the run open for the ten minutes it takes the session to
+    // notice it has nothing left to do.
+    body: Option<Json<CodemapDoneBody>>,
+) -> Json<serde_json::Value> {
+    if let Some(rejected) = reject_invalid_name(&name) {
+        return rejected;
+    }
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let ok = body.ok.unwrap_or(true);
+    let tracked = state
+        .codemap
+        .finish(&name, ok, body.note.as_deref(), now_ms())
+        .is_some();
+    tracing::info!(
+        "codemap: '{name}' reports {} (run in flight: {tracked})",
+        if ok { "it is written" } else { "it gave up" }
+    );
+    ok_json_with(serde_json::json!({ "tracked": tracked }))
+}
+
+/// `GET /api/codemap` — every codemap run this daemon knows about, newest
+/// first.
+///
+/// What a tab reloaded mid-run reads to rebuild what it was showing. The
+/// `codemap` SSE event carries changes from then on; this is the snapshot that
+/// event stream has no way to replay.
+async fn api_codemap_runs(State(state): State<Arc<AppState>>) -> Json<Vec<crate::codemap::Run>> {
+    Json(state.codemap.all())
 }
 
 async fn ws_handler(
@@ -4387,6 +4971,52 @@ mod tests {
     use crate::relay::{Relay, RelayKind, RelayState};
     use serde_json::json;
 
+    /// The browser switches on `kind` and keys rows on `sandbox`, both of them
+    /// at the top level — the progress payload is flattened into the envelope
+    /// rather than nested under it, and a tab reading `ev.steps` would find
+    /// nothing if that ever stopped being true.
+    #[test]
+    fn a_progress_event_reaches_the_browser_flat() {
+        let event = |progress| {
+            serde_json::to_value(ProvisionEvent {
+                sandbox: "neos".into(),
+                progress,
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            event(crate::progress::Progress::Plan {
+                steps: vec![crate::progress::Step::new(
+                    crate::progress::CREATE,
+                    "Creating the sandbox"
+                )],
+            }),
+            json!({
+                "sandbox": "neos",
+                "kind": "plan",
+                "steps": [{ "id": "create", "label": "Creating the sandbox" }],
+            })
+        );
+        assert_eq!(
+            event(crate::progress::Progress::Started {
+                id: crate::progress::CREATE
+            }),
+            json!({ "sandbox": "neos", "kind": "started", "id": "create" })
+        );
+        assert_eq!(
+            event(crate::progress::Progress::Detail {
+                text: "pulling image".into()
+            }),
+            json!({ "sandbox": "neos", "kind": "detail", "text": "pulling image" })
+        );
+        // The one every tab acts on the same way: retire the row, whichever way
+        // the bring-up went.
+        assert_eq!(
+            event(crate::progress::Progress::Done { error: None }),
+            json!({ "sandbox": "neos", "kind": "done", "error": null })
+        );
+    }
+
     /// The bug this exists for: 256 KB of scrollback holds hundreds of `CSI 6n`
     /// from the shell prompt, and replaying them into a rebuilt terminal makes
     /// it answer every single one back into the PTY — `37;3R37;3R…` typed onto
@@ -4469,7 +5099,7 @@ mod tests {
         // answer worth anything to the agent that receives it.
         assert_eq!(view["to"], json!("beta"));
 
-        let approved = relay.approve(&req.id, None, None, 4_000).unwrap();
+        let approved = relay.approve(&req.id, None, vec![], 4_000).unwrap();
         assert_eq!(relay_agent_view(&approved)["answer"], json!("hunter2"));
 
         // A refusal releases nothing, now or later.
@@ -4491,14 +5121,23 @@ mod tests {
 
         let pending = relay_agent_view(&relay.get(&req.id).unwrap());
         assert_eq!(pending["kind"], json!("screenshot"));
+        assert_eq!(pending["images"], json!([]));
         assert_eq!(pending["image"], json!(null));
 
-        let shot = parse_shot("data:image/png;base64,iVBORw0KGgo=").unwrap();
+        let shots = parse_shots(&[
+            "data:image/png;base64,iVBORw0KGgo=".to_string(),
+            "data:image/jpeg;base64,/9j/4AAQ".to_string(),
+        ])
+        .unwrap();
         let approved = relay
-            .approve(&req.id, Some("at 375px"), Some(shot), 2_000)
+            .approve(&req.id, Some("at 375px"), shots, 2_000)
             .unwrap();
         let view = relay_agent_view(&approved);
-        assert_eq!(view["image"]["mime"], json!("image/png"));
+        assert_eq!(view["images"].as_array().unwrap().len(), 2);
+        assert_eq!(view["images"][0]["mime"], json!("image/png"));
+        assert_eq!(view["images"][0]["b64"], json!("iVBORw0KGgo="));
+        assert_eq!(view["images"][1]["mime"], json!("image/jpeg"));
+        // A CLI from before the list existed still gets the first of them.
         assert_eq!(view["image"]["b64"], json!("iVBORw0KGgo="));
         // The caption travels as the answer, so an agent that only reads text
         // still gets the part that was written for it.
@@ -4506,7 +5145,39 @@ mod tests {
 
         let refused = relay.open("alpha", RelayKind::Screenshot, "and now?", 3_000);
         let denied = relay.deny(&refused.id, None, 4_000).unwrap();
+        assert_eq!(relay_agent_view(&denied)["images"], json!([]));
         assert_eq!(relay_agent_view(&denied)["image"], json!(null));
+    }
+
+    /// What a *set* of images is checked for, over and above each one: how many
+    /// there are, and what they weigh together. Both are the human's to fix in
+    /// the popup, so both come back as words rather than as a dropped request.
+    #[test]
+    fn a_set_of_images_is_capped_by_count_and_by_weight() {
+        let one = "data:image/png;base64,iVBORw0KGgo=".to_string();
+        let none: Vec<String> = vec![];
+        assert!(parse_shots(&none).unwrap().is_empty());
+        // Empty slots are what an unattached row looks like from the browser;
+        // they are not images and are not counted as any.
+        assert!(parse_shots(&["".to_string(), "   ".to_string()])
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            parse_shots(&vec![one.clone(); crate::relay::MAX_SHOTS])
+                .unwrap()
+                .len(),
+            crate::relay::MAX_SHOTS
+        );
+        assert!(parse_shots(&vec![one.clone(); crate::relay::MAX_SHOTS + 1]).is_err());
+        // Each within the per-image cap, too much all together.
+        let big = format!(
+            "data:image/png;base64,{}",
+            "A".repeat(crate::relay::MAX_SHOT_B64)
+        );
+        assert!(parse_shots(std::slice::from_ref(&big)).is_ok());
+        assert!(parse_shots(&vec![big; 3]).is_err());
+        // One bad envelope refuses the set, rather than sending what parsed.
+        assert!(parse_shots(&[one, "data:image/svg+xml;base64,PHN2Zz4=".to_string()]).is_err());
     }
 
     /// What the daemon checks about an image, and what it deliberately does
@@ -4537,13 +5208,20 @@ mod tests {
     fn the_screenshot_outcome_message_points_at_the_image_or_drops_it() {
         let relay = Relay::new();
         let req = relay.open("alpha", RelayKind::Screenshot, "the new header", 1_000);
-        let shot = parse_shot("data:image/png;base64,iVBORw0KGgo=").unwrap();
+        let shots = parse_shots(&[
+            "data:image/png;base64,iVBORw0KGgo=".to_string(),
+            "data:image/png;base64,YWZ0ZXI=".to_string(),
+        ])
+        .unwrap();
         let approved = relay
-            .approve(&req.id, Some("dark mode"), Some(shot), 2_000)
+            .approve(&req.id, Some("dark mode"), shots, 2_000)
             .unwrap();
         let msg = relay_outcome_message(&approved);
         assert!(msg.contains(&format!("wait {}", req.id)), "{msg}");
         assert!(msg.contains("~/.sbxw/shots/"), "{msg}");
+        // How many there are, so an agent reading one file knows it is not all
+        // of them.
+        assert!(msg.contains("2 screenshots"), "{msg}");
         assert!(msg.contains("dark mode"), "{msg}");
         // Never the base64 itself: this text is typed into a TUI.
         assert!(!msg.contains("iVBORw0KGgo"), "{msg}");
@@ -4560,7 +5238,7 @@ mod tests {
         // Words instead of an image is a valid outcome, and says so.
         let described = relay.open("alpha", RelayKind::Screenshot, "the new header", 5_000);
         let answered = relay
-            .approve(&described.id, Some("it wraps at 400px"), None, 6_000)
+            .approve(&described.id, Some("it wraps at 400px"), vec![], 6_000)
             .unwrap();
         let msg = relay_outcome_message(&answered);
         assert!(msg.contains("in words rather than with an image"), "{msg}");
@@ -4619,7 +5297,7 @@ mod tests {
         relay
             .reply(&req.id, "beta", "https://example.test", 3_000)
             .unwrap();
-        let approved = relay.approve(&req.id, None, None, 4_000).unwrap();
+        let approved = relay.approve(&req.id, None, vec![], 4_000).unwrap();
         let msg = relay_outcome_message(&approved);
         assert!(msg.contains("https://example.test"), "{msg}");
         assert!(msg.contains("from sandbox \"beta\""), "{msg}");
@@ -5344,9 +6022,10 @@ mod tests {
             artifact("ARCHITECTURE.md", 10),
             artifact("wireframe.png", 20),
         ];
-        let map = split_codemap(&mut entries).expect("a map was there");
+        let map = take_map(&mut entries, CODEMAP_DIR).expect("a map was there");
 
         assert_eq!(map.dir, "codemap");
+        assert_eq!(map.slug, "codemap");
         assert_eq!(map.files, 2);
         assert_eq!(map.modified, 50, "the newest file dates the map");
         assert_eq!(
@@ -5354,22 +6033,82 @@ mod tests {
             ["ARCHITECTURE.md", "wireframe.png"],
             "only what a person put there deliberately is left"
         );
+        // Folded out of the list, but handed over — the viewer is a browser
+        // page and this response is all it gets to read the map from.
+        assert_eq!(
+            map.entries
+                .iter()
+                .map(|e| e.path.as_str())
+                .collect::<Vec<_>>(),
+            ["codemap/codemap.md", "codemap/api/auth.md"]
+        );
     }
 
     /// No map is the normal state of a fresh project, and must not invent one.
     #[test]
     fn a_project_without_a_map_reports_none_and_keeps_its_files() {
         let mut entries = vec![artifact("notes.md", 1)];
-        assert!(split_codemap(&mut entries).is_none());
+        assert!(take_map(&mut entries, CODEMAP_DIR).is_none());
         assert_eq!(entries.len(), 1);
 
         // A file merely *named* like the directory is not the directory.
         let mut decoy = vec![artifact("codemap.md", 1), artifact("codemaps/x.md", 2)];
         assert!(
-            split_codemap(&mut decoy).is_none(),
+            take_map(&mut decoy, CODEMAP_DIR).is_none(),
             "prefix match is on `codemap/`"
         );
         assert_eq!(decoy.len(), 2);
+    }
+
+    /// Each lens is its own map, and they are listed newest first: the one you
+    /// asked for a minute ago is the one you came back to read.
+    #[test]
+    fn lenses_are_folded_out_one_directory_at_a_time() {
+        let mut entries = vec![
+            artifact("codemap-lenses/product-owner/product-owner.md", 10),
+            artifact("codemap-lenses/product-owner/roadmap.md", 40),
+            artifact("codemap-lenses/on-call/on-call.md", 90),
+            artifact("codemap-lenses/README.md", 5),
+            artifact("wireframe.png", 20),
+        ];
+        let lenses = take_lenses(&mut entries);
+
+        assert_eq!(
+            lenses.iter().map(|l| l.slug.as_str()).collect::<Vec<_>>(),
+            ["on-call", "product-owner"],
+            "newest first"
+        );
+        assert_eq!(lenses[1].dir, "codemap-lenses/product-owner");
+        assert_eq!(lenses[1].files, 2);
+        assert_eq!(lenses[1].modified, 40);
+        assert_eq!(
+            entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            ["codemap-lenses/README.md", "wireframe.png"],
+            "a file loose in codemap-lenses/ belongs to no lens"
+        );
+        assert!(take_lenses(&mut vec![artifact("notes.md", 1)]).is_empty());
+    }
+
+    /// What a headless session says *last* is the part worth keeping: its own
+    /// account of the map it wrote, or the reason it stopped. Everything above
+    /// is progress nobody reads afterwards.
+    #[test]
+    fn a_sessions_note_is_the_tail_of_what_it_printed() {
+        let out = b"reading the repo\n\nwriting auth.md\n  wrote 7 files\n\n";
+        assert_eq!(
+            output_tail(out),
+            "reading the repo writing auth.md wrote 7 files"
+        );
+
+        let long = (1..=10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(output_tail(long.as_bytes()), "line 8 line 9 line 10");
+
+        // A session that printed nothing leaves nothing to say — and `Runs`
+        // drops an empty note rather than filing a blank one.
+        assert!(output_tail(b"  \n\n").is_empty());
     }
 
     #[test]
