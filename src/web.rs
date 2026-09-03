@@ -1179,6 +1179,12 @@ pub async fn serve(
         use_api_key,
     });
 
+    // API-key auth has no subscription windows to ask about; everyone else gets
+    // the header filled in at start-up rather than at first message.
+    if !use_api_key {
+        spawn_usage_poller(state.clone());
+    }
+
     let app = Router::new()
         .route("/", get(index_handler))
         .merge(static_assets())
@@ -1709,7 +1715,7 @@ async fn api_hook_log(State(state): State<Arc<AppState>>) -> Json<Vec<serde_json
     Json(state.hook_log.lock().unwrap().iter().cloned().collect())
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct UsageBody {
     five_hour_pct: Option<f64>,
     seven_day_pct: Option<f64>,
@@ -1724,20 +1730,27 @@ async fn api_usage_post(
     State(state): State<Arc<AppState>>,
     Json(body): Json<UsageBody>,
 ) -> StatusCode {
-    let mut u = state.usage.lock().unwrap();
-    // Only overwrite a percentage when the report actually carries one, so a
-    // session that hasn't seen its first API response yet (no `rate_limits`)
-    // doesn't wipe a good value from another session.
-    if body.five_hour_pct.is_some() {
-        u.five_hour_pct = body.five_hour_pct;
-        u.five_hour_resets_at = body.five_hour_resets_at;
+    apply_usage(&state.usage, body);
+    StatusCode::OK
+}
+
+/// Fold a fresh reading into the shared value, whichever path it arrived by.
+///
+/// Only overwrites a percentage when the reading actually carries one, so a
+/// session that hasn't seen its first API response yet (no `rate_limits`)
+/// doesn't wipe a good value another session — or the poller — already put
+/// there.
+fn apply_usage(store: &Mutex<UsageInfo>, new: UsageBody) {
+    let mut u = store.lock().unwrap();
+    if new.five_hour_pct.is_some() {
+        u.five_hour_pct = new.five_hour_pct;
+        u.five_hour_resets_at = new.five_hour_resets_at;
     }
-    if body.seven_day_pct.is_some() {
-        u.seven_day_pct = body.seven_day_pct;
-        u.seven_day_resets_at = body.seven_day_resets_at;
+    if new.seven_day_pct.is_some() {
+        u.seven_day_pct = new.seven_day_pct;
+        u.seven_day_resets_at = new.seven_day_resets_at;
     }
     u.updated_ms = now_ms();
-    StatusCode::OK
 }
 
 /// Latest account-wide subscription usage (the `/usage` percentages), for the
@@ -1745,6 +1758,184 @@ async fn api_usage_post(
 /// first API response). Poll: `curl -s http://sbxw.localhost:7681/api/usage`.
 async fn api_usage_get(State(state): State<Arc<AppState>>) -> Json<UsageInfo> {
     Json(state.usage.lock().unwrap().clone())
+}
+
+/// The endpoint behind Claude Code's own `/usage`: the account's rate-limit
+/// windows. Asking costs no tokens and touches no model.
+const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+
+/// How often the daemon asks. The windows are 5 hours and 7 days wide, so five
+/// minutes is already far finer than the thing being measured — this exists to
+/// make the header right *before* you start work, not to watch a number tick.
+const USAGE_POLL: Duration = Duration::from_secs(300);
+
+/// Ceiling for the backoff. The endpoint rate-limits, and answering "you are
+/// asking too often" by asking exactly as often is how an account stays
+/// rate-limited.
+const USAGE_POLL_MAX: Duration = Duration::from_secs(1800);
+
+/// Keep `/api/usage` populated without anyone having to talk to an agent first.
+///
+/// The statusLine path (`api_usage_post`) can only report what Claude Code has
+/// been told, and Claude Code is only told in the response to a message — so
+/// until you send one, every gauge in the window reads nothing. That is exactly
+/// backwards for a figure whose whole job is to answer "can I start something
+/// long?" *before* you start it.
+///
+/// So the daemon asks for itself — **through a sandbox**. That indirection is
+/// the entire trick, and it was arrived at the long way round: asking from the
+/// host needs an OAuth token with the `user:profile` scope, and on a Mac there
+/// isn't reliably one to be had. `CLAUDE_CODE_OAUTH_TOKEN` from
+/// `claude setup-token` is `user:inference` only (`403`), the keychain copy goes
+/// stale between Claude Code runs (`401`), and the credentials injected into a
+/// sandbox are not valid outside it. A request *leaving a sandbox*, meanwhile,
+/// is authenticated by the sandbox proxy with the account's own credentials at
+/// full scope — the same way every agent in every sandbox already reaches
+/// Anthropic. So it needs no token here at all.
+///
+/// Both paths write the same value and the last writer wins, which is the right
+/// precedence by accident: while an agent is working its statusLine reports land
+/// between polls and are fresher than ours.
+fn spawn_usage_poller(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let mut delay = USAGE_POLL;
+        // Logged when it *changes*, so the log carries one line per state of
+        // the world rather than one per tick.
+        let mut last_report: Option<String> = None;
+        let mut say = |report: String| {
+            if last_report.as_deref() != Some(report.as_str()) {
+                tracing::info!("{report}");
+                last_report = Some(report);
+            }
+        };
+        loop {
+            match fetch_usage().await {
+                Ok((body, sandbox)) => {
+                    delay = USAGE_POLL;
+                    let show = |p: Option<f64>| {
+                        p.map_or_else(|| "—".to_string(), |p| format!("{}%", p.round()))
+                    };
+                    say(format!(
+                        "subscription usage: 5h {}, 7d {} (asked from sandbox {sandbox}, \
+                         every {}s)",
+                        show(body.five_hour_pct),
+                        show(body.seven_day_pct),
+                        USAGE_POLL.as_secs()
+                    ));
+                    apply_usage(&state.usage, body);
+                }
+                Err(why) => {
+                    delay = (delay * 2).min(USAGE_POLL_MAX);
+                    say(format!(
+                        "could not read subscription usage: {why} — retrying in {}s",
+                        delay.as_secs()
+                    ));
+                }
+            }
+            tokio::time::sleep(delay).await;
+        }
+    });
+}
+
+/// One reading, taken through whichever running sandbox answers first.
+///
+/// Every running sandbox is tried rather than just the first, because a sandbox
+/// can be up and still not answer — mid-boot, or without `curl` in its image.
+async fn fetch_usage() -> Result<(UsageBody, String), String> {
+    let running: Vec<String> = tokio::task::spawn_blocking(sbx::list_sandboxes)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| s.status.to_lowercase().contains("running"))
+        .map(|s| s.name)
+        .collect();
+    if running.is_empty() {
+        return Err("no sandbox is running to ask through".into());
+    }
+    let mut last = String::new();
+    for name in running {
+        let n = name.clone();
+        let raw = tokio::task::spawn_blocking(move || sbx::curl_in_sandbox(&n, USAGE_URL)).await;
+        match raw.map_err(|e| e.to_string()).and_then(|r| match r {
+            Ok(body) => usage_from_json(&body).map_err(|e| format!("{name}: {e}")),
+            Err(e) => Err(format!("{name}: {e:#}")),
+        }) {
+            Ok(body) => return Ok((body, name)),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// The endpoint's answer, mapped onto the shape a sandbox's statusLine reports.
+fn usage_from_json(raw: &str) -> Result<UsageBody, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(raw.trim()).map_err(|e| format!("unreadable answer ({e})"))?;
+    let (five_hour_pct, five_hour_resets_at) = usage_window(&v, "five_hour");
+    let (seven_day_pct, seven_day_resets_at) = usage_window(&v, "seven_day");
+    if five_hour_pct.is_none() && seven_day_pct.is_none() {
+        // An error body, or an account with no subscription windows at all.
+        let head: String = raw.trim().chars().take(200).collect();
+        return Err(format!("no five_hour/seven_day windows in it: {head}"));
+    }
+    Ok(UsageBody {
+        five_hour_pct,
+        seven_day_pct,
+        five_hour_resets_at,
+        seven_day_resets_at,
+    })
+}
+
+/// One `{"utilization": 33.0, "resets_at": "…"}` window out of the response.
+fn usage_window(v: &serde_json::Value, key: &str) -> (Option<f64>, Option<i64>) {
+    let Some(w) = v.get(key) else {
+        return (None, None);
+    };
+    (
+        w.get("utilization").and_then(serde_json::Value::as_f64),
+        w.get("resets_at")
+            .and_then(serde_json::Value::as_str)
+            .and_then(rfc3339_to_epoch),
+    )
+}
+
+/// `2026-09-03T12:00:00.398343+00:00` → unix seconds, which is what the island
+/// and the web header expect (`resets_at` is a timestamp everywhere else in
+/// sbxw). Written out rather than pulling in a date crate for one field: the
+/// input is one machine-generated shape, and the calendar arithmetic is Howard
+/// Hinnant's `days_from_civil`, which is exact and eight lines.
+fn rfc3339_to_epoch(s: &str) -> Option<i64> {
+    let field = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, mo, d) = (field(0..4)?, field(5..7)?, field(8..10)?);
+    let (h, mi, sec) = (field(11..13)?, field(14..16)?, field(17..19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = y - i64::from(mo <= 2);
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let mut epoch = days * 86_400 + h * 3600 + mi * 60 + sec;
+
+    // Whatever follows the seconds: an optional fraction, then `Z` or ±HH:MM.
+    let tail = s
+        .get(19..)?
+        .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    let sign = tail.chars().next();
+    if sign == Some('+') || sign == Some('-') {
+        let digits: String = tail[1..].chars().filter(char::is_ascii_digit).collect();
+        let off = digits.get(0..2)?.parse::<i64>().ok()? * 3600
+            + digits
+                .get(2..4)
+                .and_then(|m| m.parse::<i64>().ok())
+                .unwrap_or(0)
+                * 60;
+        epoch += if sign == Some('-') { off } else { -off };
+    }
+    Some(epoch)
 }
 
 #[derive(Deserialize)]
@@ -5027,6 +5218,90 @@ mod tests {
             event(crate::progress::Progress::Done { error: None }),
             json!({ "sandbox": "neos", "kind": "done", "error": null })
         );
+    }
+
+    /// `resets_at` comes back as RFC 3339 with a microsecond fraction and an
+    /// explicit offset; everything downstream wants unix seconds.
+    #[test]
+    fn a_reset_timestamp_becomes_unix_seconds() {
+        // The shape the endpoint actually returns.
+        assert_eq!(
+            rfc3339_to_epoch("2026-09-03T12:00:00.398343+00:00"),
+            Some(1_788_436_800)
+        );
+        // …and the shapes it is allowed to return instead.
+        assert_eq!(
+            rfc3339_to_epoch("2026-09-03T12:00:00Z"),
+            Some(1_788_436_800)
+        );
+        assert_eq!(
+            rfc3339_to_epoch("2026-09-03T14:00:00+02:00"),
+            Some(1_788_436_800)
+        );
+        assert_eq!(
+            rfc3339_to_epoch("2026-09-03T07:00:00-0500"),
+            Some(1_788_436_800)
+        );
+        // A leap day, since the civil-date arithmetic is hand-rolled.
+        assert_eq!(
+            rfc3339_to_epoch("2024-02-29T00:00:00Z"),
+            Some(1_709_164_800)
+        );
+        assert_eq!(rfc3339_to_epoch("not a timestamp"), None);
+        assert_eq!(rfc3339_to_epoch("2026-13-03T12:00:00Z"), None);
+    }
+
+    /// What comes back through `sbx exec` is whatever the sandbox printed — the
+    /// real answer, or an error body, or nothing at all.
+    #[test]
+    fn a_usage_answer_is_read_or_explained() {
+        let real = r#"{"five_hour":{"utilization":76.0,"resets_at":"2026-09-03T12:00:00Z",
+                       "limit_dollars":null},"seven_day":{"utilization":11.0,
+                       "resets_at":"2026-09-09T01:00:00Z"},"seven_day_opus":null}"#;
+        let got = usage_from_json(real).expect("real answer reads");
+        assert_eq!(got.five_hour_pct, Some(76.0));
+        assert_eq!(got.five_hour_resets_at, Some(1_788_436_800));
+        assert_eq!(got.seven_day_pct, Some(11.0));
+        // An error body is JSON too, which is exactly why "did it parse?" is
+        // not the question worth asking.
+        assert!(
+            usage_from_json(r#"{"type":"error","error":{"type":"permission_error"}}"#)
+                .unwrap_err()
+                .contains("no five_hour/seven_day windows")
+        );
+        assert!(usage_from_json("")
+            .unwrap_err()
+            .contains("unreadable answer"));
+    }
+
+    /// A reading with a missing window must not blank one already held: a
+    /// session that has not seen its first API response reports `null`.
+    #[test]
+    fn a_partial_reading_keeps_what_it_does_not_carry() {
+        let store = Mutex::new(UsageInfo::default());
+        apply_usage(
+            &store,
+            UsageBody {
+                five_hour_pct: Some(33.0),
+                seven_day_pct: Some(7.0),
+                five_hour_resets_at: Some(10),
+                seven_day_resets_at: Some(20),
+            },
+        );
+        apply_usage(
+            &store,
+            UsageBody {
+                five_hour_pct: Some(41.0),
+                seven_day_pct: None,
+                five_hour_resets_at: Some(11),
+                seven_day_resets_at: None,
+            },
+        );
+        let u = store.lock().unwrap();
+        assert_eq!(u.five_hour_pct, Some(41.0));
+        assert_eq!(u.five_hour_resets_at, Some(11));
+        assert_eq!(u.seven_day_pct, Some(7.0));
+        assert_eq!(u.seven_day_resets_at, Some(20));
     }
 
     /// The bug this exists for: 256 KB of scrollback holds hundreds of `CSI 6n`

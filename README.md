@@ -343,14 +343,15 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   your **Claude subscription usage**: the 5-hour and weekly window percentages,
   each as a gauge, at a size you read rather than squint at.
 
-  The figures are the ones Claude Code's own `/usage` prints, forwarded by
-  whichever sandbox last rendered a status line — account-wide, not per-sandbox,
-  and the same numbers the [island](#dynamic-island-macos) shows. The gauge goes
-  amber at 75% and red at 90%, which is where the answer to "can I start
-  something long?" changes. Absent entirely until a sandbox has reported: an
-  API-key session has no subscription windows to report. And if the window has
-  since reset with nothing reported since, the chip fades and says so on hover
-  rather than standing behind a figure that is over.
+  The figures are the ones Claude Code's own `/usage` prints — account-wide, not
+  per-sandbox, and the same numbers the [island](#dynamic-island-macos) shows.
+  They are there without anyone having opened a sandbox or said a word to an
+  agent, which is the point: this gauge answers "can I start something long?",
+  and that is asked *before* the long thing. It goes amber at 75% and red at 90%,
+  where the answer changes. Absent entirely when there is nothing to show — an
+  API-key session has no subscription windows at all. And if a window has since
+  reset with nothing seen since, the chip fades and says so on hover rather than
+  standing behind a figure that is over.
 - **Know what you are running** — the two versions in play, **`sbx`** and
   **`sbxw`**, on the last line of the sidebar, under Help. They are baked into
   the page rather than polled, since neither can change under a running daemon,
@@ -800,16 +801,37 @@ agent, wait for its TUI, type, submit. Three details that are easy to get wrong:
 Creating a chat is still slow (a sandbox has to boot); the composer shows a
 spinner, and keeps your text on failure so it can be retried.
 
-**Subscription usage comes from Claude Code's own `statusLine`, not the OAuth
-API.** sbxw installs a `statusLine` command (`assets/usage-statusline.js`) that
-Claude Code invokes with a structured JSON payload on stdin (per its
-[statusline contract](https://code.claude.com/docs/en/statusline)). Claude Code
-fetches the `/usage` numbers itself; the script just forwards the
-`rate_limits.{five_hour,seven_day}.used_percentage` it receives to the daemon
-(`POST /api/usage`, throttled) — no OAuth token is reused out-of-band. Shown
-only for Pro/Max sessions (API-key auth has no `rate_limits`), and only after a
-session's first API response. One account-wide value, latest-wins: the island
-and the web header both read the same `/api/usage`, so they cannot disagree.
+**Subscription usage arrives two ways, and the header needs both.** One value
+(`/api/usage`), one precedence rule — last writer wins — and two writers:
+
+- **Each sandbox forwards what Claude Code already told it.** sbxw installs a
+  `statusLine` command (`assets/usage-statusline.js`) that Claude Code invokes
+  with a structured JSON payload on stdin (per its
+  [statusline contract](https://code.claude.com/docs/en/statusline)); the script
+  forwards the `rate_limits.{five_hour,seven_day}.used_percentage` it is given
+  (`POST /api/usage`, throttled). Free, and the freshest thing going while an
+  agent is actually working.
+- **The daemon asks for itself, every five minutes — through a sandbox.** It runs
+  `sbx exec <sandbox> -- curl https://api.anthropic.com/api/oauth/usage`, which
+  costs no tokens and touches no model. This is what makes the gauges right on a
+  daemon that has never run an agent: the statusLine says nothing until somebody
+  sends a message, so on its own it leaves the number you check *before* starting
+  work empty until you have started it.
+
+  **Why through a sandbox, and not from the host?** Because that request needs an
+  OAuth token with the `user:profile` scope, and on a Mac there isn't reliably
+  one to be had: `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` is
+  `user:inference` only and answers `403`; the keychain copy goes stale between
+  Claude Code runs and answers `401`; the credentials injected into a sandbox are
+  not valid outside it. A request *leaving a sandbox* is authenticated by the
+  sandbox proxy with the account's own credentials at full scope — the same way
+  every agent already reaches Anthropic — so it needs no token on the host at
+  all. Every running sandbox is tried until one answers, and failures back off
+  (doubling to half an hour) because the endpoint rate-limits.
+
+Shown for Pro/Max only — API-key auth has no subscription windows, and the poll
+does not run under `--use-api-key`. The island and the web header both read the
+same `/api/usage`, so they cannot disagree.
 
 **Session state comes from Claude Code hooks, not terminal scraping.** At
 provisioning time sbxw installs a small hook (`assets/status-hook.js`) into each

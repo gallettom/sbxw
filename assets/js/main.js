@@ -92,14 +92,15 @@ sbxwStream.addEventListener('clients', ev => {
 })();
 
 // Usage does move. `/api/usage` holds the 5-hour and weekly percentages Claude
-// Code's `/usage` prints, forwarded by whichever sandbox rendered a status line
-// most recently (assets/usage-statusline.js → POST /api/usage). Account-wide,
-// so this is one figure for the window and not one per sandbox.
+// Code's `/usage` prints — account-wide, so this is one figure for the window
+// and not one per sandbox. The daemon keeps it current by asking Anthropic
+// through a running sandbox every five minutes (spawn_usage_poller in
+// src/web.rs); a sandbox mid-message forwards what Claude Code already told it,
+// which lands in between (assets/usage-statusline.js → POST /api/usage).
 //
-// Polled rather than pushed: the value only changes when a sandbox reports, the
-// script throttles itself to one report every 10s, and a percentage that is a
-// few seconds stale is still the same percentage. Adding an SSE event for it
-// would be a second delivery path for a number nobody is watching tick.
+// Polled rather than pushed: a percentage that is a few seconds stale is still
+// the same percentage. Adding an SSE event for it would be a second delivery
+// path for a number nobody is watching tick.
 const USAGE_POLL_MS = 30000;
 const usageEl = document.getElementById('usage');
 
@@ -141,9 +142,9 @@ async function refreshUsage() {
   } catch (_) { return; }
   renderUsageWindow('usage-5h', '5-hour window', u.five_hour_pct, u.five_hour_resets_at);
   renderUsageWindow('usage-7d', 'Weekly window', u.seven_day_pct, u.seven_day_resets_at);
-  // Nothing has ever reported: an API-key sandbox has no subscription windows,
-  // and a fresh daemon has not seen its first status line yet. Neither is worth
-  // an empty gauge in the header.
+  // Nothing to show: an API-key daemon has no subscription windows to ask
+  // about, and one with no sandbox running has nothing to ask through. Neither
+  // is worth an empty gauge in the header.
   usageEl.hidden = !u.updated_ms
     || (typeof u.five_hour_pct !== 'number' && typeof u.seven_day_pct !== 'number');
 }

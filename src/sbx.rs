@@ -1364,6 +1364,17 @@ pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Fetch `url` *from inside* `sandbox` and return the body.
+///
+/// The point is whose credentials are used: the sandbox proxy injects the
+/// account's own, at full scope, into requests leaving a sandbox — the same
+/// mechanism that authenticates every agent in here. So a request made this way
+/// needs no token on the host at all, which is the whole reason the usage poller
+/// goes through a sandbox instead of asking directly (see `web::fetch_usage`).
+pub fn curl_in_sandbox(sandbox: &str, url: &str) -> Result<String> {
+    run_capture(&["exec", sandbox, "--", "curl", "-s", "--max-time", "10", url])
+}
+
 /// Refresh Claude Code's OAuth credentials in a *running* sandbox by writing
 /// `~/.claude/.credentials.json` directly over `sbx exec`. This replaces the
 /// old `sbx kit add` path for running sandboxes: `kit add`

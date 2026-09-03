@@ -92,8 +92,10 @@
   .usage-win[hidden] { display: none; }
   /* The window's own figure, faded once it can no longer be trusted: the reset
      time has passed and nothing has reported since, so the number on screen
-     belongs to a window that is over (see `renderUsageWindow`). */
-  .usage-win.stale { opacity: .45; }
+     belongs to a window that is over (see `renderUsageWindow`). Faded, not
+     erased — .45 took the amber to 2.4:1 against the header, which is not
+     "treat this with suspicion", it is "cannot read this at all". */
+  .usage-win.stale { opacity: .72; }
   .usage-lbl { color: var(--c-text-dim); font-size: 11px; }
   /* The headline, and sized like one: bright, and a shade larger than the
      controls it sits in a row with. `tabular-nums` and a four-character floor
@@ -112,8 +114,11 @@
   }
   .usage-bar i { display: block; height: 100%; width: 0;
     background: var(--c-green); transition: width .3s ease; }
-  .usage-win.warn .usage-bar i { background: var(--c-amber); }
-  .usage-win.warn .usage-pct   { color: var(--c-amber); }
+  /* amber-strong rather than amber: the base shade is a dark ochre that reads as
+     olive at this size against the header, and it is the *warning* colour — the
+     one place in the window that must not need a second look. */
+  .usage-win.warn .usage-bar i { background: var(--c-amber-strong); }
+  .usage-win.warn .usage-pct   { color: var(--c-amber-strong); }
   .usage-win.hot  .usage-bar i { background: var(--c-red); }
   .usage-win.hot  .usage-pct   { color: var(--c-red); }
 

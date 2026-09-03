@@ -78,10 +78,12 @@
 
   <!-- ── What the account is spending ──
        The same 5-hour and weekly percentages Claude Code's own `/usage`
-       prints: each sandbox's statusLine forwards them to the daemon (see
-       assets/usage-statusline.js), so this is one account-wide figure, not a
-       per-sandbox one — hidden entirely until a sandbox has reported, since
-       API-key auth has no subscription windows to report.
+       prints, and one account-wide figure rather than a per-sandbox one. The
+       daemon asks Anthropic for them every five minutes through a running
+       sandbox (see spawn_usage_poller in src/web.rs), so they are up here
+       before you have opened anything; each sandbox's statusLine tops them up
+       while it works (see assets/usage-statusline.js). Hidden entirely under
+       API-key auth, which has no subscription windows at all.
 
        It has the corner to itself, and is sized to be read from across the
        room rather than squinted at: it is the one thing up here that decides
