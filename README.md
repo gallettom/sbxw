@@ -159,10 +159,10 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   through the *same* provisioning pipeline as the CLI.
 - **Star the folders you keep projects under** (☆ on each row of the picker) and
   they become one-click shortcuts above it. See below.
-- **Watch the bring-up happen** — the row that appears in the sidebar while a
-  sandbox is being created lists the steps it will take and ticks them off,
-  with `sbx`'s own output (the image pull, mostly) streaming under whichever one
-  is running. See below.
+- **Watch the bring-up happen** — the card that appears in the bottom-right
+  corner while a sandbox is being created lists the steps it will take and ticks
+  them off, with `sbx`'s own output (the image pull, mostly) streaming under
+  whichever one is running. See below.
 - The **chat sandbox** card is the browser equivalent of `sbxw chat`, with an
   optional name (leave it empty for the generated `chat-xxxxxx`). See below.
 - **Route an agent's question to another sandbox**, when one asks for something
@@ -324,8 +324,8 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   the command and re-splitting it by hand is the step this replaces. A reference
   card is not a decision, so it dims nothing: click the button again, click
   away, or press Escape.
-- **Open the host monitor** (**Monitor Sandboxes** in the header) in the
-  focused pane: sbx's own all-sandboxes
+- **Open the host monitor** (**Monitor Sandboxes**, at the foot of the sidebar)
+  in the focused pane: sbx's own all-sandboxes
   dashboard, run in a PTY and streamed to the browser like any other pane, so a
   full-screen TUI works as it does in a terminal. It is *not* a sandbox session —
   it runs on the host, is shared by every viewer, and is filed under a
@@ -339,13 +339,36 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   command, deliberately not a "run anything on the host" box**. The default is
   bare `["sbx"]`: with no subcommand the CLI opens its own dashboard. Set it to
   `[]` and the button disappears.
+- **See what the account is spending** — the header's right-hand corner carries
+  your **Claude subscription usage**: the 5-hour and weekly window percentages,
+  each as a gauge, at a size you read rather than squint at.
+
+  The figures are the ones Claude Code's own `/usage` prints, forwarded by
+  whichever sandbox last rendered a status line — account-wide, not per-sandbox,
+  and the same numbers the [island](#dynamic-island-macos) shows. The gauge goes
+  amber at 75% and red at 90%, which is where the answer to "can I start
+  something long?" changes. Absent entirely until a sandbox has reported: an
+  API-key session has no subscription windows to report. And if the window has
+  since reset with nothing reported since, the chip fades and says so on hover
+  rather than standing behind a figure that is over.
+- **Know what you are running** — the two versions in play, **`sbx`** and
+  **`sbxw`**, on the last line of the sidebar, under Help. They are baked into
+  the page rather than polled, since neither can change under a running daemon,
+  and they sit down there rather than beside the usage because a number that
+  never moves has no business next to the one you check. `sbx`'s answers *"is
+  this old CLI why that failed?"* (see the [floor](#requires-sbx-0390-or-newer));
+  sbxw's own is what a bug report needs, and what `sbxw update` moves. `sbx` is
+  left out entirely when its `sbx version` printed nothing a version could be
+  read out of — sbxw does not get to guess at that.
 
 ### Help — an empty sandbox list
 
 The sidebar shows exactly what `sbx ls` reports, so an empty list is ambiguous:
-you have no sandboxes, or the CLI can't see the ones you do. The **?** button in
-the header (also reachable from the sidebar's own empty state) opens a dialog
-with the two host-side fixes, each with a copy button:
+you have no sandboxes, or the CLI can't see the ones you do. The **Help** button
+at the foot of the sidebar — under the list it is a question about, and pinned
+there whether that list is empty or forty rows long — opens a dialog with the
+two host-side fixes, each with a copy button. (The list's own empty state
+carries a second way in, since that is where the question actually gets asked.)
 
 1. `sbx login` — an unauthenticated CLI lists nothing at all.
 2. Logged in and still empty? Restart the daemon behind the CLI:
@@ -785,7 +808,8 @@ fetches the `/usage` numbers itself; the script just forwards the
 `rate_limits.{five_hour,seven_day}.used_percentage` it receives to the daemon
 (`POST /api/usage`, throttled) — no OAuth token is reused out-of-band. Shown
 only for Pro/Max sessions (API-key auth has no `rate_limits`), and only after a
-session's first API response.
+session's first API response. One account-wide value, latest-wins: the island
+and the web header both read the same `/api/usage`, so they cannot disagree.
 
 **Session state comes from Claude Code hooks, not terminal scraping.** At
 provisioning time sbxw installs a small hook (`assets/status-hook.js`) into each

@@ -76,20 +76,30 @@
 
   <span class="spacer"></span>
 
+  <!-- ── What the account is spending ──
+       The same 5-hour and weekly percentages Claude Code's own `/usage`
+       prints: each sandbox's statusLine forwards them to the daemon (see
+       assets/usage-statusline.js), so this is one account-wide figure, not a
+       per-sandbox one — hidden entirely until a sandbox has reported, since
+       API-key auth has no subscription windows to report.
 
-  <!-- Host monitor — every sandbox at once, in a pane of its own. Up here
-       rather than in the sidebar because it opens a view of *all* sandboxes,
-       not one of the rows listed below it; spelled out rather than drawn,
-       because it is the only header control whose name is not obvious from
-       its shape. Hidden until `monitor_cmd` says there is one. -->
-  <button id="btn-monitor" class="monitor-btn" hidden
-          title="Host monitor — every sandbox at once, in a pane of its own">
-    Monitor Sandboxes
-  </button>
-
-  <!-- Opens the help modal below. Sits next to Refresh because the two are
-       the pair you reach for when the sidebar looks wrong. -->
-  <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart" aria-label="Help">Help</button>
+       It has the corner to itself, and is sized to be read from across the
+       room rather than squinted at: it is the one thing up here that decides
+       whether you start something long. The versions used to share this
+       corner and no longer do — they never change, and a number that never
+       changes should not sit beside the one you check. -->
+  <div class="usage" id="usage" hidden title="Claude subscription usage, account-wide">
+    <span class="usage-win" id="usage-5h" hidden>
+      <span class="usage-lbl">5h</span>
+      <span class="usage-bar"><i></i></span>
+      <span class="usage-pct"></span>
+    </span>
+    <span class="usage-win" id="usage-7d" hidden>
+      <span class="usage-lbl">7d</span>
+      <span class="usage-bar"><i></i></span>
+      <span class="usage-pct"></span>
+    </span>
+  </div>
 </header>
 
 <div class="layout">
@@ -107,6 +117,36 @@
       </span>
     </div>
     <div id="sandbox-list"></div>
+
+    <!-- ── Sidebar footer ──
+         The two controls that are about the whole list rather than about one
+         row of it, pinned under it: the list scrolls, this does not, so they
+         are in the same place whether you own two sandboxes or forty.
+
+         Monitor Sandboxes opens a view of *all* sandboxes in a pane of its
+         own — the column it belongs to, at the end of it, rather than beside
+         a pane count in the header. Help answers "why is this list empty?",
+         which is a question asked of the thing directly above it. Both are
+         spelled out rather than drawn: neither is a shape anyone would
+         recognise. Monitor stays hidden until `monitor_cmd` says there is
+         something to open. -->
+    <div class="sidebar-footer">
+      <button id="btn-monitor" class="monitor-btn" hidden
+              title="Host monitor — every sandbox at once, in a pane of its own">
+        Monitor Sandboxes
+      </button>
+      <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart">Help</button>
+
+      <!-- What this is running on, at the very bottom of the window: two
+           numbers you look up once, when something has gone wrong or a bug
+           report asks for them, and never again. Filled in from the constants
+           at the foot of this file; `sbx`'s row is dropped entirely when its
+           version could not be read. -->
+      <div class="versions">
+        <span class="version" id="version-sbx" hidden title="Version of the sbx CLI sbxw is driving">sbx <b></b></span>
+        <span class="version" id="version-sbxw" title="Version of sbxw itself">sbxw <b></b></span>
+      </div>
+    </div>
   </aside>
 
   <!-- ── New sandbox: which kind? ──
@@ -662,6 +702,13 @@ const MONITOR_CMD = "__MONITOR__";
 // Pseudo-sandbox the monitor session is filed under, host-side. Underscores
 // can't occur in a real sandbox name, so it can never shadow one.
 const MONITOR_SANDBOX = '__host__';
+// Both versions come from the server rather than from an endpoint the page
+// polls: neither can change while this daemon is running, so a value baked
+// into the page it serves is the whole truth for as long as the tab lives.
+// `SBX_VERSION` is empty when `sbx version` printed something no version could
+// be read out of — a display is not worth guessing over (see sbx::version).
+const SBXW_VERSION = "__SBXW_VERSION__";
+const SBX_VERSION  = "__SBX_VERSION__";
 </script>
 <!-- Every other script — xterm.js and the app itself — is loaded by
      singleton.js, and only once it decides this tab should actually boot

@@ -4,8 +4,9 @@
 // whatever `sbx ls` reports and nothing else, so both cures live on the host
 // (`sbx login`, then restarting the daemon) and there is nothing the UI can
 // press on the user's behalf — it can only show the commands and let them be
-// copied. Reachable from the header's "?" and from the sidebar's own empty
-// state, which is where the question actually gets asked.
+// copied. Reachable from the Help button at the foot of the sidebar — under
+// the list it is a question about — and from the list's own empty state, which
+// is where the question actually gets asked.
 const helpOverlay = document.getElementById('help-modal-overlay');
 
 function openHelpModal()  { helpOverlay.classList.remove('hidden'); }
@@ -34,6 +35,6 @@ helpOverlay.addEventListener('click', e => {
   if (btn) copyField(btn, btn.dataset.helpCopy);
 });
 
-// Same refresh the header button does, so step 2 can be checked without
+// Same refresh the sidebar's own button does, so step 2 can be checked without
 // closing the dialog first.
 document.getElementById('help-modal-refresh').addEventListener('click', loadSandboxes);

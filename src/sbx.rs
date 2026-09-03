@@ -329,6 +329,10 @@ pub fn assert_available() -> Result<()> {
     )?;
 
     let parsed = parse_version(&raw);
+    // Fill the display cache from the spawn this check already paid for, so
+    // `version()` below never has to run `sbx version` a second time — and so
+    // it holds the same number the floor was checked against.
+    let _ = SBX_VERSION.set(parsed.map(|(a, b, c)| format!("{a}.{b}.{c}")));
 
     if std::env::var_os(SKIP_VERSION_CHECK_ENV).is_some() {
         tracing::debug!("sbx version check skipped via {SKIP_VERSION_CHECK_ENV}");
@@ -361,6 +365,29 @@ pub fn assert_available() -> Result<()> {
     // earlier one.
     let _ = CHECKED.set(());
     Ok(())
+}
+
+/// `sbx`'s own version, normalised to `MAJOR.MINOR.PATCH` — see `version()`.
+static SBX_VERSION: OnceLock<Option<String>> = OnceLock::new();
+
+/// The version of the `sbx` this sbxw is driving, as `MAJOR.MINOR.PATCH`, for
+/// showing in the UI. `None` when `sbx version` could not be run or printed
+/// nothing a version could be read out of: the same "not something sbxw gets
+/// to veto" stance `assert_available` takes, and a display has even less claim
+/// to guess than a check does.
+///
+/// Cached for the life of the process. Upgrading `sbx` under a running daemon
+/// is not a thing that half-works — the CLI it spawns is resolved from `PATH`
+/// per call, but every sandbox it is holding open belongs to the old one — so
+/// a stale string here is the least of that, and re-spawning `sbx version` on
+/// every page load would buy nothing.
+pub fn version() -> Option<String> {
+    SBX_VERSION
+        .get_or_init(|| {
+            let raw = run_capture(&["version"]).ok()?;
+            parse_version(&raw).map(|(a, b, c)| format!("{a}.{b}.{c}"))
+        })
+        .clone()
 }
 
 /// First `MAJOR.MINOR[.PATCH]` in `raw`, so the check doesn't depend on how

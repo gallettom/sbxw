@@ -77,6 +77,46 @@
   }
   header .spacer { flex: 1; }
 
+  /* ── Header corner: subscription usage ──
+     Sized to be read rather than squinted at. It used to share this corner with
+     the two version numbers, at 11px, which made the one figure up here that
+     actually moves — and the only one that decides whether you start something
+     long — the smallest thing in the window. The versions went to the foot of
+     the sidebar, and what stayed gets the room. */
+  .usage {
+    display: flex; align-items: center; gap: 1.1rem;
+    white-space: nowrap;
+  }
+  .usage[hidden] { display: none; }
+  .usage-win { display: flex; align-items: center; gap: .45rem; }
+  .usage-win[hidden] { display: none; }
+  /* The window's own figure, faded once it can no longer be trusted: the reset
+     time has passed and nothing has reported since, so the number on screen
+     belongs to a window that is over (see `renderUsageWindow`). */
+  .usage-win.stale { opacity: .45; }
+  .usage-lbl { color: var(--c-text-dim); font-size: 11px; }
+  /* The headline, and sized like one: bright, and a shade larger than the
+     controls it sits in a row with. `tabular-nums` and a four-character floor
+     keep 9% and 100% the same width, so nothing in the header shifts sideways
+     as the number grows a digit. */
+  .usage-pct {
+    color: var(--c-text-bright); font-size: 14px; font-weight: 600;
+    font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right;
+  }
+  /* A gauge, not a progress bar — nothing here is being waited for. Fixed
+     width, so the two windows are read against each other rather than each
+     scaled to itself. */
+  .usage-bar {
+    width: 68px; height: 7px; border-radius: 4px;
+    background: var(--c-elevated); overflow: hidden;
+  }
+  .usage-bar i { display: block; height: 100%; width: 0;
+    background: var(--c-green); transition: width .3s ease; }
+  .usage-win.warn .usage-bar i { background: var(--c-amber); }
+  .usage-win.warn .usage-pct   { color: var(--c-amber); }
+  .usage-win.hot  .usage-bar i { background: var(--c-red); }
+  .usage-win.hot  .usage-pct   { color: var(--c-red); }
+
   /* ── Duplicate-tab interstitial (see singleton.js) ── */
   .singleton-overlay {
     position: fixed; inset: 0;
@@ -150,10 +190,10 @@
     animation: sbx-ready-pulse 1.6s ease-in-out infinite;
   }
 
-  /* Twin of the Refresh button, sat before the help circle. Text rather than a
-     glyph: "a screen on a stand" reads as a monitor only once you already know
-     that is what this opens. Taller than the modal ones and no wider: it is
-     sized to the header row it sits in. */
+  /* The sidebar's two footer buttons. Text rather than a glyph: "a screen on a
+     stand" reads as a monitor only once you already know that is what this
+     opens. Taller than the modal ones — they are controls in their own right,
+     not the tail of a dialog. */
   .monitor-btn, .help-btn {
     height: 28px; padding: 0 .8rem; font-weight: 500;
   }
@@ -193,12 +233,49 @@
   .layout { display: flex; flex: 1; overflow: hidden; }
 
   /* ── Sidebar ── */
+  /* The column scrolls in one place only: the list. The header above it and
+     the footer under it stay put, so ＋ and Help are where you left them
+     whether you own two sandboxes or forty — which is the whole point of
+     pinning the pair down there. `min-height: 0` on the list because a flex
+     item's floor is its content, and without it a long list pushes the footer
+     off the bottom of the sidebar instead of scrolling inside it. */
   .sidebar {
     width: 205px; flex-shrink: 0;
     background: var(--c-bg); border-right: 1px solid var(--c-elevated);
-    overflow-y: auto; padding: .25rem 0;
+    overflow: hidden; padding: .25rem 0;
     display: flex; flex-direction: column;
   }
+  #sandbox-list { flex: 1; min-height: 0; overflow-y: auto; }
+  .sidebar-footer {
+    flex-shrink: 0;
+    display: flex; flex-direction: column; gap: .35rem;
+    padding: .5rem .6rem;
+    border-top: 1px solid var(--c-elevated);
+  }
+  /* Full width and centred: in a column two buttons of different word-lengths
+     sitting at their own widths read as a ragged edge, not as a pair. */
+  .sidebar-footer .monitor-btn, .sidebar-footer .help-btn {
+    width: 100%; justify-content: center;
+  }
+  /* The last line in the window, and the quietest thing in it: two numbers you
+     look up once — when something has gone wrong, or a bug report asks — and
+     never again. Centred under the buttons rather than aligned with the rows
+     above, because it belongs to the footer and not to the list. */
+  .versions {
+    display: flex; align-items: center; justify-content: center; gap: .4rem;
+    padding-top: .15rem;
+    font-size: 10px; color: var(--c-text-dim);
+  }
+  .version[hidden] { display: none; }
+  /* Two name-and-number pairs side by side read as one run of text without a
+     mark between them. Only ever *between*: the `:not([hidden])` is what stops
+     a leading dot when `sbx`'s version is the one that isn't there. */
+  .version:not([hidden]) + .version::before {
+    content: "·"; margin-right: .4rem; color: var(--c-dim);
+  }
+  /* The number is the part anyone reads; the name is only there to say which
+     number it is. */
+  .version b { color: var(--c-text-muted); font-weight: 600; }
   .sidebar-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: .4rem .75rem; padding-right: 0.45rem; margin-bottom: 10px;

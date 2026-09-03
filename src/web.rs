@@ -1285,10 +1285,22 @@ async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
     // JS string literal, and a command with a quote in it isn't worth a
     // serialiser here.
     let monitor = state.cfg.monitor_cmd.join(" ").replace(['"', '\\'], "");
+    // Both versions are shown in the header. `sbx`'s is cached after the first
+    // read (it cannot change under a running daemon), but the very first page
+    // of a process that somehow reached here without `assert_available` would
+    // spawn a process — off the runtime, like every other blocking call in
+    // this file. Empty when unknown, which is what hides the chip.
+    let sbx_version = tokio::task::spawn_blocking(sbx::version)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     Html(
         INDEX_HTML_TEMPLATE
             .replace("__SANDBOX__", &state.initial_sandbox)
-            .replace("__MONITOR__", &monitor),
+            .replace("__MONITOR__", &monitor)
+            .replace("__SBXW_VERSION__", env!("CARGO_PKG_VERSION"))
+            .replace("__SBX_VERSION__", &sbx_version),
     )
 }
 

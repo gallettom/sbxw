@@ -325,9 +325,9 @@ document.getElementById('chat-modal-back').addEventListener('click', () => {
 // pane: the daemon binds to localhost, and one fixed configured command is a
 // far smaller thing to expose than a shell.
 //
-// The button sits in the header, beside Refresh: it shows every sandbox at
-// once, which is a different thing from the sandbox rows in the sidebar it
-// used to sit above.
+// The button sits at the foot of the sidebar, under the list: it shows every
+// sandbox at once, which is the whole of what that column is about — and it
+// stays put there while the list above it scrolls.
 const btnMonitor = document.getElementById('btn-monitor');
 if (MONITOR_CMD) {
   btnMonitor.hidden = false;

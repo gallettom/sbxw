@@ -72,6 +72,88 @@ sbxwStream.addEventListener('clients', ev => {
   multiClientWarning.hidden = n <= 1;
 });
 
+// ── Versions, and what the subscription is spending ───────────────────────
+//
+// Two facts about the window rather than about any sandbox in it, and they sit
+// apart because they behave differently: the usage gauges have the header's
+// corner (it moves, and it is what you check), the versions the last line of
+// the sidebar (they cannot move at all).
+//
+// The versions are baked into the page by `index_handler` (see src/web.rs),
+// since neither can change while this daemon runs — there is nothing to poll.
+// `sbx`'s is empty when its output carried no readable version, and an absent
+// version is not worth a line saying so.
+(function showVersions() {
+  document.querySelector('#version-sbxw b').textContent = SBXW_VERSION;
+  if (!SBX_VERSION) return;
+  const el = document.getElementById('version-sbx');
+  el.querySelector('b').textContent = SBX_VERSION;
+  el.hidden = false;
+})();
+
+// Usage does move. `/api/usage` holds the 5-hour and weekly percentages Claude
+// Code's `/usage` prints, forwarded by whichever sandbox rendered a status line
+// most recently (assets/usage-statusline.js → POST /api/usage). Account-wide,
+// so this is one figure for the window and not one per sandbox.
+//
+// Polled rather than pushed: the value only changes when a sandbox reports, the
+// script throttles itself to one report every 10s, and a percentage that is a
+// few seconds stale is still the same percentage. Adding an SSE event for it
+// would be a second delivery path for a number nobody is watching tick.
+const USAGE_POLL_MS = 30000;
+const usageEl = document.getElementById('usage');
+
+// One window's chip. `resetsAt` is unix *seconds*, and a reset already in the
+// past is the honest reason a percentage looks wrong: nobody has run an agent
+// since the window rolled over, so the daemon is still holding the last figure
+// from the previous one. Say so in the tooltip and fade the chip rather than
+// hiding it — a stale 90% and no figure at all are different things.
+function renderUsageWindow(id, label, pct, resetsAt) {
+  const el = document.getElementById(id);
+  if (typeof pct !== 'number') { el.hidden = true; return; }
+  const rounded = Math.round(pct);
+  const clamped = Math.max(0, Math.min(100, rounded));
+  el.querySelector('.usage-bar i').style.width = clamped + '%';
+  el.querySelector('.usage-pct').textContent = rounded + '%';
+  // The bar earns its colour on the way up, at the two points where the answer
+  // to "can I start something long?" changes.
+  el.classList.toggle('warn', rounded >= 75 && rounded < 90);
+  el.classList.toggle('hot', rounded >= 90);
+
+  const reset = typeof resetsAt === 'number' ? new Date(resetsAt * 1000) : null;
+  const stale = !!reset && reset.getTime() < Date.now();
+  el.classList.toggle('stale', stale);
+  el.title = `${label}: ${rounded}% of the subscription window used`
+    + (reset
+        ? stale
+          ? ` — but that window reset at ${reset.toLocaleString()}; no sandbox has reported since`
+          : ` · resets ${reset.toLocaleString()}`
+        : '');
+  el.hidden = false;
+}
+
+async function refreshUsage() {
+  let u;
+  try {
+    const res = await fetch('/api/usage');
+    if (!res.ok) return;
+    u = await res.json();
+  } catch (_) { return; }
+  renderUsageWindow('usage-5h', '5-hour window', u.five_hour_pct, u.five_hour_resets_at);
+  renderUsageWindow('usage-7d', 'Weekly window', u.seven_day_pct, u.seven_day_resets_at);
+  // Nothing has ever reported: an API-key sandbox has no subscription windows,
+  // and a fresh daemon has not seen its first status line yet. Neither is worth
+  // an empty gauge in the header.
+  usageEl.hidden = !u.updated_ms
+    || (typeof u.five_hour_pct !== 'number' && typeof u.seven_day_pct !== 'number');
+}
+
+refreshUsage();
+setInterval(refreshUsage, USAGE_POLL_MS);
+// A tab that was in the background missed every poll; the interval alone would
+// leave a stale figure up for as long as 30s after you come back to it.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshUsage(); });
+
 // ── Agent activity on the liserets ────────────────────────────────────────
 // The `session` event on `/api/stream` carries one SessionInfo per state
 // change, folded from the hooks the sandbox POSTs to `/api/hook` — the same
