@@ -75,22 +75,41 @@ const bgJobsEl = document.getElementById('bg-jobs');
 const bgJobs = new Map();
 let bgJobSeq = 0;
 
-/** Adds a corner card for a long-running background operation; returns its id. */
-function startBgJob(label) {
+/**
+ * Opens an empty corner card and hands back its body to fill.
+ *
+ * Most background work has one line to say and uses `startBgJob` below. Work
+ * that has more — a bring-up ticking off the steps it announced — writes into
+ * `body` instead, so it still arrives in the same corner, in the same card,
+ * with the same logo and the same entry and exit. A long job looks like a long
+ * job whatever it happens to be doing.
+ *
+ * Returns `{ id, card, body }`; `id` is what `finishBgJob` takes.
+ */
+function openBgJob(className = '') {
   const id = ++bgJobSeq;
   const card = document.createElement('div');
-  card.className = 'bg-job-card';
+  card.className = 'bg-job-card' + (className ? ' ' + className : '');
   const logo = document.createElement('div');
   logo.className = 'bg-job-pixel-logo';
-  const text = document.createElement('div');
-  text.className = 'bg-job-label';
-  text.textContent = label;
-  card.append(logo, text);
+  const body = document.createElement('div');
+  body.className = 'bg-job-body';
+  card.append(logo, body);
   bgJobsEl.appendChild(card);
 
   const { pixels, rows } = buildPixelGrid(logo);
   const timer = animatePixelGrid(pixels, rows);
   bgJobs.set(id, { el: card, timer });
+  return { id, card, body };
+}
+
+/** Adds a corner card for a long-running background operation; returns its id. */
+function startBgJob(label) {
+  const { id, body } = openBgJob();
+  const text = document.createElement('div');
+  text.className = 'bg-job-label';
+  text.textContent = label;
+  body.appendChild(text);
   return id;
 }
 

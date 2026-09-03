@@ -50,7 +50,7 @@ sbxwStream.addEventListener('focus', ev => {
 
 // A sandbox is being created: the steps it plans to take, the one running now,
 // and what `sbx` is printing under it — the image pull, mostly, which is the
-// part that takes minutes. Painted onto the pending row in the sidebar (see
+// part that takes minutes. Painted onto the bring-up's corner card (see
 // `applyProvisionEvent`), for whichever tab is open rather than only the one
 // that clicked Create.
 sbxwStream.addEventListener('provision', ev => {

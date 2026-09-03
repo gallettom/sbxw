@@ -444,6 +444,36 @@ function applyPaneChrome(idx, name) {
   panes[idx].el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
 }
 
+/**
+ * Put a pane back to the state a fresh one is in: no socket, no session, no
+ * name in the bar, nothing left on screen.
+ *
+ * Closing the socket is not the same thing, and the difference is what a
+ * removed sandbox used to look like: the pane kept the dead session's last
+ * screen under its name, which reads exactly like a session that is still
+ * there and merely quiet. The terminal is reset rather than cleared, so a TUI
+ * that left mouse-tracking on cannot leak DECSET modes into whatever is
+ * connected here next.
+ *
+ * Leaves the layout alone — how many panes there are is the user's choice, not
+ * a consequence of one of them emptying. Callers that also want the slot gone
+ * use `closePane`.
+ */
+function emptyPane(idx) {
+  const pane = panes[idx];
+  if (!pane) return;
+  if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
+  pane.sandbox = null;
+  pane.beforeMonitor = null;
+  pane.term.reset();
+  pane.lastSelection = '';
+  document.getElementById(`pconn-${idx}`).textContent = '';
+  document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
+  applyPaneChrome(idx, null);
+  // The liseret speaks for whoever is in the pane, and now nobody is.
+  applyAgentStates();
+}
+
 function connectPane(idx, name, mode) {
   if (!name || idx >= panes.length) return;
   // Refuse to duplicate a sandbox already open in a different visible pane.

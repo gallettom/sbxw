@@ -15,12 +15,13 @@ function openRmModal(name) {
 function closeRmModal() { rmOverlay.classList.add('hidden'); rmTarget = null; }
 
 async function removeSandbox(name) {
-  panes.forEach(p => {
-    if (p.sandbox === name) {
-      if (p.ws) { try { p.ws.close(); } catch(_){} p.ws = null; }
-      p.sandbox = null;
-    }
-  });
+  // The sandbox is going away and so is every terminal onto it. Emptying the
+  // pane rather than just dropping its socket is the difference between "this
+  // session is gone" and a pane still captioned with the sandbox's name,
+  // showing the last screen it ever printed — and the saved layout must forget
+  // it too, or the next reload tries to reconnect a sandbox that is not there.
+  panes.forEach((p, i) => { if (p.sandbox === name) emptyPane(i); });
+  saveLayout();
   const s = sandboxes.find(x => x.name === name);
   if (s) s.status = 'removing…';
   renderSidebar();
@@ -115,8 +116,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !dupOverlay.classList.contains('hidden')) closeDupModal();
 });
 
-// Same fire-and-forget pattern as sandbox creation: close the modal right
-// away and let the new row show up as "pending" while provisioning runs.
+// Same fire-and-forget pattern as sandbox creation: close the modal right away
+// and let the copy report its steps from a corner card while provisioning runs.
 dupConfirm.addEventListener('click', () => {
   if (!dupSource || dupConfirm.disabled) return;
   const source  = dupSource;

@@ -362,8 +362,8 @@ if (MONITOR_CMD) {
 // Spins up a throwaway sandbox whose workspace is a fresh temp dir, so the
 // agent has nothing to read or edit — a pure chat. The name is optional: the
 // modal pre-computes a `chat-xxxxxx` one and uses it when the field is left
-// empty, so the pending row always matches the sandbox the server creates.
-// Provisioned in the background like a normal create (pending row +
+// empty, so the pending card always matches the sandbox the server creates.
+// Provisioned in the background like a normal create (corner card +
 // auto-attach on success).
 const chatOverlay   = document.getElementById('chat-modal-overlay');
 const chatInpName   = document.getElementById('chat-inp-name');
@@ -468,8 +468,8 @@ document.addEventListener('keydown', e => {
 
 // Provisioning (network policy, kits, ports…) can take a while, so this
 // doesn't block the UI: the modal closes right away and the request runs
-// in the background behind a corner indicator, leaving every other
-// sandbox/pane fully interactive in the meantime.
+// in the background behind a corner card reporting its steps, leaving every
+// other sandbox/pane fully interactive in the meantime.
 document.getElementById('modal-create').addEventListener('click', () => {
   const name = inpName.value.trim();
   if (!name || btnCreate.disabled) { inpName.classList.add('error'); return; }
@@ -479,8 +479,8 @@ document.getElementById('modal-create').addEventListener('click', () => {
   closeModal();
 
   (async () => {
-    // Shown as the last row of the sandbox list, not a corner toast — this
-    // is the one operation whose outcome literally *is* a new list entry.
+    // Shown as a corner card, where every other job running behind you is —
+    // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
       const res = await fetch('/api/sandboxes/create', {

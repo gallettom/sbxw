@@ -363,8 +363,11 @@ several minutes. That used to be a single sidebar row saying *Creating…* until
 it either turned into a sandbox or turned into an error toast — and a slow
 download looks exactly like a wedged one from there.
 
-So the row shows the work instead. The daemon announces the steps **before it
-starts the first one**, and the row draws all of them, the ones still to come
+So it shows the work instead, from a card in the bottom-right corner — the same
+stack a published port, a code map being written and a routed sandbox question
+already report from, because a bring-up is the same kind of thing: work running
+behind you while you carry on. The daemon announces the steps **before it starts
+the first one**, and the card draws all of them, the ones still to come
 included:
 
 ```
@@ -390,7 +393,7 @@ sbxw  neos                     Creating… 2/5
   says so, several times a second.
 - It survives a reload. The steps come over the same SSE stream as everything
   else in the UI (`/api/stream`, a `provision` event), so a tab that was opened
-  or refreshed mid-bring-up picks the row back up at the next step — which is
+  or refreshed mid-bring-up picks the card back up at the next step — which is
   exactly what you do when a creation seems stuck.
 - Every way in gets it: the create dialog, the chat dialog, **Duplicate**, and
   the island's ephemeral chat all go through the one pipeline, and it is the

@@ -551,75 +551,6 @@
     padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
     animation: sbx-ready-pulse 1.6s ease-in-out infinite;
   }
-  /* ── Pending sandbox row — last item in the list while creation runs ── */
-  .sbx-item-pending {
-    padding: .45rem .75rem;
-    border-left: 2px solid transparent;
-    cursor: default;
-  }
-  .sbx-pending-head {
-    display: flex; align-items: center; gap: .55rem;
-  }
-  /* The steps the bring-up announced, ticked off as it goes (see
-     src/progress.rs). Indented under the pixel logo rather than beside it:
-     the list is what the row is about once creation is under way, and the
-     logo is only there to say something is still running. */
-  .sbx-pending-steps {
-    list-style: none; margin: .4rem 0 .1rem; padding: 0 0 0 .35rem;
-    border-left: 1px solid var(--c-border);
-    display: flex; flex-direction: column; gap: .18rem;
-  }
-  .sbx-step {
-    display: grid;
-    grid-template-columns: 12px 1fr;
-    align-items: baseline;
-    column-gap: .35rem;
-    font-size: 11px;
-    color: var(--c-text-dim);
-  }
-  .sbx-step-mark {
-    justify-self: center;
-    width: 5px; height: 5px; border-radius: 50%;
-    background: var(--c-dim);
-    align-self: center;
-  }
-  .sbx-step.done { color: var(--c-text-muted); }
-  .sbx-step.done .sbx-step-mark {
-    background: none;
-    /* A tick drawn from the box itself: two borders, rotated. Cheaper than a
-       glyph, which at 11px lands on a different baseline in every font the
-       mono stack may fall back to. */
-    width: 3px; height: 6px; border-radius: 0;
-    border: solid var(--c-green); border-width: 0 1.5px 1.5px 0;
-    transform: translateY(-1px) rotate(45deg);
-  }
-  .sbx-step.running { color: var(--c-text-bright); }
-  .sbx-step.running .sbx-step-mark {
-    background: var(--c-blue); box-shadow: 0 0 5px #58a6ff99;
-    animation: sbx-ready-pulse 1.6s ease-in-out infinite;
-  }
-  .sbx-step-label { min-width: 0; }
-  /* What sbx last printed under the running step — an image pull's progress,
-     usually. One line, clipped: it is a status line, and a wrapped paragraph
-     would push the sandbox list around every time the percentage moved. */
-  .sbx-step-detail {
-    grid-column: 2;
-    margin-top: .1rem;
-    color: var(--c-text-dim);
-    font-size: 10px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .sbx-pending-logo {
-    display: grid;
-    grid-template-columns: repeat(var(--cols, 23), 3px);
-    grid-template-rows: repeat(var(--rows, 7), 3px);
-    gap: 1px;
-    flex-shrink: 0;
-    image-rendering: pixelated;
-  }
-  .sbx-pending-info { min-width: 0; }
-  .sbx-pending-info .sbx-name { margin-bottom: .15rem; }
-  .sbx-pending-info .sbx-status { font-style: italic; }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
   .sbx-agent  { color: var(--c-text-dim); font-size: 10px; }
   .sbx-actions { display: flex; gap: .25rem; align-items: center; }
@@ -1038,6 +969,7 @@
     pointer-events: none;
   }
   .bg-job-card {
+    --px-size: 3px;
     pointer-events: auto;
     display: flex; align-items: center; gap: .55rem;
     background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 6px;
@@ -1048,10 +980,15 @@
   .bg-job-card.leaving { animation: bg-job-out .18s ease-in forwards; }
   @keyframes bg-job-in  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   @keyframes bg-job-out { to   { opacity: 0; transform: translateY(6px); } }
+  /* One knob for the whole glyph: `--px-size` is the side of a single pixel,
+     and the grid's tracks and the cells inside it both read it, so a card that
+     wants a smaller logo sets it once on the card. The default belongs on the
+     card and not here — declared on the logo it would win over the card's own
+     value instead of inheriting it, and no card could ever change it. */
   .bg-job-pixel-logo {
     display: grid;
-    grid-template-columns: repeat(var(--cols, 23), 3px);
-    grid-template-rows: repeat(var(--rows, 7), 3px);
+    grid-template-columns: repeat(var(--cols, 23), var(--px-size, 3px));
+    grid-template-rows: repeat(var(--rows, 7), var(--px-size, 3px));
     gap: 1px;
     flex-shrink: 0;
     /* Nearest-neighbour scaling keeps the tiny grid crisp instead of blurring
@@ -1062,11 +999,99 @@
     font: 600 11px var(--font-mono);
     color: var(--c-text); white-space: nowrap;
   }
+  .bg-job-body { min-width: 0; }
+  /* A card with more than one line to say. The logo stops being something the
+     text sits beside and becomes the marker at the top of a block, so it
+     aligns to the first line rather than to the middle of the card. */
+  .bg-job-card.bg-job-rich { align-items: flex-start; }
+  .bg-job-card.bg-job-rich .bg-job-pixel-logo { margin-top: .15rem; }
+
+  /* ── A sandbox being created, reporting from the corner ── */
+  /* Same card as every other long job — it *is* one — with the bring-up's
+     steps under its name. Capped so a long detail line clips instead of
+     stretching the card across the window.
+
+     Two rows, not two columns: the logo and the two-line header share the top
+     row, and the step list wraps under both of them at the card's own left
+     edge. Indented beside the header it was a narrow column wrapping every
+     other label; full width it reads as the list it is. */
+  .bg-job-card.sbx-creating {
+    max-width: 320px;
+    flex-wrap: wrap;
+    /* Sized to the header it sits beside rather than to the card it opens:
+       seven 2px rows and their gaps come out near the height of the name and
+       the status line together, so the logo reads as a marker for those two
+       and not as the thing the card is built around. */
+    --px-size: 2px;
+    align-items: center;
+  }
+  .bg-job-card.sbx-creating .bg-job-pixel-logo { margin-top: 0; }
+  /* The name keeps the label's single line and clips at the cap rather than
+     widening the card past it — a long sandbox name is not worth a card that
+     reaches halfway across the window. */
+  .bg-job-card.sbx-creating .bg-job-label { overflow: hidden; text-overflow: ellipsis; }
+  .sbx-creating-status {
+    color: var(--c-text-muted); font-size: 11px; font-style: italic;
+    margin-top: .1rem;
+  }
+  /* The steps the bring-up announced, ticked off as it goes (see
+     src/progress.rs). Its own row across the whole card — the list is what the
+     card is about once creation is under way, and the logo is only there to
+     say something is still running. */
+  .sbx-pending-steps {
+    flex-basis: 100%;
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: .18rem;
+  }
+  /* `display: flex` above outranks the UA's `[hidden]`, and an empty flex item
+     is still a flex item: without this the card carries a row gap's worth of
+     blank space for as long as the plan has not arrived. */
+  .sbx-pending-steps[hidden] { display: none; }
+  .sbx-step {
+    display: grid;
+    grid-template-columns: 12px 1fr;
+    align-items: baseline;
+    column-gap: .35rem;
+    font-size: 11px;
+    color: var(--c-text-dim);
+  }
+  .sbx-step-mark {
+    justify-self: center;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--c-dim);
+    align-self: center;
+  }
+  .sbx-step.done { color: var(--c-text-muted); }
+  .sbx-step.done .sbx-step-mark {
+    background: none;
+    /* A tick drawn from the box itself: two borders, rotated. Cheaper than a
+       glyph, which at 11px lands on a different baseline in every font the
+       mono stack may fall back to. */
+    width: 3px; height: 6px; border-radius: 0;
+    border: solid var(--c-green); border-width: 0 1.5px 1.5px 0;
+    transform: translateY(-1px) rotate(45deg);
+  }
+  .sbx-step.running { color: var(--c-text-bright); }
+  .sbx-step.running .sbx-step-mark {
+    background: var(--c-blue); box-shadow: 0 0 5px #58a6ff99;
+    animation: sbx-ready-pulse 1.6s ease-in-out infinite;
+  }
+  .sbx-step-label { min-width: 0; }
+  /* What sbx last printed under the running step — an image pull's progress,
+     usually. One line, clipped: it is a status line, and a wrapped paragraph
+     would resize the card every time the percentage moved. */
+  .sbx-step-detail {
+    grid-column: 2;
+    margin-top: .1rem;
+    color: var(--c-text-dim);
+    font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   /* Individual pixel cell — flat and hard-edged (no radius, no blur glow, no
      fade transition) so toggling reads as a discrete pixel flipping on/off
      rather than a smooth glowing blob. */
   .px {
-    width: 3px; height: 3px;
+    width: var(--px-size, 3px); height: var(--px-size, 3px);
     background: transparent;
     border: 1px solid rgba(139, 148, 158, .3);
   }

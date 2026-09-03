@@ -2,10 +2,11 @@
 let sandboxes = [];
 const listEl = document.getElementById('sandbox-list');
 
-// Sandboxes still provisioning in the background (rendered as the last row
-// of the list) and sandboxes that just became ready without the UI jumping
-// to them (rendered as a small blue "ready" dot until the user opens them).
-const pendingCreations = new Map(); // name -> { el, timer, steps, at, detail }
+// Sandboxes still provisioning in the background (each reporting from a card
+// in the bottom-right corner stack) and sandboxes that just became ready
+// without the UI jumping to them (rendered as a small blue "ready" dot in the
+// list until the user opens them).
+const pendingCreations = new Map(); // name -> { job, steps, at, detail }
 const readySandboxes = new Set();
 
 // If a visible pane is sitting empty (no sandbox attached), a freshly
@@ -32,9 +33,15 @@ function attachToEmptyPaneOrMarkReady(name) {
 }
 
 /**
- * Builds (once) the pending-row DOM node + its running pixel-fill animation.
+ * Builds (once) the corner card a bring-up reports into.
  *
- * Returns the row's state, so a caller that only wants to make sure a row
+ * A creation is background work like publishing a port or writing a code map,
+ * so it says so where the other long jobs do: a card in the bottom-right stack
+ * (`#bg-jobs`, see `openBgJob`), not a row in the sandbox list. The list is for
+ * sandboxes that exist — this one does not yet — and one corner for everything
+ * running behind you beats a second place to look.
+ *
+ * Returns the card's state, so a caller that only wants to make sure a card
  * exists — the progress stream, for a bring-up this tab did not start — can
  * take the existing one instead of restarting its animation.
  */
@@ -42,30 +49,25 @@ function addPendingSandbox(name) {
   const existing = pendingCreations.get(name);
   if (existing) return existing;
 
-  const row = document.createElement('div');
-  row.className = 'sbx-item-pending';
-  const head = document.createElement('div');
-  head.className = 'sbx-pending-head';
-  const logo = document.createElement('div');
-  logo.className = 'sbx-pending-logo';
-  const info = document.createElement('div');
-  info.className = 'sbx-pending-info';
-  info.innerHTML = `<div class="sbx-name">${escHtml(name)}</div><div class="sbx-status">Creating…</div>`;
-  head.append(logo, info);
+  const { id, card, body } = openBgJob('bg-job-rich sbx-creating');
+  body.innerHTML = `<div class="bg-job-label">${escHtml(name)}</div>`
+    + `<div class="sbx-creating-status">Creating…</div>`;
   // Empty until the daemon says what the steps are, and that is the honest
   // state: a bring-up is one `sbx` call away from starting and this tab is not
   // the one that knows what it will do.
+  //
+  // Hung off the card rather than the body: the logo and the two header lines
+  // are one row, and the list wraps under both of them at the card's left edge
+  // instead of into the narrow column beside the logo.
   const steps = document.createElement('ol');
   steps.className = 'sbx-pending-steps';
   steps.hidden = true;
-  row.append(head, steps);
+  card.appendChild(steps);
 
-  const { pixels, rows } = buildPixelGrid(logo);
-  const timer = animatePixelGrid(pixels, rows);
   const pending = {
-    el: row,
-    timer,
-    statusEl: info.querySelector('.sbx-status'),
+    /// The corner card's id, for `finishBgJob` when the bring-up ends.
+    job: id,
+    statusEl: body.querySelector('.sbx-creating-status'),
     stepsEl: steps,
     /// The plan, as announced up front: `[{ id, label }]`.
     steps: [],
@@ -76,6 +78,8 @@ function addPendingSandbox(name) {
     detail: '',
   };
   pendingCreations.set(name, pending);
+  // Only for the sidebar's empty state, which reads differently while a
+  // bring-up is running (see `renderSidebar`).
   renderSidebar();
   return pending;
 }
@@ -83,14 +87,14 @@ function addPendingSandbox(name) {
 function removePendingSandbox(name) {
   const p = pendingCreations.get(name);
   if (!p) return;
-  clearInterval(p.timer);
+  finishBgJob(p.job);
   pendingCreations.delete(name);
   renderSidebar();
 }
 
 // ── What a bring-up is doing, while it does it ───────────────────────────
 //
-// A sandbox that has to pull its image takes minutes, and a row saying
+// A sandbox that has to pull its image takes minutes, and a card saying
 // "Creating…" the whole way through cannot be told from a wedged one. The
 // daemon reports each step as it starts and forwards what `sbx` prints
 // underneath (see src/progress.rs); this paints it.
@@ -113,7 +117,8 @@ function renderPendingSteps(p) {
       <span class="sbx-step-label">${escHtml(s.label)}</span>${detail}
     </li>`;
   }).join('');
-  // The header counts what the list shows, for a sidebar scrolled past it.
+  // The card's own line counts what the list under it shows, so the state is
+  // still readable at a glance without reading seven rows.
   p.statusEl.textContent = p.at >= 0
     ? `Creating… ${p.at + 1}/${p.steps.length}`
     : 'Creating…';
@@ -122,7 +127,7 @@ function renderPendingSteps(p) {
 /**
  * Apply one `provision` event from `/api/stream`.
  *
- * A row is created on demand rather than assumed: the tab that clicked Create
+ * A card is created on demand rather than assumed: the tab that clicked Create
  * already has one, but a tab reloaded mid-bring-up (exactly what you do when a
  * download seems stuck) has nothing, and the stream is enough to rebuild it.
  */
@@ -338,10 +343,21 @@ function sandboxItemHtml(s, groupColor) {
 }
 
 function renderSidebar() {
-  if (!sandboxes.length && !pendingCreations.size) {
-    // An empty list is ambiguous — you own no sandboxes, or `sbx` can't see
-    // the ones you do. The second case is the common one and is fixed on the
-    // host, so point at the help dialog that spells out how (/js/help.js).
+  if (!sandboxes.length) {
+    // Nothing in the list *while a bring-up is running* is not the ambiguous
+    // case below — it is the expected one, and the corner card already says
+    // what is happening. Offering the "can't see my sandboxes" help here would
+    // send someone troubleshooting a machine that is working.
+    if (pendingCreations.size) {
+      listEl.innerHTML = `<div class="sbx-empty">
+        <div class="sbx-empty-msg">Creating your first sandbox…</div>
+      </div>`;
+      return;
+    }
+    // An empty list is otherwise ambiguous — you own no sandboxes, or `sbx`
+    // can't see the ones you do. The second case is the common one and is fixed
+    // on the host, so point at the help dialog that spells out how
+    // (/js/help.js).
     listEl.innerHTML = `<div class="sbx-empty">
       <div class="sbx-empty-msg">No sandboxes</div>
       <button class="sbx-empty-help" data-help-open type="button">Expected some? →</button>
@@ -382,9 +398,6 @@ function renderSidebar() {
   if (openGroup !== null) html += '</div>';
 
   listEl.innerHTML = html;
-  // Re-parent (not rebuild) the persisted pending-row nodes so their running
-  // fill animation keeps going instead of restarting on every re-render.
-  pendingCreations.forEach(p => listEl.appendChild(p.el));
   // The rows above were just rebuilt from a string and carry no agent classes;
   // repaint them from the live session state rather than baking it into the
   // HTML, so an event arriving between two renders still lands.

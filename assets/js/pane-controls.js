@@ -51,17 +51,10 @@ function closePane(idx) {
   if (paneCount <= 1) return;
   if (dragSel?.pane?.index === idx) dragSel = null;
 
-  // Disconnect the closing pane.
-  const closing = panes[idx];
-  if (closing.ws) { try { closing.ws.close(); } catch (_) {} closing.ws = null; }
-  closing.sandbox = null;
-  closing.term.clear();
-  document.getElementById(`pconn-${idx}`).textContent = '';
-  document.getElementById(`pdot-${idx}`).className = 'dot term-disconnected';
-  closing.beforeMonitor = null;
-  // Also what puts a closed monitor pane's hidden mode buttons back, so they
-  // don't stay hidden for whatever gets connected here next.
-  applyPaneChrome(idx, null);
+  // Disconnect the closing pane. `emptyPane` is also what puts a closed
+  // monitor pane's hidden mode buttons back, so they don't stay hidden for
+  // whatever gets connected here next.
+  emptyPane(idx);
 
   // Shift panes[idx+1..paneCount-1] one slot to the left.
   // After each step the source slot is nulled so it can safely be overwritten
@@ -102,14 +95,11 @@ function closePane(idx) {
     // leak into it. PTY resize will trigger a redraw.
     dst.term.reset();
 
-    // Null out the source so it becomes a clean empty slot.
-    src.sandbox = null;
-    src.ws      = null;
-    src.beforeMonitor = null;
-    src.term.clear();
-    document.getElementById(`pconn-${src.index}`).textContent = '';
-    document.getElementById(`pdot-${src.index}`).className = 'dot term-disconnected';
-    applyPaneChrome(src.index, null);
+    // Null out the source so it becomes a clean empty slot. The socket is
+    // dropped *before* emptying it — it now belongs to `dst`, and `emptyPane`
+    // would otherwise close the session that just moved.
+    src.ws = null;
+    emptyPane(src.index);
   }
 
   // Hide the now-empty last slot and decrement the count.
