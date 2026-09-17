@@ -2427,10 +2427,13 @@ fn clean_resource_list(raw: &str) -> std::result::Result<String, String> {
 /// Body of `POST /api/sandboxes/:name/envfile`.
 #[derive(Deserialize)]
 struct EnvFileBody {
-    /// Repository root the `workspace:` expression is written against. Empty
-    /// or absent means "work it out" (the `SBXW_PROJECTS_ROOT` variable, else
-    /// the workspace's parent).
-    root: Option<String>,
+    /// Directory the file goes in, which its paths are written relative to.
+    /// Empty or absent means the workspace's parent; so does one that does not
+    /// strictly contain the workspace. `root` is the name the panel used when
+    /// this was a `${SBXW_PROJECTS_ROOT}` fallback, still accepted from a page
+    /// loaded before the upgrade.
+    #[serde(alias = "root")]
+    dir: Option<String>,
     /// Absent means preview only; `true` writes the file to disk.
     save: Option<bool>,
     /// Overwrite an existing file.
@@ -2441,8 +2444,8 @@ struct EnvFileBody {
 /// sandbox, previewed or written.
 ///
 /// Both verbs render; only `save: true` touches the disk. The preview is what
-/// makes the repository root editable in the first place: you change the root,
-/// see the `workspace:` line change, and only then write the file.
+/// makes the folder editable in the first place: you change it, see the
+/// `workspace:` line change, and only then write the file.
 ///
 /// The ports come from `sbx ports` rather than from `sbxw.toml`, so this
 /// exports the sandbox that exists rather than the one the config describes —
@@ -2456,17 +2459,17 @@ async fn api_envfile(
         return err;
     }
     let body = body.map(|Json(b)| b);
-    let root = body
+    let dir = body
         .as_ref()
-        .and_then(|b| b.root.clone())
+        .and_then(|b| b.dir.clone())
         .filter(|r| !r.trim().is_empty());
     let save = body.as_ref().and_then(|b| b.save).unwrap_or(false);
     let force = body.as_ref().and_then(|b| b.force).unwrap_or(false);
     let cfg = state.cfg.clone();
 
     let out = tokio::task::spawn_blocking(move || {
-        let root = root.map(std::path::PathBuf::from);
-        let rendered = crate::render_env_file_for(&name, &cfg, root.as_deref())?;
+        let dir = dir.map(|d| std::path::PathBuf::from(d.trim()));
+        let rendered = crate::render_env_file_for(&name, &cfg, dir.as_deref())?;
         if !save {
             return Ok::<_, anyhow::Error>((rendered, None));
         }
@@ -2489,9 +2492,7 @@ async fn api_envfile(
             "ok": true,
             "yaml": r.yaml,
             "dest": r.dest,
-            "projectsRoot": r.projects_root,
-            "rootVar": r.root_var,
-            "rootFromEnv": r.root_from_env,
+            "dir": r.dir,
             "written": written,
         })),
         Ok(Err(e)) => err_json(format!("{e:#}")),

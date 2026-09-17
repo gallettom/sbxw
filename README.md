@@ -8,10 +8,11 @@ policy.
 It **only ever calls `sbx`** — never `docker sandbox`.
 
 > Built against the `sbx` **0.39** CLI reference
-> (docs.docker.com/reference/cli/sbx), and it assumes 0.39 throughout — there
-> are no fallbacks for older releases. It checks at startup; see below.
+> (docs.docker.com/reference/cli/sbx) and the **0.42/0.43** release notes, and
+> it assumes 0.43 throughout — there are no fallbacks for older releases. It
+> checks at startup; see below.
 
-## Requires sbx 0.39.0 or newer
+## Requires sbx 0.43.0 or newer
 
 `sbxw up`, `sbxw chat`, `sbxw web`, `sbxw env run` and `sbxw prune` run
 `sbx version` first and stop with a clear message if it's older.
@@ -25,7 +26,9 @@ it fails on. What sbxw now assumes, unconditionally:
 | Feature | Used for |
 | --- | --- |
 | `create`/`run` `-e KEY=VALUE`, `--env-file` | `[env]` and `env_files` in `sbxw.toml` — baked in at creation, applied to the agent session on every attach |
-| `sbx env create` | `sbxw env run`, which provisions from a committed `.sbxenv.yaml` |
+| `sbx env create --name`, `--env-arg` | `sbxw env run`, which provisions from a committed `sbxenv.yaml` |
+| The 0.42/0.43 environment-file format | `sbxenv.yaml` (not hidden), `${{ env.* }}` expressions, paths relative to the declaring file, `skills:` — see [Environment files](#environment-files-sbxenvyaml) |
+| `create --skills=off\|readonly\|readwrite` | `skills` in `sbxw.toml` — see [Shared skills](#shared-skills) |
 | `sbx prune` | `sbxw prune` |
 | Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the four kits under `assets/` |
 | `secret set --sandbox NAME` | the Anthropic secret, without the deprecation warning the old spellings printed |
@@ -39,11 +42,28 @@ can trust that a command which succeeded actually ran — which is why the
 speculative retries sbxw used to carry (a create retried with fewer kits, a
 policy view retried unscoped because the flag might not exist) are gone.
 
-The one thing still *probed* rather than assumed is `sbx create
---no-share-skills`: it came from release notes and has never appeared in the
-published reference. Since an unknown flag now fails the whole `create`, sbxw
-reads `sbx create --help` once before passing it — see [Shared
-skills](#shared-skills).
+The floor moved from 0.39 to 0.43 because environment files changed shape in
+between, in ways no single file can straddle: 0.42 renamed the project file to
+`sbxenv.yaml`, stopped expanding `${VAR}` and stopped mounting the file's
+directory when `workspace:` is absent; 0.43 resolves relative paths against the
+file that declares them and gave every `sbx env` subcommand `--name`. 0.42 also
+made published ports default to `tcp4` (sbxw publishes on explicit IPv4
+addresses, so nothing changes for its own ports) and refuses sandbox names over
+63 characters or ending in a hyphen — sbxw checks that rule itself, in the CLI
+and the web UI, before sbx has to.
+
+Two 0.43 behaviours worth knowing: sandboxes made with `sbx create` — which is
+how `sbxw up` makes them — **stop by themselves once idle** (restart with
+`sbxw up`; ports are re-published on every bring-up), and **MCP OAuth client
+secrets** are now stored as `mcp:<server>:client_secret` — one stored under the
+old `mcp:<server>.client_secret` name is no longer read and has to be set again
+with `sbx secret set mcp:<server>:client_secret`. sbxw stores no MCP secrets
+itself, so that one is yours to redo.
+
+The one thing still *probed* rather than assumed is the skills flag of `sbx
+create`: it comes from release notes, not the published reference. Since an
+unknown flag fails the whole `create`, sbxw reads `sbx create --help` once
+before passing it — see [Shared skills](#shared-skills).
 
 To run against an older sbx anyway:
 
@@ -64,9 +84,9 @@ forgotten.
 1. **Create** — if the sandbox doesn't exist:
    `sbx create claude <path> --name <name>` (extra `--ro DIR` mounts are appended
    as read-only workspaces, i.e. `DIR:ro`). `<path>` defaults to the current
-   directory. If it already exists it's reused. Ports, kits and — on sbx 0.39+ —
+   directory. If it already exists it's reused. Ports, kits, `skills` and
    `[env]` / `env_files` all go in here, because creation is the only moment sbx
-   applies them whole. See [Environment variables](#environment-variables-sbx-039).
+   applies them whole. See [Environment variables](#environment-variables).
 2. **Network policy** — applies a restrictive local-dev egress allowlist via
    `sbx policy allow network "<list>"` (npm, pypi, packagist, github, docker
    registries, `api.anthropic.com`). Not `**`. **Runs before kits** so a kit's
@@ -136,8 +156,8 @@ diagonally across the screen.
 | `sbxw stop <names…> [--all]` | Stop sandboxes (state kept; restartable). |
 | `sbxw rm <names…> [--all]` | Remove sandboxes permanently (passes `--force`, so removal proceeds even if a session is attached, which sbx otherwise refuses). |
 | `sbxw prune [--since D] [--dry-run] [--yes]` | Remove every **stopped** sandbox — a running one is never a candidate, so this can't take out the one you're in. Lists them and asks first. `--since 168h` keeps anything stopped more recently. |
-| `sbxw env run [paths…]` | Bring a sandbox up from a `.sbxenv.yaml`: `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
-| `sbxw env export [path]` | Write a `.sbxenv.yaml` beside the workspace, with the workspace anchored to `$SBXW_PROJECTS_ROOT` so the file is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
+| `sbxw env run [paths…] [--env-arg K=V]` | Bring a sandbox up from an `sbxenv.yaml` (over `~/.sbxenv.yaml`): `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
+| `sbxw env export [path]` | Write an `sbxenv.yaml` beside the workspace, with every path relative to the file so it is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
 | `sbxw logs <name> [-n N]` | Tail a running daemon's log. |
 | `sbxw hosts [show\|sync\|clear]` | Show the `/etc/hosts` block (plus anything a daemon parked), re-apply it — the one place `sudo` can ask for a password — or remove it. |
 | `sbxw down [name]` | Kill the daemon for `name`; with no name, kill all daemons **and** remove the `/etc/hosts` block. |
@@ -250,11 +270,11 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   matters: a business document wants revenue, users and deadlines, a repository
   has none of them, and the answer is to name them as missing rather than to
   fill them in.
-- **Export the sandbox as a `.sbxenv.yaml`** — the **Env** button in a pane's
+- **Export the sandbox as an `sbxenv.yaml`** — the **Env** button in a pane's
   top bar, beside **SSH** and behaving the same way: a card hanging off the
   button, closed by Escape or by clicking away. Live preview, an editable
-  repository root (the `${SBXW_PROJECTS_ROOT:-…}` the workspace is anchored to),
-  Copy, and Save. It reads the ports the sandbox *actually* has, so it exports
+  folder (where the file goes, and what its paths are relative to), Copy, and
+  Save. It reads the ports the sandbox *actually* has, so it exports
   what is running rather than what the config asks for. See
   [Environment files](#environment-files-sbxenvyaml).
 - **Inspect the network policy** in that same panel. Three `sbx` calls, because
@@ -1122,17 +1142,28 @@ sbxw skills import             # do it
 sbxw skills import --force     # ...replacing skills already in the store
 ```
 
-Imported skills survive `sbxw rm` and are mounted read-write into new sandboxes.
-Set `share_skills = false` in `sbxw.toml` to create sandboxes without the store
-(passes `--no-share-skills`), e.g. for a sandbox that should only ever see the
-skills its own kits provide. It's read at **creation** only — flipping it does
-nothing to sandboxes that already exist.
+Imported skills survive `sbxw rm`. Since sbx 0.43 new sandboxes mount the
+store **read-only** by default; `skills` in `sbxw.toml` picks another mode,
+passed as `sbx create --skills=…`:
 
-`--no-share-skills` is the one flag sbxw takes from release notes that has never
-appeared in the published `sbx create` reference, and since 0.39 an unknown flag
-fails the whole command. So sbxw reads `sbx create --help` once before passing
-it: if the flag isn't there you get the sandbox *with* the store and a warning
-that the setting couldn't be honoured, rather than no sandbox at all.
+```toml
+skills = "off"        # only the skills this sandbox's kits provide
+# skills = "readwrite"  # the agent may add to the store every sandbox mounts
+```
+
+Empty (the default) leaves it to sbx — and to its host-wide
+`skills.defaultMode`, which is the better place for a preference that isn't
+about one project. The old `share_skills = false` still works and means
+`skills = "off"`; `skills` wins when both are set. It's read at **creation**
+only — changing it does nothing to sandboxes that already exist. An exported
+environment file carries it as its own `skills:` field.
+
+The skills flag comes from release notes rather than the published `sbx create`
+reference, and an unknown flag fails the whole command. So sbxw reads `sbx
+create --help` once before passing it: `--skills=MODE` when listed, the
+deprecated `--no-share-skills` for `off` when only that is, and otherwise the
+sandbox with sbx's default and a warning that the setting couldn't be honoured,
+rather than no sandbox at all.
 
 How this relates to [kits](#kits): a kit can install *anything* (apt packages,
 binaries, startup commands) but applying one recreates the container. The skill
@@ -1154,7 +1185,7 @@ See `sbxw.toml.example`. Key choice: `ip_per_app`.
 
 `claude_model` reaches the sandbox as **`ANTHROPIC_DEFAULT_MODEL`**, alongside
 `[env]` — so it is baked in at creation, re-applied on every attach, and carried
-into an exported `.sbxenv.yaml` without a special case anywhere.
+into an exported `sbxenv.yaml` without a special case anywhere.
 
 It used to be written as `model` into the sandbox's `~/.claude/settings.json`.
 That looked equivalent and wasn't: in Claude Code's precedence, a settings-file
@@ -1177,7 +1208,7 @@ Two consequences worth knowing:
 
 Spelling `ANTHROPIC_DEFAULT_MODEL` yourself in `[env]` overrides `claude_model`.
 
-### Environment variables (sbx 0.39+)
+### Environment variables
 
 ```toml
 env_files = [".env.sandbox"]   # root key — must come before [env]
@@ -1207,32 +1238,48 @@ Two things to watch:
   `[[ports]]`.
 - **Not for secrets.** The value lands in `sbx create`'s argv, visible in the
   host's process list, and in a file most projects commit. Tokens go through
-  `sbx secret set` — which is already how sbxw handles the Anthropic one — or a
-  `.sbxenv.yaml` `secrets:` entry that resolves on the host.
+  `sbx secret set` — which is already how sbxw handles the Anthropic one — or an
+  `sbxenv.yaml` `secrets:` entry that resolves on the host.
 
-On an sbx older than 0.39 both are dropped with a warning naming what didn't go
-in. There is no older spelling to fall back to: before 0.39 the only way to put
-a variable in a sandbox was a kit writing a shell rc file, which is a container
-recreate for a one-line change.
+## Environment files (`sbxenv.yaml`)
 
-## Environment files (`.sbxenv.yaml`)
-
-sbx 0.39 introduced its own committable project setup — `.sbxenv.yaml`, read by
+sbx has its own committable project setup — `sbxenv.yaml`, read by
 `sbx env run|create|exec|rm` — covering agent, workspace, extra mounts, kits,
-env vars, secrets, MCP servers, ports and registry credentials. sbxw both
-**writes** one and **runs** on one.
+env vars, secrets, MCP servers, skills, ports and registry credentials. sbxw
+both **writes** one and **runs** on one.
+
+The format as sbx 0.43 reads it, which is what sbxw follows:
+
+- **A project's file is `sbxenv.yaml`, not hidden.** A directory means that name
+  alone; a hidden `.sbxenv.yaml` there is no longer read, and `sbxw env run`
+  says so and tells you to rename it. `~/.sbxenv.yaml` in your home directory is
+  merged **beneath** every project file as shared defaults.
+- **`${VAR}` is not expanded any more.** The file's own expressions are
+  `${{ env.projectDir }}`, `${{ env.fileDir }}` and `${{ env.args.NAME }}` —
+  the last declared in an `args:` block and supplied with `--env-arg NAME=VALUE`.
+  sbxw warns about any `${VAR}` it finds.
+- **Relative paths resolve against the file that declares them**, so
+  `workspace: ./neos` means the same thing wherever you run from — and
+  `~/.sbxenv.yaml` can mount each project's own directory with
+  `workspace: ${{ env.projectDir }}`.
+- **No `workspace:` means no mount**, not the file's directory. sbxw refuses
+  such a file, because its pipeline needs a workspace to work on; write
+  `workspace: .` to mount the directory holding the file.
+- **`sbx env create` shows a plan and asks** before changing anything on the
+  host, so `sbxw env run` needs you at the terminal for that step.
 
 ### `sbxw env run` — bring a sandbox up from the file
 
 ```bash
-sbxw env run                        # .sbxenv.yaml in the current directory
+sbxw env run                        # sbxenv.yaml in the current directory
 sbxw env run ../neos-env            # ...or in that directory
 sbxw env run base.yaml local.yaml   # merged in order, later files win
+sbxw env run --env-arg port=4300    # a value for ${{ env.args.port }}
 ```
 
 It is not a passthrough. `sbx env create` does the **creation**, because it is
 the only thing that can apply an environment file whole — secrets, bindings,
-registries, MCP servers, kits, mounts. Everything sbxw adds and the format has
+registries, MCP servers, skills, kits, mounts. Everything sbxw adds and the format has
 no field for runs afterwards, through the same idempotent pipeline `sbxw up`
 uses: egress policy, OAuth credentials, hooks, `/etc/hosts` aliases, the
 browser terminal. That split is forced by sbx's own behaviour — `sbx env run`
@@ -1253,9 +1300,9 @@ So sbxw checks each host port itself, asks, and rewrites the document once:
 
 ```
 $ sbxw env run
-sbxw  /home/you/dev/neos-env/.sbxenv.yaml → sandbox 'neos'
+sbxw  /home/you/dev/neos-env/sbxenv.yaml → sandbox 'neos'
   ! host port 4200 (127.0.0.1) is busy — port for sandbox:4200 [4201] ⏎
-sbxw  ports adjusted — running from a rewritten copy at ~/.sbxw/state/env/neos/.sbxenv.yaml
+sbxw  ports adjusted — running from a rewritten copy at ~/.sbxw/state/env/neos/sbxenv.yaml
 sbxw  handing secrets, mcp to sbx — sbxw does not read those
 sbxw  taken from sbxw.toml:
         · /etc/hosts aliases (neos.local → :4201)
@@ -1268,8 +1315,18 @@ and logs it instead of stopping for an answer nobody is there to give. `--yes`
 forces that behaviour on a terminal too. Your committed file is never edited:
 the rewrite goes to a scratch copy under `~/.sbxw/state/env/<name>/`, with paths
 made absolute so it resolves from there, and every key sbxw doesn't model
-(`secrets`, `bindings`, `registries`, `mcp`, `sandboxOptions`) travels through
-the round trip untouched.
+(`secrets`, `bindings`, `registries`, `mcp`, `skills`, `sandboxOptions`, a kit's
+`args`) travels through the round trip untouched. When nothing has to move, sbx
+gets your paths exactly as you typed them.
+
+The copy holds only your project's files. sbx merges `~/.sbxenv.yaml` beneath
+it again, as it would beneath the original — so the copy must not contain it
+too, or every kit and port it declares would be applied twice. The one thing
+that can't be fixed this way is a busy port declared in `~/.sbxenv.yaml`
+itself; sbxw stops and asks you to change it there.
+
+The sandbox name is passed as `sbx env create --name`, so sbxw never has to
+guess the `<agent>-<directory>` name sbx would otherwise pick.
 
 **The environment file wins; `sbxw.toml` is the fallback.** Field by field,
 because the two describe overlapping but unequal things — the format has ports
@@ -1288,33 +1345,39 @@ sandbox actually got — read back from `sbx ports`, not assumed from the file.
 From the CLI, for a project:
 
 ```bash
-sbxw env export                 # writes ../.sbxenv.yaml for ./ as the workspace
-sbxw env export -o -            # print it instead
+sbxw env export                        # writes ../sbxenv.yaml for ./ as the workspace
+sbxw env export -o ~/dev/sbxenv.yaml   # further up — workspace: ./acme/neos
+sbxw env export -o -                   # print it instead
 ```
 
 Or from the **web UI**, per pane: the **Env** button in the pane's top bar
 opens a card (same shape as the SSH one next to it) with a preview, an editable
-repository root, Copy, and Save. That version is the better one when the two
+folder, Copy, and Save. That version is the better one when the two
 differ, because it reads the ports the sandbox actually has — including one you
 added from the ports dialog, or one that moved because the configured host port
 was busy — rather than the ports the config asks for.
 
-**The workspace is written through a variable**, so one committed file works on
+**Every path is written relative to the file**, so one committed file works on
 machines that keep their repositories in different places:
 
 ```yaml
-workspace: '${SBXW_PROJECTS_ROOT:-/Users/you/dev}/neos'
+workspace: ./neos
+skills: 'off'
+kits:
+  - ./kits/headroom
 ```
 
-Both halves earn their place. The variable is what makes the file portable — a
-colleague exports `SBXW_PROJECTS_ROOT` once and every project resolves. The
-fallback is what stops it being a trap: it works out of the box on the exporting
-machine, and on anyone with the same layout, so nothing has to be configured
-before the file runs at all. The price is one absolute path from your machine in
-a committed file; pick a root with nothing personal in it, or accept it as the
-cost of a file that works. `install.sh` offers to set the variable, and the web
-UI lets you change the root per export and see the `workspace:` line change
-before saving.
+sbx 0.43 resolves those against the file itself, so the file moves with the
+directory it sits in and needs no configuration at all. That replaces the
+`${SBXW_PROJECTS_ROOT:-/Users/you/dev}/neos` sbxw used to write — sbx 0.42
+stopped expanding `${VAR}`, so that line would now reach sbx verbatim. The
+variable, and the `install.sh` prompt that set it, are gone; an existing
+`export SBXW_PROJECTS_ROOT=…` in your shell rc is harmless and can be deleted.
+A kit that shares nothing with the file's folder but the filesystem root is
+written as an absolute path, since climbing all the way up is no more portable.
+
+In the web UI, the folder is editable: any directory above the workspace will
+do, and the `workspace:` line in the preview changes with it before you save.
 
 Everything that *didn't* fit is written into the file's header, with the command
 that reproduces it — the allowlist as an `sbx policy allow network` line, the
@@ -1325,8 +1388,10 @@ is the worst direction for an omission to go in.
 The file lands in the workspace's **parent**, not the workspace, and that is not
 tidiness: the agent can write anywhere in a direct-mounted directory, so an
 environment file inside one is a file the agent can rewrite — and it is the file
-that decides what the *next* sandbox gets. Same reasoning as sbx's own
-[guidance](https://docs.docker.com/ai/sandboxes/configuration/environment-files/).
+that decides what the *next* sandbox gets. sbx 0.42 binds the file read-only
+into the sandboxes `sbx env` creates, but a sandbox from `sbxw up` (plain `sbx
+create`) mounts the same directory without that protection, so outside is still
+the only place that is safe from both.
 
 Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
 
@@ -1342,7 +1407,7 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   effect only when you run `sbxw up` yourself, and `sbx policy ls <name>` shows
   what a sandbox actually has. If you'd rather it were out of reach, keep the
   config outside the mounted directory and point at it with `--config`. (This is
-  the same hazard sbx names for `.sbxenv.yaml`, which is why `sbxw env export`
+  the same hazard sbx names for `sbxenv.yaml`, which is why `sbxw env export`
   writes *beside* the workspace rather than into it.)
 - When a `sbx` call fails, sbxw now folds **what sbx actually said** into the
   error instead of reporting a bare exit status — so the structured
@@ -1404,8 +1469,18 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   `sbx create --no-share-skills` is the one that did **not** turn up: the 0.39
   reference lists `--clone --cpus --deny-network -e/--env --env-file --kit
   -m/--memory --name -p/--publish -q/--quiet -t/--template` and no skills flag.
-  Since 0.39 also made an unknown flag a hard error, sbxw now probes `sbx create
-  --help` before passing it — see the 0.39 notes above. The original caveat
+  0.43 replaced it with `--skills=MODE`, again from release notes only. Since
+  an unknown flag is a hard error, sbxw probes `sbx create --help` before
+  passing either — see [Shared skills](#shared-skills).
+- The shape of an environment file's `args:` block. The 0.42 notes document
+  `${{ env.args.NAME }}` and `--env-arg`, not the block's grammar. sbxw reads
+  `NAME: value`, `NAME: {default: value}` and a list of `{name, default}` for
+  its own view of the file; an argument it can't read stays in the text for sbx
+  to resolve. Likewise a `kits:` entry written as a mapping (with per-kit
+  `args`) is passed through untouched rather than resolved by sbxw.
+- Whether `sbx ports` lists a 0.42 default publish as `tcp4` or `tcp`. sbxw
+  treats both as the default on an IPv4 address, where they mean the same
+  thing. The original caveat
   below still applies to everything else: each has a fallback if the flag turns
   out to be spelled differently — `create` failing means `sbxw up` fails loudly
   rather than silently mis-provisioning, and the port publishing is still done

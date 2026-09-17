@@ -209,7 +209,7 @@
       <div class="modal-body">
         <div>
           <label class="field-label" for="inp-name">Sandbox name</label>
-          <input id="inp-name" class="field-input" type="text" placeholder="my-project"
+          <input id="inp-name" class="field-input" type="text" maxlength="63" placeholder="my-project"
                  pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
           <span class="create-error hidden" id="name-error" style="align-self:flex-start;margin-top:.3rem;display:block"></span>
         </div>
@@ -320,10 +320,10 @@
       policy, credentials and hooks on top.
     </p>
     <div class="envfile-root-row">
-      <label class="field-label" for="envfile-root" style="margin:0">Root</label>
+      <label class="field-label" for="envfile-root" style="margin:0">Folder</label>
       <input id="envfile-root" class="port-input w-alias" type="text" spellcheck="false"
              autocapitalize="off" autocomplete="off"
-             title="The workspace path is written relative to this, through a variable">
+             title="Where the file is saved — every path in it is written relative to this folder">
       <button class="refresh-btn" id="envfile-preview">Preview</button>
     </div>
     <span class="envfile-root-note" id="envfile-root-note"></span>
@@ -351,7 +351,7 @@
         <p style="margin:0 0 .2rem;color:#c9d1d9;font-size:13px;">
           New sandbox on the same workspace as <strong id="dup-modal-source" style="color:#e6edf3"></strong>.
         </p>
-        <input id="dup-inp-name" class="field-input" type="text" placeholder="new-sandbox-name"
+        <input id="dup-inp-name" class="field-input" type="text" maxlength="63" placeholder="new-sandbox-name"
                pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
         <span class="create-error hidden" id="dup-name-error" style="align-self:flex-start;margin-top:.3rem;display:block"></span>
       </div>
@@ -376,7 +376,7 @@
         </p>
         <div>
           <label class="field-label" for="chat-inp-name">Name <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
-          <input id="chat-inp-name" class="field-input" type="text"
+          <input id="chat-inp-name" class="field-input" type="text" maxlength="63"
                  pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
           <span style="color:#8b949e;font-size:11px;display:block;margin-top:.35rem">
             Leave empty for <strong id="chat-name-suggestion" style="color:#c9d1d9;font-weight:600"></strong>.

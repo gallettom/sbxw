@@ -29,7 +29,7 @@
 //!     because `sbx kit add` recreates the container and would kill any
 //!     attached session.
 //!
-//! Requires **sbx 0.39 or newer** and assumes it throughout — there are no
+//! Requires **sbx 0.43 or newer** and assumes it throughout — there are no
 //! runtime fallbacks for older releases. See `sbx::MIN_SBX_VERSION`.
 
 mod codemap;
@@ -271,8 +271,8 @@ Examples:
     /// Import skills from your host agents into the store shared by all sandboxes.
     ///
     /// Thin passthrough to `sbx skills import`. Imported skills persist after a
-    /// sandbox is deleted and are mounted into new ones; set `share_skills = false`
-    /// in sbxw.toml to keep the store out of the sandboxes sbxw creates.
+    /// sandbox is deleted and are mounted into new ones (read-only, unless
+    /// `skills` in sbxw.toml says `readwrite` — or `off` to keep the store out).
     Skills {
         #[command(subcommand)]
         cmd: SkillsCmd,
@@ -303,7 +303,7 @@ Examples:
         #[arg(long)]
         all: bool,
     },
-    /// Remove every *stopped* sandbox (requires sbx 0.39+).
+    /// Remove every *stopped* sandbox.
     ///
     /// The safe counterpart to `sbxw rm --all`: a running sandbox is never a
     /// candidate, so this can't take out the one you are working in. It shows
@@ -325,7 +325,7 @@ Examples:
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Run or write a `.sbxenv.yaml` environment file (requires sbx 0.39+).
+    /// Run or write an `sbxenv.yaml` environment file (requires sbx 0.43+).
     ///
     /// An environment file is sbx's own committable project setup: agent,
     /// workspace, mounts, kits, env, secrets, MCP servers, ports. `run` brings
@@ -383,7 +383,7 @@ Then open a new shell (or re-source the rc file).")]
 
 #[derive(Subcommand)]
 enum EnvCmd {
-    /// Bring a sandbox up from a `.sbxenv.yaml`, with sbxw's pipeline around it.
+    /// Bring a sandbox up from an `sbxenv.yaml`, with sbxw's pipeline around it.
     ///
     /// `sbx env create` creates the sandbox from the file — workspace, kits,
     /// env, secrets, MCP servers, ports — and sbxw does the rest it always
@@ -393,12 +393,13 @@ enum EnvCmd {
     ///
     /// The environment file wins wherever it says something; `sbxw.toml` fills
     /// in what the format cannot express, and the run says which of its values
-    /// it used.
+    /// it used. `~/.sbxenv.yaml` is merged beneath the project file, as sbx does.
     #[command(after_help = "\
 Examples:
-  sbxw env run                      # .sbxenv.yaml in the current directory
+  sbxw env run                      # sbxenv.yaml in the current directory
   sbxw env run ../neos-env          # ...or in that directory
   sbxw env run base.yaml local.yaml # merged in order, later files win
+  sbxw env run --env-arg port=4300  # a value for ${{ env.args.port }}
   sbxw env run --yes                # take free ports without asking
   sbxw env run --no-web             # attach here instead of the browser")]
     Run {
@@ -412,6 +413,7 @@ Examples:
         #[arg(long)]
         no_web: bool,
         /// Accept the suggested replacement for a busy host port without asking.
+        /// (sbx still shows its own plan and asks before creating.)
         #[arg(long, short = 'y')]
         yes: bool,
         /// If ANTHROPIC_API_KEY is set, store it as the global `anthropic` secret.
@@ -420,15 +422,20 @@ Examples:
         /// Follow the daemon log in this terminal after starting.
         #[arg(long)]
         tail: bool,
+        /// A value for the file's `${{ env.args.NAME }}`, as NAME=VALUE.
+        /// Repeatable; passed on to `sbx env create` too.
+        #[arg(long = "env-arg", value_name = "NAME=VALUE")]
+        env_args: Vec<String>,
     },
-    /// Generate a `.sbxenv.yaml` next to the workspace from sbxw.toml.
+    /// Generate an `sbxenv.yaml` next to the workspace from sbxw.toml.
     #[command(after_help = "\
 Examples:
-  sbxw env export                       # write ../.sbxenv.yaml for ./ as the workspace
+  sbxw env export                       # write ../sbxenv.yaml for ./ as the workspace
   sbxw env export --name neos ~/dev/neos
+  sbxw env export -o ~/dev/sbxenv.yaml  # further up: workspace: ./group/neos
   sbxw env export -o -                  # print it instead of writing a file
 
-Then, on any machine with sbx 0.39+ and no sbxw:
+Then, on any machine with sbx 0.43+ and no sbxw:
   sbx env run                           # from the directory holding the file")]
     Export {
         /// Workspace the agent edits. Defaults to the current directory.
@@ -440,9 +447,9 @@ Then, on any machine with sbx 0.39+ and no sbxw:
         /// Path to the project config. Defaults to ./sbxw.toml.
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
-        /// Where to write it. Defaults to `.sbxenv.yaml` in the workspace's
-        /// *parent*, which is where sbx wants it — see the command's notes.
-        /// `-` writes to stdout.
+        /// Where to write it. Defaults to `sbxenv.yaml` in the workspace's
+        /// *parent*, outside the agent's reach. Paths in the file are written
+        /// relative to wherever it goes. `-` writes to stdout.
         #[arg(long, short = 'o', value_name = "FILE")]
         out: Option<PathBuf>,
         /// Overwrite an existing file.
@@ -740,7 +747,8 @@ fn main() -> Result<()> {
                 yes,
                 use_api_key,
                 tail,
-            } => cmd_env_run(paths, config, no_web, yes, use_api_key, tail),
+                env_args,
+            } => cmd_env_run(paths, config, no_web, yes, use_api_key, tail, env_args),
             EnvCmd::Export {
                 path,
                 name,
@@ -1513,18 +1521,24 @@ fn derive_sandbox_name(workspace: &Path) -> String {
             Some(existing) if existing == workspace => return candidate,
             Some(_) => {
                 clashes += 1;
-                candidate = if clashes == 1 {
-                    format!("{base}-copy")
+                let suffix = if clashes == 1 {
+                    "-copy".to_string()
                 } else {
-                    format!("{base}-copy-{}", clashes - 1)
+                    format!("-copy-{}", clashes - 1)
                 };
+                // The suffix must survive sbx's length limit, so the base gives
+                // way — and must not leave a hyphen where the two meet.
+                let keep = MAX_SANDBOX_NAME_LEN - suffix.len();
+                let head = base[..base.len().min(keep)].trim_end_matches('-');
+                candidate = format!("{head}{suffix}");
             }
         }
     }
 }
 
-/// Replaces anything outside `is_valid_sandbox_name`'s alphabet with `-`, so
-/// a derived name is always accepted without the caller re-checking it.
+/// Replaces anything outside `is_valid_sandbox_name`'s alphabet with `-`, and
+/// cuts it to sbx's length with no trailing hyphen, so a derived name is always
+/// accepted without the caller re-checking it.
 fn sanitize_sandbox_name_component(s: &str) -> String {
     let cleaned: String = s
         .chars()
@@ -1535,11 +1549,13 @@ fn sanitize_sandbox_name_component(s: &str) -> String {
                 '-'
             }
         })
+        .take(MAX_SANDBOX_NAME_LEN)
         .collect();
+    let cleaned = cleaned.trim_end_matches('-');
     if cleaned.is_empty() {
         "sandbox".to_string()
     } else {
-        cleaned
+        cleaned.to_string()
     }
 }
 
@@ -1581,16 +1597,24 @@ pub(crate) fn mint_chat_name() -> String {
     format!("chat-{:06x}", (nanos as u64) & 0xff_ffff)
 }
 
+/// sbx refuses a longer name (0.42) — it is a DNS label's limit, which is what
+/// `<name>.sbx` and the `/etc/hosts` aliases make of it.
+pub(crate) const MAX_SANDBOX_NAME_LEN: usize = 63;
+
 /// Sandbox names go into shell commands, file names and hostnames, so keep them
-/// to an unambiguous alphabet.
+/// to an unambiguous alphabet — and within sbx's own rule since 0.42: at most
+/// 63 characters, not ending in a hyphen or period (sbxw allows no period).
 pub(crate) fn is_valid_sandbox_name(name: &str) -> bool {
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    !name.is_empty()
+        && name.len() <= MAX_SANDBOX_NAME_LEN
+        && !name.ends_with('-')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// What to tell the user when `is_valid_sandbox_name` says no. Shared with the
 /// web UI so the CLI and the browser explain the same rule the same way.
 pub(crate) const INVALID_NAME_MSG: &str =
-    "name must be non-empty and contain only letters, digits, and hyphens";
+    "name must be 1–63 letters, digits and hyphens, and must not end with a hyphen";
 
 /// Create the empty workspace for chat sandbox `name`, returning its path.
 pub(crate) fn prepare_chat_workspace(name: &str) -> Result<String> {
@@ -2481,7 +2505,7 @@ pub(crate) fn provision_sandbox(
                 ro_mounts: ro_strs,
                 kits: &kits,
                 publish: &port_specs,
-                share_skills: cfg.share_skills,
+                skills: cfg.skills_mode(),
                 env: &env_pairs,
                 env_files: &cfg.env_files,
             },
@@ -2713,30 +2737,89 @@ pub(crate) fn provision_sandbox(
     Ok(warnings)
 }
 
-/// Where an exported `.sbxenv.yaml` goes when `-o` doesn't say: the workspace's
-/// **parent**, not the workspace.
+/// Where an exported `sbxenv.yaml` goes when nothing says otherwise: `dir`, or
+/// the workspace's **parent** — never the workspace.
 ///
-/// sbx is explicit about this and the reason is not tidiness. The agent can
-/// write anywhere in a direct-mounted workspace, so an environment file inside
-/// one is a file the agent can rewrite — and it is the file that decides what
-/// the *next* sandbox gets: which kits, which mounts, which ports. Outside, it
-/// is host-side configuration the sandbox cannot reach.
+/// The reason is not tidiness. The agent can write anywhere in a direct-mounted
+/// workspace, so an environment file inside one is a file the agent can
+/// rewrite — and it is the file that decides what the *next* sandbox gets:
+/// which kits, which mounts, which ports. sbx 0.42 binds the file read-only
+/// into sandboxes that `sbx env` creates, but not into the ones `sbxw up`
+/// creates with `sbx create`, which mount the same directory. Outside, it is
+/// host-side configuration no sandbox can reach.
 ///
 /// (sbxw.toml has the same shape of exposure and sbxw does not move it, because
 /// it is a project's own file and moving it would break every existing setup.
 /// It is worth knowing about: an agent that edits `network_allow` widens its own
 /// egress on your next `sbxw up`. The README says so too.)
-fn default_env_export_path(workspace: &Path) -> PathBuf {
-    workspace.parent().unwrap_or(workspace).join(".sbxenv.yaml")
+fn default_env_export_path(workspace: &Path, dir: Option<&Path>) -> PathBuf {
+    export_dir_for(workspace, dir).join(envfile::FILE_NAME)
 }
 
-/// `sbxw env run` — create from a `.sbxenv.yaml`, then run sbxw's own pipeline
+/// The directory an export is written to, and so the one its paths are
+/// relative to: `explicit` when it strictly contains the workspace, the
+/// workspace's parent otherwise.
+///
+/// "Strictly" is the rule above: the workspace itself is never the answer. And
+/// a directory beside the workspace rather than above it would give
+/// `workspace: ../../elsewhere/neos` — correct, and a file nobody can read — so
+/// it is refused in favour of the parent.
+fn export_dir_for(workspace: &Path, explicit: Option<&Path>) -> PathBuf {
+    if let Some(d) = explicit.filter(|d| workspace.starts_with(d) && *d != workspace) {
+        return d.to_path_buf();
+    }
+    workspace
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workspace.to_path_buf())
+}
+
+/// `path`, as an environment file in `dir` should spell it.
+///
+/// Relative — `./neos`, `../kits/headroom` — because sbx 0.43 resolves a
+/// relative path against the file that declares it, which makes it the one
+/// spelling that survives a checkout in a different place. It replaces
+/// `${SBXW_PROJECTS_ROOT:-/abs}/neos`, which 0.42 stopped expanding.
+///
+/// Absolute when the two share nothing but the filesystem root: a path that
+/// climbs all the way up is no more portable than the absolute one, and much
+/// harder to read.
+fn path_relative_to(dir: &Path, path: &Path) -> String {
+    use std::path::Component;
+    let d: Vec<Component> = dir.components().collect();
+    let p: Vec<Component> = path.components().collect();
+    let common = d.iter().zip(&p).take_while(|(a, b)| a == b).count();
+    let only_root = d
+        .iter()
+        .take(common)
+        .all(|c| matches!(c, Component::RootDir | Component::Prefix(_)));
+    if only_root {
+        return path.to_string_lossy().into_owned();
+    }
+    let mut rel = PathBuf::new();
+    for _ in common..d.len() {
+        rel.push("..");
+    }
+    for c in &p[common..] {
+        rel.push(c);
+    }
+    let rel = rel.to_string_lossy().into_owned();
+    if rel.is_empty() {
+        ".".into()
+    } else if rel.starts_with("..") {
+        rel
+    } else {
+        format!("./{rel}")
+    }
+}
+
+/// `sbxw env run` — create from an `sbxenv.yaml`, then run sbxw's own pipeline
 /// over the result.
 ///
 /// The division of labour is the point. `sbx env create` is the only thing that
 /// can apply an environment file whole — secrets, bindings, registries, MCP
-/// servers, kits, mounts — so it does the creation. Everything sbxw adds and
-/// the format cannot express (egress policy, OAuth credentials, hooks, the
+/// servers, skills, kits, mounts — so it does the creation. Everything sbxw adds
+/// and the format cannot express (egress policy, OAuth credentials, hooks, the
 /// `/etc/hosts` aliases, the browser terminal) comes after, through the same
 /// `provision_sandbox` every other entry point uses, on a sandbox that by then
 /// already exists.
@@ -2746,8 +2829,10 @@ fn default_env_export_path(workspace: &Path) -> PathBuf {
 /// and the new sandbox is removed — while the secrets it provisioned first stay
 /// behind. And there is no way to fix it from the outside: `env create` has no
 /// port flag, and a second file can only *add* ports because the merge
-/// concatenates lists. So the file itself is rewritten, into a scratch copy,
-/// with every path made absolute so it can live outside the original directory.
+/// concatenates lists. So when a port has to move, the file itself is
+/// rewritten, into a scratch copy with every path made absolute so it can live
+/// outside the original directory. Otherwise sbx gets the arguments exactly as
+/// they were typed, and applies its own rules to them.
 fn cmd_env_run(
     paths: Vec<PathBuf>,
     config: PathBuf,
@@ -2755,37 +2840,50 @@ fn cmd_env_run(
     yes: bool,
     use_api_key: bool,
     tail: bool,
+    env_args: Vec<String>,
 ) -> Result<()> {
-    // `assert_available` already refuses anything below the floor, and `sbx env`
-    // arrived in that same release — so there is nothing extra to check here.
+    // `assert_available` already refuses anything below the floor, and the
+    // environment-file shape this reads is that same release's.
     sbx::assert_available()?;
+
+    let cli_args: Vec<(String, String)> = env_args
+        .iter()
+        .map(|pair| {
+            pair.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .with_context(|| format!("--env-arg {pair}: expected NAME=VALUE"))
+        })
+        .collect::<Result<_>>()?;
 
     let cwd = std::env::current_dir()?;
     let files = envfile::resolve_paths(&paths, &cwd)?;
-    let mut loaded = envfile::load(&files, &|name| std::env::var(name).ok())?;
+    let user_base = envfile::user_base();
+    let mut loaded = envfile::load(&files, user_base.as_deref(), &cli_args)?;
     let spec = loaded.spec()?;
 
+    for name in &loaded.legacy_vars {
+        eprintln!(
+            "sbxw  warning: ${{{name}}} is not expanded since sbx 0.42 — it reaches sbx \
+             verbatim. Use an argument instead (`${{{{ env.args.{name} }}}}` with \
+             --env-arg {name}=…), or a path relative to the file."
+        );
+    }
     for name in &loaded.unresolved {
         eprintln!(
-            "sbxw  warning: ${{{name}}} has no value on this host — left as written, so sbx \
-             will see it unresolved too"
+            "sbxw  warning: ${{{{ {name} }}}} has no value — left as written, so sbx will \
+             see it unresolved too"
         );
     }
 
-    // Paths in the file are relative to the *first* file's directory, which is
-    // sbx's rule and therefore sbxw's. Owned, because the document it came from
-    // is rewritten further down.
-    let base = loaded.base_dir.clone();
-    let workspace = match spec.workspace.as_deref() {
-        Some(w) => {
-            let p = Path::new(w);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                base.join(p)
-            }
-        }
-        None => base.clone(),
+    // Already absolute: each path was resolved against the file that declared
+    // it, which is sbx's rule and therefore sbxw's.
+    let Some(workspace) = spec.workspace.as_deref().map(PathBuf::from) else {
+        bail!(
+            "{} declares no `workspace:`. Since sbx 0.42 that creates a sandbox with nothing \
+             mounted, and sbxw's pipeline — artifacts, trust, the Files panel — has nothing \
+             to work on. Add `workspace: .` to mount the file's own directory.",
+            display_sources(&loaded.sources)
+        );
     };
     let workspace = std::fs::canonicalize(&workspace).with_context(|| {
         format!(
@@ -2795,9 +2893,9 @@ fn cmd_env_run(
     })?;
     let agent = spec.agent.clone().unwrap_or_else(|| "claude".into());
 
-    // sbx would default the name to `<agent>-<basename>`; sbxw pins it instead,
-    // so finding the sandbox afterwards is a lookup and not a re-derivation of
-    // whatever sanitising sbx applies.
+    // sbx would default the name to `<agent>-<basename>`; sbxw pins it instead
+    // (`--name`), so finding the sandbox afterwards is a lookup and not a
+    // re-derivation of whatever sanitising sbx applies.
     let name = match spec.name.clone() {
         Some(n) => n,
         None => {
@@ -2812,10 +2910,11 @@ fn cmd_env_run(
         bail!(INVALID_NAME_MSG);
     }
 
-    println!(
-        "sbxw  {} → sandbox '{name}'",
-        display_sources(&loaded.sources)
-    );
+    let mut shown = display_sources(&loaded.sources);
+    if let Some(u) = &loaded.user_source {
+        shown = format!("{shown} (over {})", u.display());
+    }
+    println!("sbxw  {shown} → sandbox '{name}'");
 
     // ── Creation, once, and only if there is nothing there yet ───────────────
     if sbx::exists(&name)? {
@@ -2826,51 +2925,41 @@ fn cmd_env_run(
         );
     } else {
         let (ports, moved) = negotiate_ports(&spec.ports, !yes)?;
-        let pinned_name = spec.name.is_none();
-        let rewrite = moved || pinned_name;
 
-        let create_args: Vec<String> = if rewrite {
-            loaded.set_ports(&ports);
-            if pinned_name {
-                loaded.set_name(&name);
-            }
-            // The scratch copy lives outside `base`, so every relative path in
-            // it has to be absolute or it would resolve against the wrong
-            // directory. The kit resolver is the same one `sbxw.toml` uses, so
-            // an OCI reference stays a reference.
-            loaded.set_workspace(&workspace.to_string_lossy());
-            let mounts: Vec<envfile::MountSpec> = spec
-                .additional
-                .iter()
-                .map(|m| envfile::MountSpec {
-                    path: base.join(&m.path).to_string_lossy().into_owned(),
-                    read_only: m.read_only,
-                })
-                .collect();
-            loaded.set_additional(&mounts);
-            let kits: Vec<String> = spec
-                .kits
-                .iter()
-                .map(|k| resolve_kit_ref(&base, k.clone()))
-                .collect();
-            loaded.set_kits(&kits);
-
-            let dir = env_state_dir(&name);
-            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-            let derived = dir.join(".sbxenv.yaml");
-            std::fs::write(&derived, loaded.to_yaml()?)
-                .with_context(|| format!("writing {}", derived.display()))?;
-            if moved {
-                println!(
-                    "sbxw  ports adjusted — running from a rewritten copy at {}",
-                    derived.display()
+        let targets: Vec<String> = if moved {
+            // The base's ports are not ours to rewrite: sbx reads the base
+            // again, beneath the copy, and would publish the old one anyway.
+            let (from_base, own) = ports.split_at(spec.user_ports);
+            if from_base != &spec.ports[..spec.user_ports] {
+                bail!(
+                    "a busy host port is declared in {}, which sbx merges beneath every \
+                     project — change it there, or free the port",
+                    loaded
+                        .user_source
+                        .as_deref()
+                        .unwrap_or(Path::new("~/.sbxenv.yaml"))
+                        .display()
                 );
             }
-            vec![derived.to_string_lossy().into_owned()]
+            loaded.set_ports(own);
+            loaded.set_workspace(&workspace.to_string_lossy());
+
+            // A directory, not a file: that is what makes sbx merge the base
+            // beneath it, exactly as it would have for the original.
+            let dir = env_state_dir(&name);
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            let derived = dir.join(envfile::FILE_NAME);
+            std::fs::write(&derived, loaded.to_yaml()?)
+                .with_context(|| format!("writing {}", derived.display()))?;
+            println!(
+                "sbxw  ports adjusted — running from a rewritten copy at {}",
+                derived.display()
+            );
+            vec![dir.to_string_lossy().into_owned()]
         } else {
-            files
+            envfile::absolute_inputs(&paths, &cwd)
                 .iter()
-                .map(|f| f.to_string_lossy().into_owned())
+                .map(|p| p.to_string_lossy().into_owned())
                 .collect()
         };
 
@@ -2880,13 +2969,13 @@ fn cmd_env_run(
                 spec.delegated.join(", ")
             );
         }
-        sbx::env_create(&create_args)?;
+        sbx::env_create(&targets, &name, &env_args)?;
 
-        // The name is pinned into the document precisely so this holds. If it
-        // doesn't, stopping here is the only safe move: the provisioning pass
-        // below creates a sandbox when it can't find one, and it would use
-        // `sbx create` — a *second* sandbox, without the secrets, bindings and
-        // MCP servers the environment file just provisioned into the first.
+        // `--name` is passed precisely so this holds. If it doesn't, stopping
+        // here is the only safe move: the provisioning pass below creates a
+        // sandbox when it can't find one, and it would use `sbx create` — a
+        // *second* sandbox, without the secrets, bindings and MCP servers the
+        // environment file just provisioned into the first.
         if !sbx::exists(&name)? {
             bail!(
                 "`sbx env create` reported success but no sandbox named '{name}' exists. \
@@ -2907,8 +2996,8 @@ fn cmd_env_run(
         .map(|m| envfile::Port {
             sandbox: m.sandbox_port,
             host: Some(m.host_port),
+            protocol: (!envfile::protocol_is_default(&m.proto, &m.host_ip)).then_some(m.proto),
             host_ip: (!m.host_ip.is_empty()).then_some(m.host_ip),
-            protocol: (!m.proto.is_empty() && m.proto != "tcp").then_some(m.proto),
         })
         .collect();
     let effective = envfile::Spec {
@@ -2922,7 +3011,7 @@ fn cmd_env_run(
         ..spec
     };
 
-    let (cfg, borrowed) = config_from_spec(&effective, &base, load_config(&config)?);
+    let (cfg, borrowed) = config_from_spec(&effective, load_config(&config)?);
     if !borrowed.is_empty() {
         let from = if config.exists() {
             config.display().to_string()
@@ -2989,7 +3078,7 @@ fn display_sources(sources: &[PathBuf]) -> String {
 /// exactly the setup where somebody edits the wrong one and watches nothing
 /// happen; printing the borrowed values at creation time is what makes that
 /// visible on the run where it matters.
-fn config_from_spec(spec: &envfile::Spec, base: &Path, mut cfg: Config) -> (Config, Vec<String>) {
+fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<String>) {
     let mut report = Vec::new();
 
     if spec.ports.is_empty() {
@@ -3061,17 +3150,13 @@ fn config_from_spec(spec: &envfile::Spec, base: &Path, mut cfg: Config) -> (Conf
     // deliberate: it skips the ones `sbx inspect` already lists, so this is a
     // no-op that also repairs a sandbox whose kit went missing.
     if !spec.kits.is_empty() {
-        // Resolved against the environment file's own directory *before* they
-        // are written into the merged config. That config lands in
-        // `state/env/<name>/`, and `load_config` re-anchors relative entries to
-        // whatever directory it read them from — so a raw `./kits/headroom`
-        // would come back as `state/env/<name>/kits/headroom`, a path that has
-        // never existed.
-        cfg.kits = spec
-            .kits
-            .iter()
-            .map(|k| resolve_kit_ref(base, k.clone()))
-            .collect();
+        // Already absolute — `envfile::load` resolves each against the file
+        // that named it — and they have to be before they are written into the
+        // merged config. That config lands in `state/env/<name>/`, and
+        // `load_config` re-anchors relative entries to whatever directory it
+        // read them from — so a raw `./kits/headroom` would come back as
+        // `state/env/<name>/kits/headroom`, a path that has never existed.
+        cfg.kits = spec.kits.clone();
     } else if !cfg.kits.is_empty() {
         report.push(format!("kits ({})", cfg.kits.join(", ")));
     }
@@ -3198,93 +3283,7 @@ fn negotiate_ports(
     Ok((out, moved))
 }
 
-/// The variable an exported environment file routes its workspace through, so
-/// the same committed file works on machines that keep their repositories in
-/// different places.
-///
-/// `install.sh` offers to set it; nothing breaks if nobody does, because every
-/// reference is written with a fallback (see `portable_workspace`).
-pub(crate) const PROJECTS_ROOT_ENV: &str = "SBXW_PROJECTS_ROOT";
-
-/// The developer's repository root, if they have declared one and this
-/// workspace is actually under it.
-///
-/// The second half matters: a stale or unrelated `SBXW_PROJECTS_ROOT` must not
-/// produce `${SBXW_PROJECTS_ROOT}/../../elsewhere/neos`. If the variable
-/// doesn't contain this workspace it is simply not the right root for it, and
-/// the workspace's own parent is used instead.
-fn projects_root_for(workspace: &Path) -> Option<PathBuf> {
-    let raw = std::env::var(PROJECTS_ROOT_ENV).ok()?;
-    let root = PathBuf::from(raw.trim());
-    if root.as_os_str().is_empty() {
-        return None;
-    }
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
-    workspace.starts_with(&root).then_some(root)
-}
-
-/// The root a workspace's path is expressed against, and whether it came from
-/// the environment rather than being guessed.
-///
-/// One chain, because two copies of it disagreed: the panel showed a
-/// `projectsRoot` derived here while the `workspace:` line under it came from
-/// `portable_workspace_with`'s own copy, so any edit to one made the UI report
-/// a root the file wasn't using.
-///
-/// An explicit root that does not contain the workspace is refused — it cannot
-/// be *this* workspace's root, and honouring it would emit
-/// `${ROOT}/../../elsewhere`.
-fn resolve_projects_root(workspace: &Path, explicit: Option<&Path>) -> (PathBuf, bool) {
-    if let Some(r) = explicit.filter(|r| workspace.starts_with(r)) {
-        return (r.to_path_buf(), false);
-    }
-    if let Some(r) = projects_root_for(workspace) {
-        return (r, true);
-    }
-    let fallback = workspace
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| workspace.to_path_buf());
-    (fallback, false)
-}
-
-/// The `workspace:` value for an exported path: routed through
-/// `SBXW_PROJECTS_ROOT`, with the exporting machine's own root as the fallback.
-///
-/// ```text
-/// ${SBXW_PROJECTS_ROOT:-/Users/thomas/Downloads}/neos
-/// ```
-///
-/// Both halves earn their place. The **variable** is what makes the file
-/// portable: a colleague who keeps repositories somewhere else exports it once
-/// and every project's file resolves. The **fallback** is what stops the file
-/// from being a trap: it works on the exporting machine, and on a colleague's
-/// too if they happen to use the same layout, so nothing has to be configured
-/// before the file will run at all. The price is one absolute path from the
-/// exporter's machine sitting in a committed file — pass a root that contains
-/// no personal detail, or accept it as the cost of a file that works.
-///
-/// The suffix is everything below the root, so a repository nested two levels
-/// down keeps its shape.
-///
-/// The root is supplied rather than discovered, because the web UI lets you
-/// edit it and an edit that changed only the *fallback* while the suffix stayed
-/// wrong would be a confusing half-measure. See `resolve_projects_root`.
-fn portable_workspace_with(workspace: &Path, root: Option<&Path>) -> String {
-    let (root, _) = resolve_projects_root(workspace, root);
-    let suffix = workspace
-        .strip_prefix(&root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let root = root.to_string_lossy();
-    if suffix.is_empty() {
-        format!("${{{PROJECTS_ROOT_ENV}:-{root}}}")
-    } else {
-        format!("${{{PROJECTS_ROOT_ENV}:-{root}}}/{suffix}")
-    }
-}
-
-/// `sbxw env export` — sbxw.toml, rendered as the `.sbxenv.yaml` sbx 0.39 reads.
+/// `sbxw env export` — sbxw.toml, rendered as the `sbxenv.yaml` sbx reads.
 ///
 /// One-way and non-authoritative: sbxw keeps provisioning from sbxw.toml, and
 /// this exists so a contributor with plain `sbx` (or a CI runner) can bring up
@@ -3299,8 +3298,7 @@ fn cmd_env_export(
 ) -> Result<()> {
     // Deliberately no `assert_available` here: exporting needs no sbx at all.
     // The file is read on whatever machine runs it, and writing one on a host
-    // without sbx — or with an older one — is a perfectly good reason to run
-    // this command.
+    // without sbx is a perfectly good reason to run this command.
     let cfg = load_config(&config)?;
 
     let workspace = match path {
@@ -3315,21 +3313,22 @@ fn cmd_env_export(
         bail!(INVALID_NAME_MSG);
     }
 
-    let dest = out.unwrap_or_else(|| default_env_export_path(&workspace));
+    let dest = out.unwrap_or_else(|| default_env_export_path(&workspace, None));
     let to_stdout = dest.as_os_str() == "-";
-    // One root for the whole file, taken from the workspace — not one per path.
-    // With `None`, every path resolved its own root (a kit beside the project
-    // got `${ROOT:-/p/kits}/headroom` while the workspace got `${ROOT:-/p}/neos`),
-    // so setting the variable moved them inconsistently. The web export always
-    // passed a single root; this is the CLI catching up.
-    let (root, _) = resolve_projects_root(&workspace, None);
-    let file = env_file_for(
-        &name,
-        &cfg,
-        &workspace,
-        ports_from_config(&cfg),
-        Some(&root),
-    );
+    // The paths inside are relative to wherever the file lands, so that has to
+    // be known — as a real directory — before a line is written. Printed
+    // output is spelled for the default spot.
+    let dir = if to_stdout {
+        export_dir_for(&workspace, None)
+    } else {
+        let parent = match dest.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+            _ => std::env::current_dir()?,
+        };
+        std::fs::canonicalize(&parent)
+            .with_context(|| format!("no such directory: {}", parent.display()))?
+    };
+    let file = env_file_for(&name, &cfg, &workspace, ports_from_config(&cfg), &dir);
     let rendered = file.render(&env_file_generator());
 
     if to_stdout {
@@ -3342,19 +3341,20 @@ fn cmd_env_export(
             dest.display()
         );
     }
-    if dest.starts_with(&workspace) {
+    if dir.starts_with(&workspace) {
         eprintln!(
-            "sbxw  warning: {} is inside the workspace, so the agent can edit the file that \
-             configures its own next sandbox. sbx recommends keeping it outside.",
+            "sbxw  warning: {} is inside the workspace, so an agent in a `sbxw up` sandbox \
+             can edit the file that configures its own next sandbox. Keep it outside.",
             dest.display()
         );
     }
     std::fs::write(&dest, &rendered).with_context(|| format!("writing {}", dest.display()))?;
     println!("wrote {}", dest.display());
-    println!(
-        "run it with:  cd {} && sbx env run",
-        dest.parent().unwrap_or(Path::new(".")).display()
-    );
+    if dest.file_name() == Some(std::ffi::OsStr::new(envfile::FILE_NAME)) {
+        println!("run it with:  cd {} && sbx env run", dir.display());
+    } else {
+        println!("run it with:  sbx env run {}", dest.display());
+    }
     Ok(())
 }
 
@@ -3391,18 +3391,18 @@ fn alias_for(cfg: &Config, sandbox_port: u16) -> String {
 /// and `render_env_file_for` each built the struct field by field — and they had
 /// already drifted: the same project exported `kits: ./local-kit` from the CLI
 /// and `kits: ${SBXW_PROJECTS_ROOT:-…}/local-kit` from the browser. What
-/// genuinely differs between the callers is only where the ports come from, so
-/// that is the parameter; everything else is shared by construction.
+/// genuinely differs between the callers is where the ports come from and where
+/// the file goes, so those are the parameters; everything else is shared by
+/// construction.
 ///
-/// Paths go through `${SBXW_PROJECTS_ROOT}` for kits as well as the workspace:
-/// a kit checked out beside the project is exactly as machine-specific as the
-/// project, and the variable is what the panel's whole UX is built around.
+/// Kits are written relative to `dir` as well as the workspace: a kit checked
+/// out beside the project is exactly as machine-specific as the project.
 fn env_file_for(
     name: &str,
     cfg: &Config,
     workspace: &Path,
     ports: Vec<envfile::Port>,
-    root: Option<&Path>,
+    dir: &Path,
 ) -> envfile::EnvFile {
     let triples: Vec<PortTriple> = ports
         .iter()
@@ -3417,14 +3417,15 @@ fn env_file_for(
     envfile::EnvFile {
         name: name.to_string(),
         agent: "claude".into(),
-        workspace: portable_workspace_with(workspace, root),
+        workspace: path_relative_to(dir, workspace),
+        skills: cfg.skills_mode().map(str::to_string),
         kits: cfg
             .kits
             .iter()
             .map(|k| {
                 let p = Path::new(k);
                 if p.is_absolute() {
-                    portable_workspace_with(p, root)
+                    path_relative_to(dir, p)
                 } else {
                     // A registry or git reference — `load_config` left it alone
                     // precisely because it is not a path, so neither do we.
@@ -3448,12 +3449,8 @@ pub(crate) struct RenderedEnvFile {
     pub yaml: String,
     /// Where `save` would write it: beside the workspace, never inside it.
     pub dest: String,
-    /// The root the `workspace:` expression is expressed against.
-    pub projects_root: String,
-    pub root_var: &'static str,
-    /// True when that root came from the environment rather than being guessed
-    /// from the workspace's parent.
-    pub root_from_env: bool,
+    /// The directory it goes in, which every path in it is relative to.
+    pub dir: String,
 }
 
 /// Render the environment file for an **existing sandbox**.
@@ -3467,7 +3464,7 @@ pub(crate) struct RenderedEnvFile {
 pub(crate) fn render_env_file_for(
     name: &str,
     cfg: &Config,
-    root_override: Option<&Path>,
+    dir_override: Option<&Path>,
 ) -> Result<RenderedEnvFile> {
     let workspace = workspace_for(name).with_context(|| {
         format!(
@@ -3485,17 +3482,13 @@ pub(crate) fn render_env_file_for(
         live.iter().map(envfile::Port::from).collect()
     };
 
-    let (effective_root, root_from_env) = resolve_projects_root(&workspace, root_override);
-    let file = env_file_for(name, cfg, &workspace, ports, Some(&effective_root));
+    let dir = export_dir_for(&workspace, dir_override);
+    let file = env_file_for(name, cfg, &workspace, ports, &dir);
 
     Ok(RenderedEnvFile {
         yaml: file.render(&env_file_generator()),
-        dest: default_env_export_path(&workspace)
-            .to_string_lossy()
-            .into_owned(),
-        projects_root: effective_root.to_string_lossy().into_owned(),
-        root_var: PROJECTS_ROOT_ENV,
-        root_from_env,
+        dest: dir.join(envfile::FILE_NAME).to_string_lossy().into_owned(),
+        dir: dir.to_string_lossy().into_owned(),
     })
 }
 
@@ -3551,14 +3544,6 @@ fn env_export_notes(cfg: &Config, ports: &[PortTriple]) -> Vec<String> {
              The ports below are published either way; only the names are missing.",
             aliases.join(", ")
         ));
-    }
-
-    if !cfg.share_skills {
-        notes.push(
-            "share_skills = false (`sbx create --no-share-skills`). An environment file\n\
-             has no field for it, so `sbx env run` mounts the shared skill store."
-                .into(),
-        );
     }
 
     notes.push(
@@ -4007,7 +3992,7 @@ fn restrict_permissions(path: &std::path::Path, mode: u32) {
 /// this kit uses — `network.allowedDomains` became `permissions.network.allow`,
 /// `commands.initFiles` became `setup.files` — and its loader *rejects* v1
 /// field names rather than tolerating them, so a spec has to commit to one.
-/// sbxw used to pick per host; with the floor at 0.39 there is one answer.
+/// sbxw used to pick per host; with the floor past 0.39 there is one answer.
 fn oauth_kit_spec(credentials_json: &str) -> String {
     oauth_kit_spec_inner(Some(credentials_json))
 }
@@ -4305,26 +4290,24 @@ mod tests {
         assert!(format!("{err:#}").contains("failed to apply network allowlist"));
     }
 
-    /// The workspace goes through a variable *with* a fallback: the variable
-    /// is what makes a committed file portable, the fallback is what stops it
-    /// from being a trap on a machine where nobody set one.
+    /// sbx 0.43 resolves a relative path against the file that declares it, so
+    /// relative is the spelling that survives a checkout somewhere else.
     #[test]
-    fn a_portable_workspace_keeps_the_suffix_below_the_root() {
-        let ws = Path::new("/home/you/dev/acme/neos");
+    fn a_path_is_written_relative_to_the_file() {
+        let dir = Path::new("/home/you/dev");
         assert_eq!(
-            portable_workspace_with(ws, Some(Path::new("/home/you/dev"))),
-            "${SBXW_PROJECTS_ROOT:-/home/you/dev}/acme/neos"
+            path_relative_to(dir, Path::new("/home/you/dev/acme/neos")),
+            "./acme/neos"
         );
-        // No root given: the workspace's own parent, which always resolves.
         assert_eq!(
-            portable_workspace_with(ws, None),
-            "${SBXW_PROJECTS_ROOT:-/home/you/dev/acme}/neos"
+            path_relative_to(dir, Path::new("/home/you/kits/headroom")),
+            "../kits/headroom"
         );
-        // A root that doesn't contain the workspace cannot be its root, and
-        // honouring it would emit `${ROOT}/../../elsewhere`.
+        assert_eq!(path_relative_to(dir, dir), ".");
+        // Sharing only the root is no portability at all — absolute reads better.
         assert_eq!(
-            portable_workspace_with(ws, Some(Path::new("/opt/other"))),
-            "${SBXW_PROJECTS_ROOT:-/home/you/dev/acme}/neos"
+            path_relative_to(dir, Path::new("/opt/kits/x")),
+            "/opt/kits/x"
         );
     }
 
@@ -4421,7 +4404,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (cfg, report) = config_from_spec(&spec, Path::new("/env"), base);
+        let (cfg, report) = config_from_spec(&spec, base);
 
         // The file's port wins…
         assert_eq!(cfg.ports.len(), 1);
@@ -4499,9 +4482,25 @@ mod tests {
     /// sandbox gets.
     #[test]
     fn an_exported_environment_file_lands_outside_the_workspace() {
-        let dest = default_env_export_path(Path::new("/home/you/dev/neos"));
-        assert_eq!(dest, Path::new("/home/you/dev/.sbxenv.yaml"));
-        assert!(!dest.starts_with("/home/you/dev/neos"));
+        let ws = Path::new("/home/you/dev/acme/neos");
+        let dest = default_env_export_path(ws, None);
+        assert_eq!(dest, Path::new("/home/you/dev/acme/sbxenv.yaml"));
+        assert!(!dest.starts_with(ws));
+
+        // A directory further up is honoured…
+        assert_eq!(
+            default_env_export_path(ws, Some(Path::new("/home/you/dev"))),
+            Path::new("/home/you/dev/sbxenv.yaml")
+        );
+        // …the workspace itself, or a directory beside it, is not.
+        for refused in [ws, Path::new("/opt/other")] {
+            assert_eq!(
+                export_dir_for(ws, Some(refused)),
+                Path::new("/home/you/dev/acme"),
+                "{} is not a place for this file",
+                refused.display()
+            );
+        }
     }
 
     /// `web_port_of` learned the IPv6 lesson and wrote it in a comment; the
@@ -4523,85 +4522,37 @@ mod tests {
         assert!(web_ip_of("127.0.0.2:7681").starts_with("127."));
     }
 
-    /// One spelling for every path in an exported file. The CLI export used to
-    /// write kits relative to the file's directory while the web panel wrote
-    /// them through the variable, so the same project produced two different
-    /// `kits:` lines depending on which one you used.
+    /// One spelling for every path in an exported file, relative to where the
+    /// file goes, so moving the directory moves the workspace and its kits
+    /// together.
     #[test]
-    fn every_exported_path_goes_through_the_root_variable() {
+    fn every_exported_path_is_relative_to_the_file() {
         let cfg = Config {
             kits: vec![
                 "/home/you/dev/kits/headroom".into(),
                 "docker.io/sbx/playwright-kit:latest".into(),
             ],
             ports: vec![],
+            skills: "off".into(),
             ..Config::default()
         };
-        let ws = Path::new("/home/you/dev/neos");
-        let root = Path::new("/home/you/dev");
-
-        let file = env_file_for("neos", &cfg, ws, ports_from_config(&cfg), Some(root));
-        assert_eq!(file.workspace, "${SBXW_PROJECTS_ROOT:-/home/you/dev}/neos");
-        assert_eq!(
-            file.kits[0],
-            "${SBXW_PROJECTS_ROOT:-/home/you/dev}/kits/headroom"
-        );
-        // A registry reference is not a path and must survive untouched.
-        assert_eq!(file.kits[1], "docker.io/sbx/playwright-kit:latest");
-    }
-
-    /// One root for the whole file, not one per path — otherwise setting
-    /// `SBXW_PROJECTS_ROOT` moves the workspace and its kits to different
-    /// places, which is worse than not using the variable at all.
-    #[test]
-    fn every_path_in_one_file_shares_one_root() {
-        let cfg = Config {
-            kits: vec!["/p/kits/headroom".into()],
-            ports: vec![],
-            ..Config::default()
-        };
-        let ws = Path::new("/p/neos");
-        let (root, _) = resolve_projects_root(ws, None);
-
-        let file = env_file_for("neos", &cfg, ws, ports_from_config(&cfg), Some(&root));
-        assert_eq!(file.workspace, "${SBXW_PROJECTS_ROOT:-/p}/neos");
-        assert_eq!(file.kits[0], "${SBXW_PROJECTS_ROOT:-/p}/kits/headroom");
-
-        // Both suffixes hang off the same root, so one variable relocates the
-        // whole file coherently.
-        for path in [&file.workspace, &file.kits[0]] {
-            assert!(
-                path.starts_with("${SBXW_PROJECTS_ROOT:-/p}/"),
-                "{path} does not share the file's root"
-            );
-        }
-    }
-
-    /// The root the panel *reports* and the root the file *uses* came from two
-    /// copies of the same chain; they must not be able to disagree.
-    #[test]
-    fn the_reported_root_is_the_one_the_workspace_line_uses() {
         let ws = Path::new("/home/you/dev/acme/neos");
 
-        let (root, from_env) = resolve_projects_root(ws, Some(Path::new("/home/you/dev")));
-        assert_eq!(root, Path::new("/home/you/dev"));
-        assert!(
-            !from_env,
-            "an explicit root did not come from the environment"
+        let file = env_file_for(
+            "neos",
+            &cfg,
+            ws,
+            ports_from_config(&cfg),
+            Path::new("/home/you/dev"),
         );
-        assert_eq!(
-            portable_workspace_with(ws, Some(&root)),
-            "${SBXW_PROJECTS_ROOT:-/home/you/dev}/acme/neos"
-        );
-
-        // A root that doesn't contain the workspace cannot be its root; both
-        // the report and the line fall back to the parent.
-        let (root, _) = resolve_projects_root(ws, Some(Path::new("/opt/other")));
-        assert_eq!(root, Path::new("/home/you/dev/acme"));
-        assert_eq!(
-            portable_workspace_with(ws, Some(&root)),
-            "${SBXW_PROJECTS_ROOT:-/home/you/dev/acme}/neos"
-        );
+        assert_eq!(file.workspace, "./acme/neos");
+        assert_eq!(file.kits[0], "./kits/headroom");
+        // A registry reference is not a path and must survive untouched.
+        assert_eq!(file.kits[1], "docker.io/sbx/playwright-kit:latest");
+        // `skills` has a field of its own since 0.43, so it is carried rather
+        // than described.
+        assert_eq!(file.skills.as_deref(), Some("off"));
+        assert!(!file.render("t").contains("${"), "no expression survives");
     }
 
     /// An export that dropped the allowlist would describe a *more* permissive
@@ -4616,6 +4567,8 @@ mod tests {
             ..Config::default()
         };
         let ports = vec![(4200u16, 4200u16, "neos.local".to_string())];
+        // The skills setting is a field now, not a note.
+        assert!(!env_export_notes(&cfg, &ports).join("\n").contains("skills"));
         let notes = env_export_notes(&cfg, &ports).join("\n");
 
         assert!(notes.contains("sbx policy allow network \"github.com,pypi.org\""));
@@ -4625,7 +4578,6 @@ mod tests {
         // rather than describing what the reader would have to do by hand.
         assert!(!notes.contains("claude-sonnet-5"), "{notes}");
         assert!(notes.contains("neos.local:4200"));
-        assert!(notes.contains("--no-share-skills"));
         assert!(notes.contains("CLAUDE_CODE_OAUTH_TOKEN"));
 
         // Nothing to say about a setting left at its default.
@@ -4641,7 +4593,6 @@ mod tests {
         )
         .join("\n");
         assert!(!quiet.contains("sbx policy"));
-        assert!(!quiet.contains("--no-share-skills"));
     }
 
     /// Every kit sbxw ships declares startup commands — that is how they
@@ -4866,14 +4817,25 @@ mod tests {
     #[test]
     fn sandbox_name_sanitization_keeps_only_the_valid_alphabet() {
         assert_eq!(sanitize_sandbox_name_component("my-project"), "my-project");
-        assert_eq!(
-            sanitize_sandbox_name_component("my project!"),
-            "my-project-"
-        );
+        // A trailing hyphen is refused by sbx since 0.42, so none is left.
+        assert_eq!(sanitize_sandbox_name_component("my project!"), "my-project");
         assert_eq!(sanitize_sandbox_name_component(""), "sandbox");
+        assert_eq!(sanitize_sandbox_name_component("!!"), "sandbox");
         assert!(is_valid_sandbox_name(&sanitize_sandbox_name_component(
             "a/b_c.d é"
         )));
+        let long = sanitize_sandbox_name_component(&format!("{}-x", "a".repeat(62)));
+        assert_eq!(long, "a".repeat(62), "cut to 63, then the hyphen trimmed");
+        assert!(is_valid_sandbox_name(&long));
+    }
+
+    #[test]
+    fn sandbox_names_follow_sbx_length_and_ending_rules() {
+        assert!(is_valid_sandbox_name(&"a".repeat(63)));
+        assert!(!is_valid_sandbox_name(&"a".repeat(64)));
+        assert!(!is_valid_sandbox_name("neos-"));
+        assert!(!is_valid_sandbox_name("neos.local"));
+        assert!(is_valid_sandbox_name("neos-2"));
     }
 
     /// Two different paths whose basenames collide must not end up sharing a

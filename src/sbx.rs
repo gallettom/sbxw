@@ -1,30 +1,34 @@
 //! Thin, typed wrappers around the `sbx` CLI.
 //!
 //! Every command here maps to a subcommand confirmed against the published
-//! reference (docs.docker.com/reference/cli/sbx) for **sbx 0.39**, which is
-//! also `MIN_SBX_VERSION`. We never call `docker sandbox` — only the standalone
+//! reference (docs.docker.com/reference/cli/sbx) for **sbx 0.39**, and moved
+//! to the 0.42/0.43 release notes where those changed it; 0.43 is
+//! `MIN_SBX_VERSION`. We never call `docker sandbox` — only the standalone
 //! `sbx` binary, as requested.
 //!
 //! One version, no gates. sbxw used to accept 0.37+ and branch at runtime for
 //! everything 0.38 and 0.39 added; that is gone, along with every fallback path
-//! it implied. What the code assumes is simply what 0.39 does.
+//! it implied. What the code assumes is simply what the floor does.
 //!
 //! ```text
-//! sbx create <agent> [PATH...] --name <name>
+//! sbx create <agent> [PATH...] --name <name>   (PATH optional since 0.42: no mount)
 //!            [--kit REF]…      (repeatable; the only way to apply a kit whole)
 //!            [-p SPEC]…        (publish at creation — all-or-nothing, see create_claude)
 //!            [-e KEY=VALUE]…   (repeatable; bare KEY takes the host's value)
 //!            [--env-file FILE]… (--env beats any file; a later file beats an earlier one)
+//!            [--skills=off|readonly|readwrite]  (0.43; readonly is the default)
 //! sbx run    <agent> [PATH...] [--name <name>] [-e …] [-- AGENT_ARGS...]
 //! sbx run    --name <name>     (re-attach, incl. sandboxes created with --kit;
 //!                               -e applies to the agent session, so it takes
 //!                               effect on a re-attach too)
-//! sbx ls
+//! sbx ls [--json]              (--json carries a last-used timestamp since 0.43)
 //! sbx inspect SANDBOX          (lists kits, injected secrets, info)
 //! sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //! sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
+//!                              (PROTO defaults to tcp4 since 0.42, not dual-stack tcp)
 //! sbx prune  [--dry-run] [--filter since=DURATION] [-f]   (stopped sandboxes only)
-//! sbx env    create|run|exec|rm [PATH...]                 (.sbxenv.yaml; experimental)
+//! sbx env    create|run|exec|rm [PATH...] [--name N] [--env-arg K=V]…
+//!                              (sbxenv.yaml; experimental; shows a plan and asks)
 //! sbx policy allow|deny network [--sandbox NAME] RESOURCES (comma list, *.dom, dom:443, **)
 //! sbx policy ls [SANDBOX] [--wide] [--json] [--type|--source|--decision …]
 //!                              (SANDBOX is POSITIONAL here, unlike allow/deny's
@@ -36,7 +40,7 @@
 //! sbx setup ssh [remove]       (managed `Host *.sbx` block => `ssh <name>.sbx`)
 //! ```
 //!
-//! Behaviours this module is built on, all of them 0.39's:
+//! Behaviours this module is built on, 0.39's unless marked:
 //!   * `sbx kit add` RECREATES the sandbox container (state preserved) and
 //!     composes the kit's network allow/deny rules into the live policy — which
 //!     is why sbxw applies kits at *creation* and skips ones `inspect` already
@@ -60,6 +64,11 @@
 //!     flag sbx does not know costs the whole call, which is why the one flag
 //!     with no published reference is probed rather than assumed (see
 //!     `create_supports`).
+//!   * (0.42) Sandbox names longer than 63 characters, or ending in a hyphen
+//!     or period, are refused — `crate::is_valid_sandbox_name` says so first.
+//!   * (0.43) A sandbox made by `sbx create` **stops by itself once idle**.
+//!     Nothing here assumes a sandbox stays up: the daemon re-checks
+//!     `is_running` and re-publishes ports on every attach.
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -291,16 +300,22 @@ fn run_capture(args: &[&str]) -> Result<String> {
 /// The floor used to be 0.37 with everything from 0.38 and 0.39 behind runtime
 /// gates, so one binary could serve three releases. That is gone: the gates
 /// cost a branch and a fallback at every call site, and each fallback was a
-/// second code path nobody ran. 0.39 is what this file assumes end to end —
-/// `create -e/--env-file`, `prune`, `env create`, kit spec v2, `secret set
-/// --sandbox`, `SANDBOX_NAME` — and none of it is conditional any more.
+/// second code path nobody ran. 0.39 brought `create -e/--env-file`, `prune`,
+/// `env create`, kit spec v2, `secret set --sandbox` and `SANDBOX_NAME`.
+///
+/// The floor moved to 0.43 because environment files changed shape under it
+/// and there is no way to write one file both sides can read: 0.42 renamed the
+/// project file to `sbxenv.yaml`, stopped expanding `${VAR}` and stopped
+/// mounting the file's directory by default, and 0.43 resolves relative paths
+/// against the declaring file and gave `sbx env` its `--name`. `--skills` is
+/// 0.43's too.
 ///
 /// What that buys, beyond the deletions: an unrecognised flag or subcommand is
 /// a hard error from 0.39 on (before, it printed help and exited 0). Code that
 /// can assume 0.39 can therefore trust a command's success, which is why the
 /// probes and retries that used to paper over "maybe this flag exists" are gone
 /// too.
-pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 39, 0);
+pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 43, 0);
 
 /// There is deliberately **no** upper bound. Newer sbx releases have so far
 /// added surface rather than moved it, and the parts that did move (the policy
@@ -348,8 +363,8 @@ pub fn assert_available() -> Result<()> {
                 "this sbx is {a}.{b}.{c}, but sbxw needs {min_a}.{min_b}.{min_c} or newer.\n\
                  Upgrade sbx, or set {SKIP_VERSION_CHECK_ENV}=1 to run anyway — but expect \
                  failures rather than degraded behaviour: sbxw no longer carries fallbacks \
-                 for older releases, so `create --env`, `prune`, `env create`, kit spec v2 \
-                 and `secret set --sandbox` are all passed as-is."
+                 for older releases, so environment files (`sbxenv.yaml`, `${{{{ … }}}}`), \
+                 `env create --name`, `create --skills` and kit spec v2 are all passed as-is."
             );
         }
         Some((a, b, c)) => {
@@ -505,9 +520,9 @@ pub struct CreateOpts<'a> {
     /// Port specs (`[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]`) forwarded as
     /// `-p`. See the note on `create_claude`.
     pub publish: &'a [String],
-    /// When false, pass `--no-share-skills` to keep the host's shared skill
-    /// store out of this sandbox.
-    pub share_skills: bool,
+    /// `--skills=<mode>` (`off`, `readonly`, `readwrite`); `None` passes
+    /// nothing, which is sbx's own default — read-only sharing since 0.43.
+    pub skills: Option<&'a str>,
     /// `KEY=VALUE` pairs forwarded as `-e`, and files forwarded as
     /// `--env-file`. sbx resolves the precedence between them itself (`--env`
     /// beats any file; a later file beats an earlier one), so both are passed
@@ -523,7 +538,7 @@ pub struct CreateOpts<'a> {
     pub env_files: &'a [String],
 }
 
-/// `sbx create claude <workspace> --name <name> [--kit K…] [-p SPEC…] [--no-share-skills]`.
+/// `sbx create claude <workspace> --name <name> [--kit K…] [-p SPEC…] [--skills=MODE]`.
 ///
 /// Ports are published *at creation* rather than only by the provisioning
 /// thread: that thread has to wait for the sandbox to report `running` before
@@ -539,34 +554,53 @@ pub struct CreateOpts<'a> {
 pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
     // Probed rather than assumed, and only when it would be used — see
     // `create_supports`.
-    let no_share_skills = !opts.share_skills && {
-        let supported = create_supports("--no-share-skills");
-        if !supported {
+    let skills = opts.skills.and_then(|mode| {
+        let flag = skills_flag(mode, create_supports("--skills"), || {
+            create_supports("--no-share-skills")
+        });
+        if flag.is_none() {
             tracing::warn!(
-                "`sbx create` on this host has no --no-share-skills flag, so share_skills = \
-                 false cannot be honoured: '{name}' gets the shared skill store. Creating it \
-                 anyway — losing the sandbox over a skills mount would be the worse trade."
+                "`sbx create` on this host takes no --skills flag, so skills = \"{mode}\" \
+                 cannot be honoured: '{name}' gets sbx's default. Creating it anyway — losing \
+                 the sandbox over a skills mount would be the worse trade."
             );
         }
-        supported
-    };
-    let args = create_args(name, opts, no_share_skills);
+        flag
+    });
+    let args = create_args(name, opts, skills.as_deref());
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_inherit(&refs)
 }
 
+/// The flag that asks `sbx create` for skills `mode`, given what its `--help`
+/// lists — or `None` when nothing it lists can say it.
+///
+/// `--skills=MODE` is 0.43's spelling. `--no-share-skills`, the one before it,
+/// survives as a deprecated alias for `--skills=off`, and is still worth using
+/// for exactly that on an sbx whose help lists nothing better. `readwrite` has
+/// no older spelling at all.
+fn skills_flag(mode: &str, has_skills: bool, has_legacy: impl FnOnce() -> bool) -> Option<String> {
+    if has_skills {
+        Some(format!("--skills={mode}"))
+    } else if mode == "off" && has_legacy() {
+        Some("--no-share-skills".into())
+    } else {
+        None
+    }
+}
+
 /// Does `sbx create --help` list `flag`?
 ///
-/// A feature probe rather than a version gate, because this one is not a
-/// version question. `--no-share-skills` came from release notes and has never
-/// appeared in the published `sbx create` reference — the 0.39 options are
-/// `--clone --cpus --deny-network -e/--env --env-file --kit -m/--memory --name
-/// -p/--publish -q/--quiet -t/--template`, and no skills flag among them. It
-/// may have been renamed, or never shipped under that spelling.
+/// A feature probe rather than a version gate, because this one is not only a
+/// version question. The skills flag came from release notes — `--no-share-skills`
+/// never appeared in the published `sbx create` reference, whose 0.39 options
+/// are `--clone --cpus --deny-network -e/--env --env-file --kit -m/--memory
+/// --name -p/--publish -q/--quiet -t/--template`, and 0.43 replaced it with
+/// `--skills` before the reference caught up.
 ///
 /// Until 0.39 guessing wrong was survivable: an unrecognised argument printed
 /// help and exited 0. 0.39 made that an error, so a single unknown flag now
-/// fails the whole `create` — and `share_skills = false` would cost you the
+/// fails the whole `create` — and a `skills` setting would cost you the
 /// sandbox rather than the setting. Reading `--help` is the cheap way to be
 /// sure, and it is only paid for by the configs that ask for the flag.
 ///
@@ -581,10 +615,10 @@ fn create_supports(flag: &str) -> bool {
 /// The argv `create_claude` runs, split out so the flag grammar is testable
 /// without a live `sbx`.
 ///
-/// `no_share_skills` is resolved by the caller rather than probed here: it is
-/// the one flag whose existence is uncertain, and a test wants to pin both
-/// answers without a live `sbx create --help`.
-fn create_args(name: &str, opts: &CreateOpts<'_>, no_share_skills: bool) -> Vec<String> {
+/// `skills` is the flag the caller resolved rather than one probed here: it is
+/// the one flag whose spelling is uncertain, and a test wants to pin every
+/// answer without a live `sbx create --help`.
+fn create_args(name: &str, opts: &CreateOpts<'_>, skills: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "create".into(),
         "claude".into(),
@@ -603,8 +637,8 @@ fn create_args(name: &str, opts: &CreateOpts<'_>, no_share_skills: bool) -> Vec<
         args.push("-p".into());
         args.push(spec.clone());
     }
-    if no_share_skills {
-        args.push("--no-share-skills".into());
+    if let Some(flag) = skills {
+        args.push(flag.into());
     }
     // Files first, then `-e`. sbx's precedence is `--env` over any `--env-file`
     // whatever the order, so writing the argv in that order costs nothing and
@@ -707,8 +741,8 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
     .collect()
 }
 
-/// `sbx env create PATH...` — provision a sandbox from environment files,
-/// without attaching to it (sbx 0.39+, experimental).
+/// `sbx env create PATH... --name NAME [--env-arg K=V]…` — provision a sandbox
+/// from environment files, without attaching to it (experimental).
 ///
 /// `create` and not `run`: `run` would drop into the agent's shell, and sbxw
 /// wants the sandbox created so its own provisioning can follow and its own
@@ -716,14 +750,32 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
 /// environment file's `secrets`, `bindings`, `registries` and `mcp` — the parts
 /// sbxw has no way to apply itself.
 ///
-/// stdio is inherited: creation is long and chatty (image pulls, kit installs,
-/// secret resolution that may prompt a vault), and a caller watching a terminal
-/// should see it happen.
-pub fn env_create(paths: &[String]) -> Result<()> {
-    let mut args = vec!["env".to_string(), "create".to_string()];
-    args.extend(paths.iter().cloned());
+/// `--name` (0.43) is always passed. sbx would otherwise default the name to
+/// `<agent>-<workspace-basename>`, and sbxw would have to guess the same
+/// string — sanitising included — to find the sandbox afterwards. Before the
+/// flag existed that meant rewriting the file just to pin a name.
+///
+/// stdio is inherited, and has to be: creation is long and chatty (image pulls,
+/// kit installs, secret resolution that may prompt a vault), and since 0.42
+/// sbx shows a plan of everything the file changes on the host and **asks
+/// before applying it** — a question only the person at the terminal can
+/// answer.
+pub fn env_create(paths: &[String], name: &str, env_args: &[String]) -> Result<()> {
+    let args = env_create_args(paths, name, env_args);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     run_inherit(&refs)
+}
+
+fn env_create_args(paths: &[String], name: &str, env_args: &[String]) -> Vec<String> {
+    let mut args = vec!["env".to_string(), "create".to_string()];
+    args.extend(paths.iter().cloned());
+    args.push("--name".into());
+    args.push(name.into());
+    for pair in env_args {
+        args.push("--env-arg".into());
+        args.push(pair.clone());
+    }
+    args
 }
 
 /// `sbx skills import [--dry-run] [--force]` — discover skills from supported
@@ -1811,9 +1863,10 @@ mod tests {
         // nothing in this file falls back to an older shape any more.
         assert!(parse_version("0.34.9").unwrap() < MIN_SBX_VERSION);
         assert!(parse_version("0.38.9").unwrap() < MIN_SBX_VERSION);
-        assert!(parse_version("0.39.0").unwrap() >= MIN_SBX_VERSION);
-        // A missing patch reads as `.0`, so "0.39" is the floor, not below it.
-        assert!(parse_version("0.39").unwrap() >= MIN_SBX_VERSION);
+        assert!(parse_version("0.42.1").unwrap() < MIN_SBX_VERSION);
+        assert!(parse_version("0.43.0").unwrap() >= MIN_SBX_VERSION);
+        // A missing patch reads as `.0`, so "0.43" is the floor, not below it.
+        assert!(parse_version("0.43").unwrap() >= MIN_SBX_VERSION);
         assert!(parse_version("0.100.0").unwrap() > MIN_SBX_VERSION);
         assert!(parse_version("1.0.0").unwrap() > MIN_SBX_VERSION);
     }
@@ -1859,10 +1912,60 @@ mod tests {
             ro_mounts: &[],
             kits: &[],
             publish: &[],
-            share_skills: true,
+            skills: None,
             env,
             env_files,
         }
+    }
+
+    /// `--skills` when sbx lists it; the old flag only for the one mode it can
+    /// say; nothing — and a sandbox with sbx's default — otherwise.
+    #[test]
+    fn the_skills_flag_follows_what_create_help_lists() {
+        let never = || -> bool { panic!("the legacy flag is only probed when it could be used") };
+        assert_eq!(
+            skills_flag("readwrite", true, never).as_deref(),
+            Some("--skills=readwrite")
+        );
+        assert_eq!(
+            skills_flag("off", true, never).as_deref(),
+            Some("--skills=off")
+        );
+        assert_eq!(
+            skills_flag("off", false, || true).as_deref(),
+            Some("--no-share-skills")
+        );
+        assert_eq!(skills_flag("off", false, || false), None);
+        assert_eq!(skills_flag("readwrite", false, || true), None);
+
+        let args = create_args("neos", &opts(&[], &[]), Some("--skills=off"));
+        assert_eq!(args.last().map(String::as_str), Some("--skills=off"));
+        assert!(!create_args("neos", &opts(&[], &[]), None)
+            .iter()
+            .any(|a| a.contains("skills")));
+    }
+
+    #[test]
+    fn env_create_names_the_sandbox_and_forwards_every_argument() {
+        let args = env_create_args(
+            &["/p/neos".into()],
+            "neos",
+            &["port=4200".into(), "root=/srv".into()],
+        );
+        assert_eq!(
+            args,
+            [
+                "env",
+                "create",
+                "/p/neos",
+                "--name",
+                "neos",
+                "--env-arg",
+                "port=4200",
+                "--env-arg",
+                "root=/srv",
+            ]
+        );
     }
 
     /// `--env-file` is written before `-e` because that is the order sbx's own
@@ -1873,7 +1976,7 @@ mod tests {
         let env = vec!["A=1".to_string(), "B=2".to_string()];
         let files = vec!["/p/.env".to_string()];
 
-        let modern = create_args("neos", &opts(&env, &files), false);
+        let modern = create_args("neos", &opts(&env, &files), None);
         assert_eq!(
             modern[5..],
             [
@@ -1923,7 +2026,7 @@ mod tests {
             "SPACED=a b".to_string(),
             "EQUALS=k=v".to_string(),
         ];
-        let args = create_args("neos", &opts(&env, &[]), false);
+        let args = create_args("neos", &opts(&env, &[]), None);
         assert_eq!(
             args[5..],
             [

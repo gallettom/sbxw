@@ -45,12 +45,22 @@ pub struct Config {
     /// the sbx template rather than from sbxw. On an older one the variable is
     /// ignored in silence and sessions start on Claude Code's own default.
     pub claude_model: String,
-    /// Mount sbx's shared skill store (populated by `sbxw skills import`) into
-    /// sandboxes sbxw creates. true matches sbx's own default; false passes
-    /// `--no-share-skills` to `sbx create`, so the agent sees only the skills
-    /// its kits and workspace provide.
+    /// How sandboxes sbxw creates see sbx's shared skill store (populated by
+    /// `sbxw skills import`): `"off"`, `"readonly"` or `"readwrite"`, passed as
+    /// `sbx create --skills=…` (sbx 0.43). Empty leaves it to sbx, whose
+    /// default is `"readonly"` — and whose `skills.defaultMode` setting can
+    /// change that for the whole host, which is the better place for a
+    /// preference that isn't about this project.
     ///
-    /// Only read at *creation*: flipping it has no effect on existing sandboxes.
+    /// `"off"` means the agent sees only the skills its kits and workspace
+    /// provide; `"readwrite"` lets it add to the store every other sandbox
+    /// mounts, so it is a choice about the *other* sandboxes as much as this one.
+    ///
+    /// Only read at *creation*: changing it has no effect on existing sandboxes.
+    pub skills: String,
+    /// The spelling before `skills`: `false` means `skills = "off"`. Kept so an
+    /// existing sbxw.toml goes on meaning what it said — sbx kept its own old
+    /// flag as an alias for the same reason. `skills` wins when both are set.
     pub share_skills: bool,
     /// Command the web UI's **Monitor** pane runs, as argv — no shell, so no
     /// quoting rules and no injection surface. It runs on the *host*, outside
@@ -63,7 +73,7 @@ pub struct Config {
     /// all-sandboxes dashboard.
     pub monitor_cmd: Vec<String>,
     /// Environment variables put in the sandbox at creation, forwarded as
-    /// `sbx create -e KEY=VALUE` (sbx 0.39+; dropped with a warning on older).
+    /// `sbx create -e KEY=VALUE`.
     ///
     /// A `BTreeMap` so the argv is stable run to run — a diff of two `sbxw up`
     /// logs should show what changed in the config, not how a hash map felt.
@@ -76,9 +86,9 @@ pub struct Config {
     /// Not a place for secrets: the value lands in `sbx create`'s argv, visible
     /// in the host process list, and in a file most projects commit. Tokens go
     /// through `sbx secret set` (which is how sbxw already handles the Anthropic
-    /// one) or a `.sbxenv.yaml` `secrets:` entry that resolves on the host.
+    /// one) or an `sbxenv.yaml` `secrets:` entry that resolves on the host.
     pub env: std::collections::BTreeMap<String, String>,
-    /// Files of `KEY=VALUE` lines forwarded as `sbx create --env-file` (0.39+),
+    /// Files of `KEY=VALUE` lines forwarded as `sbx create --env-file`,
     /// in order. Relative paths resolve against `sbxw.toml`'s directory.
     ///
     /// sbx settles the precedence itself: `env` above beats every file, and a
@@ -139,6 +149,7 @@ impl Default for Config {
             kits: vec![],
             claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5".into(),
+            skills: String::new(),
             share_skills: true,
             monitor_cmd: vec!["sbx".into()],
             env: Default::default(),
@@ -147,7 +158,18 @@ impl Default for Config {
     }
 }
 
+/// The values `skills` accepts, in sbx's own words.
+pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
+
 impl Config {
+    /// The `--skills` mode to ask for, or `None` for sbx's default.
+    pub fn skills_mode(&self) -> Option<&str> {
+        match self.skills.trim() {
+            "" => (!self.share_skills).then_some("off"),
+            mode => Some(mode),
+        }
+    }
+
     /// `env` as the `KEY=VALUE` arguments `sbx`'s `-e` takes, in the map's
     /// (sorted) order.
     ///
@@ -170,7 +192,7 @@ impl Config {
     /// Only `claude_model` for now, as `ANTHROPIC_DEFAULT_MODEL`. Deriving it
     /// here rather than at each call site is what keeps the model wherever the
     /// environment goes — baked in at creation, re-applied on every attach, and
-    /// carried into an exported `.sbxenv.yaml` — from one definition.
+    /// carried into an exported `sbxenv.yaml` — from one definition.
     ///
     /// An explicit `ANTHROPIC_DEFAULT_MODEL` in `[env]` wins: it is the more
     /// specific way to say the same thing, and silently overruling it would be
@@ -206,6 +228,18 @@ impl Config {
                 .with_context(|| format!("reading {}", path.display()))?;
             let cfg: Config =
                 toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+            // Checked here rather than left to sbx: a value it refuses would
+            // fail `sbx create` — the sandbox, not the setting — and only once
+            // somebody asked for a new one.
+            if let Some(mode) = cfg.skills_mode() {
+                if !SKILL_MODES.contains(&mode) {
+                    anyhow::bail!(
+                        "{}: skills = \"{mode}\" — expected one of {}",
+                        path.display(),
+                        SKILL_MODES.join(", ")
+                    );
+                }
+            }
             Ok(cfg)
         } else {
             Ok(Config::default())
@@ -228,6 +262,7 @@ mod tests {
     fn a_config_survives_being_written_and_read_again() {
         let mut cfg = Config {
             claude_model: "claude-opus-5".into(),
+            skills: "readwrite".into(),
             share_skills: false,
             ip_per_app: true,
             env_files: vec!["/p/.env".into()],
@@ -242,6 +277,7 @@ mod tests {
 
         assert_eq!(back.claude_model, cfg.claude_model);
         assert!(!back.share_skills);
+        assert_eq!(back.skills_mode(), Some("readwrite"));
         assert!(back.ip_per_app);
         assert_eq!(back.env, cfg.env);
         assert_eq!(back.env_files, cfg.env_files);
@@ -250,6 +286,34 @@ mod tests {
         assert_eq!(back.ports[0].alias, "neos.local");
         assert_eq!(back.ports[0].host_port, 4200);
         assert_eq!(back.monitor_cmd, cfg.monitor_cmd);
+    }
+
+    /// `share_skills = false` still means what it meant; `skills` is the newer,
+    /// more specific spelling and wins; and neither says nothing at all.
+    #[test]
+    fn the_old_share_skills_switch_is_an_alias_for_off() {
+        let cfg = |skills: &str, share_skills: bool| Config {
+            skills: skills.into(),
+            share_skills,
+            ..Config::default()
+        };
+        assert_eq!(cfg("", true).skills_mode(), None);
+        assert_eq!(cfg("", false).skills_mode(), Some("off"));
+        assert_eq!(cfg("readwrite", false).skills_mode(), Some("readwrite"));
+        assert_eq!(cfg("readonly", true).skills_mode(), Some("readonly"));
+    }
+
+    #[test]
+    fn an_unknown_skills_mode_is_refused_on_load() {
+        let dir = std::env::temp_dir().join(format!("sbxw-config-skills-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("sbxw.toml");
+        std::fs::write(&f, "skills = \"rw\"\n").unwrap();
+        let err = Config::load_or_default(&f).unwrap_err().to_string();
+        assert!(err.contains("readwrite"), "{err}");
+        std::fs::write(&f, "skills = \"readwrite\"\n").unwrap();
+        assert!(Config::load_or_default(&f).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A bare `KEY` (inherit from the host) is not reachable from a TOML map,

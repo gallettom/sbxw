@@ -22,11 +22,15 @@ claude_subscription = "pro"
 # not from sbxw); on an older one the variable is ignored silently.
 claude_model = "claude-sonnet-5"
 
-# Mount sbx's shared skill store (filled by `sbxw skills import`) into the
-# sandboxes sbxw creates. true matches sbx's own default; false passes
-# `--no-share-skills`, so the agent sees only what its kits and workspace give
-# it. Read at CREATION only — flipping it doesn't affect existing sandboxes.
-share_skills = true
+# How the sandboxes sbxw creates see sbx's shared skill store (filled by
+# `sbxw skills import`), passed as `sbx create --skills=…` (sbx 0.43+):
+#   "off"        only what the sandbox's kits and workspace give it
+#   "readonly"   the store, read-only — sbx's default
+#   "readwrite"  the agent may add skills every other sandbox then mounts
+# Empty leaves it to sbx (and its host-wide `skills.defaultMode`). The older
+# `share_skills = false` still works and means "off".
+# Read at CREATION only — changing it doesn't affect existing sandboxes.
+skills = ""
 
 # Command behind the web UI's Monitor pane, as argv (no shell involved).
 # Bare `sbx` opens the CLI's own all-sandboxes dashboard. It runs on the HOST,

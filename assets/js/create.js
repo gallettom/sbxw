@@ -255,7 +255,7 @@ fsList.addEventListener('click', ev => {
 });
 
 function validateForm() {
-  const nameOk = /^[a-z0-9][a-z0-9-]*$/.test(inpName.value.trim());
+  const nameOk = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(inpName.value.trim());
   const pathOk = selectedPath.length > 0;
   btnCreate.disabled = !(nameOk && pathOk);
 }
@@ -272,7 +272,7 @@ function normalizeNameInput() {
     el.setSelectionRange(pos, pos);
   }
   nameErrEl.textContent = hadInvalidChars
-    ? 'Lowercase letters, digits, and hyphens only — must start with a letter or digit'
+    ? 'Lowercase letters, digits, and hyphens only — must start and end with a letter or digit'
     : '';
   nameErrEl.classList.toggle('hidden', !hadInvalidChars);
   inpName.classList.remove('error');
@@ -398,7 +398,7 @@ function validateChatForm() {
     chatNameErr.textContent = `“${name}” already exists — pick another name`;
     chatNameErr.classList.remove('hidden');
   }
-  chatConfirm.disabled = taken || !/^[a-z0-9][a-z0-9-]*$/.test(name);
+  chatConfirm.disabled = taken || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
 }
 
 chatInpName.addEventListener('input', () => {
@@ -413,7 +413,7 @@ chatInpName.addEventListener('input', () => {
     el.setSelectionRange(pos, pos);
   }
   chatNameErr.textContent = hadInvalidChars
-    ? 'Lowercase letters, digits, and hyphens only — must start with a letter or digit'
+    ? 'Lowercase letters, digits, and hyphens only — must start and end with a letter or digit'
     : '';
   chatNameErr.classList.toggle('hidden', !hadInvalidChars);
   chatInpName.classList.remove('error');

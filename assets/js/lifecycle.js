@@ -82,7 +82,7 @@ function openDupModal(name) {
 function closeDupModal() { dupOverlay.classList.add('hidden'); dupSource = null; }
 
 function validateDupForm() {
-  const nameOk = /^[a-z0-9][a-z0-9-]*$/.test(dupInpName.value.trim());
+  const nameOk = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(dupInpName.value.trim());
   dupConfirm.disabled = !nameOk;
 }
 
@@ -98,7 +98,7 @@ dupInpName.addEventListener('input', () => {
     el.setSelectionRange(pos, pos);
   }
   dupNameErr.textContent = hadInvalidChars
-    ? 'Lowercase letters, digits, and hyphens only — must start with a letter or digit'
+    ? 'Lowercase letters, digits, and hyphens only — must start and end with a letter or digit'
     : '';
   dupNameErr.classList.toggle('hidden', !hadInvalidChars);
   dupInpName.classList.remove('error');
