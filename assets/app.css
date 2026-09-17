@@ -986,6 +986,47 @@
   }
   .pane-bar .conn-label { color: var(--c-text-muted); font-size: 11px; }
   .pane-bar .spacer { flex: 1; }
+
+  /* ── The bar in a narrow pane ──
+     A pane's width has nothing to do with the window's: four panes on a wide
+     screen are each as cramped as one pane on a laptop, so what follows asks
+     the *pane* how much room it has, not the viewport.
+
+     Two rules before any breakpoint. The bar never wraps — a flex child falls
+     back to its min-content width, and "footprint-server" breaks at the hyphen,
+     which is how a 32px bar became two lines. And nothing shrinks except the
+     name, which truncates: a squeezed button is unreadable ("B" for Bash),
+     while a truncated name still says which sandbox this is.
+
+     Then things go in the order of what the bar is *for*: first what is said
+     twice, then the words on buttons whose glyph already says it, then the one
+     button whose job another button also does. */
+  .pane { container: pane / inline-size; }
+  .pane-bar { white-space: nowrap; }
+  .pane-bar > * { flex-shrink: 0; }
+  .pane-bar .sandbox-label {
+    flex-shrink: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  @container pane (max-width: 620px) {
+    .pane-bar { gap: .35rem; padding: .3rem .5rem; }
+    /* The dot is this word, in the place the eye already checks for it. */
+    .pane-bar .conn-label { display: none; }
+  }
+  @container pane (max-width: 500px) {
+    /* ✦ and ❯ are the modes' own marks, and the active one keeps its colour —
+       purple for Claude, green for Bash — so the switch still reads at a
+       glance without spelling either out. */
+    .pane-bar .mode-switch .mode-word { display: none; }
+    .pane-bar .mode-switch button { padding: .2rem .45rem; }
+  }
+  @container pane (max-width: 400px) {
+    /* The only control that can go without taking a capability with it: ↻
+       rebuilds the terminal *and* reconnects, so Reconnect's job is still on
+       the bar, one button to the right. */
+    .pane-bar .pane-reconnect-btn { display: none; }
+  }
   .pane-btn {
     background: var(--c-elevated); color: var(--c-text);
     border: 1px solid var(--c-border); border-radius: 6px;

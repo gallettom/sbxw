@@ -148,12 +148,14 @@ function createPane(index) {
       <span class="conn-label" id="pconn-${index}"></span>
       <span class="spacer"></span>
       <div class="mode-switch" role="tablist">
-        <button class="mode-btn active" data-mode="claude">✦ Claude</button>
-        <button class="mode-btn" data-mode="bash">❯ Bash</button>
+        <!-- The word is wrapped so a narrow pane can drop it and keep the
+             glyph, which carries the mode on its own (see app.css). -->
+        <button class="mode-btn active" data-mode="claude" title="Claude" aria-label="Claude">✦<span class="mode-word"> Claude</span></button>
+        <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
       </div>
       <button class="pane-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
-      <button class="pane-btn" id="preconnect-${index}">Reconnect</button>
+      <button class="pane-btn pane-reconnect-btn" id="preconnect-${index}">Reconnect</button>
       <button class="pane-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
@@ -211,6 +213,8 @@ function createPane(index) {
   return pane;
 }
 
+let oscCopyFailed = false;
+
 // Builds a fresh xterm Terminal (+ addons) into `pane.termEl` and points
 // pane.term/pane.fit at it. Called once from createPane, and again from
 // recreatePaneTerminal() on an existing pane — so every wire-up here must
@@ -229,6 +233,72 @@ function setupTerminal(pane) {
   term.open(pane.termEl);
 
   term.onSelectionChange(() => { const s = term.getSelection(); if (s) pane.lastSelection = s; });
+
+  // ── Clipboard writes from inside the sandbox (OSC 52) ───────────────────
+  // A program in the PTY has no clipboard within reach: the sandbox's `xclip`
+  // and `wl-paste` are shims that only *read* images back out (`sbx-clipboard`),
+  // and a write to them exits 0 having copied nothing — which is how an agent
+  // reports "copied 7 chars to clipboard" while the user's clipboard never
+  // changes. OSC 52 is the sequence that asks the *terminal* to do the copy
+  // instead, and through this browser it is the one path out of the sandbox
+  // that ends on the user's own clipboard. Claude Code, vim's `"+y` and tmux
+  // all emit it; nothing was listening.
+  //
+  // It also covers the case the pane's own copy-on-select cannot: while a TUI
+  // holds mouse tracking, xterm makes no selection to copy, so the double-click
+  // is the app's and the clipboard write has to come from the app too.
+  //
+  // Writes only. The read form (`52;c;?`) replies down the PTY, handing
+  // whatever the user is carrying — a password out of a manager, say — to any
+  // program that asks for it, or to any file that happens to be `cat`ed.
+  // ── A repaint must not take the selection away ──────────────────────────
+  // xterm clears the selection every time the program re-declares its mouse
+  // mode: `CoreMouseService`'s `activeProtocol` setter fires `onProtocolChange`
+  // unconditionally, and `Terminal` answers that by calling
+  // `SelectionService.disable()`, whose first line is `clearSelection()`. An
+  // agent's TUI re-sends `?1000;1002;1003;1006h` on essentially every repaint —
+  // 115 times in one 256 KB replay of a live session — so a selection could not
+  // outlive the next line of output arriving behind it.
+  //
+  // A real terminal resets nothing when a program re-declares a mode it already
+  // has, so neither does this one: the setter is made idempotent, and a genuine
+  // change still goes through untouched. Reaching into `_core` is the price —
+  // the guard below keeps a future xterm that renames this from throwing.
+  //
+  // This must stay *after* `term.open()`: xterm ends `_bindMouse` with a
+  // deliberate self-assignment ("force initial onProtocolChange so we dont miss
+  // early mouse requests"), and that one has to fire to wire up the mouse
+  // listeners. Patched before open, it would be the one assignment we skip.
+  const mouse = term._core?.coreMouseService;
+  const proto = mouse && Object.getOwnPropertyDescriptor(Object.getPrototypeOf(mouse), 'activeProtocol');
+  if (proto?.get && proto?.set) {
+    Object.defineProperty(mouse, 'activeProtocol', {
+      configurable: true,
+      get: () => proto.get.call(mouse),
+      set: v => { if (v !== proto.get.call(mouse)) proto.set.call(mouse, v); },
+    });
+  }
+
+  term.parser.registerOscHandler(52, payload => {
+    const b64 = payload.slice(payload.indexOf(';') + 1);
+    if (!b64 || b64 === '?') return true;
+    let text = '';
+    try {
+      // base64 → bytes → UTF-8. `atob` alone stops at Latin-1 and would turn
+      // every accented character into two.
+      text = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
+    } catch (_) {
+      return true; // Malformed payload: handled, and nothing to copy.
+    }
+    if (text) copyQuiet(text).then(ok => {
+      // Once per tab: the reason is the address the page was opened on or the
+      // browser's rules, and neither changes between one copy and the next.
+      if (ok || oscCopyFailed) return;
+      oscCopyFailed = true;
+      showToast('The browser refused a clipboard copy from the sandbox', 'error');
+    });
+    return true;
+  });
   term.onData(data => {
     if (pane.ws && pane.ws.readyState === WebSocket.OPEN)
       pane.ws.send(new TextEncoder().encode(data));

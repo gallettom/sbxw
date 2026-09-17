@@ -147,7 +147,7 @@ document.addEventListener('mousedown', e => {
 }, true);
 
 document.addEventListener('mousemove', e => {
-  if (!dragSel || !(e.buttons & 1)) { dragSel = null; return; }
+  if (!dragSel || !(e.buttons & 1)) { dragSel = null; holdSelectionAgainstMotion(e); return; }
   const cur = mouseToCell(e, dragSel.pane);
   if (!cur) { dragSel = null; return; }
   if (!dragSel.dragging) {
@@ -159,11 +159,105 @@ document.addEventListener('mousemove', e => {
   let [a, b] = [dragSel.start, cur];
   if (b.row < a.row || (b.row === a.row && b.col < a.col)) [a, b] = [b, a];
   const cols = dragSel.pane.term.cols || 1;
-  try { dragSel.pane.term.select(a.col, a.row, Math.max(1, (b.row - a.row) * cols + (b.col - a.col))); }
+  const len = Math.max(1, (b.row - a.row) * cols + (b.col - a.col));
+  // Kept for the restore below. Buffer coordinates, not viewport ones (see
+  // `mouseToCell`), so they stay valid even if the pane scrolls afterwards.
+  try { dragSel.pane.term.select(a.col, a.row, len); dragSel.range = { col: a.col, row: a.row, len }; }
   catch (_) { dragSel = null; }
 }, true);
 
 document.addEventListener('mouseup', e => {
-  if (!dragSel?.dragging) { dragSel = null; return; }
+  // A drag that ends outside the pane it started in still belongs to that
+  // pane, so the pane comes from `dragSel` first and from the element under
+  // the cursor only for a click that never became a drag.
+  //
+  // The scrollbar is excluded the same way it is on mousedown: dragging it
+  // leaves whatever was selected selected, and re-copying an old selection
+  // the user has moved on from is worse than copying nothing.
+  const onScrollbar = e.target.classList?.contains('xterm-viewport');
+  const pane = dragSel?.pane || (onScrollbar ? null : paneFromEl(e.target));
+  const range = dragSel?.range;
   dragSel = null;
+  if (e.button !== 0 || !pane) return;
+  // Copy first: this handler is on the capture phase, so the selection is
+  // still there — by the time xterm is done with this same event it may not be.
+  copySelectionOnRelease(pane);
+  if (range) keepSelectionVisible(pane, range);
 }, true);
+
+/// Put the drag's selection back after the release wipes it.
+///
+/// While a TUI holds mouse tracking, xterm reports the mouse to the program as
+/// *user input* (`CoreMouseService` → `triggerDataEvent(report, true)`), and
+/// its selection service clears the selection on any user input — the same
+/// rule that makes a keystroke drop the highlight, which is right for a
+/// keystroke and wrong for the mouse-up that just finished drawing it. So the
+/// text stayed selected for exactly as long as the button was held, which read
+/// as "selecting with the mouse doesn't work" even though the copy landed.
+///
+/// The release still reaches the program — swallowing it would leave the TUI
+/// believing the button is down — and the selection goes back on top of it,
+/// before the frame it would have been missing from.
+function keepSelectionVisible(pane, range) {
+  requestAnimationFrame(() => {
+    // Nothing cleared it (a pane with no mouse tracking, say): leave it alone
+    // rather than re-firing a selection change for the same range.
+    if (!pane.term || pane.term.hasSelection()) return;
+    try { pane.term.select(range.col, range.row, range.len); } catch (_) {}
+  });
+}
+
+/// Keep the pointer's idle motion away from a program that is tracking it,
+/// for as long as a selection is on screen.
+///
+/// An agent's TUI asks for any-event tracking (`?1003h`), so every move over
+/// the pane is reported to it — and xterm hands the program's mouse reports to
+/// `triggerDataEvent(report, true)`, i.e. as *user input*, which its selection
+/// service answers by clearing the selection. The selected text therefore
+/// survived only until the pointer twitched over the terminal: move the mouse
+/// away and it stayed, leave it there and it vanished.
+///
+/// Motion only, and only over a pane that has something selected. Buttons and
+/// keys still reach the program untouched, and the first of either drops the
+/// selection and hands the pointer straight back — so a TUI's hover states are
+/// frozen exactly while the user is reading a selection, and never after it.
+function holdSelectionAgainstMotion(e) {
+  if (e.target.classList?.contains('xterm-viewport')) return;
+  const pane = paneFromEl(e.target);
+  if (!pane || pane.el.style.display === 'none') return;
+  // No preventDefault: the browser's own cursor and hover work is not the
+  // program's, and stopping it would only make the pane feel dead.
+  if (pane.term?.hasSelection()) e.stopImmediatePropagation();
+}
+
+// ── Copy on select ───────────────────────────────────────────────────────
+// A selection in a terminal is only ever made in order to paste it somewhere,
+// and a pane has no Copy button to press — xterm just leaves the selection lit
+// up waiting for a ⌘C nobody types after double-clicking a word. So every
+// selection the mouse makes (double-click word, triple-click line, or a drag
+// through the custom path above) goes to the clipboard the moment the button
+// comes up. A click that selects nothing copies nothing: it must not wipe the
+// clipboard of whatever the user was carrying.
+//
+// This is the copy for text the *browser* selected. While a TUI holds mouse
+// tracking, xterm makes no selection at all and the double-click belongs to
+// the program in the PTY — there the copy arrives as OSC 52 instead, handled
+// in `setupTerminal`.
+let copySelectionFailed = false;
+
+function copySelectionOnRelease(pane) {
+  // Read and write synchronously, inside the mouseup. Both selection paths are
+  // settled by now — xterm selects a word on the second *mousedown* of a
+  // double-click, and a drag updates on every mousemove — and deferring the
+  // clipboard write out of the event, even by `setTimeout(…, 0)`, leaves the
+  // user gesture behind, which Safari will not write without.
+  const text = pane.term?.getSelection?.();
+  if (!text) return;
+  copyQuiet(text).then(ok => {
+    // Said once per tab: the failure is a property of the address the page was
+    // opened on, so it will fail on every selection after this one too.
+    if (ok || copySelectionFailed) return;
+    copySelectionFailed = true;
+    showToast('Copy-on-select needs localhost or HTTPS — press ⌘C instead', 'error');
+  });
+}

@@ -148,6 +148,38 @@ function copyField(btn, text) {
   });
 }
 
+/// Copy `text` with no UI of its own — for the copies nobody pressed a button
+/// for (selecting text in a terminal). Resolves to whether the clipboard took
+/// it, so the caller decides whether a failure is worth saying out loud.
+///
+/// Falls back to `execCommand` where `navigator.clipboard` is missing or
+/// refuses: that is the page reached by LAN IP rather than by localhost, and a
+/// selection-copy that silently stops working there would look like the bug
+/// this exists to fix.
+function copyQuiet(text) {
+  if (!navigator.clipboard) return Promise.resolve(copyViaExecCommand(text));
+  return navigator.clipboard.writeText(text).then(() => true, () => copyViaExecCommand(text));
+}
+
+/// The pre-Clipboard-API path: `execCommand('copy')` copies the *document*
+/// selection, so it needs a real element holding the text and selected in it.
+/// Off-screen rather than hidden — `display:none` can't hold a selection — and
+/// focus goes back where it was, or the terminal loses the keyboard to a
+/// textarea that no longer exists.
+function copyViaExecCommand(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('aria-hidden', 'true');
+  ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0';
+  document.body.appendChild(ta);
+  const focused = document.activeElement;
+  let ok = false;
+  try { ta.select(); ok = document.execCommand('copy'); } catch (_) {}
+  ta.remove();
+  try { focused?.focus?.(); } catch (_) {}
+  return ok;
+}
+
 // ── Pane-bar popovers ─────────────────────────────────────────────────────
 //
 // The cards that hang off a pane's top-bar buttons (SSH, Env). They share more

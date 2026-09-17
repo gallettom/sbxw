@@ -77,7 +77,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 /// Output bytes kept per sandbox for replay on reconnect (256 KB).
 const REPLAY_BYTES: usize = 256 * 1024;
 
-/// Remove the sequences a terminal is expected to *answer* from a byte stream.
+/// Remove the sequences that *act* rather than paint from a byte stream.
 ///
 /// The replay ring holds raw PTY output, questions included: a shell prompt
 /// asks where the cursor is (`CSI 6n`) on nearly every redraw, a TUI asks what
@@ -87,9 +87,13 @@ const REPLAY_BYTES: usize = 256 * 1024;
 /// an agent's TUI in front, it eats them; at a bash prompt they land on the
 /// command line as `37;3R37;3R…`, one per query in 256 KB of scrollback.
 ///
-/// Repainting the screen needs none of them, so the replay drops them and the
-/// live stream (where an answer is genuinely wanted) keeps them.
-fn strip_terminal_queries(input: &[u8]) -> Vec<u8> {
+/// A clipboard write (OSC 52) is the same problem without a question mark: it
+/// is an action the sequence performs, so replaying one silently re-copies a
+/// word selected an hour ago over whatever the user is carrying now.
+///
+/// Repainting the screen needs none of it, so the replay drops them and the
+/// live stream (where the answer, or the copy, is genuinely wanted) keeps them.
+fn strip_replay_side_effects(input: &[u8]) -> Vec<u8> {
     const ESC: u8 = 0x1b;
     const BEL: u8 = 0x07;
     let mut out = Vec::with_capacity(input.len());
@@ -147,14 +151,16 @@ fn strip_terminal_queries(input: &[u8]) -> Vec<u8> {
                     break;
                 };
                 let payload = &input[payload_start..payload_end];
-                let query = if kind == b']' {
+                let acts = if kind == b']' {
                     // A colour/clipboard read is the field `?` on its own.
                     payload.rsplit(|&b| b == b';').next() == Some(b"?")
+                        // OSC 52 the other way round: a clipboard write.
+                        || payload.starts_with(b"52;")
                 } else {
                     // XTGETTCAP (`+q`) and DECRQSS (`$q`).
                     payload.starts_with(b"+q") || payload.starts_with(b"$q")
                 };
-                if !query {
+                if !acts {
                     out.extend_from_slice(&input[i..next]);
                 }
                 i = next;
@@ -5051,7 +5057,7 @@ async fn bridge(
     // Clone out of the lock before awaiting (MutexGuard is not Send).
     let replay_snapshot: Vec<u8> = {
         let r = session.replay.lock().unwrap();
-        strip_terminal_queries(&r.iter().copied().collect::<Vec<u8>>())
+        strip_replay_side_effects(&r.iter().copied().collect::<Vec<u8>>())
     };
     if !replay_snapshot.is_empty() {
         ws_tx.send(Message::Binary(replay_snapshot)).await.ok();
@@ -5313,7 +5319,7 @@ mod tests {
     fn a_replay_asks_the_terminal_nothing() {
         let history = b"user@box:~$ \x1b[6nls\r\n\x1b[?6n\x1b[5n\x1b[c\x1b[>c";
         assert_eq!(
-            strip_terminal_queries(history),
+            strip_replay_side_effects(history),
             b"user@box:~$ ls\r\n".to_vec()
         );
     }
@@ -5334,7 +5340,7 @@ mod tests {
             &b"\x1b[?2004h\x1b[?25l"[..],
         ] {
             assert_eq!(
-                strip_terminal_queries(painting),
+                strip_replay_side_effects(painting),
                 painting.to_vec(),
                 "{:?} must survive the replay filter",
                 String::from_utf8_lossy(painting)
@@ -5342,12 +5348,27 @@ mod tests {
         }
     }
 
+    /// A clipboard write is not history: the pane the user reconnects would
+    /// re-copy whatever the agent last selected, over whatever they are
+    /// carrying now. The live stream still delivers it — that is the copy the
+    /// browser is meant to make (see the OSC 52 handler in `panes.js`).
+    #[test]
+    fn a_replay_does_not_touch_the_clipboard() {
+        let history = b"out\x1b]52;c;aGVsbG8=\x07put\x1b]52;c;aGk=\x1b\\ ";
+        assert_eq!(strip_replay_side_effects(history), b"output ".to_vec());
+        // A title shares the `]` opener; only 52 goes.
+        assert_eq!(
+            strip_replay_side_effects(b"\x1b]0;52;not this\x07"),
+            b"\x1b]0;52;not this\x07".to_vec()
+        );
+    }
+
     #[test]
     fn the_other_question_shapes_go_too() {
         // DECRQM, XTVERSION, a window-size report, an OSC colour read, and
         // XTGETTCAP — each answered by xterm.js, each pointless on a repaint.
         let asks = b"a\x1b[?2026$pb\x1b[>0qc\x1b[18td\x1b]11;?\x1b\\e\x1bP+q544e\x1b\\f";
-        assert_eq!(strip_terminal_queries(asks), b"abcdef".to_vec());
+        assert_eq!(strip_replay_side_effects(asks), b"abcdef".to_vec());
     }
 
     /// The ring buffer cuts at 256 KB wherever that lands, so both ends of a
@@ -5356,16 +5377,16 @@ mod tests {
     #[test]
     fn a_sequence_cut_by_the_ring_is_left_alone() {
         assert_eq!(
-            strip_terminal_queries(b"text\x1b[6"),
+            strip_replay_side_effects(b"text\x1b[6"),
             b"text\x1b[6".to_vec()
         );
-        assert_eq!(strip_terminal_queries(b"text\x1b"), b"text\x1b".to_vec());
+        assert_eq!(strip_replay_side_effects(b"text\x1b"), b"text\x1b".to_vec());
         assert_eq!(
-            strip_terminal_queries(b"text\x1b]11;?"),
+            strip_replay_side_effects(b"text\x1b]11;?"),
             b"text\x1b]11;?".to_vec()
         );
         // A trailing fragment of an answered query still goes, up to the cut.
-        assert_eq!(strip_terminal_queries(b"6n\x1b[6n"), b"6n".to_vec());
+        assert_eq!(strip_replay_side_effects(b"6n\x1b[6n"), b"6n".to_vec());
     }
 
     /// The whole review step rests on this: an answer exists server-side from
