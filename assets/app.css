@@ -1078,13 +1078,17 @@
     color: color-mix(in oklab, var(--group-color, var(--c-text)) 70%, var(--c-white));
   }
   .pane-bar .role-chip[hidden] { display: none; }
-  /* The main session made lead. Violet, the colour ★ Lead lights up in: the
-     chip says "★ lead" filled, and the bar carries a stripe on its left edge,
-     so the pane reads as the lead from across the grid, grouped or not. */
+  /* The main session made lead: the chip says "★ lead" filled, and the bar
+     carries a stripe on its left edge, so the pane reads as the lead from
+     across the grid. Both in the group's hue — violet beside a rose bar read
+     as a second group — and violet, the colour ★ Lead lights up in, only when
+     the pane is ungrouped. Filled and starred is what sets it apart from its
+     threads, which are tinted. Dark text holds AA on all four hues. */
   .pane-bar .role-chip.lead {
-    background: var(--c-purple-alt); border-color: var(--c-purple-alt); color: var(--c-bg);
+    --lead-color: var(--group-color, var(--c-purple-alt));
+    background: var(--lead-color); border-color: var(--lead-color); color: var(--c-bg);
   }
-  .pane.leading .pane-bar { box-shadow: inset 4px 0 0 var(--c-purple-alt); }
+  .pane.leading .pane-bar { box-shadow: inset 4px 0 0 var(--group-color, var(--c-purple-alt)); }
   .pane-bar .mode-switch button[data-mode="lead"].active { color: var(--c-purple-alt); }
   .pane-bar .pane-thread-close[hidden] { display: none; }
   .pane-bar {
