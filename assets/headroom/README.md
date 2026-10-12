@@ -15,7 +15,10 @@ On every container start, the kit's startup script:
 3. Runs Headroom's durable integration: **`headroom init --global claude`**, which
    writes `~/.claude/settings.json` (`ANTHROPIC_BASE_URL=http://127.0.0.1:8787` +
    `SessionStart`/`PreToolUse` hooks that **auto-start the proxy** — no daemon or
-   env-file wiring on our side).
+   env-file wiring on our side). It clones a plugin marketplace, so it is skipped
+   when nothing calls for it: it ran successfully since `headroom` was last
+   installed (`~/.headroom/.sbxw-init-done`), the manifest exists and
+   `settings.json` still points at `127.0.0.1:8787`. Delete the stamp to force it.
 4. Patches Headroom's deployment manifest
    (`~/.headroom/deploy/init-user/manifest.json`) — the real source of the proxy's
    command line — to force:
@@ -25,6 +28,10 @@ On every container start, the kit's startup script:
    - **`--code-aware`** — AST-based code compression (uses `[code]`/tree-sitter).
    - **`--intercept-tool-results`** — compress tool outputs (file reads, command
      output) — the biggest token sink for an agent.
+
+   The manifest is written, and a running proxy restarted, only when this
+   changes it. `build-essential` (needed to compile headroom's Rust extension)
+   skips `apt-get update` when any bundled kit ran it in the last hour.
 
 The proxy uses **Authorization-header passthrough**: it forwards Claude's
 existing credentials to `api.anthropic.com`, so it works with both the API-key
