@@ -2642,7 +2642,10 @@ pub(crate) fn provision_sandbox(
                 sbx::piece::USAGE_STATUSLINE,
                 "could not install usage statusLine",
             ),
-            (sbx::piece::RELAY, "could not install the cross-sandbox relay"),
+            (
+                sbx::piece::RELAY,
+                "could not install the cross-sandbox relay",
+            ),
             (
                 sbx::piece::STALE_MODEL,
                 "could not clear the old settings.json model key",

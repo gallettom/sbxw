@@ -91,6 +91,16 @@ use std::time::{Duration, Instant};
 
 const BIN: &str = "sbx";
 
+/// `&["a", "b"]` as owned argv, for the builders that hand theirs to a caller.
+fn owned(args: &[&str]) -> Vec<String> {
+    args.iter().map(|s| s.to_string()).collect()
+}
+
+/// An owned argv borrowed back, for the runners below.
+fn as_strs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
 /// Longest tail of a failing command's stderr we fold into the error message.
 /// Generous on purpose: sbx's policy denials carry a multi-line explanation
 /// (rule, origin, detail) and, since the 2026 releases, an organisation's
@@ -140,7 +150,7 @@ fn run_inherit(args: &[&str]) -> Result<()> {
         .status()
         .with_context(|| format!("failed to spawn `{BIN}` — is it on your PATH?"))?;
     if !status.success() {
-        bail!("`sbx {}` exited with {}", args.join(" "), status);
+        return Err(command_error(args, status, b""));
     }
     Ok(())
 }
@@ -179,9 +189,6 @@ fn run_reporting(args: &[&str], sink: crate::progress::Sink) -> Result<()> {
 
     let status = child.wait()?;
     if !status.success() {
-        if tail.is_empty() {
-            bail!("`sbx {}` exited with {}", args.join(" "), status);
-        }
         return Err(command_error(args, status, tail.join("\n").as_bytes()));
     }
     Ok(())
@@ -593,8 +600,7 @@ pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
         flag
     });
     let args = create_args(name, opts, skills.as_deref());
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_inherit(&refs)
+    run_inherit(&as_strs(&args))
 }
 
 /// The flag that asks `sbx create` for skills `mode`, given what its `--help`
@@ -720,20 +726,11 @@ pub fn run_attach_args(name: &str, env: &[String], env_files: &[String]) -> Vec<
 /// `run_capture` rather than inherited stdio: `-d` prints the sandbox id and
 /// returns, there is nothing to watch, and a refusal should carry sbx's words.
 pub fn run_detached(name: &str) -> Result<()> {
-    run_capture(
-        &run_detached_args(name)
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-    )
-    .map(|_| ())
+    run_capture(&as_strs(&run_detached_args(name))).map(|_| ())
 }
 
 fn run_detached_args(name: &str) -> Vec<String> {
-    ["run", "-d", "--name", name]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    owned(&["run", "-d", "--name", name])
 }
 
 /// Path (inside the sandbox) of the `/codemap` command the codemap kit
@@ -780,7 +777,7 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
     const SCRIPT: &str = "\
         export SBXW_CODEMAP_DONE=\"http://host.docker.internal:$2/api/sandboxes/$1/codemap/done\"; \
         exec claude -p \"$3\" --permission-mode bypassPermissions";
-    [
+    owned(&[
         "exec",
         name,
         "--",
@@ -791,10 +788,7 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
         name,
         web_port,
         prompt,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    ])
 }
 
 /// Argv for a *thread*: a second Claude session in `name`, working in a git
@@ -862,7 +856,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
             exec claude --dangerously-skip-permissions --continue
         fi
         exec claude --dangerously-skip-permissions ${3:+"$3"}"#;
-    [
+    owned(&[
         "exec",
         "-it",
         name,
@@ -874,10 +868,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
         workspace,
         thread,
         prompt,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    ])
 }
 
 /// Where a thread stands, read before closing it: what closing would throw
@@ -961,10 +952,18 @@ pub fn thread_bash_args(name: &str, workspace: &str, thread: &str) -> Vec<String
             exit 1
         fi
         cd "$wt" && exec bash -l"#;
-    ["exec", "-it", name, "--", "bash", "-lc", SCRIPT, "sbxw-thread-bash", workspace, thread]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    owned(&[
+        "exec",
+        "-it",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        SCRIPT,
+        "sbxw-thread-bash",
+        workspace,
+        thread,
+    ])
 }
 
 /// Argv for `THREAD_END_SCRIPT`. `action` is `status` or `close`.
@@ -977,10 +976,15 @@ pub fn thread_end_args(
     delete_branch: bool,
 ) -> Vec<String> {
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
-    let mut args: Vec<String> = ["exec", name, "--", "bash", "-lc", THREAD_END_SCRIPT, "sbxw-thread-end"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut args: Vec<String> = owned(&[
+        "exec",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        THREAD_END_SCRIPT,
+        "sbxw-thread-end",
+    ]);
     args.extend([
         workspace.to_string(),
         thread.to_string(),
@@ -1008,15 +1012,16 @@ fn run_thread_end(args: &[String]) -> Result<std::collections::HashMap<String, S
         anyhow::bail!("{err}");
     }
     if !out.status.success() {
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        return Err(command_error(&refs[..3], out.status, &out.stderr));
+        return Err(command_error(&as_strs(&args[..3]), out.status, &out.stderr));
     }
     Ok(fields)
 }
 
 /// What closing thread `thread` of sandbox `name` would lose.
 pub fn thread_status(name: &str, workspace: &str, thread: &str) -> Result<ThreadStatus> {
-    let f = run_thread_end(&thread_end_args(name, workspace, thread, "status", false, false))?;
+    let f = run_thread_end(&thread_end_args(
+        name, workspace, thread, "status", false, false,
+    ))?;
     let get = |k: &str| f.get(k).cloned().unwrap_or_default();
     let num = |k: &str| get(k).parse().unwrap_or(0);
     Ok(ThreadStatus {
@@ -1070,8 +1075,7 @@ pub fn thread_close(
 /// answer.
 pub fn env_create(paths: &[String], name: &str, env_args: &[String]) -> Result<()> {
     let args = env_create_args(paths, name, env_args);
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_inherit(&refs)
+    run_inherit(&as_strs(&args))
 }
 
 fn env_create_args(paths: &[String], name: &str, env_args: &[String]) -> Vec<String> {
@@ -1510,7 +1514,7 @@ fn policy_rule_args<'a>(
 pub fn policy_rm_rule(rule: &str, sandbox: Option<&str>) -> Result<()> {
     let attempt = |scope: Option<&str>| {
         let args = policy_rm_args(rule, scope);
-        run_checked(&args.iter().map(String::as_str).collect::<Vec<_>>())
+        run_checked(&as_strs(&args))
     };
     match (attempt(sandbox), sandbox) {
         (Ok(()), _) => Ok(()),
@@ -1526,10 +1530,7 @@ pub fn policy_rm_rule(rule: &str, sandbox: Option<&str>) -> Result<()> {
 }
 
 fn policy_rm_args(rule: &str, sandbox: Option<&str>) -> Vec<String> {
-    let mut args: Vec<String> = ["policy", "rm", "network", "--id", rule]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut args: Vec<String> = owned(&["policy", "rm", "network", "--id", rule]);
     if let Some(name) = sandbox {
         args.push("--sandbox".into());
         args.push(name.into());
@@ -1787,20 +1788,10 @@ pub fn secret_set_stdin(
     args.extend(secret_scope_args(global, sandbox));
     args.push(service.into());
 
-    tracing::debug!(target: "sbx", "sbx {} (secret via stdin)", args.join(" "));
-    let mut child = Command::new(BIN)
-        .args(&args)
-        .stdin(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn `{BIN} secret set`"))?;
-    child
-        .stdin
-        .take()
-        .context("no stdin handle for sbx secret set")?
-        .write_all(value.as_bytes())?;
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("`sbx secret set {service}` failed: {status}");
+    let refs = as_strs(&args);
+    let out = run_stdin(&refs, value.as_bytes())?;
+    if !out.status.success() {
+        return Err(command_error(&refs, out.status, &out.stderr));
     }
     Ok(())
 }
@@ -1817,29 +1808,35 @@ fn exec_args<'a>(sandbox: &'a str, stdin: bool, args: &[&'a str]) -> Vec<&'a str
     full
 }
 
-/// Run `args` inside `sandbox` with `data` piped to its stdin, and hand back
-/// its output whatever the exit status.
-///
-/// `-i` (no `-t`) is deliberate: a PTY would perform newline translation and
-/// corrupt binary data.
-fn exec_stdin(sandbox: &str, args: &[&str], data: &[u8]) -> Result<std::process::Output> {
-    let full = exec_args(sandbox, true, args);
-    tracing::debug!(target: "sbx", "sbx {} (stdin)", full.join(" "));
+/// Run `sbx <args...>` with `data` piped to its stdin, and hand back its
+/// output whatever the exit status. The data never reaches argv, so a secret
+/// stays out of the process table and of every log line here.
+fn run_stdin(args: &[&str], data: &[u8]) -> Result<std::process::Output> {
+    tracing::debug!(target: "sbx", "sbx {} (stdin)", args.join(" "));
     let mut child = Command::new(BIN)
-        .args(&full)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("failed to spawn `{BIN} exec`"))?;
+        .with_context(|| format!("failed to spawn `{BIN} {}`", args[0]))?;
     // Dropped at the end of the statement, which closes the pipe — the child
     // reads to EOF before it does anything.
     child
         .stdin
         .take()
-        .context("no stdin handle for sbx exec")?
+        .context("no stdin handle for sbx")?
         .write_all(data)?;
     Ok(child.wait_with_output()?)
+}
+
+/// Run `args` inside `sandbox` with `data` piped to its stdin — `run_stdin`
+/// through `sbx exec -i`.
+///
+/// `-i` (no `-t`) is deliberate: a PTY would perform newline translation and
+/// corrupt binary data.
+fn exec_stdin(sandbox: &str, args: &[&str], data: &[u8]) -> Result<std::process::Output> {
+    run_stdin(&exec_args(sandbox, true, args), data)
 }
 
 /// Write `data` to `dest` inside the sandbox by piping it over stdin to
@@ -1850,7 +1847,12 @@ fn exec_stdin(sandbox: &str, args: &[&str], data: &[u8]) -> Result<std::process:
 /// arbitrary path can't break out into shell syntax, and the parent directory
 /// is created on demand.
 pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
-    write_file_with(sandbox, dest, data, r#"mkdir -p "$(dirname "$1")" && cat > "$1""#)
+    write_file_with(
+        sandbox,
+        dest,
+        data,
+        r#"mkdir -p "$(dirname "$1")" && cat > "$1""#,
+    )
 }
 
 /// `write_file_stdin` with the shell script spelled by the caller — `$1` is the
@@ -1875,7 +1877,11 @@ fn write_file_with(sandbox: &str, dest: &str, data: &[u8], script: &str) -> Resu
 /// needs no token on the host at all, which is the whole reason the usage poller
 /// goes through a sandbox instead of asking directly (see `web::fetch_usage`).
 pub fn curl_in_sandbox(sandbox: &str, url: &str) -> Result<String> {
-    run_capture(&exec_args(sandbox, false, &["curl", "-s", "--max-time", "10", url]))
+    run_capture(&exec_args(
+        sandbox,
+        false,
+        &["curl", "-s", "--max-time", "10", url],
+    ))
 }
 
 /// Refresh Claude Code's OAuth credentials in a *running* sandbox by writing
@@ -2830,7 +2836,29 @@ neos   claude   2 days ago   running   /p/neos
         let failed = parse_tooling_report(out, &pieces).expect("a report");
         assert_eq!(failed, vec![(piece::TRUST, "EACCES".to_string())]);
         assert!(parse_tooling_report("no report here", &pieces).is_none());
-        assert_eq!(parse_tooling_report("SBXW-TOOLING []", &pieces), Some(vec![]));
+        assert_eq!(
+            parse_tooling_report("SBXW-TOOLING []", &pieces),
+            Some(vec![])
+        );
+    }
+
+    /// `node -` on `script`, returning what it printed.
+    fn run_node(script: &str) -> String {
+        let mut child = Command::new("node")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).into_owned()
     }
 
     /// Run the whole bring-up batch under a real `node`, against a scratch
@@ -2857,26 +2885,18 @@ neos   claude   2 days ago   running   /p/neos
         std::fs::write(&claude_json, r#"{"onboarded":true}"#).unwrap();
         std::fs::write(&memory, "my own rule\n").unwrap();
 
-        let script = Tooling::new()
+        let batch = Tooling::new()
             .trust_workspace("/work")
             .artifact_hook()
             .status_hooks("7681")
             .usage_statusline("7681")
             .relay("7681")
-            .drop_stale_model("m1")
+            .drop_stale_model("m1");
+        let script = batch
             .script()
             .replace("/home/agent/", &format!("{}/", home.display()));
         let run = || {
-            let mut child = Command::new("node")
-                .arg("-")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .unwrap();
-            child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
-            let out = child.wait_with_output().unwrap();
-            assert!(out.status.success());
-            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stdout = run_node(&script);
             assert!(stdout.contains("SBXW-TOOLING []"), "{stdout}");
         };
         let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap();
@@ -2887,7 +2907,10 @@ neos   claude   2 days ago   running   /p/neos
 
         let s: serde_json::Value = serde_json::from_str(&first.0).unwrap();
         assert!(s.get("model").is_none(), "sbxw's own model is dropped");
-        assert_eq!(s["statusLine"]["command"], "mine", "the user's statusLine stays");
+        assert_eq!(
+            s["statusLine"]["command"], "mine",
+            "the user's statusLine stays"
+        );
         let pre = s["hooks"]["PreToolUse"].as_array().unwrap();
         // Theirs, the artifact hook, the status hook — once each.
         assert_eq!(pre.len(), 3, "{pre:?}");
@@ -2911,27 +2934,13 @@ neos   claude   2 days ago   running   /p/neos
         // only those: `.claude.json` is a directory here.
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".claude.json")).unwrap();
-        let mut child = Command::new("node")
-            .arg("-")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
-        let out = child.wait_with_output().unwrap();
-        let pieces = Tooling::new()
-            .trust_workspace("/work")
-            .artifact_hook()
-            .status_hooks("7681")
-            .usage_statusline("7681")
-            .relay("7681")
-            .drop_stale_model("m1")
-            .pieces;
-        let failed = parse_tooling_report(&String::from_utf8_lossy(&out.stdout), &pieces)
-            .expect("a report");
+        let failed = parse_tooling_report(&run_node(&script), &batch.pieces).expect("a report");
         let names: Vec<&str> = failed.iter().map(|(p, _)| *p).collect();
         assert_eq!(names, vec![piece::TRUST, piece::RELAY]);
-        assert!(home.join(".claude/settings.json").exists(), "the rest still landed");
+        assert!(
+            home.join(".claude/settings.json").exists(),
+            "the rest still landed"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -3100,7 +3109,12 @@ local-policy                          local   all              network: 159 allo
         assert_eq!(&args[..6], ["exec", "-it", "neos", "--", "bash", "-lc"]);
         assert_eq!(
             &args[7..],
-            ["sbxw-thread", "/Users/me/my $(id) app", "fix-login", "/lead $(id)"]
+            [
+                "sbxw-thread",
+                "/Users/me/my $(id) app",
+                "fix-login",
+                "/lead $(id)"
+            ]
         );
         // The worktree and branch the README promises.
         assert!(script.contains(r#""$root/.sbxw-worktrees/$2""#), "{script}");
@@ -3115,7 +3129,14 @@ local-policy                          local   all              network: 159 allo
         assert!(!args[5].contains("fix-login") && !args[5].contains("$(id)"));
         assert_eq!(
             &args[6..],
-            ["sbxw-thread-end", "/w/$(id)", "fix-login", "close", "1", "0"]
+            [
+                "sbxw-thread-end",
+                "/w/$(id)",
+                "fix-login",
+                "close",
+                "1",
+                "0"
+            ]
         );
     }
 
