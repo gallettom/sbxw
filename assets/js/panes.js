@@ -743,7 +743,7 @@ function renderThreadRepos() {
       return `<label class="repo-row">
           <input type="radio" name="thread-repo" value="${i}"${r.path === repo ? ' checked' : ''}>
           <span class="repo-name">${escHtml(repoLabel(r.path, repos.workspace))}${r.path ? '' : '<span class="repo-ws"> (workspace)</span>'}</span>
-          <span class="repo-meta"><span class="repo-branch">${r.detached ? 'no branch' : escHtml(r.branch || '')}</span>
+          <span class="repo-meta">${r.detached ? '' : `<span class="repo-branch">${escHtml(r.branch || '')}</span>`}
             <span class="repo-status ${st.tone}">${escHtml(st.text)}</span></span>
         </label>`;
     }).join('');

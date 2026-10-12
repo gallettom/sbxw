@@ -616,6 +616,33 @@
   .thread-chip:hover { border-color: var(--c-blue); }
   .thread-chip.open::before { content: '● '; color: var(--c-green); }
   .thread-count { color: var(--c-text-muted); font-size: 11px; margin-right: auto; align-self: center; }
+  .thread-chip-repo { margin-left: .45rem; color: var(--c-text-dim); font-size: 11px; }
+  /* The repo picker: one row per git repo of the workspace. The name is what
+     a person looks for, so it leads; branch and checkout state sit quietly
+     under it, green when clean and amber when there is something to know. */
+  .repo-list { display: flex; flex-direction: column; gap: .35rem; max-height: 40vh; overflow-y: auto; padding: 2px; }
+  .repo-row {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .6rem; row-gap: .1rem;
+    align-items: baseline; padding: .45rem .65rem; cursor: pointer;
+    border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg);
+  }
+  .repo-row:hover { border-color: var(--c-dim); }
+  .repo-row:has(input:checked) { border-color: var(--c-blue); background: var(--c-blue-tint); }
+  .repo-row:has(input:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .repo-row input { grid-row: span 2; margin: 0; accent-color: var(--c-blue); }
+  .repo-row input:focus-visible { outline: none; }
+  .repo-name { color: var(--c-text-bright); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+  .repo-ws { color: var(--c-text-dim); font-weight: 400; }
+  .repo-meta { display: flex; flex-wrap: wrap; gap: .1rem .75rem; font-size: 11px; }
+  .repo-branch { color: var(--c-text-muted); overflow-wrap: anywhere; }
+  .repo-status { white-space: pre; }
+  .repo-status.ok { color: var(--c-green); }
+  .repo-status.warn { color: var(--c-amber); }
+  .repo-note { margin: .35rem 0 0; color: var(--c-text-muted); font-size: 11px; line-height: 1.5; }
+  .repo-note.warn {
+    margin-top: 0; padding: .55rem .7rem; border-radius: 6px; font-size: 12px;
+    color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber);
+  }
   .thread-close-lead { margin: 0; color: var(--c-text); font-size: 13px; }
   .thread-close-path {
     display: block; padding: .4rem .55rem; border-radius: 6px; background: var(--c-bg);
@@ -675,6 +702,20 @@
     background: color-mix(in srgb, var(--plan-accent) 12%, transparent);
   }
   .plan-unnamed { color: var(--c-text-dim); font-style: italic; }
+  /* Where a thread works: its repo as a neutral chip — the group hue is for
+     what it owns — or, while it has none and needs one, an amber flag. */
+  .plan-repo { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin: -.1rem 0 .45rem; }
+  .plan-repo-chip {
+    font-family: var(--font-mono); font-size: 11px; color: var(--c-text-bright);
+    padding: .1rem .45rem; border-radius: 4px; overflow-wrap: anywhere;
+    border: 1px solid var(--c-border); background: var(--c-elevated);
+  }
+  .plan-repo.flagged {
+    display: inline-flex; padding: .15rem .5rem; border-radius: 4px; font-size: 11px;
+    color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber);
+  }
+  .plan-thread.needs-repo { border-top-color: var(--c-amber); border-right-color: var(--c-amber); border-bottom-color: var(--c-amber); }
+  .plan-thread select.field-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .plan-form { display: none; flex-direction: column; gap: .5rem; padding-top: 1.7rem; }
   .plan-thread.editing .plan-view { display: none; }
   .plan-thread.editing .plan-form { display: flex; }
