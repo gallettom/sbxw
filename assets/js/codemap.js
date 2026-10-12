@@ -1009,6 +1009,12 @@
 
     $('codemap-close').addEventListener('click', close);
     $('codemap-close2').addEventListener('click', close);
+    // The Files tab: back to the explorer on the same sandbox.
+    $('codemap-tab-files').addEventListener('click', () => {
+      const name = state.sandbox;
+      close();
+      if (name && typeof openFilesModal === 'function') openFilesModal(name);
+    });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !overlay.classList.contains('hidden')) close();

@@ -137,26 +137,26 @@ function createPane(index) {
     <div class="pane-bar">
       <span class="dot term-disconnected" id="pdot-${index}" title="Terminal connection"></span>
       <span class="sandbox-label" id="plabel-${index}">—</span>
+      <span class="conn-label" id="pconn-${index}"></span>
       <!-- Beside the name, not over with SSH/Env/Reconnect on the right: those
            act on the *session* in this pane, while a project is a fact about
            the sandbox the name belongs to — the same workspace, whichever pane
            happens to be showing it. -->
       <button class="pane-btn pane-files-btn" id="pfiles-${index}" disabled
               title="Project — this sandbox's code map and the deliverables under .sbxw-artifacts/">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
-      <span class="conn-label" id="pconn-${index}"></span>
       <span class="spacer"></span>
+      <button class="pane-btn pane-session-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
+      <button class="pane-btn pane-session-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
+      <button class="pane-btn pane-session-btn pane-reconnect-btn" id="preconnect-${index}">Reconnect</button>
+      <button class="pane-btn pane-session-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <div class="mode-switch" role="tablist">
         <!-- The word is wrapped so a narrow pane can drop it and keep the
              glyph, which carries the mode on its own (see app.css). -->
         <button class="mode-btn active" data-mode="claude" title="Claude" aria-label="Claude">✦<span class="mode-word"> Claude</span></button>
         <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
       </div>
-      <button class="pane-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
-      <button class="pane-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
-      <button class="pane-btn pane-reconnect-btn" id="preconnect-${index}">Reconnect</button>
-      <button class="pane-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
     <div class="pane-term" id="pterm-${index}"></div>`;
@@ -224,7 +224,8 @@ function setupTerminal(pane) {
   const term = new Terminal({
     cursorBlink: true, fontSize: 13,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    theme: { background: '#000000', foreground: '#c9d1d9', cursor: '#58a6ff' },
+    // --c-bg, so the terminal and the chrome around it are one black, not two.
+    theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
     scrollback: 10000,
   });
   const fit = new FitAddon.FitAddon();
@@ -339,6 +340,9 @@ function recreatePaneTerminal(idx) {
 function setFocusedPane(idx) {
   panes.forEach((p, i) => p.el.classList.toggle('focused', i === idx));
   focusedPane = idx;
+  const focusedSandbox = panes[idx]?.sandbox;
+  listEl.querySelectorAll('.sbx-item').forEach(row =>
+    row.classList.toggle('focused', !!focusedSandbox && row.dataset.name === focusedSandbox));
   panes[idx]?.term.focus();
   // Which sandbox is being read decides whether its `attention` liseret shows
   // at all — on this pane, and on its sidebar row.

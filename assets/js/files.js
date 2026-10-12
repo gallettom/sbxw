@@ -38,9 +38,20 @@ function humanSize(bytes) {
   return `${v.toFixed(1)} ${units[i]}`;
 }
 
+/// Short and in the browser's own locale: day and month, plus the time for
+/// this year or the year for older ones. Seconds told nobody anything, and a
+/// column of "8/17/2026, 3:12:16 PM" was mostly noise around the date.
 function humanTime(unixSecs) {
   if (!unixSecs) return '—';
-  return new Date(unixSecs * 1000).toLocaleString();
+  const d = new Date(unixSecs * 1000);
+  return d.toLocaleString(undefined, d.getFullYear() === new Date().getFullYear()
+    ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+    : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/// The full timestamp, for a tooltip on the short one.
+function fullTime(unixSecs) {
+  return unixSecs ? new Date(unixSecs * 1000).toLocaleString() : '';
 }
 
 const fxApi = (path, extra = '') =>
@@ -126,7 +137,7 @@ function fxNotice(text, kind) {
 async function fxOpen(path, { push = true, select = null } = {}) {
   if (!filesTarget) return;
   const seq = ++fx.seq;
-  fxTbody.innerHTML = '<tr><td colspan="3" class="ports-empty-msg">Loading…</td></tr>';
+  fxTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>';
   let data;
   try {
     const res = await fetch(fxApi('', `?path=${encodeURIComponent(path || '')}`));
@@ -139,7 +150,7 @@ async function fxOpen(path, { push = true, select = null } = {}) {
     fxNotice(data.error || 'could not list that folder', 'error');
     // Nothing on screen yet (the first open failed): show something rather
     // than a spinner forever.
-    if (!fx.path) fxTbody.innerHTML = '<tr><td colspan="3" class="ports-empty-msg">Nothing to show</td></tr>';
+    if (!fx.path) fxTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Nothing to show</td></tr>';
     else renderList();
     return;
   }
@@ -153,6 +164,9 @@ async function fxOpen(path, { push = true, select = null } = {}) {
     artifacts: data.artifacts || null,
     home: data.home || '/home/agent',
   };
+  // A folder with a README opens on it, the way a repository page does: the
+  // preview has something to say before anything is clicked.
+  if (!select) select = fx.entries.find((e) => e.kind === 'file' && FX_README.test(e.name))?.name || null;
   fx.selected = select;
   fxNotice(fx.offline
     ? 'This sandbox is stopped — showing its workspace from the host. Start it to browse the rest of its filesystem.'
@@ -163,7 +177,7 @@ async function fxOpen(path, { push = true, select = null } = {}) {
   renderList();
   if (select) {
     const entry = fx.entries.find((e) => e.name === select);
-    if (entry) fxPreview(entry); else fxPreviewEmpty();
+    if (entry) fxShow(entry); else fxPreviewEmpty();
   } else {
     fxPreviewEmpty();
   }
@@ -187,16 +201,22 @@ function renderCrumbs() {
 }
 
 const FX_ICONS = { dir: '📁', file: '📄', other: '·' };
+const FX_README = /^readme(\.(md|markdown|txt))?$/i;
 
-function renderList() {
+/// The rows on screen, in order: what the filter and the dotfile toggle leave.
+function fxVisible() {
   const q = document.getElementById('fx-filter').value.trim().toLowerCase();
   const hidden = document.getElementById('fx-show-hidden').checked;
-  const rows = fx.entries.filter((e) =>
+  return fx.entries.filter((e) =>
     // Dotfiles are hidden by default — except the one folder this panel is for.
     (hidden || !e.name.startsWith('.') || e.name === '.sbxw-artifacts')
     && (!q || e.name.toLowerCase().includes(q)));
+}
+
+function renderList() {
+  const rows = fxVisible();
   if (!rows.length) {
-    fxTbody.innerHTML = `<tr><td colspan="3" class="ports-empty-msg">${
+    fxTbody.innerHTML = `<tr><td colspan="4" class="ports-empty-msg">${
       fx.entries.length ? 'Nothing matches' : 'Empty folder'}</td></tr>`;
     return;
   }
@@ -206,8 +226,34 @@ function renderList() {
       <td class="fx-name"><span class="fx-icon">${FX_ICONS[e.kind] || '·'}</span>
         <span class="fx-label">${escHtml(e.name)}</span>${e.link ? '<span class="fx-link" title="Symbolic link">↗</span>' : ''}</td>
       <td class="fx-num">${e.kind === 'file' ? humanSize(e.size) : '—'}</td>
-      <td class="fx-time">${humanTime(e.modified)}</td>
+      <td class="fx-time" title="${escHtml(fullTime(e.modified))}">${humanTime(e.modified)}</td>
+      <td class="fx-act">${e.kind === 'file'
+        ? `<button class="fx-dl" type="button" tabindex="-1" title="Download"
+             aria-label="Download ${escHtml(e.name)}">⬇</button>` : ''}</td>
     </tr>`).join('');
+  fxTbody.querySelector('.fx-row.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+function fxDownload(entry) {
+  const a = document.createElement('a');
+  a.href = fxFileUrl(fxJoin(fx.path, entry.name), '&download=1');
+  a.download = entry.name;
+  a.click();
+}
+
+/// Select a row and show it on the right: a file is previewed, a folder says
+/// what Return will do. Used by the keyboard, which walks folders without
+/// opening them, as well as by the README a folder opens on.
+function fxShow(entry) {
+  if (entry.kind === 'file') { fxPreview(entry); return; }
+  fx.selected = entry.name;
+  renderList();
+  setPreviewOpen(true);
+  document.getElementById('fx-preview').innerHTML = `
+    <div class="fx-prev-head">
+      <div class="fx-prev-name">${escHtml(entry.name)}</div>
+      <div class="fx-prev-meta">${entry.kind === 'dir' ? 'Folder — Return to open it' : 'Not a regular file'}</div>
+    </div>`;
 }
 
 /* ── Preview ──
@@ -222,22 +268,28 @@ const FX_TEXT_MAX = 1024 * 1024;
 const FX_HTML_MAX = 8 * 1024 * 1024;
 const FX_IMAGE_MAX = 24 * 1024 * 1024;
 
+/// Nothing selected: the preview column folds away rather than standing empty
+/// beside the list — it was a third of the panel holding one grey sentence and
+/// a third copy of the path. It comes back with the first selection.
+function setPreviewOpen(open) {
+  document.querySelector('.fx-body').classList.toggle('no-preview', !open);
+}
+
 function fxPreviewEmpty() {
-  document.getElementById('fx-preview').innerHTML = `
-    <div class="cm-side-label">${escHtml(fx.path || '')}</div>
-    <p class="cm-empty-small">${fx.entries.length} item${fx.entries.length === 1 ? '' : 's'}.
-    Select a file to preview it; double-click to download.</p>`;
+  document.getElementById('fx-preview').innerHTML = '';
+  setPreviewOpen(false);
 }
 
 async function fxPreview(entry) {
   fx.selected = entry.name;
   renderList();
+  setPreviewOpen(true);
   const path = fxJoin(fx.path, entry.name);
   const host = document.getElementById('fx-preview');
   host.innerHTML = `
     <div class="fx-prev-head">
       <div class="fx-prev-name" title="${escHtml(path)}">${escHtml(entry.name)}</div>
-      <div class="fx-prev-meta">${humanSize(entry.size)} · ${escHtml(humanTime(entry.modified))}</div>
+      <div class="fx-prev-meta">${humanSize(entry.size)} · ${escHtml(fullTime(entry.modified))}</div>
       <div class="fx-prev-actions">
         <a class="dl-link" href="${fxFileUrl(path, '&download=1')}" download="${escHtml(entry.name)}">⬇ Download</a>
         <button class="fx-copy" data-copy="${escHtml(path)}" title="Copy the path">Copy path</button>
@@ -393,6 +445,7 @@ async function openFilesModal(name) {
   document.getElementById('fx-filter').value = '';
   fxNotice('');
   fetchCodemapState(name);
+  document.getElementById('fx-list-wrap').focus({ preventScroll: true });
   await fxOpen('', { push: false });
   if (filesTarget !== name) return;
   const artifacts = fx.entries.find((e) => e.name === '.sbxw-artifacts' && e.kind === 'dir');
@@ -480,17 +533,41 @@ fxTbody.addEventListener('click', (e) => {
   if (!row) return;
   const entry = fx.entries.find((x) => x.name === row.dataset.name);
   if (!entry) return;
+  // Keep the keyboard where the pointer just was, so ↑/↓ carry on from here.
+  document.getElementById('fx-list-wrap').focus({ preventScroll: true });
+  if (e.target.closest('.fx-dl')) { fxDownload(entry); return; }
   if (entry.kind === 'dir') fxOpen(fxJoin(fx.path, entry.name));
   else fxPreview(entry);
 });
 fxTbody.addEventListener('dblclick', (e) => {
   const row = e.target.closest('.fx-row');
   const entry = row && fx.entries.find((x) => x.name === row.dataset.name);
-  if (!entry || entry.kind !== 'file') return;
-  const a = document.createElement('a');
-  a.href = fxFileUrl(fxJoin(fx.path, entry.name), '&download=1');
-  a.download = entry.name;
-  a.click();
+  if (!entry || entry.kind !== 'file' || e.target.closest('.fx-dl')) return;
+  fxDownload(entry);
+});
+
+// The list as one keyboard widget. Arrows walk the visible rows — previewing
+// files as they go, so reading through a folder is a matter of holding ↓ —
+// Return acts on the selection, Backspace goes up a level.
+document.getElementById('fx-list-wrap').addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const rows = fxVisible();
+  const i = rows.findIndex((r) => r.name === fx.selected);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!rows.length) return;
+    const next = i === -1 ? 0
+      : Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+    if (next !== i) fxShow(rows[next]);
+  } else if (e.key === 'Enter' && i !== -1) {
+    e.preventDefault();
+    const entry = rows[i];
+    if (entry.kind === 'dir') fxOpen(fxJoin(fx.path, entry.name));
+    else if (entry.kind === 'file') fxDownload(entry);
+  } else if (e.key === 'Backspace' && fx.parent) {
+    e.preventDefault();
+    fxOpen(fx.parent, { select: fx.path.split('/').pop() });
+  }
 });
 
 document.getElementById('fx-preview').addEventListener('click', (e) => {

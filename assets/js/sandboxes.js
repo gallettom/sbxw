@@ -305,6 +305,9 @@ function sandboxItemHtml(s, groupColor) {
     ? connPanes.map(p => `<span class="sbx-pane-badge">P${p.index + 1}</span>`).join('')
     : '';
   const isActive = connPanes.length > 0;
+  // The sandbox in the focused pane — the one being worked on — keeps its
+  // row's buttons out without a hover (see "Row actions, on demand").
+  const isFocused = panes[focusedPane]?.sandbox === s.name;
   const isRunning = s.status === 'running';
   const readyDot = readySandboxes.has(s.name) ? '<span class="sbx-ready-dot" title="Ready"></span>' : '';
   // A map being written is the one thing an agent does *for* a sandbox that
@@ -317,12 +320,12 @@ function sandboxItemHtml(s, groupColor) {
     : '';
   const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${s.name}" title="Duplicate (new sandbox, same workspace)">⧉</button>`;
   const actions = isRunning
-    ? `<button class="stop-btn" data-action="stop" data-name="${s.name}">■ Stop</button>
+    ? `<button class="icon-btn stop-btn" data-action="stop" data-name="${s.name}" title="Stop">■</button>
        <button class="icon-btn restart-btn" data-action="restart" data-name="${s.name}" title="Reload">↺</button>
        <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Ports &amp; network policy">⇌</button>
        ${dupBtn}
        <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`
-    : `<button class="connect-btn" data-action="connect" data-name="${s.name}">▶ Connect</button>
+    : `<button class="icon-btn connect-btn" data-action="connect" data-name="${s.name}" title="Connect">▶</button>
        <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Ports &amp; network policy">⇌</button>
        ${dupBtn}
        <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`;
@@ -331,14 +334,14 @@ function sandboxItemHtml(s, groupColor) {
   // neutral grey (the same one buttons use), so the sidebar's left edge
   // reads consistently whether or not a row belongs to a group.
   const borderStyle = ` style="border-left-color:${groupColor || '#c9d1d9'}"`;
-  return `<div class="sbx-item${isActive ? ' active' : ''}" data-name="${s.name}"${borderStyle}>
+  return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}" data-name="${s.name}"${borderStyle}>
     <div class="sbx-name">${s.name}${paneTag}${readyDot}${mapBadge}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       <span class="sbx-status">${s.status}</span>
       <span class="sbx-agent">${s.agent}</span>
+      <div class="sbx-actions">${actions}</div>
     </div>
-    <div class="sbx-actions">${actions}</div>
   </div>`;
 }
 

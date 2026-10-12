@@ -88,6 +88,9 @@
     white-space: nowrap;
   }
   .usage[hidden] { display: none; }
+  /* What the two gauges are, said once for both: "5h" and "7d" alone are
+     windows of something the header never named. */
+  .usage-title { color: var(--c-text-muted); font-size: 12px; }
   .usage-win { display: flex; align-items: center; gap: .45rem; }
   .usage-win[hidden] { display: none; }
   /* The window's own figure, faded once it can no longer be trusted: the reset
@@ -373,15 +376,16 @@
   /* ── New-sandbox kind chooser ──
      One card above the other rather than side by side: stacked, each card gets
      the full width of the modal, so the four points under it read as four short
-     centred lines instead of a wrapped column half that wide. Everything is
-     centred on the card's own axis — the icon, the title and the call to action
-     line up down the middle, and the two cards mirror each other. */
-  .kind-lead { color: var(--c-text-soft); font-size: 12.5px; line-height: 1.6; margin: 0; text-align: center; }
+     lines instead of a wrapped column half that wide. Left-aligned, with the
+     icon in a column of its own: centred lines each start somewhere different,
+     so the eye has to hunt for the start of every point it compares. */
+  .kind-lead { color: var(--c-text-soft); font-size: 12.5px; line-height: 1.6; margin: 0; }
   .kind-grid { display: flex; flex-direction: column; gap: .6rem; }
   .kind-card {
-    display: flex; flex-direction: column; align-items: center; gap: .35rem;
+    display: grid; grid-template-columns: auto 1fr; column-gap: .75rem; row-gap: .35rem;
+    align-items: start;
     background: var(--c-surface-alt); border: 1px solid var(--c-elevated); border-radius: 8px;
-    padding: .8rem .9rem; text-align: center; cursor: pointer;
+    padding: .8rem .9rem; text-align: left; cursor: pointer;
     font: inherit; color: inherit;
     transition: background .12s, border-color .12s, box-shadow .12s, transform .1s;
   }
@@ -398,7 +402,8 @@
   #kind-chat:hover, #kind-chat:focus-visible {
     border-color: var(--c-green); box-shadow: 0 0 0 1px #3fb95033;
   }
-  .kind-card-icon { font-size: 18px; line-height: 1; }
+  .kind-card-icon { font-size: 18px; line-height: 1; grid-row: 1 / span 4; }
+  .kind-card > :not(.kind-card-icon) { grid-column: 2; }
   .kind-card-title { color: var(--c-text-bright); font-size: 13px; font-weight: 600; }
   .kind-card-lead { color: var(--c-text-soft); font-size: 12px; line-height: 1.5; }
   .kind-card-points {
@@ -406,11 +411,12 @@
     display: flex; flex-direction: column; gap: .25rem;
     color: var(--c-text-muted); font-size: 11.5px; line-height: 1.45;
   }
-  /* The bullet rides inline with its text rather than being positioned in a
-     gutter: a gutter is measured from the left edge, which is exactly the edge
-     a centred line no longer has. */
+  /* The bullet hangs in a gutter, so a point that wraps continues under its
+     own text rather than under the bullet. */
+  .kind-card-points li { padding-left: .8rem; text-indent: -.8rem; }
   .kind-card-points li::before {
-    content: "·"; margin-right: .35rem; color: var(--c-dim); font-weight: 700;
+    content: "·"; display: inline-block; width: .8rem; text-indent: 0;
+    color: var(--c-dim); font-weight: 700;
   }
   .kind-card-go { padding-top: .5rem; font-size: 11.5px; font-weight: 600; }
   #kind-workspace .kind-card-go { color: var(--c-blue); }
@@ -657,7 +663,11 @@
     background: var(--c-blue-tint); border: 1px solid var(--c-blue); border-radius: 4px;
     padding: .3rem; margin-left: .3rem; vertical-align: middle; float: right;
   }
-  .sbx-meta { display: flex; align-items: center; gap: .35rem; margin-bottom: .25rem; }
+  /* Status on the left, the row's actions on the right of the same line, so a
+     row is two lines whether its buttons are showing or not. The min-height is
+     the buttons' own, so revealing them never nudges the row. */
+  .sbx-meta { display: flex; align-items: center; gap: .35rem; min-height: 21px; }
+  .sbx-status, .sbx-agent { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
   .dot.running  { background: var(--c-green); box-shadow: 0 0 5px #3fb95066; }
   .dot.stopped  { background: var(--c-dim); }
@@ -682,7 +692,7 @@
   }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
   .sbx-agent  { color: var(--c-text-dim); font-size: 10px; }
-  .sbx-actions { display: flex; gap: .25rem; align-items: center; }
+  .sbx-actions { display: flex; gap: .2rem; align-items: center; margin-left: auto; flex-shrink: 0; }
   .sbx-actions button {
     background: var(--c-elevated); color: var(--c-text);
     border: 1px solid var(--c-border); border-radius: 4px;
@@ -690,12 +700,12 @@
     font-family: inherit; transition: background .1s; white-space: nowrap; flex-shrink: 0;
   }
   .sbx-actions button:hover { background: var(--c-border); }
-  .sbx-actions button.stop-btn { color: var(--c-red); }
+  .sbx-actions button.icon-btn.stop-btn { color: var(--c-red); }
   .sbx-actions button.stop-btn:hover { background: var(--c-red-tint); border-color: var(--c-red); }
-  .sbx-actions button.connect-btn { color: var(--c-green); width: 76px; }
+  .sbx-actions button.icon-btn.connect-btn { color: var(--c-green); }
   .sbx-actions button.connect-btn:hover { background: var(--c-green-tint); border-color: var(--c-green); }
   .sbx-actions button.icon-btn {
-    padding: .15rem .38rem; font-size: 13px; line-height: 1; color: var(--c-text-dim);
+    padding: .15rem .3rem; font-size: 13px; line-height: 1; color: var(--c-text-dim);
   }
   .sbx-actions button.icon-btn svg { vertical-align: -1px; display: inline-block; }
   .sbx-actions button.restart-btn { color: var(--c-green); }
@@ -704,11 +714,25 @@
   .sbx-actions button.ports-btn:hover   { color: var(--c-blue); border-color: var(--c-blue); background: var(--c-blue-tint); }
   .sbx-actions button.dup-btn { color: var(--c-purple); }
   .sbx-actions button.dup-btn:hover     { color: var(--c-purple); border-color: var(--c-purple); background: var(--c-purple-tint); }
-  /* Pinned to the row's right edge regardless of what precedes it — running
-     rows carry an extra restart button and "■ Stop"/"▶ Connect" aren't the
-     same width, so without this the delete target drifts item to item. */
+  /* Last in the row, so the delete target sits at the right edge on every row. */
   .sbx-actions button.rm-btn    { color: var(--c-red); }
   .sbx-actions button.rm-btn:hover    { background: var(--c-red-tint); border-color: var(--c-red); }
+  /* ── Row actions, on demand ──
+     Eight rows each carrying five coloured buttons is forty targets fighting
+     for the eye, for an action taken on one row at a time. At rest a row is
+     its name and its state; the buttons come back on the row under the
+     pointer or holding keyboard focus, and stay on the row whose sandbox is
+     in the focused pane — the one you are working on. They share the status
+     line, so hiding them leaves no gap and showing them only shortens the
+     agent's name. Clicking the row itself still connects, so nothing is lost
+     meanwhile. A touch screen has no hover to reveal them with, so it keeps
+     them. */
+  @media (hover: hover) {
+    .sbx-item .sbx-actions { display: none; }
+    .sbx-item.focused .sbx-actions,
+    .sbx-item:hover .sbx-actions,
+    .sbx-item:focus-within .sbx-actions { display: flex; }
+  }
   .ports-section-label {
     color: var(--c-text-muted); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;
@@ -1020,18 +1044,28 @@
   .pane-bar .dot.term-connected    { background: var(--c-blue); box-shadow: 0 0 5px #58a6ff66; }
   .pane-bar .dot.term-disconnected { background: var(--c-dim); }
   .pane-bar .sandbox-label { color: var(--c-text-bright); font-weight: 500; }
-  /* Project, attached to the name it belongs to. Icon-only and amber — the
-     colour it wore in the sidebar, so the folder is recognisably the same
-     button in its new home — and sized to sit level with the label rather than
-     to match the session buttons at the other end of the bar. */
+  /* Project, attached to the name it belongs to. Amber — the colour it wore
+     in the sidebar, so it is recognisably the same button in its new home —
+     and sized to sit level with the label rather than to match the session
+     buttons at the other end of the bar. It says "Project" because a folder
+     alone promised a file browser: what it opens is the code map and the
+     deliverables. A narrow pane drops the word, as it does Claude and Bash. */
   .pane-bar .pane-files-btn {
-    display: inline-flex; align-items: center;
-    padding: .15rem .35rem; color: var(--c-amber);
+    display: inline-flex; align-items: center; gap: .3rem;
+    padding: .15rem .4rem; color: var(--c-amber); line-height: 1;
   }
+  /* Block, so the icon centres on its box rather than sitting on the text's
+     baseline with descender room under it — which is what pushed it above
+     the word. */
+  .pane-bar .pane-files-btn svg { display: block; flex-shrink: 0; }
   .pane-bar .pane-files-btn:hover:not(:disabled) {
     background: var(--c-amber-tint); border-color: var(--c-amber);
   }
   .pane-bar .conn-label { color: var(--c-text-muted); font-size: 11px; }
+  /* "connected" says what the blue dot beside the name already says. The
+     label speaks only when it has news: connecting, dropped, an error, or
+     nothing attached yet. */
+  .pane-bar .dot.term-connected ~ .conn-label { display: none; }
   .pane-bar .spacer { flex: 1; }
 
   /* ── The bar in a narrow pane ──
@@ -1065,14 +1099,17 @@
     /* ✦ and ❯ are the modes' own marks, and the active one keeps its colour —
        purple for Claude, green for Bash — so the switch still reads at a
        glance without spelling either out. */
-    .pane-bar .mode-switch .mode-word { display: none; }
+    .pane-bar .mode-switch .mode-word,
+    .pane-bar .files-word { display: none; }
     .pane-bar .mode-switch button { padding: .2rem .45rem; }
   }
   @container pane (max-width: 400px) {
     /* The only control that can go without taking a capability with it: ↻
        rebuilds the terminal *and* reconnects, so Reconnect's job is still on
        the bar, one button to the right. */
-    .pane-bar .pane-reconnect-btn { display: none; }
+    /* Specific enough to beat the on-demand reveal below, which would
+       otherwise bring it back on the focused pane. */
+    .pane .pane-bar .pane-session-btn.pane-reconnect-btn { display: none; }
   }
   .pane-btn {
     background: var(--c-elevated); color: var(--c-text);
@@ -1082,6 +1119,21 @@
   }
   .pane-btn:hover { background: var(--c-border); }
   .pane-btn:disabled { opacity: .4; cursor: not-allowed; }
+  /* ── Session buttons, on demand ──
+     SSH, Env, Reconnect and ↻ repeated on every pane is twenty-odd buttons
+     for something done now and then. They show on the focused pane, the one
+     under the pointer, and any pane whose terminal has dropped — the moment
+     Reconnect is the thing you came for. Name, mode switch and close stay.
+     They sit left of the mode switch, in the spacer's room: taken out of the
+     flow rather than merely hidden, so a quiet bar has no hole in it, and
+     the switch and ✕ stay pinned to the right edge either way. */
+  @media (hover: hover) {
+    .pane .pane-session-btn { display: none; }
+    .pane.focused .pane-session-btn,
+    .pane:hover .pane-session-btn,
+    .pane:focus-within .pane-session-btn,
+    .pane:has(.term-disconnected) .pane-reconnect-btn { display: inline-block; }
+  }
   .pane-close-btn {
     background: none; border: none; color: var(--c-text); cursor: pointer;
     font-size: 13px; line-height: 1; padding: .1rem .35rem; border-radius: 4px;
@@ -1710,7 +1762,37 @@
      Favourites on the left, the folder in the middle, a preview on the right —
      the codemap viewer's three columns, in the same colours, so the two panels
      opened from the same button row read as one family. */
-  .files-modal { width: 1280px; max-width: 96vw; height: 84vh; max-height: 84vh; }
+  /* The code map modal's size, so moving between the Project modal's two tabs
+     (which are two modals) changes what is inside the frame, not the frame. */
+  .files-modal { width: 1760px; max-width: 97vw; height: 94vh; max-height: 94vh; }
+
+  /* ── Project tabs: Files | Code map ──
+     Underlined tabs beside the title, shared by the two modals that make up
+     the Project panel. The active tab is the one you are on and is not a
+     button you need; the other is. The Code map tab inherits the footer
+     button's states — amber and pulsing while a map is being written,
+     dimmed while there is nothing to open yet. */
+  .proj-tabs { display: flex; align-items: stretch; gap: .2rem; margin: -.75rem auto -.75rem 1.6rem; align-self: stretch; }
+  .proj-tab {
+    display: inline-flex; align-items: center; gap: .35rem;
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--c-text-muted); font: inherit; font-size: 12.5px; cursor: pointer;
+    padding: 0 .7rem; white-space: nowrap;
+  }
+  .proj-tab:hover:not(:disabled):not(.active) { color: var(--c-text-bright); border-bottom-color: var(--c-border); }
+  .proj-tab.active { color: var(--c-text-bright); border-bottom-color: var(--c-blue); cursor: default; }
+  .proj-tab:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; border-radius: 4px; }
+  .proj-tab:disabled { opacity: .5; cursor: not-allowed; }
+  .proj-tab.working {
+    color: var(--c-amber); opacity: 1 !important;
+    animation: sbx-ready-pulse 1.6s ease-in-out infinite;
+  }
+  .proj-tab svg { flex-shrink: 0; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
   .fx-toolbar {
     display: flex; align-items: center; gap: .4rem;
     padding: .5rem 1rem; border-bottom: 1px solid var(--c-elevated); flex-shrink: 0;
@@ -1759,6 +1841,10 @@
     flex: 1; min-height: 0;
     display: grid; grid-template-columns: 200px minmax(0, 1fr) minmax(260px, 34%);
   }
+  /* Nothing selected and no README to open on: the preview folds away and the
+     list takes its room (see setPreviewOpen in /js/files.js). */
+  .fx-body.no-preview { grid-template-columns: 200px minmax(0, 1fr); }
+  .fx-body.no-preview .fx-preview { display: none; }
   .fx-side { overflow-y: auto; padding: .2rem .5rem .6rem; border-right: 1px solid var(--c-elevated); }
   .fx-fav {
     display: flex; align-items: center; gap: .45rem;
@@ -1778,6 +1864,23 @@
   .fx-fav-rm:hover { color: var(--c-red); }
   .fx-fav-sep { height: 1px; background: var(--c-elevated); margin: .4rem .45rem; }
   .fx-list-wrap { overflow: auto; min-width: 0; }
+  .fx-list-wrap:focus { outline: none; }
+  .fx-list-wrap:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  /* Download, on the row: was a double-click nobody could see. Shown on the
+     row under the pointer and on the selected one, so the column is quiet
+     until you are on a file; a touch screen keeps it on every row. */
+  .fx-act { width: 2.2rem; text-align: center; }
+  .fx-list td.fx-act { padding: 0 .4rem; }
+  .fx-dl {
+    background: none; border: 1px solid transparent; border-radius: 4px;
+    color: var(--c-text-muted); font: inherit; font-size: 12px; line-height: 1;
+    padding: .2rem .35rem; cursor: pointer;
+  }
+  .fx-dl:hover { color: var(--c-text-bright); border-color: var(--c-border); background: var(--c-elevated); }
+  @media (hover: hover) {
+    .fx-row .fx-dl { visibility: hidden; }
+    .fx-row:hover .fx-dl, .fx-row.selected .fx-dl { visibility: visible; }
+  }
   .fx-list { width: 100%; border-collapse: collapse; font-size: 12px; }
   .fx-list thead th {
     position: sticky; top: 0; z-index: 1; background: var(--c-surface);

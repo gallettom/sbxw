@@ -91,6 +91,7 @@
        corner and no longer do — they never change, and a number that never
        changes should not sit beside the one you check. -->
   <div class="usage" id="usage" hidden title="Claude subscription usage, account-wide">
+    <span class="usage-title">Usage</span>
     <span class="usage-win" id="usage-5h" hidden>
       <span class="usage-lbl">5h</span>
       <span class="usage-bar"><i></i></span>
@@ -472,6 +473,26 @@
     <div class="modal files-modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
       <div class="modal-head">
         <span class="modal-title" id="files-modal-title">Project — <span id="files-modal-name"></span></span>
+        <!-- Files and Code map are the two halves of one project, so they are
+             tabs at the top rather than a list with a map button in its footer,
+             where the one thing sbxw adds over any file browser was the
+             faintest control in the panel. The Code map tab keeps the old
+             button's four states — it offers to write a map when there is none
+             (see renderCodemapButton in /js/files.js). The code map modal
+             carries the same pair, so switching reads as changing tabs. -->
+        <div class="proj-tabs" role="tablist" aria-label="Project">
+          <button class="proj-tab active" role="tab" aria-selected="true" tabindex="-1">Files</button>
+          <button class="proj-tab" role="tab" aria-selected="false" id="files-modal-codemap" disabled>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M5 4.2H11M4.2 5.59L7.2 10.81M11.8 5.59L8.8 10.81"
+                    stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+              <circle cx="3.4" cy="4.2" r="1.6" fill="currentColor"/>
+              <circle cx="12.6" cy="4.2" r="1.6" fill="currentColor"/>
+              <circle cx="8" cy="12.2" r="1.6" fill="currentColor"/>
+            </svg>
+            <span id="files-modal-codemap-label">Code map</span>
+          </button>
+        </div>
         <button class="modal-close" id="files-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="fx-toolbar">
@@ -500,13 +521,16 @@
           <div class="cm-side-label">Favourites</div>
           <div id="fx-favourites"></div>
         </aside>
-        <section class="fx-list-wrap">
+        <!-- Focusable as one widget: ↑/↓ move the selection, Return opens a
+             folder or downloads a file, Backspace goes up (see /js/files.js). -->
+        <section class="fx-list-wrap" id="fx-list-wrap" tabindex="0"
+                 aria-label="Files — arrow keys to move, Return to open or download">
           <table class="fx-list">
             <thead>
-              <tr><th>Name</th><th class="fx-num">Size</th><th>Modified</th></tr>
+              <tr><th>Name</th><th class="fx-num">Size</th><th>Modified</th><th class="fx-act"><span class="sr-only">Download</span></th></tr>
             </thead>
             <tbody id="fx-tbody">
-              <tr><td colspan="3" class="ports-empty-msg">Loading…</td></tr>
+              <tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>
             </tbody>
           </table>
         </section>
@@ -519,30 +543,6 @@
           <button id="files-modal-refresh" class="refresh-btn">
             <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M1.5 8A6.5 6.5 0 1 0 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Refresh
-          </button>
-          <!-- The map is an action on the project, not a row in a table of
-               downloadable files: it has no size, and "open" is not "download".
-               It sits beside Refresh so the table above stays homogeneous. -->
-          <button id="files-modal-codemap" class="refresh-btn" disabled>
-            <!-- Three linked nodes — a cycle, not a tree: a code map is a
-                 graph of markdown files that point at each other, and the
-                 viewer's own Graph tab draws it the same way. Deliberately not
-                 Feather's `share-2` shape, which reads as "share".
-
-                 13px rather than the 11px of the Refresh button beside it:
-                 rasterised at 11 the three edges close up into a blob. Edges
-                 stop at each disc's rim rather than running to its centre. -->
-            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M5 4.2H11M4.2 5.59L7.2 10.81M11.8 5.59L8.8 10.81"
-                    stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-              <circle cx="3.4" cy="4.2" r="1.6" fill="currentColor"/>
-              <circle cx="12.6" cy="4.2" r="1.6" fill="currentColor"/>
-              <circle cx="8" cy="12.2" r="1.6" fill="currentColor"/>
-            </svg>
-            <!-- The label is the button's state, not a fixed name: a project
-                 with no map is offered one instead of being told it has none
-                 (see renderCodemapButton in /js/files.js). -->
-            <span id="files-modal-codemap-label">Code map</span>
           </button>
         </div>
         <button class="btn-cancel" id="files-modal-close2">Close</button>
@@ -561,7 +561,13 @@
   <div class="modal-overlay hidden" id="codemap-modal-overlay">
     <div class="modal codemap-modal" role="dialog" aria-modal="true" aria-labelledby="codemap-title">
       <div class="modal-head">
-        <span class="modal-title" id="codemap-title">Code map — <span id="codemap-name"></span></span>
+        <span class="modal-title" id="codemap-title">Project — <span id="codemap-name"></span></span>
+        <!-- The Project modal's tabs, with this side selected: Files goes back
+             to the explorer on the same sandbox. -->
+        <div class="proj-tabs" role="tablist" aria-label="Project">
+          <button class="proj-tab" role="tab" aria-selected="false" id="codemap-tab-files">Files</button>
+          <button class="proj-tab active" role="tab" aria-selected="true" tabindex="-1">Code map</button>
+        </div>
         <button class="modal-close" id="codemap-close" aria-label="Close">✕</button>
       </div>
       <div class="codemap-toolbar">

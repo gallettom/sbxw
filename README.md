@@ -218,20 +218,23 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   of a picture, or a flat refusal, are equally valid answers. See
   [Asking *you* for a screenshot](#asking-you-for-a-screenshot).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
-- **Browse the sandbox's files** — the **Project** panel (📁 beside the sandbox
-  name in a pane's top bar) is a file explorer over the sandbox's *own*
+- **Browse the sandbox's files** — the **Files** tab of the **Project** panel
+  (**Project** beside the sandbox name in a pane's top bar) is a file explorer over the sandbox's *own*
   filesystem, opening on `.sbxw-artifacts/`: breadcrumb (click its empty space to
   type a path, `~` included), back / up, a filter, dotfiles on demand, and a
   preview of the selected file — text, images, and HTML in a sandboxed iframe —
-  with Download and Copy path. Favourites on the left: `.sbxw-artifacts`, the
+  with Download and Copy path. A folder with a README opens on it; with nothing
+  selected the preview folds away. ⬇ on the hovered or selected row downloads,
+  and the list works from the keyboard: ↑/↓ walk and preview, Return opens a
+  folder or downloads a file, Backspace goes up. Favourites on the left: `.sbxw-artifacts`, the
   workspace, the agent's home and `/` are built in, and ★ pins any other folder
   (remembered per sandbox, in this browser). A running sandbox is read through
   `sbx exec`, so everything the agent sees is there; a stopped one shows its
   workspace from the host and says so, rather than being started to list a
   folder. Read-only, and every file is served under `Content-Security-Policy:
   sandbox` — an HTML file an agent wrote never runs with the daemon's origin.
-- **Read the project's code map** — the **Code map** button in the **Project**
-  panel (📁 beside the sandbox name in a pane's top bar) opens the linked
+- **Read the project's code map** — the **Code map** tab of the **Project**
+  panel opens the linked
   markdown under `.sbxw-artifacts/codemap/` as a small vault:
   `[[wiki links]]` are clickable, every section lists what points *at* it
   (backlinks), the outline jumps within a file, search spans the whole map, and
@@ -245,16 +248,18 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   the drawing gets the width. Read-only, and served from the artifacts
   endpoints, so it reaches nothing outside `.sbxw-artifacts`.
 
-  The panel itself opens from 📁 in a pane's top bar, sat against the sandbox
+  The panel itself opens from **Project** in a pane's top bar, sat against the sandbox
   name rather than with SSH / Env / Reconnect at the other end of that bar:
   those act on the *session* in the pane, while a project is a fact about the
   **workspace** the name belongs to — two sandboxes duplicated from one project
-  share the same map. The map is a *button* inside the panel rather than a row
-  in its table, because a map is not a file you download: it has no size, and
-  "open" is not "download". Its own files are folded out of the list because a real map is
+  share the same map. The map is a *tab* of the panel rather than a row in its
+  table, because a map is not a file you download: it has no size, and "open"
+  is not "download" — and a tab beside Files, rather than the button in the
+  footer it used to be, because it is the one thing this panel has that any
+  file browser does not. Its own files are folded out of the list because a real map is
   dozens of markdown files, and listing them buried the deliverables they sit
   beside.
-- **Ask for one, when there is none** — the same button reads **Generate code
+- **Ask for one, when there is none** — the same tab reads **Generate code
   map** on a project without one, and starts a *background session* in that
   sandbox that runs `/codemap` (from the [codemap kit](#kits)). It used to sit
   there disabled, naming the command and leaving you to go and type it: the case
