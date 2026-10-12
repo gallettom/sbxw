@@ -286,7 +286,7 @@
        of the existing worktrees, offered as chips. Filled by openThread() in
        /js/panes.js. -->
   <div class="modal-overlay hidden" id="thread-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" style="width:420px">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" style="width:440px">
       <div class="modal-head">
         <span class="modal-title" id="thread-modal-title">New thread</span>
         <button class="modal-close" id="thread-modal-close" aria-label="Close">✕</button>
@@ -297,6 +297,14 @@
           <input id="thread-name" class="field-input" type="text" maxlength="40" placeholder="fix-login"
                  autocomplete="off" autocapitalize="off" spellcheck="false">
           <p class="thread-hint" id="thread-hint"></p>
+        </div>
+        <!-- The repo the new thread works in: one row per git repo of the
+             workspace, from /repos. Hidden for a name that already exists —
+             the daemon remembers that thread's repo. -->
+        <div id="thread-repo-wrap">
+          <span class="field-label" id="thread-repo-label">Repository</span>
+          <div class="repo-list" id="thread-repos" role="radiogroup" aria-labelledby="thread-repo-label"></div>
+          <p class="repo-note" id="thread-repo-note" hidden></p>
         </div>
         <div id="thread-existing-wrap" hidden>
           <span class="field-label">Existing threads</span>

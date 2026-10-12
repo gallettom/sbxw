@@ -36,6 +36,48 @@ function showNote(el, msg) {
   el.classList.toggle('hidden', !msg);
 }
 
+// ── Git repos of a workspace ──────────────────────────────────────────────
+// A thread works in one git repo of its sandbox's workspace: the workspace
+// itself (path '') or a repo one level down. The New thread dialog and the
+// plan dialog both list them, so the reading lives here once.
+
+// `{ok, workspace, repos}` from the daemon, or `{ok: false, error}` — an
+// unreachable daemon folded in, as postJsonOrError does.
+async function fetchRepos(sandbox) {
+  try {
+    const r = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/repos`)).json();
+    return r && r.ok ? { ok: true, workspace: r.workspace || '', repos: r.repos || [] }
+      : { ok: false, error: r?.error || 'no answer' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// A repo by the name a person knows it by: its folder, or the workspace's
+// own folder for the workspace itself.
+function repoLabel(path, workspace) {
+  if (path) return path;
+  return (workspace || '').split('/').filter(Boolean).pop() || 'workspace';
+}
+
+// What a repo's checkout looks like, in a few words and a tone: 'clean' is
+// green, anything a person should know before working there is amber.
+function repoStatus(r) {
+  const parts = [];
+  if (r.detached) parts.push('detached');
+  parts.push(r.dirty ? `${r.dirty} uncommitted` : 'clean');
+  if (r.ahead || r.behind) parts.push(`↑${r.ahead || 0} ↓${r.behind || 0}`);
+  const tone = r.dirty || r.detached ? 'warn' : 'ok';
+  return { text: parts.join('  '), tone };
+}
+
+// The repo a thread gets without being asked: the only one there is, or the
+// workspace itself when it is one. Undefined when a person has to choose.
+function defaultRepo(repos) {
+  if (repos.length === 1) return repos[0].path;
+  return repos.some(r => r.path === '') ? '' : undefined;
+}
+
 // ── Toast ─────────────────────────────────────────────────────────────────
 let pasteToastTimer = null;
 function showToast(msg, kind) {
