@@ -4922,12 +4922,7 @@ fn walk_artifacts(
             let Ok(meta) = entry.metadata() else {
                 continue;
             };
-            let modified = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
+            let modified = crate::sandbox_fs::mtime_secs(&meta);
             let rel = path
                 .strip_prefix(root)
                 .unwrap_or(&path)

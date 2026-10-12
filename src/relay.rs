@@ -307,14 +307,25 @@ impl Relay {
         Ok(updated)
     }
 
-    /// A human sends the question to `to`. Also the way a request is *re*-routed
-    /// after a target went quiet: the earlier answer, if any, is dropped rather
-    /// than carried over, since it answered on behalf of a different sandbox.
-    pub(crate) fn route(&self, id: &str, to: &str, now: u64) -> Result<RelayRequest, String> {
+    /// `mutate` for a transition only an unsettled request can make: approved
+    /// and denied are terminal, so every move out of them is refused here.
+    fn mutate_open<F>(&self, id: &str, now: u64, f: F) -> Result<RelayRequest, String>
+    where
+        F: FnOnce(&mut RelayRequest) -> Result<(), String>,
+    {
         self.mutate(id, now, |req| {
             if req.state.is_final() {
                 return Err(format!("request {id} is already settled"));
             }
+            f(req)
+        })
+    }
+
+    /// A human sends the question to `to`. Also the way a request is *re*-routed
+    /// after a target went quiet: the earlier answer, if any, is dropped rather
+    /// than carried over, since it answered on behalf of a different sandbox.
+    pub(crate) fn route(&self, id: &str, to: &str, now: u64) -> Result<RelayRequest, String> {
+        self.mutate_open(id, now, |req| {
             if req.kind == RelayKind::Screenshot {
                 return Err(format!(
                     "request {id} asks for a screenshot — no other sandbox can see this screen"
@@ -358,10 +369,7 @@ impl Relay {
         answer: &str,
         now: u64,
     ) -> Result<RelayRequest, String> {
-        self.mutate(id, now, |req| {
-            if req.state.is_final() {
-                return Err(format!("request {id} is already settled"));
-            }
+        self.mutate_open(id, now, |req| {
             match req.to.as_deref() {
                 Some(target) if target == from => {}
                 _ => return Err(format!("request {id} was not sent to '{from}'")),
@@ -393,10 +401,7 @@ impl Relay {
         shots: Vec<Shot>,
         now: u64,
     ) -> Result<RelayRequest, String> {
-        self.mutate(id, now, |req| {
-            if req.state.is_final() {
-                return Err(format!("request {id} is already settled"));
-            }
+        self.mutate_open(id, now, |req| {
             if let Some(text) = answer {
                 req.answer = Some(text.to_string());
             }
@@ -419,10 +424,7 @@ impl Relay {
         note: Option<&str>,
         now: u64,
     ) -> Result<RelayRequest, String> {
-        self.mutate(id, now, |req| {
-            if req.state.is_final() {
-                return Err(format!("request {id} is already settled"));
-            }
+        self.mutate_open(id, now, |req| {
             // The held answer never reaches the asker, so it is dropped here
             // rather than kept where an approval could later release it. The
             // images are cleared alongside it so that "denied" is a statement

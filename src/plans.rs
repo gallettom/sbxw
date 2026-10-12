@@ -78,6 +78,11 @@ impl ThreadState {
     pub(crate) fn reportable(self) -> bool {
         matches!(self, ThreadState::Working | ThreadState::Blocked | ThreadState::Done)
     }
+
+    /// Whether the thread has stopped for good, one way or the other.
+    pub(crate) fn is_finished(self) -> bool {
+        matches!(self, ThreadState::Done | ThreadState::Failed)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -330,6 +335,19 @@ impl Plans {
         Ok(plan)
     }
 
+    /// `mutate` for a person's decision, which only a pending plan can take.
+    fn mutate_pending<F>(&self, id: &str, now: u64, f: F) -> Result<Plan, String>
+    where
+        F: FnOnce(&mut Plan) -> Result<(), String>,
+    {
+        self.mutate(id, now, |p| {
+            if p.state != PlanState::Pending {
+                return Err(format!("plan {id} was already settled"));
+            }
+            f(p)
+        })
+    }
+
     /// The threads a person approved, as they left them in the dialog. A thread
     /// already approved in another plan of the same sandbox is refused: two
     /// plans writing to one worktree is the thing worktrees exist to prevent.
@@ -345,7 +363,7 @@ impl Plans {
         let taken: Vec<String> = self
             .approved_threads(&sandbox)
             .into_iter()
-            .filter(|(_, t)| t.state != ThreadState::Done && t.state != ThreadState::Failed)
+            .filter(|(_, t)| !t.state.is_finished())
             .map(|(_, t)| t.name)
             .collect();
         if let Some(t) = threads.iter().find(|t| taken.contains(&t.name)) {
@@ -354,10 +372,7 @@ impl Plans {
                 t.name
             ));
         }
-        self.mutate(id, now, |p| {
-            if p.state != PlanState::Pending {
-                return Err(format!("plan {id} was already settled"));
-            }
+        self.mutate_pending(id, now, |p| {
             p.threads = threads;
             for t in &mut p.threads {
                 t.updated_ms = now;
@@ -368,10 +383,7 @@ impl Plans {
     }
 
     pub(crate) fn refuse(&self, id: &str, note: Option<String>, now: u64) -> Result<Plan, String> {
-        self.mutate(id, now, |p| {
-            if p.state != PlanState::Pending {
-                return Err(format!("plan {id} was already settled"));
-            }
+        self.mutate_pending(id, now, |p| {
             p.state = PlanState::Refused;
             p.note = note.map(|n| clip(&n)).filter(|n| !n.is_empty());
             Ok(())
@@ -454,9 +466,7 @@ impl Plans {
             map.retain(|_, p| {
                 let old = now.saturating_sub(p.updated_ms) > max_age_ms;
                 let finished = p.state != PlanState::Approved
-                    || p.threads
-                        .iter()
-                        .all(|t| matches!(t.state, ThreadState::Done | ThreadState::Failed));
+                    || p.threads.iter().all(|t| t.state.is_finished());
                 let keep = !(old && finished);
                 if !keep {
                     dropped.push(p.sandbox.clone());
