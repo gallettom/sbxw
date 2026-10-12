@@ -97,6 +97,10 @@ pub(crate) struct PlanThread {
     /// workspace by `web.rs`, which records it before the thread starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// The model it runs on (`claude --model`), checked by
+    /// `config::valid_model_id`. Absent: the sandbox's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     #[serde(default)]
     pub state: ThreadState,
     /// Its latest report, or why it failed.
@@ -122,8 +126,52 @@ pub(crate) struct Plan {
     /// the lead's tools refuse it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// The merge the lead proposed once its threads were reviewed
+    /// (`propose_merge`), and how it went once a person clicked it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge: Option<Merge>,
     pub created_ms: u64,
     pub updated_ms: u64,
+}
+
+/// Where a proposed merge stands. Serialized to the browser, so the spellings
+/// are a wire contract.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MergeState {
+    /// Waiting for a person's click.
+    Proposed,
+    Merging,
+    /// Every thread merged.
+    Merged,
+    /// One did not; the ones before it did, the ones after were not tried.
+    Failed,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub(crate) struct MergeResult {
+    pub thread: String,
+    pub ok: bool,
+    /// The merge commit, when it merged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub(crate) struct Merge {
+    /// The threads, in the order their branches are merged.
+    pub order: Vec<String>,
+    /// The lead's word on it, for the person about to click.
+    pub note: String,
+    pub state: MergeState,
+    /// The branch merged into, set once merging starts; `null` before that,
+    /// and when the threads' repos are on different branches.
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub results: Vec<MergeResult>,
 }
 
 pub(crate) struct Plans {
@@ -181,11 +229,17 @@ fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
             Some(r) => Some(crate::repos::normalize(r).map_err(|e| format!("thread {name:?}: {e}"))?),
             None => None,
         };
+        let model = match t.model.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(m) if crate::config::valid_model_id(m) => Some(m.to_string()),
+            Some(m) => return Err(format!("thread {name:?}: {m:?} is not a model id")),
+        };
         out.push(PlanThread {
             name,
             goal,
             scope: clip(&t.scope),
             repo,
+            model,
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
@@ -367,6 +421,7 @@ impl Plans {
                 state: PlanState::Pending,
                 note: None,
                 closed: false,
+                merge: None,
                 created_ms: now,
                 updated_ms: now,
             };
@@ -443,6 +498,97 @@ impl Plans {
         self.mutate_pending(id, now, |p| {
             p.state = PlanState::Refused;
             p.note = note.map(|n| clip(&n)).filter(|n| !n.is_empty());
+            Ok(())
+        })
+    }
+
+    /// The lead proposes merging its reviewed threads, in `order`. Only for an
+    /// approved plan it still leads (`led`), and only once every one of those
+    /// threads is done: the person clicking should be merging finished work.
+    /// A new proposal replaces one nobody clicked yet, or one that failed.
+    pub(crate) fn propose_merge(
+        &self,
+        id: &str,
+        sandbox: &str,
+        order: Vec<String>,
+        note: &str,
+        now: u64,
+    ) -> Result<Plan, String> {
+        let plan = self.led(id, sandbox)?;
+        if plan.state != PlanState::Approved {
+            return Err(format!("plan {id} is not approved, so there is nothing to merge"));
+        }
+        if order.is_empty() {
+            return Err("name the threads to merge, in order".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for name in &order {
+            if !seen.insert(name.as_str()) {
+                return Err(format!("thread {name:?} is named twice"));
+            }
+            match plan.threads.iter().find(|t| &t.name == name) {
+                None => return Err(format!("{name:?} is not a thread of plan {id}")),
+                Some(t) if t.state != ThreadState::Done => {
+                    return Err(format!(
+                        "thread {name:?} is not done (it is {:?}); propose the merge once it is",
+                        t.state
+                    )
+                    .to_lowercase())
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(m) = &plan.merge {
+            if matches!(m.state, MergeState::Merging | MergeState::Merged) {
+                return Err(format!("plan {id} is already {:?}", m.state).to_lowercase());
+            }
+        }
+        self.mutate(id, now, |p| {
+            p.merge = Some(Merge {
+                order,
+                note: clip(note),
+                state: MergeState::Proposed,
+                base: None,
+                results: vec![],
+            });
+            Ok(())
+        })
+    }
+
+    /// A person clicked Merge: the proposed (or failed) merge starts over,
+    /// into `base`. Gives the plan as it now stands; refuses a second click.
+    pub(crate) fn start_merge(&self, id: &str, base: Option<String>, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            let m = p
+                .merge
+                .as_mut()
+                .ok_or_else(|| format!("plan {id} has no merge proposed"))?;
+            match m.state {
+                MergeState::Proposed | MergeState::Failed => {}
+                s => return Err(format!("plan {id} is already {s:?}").to_lowercase()),
+            }
+            m.state = MergeState::Merging;
+            m.base = base;
+            m.results.clear();
+            Ok(())
+        })
+    }
+
+    /// One thread's outcome, as it lands.
+    pub(crate) fn merge_result(&self, id: &str, result: MergeResult, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge"))?;
+            m.results.push(result);
+            Ok(())
+        })
+    }
+
+    /// The end of a merge: merged when every thread in its order did.
+    pub(crate) fn finish_merge(&self, id: &str, now: u64) -> Result<Plan, String> {
+        self.mutate(id, now, |p| {
+            let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge"))?;
+            let all = m.order.len() == m.results.len() && m.results.iter().all(|r| r.ok);
+            m.state = if all { MergeState::Merged } else { MergeState::Failed };
             Ok(())
         })
     }
@@ -551,6 +697,7 @@ mod tests {
             goal: goal.into(),
             scope: String::new(),
             repo: None,
+            model: None,
             state: ThreadState::Working,
             summary: "ignored".into(),
             updated_ms: 0,
@@ -662,6 +809,8 @@ mod tests {
         let loaded = Plans::in_dir(Some(dir.clone())).owned("p-1", "neos").unwrap();
         assert_eq!(loaded.threads[0].repo, None);
         assert!(!loaded.closed);
+        assert_eq!(loaded.threads[0].model, None);
+        assert!(loaded.merge.is_none());
         assert_eq!(loaded.threads[0].state, ThreadState::Working);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -699,5 +848,66 @@ mod tests {
         assert_eq!(p.threads[0].state, ThreadState::Blocked);
         assert_eq!(p.threads[0].summary, "which table?");
         plans.set_thread("neos", "a", ThreadState::Failed, "no session", true, 4).unwrap();
+    }
+
+    #[test]
+    fn a_thread_may_name_its_model_and_a_bad_one_is_refused() {
+        let plans = Plans::new();
+        let mut a = t("a", "g");
+        a.model = Some("claude-opus-5-5; rm".into());
+        assert!(plans.propose("neos", "", vec![a.clone()], 1).is_err());
+        a.model = Some("claude-opus-5-5".into());
+        let p = plans.propose("neos", "", vec![a, t("b", "g")], 1).unwrap();
+        assert_eq!(p.threads[0].model.as_deref(), Some("claude-opus-5-5"));
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains(r#""model":null"#), "absent, not null: {json}");
+        assert!(!json.contains(r#""merge""#), "absent until proposed: {json}");
+    }
+
+    #[test]
+    fn a_merge_is_proposed_only_for_finished_threads_of_a_led_approved_plan() {
+        let plans = Plans::new();
+        let p = plans.propose("neos", "", vec![t("a", "g"), t("b", "g")], 1).unwrap();
+        let order = || vec!["a".to_string(), "b".to_string()];
+        let err = plans.propose_merge(&p.id, "neos", order(), "n", 2).unwrap_err();
+        assert!(err.contains("not approved"), "{err}");
+
+        plans.approve(&p.id, vec![t("a", "g"), t("b", "g")], 3).unwrap();
+        plans.set_thread("neos", "a", ThreadState::Done, "", false, 4).unwrap();
+        let err = plans.propose_merge(&p.id, "neos", order(), "n", 5).unwrap_err();
+        assert!(err.contains("\"b\" is not done"), "{err}");
+        assert!(plans.propose_merge(&p.id, "neos", vec!["zz".into()], "n", 5).is_err());
+        assert!(plans.propose_merge(&p.id, "neos", vec![], "n", 5).is_err());
+        assert!(plans.propose_merge(&p.id, "other", vec!["a".into()], "n", 5).is_err());
+
+        plans.set_thread("neos", "b", ThreadState::Done, "", false, 6).unwrap();
+        let m = plans.propose_merge(&p.id, "neos", order(), "b after a", 7).unwrap().merge.unwrap();
+        assert_eq!((m.state, m.order, m.base), (MergeState::Proposed, order(), None));
+        let json = serde_json::to_string(&plans.get(&p.id).unwrap()).unwrap();
+        assert!(json.contains(r#""state":"proposed""#) && json.contains(r#""base":null"#), "{json}");
+
+        // Clicked: one merge at a time, and the outcome follows the results.
+        let m = plans.start_merge(&p.id, Some("main".into()), 8).unwrap().merge.unwrap();
+        assert_eq!((m.state, m.base.as_deref()), (MergeState::Merging, Some("main")));
+        assert!(plans.start_merge(&p.id, None, 8).is_err());
+        assert!(plans.propose_merge(&p.id, "neos", order(), "again", 8).is_err());
+        let ok = |n: &str| MergeResult { thread: n.into(), ok: true, commit: Some("c".into()), error: None };
+        plans.merge_result(&p.id, ok("a"), 9).unwrap();
+        let bad = MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()) };
+        plans.merge_result(&p.id, bad, 9).unwrap();
+        assert_eq!(plans.finish_merge(&p.id, 10).unwrap().merge.unwrap().state, MergeState::Failed);
+        // A failed merge can be clicked again, and starts over.
+        assert!(plans.start_merge(&p.id, None, 11).unwrap().merge.unwrap().results.is_empty());
+        plans.merge_result(&p.id, ok("a"), 12).unwrap();
+        plans.merge_result(&p.id, ok("b"), 12).unwrap();
+        assert_eq!(plans.finish_merge(&p.id, 13).unwrap().merge.unwrap().state, MergeState::Merged);
+
+        // A closed plan is no longer the lead's to merge.
+        let q = plans.propose("neos", "", vec![t("c", "g")], 20).unwrap();
+        plans.approve(&q.id, vec![t("c", "g")], 21).unwrap();
+        plans.set_thread("neos", "c", ThreadState::Done, "", false, 22).unwrap();
+        plans.end_lead("neos", 23);
+        let err = plans.propose_merge(&q.id, "neos", vec!["c".into()], "n", 24).unwrap_err();
+        assert!(err.contains("ended lead mode"), "{err}");
     }
 }

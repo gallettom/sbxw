@@ -31,7 +31,7 @@ pub struct Config {
     /// "enterprise", or "free". Wrong values mislabel the plan in-session.
     pub claude_subscription: String,
     /// Model new sessions in the sandbox start on, passed as
-    /// `ANTHROPIC_DEFAULT_MODEL`. Accepts a full model id ("claude-sonnet-5")
+    /// `ANTHROPIC_DEFAULT_MODEL`. Accepts a full model id ("claude-sonnet-5-5")
     /// or an alias ("sonnet", "opus"). Empty => don't set it at all.
     ///
     /// A *default*, and now genuinely one. sbxw used to write `model` into the
@@ -45,6 +45,11 @@ pub struct Config {
     /// the sbx template rather than from sbxw. On an older one the variable is
     /// ignored in silence and sessions start on Claude Code's own default.
     pub claude_model: String,
+    /// The models a thread may be started on, offered by the web UI's New
+    /// thread form and named in a lead's plans. Each `id` is what
+    /// `claude --model` receives; `label` is what a person reads. A thread
+    /// started without one runs on `claude_model`.
+    pub models: Vec<ModelChoice>,
     /// How sandboxes sbxw creates see sbx's shared skill store (populated by
     /// `sbxw skills import`): `"off"`, `"readonly"` or `"readwrite"`, passed as
     /// `sbx create --skills=…` (sbx 0.43). Empty leaves it to sbx, whose
@@ -124,6 +129,40 @@ pub struct Config {
     pub env_files: Vec<String>,
 }
 
+/// One entry of `models`.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct ModelChoice {
+    pub id: String,
+    pub label: String,
+}
+
+/// The models offered when `sbxw.toml` names none.
+pub fn default_models() -> Vec<ModelChoice> {
+    [
+        ("claude-sonnet-5-5", "Sonnet 5.5"),
+        ("claude-opus-5-5", "Opus 5.5"),
+        ("claude-haiku-5-5", "Haiku 5.5"),
+    ]
+    .into_iter()
+    .map(|(id, label)| ModelChoice {
+        id: id.into(),
+        label: label.into(),
+    })
+    .collect()
+}
+
+/// Whether `id` may be passed as `claude --model`: `^[a-z0-9][a-z0-9.\-]{0,63}$`.
+/// It reaches a command line inside the sandbox, so the alphabet is kept to
+/// what model ids and aliases use, and nothing that could read as a flag.
+pub fn valid_model_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    !b.is_empty()
+        && b.len() <= 64
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'-')
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PortMap {
     /// Friendly hostname written to /etc/hosts, e.g. "neos.local".
@@ -175,7 +214,8 @@ impl Default for Config {
             ],
             kits: vec![],
             claude_subscription: "pro".into(),
-            claude_model: "claude-sonnet-5".into(),
+            claude_model: "claude-sonnet-5-5".into(),
+            models: default_models(),
             skills: String::new(),
             share_skills: true,
             pull: String::new(),
@@ -339,6 +379,39 @@ mod tests {
         assert_eq!(back.ports[0].alias, "neos.local");
         assert_eq!(back.ports[0].host_port, 4200);
         assert_eq!(back.monitor_cmd, cfg.monitor_cmd);
+        assert_eq!(back.models, cfg.models);
+    }
+
+    #[test]
+    fn the_default_model_is_sonnet_5_5_and_three_are_offered() {
+        let cfg = Config::default();
+        assert_eq!(cfg.claude_model, "claude-sonnet-5-5");
+        let ids: Vec<&str> = cfg.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"]
+        );
+        assert_eq!(cfg.models[1].label, "Opus 5.5");
+    }
+
+    /// The example promises its values are the built-in defaults.
+    #[test]
+    fn the_example_file_parses_and_names_the_default_models() {
+        let cfg: Config = toml::from_str(include_str!("../sbxw.toml.example")).expect("parse");
+        assert_eq!(cfg.claude_model, Config::default().claude_model);
+        assert_eq!(cfg.models, default_models());
+    }
+
+    #[test]
+    fn model_ids_are_checked_against_a_narrow_alphabet() {
+        for ok in ["claude-opus-5-5", "sonnet", "9", "claude-3.7-x"] {
+            assert!(valid_model_id(ok), "{ok}");
+        }
+        let long = "a".repeat(65);
+        for bad in ["", "-x", ".x", "Claude", "a b", "a;b", "a$b", "a/b", long.as_str()] {
+            assert!(!valid_model_id(bad), "{bad}");
+        }
+        assert!(valid_model_id(&"a".repeat(64)));
     }
 
     /// `share_skills = false` still means what it meant; `skills` is the newer,
@@ -431,7 +504,7 @@ mod tests {
     #[test]
     fn an_explicit_variable_in_env_beats_claude_model() {
         let mut cfg = Config {
-            claude_model: "claude-sonnet-5".into(),
+            claude_model: "claude-sonnet-5-5".into(),
             ..Config::default()
         };
         cfg.env

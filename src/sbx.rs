@@ -847,11 +847,21 @@ macro_rules! no_repo_fn {
 /// which is the one that can lead). `prompt`, when given, is the session's first
 /// message — an approved plan's briefing.
 ///
-/// Workspace, thread name and prompt are positional (`$1`–`$3`), never script
-/// text: the thread name comes from a WebSocket query parameter. It is
+/// `model`, when given, is passed as `claude --model`, on a fresh start and on
+/// `--continue` alike; empty leaves the sandbox's default
+/// (`ANTHROPIC_DEFAULT_MODEL`) in charge.
+///
+/// Workspace, thread name, prompt and model are positional (`$1`–`$4`), never
+/// script text: the thread name comes from a WebSocket query parameter. It is
 /// validated (`crate::is_valid_thread_name`), and that is exactly why the
 /// property is easy to lose — nothing downstream would notice.
-pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) -> Vec<String> {
+pub fn thread_run_args(
+    name: &str,
+    workspace: &str,
+    thread: &str,
+    prompt: &str,
+    model: &str,
+) -> Vec<String> {
     const SCRIPT: &str = concat!(no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
@@ -880,9 +890,9 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
         tr="$HOME/.claude/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
         if [ -z "$3" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
             printf '\033[2m[sbxw] resuming its last conversation\033[0m\r\n'
-            exec claude --dangerously-skip-permissions --continue
+            exec claude --dangerously-skip-permissions ${4:+--model "$4"} --continue
         fi
-        exec claude --dangerously-skip-permissions ${3:+"$3"}"#);
+        exec claude --dangerously-skip-permissions ${4:+--model "$4"} ${3:+"$3"}"#);
     owned(&[
         "exec",
         "-it",
@@ -895,6 +905,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
         workspace,
         thread,
         prompt,
+        model,
     ])
 }
 
@@ -1079,6 +1090,72 @@ pub fn thread_close(
         delete_branch,
     ))
     .map(|_| ())
+}
+
+/// Merge thread `$2`'s branch into the branch the main checkout of the repo
+/// under `$1` is on — what a lead's proposed merge runs, one thread at a time
+/// (`web::api_plan_merge`).
+///
+/// Refuses a main checkout with uncommitted changes to tracked files: a merge
+/// into one mixes the person's unfinished work into the merge commit, or fails
+/// halfway. Untracked files are left to git, which refuses only if the merge
+/// would overwrite one. On a failed merge it runs `git merge --abort`, so the
+/// checkout is as it was, and names the conflicting files.
+///
+/// Prints `key=value` lines like `THREAD_END_SCRIPT`: `commit=` on success,
+/// `error=` otherwise. Everything variable is positional.
+const THREAD_MERGE_SCRIPT: &str = concat!(no_repo_fn!(), r#"
+    [ -n "$1" ] && cd "$1" 2>/dev/null
+    if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        echo "error=$(sbxw_no_repo)"; exit 3
+    fi
+    root=$(dirname "$common"); br="sbxw/$2"
+    base=$(git -C "$root" rev-parse --abbrev-ref HEAD)
+    if [ "$base" = HEAD ]; then
+        echo "error=the main checkout of $root is on a detached HEAD"; exit 4
+    fi
+    if ! git -C "$root" show-ref --verify --quiet "refs/heads/$br"; then
+        echo "error=there is no branch $br in $root"; exit 5
+    fi
+    n=$(git -C "$root" status --porcelain --untracked-files=no | wc -l | tr -d ' ')
+    if [ "$n" -gt 0 ]; then
+        echo "error=the main checkout of $root has $n uncommitted change(s); commit or stash them first"; exit 6
+    fi
+    if out=$(git -C "$root" merge --no-ff --no-edit "$br" 2>&1); then
+        echo "base=$base"
+        echo "commit=$(git -C "$root" rev-parse --short HEAD)"
+        echo ok=1
+        exit 0
+    fi
+    files=$(git -C "$root" diff --name-only --diff-filter=U | head -n 5 | tr '\n' ' ')
+    git -C "$root" merge --abort >/dev/null 2>&1
+    if [ -n "$files" ]; then
+        echo "error=conflict in ${files% }"
+    else
+        echo "error=$(printf '%s' "$out" | tail -n 1)"
+    fi
+    exit 7"#);
+
+/// Argv for `THREAD_MERGE_SCRIPT`.
+pub fn thread_merge_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
+    owned(&[
+        "exec",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        THREAD_MERGE_SCRIPT,
+        "sbxw-thread-merge",
+        workspace,
+        thread,
+    ])
+}
+
+/// Merge thread `thread`'s branch into its repo's checked-out branch, giving
+/// the merge commit.
+pub fn thread_merge(name: &str, workspace: &str, thread: &str) -> Result<String> {
+    let f = run_thread_end(&thread_merge_args(name, workspace, thread))?;
+    Ok(f.get("commit").cloned().unwrap_or_default())
 }
 
 /// `sbx env create PATH... --name NAME [--env-arg K=V]…` — provision a sandbox
@@ -3128,11 +3205,18 @@ local-policy                          local   all              network: 159 allo
     /// ever be spliced into the script.
     #[test]
     fn a_thread_passes_its_workspace_and_name_as_arguments_not_as_script() {
-        let args = thread_run_args("neos", "/Users/me/my $(id) app", "fix-login", "/lead $(id)");
+        let args = thread_run_args(
+            "neos",
+            "/Users/me/my $(id) app",
+            "fix-login",
+            "/lead $(id)",
+            "claude-opus-5-5",
+        );
         let script = &args[6];
         assert!(!script.contains("neos"), "{script}");
         assert!(!script.contains("fix-login"), "{script}");
         assert!(!script.contains("$(id)"), "{script}");
+        assert!(!script.contains("opus"), "{script}");
         assert_eq!(&args[..6], ["exec", "-it", "neos", "--", "bash", "-lc"]);
         assert_eq!(
             &args[7..],
@@ -3140,13 +3224,40 @@ local-policy                          local   all              network: 159 allo
                 "sbxw-thread",
                 "/Users/me/my $(id) app",
                 "fix-login",
-                "/lead $(id)"
+                "/lead $(id)",
+                "claude-opus-5-5"
             ]
         );
+        // The model, when given, on both the fresh and the resumed start.
+        assert_eq!(script.matches(r#"${4:+--model "$4"}"#).count(), 2, "{script}");
+        assert!(script.contains(r#"${4:+--model "$4"} --continue"#), "{script}");
+        // None given: an empty $4, so no flag at all.
+        assert_eq!(thread_run_args("neos", "", "t", "", "")[11], "");
         // The worktree and branch the README promises.
         assert!(script.contains(r#""$root/.sbxw-worktrees/$2""#), "{script}");
         assert!(script.contains(r#""sbxw/$2""#), "{script}");
         assert!(script.contains(r#"export SBXW_THREAD="$2""#), "{script}");
+    }
+
+    /// A lead's merge: the thread name and the repo path are arguments, the
+    /// merge is `--no-ff --no-edit` of the thread's branch, a conflict is
+    /// aborted, and a dirty main checkout is refused before anything runs.
+    #[test]
+    fn merging_a_thread_passes_everything_as_arguments_not_as_script() {
+        let args = thread_merge_args("neos", "/Users/me/my $(id) app", "fix-login");
+        assert_eq!(&args[..5], ["exec", "neos", "--", "bash", "-lc"]);
+        assert_eq!(
+            &args[6..],
+            ["sbxw-thread-merge", "/Users/me/my $(id) app", "fix-login"]
+        );
+        let script = &args[5];
+        assert!(!script.contains("fix-login") && !script.contains("$(id)"), "{script}");
+        assert!(script.contains(r#"merge --no-ff --no-edit "$br""#), "{script}");
+        assert!(script.contains(r#"br="sbxw/$2""#), "{script}");
+        assert!(script.contains("merge --abort"), "{script}");
+        assert!(script.contains("uncommitted change"), "{script}");
+        let dirty = script.find("uncommitted change").unwrap();
+        assert!(dirty < script.find("merge --no-ff").unwrap(), "refused before merging");
     }
 
     #[test]

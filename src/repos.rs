@@ -13,10 +13,11 @@
 //! scripts in the sandbox `cd` into — and the scan works on a stopped sandbox.
 //!
 //! The choices are kept in `~/.sbxw/state/threads/<sandbox>.json`
-//! (`thread → repo`), written like plans are: `0700` directory, temporary file
+//! (`thread → repo`, or `thread → {repo, model}` once a model was picked for
+//! it — see `ThreadRecord`), written like plans are: `0700` directory, temporary file
 //! and rename.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -244,6 +245,12 @@ fn head_branch(dir: &Path) -> Option<(String, bool)> {
     })
 }
 
+/// The branch checked out in the repo holding `dir`, or `None` when HEAD is
+/// detached or there is no repo — what a merge into it would land on.
+pub(crate) fn branch_of(dir: &Path) -> Option<String> {
+    head_branch(dir).and_then(|(b, detached)| (!detached).then_some(b))
+}
+
 /// A repo path as a thread names it, checked and normalised: relative, no
 /// `..`, no `.`, no empty parts. `''` (the workspace itself) is fine.
 pub(crate) fn normalize(rel: &str) -> Result<String, String> {
@@ -328,12 +335,65 @@ fn file_of(dir: &Path, sandbox: &str) -> PathBuf {
     dir.join(format!("{sandbox}.json"))
 }
 
-/// `sandbox`'s choices; unreadable reads as none.
-pub(crate) fn load(dir: &Path, sandbox: &str) -> BTreeMap<String, String> {
+/// What is remembered about one thread: its repo, and the model it was first
+/// opened on.
+///
+/// On disk a record without a model is the bare repo string, exactly what
+/// files held before models could be picked — so those files still load, and a
+/// file written now still reads in an older sbxw unless a model was picked.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ThreadRecord {
+    pub repo: String,
+    pub model: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum StoredRecord {
+    Repo(String),
+    Full {
+        repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
+}
+
+impl From<StoredRecord> for ThreadRecord {
+    fn from(s: StoredRecord) -> Self {
+        match s {
+            StoredRecord::Repo(repo) => ThreadRecord { repo, model: None },
+            StoredRecord::Full { repo, model } => ThreadRecord { repo, model },
+        }
+    }
+}
+
+impl From<&ThreadRecord> for StoredRecord {
+    fn from(r: &ThreadRecord) -> Self {
+        match &r.model {
+            None => StoredRecord::Repo(r.repo.clone()),
+            Some(m) => StoredRecord::Full {
+                repo: r.repo.clone(),
+                model: Some(m.clone()),
+            },
+        }
+    }
+}
+
+/// `sandbox`'s records; unreadable reads as none.
+pub(crate) fn load_records(dir: &Path, sandbox: &str) -> BTreeMap<String, ThreadRecord> {
     std::fs::read_to_string(file_of(dir, sandbox))
         .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
+        .and_then(|t| serde_json::from_str::<BTreeMap<String, StoredRecord>>(&t).ok())
+        .map(|m| m.into_iter().map(|(k, v)| (k, v.into())).collect())
         .unwrap_or_default()
+}
+
+/// `sandbox`'s choices of repo; unreadable reads as none.
+pub(crate) fn load(dir: &Path, sandbox: &str) -> BTreeMap<String, String> {
+    load_records(dir, sandbox)
+        .into_iter()
+        .map(|(k, v)| (k, v.repo))
+        .collect()
 }
 
 /// The repo recorded for `thread`, if any.
@@ -341,19 +401,55 @@ pub(crate) fn recorded(dir: &Path, sandbox: &str, thread: &str) -> Option<String
     load(dir, sandbox).remove(thread)
 }
 
-/// Record `thread`'s repo, or forget it with `None`.
+/// The model recorded for `thread`, if any.
+pub(crate) fn recorded_model(dir: &Path, sandbox: &str, thread: &str) -> Option<String> {
+    load_records(dir, sandbox).remove(thread).and_then(|r| r.model)
+}
+
+/// Record `thread`'s repo, keeping its model, or forget the thread with `None`.
 pub(crate) fn record(
     dir: &Path,
     sandbox: &str,
     thread: &str,
     repo: Option<&str>,
 ) -> std::io::Result<()> {
+    update(dir, sandbox, thread, |rec| match repo {
+        Some(r) => {
+            let mut rec = rec.unwrap_or_default();
+            rec.repo = r.to_string();
+            Some(rec)
+        }
+        None => None,
+    })
+}
+
+/// Record the model `thread` runs on, or clear it with `None`, keeping its
+/// repo. A thread with no record yet gets one in `''` — only the case for a
+/// sandbox sbxw has no workspace for, where the repo is never read.
+pub(crate) fn record_model(
+    dir: &Path,
+    sandbox: &str,
+    thread: &str,
+    model: Option<&str>,
+) -> std::io::Result<()> {
+    update(dir, sandbox, thread, |rec| {
+        let mut rec = rec.unwrap_or_default();
+        rec.model = model.map(str::to_string);
+        Some(rec)
+    })
+}
+
+/// Change one thread's record under the lock, writing only when it changed.
+fn update<F>(dir: &Path, sandbox: &str, thread: &str, f: F) -> std::io::Result<()>
+where
+    F: FnOnce(Option<ThreadRecord>) -> Option<ThreadRecord>,
+{
     let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut map = load(dir, sandbox);
+    let mut map = load_records(dir, sandbox);
     let before = map.clone();
-    match repo {
-        Some(r) => map.insert(thread.to_string(), r.to_string()),
-        None => map.remove(thread),
+    match f(map.remove(thread)) {
+        Some(rec) => map.insert(thread.to_string(), rec),
+        None => None,
     };
     if map == before {
         return Ok(());
@@ -371,8 +467,9 @@ pub(crate) fn record(
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
+    let stored: BTreeMap<&String, StoredRecord> = map.iter().map(|(k, v)| (k, v.into())).collect();
     let tmp = dir.join(format!(".{sandbox}.json.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&map)?)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&stored)?)?;
     std::fs::rename(&tmp, &path)
 }
 
@@ -625,6 +722,35 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&one);
         let _ = std::fs::remove_dir_all(&none);
+        let _ = std::fs::remove_dir_all(state.parent().unwrap());
+    }
+
+    #[test]
+    fn a_model_is_kept_beside_the_repo_and_old_files_still_load() {
+        let state = temp("state-model").join("threads");
+        std::fs::create_dir_all(&state).unwrap();
+        // Written before models could be picked.
+        std::fs::write(file_of(&state, "neos"), r#"{"api":"backend","ui":""}"#).unwrap();
+        assert_eq!(recorded(&state, "neos", "api").as_deref(), Some("backend"));
+        assert_eq!(recorded_model(&state, "neos", "api"), None);
+
+        record_model(&state, "neos", "api", Some("claude-opus-5-5")).unwrap();
+        assert_eq!(recorded_model(&state, "neos", "api").as_deref(), Some("claude-opus-5-5"));
+        // Moving the repo keeps the model.
+        record(&state, "neos", "api", Some("frontend")).unwrap();
+        let rec = load_records(&state, "neos").remove("api").unwrap();
+        assert_eq!(
+            rec,
+            ThreadRecord { repo: "frontend".into(), model: Some("claude-opus-5-5".into()) }
+        );
+        // A thread without a model is still written as a bare repo.
+        let raw = std::fs::read_to_string(file_of(&state, "neos")).unwrap();
+        assert!(raw.contains(r#""ui": """#), "{raw}");
+        assert!(raw.contains(r#""model": "claude-opus-5-5""#), "{raw}");
+        assert_eq!(load(&state, "neos").get("ui").map(String::as_str), Some(""));
+
+        record(&state, "neos", "api", None).unwrap();
+        assert_eq!(recorded_model(&state, "neos", "api"), None);
         let _ = std::fs::remove_dir_all(state.parent().unwrap());
     }
 }

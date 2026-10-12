@@ -4515,7 +4515,7 @@ mod tests {
     fn the_environment_file_wins_and_sbxw_toml_fills_the_gaps() {
         let base = Config {
             network_allow: vec!["github.com".into()],
-            claude_model: "claude-sonnet-5".into(),
+            claude_model: "claude-sonnet-5-5".into(),
             ports: vec![config::PortMap {
                 alias: "neos.local".into(),
                 sandbox_port: 4200,
@@ -4552,7 +4552,7 @@ mod tests {
         let report = report.join("\n");
         assert!(report.contains("neos.local → :4201"), "{report}");
         assert!(report.contains("egress allowlist"), "{report}");
-        assert!(report.contains("claude-sonnet-5"), "{report}");
+        assert!(report.contains("claude-sonnet-5-5"), "{report}");
         assert!(
             report.contains("NODE_ENV"),
             "the override is named: {report}"
@@ -4696,7 +4696,7 @@ mod tests {
         let cfg = Config {
             network_allow: vec!["github.com".into(), "pypi.org".into()],
             network_deny: vec!["telemetry.example".into()],
-            claude_model: "claude-sonnet-5".into(),
+            claude_model: "claude-sonnet-5-5".into(),
             share_skills: false,
             ..Config::default()
         };
@@ -4710,7 +4710,7 @@ mod tests {
         // The model is no longer a *note*: it rides in the file's own `env:`
         // block as ANTHROPIC_DEFAULT_MODEL, so an export carries it for real
         // rather than describing what the reader would have to do by hand.
-        assert!(!notes.contains("claude-sonnet-5"), "{notes}");
+        assert!(!notes.contains("claude-sonnet-5-5"), "{notes}");
         assert!(notes.contains("neos.local:4200"));
         assert!(notes.contains("CLAUDE_CODE_OAUTH_TOKEN"));
 
