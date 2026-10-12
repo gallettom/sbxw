@@ -47,6 +47,12 @@ pull = ""
 # is held up from its next start.
 keep_running = false
 
+# How many Claude sessions a sandbox may hold open at once in the web UI: the
+# agent, plus each thread opened beside it with "+ Thread" (one git worktree
+# and branch per thread). They share the sandbox's CPU and memory and your
+# usage, so this is a budget. The agent itself is never refused.
+max_agent_sessions = 4
+
 # Command behind the web UI's Monitor pane, as argv (no shell involved).
 # Bare `sbx` opens the CLI's own all-sandboxes dashboard. It runs on the HOST,
 # outside every sandbox, which is why it is one fixed command and not a

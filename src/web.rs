@@ -379,6 +379,35 @@ fn session_key(sandbox: &str, mode: &str) -> String {
 const MONITOR_KEY_MODE: &str = "monitor";
 const MONITOR_SANDBOX: &str = "__host__";
 
+/// A *thread* is a further Claude session in a sandbox, in a git worktree of
+/// its own (see `sbx::thread_run_args`). Its mode is this prefix and its name,
+/// so its PTY is filed apart from the agent's and from every other thread's.
+/// The `:` cannot clash with anything: `split_key` cuts at the first `::`, and
+/// a thread name is lower-case letters, digits and hyphens.
+const THREAD_MODE_PREFIX: &str = "thread:";
+
+fn thread_mode(thread: &str) -> String {
+    format!("{THREAD_MODE_PREFIX}{thread}")
+}
+
+/// The thread a mode names, if it names one.
+fn thread_of(mode: &str) -> Option<&str> {
+    mode.strip_prefix(THREAD_MODE_PREFIX)
+}
+
+/// How many Claude sessions sbxw holds open for `sandbox`: its agent and its
+/// threads, live ones only — an entry outlives its process (`PtySession::alive`),
+/// and a thread that exited must not keep counting against the ceiling.
+fn agent_ptys(sessions: &HashMap<String, Arc<PtySession>>, sandbox: &str) -> usize {
+    sessions
+        .iter()
+        .filter(|(k, pty)| {
+            let (s, mode) = split_key(k);
+            s == sandbox && (mode == "claude" || thread_of(mode).is_some()) && pty.alive()
+        })
+        .count()
+}
+
 /// Split a session key "<sandbox>::<mode>" back into its parts.
 fn split_key(key: &str) -> (&str, &str) {
     let (sandbox, rest) = key.split_once("::").unwrap_or((key, ""));
@@ -1016,8 +1045,11 @@ struct SandboxItem {
 struct WsQuery {
     sandbox: Option<String>,
     /// "claude" (default) attaches the agent, "bash" opens a shell via sbx exec,
-    /// "monitor" runs the host dashboard and ignores `sandbox`.
+    /// "monitor" runs the host dashboard and ignores `sandbox`, "thread" opens
+    /// the thread named by `thread` (see `thread_mode`).
     mode: Option<String>,
+    /// Name of the thread, with `mode=thread`.
+    thread: Option<String>,
 }
 
 const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
@@ -1251,6 +1283,9 @@ pub async fn serve(
         )
         .route("/api/hosts", get(api_hosts_read))
         .route("/api/sandboxes/:name/stop", post(api_stop))
+        .route("/api/sandboxes/:name/threads", get(api_threads))
+        .route("/api/sandboxes/:name/threads/:thread", get(api_thread_status))
+        .route("/api/sandboxes/:name/threads/:thread/close", post(api_thread_close))
         .route("/api/sandboxes/:name/rm", post(api_rm))
         .route(
             "/api/sandboxes/:name/paste-image",
@@ -2662,6 +2697,120 @@ async fn api_hosts_read() -> Json<Vec<HostEntry>> {
             })
             .collect(),
     )
+}
+
+/// `GET /api/sandboxes/:name/threads` — what the **Thread** button offers: every
+/// thread with a worktree, whether its session is open, and how many more the
+/// ceiling allows.
+///
+/// Worktrees are read from the host side of the mount, under the repository
+/// that holds the recorded workspace (`sbx::thread_run_args` puts them at the
+/// repository's top level, which a workspace in a subfolder is not). A sandbox
+/// sbxw has no workspace for lists only its open threads.
+async fn api_threads(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_name(&name) {
+        return bad;
+    }
+    let mut threads: std::collections::BTreeMap<String, bool> = Default::default();
+    let repo = crate::workspace_for(&name)
+        .and_then(|ws| ws.ancestors().find(|d| d.join(".git").exists()).map(|d| d.to_path_buf()));
+    if let Some(repo) = repo {
+        if let Ok(dir) = std::fs::read_dir(repo.join(".sbxw-worktrees")) {
+            for entry in dir.flatten() {
+                let n = entry.file_name().to_string_lossy().into_owned();
+                if crate::is_valid_thread_name(&n) && entry.path().is_dir() {
+                    threads.insert(n, false);
+                }
+            }
+        }
+    }
+    let open = {
+        let map = state.sessions.lock().unwrap();
+        for (key, pty) in map.iter() {
+            let (s, mode) = split_key(key);
+            if let (true, Some(t)) = (s == name, thread_of(mode)) {
+                if pty.alive() {
+                    threads.insert(t.to_string(), true);
+                }
+            }
+        }
+        agent_ptys(&map, &name)
+    };
+    let list: Vec<serde_json::Value> = threads
+        .into_iter()
+        .map(|(name, open)| serde_json::json!({ "name": name, "open": open }))
+        .collect();
+    ok_json_with(serde_json::json!({
+        "threads": list,
+        "open": open,
+        "max": state.cfg.max_agent_sessions.max(1),
+    }))
+}
+
+/// Both names of a thread endpoint, checked: they reach a shell in the sandbox.
+fn reject_invalid_thread(name: &str, thread: &str) -> Option<Json<serde_json::Value>> {
+    reject_invalid_name(name).or_else(|| {
+        (!crate::is_valid_thread_name(thread)).then(|| err_json("invalid thread name"))
+    })
+}
+
+fn workspace_arg(name: &str) -> String {
+    crate::workspace_for(name)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// `GET /api/sandboxes/:name/threads/:thread` — what closing it would lose:
+/// uncommitted files, and commits its branch has that the base does not.
+async fn api_thread_status(Path((name, thread)): Path<(String, String)>) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_thread(&name, &thread) {
+        return bad;
+    }
+    let workspace = workspace_arg(&name);
+    blocking(
+        move || sbx::thread_status(&name, &workspace, &thread),
+        |st| ok_json_with(serde_json::json!({ "status": st })),
+    )
+    .await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ThreadCloseBody {
+    /// Throw away uncommitted files in the worktree.
+    discard: bool,
+    /// Delete the branch too, merged or not.
+    delete_branch: bool,
+}
+
+/// `POST /api/sandboxes/:name/threads/:thread/close` — stop the thread, remove
+/// its worktree, and its branch if asked. What would be lost was shown first
+/// (`api_thread_status`); refusing dirty work without `discard` is the
+/// daemon's own check, not the browser's.
+async fn api_thread_close(
+    Path((name, thread)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ThreadCloseBody>,
+) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_thread(&name, &thread) {
+        return bad;
+    }
+    let workspace = workspace_arg(&name);
+    let key = session_key(&name, &thread_mode(&thread));
+    let res = blocking_ok(move || {
+        sbx::thread_close(&name, &workspace, &thread, body.discard, body.delete_branch)
+    })
+    .await;
+    // The thread's `claude` was stopped inside the sandbox, so its PTY is
+    // ending on its own; dropping the entry now means reopening the same name
+    // starts fresh instead of finding a session on its way out.
+    if res.0.get("ok") == Some(&serde_json::Value::Bool(true)) {
+        state.sessions.lock().unwrap().remove(&key);
+    }
+    res
 }
 
 async fn api_stop(Path(name): Path<String>) -> Json<serde_json::Value> {
@@ -4921,13 +5070,25 @@ async fn ws_handler(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
     // "bash" → shell session; "monitor" → the host dashboard, which ignores the
-    // sandbox parameter entirely; anything else → the agent ("claude").
+    // sandbox parameter entirely; "thread" → the named thread; anything else →
+    // the agent ("claude").
     let mode = match params.mode.as_deref() {
-        Some("bash") => "bash",
-        Some(MONITOR_KEY_MODE) => MONITOR_KEY_MODE,
-        _ => "claude",
-    }
-    .to_string();
+        Some("bash") => "bash".to_string(),
+        Some(MONITOR_KEY_MODE) => MONITOR_KEY_MODE.to_string(),
+        // The name becomes a directory and a branch inside the sandbox, so a bad
+        // one is refused here rather than quietly opening the agent instead.
+        Some("thread") => match params.thread.as_deref() {
+            Some(t) if crate::is_valid_thread_name(t) => thread_mode(t),
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "a thread name is 1–40 lower-case letters, digits and inner hyphens",
+                )
+                    .into_response()
+            }
+        },
+        _ => "claude".to_string(),
+    };
     let sandbox = if mode == MONITOR_KEY_MODE {
         MONITOR_SANDBOX.to_string()
     } else {
@@ -4964,6 +5125,7 @@ async fn handle_socket(
 ///   mode == "bash"   → `sbx exec -it <sandbox> -- bash`, or SSH if it's stopped
 ///   mode == "claude" → `sbx run --name <sandbox>` (or the configured web_shell via exec)
 ///   mode == "monitor"→ `cfg.monitor_cmd` on the **host**, under `MONITOR_KEY`
+///   mode == "thread:<name>" → `claude` in that thread's worktree, via `sbx exec`
 /// The session lives until the PTY process exits.
 fn get_or_create_session(
     sandbox: &str,
@@ -4995,6 +5157,30 @@ fn get_or_create_session(
     // the runtime with a 422. Re-create the empty directory first (no-op for a
     // normal sandbox, or a chat one still present) so attaching just works.
     crate::ensure_chat_workspace(sandbox);
+
+    if let Some(thread) = thread_of(mode) {
+        // The ceiling is checked only here, on the way to a *new* thread: a
+        // thread already open was found on the fast path above, and the agent
+        // itself is never refused.
+        let open = agent_ptys(&sessions.lock().unwrap(), sandbox);
+        let max = cfg.max_agent_sessions.max(1);
+        if open >= max {
+            bail!(
+                "'{sandbox}' already has {open} Claude session{} open, and max_agent_sessions \
+                 is {max} (sbxw.toml). Close a thread first, or raise the ceiling.",
+                if open == 1 { "" } else { "s" }
+            );
+        }
+        // The workspace is mounted at the same path inside the sandbox. An
+        // unrecorded one (a sandbox sbxw did not create) leaves the script where
+        // `sbx exec` starts, which is the workspace too.
+        let workspace = crate::workspace_for(sandbox)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut c = CommandBuilder::new("sbx");
+        c.args(crate::sbx::thread_run_args(sandbox, &workspace, thread));
+        return spawn_pty_session(c, key, sessions);
+    }
 
     // `sbx exec` only reaches a *running* sandbox, while `sbx run` (the agent
     // pane) starts a stopped one as a side effect. That asymmetry made the Bash
@@ -5152,14 +5338,25 @@ async fn bridge(
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Get or create the session on a blocking thread (PTY setup does syscalls).
-    let session = tokio::task::spawn_blocking({
+    let session = match tokio::task::spawn_blocking({
         let sandbox = sandbox.clone();
         let mode = mode.clone();
         let cfg = cfg.clone();
         let sessions = sessions.clone();
         move || get_or_create_session(&sandbox, &mode, &cfg, &sessions)
     })
-    .await??;
+    .await?
+    {
+        Ok(session) => session,
+        Err(e) => {
+            // Said in the pane, which is where the person who asked is looking:
+            // a socket that just closes reads as "disconnected" and nothing more.
+            // Not JSON, so the pane writes it verbatim (`handlePaneData`).
+            let msg = format!("\r\n\x1b[31m[sbxw] {e:#}\x1b[0m\r\n");
+            let _ = ws_tx.send(Message::Text(msg)).await;
+            return Err(e);
+        }
+    };
 
     // Subscribe BEFORE reading the replay buffer so we don't miss output
     // produced in the window between snapshot and subscription.
@@ -5994,6 +6191,22 @@ mod tests {
         assert_eq!(split_key("neos::claude"), ("neos", "claude"));
         // And a bash session is untouched by any of this.
         assert_eq!(split_key("neos::bash"), ("neos", "bash"));
+    }
+
+    /// A thread's PTY is filed apart from the agent's, and its key splits back
+    /// into the sandbox and a mode that names the thread — never "claude", so
+    /// nothing that addresses *the* agent (answering a prompt, typing a relay
+    /// answer) can land in a thread by accident.
+    #[test]
+    fn a_thread_is_keyed_apart_from_the_agent() {
+        let key = session_key("neos", &thread_mode("fix-login"));
+        assert_eq!(key, "neos::thread:fix-login");
+        assert_ne!(key, session_key("neos", "claude"));
+        let (sandbox, mode) = split_key(&key);
+        assert_eq!((sandbox, mode), ("neos", "thread:fix-login"));
+        assert_eq!(thread_of(mode), Some("fix-login"));
+        assert_eq!(thread_of("claude"), None);
+        assert_eq!(thread_of("bash"), None);
     }
 
     /// Where a session came from, decided on evidence rather than assumed.

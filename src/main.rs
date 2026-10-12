@@ -1619,6 +1619,24 @@ pub(crate) fn is_valid_sandbox_name(name: &str) -> bool {
 pub(crate) const INVALID_NAME_MSG: &str =
     "name must be 1–63 letters, digits and hyphens, and must not end with a hyphen";
 
+/// Longest thread name: it becomes a directory and a branch (`sbxw/<name>`),
+/// and is shown in a pane bar.
+pub(crate) const MAX_THREAD_NAME_LEN: usize = 40;
+
+/// A thread's name becomes a worktree directory and a git branch, and reaches
+/// the daemon from a WebSocket query — so the same unambiguous alphabet as a
+/// sandbox name, lower-case only, since a branch `Fix` and a branch `fix` are
+/// one directory on a case-insensitive Mac.
+pub(crate) fn is_valid_thread_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_THREAD_NAME_LEN
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// Create the empty workspace for chat sandbox `name`, returning its path.
 pub(crate) fn prepare_chat_workspace(name: &str) -> Result<String> {
     let dir = chat_workspace_root().join(name);
@@ -4884,6 +4902,20 @@ mod tests {
         assert!(!is_valid_sandbox_name("neos-"));
         assert!(!is_valid_sandbox_name("neos.local"));
         assert!(is_valid_sandbox_name("neos-2"));
+    }
+
+    /// A thread name is a directory, a branch and a query parameter: no path
+    /// separators, no dots (`..`), no case pairs that collide on macOS, and no
+    /// leading hyphen that git would read as an option.
+    #[test]
+    fn thread_names_are_safe_as_a_directory_and_a_branch() {
+        assert!(is_valid_thread_name("fix-login"));
+        assert!(is_valid_thread_name("t2"));
+        assert!(is_valid_thread_name(&"a".repeat(MAX_THREAD_NAME_LEN)));
+        assert!(!is_valid_thread_name(&"a".repeat(MAX_THREAD_NAME_LEN + 1)));
+        for bad in ["", "Fix", "-x", "x-", "a/b", "..", "a.b", "a b", "a_b"] {
+            assert!(!is_valid_thread_name(bad), "{bad:?}");
+        }
     }
 
     /// Two different paths whose basenames collide must not end up sharing a

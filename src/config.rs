@@ -83,6 +83,12 @@ pub struct Config {
     /// `run -d` restarts one that exists, and a running one has panes attached
     /// that a restart would cut — so it is held up from its next start on.
     pub keep_running: bool,
+    /// How many Claude sessions one sandbox may hold open at once: the agent
+    /// sbxw attaches, plus every thread opened beside it, each in its own git
+    /// worktree. They share the sandbox's CPU and memory and the account's
+    /// usage, so this is a budget rather than a technical limit. The agent
+    /// itself is always allowed; the ceiling only refuses a new thread.
+    pub max_agent_sessions: usize,
     /// Command the web UI's **Monitor** pane runs, as argv — no shell, so no
     /// quoting rules and no injection surface. It runs on the *host*, outside
     /// any sandbox, which is why it is one fixed configured command rather than
@@ -174,6 +180,7 @@ impl Default for Config {
             share_skills: true,
             pull: String::new(),
             keep_running: false,
+            max_agent_sessions: 4,
             monitor_cmd: vec!["sbx".into()],
             env: Default::default(),
             env_files: vec![],
@@ -306,6 +313,7 @@ mod tests {
             share_skills: false,
             pull: "missing".into(),
             keep_running: true,
+            max_agent_sessions: 2,
             ip_per_app: true,
             env_files: vec!["/p/.env".into()],
             ..Config::default()
@@ -323,6 +331,7 @@ mod tests {
         assert!(back.ip_per_app);
         assert_eq!(back.pull_policy(), Some("missing"));
         assert!(back.keep_running);
+        assert_eq!(back.max_agent_sessions, 2);
         assert_eq!(back.env, cfg.env);
         assert_eq!(back.env_files, cfg.env_files);
         assert_eq!(back.network_allow, cfg.network_allow);

@@ -352,7 +352,7 @@ if (MONITOR_CMD) {
     const open = panes.slice(0, paneCount).findIndex(p => p.sandbox === MONITOR_SANDBOX);
     if (open >= 0) {
       const back = panes[open].beforeMonitor;
-      if (back) connectPane(open, back.sandbox, back.mode);
+      if (back) connectPane(open, back.sandbox, back.mode, back.thread);
       else closePane(open);
       return;
     }

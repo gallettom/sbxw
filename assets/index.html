@@ -281,6 +281,67 @@
     </div>
   </div>
 
+  <!-- ── Open a thread ──
+       Names a thread of the sandbox in the pane that asked: a new one, or one
+       of the existing worktrees, offered as chips. Filled by openThread() in
+       /js/panes.js. -->
+  <div class="modal-overlay hidden" id="thread-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" style="width:420px">
+      <div class="modal-head">
+        <span class="modal-title" id="thread-modal-title">New thread</span>
+        <button class="modal-close" id="thread-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div>
+          <label class="field-label" for="thread-name">Thread name</label>
+          <input id="thread-name" class="field-input" type="text" maxlength="40" placeholder="fix-login"
+                 autocomplete="off" autocapitalize="off" spellcheck="false">
+          <p class="thread-hint" id="thread-hint"></p>
+        </div>
+        <div id="thread-existing-wrap" hidden>
+          <span class="field-label">Existing threads</span>
+          <div class="thread-chips" id="thread-existing"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="thread-count" id="thread-count"></span>
+        <span class="create-error hidden" id="thread-error"></span>
+        <button class="btn-cancel" id="thread-modal-cancel">Cancel</button>
+        <button class="btn-create" id="thread-modal-open" disabled>Open thread</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Close a thread ──
+       Says what closing would throw away before anything is thrown away:
+       uncommitted files must be ticked off explicitly, and an unmerged branch
+       is kept unless asked. Filled by closeThread() in /js/panes.js. -->
+  <div class="modal-overlay hidden" id="thread-close-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-close-title" style="width:440px">
+      <div class="modal-head">
+        <span class="modal-title" id="thread-close-title">Close thread</span>
+        <button class="modal-close" id="thread-close-x" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="thread-close-lead">The session stops and its worktree is removed:</p>
+        <code class="thread-close-path" id="thread-close-path"></code>
+        <label class="thread-check danger" id="thread-close-dirty-row" hidden>
+          <input type="checkbox" id="thread-close-discard">
+          <span id="thread-close-dirty"></span>
+        </label>
+        <label class="thread-check" id="thread-close-branch-row" hidden>
+          <input type="checkbox" id="thread-close-branch">
+          <span id="thread-close-branch-text"></span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="thread-close-error"></span>
+        <button class="btn-cancel" id="thread-close-cancel">Cancel</button>
+        <button class="btn-danger" id="thread-close-confirm">Close thread</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── SSH connection details ──
        What to type into an SSH client's "add a connection" form (Claude
        Desktop's is the one this is shaped after), plus the one-liner for a

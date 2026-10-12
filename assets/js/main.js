@@ -174,8 +174,12 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 // `sandbox`. Both carry the same three classes and run the same animations;
 // only where the strip is anchored differs (under the pane bar, along the top
 // of the row).
-function paintLiseret(el, sandbox, watchedSandbox = null) {
-  const st = sandbox ? agentStates.get(`${sandbox}::claude`) : null;
+//
+// `thread` paints a thread's pane instead: its own state, never a summons
+// suppressed for watching the agent beside it, and no "done" flash — that one
+// is the agent's, and is shared with the sidebar row.
+function paintLiseret(el, sandbox, watchedSandbox = null, thread = null) {
+  const st = sandbox ? agentStates.get(thread ? `${sandbox}::thread:${thread}` : `${sandbox}::claude`) : null;
   el.classList.toggle('agent-working', st === 'working');
   // A summons is pointless while you are reading the terminal it points at, so
   // it is suppressed on every strip speaking for that sandbox, sidebar row
@@ -183,10 +187,10 @@ function paintLiseret(el, sandbox, watchedSandbox = null) {
   // the pane or the tab and the amber returns, since the session still wants an
   // answer. A bash pane has no sandbox here (`null`) and must not read as
   // watched just because nothing else is.
-  const watched = !!sandbox && sandbox === watchedSandbox;
+  const watched = !thread && !!sandbox && sandbox === watchedSandbox;
   el.classList.toggle('agent-attention', st === 'attention' && !watched);
 
-  const flash = sandbox ? doneFlashes.get(sandbox) : null;
+  const flash = sandbox && !thread ? doneFlashes.get(sandbox) : null;
   if (!flash) {
     el.classList.remove('agent-done');
     el.style.removeProperty('--liseret-delay');
@@ -213,7 +217,9 @@ function applyAgentStates() {
     ? focused.sandbox || null
     : null;
   // A bash pane is a shell you drive yourself — no agent, so nothing to show.
-  panes.forEach(p => paintLiseret(p.el, p.mode === 'claude' ? p.sandbox : null, watchedSandbox));
+  panes.forEach(p => p.mode === 'thread'
+    ? paintLiseret(p.el, p.sandbox, watchedSandbox, p.thread)
+    : paintLiseret(p.el, p.mode === 'claude' ? p.sandbox : null, watchedSandbox));
   listEl.querySelectorAll('.sbx-item')
     .forEach(row => paintLiseret(row, row.dataset.name, watchedSandbox));
 
@@ -265,15 +271,27 @@ function flashDone(sandbox) {
 // `seed` marks the initial snapshot: those states are already true rather than
 // freshly reached, so a session that has been idle since yesterday must not
 // flash green just because you reloaded the tab.
+//
+// A thread's hooks report the same mode as the agent's — they are the same
+// `claude`, reading the same settings. Its working directory is what tells it
+// apart, and filing it under its own key is what stops a busy thread from
+// painting the agent's pane and sidebar row as busy.
+function threadOfCwd(cwd) {
+  const m = /\/\.sbxw-worktrees\/([a-z0-9-]+)(?:\/|$)/.exec(cwd || '');
+  return m ? m[1] : null;
+}
+
 function ingestSession(info, seed = false) {
   if (!info || !info.sandbox) return;
-  const key = `${info.sandbox}::${info.mode || 'claude'}`;
+  const mode = info.mode || 'claude';
+  const thread = mode === 'claude' ? threadOfCwd(info.cwd) : null;
+  const key = thread ? `${info.sandbox}::thread:${thread}` : `${info.sandbox}::${mode}`;
   const prev = agentStates.get(key);
   if (info.state === 'exited') agentStates.delete(key);
   else agentStates.set(key, info.state);
   // "Finished thinking" is a transition, not a state — `idle` is also where a
   // session sits between prompts, and that is not news.
-  if (!seed && info.state === 'idle' && (prev === 'working' || prev === 'attention'))
+  if (!seed && !thread && info.state === 'idle' && (prev === 'working' || prev === 'attention'))
     flashDone(info.sandbox);
   applyAgentStates();
 }
@@ -360,7 +378,7 @@ document.addEventListener('visibilitychange', async () => {
     let connected = false;
     saved.panes.slice(0, n).forEach((state, i) => {
       if (state.sandbox && exists(state.sandbox)) {
-        connectPane(i, state.sandbox, state.mode || 'claude');
+        connectPane(i, state.sandbox, state.mode || 'claude', state.thread || null);
         connected = true;
       }
     });
@@ -386,6 +404,9 @@ document.addEventListener('visibilitychange', async () => {
       panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
     }
   }
+  // A layout saved before threads were grouped, or one a pane was dropped
+  // into by hand, comes back with each sandbox's panes side by side.
+  regroupPanes();
   // A `#sandbox=<name>` fragment (e.g. opened from the macOS notch companion)
   // wins over the restored layout: attach that sandbox to the focused pane.
   applySandboxHash();

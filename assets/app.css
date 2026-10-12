@@ -38,6 +38,15 @@
     --c-purple-strong: #8957e5;
     --c-purple-alt: #a371f7;
     --c-purple-tint: #22163c;
+    /* Group hues: one per sandbox shown in several panes (agent + threads).
+       Deliberately none of the status colours — blue is focus, amber is
+       "needs you", green is "done" — so a group never reads as a state.
+       Violet comes last: it is Claude's own colour on the mode switch, and a
+       group should not read as "the Claude pane" while another hue is free. */
+    --c-group-1: #f778ba;      /* rose */
+    --c-group-2: #39c5cf;      /* cyan */
+    --c-group-3: #c9b38a;      /* sand */
+    --c-group-4: #a371f7;      /* violet */
     --c-hover-subtle: #1c2128; /* codemap row hover */
     --c-active-bg: #282e36;    /* header buttons, :active */
     --c-white: #fff;
@@ -595,6 +604,25 @@
   }
   .btn-danger:hover { background: var(--c-red); }
   .create-error { color: var(--c-red); font-size: 11px; align-self: center; }
+  /* ── Thread dialogs ── */
+  .thread-hint { margin: .35rem 0 0; color: var(--c-text-muted); font-size: 11px; }
+  .thread-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .thread-chip {
+    background: var(--c-elevated); color: var(--c-text); border: 1px solid var(--c-border);
+    border-radius: 999px; padding: .15rem .6rem; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .thread-chip:hover { border-color: var(--c-blue); }
+  .thread-chip.open::before { content: '● '; color: var(--c-green); }
+  .thread-count { color: var(--c-text-muted); font-size: 11px; margin-right: auto; align-self: center; }
+  .thread-close-lead { margin: 0; color: var(--c-text); font-size: 13px; }
+  .thread-close-path {
+    display: block; padding: .4rem .55rem; border-radius: 6px; background: var(--c-bg);
+    color: var(--c-text-muted); font-size: 11px; overflow-wrap: anywhere;
+  }
+  .thread-check { display: flex; gap: .5rem; align-items: flex-start; font-size: 12px; color: var(--c-text); cursor: pointer; }
+  .thread-check input { margin-top: .15rem; }
+  .thread-check.danger { color: var(--c-red); }
+  .thread-check[hidden] { display: none; }
   .sbx-item {
     padding: .45rem .75rem;
     margin-top: 0.45rem;
@@ -946,7 +974,44 @@
   .pane {
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--c-bg); min-width: 0; min-height: 0;
+    position: relative;
   }
+  /* ── Groups ──
+     A sandbox shown in several panes — its agent and its threads — is one
+     piece of work. paintGroups() gives the group a hue (--group-color) and
+     says which of each pane's edges are the group's outer ones (edge-*); an
+     edge shared with a groupmate stays open, so the group reads as one block.
+     The bar carries the hue too, mixed into the same slate as every other
+     bar, so a group is recognisable along the top row of the grid without
+     following the outline, and still looks like part of the same grid. */
+  .pane.grouped::after {
+    content: ''; position: absolute; inset: 0; z-index: 20; pointer-events: none;
+    border: 0 solid var(--group-color);
+  }
+  .pane.grouped.edge-t::after { border-top-width: 2px; }
+  .pane.grouped.edge-r::after { border-right-width: 2px; }
+  .pane.grouped.edge-b::after { border-bottom-width: 2px; }
+  .pane.grouped.edge-l::after { border-left-width: 2px; }
+  .pane.grouped .pane-bar {
+    background: color-mix(in oklab, var(--group-color) 26%, darkslategrey);
+  }
+  /* What this pane is within its sandbox, all in the group's one hue: the
+     agent is the trunk, so "main" is filled; a thread is a branch off it, so
+     "⑂ name" is outlined. Two threads of one sandbox are told apart by their
+     names — a second hue per thread would look like a second group. */
+  .pane-bar .role-chip {
+    font-size: 11px; font-weight: 600; line-height: 1;
+    padding: .2rem .45rem; border-radius: 4px;
+    border: 1px solid var(--group-color, var(--c-dim));
+    background: var(--group-color, var(--c-dim));
+    color: var(--c-bg);
+  }
+  .pane-bar .role-chip.thread {
+    background: color-mix(in oklab, var(--group-color, var(--c-dim)) 18%, transparent);
+    color: color-mix(in oklab, var(--group-color, var(--c-text)) 70%, var(--c-white));
+  }
+  .pane-bar .role-chip[hidden] { display: none; }
+  .pane-bar .pane-thread-close[hidden] { display: none; }
   .pane-bar {
     display: flex; align-items: center; gap: .5rem;
     padding: .3rem .75rem;
@@ -1096,9 +1161,9 @@
     .pane-bar .conn-label { display: none; }
   }
   @container pane (max-width: 500px) {
-    /* ✦ and ❯ are the modes' own marks, and the active one keeps its colour —
-       purple for Claude, green for Bash — so the switch still reads at a
-       glance without spelling either out. */
+    /* ✦, ❯ and ⑂ are the modes' own marks, and the active one keeps its
+       colour — purple for Claude, green for Bash, blue for a thread — so the
+       switch still reads at a glance without spelling any of them out. */
     .pane-bar .mode-switch .mode-word,
     .pane-bar .files-word { display: none; }
     .pane-bar .mode-switch button { padding: .2rem .45rem; }
@@ -1163,6 +1228,7 @@
   .pane-bar .mode-switch button.active { background: var(--c-elevated); color: var(--c-text-bright); }
   .pane-bar .mode-switch button[data-mode="claude"].active { color: var(--c-purple); }
   .pane-bar .mode-switch button[data-mode="bash"].active   { color: var(--c-green); }
+  .pane-bar .mode-switch button[data-mode="thread"].active { color: var(--c-blue); }
 
   /* ── Pasted-image toast ── */
   .paste-toast {

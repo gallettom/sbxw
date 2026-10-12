@@ -218,6 +218,9 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   of a picture, or a flat refusal, are equally valid answers. See
   [Asking *you* for a screenshot](#asking-you-for-a-screenshot).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
+- **Run several agents in one sandbox** — **⑂ Thread** in a pane's mode switch
+  opens another Claude session beside the agent, in a git worktree and branch
+  of its own. See [Threads](#threads-several-agents-in-one-sandbox).
 - **Browse the sandbox's files** — the **Files** tab of the **Project** panel
   (**Project** beside the sandbox name in a pane's top bar) is a file explorer over the sandbox's *own*
   filesystem, opening on `.sbxw-artifacts/`: breadcrumb (click its empty space to
@@ -548,6 +551,74 @@ Everything else is a normal sandbox: a chat sandbox still reads your
 `sbxw.toml`, so it applies the same kits and publishes the same `[[ports]]`. If
 a project sandbox already holds one of those host ports, sbx's conflict recovery
 gives the chat sandbox a different one.
+
+## Threads: several agents in one sandbox
+
+Claude already splits work inside one session, with subagents. That work is
+invisible: you cannot read along, or steer one line of it. A **thread** is the
+visible version, which is another Claude session in the same sandbox, in a pane
+of its own, working on one thing.
+
+Two agents editing one checkout overwrite each other's files and leave one diff
+nobody can review. Each thread therefore gets a **git worktree** and a
+**branch** of its own:
+
+```
+<repo>/.sbxw-worktrees/<thread>   on branch   sbxw/<thread>
+```
+
+- **Open one:** **⑂ Thread** in the pane's mode switch opens a dialog that asks
+  for a name (lower-case letters, digits, hyphens) and offers the existing
+  threads as chips, a green dot marking the open ones. The thread opens in the
+  first empty pane, or in a new one while the window has room, so the agent
+  stays on screen. The first open creates the worktree from the repository's
+  current `HEAD`. Every later open lands back in it, with its uncommitted work.
+- **Grouped on screen:** a sandbox's panes, its agent first and then its
+  threads, are moved next to each other, empty panes last, on opening a thread
+  and on loading the page. A group has its own hue (rose, cyan, sand, violet:
+  none of the status colours blue, amber and green, and violet, Claude's own
+  colour, only last). The hue tints the group's
+  pane bars and draws a 2px outline on the group's outer edges only, so the
+  group reads as one block. Moving a pane reconnects it, which replays its
+  session; the session itself is untouched.
+- **Threads told apart:** everything in a group wears the group's one hue.
+  The agent's bar says `main`, filled; each thread's bar says `⑂ <name>`,
+  outlined. Threads are told apart by name, not by colour: a hue per thread
+  would read as another group.
+- **Close one:** **Close thread** in a thread's pane bar first reads what
+  closing would lose, then shows it: the worktree's path, its uncommitted files
+  (which must be ticked off before **Close thread** is enabled, and which the
+  daemon refuses on its own without that tick), and whether its branch
+  `sbxw/<name>` has commits the main checkout's branch lacks. A branch with
+  nothing new is deleted by default. One with unmerged commits is kept unless
+  you tick it. Closing stops every process working in the worktree, the
+  thread's `claude` and anything it started, then runs `git worktree remove`
+  and, if asked, `git branch -D`. It needs the sandbox running.
+- **Ceiling:** `max_agent_sessions` in `sbxw.toml` (default 4) counts the agent
+  plus every open thread. The threads share the sandbox's CPU and memory and
+  your usage, so four sessions spend it up to four times as fast. The agent
+  itself is never refused. Only a new thread is, and the reason is shown in its
+  pane.
+- **Nothing is removed for you.** A worktree can hold work nobody has
+  committed, so closing is always a click and never a side effect of closing a
+  pane: the pane's ✕ leaves the thread running. Merging a thread's branch is
+  yours to do.
+- `.sbxw-worktrees/` is added to the repository's `.git/info/exclude`, not to
+  its `.gitignore`. It is sbxw's bookkeeping, not a change to the project.
+- Each thread's pane has its own activity strip. A thread is recognised by its
+  working directory. Its hooks report the same agent as the main session, and
+  before threads were told apart, a busy thread painted the agent's pane as
+  busy.
+- The thread runs `claude --dangerously-skip-permissions` through `sbx exec`,
+  the same flag sbx gives the agent it starts, so a thread is no more trusted
+  than the pane beside it. An `env` change made in `sbxw.toml` after creation
+  reaches the agent on its next attach, because sbx applies those flags to
+  `sbx run`. A thread, started with `sbx exec`, is not guaranteed to see it. The
+  workspace needs to be a git repository.
+
+The island answers prompts for the agent only. A thread runs in its worktree
+rather than in the recorded workspace, so it is classified as not sbxw's own
+terminal, and its questions are answered in its pane.
 
 ## Asking another sandbox (the relay)
 

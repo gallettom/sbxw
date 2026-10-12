@@ -49,8 +49,11 @@ function applyGridTemplate(n) {
   const mainEl = document.getElementById('main-area');
   const { cols, rows } = gridDimsFor(n);
   mainEl.className = 'main';
-  mainEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-  mainEl.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+  // minmax(0, …), not a bare 1fr (which is minmax(auto, 1fr)): a terminal's
+  // canvas has a fixed width, and with an `auto` floor it widened its own
+  // column and squeezed an empty neighbour down to a sliver.
+  mainEl.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+  mainEl.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
 
   panes.forEach(p => { p.el.style.gridColumn = ''; });
 
@@ -67,6 +70,7 @@ function applyGridTemplate(n) {
       colCursor += span;
     }
   }
+  schedulePaintGroups();
 }
 
 function updateLayoutSwitchLabel() {
@@ -137,6 +141,7 @@ function createPane(index) {
     <div class="pane-bar">
       <span class="dot term-disconnected" id="pdot-${index}" title="Terminal connection"></span>
       <span class="sandbox-label" id="plabel-${index}">—</span>
+      <span class="role-chip" id="prole-${index}" hidden></span>
       <span class="conn-label" id="pconn-${index}"></span>
       <!-- Beside the name, not over with SSH/Env/Reconnect on the right: those
            act on the *session* in this pane, while a project is a fact about
@@ -146,6 +151,8 @@ function createPane(index) {
               title="Project — this sandbox's code map and the deliverables under .sbxw-artifacts/">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
+      <button class="pane-btn pane-thread-close" id="pthreadclose-${index}" hidden
+              title="Close this thread — stop it, remove its worktree, and its branch">Close thread</button>
       <span class="spacer"></span>
       <button class="pane-btn pane-session-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn pane-session-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
@@ -156,6 +163,7 @@ function createPane(index) {
              glyph, which carries the mode on its own (see app.css). -->
         <button class="mode-btn active" data-mode="claude" title="Claude" aria-label="Claude">✦<span class="mode-word"> Claude</span></button>
         <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
+        <button class="mode-btn" data-mode="thread" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own" aria-label="Thread">⑂<span class="mode-word"> Thread</span></button>
       </div>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
@@ -167,6 +175,8 @@ function createPane(index) {
   const pane = {
     index, el, termEl,
     ws: null, sandbox: null, mode: 'claude',
+    // Name of the thread shown, when `mode` is 'thread'.
+    thread: null,
     // Sandbox this pane was on before the monitor took it over, so the
     // Monitor button toggles.
     beforeMonitor: null,
@@ -185,7 +195,7 @@ function createPane(index) {
   el.addEventListener('mousedown', () => setFocusedPane(index));
 
   // Mode buttons
-  const [claudeBtn, bashBtn] = el.querySelectorAll('.mode-btn');
+  const [claudeBtn, bashBtn, threadBtn] = el.querySelectorAll('.mode-btn');
   claudeBtn.addEventListener('click', () => {
     if (pane.mode !== 'claude' && pane.sandbox) connectPane(index, pane.sandbox, 'claude');
     else setPaneMode(index, 'claude');
@@ -194,11 +204,15 @@ function createPane(index) {
     if (pane.mode !== 'bash' && pane.sandbox) connectPane(index, pane.sandbox, 'bash');
     else setPaneMode(index, 'bash');
   });
+  threadBtn.addEventListener('click', () => {
+    if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX) openThread(index);
+  });
 
   document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
     if (pane.sandbox) connectPane(index, pane.sandbox, pane.mode);
   });
   document.getElementById(`prefresh-${index}`).addEventListener('click', () => recreatePaneTerminal(index));
+  document.getElementById(`pthreadclose-${index}`).addEventListener('click', () => closeThread(index));
   document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
   document.getElementById(`pssh-${index}`).addEventListener('click', ev => {
     if (pane.sandbox) toggleSshPop(pane.sandbox, ev.currentTarget);
@@ -355,6 +369,7 @@ function setPaneMode(idx, mode, save = true) {
   pane.mode = mode;
   pane.el.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   applyAgentStates();
+  schedulePaintGroups();
   if (save) saveLayout();
 }
 
@@ -489,10 +504,22 @@ function handlePaneData(pane, ev) {
 // pass no mode — letting it stick would reopen the monitor under a sandbox's
 // name, with the Claude/Bash toggles hidden and no way back. The target decides
 // the mode, not the pane's current contents.
+//
+// `thread` does not stick either: a thread belongs to one sandbox, and "connect
+// this pane to that other sandbox" means its agent, not a thread of the same
+// name over there.
 function paneModeFor(name, requested, current) {
   if (name === MONITOR_SANDBOX) return 'monitor';
   if (requested) return requested;
-  return current === 'monitor' ? 'claude' : current;
+  return current === 'monitor' || current === 'thread' ? 'claude' : current;
+}
+
+// Which session a pane holds, as one comparable string. A sandbox's agent and
+// its shell are one slot — showing both in two panes was never offered — while
+// each thread is a session of its own, so it can sit beside the agent.
+function sessionIdentity(sandbox, mode, thread) {
+  if (!sandbox) return null;
+  return mode === 'thread' ? `${sandbox}::thread:${thread}` : `${sandbox}::main`;
 }
 
 // The pane bar as it depends on *what* a pane holds rather than on which
@@ -508,14 +535,18 @@ function applyPaneChrome(idx, name) {
   const label = document.getElementById(`plabel-${idx}`);
   // The command is the tooltip, not the label: `monitor_cmd` is bare `sbx`,
   // which as a pane title says nothing about what the pane is.
+  const thread = panes[idx].mode === 'thread' ? panes[idx].thread : null;
+  // The thread's name is its role chip, painted by paintGroups().
   label.textContent = monitor ? 'monitor' : (name || '—');
-  label.title = monitor ? `host monitor — ${MONITOR_CMD}` : '';
+  label.title = monitor ? `host monitor — ${MONITOR_CMD}`
+    : thread ? `Thread "${thread}" — worktree .sbxw-worktrees/${thread}, branch sbxw/${thread}` : '';
   document.getElementById(`pssh-${idx}`).disabled = !name || monitor;
   document.getElementById(`penv-${idx}`).disabled = !name || monitor;
   // The monitor runs on the host and has no workspace, so it has no project
   // either — the same reason SSH and Env go dark on it.
   document.getElementById(`pfiles-${idx}`).disabled = !name || monitor;
   panes[idx].el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
+  document.getElementById(`pthreadclose-${idx}`).hidden = !(name && thread);
 }
 
 /**
@@ -538,6 +569,7 @@ function emptyPane(idx) {
   if (!pane) return;
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
   pane.sandbox = null;
+  pane.thread = null;
   pane.beforeMonitor = null;
   pane.term.reset();
   pane.lastSelection = '';
@@ -546,17 +578,26 @@ function emptyPane(idx) {
   applyPaneChrome(idx, null);
   // The liseret speaks for whoever is in the pane, and now nobody is.
   applyAgentStates();
+  schedulePaintGroups();
 }
 
-function connectPane(idx, name, mode) {
+function connectPane(idx, name, mode, thread) {
   if (!name || idx >= panes.length) return;
-  // Refuse to duplicate a sandbox already open in a different visible pane.
-  if (panes.slice(0, paneCount).some((p, i) => i !== idx && p.sandbox === name)) return;
   const pane = panes[idx];
+  const nextMode = paneModeFor(name, mode, pane.mode);
+  // Reconnect and ↻ pass the mode alone; the thread is the one already here.
+  const nextThread = nextMode === 'thread'
+    ? (thread || (name === pane.sandbox ? pane.thread : null))
+    : null;
+  if (nextMode === 'thread' && !nextThread) return;
+  // Refuse to duplicate a session already open in a different visible pane.
+  const id = sessionIdentity(name, nextMode, nextThread);
+  if (panes.slice(0, paneCount).some((p, i) => i !== idx && sessionIdentity(p.sandbox, p.mode, p.thread) === id)) return;
   const monitor = name === MONITOR_SANDBOX;
-  const from = { sandbox: pane.sandbox, mode: pane.mode };
+  const from = { sandbox: pane.sandbox, mode: pane.mode, thread: pane.thread };
 
-  setPaneMode(idx, paneModeFor(name, mode, pane.mode), false);
+  pane.thread = nextThread;
+  setPaneMode(idx, nextMode, false);
 
   // Where the Monitor button sends you back to. Only a real sandbox is worth
   // remembering, and leaving the monitor clears it.
@@ -579,7 +620,8 @@ function connectPane(idx, name, mode) {
   renderSidebar();
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}`);
+  const threadParam = pane.thread ? `&thread=${encodeURIComponent(pane.thread)}` : '';
+  pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}${threadParam}`);
   pane.ws.binaryType = 'arraybuffer';
 
   pane.ws.onopen = () => {
@@ -602,4 +644,276 @@ function connectPane(idx, name, mode) {
     document.getElementById(`pconn-${idx}`).textContent = 'error';
   };
   saveLayout();
+}
+
+// ── Threads ───────────────────────────────────────────────────────────────
+// A thread is another Claude session in the same sandbox, working in a git
+// worktree and branch of its own (`.sbxw-worktrees/<name>`, `sbxw/<name>`), so
+// two agents never edit one checkout. The daemon creates the worktree the first
+// time a name is opened and reattaches to it after that; nothing here removes
+// one, since it can hold work nobody has committed.
+
+const THREAD_NAME = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+const threadOverlay = document.getElementById('thread-modal-overlay');
+const threadInput = document.getElementById('thread-name');
+const threadOpenBtn = document.getElementById('thread-modal-open');
+const threadError = document.getElementById('thread-error');
+// The pane that asked, and the sandbox it showed then.
+let threadAsk = null;
+
+// Ask for a thread of the sandbox in pane `idx`. The existing ones are offered
+// as chips — reopening one is the common case after a reload.
+async function openThread(idx) {
+  const sandbox = panes[idx]?.sandbox;
+  if (!sandbox) return;
+  let info = null;
+  try { info = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads`)).json(); } catch (_) {}
+  const known = info?.ok ? info.threads : [];
+  const used = new Set(known.map(t => t.name));
+  let n = 1;
+  while (used.has(`t${n}`)) n++;
+
+  threadAsk = { idx, sandbox, known };
+  document.getElementById('thread-modal-title').textContent = `New thread in ${sandbox}`;
+  document.getElementById('thread-hint').textContent =
+    'Lower-case letters, digits and hyphens. It gets the worktree .sbxw-worktrees/<name> and the branch sbxw/<name>.';
+  document.getElementById('thread-count').textContent =
+    info?.ok ? `${info.open} of ${info.max} Claude sessions open` : '';
+  const chips = document.getElementById('thread-existing');
+  chips.innerHTML = known.map(t =>
+    `<button type="button" class="thread-chip${t.open ? ' open' : ''}" data-name="${escHtml(t.name)}"
+       title="${t.open ? 'Open — go to it' : 'Worktree kept — reopen it'}">${escHtml(t.name)}</button>`).join('');
+  document.getElementById('thread-existing-wrap').hidden = !known.length;
+  threadInput.value = `t${n}`;
+  validateThreadName();
+  threadOverlay.classList.remove('hidden');
+  threadInput.focus();
+  threadInput.select();
+}
+
+function closeThreadModal() { threadOverlay.classList.add('hidden'); threadAsk = null; }
+
+function validateThreadName() {
+  const name = threadInput.value.trim();
+  const ok = THREAD_NAME.test(name);
+  threadInput.classList.toggle('error', !!name && !ok);
+  threadError.textContent = name && !ok ? 'Lower-case letters, digits and inner hyphens only' : '';
+  threadError.classList.toggle('hidden', !threadError.textContent);
+  const existing = threadAsk?.known.find(t => t.name === name);
+  threadOpenBtn.textContent = existing ? (existing.open ? 'Go to thread' : 'Reopen thread') : 'Open thread';
+  threadOpenBtn.disabled = !ok;
+}
+
+function submitThread(name) {
+  if (!threadAsk || !THREAD_NAME.test(name)) return;
+  const { idx, sandbox } = threadAsk;
+  closeThreadModal();
+  showThread(idx, sandbox, name);
+}
+
+// Put thread `name` of `sandbox` on screen, beside its sandbox's panes: in the
+// first empty pane, else a new one while the window has room, else in pane
+// `idx` (the agent's session keeps running behind it).
+function showThread(idx, sandbox, name) {
+  const id = sessionIdentity(sandbox, 'thread', name);
+  const shown = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
+  if (shown >= 0) { setFocusedPane(shown); return; }
+
+  let target = panes.slice(0, paneCount).findIndex(p => !p.sandbox);
+  if (target < 0 && paneCount < computeMaxPanes()) { setLayout(paneCount + 1); target = paneCount - 1; }
+  if (target < 0) target = idx;
+  connectPane(target, sandbox, 'thread', name);
+  regroupPanes();
+  const at = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
+  setFocusedPane(at >= 0 ? at : target);
+}
+
+threadInput.addEventListener('input', validateThreadName);
+threadInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(threadInput.value.trim()); }
+});
+threadOpenBtn.addEventListener('click', () => submitThread(threadInput.value.trim()));
+document.getElementById('thread-existing').addEventListener('click', e => {
+  const chip = e.target.closest('.thread-chip');
+  if (chip) submitThread(chip.dataset.name);
+});
+document.getElementById('thread-modal-close').addEventListener('click', closeThreadModal);
+document.getElementById('thread-modal-cancel').addEventListener('click', closeThreadModal);
+threadOverlay.addEventListener('click', e => { if (e.target === threadOverlay) closeThreadModal(); });
+
+// ── Close a thread ──
+// What would be lost is read first and shown, and the dialog cannot discard
+// uncommitted files until that is ticked. The branch goes by default only when
+// it holds nothing its base lacks; with unmerged commits it is kept unless
+// ticked, since those commits are work.
+const closeOverlay = document.getElementById('thread-close-overlay');
+const closeConfirm = document.getElementById('thread-close-confirm');
+const closeError = document.getElementById('thread-close-error');
+const discardBox = document.getElementById('thread-close-discard');
+const branchBox = document.getElementById('thread-close-branch');
+let closeAsk = null;
+
+async function closeThread(idx) {
+  const { sandbox, thread } = panes[idx] || {};
+  if (!sandbox || !thread) return;
+  const base = `/api/sandboxes/${encodeURIComponent(sandbox)}/threads/${encodeURIComponent(thread)}`;
+  closeAsk = { sandbox, thread, base, st: null };
+  document.getElementById('thread-close-title').textContent = `Close thread ${thread}`;
+  document.getElementById('thread-close-path').textContent = 'Reading the worktree…';
+  document.getElementById('thread-close-dirty-row').hidden = true;
+  document.getElementById('thread-close-branch-row').hidden = true;
+  setCloseError('');
+  closeConfirm.disabled = true;
+  closeConfirm.textContent = 'Close thread';
+  closeOverlay.classList.remove('hidden');
+
+  let st;
+  try {
+    const r = await (await fetch(base)).json();
+    if (!r.ok) throw new Error(r.error || 'unknown error');
+    st = r.status;
+  } catch (e) {
+    document.getElementById('thread-close-path').textContent = '—';
+    setCloseError(`Could not read the thread: ${e.message}`);
+    return;
+  }
+  if (closeAsk?.thread !== thread) return;
+  closeAsk.st = st;
+  document.getElementById('thread-close-path').textContent = st.worktree;
+  discardBox.checked = false;
+  document.getElementById('thread-close-dirty').textContent =
+    `Discard ${st.dirty} uncommitted file${st.dirty === 1 ? '' : 's'} in it`;
+  document.getElementById('thread-close-dirty-row').hidden = !st.dirty;
+  branchBox.checked = st.has_branch && !st.ahead;
+  document.getElementById('thread-close-branch-text').textContent = st.ahead
+    ? `Delete branch ${st.branch} too, with its ${st.ahead} commit${st.ahead === 1 ? '' : 's'} not in ${st.base}`
+    : `Delete branch ${st.branch} too (nothing in it that ${st.base} lacks)`;
+  document.getElementById('thread-close-branch-row').hidden = !st.has_branch;
+  updateCloseConfirm();
+}
+
+function setCloseError(msg) {
+  closeError.textContent = msg;
+  closeError.classList.toggle('hidden', !msg);
+}
+
+function updateCloseConfirm() {
+  const st = closeAsk?.st;
+  closeConfirm.disabled = !st || (st.dirty > 0 && !discardBox.checked);
+}
+
+function closeCloseModal() { closeOverlay.classList.add('hidden'); closeAsk = null; }
+
+discardBox.addEventListener('change', updateCloseConfirm);
+closeConfirm.addEventListener('click', async () => {
+  const ask = closeAsk;
+  if (!ask?.st) return;
+  closeConfirm.disabled = true;
+  closeConfirm.textContent = 'Closing…';
+  setCloseError('');
+  let res;
+  try {
+    res = await (await fetch(`${ask.base}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ discard: discardBox.checked, delete_branch: branchBox.checked }),
+    })).json();
+  } catch (e) {
+    res = { ok: false, error: e.message };
+  }
+  if (!res.ok) {
+    setCloseError(res.error || 'could not close the thread');
+    closeConfirm.textContent = 'Close thread';
+    updateCloseConfirm();
+    return;
+  }
+  closeCloseModal();
+  // The pane may have moved while the dialog was open.
+  const at = panes.slice(0, paneCount)
+    .findIndex(p => p.sandbox === ask.sandbox && p.mode === 'thread' && p.thread === ask.thread);
+  if (at >= 0) { if (paneCount > 1) closePane(at); else emptyPane(at); }
+});
+document.getElementById('thread-close-x').addEventListener('click', closeCloseModal);
+document.getElementById('thread-close-cancel').addEventListener('click', closeCloseModal);
+closeOverlay.addEventListener('click', e => { if (e.target === closeOverlay) closeCloseModal(); });
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!threadOverlay.classList.contains('hidden')) closeThreadModal();
+  if (!closeOverlay.classList.contains('hidden')) closeCloseModal();
+});
+
+// ── Groups ────────────────────────────────────────────────────────────────
+// A sandbox shown in more than one pane — its agent and its threads — is one
+// piece of work, so its panes sit side by side and share a thin outline. The
+// outline is drawn per edge, only where a pane does not touch another of its
+// group, so a group reads as one block rather than as boxes in a row.
+
+const GROUP_COLORS = ['var(--c-group-1)', 'var(--c-group-2)', 'var(--c-group-3)', 'var(--c-group-4)'];
+
+// Reorder the visible panes so each sandbox's panes are contiguous, in the
+// order the sandboxes first appear, the agent ahead of its threads, and empty
+// panes last — a gap inside the grid would split the groups apart. Only the
+// panes whose content changes are reconnected — a reconnect replays the
+// session, so it costs a repaint, never the session.
+function regroupPanes() {
+  const vis = panes.slice(0, paneCount);
+  const now = vis.map(p => ({ sandbox: p.sandbox, mode: p.mode, thread: p.thread }));
+  const first = new Map();
+  now.forEach((d, i) => { if (d.sandbox && !first.has(d.sandbox)) first.set(d.sandbox, i); });
+  const want = now
+    .map((d, i) => ({ d, i, k: d.sandbox ? first.get(d.sandbox) : Infinity, sub: d.mode === 'thread' ? 1 : 0 }))
+    .sort((a, b) => a.k - b.k || a.sub - b.sub || a.i - b.i)
+    .map(x => x.d);
+  const same = (a, b) => a.sandbox === b.sandbox && a.mode === b.mode && a.thread === b.thread;
+  const moved = want.map((d, i) => (same(d, now[i]) ? -1 : i)).filter(i => i >= 0);
+  if (!moved.length) return;
+  moved.forEach(i => emptyPane(i));
+  moved.forEach(i => { if (want[i].sandbox) connectPane(i, want[i].sandbox, want[i].mode, want[i].thread); });
+}
+
+let groupsQueued = false;
+function schedulePaintGroups() {
+  if (groupsQueued) return;
+  groupsQueued = true;
+  requestAnimationFrame(() => { groupsQueued = false; paintGroups(); });
+}
+window.addEventListener('resize', schedulePaintGroups);
+
+function paintGroups() {
+  const vis = panes.slice(0, paneCount);
+  const count = new Map();
+  vis.forEach(p => {
+    if (p.sandbox && p.sandbox !== MONITOR_SANDBOX) count.set(p.sandbox, (count.get(p.sandbox) || 0) + 1);
+  });
+  const colorOf = new Map();
+  vis.forEach(p => {
+    if ((count.get(p.sandbox) || 0) > 1 && !colorOf.has(p.sandbox))
+      colorOf.set(p.sandbox, GROUP_COLORS[colorOf.size % GROUP_COLORS.length]);
+  });
+  const rects = vis.map(p => p.el.getBoundingClientRect());
+  const near = (a, b) => Math.abs(a - b) <= 3;
+  panes.forEach((p, i) => {
+    p.el.classList.remove('grouped', 'edge-t', 'edge-r', 'edge-b', 'edge-l');
+    const color = i < paneCount ? colorOf.get(p.sandbox) : null;
+    // A thread always names itself; the agent says "main" only when it has a
+    // thread on screen to be told apart from.
+    const chip = document.getElementById(`prole-${i}`);
+    const thread = p.sandbox && p.mode === 'thread' ? p.thread : null;
+    chip.textContent = thread ? `⑂ ${thread}` : 'main';
+    chip.classList.toggle('thread', !!thread);
+    chip.hidden = !(i < paneCount && p.sandbox && (thread || color));
+    if (!color) { p.el.style.removeProperty('--group-color'); return; }
+    p.el.style.setProperty('--group-color', color);
+    p.el.classList.add('grouped');
+    const r = rects[i];
+    const mates = vis.filter((q, j) => j !== i && q.sandbox === p.sandbox).map(q => rects[q.index]);
+    const acrossX = q => Math.min(r.right, q.right) - Math.max(r.left, q.left) > 4;
+    const acrossY = q => Math.min(r.bottom, q.bottom) - Math.max(r.top, q.top) > 4;
+    if (!mates.some(q => near(q.bottom, r.top) && acrossX(q))) p.el.classList.add('edge-t');
+    if (!mates.some(q => near(q.top, r.bottom) && acrossX(q))) p.el.classList.add('edge-b');
+    if (!mates.some(q => near(q.right, r.left) && acrossY(q))) p.el.classList.add('edge-l');
+    if (!mates.some(q => near(q.left, r.right) && acrossY(q))) p.el.classList.add('edge-r');
+  });
 }

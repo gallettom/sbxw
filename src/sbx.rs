@@ -783,6 +783,216 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
     .collect()
 }
 
+/// Argv for a *thread*: a second Claude session in `name`, working in a git
+/// worktree of its own, `<repo>/.sbxw-worktrees/<thread>` on branch
+/// `sbxw/<thread>`.
+///
+/// Two agents editing one working tree overwrite each other's files and mix
+/// their changes into one diff nobody can review, so each thread gets a
+/// checkout of its own. The worktree outlives the session: reopening the
+/// thread lands back in it, on its branch, with its uncommitted work. Removing
+/// one is left to a person — it can hold work nobody has committed.
+///
+/// `.sbxw-worktrees/` goes in the repository's `info/exclude`, not its
+/// `.gitignore`: hiding sbxw's own bookkeeping from `git status` is not a
+/// change to the project that anyone should have to commit.
+///
+/// `sbx exec` rather than `sbx run`: `run` attaches *the* agent, and a second
+/// one would be that same session again. The permission flag is the one sbx
+/// gives the agent it starts, so a thread is no more and no less trusted than
+/// the pane beside it. `bash -lc` is a login shell, for `claude` on PATH (see
+/// `codemap_run_args`).
+///
+/// Workspace and thread name are positional (`$1`, `$2`), never script text:
+/// the thread name comes from a WebSocket query parameter. It is validated
+/// (`crate::is_valid_thread_name`), and that is exactly why the property is easy
+/// to lose — nothing downstream would notice.
+pub fn thread_run_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
+    const SCRIPT: &str = r#"
+        [ -n "$1" ] && cd "$1" 2>/dev/null
+        if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+            printf '\033[31m[sbxw] %s is not a git repository: a thread needs one for its worktree.\033[0m\r\n' "$PWD"
+            exit 1
+        fi
+        wt="$root/.sbxw-worktrees/$2"
+        if [ ! -d "$wt" ]; then
+            ex=$(git -C "$root" rev-parse --git-path info/exclude)
+            case "$ex" in /*) ;; *) ex="$root/$ex" ;; esac
+            mkdir -p "$(dirname "$ex")"
+            grep -qxF '/.sbxw-worktrees/' "$ex" 2>/dev/null || printf '/.sbxw-worktrees/\n' >> "$ex"
+            if git -C "$root" show-ref --verify --quiet "refs/heads/sbxw/$2"; then
+                git -C "$root" worktree add "$wt" "sbxw/$2" || exit 1
+            else
+                git -C "$root" worktree add -b "sbxw/$2" "$wt" || exit 1
+            fi
+        fi
+        printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$2"
+        cd "$wt" && exec claude --dangerously-skip-permissions"#;
+    [
+        "exec",
+        "-it",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        SCRIPT,
+        "sbxw-thread",
+        workspace,
+        thread,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// Where a thread stands, read before closing it: what closing would throw
+/// away.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct ThreadStatus {
+    /// Its worktree, as the sandbox sees it.
+    pub worktree: String,
+    /// Its branch, `sbxw/<thread>`.
+    pub branch: String,
+    /// The branch the main checkout is on — what "merged" is measured against.
+    pub base: String,
+    /// Does the branch exist at all?
+    pub has_branch: bool,
+    /// Files changed in the worktree and not committed: lost on close.
+    pub dirty: u32,
+    /// Commits on the thread's branch that `base` does not have: lost if the
+    /// branch is deleted.
+    pub ahead: u32,
+}
+
+/// One script for both questions about a thread's end — "what would closing
+/// lose?" (`status`) and "close it" (`close`) — so the two can never disagree
+/// about which worktree, branch and base they mean.
+///
+/// Closing stops every process working in the worktree (found by its cwd: the
+/// thread's `claude`, its shells, a dev server it started), then removes the
+/// worktree, then the branch if asked. Uncommitted work is refused unless
+/// `discard` says otherwise — the browser has asked by then, but the daemon
+/// does not trust a click it did not see.
+///
+/// Everything variable is positional, as in `thread_run_args`.
+const THREAD_END_SCRIPT: &str = r#"
+    [ -n "$1" ] && cd "$1" 2>/dev/null
+    if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        echo "error=$PWD is not a git repository"; exit 3
+    fi
+    root=$(dirname "$common")
+    wt="$root/.sbxw-worktrees/$2"; br="sbxw/$2"
+    base=$(git -C "$root" rev-parse --abbrev-ref HEAD)
+    dirty=0; [ -d "$wt" ] && dirty=$(git -C "$wt" status --porcelain | wc -l | tr -d ' ')
+    has_branch=0; ahead=0
+    if git -C "$root" show-ref --verify --quiet "refs/heads/$br"; then
+        has_branch=1; ahead=$(git -C "$root" rev-list --count "HEAD..$br")
+    fi
+    if [ "$3" = status ]; then
+        printf 'worktree=%s\nbranch=%s\nbase=%s\nhas_branch=%s\ndirty=%s\nahead=%s\n' \
+            "$wt" "$br" "$base" "$has_branch" "$dirty" "$ahead"
+        exit 0
+    fi
+    if [ "$dirty" -gt 0 ] && [ "$4" != 1 ]; then
+        echo "error=$wt has $dirty uncommitted file(s)"; exit 4
+    fi
+    for p in /proc/[0-9]*; do
+        c=$(readlink "$p/cwd" 2>/dev/null) || continue
+        pid=${p#/proc/}; [ "$pid" = $$ ] && continue
+        case "$c" in "$wt"|"$wt"/*) kill "$pid" 2>/dev/null ;; esac
+    done
+    sleep 1
+    if [ -d "$wt" ]; then
+        git -C "$root" worktree remove --force "$wt" || { echo "error=could not remove $wt"; exit 5; }
+    fi
+    git -C "$root" worktree prune
+    if [ "$5" = 1 ] && [ "$has_branch" = 1 ]; then
+        git -C "$root" branch -D "$br" >/dev/null || { echo "error=could not delete $br"; exit 6; }
+    fi
+    echo ok=1"#;
+
+/// Argv for `THREAD_END_SCRIPT`. `action` is `status` or `close`.
+pub fn thread_end_args(
+    name: &str,
+    workspace: &str,
+    thread: &str,
+    action: &str,
+    discard: bool,
+    delete_branch: bool,
+) -> Vec<String> {
+    let flag = |b: bool| if b { "1" } else { "0" }.to_string();
+    let mut args: Vec<String> = ["exec", name, "--", "bash", "-lc", THREAD_END_SCRIPT, "sbxw-thread-end"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    args.extend([
+        workspace.to_string(),
+        thread.to_string(),
+        action.to_string(),
+        flag(discard),
+        flag(delete_branch),
+    ]);
+    args
+}
+
+/// The `key=value` lines the script prints, or its `error=` line as the error.
+fn run_thread_end(args: &[String]) -> Result<std::collections::HashMap<String, String>> {
+    let out = Command::new(BIN)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to spawn `{BIN} exec`"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let fields: std::collections::HashMap<String, String> = stdout
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect();
+    if let Some(err) = fields.get("error") {
+        anyhow::bail!("{err}");
+    }
+    if !out.status.success() {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        return Err(command_error(&refs[..3], out.status, &out.stderr));
+    }
+    Ok(fields)
+}
+
+/// What closing thread `thread` of sandbox `name` would lose.
+pub fn thread_status(name: &str, workspace: &str, thread: &str) -> Result<ThreadStatus> {
+    let f = run_thread_end(&thread_end_args(name, workspace, thread, "status", false, false))?;
+    let get = |k: &str| f.get(k).cloned().unwrap_or_default();
+    let num = |k: &str| get(k).parse().unwrap_or(0);
+    Ok(ThreadStatus {
+        worktree: get("worktree"),
+        branch: get("branch"),
+        base: get("base"),
+        has_branch: get("has_branch") == "1",
+        dirty: num("dirty"),
+        ahead: num("ahead"),
+    })
+}
+
+/// Close thread `thread`: stop what runs in its worktree, remove the worktree,
+/// and delete its branch if `delete_branch`.
+pub fn thread_close(
+    name: &str,
+    workspace: &str,
+    thread: &str,
+    discard: bool,
+    delete_branch: bool,
+) -> Result<()> {
+    run_thread_end(&thread_end_args(
+        name,
+        workspace,
+        thread,
+        "close",
+        discard,
+        delete_branch,
+    ))
+    .map(|_| ())
+}
+
 /// `sbx env create PATH... --name NAME [--env-arg K=V]…` — provision a sandbox
 /// from environment files, without attaching to it (experimental).
 ///
@@ -2563,6 +2773,37 @@ local-policy                          local   all              network: 159 allo
             "{script}"
         );
         assert_eq!(&args[..5], ["exec", "neos", "--", "bash", "-lc"]);
+    }
+
+    /// Same property as the codemap session: the thread name arrives from a
+    /// WebSocket query and the workspace from a file on disk, and neither may
+    /// ever be spliced into the script.
+    #[test]
+    fn a_thread_passes_its_workspace_and_name_as_arguments_not_as_script() {
+        let args = thread_run_args("neos", "/Users/me/my $(id) app", "fix-login");
+        let script = &args[6];
+        assert!(!script.contains("neos"), "{script}");
+        assert!(!script.contains("fix-login"), "{script}");
+        assert!(!script.contains("$(id)"), "{script}");
+        assert_eq!(&args[..6], ["exec", "-it", "neos", "--", "bash", "-lc"]);
+        assert_eq!(
+            &args[7..],
+            ["sbxw-thread", "/Users/me/my $(id) app", "fix-login"]
+        );
+        // The worktree and branch the README promises.
+        assert!(script.contains(r#""$root/.sbxw-worktrees/$2""#), "{script}");
+        assert!(script.contains(r#""sbxw/$2""#), "{script}");
+    }
+
+    #[test]
+    fn closing_a_thread_passes_everything_as_arguments_not_as_script() {
+        let args = thread_end_args("neos", "/w/$(id)", "fix-login", "close", true, false);
+        assert_eq!(&args[..5], ["exec", "neos", "--", "bash", "-lc"]);
+        assert!(!args[5].contains("fix-login") && !args[5].contains("$(id)"));
+        assert_eq!(
+            &args[6..],
+            ["sbxw-thread-end", "/w/$(id)", "fix-login", "close", "1", "0"]
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@ function saveLayout() {
   try {
     localStorage.setItem(LAYOUT_KEY, JSON.stringify({
       n: paneCount,
-      panes: panes.slice(0, paneCount).map(p => ({ sandbox: p.sandbox || null, mode: p.mode })),
+      panes: panes.slice(0, paneCount).map(p => ({ sandbox: p.sandbox || null, mode: p.mode, thread: p.thread || null })),
     }));
   } catch (_) {}
 }
@@ -65,6 +65,7 @@ function closePane(idx) {
 
     dst.sandbox = src.sandbox;
     dst.mode    = src.mode;
+    dst.thread  = src.thread;
     dst.ws      = src.ws;
     // Travels with the session: it says where *this* session's pane goes back
     // to when the monitor button is pressed again, not where dst used to be.
