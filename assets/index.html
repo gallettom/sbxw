@@ -306,6 +306,13 @@
           <div class="repo-list" id="thread-repos" role="radiogroup" aria-labelledby="thread-repo-label"></div>
           <p class="repo-note" id="thread-repo-note" hidden></p>
         </div>
+        <!-- The model the new thread runs, from /api/models, the default
+             preselected. Hidden for an existing name — the daemon remembers
+             that thread's model — and when the daemon offers no list. -->
+        <div id="thread-model-wrap" hidden>
+          <span class="field-label" id="thread-model-label">Model</span>
+          <div class="model-seg" id="thread-models" role="radiogroup" aria-labelledby="thread-model-label"></div>
+        </div>
         <div id="thread-existing-wrap" hidden>
           <span class="field-label">Existing threads</span>
           <div class="thread-chips" id="thread-existing"></div>
@@ -379,12 +386,28 @@
         <span class="modal-title" id="plan-title">Plan</span>
         <button class="modal-close" id="plan-x" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body plan-review-part">
         <p class="plan-summary" id="plan-summary"></p>
         <div class="plan-threads" id="plan-threads"></div>
         <button class="btn-add-port plan-add" id="plan-add" type="button">＋ Add thread</button>
       </div>
-      <div class="modal-foot">
+      <!-- The merge view: the lead's note, then the threads in the order
+           their branches merge, each following along live. -->
+      <div class="modal-body plan-merge-part">
+        <p class="plan-summary" id="merge-note"></p>
+        <ol class="merge-list" id="merge-list" aria-live="polite"></ol>
+        <p class="merge-outcome" id="merge-outcome" role="status" hidden></p>
+        <label class="thread-check" id="merge-close-row">
+          <input type="checkbox" id="merge-close" checked>
+          <span>Close the threads after merging</span>
+        </label>
+      </div>
+      <div class="modal-foot plan-merge-part">
+        <span class="create-error hidden" id="merge-error"></span>
+        <button class="btn-cancel" id="merge-later">Not now</button>
+        <button class="btn-create" id="merge-all">Merge all</button>
+      </div>
+      <div class="modal-foot plan-review-part">
         <span class="thread-count" id="plan-count"></span>
         <span class="create-error hidden" id="plan-error"></span>
         <button class="btn-cancel" id="plan-refuse">Refuse</button>

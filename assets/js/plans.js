@@ -12,6 +12,12 @@ let planShown = null;             // id of the plan in the dialog
 // The git repos of the shown plan's workspace, from /repos: `{sandbox, ok,
 // workspace, repos}`, or null until they arrive.
 let planRepos = null;
+// What the dialog shows of that plan: 'review' while it waits for approval,
+// 'merge' once its lead has proposed merging the threads' branches.
+let planView = 'review';
+// The models a thread can run, from /api/models (see fetchModels in util.js);
+// null until they arrive.
+let planModels = null;
 
 const planOverlay = document.getElementById('plan-overlay');
 const planRows = document.getElementById('plan-threads');
@@ -144,6 +150,11 @@ function refreshPlanButtons() {
   panes.forEach((p, i) => {
     const btn = document.getElementById(`pplan-${i}`);
     if (btn) btn.hidden = !(i < paneCount && p.sandbox && !p.thread && pendingPlanFor(p.sandbox));
+    const merge = document.getElementById(`pmerge-${i}`);
+    if (!merge) return;
+    const mp = i < paneCount && p.sandbox && !p.thread ? mergePlanFor(p.sandbox) : null;
+    merge.hidden = !mp;
+    if (mp) merge.textContent = mp.merge.state === 'merging' ? 'Merging…' : 'Merge';
   });
 }
 
@@ -151,6 +162,145 @@ function openPendingPlan(sandbox) {
   const p = pendingPlanFor(sandbox);
   if (p) showPlan(p);
 }
+
+// ── Merge ──
+// Once a lead has reviewed its threads it proposes merging their branches, in
+// an order of its choosing; the Merge button on its pane opens that proposal.
+// One click merges them all, one after another, and each row follows along
+// from the plan's SSE updates: pending, then merged at a commit or failed with
+// the reason. A failure stops the run, so what follows it was never merged.
+const mergeList = document.getElementById('merge-list');
+const mergeAll = document.getElementById('merge-all');
+const mergeLater = document.getElementById('merge-later');
+const mergeError = document.getElementById('merge-error');
+const mergeClose = document.getElementById('merge-close');
+// The plan id a Merge all is on its way for, until the daemon answers.
+let mergeAsk = null;
+
+// The plan of `sandbox` whose merge waits on a person or is under way: the
+// latest, if several. Plans whose lead mode was ended are over.
+function mergePlanFor(sandbox) {
+  let best = null;
+  for (const p of plans.values()) {
+    if (p.sandbox !== sandbox || p.closed || !p.merge) continue;
+    if (!['proposed', 'merging'].includes(p.merge.state)) continue;
+    if (!best || p.created_ms > best.created_ms) best = p;
+  }
+  return best;
+}
+
+function openMergePlan(sandbox) {
+  const p = mergePlanFor(sandbox);
+  if (p) showMerge(p);
+}
+
+function setPlanView(view) {
+  planView = view;
+  planOverlay.querySelector('.plan-modal').classList.toggle('merge-view', view === 'merge');
+}
+
+async function showMerge(plan) {
+  planShown = plan.id;
+  setPlanView('merge');
+  if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
+  document.getElementById('plan-title').textContent = `Merge the threads of ${plan.sandbox}`;
+  mergeClose.checked = true;
+  showNote(mergeError, '');
+  paintMerge(plan);
+  planOverlay.classList.remove('hidden');
+  (mergeAll.hidden || mergeAll.disabled ? mergeLater : mergeAll).focus();
+  if (!planRepos) {
+    const r = await fetchRepos(plan.sandbox);
+    if (planShown !== plan.id) return;
+    planRepos = { sandbox: plan.sandbox, ...r };
+    const now = plans.get(plan.id);
+    if (now?.merge && planView === 'merge') paintMerge(now);
+  }
+}
+
+// One row of the merge: where the thread stands in it, as a mark and a word.
+function mergeRowHtml(plan, name, i) {
+  const m = plan.merge;
+  const t = plan.threads.find(x => x.name === name);
+  const r = (m.results || []).find(x => x.thread === name);
+  const running = m.state === 'merging' || mergeAsk === plan.id;
+  let state = '', status = '';
+  if (r?.ok) {
+    state = 'ok';
+    status = `<span class="merge-mark" aria-hidden="true">✓</span>${r.commit
+      ? `<code class="merge-commit" title="${escHtml(r.commit)}">${escHtml(r.commit.slice(0, 7))}</code>` : 'merged'}`;
+  } else if (r) {
+    state = 'failed';
+    status = `<span class="merge-mark" aria-hidden="true">✕</span><span>${escHtml(r.error || 'failed')}</span>`;
+  } else if (running) {
+    state = 'pending';
+    status = '<span>pending</span>';
+  } else if (m.state === 'failed' || m.state === 'merged') {
+    state = 'skipped';
+    status = '<span>not merged</span>';
+  }
+  const repo = t?.repo != null
+    ? `<code class="plan-repo-chip">${escHtml(repoLabel(t.repo, planRepos?.workspace))}</code>` : '';
+  return `<li class="merge-row${state ? ` ${state}` : ''}" style="--plan-accent: var(${PLAN_HUES[i % PLAN_HUES.length]})">
+      <span class="merge-name">${escHtml(name)}</span>${repo}
+      ${status ? `<span class="merge-status">${status}</span>` : ''}
+    </li>`;
+}
+
+function paintMerge(plan) {
+  const m = plan.merge;
+  const order = m.order?.length ? m.order : plan.threads.map(t => t.name);
+  // The hue each thread had on its plan card, so a row is recognised at once.
+  const hue = name => Math.max(0, plan.threads.findIndex(t => t.name === name));
+  document.getElementById('merge-note').textContent = m.note || '';
+  mergeList.innerHTML = order.map(n => mergeRowHtml(plan, n, hue(n))).join('');
+
+  const outcome = document.getElementById('merge-outcome');
+  outcome.className = 'merge-outcome';
+  if (m.state === 'merged') {
+    outcome.classList.add('ok');
+    outcome.textContent = m.base ? `Merged into ${m.base}` : 'Merged';
+  } else if (m.state === 'failed') {
+    outcome.classList.add('failed');
+    const bad = (m.results || []).find(r => !r.ok);
+    const done = new Set((m.results || []).filter(r => r.ok).map(r => r.thread));
+    const rest = order.filter(n => !done.has(n) && n !== bad?.thread);
+    outcome.textContent = (bad ? `${bad.thread} could not be merged: ${bad.error || 'no reason given'}.` : 'The merge failed.')
+      + (rest.length ? ` The remaining thread${rest.length === 1 ? ' was' : 's were'} not merged: ${rest.join(', ')}.` : '');
+  } else {
+    outcome.textContent = '';
+  }
+  outcome.hidden = !outcome.textContent;
+
+  const over = m.state === 'merged' || m.state === 'failed';
+  const running = !over && (m.state === 'merging' || mergeAsk === plan.id);
+  document.getElementById('merge-close-row').hidden = over;
+  mergeClose.disabled = running;
+  mergeAll.hidden = over;
+  mergeAll.disabled = running;
+  mergeAll.textContent = running ? 'Merging…' : 'Merge all';
+  // Closing never stops a merge under way: the pane's Merging… button leads back.
+  mergeLater.textContent = over ? 'Close' : running ? 'Hide' : 'Not now';
+}
+
+mergeAll.addEventListener('click', async () => {
+  const id = planShown;
+  const plan = plans.get(id);
+  if (!plan?.merge || mergeAsk) return;
+  mergeAsk = id;
+  showNote(mergeError, '');
+  paintMerge(plan);
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/merge`, { close_threads: mergeClose.checked });
+  mergeAsk = null;
+  const now = plans.get(id);
+  if (res.ok && res.merge && now) plans.set(id, { ...now, merge: res.merge });
+  if (planShown === id && planView === 'merge' && plans.get(id)?.merge) {
+    paintMerge(plans.get(id));
+    if (!res.ok) showNote(mergeError, res.error || 'could not merge');
+  }
+  schedulePaintGroups();
+});
+mergeLater.addEventListener('click', closePlan);
 
 // The group hues, in the order panes use them: a thread keeps its colour from
 // the card edge to every file it owns, so whose-is-what reads at a glance.
@@ -177,16 +327,20 @@ function planNeedsRepo() {
   return !!planRepos?.ok && planRepos.repos.length > 1 && defaultRepo(planRepos.repos) === undefined;
 }
 
-// The card's repo line: the repo as a chip, or the flag saying one is needed.
+// The card's repo line: the repo as a chip, or the flag saying one is needed,
+// and beside it the model when the thread names one — without, it runs the
+// default, which needs no saying.
 function planRepoHtml(t) {
+  const model = t.model
+    ? `<span class="plan-model-chip" title="Model">${escHtml(modelLabel(t.model, planModels))}</span>` : '';
   if (t.repo != null) {
     return `<div class="plan-repo"><span class="plan-owns-label">In</span>
-        <code class="plan-repo-chip">${escHtml(repoLabel(t.repo, planRepos?.workspace))}</code></div>`;
+        <code class="plan-repo-chip">${escHtml(repoLabel(t.repo, planRepos?.workspace))}</code>${model}</div>`;
   }
   if (planNeedsRepo()) {
-    return `<div class="plan-repo flagged">No repository yet: choose one with Edit</div>`;
+    return `<div class="plan-repo"><span class="plan-repo-flag">No repository yet: choose one with Edit</span>${model}</div>`;
   }
-  return '';
+  return model ? `<div class="plan-repo">${model}</div>` : '';
 }
 
 // The reading half of a card, rebuilt from its inputs whenever editing ends.
@@ -210,10 +364,11 @@ function planViewHtml(t) {
 // inputs are the card's source of truth — Approve reads them whether or not
 // they were ever shown — so reading and editing cannot drift apart. The repo
 // is kept in `data-repo`, absent while the thread has none: '' is a repo too,
-// the workspace itself.
+// the workspace itself. The model is kept the same way, in `data-model`.
 function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
   const repo = typeof t.repo === 'string' ? ` data-repo="${escHtml(t.repo)}"` : '';
-  return `<div class="plan-thread" style="--plan-accent: var(${PLAN_HUES[i % PLAN_HUES.length]})"${repo}>
+  const model = t.model ? ` data-model="${escHtml(t.model)}"` : '';
+  return `<div class="plan-thread" style="--plan-accent: var(${PLAN_HUES[i % PLAN_HUES.length]})"${repo}${model}>
       <div class="plan-card-tools">
         <button type="button" class="plan-edit" aria-pressed="false">Edit</button>
         <button type="button" class="plan-remove" title="Remove this thread from the plan" aria-label="Remove thread">✕</button>
@@ -230,6 +385,9 @@ function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
         <label class="plan-label">Repository
           <select class="field-input plan-repo-select"></select>
         </label>
+        <label class="plan-label plan-model-field">Model
+          <select class="field-input plan-model-select"></select>
+        </label>
         <label class="plan-label">Owns
           <input class="field-input plan-scope" type="text" placeholder="Files or areas only this thread edits, separated by commas"
                  value="${escHtml(t.scope || '')}">
@@ -238,8 +396,8 @@ function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
     </div>`;
 }
 
-// `repo` is added only when the thread has one, so a plan in a workspace of
-// one repo approves exactly as it did before repos were a thing.
+// `repo` and `model` are added only when the thread has one, so a plan that
+// names neither approves exactly as it did before either was a thing.
 function rowThread(row) {
   const t = {
     name: row.querySelector('.plan-name').value.trim(),
@@ -247,7 +405,22 @@ function rowThread(row) {
     scope: row.querySelector('.plan-scope').value.trim(),
   };
   if (row.dataset.repo !== undefined) t.repo = row.dataset.repo;
+  if (row.dataset.model) t.model = row.dataset.model;
   return t;
+}
+
+// The Model select of a card: the default first, as "none", then each model.
+// Hidden when the daemon offers no list; the card keeps whatever model it has.
+function fillModelSelect(row) {
+  const field = row.querySelector('.plan-model-field');
+  field.hidden = !planModels?.ok;
+  if (field.hidden) return;
+  const cur = row.dataset.model || '';
+  const list = planModels.models.slice();
+  if (cur && !list.some(m => m.id === cur)) list.push({ id: cur, label: cur });
+  row.querySelector('.plan-model-select').innerHTML =
+    `<option value="">Default (${escHtml(modelLabel(planModels.default, planModels))})</option>`
+    + list.map(m => `<option value="${escHtml(m.id)}"${m.id === cur ? ' selected' : ''}>${escHtml(m.label)}</option>`).join('');
 }
 
 // The Repository select of a card, from the workspace's repos. Values are
@@ -275,6 +448,7 @@ function fillRepoSelect(row) {
 function paintPlanRow(row) {
   row.classList.toggle('needs-repo', planNeedsRepo() && row.dataset.repo === undefined);
   fillRepoSelect(row);
+  fillModelSelect(row);
   if (!row.classList.contains('editing')) {
     row.querySelector('.plan-view').innerHTML = planViewHtml(rowThread(row));
     fitPlanMore(row);
@@ -323,6 +497,7 @@ function setPlanError(msg) {
 
 async function showPlan(plan) {
   planShown = plan.id;
+  setPlanView('review');
   if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
   document.getElementById('plan-title').textContent = `Plan from the lead of ${plan.sandbox}`;
   document.getElementById('plan-summary').textContent = plan.summary || '';
@@ -364,6 +539,7 @@ async function updatePlanCount() {
 function closePlan() {
   planOverlay.classList.add('hidden');
   planShown = null;
+  mergeAsk = null;
   planBudget = null;
   planRepos = null;
 }
@@ -396,7 +572,10 @@ function ingestPlan(plan, seed = false) {
     panesOpenedFor.add(plan.id);
     openPlanPanes(plan);
   }
-  if (planShown === plan.id && (plan.state !== 'pending' || plan.closed)) closePlan();
+  if (planShown === plan.id) {
+    if (planView === 'merge') { if (plan.merge) paintMerge(plan); else closePlan(); }
+    else if (plan.state !== 'pending' || plan.closed) closePlan();
+  }
   schedulePaintGroups();
 }
 
@@ -428,6 +607,13 @@ document.getElementById('plan-add').addEventListener('click', () => {
 });
 
 planRows.addEventListener('change', e => {
+  const msel = e.target.closest('.plan-model-select');
+  if (msel) {
+    const row = msel.closest('.plan-thread');
+    if (msel.value) row.dataset.model = msel.value;
+    else delete row.dataset.model;
+    return;
+  }
   const sel = e.target.closest('.plan-repo-select');
   if (!sel) return;
   const row = sel.closest('.plan-thread');
@@ -485,6 +671,11 @@ document.getElementById('plan-x').addEventListener('click', closePlan);
 planOverlay.addEventListener('click', e => { if (e.target === planOverlay) closePlan(); });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !planOverlay.classList.contains('hidden')) closePlan();
+});
+
+fetchModels().then(m => {
+  planModels = m;
+  if (planShown && planView === 'review') planRows.querySelectorAll('.plan-thread').forEach(paintPlanRow);
 });
 
 fetch('/api/plans')

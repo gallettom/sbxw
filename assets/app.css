@@ -638,6 +638,23 @@
   .repo-status { white-space: pre; }
   .repo-status.ok { color: var(--c-green); }
   .repo-status.warn { color: var(--c-amber); }
+  /* The model picker: one segmented bar, the pick lit the way a picked repo
+     row is. Segments share the width and wrap their label rather than the bar
+     scrolling, so three fit side by side down to a phone. */
+  .model-seg {
+    display: flex; border: 1px solid var(--c-border); border-radius: 6px;
+    background: var(--c-bg); overflow: hidden;
+  }
+  .model-seg-opt {
+    flex: 1 1 0; min-width: 0; position: relative; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: .4rem .5rem; font-size: 12px; color: var(--c-text-muted); overflow-wrap: anywhere;
+  }
+  .model-seg-opt + .model-seg-opt { border-left: 1px solid var(--c-border); }
+  .model-seg-opt:hover { color: var(--c-text-bright); background: var(--c-elevated); }
+  .model-seg-opt input { position: absolute; opacity: 0; pointer-events: none; }
+  .model-seg-opt:has(input:checked) { color: var(--c-text-bright); background: var(--c-blue-tint); box-shadow: inset 0 -2px 0 var(--c-blue); }
+  .model-seg-opt:has(input:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: -2px; }
   .repo-note { margin: .35rem 0 0; color: var(--c-text-muted); font-size: 11px; line-height: 1.5; }
   .repo-note.warn {
     margin-top: 0; padding: .55rem .7rem; border-radius: 6px; font-size: 12px;
@@ -711,10 +728,17 @@
     padding: .1rem .45rem; border-radius: 4px; overflow-wrap: anywhere;
     border: 1px solid var(--c-border); background: var(--c-elevated);
   }
-  .plan-repo.flagged {
+  .plan-repo-flag {
     display: inline-flex; padding: .15rem .5rem; border-radius: 4px; font-size: 11px;
     color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber);
   }
+  /* The model sits beside the repo, quieter: dashed, no fill — a setting of
+     the thread, not where it lives. */
+  .plan-model-chip {
+    font-size: 11px; color: var(--c-text-muted);
+    padding: .1rem .45rem; border-radius: 4px; border: 1px dashed var(--c-border);
+  }
+  .plan-label[hidden] { display: none; }
   .plan-thread.needs-repo { border-top-color: var(--c-amber); border-right-color: var(--c-amber); border-bottom-color: var(--c-amber); }
   .plan-thread select.field-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .plan-form { display: none; flex-direction: column; gap: .5rem; padding-top: 1.7rem; }
@@ -728,6 +752,47 @@
   .plan-thread .plan-name { font-weight: 600; }
   .plan-add { align-self: flex-start; }
   .plan-modal .modal-foot { flex-wrap: wrap; }
+  /* The two halves of the plan dialog: reviewing a plan, merging its threads. */
+  .plan-modal.merge-view .plan-review-part,
+  .plan-modal:not(.merge-view) .plan-merge-part { display: none; }
+  /* The merge, as the sequence it is: each thread on its own row, its card's
+     hue on the edge, its repo, and where it stands — said by colour and by a
+     mark, so neither carries it alone. */
+  .merge-list {
+    margin: 0; padding: 0; list-style: none; counter-reset: merge;
+    display: flex; flex-direction: column; gap: .4rem;
+  }
+  .merge-row {
+    counter-increment: merge;
+    display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem;
+    padding: .5rem .7rem; border: 1px solid var(--c-border); border-left: 3px solid var(--plan-accent);
+    border-radius: 6px; background: var(--c-bg); min-width: 0;
+  }
+  .merge-row::before { content: counter(merge); color: var(--c-text-dim); font-size: 11px; min-width: 1.2ch; }
+  .merge-name { color: var(--plan-accent); font-weight: 600; overflow-wrap: anywhere; }
+  .merge-status {
+    margin-left: auto; display: inline-flex; align-items: baseline; gap: .35rem;
+    font-size: 12px; color: var(--c-text-dim); min-width: 0; overflow-wrap: anywhere;
+  }
+  .merge-mark { font-weight: 700; }
+  .merge-commit { color: var(--c-text-bright); font-size: 11px; }
+  .merge-row.ok .merge-status { color: var(--c-green); }
+  .merge-row.failed { border-top-color: var(--c-red-border); border-right-color: var(--c-red-border); border-bottom-color: var(--c-red-border); background: var(--c-red-tint); }
+  .merge-row.failed .merge-status { color: var(--c-red); flex-basis: 100%; margin-left: 0; }
+  .merge-row.pending .merge-status::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--c-amber);
+    align-self: center; animation: merge-pending 1.2s ease-in-out infinite;
+  }
+  .merge-row.skipped .merge-name { color: var(--c-text-muted); }
+  @keyframes merge-pending { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .merge-row.pending .merge-status::before { animation: none; } }
+  .merge-outcome { margin: 0; padding: .55rem .7rem; border-radius: 6px; font-size: 12px; line-height: 1.5; }
+  .merge-outcome.ok { color: var(--c-green); background: var(--c-green-tint); border: 1px solid var(--c-green-deep); font-weight: 600; }
+  .merge-outcome.failed { color: var(--c-red); background: var(--c-red-tint); border: 1px solid var(--c-red-border); }
+  .merge-outcome[hidden], .merge-list:empty { display: none; }
+  #merge-close-row input:focus-visible,
+  .plan-merge-part button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+  .plan-merge-part button[hidden] { display: none; }
   /* A lead's pane bar: its plan waiting on you. Amber, the colour of "needs
      you" everywhere else in the UI. */
   .pane-bar .pane-plan-btn { color: var(--c-amber); border-color: var(--c-amber); }

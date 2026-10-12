@@ -153,6 +153,8 @@ function createPane(index) {
       </button>
       <button class="pane-btn pane-plan-btn" id="pplan-${index}" hidden
               title="This lead's plan is waiting for you">Review plan</button>
+      <button class="pane-btn pane-plan-btn" id="pmerge-${index}" hidden
+              title="This lead's threads are reviewed and ready to merge">Merge</button>
       <button class="pane-btn pane-thread-close" id="pthreadclose-${index}" hidden
               title="Close this thread — stop it, remove its worktree, and its branch">Close thread</button>
       <span class="spacer"></span>
@@ -220,6 +222,9 @@ function createPane(index) {
   });
   document.getElementById(`pplan-${index}`).addEventListener('click', () => {
     if (pane.sandbox && typeof openPendingPlan === 'function') openPendingPlan(pane.sandbox);
+  });
+  document.getElementById(`pmerge-${index}`).addEventListener('click', () => {
+    if (pane.sandbox && typeof openMergePlan === 'function') openMergePlan(pane.sandbox);
   });
 
   document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
@@ -600,10 +605,10 @@ function emptyPane(idx) {
   schedulePaintGroups();
 }
 
-// `repo` names the git repo a thread works in, and only on that thread's
-// first open: the daemon remembers it, so a reconnect, a reload or a restored
-// layout opens the thread without it.
-function connectPane(idx, name, mode, thread, repo) {
+// `repo` names the git repo a thread works in, and `model` the Claude model it
+// runs, both only on that thread's first open: the daemon remembers them, so a
+// reconnect, a reload or a restored layout opens the thread without them.
+function connectPane(idx, name, mode, thread, repo, model) {
   if (!name || idx >= panes.length) return;
   const pane = panes[idx];
   const nextMode = paneModeFor(name, mode, pane.mode);
@@ -644,7 +649,9 @@ function connectPane(idx, name, mode, thread, repo) {
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const threadParam = pane.thread
-    ? `&thread=${encodeURIComponent(pane.thread)}` + (pane.mode === 'thread' && repo != null ? `&repo=${encodeURIComponent(repo)}` : '')
+    ? `&thread=${encodeURIComponent(pane.thread)}`
+      + (pane.mode === 'thread' && repo != null ? `&repo=${encodeURIComponent(repo)}` : '')
+      + (pane.mode === 'thread' && model != null ? `&model=${encodeURIComponent(model)}` : '')
     : '';
   pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}${threadParam}`);
   pane.ws.binaryType = 'arraybuffer';
@@ -692,16 +699,18 @@ let threadAsk = null;
 async function openThread(idx) {
   const sandbox = panes[idx]?.sandbox;
   if (!sandbox) return;
-  const [info, repos] = await Promise.all([
+  const [info, repos, models] = await Promise.all([
     fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads`).then(r => r.json()).catch(() => null),
     fetchRepos(sandbox),
+    fetchModels(),
   ]);
   const known = info?.ok ? info.threads : [];
   const used = new Set(known.map(t => t.name));
   let n = 1;
   while (used.has(`t${n}`)) n++;
 
-  threadAsk = { idx, sandbox, known, repos, repo: repos.ok ? defaultRepo(repos.repos) : undefined };
+  threadAsk = { idx, sandbox, known, repos, repo: repos.ok ? defaultRepo(repos.repos) : undefined,
+    models, model: models.ok ? models.default : undefined };
   document.getElementById('thread-modal-title').textContent = `New thread in ${sandbox}`;
   document.getElementById('thread-hint').textContent =
     'Lower-case letters, digits and hyphens. It gets the worktree .sbxw-worktrees/<name> and the branch sbxw/<name>.';
@@ -712,8 +721,10 @@ async function openThread(idx) {
   chips.innerHTML = known.map(t =>
     `<button type="button" class="thread-chip${t.open ? ' open' : ''}" data-name="${escHtml(t.name)}"
        title="${t.open ? 'Open — go to it' : 'Worktree kept — reopen it'}">${escHtml(t.name)}${t.repo != null
-         ? `<span class="thread-chip-repo">${escHtml(repoLabel(t.repo, ws))}</span>` : ''}</button>`).join('');
+         ? `<span class="thread-chip-repo">${escHtml(repoLabel(t.repo, ws))}</span>` : ''}${models.ok && t.model && t.model !== models.default
+         ? `<span class="thread-chip-repo">${escHtml(modelLabel(t.model, models))}</span>` : ''}</button>`).join('');
   renderThreadRepos();
+  renderThreadModels();
   document.getElementById('thread-existing-wrap').hidden = !known.length;
   threadInput.value = `t${n}`;
   validateThreadName();
@@ -752,6 +763,17 @@ function renderThreadRepos() {
   note.hidden = !note.textContent;
 }
 
+// The models as one segmented control, the default checked. Radios under the
+// labels, so arrow keys move along it the way they do in the repo list.
+function renderThreadModels() {
+  const { models, model } = threadAsk;
+  document.getElementById('thread-models').innerHTML = models.ok ? models.models.map(m =>
+    `<label class="model-seg-opt">
+        <input type="radio" name="thread-model" value="${escHtml(m.id)}"${m.id === model ? ' checked' : ''}>
+        <span>${escHtml(m.label)}</span>
+      </label>`).join('') : '';
+}
+
 function closeThreadModal() { threadOverlay.classList.add('hidden'); threadAsk = null; }
 
 function validateThreadName() {
@@ -765,6 +787,7 @@ function validateThreadName() {
   // An existing thread keeps the repo it has; a new one needs one, unless the
   // daemon could not say which there are.
   document.getElementById('thread-repo-wrap').hidden = !!existing;
+  document.getElementById('thread-model-wrap').hidden = !!existing || !threadAsk?.models?.ok;
   const repos = threadAsk?.repos;
   const needsRepo = !existing && repos?.ok && threadAsk.repo === undefined;
   threadOpenBtn.disabled = !ok || needsRepo;
@@ -772,17 +795,19 @@ function validateThreadName() {
 
 function submitThread(name) {
   if (!threadAsk || !THREAD_NAME.test(name)) return;
-  const { idx, sandbox, known, repos, repo } = threadAsk;
+  const { idx, sandbox, known, repos, repo, models, model } = threadAsk;
   const fresh = !known.some(t => t.name === name);
   if (fresh && repos.ok && repo === undefined) return;
   closeThreadModal();
-  showThread(idx, sandbox, name, fresh ? repo : undefined);
+  // The default goes unsaid: the daemon picks it for a thread that names none.
+  const pick = fresh && models.ok && model !== models.default ? model : undefined;
+  showThread(idx, sandbox, name, fresh ? repo : undefined, pick);
 }
 
 // Put thread `name` of `sandbox` on screen, beside its sandbox's panes: in the
 // first empty pane, else a new one while the window has room, else in pane
 // `idx` (the agent's session keeps running behind it).
-function showThread(idx, sandbox, name, repo) {
+function showThread(idx, sandbox, name, repo, model) {
   const id = sessionIdentity(sandbox, 'thread', name);
   const shown = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
   if (shown >= 0) { setFocusedPane(shown); return; }
@@ -790,7 +815,7 @@ function showThread(idx, sandbox, name, repo) {
   let target = panes.slice(0, paneCount).findIndex(p => !p.sandbox);
   if (target < 0 && paneCount < computeMaxPanes()) { setLayout(paneCount + 1); target = paneCount - 1; }
   if (target < 0) target = idx;
-  connectPane(target, sandbox, 'thread', name, repo);
+  connectPane(target, sandbox, 'thread', name, repo, model);
   regroupPanes();
   const at = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
   setFocusedPane(at >= 0 ? at : target);
@@ -802,6 +827,9 @@ document.getElementById('thread-repos').addEventListener('change', e => {
   threadAsk.repo = threadAsk.repos.repos[+e.target.value]?.path;
   document.getElementById('thread-repo-note').hidden = true;
   validateThreadName();
+});
+document.getElementById('thread-models').addEventListener('change', e => {
+  if (threadAsk && e.target.name === 'thread-model') threadAsk.model = e.target.value;
 });
 threadInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(threadInput.value.trim()); }
