@@ -32,6 +32,21 @@ claude_model = "claude-sonnet-5"
 # Read at CREATION only — changing it doesn't affect existing sandboxes.
 skills = ""
 
+# Image pull policy at creation, passed as `sbx create --pull=…`:
+#   "always"   check the registry every time — sbx's default
+#   "missing"  only pull an image the host doesn't have (faster, works offline,
+#              but a newer template is not picked up by itself)
+#   "never"    use what is on the host or fail
+# Empty leaves it to sbx. Read at CREATION only.
+pull = ""
+
+# Keep the sandbox running with nobody attached (sbx 0.47's `sbx run -d`),
+# until `sbxw stop`. Off, it stops by itself once idle — fine for an agent, not
+# for a dev server you reach through the aliases below with no pane open.
+# Applied at bring-up to a sandbox that is new or stopped; one already running
+# is held up from its next start.
+keep_running = false
+
 # Command behind the web UI's Monitor pane, as argv (no shell involved).
 # Bare `sbx` opens the CLI's own all-sandboxes dashboard. It runs on the HOST,
 # outside every sandbox, which is why it is one fixed command and not a
@@ -60,6 +75,11 @@ network_allow = [
   # Uncomment for skaffold image builds / k3d cluster:
   # "quay.io", "*.quay.io",
   # (The headroom kit needs no extra domains — pypi + github defaults cover it.)
+  # Uncomment for the agent-skills kit (archify + brag): Chromium from the
+  # Playwright CDN, ffmpeg and Chromium's libraries from the apt mirrors.
+  # "cdn.playwright.dev", "playwright.download.prss.microsoft.com",
+  # "deb.debian.org", "security.debian.org",
+  # "archive.ubuntu.com", "security.ubuntu.com", "ports.ubuntu.com",
 ]
 
 # Optional explicit denylist (applied via `sbx policy deny network`). Empty by
@@ -89,11 +109,18 @@ env_files = []
 # Examples (each requires uncommenting its network_allow entries above):
 #   assets/k8s-tools — install k3d + kubectl + skaffold
 #   assets/headroom  — token-compression proxy in front of Claude (saves tokens)
+#   assets/agent-skills — /archify (interactive architecture diagrams) and
+#                      /brag (a launch video of the project), /i-have-adhd,
+#                      /handoff, /grill-me and /frontend-design, pinned, with the
+#                      Chromium and ffmpeg they run on.
 #   assets/codemap   — /codemap: agents read (and write) a repo's code map in
-#                      .sbxw-artifacts/codemap/ before reading its source.
+#                      .sbxw-artifacts/codemap/ before reading its source, with
+#                      an Archify diagram of the whole (drawn with agent-skills).
 #                      Needs no network of its own.
 #
 # kits = [
+#   "path/to/sbxw/assets/agent-skills",
+#   "path/to/sbxw/assets/codemap",
 #   "path/to/sbxw/assets/headroom",
 #   "path/to/sbxw/assets/k8s-tools",
 # ]

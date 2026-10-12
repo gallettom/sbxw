@@ -115,7 +115,7 @@
             <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <button class="btn-new" id="btn-new-sandbox" title="New sandbox">＋</button>
+        <button class="btn-new" id="btn-new-sandbox" title="New sandbox (Alt+N / ⌥N)">＋</button>
       </span>
     </div>
     <div id="sandbox-list"></div>
@@ -133,6 +133,10 @@
          recognise. Monitor stays hidden until `monitor_cmd` says there is
          something to open. -->
     <div class="sidebar-footer">
+      <!-- Skills first: the one footer control about what is *inside* every
+           sandbox rather than about the list, ringed in the logo's blue and
+           green so it does not read as a third grey utility button. -->
+      <button id="btn-skills" class="skills-btn" title="Skills — the commands the bundled kits put in every sandbox">Skills</button>
       <button id="btn-monitor" class="monitor-btn" hidden
               title="Host monitor — every sandbox at once, in a pane of its own">
         Monitor Sandboxes
@@ -457,30 +461,58 @@
     </div>
   </div>
 
-  <!-- ── Project ("artifacts") modal ──
-       Opened from the 📁 button beside the sandbox name in a pane's top bar
-       (see /js/panes.js, /js/files.js). -->
+  <!-- ── Project modal ──
+       A file explorer over the sandbox's own filesystem — the whole of it, read
+       through `sbx exec` while the sandbox runs, the workspace alone from the
+       host while it is stopped (see src/sandbox_fs.rs). `.sbxw-artifacts`, where
+       the agent leaves its deliverables, is the first favourite and where it
+       opens. Opened from the 📁 button beside the sandbox name in a pane's top
+       bar (see /js/panes.js, /js/files.js). -->
   <div class="modal-overlay hidden" id="files-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title" style="width:520px">
+    <div class="modal files-modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
       <div class="modal-head">
         <span class="modal-title" id="files-modal-title">Project — <span id="files-modal-name"></span></span>
         <button class="modal-close" id="files-modal-close" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body" style="gap:0;padding-bottom:.5rem">
-        <div class="ports-section-label" id="files-modal-dir" style="word-break:break-all">.sbxw-artifacts</div>
-        <table class="ports-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Size</th>
-              <th>Modified</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="files-modal-tbody">
-            <tr><td colspan="4" class="ports-empty-msg">Loading…</td></tr>
-          </tbody>
-        </table>
+      <div class="fx-toolbar">
+        <button class="fx-icon-btn" id="fx-back" title="Back" aria-label="Back">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="fx-icon-btn" id="fx-up" title="Parent folder" aria-label="Parent folder">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <!-- The breadcrumb is the path, each segment a way back up; clicking the
+             empty space after it turns it into a text field for typing a path. -->
+        <div class="fx-crumbs" id="fx-crumbs" title="Click to type a path"></div>
+        <input class="field-input fx-path-input hidden" id="fx-path-input" type="text"
+               spellcheck="false" autocomplete="off" aria-label="Path">
+        <button class="fx-icon-btn fx-star" id="fx-star" title="Add this folder to favourites"
+                aria-label="Favourite" aria-pressed="false">★</button>
+        <input class="field-input fx-filter" id="fx-filter" type="search"
+               placeholder="Filter this folder" autocomplete="off">
+        <label class="fx-hidden-toggle" title="Show dotfiles">
+          <input type="checkbox" id="fx-show-hidden"> Hidden
+        </label>
+      </div>
+      <div class="fx-notice hidden" id="fx-notice"></div>
+      <div class="fx-body">
+        <aside class="fx-side">
+          <div class="cm-side-label">Favourites</div>
+          <div id="fx-favourites"></div>
+        </aside>
+        <section class="fx-list-wrap">
+          <table class="fx-list">
+            <thead>
+              <tr><th>Name</th><th class="fx-num">Size</th><th>Modified</th></tr>
+            </thead>
+            <tbody id="fx-tbody">
+              <tr><td colspan="3" class="ports-empty-msg">Loading…</td></tr>
+            </tbody>
+          </table>
+        </section>
+        <aside class="fx-preview" id="fx-preview">
+          <p class="cm-empty-small">Select a file to preview it.</p>
+        </aside>
       </div>
       <div class="modal-foot" style="justify-content:space-between;align-items:center">
         <div style="display:flex;gap:.4rem;align-items:center">
@@ -521,7 +553,8 @@
   <!-- ── Code map modal ──
        The markdown knowledge graph under .sbxw-artifacts/codemap/, made
        navigable: [[wiki links]] resolve, backlinks are listed, and the whole
-       map can be seen at once as a graph. It reads; the one thing it writes,
+       map can be seen at once — as its Archify diagram when /codemap drew one,
+       as the graph of its links otherwise. It reads; the one thing it writes,
        it writes by asking the sandbox's own agent (see the lens bar below).
        Opened from the Project panel's "Code map" button (see /js/files.js,
        /js/codemap.js). -->
@@ -558,7 +591,7 @@
         </button>
         <div class="mode-switch" role="tablist">
           <button class="mode-btn active" id="codemap-view-doc">Document</button>
-          <button class="mode-btn" id="codemap-view-graph">Graph</button>
+          <button class="mode-btn" id="codemap-view-diagram">Diagram</button>
         </div>
       </div>
       <!-- ── Lens bar ──
@@ -604,6 +637,86 @@
           Refresh
         </button>
         <button class="btn-cancel" id="codemap-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Skills modal ──
+       What the bundled kits put in a sandbox, command by command. Static: the
+       kits are files in this repository, and a sandbox only has a kit's
+       commands if sbxw.toml's `kits` lists it — the lead says so rather than
+       the page pretending to know. Opened from the sidebar footer (/js/skills.js). -->
+  <div class="modal-overlay hidden" id="skills-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="skills-modal-title" style="width:600px">
+      <div class="modal-head">
+        <span class="modal-title" id="skills-modal-title">Skills in your sandboxes</span>
+        <button class="modal-close" id="skills-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-lead">
+          Type the command in a sandbox’s agent pane. A sandbox has a kit’s commands
+          when <code>sbxw.toml</code>’s <code>kits</code> lists it; a sandbox created
+          before the kit was added needs <code>sbxw rm</code> then <code>sbxw up</code>.
+          <strong>Default</strong> skills are run by sbxw on its own — a hook, a web UI
+          button, or another skill; <strong>manual</strong> ones only when you type them.
+          Hover a tag for the reason.
+        </p>
+        <div class="help-step">
+          <div class="help-step-head">Agent skills kit <span class="skills-kit">assets/agent-skills</span></div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/i-have-adhd</code> <span class="skills-tag skills-tag-default" title="On in every session: a session-start hook injects it, no command needed">default</span> <a class="skills-src" href="https://github.com/ayghri/i-have-adhd" target="_blank" rel="noopener">ayghri/i-have-adhd</a></div>
+            <p class="help-step-body">Shapes every answer for a reader with ADHD: the next action first, numbered steps, state restated each turn, specific time estimates. Always on through a session-start hook; “stop adhd mode” turns it off for the session.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/archify</code> <span class="skills-tag skills-tag-default" title="Run by /codemap to draw the map’s architecture diagram">default</span> <a class="skills-src" href="https://github.com/tt-a1i/archify" target="_blank" rel="noopener">tt-a1i/archify</a></div>
+            <p class="help-step-body">Validated, interactive HTML diagrams — architecture, workflow, sequence, data flow, lifecycle — from a description, pasted Mermaid, or the repository itself.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/handoff</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/mattpocock/skills" target="_blank" rel="noopener">mattpocock/skills</a></div>
+            <p class="help-step-body">Compacts the current conversation into a handoff document a fresh agent can pick up. Pass what the next session is for.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/grill-me</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/mattpocock/skills" target="_blank" rel="noopener">mattpocock/skills</a></div>
+            <p class="help-step-body">A relentless interview to sharpen a plan or design: questions in rounds, each with a recommended answer, until nothing is left assumed.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/grilling</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/mattpocock/skills" target="_blank" rel="noopener">mattpocock/skills</a></div>
+            <p class="help-step-body">The interview /grill-me runs. The agent also reaches for it on its own when you ask to be grilled.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/frontend-design</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/anthropics/skills" target="_blank" rel="noopener">anthropics/skills</a></div>
+            <p class="help-step-body">Guidance for distinctive, intentional UI design — aesthetic direction, typography, choices that don’t read as templated defaults. Used on its own when the agent builds UI.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/brag</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/latent-spaces/brag" target="_blank" rel="noopener">latent-spaces/brag</a></div>
+            <p class="help-step-body">A short, shareable launch video of the project, with music, motion and share copy.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/brag-slim</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span> <a class="skills-src" href="https://github.com/latent-spaces/brag" target="_blank" rel="noopener">latent-spaces/brag</a></div>
+            <p class="help-step-body">The same launch video from a project or a website URL, built only with the tools already installed.</p>
+          </div>
+        </div>
+        <div class="help-step">
+          <div class="help-step-head">Code map kit <span class="skills-kit">assets/codemap</span></div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/codemap</code> <span class="skills-tag skills-tag-default" title="Run by the web UI’s Code map panel; its hooks put the map in front of every session">default</span></div>
+            <p class="help-step-body">Writes or refreshes the project’s code map in <code>.sbxw-artifacts/codemap/</code>: what the code does, why it is built that way, and where each idea lives. Agents read it before the source.</p>
+          </div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/codemap-lens</code> <span class="skills-tag skills-tag-default" title="Run by the web UI’s “Write a lens…” button">default</span></div>
+            <p class="help-step-body">Retells the code map for one reader — a product owner, a new joiner — as a separate document beside it.</p>
+          </div>
+        </div>
+        <div class="help-step">
+          <div class="help-step-head">Markdown to PDF kit <span class="skills-kit">assets/md-to-pdf-tools</span></div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/md-to-pdf</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span></div>
+            <p class="help-step-body">Converts a Markdown file to a styled PDF and a stitched full-page PNG.</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-cancel" id="skills-modal-close2">Close</button>
       </div>
     </div>
   </div>

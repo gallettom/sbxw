@@ -13,9 +13,12 @@ web UI already lists and serves, and it is written in the
 sections, links straight into source symbols (`[[src/auth.ts#validateToken]]`),
 and `// @lat: [[section]]` comments tying code back to the idea it implements.
 
-The format matters more than the tooling here. A repo that later runs
-`npm i -g lat.md` gets `lat check`, `lat search` and `lat section` over exactly
-what this kit's agents have already written — nothing to convert.
+Beside the markdown sits the map's one picture: an
+[Archify](https://github.com/tt-a1i/archify) architecture diagram in
+`.sbxw-artifacts/codemap/diagram/` — a typed `architecture.json` rendered to a
+standalone, interactive `architecture.html`. `/codemap` draws it from the same
+reading as the prose, with the archify the [agent-skills kit](../agent-skills/README.md)
+installs, so apply both kits. See [The diagram](#the-diagram).
 
 ## What it installs
 
@@ -32,6 +35,10 @@ what this kit's agents have already written — nothing to convert.
 | `~/.sbxw/codemap/hook-search.mjs` | `PreToolUse` on Grep/Glob + Bash searches — recalls the map before the session's first search, or asks an unmapped session to *offer* one |
 | `~/.sbxw/codemap/hook-stop.mjs` | `Stop` — asks an unmapped session to *offer* a map before it ends |
 | `~/.sbxw/codemap/install-hooks.mjs` | merges those three into `~/.claude/settings.json`, at every container start |
+
+Archify itself is not in this list: it is a third-party skill with a browser
+behind it, so it is installed — pinned — by the agent-skills kit, and this kit
+only says how to use it.
 
 User-level, not project-level: all of it lands in the sandbox regardless of which
 project is mounted, so nothing has to be committed into target repos.
@@ -98,7 +105,7 @@ first, so every container start is a no-op.
 and the three rules that matter: read the map before searching, believe the tree
 where they differ, update the map in the same session as the code. The agent no
 longer has to remember to look — it has already read it. Silent when there is no
-map, and it defers to a real `lat.md/` vault when the repo has graduated to one.
+map, and it defers to a real `lat.md/` vault when the repo already keeps one.
 
 **`PreToolUse` on `Grep|Glob|Bash` — a second line, at the moment it bites.** It
 runs on the Grep and Glob tools, and on a Bash command that is a search
@@ -148,8 +155,10 @@ skip themselves there — a session writing the map has no use for being asked t
 Three ways, in descending order of comfort:
 
 - **sbxw's web UI** — the **Map** button in a pane's top bar. Wiki links resolve,
-  backlinks are listed, search spans the map, and the **Graph** tab shows the
-  files as a force-directed graph. Nothing to install, works on a remote sandbox.
+  backlinks are listed, search spans the map, and the **Diagram** tab shows the
+  Archify diagram, live (focus, route tracing, themes, export) — or, for a map
+  that has none yet, the graph of its links. Nothing to install, works on a
+  remote sandbox.
 - **Obsidian** — `.sbxw-artifacts/codemap/` is a valid vault as it stands, since
   the format is Obsidian's. Best for long editing sessions.
 - **Any editor** — the links are plain text. WebStorm and GitHub render `[[…]]`
@@ -169,7 +178,7 @@ same way (`claude -p "/codemap-lens <brief>"`), and a sandbox runs one of the
 two at a time: a lens is written from the map, so it never reads one that is
 being rewritten under it.
 
-That background session is why the command's step 6 ends with an HTTP call. The
+That background session is why the command's step 7 ends with an HTTP call. The
 run has to end somewhere, and the two candidates know different things: the
 agent knows the map is written the moment the checker comes back clean, while
 the session's exit status knows only that a process stopped. So the daemon puts
@@ -179,6 +188,34 @@ The exit is kept as the backstop for a run that never gets that far (a session
 refused its permissions, a sandbox stopped underneath it). Nothing is set when a
 human types `/codemap` (or `/codemap-lens`) in a pane, and the step is a no-op
 then.
+
+## The diagram
+
+The markdown is written for the next agent. A person opening the map first wants
+the shape of the whole, and a force-directed graph of which file links to which
+never showed that — it showed the map's own structure, not the system's. So
+`/codemap` ends by drawing the system with Archify (step 6):
+
+- **Repository-backed.** `meta.repository` pins the commit, every component and
+  relationship cites the code it stands for (`sources`: path and line range), and
+  Archify's `finalize` checks the candidate against the schema, against those
+  committed bytes, and — when Chromium is there — in a real browser at four
+  viewports.
+- **Tied to the prose.** Each component is labelled with the heading of the map
+  section that explains it. The diagram never says anything the map does not.
+- **Fixed place.** `diagram/architecture.json` (the source, edited by hand),
+  `diagram/architecture.html` (the render), and Archify's receipts beside them.
+  The web UI and the checker look nowhere else.
+- **Optional.** No archify in the sandbox, or a diagram that will not pass within
+  Archify's repair limit: the map is written anyway and the report says why there
+  is no picture.
+
+It rots like a code link, so the checker treats it like one: the render may not
+be older than its JSON, every cited file must exist and be long enough for its
+range, a label no heading carries is a warning, and so is a commit since the
+drawing that touched cited code. The HTML is shown in the UI in a sandboxed
+iframe with no same-origin access — it was written by an agent, and a page with
+the UI's origin could call the daemon's API.
 
 ## Lenses
 
@@ -256,6 +293,9 @@ node /home/agent/.sbxw/codemap/check-codemap.mjs --dir lat.md   # a real lat.md/
 - every `[[wiki link]]` resolves — to a section, or to a real symbol in a real source file
 - every `// @lat:` / `# @lat:` back reference in source points at a section that exists
 - every leaf section under `require-code-mention: true` is claimed by exactly one test
+- when `diagram/` exists: the HTML is not older than the JSON, every source the
+  diagram cites exists and covers its line range; warnings for a component label
+  no heading carries and for cited code changed since the pinned commit
 
 When a link is close to something real, the error names the fix rather than the
 failure: the repo-root path you meant (`did you mean [[src/lib/models/models.ts…`)
@@ -270,11 +310,10 @@ failure.
 
 ## Notes
 
-- **No network needed.** The kit only writes files. The npm domains in
-  `permissions.network.allow` are there for the optional upgrade path — a repo
-  that wants semantic search runs `npm i -g lat.md`, keeps its map in `lat.md/`
-  at the repo root instead, and uses `lat check`. The `/codemap` command detects
-  that case and defers to it.
+- **No network needed.** The kit only writes files; the archify it draws with is
+  the agent-skills kit's. The npm domains in `permissions.network.allow` remain
+  for a repository that already keeps a real `lat.md/` vault and runs its CLI:
+  `/codemap` and the hooks detect that case and defer to it.
 - **`.sbxw-artifacts/` is not `.gitignore`d by sbxw**, so a map is committable
   and travels with the repo — which is the point. Whether to commit it is the
   user's call; the agent should ask rather than assume. The same goes for

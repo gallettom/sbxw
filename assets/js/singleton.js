@@ -35,6 +35,7 @@ const SBXW_APP_SCRIPTS = [
   '/js/ssh.js',
   '/js/envfile.js',
   '/js/help.js',
+  '/js/skills.js',
   '/js/lifecycle.js',
   '/js/main.js',
   // After main.js: the relay popup subscribes to the SSE stream that file

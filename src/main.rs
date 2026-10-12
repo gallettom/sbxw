@@ -38,6 +38,7 @@ mod envfile;
 mod hosts;
 mod progress;
 mod relay;
+mod sandbox_fs;
 mod sbx;
 mod web;
 
@@ -315,8 +316,10 @@ Examples:
   sbxw prune --dry-run           # list them and stop there
   sbxw prune --yes               # no prompt (scripts, cron)")]
     Prune {
-        /// Only sandboxes stopped for longer than this (sbx duration, e.g. 168h).
-        #[arg(long, value_name = "DURATION")]
+        /// Only sandboxes stopped for longer than this (sbx duration, e.g. 168h,
+        /// or a timestamp). Sent to sbx as `--filter until=…`; `--until` is the
+        /// same flag in sbx's own word.
+        #[arg(long, visible_alias = "until", value_name = "DURATION")]
         since: Option<String>,
         /// List what would be removed and exit without removing anything.
         #[arg(long)]
@@ -2189,8 +2192,8 @@ fn kit_add_repairing_oauth(name: &str, kit: &str, credentials_json: Option<&str>
 ///
 /// It matters because `kit add` **refuses** such a kit: the recreate
 /// flow behind it does not run startup commands, so rather than apply the kit
-/// half-way it tells you to recreate the sandbox with `sbx create --kit`. All
-/// three kits sbxw ships declare startup commands — that is how they install
+/// half-way it tells you to recreate the sandbox with `sbx create --kit`. Every
+/// kit sbxw ships declares startup commands — that is how they install
 /// anything — so this is the common case, not a corner one.
 ///
 /// Only directory kits can be read; a ZIP or an OCI reference answers `false`
@@ -2506,6 +2509,7 @@ pub(crate) fn provision_sandbox(
                 kits: &kits,
                 publish: &port_specs,
                 skills: cfg.skills_mode(),
+                pull: cfg.pull_policy(),
                 env: &env_pairs,
                 env_files: &cfg.env_files,
             },
@@ -2515,6 +2519,27 @@ pub(crate) fn provision_sandbox(
         // re-resolves it on every later container swap (see `oauth_kit_dir`).
         // `sbxw rm` is what cleans it up.
         drop(kit_dir);
+    }
+
+    // 2a. `keep_running`: hold the sandbox up past its last session (sbx
+    // 0.47's `run -d`). Only on one that was just created or is stopped —
+    // `run -d` restarts a sandbox that exists, and a running one may have
+    // panes attached that a restart would cut. Doing it here, before the wait
+    // below, also starts a stopped sandbox for the steps that need it up.
+    if cfg.keep_running {
+        if !existed || !sbx::is_running(name).unwrap_or(true) {
+            match sbx::run_detached(name) {
+                Ok(()) => tracing::info!("'{name}' kept running until `sbxw stop {name}`"),
+                Err(e) => tracing::warn!(
+                    "keep_running: could not hold '{name}' up — it will stop once idle: {e:#}"
+                ),
+            }
+        } else {
+            tracing::info!(
+                "keep_running: '{name}' is already running and is left as it is; it is held \
+                 up from its next start (`sbxw stop {name}`, then `sbxw up {name}`)"
+            );
+        }
     }
 
     // The daemon's port: both the in-sandbox hooks (which POST to it) and the
@@ -2872,6 +2897,14 @@ fn cmd_env_run(
         eprintln!(
             "sbxw  warning: ${{{{ {name} }}}} has no value — left as written, so sbx will \
              see it unresolved too"
+        );
+    }
+    for (secret, command) in loaded.relative_secret_commands() {
+        eprintln!(
+            "sbxw  warning: secrets.{secret}.command (`{command}`) uses a relative path. Since \
+             sbx 0.46 it runs from a fresh temporary directory, so that path no longer \
+             resolves. Use an absolute path to a helper kept outside the workspace, or a \
+             program on PATH."
         );
     }
 
@@ -3529,9 +3562,24 @@ fn env_export_notes(cfg: &Config, ports: &[PortTriple]) -> Vec<String> {
     notes.push(
         "OAuth credentials. sbxw injects CLAUDE_CODE_OAUTH_TOKEN as a kit at creation;\n\
          `sbx env run` does not. Run /login inside the sandbox, or add a secrets:\n\
-         entry whose `command:` resolves the token on the host."
+         entry whose `command:` resolves the token on the host — by absolute path\n\
+         or by name on PATH: since sbx 0.46 it runs from a fresh temporary directory."
             .into(),
     );
+
+    if cfg.keep_running {
+        notes.push(
+            "keep_running — staying up with nobody attached is `sbx run -d`, not a file\n\
+             field. After `sbx env run`, run once: sbx run -d --name <this file's name:>"
+                .into(),
+        );
+    }
+    if let Some(policy) = cfg.pull_policy() {
+        notes.push(format!(
+            "pull = \"{policy}\" — the image pull policy is `sbx create --pull`, not a file\n\
+             field, so `sbx env run` pulls with sbx's default (always)."
+        ));
+    }
 
     let aliases: Vec<String> = ports
         .iter()
@@ -3567,7 +3615,7 @@ fn env_export_notes(cfg: &Config, ports: &[PortTriple]) -> Vec<String> {
 /// than parsing prune's listing, so it survives any change to that output.
 ///
 /// The preview is a real `--dry-run` call rather than sbxw's own guess at which
-/// sandboxes qualify: `since` is sbx's duration parser and sbx's stop-time
+/// sandboxes qualify: the age is sbx's duration parser and sbx's stop-time
 /// bookkeeping, and a second opinion here could only ever disagree with what
 /// the next call actually removes.
 fn cmd_prune(since: Option<&str>, dry_run: bool, yes: bool) -> Result<()> {
@@ -4599,7 +4647,7 @@ mod tests {
     /// install anything — so `kit add` refusing them is the common case.
     #[test]
     fn the_bundled_kits_are_all_startup_kits() {
-        for kit in ["k8s-tools", "headroom", "md-to-pdf-tools"] {
+        for kit in ["k8s-tools", "headroom", "md-to-pdf-tools", "codemap", "agent-skills"] {
             let dir = format!("assets/{kit}");
             assert!(
                 kit_declares_startup(&dir),

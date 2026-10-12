@@ -62,6 +62,27 @@ pub struct Config {
     /// existing sbxw.toml goes on meaning what it said — sbx kept its own old
     /// flag as an alias for the same reason. `skills` wins when both are set.
     pub share_skills: bool,
+    /// Image pull policy for sandboxes sbxw creates: `"always"`, `"missing"`
+    /// or `"never"`, passed as `sbx create --pull=…`. Empty leaves
+    /// it to sbx, whose default is `"always"`: a registry round trip on every
+    /// creation, even when the image is already on the host. `"missing"` makes
+    /// a second sandbox on the same template start without one — and works
+    /// offline — at the price of not picking up a newer template by itself.
+    ///
+    /// Only read at *creation*, like `skills`.
+    pub pull: String,
+    /// Keep the sandbox running when nobody is attached (sbx 0.47's
+    /// `sbx run -d`). Off, a sandbox stops by itself once idle — sbx's default
+    /// since 0.43, and the right one for an agent you talk to. On, it stays up
+    /// until `sbxw stop` (or `sbx stop`), which is what a project serving an
+    /// app behind its `ports` aliases wants: the dev server is still there
+    /// when you open `neos.local` with no pane open.
+    ///
+    /// Applied at bring-up, to a sandbox sbxw just created or found stopped. A
+    /// sandbox already running when this is turned on is left as it is — sbx's
+    /// `run -d` restarts one that exists, and a running one has panes attached
+    /// that a restart would cut — so it is held up from its next start on.
+    pub keep_running: bool,
     /// Command the web UI's **Monitor** pane runs, as argv — no shell, so no
     /// quoting rules and no injection surface. It runs on the *host*, outside
     /// any sandbox, which is why it is one fixed configured command rather than
@@ -151,6 +172,8 @@ impl Default for Config {
             claude_model: "claude-sonnet-5".into(),
             skills: String::new(),
             share_skills: true,
+            pull: String::new(),
+            keep_running: false,
             monitor_cmd: vec!["sbx".into()],
             env: Default::default(),
             env_files: vec![],
@@ -161,6 +184,9 @@ impl Default for Config {
 /// The values `skills` accepts, in sbx's own words.
 pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
 
+/// The values `pull` accepts, in sbx's own words.
+pub const PULL_POLICIES: [&str; 3] = ["always", "missing", "never"];
+
 impl Config {
     /// The `--skills` mode to ask for, or `None` for sbx's default.
     pub fn skills_mode(&self) -> Option<&str> {
@@ -168,6 +194,11 @@ impl Config {
             "" => (!self.share_skills).then_some("off"),
             mode => Some(mode),
         }
+    }
+
+    /// The `--pull` policy to ask for, or `None` for sbx's default.
+    pub fn pull_policy(&self) -> Option<&str> {
+        Some(self.pull.trim()).filter(|p| !p.is_empty())
     }
 
     /// `env` as the `KEY=VALUE` arguments `sbx`'s `-e` takes, in the map's
@@ -240,6 +271,15 @@ impl Config {
                     );
                 }
             }
+            if let Some(policy) = cfg.pull_policy() {
+                if !PULL_POLICIES.contains(&policy) {
+                    anyhow::bail!(
+                        "{}: pull = \"{policy}\" — expected one of {}",
+                        path.display(),
+                        PULL_POLICIES.join(", ")
+                    );
+                }
+            }
             Ok(cfg)
         } else {
             Ok(Config::default())
@@ -264,6 +304,8 @@ mod tests {
             claude_model: "claude-opus-5".into(),
             skills: "readwrite".into(),
             share_skills: false,
+            pull: "missing".into(),
+            keep_running: true,
             ip_per_app: true,
             env_files: vec!["/p/.env".into()],
             ..Config::default()
@@ -279,6 +321,8 @@ mod tests {
         assert!(!back.share_skills);
         assert_eq!(back.skills_mode(), Some("readwrite"));
         assert!(back.ip_per_app);
+        assert_eq!(back.pull_policy(), Some("missing"));
+        assert!(back.keep_running);
         assert_eq!(back.env, cfg.env);
         assert_eq!(back.env_files, cfg.env_files);
         assert_eq!(back.network_allow, cfg.network_allow);
@@ -313,6 +357,26 @@ mod tests {
         assert!(err.contains("readwrite"), "{err}");
         std::fs::write(&f, "skills = \"readwrite\"\n").unwrap();
         assert!(Config::load_or_default(&f).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Same rule as `skills`: a value sbx would refuse fails the load, not a
+    /// `sbx create` later — and empty means sbx's own default.
+    #[test]
+    fn an_unknown_pull_policy_is_refused_on_load() {
+        let dir = std::env::temp_dir().join(format!("sbxw-config-pull-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("sbxw.toml");
+        std::fs::write(&f, "pull = \"if-not-present\"\n").unwrap();
+        let err = Config::load_or_default(&f).unwrap_err().to_string();
+        assert!(err.contains("missing"), "{err}");
+        std::fs::write(&f, "pull = \"missing\"\n").unwrap();
+        assert_eq!(
+            Config::load_or_default(&f).unwrap().pull_policy(),
+            Some("missing")
+        );
+        std::fs::write(&f, "pull = \"\"\n").unwrap();
+        assert_eq!(Config::load_or_default(&f).unwrap().pull_policy(), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

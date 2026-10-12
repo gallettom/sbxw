@@ -8,13 +8,16 @@ description: >
   — never written unasked — when a session ends in a repository it just read and
   could not map. So a sandbox agent reads a repository's map before its source,
   knows how to write one when there is none, and can retell it for a reader who
-  does not read code. Format is lat.md's (wiki links, code links, @lat: back references),
-  so a repo can graduate to the real CLI without rewriting anything.
+  does not read code. Format is lat.md's (wiki links, code links, @lat: back
+  references); the picture of the whole is an Archify architecture diagram drawn
+  from the same reading and checked against the same tree, using the archify
+  that the agent-skills kit installs.
   Idempotent: safe to re-run on every container start.
 
-# Nothing here reaches the network — the kit only writes files into the sandbox.
-# The domains are declared for the optional upgrade path in this kit's README
-# (npm i -g lat.md, for repos that want semantic search over their map).
+# Nothing here reaches the network — the kit only writes files into the sandbox,
+# and the archify it draws with is fetched by the agent-skills kit. The domains
+# stay declared for repositories that already keep a real lat.md/ vault and run
+# its CLI through npx.
 permissions:
   network:
     allow:
@@ -78,6 +81,8 @@ setup:
         - Add subdirectories only when a topic grows past three files; each subdirectory
           gets its own index, **named after the directory** (`api/api.md`).
         - Name files after concepts (`auth.md`, `scheduling.md`), not after paths.
+        - `diagram/` is reserved for step 6's Archify diagram. It holds no markdown and
+          needs no index; do not name a map subdirectory after it.
         - If the project has tests worth describing as behaviour, give them `tests.md`
           with `require-code-mention: true` in the frontmatter (see step 4).
 
@@ -175,17 +180,61 @@ setup:
            file name. They are repo-root-relative.
         3. **Links to headings that contain code**, quoted without their backticks.
 
-        ## 6. Report back
+        ## 6. Draw the diagram (Archify)
+
+        The markdown is for the next agent; the picture of the whole is for the people
+        reading over its shoulder. Draw it with **Archify**, from the reading you have
+        just done — not a second exploration — as a repository-backed `architecture`
+        diagram:
+
+        - Archify lives at `/home/agent/.sbxw/agent-skills/archify` (installed by sbxw's
+          agent-skills kit). **If that directory is missing, skip this step** and say so
+          in the report: the map is complete without it.
+        - Read its `SKILL.md`, then follow its fast authoring path and its
+          `references/repository-authoring.md`. `bin/archify.mjs` and every relative path
+          in them resolve against `/home/agent/.sbxw/agent-skills/archify/`; never
+          install or update Archify yourself.
+        - The location is fixed, so the web UI and the checker find it:
+          `.sbxw-artifacts/codemap/diagram/architecture.json` for the candidate,
+          `meta.output` set to `.sbxw-artifacts/codemap/diagram/architecture.html`.
+          On a refresh, edit the candidate that is there instead of starting over.
+        - **One component per map section that names a runtime part**, labelled with that
+          section's heading text, verbatim — it is how a reader crosses from the picture
+          to the prose, and the checker warns about a label no heading carries. Its
+          `sources` cite the same code the section links to. Relationships come from call
+          sites you read, not from the prose.
+        - Render and check it in one command, from the repository root:
+
+          ```bash
+          node /home/agent/.sbxw/agent-skills/archify/bin/archify.mjs finalize architecture \
+            .sbxw-artifacts/codemap/diagram/architecture.json \
+            .sbxw-artifacts/codemap/diagram/architecture.html \
+            --repo-root . --quality showcase --json
+          ```
+
+          Repair what it reports within Archify's own repair limit. A browser gate
+          reported `skipped` means this sandbox has no Chromium: say so, do not call it
+          passed. A repository with no commit or no `origin` cannot pin
+          `meta.repository`; draw it without `--repo-root` and say the sources are
+          unverified.
+        - Run the map checker again: it also checks that the diagram was rendered after
+          its last edit and that every file it cites still exists.
+
+        A diagram that will not pass is not worth holding the map back for: stop at
+        Archify's repair limit, leave no half-written `diagram/` behind, and report it.
+
+        ## 7. Report back
 
         Tell the user, briefly: what you mapped, what you deliberately left out and why,
         and anything you could not verify. If you added `@lat:` comments, say which files
-        you touched.
+        you touched. Give the diagram's path and the gates it passed — or why there is
+        none.
 
         **If `$SBXW_CODEMAP_DONE` is set**, this run was started from sbxw's web UI: there
         is no pane anyone is reading, and that URL is where the person who clicked is
-        waiting. POST to it the moment the map is written and the checker is clean —
-        before anything optional you still mean to do, because until it arrives the UI
-        can only say "still writing".
+        waiting. POST to it the moment the map is written, the diagram drawn (or given
+        up on) and the checker clean — before anything optional you still mean to do,
+        because until it arrives the UI can only say "still writing".
 
         ```bash
         curl -fsS -X POST "$SBXW_CODEMAP_DONE" -H 'content-type: application/json' \
@@ -207,6 +256,10 @@ setup:
         - After changing behaviour, architecture or tests in a mapped repo, update the
           map in the same session and re-run the checker. A map nobody maintains is worse
           than no map, because it is still believed.
+        - When the change moved a component or a relationship, edit
+          `diagram/architecture.json` to match and run step 6's `finalize` again. The
+          checker says when the diagram cites a file that is gone, or was drawn at an
+          older commit than `HEAD`; the second is a prompt to look, not a failure.
     # The lens half: the map, retold for one reader who is not the next agent.
     # Kept as its own command rather than a flag on /codemap because it writes
     # somewhere else and answers to somebody else — and because the web UI's Code
@@ -384,8 +437,10 @@ setup:
         project does and **why** — domain concepts, design decisions, invariants, test
         specs. It is not a copy of the code; it is the layer the code cannot express.
         It lives in `.sbxw-artifacts/codemap/` and follows the
-        [lat.md](https://github.com/vercel-labs/lat.md) format, so a repository that
-        later adopts the real `lat` CLI keeps everything it has already written.
+        [lat.md](https://github.com/vercel-labs/lat.md) format. Beside the markdown, in
+        `diagram/`, sits the one picture of the whole: an
+        [Archify](https://github.com/tt-a1i/archify) architecture diagram (see
+        [The diagram](#the-diagram)).
 
         ## Reading a map
 
@@ -528,6 +583,36 @@ setup:
         TODOs, or session notes. And never write a claim you have not checked against
         the tree.
 
+        ## The diagram
+
+        `diagram/` holds the map's picture, drawn with Archify (installed by sbxw's
+        agent-skills kit at `/home/agent/.sbxw/agent-skills/archify`):
+
+        | File | What it is |
+        | --- | --- |
+        | `diagram/architecture.json` | the typed candidate — the diagram's source, edited by hand |
+        | `diagram/architecture.html` | the standalone, interactive render; what people open |
+        | `diagram/architecture.*.json` | Archify's receipts from the last `finalize` |
+
+        It is repository-backed: `meta.repository` pins the commit it was drawn at, and
+        every component cites the code it stands for in `sources`. Each component is
+        labelled with the heading of the map section that explains it, so the picture
+        and the prose can be read against each other. The markdown stays the record —
+        the diagram never says anything the map does not.
+
+        Edit the JSON, never the HTML, then render and check again from the repository
+        root:
+
+        ```bash
+        node /home/agent/.sbxw/agent-skills/archify/bin/archify.mjs finalize architecture \
+          .sbxw-artifacts/codemap/diagram/architecture.json \
+          .sbxw-artifacts/codemap/diagram/architecture.html \
+          --repo-root . --quality showcase --json
+        ```
+
+        A map without `diagram/` is still a valid map: the diagram is drawn when Archify
+        is available, and the checker only mentions its absence.
+
         ## Validating
 
         ```bash
@@ -540,9 +625,15 @@ setup:
         exotic declaration, but it never invents one. Run it after every edit to the map,
         and treat a failure as work that is not finished.
 
-        If the project has the real CLI installed (`npm i -g lat.md`) and keeps its map
-        in `lat.md/` at the repo root, use `lat check`, `lat search` and `lat section`
-        instead — same format, more power.
+        When `diagram/` exists it is checked too: the HTML must be newer than the JSON
+        (a render older than its source is stale), every cited source file must still
+        exist and be long enough for its line range, and a component label no map
+        heading carries is a warning. So is a diagram drawn at another commit than
+        `HEAD` — look whether the architecture moved, and redraw if it did.
+
+        A repository that already keeps its map in a `lat.md/` vault at its root
+        validates it with that project's own `lat check`; this kit works in it rather
+        than beside it.
 
         `/codemap` walks through building or refreshing a map end to end; this file is
         the reference it leans on.
@@ -571,7 +662,7 @@ setup:
 
         import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
         import { join, relative, resolve, extname, sep } from "node:path";
-        import { execSync } from "node:child_process";
+        import { execFileSync, execSync } from "node:child_process";
 
         const argv = process.argv.slice(2);
         const flag = (name, dflt) => {
@@ -590,6 +681,11 @@ setup:
         const SKIP = new Set([".git", "node_modules", "target", "dist", "build", ".next", ".venv",
           "vendor", "__pycache__", ".cache"]);
         const LEAD_MAX = 250;
+        // The map's Archify diagram lives here (FORMAT.md, The diagram): JSON and
+        // HTML rather than markdown, so it is checked by its own rule below, not read
+        // as a section file.
+        const DIAGRAM = "diagram";
+        const ARCHIFY = "/home/agent/.sbxw/agent-skills/archify";
 
         const errors = [];
         const warnings = [];
@@ -689,6 +785,7 @@ setup:
         const files = new Map();   // "sub/dir/name" without .md  ->  record
         for (const abs of walk(MAP_ABS)) {
           const rel = relative(MAP_ABS, abs).split(sep).join("/");
+          if (rel.indexOf(DIAGRAM + "/") === 0) continue;
           if (!rel.endsWith(".md")) {
             fail(MAP + "/" + rel, "only .md files belong in the map",
               "keep other deliverables elsewhere under .sbxw-artifacts/");
@@ -1005,6 +1102,98 @@ setup:
           });
         }
 
+        /* ─── rule: the Archify diagram, when there is one ──────────────────────── */
+
+        // The diagram makes the same kind of claim a code link does — this component
+        // is that code — so it rots the same way, and is held to the same rule: every
+        // file it cites still exists, and the render is not older than its source.
+        let diagramNote = "";
+        const DIAGRAM_ABS = join(MAP_ABS, DIAGRAM);
+        if (existsSync(DIAGRAM_ABS)) {
+          const jsonAbs = join(DIAGRAM_ABS, "architecture.json");
+          const htmlAbs = join(DIAGRAM_ABS, "architecture.html");
+          const where = MAP + "/" + DIAGRAM + "/architecture.json";
+          let candidate = null;
+          if (!existsSync(jsonAbs)) {
+            fail(MAP + "/" + DIAGRAM + "/", "no architecture.json — the diagram has no source",
+              "draw it with /codemap step 6, or delete " + DIAGRAM + "/");
+          } else {
+            try { candidate = JSON.parse(readFileSync(jsonAbs, "utf8")); }
+            catch (e) { fail(where, "not valid JSON — " + e.message, "fix it, then run Archify's finalize again"); }
+          }
+          if (candidate) {
+            const html = MAP + "/" + DIAGRAM + "/architecture.html";
+            if (!existsSync(htmlAbs))
+              fail(html, "never rendered", "run Archify's finalize — FORMAT.md, The diagram");
+            else if (statSync(htmlAbs).mtimeMs < statSync(jsonAbs).mtimeMs)
+              fail(html, "older than architecture.json — the render is stale", "run Archify's finalize again");
+
+            const headings = new Set();
+            for (const file of files.values())
+              eachSection(file, (node) => { if (node.title) headings.add(node.title.toLowerCase()); });
+
+            const cited = new Set();
+            const checkSources = (what, list) => {
+              for (const ref of Array.isArray(list) ? list : []) {
+                if (!ref || typeof ref.path !== "string") continue;
+                cited.add(ref.path);
+                const text = readSource(ref.path);
+                if (text === null) {
+                  fail(where, what + " cites " + ref.path + ", which does not exist",
+                    "moved or deleted? cite whatever replaced it, then render again");
+                  continue;
+                }
+                const last = Math.max(ref.line || 0, ref.end_line || 0);
+                const count = text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+                if (last > count)
+                  fail(where, what + " cites " + ref.path + ":" + last + ", past its last line (" + count + ")",
+                    "the code moved — re-read it and fix the range");
+              }
+            };
+
+            const components = Array.isArray(candidate.components) ? candidate.components : [];
+            for (const c of components) {
+              if (!c) continue;
+              const label = typeof c.label === "string" ? c.label : "";
+              if (label && !headings.has(label.toLowerCase()))
+                warn(where, 'component "' + label + '" matches no heading in the map',
+                  "label it with the heading of the section that explains it");
+              checkSources('component "' + (label || c.id) + '"', c.sources);
+            }
+            for (const r of Array.isArray(candidate.connections) ? candidate.connections : [])
+              if (r) checkSources("relationship " + r.from + " → " + r.to, r.sources);
+
+            // Drawn at an older commit is normal — every commit after the drawing
+            // makes it so. What is worth a look is a commit that touched code the
+            // diagram cites, so that is what is asked of git.
+            const repo = candidate.meta && candidate.meta.repository;
+            const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8",
+              maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] }).trim();
+            if (repo && typeof repo.revision === "string" && cited.size) {
+              let head = "";
+              try { head = git(["rev-parse", "HEAD"]); } catch (e) { /* not a repository */ }
+              if (head && head.toLowerCase() !== repo.revision.toLowerCase()) {
+                let touched = null;
+                try {
+                  touched = git(["diff", "--name-only", repo.revision, "HEAD", "--"].concat(Array.from(cited)))
+                    .split("\n").filter(Boolean);
+                } catch (e) { /* the revision is not in this clone */ }
+                if (touched === null)
+                  warn(where, "drawn at " + repo.revision.slice(0, 12) + ", which this clone does not have",
+                    "check the components against HEAD, then render again");
+                else if (touched.length)
+                  warn(where, "cited code changed since the diagram was drawn (" + repo.revision.slice(0, 12)
+                    + "): " + touched.slice(0, 5).join(", ") + (touched.length > 5 ? ", …" : ""),
+                    "if a component or relationship moved, edit the candidate and render again");
+              }
+            }
+            diagramNote = ", " + components.length + " diagram components";
+          }
+        } else if (MAP_NAME === "codemap" && existsSync(ARCHIFY)) {
+          warn(MAP + "/", "no " + DIAGRAM + "/ — the map has no picture of the whole yet",
+            "/codemap step 6 draws one with Archify");
+        }
+
         /* ─── coverage hint: source trees the map never mentions ────────────────── */
 
         const mentioned = new Set();
@@ -1046,7 +1235,7 @@ setup:
 
         if (!QUIET || errors.length) {
           console.log(MAP + "/: " + files.size + " files, " + sections + " sections, "
-            + links + " links, " + refs + " @lat refs");
+            + links + " links, " + refs + " @lat refs" + diagramNote);
           console.log(errors.length
             ? "FAIL — " + errors.length + " error(s), " + warnings.length + " warning(s)"
             : "OK — " + warnings.length + " warning(s)");
@@ -1278,7 +1467,8 @@ setup:
         //
         // Written without template literals: see hook-lib.mjs.
 
-        import { readFileSync } from "node:fs";
+        import { existsSync, readFileSync } from "node:fs";
+        import { join } from "node:path";
         import { CHECKER, LENS_REL, MAP_REL, clip, findMap, lenses, readInput, repoRoot, sections } from "./hook-lib.mjs";
 
         // Enough for an index of a large map, small enough that it never dominates the
@@ -1307,6 +1497,12 @@ setup:
           );
           const named = sections(root);
           if (named.length) lines.push("Sections beside the index: " + named.join(", "), "");
+          if (existsSync(join(root, MAP_REL, "diagram", "architecture.json"))) {
+            lines.push(
+              "The map's picture is an Archify architecture diagram: " + MAP_REL + "/diagram/architecture.json (source) rendered to architecture.html. Each component is labelled with the heading of the section that explains it. When a change moves a component or a relationship, edit the JSON and render it again — /home/agent/.sbxw/codemap/FORMAT.md, The diagram.",
+              "",
+            );
+          }
           lines.push("The index, verbatim:", "");
           try {
             lines.push(clip(readFileSync(map.index, "utf8").trim(), MAX_INDEX));

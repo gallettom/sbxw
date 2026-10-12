@@ -2,8 +2,8 @@
 //!
 //! Every command here maps to a subcommand confirmed against the published
 //! reference (docs.docker.com/reference/cli/sbx) for **sbx 0.39**, and moved
-//! to the 0.42/0.43 release notes where those changed it; 0.43 is
-//! `MIN_SBX_VERSION`. We never call `docker sandbox` — only the standalone
+//! to the 0.42/0.43 release notes where those changed it, then checked against
+//! the `--help` of a real 0.47.0 binary; 0.47 is `MIN_SBX_VERSION`. We never call `docker sandbox` — only the standalone
 //! `sbx` binary, as requested.
 //!
 //! One version, no gates. sbxw used to accept 0.37+ and branch at runtime for
@@ -17,16 +17,20 @@
 //!            [-e KEY=VALUE]…   (repeatable; bare KEY takes the host's value)
 //!            [--env-file FILE]… (--env beats any file; a later file beats an earlier one)
 //!            [--skills=off|readonly|readwrite]  (0.43; readonly is the default)
+//!            [--pull=always|missing|never]      (always is the default)
 //! sbx run    <agent> [PATH...] [--name <name>] [-e …] [-- AGENT_ARGS...]
 //! sbx run    --name <name>     (re-attach, incl. sandboxes created with --kit;
 //!                               -e applies to the agent session, so it takes
 //!                               effect on a re-attach too)
-//! sbx ls [--json]              (--json carries a last-used timestamp since 0.43)
+//! sbx run    -d --name <name>  (0.47: keeps an existing sandbox running after
+//!                               every session has gone, until `sbx stop`)
+//! sbx ls [--json]              (columns found by header — see `parse_ls_table`;
+//!                               a hung guest shows as unresponsive since 0.45)
 //! sbx inspect SANDBOX          (lists kits, injected secrets, info)
 //! sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
 //! sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
 //!                              (PROTO defaults to tcp4 since 0.42, not dual-stack tcp)
-//! sbx prune  [--dry-run] [--filter since=DURATION] [-f]   (stopped sandboxes only)
+//! sbx prune  [--dry-run] [--filter until=DURATION] [-f]   (stopped sandboxes only)
 //! sbx env    create|run|exec|rm [PATH...] [--name N] [--env-arg K=V]…
 //!                              (sbxenv.yaml; experimental; shows a plan and asks)
 //! sbx policy allow|deny network [--sandbox NAME] RESOURCES (comma list, *.dom, dom:443, **)
@@ -35,6 +39,8 @@
 //!                               --sandbox; --wide is the rule-level view)
 //! sbx policy log [SANDBOX]     (recent allow/deny decisions)
 //! sbx policy inspect <policy-or-rule>
+//! sbx policy rm network --id RULE_ID [--sandbox NAME] --force
+//!                              (global by default; --force since 0.45's prompt)
 //! sbx secret set [--sandbox NAME] <service>               (service-keyed, via stdin)
 //! sbx skills import [--dry-run|--force]
 //! sbx setup ssh [remove]       (managed `Host *.sbx` block => `ssh <name>.sbx`)
@@ -68,7 +74,14 @@
 //!     or period, are refused — `crate::is_valid_sandbox_name` says so first.
 //!   * (0.43) A sandbox made by `sbx create` **stops by itself once idle**.
 //!     Nothing here assumes a sandbox stays up: the daemon re-checks
-//!     `is_running` and re-publishes ports on every attach.
+//!     `is_running` and re-publishes ports on every attach. (0.47) `sbx run -d`
+//!     is the way out, for a project that asks for it — see `keep_running`.
+//!   * (0.45) **Removing anything asks for confirmation**, and a prompt with no
+//!     terminal to answer it is a refusal. Every removal sbxw runs passes
+//!     `--force`; the confirming, where there is any, is sbxw's own.
+//!   * (0.45) `sbx exec -d` fails outright instead of running in the
+//!     foreground. Nothing here detaches an exec: a background job is a
+//!     process the daemon holds (see `codemap_run_args`).
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -310,12 +323,19 @@ fn run_capture(args: &[&str]) -> Result<String> {
 /// against the declaring file and gave `sbx env` its `--name`. `--skills` is
 /// 0.43's too.
 ///
+/// It moved to 0.47 for the same reason in a smaller key. 0.45 made every
+/// removal ask for confirmation, and `policy rm network` only learned the
+/// `--force` that answers it then — on 0.43 the flag is an error, without it on
+/// 0.45 the call hangs on a prompt nobody sees. 0.47's `run -d` is what keeps a
+/// sandbox up (`keep_running`). Each would have been a gate; the floor is
+/// cheaper.
+///
 /// What that buys, beyond the deletions: an unrecognised flag or subcommand is
 /// a hard error from 0.39 on (before, it printed help and exited 0). Code that
 /// can assume 0.39 can therefore trust a command's success, which is why the
 /// probes and retries that used to paper over "maybe this flag exists" are gone
 /// too.
-pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 43, 0);
+pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 47, 0);
 
 /// There is deliberately **no** upper bound. Newer sbx releases have so far
 /// added surface rather than moved it, and the parts that did move (the policy
@@ -364,7 +384,8 @@ pub fn assert_available() -> Result<()> {
                  Upgrade sbx, or set {SKIP_VERSION_CHECK_ENV}=1 to run anyway — but expect \
                  failures rather than degraded behaviour: sbxw no longer carries fallbacks \
                  for older releases, so environment files (`sbxenv.yaml`, `${{{{ … }}}}`), \
-                 `env create --name`, `create --skills` and kit spec v2 are all passed as-is."
+                 `env create --name`, `create --skills`/`--pull`, `run -d`, \
+                 `policy rm network --force` and kit spec v2 are all passed as-is."
             );
         }
         Some((a, b, c)) => {
@@ -463,29 +484,15 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 
 /// Return true if a sandbox with this exact name already exists (any state).
 pub fn exists(name: &str) -> Result<bool> {
-    // `sbx ls` prints a table whose first column is the sandbox name.
-    let table = run_capture(&["ls"]).unwrap_or_default();
-    Ok(table
-        .lines()
-        .skip(1) // header
-        .filter_map(|l| l.split_whitespace().next())
-        .any(|n| n == name))
+    Ok(list_sandboxes().iter().any(|s| s.name == name))
 }
 
 /// Return true if the sandbox is currently running.
 pub fn is_running(name: &str) -> Result<bool> {
-    let table = run_capture(&["ls"]).unwrap_or_default();
-    for line in table.lines().skip(1) {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        // Layout observed in docs: NAME AGENT STATUS PORTS WORKSPACE
-        if cols.first() == Some(&name) {
-            return Ok(cols
-                .get(2)
-                .map(|s| s.eq_ignore_ascii_case("running"))
-                .unwrap_or(false));
-        }
-    }
-    Ok(false)
+    Ok(list_sandboxes()
+        .iter()
+        .find(|s| s.name == name)
+        .is_some_and(SandboxInfo::is_running))
 }
 
 /// Poll `sbx ls` until `name` reports running, or `timeout` elapses.
@@ -523,6 +530,10 @@ pub struct CreateOpts<'a> {
     /// `--skills=<mode>` (`off`, `readonly`, `readwrite`); `None` passes
     /// nothing, which is sbx's own default — read-only sharing since 0.43.
     pub skills: Option<&'a str>,
+    /// `--pull=<policy>` (`always`, `missing`, `never`); `None` passes nothing,
+    /// which is sbx's `always` — a registry round trip on every creation, even
+    /// for an image already on the host.
+    pub pull: Option<&'a str>,
     /// `KEY=VALUE` pairs forwarded as `-e`, and files forwarded as
     /// `--env-file`. sbx resolves the precedence between them itself (`--env`
     /// beats any file; a later file beats an earlier one), so both are passed
@@ -640,6 +651,9 @@ fn create_args(name: &str, opts: &CreateOpts<'_>, skills: Option<&str>) -> Vec<S
     if let Some(flag) = skills {
         args.push(flag.into());
     }
+    if let Some(policy) = opts.pull {
+        args.push(format!("--pull={policy}"));
+    }
     // Files first, then `-e`. sbx's precedence is `--env` over any `--env-file`
     // whatever the order, so writing the argv in that order costs nothing and
     // makes a log line read the way the rule does.
@@ -678,6 +692,34 @@ pub fn run_attach_args(name: &str, env: &[String], env_files: &[String]) -> Vec<
         args.push(pair.clone());
     }
     args
+}
+
+/// `sbx run -d --name <name>` — start the sandbox if it is stopped, open no
+/// session, and (0.47) **keep it running** after every session has gone, until
+/// `sbx stop` or `sbx rm`.
+///
+/// Without it a sandbox stops by itself once idle (0.43), which is right for an
+/// agent and wrong for what sbxw publishes: a dev server behind `neos.local`
+/// that vanishes because nobody had a pane open. `keep_running` in sbxw.toml
+/// is the project saying which of the two it is.
+///
+/// `run_capture` rather than inherited stdio: `-d` prints the sandbox id and
+/// returns, there is nothing to watch, and a refusal should carry sbx's words.
+pub fn run_detached(name: &str) -> Result<()> {
+    run_capture(
+        &run_detached_args(name)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    )
+    .map(|_| ())
+}
+
+fn run_detached_args(name: &str) -> Vec<String> {
+    ["run", "-d", "--name", name]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Path (inside the sandbox) of the `/codemap` command the codemap kit
@@ -834,24 +876,86 @@ pub struct SandboxInfo {
     pub status: String,
 }
 
+impl SandboxInfo {
+    /// Up, and answering. Since 0.45 a sandbox whose guest kernel stopped
+    /// responding is *reported* as such rather than wedged for good, and
+    /// whatever words sbx puts next to "running" for it, a sandbox nothing can
+    /// `exec` into is not one sbxw should provision or attach to as if it were.
+    pub fn is_running(&self) -> bool {
+        let status = self.status.to_ascii_lowercase();
+        status.split_whitespace().next() == Some("running") && !status.contains("unresponsive")
+    }
+}
+
 /// Parse `sbx ls` into sandbox info. Returns an empty list on error.
 pub fn list_sandboxes() -> Vec<SandboxInfo> {
-    let table = run_capture(&["ls"]).unwrap_or_default();
-    table
-        .lines()
-        .skip(1) // header row
-        .filter_map(|line| {
-            let mut cols = line.split_whitespace();
-            let name = cols.next()?.to_string();
-            let agent = cols.next().unwrap_or("").to_string();
-            let status = cols.next().unwrap_or("unknown").to_string();
-            Some(SandboxInfo {
-                name,
-                agent,
-                status,
+    parse_ls_table(&run_capture(&["ls"]).unwrap_or_default())
+}
+
+/// The rows of an `sbx ls` table.
+///
+/// Columns are found by their **headers** — `STATUS` (or `STATE`) and `AGENT`
+/// wherever they sit — and the name is the first column. 0.45 moved every list
+/// command onto one table format, and "the third word of the line is the
+/// status" was a guess about the old one that a new column, or a status of more
+/// than one word, would silently break: a sandbox read as stopped is one sbxw
+/// tries to start again.
+///
+/// A header that cannot be read that way (tabs instead of padding, a single
+/// column) falls back to the old reading, `NAME AGENT STATUS …` split on
+/// whitespace, so an unexpected layout costs precision rather than every row.
+fn parse_ls_table(raw: &str) -> Vec<SandboxInfo> {
+    let mut lines = raw.lines().filter(|l| !l.trim().is_empty());
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let spans = header_spans(header);
+    let find = |names: &[&str]| {
+        spans
+            .iter()
+            .position(|(h, _)| names.iter().any(|n| h.eq_ignore_ascii_case(n)))
+    };
+    let (agent_col, status_col) = (find(&["AGENT"]), find(&["STATUS", "STATE"]));
+
+    match status_col {
+        Some(status_col) if spans.len() >= 2 => {
+            let starts: Vec<usize> = spans.iter().map(|(_, at)| *at).collect();
+            lines
+                .filter_map(|line| {
+                    let cells = slice_at(line, &starts);
+                    // The name can't contain a blank; anything after one is a
+                    // wide name bleeding into the next column, not the name.
+                    let name = cells.first()?.split_whitespace().next()?.to_string();
+                    let cell = |i: Option<usize>| {
+                        i.and_then(|i| cells.get(i)).cloned().unwrap_or_default()
+                    };
+                    let status = cell(Some(status_col));
+                    Some(SandboxInfo {
+                        name,
+                        agent: cell(agent_col),
+                        status: if status.is_empty() {
+                            "unknown".into()
+                        } else {
+                            status
+                        },
+                    })
+                })
+                .collect()
+        }
+        _ => lines
+            .filter_map(|line| {
+                let mut cols = line.split_whitespace();
+                let name = cols.next()?.to_string();
+                let agent = cols.next().unwrap_or("").to_string();
+                let status = cols.next().unwrap_or("unknown").to_string();
+                Some(SandboxInfo {
+                    name,
+                    agent,
+                    status,
+                })
             })
-        })
-        .collect()
+            .collect(),
+    }
 }
 
 /// `sbx stop SANDBOX` — stop without removing.
@@ -875,7 +979,7 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
     run_checked(&args)
 }
 
-/// `sbx prune [--dry-run] [--filter since=DURATION] --force` (sbx 0.39+).
+/// `sbx prune [--dry-run] [--filter until=DURATION] --force` (sbx 0.39+).
 ///
 /// The safe half of `rm --all`: a *running* sandbox is never a candidate, so
 /// this cannot take out the one you are working in — which is the whole reason
@@ -887,11 +991,14 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
 /// therefore happens *before* this is called — `--dry-run` is what makes that
 /// possible, and `sbxw prune` shows it first unless told not to.
 ///
-/// `since` is sbx's own spelling and its own duration parser: `since=168h` means
-/// "stopped for longer than a week". A sandbox whose stop time the daemon can't
-/// report is left alone by sbx, not by sbxw.
-pub fn prune(since: Option<&str>, dry_run: bool) -> Result<String> {
-    let filter = since.map(|d| format!("since={d}"));
+/// The filter key is `until`: `until=168h` means "stopped before a week ago",
+/// i.e. stopped for longer than a week, and the value can also be an RFC 3339
+/// or Unix timestamp — sbx's parser, not sbxw's. sbxw used to send `since=`,
+/// which no release has accepted; its own `--since` flag keeps the name and
+/// the meaning, and only the word on the wire changed. A sandbox whose stop
+/// time the daemon can't report is left alone by sbx, not by sbxw.
+pub fn prune(until: Option<&str>, dry_run: bool) -> Result<String> {
+    let filter = until.map(prune_filter);
     let mut args = vec!["prune"];
     if dry_run {
         args.push("--dry-run");
@@ -903,6 +1010,11 @@ pub fn prune(since: Option<&str>, dry_run: bool) -> Result<String> {
         args.push(f);
     }
     run_capture(&args)
+}
+
+/// The `--filter` value `prune` sends for "stopped for longer than `age`".
+fn prune_filter(age: &str) -> String {
+    format!("until={age}")
 }
 
 /// `sbx ports <name> --publish <spec>` where spec = [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO].
@@ -1103,18 +1215,55 @@ fn policy_rule_args<'a>(
     args
 }
 
-/// `sbx policy rm <rule>` — drop a single rule from a local policy.
+/// `sbx policy rm network --id RULE_ID [--sandbox NAME] --force` — drop a
+/// single rule.
 ///
 /// Takes the **rule** id from `policy ls --wide`, never a policy id: `sbx policy
 /// inspect` accepts either, and handing a policy id to a command documented as
 /// "Remove a policy rule" is how you delete far more than you meant to. The
 /// caller is responsible for sourcing the id from a rule-id column.
 ///
-/// Not verified against a live `sbx policy rm --help` — the argument shape is
-/// inferred from the command's description. A mismatch fails loudly with sbx's
-/// own message rather than removing the wrong thing.
-pub fn policy_rm_rule(rule: &str) -> Result<()> {
-    run_checked(&["policy", "rm", rule])
+/// The shape is from `sbx policy rm network --help` (0.47). sbxw used to call
+/// `sbx policy rm <rule>`, which `rm` — a group whose only subcommand is
+/// `network` — refuses outright, so the panel's ✕ never removed anything.
+///
+/// The rule is looked for in the **global** policy unless `--sandbox` names a
+/// sandbox, and the panel lists both kinds side by side without always saying
+/// which a row is. So the rule is tried where it was most likely put first
+/// (`sandbox`, when given) and then in the other scope. A rule id is a UUID: the
+/// second attempt cannot hit a different rule than the one meant.
+///
+/// `--force` because 0.45 made removal ask, and the daemon has no terminal to
+/// answer on. The browser already asked — see `wirePolicyDeletes`.
+pub fn policy_rm_rule(rule: &str, sandbox: Option<&str>) -> Result<()> {
+    let attempt = |scope: Option<&str>| {
+        let args = policy_rm_args(rule, scope);
+        run_checked(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    match (attempt(sandbox), sandbox) {
+        (Ok(()), _) => Ok(()),
+        (Err(scoped), Some(name)) => attempt(None).map_err(|global| {
+            // Both refusals: either may be the one that explains it (a rule
+            // governed by the organisation is refused *globally*, say).
+            anyhow::anyhow!(
+                "{scoped:#}\n\nnor in the global policy (tried after sandbox '{name}'s): {global:#}"
+            )
+        }),
+        (Err(e), None) => Err(e),
+    }
+}
+
+fn policy_rm_args(rule: &str, sandbox: Option<&str>) -> Vec<String> {
+    let mut args: Vec<String> = ["policy", "rm", "network", "--id", rule]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if let Some(name) = sandbox {
+        args.push("--sandbox".into());
+        args.push(name.into());
+    }
+    args.push("--force".into());
+    args
 }
 
 /// `sbx policy ls [SANDBOX] [--wide]` — the policy rules in force, including the
@@ -1443,6 +1592,24 @@ fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
     let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
     full.extend_from_slice(args);
     run_checked(&full)
+}
+
+/// Run a command inside `sandbox` and hand back its raw output, whatever its
+/// exit status.
+///
+/// For callers that read stdout as bytes (a file's contents) and give the exit
+/// code a meaning of their own — `crate::sandbox_fs` maps its script's codes to
+/// "no such directory", "too large" and the like, which `command_error`'s
+/// generic rendering would bury under the whole `sh -c` script.
+pub fn exec_output(sandbox: &str, args: &[&str]) -> Result<std::process::Output> {
+    let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
+    full.extend_from_slice(args);
+    tracing::debug!(target: "sbx", "sbx {} (bytes)", full.join(" "));
+    Command::new(BIN)
+        .args(&full)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("failed to spawn `{BIN} exec`"))
 }
 
 /// Is `path` a file inside `sandbox`?
@@ -1864,9 +2031,13 @@ mod tests {
         assert!(parse_version("0.34.9").unwrap() < MIN_SBX_VERSION);
         assert!(parse_version("0.38.9").unwrap() < MIN_SBX_VERSION);
         assert!(parse_version("0.42.1").unwrap() < MIN_SBX_VERSION);
-        assert!(parse_version("0.43.0").unwrap() >= MIN_SBX_VERSION);
-        // A missing patch reads as `.0`, so "0.43" is the floor, not below it.
-        assert!(parse_version("0.43").unwrap() >= MIN_SBX_VERSION);
+        assert!(parse_version("0.46.0").unwrap() < MIN_SBX_VERSION);
+        assert!(parse_version("0.47.0").unwrap() >= MIN_SBX_VERSION);
+        // The real `sbx version` line, release candidate or not.
+        assert!(parse_version("sbx version: v0.47.0 0411f50ee4").unwrap() >= MIN_SBX_VERSION);
+        assert!(parse_version("sbx version: v0.48.0-rc4 3d6106b").unwrap() > MIN_SBX_VERSION);
+        // A missing patch reads as `.0`, so "0.47" is the floor, not below it.
+        assert!(parse_version("0.47").unwrap() >= MIN_SBX_VERSION);
         assert!(parse_version("0.100.0").unwrap() > MIN_SBX_VERSION);
         assert!(parse_version("1.0.0").unwrap() > MIN_SBX_VERSION);
     }
@@ -1913,6 +2084,7 @@ mod tests {
             kits: &[],
             publish: &[],
             skills: None,
+            pull: None,
             env,
             env_files,
         }
@@ -1943,6 +2115,99 @@ mod tests {
         assert!(!create_args("neos", &opts(&[], &[]), None)
             .iter()
             .any(|a| a.contains("skills")));
+    }
+
+    /// The status is found under its header, wherever that column sits and
+    /// however many words it holds — the old "third word" reading took a new
+    /// column, or a two-word status, for something else.
+    #[test]
+    fn the_ls_table_is_read_by_its_headers() {
+        let raw = "\
+SANDBOX      AGENT    STATUS                 PORTS                  WORKSPACE
+neos         claude   running                127.0.0.1:4200->4200   /p/neos
+old-one      claude   stopped                                       /p/old
+hung         claude   running (unresponsive)                        /p/hung
+";
+        let rows = parse_ls_table(raw);
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["neos", "old-one", "hung"]);
+        assert_eq!(rows[0].agent, "claude");
+        assert!(rows[0].is_running());
+        assert!(!rows[1].is_running());
+        assert_eq!(rows[2].status, "running (unresponsive)");
+        assert!(
+            !rows[2].is_running(),
+            "a guest that stopped answering is not up"
+        );
+
+        // A column ahead of STATUS no longer shifts it.
+        let raw = "\
+NAME   AGENT    CREATED      STATUS    WORKSPACE
+neos   claude   2 days ago   running   /p/neos
+";
+        let rows = parse_ls_table(raw);
+        assert_eq!(rows[0].status, "running");
+        assert!(rows[0].is_running());
+    }
+
+    /// No header to read columns by — the old positional reading still works.
+    #[test]
+    fn an_ls_table_without_readable_headers_falls_back_to_positions() {
+        let rows = parse_ls_table("NAME\tAGENT\tSTATUS\nneos\tclaude\tstopped\n");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "neos");
+        assert_eq!(rows[0].status, "stopped");
+        assert!(parse_ls_table("").is_empty());
+        assert!(!SandboxInfo {
+            name: "x".into(),
+            agent: String::new(),
+            status: "Unresponsive".into()
+        }
+        .is_running());
+    }
+
+    /// `policy rm` is a group: the rule goes to its `network` subcommand, by
+    /// id, with the confirmation 0.45 added answered up front.
+    #[test]
+    fn a_rule_is_removed_through_policy_rm_network_by_id() {
+        assert_eq!(
+            policy_rm_args("2d3c", None),
+            ["policy", "rm", "network", "--id", "2d3c", "--force"]
+        );
+        assert_eq!(
+            policy_rm_args("2d3c", Some("neos")),
+            [
+                "policy",
+                "rm",
+                "network",
+                "--id",
+                "2d3c",
+                "--sandbox",
+                "neos",
+                "--force"
+            ]
+        );
+    }
+
+    /// `until=` is the only key `sbx prune --filter` takes.
+    #[test]
+    fn prune_filters_on_until() {
+        assert_eq!(prune_filter("168h"), "until=168h");
+    }
+
+    #[test]
+    fn keeping_a_sandbox_up_is_a_detached_run_by_name() {
+        assert_eq!(run_detached_args("neos"), ["run", "-d", "--name", "neos"]);
+    }
+
+    #[test]
+    fn a_pull_policy_reaches_create_only_when_one_is_set() {
+        let mut o = opts(&[], &[]);
+        assert!(!create_args("neos", &o, None)
+            .iter()
+            .any(|a| a.starts_with("--pull")));
+        o.pull = Some("missing");
+        assert!(create_args("neos", &o, None).contains(&"--pull=missing".to_string()));
     }
 
     #[test]

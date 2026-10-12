@@ -37,6 +37,8 @@
 //!   POST /api/fs/pick               → OS-native folder picker (Finder/Explorer/zenity)
 //!   GET  /api/sandboxes/:name/artifacts             → non-code files under .sbxw-artifacts
 //!   GET  /api/sandboxes/:name/artifacts/download     → download one of those files
+//!   GET  /api/sandboxes/:name/fs?path=               → one directory of the sandbox's filesystem
+//!   GET  /api/sandboxes/:name/fs/file?path=          → one file from it (preview or download)
 //!   POST /api/sandboxes/:name/codemap/lens          → start a background session that retells the map for an audience
 //!   POST /api/sandboxes/:name/codemap               → start a background session that writes the map
 //!   POST /api/sandboxes/:name/codemap/done          → that agent reports the document is written
@@ -1073,6 +1075,7 @@ const STATIC_ASSETS: &[(&str, &str, &str)] = &[
         include_str!("../assets/js/envfile.js"),
     ),
     ("/js/help.js", JS, include_str!("../assets/js/help.js")),
+    ("/js/skills.js", JS, include_str!("../assets/js/skills.js")),
     (
         "/js/lifecycle.js",
         JS,
@@ -1142,7 +1145,7 @@ pub async fn serve(
                         .await
                         .unwrap_or_default()
                         .into_iter()
-                        .filter(|s| s.status.to_lowercase().contains("running"))
+                        .filter(|s| s.is_running())
                         .map(|s| s.name)
                         .collect();
                 if running.is_empty() {
@@ -1261,6 +1264,8 @@ pub async fn serve(
             get(api_fs_favourites).post(api_fs_favourite_set),
         )
         .route("/api/sandboxes/:name/artifacts", get(api_artifacts))
+        .route("/api/sandboxes/:name/fs", get(api_sandbox_fs))
+        .route("/api/sandboxes/:name/fs/file", get(api_sandbox_fs_file))
         .route(
             "/api/sandboxes/:name/artifacts/download",
             get(api_artifact_download),
@@ -1852,7 +1857,7 @@ async fn fetch_usage() -> Result<(UsageBody, String), String> {
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|s| s.status.to_lowercase().contains("running"))
+        .filter(|s| s.is_running())
         .map(|s| s.name)
         .collect();
     if running.is_empty() {
@@ -2550,7 +2555,9 @@ async fn api_policy_add(
 /// `POST /api/sandboxes/:name/policy/rules/rm` — remove one rule by id.
 ///
 /// The id must come from a rule-id column (see `sbx::policy_rm_rule`); the
-/// frontend only offers the button when the listing has one.
+/// frontend only offers the button when the listing has one. It is looked for
+/// in this sandbox's own policy first, then in the global one — the listing
+/// shows both, and `sbx policy rm` needs to be told which.
 async fn api_policy_rm(
     Path(name): Path<String>,
     Json(body): Json<PolicyRmBody>,
@@ -2563,7 +2570,7 @@ async fn api_policy_rm(
         Err(e) => return err_json(e),
     };
     tracing::info!("web UI: removing policy rule {rule} (from sandbox '{name}' panel)");
-    blocking_ok(move || sbx::policy_rm_rule(&rule)).await
+    blocking_ok(move || sbx::policy_rm_rule(&rule, Some(&name))).await
 }
 
 #[derive(Deserialize)]
@@ -4471,6 +4478,112 @@ async fn api_artifact_download(
                 header::CONTENT_DISPOSITION,
                 format!("attachment; filename=\"{filename}\""),
             ),
+        ],
+        data,
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct SandboxFsQuery {
+    #[serde(default)]
+    path: String,
+    /// Set for "Download": an attachment named after the file. Unset, the
+    /// bytes come back for the panel's own preview.
+    #[serde(default)]
+    download: Option<String>,
+    /// Refuse past this many bytes — what a preview asks for, so a click on a
+    /// 2 GB log does not stream it into a `<pre>`.
+    #[serde(default)]
+    max: Option<u64>,
+    /// With `max`: the file's first `max` bytes rather than a refusal.
+    #[serde(default)]
+    head: Option<String>,
+}
+
+/// `GET /api/sandboxes/:name/fs?path=/abs/dir` — one directory of the sandbox's
+/// own filesystem, for the Project panel's explorer (see `crate::sandbox_fs`).
+///
+/// The response also names the places the explorer offers as favourites —
+/// the workspace, its `.sbxw-artifacts`, the agent's home — because only the
+/// daemon knows where this sandbox's workspace is.
+async fn api_sandbox_fs(
+    Path(name): Path<String>,
+    Query(q): Query<SandboxFsQuery>,
+) -> Json<serde_json::Value> {
+    if let Some(err) = reject_invalid_name(&name) {
+        return err;
+    }
+    let workspace = crate::workspace_for(&name);
+    let ws = workspace.clone();
+    let listing = match try_blocking(move || {
+        crate::sandbox_fs::list(&name, ws.as_deref(), &q.path)
+    })
+    .await
+    {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+    let workspace = workspace.map(|w| w.to_string_lossy().into_owned());
+    let artifacts = workspace
+        .as_ref()
+        .map(|w| format!("{}/{}", w.trim_end_matches('/'), crate::ARTIFACTS_DIR));
+    Json(serde_json::json!({
+        "ok": true,
+        "path": listing.path,
+        "parent": listing.parent,
+        "entries": listing.entries,
+        "offline": listing.offline,
+        "workspace": workspace,
+        "artifacts": artifacts,
+        "home": crate::sandbox_fs::SANDBOX_HOME,
+    }))
+}
+
+/// `GET /api/sandboxes/:name/fs/file?path=/abs/file[&download=1][&max=N[&head=1]]` —
+/// one file's bytes from inside the sandbox.
+///
+/// Served under `Content-Security-Policy: sandbox` and `nosniff` whatever the
+/// type: the file was written by whatever ran in the sandbox, and an HTML or SVG
+/// document rendered with the daemon's origin could call every route here. The
+/// panel previews HTML from the text instead, in a sandboxed iframe.
+async fn api_sandbox_fs_file(
+    Path(name): Path<String>,
+    Query(q): Query<SandboxFsQuery>,
+) -> Response {
+    if !crate::is_valid_sandbox_name(&name) {
+        return (StatusCode::BAD_REQUEST, crate::INVALID_NAME_MSG).into_response();
+    }
+    let workspace = crate::workspace_for(&name);
+    let path = q.path.clone();
+    let max = q.max.unwrap_or(crate::sandbox_fs::MAX_FILE);
+    let head = q.head.is_some();
+    let data = match tokio::task::spawn_blocking(move || {
+        crate::sandbox_fs::read(&name, workspace.as_deref(), &path, max, head)
+    })
+    .await
+    {
+        Ok(Ok(d)) => d,
+        Ok(Err(e)) => return (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "task panic").into_response(),
+    };
+    let filename = q
+        .path
+        .rsplit('/')
+        .next()
+        .unwrap_or("download")
+        .replace(['"', '\\', '\r', '\n'], "");
+    let disposition = if q.download.is_some() {
+        format!("attachment; filename=\"{filename}\"")
+    } else {
+        "inline".to_string()
+    };
+    (
+        [
+            (header::CONTENT_TYPE, guess_mime(&filename).to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::CONTENT_SECURITY_POLICY, "sandbox".to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
         ],
         data,
     )

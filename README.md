@@ -8,11 +8,11 @@ policy.
 It **only ever calls `sbx`** — never `docker sandbox`.
 
 > Built against the `sbx` **0.39** CLI reference
-> (docs.docker.com/reference/cli/sbx) and the **0.42/0.43** release notes, and
-> it assumes 0.43 throughout — there are no fallbacks for older releases. It
-> checks at startup; see below.
+> (docs.docker.com/reference/cli/sbx), the **0.42–0.47** release notes and the
+> `--help` of a real 0.47.0 binary, and it assumes 0.47 throughout — there are
+> no fallbacks for older releases. It checks at startup; see below.
 
-## Requires sbx 0.43.0 or newer
+## Requires sbx 0.47.0 or newer
 
 `sbxw up`, `sbxw chat`, `sbxw web`, `sbxw env run` and `sbxw prune` run
 `sbx version` first and stop with a clear message if it's older.
@@ -29,8 +29,11 @@ it fails on. What sbxw now assumes, unconditionally:
 | `sbx env create --name`, `--env-arg` | `sbxw env run`, which provisions from a committed `sbxenv.yaml` |
 | The 0.42/0.43 environment-file format | `sbxenv.yaml` (not hidden), `${{ env.* }}` expressions, paths relative to the declaring file, `skills:` — see [Environment files](#environment-files-sbxenvyaml) |
 | `create --skills=off\|readonly\|readwrite` | `skills` in `sbxw.toml` — see [Shared skills](#shared-skills) |
-| `sbx prune` | `sbxw prune` |
-| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the four kits under `assets/` |
+| `sbx prune --filter until=…` | `sbxw prune` |
+| `policy rm network --id … --force` | the ✕ on a rule in the network-policy panel |
+| `run -d --name NAME` keeping a sandbox up (0.47) | `keep_running` in `sbxw.toml` |
+| `create --pull=always\|missing\|never` | `pull` in `sbxw.toml` |
+| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the five kits under `assets/` |
 | `secret set --sandbox NAME` | the Anthropic secret, without the deprecation warning the old spellings printed |
 | `SANDBOX_NAME` | the in-sandbox hooks naming their own sandbox |
 | `create --kit` repeated | every configured kit applied at creation, which is the only moment sbx applies one whole |
@@ -52,9 +55,29 @@ addresses, so nothing changes for its own ports) and refuses sandbox names over
 63 characters or ending in a hyphen — sbxw checks that rule itself, in the CLI
 and the web UI, before sbx has to.
 
+The floor moved again, to 0.47, for smaller reasons with the same shape.
+0.45 made **every removal ask for confirmation**, and a prompt with no terminal
+behind it is a refusal: sbxw passes `--force` to each removal it runs and does
+its own asking, but `policy rm network` only learned `--force` in 0.45 — on
+0.43 the flag is an error. 0.47's `sbx run -d` is what `keep_running` is built
+on. Two calls were wrong on every release and are fixed with it: `sbxw prune
+--since` sent `--filter since=…`, a key sbx has never accepted (it is
+`until=`), and the panel's ✕ ran `sbx policy rm <id>`, which `rm` — a group
+whose only subcommand is `network` — refuses.
+
+Other 0.45–0.47 changes sbxw follows: `sbx ls` is read by its column headers,
+since 0.45 put every list on one table format, and a sandbox whose guest
+stopped responding (reported since 0.45) is not treated as running. `sbx exec
+-d` now fails outright; sbxw never detached an exec. And since 0.46 a
+`secrets.<name>.command` in an environment file runs from a fresh temporary
+directory, so `sbxw env run` warns about one that uses `./helper` or
+`../token` — use an absolute path outside the workspace, or a program on
+`PATH`.
+
 Two 0.43 behaviours worth knowing: sandboxes made with `sbx create` — which is
 how `sbxw up` makes them — **stop by themselves once idle** (restart with
-`sbxw up`; ports are re-published on every bring-up), and **MCP OAuth client
+`sbxw up`; ports are re-published on every bring-up; or set `keep_running =
+true` to hold one up until `sbxw stop`), and **MCP OAuth client
 secrets** are now stored as `mcp:<server>:client_secret` — one stored under the
 old `mcp:<server>.client_secret` name is no longer read and has to be set again
 with `sbx secret set mcp:<server>:client_secret`. sbxw stores no MCP secrets
@@ -155,7 +178,7 @@ diagonally across the screen.
 | `sbxw ls` | List all sandboxes with status. |
 | `sbxw stop <names…> [--all]` | Stop sandboxes (state kept; restartable). |
 | `sbxw rm <names…> [--all]` | Remove sandboxes permanently (passes `--force`, so removal proceeds even if a session is attached, which sbx otherwise refuses). |
-| `sbxw prune [--since D] [--dry-run] [--yes]` | Remove every **stopped** sandbox — a running one is never a candidate, so this can't take out the one you're in. Lists them and asks first. `--since 168h` keeps anything stopped more recently. |
+| `sbxw prune [--since D] [--dry-run] [--yes]` | Remove every **stopped** sandbox — a running one is never a candidate, so this can't take out the one you're in. Lists them and asks first. `--since 168h` (alias `--until`, sbx's word: it becomes `--filter until=168h`) keeps anything stopped more recently. |
 | `sbxw env run [paths…] [--env-arg K=V]` | Bring a sandbox up from an `sbxenv.yaml` (over `~/.sbxenv.yaml`): `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
 | `sbxw env export [path]` | Write an `sbxenv.yaml` beside the workspace, with every path relative to the file so it is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
 | `sbxw logs <name> [-n N]` | Tail a running daemon's log. |
@@ -195,16 +218,32 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   of a picture, or a flat refusal, are equally valid answers. See
   [Asking *you* for a screenshot](#asking-you-for-a-screenshot).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
+- **Browse the sandbox's files** — the **Project** panel (📁 beside the sandbox
+  name in a pane's top bar) is a file explorer over the sandbox's *own*
+  filesystem, opening on `.sbxw-artifacts/`: breadcrumb (click its empty space to
+  type a path, `~` included), back / up, a filter, dotfiles on demand, and a
+  preview of the selected file — text, images, and HTML in a sandboxed iframe —
+  with Download and Copy path. Favourites on the left: `.sbxw-artifacts`, the
+  workspace, the agent's home and `/` are built in, and ★ pins any other folder
+  (remembered per sandbox, in this browser). A running sandbox is read through
+  `sbx exec`, so everything the agent sees is there; a stopped one shows its
+  workspace from the host and says so, rather than being started to list a
+  folder. Read-only, and every file is served under `Content-Security-Policy:
+  sandbox` — an HTML file an agent wrote never runs with the daemon's origin.
 - **Read the project's code map** — the **Code map** button in the **Project**
   panel (📁 beside the sandbox name in a pane's top bar) opens the linked
   markdown under `.sbxw-artifacts/codemap/` as a small vault:
   `[[wiki links]]` are clickable, every section lists what points *at* it
   (backlinks), the outline jumps within a file, search spans the whole map, and
-  a **Graph** tab lays the files out as a force-directed graph you can drag.
+  a **Diagram** tab shows the map's [Archify](https://github.com/tt-a1i/archify)
+  architecture diagram, live — focus, route tracing, themes, export — in a
+  sandboxed iframe that cannot reach the daemon. A map with no diagram yet (a
+  lens, or one written before Archify) shows the graph of its links instead.
   A dead link is drawn struck through in red rather than silently as text — a
-  map that has drifted from the code says so on sight. Read-only, and served
-  from the two endpoints the Project panel already uses, so it reaches nothing
-  outside `.sbxw-artifacts`.
+  map that has drifted from the code says so on sight. The panel takes nearly
+  the whole window, and the outline column folds away in the Diagram tab, so
+  the drawing gets the width. Read-only, and served from the artifacts
+  endpoints, so it reaches nothing outside `.sbxw-artifacts`.
 
   The panel itself opens from 📁 in a pane's top bar, sat against the sandbox
   name rather than with SSH / Env / Reconnect at the other end of that bar:
@@ -249,7 +288,7 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   change"* — and the agent writes it into
   `.sbxw-artifacts/codemap-lenses/<slug>/`, beside the map and never inside it.
   Each lens then appears in the picker next to the map and is read through the
-  same viewer, links, graph and all.
+  same viewer, links and all.
 
   The agent names it, once it has read the map: that directory is the lens's
   title in the picker, and a title cut from the brief's opening words
@@ -304,7 +343,9 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
     sandboxes** to write it to the host-wide policy instead — that one asks for
     confirmation, since it governs every sandbox including ones created later.
     Runs `sbx policy allow|deny network [--sandbox <name>] <resources>`.
-  - **✕ on a rule** removes it via `sbx policy rm <rule-id>`, after a
+  - **✕ on a rule** removes it via `sbx policy rm network --id <rule-id>
+    --force` — tried in this sandbox's policy first, then the global one,
+    since the listing shows both — after a
     confirmation that names the rule's blast radius. The id comes from the
     listing's *rule-id* column specifically — a policy id would delete every rule
     in that policy — so the button only appears when sbx reports one. Rules from
@@ -314,10 +355,6 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   `sbxw up` re-applies the configured allowlist over the top. For a permanent
   change, edit `network_allow` / `network_deny` there.
 
-  > `sbx policy rm`'s argument shape is inferred from its help text, not verified
-  > against a live run. If it turns out to differ, the button surfaces sbx's own
-  > error verbatim — it can't remove the wrong thing, since it only ever passes a
-  > rule id.
 - **Reconnect / ↻ (rebuild)** in the terminal bar — the first reopens the pane's
   WebSocket, the second also throws the xterm widget away and builds a new one
   (for a display that has gone bad in ways a reconnect can't clear). Both replay
@@ -1016,7 +1053,7 @@ ERROR: kit "md-to-pdf-tools" declares commands.startup, which the kit-add
        via `sbx rm` + `sbx create --kit` to use this kit
 ```
 
-All four bundled kits declare startup commands — that is how they install
+All five bundled kits declare startup commands — that is how they install
 anything — so this is the normal case, not a corner one. **Adding a kit to
 `sbxw.toml` for a sandbox that already exists therefore means recreating it:**
 `sbxw rm <name>` then `sbxw up <name>`. sbxw says so and changes nothing rather
@@ -1052,6 +1089,19 @@ Bundled kits:
   WeasyPrint + poppler-utils + Pillow stack it needs, so the skill is
   available and first invocation has no install step. See
   `assets/md-to-pdf-tools/README.md`.
+- **`assets/agent-skills`** — `/archify` ([tt-a1i/archify](https://github.com/tt-a1i/archify):
+  validated, interactive HTML architecture / workflow / sequence / dataflow /
+  lifecycle diagrams) and `/brag` + `/brag-slim`
+  ([latent-spaces/brag](https://github.com/latent-spaces/brag): a launch video of
+  the project), `/i-have-adhd` ([ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd)),
+  always on through a `SessionStart` hook, `/handoff` and `/grill-me`
+  ([mattpocock/skills](https://github.com/mattpocock/skills)), `/frontend-design`
+  ([anthropics/skills](https://github.com/anthropics/skills)),
+  each pinned to a commit, plus a headless Chromium (Playwright's,
+  which has linux-arm64 builds) and FFmpeg. The skills land in
+  `~/.sbxw/agent-skills/` with thin user-level commands pointing at them, never in
+  the shared skill store. Needs the Playwright CDN and the apt mirrors in
+  `network_allow`. See `assets/agent-skills/README.md`.
 - **`assets/codemap`** — ships the `/codemap` command, a format reference, an
   offline checker, and three Claude Code hooks, so an agent **reads a
   repository's code map before its source** and knows how to write one when
@@ -1063,7 +1113,12 @@ Bundled kits:
   stays the user's call.
   The map is markdown in [lat.md](https://github.com/vercel-labs/lat.md) format
   — `[[wiki links]]` between sections, links into source symbols, `@lat:`
-  comments tying code back to the idea it implements. `/codemap-lens` comes with
+  comments tying code back to the idea it implements — plus one picture of the
+  whole: an [Archify](https://github.com/tt-a1i/archify) architecture diagram in
+  `diagram/`, repository-backed (pinned commit, every component citing its
+  code), labelled with the map's own headings, and held to the checker like a
+  code link. It is drawn with the archify the `agent-skills` kit installs, so
+  apply both. `/codemap-lens` comes with
   it: the same map retold for one reader, into
   `.sbxw-artifacts/codemap-lenses/<slug>/` — what the web UI's *Write a lens…*
   button runs. Both are what the web UI's Code map panel starts, each in a
@@ -1076,7 +1131,7 @@ the sandbox policy when the kit is added; domains a kit does *not*
 declare (e.g. apt mirrors) still need adding to `sbxw.toml`'s `network_allow` —
 see each kit's README.
 
-The four bundled kits are **spec v2** (`schemaVersion: "2"`), like the OAuth
+The five bundled kits are **spec v2** (`schemaVersion: "2"`), like the OAuth
 kit sbxw generates: `permissions.network.allow`, `setup.files`, `setup.startup`.
 The v2 loader rejects v1 field names outright, so a spec commits to one grammar
 — if you adapt a kit written against v1, rename all three sections, not one.

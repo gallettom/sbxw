@@ -1,0 +1,413 @@
+schemaVersion: "2"
+kind: mixin
+name: agent-skills
+description: >
+  Ships third-party agent skills, pinned to a commit, as user-level Claude
+  Code commands: /i-have-adhd (ayghri/i-have-adhd — output shaped for a reader
+  with ADHD, always on through a SessionStart hook), /handoff, /grill-me and
+  grilling (mattpocock/skills), /frontend-design (anthropics/skills), /archify
+  (tt-a1i/archify — validated, interactive HTML
+  architecture / workflow / sequence / dataflow / lifecycle diagrams) and /brag
+  + /brag-slim (latent-spaces/brag — a short launch video of the project).
+  Also installs what they run on: a headless Chromium for archify's browser gate
+  and Hyperframes' renderer, and FFmpeg for brag. The codemap kit draws its
+  diagram with the archify installed here. Idempotent: safe to re-run on every
+  container start; nothing is downloaded again until a pin moves.
+
+# codeload.github.com serves the two pinned tarballs; the Playwright CDN serves
+# Chromium (it has linux-arm64 builds, which Chrome for Testing does not);
+# npm serves the Playwright installer and, at /brag time, `npx hyperframes`;
+# the Ubuntu/Debian mirrors serve ffmpeg and Chromium's shared libraries.
+# Keep sbxw.toml's network_allow in step with this list — see the README.
+permissions:
+  network:
+    allow:
+      - github.com
+      - codeload.github.com
+      - registry.npmjs.org
+      - cdn.playwright.dev
+      - playwright.download.prss.microsoft.com
+      - deb.debian.org
+      - security.debian.org
+      - archive.ubuntu.com
+      - security.ubuntu.com
+      - ports.ubuntu.com
+
+setup:
+  files:
+    # The skills themselves land outside ~/.claude/skills on purpose: in a
+    # sandbox that path is a mount of sbx's shared skill store, so writing there
+    # would write onto the host and into every other sandbox. What lands in
+    # ~/.claude/commands is a thin pointer to the pinned copy instead — the same
+    # arrangement as /codemap and /md-to-pdf.
+    - path: /home/agent/.claude/commands/archify.md
+      mode: "0644"
+      content: |
+        Create polished, validated architecture, workflow, sequence, data-flow and lifecycle/state diagrams as explorable standalone HTML (Archify) — from a description, pasted Mermaid, or a real repository traced from source. Not for numeric charts or dashboards.
+
+        Request: $ARGUMENTS
+
+        Archify is installed in this sandbox by sbxw's agent-skills kit, at
+        `/home/agent/.sbxw/agent-skills/archify` (the commit is in `.sbxw-rev` there).
+        **Read `/home/agent/.sbxw/agent-skills/archify/SKILL.md` now and follow it** for
+        this request. What is specific to this sandbox:
+
+        - **Paths.** `bin/archify.mjs` is `/home/agent/.sbxw/agent-skills/archify/bin/archify.mjs`,
+          and every relative path in SKILL.md — `references/`, `schemas/`, `examples/` —
+          resolves against `/home/agent/.sbxw/agent-skills/archify/`. Your working directory
+          stays the project's: input and output paths resolve from there.
+        - **Output.** Unless the user names another location, put each new diagram in
+          `.sbxw-artifacts/archify/<type>-<slug>-<YYYYMMDD-HHMMSS>/` rather than
+          `.archify/…` — same rules as SKILL.md's folder, but sbxw's web UI lists
+          `.sbxw-artifacts/`, so the person can open the HTML from there.
+        - **Browser gate.** The kit installs a headless Chromium as `chromium` on `PATH`
+          and points `ARCHIFY_CHROME` at it. If `finalize` reports the browser gate as
+          `skipped`, Chromium is not installed in this sandbox: report browser evidence as
+          skipped, never as passed.
+        - **Updates.** Never install or update Archify yourself — the kit pins it. If a
+          receipt says an update is available, mention it once and say it arrives by
+          moving the pin in sbxw's `assets/agent-skills` kit.
+    - path: /home/agent/.claude/commands/brag.md
+      mode: "0644"
+      content: |
+        Turn the current project into a short, polished, shareable launch video — music, motion and share copy included (/brag, powered by Hyperframes). Use when someone says "/brag", "let's brag about this", "make a launch video" or wants to show off what they built.
+
+        Invocation: /brag $ARGUMENTS
+
+        /brag is installed in this sandbox by sbxw's agent-skills kit, at
+        `/home/agent/.sbxw/agent-skills/brag` (the commit is in `.sbxw-rev` there).
+        **Read `/home/agent/.sbxw/agent-skills/brag/SKILL.md` now and follow it**, passing
+        it the invocation above. What is specific to this sandbox:
+
+        - **`<skill-dir>`** in SKILL.md and its references is
+          `/home/agent/.sbxw/agent-skills/brag`; `references/`, `scripts/`, `slim.md`
+          and the bundled audio resolve against it.
+        - **Tools.** FFmpeg is installed by the kit. Hyperframes is fetched by `npx
+          hyperframes` on first use (registry.npmjs.org must be allowed); it renders with
+          the kit's Chromium through `HYPERFRAMES_BROWSER_PATH`, because the
+          chrome-headless-shell it would otherwise download has no linux-arm64 build.
+          `uv` is not installed: for music cues use a bundled preset or
+          `npx hyperframes beats`, as SKILL.md allows.
+        - **Previews.** This sandbox has no display and its ports are not published by
+          default: prefer `npx hyperframes snapshot` over `preview`, and give the user
+          the path to `brag.mp4` rather than trying to open it.
+    - path: /home/agent/.claude/commands/brag-slim.md
+      mode: "0644"
+      content: |
+        Turn a project directory or a website URL into a short, shareable launch video with music, motion and share copy, built entirely with the tools already on the machine (/brag-slim). If /brag is also asked for, let /brag handle it; it hands off here on Opus 5.5.
+
+        Invocation: /brag-slim $ARGUMENTS
+
+        /brag-slim is installed in this sandbox by sbxw's agent-skills kit, at
+        `/home/agent/.sbxw/agent-skills/brag-slim`. **Read
+        `/home/agent/.sbxw/agent-skills/brag-slim/SKILL.md` now and follow it**, passing
+        it the invocation above. The kit has installed FFmpeg and a headless Chromium
+        (`chromium` on `PATH`, sandbox flag included) for frames and the render; there is
+        no display, so hand the user the path to the video rather than opening it.
+    # The next four mirror their upstream frontmatter: /i-have-adhd, /handoff
+    # and /grill-me run only when the user types them; grilling is the one the
+    # agent may reach for on its own, on a "grill me".
+    - path: /home/agent/.claude/commands/i-have-adhd.md
+      mode: "0644"
+      content: |
+        ---
+        description: 'Shape output for a reader with ADHD: lead with the next action, number multi-step work, restate state across turns, suppress tangents, give specific time estimates, make wins visible. Stays on until "stop adhd mode".'
+        disable-model-invocation: true
+        ---
+
+        /i-have-adhd is installed in this sandbox by sbxw's agent-skills kit, at
+        `/home/agent/.sbxw/agent-skills/i-have-adhd` (the commit is in `.sbxw-rev` there).
+        **Read `/home/agent/.sbxw/agent-skills/i-have-adhd/SKILL.md` now and follow it**
+        for the rest of this session, until the user says "stop adhd mode" or "normal mode".
+
+        If the session already opened with "ADHD MODE ACTIVE (always-on)", the rules are
+        in force: confirm in one line and carry on. Always-on is the kit's `SessionStart`
+        hook, which fires while `/home/agent/.claude/.i-have-adhd-always` exists; deleting
+        that file turns it off for good in this sandbox.
+
+        $ARGUMENTS
+    - path: /home/agent/.claude/commands/handoff.md
+      mode: "0644"
+      content: |
+        ---
+        description: Compact the current conversation into a handoff document for another agent to pick up.
+        argument-hint: "What will the next session be used for?"
+        disable-model-invocation: true
+        ---
+
+        Next session's focus: $ARGUMENTS
+
+        /handoff is installed in this sandbox by sbxw's agent-skills kit, at
+        `/home/agent/.sbxw/agent-skills/handoff` (the commit is in `.sbxw-rev` there).
+        **Read `/home/agent/.sbxw/agent-skills/handoff/SKILL.md` now and follow it.**
+        End by giving the user the absolute path of the document you wrote: this sandbox
+        has no display, and that path is how the next agent is pointed at it.
+    - path: /home/agent/.claude/commands/grill-me.md
+      mode: "0644"
+      content: |
+        ---
+        description: A relentless interview to sharpen a plan or design.
+        disable-model-invocation: true
+        ---
+
+        Subject: $ARGUMENTS
+
+        /grill-me is installed in this sandbox by sbxw's agent-skills kit. Its upstream
+        SKILL.md only hands over to the `grilling` skill, which is installed at
+        `/home/agent/.sbxw/agent-skills/grilling` (the commit is in `.sbxw-rev` there).
+        **Read `/home/agent/.sbxw/agent-skills/grilling/SKILL.md` now and follow it**
+        on the subject above, or on the plan this conversation is about if it is empty.
+    - path: /home/agent/.claude/commands/grilling.md
+      mode: "0644"
+      content: |
+        Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
+
+        Subject: $ARGUMENTS
+
+        Grilling is installed in this sandbox by sbxw's agent-skills kit, at
+        `/home/agent/.sbxw/agent-skills/grilling` (the commit is in `.sbxw-rev` there).
+        **Read `/home/agent/.sbxw/agent-skills/grilling/SKILL.md` now and follow it.**
+    - path: /home/agent/.claude/commands/frontend-design.md
+      mode: "0644"
+      content: |
+        Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.
+
+        Request: $ARGUMENTS
+
+        frontend-design (anthropics/skills) is installed in this sandbox by sbxw's
+        agent-skills kit, at `/home/agent/.sbxw/agent-skills/frontend-design` (the commit
+        is in `.sbxw-rev` there). **Read
+        `/home/agent/.sbxw/agent-skills/frontend-design/SKILL.md` now and follow it** for
+        this request.
+    # i-have-adhd's always-on mode. Upstream ships it as a plugin hook that finds
+    # SKILL.md through the plugin's own tree; this is the same hook reading the
+    # kit's pinned copy instead. It fires only while the flag file exists — the
+    # installer creates it once, so deleting it turns always-on off for good.
+    - path: /home/agent/.sbxw/agent-skills/hook-adhd.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // SessionStart: inject the i-have-adhd ruleset when the flag file exists.
+        // Never blocks a session start: any failure exits 0 and says nothing.
+        import { existsSync, readFileSync } from "node:fs";
+
+        const FLAG = "/home/agent/.claude/.i-have-adhd-always";
+        const SKILL = "/home/agent/.sbxw/agent-skills/i-have-adhd/SKILL.md";
+
+        try {
+          if (!existsSync(FLAG) || !existsSync(SKILL)) process.exit(0);
+          const body = readFileSync(SKILL, "utf8")
+            .replace(/^---[^\S\r\n]*\r?\n[\s\S]*?\r?\n---[^\S\r\n]*(?:\r?\n|$)/, "")
+            .replace(/(?:\r?\n)+$/, "");
+          process.stdout.write(
+            "ADHD MODE ACTIVE (always-on). The ruleset below applies to every response. " +
+              '"stop adhd mode" turns it off for this session; delete ' + FLAG +
+              " to turn always-on off for good.\n\n" + body + "\n",
+          );
+        } catch {
+          process.exit(0);
+        }
+    - path: /home/agent/.sbxw/agent-skills/install-hooks.mjs
+      mode: "0755"
+      content: |
+        #!/usr/bin/env node
+        // Register hook-adhd.mjs in Claude Code's user-level settings, the file it
+        // reads for every session in this sandbox whatever project is open.
+        // Merges rather than overwrites and removes its own previous entry first, so
+        // re-running on every container start is a no-op; a corrupt settings file is
+        // left exactly as found. Same arrangement as the codemap kit's hooks.
+        import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+        import { dirname } from "node:path";
+
+        const SETTINGS = "/home/agent/.claude/settings.json";
+        const HOOK = "/home/agent/.sbxw/agent-skills/hook-adhd.mjs";
+        const FLAG = "/home/agent/.claude/.i-have-adhd-always";
+        // Seeded once: the flag is created on the first start only, so a user who
+        // deleted it to turn always-on off is not overruled by the next start.
+        const SEEDED = "/home/agent/.sbxw/agent-skills/.adhd-flag-seeded";
+
+        let settings = {};
+        try {
+          settings = JSON.parse(readFileSync(SETTINGS, "utf8"));
+        } catch (e) {
+          if (e.code !== "ENOENT") {
+            console.log("  [agent-skills] " + SETTINGS + " is not readable JSON — i-have-adhd hook not installed, settings left alone");
+            process.exit(0);
+          }
+        }
+
+        const ours = (entry) =>
+          (entry.hooks || []).some((h) => (h.args || []).includes(HOOK) || String(h.command || "").includes(HOOK));
+
+        settings.hooks = settings.hooks || {};
+        settings.hooks.SessionStart = (settings.hooks.SessionStart || []).filter((e) => !ours(e));
+        settings.hooks.SessionStart.push({
+          matcher: "startup|resume|clear|compact",
+          hooks: [{ type: "command", command: "node", args: [HOOK], timeout: 30 }],
+        });
+
+        mkdirSync(dirname(SETTINGS), { recursive: true });
+        writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
+
+        if (!existsSync(SEEDED)) {
+          writeFileSync(FLAG, "");
+          writeFileSync(SEEDED, "");
+        }
+        console.log("  [agent-skills] i-have-adhd hook installed (always-on " + (existsSync(FLAG) ? "on" : "off: " + FLAG + " was deleted") + ")");
+    - path: /home/agent/.sbxw/agent-skills/install.sh
+      mode: "0755"
+      content: |
+        #!/usr/bin/env bash
+        # Install the pinned agent skills, and what they run on.
+        # Idempotent: every step checks before it acts, and a failed step is
+        # reported and skipped rather than failing the container start.
+        # No dollar-brace anywhere: kit `content` fields reject it.
+        set -uo pipefail
+        info() { echo "  [agent-skills] $*"; }
+
+        BASE=/home/agent/.sbxw/agent-skills
+        BIN=/home/agent/.local/bin
+        PW_BROWSERS=/home/agent/.cache/ms-playwright
+        ENV_FILE=/etc/sandbox-persistent.sh
+        mkdir -p "$BASE" "$BIN"
+
+        # ── Pins. Move one to update: the next container start fetches it. ───
+        ARCHIFY_REPO=tt-a1i/archify
+        ARCHIFY_REV=73aaa0696e8f72c232ea710e6fa94fd953f3e773   # v3.0.1
+        BRAG_REPO=latent-spaces/brag
+        BRAG_REV=7079945d391573edebe48fdc0a23b39c4b4e8726      # v0.4.0
+        ADHD_REPO=ayghri/i-have-adhd
+        ADHD_REV=1ecea1993b7fce257ffbd686c070948b5e07eda6      # main, 2026-10-11
+        POCOCK_REPO=mattpocock/skills
+        POCOCK_REV=49dd158d1076134a641b33efb035946536778336    # main, 2026-10-09
+        ANTHROPIC_REPO=anthropics/skills
+        ANTHROPIC_REV=dbd4588f9e1033efb41dad4bef2f7947c8993d44 # main, 2026-10-09
+        PLAYWRIGHT=1.63.0
+
+        # fetch REPO REV TARGET... — each TARGET is "subdir:dest". One tarball
+        # per repository, unpacked once, and a dest is swapped in whole, so a
+        # failed download leaves the previous install untouched.
+        fetch() {
+          repo="$1"; rev="$2"; shift 2
+          stale=""
+          for t in "$@"; do
+            dest="$BASE/$(echo "$t" | cut -d: -f2)"
+            [ "$(cat "$dest/.sbxw-rev" 2>/dev/null)" = "$rev" ] || stale=1
+          done
+          if [ -z "$stale" ]; then info "$repo already at $rev"; return 0; fi
+          tmp="$(mktemp -d)"
+          if ! curl -fsSL "https://codeload.github.com/$repo/tar.gz/$rev" | tar -xz -C "$tmp"; then
+            info "could not download $repo@$rev — keeping what is installed (is codeload.github.com allowed?)"
+            rm -rf "$tmp"; return 1
+          fi
+          top="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+          for t in "$@"; do
+            sub="$(echo "$t" | cut -d: -f1)"
+            dest="$BASE/$(echo "$t" | cut -d: -f2)"
+            if [ ! -f "$top/$sub/SKILL.md" ]; then
+              info "$repo@$rev has no $sub/SKILL.md — skipped"; continue
+            fi
+            rm -rf "$dest.new" && cp -a "$top/$sub" "$dest.new" \
+              && echo "$rev" > "$dest.new/.sbxw-rev" \
+              && rm -rf "$dest" && mv "$dest.new" "$dest" \
+              && info "$(basename "$dest") -> $dest ($rev)"
+          done
+          rm -rf "$tmp"
+        }
+
+        fetch "$ARCHIFY_REPO" "$ARCHIFY_REV" archify:archify
+        fetch "$BRAG_REPO" "$BRAG_REV" skills/brag:brag skills/brag-slim:brag-slim
+        fetch "$ADHD_REPO" "$ADHD_REV" skills/i-have-adhd:i-have-adhd
+        fetch "$POCOCK_REPO" "$POCOCK_REV" skills/productivity/handoff:handoff \
+          skills/productivity/grill-me:grill-me skills/productivity/grilling:grilling
+        fetch "$ANTHROPIC_REPO" "$ANTHROPIC_REV" skills/frontend-design:frontend-design
+
+        APT_READY=""
+        apt_install() {
+          if [ -z "$APT_READY" ]; then
+            sudo apt-get update -qq >/dev/null 2>&1 || { info "apt-get update failed (are the apt mirrors in network_allow?)"; return 1; }
+            APT_READY=1
+          fi
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1
+        }
+
+        # ── FFmpeg, for /brag's poster frame and final mux ───────────────────
+        if command -v ffmpeg >/dev/null 2>&1; then
+          info "ffmpeg already installed"
+        elif apt_install ffmpeg; then
+          info "ffmpeg installed"
+        else
+          info "ffmpeg install failed — /brag will say so when it needs it"
+        fi
+
+        # ── Headless Chromium, for archify's browser gate and Hyperframes ────
+        # Playwright's build, because it exists for linux-arm64 as well as x64.
+        find_chrome() {
+          ls -d "$PW_BROWSERS"/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1
+        }
+        CHROME="$(find_chrome)"
+        if [ -n "$CHROME" ]; then
+          info "chromium already installed"
+        else
+          info "installing chromium (playwright@$PLAYWRIGHT)…"
+          PLAYWRIGHT_BROWSERS_PATH="$PW_BROWSERS" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1 \
+            || info "chromium download failed (are registry.npmjs.org and cdn.playwright.dev allowed?)"
+          CHROME="$(find_chrome)"
+        fi
+
+        # Its shared libraries, read off the binary rather than guessed from a
+        # distribution's package names, which moved with the t64 transition.
+        if [ -n "$CHROME" ] && ldd "$CHROME" 2>/dev/null | grep -q "not found"; then
+          info "installing chromium's shared libraries…"
+          LIBS=""
+          for p in libnss3 libnspr4 libatk1.0-0t64 libatk1.0-0 libatk-bridge2.0-0t64 libatk-bridge2.0-0 \
+                   libcups2t64 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+                   libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libasound2 libxshmfence1 \
+                   fonts-liberation fonts-noto-color-emoji; do
+            apt-cache show "$p" >/dev/null 2>&1 && LIBS="$LIBS $p"
+          done
+          apt_install $LIBS || info "some of chromium's libraries failed to install"
+        fi
+
+        # `--no-sandbox` is not optional here: Chrome's own sandbox needs user
+        # namespaces the container does not grant to a non-root user.
+        if [ -n "$CHROME" ] && "$CHROME" --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>&1; then
+          printf '#!/bin/sh\nexec "%s" --no-sandbox "$@"\n' "$CHROME" > "$BIN/chromium"
+          chmod 0755 "$BIN/chromium"
+          info "chromium -> $BIN/chromium"
+          HAVE_CHROME=1
+        else
+          [ -n "$CHROME" ] && info "chromium is installed but does not start — archify's browser gate will report skipped"
+          rm -f "$BIN/chromium"
+          HAVE_CHROME=""
+        fi
+
+        # ── Environment, for every later shell the agent opens ───────────────
+        # Rewritten between fences, so re-running replaces rather than appends,
+        # and removed when there is no browser to point at: archify treats a set
+        # but broken ARCHIFY_CHROME as a failure, an absent one as "skipped".
+        BEGIN="# >>> sbxw agent-skills >>>"
+        END="# <<< sbxw agent-skills <<<"
+        if [ -f "$ENV_FILE" ]; then
+          tmpenv="$(mktemp)"
+          sed "/^$BEGIN\$/,/^$END\$/d" "$ENV_FILE" > "$tmpenv"
+          if [ -n "$HAVE_CHROME" ]; then
+            {
+              echo "$BEGIN"
+              echo "export ARCHIFY_CHROME=$BIN/chromium"
+              echo "export HYPERFRAMES_BROWSER_PATH=$BIN/chromium"
+              echo "$END"
+            } >> "$tmpenv"
+          fi
+          if ! cmp -s "$tmpenv" "$ENV_FILE"; then
+            { cat "$tmpenv" > "$ENV_FILE"; } 2>/dev/null || sudo tee "$ENV_FILE" < "$tmpenv" >/dev/null \
+              || info "could not update $ENV_FILE"
+          fi
+          rm -f "$tmpenv"
+        fi
+
+        info "done."
+
+  startup:
+    - command: ["bash", "/home/agent/.sbxw/agent-skills/install.sh"]
+    - command: ["node", "/home/agent/.sbxw/agent-skills/install-hooks.mjs"]

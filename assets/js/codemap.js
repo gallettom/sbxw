@@ -3,7 +3,9 @@
 // Reads the markdown knowledge graph a `/codemap` run leaves under
 // `.sbxw-artifacts/codemap/` (see assets/codemap/) and makes it navigable the
 // way Obsidian makes a vault navigable: `[[wiki links]]` are clickable,
-// backlinks are listed, and the whole thing can be seen at once as a graph.
+// backlinks are listed, and the whole thing can be seen at once — as the
+// map's Archify architecture diagram when `/codemap` drew one, and as the graph
+// of its links otherwise.
 //
 // Everything here is front-end only. The two endpoints the Files panel already
 // uses are enough — `/artifacts` to list, `/artifacts/download` to fetch a
@@ -415,8 +417,9 @@
     others: [],          // markdown outside the map, viewable but not linked
     backlinks: new Map(),
     graph: null,
+    diagram: null,       // path of the map's Archify render, when it has one
     current: null,       // doc key on screen
-    view: 'doc',         // 'doc' | 'graph'
+    view: 'doc',         // 'doc' | 'diagram'
     filter: '',
     raf: null,
     alpha: 0,
@@ -446,6 +449,17 @@
 
   const isMarkdown = (e) => /\.(md|markdown)$/i.test(e.path);
 
+  // The map's picture: the Archify render `/codemap` leaves in `<map>/diagram/`
+  // (see the codemap kit's FORMAT.md). `architecture.html` by name; any other
+  // render there will do, so a hand-drawn second diagram is not invisible.
+  function diagramIn(root, entries) {
+    if (!root) return null;
+    const prefix = `${root}/diagram/`;
+    const html = entries.filter((e) => e.path.startsWith(prefix) && /\.html$/i.test(e.path));
+    const named = html.find((e) => e.path === `${prefix}architecture.html`);
+    return (named || html[0] || {}).path || null;
+  }
+
   // Every map this project has, in the order the picker offers them: the code
   // map first — it is the source the lenses are written from — then each lens,
   // newest first, as the server listed them.
@@ -464,18 +478,21 @@
     state.sandbox = name;
     state.docs = new Map();
     state.others = [];
+    state.diagram = null;
     state.current = null;
     state.view = 'doc';
     $('codemap-doc').innerHTML = '<p class="cm-empty">Loading…</p>';
     $('codemap-files').innerHTML = '';
     $('codemap-side').innerHTML = '';
 
+    let all = [];
     let entries = [];
     let data = {};
     try {
       const res = await fetch(api(''));
       data = await res.json();
-      entries = (data.entries || []).filter(isMarkdown);
+      all = data.entries || [];
+      entries = all.filter(isMarkdown);
     } catch (_) {
       $('codemap-doc').innerHTML = '<p class="cm-empty cm-error">Could not reach this sandbox.</p>';
       return;
@@ -489,9 +506,11 @@
     if (chosen) {
       state.root = chosen.dir;
       inMap = (chosen.entries || []).filter(isMarkdown);
+      state.diagram = diagramIn(state.root, chosen.entries || []);
     } else {
       state.root = findMapRoot(entries);
       inMap = state.root ? entries.filter((e) => e.path.startsWith(`${state.root}/`)) : [];
+      state.diagram = diagramIn(state.root, all);
     }
     state.others = entries.filter((e) => !inMap.includes(e));
     renderLensPicker();
@@ -779,6 +798,48 @@
       ${codeRows}`;
   }
 
+  /* ── Diagram view ─────────────────────────────────────────────────────
+     The map's picture is an Archify render: one self-contained HTML file with
+     its own viewer (themes, focus, route tracing, export). It is shown in an
+     iframe from `srcdoc` with scripts allowed but **no same-origin**: the file
+     was written by an agent inside the sandbox, and a page running with this
+     tab's origin could call every route the daemon serves. Archify guards its
+     storage access, so an opaque origin costs it nothing but a remembered
+     theme. A map without a diagram — a lens, or one written before Archify —
+     falls back to the graph of its links below. */
+
+  async function showDiagram() {
+    if (!state.diagram) { showGraph(true); return; }
+    state.view = 'diagram';
+    syncViewButtons();
+    const host = $('codemap-doc');
+    const path = state.diagram;
+    host.innerHTML = '<p class="cm-empty">Loading the diagram…</p>';
+    let html = '';
+    try {
+      const res = await fetch(api(`/download?path=${encodeURIComponent(path)}`));
+      if (!res.ok) throw new Error(String(res.status));
+      html = await res.text();
+    } catch (_) {
+      if (state.view === 'diagram') {
+        host.innerHTML = '<p class="cm-empty cm-error">Could not read the diagram.</p>';
+      }
+      return;
+    }
+    // Navigated elsewhere while it loaded: leave the document they chose alone.
+    if (state.view !== 'diagram' || state.diagram !== path) return;
+    host.innerHTML = `
+      <div class="cm-diagram-wrap">
+        <div class="cm-diagram-bar">
+          <span>Archify diagram · <code>${escapeHtml(path)}</code></span>
+          <a href="${api(`/download?path=${encodeURIComponent(path)}`)}" download>Download HTML</a>
+        </div>
+        <iframe class="cm-diagram" id="codemap-diagram" title="Architecture diagram"
+                sandbox="allow-scripts allow-downloads allow-popups"></iframe>
+      </div>`;
+    $('codemap-diagram').srcdoc = html;
+  }
+
   /* ── Graph view ───────────────────────────────────────────────────────── */
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -788,12 +849,22 @@
     return el;
   };
 
-  function showGraph() {
-    if (!state.graph || !state.graph.nodes.length) return;
-    state.view = 'graph';
+  // `fallback` says why the graph is on screen: this map has no diagram.
+  function showGraph(fallback) {
+    if (!state.graph || !state.graph.nodes.length) {
+      if (fallback) {
+        state.view = 'diagram';
+        syncViewButtons();
+        $('codemap-doc').innerHTML = '<p class="cm-empty">No diagram, and no files to graph yet.</p>';
+      }
+      return;
+    }
+    state.view = 'diagram';
     syncViewButtons();
     const host = $('codemap-doc');
-    host.innerHTML = '<svg class="cm-graph" id="codemap-graph"></svg>';
+    host.innerHTML = (fallback ? `<p class="cm-diagram-note">No Archify diagram in this map
+      yet — <code>/codemap</code> draws one. Meanwhile, how its files link to each other:</p>` : '')
+      + '<svg class="cm-graph" id="codemap-graph"></svg>';
     const svg = $('codemap-graph');
     const width = host.clientWidth || 640;
     const height = host.clientHeight || 460;
@@ -871,7 +942,7 @@
 
   // Re-enter the cooling loop after a drag re-heated a settled graph.
   function showGraphResume() {
-    if (state.view !== 'graph') return;
+    if (state.view !== 'diagram') return;
     const svg = $('codemap-graph');
     if (!svg) return;
     const host = $('codemap-doc');
@@ -898,8 +969,11 @@
 
   function syncViewButtons() {
     $('codemap-view-doc').classList.toggle('active', state.view === 'doc');
-    $('codemap-view-graph').classList.toggle('active', state.view === 'graph');
-    if (state.view !== 'graph' && state.raf) {
+    $('codemap-view-diagram').classList.toggle('active', state.view === 'diagram');
+    // A picture wants the width the outline column holds (see .codemap-body.wide).
+    const body = document.querySelector('#codemap-modal-overlay .codemap-body');
+    if (body) body.classList.toggle('wide', state.view === 'diagram');
+    if (state.view !== 'diagram' && state.raf) {
       cancelAnimationFrame(state.raf);
       state.raf = null;
     }
@@ -963,7 +1037,7 @@
       if (state.current) openDoc(state.current);
       else if (state.docs.size) openDoc([...state.docs.keys()][0]);
     });
-    $('codemap-view-graph').addEventListener('click', showGraph);
+    $('codemap-view-diagram').addEventListener('click', showDiagram);
     $('codemap-search').addEventListener('input', (e) => {
       state.filter = e.target.value;
       renderFileList();
@@ -1010,7 +1084,7 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       parseDoc, resolveLink, buildBacklinks, buildGraph, renderMarkdown, renderInline,
-      findMapRoot, mapsFrom, tickGraph, seedLayout, slug, isCodeTarget,
+      findMapRoot, diagramIn, mapsFrom, tickGraph, seedLayout, slug, isCodeTarget,
     };
   }
 })();

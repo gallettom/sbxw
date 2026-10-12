@@ -298,6 +298,19 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !kindOverlay.classList.contains('hidden')) closeKindModal();
 });
 
+// Alt+N (⌥N) opens the chooser from anywhere — Ctrl/⌘+N belongs to the
+// browser and cannot be taken. Matched on `code`, not `key`: on a Mac ⌥N types
+// a dead-key tilde. Listened for on window in the capture phase because xterm
+// stops the keydowns it handles, and the point is to work from a terminal pane.
+// Not while another dialog is open: one modal stacked on another is the bug.
+window.addEventListener('keydown', e => {
+  if (e.code !== 'KeyN' || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (document.querySelector('.modal-overlay:not(.hidden)')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openKindModal();
+}, true);
+
 // Each card hands straight over to that kind's own modal — the chooser is a
 // signpost, not a step you have to confirm your way out of.
 document.getElementById('kind-workspace').addEventListener('click', () => {

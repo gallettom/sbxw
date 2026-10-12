@@ -817,6 +817,54 @@ impl Loaded {
         })
     }
 
+    /// `secrets.<name>.command` entries that lean on a **relative path**, as
+    /// `(secret, command)`.
+    ///
+    /// sbx 0.46 runs a secret command from a fresh temporary directory on the
+    /// host, so `./credential-helper` or `cat ../token` no longer finds what it
+    /// found when it ran from the project — and the failure surfaces as a
+    /// secret that will not resolve, a long way from its cause. It is also the
+    /// point of the change: a helper inside a writable workspace is one the
+    /// agent could rewrite. So this is reported, not repaired; anchoring the
+    /// path the way `anchor` does a workspace would undo the protection.
+    ///
+    /// "Relative" is read the way a shell would see it: the program named by a
+    /// path that is not absolute, or any word starting `./` or `../`. A bare
+    /// program name is a `PATH` lookup and fine; a word that is merely a
+    /// relative file name (`cat token`) is indistinguishable from an argument
+    /// and is not guessed at.
+    pub fn relative_secret_commands(&self) -> Vec<(String, String)> {
+        let merged = merge(self.user_doc.clone(), self.doc.clone());
+        let Some(Value::Mapping(secrets)) = merged.get("secrets") else {
+            return Vec::new();
+        };
+        let relative = |word: &str| word.starts_with("./") || word.starts_with("../");
+        secrets
+            .iter()
+            .filter_map(|(name, entry)| {
+                let Value::String(command) = entry.get("command")? else {
+                    return None;
+                };
+                let mut words = command.split_whitespace();
+                let program = words.next()?;
+                let program_is_relative = program.contains('/')
+                    && !program.starts_with('/')
+                    && !program.starts_with('~')
+                    && !program.starts_with('$');
+                (program_is_relative || words.any(relative)).then(|| {
+                    let name = match name {
+                        Value::String(s) => s.clone(),
+                        other => serde_norway::to_string(other)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string(),
+                    };
+                    (name, command.clone())
+                })
+            })
+            .collect()
+    }
+
     /// Replace the project document's `ports` list, keeping every other key as
     /// it was.
     ///
@@ -1076,6 +1124,29 @@ mod tests {
         .unwrap();
         assert_eq!(spec.ports[0].host, None);
         assert_eq!(spec.ports[1].host, Some(4000));
+    }
+
+    /// sbx 0.46 runs these from a temporary directory: a relative helper is
+    /// reported, a program found on PATH or by absolute path is not.
+    #[test]
+    fn a_secret_command_on_a_relative_path_is_reported() {
+        let loaded = load_str(
+            "schemaVersion: \"1\"\nworkspace: .\n\
+             secrets:\n\
+             \x20 a:\n    command: ./credential-helper --json\n\
+             \x20 b:\n    command: cat ../token\n\
+             \x20 c:\n    command: gh auth token\n\
+             \x20 d:\n    command: /opt/bin/helper\n\
+             \x20 e:\n    command: bin/helper\n\
+             \x20 f:\n    ref: op://vault/item\n",
+            "relative-secrets",
+        );
+        let names: Vec<String> = loaded
+            .relative_secret_commands()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(names, ["a", "b", "e"]);
     }
 
     /// The whole reason rewriting goes through the parsed document: sbxw models
