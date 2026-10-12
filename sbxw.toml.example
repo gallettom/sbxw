@@ -14,13 +14,22 @@ web_shell = ""
 claude_subscription = "pro"
 
 # Model new sessions start on, passed as ANTHROPIC_DEFAULT_MODEL. Full model id
-# ("claude-sonnet-5") or alias ("sonnet", "opus"). Empty => don't set it.
+# ("claude-sonnet-5-5") or alias ("sonnet", "opus"). Empty => don't set it.
 #
 # A real default: it applies only when nothing else picks a model, so a /model
 # chosen in-session now survives the next `sbxw up` instead of being overwritten.
 # Needs Claude Code 2.1.236+ inside the sandbox (it comes from the sbx template,
 # not from sbxw); on an older one the variable is ignored silently.
-claude_model = "claude-sonnet-5"
+claude_model = "claude-sonnet-5-5"
+
+# Models a thread can be started on — offered by New thread and named in a
+# lead's plans, passed as `claude --model <id>`. A thread without one runs on
+# claude_model.
+models = [
+  { id = "claude-sonnet-5-5", label = "Sonnet 5.5" },
+  { id = "claude-opus-5-5", label = "Opus 5.5" },
+  { id = "claude-haiku-5-5", label = "Haiku 5.5" },
+]
 
 # How the sandboxes sbxw creates see sbx's shared skill store (filled by
 # `sbxw skills import`), passed as `sbx create --skills=…` (sbx 0.43+):

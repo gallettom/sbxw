@@ -1095,6 +1095,10 @@ struct WsQuery {
     /// (`''` is the workspace itself). Recorded on its first open; see
     /// `settle_thread_repo`.
     repo: Option<String>,
+    /// With `mode=thread`: the model it runs on (`claude --model`), checked by
+    /// `config::valid_model_id`. Recorded on its first open beside its repo;
+    /// see `settle_thread_model`.
+    model: Option<String>,
 }
 
 const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
@@ -1328,6 +1332,7 @@ pub async fn serve(
         .route("/api/sandboxes/:name/lead", post(api_lead))
         .route("/api/sandboxes/:name/lead/end", post(api_lead_end))
         .route("/api/leads", get(api_leads))
+        .route("/api/models", get(api_models))
         .route("/api/plans", get(api_plans_list))
         .route("/api/plans/propose", post(api_plan_propose))
         .route("/api/plans/wait", post(api_plan_wait))
@@ -1336,6 +1341,8 @@ pub async fn serve(
         .route("/api/plans/report", post(api_plan_report))
         .route("/api/plans/:id/approve", post(api_plan_approve))
         .route("/api/plans/:id/refuse", post(api_plan_refuse))
+        .route("/api/plans/propose_merge", post(api_plan_propose_merge))
+        .route("/api/plans/:id/merge", post(api_plan_merge))
         .route("/api/sandboxes/:name/threads/:thread", get(api_thread_status))
         .route("/api/sandboxes/:name/threads/:thread/close", post(api_thread_close))
         .route("/api/sandboxes/:name/rm", post(api_rm))
@@ -2769,14 +2776,14 @@ async fn api_threads(
         .into_iter()
         .map(|(t, repo)| (t, (false, repo)))
         .collect();
-    let recorded = crate::repos::load(&crate::thread_repos_dir(), &name);
+    let records = crate::repos::load_records(&crate::thread_repos_dir(), &name);
     let open = {
         let map = state.sessions.lock().unwrap();
         for (key, pty) in map.iter() {
             let (s, mode) = split_key(key);
             if let (true, Some(t)) = (s == name, thread_of(mode)) {
                 if pty.alive() {
-                    let repo = recorded.get(t).cloned().unwrap_or_default();
+                    let repo = records.get(t).map(|r| r.repo.clone()).unwrap_or_default();
                     threads.entry(t.to_string()).or_insert((false, repo)).0 = true;
                 }
             }
@@ -2785,7 +2792,10 @@ async fn api_threads(
     };
     let list: Vec<serde_json::Value> = threads
         .into_iter()
-        .map(|(name, (open, repo))| serde_json::json!({ "name": name, "open": open, "repo": repo }))
+        .map(|(name, (open, repo))| {
+            let model = records.get(&name).and_then(|r| r.model.clone());
+            serde_json::json!({ "name": name, "open": open, "repo": repo, "model": model })
+        })
         .collect();
     ok_json_with(serde_json::json!({
         "threads": list,
@@ -2864,6 +2874,19 @@ fn settle_thread_repo(sandbox: &str, thread: &str, requested: Option<&str>) -> R
     Ok(crate::repos::thread_dir(&ws, &chosen).to_string_lossy().into_owned())
 }
 
+/// Record the model `thread` runs on, asked for on its socket (`model=`), when
+/// it has none yet: a thread keeps the model it was first opened on, as it
+/// keeps its repo, so a pane reopened without one resumes on the same model.
+/// Called after `settle_thread_repo`, so the record it joins names the repo.
+fn settle_thread_model(sandbox: &str, thread: &str, model: &str) -> Result<(), String> {
+    let dir = crate::thread_repos_dir();
+    if crate::repos::recorded_model(&dir, sandbox, thread).is_some() {
+        return Ok(());
+    }
+    crate::repos::record_model(&dir, sandbox, thread, Some(model))
+        .map_err(|e| format!("could not record the model of thread {thread}: {e}"))
+}
+
 /// The repo of every thread of a plan, resolved as `settle_thread_repo` will
 /// but without recording anything: a plan whose threads could not start is
 /// refused before anything is recorded or started.
@@ -2935,6 +2958,17 @@ async fn api_thread_close(
     if let Some(bad) = reject_invalid_thread(&name, &thread) {
         return bad;
     }
+    close_thread(&state, name, thread, body).await
+}
+
+/// What `api_thread_close` does once the names are checked — also how a merged
+/// thread of a plan is closed (`api_plan_merge`).
+async fn close_thread(
+    state: &Arc<AppState>,
+    name: String,
+    thread: String,
+    body: ThreadCloseBody,
+) -> Json<serde_json::Value> {
     let key = session_key(&name, &thread_mode(&thread));
     let bash_key = session_key(&name, &thread_bash_mode(&thread));
     let (sandbox, closed) = (name.clone(), thread.clone());
@@ -3010,6 +3044,22 @@ struct PlanApproveBody {
 #[serde(default)]
 struct PlanRefuseBody {
     note: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PlanMergeProposeBody {
+    from: String,
+    id: String,
+    order: Vec<String>,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct PlanMergeBody {
+    /// Once every thread merged, close each one, deleting its branch.
+    close_threads: bool,
 }
 
 /// A plan as the lead sees it: the plan, plus whether each thread's session is
@@ -3126,6 +3176,25 @@ async fn api_plan_send(
         Ok(()) => ok_json(),
         Err(e) => err_json(e),
     }
+}
+
+/// `POST /api/plans/propose_merge` — the lead proposes merging its reviewed
+/// threads, in order (`Plans::propose_merge`). Nothing is merged until a
+/// person clicks it (`api_plan_merge`).
+async fn api_plan_propose_merge(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PlanMergeProposeBody>,
+) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_name(&body.from) {
+        return bad;
+    }
+    let order: Vec<String> = body.order.iter().map(|t| t.trim().to_string()).collect();
+    let note = relay_clip(&body.note, crate::plans::MAX_TEXT);
+    let plan = state.plans.propose_merge(&body.id, &body.from, order, &note, now_ms());
+    if let Ok(p) = &plan {
+        tracing::info!("plans: '{}' proposed merging {}", p.sandbox, p.id);
+    }
+    plan_reply(&state, plan)
 }
 
 /// `POST /api/plans/report` — a thread says where it stands. Blocked and done
@@ -3268,6 +3337,17 @@ async fn api_leads(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
     Json(leading_sandboxes(&state))
 }
 
+/// What `GET /api/models` answers: the sandbox default (`claude_model`) and
+/// the models a thread may be started on (`models`).
+fn models_view(cfg: &Config) -> serde_json::Value {
+    serde_json::json!({ "ok": true, "default": cfg.claude_model, "models": cfg.models })
+}
+
+/// `GET /api/models` — the model picker of New thread and of a plan's threads.
+async fn api_models(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(models_view(&state.cfg))
+}
+
 /// `GET /api/plans` — every plan, for a browser tab to seed itself from.
 async fn api_plans_list(State(state): State<Arc<AppState>>) -> Json<Vec<crate::plans::Plan>> {
     Json(state.plans.list())
@@ -3371,9 +3451,17 @@ async fn api_plan_approve(
     tracing::info!("plans: {id} approved for '{sandbox}' ({} thread(s))", plan.threads.len());
     // Each thread's repo is recorded before its session starts, so the launch
     // below — or its pane, whichever opens it first — finds it there.
+    // Its model too, beside the repo: the plan says it, so it wins over any
+    // left from an earlier open.
     for t in &plan.threads {
         if let Err(e) = settle_thread_repo(&sandbox, &t.name, t.repo.as_deref()) {
             tracing::warn!("plans: thread '{}' of '{sandbox}': {e}", t.name);
+        } else if let Some(model) = t.model.as_deref() {
+            if let Err(e) =
+                crate::repos::record_model(&crate::thread_repos_dir(), &sandbox, &t.name, Some(model))
+            {
+                tracing::warn!("plans: could not record the model of '{}': {e}", t.name);
+            }
         }
     }
 
@@ -3420,6 +3508,190 @@ async fn api_plan_approve(
         });
     }
     ok_json_with(serde_json::json!({ "plan": plan }))
+}
+
+/// The directory a thread's merge runs from: its repo under the workspace, as
+/// its record has it, else as the plan named it. `''` without a workspace.
+fn merge_dir(sandbox: &str, thread: &str, planned: Option<&str>) -> Result<String, String> {
+    let recorded = crate::repos::recorded(&crate::thread_repos_dir(), sandbox, thread);
+    let requested = if recorded.is_some() { None } else { planned };
+    settle_thread_repo(sandbox, thread, requested)
+}
+
+/// The line the lead is told once a merge ends:
+/// `[sbxw] Merged: a, b. Failed: c (conflict in X).`
+fn merge_summary(merge: &crate::plans::Merge) -> String {
+    let merged: Vec<&str> = merge
+        .results
+        .iter()
+        .filter(|r| r.ok)
+        .map(|r| r.thread.as_str())
+        .collect();
+    let mut line = format!(
+        "[sbxw] Merged: {}.",
+        if merged.is_empty() { "none".to_string() } else { merged.join(", ") }
+    );
+    let failed: Vec<String> = merge
+        .results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| format!("{} ({})", r.thread, r.error.as_deref().unwrap_or("failed")))
+        .collect();
+    if !failed.is_empty() {
+        line.push_str(&format!(" Failed: {}.", failed.join(", ")));
+    }
+    let untried: Vec<&str> = merge
+        .order
+        .iter()
+        .filter(|t| !merge.results.iter().any(|r| &r.thread == *t))
+        .map(String::as_str)
+        .collect();
+    if !untried.is_empty() {
+        line.push_str(&format!(" Not tried: {}.", untried.join(", ")));
+    }
+    line.replace('\n', " ")
+}
+
+/// `POST /api/plans/:id/merge` — the person clicks Merge on the lead's
+/// proposed merge. Each thread in its order is merged (`sbx::thread_merge`)
+/// into the branch the main checkout of its repo is on, one at a time,
+/// stopping at the first that fails; the plan is broadcast after each, so the
+/// dialog follows along. With `close_threads`, once every one merged, each is
+/// closed as the Close button would, branch and all. The lead, if its session
+/// is alive, is told how it went in one line.
+async fn api_plan_merge(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<PlanMergeBody>,
+) -> Json<serde_json::Value> {
+    use crate::plans::{MergeResult, MergeState, PlanState};
+    if !from_browser(&headers) {
+        return err_json("merges are started from the sbxw web UI");
+    }
+    let Some(plan) = state.plans.get(&id) else {
+        return err_json(format!("no plan '{id}'"));
+    };
+    if plan.state != PlanState::Approved {
+        return err_json(format!("plan {id} is not approved"));
+    }
+    let Some(merge) = plan.merge.clone() else {
+        return err_json(format!("plan {id} has no merge proposed"));
+    };
+    if !matches!(merge.state, MergeState::Proposed | MergeState::Failed) {
+        return err_json(format!("plan {id} is already {:?}", merge.state).to_lowercase());
+    }
+    let sandbox = plan.sandbox.clone();
+    // Where each thread merges, and into what — read before anything runs, so
+    // the dialog can say the base from the first broadcast on.
+    let planned: Vec<(String, Option<String>)> = merge
+        .order
+        .iter()
+        .map(|t| {
+            let repo = plan.threads.iter().find(|p| &p.name == t).and_then(|p| p.repo.clone());
+            (t.clone(), repo)
+        })
+        .collect();
+    let sb = sandbox.clone();
+    let dirs: Vec<Result<String, String>> = match tokio::task::spawn_blocking(move || {
+        planned
+            .iter()
+            .map(|(t, repo)| merge_dir(&sb, t, repo.as_deref()))
+            .collect()
+    })
+    .await
+    {
+        Ok(d) => d,
+        Err(e) => return err_json(e),
+    };
+    let bases: std::collections::BTreeSet<Option<String>> = dirs
+        .iter()
+        .map(|d| match d {
+            Ok(dir) if !dir.is_empty() => crate::repos::branch_of(std::path::Path::new(dir)),
+            _ => None,
+        })
+        .collect();
+    let base = match bases.len() {
+        1 => bases.into_iter().next().flatten(),
+        _ => None,
+    };
+    if let Err(e) = state.plans.start_merge(&id, base, now_ms()) {
+        return err_json(e);
+    }
+    tracing::info!("plans: merging {id} for '{sandbox}' ({} thread(s))", merge.order.len());
+
+    let (sb, cfg, sessions) = (sandbox.clone(), state.cfg.clone(), state.sessions.clone());
+    let running = tokio::task::spawn_blocking(move || ensure_running_for_thread(&sb, &cfg, &sessions))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| format!("{e:#}")));
+
+    for (thread, dir) in merge.order.iter().zip(dirs) {
+        let outcome = match (&running, dir) {
+            (Err(e), _) => Err(format!("the sandbox could not be started: {e}")),
+            (Ok(()), Err(e)) => Err(e),
+            (Ok(()), Ok(dir)) => {
+                let (sb, t) = (sandbox.clone(), thread.clone());
+                tokio::task::spawn_blocking(move || crate::sbx::thread_merge(&sb, &dir, &t))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.map_err(|e| format!("{e:#}")))
+            }
+        };
+        let ok = outcome.is_ok();
+        let result = match outcome {
+            Ok(commit) => MergeResult {
+                thread: thread.clone(),
+                ok: true,
+                commit: Some(commit).filter(|c| !c.is_empty()),
+                error: None,
+            },
+            Err(e) => MergeResult {
+                thread: thread.clone(),
+                ok: false,
+                commit: None,
+                error: Some(e),
+            },
+        };
+        if let Err(e) = state.plans.merge_result(&id, result, now_ms()) {
+            return err_json(e);
+        }
+        if !ok {
+            break;
+        }
+    }
+    let plan = match state.plans.finish_merge(&id, now_ms()) {
+        Ok(p) => p,
+        Err(e) => return err_json(e),
+    };
+    let merge = plan.merge.clone().unwrap_or(merge);
+    let mut summary = merge_summary(&merge);
+
+    if body.close_threads && merge.state == MergeState::Merged {
+        let mut unclosed = Vec::new();
+        for thread in &merge.order {
+            let close = ThreadCloseBody {
+                discard: false,
+                delete_branch: true,
+            };
+            let res = close_thread(&state, sandbox.clone(), thread.clone(), close).await;
+            if res.0.get("ok") != Some(&serde_json::Value::Bool(true)) {
+                let why = res.0.get("error").and_then(|e| e.as_str()).unwrap_or("failed");
+                tracing::warn!("plans: could not close merged thread '{thread}': {why}");
+                unclosed.push(format!("{thread} ({why})"));
+            }
+        }
+        if !unclosed.is_empty() {
+            summary.push_str(&format!(" Not closed: {}.", unclosed.join(", ")).replace('\n', " "));
+        }
+    }
+    tracing::info!("plans: {id}: {summary}");
+    if pty_alive(&state.sessions, &sandbox, "claude") {
+        if let Err(e) = push_text(&state, &sandbox, &summary).await {
+            tracing::warn!("plans: could not tell the lead of '{sandbox}' about the merge: {e}");
+        }
+    }
+    ok_json_with(serde_json::json!({ "merge": merge }))
 }
 
 /// `POST /api/plans/:id/refuse` — nothing from it starts, then or later.
@@ -5689,12 +5961,20 @@ async fn ws_handler(
     };
     // Only a thread's own session chooses its repo; its Bash follows it.
     let repo = thread_of(&mode).and(params.repo);
+    // The same for its model, which reaches the sandbox's command line.
+    let model = thread_of(&mode)
+        .and(params.model)
+        .filter(|m| !m.is_empty());
+    if model.as_deref().is_some_and(|m| !crate::config::valid_model_id(m)) {
+        return (StatusCode::BAD_REQUEST, "invalid model id").into_response();
+    }
     ws.on_upgrade(move |socket| {
         handle_socket(
             socket,
             sandbox,
             mode,
             repo,
+            model,
             state.cfg.clone(),
             state.sessions.clone(),
         )
@@ -5706,10 +5986,11 @@ async fn handle_socket(
     sandbox: String,
     mode: String,
     repo: Option<String>,
+    model: Option<String>,
     cfg: Arc<Config>,
     sessions: Sessions,
 ) {
-    if let Err(e) = bridge(socket, sandbox, mode, repo, cfg, sessions).await {
+    if let Err(e) = bridge(socket, sandbox, mode, repo, model, cfg, sessions).await {
         tracing::warn!("tty bridge ended: {e:#}");
     }
 }
@@ -5793,8 +6074,11 @@ fn get_or_create_session(
         // A thread of an approved plan starts on its briefing, whoever
         // happens to open it first — the launch or its pane.
         let prompt = THREAD_PROMPTS.lock().unwrap().remove(&key).unwrap_or_default();
+        let model = crate::repos::recorded_model(&crate::thread_repos_dir(), sandbox, thread)
+            .filter(|m| crate::config::valid_model_id(m))
+            .unwrap_or_default();
         let mut c = CommandBuilder::new("sbx");
-        c.args(crate::sbx::thread_run_args(sandbox, &dir, thread, &prompt));
+        c.args(crate::sbx::thread_run_args(sandbox, &dir, thread, &prompt, &model));
         return spawn_pty_session(c, key, sessions);
     }
 
@@ -5986,6 +6270,7 @@ async fn bridge(
     sandbox: String,
     mode: String,
     repo: Option<String>,
+    model: Option<String>,
     cfg: Arc<Config>,
     sessions: Sessions,
 ) -> Result<()> {
@@ -6000,8 +6285,15 @@ async fn bridge(
         move || {
             // The repo asked for is settled first; `get_or_create_session`
             // then finds it recorded.
-            if let (Some(thread), Some(repo)) = (thread_of(&mode), repo.as_deref()) {
-                settle_thread_repo(&sandbox, thread, Some(repo)).map_err(anyhow::Error::msg)?;
+            // So is its model, after the repo: the model is kept in the repo's
+            // record, which must name the right repo before it holds anything.
+            if let Some(thread) = thread_of(&mode) {
+                if repo.is_some() || model.is_some() {
+                    settle_thread_repo(&sandbox, thread, repo.as_deref()).map_err(anyhow::Error::msg)?;
+                }
+                if let Some(model) = model.as_deref() {
+                    settle_thread_model(&sandbox, thread, model).map_err(anyhow::Error::msg)?;
+                }
             }
             get_or_create_session(&sandbox, &mode, &cfg, &sessions)
         }
@@ -7291,6 +7583,43 @@ mod tests {
         assert_eq!(
             err_json("path is not a directory").0,
             json!({ "ok": false, "error": "path is not a directory" })
+        );
+    }
+
+    #[test]
+    fn the_models_endpoint_names_the_default_and_the_choices() {
+        let v = models_view(&Config::default());
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["default"], "claude-sonnet-5-5");
+        assert_eq!(
+            v["models"],
+            serde_json::json!([
+                { "id": "claude-sonnet-5-5", "label": "Sonnet 5.5" },
+                { "id": "claude-opus-5-5", "label": "Opus 5.5" },
+                { "id": "claude-haiku-5-5", "label": "Haiku 5.5" },
+            ])
+        );
+    }
+
+    #[test]
+    fn a_merge_summary_says_what_merged_failed_and_was_not_tried() {
+        use crate::plans::{Merge, MergeResult, MergeState};
+        let r = |t: &str, ok: bool, err: Option<&str>| MergeResult {
+            thread: t.into(),
+            ok,
+            commit: None,
+            error: err.map(Into::into),
+        };
+        let m = Merge {
+            order: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            note: String::new(),
+            state: MergeState::Failed,
+            base: Some("main".into()),
+            results: vec![r("a", true, None), r("b", true, None), r("c", false, Some("conflict in X"))],
+        };
+        assert_eq!(
+            merge_summary(&m),
+            "[sbxw] Merged: a, b. Failed: c (conflict in X). Not tried: d."
         );
     }
 

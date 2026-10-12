@@ -643,7 +643,7 @@ nobody can review. Each thread therefore gets a **git worktree** and a
 - **Nothing is removed for you.** A worktree can hold work nobody has
   committed, so closing is always a click and never a side effect of closing a
   pane: the pane's ✕ leaves the thread running. Merging a thread's branch is
-  yours to do.
+  yours to do (a lead's plan offers it as one click, below).
 - `.sbxw-worktrees/` is added to the repository's `.git/info/exclude`, not to
   its `.gitignore`. It is sbxw's bookkeeping, not a change to the project.
 - Each thread's pane has its own activity strip. A thread is recognised by its
@@ -656,6 +656,17 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   reaches the agent on its next attach, because sbx applies those flags to
   `sbx run`. A thread, started with `sbx exec`, is not guaranteed to see it. The
   workspace needs to be a git repository.
+- **Its model:** the New thread dialog offers the models of `GET /api/models`
+  (`{ok, default, models:[{id,label}]}`: the `models` list of `sbxw.toml` and
+  `claude_model` as the default). The pick reaches the daemon as
+  `model=<id>` on the thread's first open, checked against
+  `^[a-z0-9][a-z0-9.\-]{0,63}$`, and is recorded beside its repo in
+  `~/.sbxw/state/threads/<sandbox>.json` (a thread without one is still
+  recorded as the bare repo string, so older files load as they were). The
+  thread then runs `claude --model <id>`, on a fresh start and on
+  `--continue` alike; with no model given or recorded there is no flag and
+  the sandbox default applies. `GET /api/sandboxes/<name>/threads` gives each
+  thread's `model`, or `null`.
 
 The island answers prompts for the agent only. A thread runs in its worktree
 rather than in the recorded workspace, so it is classified as not sbxw's own
@@ -668,7 +679,7 @@ pane's mode switch makes the sandbox's main session do it for you: sbxw types
 `/lead` into it, and from then on it asks what you want done, reads the
 repository, and proposes a **plan**, a few threads each with a name, a goal and
 the files it owns. As the lead it **does not code**. It plans, follows the
-threads, reviews their branches, and hands the merges to you. The lead is the
+threads, reviews their branches, and proposes the merge for you to click. The lead is the
 conversation you already have, so it costs no extra session or worktree.
 
 ```
@@ -713,9 +724,30 @@ conversation you already have, so it costs no extra session or worktree.
   capability) and read back when the daemon starts, so a thread's chip, the
   lead's tools and a pending dialog come back with it. A plan whose threads
   are all done or failed is dropped a day after its last change.
+- **A model per thread.** A plan's thread may name a `model` (the lead picks
+  Opus for hard work, Haiku for mechanical work), editable in the dialog; it
+  is recorded before the thread starts. Omitted, the thread runs on the
+  sandbox default.
+- **One-click merge.** Once it has reviewed the threads, the lead calls
+  `propose_merge` with the order to merge them in and a note. That is accepted
+  only for an approved plan it still leads, and only when every thread named
+  is done. The plan then carries `merge: {order, note, state, base, results}`
+  and the dialog offers **Merge all**, which calls `POST /api/plans/<id>/merge`
+  with `{close_threads}`. For each thread in order, in its repo, sbxw refuses
+  a main checkout with uncommitted changes, else runs `git merge --no-ff
+  --no-edit sbxw/<thread>` into the branch that checkout is on, inside the
+  sandbox (started first if stopped). A conflict is aborted (`git merge
+  --abort`) and the merge stops there. `state` goes `proposed` → `merging` →
+  `merged` or `failed`; `base` is the branch merged into (`null` when the
+  repos are on different branches); `results` holds `{thread, ok, commit?,
+  error?}`, broadcast after each thread. With `close_threads`, once all
+  merged, each thread is closed as **Close thread** would, branch deleted.
+  The lead is then told in one line: `[sbxw] Merged: a, b. Failed: c
+  (conflict in X).` A failed merge can be clicked again after fixing the
+  cause.
 - **The tools** come from the `sbxw-relay` MCP server and depend on the
-  session: the main session gets `propose_plan`, `check_plan`, `plan_status`
-  and `send_to_thread` (their descriptions say to use them only when leading);
+  session: the main session gets `propose_plan`, `check_plan`, `plan_status`,
+  `send_to_thread` and `propose_merge` (their descriptions say to use them only when leading);
   a thread gets `report_thread_status` and none of those. A session knows which
   it is from `SBXW_THREAD`, which sbxw sets when it starts a thread. **★ Lead**
   installs `/lead` and refreshes the relay server first, so a sandbox created
@@ -1454,6 +1486,10 @@ Two consequences worth knowing:
 
 Spelling `ANTHROPIC_DEFAULT_MODEL` yourself in `[env]` overrides `claude_model`.
 
+The default is `claude-sonnet-5-5`. `models` lists what a thread may be started
+on (New thread, and a lead's plans), each `{ id, label }`; by default Sonnet
+5.5, Opus 5.5 and Haiku 5.5. A thread given one runs `claude --model <id>`.
+
 ### Environment variables
 
 ```toml
@@ -1553,7 +1589,7 @@ sbxw  handing secrets, mcp to sbx — sbxw does not read those
 sbxw  taken from sbxw.toml:
         · /etc/hosts aliases (neos.local → :4201)
         · the egress allowlist (15 rules) — an environment file has no field for it
-        · claude_model (claude-sonnet-5) — passed as ANTHROPIC_DEFAULT_MODEL
+        · claude_model (claude-sonnet-5-5) — passed as ANTHROPIC_DEFAULT_MODEL
 ```
 
 With no terminal to ask on — a daemon, CI, a hook — it takes the next free port
