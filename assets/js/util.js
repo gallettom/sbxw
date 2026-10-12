@@ -71,6 +71,26 @@ function repoStatus(r) {
   return { text: parts.join('  '), tone };
 }
 
+// ── Models ────────────────────────────────────────────────────────────────
+// The Claude models a thread can run, from /api/models: `{ok, default,
+// models: [{id, label}]}`, or `{ok: false}` when the daemon has none to offer —
+// then no model control is shown and threads get the daemon's default. Asked
+// once per tab: the list cannot change while the daemon runs.
+let modelsAsk = null;
+function fetchModels() {
+  modelsAsk ??= fetch('/api/models')
+    .then(r => r.json())
+    .then(r => r && r.ok && Array.isArray(r.models) && r.models.length
+      ? { ok: true, default: r.default, models: r.models } : { ok: false })
+    .catch(() => ({ ok: false }));
+  return modelsAsk;
+}
+
+// A model by its label, or by its id when the list does not know it.
+function modelLabel(id, models) {
+  return models?.ok ? (models.models.find(m => m.id === id)?.label ?? id) : id;
+}
+
 // The repo a thread gets without being asked: the only one there is, or the
 // workspace itself when it is one. Undefined when a person has to choose.
 function defaultRepo(repos) {
