@@ -291,8 +291,9 @@ setup:
           repo="$1"; rev="$2"; shift 2
           stale=""
           for t in "$@"; do
-            dest="$BASE/$(echo "$t" | cut -d: -f2)"
-            [ "$(cat "$dest/.sbxw-rev" 2>/dev/null)" = "$rev" ] || stale=1
+            IFS=: read -r sub name <<< "$t"
+            have=""; read -r have 2>/dev/null < "$BASE/$name/.sbxw-rev"
+            [ "$have" = "$rev" ] || stale=1
           done
           if [ -z "$stale" ]; then info "$repo already at $rev"; return 0; fi
           tmp="$(mktemp -d)"
@@ -302,83 +303,148 @@ setup:
           fi
           top="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
           for t in "$@"; do
-            sub="$(echo "$t" | cut -d: -f1)"
-            dest="$BASE/$(echo "$t" | cut -d: -f2)"
+            IFS=: read -r sub name <<< "$t"
+            dest="$BASE/$name"
             if [ ! -f "$top/$sub/SKILL.md" ]; then
               info "$repo@$rev has no $sub/SKILL.md — skipped"; continue
             fi
             rm -rf "$dest.new" && cp -a "$top/$sub" "$dest.new" \
               && echo "$rev" > "$dest.new/.sbxw-rev" \
               && rm -rf "$dest" && mv "$dest.new" "$dest" \
-              && info "$(basename "$dest") -> $dest ($rev)"
+              && info "$name -> $dest ($rev)"
           done
           rm -rf "$tmp"
         }
 
-        fetch "$ARCHIFY_REPO" "$ARCHIFY_REV" archify:archify
-        fetch "$BRAG_REPO" "$BRAG_REV" skills/brag:brag skills/brag-slim:brag-slim
-        fetch "$ADHD_REPO" "$ADHD_REV" skills/i-have-adhd:i-have-adhd
+        # The five repositories are independent: fetched side by side, and
+        # waited for at the end. Each writes only its own dests.
+        fetch "$ARCHIFY_REPO" "$ARCHIFY_REV" archify:archify &
+        fetch "$BRAG_REPO" "$BRAG_REV" skills/brag:brag skills/brag-slim:brag-slim &
+        fetch "$ADHD_REPO" "$ADHD_REV" skills/i-have-adhd:i-have-adhd &
         fetch "$POCOCK_REPO" "$POCOCK_REV" skills/productivity/handoff:handoff \
-          skills/productivity/grill-me:grill-me skills/productivity/grilling:grilling
-        fetch "$ANTHROPIC_REPO" "$ANTHROPIC_REV" skills/frontend-design:frontend-design
+          skills/productivity/grill-me:grill-me skills/productivity/grilling:grilling &
+        fetch "$ANTHROPIC_REPO" "$ANTHROPIC_REV" skills/frontend-design:frontend-design &
 
-        APT_READY=""
-        apt_install() {
-          if [ -z "$APT_READY" ]; then
-            sudo apt-get update -qq >/dev/null 2>&1 || { info "apt-get update failed (are the apt mirrors in network_allow?)"; return 1; }
-            APT_READY=1
-          fi
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1
+        # apt_install ARGS... — `apt-get install` that refreshes the package
+        # lists only when no kit has done so in the last hour (the stamp is
+        # shared with the other bundled kits), and once more if the install
+        # fails on lists that turned out to be stale.
+        APT_STAMP=/home/agent/.cache/sbxw-apt-updated
+        apt_update() {
+          if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
+          sudo apt-get update -qq >/dev/null 2>&1 || return 1
+          mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
         }
-
-        # ── FFmpeg, for /brag's poster frame and final mux ───────────────────
-        if command -v ffmpeg >/dev/null 2>&1; then
-          info "ffmpeg already installed"
-        elif apt_install ffmpeg; then
-          info "ffmpeg installed"
-        else
-          info "ffmpeg install failed — /brag will say so when it needs it"
-        fi
+        apt_install() {
+          apt_update fresh || { info "apt-get update failed (are the apt mirrors in network_allow?)"; return 1; }
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1 && return 0
+          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1
+        }
 
         # ── Headless Chromium, for archify's browser gate and Hyperframes ────
         # Playwright's build, because it exists for linux-arm64 as well as x64.
+        # Downloaded in the background while apt installs ffmpeg and the
+        # libraries Chromium links against.
         find_chrome() {
           ls -d "$PW_BROWSERS"/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1
         }
         CHROME="$(find_chrome)"
+        CHROME_PID=""
         if [ -n "$CHROME" ]; then
           info "chromium already installed"
         else
           info "installing chromium (playwright@$PLAYWRIGHT)…"
-          PLAYWRIGHT_BROWSERS_PATH="$PW_BROWSERS" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1 \
-            || info "chromium download failed (are registry.npmjs.org and cdn.playwright.dev allowed?)"
-          CHROME="$(find_chrome)"
+          (
+            PLAYWRIGHT_BROWSERS_PATH="$PW_BROWSERS" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1 \
+              || info "chromium download failed (are registry.npmjs.org and cdn.playwright.dev allowed?)"
+          ) &
+          CHROME_PID=$!
         fi
 
-        # Its shared libraries, read off the binary rather than guessed from a
-        # distribution's package names, which moved with the t64 transition.
-        if [ -n "$CHROME" ] && ldd "$CHROME" 2>/dev/null | grep -q "not found"; then
-          info "installing chromium's shared libraries…"
-          LIBS=""
-          for p in libnss3 libnspr4 libatk1.0-0t64 libatk1.0-0 libatk-bridge2.0-0t64 libatk-bridge2.0-0 \
+        # Chromium's shared libraries, read off the binary rather than guessed
+        # from a distribution's package names, which moved with the t64
+        # transition. While the binary is still downloading, the libraries it
+        # is known to link are looked up in the linker cache instead, so the
+        # install can share ffmpeg's apt call; the binary is checked again
+        # once it lands.
+        chrome_libs_missing() {
+          # Matched with `case`, not `| grep -q`: under pipefail, grep quitting
+          # at the first match can fail the pipeline with SIGPIPE.
+          if [ -n "$CHROME" ]; then
+            case "$(ldd "$CHROME" 2>/dev/null)" in *"not found"*) return 0 ;; esac
+            return 1
+          fi
+          ldcache="$(ldconfig -p 2>/dev/null)"
+          for so in libnss3.so libnspr4.so libatk-1.0.so.0 libatk-bridge-2.0.so.0 libcups.so.2 \
+                    libdrm.so.2 libxkbcommon.so.0 libXcomposite.so.1 libXdamage.so.1 libXfixes.so.3 \
+                    libXrandr.so.2 libgbm.so.1 libpango-1.0.so.0 libcairo.so.2 libasound.so.2; do
+            case "$ldcache" in *"$so"*) ;; *) return 0 ;; esac
+          done
+          return 1
+        }
+        # Those of Chromium's library packages this distribution has, in one
+        # apt-cache call (needs fresh lists: call after apt_update).
+        chrome_lib_pkgs() {
+          apt-cache show libnss3 libnspr4 libatk1.0-0t64 libatk1.0-0 libatk-bridge2.0-0t64 libatk-bridge2.0-0 \
                    libcups2t64 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
                    libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libasound2 libxshmfence1 \
-                   fonts-liberation fonts-noto-color-emoji; do
-            apt-cache show "$p" >/dev/null 2>&1 && LIBS="$LIBS $p"
-          done
-          apt_install $LIBS || info "some of chromium's libraries failed to install"
+                   fonts-liberation fonts-noto-color-emoji 2>/dev/null \
+            | sed -n 's/^Package: //p' | sort -u | tr '\n' ' '
+        }
+
+        # ── FFmpeg (for /brag's poster frame and final mux) + those libraries,
+        #    in a single apt call ────────────────────────────────────────────
+        NEED_FFMPEG=""
+        if command -v ffmpeg >/dev/null 2>&1; then
+          info "ffmpeg already installed"
+        else
+          NEED_FFMPEG=1
+        fi
+        NEED_LIBS=""
+        chrome_libs_missing && NEED_LIBS=1
+        if [ -n "$NEED_FFMPEG$NEED_LIBS" ]; then
+          PKGS=""
+          [ -n "$NEED_FFMPEG" ] && info "installing ffmpeg…" && PKGS="ffmpeg"
+          if [ -n "$NEED_LIBS" ] && apt_update fresh; then
+            info "installing chromium's shared libraries…"
+            PKGS="$PKGS $(chrome_lib_pkgs)"
+          fi
+          if apt_install $PKGS; then
+            [ -n "$NEED_FFMPEG" ] && info "ffmpeg installed"
+          else
+            info "apt install failed for:$PKGS"
+          fi
+          command -v ffmpeg >/dev/null 2>&1 || info "ffmpeg is not installed — /brag will say so when it needs it"
+        fi
+
+        if [ -n "$CHROME_PID" ]; then
+          wait "$CHROME_PID"
+          CHROME="$(find_chrome)"
+          # The guess above can miss: whatever the binary itself still lacks.
+          if [ -n "$CHROME" ] && chrome_libs_missing; then
+            apt_install $(chrome_lib_pkgs) || info "some of chromium's libraries failed to install"
+          fi
         fi
 
         # `--no-sandbox` is not optional here: Chrome's own sandbox needs user
         # namespaces the container does not grant to a non-root user.
-        if [ -n "$CHROME" ] && "$CHROME" --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>&1; then
+        # A launch costs most of a second, so it is done once per binary: the
+        # stamp names the binary that last started, and a restart that finds
+        # the same one, its wrapper in place and no library missing skips it.
+        CHROME_OK="$BASE/.chromium-ok"
+        have_ok=""; read -r have_ok 2>/dev/null < "$CHROME_OK"
+        if [ -n "$CHROME" ] && [ "$have_ok" = "$CHROME" ] && [ -x "$BIN/chromium" ] && ! chrome_libs_missing; then
+          info "chromium already set up -> $BIN/chromium"
+          HAVE_CHROME=1
+        elif [ -n "$CHROME" ] && "$CHROME" --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>&1; then
           printf '#!/bin/sh\nexec "%s" --no-sandbox "$@"\n' "$CHROME" > "$BIN/chromium"
           chmod 0755 "$BIN/chromium"
+          echo "$CHROME" > "$CHROME_OK"
           info "chromium -> $BIN/chromium"
           HAVE_CHROME=1
         else
           [ -n "$CHROME" ] && info "chromium is installed but does not start — archify's browser gate will report skipped"
-          rm -f "$BIN/chromium"
+          rm -f "$BIN/chromium" "$CHROME_OK"
           HAVE_CHROME=""
         fi
 
@@ -406,6 +472,7 @@ setup:
           rm -f "$tmpenv"
         fi
 
+        wait   # the skill fetches
         info "done."
 
   startup:
