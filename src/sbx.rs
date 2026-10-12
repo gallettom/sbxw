@@ -91,6 +91,16 @@ use std::time::{Duration, Instant};
 
 const BIN: &str = "sbx";
 
+/// `&["a", "b"]` as owned argv, for the builders that hand theirs to a caller.
+fn owned(args: &[&str]) -> Vec<String> {
+    args.iter().map(|s| s.to_string()).collect()
+}
+
+/// An owned argv borrowed back, for the runners below.
+fn as_strs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
+}
+
 /// Longest tail of a failing command's stderr we fold into the error message.
 /// Generous on purpose: sbx's policy denials carry a multi-line explanation
 /// (rule, origin, detail) and, since the 2026 releases, an organisation's
@@ -135,12 +145,19 @@ fn run_inherit(args: &[&str]) -> Result<()> {
     if let Some(sink) = crate::progress::sink() {
         return run_reporting(args, sink);
     }
+    run_interactive(args)
+}
+
+/// Run `sbx <args...>` on this process's terminal, always — for the commands
+/// that *are* a terminal session (`sbxw bash`, a `--no-web` agent attach), where
+/// a progress listener has nothing to forward.
+pub fn run_interactive(args: &[&str]) -> Result<()> {
     let status = Command::new(BIN)
         .args(args)
         .status()
         .with_context(|| format!("failed to spawn `{BIN}` — is it on your PATH?"))?;
     if !status.success() {
-        bail!("`sbx {}` exited with {}", args.join(" "), status);
+        return Err(command_error(args, status, b""));
     }
     Ok(())
 }
@@ -179,9 +196,6 @@ fn run_reporting(args: &[&str], sink: crate::progress::Sink) -> Result<()> {
 
     let status = child.wait()?;
     if !status.success() {
-        if tail.is_empty() {
-            bail!("`sbx {}` exited with {}", args.join(" "), status);
-        }
         return Err(command_error(args, status, tail.join("\n").as_bytes()));
     }
     Ok(())
@@ -482,30 +496,44 @@ fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     None
 }
 
+/// This sandbox's row of `sbx ls`, if it exists (in any state).
+///
+/// One `sbx ls` answers both "does it exist" and "is it running"; a bring-up
+/// that needs both asks this once rather than `exists` and then `is_running`.
+pub fn lookup(name: &str) -> Option<SandboxInfo> {
+    list_sandboxes().into_iter().find(|s| s.name == name)
+}
+
 /// Return true if a sandbox with this exact name already exists (any state).
 pub fn exists(name: &str) -> Result<bool> {
-    Ok(list_sandboxes().iter().any(|s| s.name == name))
+    Ok(lookup(name).is_some())
 }
 
 /// Return true if the sandbox is currently running.
 pub fn is_running(name: &str) -> Result<bool> {
-    Ok(list_sandboxes()
-        .iter()
-        .find(|s| s.name == name)
-        .is_some_and(SandboxInfo::is_running))
+    Ok(lookup(name).is_some_and(|s| s.is_running()))
 }
 
 /// Poll `sbx ls` until `name` reports running, or `timeout` elapses.
 /// Returns whether it came up in time.
+///
+/// The interval starts short and doubles to half a second: a sandbox `sbx
+/// create` has just started is usually up within the first few polls, and a
+/// flat 500 ms made every one of those cost up to half a second of nothing.
 pub fn wait_until_running(name: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
+    let mut pause = Duration::from_millis(100);
+    loop {
         if is_running(name).unwrap_or(false) {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(500));
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep(pause.min(deadline - now));
+        pause = (pause * 2).min(Duration::from_millis(500));
     }
-    false
 }
 
 /// Everything `create_claude` needs beyond the sandbox name.
@@ -579,8 +607,7 @@ pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
         flag
     });
     let args = create_args(name, opts, skills.as_deref());
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_inherit(&refs)
+    run_inherit(&as_strs(&args))
 }
 
 /// The flag that asks `sbx create` for skills `mode`, given what its `--help`
@@ -706,20 +733,11 @@ pub fn run_attach_args(name: &str, env: &[String], env_files: &[String]) -> Vec<
 /// `run_capture` rather than inherited stdio: `-d` prints the sandbox id and
 /// returns, there is nothing to watch, and a refusal should carry sbx's words.
 pub fn run_detached(name: &str) -> Result<()> {
-    run_capture(
-        &run_detached_args(name)
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-    )
-    .map(|_| ())
+    run_capture(&as_strs(&run_detached_args(name))).map(|_| ())
 }
 
 fn run_detached_args(name: &str) -> Vec<String> {
-    ["run", "-d", "--name", name]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    owned(&["run", "-d", "--name", name])
 }
 
 /// Path (inside the sandbox) of the `/codemap` command the codemap kit
@@ -766,7 +784,7 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
     const SCRIPT: &str = "\
         export SBXW_CODEMAP_DONE=\"http://host.docker.internal:$2/api/sandboxes/$1/codemap/done\"; \
         exec claude -p \"$3\" --permission-mode bypassPermissions";
-    [
+    owned(&[
         "exec",
         name,
         "--",
@@ -777,10 +795,7 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
         name,
         web_port,
         prompt,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    ])
 }
 
 /// Argv for a *thread*: a second Claude session in `name`, working in a git
@@ -848,7 +863,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
             exec claude --dangerously-skip-permissions --continue
         fi
         exec claude --dangerously-skip-permissions ${3:+"$3"}"#;
-    [
+    owned(&[
         "exec",
         "-it",
         name,
@@ -860,10 +875,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
         workspace,
         thread,
         prompt,
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect()
+    ])
 }
 
 /// Where a thread stands, read before closing it: what closing would throw
@@ -947,10 +959,18 @@ pub fn thread_bash_args(name: &str, workspace: &str, thread: &str) -> Vec<String
             exit 1
         fi
         cd "$wt" && exec bash -l"#;
-    ["exec", "-it", name, "--", "bash", "-lc", SCRIPT, "sbxw-thread-bash", workspace, thread]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    owned(&[
+        "exec",
+        "-it",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        SCRIPT,
+        "sbxw-thread-bash",
+        workspace,
+        thread,
+    ])
 }
 
 /// Argv for `THREAD_END_SCRIPT`. `action` is `status` or `close`.
@@ -963,10 +983,15 @@ pub fn thread_end_args(
     delete_branch: bool,
 ) -> Vec<String> {
     let flag = |b: bool| if b { "1" } else { "0" }.to_string();
-    let mut args: Vec<String> = ["exec", name, "--", "bash", "-lc", THREAD_END_SCRIPT, "sbxw-thread-end"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut args: Vec<String> = owned(&[
+        "exec",
+        name,
+        "--",
+        "bash",
+        "-lc",
+        THREAD_END_SCRIPT,
+        "sbxw-thread-end",
+    ]);
     args.extend([
         workspace.to_string(),
         thread.to_string(),
@@ -994,15 +1019,16 @@ fn run_thread_end(args: &[String]) -> Result<std::collections::HashMap<String, S
         anyhow::bail!("{err}");
     }
     if !out.status.success() {
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        return Err(command_error(&refs[..3], out.status, &out.stderr));
+        return Err(command_error(&as_strs(&args[..3]), out.status, &out.stderr));
     }
     Ok(fields)
 }
 
 /// What closing thread `thread` of sandbox `name` would lose.
 pub fn thread_status(name: &str, workspace: &str, thread: &str) -> Result<ThreadStatus> {
-    let f = run_thread_end(&thread_end_args(name, workspace, thread, "status", false, false))?;
+    let f = run_thread_end(&thread_end_args(
+        name, workspace, thread, "status", false, false,
+    ))?;
     let get = |k: &str| f.get(k).cloned().unwrap_or_default();
     let num = |k: &str| get(k).parse().unwrap_or(0);
     Ok(ThreadStatus {
@@ -1056,8 +1082,7 @@ pub fn thread_close(
 /// answer.
 pub fn env_create(paths: &[String], name: &str, env_args: &[String]) -> Result<()> {
     let args = env_create_args(paths, name, env_args);
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_inherit(&refs)
+    run_inherit(&as_strs(&args))
 }
 
 fn env_create_args(paths: &[String], name: &str, env_args: &[String]) -> Vec<String> {
@@ -1136,6 +1161,12 @@ impl SandboxInfo {
     pub fn is_running(&self) -> bool {
         let status = self.status.to_ascii_lowercase();
         status.split_whitespace().next() == Some("running") && !status.contains("unresponsive")
+    }
+
+    /// Reported as stopped — nothing is booting it, so nothing will bring it up
+    /// unless sbxw does.
+    pub fn is_stopped(&self) -> bool {
+        self.status.to_ascii_lowercase().split_whitespace().next() == Some("stopped")
     }
 }
 
@@ -1490,7 +1521,7 @@ fn policy_rule_args<'a>(
 pub fn policy_rm_rule(rule: &str, sandbox: Option<&str>) -> Result<()> {
     let attempt = |scope: Option<&str>| {
         let args = policy_rm_args(rule, scope);
-        run_checked(&args.iter().map(String::as_str).collect::<Vec<_>>())
+        run_checked(&as_strs(&args))
     };
     match (attempt(sandbox), sandbox) {
         (Ok(()), _) => Ok(()),
@@ -1506,10 +1537,7 @@ pub fn policy_rm_rule(rule: &str, sandbox: Option<&str>) -> Result<()> {
 }
 
 fn policy_rm_args(rule: &str, sandbox: Option<&str>) -> Vec<String> {
-    let mut args: Vec<String> = ["policy", "rm", "network", "--id", rule]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let mut args: Vec<String> = owned(&["policy", "rm", "network", "--id", rule]);
     if let Some(name) = sandbox {
         args.push("--sandbox".into());
         args.push(name.into());
@@ -1767,47 +1795,78 @@ pub fn secret_set_stdin(
     args.extend(secret_scope_args(global, sandbox));
     args.push(service.into());
 
-    tracing::debug!(target: "sbx", "sbx {} (secret via stdin)", args.join(" "));
+    let refs = as_strs(&args);
+    let out = run_stdin(&refs, value.as_bytes())?;
+    if !out.status.success() {
+        return Err(command_error(&refs, out.status, &out.stderr));
+    }
+    Ok(())
+}
+
+/// `sbx exec [-i] SANDBOX -- args…` — the one spelling every in-sandbox command
+/// here goes through.
+fn exec_args<'a>(sandbox: &'a str, stdin: bool, args: &[&'a str]) -> Vec<&'a str> {
+    let mut full = vec!["exec"];
+    if stdin {
+        full.push("-i");
+    }
+    full.extend([sandbox, "--"]);
+    full.extend_from_slice(args);
+    full
+}
+
+/// Run `sbx <args...>` with `data` piped to its stdin, and hand back its
+/// output whatever the exit status. The data never reaches argv, so a secret
+/// stays out of the process table and of every log line here.
+fn run_stdin(args: &[&str], data: &[u8]) -> Result<std::process::Output> {
+    tracing::debug!(target: "sbx", "sbx {} (stdin)", args.join(" "));
     let mut child = Command::new(BIN)
-        .args(&args)
+        .args(args)
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| format!("failed to spawn `{BIN} secret set`"))?;
+        .with_context(|| format!("failed to spawn `{BIN} {}`", args[0]))?;
+    // Dropped at the end of the statement, which closes the pipe — the child
+    // reads to EOF before it does anything.
     child
         .stdin
         .take()
-        .context("no stdin handle for sbx secret set")?
-        .write_all(value.as_bytes())?;
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("`sbx secret set {service}` failed: {status}");
-    }
-    Ok(())
+        .context("no stdin handle for sbx")?
+        .write_all(data)?;
+    Ok(child.wait_with_output()?)
+}
+
+/// Run `args` inside `sandbox` with `data` piped to its stdin — `run_stdin`
+/// through `sbx exec -i`.
+///
+/// `-i` (no `-t`) is deliberate: a PTY would perform newline translation and
+/// corrupt binary data.
+fn exec_stdin(sandbox: &str, args: &[&str], data: &[u8]) -> Result<std::process::Output> {
+    run_stdin(&exec_args(sandbox, true, args), data)
 }
 
 /// Write `data` to `dest` inside the sandbox by piping it over stdin to
 /// `sbx exec`. Used by the web UI to drop a pasted image into the sandbox
 /// filesystem so the agent can read it.
 ///
-/// `-i` (no `-t`) is deliberate: a PTY would perform newline translation and
-/// corrupt binary data. The destination is passed as a positional argument to
-/// `sh -c` (`$1`) so an arbitrary path can't break out into shell syntax, and
-/// the parent directory is created on demand.
+/// The destination is passed as a positional argument to `sh -c` (`$1`) so an
+/// arbitrary path can't break out into shell syntax, and the parent directory
+/// is created on demand.
 pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
-    let script = r#"mkdir -p "$(dirname "$1")" && cat > "$1""#;
-    let mut child = Command::new(BIN)
-        .args(["exec", "-i", sandbox, "--", "sh", "-c", script, "sh", dest])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn `{BIN} exec` to write {dest}"))?;
-    child
-        .stdin
-        .take()
-        .context("no stdin handle for sbx exec")?
-        .write_all(data)?;
-    let out = child.wait_with_output()?;
+    write_file_with(
+        sandbox,
+        dest,
+        data,
+        r#"mkdir -p "$(dirname "$1")" && cat > "$1""#,
+    )
+}
+
+/// `write_file_stdin` with the shell script spelled by the caller — `$1` is the
+/// destination, stdin the contents.
+fn write_file_with(sandbox: &str, dest: &str, data: &[u8], script: &str) -> Result<()> {
+    let out = exec_stdin(sandbox, &["sh", "-c", script, "sh", dest], data)
+        .with_context(|| format!("could not write {dest}"))?;
     if !out.status.success() {
         bail!(
             "`sbx exec` write to {dest} failed: {}",
@@ -1825,7 +1884,11 @@ pub fn write_file_stdin(sandbox: &str, dest: &str, data: &[u8]) -> Result<()> {
 /// needs no token on the host at all, which is the whole reason the usage poller
 /// goes through a sandbox instead of asking directly (see `web::fetch_usage`).
 pub fn curl_in_sandbox(sandbox: &str, url: &str) -> Result<String> {
-    run_capture(&["exec", sandbox, "--", "curl", "-s", "--max-time", "10", url])
+    run_capture(&exec_args(
+        sandbox,
+        false,
+        &["curl", "-s", "--max-time", "10", url],
+    ))
 }
 
 /// Refresh Claude Code's OAuth credentials in a *running* sandbox by writing
@@ -1833,17 +1896,18 @@ pub fn curl_in_sandbox(sandbox: &str, url: &str) -> Result<String> {
 /// old `sbx kit add` path for running sandboxes: `kit add`
 /// recreates the sandbox container, which would kill live agent/bash sessions
 /// attached through the web terminal.
+///
+/// One exec, not a write and then a `chmod`: the `umask` makes a new file
+/// owner-only from its first byte, and the `chmod` covers one that already
+/// existed with wider bits.
 pub fn write_oauth_credentials(sandbox: &str, credentials_json: &str) -> Result<()> {
     const DEST: &str = "/home/agent/.claude/.credentials.json";
-    write_file_stdin(sandbox, DEST, credentials_json.as_bytes())?;
-    exec_run(sandbox, &["chmod", "600", DEST])
-}
-
-/// Run a non-interactive command inside `sandbox` via `sbx exec`, inheriting stdio.
-fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
-    let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
-    full.extend_from_slice(args);
-    run_checked(&full)
+    write_file_with(
+        sandbox,
+        DEST,
+        credentials_json.as_bytes(),
+        r#"umask 077 && mkdir -p "$(dirname "$1")" && cat > "$1" && chmod 600 "$1""#,
+    )
 }
 
 /// Run a command inside `sandbox` and hand back its raw output, whatever its
@@ -1854,8 +1918,7 @@ fn exec_run(sandbox: &str, args: &[&str]) -> Result<()> {
 /// "no such directory", "too large" and the like, which `command_error`'s
 /// generic rendering would bury under the whole `sh -c` script.
 pub fn exec_output(sandbox: &str, args: &[&str]) -> Result<std::process::Output> {
-    let mut full: Vec<&str> = vec!["exec", sandbox, "--"];
-    full.extend_from_slice(args);
+    let full = exec_args(sandbox, false, args);
     tracing::debug!(target: "sbx", "sbx {} (bytes)", full.join(" "));
     Command::new(BIN)
         .args(&full)
@@ -1871,121 +1934,19 @@ pub fn exec_output(sandbox: &str, args: &[&str]) -> Result<std::process::Output>
 /// caller: whatever was going to depend on that file cannot be started, and the
 /// caller is the one holding the better error for why.
 pub fn file_exists(sandbox: &str, path: &str) -> bool {
-    exec_run(sandbox, &["test", "-f", path]).is_ok()
+    run_checked(&exec_args(sandbox, false, &["test", "-f", path])).is_ok()
 }
 
 /// Path (inside the sandbox) of Claude Code's user-level settings file — the one
-/// every helper below merges into.
+/// the hook, statusLine and model pieces below merge into.
 const SETTINGS_PATH: &str = "/home/agent/.claude/settings.json";
 
-/// Run a one-shot Node script inside `sandbox`: write it to `tmp_path`, run it,
-/// then remove it. The removal is best-effort and never masks the script's own
-/// outcome, which is what the caller cares about.
-fn run_node_script(sandbox: &str, tmp_path: &str, script: &str) -> Result<()> {
-    write_file_stdin(sandbox, tmp_path, script.as_bytes())?;
-    let result = exec_run(sandbox, &["node", tmp_path]);
-    let _ = exec_run(sandbox, &["rm", "-f", tmp_path]);
-    result
-}
-
-/// Wrap `body` — JavaScript mutating the parsed settings object `d` — in the
-/// read-modify-write boilerplate every settings helper needs.
-///
-/// Merging rather than overwriting is load-bearing: that single file also holds
-/// the model, hook and statusLine settings installed by the *other* helpers here,
-/// plus whatever the user configured in-session. A missing or corrupt file parses
-/// as `{}`, so a first run and a repeat run behave identically.
-fn settings_merge_script(body: &str) -> String {
-    format!(
-        "const fs=require('fs');const p='{SETTINGS_PATH}';\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
-         {body}\
-         fs.writeFileSync(p,JSON.stringify(d));"
-    )
-}
-
-/// Pre-seed `/home/agent/.claude.json` so Claude Code considers `workspace`
-/// already trusted the first time it starts in this sandbox. Without this,
-/// a fresh sandbox shows the "workspace has not been trusted" banner and
-/// ignores every `permissions.allow` entry from `.claude/settings.local.json`
-/// until someone accepts the trust dialog interactively.
-///
-/// This merges into whatever `.claude.json` already exists (via a small
-/// Node script run inside the sandbox) rather than overwriting it, since
-/// Claude Code also keeps onboarding/account state in that same file.
-/// Safe to call repeatedly (e.g. on every `sbxw up`).
-pub fn trust_workspace(sandbox: &str, workspace: &str) -> Result<()> {
-    // Not `settings_merge_script`: trust lives in `.claude.json`, a different
-    // file from the `settings.json` every other helper here merges into.
-    let script = format!(
-        "const fs=require('fs');const p='/home/agent/.claude.json';const w={};\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
-         d.projects=d.projects||{{}};\
-         d.projects[w]=Object.assign({{}},d.projects[w],{{hasTrustDialogAccepted:true}});\
-         fs.writeFileSync(p,JSON.stringify(d));",
-        serde_json::to_string(workspace)?
-    );
-    run_node_script(sandbox, "/tmp/.sbxw-trust.js", &script)
-}
-
-/// Remove a `model` key from the sandbox's `settings.json` — but only when it
-/// still holds `written_by_sbxw`.
-///
-/// The model now travels as `ANTHROPIC_DEFAULT_MODEL` (see
-/// `crate::config::Config::claude_model`), which Claude Code consults *last*:
-/// a `model` value in any settings file outranks it. Sandboxes sbxw
-/// provisioned before that change have exactly such a value — one sbxw itself
-/// wrote — so without this they would be deaf to the variable and stuck on
-/// whatever `claude_model` said the day they were created.
-///
-/// The equality test is what makes the deletion safe. A `model` that still
-/// matches the configured one is sbxw's own leftover, or a user who picked the
-/// same model — either way the variable puts back the same answer. A `model`
-/// that *differs* is somebody's deliberate `/model`, and gets left alone;
-/// preserving that choice is the entire point of moving down a precedence
-/// level.
-///
-/// Best-effort and idempotent: the key is gone after the first successful run,
-/// and every later call is a no-op.
-pub fn drop_stale_settings_model(sandbox: &str, written_by_sbxw: &str) -> Result<()> {
-    let script = settings_merge_script(&format!(
-        "if(d.model==={}){{delete d.model;}}",
-        serde_json::to_string(written_by_sbxw)?
-    ));
-    run_node_script(sandbox, "/tmp/.sbxw-model.js", &script)
-}
+/// Path (inside the sandbox) of Claude Code's user-level state file: workspace
+/// trust, onboarding, account state — and the user-scoped MCP servers.
+const CLAUDE_JSON_PATH: &str = "/home/agent/.claude.json";
 
 /// Path (inside the sandbox) the enforcement hook script is installed at.
 const ARTIFACT_HOOK_PATH: &str = "/home/agent/.sbxw/enforce-artifacts.js";
-
-/// Install a user-level (`/home/agent/.claude/settings.json`) `PreToolUse`
-/// hook that blocks Claude from *creating* new non-code deliverables (docs,
-/// wireframes... by extension) anywhere outside the `.sbxw-artifacts/`
-/// convention folder. Editing a file that already exists is never blocked —
-/// only brand-new files with a matching extension trip it, and Claude gets a
-/// `permissionDecisionReason` back telling it where to retry. See
-/// `assets/enforce-artifacts.js` for the actual matching logic.
-///
-/// Installed at the user level (not the project's own `.claude/settings.json`)
-/// so it applies automatically to every sbxw sandbox without touching the
-/// user's own repo config. Merges into whatever `settings.json` already
-/// exists — removing any previous copy of this exact hook first — rather
-/// than overwriting it, since that file can also hold model/permission
-/// settings the user configured in-session. Safe to call repeatedly.
-pub fn install_artifact_hook(sandbox: &str) -> Result<()> {
-    const HOOK_SCRIPT: &str = include_str!("../assets/enforce-artifacts.js");
-    write_file_stdin(sandbox, ARTIFACT_HOOK_PATH, HOOK_SCRIPT.as_bytes())?;
-
-    let merge_script = settings_merge_script(&format!(
-        "const hookPath={};\
-         d.hooks=d.hooks||{{}};\
-         d.hooks.PreToolUse=(d.hooks.PreToolUse||[]).filter(e=>\
-           !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
-         d.hooks.PreToolUse.push({{matcher:'Write',hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});",
-        serde_json::to_string(ARTIFACT_HOOK_PATH)?
-    ));
-    run_node_script(sandbox, "/tmp/.sbxw-hook-install.js", &merge_script)
-}
 
 /// Path (inside the sandbox) the status-forwarding hook script is installed at.
 const STATUS_HOOK_PATH: &str = "/home/agent/.sbxw/status-hook.js";
@@ -2005,32 +1966,8 @@ const STATUS_HOOK_EVENTS: &[&str] = &[
     "Stop",
 ];
 
-/// Install a user-level hook that POSTs every relevant Claude Code lifecycle
-/// event to the sbxw daemon (`http://host.docker.internal:<port>/api/hook`), so
-/// the island can derive session state from *trusted, structured* events rather
-/// than scraping the terminal. `web_port` is the daemon's port.
-///
-/// Fire-and-forget: the script never blocks Claude Code or influences a tool
-/// decision (see `assets/status-hook.js`). Merges into `settings.json` and
-/// removes any prior copy of this hook first, like `install_artifact_hook`.
-pub fn install_status_hooks(sandbox: &str, web_port: &str) -> Result<()> {
-    const HOOK_SCRIPT: &str = include_str!("../assets/status-hook.js");
-    let script = HOOK_SCRIPT.replace("__PORT__", web_port);
-    write_file_stdin(sandbox, STATUS_HOOK_PATH, script.as_bytes())?;
-
-    let merge_script = settings_merge_script(&format!(
-        "const hookPath={path};const events={events};\
-         d.hooks=d.hooks||{{}};\
-         for(const ev of events){{\
-           d.hooks[ev]=(d.hooks[ev]||[]).filter(e=>\
-             !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
-           d.hooks[ev].push({{hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});\
-         }}",
-        path = serde_json::to_string(STATUS_HOOK_PATH)?,
-        events = serde_json::to_string(STATUS_HOOK_EVENTS)?,
-    ));
-    run_node_script(sandbox, "/tmp/.sbxw-status-hook-install.js", &merge_script)
-}
+/// Path (inside the sandbox) the usage statusLine script is installed at.
+const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
 
 /// Path (inside the sandbox) the cross-sandbox relay CLI is installed at.
 const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
@@ -2129,20 +2066,6 @@ fn relay_doc() -> String {
     )
 }
 
-/// Install the cross-sandbox relay, in three parts: the CLI, the MCP server
-/// that puts it in the agent's tool list, and the paragraph in the agent's user
-/// memory that says when to reach for it. `web_port` is the daemon's port — the
-/// same one the status hook already reaches, so no extra network rule is needed.
-///
-/// All three, because they answer different failures. The CLI is the thing that
-/// works; the MCP server is what makes it *considered* (an agent weighs its
-/// tools every turn and its memory only sometimes); the memory paragraph is what
-/// names the moment, which otherwise looks like an ordinary dead end.
-///
-/// The memory file is rewritten around sbxw's fenced section rather than
-/// overwritten: Claude Code writes `#` memories into that same file, and the
-/// user may have put their own standing instructions there. `.claude.json` is
-/// merged for the same reason.
 /// Where `/lead` lands: a user-level command, like the kits' — not under
 /// `~/.claude/skills`, which in a sandbox is sbx's shared store on the host.
 const LEAD_COMMAND_PATH: &str = "/home/agent/.claude/commands/lead.md";
@@ -2155,72 +2078,329 @@ pub fn install_lead_command(sandbox: &str) -> Result<()> {
     write_file_stdin(sandbox, LEAD_COMMAND_PATH, LEAD.as_bytes())
 }
 
+/// Install the cross-sandbox relay, in three parts: the CLI, the MCP server
+/// that puts it in the agent's tool list, and the paragraph in the agent's user
+/// memory that says when to reach for it. `web_port` is the daemon's port — the
+/// same one the status hook already reaches, so no extra network rule is needed.
+///
+/// All three, because they answer different failures. The CLI is the thing that
+/// works; the MCP server is what makes it *considered* (an agent weighs its
+/// tools every turn and its memory only sometimes); the memory paragraph is what
+/// names the moment, which otherwise looks like an ordinary dead end.
+///
+/// Bring-up installs it as one piece of its `Tooling` batch; this is the same
+/// piece on its own, for the web UI's Lead button.
 pub fn install_relay_tool(sandbox: &str, web_port: &str) -> Result<()> {
-    const TOOL: &str = include_str!("../assets/relay-tool.js");
-    const MCP: &str = include_str!("../assets/relay-mcp.js");
-    let script = TOOL.replace("__PORT__", web_port);
-    write_file_stdin(sandbox, RELAY_TOOL_PATH, script.as_bytes())?;
-    // The MCP wrapper reads the daemon's port from the CLI it requires, so only
-    // one copy of it is ever templated in.
-    write_file_stdin(sandbox, RELAY_MCP_PATH, MCP.as_bytes())?;
-
-    // Register the server at *user* scope — every project in this sandbox, not
-    // just the one that happens to be open. That lives at the top level of
-    // `.claude.json` under `mcpServers` (the same file `trust_workspace`
-    // merges into), which is why this is a merge and not a write: that file
-    // also holds the trust flags, onboarding state and the agent's own config.
-    let mcp_script = format!(
-        "const fs=require('fs');const p='/home/agent/.claude.json';\
-         let d={{}};try{{d=JSON.parse(fs.readFileSync(p,'utf8'))}}catch(e){{}}\
-         d.mcpServers=d.mcpServers||{{}};\
-         d.mcpServers[{name}]={{type:'stdio',command:'node',args:[{path}],env:{{}}}};\
-         fs.writeFileSync(p,JSON.stringify(d));",
-        name = serde_json::to_string(RELAY_MCP_NAME)?,
-        path = serde_json::to_string(RELAY_MCP_PATH)?,
-    );
-    run_node_script(sandbox, "/tmp/.sbxw-relay-mcp-install.js", &mcp_script)?;
-
-    let merge_script = format!(
-        "const fs=require('fs');const p={path};\
-         const begin={begin},end={end},doc={doc};\
-         let cur='';try{{cur=fs.readFileSync(p,'utf8')}}catch(e){{}}\
-         const from=cur.indexOf(begin),to=cur.indexOf(end);\
-         let rest=(from>=0&&to>from)?cur.slice(0,from)+cur.slice(to+end.length):cur;\
-         rest=rest.replace(/\\n{{3,}}/g,'\\n\\n').trim();\
-         fs.mkdirSync(require('path').dirname(p),{{recursive:true}});\
-         fs.writeFileSync(p,(rest?rest+'\\n\\n':'')+doc);",
-        path = serde_json::to_string(USER_MEMORY_PATH)?,
-        begin = serde_json::to_string(RELAY_DOC_BEGIN)?,
-        end = serde_json::to_string(RELAY_DOC_END)?,
-        doc = serde_json::to_string(&relay_doc())?,
-    );
-    run_node_script(sandbox, "/tmp/.sbxw-relay-install.js", &merge_script)
+    Tooling::new().relay(web_port).run(sandbox)?.into_result()
 }
 
-/// Path (inside the sandbox) the usage statusLine script is installed at.
-const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
+/// A JavaScript literal for `v`. JSON is a subset of JavaScript, so a string
+/// encoded this way cannot break out of the script it is spliced into.
+fn js<T: serde::Serialize + ?Sized>(v: &T) -> String {
+    serde_json::to_string(v).expect("plain strings and lists always serialise")
+}
 
-/// Install a Claude Code `statusLine` command that prints a compact status line
-/// and (throttled) forwards the subscription rate limits to the daemon
-/// (`http://host.docker.internal:<port>/api/usage`). Claude Code fetches those
-/// numbers itself per the statusLine contract, so no OAuth token is reused
-/// out-of-band. Only Pro/Max sessions carry `rate_limits`; others degrade to
-/// model/cost only. A user-configured `statusLine` is preserved (we only set
-/// ours if none exists, or if the existing one is already ours).
-pub fn install_usage_statusline(sandbox: &str, web_port: &str) -> Result<()> {
-    const SCRIPT: &str = include_str!("../assets/usage-statusline.js");
-    let script = SCRIPT.replace("__PORT__", web_port);
-    write_file_stdin(sandbox, USAGE_STATUSLINE_PATH, script.as_bytes())?;
+/// The in-sandbox half of a bring-up, as **one** `sbx exec`.
+///
+/// Each piece used to be its own helper and its own round trips: write a hook
+/// file, write a Node script to `/tmp`, run it, remove it — four `sbx exec`
+/// calls for the artifact hook alone, 26 for the whole TOOLING step, each one a
+/// process spawn on the host and a hop through the sbx daemon into the VM. Now
+/// the pieces are collected here and run as a single Node script piped to
+/// `node -` on stdin, with every file it installs embedded in it.
+///
+/// What each piece promises is unchanged:
+///   * **Merges, not overwrites.** `settings.json` and `.claude.json` are read
+///     once, every piece mutates the parsed object, and each file is written
+///     back once at the end. A missing or corrupt file parses as `{}`, so a
+///     first run and a repeat run behave identically; and those files also hold
+///     whatever the user configured in-session.
+///   * **Best-effort, per piece.** A piece that throws has its changes to the
+///     shared JSON rolled back and is reported by name (`ToolingOutcome`); the
+///     pieces after it still run. A file that cannot be written back fails
+///     every piece that touched it.
+///   * **Idempotent.** Each hook removes its own previous copy before adding
+///     itself; the memory section is fenced and replaced in place.
+#[derive(Default)]
+pub struct Tooling {
+    pieces: Vec<(&'static str, String)>,
+}
 
-    let command = format!("node {USAGE_STATUSLINE_PATH}");
-    let merge_script = settings_merge_script(&format!(
-        "const cmd={cmd};\
-         if(!d.statusLine||((d.statusLine.command||'').includes('usage-statusline.js'))){{\
-           d.statusLine={{type:'command',command:cmd}};\
-         }}",
-        cmd = serde_json::to_string(&command)?,
-    ));
-    run_node_script(sandbox, "/tmp/.sbxw-usage-install.js", &merge_script)
+/// Names `Tooling` reports a failed piece under.
+pub mod piece {
+    pub const TRUST: &str = "trust";
+    pub const ARTIFACT_HOOK: &str = "artifact-hook";
+    pub const STATUS_HOOKS: &str = "status-hooks";
+    pub const USAGE_STATUSLINE: &str = "usage-statusline";
+    pub const RELAY: &str = "relay";
+    pub const STALE_MODEL: &str = "stale-model";
+}
+
+/// What the script prints its failures after, on a line of its own, so nothing
+/// else on stdout (a warning from Node, say) can be mistaken for the report.
+const TOOLING_REPORT: &str = "SBXW-TOOLING ";
+
+/// The helpers every piece's body is written against:
+///   * `json(p)` — the parsed JSON file `p`, loaded on first use (`{}` when
+///     missing or corrupt) and written back once, after every piece has run;
+///   * `put(p, text)` — write a file now, creating its directory.
+const TOOLING_PRELUDE: &str = "\
+const fs=require('fs'),path=require('path');\
+let docs={};const touched={};const failed=[];let who='';\
+const put=(p,s)=>{fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s)};\
+const json=p=>{(touched[p]=touched[p]||new Set()).add(who);\
+if(!(p in docs)){try{docs[p]=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){docs[p]={}}}return docs[p]};\
+const msg=e=>String((e&&e.message)||e);\
+const piece=(name,f)=>{who=name;const snap=JSON.stringify(docs);\
+try{f()}catch(e){docs=JSON.parse(snap);failed.push([name,msg(e)])}};";
+
+/// After the pieces: write back each JSON file one of them touched, then report.
+const TOOLING_EPILOGUE: &str = "\
+for(const p of Object.keys(docs)){try{put(p,JSON.stringify(docs[p]))}\
+catch(e){for(const w of touched[p]||[])failed.push([w,msg(e)])}}";
+
+impl Tooling {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn piece(mut self, name: &'static str, body: String) -> Self {
+        self.pieces.push((name, body));
+        self
+    }
+
+    /// Pre-seed `.claude.json` so Claude Code considers `workspace` already
+    /// trusted the first time it starts in this sandbox. Without this, a fresh
+    /// sandbox shows the "workspace has not been trusted" banner and ignores
+    /// every `permissions.allow` entry from `.claude/settings.local.json` until
+    /// someone accepts the trust dialog interactively.
+    pub fn trust_workspace(self, workspace: &str) -> Self {
+        let body = format!(
+            "const d=json({p});const w={w};\
+             d.projects=d.projects||{{}};\
+             d.projects[w]=Object.assign({{}},d.projects[w],{{hasTrustDialogAccepted:true}});",
+            p = js(CLAUDE_JSON_PATH),
+            w = js(workspace),
+        );
+        self.piece(piece::TRUST, body)
+    }
+
+    /// A user-level `PreToolUse` hook that blocks Claude from *creating* new
+    /// non-code deliverables (docs, wireframes... by extension) anywhere outside
+    /// the `.sbxw-artifacts/` convention folder. Editing a file that already
+    /// exists is never blocked — only brand-new files with a matching extension
+    /// trip it, and Claude gets a `permissionDecisionReason` back telling it
+    /// where to retry. See `assets/enforce-artifacts.js` for the matching logic.
+    ///
+    /// User level (not the project's own `.claude/settings.json`) so it applies
+    /// to every sbxw sandbox without touching the user's own repo config.
+    pub fn artifact_hook(self) -> Self {
+        const HOOK_SCRIPT: &str = include_str!("../assets/enforce-artifacts.js");
+        let body = format!(
+            "const hookPath={path};put(hookPath,{script});\
+             const d=json({settings});\
+             d.hooks=d.hooks||{{}};\
+             d.hooks.PreToolUse=(d.hooks.PreToolUse||[]).filter(e=>\
+               !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
+             d.hooks.PreToolUse.push({{matcher:'Write',hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});",
+            path = js(ARTIFACT_HOOK_PATH),
+            script = js(HOOK_SCRIPT),
+            settings = js(SETTINGS_PATH),
+        );
+        self.piece(piece::ARTIFACT_HOOK, body)
+    }
+
+    /// A user-level hook that POSTs every relevant Claude Code lifecycle event
+    /// to the sbxw daemon (`http://host.docker.internal:<port>/api/hook`), so
+    /// the island can derive session state from *trusted, structured* events
+    /// rather than scraping the terminal. `web_port` is the daemon's port.
+    ///
+    /// Fire-and-forget: the script never blocks Claude Code or influences a
+    /// tool decision (see `assets/status-hook.js`).
+    pub fn status_hooks(self, web_port: &str) -> Self {
+        const HOOK_SCRIPT: &str = include_str!("../assets/status-hook.js");
+        let body = format!(
+            "const hookPath={path};const events={events};put(hookPath,{script});\
+             const d=json({settings});\
+             d.hooks=d.hooks||{{}};\
+             for(const ev of events){{\
+               d.hooks[ev]=(d.hooks[ev]||[]).filter(e=>\
+                 !(e.hooks||[]).some(h=>(h.args||[]).includes(hookPath)));\
+               d.hooks[ev].push({{hooks:[{{type:'command',command:'node',args:[hookPath]}}]}});\
+             }}",
+            path = js(STATUS_HOOK_PATH),
+            events = js(STATUS_HOOK_EVENTS),
+            script = js(&HOOK_SCRIPT.replace("__PORT__", web_port)),
+            settings = js(SETTINGS_PATH),
+        );
+        self.piece(piece::STATUS_HOOKS, body)
+    }
+
+    /// A Claude Code `statusLine` command that prints a compact status line and
+    /// (throttled) forwards the subscription rate limits to the daemon
+    /// (`http://host.docker.internal:<port>/api/usage`). Claude Code fetches
+    /// those numbers itself per the statusLine contract, so no OAuth token is
+    /// reused out-of-band. Only Pro/Max sessions carry `rate_limits`; others
+    /// degrade to model/cost only. A user-configured `statusLine` is preserved
+    /// (ours is set only if none exists, or if the existing one is already ours).
+    pub fn usage_statusline(self, web_port: &str) -> Self {
+        const SCRIPT: &str = include_str!("../assets/usage-statusline.js");
+        let body = format!(
+            "put({path},{script});const cmd={cmd};const d=json({settings});\
+             if(!d.statusLine||((d.statusLine.command||'').includes('usage-statusline.js'))){{\
+               d.statusLine={{type:'command',command:cmd}};\
+             }}",
+            path = js(USAGE_STATUSLINE_PATH),
+            script = js(&SCRIPT.replace("__PORT__", web_port)),
+            cmd = js(&format!("node {USAGE_STATUSLINE_PATH}")),
+            settings = js(SETTINGS_PATH),
+        );
+        self.piece(piece::USAGE_STATUSLINE, body)
+    }
+
+    /// The cross-sandbox relay — see `install_relay_tool`.
+    ///
+    /// The MCP server is registered at *user* scope — every project in this
+    /// sandbox, not just the one that happens to be open — which lives at the
+    /// top level of `.claude.json` under `mcpServers`, beside the trust flags.
+    /// The memory file is rewritten around sbxw's fenced section rather than
+    /// overwritten: Claude Code writes `#` memories into that same file, and the
+    /// user may have put their own standing instructions there.
+    pub fn relay(self, web_port: &str) -> Self {
+        const TOOL: &str = include_str!("../assets/relay-tool.js");
+        const MCP: &str = include_str!("../assets/relay-mcp.js");
+        // The MCP wrapper reads the daemon's port from the CLI it requires, so
+        // only one copy of it is ever templated in.
+        let body = format!(
+            "put({tool_path},{tool});put({mcp_path},{mcp});\
+             const d=json({claude_json});\
+             d.mcpServers=d.mcpServers||{{}};\
+             d.mcpServers[{name}]={{type:'stdio',command:'node',args:[{mcp_path}],env:{{}}}};\
+             const p={memory},begin={begin},end={end},doc={doc};\
+             let cur='';try{{cur=fs.readFileSync(p,'utf8')}}catch(e){{}}\
+             const from=cur.indexOf(begin),to=cur.indexOf(end);\
+             let rest=(from>=0&&to>from)?cur.slice(0,from)+cur.slice(to+end.length):cur;\
+             rest=rest.replace(/\\n{{3,}}/g,'\\n\\n').trim();\
+             put(p,(rest?rest+'\\n\\n':'')+doc);",
+            tool_path = js(RELAY_TOOL_PATH),
+            tool = js(&TOOL.replace("__PORT__", web_port)),
+            mcp_path = js(RELAY_MCP_PATH),
+            mcp = js(MCP),
+            claude_json = js(CLAUDE_JSON_PATH),
+            name = js(RELAY_MCP_NAME),
+            memory = js(USER_MEMORY_PATH),
+            begin = js(RELAY_DOC_BEGIN),
+            end = js(RELAY_DOC_END),
+            doc = js(&relay_doc()),
+        );
+        self.piece(piece::RELAY, body)
+    }
+
+    /// Remove a `model` key from `settings.json` — but only when it still holds
+    /// `written_by_sbxw`.
+    ///
+    /// The model now travels as `ANTHROPIC_DEFAULT_MODEL` (see
+    /// `crate::config::Config::claude_model`), which Claude Code consults
+    /// *last*: a `model` value in any settings file outranks it. Sandboxes sbxw
+    /// provisioned before that change have exactly such a value — one sbxw
+    /// itself wrote — so without this they would be deaf to the variable and
+    /// stuck on whatever `claude_model` said the day they were created.
+    ///
+    /// The equality test is what makes the deletion safe. A `model` that still
+    /// matches the configured one is sbxw's own leftover, or a user who picked
+    /// the same model — either way the variable puts back the same answer. A
+    /// `model` that *differs* is somebody's deliberate `/model`, and gets left
+    /// alone; preserving that choice is the entire point of moving down a
+    /// precedence level.
+    pub fn drop_stale_model(self, written_by_sbxw: &str) -> Self {
+        let body = format!(
+            "const d=json({settings});if(d.model==={m}){{delete d.model;}}",
+            settings = js(SETTINGS_PATH),
+            m = js(written_by_sbxw),
+        );
+        self.piece(piece::STALE_MODEL, body)
+    }
+
+    /// The whole batch as one Node script.
+    fn script(&self) -> String {
+        let mut s = String::from(TOOLING_PRELUDE);
+        for (name, body) in &self.pieces {
+            s.push_str(&format!("piece({},()=>{{{body}}});", js(name)));
+        }
+        s.push_str(TOOLING_EPILOGUE);
+        s.push_str(&format!(
+            "console.log({}+JSON.stringify(failed));",
+            js(TOOLING_REPORT)
+        ));
+        s
+    }
+
+    /// Run every piece in `sandbox`, in one `sbx exec`.
+    ///
+    /// `Err` when the batch as a whole could not run (a stopped sandbox, no
+    /// `node`); otherwise which pieces failed, and why.
+    pub fn run(&self, sandbox: &str) -> Result<ToolingOutcome> {
+        let out = exec_stdin(sandbox, &["node", "-"], self.script().as_bytes())?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        match parse_tooling_report(&stdout, &self.pieces) {
+            Some(failed) if out.status.success() => Ok(ToolingOutcome { failed }),
+            _ => Err(command_error(
+                &["exec", sandbox, "--", "node", "-"],
+                out.status,
+                &out.stderr,
+            )),
+        }
+    }
+}
+
+/// Which pieces of a `Tooling` run failed.
+#[derive(Debug, Default)]
+pub struct ToolingOutcome {
+    failed: Vec<(&'static str, String)>,
+}
+
+impl ToolingOutcome {
+    /// Why `piece` failed, or `None` when it worked (or was not in the batch).
+    pub fn error(&self, piece: &str) -> Option<&str> {
+        self.failed
+            .iter()
+            .find(|(p, _)| *p == piece)
+            .map(|(_, e)| e.as_str())
+    }
+
+    /// `Ok` when nothing failed; otherwise the first failure.
+    pub fn into_result(self) -> Result<()> {
+        match self.failed.into_iter().next() {
+            None => Ok(()),
+            Some((piece, e)) => bail!("{piece}: {e}"),
+        }
+    }
+}
+
+/// The failures the tooling script reported on its `TOOLING_REPORT` line, named
+/// by the batch's own `&'static str`s. `None` when there is no such line — the
+/// script did not get as far as reporting.
+fn parse_tooling_report(
+    stdout: &str,
+    pieces: &[(&'static str, String)],
+) -> Option<Vec<(&'static str, String)>> {
+    let line = stdout
+        .lines()
+        .rev()
+        .find_map(|l| l.strip_prefix(TOOLING_REPORT))?;
+    let raw: Vec<(String, String)> = serde_json::from_str(line).ok()?;
+    let mut failed: Vec<(&'static str, String)> = Vec::new();
+    for (name, err) in raw {
+        let Some(&(piece, _)) = pieces.iter().find(|(p, _)| *p == name) else {
+            continue;
+        };
+        // First reason wins: a piece that threw is also listed under the file
+        // it had touched, if that file then failed to write.
+        if !failed.iter().any(|(p, _)| *p == piece) {
+            failed.push((piece, err));
+        }
+    }
+    Some(failed)
 }
 
 #[cfg(test)]
@@ -2634,47 +2814,141 @@ neos   claude   2 days ago   running   /p/neos
         );
     }
 
-    /// The wrapper must *merge*: read the existing settings, apply the body, and
-    /// write back. Overwriting instead would make each helper clobber the ones
-    /// that ran before it (model vs. hooks vs. statusLine, all in one file).
     /// The deletion is conditional, and the condition is what keeps a
     /// deliberate `/model` alive. An unconditional `delete d.model` would read
     /// as "reset to the configured default" and quietly throw away the one
     /// setting this whole change exists to preserve.
     #[test]
     fn the_stale_model_key_is_only_dropped_when_it_is_sbxws_own() {
-        let script = settings_merge_script(&format!(
-            "if(d.model==={}){{delete d.model;}}",
-            serde_json::to_string("claude-opus-5").unwrap()
-        ));
+        let script = Tooling::new().drop_stale_model("claude-opus-5").script();
         assert!(
             script.contains(r#"if(d.model==="claude-opus-5"){delete d.model;}"#),
             "{script}"
         );
-        // Read-modify-write, not truncate: that file also holds the hooks and
-        // statusLine installed by the other helpers.
-        assert!(script.contains("readFileSync"), "{script}");
-        assert!(script.contains("writeFileSync"), "{script}");
         // The model name is JSON-encoded, so an alias with a quote in it cannot
         // break out of the comparison.
-        let nasty = settings_merge_script(&format!(
-            "if(d.model==={}){{delete d.model;}}",
-            serde_json::to_string(r#"a"); process.exit(1); ("#).unwrap()
-        ));
-        assert!(!nasty.contains("process.exit(1);ature"), "{nasty}");
+        let nasty = Tooling::new()
+            .drop_stale_model(r#"a"); process.exit(1); ("#)
+            .script();
+        assert!(!nasty.contains(r#"a"); process.exit(1)"#), "{nasty}");
         assert!(nasty.contains(r#"\""#), "the quote is escaped: {nasty}");
     }
 
+    /// Only the report line counts, and only names the batch knows come back.
     #[test]
-    fn settings_merge_script_reads_modifies_then_writes() {
-        let script = settings_merge_script("d.model=\"claude-sonnet-5\";");
-        let read_at = script.find("readFileSync").expect("reads the current file");
-        let body_at = script.find("d.model=").expect("applies the body");
-        let write_at = script.find("writeFileSync").expect("writes it back");
-        assert!(read_at < body_at && body_at < write_at, "{script}");
-        // A missing or corrupt settings.json must parse as `{}`, not throw.
-        assert!(script.contains("catch(e){}"), "{script}");
-        assert!(script.contains(SETTINGS_PATH), "{script}");
+    fn the_tooling_report_is_read_from_its_own_line() {
+        let pieces = Tooling::new().trust_workspace("/w").artifact_hook().pieces;
+        let out = "(node:1) Warning: something\n\
+                   SBXW-TOOLING [[\"trust\",\"EACCES\"],[\"trust\",\"later\"],[\"bogus\",\"x\"]]\n";
+        let failed = parse_tooling_report(out, &pieces).expect("a report");
+        assert_eq!(failed, vec![(piece::TRUST, "EACCES".to_string())]);
+        assert!(parse_tooling_report("no report here", &pieces).is_none());
+        assert_eq!(
+            parse_tooling_report("SBXW-TOOLING []", &pieces),
+            Some(vec![])
+        );
+    }
+
+    /// `node -` on `script`, returning what it printed.
+    fn run_node(script: &str) -> String {
+        let mut child = Command::new("node")
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Run the whole bring-up batch under a real `node`, against a scratch
+    /// home, twice: the second run must change nothing, and what the user (or
+    /// another tool) put in those files must survive both.
+    #[test]
+    fn the_tooling_batch_merges_and_is_idempotent() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = std::env::temp_dir().join(format!("sbxw-tooling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+        let settings = home.join(".claude/settings.json");
+        let claude_json = home.join(".claude.json");
+        let memory = home.join(".claude/CLAUDE.md");
+        std::fs::write(
+            &settings,
+            r#"{"model":"m1","statusLine":{"type":"command","command":"mine"},
+                "hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"x"}]}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(&claude_json, r#"{"onboarded":true}"#).unwrap();
+        std::fs::write(&memory, "my own rule\n").unwrap();
+
+        let batch = Tooling::new()
+            .trust_workspace("/work")
+            .artifact_hook()
+            .status_hooks("7681")
+            .usage_statusline("7681")
+            .relay("7681")
+            .drop_stale_model("m1");
+        let script = batch
+            .script()
+            .replace("/home/agent/", &format!("{}/", home.display()));
+        let run = || {
+            let stdout = run_node(&script);
+            assert!(stdout.contains("SBXW-TOOLING []"), "{stdout}");
+        };
+        let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap();
+        run();
+        let first = (read(&settings), read(&claude_json), read(&memory));
+        run();
+        assert_eq!(first, (read(&settings), read(&claude_json), read(&memory)));
+
+        let s: serde_json::Value = serde_json::from_str(&first.0).unwrap();
+        assert!(s.get("model").is_none(), "sbxw's own model is dropped");
+        assert_eq!(
+            s["statusLine"]["command"], "mine",
+            "the user's statusLine stays"
+        );
+        let pre = s["hooks"]["PreToolUse"].as_array().unwrap();
+        // Theirs, the artifact hook, the status hook — once each.
+        assert_eq!(pre.len(), 3, "{pre:?}");
+        assert_eq!(pre[0]["matcher"], "Bash");
+        assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
+
+        let c: serde_json::Value = serde_json::from_str(&first.1).unwrap();
+        assert_eq!(c["onboarded"], true);
+        assert_eq!(c["projects"]["/work"]["hasTrustDialogAccepted"], true);
+        assert_eq!(c["mcpServers"][RELAY_MCP_NAME]["command"], "node");
+
+        assert!(first.2.starts_with("my own rule\n\n"), "{}", first.2);
+        assert_eq!(first.2.matches(RELAY_DOC_BEGIN).count(), 1);
+        assert!(home.join(".sbxw/relay.js").exists());
+        assert!(home.join(".sbxw/relay-mcp.js").exists());
+        assert!(home.join(".sbxw/enforce-artifacts.js").exists());
+        assert!(!read(&home.join(".sbxw/status-hook.js")).contains("__PORT__"));
+        assert!(home.join(".sbxw/usage-statusline.js").exists());
+
+        // A file that cannot be written fails the pieces that touched it, and
+        // only those: `.claude.json` is a directory here.
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".claude.json")).unwrap();
+        let failed = parse_tooling_report(&run_node(&script), &batch.pieces).expect("a report");
+        let names: Vec<&str> = failed.iter().map(|(p, _)| *p).collect();
+        assert_eq!(names, vec![piece::TRUST, piece::RELAY]);
+        assert!(
+            home.join(".claude/settings.json").exists(),
+            "the rest still landed"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -2842,7 +3116,12 @@ local-policy                          local   all              network: 159 allo
         assert_eq!(&args[..6], ["exec", "-it", "neos", "--", "bash", "-lc"]);
         assert_eq!(
             &args[7..],
-            ["sbxw-thread", "/Users/me/my $(id) app", "fix-login", "/lead $(id)"]
+            [
+                "sbxw-thread",
+                "/Users/me/my $(id) app",
+                "fix-login",
+                "/lead $(id)"
+            ]
         );
         // The worktree and branch the README promises.
         assert!(script.contains(r#""$root/.sbxw-worktrees/$2""#), "{script}");
@@ -2857,7 +3136,14 @@ local-policy                          local   all              network: 159 allo
         assert!(!args[5].contains("fix-login") && !args[5].contains("$(id)"));
         assert_eq!(
             &args[6..],
-            ["sbxw-thread-end", "/w/$(id)", "fix-login", "close", "1", "0"]
+            [
+                "sbxw-thread-end",
+                "/w/$(id)",
+                "fix-login",
+                "close",
+                "1",
+                "0"
+            ]
         );
     }
 
