@@ -588,6 +588,20 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   first empty pane, or in a new one while the window has room, so the agent
   stays on screen. The first open creates the worktree from the repository's
   current `HEAD`. Every later open lands back in it, with its uncommitted work.
+- **A workspace of several repos:** a workspace is often a folder that holds
+  repos one level down (`~/dev/shop/{backend,frontend}`). A thread then works
+  in **one** of them, picked in the dialog, and its worktree and branch live in
+  that repo. `GET /api/sandboxes/<name>/repos` lists the repos found on the
+  host — the workspace itself (`''`) when it is inside a repo, else its
+  subfolders to depth 3, skipping hidden folders, `node_modules`, `target` and
+  `vendor` — each with its branch, uncommitted file count and ahead/behind.
+  The choice reaches the daemon as `repo=<folder>` on the thread's first open
+  and is remembered in `~/.sbxw/state/threads/<sandbox>.json`; later opens,
+  its Bash and **Close thread** use it. A thread whose worktree is in one repo
+  cannot be reopened in another: close it first. A thread opened without a
+  repo, and with none recorded, takes the workspace when it is a repo, else
+  the one repo under it; with several or none it is refused with the list of
+  repos found, asking you to pick one.
 - **Reopened, it picks up where it was.** A thread whose session ended (the
   daemon or the sandbox restarted, which ends every session sbxw held) resumes
   its last conversation with `claude --continue` when its pane reopens. Only a
@@ -668,7 +682,7 @@ conversation you already have, so it costs no extra session or worktree.
 ```
 
 - **Nothing starts without you.** The plan opens a dialog in the web UI. Every
-  thread's name, goal and scope can be edited, threads removed or added, and
+  thread's name, goal, scope and repo can be edited, threads removed or added, and
   the plan approved or refused. **Later** keeps it waiting; **Review plan** on
   the main pane brings it back. A refused plan is final.
 - **The lead pane says so.** From the click on ★ Lead, the main pane's chip
@@ -677,6 +691,11 @@ conversation you already have, so it costs no extra session or worktree.
   (`GET /api/leads`), so a reload keeps the mark, and restarting that session,
   a new conversation that never read `/lead`, removes it. A plan pending or
   with threads at work keeps the mark too.
+- **Leaving lead mode:** when the work is finished, `POST
+  /api/sandboxes/<name>/lead/end` (from the web UI) ends it. A pending plan is
+  refused, approved ones are closed: their threads keep running (closing them
+  stays your call), but their reports no longer reach the main session, the
+  lead's tools refuse them, and the main session is told to stop leading.
 - **Approving starts it.** sbxw opens each thread's session in its worktree,
   with a briefing as its first message: its goal, its scope, and the rules
   (commit on your branch, never merge or push, report your state). The

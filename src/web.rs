@@ -1052,6 +1052,8 @@ struct AppState {
     leads: Arc<Mutex<HashMap<String, usize>>>,
     /// "This sandbox's main session is the lead now", for open tabs (SSE `lead`).
     lead_events: broadcast::Sender<String>,
+    /// "This sandbox's lead mode was ended", for open tabs (SSE `lead-end`).
+    lead_end_events: broadcast::Sender<String>,
     cfg: Arc<Config>,
     use_api_key: bool,
 }
@@ -1089,6 +1091,10 @@ struct WsQuery {
     mode: Option<String>,
     /// Name of the thread, with `mode=thread`.
     thread: Option<String>,
+    /// With `mode=thread`: the repo it works in, relative to the workspace
+    /// (`''` is the workspace itself). Recorded on its first open; see
+    /// `settle_thread_repo`.
+    repo: Option<String>,
 }
 
 const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
@@ -1249,6 +1255,7 @@ pub async fn serve(
         plans: plans.clone(),
         leads: Arc::new(Mutex::new(HashMap::new())),
         lead_events: broadcast::channel(16).0,
+        lead_end_events: broadcast::channel(16).0,
         cfg,
         use_api_key,
     });
@@ -1317,7 +1324,9 @@ pub async fn serve(
         .route("/api/hosts", get(api_hosts_read))
         .route("/api/sandboxes/:name/stop", post(api_stop))
         .route("/api/sandboxes/:name/threads", get(api_threads))
+        .route("/api/sandboxes/:name/repos", get(api_repos))
         .route("/api/sandboxes/:name/lead", post(api_lead))
+        .route("/api/sandboxes/:name/lead/end", post(api_lead_end))
         .route("/api/leads", get(api_leads))
         .route("/api/plans", get(api_plans_list))
         .route("/api/plans/propose", post(api_plan_propose))
@@ -1573,6 +1582,7 @@ async fn api_stream(
     let mut codemap_rx = state.codemap.subscribe();
     let mut plan_rx = state.plans.subscribe();
     let mut lead_rx = state.lead_events.subscribe();
+    let mut lead_end_rx = state.lead_end_events.subscribe();
     let count_state = state.clone();
 
     tokio::spawn(async move {
@@ -1626,6 +1636,8 @@ async fn api_stream(
                 res = codemap_rx.recv() => forward!(res, |run| json_event("codemap", &run)),
                 // A main session was just made lead.
                 res = lead_rx.recv() => forward!(res, named("lead")),
+                // A main session stopped being the lead.
+                res = lead_end_rx.recv() => forward!(res, named("lead-end")),
                 // A plan was proposed, settled, or one of its threads moved.
                 // Whole plans, like `codemap` above.
                 res = plan_rx.recv() => forward!(res, |plan| json_event("plan", &plan)),
@@ -2734,13 +2746,13 @@ async fn api_hosts_read() -> Json<Vec<HostEntry>> {
 }
 
 /// `GET /api/sandboxes/:name/threads` — what the **Thread** button offers: every
-/// thread with a worktree, whether its session is open, and how many more the
-/// ceiling allows.
+/// thread with a worktree, the repo it is in, whether its session is open, and
+/// how many more the ceiling allows.
 ///
-/// Worktrees are read from the host side of the mount, under the repository
-/// that holds the recorded workspace (`sbx::thread_run_args` puts them at the
-/// repository's top level, which a workspace in a subfolder is not). A sandbox
-/// sbxw has no workspace for lists only its open threads.
+/// Worktrees are read from the host side of the mount, in every repo under the
+/// recorded workspace (`repos::scan`) — `sbx::thread_run_args` puts them at
+/// each repository's top level, which for `''` may sit above the workspace. A
+/// sandbox sbxw has no workspace for lists only its open threads.
 async fn api_threads(
     Path(name): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -2748,26 +2760,24 @@ async fn api_threads(
     if let Some(bad) = reject_invalid_name(&name) {
         return bad;
     }
-    let mut threads: std::collections::BTreeMap<String, bool> = Default::default();
-    let repo = crate::workspace_for(&name)
-        .and_then(|ws| ws.ancestors().find(|d| d.join(".git").exists()).map(|d| d.to_path_buf()));
-    if let Some(repo) = repo {
-        if let Ok(dir) = std::fs::read_dir(repo.join(".sbxw-worktrees")) {
-            for entry in dir.flatten() {
-                let n = entry.file_name().to_string_lossy().into_owned();
-                if crate::is_valid_thread_name(&n) && entry.path().is_dir() {
-                    threads.insert(n, false);
-                }
-            }
-        }
-    }
+    let sandbox = name.clone();
+    let found = tokio::task::spawn_blocking(move || thread_worktrees(&sandbox))
+        .await
+        .unwrap_or_default();
+    // name → (open, repo)
+    let mut threads: std::collections::BTreeMap<String, (bool, String)> = found
+        .into_iter()
+        .map(|(t, repo)| (t, (false, repo)))
+        .collect();
+    let recorded = crate::repos::load(&crate::thread_repos_dir(), &name);
     let open = {
         let map = state.sessions.lock().unwrap();
         for (key, pty) in map.iter() {
             let (s, mode) = split_key(key);
             if let (true, Some(t)) = (s == name, thread_of(mode)) {
                 if pty.alive() {
-                    threads.insert(t.to_string(), true);
+                    let repo = recorded.get(t).cloned().unwrap_or_default();
+                    threads.entry(t.to_string()).or_insert((false, repo)).0 = true;
                 }
             }
         }
@@ -2775,13 +2785,105 @@ async fn api_threads(
     };
     let list: Vec<serde_json::Value> = threads
         .into_iter()
-        .map(|(name, open)| serde_json::json!({ "name": name, "open": open }))
+        .map(|(name, (open, repo))| serde_json::json!({ "name": name, "open": open, "repo": repo }))
         .collect();
     ok_json_with(serde_json::json!({
         "threads": list,
         "open": open,
         "max": state.cfg.max_agent_sessions.max(1),
     }))
+}
+
+/// Every thread with a worktree in a repo under `sandbox`'s workspace, with
+/// that repo. A name found in two repos (opened, closed, opened elsewhere by
+/// hand) is listed in the one its record names, else the first.
+fn thread_worktrees(sandbox: &str) -> Vec<(String, String)> {
+    let Some(ws) = crate::workspace_for(sandbox) else { return Vec::new() };
+    let recorded = crate::repos::load(&crate::thread_repos_dir(), sandbox);
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    for repo in crate::repos::scan(&ws) {
+        let Some(root) = crate::repos::repo_root(&ws, &repo) else { continue };
+        let Ok(dir) = std::fs::read_dir(root.join(".sbxw-worktrees")) else { continue };
+        for entry in dir.flatten() {
+            let n = entry.file_name().to_string_lossy().into_owned();
+            if crate::is_valid_thread_name(&n) && entry.path().is_dir() {
+                let mine = recorded.get(&n) == Some(&repo);
+                if mine || !out.contains_key(&n) {
+                    out.insert(n, repo.clone());
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// `GET /api/sandboxes/:name/repos` — the git repos under the workspace, with
+/// their status, for the repo picker of a new thread (`repos::list`).
+async fn api_repos(Path(name): Path<String>) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_name(&name) {
+        return bad;
+    }
+    let Some(ws) = crate::workspace_for(&name) else {
+        return err_json(format!("sbxw has no workspace recorded for '{name}'"));
+    };
+    let workspace = ws.to_string_lossy().into_owned();
+    match tokio::task::spawn_blocking(move || crate::repos::list(&ws)).await {
+        Ok(repos) => ok_json_with(serde_json::json!({ "workspace": workspace, "repos": repos })),
+        Err(e) => err_json(e),
+    }
+}
+
+/// Which repo `thread` works in, settled and recorded, as the directory its
+/// scripts start in (`<workspace>/<repo>`, mounted at the same path in the
+/// sandbox). `requested` (the socket's `repo=`, or an approved plan's) wins
+/// on a thread's first open; after that its record does. With neither,
+/// `repos::choose` resolves it: the workspace if it is a repo, else the one
+/// repo under it — or refuses, asking to pick one. Refused too, with the
+/// reason, for another repo than the one its worktree is in.
+///
+/// Every thread path goes through here (its session, its Bash, status and
+/// close), so they cannot disagree about where its worktree is. No workspace
+/// recorded (a sandbox sbxw did not create) gives `''`: the script stays where
+/// `sbx exec` starts, which is the workspace too.
+fn settle_thread_repo(sandbox: &str, thread: &str, requested: Option<&str>) -> Result<String, String> {
+    let Some(ws) = crate::workspace_for(sandbox) else {
+        return match requested {
+            Some(_) => Err(format!(
+                "sbxw has no workspace recorded for '{sandbox}', so it cannot pick a repo in it"
+            )),
+            None => Ok(String::new()),
+        };
+    };
+    let dir = crate::thread_repos_dir();
+    let recorded = crate::repos::recorded(&dir, sandbox, thread);
+    let chosen = crate::repos::choose(&ws, recorded.as_deref(), thread, requested)?;
+    if recorded.as_deref() != Some(chosen.as_str()) {
+        crate::repos::record(&dir, sandbox, thread, Some(&chosen))
+            .map_err(|e| format!("could not record the repo of thread {thread}: {e}"))?;
+    }
+    Ok(crate::repos::thread_dir(&ws, &chosen).to_string_lossy().into_owned())
+}
+
+/// The repo of every thread of a plan, resolved as `settle_thread_repo` will
+/// but without recording anything: a plan whose threads could not start is
+/// refused before anything is recorded or started.
+fn check_plan_repos(sandbox: &str, threads: &[crate::plans::PlanThread]) -> Result<(), String> {
+    let Some(ws) = crate::workspace_for(sandbox) else {
+        return match threads.iter().any(|t| t.repo.is_some()) {
+            true => Err(format!(
+                "sbxw has no workspace recorded for '{sandbox}', so threads cannot name a repo"
+            )),
+            false => Ok(()),
+        };
+    };
+    let dir = crate::thread_repos_dir();
+    for t in threads {
+        let name = t.name.trim();
+        let recorded = crate::repos::recorded(&dir, sandbox, name);
+        crate::repos::choose(&ws, recorded.as_deref(), name, t.repo.as_deref())
+            .map_err(|e| format!("thread {name:?}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Both names of a thread endpoint, checked: they reach a shell in the sandbox.
@@ -2796,21 +2898,17 @@ fn workspace_string(name: &str) -> Option<String> {
     crate::workspace_for(name).map(|p| p.to_string_lossy().into_owned())
 }
 
-/// `workspace_string` for an argument to `sbx`: empty when none is recorded,
-/// which leaves the script where `sbx exec` starts — the workspace too.
-fn workspace_arg(name: &str) -> String {
-    workspace_string(name).unwrap_or_default()
-}
-
 /// `GET /api/sandboxes/:name/threads/:thread` — what closing it would lose:
 /// uncommitted files, and commits its branch has that the base does not.
 async fn api_thread_status(Path((name, thread)): Path<(String, String)>) -> Json<serde_json::Value> {
     if let Some(bad) = reject_invalid_thread(&name, &thread) {
         return bad;
     }
-    let workspace = workspace_arg(&name);
     blocking(
-        move || sbx::thread_status(&name, &workspace, &thread),
+        move || {
+            let dir = settle_thread_repo(&name, &thread, None).map_err(anyhow::Error::msg)?;
+            sbx::thread_status(&name, &dir, &thread)
+        },
         |st| ok_json_with(serde_json::json!({ "status": st })),
     )
     .await
@@ -2837,20 +2935,27 @@ async fn api_thread_close(
     if let Some(bad) = reject_invalid_thread(&name, &thread) {
         return bad;
     }
-    let workspace = workspace_arg(&name);
     let key = session_key(&name, &thread_mode(&thread));
     let bash_key = session_key(&name, &thread_bash_mode(&thread));
+    let (sandbox, closed) = (name.clone(), thread.clone());
     let res = blocking_ok(move || {
-        sbx::thread_close(&name, &workspace, &thread, body.discard, body.delete_branch)
+        let dir = settle_thread_repo(&name, &thread, None).map_err(anyhow::Error::msg)?;
+        sbx::thread_close(&name, &dir, &thread, body.discard, body.delete_branch)
     })
     .await;
     // The thread's `claude` was stopped inside the sandbox, so its PTY is
     // ending on its own; dropping the entry now means reopening the same name
     // starts fresh instead of finding a session on its way out.
     if res.0.get("ok") == Some(&serde_json::Value::Bool(true)) {
-        let mut map = state.sessions.lock().unwrap();
-        map.remove(&key);
-        map.remove(&bash_key);
+        {
+            let mut map = state.sessions.lock().unwrap();
+            map.remove(&key);
+            map.remove(&bash_key);
+        }
+        // Its worktree is gone, so nothing ties the name to a repo any more.
+        if let Err(e) = crate::repos::record(&crate::thread_repos_dir(), &sandbox, &closed, None) {
+            tracing::warn!("threads: could not forget the repo of '{closed}': {e}");
+        }
     }
     res
 }
@@ -2946,6 +3051,13 @@ async fn api_plan_propose(
     if let Some(bad) = reject_invalid_name(&body.from) {
         return bad;
     }
+    // Told now, while the lead can still fix it, rather than at approval.
+    let (sandbox, threads) = (body.from.clone(), body.threads.clone());
+    match tokio::task::spawn_blocking(move || check_plan_repos(&sandbox, &threads)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return err_json(e),
+        Err(e) => return err_json(e),
+    }
     let plan = match state.plans.propose(&body.from, &body.summary, body.threads, now_ms()) {
         Ok(p) => p,
         Err(e) => return err_json(e),
@@ -2967,6 +3079,9 @@ async fn api_plan_wait(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PlanIdBody>,
 ) -> Json<serde_json::Value> {
+    if let Err(e) = state.plans.led(&body.id, &body.from) {
+        return err_json(e);
+    }
     plan_reply(
         &state,
         state.plans.wait(&body.id, &body.from, relay_timeout(body.timeout)).await,
@@ -2978,7 +3093,7 @@ async fn api_plan_status(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PlanIdBody>,
 ) -> Json<serde_json::Value> {
-    plan_reply(&state, state.plans.owned(&body.id, &body.from))
+    plan_reply(&state, state.plans.led(&body.id, &body.from))
 }
 
 /// `POST /api/plans/send` — the lead writes to one of its threads. Only to a
@@ -2988,7 +3103,7 @@ async fn api_plan_send(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PlanSendBody>,
 ) -> Json<serde_json::Value> {
-    let plan = match state.plans.owned(&body.id, &body.from) {
+    let plan = match state.plans.led(&body.id, &body.from) {
         Ok(p) => p,
         Err(e) => return err_json(e),
     };
@@ -3024,15 +3139,17 @@ async fn api_plan_report(
         return bad;
     }
     let summary = relay_clip(&body.summary, crate::plans::MAX_TEXT);
-    if let Err(e) =
-        state
-            .plans
-            .set_thread(&body.from, &body.thread, body.state, &summary, false, now_ms())
+    let plan = match state
+        .plans
+        .set_thread(&body.from, &body.thread, body.state, &summary, false, now_ms())
     {
-        return err_json(e);
-    }
+        Ok(p) => p,
+        Err(e) => return err_json(e),
+    };
     use crate::plans::ThreadState;
-    if matches!(body.state, ThreadState::Blocked | ThreadState::Done) {
+    // A closed plan's threads still report (their chips move), but the main
+    // session is no longer the lead and is not told.
+    if !plan.closed && matches!(body.state, ThreadState::Blocked | ThreadState::Done) {
         // The lead is the sandbox's main session.
         let lead = "claude".to_string();
         if pty_alive(&state.sessions, &body.from, &lead) {
@@ -3094,6 +3211,39 @@ async fn api_lead(
         state.leads.lock().unwrap().insert(name.clone(), ptr);
         let _ = state.lead_events.send(name);
     }
+    ok_json()
+}
+
+/// What the main session is told when the user ends lead mode.
+const LEAD_END_TEXT: &str = "[sbxw] The user ended lead mode. Stop leading: no new plan and no \
+     follow-up of the threads. Go back to working normally in this session.";
+
+/// `POST /api/sandboxes/:name/lead/end` — the user leaves lead mode, the work
+/// being finished. The sandbox stops being marked lead; its pending plan is
+/// refused and its approved ones closed (`Plans::end_lead`), so their threads'
+/// reports stop reaching the main session and the lead's tools refuse them.
+/// The threads keep running: closing them stays the user's call. The main
+/// session, if alive, is told to stop leading.
+async fn api_lead_end(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_name(&name) {
+        return bad;
+    }
+    if !from_browser(&headers) {
+        return err_json("lead mode is ended from the sbxw web UI");
+    }
+    state.leads.lock().unwrap().remove(&name);
+    let ended = state.plans.end_lead(&name, now_ms());
+    tracing::info!("plans: lead mode ended for '{name}' ({} plan(s) refused or closed)", ended.len());
+    if pty_alive(&state.sessions, &name, "claude") {
+        if let Err(e) = push_text(&state, &name, LEAD_END_TEXT).await {
+            tracing::warn!("plans: could not tell '{name}' that lead mode ended: {e}");
+        }
+    }
+    let _ = state.lead_end_events.send(name);
     ok_json()
 }
 
@@ -3208,11 +3358,24 @@ async fn api_plan_approve(
             ));
         }
     }
+    let (sb, threads) = (sandbox.clone(), body.threads.clone());
+    match tokio::task::spawn_blocking(move || check_plan_repos(&sb, &threads)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return err_json(e),
+        Err(e) => return err_json(e),
+    }
     let plan = match state.plans.approve(&id, body.threads, now_ms()) {
         Ok(p) => p,
         Err(e) => return err_json(e),
     };
     tracing::info!("plans: {id} approved for '{sandbox}' ({} thread(s))", plan.threads.len());
+    // Each thread's repo is recorded before its session starts, so the launch
+    // below — or its pane, whichever opens it first — finds it there.
+    for t in &plan.threads {
+        if let Err(e) = settle_thread_repo(&sandbox, &t.name, t.repo.as_deref()) {
+            tracing::warn!("plans: thread '{}' of '{sandbox}': {e}", t.name);
+        }
+    }
 
     for t in &plan.threads {
         let key = session_key(&sandbox, &thread_mode(&t.name));
@@ -5524,11 +5687,14 @@ async fn ws_handler(
             .sandbox
             .unwrap_or_else(|| state.initial_sandbox.clone())
     };
+    // Only a thread's own session chooses its repo; its Bash follows it.
+    let repo = thread_of(&mode).and(params.repo);
     ws.on_upgrade(move |socket| {
         handle_socket(
             socket,
             sandbox,
             mode,
+            repo,
             state.cfg.clone(),
             state.sessions.clone(),
         )
@@ -5539,10 +5705,11 @@ async fn handle_socket(
     socket: WebSocket,
     sandbox: String,
     mode: String,
+    repo: Option<String>,
     cfg: Arc<Config>,
     sessions: Sessions,
 ) {
-    if let Err(e) = bridge(socket, sandbox, mode, cfg, sessions).await {
+    if let Err(e) = bridge(socket, sandbox, mode, repo, cfg, sessions).await {
         tracing::warn!("tty bridge ended: {e:#}");
     }
 }
@@ -5602,9 +5769,9 @@ fn get_or_create_session(
 
     if let Some(thread) = mode.strip_prefix(THREAD_BASH_PREFIX) {
         ensure_running_for_thread(sandbox, cfg, sessions)?;
-        let workspace = workspace_arg(sandbox);
+        let dir = settle_thread_repo(sandbox, thread, None).map_err(anyhow::Error::msg)?;
         let mut c = CommandBuilder::new("sbx");
-        c.args(crate::sbx::thread_bash_args(sandbox, &workspace, thread));
+        c.args(crate::sbx::thread_bash_args(sandbox, &dir, thread));
         return spawn_pty_session(c, key, sessions);
     }
 
@@ -5622,15 +5789,12 @@ fn get_or_create_session(
                 if open == 1 { "" } else { "s" }
             );
         }
-        // The workspace is mounted at the same path inside the sandbox. An
-        // unrecorded one (a sandbox sbxw did not create) leaves the script where
-        // `sbx exec` starts, which is the workspace too.
-        let workspace = workspace_arg(sandbox);
+        let dir = settle_thread_repo(sandbox, thread, None).map_err(anyhow::Error::msg)?;
         // A thread of an approved plan starts on its briefing, whoever
         // happens to open it first — the launch or its pane.
         let prompt = THREAD_PROMPTS.lock().unwrap().remove(&key).unwrap_or_default();
         let mut c = CommandBuilder::new("sbx");
-        c.args(crate::sbx::thread_run_args(sandbox, &workspace, thread, &prompt));
+        c.args(crate::sbx::thread_run_args(sandbox, &dir, thread, &prompt));
         return spawn_pty_session(c, key, sessions);
     }
 
@@ -5821,6 +5985,7 @@ async fn bridge(
     socket: WebSocket,
     sandbox: String,
     mode: String,
+    repo: Option<String>,
     cfg: Arc<Config>,
     sessions: Sessions,
 ) -> Result<()> {
@@ -5832,7 +5997,14 @@ async fn bridge(
         let mode = mode.clone();
         let cfg = cfg.clone();
         let sessions = sessions.clone();
-        move || get_or_create_session(&sandbox, &mode, &cfg, &sessions)
+        move || {
+            // The repo asked for is settled first; `get_or_create_session`
+            // then finds it recorded.
+            if let (Some(thread), Some(repo)) = (thread_of(&mode), repo.as_deref()) {
+                settle_thread_repo(&sandbox, thread, Some(repo)).map_err(anyhow::Error::msg)?;
+            }
+            get_or_create_session(&sandbox, &mode, &cfg, &sessions)
+        }
     })
     .await?
     {

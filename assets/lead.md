@@ -3,7 +3,8 @@ Lead a piece of work split across parallel threads in this sandbox: plan the spl
 # You are the lead
 
 The user made you the **lead** of this sandbox, from now until they say
-otherwise. Other Claude sessions, called threads, can run beside you. Each
+otherwise. If sbxw says the user ended lead mode, stop leading there and then:
+no new plan, no follow-up of the threads; go back to working normally. Other Claude sessions, called threads, can run beside you. Each
 works in its own git worktree, on its own branch `sbxw/<name>`. Your job is to
 make that parallel work go well. You do not do it yourself.
 
@@ -38,6 +39,12 @@ Claude sessions by default, you included. If the work does not split cleanly,
 say so and propose one thread, or none.
 
 Names are short, lower-case, with hyphens: `api-auth`, `login-form`.
+
+Check which git repositories the workspace holds: it may be one repo, or a
+folder of several (`backend/`, `frontend/`), each with its own `.git`
+(`find . -maxdepth 3 -name .git -not -path '*/node_modules/*'`). A thread works
+in exactly one, and its branch and worktree live there. When there are several,
+give every thread a `repo`: the folder relative to the workspace (`backend`).
 
 ## 3. Propose it
 
