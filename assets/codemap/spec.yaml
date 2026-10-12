@@ -1310,8 +1310,12 @@ setup:
         let rest = from >= 0 && to > from ? current.slice(0, from) + current.slice(to + END.length) : current;
         rest = rest.replace(/\n{3,}/g, "\n\n").trim();
 
-        mkdirSync(dirname(MEMORY), { recursive: true });
-        writeFileSync(MEMORY, (rest ? rest + "\n\n" : "") + BEGIN + "\n" + doc + "\n" + END + "\n");
+        // Written only when it changes, so a restart leaves the file untouched.
+        const next = (rest ? rest + "\n\n" : "") + BEGIN + "\n" + doc + "\n" + END + "\n";
+        if (next !== current) {
+          mkdirSync(dirname(MEMORY), { recursive: true });
+          writeFileSync(MEMORY, next);
+        }
 
         console.log("  [codemap] /codemap + /codemap-lens installed; user memory points at .sbxw-artifacts/codemap/");
     # The three hooks below are what makes the kit act rather than advise. The
@@ -1751,8 +1755,10 @@ setup:
         // they put the map in front of a session that is about to search without it, and
         // ask for an offer from a session about to end without one.
         //
-        // Merges rather than overwrites, and removes its own previous entries first, so
-        // re-running on every container start is a no-op. That file also holds the
+        // Merges rather than overwrites, and replaces its own previous entries where
+        // they stand (other kits' hooks share these events, and moving to the end
+        // would reorder them on every start), so re-running on every container start
+        // is a no-op. That file also holds the
         // model, the statusLine and sbxw's own status hooks; a corrupt one is left
         // exactly as found rather than replaced with a fresh object, since these three
         // hooks are not worth the rest of a user's configuration.
@@ -1770,9 +1776,11 @@ setup:
           ["Stop", KIT + "hook-stop.mjs", null],
         ];
 
+        let raw = "";
         let settings = {};
         try {
-          settings = JSON.parse(readFileSync(SETTINGS, "utf8"));
+          raw = readFileSync(SETTINGS, "utf8");
+          settings = JSON.parse(raw);
         } catch (e) {
           if (e.code !== "ENOENT") {
             console.log("  [codemap] " + SETTINGS + " is not readable JSON — hooks not installed, settings left alone");
@@ -1787,12 +1795,18 @@ setup:
         for (const [event, path, matcher] of HOOKS) {
           const entry = { hooks: [{ type: "command", command: "node", args: [path] }] };
           if (matcher) entry.matcher = matcher;
-          settings.hooks[event] = (settings.hooks[event] || []).filter((e) => !ours(e, path));
-          settings.hooks[event].push(entry);
+          const list = settings.hooks[event] || [];
+          const at = list.findIndex((e) => ours(e, path));
+          settings.hooks[event] = list.filter((e) => !ours(e, path));
+          settings.hooks[event].splice(at < 0 ? settings.hooks[event].length : at, 0, entry);
         }
 
-        mkdirSync(dirname(SETTINGS), { recursive: true });
-        writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
+        // Written only when it changes, so a restart leaves the file untouched.
+        const next = JSON.stringify(settings, null, 2) + "\n";
+        if (next !== raw) {
+          mkdirSync(dirname(SETTINGS), { recursive: true });
+          writeFileSync(SETTINGS, next);
+        }
         console.log("  [codemap] hooks installed: the map is injected at session start, recalled on first search, and offered at the end of an unmapped session");
 
   startup:

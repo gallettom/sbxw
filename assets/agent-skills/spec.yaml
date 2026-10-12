@@ -213,8 +213,9 @@ setup:
         #!/usr/bin/env node
         // Register hook-adhd.mjs in Claude Code's user-level settings, the file it
         // reads for every session in this sandbox whatever project is open.
-        // Merges rather than overwrites and removes its own previous entry first, so
-        // re-running on every container start is a no-op; a corrupt settings file is
+        // Merges rather than overwrites and replaces its own previous entry where it
+        // stands (moving it to the end would reorder other kits' hooks on every
+        // start), so re-running on every container start is a no-op; a corrupt settings file is
         // left exactly as found. Same arrangement as the codemap kit's hooks.
         import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
         import { dirname } from "node:path";
@@ -226,9 +227,11 @@ setup:
         // deleted it to turn always-on off is not overruled by the next start.
         const SEEDED = "/home/agent/.sbxw/agent-skills/.adhd-flag-seeded";
 
+        let raw = "";
         let settings = {};
         try {
-          settings = JSON.parse(readFileSync(SETTINGS, "utf8"));
+          raw = readFileSync(SETTINGS, "utf8");
+          settings = JSON.parse(raw);
         } catch (e) {
           if (e.code !== "ENOENT") {
             console.log("  [agent-skills] " + SETTINGS + " is not readable JSON — i-have-adhd hook not installed, settings left alone");
@@ -240,14 +243,20 @@ setup:
           (entry.hooks || []).some((h) => (h.args || []).includes(HOOK) || String(h.command || "").includes(HOOK));
 
         settings.hooks = settings.hooks || {};
-        settings.hooks.SessionStart = (settings.hooks.SessionStart || []).filter((e) => !ours(e));
-        settings.hooks.SessionStart.push({
+        const list = settings.hooks.SessionStart || [];
+        const at = list.findIndex(ours);
+        settings.hooks.SessionStart = list.filter((e) => !ours(e));
+        settings.hooks.SessionStart.splice(at < 0 ? settings.hooks.SessionStart.length : at, 0, {
           matcher: "startup|resume|clear|compact",
           hooks: [{ type: "command", command: "node", args: [HOOK], timeout: 30 }],
         });
 
-        mkdirSync(dirname(SETTINGS), { recursive: true });
-        writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
+        // Written only when it changes, so a restart leaves the file untouched.
+        const next = JSON.stringify(settings, null, 2) + "\n";
+        if (next !== raw) {
+          mkdirSync(dirname(SETTINGS), { recursive: true });
+          writeFileSync(SETTINGS, next);
+        }
 
         if (!existsSync(SEEDED)) {
           writeFileSync(FLAG, "");
