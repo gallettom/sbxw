@@ -4723,7 +4723,7 @@ mod tests {
     /// install anything — so `kit add` refusing them is the common case.
     #[test]
     fn the_bundled_kits_are_all_startup_kits() {
-        for kit in ["k8s-tools", "headroom", "md-to-pdf-tools", "codemap", "agent-skills"] {
+        for kit in ["k8s-tools", "md-to-pdf-tools", "codemap", "agent-skills"] {
             let dir = format!("assets/{kit}");
             assert!(
                 kit_declares_startup(&dir),

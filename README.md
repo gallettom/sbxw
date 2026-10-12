@@ -1245,10 +1245,6 @@ Bundled kits:
 
 - **`assets/k8s-tools`** — installs `kubectl` + `k3d` + `skaffold` into
   `~/.local/bin` (arch-aware, idempotent).
-- **`assets/headroom`** — installs [Headroom](https://github.com/chopratejas/headroom)
-  (`headroom-ai[proxy]`), a local context-compression proxy, and enables its
-  durable Claude Code integration (`headroom init --global claude`) to **cut token
-  usage** (claimed 60–95% fewer tokens). See `assets/headroom/README.md`.
 - **`assets/md-to-pdf-tools`** — ships the `/md-to-pdf` skill itself
   (user-level, works regardless of which project is mounted) plus the
   WeasyPrint + poppler-utils + Pillow stack it needs, so the skill is
@@ -1584,7 +1580,7 @@ machines that keep their repositories in different places:
 workspace: ./neos
 skills: 'off'
 kits:
-  - ./kits/headroom
+  - ./kits/codemap
 ```
 
 sbx 0.43 resolves those against the file itself, so the file moves with the
