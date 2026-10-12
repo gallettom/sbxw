@@ -691,6 +691,11 @@ conversation you already have, so it costs no extra session or worktree.
   (`GET /api/leads`), so a reload keeps the mark, and restarting that session,
   a new conversation that never read `/lead`, removes it. A plan pending or
   with threads at work keeps the mark too.
+- **Leaving lead mode:** when the work is finished, `POST
+  /api/sandboxes/<name>/lead/end` (from the web UI) ends it. A pending plan is
+  refused, approved ones are closed: their threads keep running (closing them
+  stays your call), but their reports no longer reach the main session, the
+  lead's tools refuse them, and the main session is told to stop leading.
 - **Approving starts it.** sbxw opens each thread's session in its worktree,
   with a briefing as its first message: its goal, its scope, and the rules
   (commit on your branch, never merge or push, report your state). The

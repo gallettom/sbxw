@@ -1052,6 +1052,8 @@ struct AppState {
     leads: Arc<Mutex<HashMap<String, usize>>>,
     /// "This sandbox's main session is the lead now", for open tabs (SSE `lead`).
     lead_events: broadcast::Sender<String>,
+    /// "This sandbox's lead mode was ended", for open tabs (SSE `lead-end`).
+    lead_end_events: broadcast::Sender<String>,
     cfg: Arc<Config>,
     use_api_key: bool,
 }
@@ -1253,6 +1255,7 @@ pub async fn serve(
         plans: plans.clone(),
         leads: Arc::new(Mutex::new(HashMap::new())),
         lead_events: broadcast::channel(16).0,
+        lead_end_events: broadcast::channel(16).0,
         cfg,
         use_api_key,
     });
@@ -1323,6 +1326,7 @@ pub async fn serve(
         .route("/api/sandboxes/:name/threads", get(api_threads))
         .route("/api/sandboxes/:name/repos", get(api_repos))
         .route("/api/sandboxes/:name/lead", post(api_lead))
+        .route("/api/sandboxes/:name/lead/end", post(api_lead_end))
         .route("/api/leads", get(api_leads))
         .route("/api/plans", get(api_plans_list))
         .route("/api/plans/propose", post(api_plan_propose))
@@ -1578,6 +1582,7 @@ async fn api_stream(
     let mut codemap_rx = state.codemap.subscribe();
     let mut plan_rx = state.plans.subscribe();
     let mut lead_rx = state.lead_events.subscribe();
+    let mut lead_end_rx = state.lead_end_events.subscribe();
     let count_state = state.clone();
 
     tokio::spawn(async move {
@@ -1631,6 +1636,8 @@ async fn api_stream(
                 res = codemap_rx.recv() => forward!(res, |run| json_event("codemap", &run)),
                 // A main session was just made lead.
                 res = lead_rx.recv() => forward!(res, named("lead")),
+                // A main session stopped being the lead.
+                res = lead_end_rx.recv() => forward!(res, named("lead-end")),
                 // A plan was proposed, settled, or one of its threads moved.
                 // Whole plans, like `codemap` above.
                 res = plan_rx.recv() => forward!(res, |plan| json_event("plan", &plan)),
@@ -3072,6 +3079,9 @@ async fn api_plan_wait(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PlanIdBody>,
 ) -> Json<serde_json::Value> {
+    if let Err(e) = state.plans.led(&body.id, &body.from) {
+        return err_json(e);
+    }
     plan_reply(
         &state,
         state.plans.wait(&body.id, &body.from, relay_timeout(body.timeout)).await,
@@ -3083,7 +3093,7 @@ async fn api_plan_status(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PlanIdBody>,
 ) -> Json<serde_json::Value> {
-    plan_reply(&state, state.plans.owned(&body.id, &body.from))
+    plan_reply(&state, state.plans.led(&body.id, &body.from))
 }
 
 /// `POST /api/plans/send` — the lead writes to one of its threads. Only to a
@@ -3093,7 +3103,7 @@ async fn api_plan_send(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PlanSendBody>,
 ) -> Json<serde_json::Value> {
-    let plan = match state.plans.owned(&body.id, &body.from) {
+    let plan = match state.plans.led(&body.id, &body.from) {
         Ok(p) => p,
         Err(e) => return err_json(e),
     };
@@ -3129,15 +3139,17 @@ async fn api_plan_report(
         return bad;
     }
     let summary = relay_clip(&body.summary, crate::plans::MAX_TEXT);
-    if let Err(e) =
-        state
-            .plans
-            .set_thread(&body.from, &body.thread, body.state, &summary, false, now_ms())
+    let plan = match state
+        .plans
+        .set_thread(&body.from, &body.thread, body.state, &summary, false, now_ms())
     {
-        return err_json(e);
-    }
+        Ok(p) => p,
+        Err(e) => return err_json(e),
+    };
     use crate::plans::ThreadState;
-    if matches!(body.state, ThreadState::Blocked | ThreadState::Done) {
+    // A closed plan's threads still report (their chips move), but the main
+    // session is no longer the lead and is not told.
+    if !plan.closed && matches!(body.state, ThreadState::Blocked | ThreadState::Done) {
         // The lead is the sandbox's main session.
         let lead = "claude".to_string();
         if pty_alive(&state.sessions, &body.from, &lead) {
@@ -3199,6 +3211,39 @@ async fn api_lead(
         state.leads.lock().unwrap().insert(name.clone(), ptr);
         let _ = state.lead_events.send(name);
     }
+    ok_json()
+}
+
+/// What the main session is told when the user ends lead mode.
+const LEAD_END_TEXT: &str = "[sbxw] The user ended lead mode. Stop leading: no new plan and no \
+     follow-up of the threads. Go back to working normally in this session.";
+
+/// `POST /api/sandboxes/:name/lead/end` — the user leaves lead mode, the work
+/// being finished. The sandbox stops being marked lead; its pending plan is
+/// refused and its approved ones closed (`Plans::end_lead`), so their threads'
+/// reports stop reaching the main session and the lead's tools refuse them.
+/// The threads keep running: closing them stays the user's call. The main
+/// session, if alive, is told to stop leading.
+async fn api_lead_end(
+    Path(name): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_name(&name) {
+        return bad;
+    }
+    if !from_browser(&headers) {
+        return err_json("lead mode is ended from the sbxw web UI");
+    }
+    state.leads.lock().unwrap().remove(&name);
+    let ended = state.plans.end_lead(&name, now_ms());
+    tracing::info!("plans: lead mode ended for '{name}' ({} plan(s) refused or closed)", ended.len());
+    if pty_alive(&state.sessions, &name, "claude") {
+        if let Err(e) = push_text(&state, &name, LEAD_END_TEXT).await {
+            tracing::warn!("plans: could not tell '{name}' that lead mode ended: {e}");
+        }
+    }
+    let _ = state.lead_end_events.send(name);
     ok_json()
 }
 

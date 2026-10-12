@@ -117,6 +117,11 @@ pub(crate) struct Plan {
     /// Why it was refused, when a person said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// An approved plan whose lead mode the user ended (`end_lead`): its
+    /// threads run on, but their reports no longer reach the main session and
+    /// the lead's tools refuse it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
     pub created_ms: u64,
     pub updated_ms: u64,
 }
@@ -292,6 +297,47 @@ impl Plans {
             .ok_or_else(|| format!("no plan '{id}' for '{sandbox}'"))
     }
 
+    /// `owned`, for the lead's tools: a plan whose lead mode was ended answers
+    /// so, rather than letting the lead go on following its threads.
+    pub(crate) fn led(&self, id: &str, sandbox: &str) -> Result<Plan, String> {
+        let plan = self.owned(id, sandbox)?;
+        if plan.closed {
+            return Err(format!(
+                "the user ended lead mode, so plan {id} is no longer yours to follow. \
+                 Stop leading: no new plan and no follow-up of its threads."
+            ));
+        }
+        Ok(plan)
+    }
+
+    /// The user ended lead mode in `sandbox`: a pending plan is refused, an
+    /// approved one closed. Its threads keep running — closing them stays the
+    /// user's call. Gives the plans it changed.
+    pub(crate) fn end_lead(&self, sandbox: &str, now: u64) -> Vec<Plan> {
+        let changed: Vec<Plan> = {
+            let mut map = self.plans.lock().unwrap();
+            map.values_mut()
+                .filter(|p| p.sandbox == sandbox)
+                .filter_map(|p| {
+                    match p.state {
+                        PlanState::Pending => {
+                            p.state = PlanState::Refused;
+                            p.note = Some("lead mode ended".into());
+                        }
+                        PlanState::Approved if !p.closed => p.closed = true,
+                        _ => return None,
+                    }
+                    p.updated_ms = now;
+                    Some(p.clone())
+                })
+                .collect()
+        };
+        for p in &changed {
+            self.announce(p);
+        }
+        changed
+    }
+
     /// A lead proposes a plan. One pending plan per sandbox: a second would
     /// put two dialogs about the same work in front of a person.
     pub(crate) fn propose(
@@ -320,6 +366,7 @@ impl Plans {
                 threads,
                 state: PlanState::Pending,
                 note: None,
+                closed: false,
                 created_ms: now,
                 updated_ms: now,
             };
@@ -614,8 +661,31 @@ mod tests {
         std::fs::write(dir.join("neos.json"), old).unwrap();
         let loaded = Plans::in_dir(Some(dir.clone())).owned("p-1", "neos").unwrap();
         assert_eq!(loaded.threads[0].repo, None);
+        assert!(!loaded.closed);
         assert_eq!(loaded.threads[0].state, ThreadState::Working);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ending_lead_refuses_the_pending_plan_and_closes_the_approved_one() {
+        let plans = Plans::new();
+        let a = plans.propose("neos", "", vec![t("a", "g")], 1).unwrap();
+        plans.approve(&a.id, vec![t("a", "g")], 2).unwrap();
+        let b = plans.propose("neos", "", vec![t("b", "g")], 3).unwrap();
+        let other = plans.propose("else", "", vec![t("c", "g")], 3).unwrap();
+
+        assert_eq!(plans.end_lead("neos", 4).len(), 2);
+        let a = plans.get(&a.id).unwrap();
+        assert!(a.closed && a.state == PlanState::Approved);
+        let b = plans.get(&b.id).unwrap();
+        assert_eq!((b.state, b.note.as_deref()), (PlanState::Refused, Some("lead mode ended")));
+        assert_eq!(plans.get(&other.id).unwrap().state, PlanState::Pending);
+        // The lead's tools refuse it; its threads still report.
+        assert!(plans.led(&a.id, "neos").unwrap_err().contains("ended lead mode"));
+        assert!(plans.set_thread("neos", "a", ThreadState::Done, "", false, 5).unwrap().closed);
+        assert!(plans.end_lead("neos", 6).is_empty(), "nothing left to end");
+        let json = serde_json::to_string(&plans.get(&other.id).unwrap()).unwrap();
+        assert!(!json.contains("closed"), "absent while false: {json}");
     }
 
     #[test]
