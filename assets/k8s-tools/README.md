@@ -2,7 +2,9 @@
 
 Installs **kubectl**, **k3d**, and **skaffold** into `~/.local/bin` inside a
 sandbox. Architecture-aware (amd64 / arm64) and idempotent — re-running skips
-anything already installed.
+anything already installed. The three downloads run side by side, each into a
+temp file moved into place only when complete; a failed one is reported in the
+start log and skipped, never failing the container start.
 
 ## Usage
 

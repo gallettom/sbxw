@@ -54,6 +54,12 @@ sbx kit validate path/to/sbxw/assets/md-to-pdf-tools   # sanity check the spec
   installs whatever's missing on first run — so this kit's only real job is
   moving both the skill file and the install cost to `sbxw up` time, instead
   of requiring a manual copy and a slow first conversion.
+- Start-up: pip and apt run side by side; Python packages are found with
+  `importlib.util.find_spec` rather than imported (importing WeasyPrint alone
+  costs most of a second), so a restart with everything present takes
+  milliseconds. `apt-get update` is skipped when any bundled kit ran it in the
+  last hour (`~/.cache/sbxw-apt-updated`), and run once more if the install then
+  fails on stale lists.
 - `spec.yaml` `content` fields do **not** allow `${VAR}` placeholders (only
   `${WORKDIR}`). The install script uses brace-free `$VAR` syntax for that reason.
 - `startup` commands are exec-style arrays (`command: ["bash", "..."]`), not

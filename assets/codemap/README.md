@@ -74,7 +74,8 @@ reconstructed how a repo fits together and there is none, **offer** to run
 It is spliced between `<!-- sbxw:codemap:begin -->` / `<!-- sbxw:codemap:end -->`
 fences and rewrites only what sits between them — the same discipline sbxw's
 relay uses on that file, which also holds the user's own instructions and the
-agent's `#` memories. Re-running is safe.
+agent's `#` memories. Re-running is safe, and writes nothing when the section is
+already current.
 
 Naming the moment is where the block stops. What makes an agent act on it at that
 moment is the three hooks below — the block is their vocabulary, not their
@@ -96,8 +97,10 @@ because neither announces itself:
 Three hooks move each moment from something the agent must notice to something it
 is handed. All three are registered in `~/.claude/settings.json` by
 `install-hooks.mjs`, which merges into that file (it also holds the model, the
-statusLine and sbxw's own status hooks) and removes its own previous entries
-first, so every container start is a no-op.
+statusLine and sbxw's own status hooks), replaces its own previous entries where
+they stand rather than moving them to the end (the agent-skills kit's hook shares
+`SessionStart`), and writes the file only when that changed something — so every
+container start is a no-op that leaves the file untouched.
 
 **`SessionStart` — the map arrives before the first turn.** When
 `.sbxw-artifacts/codemap/codemap.md` exists, its text becomes the session's

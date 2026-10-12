@@ -33,8 +33,9 @@ they run only when typed.
 Upstream ships always-on mode as a plugin hook that finds `SKILL.md` through the
 plugin's own tree. The kit carries the same hook, `hook-adhd.mjs`, reading the
 pinned copy instead, and `install-hooks.mjs` registers it in
-`~/.claude/settings.json` under `SessionStart` (merged, never duplicated, a
-corrupt file left alone — as the codemap kit does). Like upstream it fires only
+`~/.claude/settings.json` under `SessionStart` (merged, never duplicated, kept in
+place among the other hooks, written only when it changed, a corrupt file left
+alone — as the codemap kit does). Like upstream it fires only
 while `~/.claude/.i-have-adhd-always` exists. The kit creates that file on the
 sandbox's **first** start only, so it is on by default and
 `rm ~/.claude/.i-have-adhd-always` turns it off for good in that sandbox — a
@@ -99,7 +100,9 @@ sandbox on an Apple Silicon host runs; Ubuntu's `chromium` is a snap, which does
 not run in a container. Playwright publishes Chromium for both architectures, so
 the kit installs that (`npx playwright@1.63.0 install chromium`), adds the shared
 libraries `ldd` says are missing, and checks that it actually starts headless
-before pointing anything at it.
+before pointing anything at it. That launch is done once per binary
+(`~/.sbxw/agent-skills/.chromium-ok` names the one that last started): a later
+start that finds the same binary, its wrapper and every library skips it.
 
 Chrome's own sandbox needs user namespaces the container does not give a
 non-root user, hence the wrapper with `--no-sandbox`. Without a working browser
@@ -146,6 +149,17 @@ network_allow = [
 At use time, `/brag` runs `npx hyperframes` (npm) and Archify's receipts carry a
 bounded update check that simply reports `unavailable` when it cannot reach
 GitHub.
+
+## Start-up time
+
+On a new sandbox the independent work runs side by side: the five tarballs are
+fetched at once, and Chromium downloads while a single apt call installs ffmpeg
+and Chromium's libraries (while the binary is still downloading, the libraries it
+links are looked up in the linker cache; it is checked again with `ldd` once it
+lands). `apt-get update` is skipped when any bundled kit ran it in the last hour
+(`~/.cache/sbxw-apt-updated`), and run once more if an install then fails on
+stale lists. A restart with unchanged pins does no network work and no browser
+launch — a few milliseconds.
 
 ## Notes
 

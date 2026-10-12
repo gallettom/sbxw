@@ -166,8 +166,27 @@ setup:
       mode: "0755"
       content: |
         #!/usr/bin/env bash
+        # Idempotent, and never fails the container start: a failed step is
+        # reported and skipped. apt and pip are independent, so they run side
+        # by side; a restart with everything present runs neither.
         set -uo pipefail
         info() { echo "  [md-to-pdf-tools] $*"; }
+
+        # apt_install ARGS... — `apt-get install` that refreshes the package
+        # lists only when no kit has done so in the last hour (the stamp is
+        # shared with the other bundled kits), and once more if the install
+        # fails on lists that turned out to be stale.
+        APT_STAMP=/home/agent/.cache/sbxw-apt-updated
+        apt_update() {
+          if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
+          sudo apt-get update -qq || return 1
+          mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
+        }
+        apt_install() {
+          apt_update fresh || return 1
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" && return 0
+          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+        }
 
         # ── 1. System libs (WeasyPrint's renderer + poppler's pdftoppm) ──────
         # Checked by actual .so/binary presence, not package name: on newer
@@ -176,43 +195,55 @@ setup:
         # `dpkg -s <name>` always reports them missing even when satisfied.
         NEED_LIBS=0
         command -v pdftoppm >/dev/null 2>&1 || NEED_LIBS=1
+        # One ldconfig call, matched with `case`: `| grep -q` under pipefail
+        # can fail on SIGPIPE when grep quits at the first match.
+        LDCACHE="$(ldconfig -p 2>/dev/null)"
         for lib in libpango-1.0.so.0 libpangoft2-1.0.so.0 libgobject-2.0.so.0 libglib-2.0.so.0; do
-          ldconfig -p | grep -q "$lib" || NEED_LIBS=1
+          case "$LDCACHE" in *"$lib"*) ;; *) NEED_LIBS=1 ;; esac
         done
+
+        # ── 2. Python packages (Debian marks system Python externally-managed;
+        #    --break-system-packages confines nothing new since these are
+        #    pure-library installs the agent already runs as root/sudo user) ──
+        # Looked up with find_spec rather than imported: importing weasyprint
+        # alone takes the better part of a second, and finding the package is
+        # all the check needs (pip would not reinstall a broken one either).
+        # Plain space-separated string, not a bash array: kit spec.yaml content
+        # only allows the WORKDIR placeholder (in dollar-brace form), and bash
+        # array expansion syntax also needs dollar-brace, which the kit
+        # validator can't tell apart from a placeholder.
+        NEED_PIP="$(python3 -c '
+        from importlib.util import find_spec
+        print(" ".join(p for m, p in (("weasyprint", "weasyprint"), ("markdown", "markdown"), ("PIL", "pillow")) if find_spec(m) is None))
+        ' 2>/dev/null)" || NEED_PIP="weasyprint markdown pillow"
+
+        PIP_PID=""
+        if [ -z "$NEED_PIP" ]; then
+          info "python packages already installed"
+        else
+          info "pip installing: $NEED_PIP"
+          (
+            if pip3 install --break-system-packages -q $NEED_PIP; then
+              info "python packages installed"
+            else
+              info "pip install failed — skipping (check network_allow for pypi)"
+            fi
+          ) &
+          PIP_PID=$!
+        fi
+
         if [ "$NEED_LIBS" -eq 0 ]; then
           info "system libs already installed"
         else
           info "installing poppler-utils + pango/glib libs..."
-          if sudo apt-get update -qq && sudo apt-get install -y -qq \
-              poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libgobject-2.0-0 libglib2.0-0; then
+          if apt_install poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libgobject-2.0-0 libglib2.0-0; then
             info "system libs installed"
           else
             info "apt-get install failed — skipping (check network_allow for apt mirrors)"
           fi
         fi
 
-        # ── 2. Python packages (Debian marks system Python externally-managed;
-        #    --break-system-packages confines nothing new since these are
-        #    pure-library installs the agent already runs as root/sudo user) ──
-        # Plain space-separated string, not a bash array: kit spec.yaml content
-        # only allows the WORKDIR placeholder (in dollar-brace form), and bash
-        # array expansion syntax also needs dollar-brace, which the kit
-        # validator can't tell apart from a placeholder.
-        NEED_PIP=""
-        python3 -c "import weasyprint" 2>/dev/null || NEED_PIP="$NEED_PIP weasyprint"
-        python3 -c "import markdown"   2>/dev/null || NEED_PIP="$NEED_PIP markdown"
-        python3 -c "import PIL"        2>/dev/null || NEED_PIP="$NEED_PIP pillow"
-        if [ -z "$NEED_PIP" ]; then
-          info "python packages already installed"
-        else
-          info "pip installing:$NEED_PIP"
-          if pip3 install --break-system-packages -q $NEED_PIP; then
-            info "python packages installed"
-          else
-            info "pip install failed — skipping (check network_allow for pypi)"
-          fi
-        fi
-
+        [ -n "$PIP_PID" ] && wait "$PIP_PID"
         info "done."
   startup:
     - command: ["bash", "/home/agent/.local/bin/sbxw-install-md-to-pdf"]
