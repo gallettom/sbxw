@@ -27,11 +27,16 @@
 //! knows its own name — so a forged report is possible and harmless: it changes
 //! a label, never what runs.
 //!
-//! Like `relay` and `codemap`, this is state and nothing else; `web.rs` owns
-//! the endpoints and the sessions.
+//! Unlike `relay` and `codemap`, plans are written to disk
+//! (`~/.sbxw/state/plans/<sandbox>.json`) on every change and read back at
+//! start: an approved plan is the map of what each thread is for, and its
+//! threads' worktrees, branches and conversations outlive a daemon restart.
+//! A plan id is a capability (see above), so the directory is `0700`.
+//!
+//! `web.rs` owns the endpoints and the sessions.
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Read, sync::Mutex, time::Duration};
+use std::{collections::HashMap, io::Read, path::PathBuf, sync::Mutex, time::Duration};
 use tokio::sync::broadcast;
 
 /// Most threads one plan may ask for. Far above the session ceiling, which is
@@ -40,7 +45,7 @@ pub(crate) const MAX_THREADS: usize = 8;
 /// Longest goal, scope or summary kept, in characters.
 pub(crate) const MAX_TEXT: usize = 4000;
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum PlanState {
     /// Waiting on a person.
@@ -91,7 +96,7 @@ pub(crate) struct PlanThread {
     pub updated_ms: u64,
 }
 
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct Plan {
     pub id: String,
     pub sandbox: String,
@@ -100,7 +105,7 @@ pub(crate) struct Plan {
     pub threads: Vec<PlanThread>,
     pub state: PlanState,
     /// Why it was refused, when a person said.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub created_ms: u64,
     pub updated_ms: u64,
@@ -109,6 +114,8 @@ pub(crate) struct Plan {
 pub(crate) struct Plans {
     plans: Mutex<HashMap<String, Plan>>,
     updates: broadcast::Sender<Plan>,
+    /// Where plans are kept between runs; `None` keeps them in memory only.
+    dir: Option<PathBuf>,
 }
 
 /// 128 random bits, hex. From the OS: a plan id is a capability, so it must
@@ -168,11 +175,76 @@ fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
 }
 
 impl Plans {
+    /// Plans in memory only.
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::in_dir(None)
+    }
+
+    /// Plans kept in `dir`, one file per sandbox, starting from what is there.
+    /// A file that cannot be read is skipped with a warning: a lost plan costs
+    /// its chips and its lead's tools, never a thread or its worktree.
+    pub(crate) fn in_dir(dir: Option<PathBuf>) -> Self {
         let (updates, _) = broadcast::channel(256);
+        let mut map = HashMap::new();
+        if let Some(dir) = &dir {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for path in entries.flatten().map(|e| e.path()) {
+                    if path.extension().is_none_or(|x| x != "json") {
+                        continue;
+                    }
+                    match std::fs::read_to_string(&path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|t| serde_json::from_str::<Vec<Plan>>(&t).map_err(|e| e.to_string()))
+                    {
+                        Ok(list) => map.extend(list.into_iter().map(|p| (p.id.clone(), p))),
+                        Err(e) => tracing::warn!("plans: skipping {}: {e}", path.display()),
+                    }
+                }
+            }
+        }
         Self {
-            plans: Mutex::new(HashMap::new()),
+            plans: Mutex::new(map),
             updates,
+            dir,
+        }
+    }
+
+    /// Write `sandbox`'s plans to its file, or remove the file when it has
+    /// none left. Through a temporary file and a rename, so a crash mid-write
+    /// leaves the previous version rather than half of this one.
+    fn persist(&self, sandbox: &str) {
+        let Some(dir) = &self.dir else { return };
+        let mut list: Vec<Plan> = self
+            .plans
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|p| p.sandbox == sandbox)
+            .cloned()
+            .collect();
+        list.sort_by_key(|p| p.created_ms);
+        let path = dir.join(format!("{sandbox}.json"));
+        let res = if list.is_empty() {
+            match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        } else {
+            (|| {
+                std::fs::create_dir_all(dir)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+                }
+                let tmp = dir.join(format!(".{sandbox}.json.tmp"));
+                std::fs::write(&tmp, serde_json::to_vec_pretty(&list)?)?;
+                std::fs::rename(&tmp, &path)
+            })()
+        };
+        if let Err(e) = res {
+            tracing::warn!("plans: could not save {}: {e}", path.display());
         }
     }
 
@@ -180,7 +252,9 @@ impl Plans {
         self.updates.subscribe()
     }
 
+    /// Save and broadcast a change. Every change comes through here.
     fn announce(&self, plan: &Plan) {
+        self.persist(&plan.sandbox);
         let _ = self.updates.send(plan.clone());
     }
 
@@ -374,17 +448,29 @@ impl Plans {
     /// Forget settled plans older than `max_age_ms` whose threads have all
     /// finished, and pending ones nobody looked at for as long.
     pub(crate) fn prune(&self, now: u64, max_age_ms: u64) -> usize {
-        let mut map = self.plans.lock().unwrap();
-        let before = map.len();
-        map.retain(|_, p| {
-            let old = now.saturating_sub(p.updated_ms) > max_age_ms;
-            let finished = p.state != PlanState::Approved
-                || p.threads
-                    .iter()
-                    .all(|t| matches!(t.state, ThreadState::Done | ThreadState::Failed));
-            !(old && finished)
-        });
-        before - map.len()
+        let mut dropped: Vec<String> = Vec::new();
+        {
+            let mut map = self.plans.lock().unwrap();
+            map.retain(|_, p| {
+                let old = now.saturating_sub(p.updated_ms) > max_age_ms;
+                let finished = p.state != PlanState::Approved
+                    || p.threads
+                        .iter()
+                        .all(|t| matches!(t.state, ThreadState::Done | ThreadState::Failed));
+                let keep = !(old && finished);
+                if !keep {
+                    dropped.push(p.sandbox.clone());
+                }
+                keep
+            });
+        }
+        let n = dropped.len();
+        dropped.sort();
+        dropped.dedup();
+        for sandbox in dropped {
+            self.persist(&sandbox);
+        }
+        n
     }
 }
 
@@ -459,6 +545,29 @@ mod tests {
         // Once it is done, the name is free again.
         plans.set_thread("neos", "a", ThreadState::Done, "shipped", false, 5).unwrap();
         plans.approve(&q.id, vec![t("a", "g2")], 6).unwrap();
+    }
+
+    #[test]
+    fn plans_survive_a_restart_and_a_finished_one_leaves_no_file() {
+        let dir = std::env::temp_dir().join(format!("sbxw-plans-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let id = {
+            let plans = Plans::in_dir(Some(dir.clone()));
+            let p = plans.propose("neos", "split", vec![t("a", "g")], 1).unwrap();
+            plans.approve(&p.id, vec![t("a", "g")], 2).unwrap();
+            plans.set_thread("neos", "a", ThreadState::Blocked, "which table?", false, 3).unwrap();
+            p.id
+        };
+        let again = Plans::in_dir(Some(dir.clone()));
+        let p = again.owned(&id, "neos").unwrap();
+        assert_eq!(p.state, PlanState::Approved);
+        assert_eq!(p.threads[0].state, ThreadState::Blocked);
+        assert_eq!(p.threads[0].summary, "which table?");
+
+        again.set_thread("neos", "a", ThreadState::Done, "", false, 4).unwrap();
+        assert_eq!(again.prune(10_000, 1), 1);
+        assert!(!dir.join("neos.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

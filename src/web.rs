@@ -1159,7 +1159,7 @@ pub async fn serve(
     // to know whether sbxw holds a PTY for its sandbox (see `is_answerable`).
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
     let relay = Arc::new(crate::relay::Relay::new());
-    let plans = Arc::new(crate::plans::Plans::new());
+    let plans = Arc::new(crate::plans::Plans::in_dir(Some(crate::state_dir().join("plans"))));
 
     // Relay requests are held in memory and settle only when a human acts, so
     // one that nobody ever attends to would otherwise sit in the popup forever.
@@ -5692,6 +5692,7 @@ fn get_or_create_session(
     crate::ensure_chat_workspace(sandbox);
 
     if let Some(thread) = mode.strip_prefix(THREAD_BASH_PREFIX) {
+        ensure_running_for_thread(sandbox, cfg, sessions)?;
         let workspace = crate::workspace_for(sandbox)
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -5701,6 +5702,7 @@ fn get_or_create_session(
     }
 
     if let Some(thread) = thread_of(mode) {
+        ensure_running_for_thread(sandbox, cfg, sessions)?;
         // The ceiling is checked only here, on the way to a *new* thread: a
         // thread already open was found on the fast path above, and the agent
         // itself is never refused.
@@ -5777,6 +5779,31 @@ fn get_or_create_session(
     };
 
     spawn_pty_session(cmd, key, sessions)
+}
+
+/// Start `sandbox` if it is stopped, before a thread is opened in it.
+///
+/// A thread runs through `sbx exec`, which only reaches a running sandbox, and
+/// a sandbox stops once its last session is gone — which is exactly what a
+/// restart of the daemon leaves behind. sbx has no plain "start"; `sbx run`
+/// starts it as a side effect of attaching the agent, so the thread's sandbox
+/// comes back up with its main session, which is also the lead. Not `run -d`:
+/// that would hold the sandbox up past its sessions, which is `keep_running`'s
+/// call to make, not a thread's.
+fn ensure_running_for_thread(sandbox: &str, cfg: &Config, sessions: &Sessions) -> Result<()> {
+    if crate::sbx::is_running(sandbox).unwrap_or(true) {
+        return Ok(());
+    }
+    tracing::info!("'{sandbox}' is stopped — starting it through its main session for a thread");
+    get_or_create_session(sandbox, "claude", cfg, sessions)?;
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_secs(1));
+        if crate::sbx::is_running(sandbox).unwrap_or(false) {
+            return Ok(());
+        }
+    }
+    bail!("'{sandbox}' did not start within 90 s; open its main pane and try the thread again")
 }
 
 /// Per-key creation locks for `get_or_create_session`. Entries are never

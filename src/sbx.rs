@@ -803,6 +803,10 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
 /// the pane beside it. `bash -lc` is a login shell, for `claude` on PATH (see
 /// `codemap_run_args`).
 ///
+/// A thread reopened without a prompt resumes its last conversation
+/// (`claude --continue`) when it has one: its pane after the daemon or the
+/// sandbox restarted, which ends every session sbxw held.
+///
 /// `SBXW_THREAD` names the thread to everything the session starts — the relay
 /// MCP server reads it to know it serves a thread (and not the main session,
 /// which is the one that can lead). `prompt`, when given, is the session's first
@@ -833,7 +837,17 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
         fi
         printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$2"
         export SBXW_THREAD="$2"
-        cd "$wt" && exec claude --dangerously-skip-permissions ${3:+"$3"}"#;
+        cd "$wt" || exit 1
+        # Reopened with nothing new to say (its pane after a restart of the
+        # daemon or the sandbox): pick its conversation back up, if it had one.
+        # Claude Code files transcripts under the cwd with every character
+        # outside [A-Za-z0-9] turned into '-'.
+        tr="$HOME/.claude/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
+        if [ -z "$3" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
+            printf '\033[2m[sbxw] resuming its last conversation\033[0m\r\n'
+            exec claude --dangerously-skip-permissions --continue
+        fi
+        exec claude --dangerously-skip-permissions ${3:+"$3"}"#;
     [
         "exec",
         "-it",

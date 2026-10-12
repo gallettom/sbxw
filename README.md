@@ -577,6 +577,18 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   first empty pane, or in a new one while the window has room, so the agent
   stays on screen. The first open creates the worktree from the repository's
   current `HEAD`. Every later open lands back in it, with its uncommitted work.
+- **Reopened, it picks up where it was.** A thread whose session ended (the
+  daemon or the sandbox restarted, which ends every session sbxw held) resumes
+  its last conversation with `claude --continue` when its pane reopens. Only a
+  thread given something new to start on, a plan's briefing, opens a fresh
+  conversation.
+- **A stopped sandbox comes back for its threads.** `sbx exec`, which a thread
+  runs through, only reaches a running sandbox, and a sandbox stops once its
+  last session is gone. Opening a thread on a stopped one first attaches its
+  main session (`sbx run`, which starts it), then the thread. It is not `run
+  -d`: holding the sandbox up past its sessions stays `keep_running`'s
+  decision. While any session is attached, the agent's or a thread's, sbx
+  counts the sandbox as in use, so a plan at work keeps it up by itself.
 - **Grouped on screen:** a sandbox's panes, its agent first and then its
   threads, are moved next to each other, empty panes last, on opening a thread
   and on loading the page. A group has its own hue (rose, cyan, sand, violet:
@@ -666,6 +678,11 @@ conversation you already have, so it costs no extra session or worktree.
   `✕` failed. Hover for the report. When a thread is blocked or done, a note
   quoting its report is typed into the main session. The lead answers with
   `send_to_thread`, or asks you.
+- **Plans survive a restart.** Each change is written to
+  `~/.sbxw/state/plans/<sandbox>.json` (directory `0700`: a plan id is a
+  capability) and read back when the daemon starts, so a thread's chip, the
+  lead's tools and a pending dialog come back with it. A plan whose threads
+  are all done or failed is dropped a day after its last change.
 - **The tools** come from the `sbxw-relay` MCP server and depend on the
   session: the main session gets `propose_plan`, `check_plan`, `plan_status`
   and `send_to_thread` (their descriptions say to use them only when leading);
