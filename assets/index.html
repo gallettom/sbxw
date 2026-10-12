@@ -286,7 +286,7 @@
        of the existing worktrees, offered as chips. Filled by openThread() in
        /js/panes.js. -->
   <div class="modal-overlay hidden" id="thread-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" style="width:420px">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" style="width:440px">
       <div class="modal-head">
         <span class="modal-title" id="thread-modal-title">New thread</span>
         <button class="modal-close" id="thread-modal-close" aria-label="Close">✕</button>
@@ -297,6 +297,14 @@
           <input id="thread-name" class="field-input" type="text" maxlength="40" placeholder="fix-login"
                  autocomplete="off" autocapitalize="off" spellcheck="false">
           <p class="thread-hint" id="thread-hint"></p>
+        </div>
+        <!-- The repo the new thread works in: one row per git repo of the
+             workspace, from /repos. Hidden for a name that already exists —
+             the daemon remembers that thread's repo. -->
+        <div id="thread-repo-wrap">
+          <span class="field-label" id="thread-repo-label">Repository</span>
+          <div class="repo-list" id="thread-repos" role="radiogroup" aria-labelledby="thread-repo-label"></div>
+          <p class="repo-note" id="thread-repo-note" hidden></p>
         </div>
         <div id="thread-existing-wrap" hidden>
           <span class="field-label">Existing threads</span>
@@ -338,6 +346,25 @@
         <span class="create-error hidden" id="thread-close-error"></span>
         <button class="btn-cancel" id="thread-close-cancel">Cancel</button>
         <button class="btn-danger" id="thread-close-confirm">Close thread</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── End lead mode ──
+       Says what ending would leave behind — threads still running, a plan
+       still waiting — before the main session stops being the lead. Filled by
+       askEndLead() in /js/plans.js. -->
+  <div class="modal-overlay hidden" id="lead-end-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="lead-end-title" style="width:440px">
+      <div class="modal-head">
+        <span class="modal-title" id="lead-end-title">End lead mode</span>
+        <button class="modal-close" id="lead-end-x" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="lead-end-body"></div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="lead-end-error"></span>
+        <button class="btn-cancel" id="lead-end-cancel">Keep leading</button>
+        <button class="btn-create" id="lead-end-confirm">End lead mode</button>
       </div>
     </div>
   </div>

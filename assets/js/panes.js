@@ -600,7 +600,10 @@ function emptyPane(idx) {
   schedulePaintGroups();
 }
 
-function connectPane(idx, name, mode, thread) {
+// `repo` names the git repo a thread works in, and only on that thread's
+// first open: the daemon remembers it, so a reconnect, a reload or a restored
+// layout opens the thread without it.
+function connectPane(idx, name, mode, thread, repo) {
   if (!name || idx >= panes.length) return;
   const pane = panes[idx];
   const nextMode = paneModeFor(name, mode, pane.mode);
@@ -640,7 +643,9 @@ function connectPane(idx, name, mode, thread) {
   renderSidebar();
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const threadParam = pane.thread ? `&thread=${encodeURIComponent(pane.thread)}` : '';
+  const threadParam = pane.thread
+    ? `&thread=${encodeURIComponent(pane.thread)}` + (pane.mode === 'thread' && repo != null ? `&repo=${encodeURIComponent(repo)}` : '')
+    : '';
   pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}${threadParam}`);
   pane.ws.binaryType = 'arraybuffer';
 
@@ -687,29 +692,64 @@ let threadAsk = null;
 async function openThread(idx) {
   const sandbox = panes[idx]?.sandbox;
   if (!sandbox) return;
-  let info = null;
-  try { info = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads`)).json(); } catch (_) {}
+  const [info, repos] = await Promise.all([
+    fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads`).then(r => r.json()).catch(() => null),
+    fetchRepos(sandbox),
+  ]);
   const known = info?.ok ? info.threads : [];
   const used = new Set(known.map(t => t.name));
   let n = 1;
   while (used.has(`t${n}`)) n++;
 
-  threadAsk = { idx, sandbox, known };
+  threadAsk = { idx, sandbox, known, repos, repo: repos.ok ? defaultRepo(repos.repos) : undefined };
   document.getElementById('thread-modal-title').textContent = `New thread in ${sandbox}`;
   document.getElementById('thread-hint').textContent =
     'Lower-case letters, digits and hyphens. It gets the worktree .sbxw-worktrees/<name> and the branch sbxw/<name>.';
   document.getElementById('thread-count').textContent =
     info?.ok ? `${info.open} of ${info.max} Claude sessions open` : '';
   const chips = document.getElementById('thread-existing');
+  const ws = repos.ok ? repos.workspace : '';
   chips.innerHTML = known.map(t =>
     `<button type="button" class="thread-chip${t.open ? ' open' : ''}" data-name="${escHtml(t.name)}"
-       title="${t.open ? 'Open — go to it' : 'Worktree kept — reopen it'}">${escHtml(t.name)}</button>`).join('');
+       title="${t.open ? 'Open — go to it' : 'Worktree kept — reopen it'}">${escHtml(t.name)}${t.repo != null
+         ? `<span class="thread-chip-repo">${escHtml(repoLabel(t.repo, ws))}</span>` : ''}</button>`).join('');
+  renderThreadRepos();
   document.getElementById('thread-existing-wrap').hidden = !known.length;
   threadInput.value = `t${n}`;
   validateThreadName();
   threadOverlay.classList.remove('hidden');
   threadInput.focus();
   threadInput.select();
+}
+
+// One row per repo of the workspace, as a radio: its name first, then its
+// branch and what state its checkout is in.
+function renderThreadRepos() {
+  const list = document.getElementById('thread-repos');
+  const note = document.getElementById('thread-repo-note');
+  const { repos, repo } = threadAsk;
+  note.className = 'repo-note';
+  if (!repos.ok) {
+    // An older daemon has no /repos: say so, and leave the choice to it.
+    list.innerHTML = '';
+    note.textContent = `Could not list the repositories: ${repos.error}. The thread opens in the workspace's default.`;
+  } else if (!repos.repos.length) {
+    list.innerHTML = '';
+    note.classList.add('warn');
+    note.textContent = `${repoLabel('', repos.workspace)} holds no git repository. A thread works in a worktree of one: run git init there, or clone a repository into it, then come back.`;
+  } else {
+    list.innerHTML = repos.repos.map((r, i) => {
+      const st = repoStatus(r);
+      return `<label class="repo-row">
+          <input type="radio" name="thread-repo" value="${i}"${r.path === repo ? ' checked' : ''}>
+          <span class="repo-name">${escHtml(repoLabel(r.path, repos.workspace))}${r.path ? '' : '<span class="repo-ws"> (workspace)</span>'}</span>
+          <span class="repo-meta">${r.detached ? '' : `<span class="repo-branch">${escHtml(r.branch || '')}</span>`}
+            <span class="repo-status ${st.tone}">${escHtml(st.text)}</span></span>
+        </label>`;
+    }).join('');
+    note.textContent = repo === undefined ? 'Pick the repository this thread works in.' : '';
+  }
+  note.hidden = !note.textContent;
 }
 
 function closeThreadModal() { threadOverlay.classList.add('hidden'); threadAsk = null; }
@@ -722,20 +762,27 @@ function validateThreadName() {
   threadError.classList.toggle('hidden', !threadError.textContent);
   const existing = threadAsk?.known.find(t => t.name === name);
   threadOpenBtn.textContent = existing ? (existing.open ? 'Go to thread' : 'Reopen thread') : 'Open thread';
-  threadOpenBtn.disabled = !ok;
+  // An existing thread keeps the repo it has; a new one needs one, unless the
+  // daemon could not say which there are.
+  document.getElementById('thread-repo-wrap').hidden = !!existing;
+  const repos = threadAsk?.repos;
+  const needsRepo = !existing && repos?.ok && threadAsk.repo === undefined;
+  threadOpenBtn.disabled = !ok || needsRepo;
 }
 
 function submitThread(name) {
   if (!threadAsk || !THREAD_NAME.test(name)) return;
-  const { idx, sandbox } = threadAsk;
+  const { idx, sandbox, known, repos, repo } = threadAsk;
+  const fresh = !known.some(t => t.name === name);
+  if (fresh && repos.ok && repo === undefined) return;
   closeThreadModal();
-  showThread(idx, sandbox, name);
+  showThread(idx, sandbox, name, fresh ? repo : undefined);
 }
 
 // Put thread `name` of `sandbox` on screen, beside its sandbox's panes: in the
 // first empty pane, else a new one while the window has room, else in pane
 // `idx` (the agent's session keeps running behind it).
-function showThread(idx, sandbox, name) {
+function showThread(idx, sandbox, name, repo) {
   const id = sessionIdentity(sandbox, 'thread', name);
   const shown = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
   if (shown >= 0) { setFocusedPane(shown); return; }
@@ -743,13 +790,19 @@ function showThread(idx, sandbox, name) {
   let target = panes.slice(0, paneCount).findIndex(p => !p.sandbox);
   if (target < 0 && paneCount < computeMaxPanes()) { setLayout(paneCount + 1); target = paneCount - 1; }
   if (target < 0) target = idx;
-  connectPane(target, sandbox, 'thread', name);
+  connectPane(target, sandbox, 'thread', name, repo);
   regroupPanes();
   const at = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
   setFocusedPane(at >= 0 ? at : target);
 }
 
 threadInput.addEventListener('input', validateThreadName);
+document.getElementById('thread-repos').addEventListener('change', e => {
+  if (!threadAsk || e.target.name !== 'thread-repo') return;
+  threadAsk.repo = threadAsk.repos.repos[+e.target.value]?.path;
+  document.getElementById('thread-repo-note').hidden = true;
+  validateThreadName();
+});
 threadInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(threadInput.value.trim()); }
 });
@@ -865,6 +918,8 @@ async function startLead(idx) {
   const pane = panes[idx];
   const sandbox = pane?.sandbox;
   if (!sandbox || pane.thread) return;
+  // Lit, the button is the way out: it ends lead mode, after asking.
+  if (typeof isLeading === 'function' && isLeading(sandbox)) { askEndLead(idx); return; }
   if (pane.mode !== 'claude') connectPane(idx, sandbox, 'claude');
   const btn = pane.el.querySelector('.mode-btn[data-mode="lead"]');
   btn.disabled = true;
@@ -951,7 +1006,14 @@ function paintGroups() {
     // The whole pane says it, not only the chip: ★ Lead lit, and the bar
     // marked, for as long as this session is the lead.
     p.el.classList.toggle('leading', !!leading && i < paneCount);
-    p.el.querySelector('.mode-btn[data-mode="lead"]')?.classList.toggle('active', !!leading);
+    const leadBtn = p.el.querySelector('.mode-btn[data-mode="lead"]');
+    if (leadBtn) {
+      leadBtn.classList.toggle('active', !!leading);
+      // The lit button ends lead mode; say so where a person hovers or listens.
+      leadBtn.dataset.title ??= leadBtn.title;
+      leadBtn.title = leading ? 'End lead mode — this session stops leading; its threads keep running' : leadBtn.dataset.title;
+      leadBtn.setAttribute('aria-label', leading ? 'End lead mode' : 'Lead');
+    }
     chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
     chip.hidden = !(i < paneCount && p.sandbox && (thread || color || leading));

@@ -9,6 +9,9 @@
 const plans = new Map();          // id -> plan, as the daemon last sent it
 const panesOpenedFor = new Set(); // approved plans whose threads this tab put on screen
 let planShown = null;             // id of the plan in the dialog
+// The git repos of the shown plan's workspace, from /repos: `{sandbox, ok,
+// workspace, repos}`, or null until they arrive.
+let planRepos = null;
 
 const planOverlay = document.getElementById('plan-overlay');
 const planRows = document.getElementById('plan-threads');
@@ -27,8 +30,9 @@ function planThreadState(sandbox, thread) {
   return best ? best.t : null;
 }
 
+// A plan whose lead mode was ended is over, whatever state it was left in.
 function pendingPlanFor(sandbox) {
-  for (const p of plans.values()) if (p.sandbox === sandbox && p.state === 'pending') return p;
+  for (const p of plans.values()) if (p.sandbox === sandbox && p.state === 'pending' && !p.closed) return p;
   return null;
 }
 
@@ -60,12 +64,79 @@ function markLeading(sandbox) {
 function isLeading(sandbox) {
   if (leadSessions.has(sandbox)) return true;
   for (const p of plans.values()) {
-    if (p.sandbox !== sandbox) continue;
+    if (p.sandbox !== sandbox || p.closed) continue;
     if (p.state === 'pending') return true;
     if (p.state === 'approved' && p.threads.some(t => !['done', 'failed'].includes(t.state))) return true;
   }
   return false;
 }
+
+// Lead mode ended, here or in another tab: the daemon has closed its plans
+// (they come back with `closed: true`), and this forgets the ★ Lead click.
+function forgetLeading(sandbox) {
+  leadSessions.delete(sandbox);
+  schedulePaintGroups();
+}
+
+// ── End lead mode ──
+// The lit ★ Lead button ends it, once a person has read what that leaves
+// behind: threads at work keep running, but nobody reads their reports.
+const leadEndOverlay = document.getElementById('lead-end-overlay');
+const leadEndConfirm = document.getElementById('lead-end-confirm');
+const leadEndError = document.getElementById('lead-end-error');
+let leadEndAsk = null; // { idx, sandbox }
+
+function askEndLead(idx) {
+  const sandbox = panes[idx]?.sandbox;
+  if (!sandbox) return;
+  leadEndAsk = { idx, sandbox };
+  let running = 0;
+  for (const p of plans.values()) {
+    if (p.sandbox !== sandbox || p.closed || p.state !== 'approved') continue;
+    running += p.threads.filter(t => !['done', 'failed'].includes(t.state)).length;
+  }
+  const pending = pendingPlanFor(sandbox);
+  const lines = [`The main session of ${sandbox} stops leading and goes back to being an ordinary session.`];
+  if (running) {
+    lines.push(`${running} thread${running === 1 ? ' is' : 's are'} still at work. ${running === 1 ? 'It keeps' : 'They keep'} running — close ${running === 1 ? 'it' : 'them'} with Close thread — but ${running === 1 ? 'its reports' : 'their reports'} will no longer reach the main session.`);
+  }
+  if (pending) lines.push('The plan waiting for your approval will be refused.');
+  document.getElementById('lead-end-body').innerHTML =
+    lines.map((l, i) => `<p class="${i ? 'lead-end-warn' : 'thread-close-lead'}">${escHtml(l)}</p>`).join('');
+  showNote(leadEndError, '');
+  leadEndConfirm.disabled = false;
+  leadEndConfirm.textContent = 'End lead mode';
+  leadEndOverlay.classList.remove('hidden');
+  leadEndConfirm.focus();
+}
+
+function closeLeadEnd() { leadEndOverlay.classList.add('hidden'); leadEndAsk = null; }
+
+leadEndConfirm.addEventListener('click', async () => {
+  const ask = leadEndAsk;
+  if (!ask) return;
+  leadEndConfirm.disabled = true;
+  leadEndConfirm.textContent = 'Ending…';
+  const res = await postJsonOrError(`/api/sandboxes/${encodeURIComponent(ask.sandbox)}/lead/end`, {});
+  if (leadEndAsk !== ask) return;
+  if (!res.ok) {
+    // Said in the dialog, and in the pane the way a failed Lead is.
+    showNote(leadEndError, res.error || 'could not end lead mode');
+    leadEndConfirm.disabled = false;
+    leadEndConfirm.textContent = 'End lead mode';
+    const pane = panes[ask.idx];
+    if (pane?.sandbox === ask.sandbox) pane.term.write(`\r\n\x1b[31m[sbxw] End lead mode: ${res.error}\x1b[0m\r\n`);
+    return;
+  }
+  closeLeadEnd();
+  forgetLeading(ask.sandbox);
+});
+document.getElementById('lead-end-cancel').addEventListener('click', closeLeadEnd);
+document.getElementById('lead-end-x').addEventListener('click', closeLeadEnd);
+leadEndOverlay.addEventListener('click', e => { if (e.target === leadEndOverlay) closeLeadEnd(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !leadEndOverlay.classList.contains('hidden')) closeLeadEnd();
+});
 
 // "Review plan" on the main pane, shown while its plan waits on a person —
 // the way back to a dialog closed with Later.
@@ -100,11 +171,30 @@ function scopeItems(scope) {
   return (scope || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
 }
 
+// Does a thread without a repo have to be given one before approval? Only
+// when the workspace holds several and none of them is the obvious default.
+function planNeedsRepo() {
+  return !!planRepos?.ok && planRepos.repos.length > 1 && defaultRepo(planRepos.repos) === undefined;
+}
+
+// The card's repo line: the repo as a chip, or the flag saying one is needed.
+function planRepoHtml(t) {
+  if (t.repo != null) {
+    return `<div class="plan-repo"><span class="plan-owns-label">In</span>
+        <code class="plan-repo-chip">${escHtml(repoLabel(t.repo, planRepos?.workspace))}</code></div>`;
+  }
+  if (planNeedsRepo()) {
+    return `<div class="plan-repo flagged">No repository yet: choose one with Edit</div>`;
+  }
+  return '';
+}
+
 // The reading half of a card, rebuilt from its inputs whenever editing ends.
 function planViewHtml(t) {
   const [lead, rest] = splitGoal(t.goal);
   const items = scopeItems(t.scope);
   return `<h3 class="plan-card-title">${t.name ? escHtml(t.name) : '<span class="plan-unnamed">Unnamed thread</span>'}</h3>
+      ${planRepoHtml(t)}
       <p class="plan-lead">${lead ? escHtml(lead) : '<span class="plan-unnamed">No goal yet</span>'}</p>
       ${rest ? `<p class="plan-rest">${escHtml(rest)}</p>
       <button type="button" class="plan-more" aria-expanded="false" hidden>Show more</button>` : ''}
@@ -118,9 +208,12 @@ function planViewHtml(t) {
 
 // One thread: a card to read, with the form that edits it kept beside it. The
 // inputs are the card's source of truth — Approve reads them whether or not
-// they were ever shown — so reading and editing cannot drift apart.
+// they were ever shown — so reading and editing cannot drift apart. The repo
+// is kept in `data-repo`, absent while the thread has none: '' is a repo too,
+// the workspace itself.
 function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
-  return `<div class="plan-thread" style="--plan-accent: var(${PLAN_HUES[i % PLAN_HUES.length]})">
+  const repo = typeof t.repo === 'string' ? ` data-repo="${escHtml(t.repo)}"` : '';
+  return `<div class="plan-thread" style="--plan-accent: var(${PLAN_HUES[i % PLAN_HUES.length]})"${repo}>
       <div class="plan-card-tools">
         <button type="button" class="plan-edit" aria-pressed="false">Edit</button>
         <button type="button" class="plan-remove" title="Remove this thread from the plan" aria-label="Remove thread">✕</button>
@@ -134,6 +227,9 @@ function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
         <label class="plan-label">Goal
           <textarea class="field-input plan-goal" placeholder="What this thread must do">${escHtml(t.goal)}</textarea>
         </label>
+        <label class="plan-label">Repository
+          <select class="field-input plan-repo-select"></select>
+        </label>
         <label class="plan-label">Owns
           <input class="field-input plan-scope" type="text" placeholder="Files or areas only this thread edits, separated by commas"
                  value="${escHtml(t.scope || '')}">
@@ -142,12 +238,62 @@ function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
     </div>`;
 }
 
+// `repo` is added only when the thread has one, so a plan in a workspace of
+// one repo approves exactly as it did before repos were a thing.
 function rowThread(row) {
-  return {
+  const t = {
     name: row.querySelector('.plan-name').value.trim(),
     goal: row.querySelector('.plan-goal').value.trim(),
     scope: row.querySelector('.plan-scope').value.trim(),
   };
+  if (row.dataset.repo !== undefined) t.repo = row.dataset.repo;
+  return t;
+}
+
+// The Repository select of a card, from the workspace's repos. Values are
+// '=' + path, so the workspace itself ('=') is never mistaken for "none" ('').
+function fillRepoSelect(row) {
+  const sel = row.querySelector('.plan-repo-select');
+  const cur = row.dataset.repo;
+  const ws = planRepos?.workspace;
+  const list = planRepos?.ok ? planRepos.repos.map(r => r.path) : [];
+  if (cur !== undefined && !list.includes(cur)) list.push(cur);
+  let none = '';
+  if (cur === undefined) {
+    const def = planRepos?.ok ? defaultRepo(planRepos.repos) : undefined;
+    none = `<option value="">${planNeedsRepo() ? 'Choose a repository…'
+      : def !== undefined ? `Default: ${escHtml(repoLabel(def, ws))}` : 'Default'}</option>`;
+  }
+  sel.innerHTML = none + list.map(p => {
+    const r = planRepos?.ok ? planRepos.repos.find(x => x.path === p) : null;
+    const st = r ? `  (${r.detached ? '' : `${r.branch}, `}${repoStatus(r).text})` : '';
+    return `<option value="=${escHtml(p)}"${p === cur ? ' selected' : ''}>${escHtml(repoLabel(p, ws) + st)}</option>`;
+  }).join('');
+  sel.disabled = !list.length;
+}
+
+function paintPlanRow(row) {
+  row.classList.toggle('needs-repo', planNeedsRepo() && row.dataset.repo === undefined);
+  fillRepoSelect(row);
+  if (!row.classList.contains('editing')) {
+    row.querySelector('.plan-view').innerHTML = planViewHtml(rowThread(row));
+    fitPlanMore(row);
+  }
+}
+
+// Approve waits until every thread has somewhere to work. Not while a
+// request is out: that one is already on its way.
+function updatePlanReady() {
+  if (planApprove.textContent !== 'Approve and start') return;
+  const rows = [...planRows.querySelectorAll('.plan-thread')];
+  const empty = !!planRepos?.ok && !planRepos.repos.length;
+  const missing = rows.filter(r => r.classList.contains('needs-repo')).length;
+  planApprove.disabled = empty || missing > 0;
+  planApprove.title = empty ? 'The workspace holds no git repository'
+    : missing ? `Choose a repository for ${missing} thread${missing === 1 ? '' : 's'}` : '';
+  setPlanError(empty
+    ? `${repoLabel('', planRepos.workspace)} holds no git repository, and every thread needs one: run git init there, or clone one into it.`
+    : '');
 }
 
 // "Show more" only where the rest of a goal actually overflows its clamp,
@@ -177,6 +323,7 @@ function setPlanError(msg) {
 
 async function showPlan(plan) {
   planShown = plan.id;
+  if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
   document.getElementById('plan-title').textContent = `Plan from the lead of ${plan.sandbox}`;
   document.getElementById('plan-summary').textContent = plan.summary || '';
   planRows.innerHTML = plan.threads.map((t, i) => planRowHtml(t, i)).join('');
@@ -184,8 +331,16 @@ async function showPlan(plan) {
   planApprove.disabled = false;
   planApprove.textContent = 'Approve and start';
   planOverlay.classList.remove('hidden');
-  planRows.querySelectorAll('.plan-thread').forEach(fitPlanMore);
+  planRows.querySelectorAll('.plan-thread').forEach(paintPlanRow);
+  updatePlanReady();
   updatePlanCount();
+  if (!planRepos) {
+    const r = await fetchRepos(plan.sandbox);
+    if (planShown !== plan.id) return;
+    planRepos = { sandbox: plan.sandbox, ...r };
+    planRows.querySelectorAll('.plan-thread').forEach(paintPlanRow);
+    updatePlanReady();
+  }
 }
 
 // How many sessions approving would add, against what the sandbox has open.
@@ -210,6 +365,7 @@ function closePlan() {
   planOverlay.classList.add('hidden');
   planShown = null;
   planBudget = null;
+  planRepos = null;
 }
 
 // Open a pane for each thread of an approved plan, beside its sandbox's
@@ -240,7 +396,7 @@ function ingestPlan(plan, seed = false) {
     panesOpenedFor.add(plan.id);
     openPlanPanes(plan);
   }
-  if (planShown === plan.id && plan.state !== 'pending') closePlan();
+  if (planShown === plan.id && (plan.state !== 'pending' || plan.closed)) closePlan();
   schedulePaintGroups();
 }
 
@@ -249,6 +405,7 @@ planRows.addEventListener('click', e => {
   if (!row) return;
   if (e.target.closest('.plan-remove')) {
     row.remove();
+    updatePlanReady();
     updatePlanCount();
   } else if (e.target.closest('.plan-edit')) {
     setPlanEditing(row, !row.classList.contains('editing'));
@@ -263,9 +420,21 @@ document.getElementById('plan-add').addEventListener('click', () => {
   const n = planRows.querySelectorAll('.plan-thread').length;
   planRows.insertAdjacentHTML('beforeend', planRowHtml(undefined, n));
   const row = planRows.lastElementChild;
+  paintPlanRow(row);
   setPlanEditing(row, true);
+  updatePlanReady();
   row.querySelector('.plan-name').focus();
   updatePlanCount();
+});
+
+planRows.addEventListener('change', e => {
+  const sel = e.target.closest('.plan-repo-select');
+  if (!sel) return;
+  const row = sel.closest('.plan-thread');
+  if (sel.value) row.dataset.repo = sel.value.slice(1);
+  else delete row.dataset.repo;
+  paintPlanRow(row);
+  updatePlanReady();
 });
 
 planApprove.addEventListener('click', async () => {
@@ -275,6 +444,13 @@ planApprove.addEventListener('click', async () => {
   const threads = rows.map(rowThread);
   const bad = threads.findIndex(t => !THREAD_NAME.test(t.name));
   if (!threads.length) { setPlanError('Keep at least one thread, or refuse the plan'); return; }
+  const unplaced = rows.findIndex(r => r.classList.contains('needs-repo'));
+  if (unplaced >= 0) {
+    setPlanError(`"${threads[unplaced].name || 'Unnamed thread'}" needs a repository`);
+    if (!rows[unplaced].classList.contains('editing')) setPlanEditing(rows[unplaced], true);
+    rows[unplaced].querySelector('.plan-repo-select').focus();
+    return;
+  }
   if (bad >= 0) {
     setPlanError(`"${threads[bad].name}": lower-case letters, digits and inner hyphens only`);
     if (!rows[bad].classList.contains('editing')) setPlanEditing(rows[bad], true);
@@ -286,9 +462,9 @@ planApprove.addEventListener('click', async () => {
   setPlanError('');
   const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads });
   if (!res.ok) {
-    setPlanError(res.error || 'could not approve the plan');
-    planApprove.disabled = false;
     planApprove.textContent = 'Approve and start';
+    updatePlanReady();
+    setPlanError(res.error || 'could not approve the plan');
     return;
   }
   // The `plan` event that follows opens the panes; the reply carries the same
@@ -318,6 +494,7 @@ fetch('/api/plans')
 
 refreshLeads();
 sbxwStream.addEventListener('lead', ev => markLeading(ev.data));
+sbxwStream.addEventListener('lead-end', ev => forgetLeading(ev.data));
 
 sbxwStream.addEventListener('plan', ev => {
   try { ingestPlan(JSON.parse(ev.data)); } catch (_) {}
