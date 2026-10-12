@@ -157,6 +157,14 @@ function createPane(index) {
               title="This lead's threads are reviewed and ready to merge">Merge</button>
       <button class="pane-btn pane-thread-close" id="pthreadclose-${index}" hidden
               title="Close this thread — stop it, remove its worktree, and its branch">Close thread</button>
+      <!-- A main pane's two actions, kept out of the switch because neither is
+           a view of this pane: Thread opens another session, and Lead mode is
+           a state of the main session, turned on and off. They sit with the
+           pane's other work (Project, the plan), left of the spacer, so they
+           read apart from the session plumbing on the right; and last before
+           the spacer, so showing them on demand moves nothing else. -->
+      <button class="pane-btn pane-main-action pane-new-thread" id="pnewthread-${index}" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own">⑂<span class="mode-word"> Thread</span></button>
+      <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Lead mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Lead mode</span> <span class="lead-state">Off</span></button>
       <span class="spacer"></span>
       <button class="pane-btn pane-session-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
       <button class="pane-btn pane-session-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
@@ -166,9 +174,8 @@ function createPane(index) {
         <!-- The word is wrapped so a narrow pane can drop it and keep the
              glyph, which carries the mode on its own (see app.css). -->
         <button class="mode-btn active" data-mode="claude" title="Claude" aria-label="Claude">✦<span class="mode-word"> Claude</span></button>
-        <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
         <button class="mode-btn" data-mode="thread" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own" aria-label="Thread">⑂<span class="mode-word"> Thread</span></button>
-        <button class="mode-btn" data-mode="lead" title="Lead — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself" aria-label="Lead">★<span class="mode-word"> Lead</span></button>
+        <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
       </div>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
@@ -200,10 +207,13 @@ function createPane(index) {
   el.addEventListener('mousedown', () => setFocusedPane(index));
 
   // Mode buttons
-  // A main pane offers Claude, Bash, Thread and Lead. A thread's pane offers
-  // only Thread and Bash, both about *that* thread: its agent, and a shell in
-  // its worktree — see applyPaneChrome.
-  const [claudeBtn, bashBtn, threadBtn, leadBtn] = el.querySelectorAll('.mode-btn');
+  // A main pane switches between Claude and Bash, beside a Thread button and
+  // the Lead mode toggle. A thread's pane switches between Thread and Bash,
+  // both about *that* thread: its agent, and a shell in its worktree — see
+  // applyPaneChrome.
+  const [claudeBtn, threadBtn, bashBtn] = el.querySelectorAll('.mode-btn');
+  const newThreadBtn = document.getElementById(`pnewthread-${index}`);
+  const leadBtn = document.getElementById(`plead-${index}`);
   claudeBtn.addEventListener('click', () => {
     if (pane.mode !== 'claude' && pane.sandbox) connectPane(index, pane.sandbox, 'claude');
     else setPaneMode(index, 'claude');
@@ -216,6 +226,9 @@ function createPane(index) {
     if (!pane.sandbox || pane.sandbox === MONITOR_SANDBOX) return;
     if (pane.thread) { if (pane.mode !== 'thread') connectPane(index, pane.sandbox, 'thread', pane.thread); }
     else openThread(index);
+  });
+  newThreadBtn.addEventListener('click', () => {
+    if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX && !pane.thread) openThread(index);
   });
   leadBtn.addEventListener('click', () => {
     if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX && !pane.thread) startLead(index);
@@ -565,11 +578,14 @@ function applyPaneChrome(idx, name) {
   // The monitor runs on the host and has no workspace, so it has no project
   // either — the same reason SSH and Env go dark on it.
   document.getElementById(`pfiles-${idx}`).disabled = !name || monitor;
-  // A thread's pane is about that thread: Claude would be the main agent, and
-  // Lead is something only the main session becomes.
+  // A thread's pane is about that thread: Claude would be the main agent, a
+  // new thread is opened from the main pane, and Lead mode is something only
+  // the main session is in. On a main pane, ⑂ Thread is the button beside.
   panes[idx].el.querySelectorAll('.mode-btn').forEach(b => {
-    b.hidden = monitor || (!!thread && (b.dataset.mode === 'claude' || b.dataset.mode === 'lead'));
+    b.hidden = monitor || b.dataset.mode === (thread ? 'claude' : 'thread');
   });
+  document.getElementById(`pnewthread-${idx}`).hidden = monitor || !!thread;
+  document.getElementById(`plead-${idx}`).hidden = monitor || !!thread;
   document.getElementById(`pthreadclose-${idx}`).hidden = !(name && thread);
 }
 
@@ -949,7 +965,7 @@ async function startLead(idx) {
   // Lit, the button is the way out: it ends lead mode, after asking.
   if (typeof isLeading === 'function' && isLeading(sandbox)) { askEndLead(idx); return; }
   if (pane.mode !== 'claude') connectPane(idx, sandbox, 'claude');
-  const btn = pane.el.querySelector('.mode-btn[data-mode="lead"]');
+  const btn = document.getElementById(`plead-${idx}`);
   btn.disabled = true;
   if (typeof markLeading === 'function') markLeading(sandbox);
   let res;
@@ -1028,23 +1044,22 @@ function paintGroups() {
     // whether the main session is leading a plan right now.
     const st = thread && typeof planThreadState === 'function' ? planThreadState(p.sandbox, thread) : null;
     const leading = !thread && p.sandbox && typeof isLeading === 'function' && isLeading(p.sandbox);
-    chip.textContent = thread ? `⑂ ${thread}${st ? ` ${PLAN_STATE_MARK[st.state] || ''}` : ''}`
-      : leading ? '★ lead' : 'main';
-    chip.classList.toggle('lead', !!leading);
-    // The whole pane says it, not only the chip: ★ Lead lit, and the bar
-    // marked, for as long as this session is the lead.
+    // Lead mode is said once, by its toggle lit On (kept on the bar while it
+    // is, focused or not) and the stripe on the bar — not a second time by a
+    // "★ lead" chip beside it. The chip stays "main" among its threads.
+    chip.textContent = thread ? `⑂ ${thread}${st ? ` ${PLAN_STATE_MARK[st.state] || ''}` : ''}` : 'main';
     p.el.classList.toggle('leading', !!leading && i < paneCount);
-    const leadBtn = p.el.querySelector('.mode-btn[data-mode="lead"]');
+    const leadBtn = document.getElementById(`plead-${i}`);
     if (leadBtn) {
-      leadBtn.classList.toggle('active', !!leading);
-      // The lit button ends lead mode; say so where a person hovers or listens.
+      leadBtn.setAttribute('aria-pressed', String(!!leading));
+      leadBtn.querySelector('.lead-state').textContent = leading ? 'On' : 'Off';
+      // On, the toggle ends lead mode; say so where a person hovers.
       leadBtn.dataset.title ??= leadBtn.title;
-      leadBtn.title = leading ? 'End lead mode — this session stops leading; its threads keep running' : leadBtn.dataset.title;
-      leadBtn.setAttribute('aria-label', leading ? 'End lead mode' : 'Lead');
+      leadBtn.title = leading ? 'Lead mode is on — click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
     }
     chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
-    chip.hidden = !(i < paneCount && p.sandbox && (thread || color || leading));
+    chip.hidden = !(i < paneCount && p.sandbox && (thread || color));
     if (!color) { p.el.style.removeProperty('--group-color'); return; }
     p.el.style.setProperty('--group-color', color);
     p.el.classList.add('grouped');

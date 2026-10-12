@@ -6074,7 +6074,12 @@ fn get_or_create_session(
         // A thread of an approved plan starts on its briefing, whoever
         // happens to open it first — the launch or its pane.
         let prompt = THREAD_PROMPTS.lock().unwrap().remove(&key).unwrap_or_default();
+        // No model of its own: sbxw.toml's, spelled out. A thread starts over
+        // `sbx exec`, which carries the environment the sandbox was *created*
+        // with — an `ANTHROPIC_DEFAULT_MODEL` that may name a model since
+        // retired — not the current one an attach (`sbx run`) passes.
         let model = crate::repos::recorded_model(&crate::thread_repos_dir(), sandbox, thread)
+            .or_else(|| Some(cfg.claude_model.clone()))
             .filter(|m| crate::config::valid_model_id(m))
             .unwrap_or_default();
         let mut c = CommandBuilder::new("sbx");

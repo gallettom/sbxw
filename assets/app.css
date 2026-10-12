@@ -732,12 +732,11 @@
     display: inline-flex; padding: .15rem .5rem; border-radius: 4px; font-size: 11px;
     color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber);
   }
-  /* The model sits beside the repo, quieter: dashed, no fill — a setting of
-     the thread, not where it lives. */
-  .plan-model-chip {
-    font-size: 11px; color: var(--c-text-muted);
-    padding: .1rem .45rem; border-radius: 4px; border: 1px dashed var(--c-border);
-  }
+  /* The model, in view and in edit alike: a setting of the thread that is
+     changed often enough to need no Edit first. */
+  .plan-model-field { display: flex; align-items: center; gap: .3rem; margin-top: .6rem; }
+  .plan-model-field[hidden] { display: none; }
+  .plan-thread .plan-model-field .field-input { width: auto; max-width: 100%; font-size: 12px; padding: .15rem .4rem; }
   .plan-label[hidden] { display: none; }
   .plan-thread.needs-repo { border-top-color: var(--c-amber); border-right-color: var(--c-amber); border-bottom-color: var(--c-amber); }
   .plan-thread select.field-input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
@@ -1185,18 +1184,22 @@
     color: color-mix(in oklab, var(--group-color, var(--c-text)) 70%, var(--c-white));
   }
   .pane-bar .role-chip[hidden] { display: none; }
-  /* The main session made lead: the chip says "★ lead" filled, and the bar
-     carries a stripe on its left edge, so the pane reads as the lead from
-     across the grid. Both in the group's hue — violet beside a rose bar read
-     as a second group — and violet, the colour ★ Lead lights up in, only when
-     the pane is ungrouped. Filled and starred is what sets it apart from its
-     threads, which are tinted. Dark text holds AA on all four hues. */
-  .pane-bar .role-chip.lead {
-    --lead-color: var(--group-color, var(--c-purple-alt));
-    background: var(--lead-color); border-color: var(--lead-color); color: var(--c-bg);
-  }
+  /* The main session made lead: the Lead mode toggle lit On (below) and a
+     stripe on the bar's left edge, so the pane reads as the lead from across
+     the grid. Both in the group's hue — violet beside a rose bar read as a
+     second group — and violet only when the pane is ungrouped. */
   .pane.leading .pane-bar { box-shadow: inset 4px 0 0 var(--group-color, var(--c-purple-alt)); }
-  .pane-bar .mode-switch button[data-mode="lead"].active { color: var(--c-purple-alt); }
+  /* Lead mode as a toggle: Off reads like any button, On is filled the way
+     the lead chip is — same colour (the group's, else violet), dark text —
+     because violet text on a faint violet wash sank into the slate bar. */
+  .pane-bar .pane-lead-toggle[aria-pressed="true"],
+  .pane-bar .pane-lead-toggle[aria-pressed="true"]:hover {
+    --lead-color: var(--group-color, var(--c-purple-alt));
+    color: var(--c-bg); border-color: var(--lead-color); background: var(--lead-color);
+  }
+  .pane-bar .pane-lead-toggle[aria-pressed="true"]:hover { filter: brightness(1.12); }
+  .pane-bar .pane-lead-toggle .lead-state { font-weight: 600; }
+  .pane-bar .pane-new-thread[hidden], .pane-bar .pane-lead-toggle[hidden] { display: none; }
   .pane-bar .pane-thread-close[hidden] { display: none; }
   .pane-bar {
     display: flex; align-items: center; gap: .5rem;
@@ -1347,11 +1350,11 @@
     .pane-bar .conn-label { display: none; }
   }
   @container pane (max-width: 500px) {
-    /* ✦, ❯, ⑂ and ★ are the modes' own marks, and the lit one keeps its
-       colour — purple for Claude, green for Bash, blue for a thread, violet
-       for a session that is the lead — so the switch still reads at a glance
-       without spelling any of them out. */
-    .pane-bar .mode-switch .mode-word,
+    /* ✦, ❯ and ⑂ are the modes' own marks, and the lit one keeps its
+       colour — purple for Claude, green for Bash, blue for a thread — so the
+       switch still reads at a glance without spelling any of them out. Lead
+       mode keeps ★ and its On/Off. */
+    .pane-bar .mode-word,
     .pane-bar .files-word { display: none; }
     .pane-bar .mode-switch button { padding: .2rem .45rem; }
   }
@@ -1385,6 +1388,15 @@
     .pane:hover .pane-session-btn,
     .pane:focus-within .pane-session-btn,
     .pane:has(.term-disconnected) .pane-reconnect-btn { display: inline-block; }
+    /* ⑂ Thread and ★ Lead mode follow the same rule from the left side of the
+       spacer, where they sit last so their coming and going moves nothing.
+       :not([hidden]) keeps a thread's pane and the monitor without them.
+       Lit On, Lead mode stays: it is the one place the bar says "lead". */
+    .pane .pane-main-action { display: none; }
+    .pane.focused .pane-main-action:not([hidden]),
+    .pane:hover .pane-main-action:not([hidden]),
+    .pane:focus-within .pane-main-action:not([hidden]),
+    .pane.leading .pane-lead-toggle:not([hidden]) { display: inline-block; }
   }
   .pane-close-btn {
     background: none; border: none; color: var(--c-text); cursor: pointer;

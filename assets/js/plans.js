@@ -327,20 +327,17 @@ function planNeedsRepo() {
   return !!planRepos?.ok && planRepos.repos.length > 1 && defaultRepo(planRepos.repos) === undefined;
 }
 
-// The card's repo line: the repo as a chip, or the flag saying one is needed,
-// and beside it the model when the thread names one — without, it runs the
-// default, which needs no saying.
+// The card's repo line: the repo as a chip, or the flag saying one is needed.
+// The model has its own select below, shown whether or not the card is edited.
 function planRepoHtml(t) {
-  const model = t.model
-    ? `<span class="plan-model-chip" title="Model">${escHtml(modelLabel(t.model, planModels))}</span>` : '';
   if (t.repo != null) {
     return `<div class="plan-repo"><span class="plan-owns-label">In</span>
-        <code class="plan-repo-chip">${escHtml(repoLabel(t.repo, planRepos?.workspace))}</code>${model}</div>`;
+        <code class="plan-repo-chip">${escHtml(repoLabel(t.repo, planRepos?.workspace))}</code></div>`;
   }
   if (planNeedsRepo()) {
-    return `<div class="plan-repo"><span class="plan-repo-flag">No repository yet: choose one with Edit</span>${model}</div>`;
+    return `<div class="plan-repo"><span class="plan-repo-flag">No repository yet: choose one with Edit</span></div>`;
   }
-  return model ? `<div class="plan-repo">${model}</div>` : '';
+  return '';
 }
 
 // The reading half of a card, rebuilt from its inputs whenever editing ends.
@@ -385,14 +382,14 @@ function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
         <label class="plan-label">Repository
           <select class="field-input plan-repo-select"></select>
         </label>
-        <label class="plan-label plan-model-field">Model
-          <select class="field-input plan-model-select"></select>
-        </label>
         <label class="plan-label">Owns
           <input class="field-input plan-scope" type="text" placeholder="Files or areas only this thread edits, separated by commas"
                  value="${escHtml(t.scope || '')}">
         </label>
       </div>
+      <label class="plan-model-field"><span class="plan-owns-label">Model</span>
+        <select class="field-input plan-model-select"></select>
+      </label>
     </div>`;
 }
 

@@ -798,6 +798,22 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
     ])
 }
 
+/// `sbx exec` refuses an empty argv element ("cmd element N is empty"), and a
+/// thread's workspace, prompt or model is often empty. So the thread scripts'
+/// positional values go in behind a `=` (`pos`), and this, first in each
+/// script, takes it off again: `$1`… are the values as given, empty included.
+macro_rules! unwrap_args {
+    () => {
+        r#"
+        for a do set -- "$@" "${a#=}"; shift; done"#
+    };
+}
+
+/// One positional value of a thread script, wrapped for `unwrap_args!`.
+fn pos(value: &str) -> String {
+    format!("={value}")
+}
+
 /// Shell function `sbxw_no_repo`: why the current directory cannot hold a
 /// thread, with the repos found under it — a workspace is often a folder of
 /// repos (`backend/`, `frontend/`), and the fix is to pick one of them
@@ -862,7 +878,7 @@ pub fn thread_run_args(
     prompt: &str,
     model: &str,
 ) -> Vec<String> {
-    const SCRIPT: &str = concat!(no_repo_fn!(), r#"
+    const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
             printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"
@@ -893,20 +909,9 @@ pub fn thread_run_args(
             exec claude --dangerously-skip-permissions ${4:+--model "$4"} --continue
         fi
         exec claude --dangerously-skip-permissions ${4:+--model "$4"} ${3:+"$3"}"#);
-    owned(&[
-        "exec",
-        "-it",
-        name,
-        "--",
-        "bash",
-        "-lc",
-        SCRIPT,
-        "sbxw-thread",
-        workspace,
-        thread,
-        prompt,
-        model,
-    ])
+    let mut args = owned(&["exec", "-it", name, "--", "bash", "-lc", SCRIPT, "sbxw-thread"]);
+    args.extend([workspace, thread, prompt, model].map(pos));
+    args
 }
 
 /// Where a thread stands, read before closing it: what closing would throw
@@ -939,7 +944,7 @@ pub struct ThreadStatus {
 /// does not trust a click it did not see.
 ///
 /// Everything variable is positional, as in `thread_run_args`.
-const THREAD_END_SCRIPT: &str = concat!(no_repo_fn!(), r#"
+const THREAD_END_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
     [ -n "$1" ] && cd "$1" 2>/dev/null
     if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
         echo "error=$(sbxw_no_repo)"; exit 3
@@ -979,7 +984,7 @@ const THREAD_END_SCRIPT: &str = concat!(no_repo_fn!(), r#"
 /// in a thread's pane. Refuses rather than create the worktree: a shell is not
 /// how a thread is started. Positional arguments, as in `thread_run_args`.
 pub fn thread_bash_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
-    const SCRIPT: &str = concat!(no_repo_fn!(), r#"
+    const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
             printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"; exit 1
@@ -990,18 +995,9 @@ pub fn thread_bash_args(name: &str, workspace: &str, thread: &str) -> Vec<String
             exit 1
         fi
         cd "$wt" && exec bash -l"#);
-    owned(&[
-        "exec",
-        "-it",
-        name,
-        "--",
-        "bash",
-        "-lc",
-        SCRIPT,
-        "sbxw-thread-bash",
-        workspace,
-        thread,
-    ])
+    let mut args = owned(&["exec", "-it", name, "--", "bash", "-lc", SCRIPT, "sbxw-thread-bash"]);
+    args.extend([workspace, thread].map(pos));
+    args
 }
 
 /// Argv for `THREAD_END_SCRIPT`. `action` is `status` or `close`.
@@ -1013,7 +1009,7 @@ pub fn thread_end_args(
     discard: bool,
     delete_branch: bool,
 ) -> Vec<String> {
-    let flag = |b: bool| if b { "1" } else { "0" }.to_string();
+    let flag = |b: bool| if b { "1" } else { "0" };
     let mut args: Vec<String> = owned(&[
         "exec",
         name,
@@ -1023,13 +1019,7 @@ pub fn thread_end_args(
         THREAD_END_SCRIPT,
         "sbxw-thread-end",
     ]);
-    args.extend([
-        workspace.to_string(),
-        thread.to_string(),
-        action.to_string(),
-        flag(discard),
-        flag(delete_branch),
-    ]);
+    args.extend([workspace, thread, action, flag(discard), flag(delete_branch)].map(pos));
     args
 }
 
@@ -1104,7 +1094,7 @@ pub fn thread_close(
 ///
 /// Prints `key=value` lines like `THREAD_END_SCRIPT`: `commit=` on success,
 /// `error=` otherwise. Everything variable is positional.
-const THREAD_MERGE_SCRIPT: &str = concat!(no_repo_fn!(), r#"
+const THREAD_MERGE_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
     [ -n "$1" ] && cd "$1" 2>/dev/null
     if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
         echo "error=$(sbxw_no_repo)"; exit 3
@@ -1138,17 +1128,9 @@ const THREAD_MERGE_SCRIPT: &str = concat!(no_repo_fn!(), r#"
 
 /// Argv for `THREAD_MERGE_SCRIPT`.
 pub fn thread_merge_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
-    owned(&[
-        "exec",
-        name,
-        "--",
-        "bash",
-        "-lc",
-        THREAD_MERGE_SCRIPT,
-        "sbxw-thread-merge",
-        workspace,
-        thread,
-    ])
+    let mut args = owned(&["exec", name, "--", "bash", "-lc", THREAD_MERGE_SCRIPT, "sbxw-thread-merge"]);
+    args.extend([workspace, thread].map(pos));
+    args
 }
 
 /// Merge thread `thread`'s branch into its repo's checked-out branch, giving
@@ -3222,17 +3204,20 @@ local-policy                          local   all              network: 159 allo
             &args[7..],
             [
                 "sbxw-thread",
-                "/Users/me/my $(id) app",
-                "fix-login",
-                "/lead $(id)",
-                "claude-opus-5-5"
+                "=/Users/me/my $(id) app",
+                "=fix-login",
+                "=/lead $(id)",
+                "=claude-opus-5-5"
             ]
         );
         // The model, when given, on both the fresh and the resumed start.
         assert_eq!(script.matches(r#"${4:+--model "$4"}"#).count(), 2, "{script}");
         assert!(script.contains(r#"${4:+--model "$4"} --continue"#), "{script}");
-        // None given: an empty $4, so no flag at all.
-        assert_eq!(thread_run_args("neos", "", "t", "", "")[11], "");
+        // None given: an empty $4, so no flag at all — sent as a bare `=`,
+        // never as the empty element `sbx exec` refuses.
+        let bare = thread_run_args("neos", "", "t", "", "");
+        assert_eq!(&bare[8..], ["=", "=t", "=", "="]);
+        assert!(bare.iter().all(|a| !a.is_empty()), "{bare:?}");
         // The worktree and branch the README promises.
         assert!(script.contains(r#""$root/.sbxw-worktrees/$2""#), "{script}");
         assert!(script.contains(r#""sbxw/$2""#), "{script}");
@@ -3248,7 +3233,7 @@ local-policy                          local   all              network: 159 allo
         assert_eq!(&args[..5], ["exec", "neos", "--", "bash", "-lc"]);
         assert_eq!(
             &args[6..],
-            ["sbxw-thread-merge", "/Users/me/my $(id) app", "fix-login"]
+            ["sbxw-thread-merge", "=/Users/me/my $(id) app", "=fix-login"]
         );
         let script = &args[5];
         assert!(!script.contains("fix-login") && !script.contains("$(id)"), "{script}");
@@ -3269,13 +3254,28 @@ local-policy                          local   all              network: 159 allo
             &args[6..],
             [
                 "sbxw-thread-end",
-                "/w/$(id)",
-                "fix-login",
-                "close",
-                "1",
-                "0"
+                "=/w/$(id)",
+                "=fix-login",
+                "=close",
+                "=1",
+                "=0"
             ]
         );
+    }
+
+    /// The `=` each value travels behind comes off before the script reads
+    /// it: empty values stay empty, a value that itself starts with `=` keeps
+    /// it, and nothing in a value is evaluated.
+    #[test]
+    fn thread_script_arguments_arrive_unwrapped() {
+        let script = concat!(unwrap_args!(), r#"
+        printf '[%s]' "$#" "$@""#);
+        let out = std::process::Command::new("bash")
+            .args(["-c", script, "label"])
+            .args(["", "t", "=x", "$(id)", ""].map(pos))
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "[5][][t][=x][$(id)][]");
     }
 
     #[test]

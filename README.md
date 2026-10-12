@@ -229,7 +229,7 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   of a picture, or a flat refusal, are equally valid answers. See
   [Asking *you* for a screenshot](#asking-you-for-a-screenshot).
 - **View / add / remove port mappings** (⇌) per sandbox, including the host IP and alias.
-- **Run several agents in one sandbox** — **⑂ Thread** in a pane's mode switch
+- **Run several agents in one sandbox** — **⑂ Thread** on a pane's bar
   opens another Claude session beside the agent, in a git worktree and branch
   of its own. See [Threads](#threads-several-agents-in-one-sandbox).
 - **Browse the sandbox's files** — the **Files** tab of the **Project** panel
@@ -582,7 +582,7 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   thread: its agent, and a shell in its worktree. Claude and Lead belong to
   the main pane. The shell is not an agent and does not count against the
   ceiling.
-- **Open one:** **⑂ Thread** in the main pane's mode switch opens a dialog that asks
+- **Open one:** **⑂ Thread** on the main pane's bar, beside the mode switch, opens a dialog that asks
   for a name (lower-case letters, digits, hyphens) and offers the existing
   threads as chips, a green dot marking the open ones. The thread opens in the
   first empty pane, or in a new one while the window has room, so the agent
@@ -674,8 +674,8 @@ terminal, and its questions are answered in its pane.
 
 ## The lead: plan the threads, approve, follow
 
-Opening threads by hand means you do the splitting. **★ Lead** in the main
-pane's mode switch makes the sandbox's main session do it for you: sbxw types
+Opening threads by hand means you do the splitting. **★ Lead mode**, the On/Off
+toggle on the main pane's bar, makes the sandbox's main session do it for you: sbxw types
 `/lead` into it, and from then on it asks what you want done, reads the
 repository, and proposes a **plan**, a few threads each with a name, a goal and
 the files it owns. As the lead it **does not code**. It plans, follows the
@@ -696,8 +696,8 @@ conversation you already have, so it costs no extra session or worktree.
   thread's name, goal, scope and repo can be edited, threads removed or added, and
   the plan approved or refused. **Later** keeps it waiting; **Review plan** on
   the main pane brings it back. A refused plan is final.
-- **The lead pane says so.** From the click on ★ Lead, the main pane's chip
-  reads `★ lead` in violet, ★ Lead stays lit and the bar carries a violet
+- **The lead pane says so.** From the click on ★ Lead mode, the main pane's chip
+  reads `★ lead` in violet, the toggle reads On in violet and the bar carries a violet
   stripe. The daemon remembers which session was made lead
   (`GET /api/leads`), so a reload keeps the mark, and restarting that session,
   a new conversation that never read `/lead`, removes it. A plan pending or
@@ -725,7 +725,7 @@ conversation you already have, so it costs no extra session or worktree.
   lead's tools and a pending dialog come back with it. A plan whose threads
   are all done or failed is dropped a day after its last change.
 - **A model per thread.** A plan's thread may name a `model` (the lead picks
-  Opus for hard work, Haiku for mechanical work), editable in the dialog; it
+  Opus for hard work, Haiku for mechanical work), set by a Model select on every card, no Edit needed; it
   is recorded before the thread starts. Omitted, the thread runs on the
   sandbox default.
 - **One-click merge.** Once it has reviewed the threads, the lead calls
@@ -749,7 +749,7 @@ conversation you already have, so it costs no extra session or worktree.
   session: the main session gets `propose_plan`, `check_plan`, `plan_status`,
   `send_to_thread` and `propose_merge` (their descriptions say to use them only when leading);
   a thread gets `report_thread_status` and none of those. A session knows which
-  it is from `SBXW_THREAD`, which sbxw sets when it starts a thread. **★ Lead**
+  it is from `SBXW_THREAD`, which sbxw sets when it starts a thread. **★ Lead mode**
   installs `/lead` and refreshes the relay server first, so a sandbox created
   before plans existed needs no re-up. A main session already running keeps
   the server it started with: if `/lead` reports it has no `propose_plan`,
