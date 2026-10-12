@@ -92,6 +92,11 @@ pub(crate) struct PlanThread {
     /// The files or areas it owns, so two threads do not edit the same ones.
     #[serde(default)]
     pub scope: String,
+    /// The repo it works in, relative to the workspace (`''` is the workspace
+    /// itself) — needed when the workspace holds several. Checked against the
+    /// workspace by `web.rs`, which records it before the thread starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     #[serde(default)]
     pub state: ThreadState,
     /// Its latest report, or why it failed.
@@ -167,10 +172,15 @@ fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
         if goal.is_empty() {
             return Err(format!("thread {name:?} has no goal"));
         }
+        let repo = match t.repo.as_deref() {
+            Some(r) => Some(crate::repos::normalize(r).map_err(|e| format!("thread {name:?}: {e}"))?),
+            None => None,
+        };
         out.push(PlanThread {
             name,
             goal,
             scope: clip(&t.scope),
+            repo,
             state: ThreadState::Starting,
             summary: String::new(),
             updated_ms: 0,
@@ -493,6 +503,7 @@ mod tests {
             name: name.into(),
             goal: goal.into(),
             scope: String::new(),
+            repo: None,
             state: ThreadState::Working,
             summary: "ignored".into(),
             updated_ms: 0,
@@ -577,6 +588,33 @@ mod tests {
         again.set_thread("neos", "a", ThreadState::Done, "", false, 4).unwrap();
         assert_eq!(again.prune(10_000, 1), 1);
         assert!(!dir.join("neos.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_thread_names_its_repo_and_old_plans_without_one_still_load() {
+        let plans = Plans::new();
+        let mut a = t("a", "g");
+        a.repo = Some("../elsewhere".into());
+        assert!(plans.propose("neos", "", vec![a.clone()], 1).is_err());
+        a.repo = Some("./backend/".into());
+        let p = plans.propose("neos", "", vec![a, t("b", "g")], 1).unwrap();
+        assert_eq!(p.threads[0].repo.as_deref(), Some("backend"));
+        assert_eq!(p.threads[1].repo, None);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains(r#""repo":null"#), "absent, not null: {json}");
+
+        // Persisted before threads had a repo.
+        let old = r#"[{"id":"p-1","sandbox":"neos","summary":"s","state":"approved",
+            "created_ms":1,"updated_ms":2,
+            "threads":[{"name":"a","goal":"g","scope":"","state":"working","summary":"","updated_ms":2}]}]"#;
+        let dir = std::env::temp_dir().join(format!("sbxw-plans-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("neos.json"), old).unwrap();
+        let loaded = Plans::in_dir(Some(dir.clone())).owned("p-1", "neos").unwrap();
+        assert_eq!(loaded.threads[0].repo, None);
+        assert_eq!(loaded.threads[0].state, ThreadState::Working);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

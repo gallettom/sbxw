@@ -798,6 +798,26 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
     ])
 }
 
+/// Shell function `sbxw_no_repo`: why the current directory cannot hold a
+/// thread, with the repos found under it — a workspace is often a folder of
+/// repos (`backend/`, `frontend/`), and the fix is to pick one of them
+/// (`repo=` on the thread's socket, see `crate::repos`). One line, no colour:
+/// each script frames it its own way.
+macro_rules! no_repo_fn {
+    () => {
+        r#"
+        sbxw_no_repo() {
+            found=$(find . -maxdepth 3 -name .git -not -path '*/.sbxw-worktrees/*' -not -path '*/node_modules/*' 2>/dev/null \
+                | sed -e 's|^\./||' -e 's|/\.git$||' | sort | tr '\n' ' ')
+            if [ -n "$found" ]; then
+                printf '%s is not a git repository - pick a repo for this thread. Repos under it: %s' "$PWD" "${found% }"
+            else
+                printf '%s is not a git repository, and none was found under it: a thread needs one for its worktree.' "$PWD"
+            fi
+        }"#
+    };
+}
+
 /// Argv for a *thread*: a second Claude session in `name`, working in a git
 /// worktree of its own, `<repo>/.sbxw-worktrees/<thread>` on branch
 /// `sbxw/<thread>`.
@@ -832,10 +852,10 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
 /// validated (`crate::is_valid_thread_name`), and that is exactly why the
 /// property is easy to lose — nothing downstream would notice.
 pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) -> Vec<String> {
-    const SCRIPT: &str = r#"
+    const SCRIPT: &str = concat!(no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
-            printf '\033[31m[sbxw] %s is not a git repository: a thread needs one for its worktree.\033[0m\r\n' "$PWD"
+            printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"
             exit 1
         fi
         wt="$root/.sbxw-worktrees/$2"
@@ -862,7 +882,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) 
             printf '\033[2m[sbxw] resuming its last conversation\033[0m\r\n'
             exec claude --dangerously-skip-permissions --continue
         fi
-        exec claude --dangerously-skip-permissions ${3:+"$3"}"#;
+        exec claude --dangerously-skip-permissions ${3:+"$3"}"#);
     owned(&[
         "exec",
         "-it",
@@ -908,10 +928,10 @@ pub struct ThreadStatus {
 /// does not trust a click it did not see.
 ///
 /// Everything variable is positional, as in `thread_run_args`.
-const THREAD_END_SCRIPT: &str = r#"
+const THREAD_END_SCRIPT: &str = concat!(no_repo_fn!(), r#"
     [ -n "$1" ] && cd "$1" 2>/dev/null
     if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-        echo "error=$PWD is not a git repository"; exit 3
+        echo "error=$(sbxw_no_repo)"; exit 3
     fi
     root=$(dirname "$common")
     wt="$root/.sbxw-worktrees/$2"; br="sbxw/$2"
@@ -942,23 +962,23 @@ const THREAD_END_SCRIPT: &str = r#"
     if [ "$5" = 1 ] && [ "$has_branch" = 1 ]; then
         git -C "$root" branch -D "$br" >/dev/null || { echo "error=could not delete $br"; exit 6; }
     fi
-    echo ok=1"#;
+    echo ok=1"#);
 
 /// Argv for a shell in thread `thread`'s worktree — what the Bash button opens
 /// in a thread's pane. Refuses rather than create the worktree: a shell is not
 /// how a thread is started. Positional arguments, as in `thread_run_args`.
 pub fn thread_bash_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
-    const SCRIPT: &str = r#"
+    const SCRIPT: &str = concat!(no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
-            printf '\033[31m[sbxw] %s is not a git repository.\033[0m\r\n' "$PWD"; exit 1
+            printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"; exit 1
         fi
         wt="$(dirname "$common")/.sbxw-worktrees/$2"
         if [ ! -d "$wt" ]; then
             printf '\033[31m[sbxw] thread %s has no worktree (%s) - open the thread first.\033[0m\r\n' "$2" "$wt"
             exit 1
         fi
-        cd "$wt" && exec bash -l"#;
+        cd "$wt" && exec bash -l"#);
     owned(&[
         "exec",
         "-it",

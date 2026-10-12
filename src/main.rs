@@ -39,6 +39,7 @@ mod hosts;
 mod plans;
 mod progress;
 mod relay;
+mod repos;
 mod sandbox_fs;
 mod sbx;
 mod web;
@@ -1383,6 +1384,11 @@ pub(crate) fn workspace_for(name: &str) -> Option<PathBuf> {
     let raw = std::fs::read_to_string(workspace_record_path(name)).ok()?;
     let trimmed = raw.trim();
     (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+/// Where each sandbox's `thread → repo` choices are kept (see `repos`).
+pub(crate) fn thread_repos_dir() -> PathBuf {
+    state_dir().join("threads")
 }
 
 // ── Favourite workspace folders ──────────────────────────────────────────────
@@ -4077,7 +4083,11 @@ pub(crate) fn forget_sandbox_state(name: &str) {
             }
         }
     }
-    for file in [workspace_record_path(name), model_migrated_marker(name)] {
+    for file in [
+        workspace_record_path(name),
+        model_migrated_marker(name),
+        thread_repos_dir().join(format!("{name}.json")),
+    ] {
         let _ = std::fs::remove_file(file);
     }
 }

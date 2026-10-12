@@ -39,6 +39,12 @@ say so and propose one thread, or none.
 
 Names are short, lower-case, with hyphens: `api-auth`, `login-form`.
 
+Check which git repositories the workspace holds: it may be one repo, or a
+folder of several (`backend/`, `frontend/`), each with its own `.git`
+(`find . -maxdepth 3 -name .git -not -path '*/node_modules/*'`). A thread works
+in exactly one, and its branch and worktree live there. When there are several,
+give every thread a `repo`: the folder relative to the workspace (`backend`).
+
 ## 3. Propose it
 
 Call `propose_plan` (MCP server `sbxw-relay`) with a one-line summary and the
