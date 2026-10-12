@@ -110,19 +110,30 @@ forgotten.
    directory. If it already exists it's reused. Ports, kits, `skills` and
    `[env]` / `env_files` all go in here, because creation is the only moment sbx
    applies them whole. See [Environment variables](#environment-variables).
-2. **Network policy** — applies a restrictive local-dev egress allowlist via
+2. **Agent tooling** — once the sandbox reports `running`, one `sbx exec`
+   pipes a single Node script to `node -` that pre-trusts the workspace, installs
+   the artifacts and status hooks, the usage `statusLine` (yours is kept if you
+   set one), the cross-sandbox relay and its fenced `~/.claude/CLAUDE.md`
+   section, and drops a stale sbxw-written `model` key. `settings.json` and
+   `.claude.json` are *merged*, read and written once; each piece is
+   best-effort and warns on its own. A sandbox that is `stopped` (and that
+   nothing in the bring-up restarts) is not waited for — the tooling is
+   refreshed on the next `up` while it runs.
+3. **Network policy** — applies a restrictive local-dev egress allowlist via
    `sbx policy allow network "<list>"` (npm, pypi, packagist, github, docker
-   registries, `api.anthropic.com`). Not `**`. **Runs before kits** so a kit's
-   download commands have egress.
-3. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`.
+   registries, `api.anthropic.com`). Not `**`. sbxw's own rules —
+   `localhost:<port>` for the hooks to reach the daemon, `claude.ai` after an
+   in-place OAuth refresh — go in the same call. **Runs before kits** so a
+   kit's download commands have egress.
+4. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`.
    `kit add` **recreates the sandbox container** (state is preserved), so kits
    already listed by `sbx inspect` are skipped instead of
    blindly re-applied on every `up`. See [Kits](#kits).
-4. **Bidirectional code** — the workspace is the agent's Git working tree; edits
+5. **Bidirectional code** — the workspace is the agent's Git working tree; edits
    from the agent appear on the host instantly and vice-versa. **Only that
    directory is shared** — the sandbox is a microVM with its own filesystem,
    network and Docker daemon, so nothing else on your host is exposed.
-5. **Host aliases** — writes a delimited block in `/etc/hosts` (and, in
+6. **Host aliases** — writes a delimited block in `/etc/hosts` (and, in
    `ip_per_app` mode on macOS, `ifconfig lo0 alias` entries) so you reach apps at
    `http://neos.local:4200` etc. Privileged steps use `sudo` and prompt, so they
    run **before** the daemon detaches, in the terminal you typed `sbxw up` in —
@@ -137,7 +148,7 @@ forgotten.
    *osascript wants to make changes*), which is the one password prompt a
    process with no terminal can still put in front of you; dismissing it just
    leaves the alias parked.
-6. **Ports** — a *new* sandbox is created with the mappings already attached
+7. **Ports** — a *new* sandbox is created with the mappings already attached
    (`sbx create … -p …`), so they're live from first boot. For a reused one,
    sbxw waits until it reports `running` and then (re)publishes each mapping
    with `sbx ports <name> --publish …`. Ports are **not persistent** across a
@@ -148,7 +159,7 @@ forgotten.
    mappings and lets the per-port publishing take over, where a conflict is a
    warning naming that one port. Free the port (or change `host_port`) and run
    `sbxw ports <name>` to pick it up.
-7. **Web terminal** — backgrounds a daemon serving a browser TTY (xterm.js)
+8. **Web terminal** — backgrounds a daemon serving a browser TTY (xterm.js)
    bridged over a WebSocket to a PTY. Each sandbox has two independent sessions:
    the **Claude** agent (`sbx run`) and a **Bash** shell (`sbx exec -it … bash`),
    switchable from the UI.
@@ -156,7 +167,7 @@ forgotten.
 `sbxw up` prints the daemon pid + URL and detaches. Use `--tail` to follow its
 log, or `--no-web` to attach the agent in the current terminal instead.
 
-With `--no-web` the terminal belongs to the agent, so step 6's port publishing —
+With `--no-web` the terminal belongs to the agent, so step 7's port publishing —
 which by design finishes *after* `sbx run` has booted the sandbox — doesn't write
 to it. Its reports are held and printed when the agent exits. Otherwise they
 landed on top of the agent's full-screen UI, and in raw mode (no `ONLCR`) each
