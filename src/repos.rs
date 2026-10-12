@@ -284,17 +284,19 @@ pub(crate) fn validate(workspace: &Path, rel: &str) -> Result<String, String> {
         has_git(&real)
     };
     if !is_repo {
-        let found = scan(workspace);
-        let hint = if found.is_empty() {
-            "no repository was found under it".to_string()
-        } else {
-            format!("its repositories: {}", found.join(", "))
-        };
-        return Err(format!(
-            "{shown} is not a git repository - pick a repo for this thread ({hint})"
-        ));
+        return Err(pick_a_repo(shown, &scan(workspace)));
     }
     Ok(rel)
+}
+
+/// Why `what` cannot hold a thread, with the repos there are to pick from.
+fn pick_a_repo(what: &str, found: &[String]) -> String {
+    let hint = if found.is_empty() {
+        "no repository was found under it".to_string()
+    } else {
+        format!("its repositories: {}", found.join(", "))
+    };
+    format!("{what} is not a git repository - pick a repo for this thread ({hint})")
 }
 
 /// The top level of the repo `rel` names: where its `.sbxw-worktrees` is. For
@@ -375,8 +377,10 @@ pub(crate) fn record(
 }
 
 /// The repo a thread is to open in, given what was asked (`requested`) and
-/// what is known: its record, and where it already has a worktree. `None`
-/// keeps today's behaviour — the workspace, whatever repo holds it.
+/// what is known: its record, and where it already has a worktree. With none
+/// of those, the workspace when it is a repo (`''`, as before repos could be
+/// picked), else the one repo under it; with several, or none, nothing can be
+/// guessed and the person is asked to pick.
 ///
 /// A different repo for a thread that already has a worktree is refused: its
 /// branch, its uncommitted work and its conversation are all in the old one.
@@ -385,7 +389,7 @@ pub(crate) fn choose(
     recorded: Option<&str>,
     thread: &str,
     requested: Option<&str>,
-) -> Result<Option<String>, String> {
+) -> Result<String, String> {
     let has_worktree = |rel: &str| {
         repo_root(workspace, rel).is_some_and(|r| r.join(".sbxw-worktrees").join(thread).is_dir())
     };
@@ -405,9 +409,15 @@ pub(crate) fn choose(
             shown(&have),
             shown(&want)
         )),
-        (Some(want), _) => Ok(Some(want)),
-        (None, Some(have)) => Ok(Some(have)),
-        (None, None) => Ok(recorded.map(str::to_string)),
+        (Some(want), _) => Ok(want),
+        (None, Some(have)) => Ok(have),
+        (None, None) => match recorded {
+            Some(r) => Ok(r.to_string()),
+            None => match scan(workspace).as_slice() {
+                [only] => Ok(only.clone()),
+                found => Err(pick_a_repo("the workspace", found)),
+            },
+        },
     }
 }
 
@@ -580,35 +590,41 @@ mod tests {
         let ws = temp("choose");
         mkrepo(&ws.join("backend"));
         mkrepo(&ws.join("frontend"));
-        assert_eq!(
-            choose(&ws, None, "api", Some("backend"))
-                .unwrap()
-                .as_deref(),
-            Some("backend")
+        let pick = |rec: Option<&str>, t: &str, req: Option<&str>| choose(&ws, rec, t, req);
+        assert_eq!(pick(None, "api", Some("backend")).unwrap(), "backend");
+        // Several repos and nothing asked: the person picks.
+        let e = pick(None, "api", None).unwrap_err();
+        assert!(
+            e.contains("pick a repo for this thread") && e.contains("backend, frontend"),
+            "{e}"
         );
-        assert_eq!(choose(&ws, None, "api", None).unwrap(), None);
         std::fs::create_dir_all(ws.join("backend/.sbxw-worktrees/api")).unwrap();
         // Found without a record, kept without a request, refused elsewhere.
-        assert_eq!(
-            choose(&ws, None, "api", None).unwrap().as_deref(),
-            Some("backend")
-        );
-        assert_eq!(
-            choose(&ws, Some("backend"), "api", None)
-                .unwrap()
-                .as_deref(),
-            Some("backend")
-        );
-        let e = choose(&ws, Some("backend"), "api", Some("frontend")).unwrap_err();
+        assert_eq!(pick(None, "api", None).unwrap(), "backend");
+        assert_eq!(pick(Some("backend"), "api", None).unwrap(), "backend");
+        let e = pick(Some("backend"), "api", Some("frontend")).unwrap_err();
         assert!(e.contains("already has a worktree"), "{e}");
         // No worktree yet: the record can still change.
         assert_eq!(
-            choose(&ws, Some("frontend"), "ui", Some("backend"))
-                .unwrap()
-                .as_deref(),
-            Some("backend")
+            pick(Some("frontend"), "ui", Some("backend")).unwrap(),
+            "backend"
         );
         let _ = std::fs::remove_dir_all(&ws);
+
+        // Nothing recorded or asked: the workspace when it is a repo, else
+        // the one repo under it, else nothing to guess from.
+        let one = temp("choose-one");
+        mkrepo(&one.join("only"));
+        assert_eq!(choose(&one, None, "t", None).unwrap(), "only");
+        assert_eq!(choose(&one.join("only"), None, "t", None).unwrap(), "");
+        let none = temp("choose-none");
+        let e = choose(&none, None, "t", None).unwrap_err();
+        assert!(
+            e.contains("pick a repo") && e.contains("no repository"),
+            "{e}"
+        );
+        let _ = std::fs::remove_dir_all(&one);
+        let _ = std::fs::remove_dir_all(&none);
         let _ = std::fs::remove_dir_all(state.parent().unwrap());
     }
 }

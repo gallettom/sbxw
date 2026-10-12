@@ -599,7 +599,9 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   and is remembered in `~/.sbxw/state/threads/<sandbox>.json`; later opens,
   its Bash and **Close thread** use it. A thread whose worktree is in one repo
   cannot be reopened in another: close it first. A thread opened without a
-  repo in a workspace that is none fails with the list of repos found in it.
+  repo, and with none recorded, takes the workspace when it is a repo, else
+  the one repo under it; with several or none it is refused with the list of
+  repos found, asking you to pick one.
 - **Reopened, it picks up where it was.** A thread whose session ended (the
   daemon or the sandbox restarted, which ends every session sbxw held) resumes
   its last conversation with `claude --continue` when its pane reopens. Only a

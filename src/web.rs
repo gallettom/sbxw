@@ -2826,58 +2826,54 @@ async fn api_repos(Path(name): Path<String>) -> Json<serde_json::Value> {
     }
 }
 
-/// Which repo `thread` opens in, settled and recorded before its session
-/// starts: `requested` (the socket's `repo=`, or an approved plan's) on its
-/// first open, its record after that. Refused, with the reason, when it asks
-/// for another repo than the one its worktree is in, or for one that is not a
-/// repo under the workspace. No workspace and nothing asked keeps today's
-/// behaviour.
-fn settle_thread_repo(sandbox: &str, thread: &str, requested: Option<&str>) -> Result<(), String> {
+/// Which repo `thread` works in, settled and recorded, as the directory its
+/// scripts start in (`<workspace>/<repo>`, mounted at the same path in the
+/// sandbox). `requested` (the socket's `repo=`, or an approved plan's) wins
+/// on a thread's first open; after that its record does. With neither,
+/// `repos::choose` resolves it: the workspace if it is a repo, else the one
+/// repo under it — or refuses, asking to pick one. Refused too, with the
+/// reason, for another repo than the one its worktree is in.
+///
+/// Every thread path goes through here (its session, its Bash, status and
+/// close), so they cannot disagree about where its worktree is. No workspace
+/// recorded (a sandbox sbxw did not create) gives `''`: the script stays where
+/// `sbx exec` starts, which is the workspace too.
+fn settle_thread_repo(sandbox: &str, thread: &str, requested: Option<&str>) -> Result<String, String> {
     let Some(ws) = crate::workspace_for(sandbox) else {
         return match requested {
-            Some(_) => Err(format!("sbxw has no workspace recorded for '{sandbox}', so it cannot pick a repo in it")),
-            None => Ok(()),
+            Some(_) => Err(format!(
+                "sbxw has no workspace recorded for '{sandbox}', so it cannot pick a repo in it"
+            )),
+            None => Ok(String::new()),
         };
     };
     let dir = crate::thread_repos_dir();
     let recorded = crate::repos::recorded(&dir, sandbox, thread);
     let chosen = crate::repos::choose(&ws, recorded.as_deref(), thread, requested)?;
-    if chosen != recorded {
-        if let Some(repo) = &chosen {
-            crate::repos::record(&dir, sandbox, thread, Some(repo))
-                .map_err(|e| format!("could not record the repo of thread {thread}: {e}"))?;
-        }
+    if recorded.as_deref() != Some(chosen.as_str()) {
+        crate::repos::record(&dir, sandbox, thread, Some(&chosen))
+            .map_err(|e| format!("could not record the repo of thread {thread}: {e}"))?;
     }
-    Ok(())
+    Ok(crate::repos::thread_dir(&ws, &chosen).to_string_lossy().into_owned())
 }
 
-/// The directory `thread`'s scripts start in, as an argument to `sbx`:
-/// `<workspace>/<repo>` once it has a repo, else `workspace_arg`.
-fn thread_dir_arg(sandbox: &str, thread: &str) -> String {
-    match (
-        crate::workspace_for(sandbox),
-        crate::repos::recorded(&crate::thread_repos_dir(), sandbox, thread),
-    ) {
-        (Some(ws), Some(repo)) => crate::repos::thread_dir(&ws, &repo).to_string_lossy().into_owned(),
-        _ => workspace_arg(sandbox),
-    }
-}
-
-/// The repos the threads of a plan ask for, checked against the workspace as
-/// `settle_thread_repo` will: refused before anything is recorded or started.
+/// The repo of every thread of a plan, resolved as `settle_thread_repo` will
+/// but without recording anything: a plan whose threads could not start is
+/// refused before anything is recorded or started.
 fn check_plan_repos(sandbox: &str, threads: &[crate::plans::PlanThread]) -> Result<(), String> {
-    let asked: Vec<_> = threads.iter().filter_map(|t| Some((t, t.repo.as_deref()?))).collect();
-    if asked.is_empty() {
-        return Ok(());
-    }
     let Some(ws) = crate::workspace_for(sandbox) else {
-        return Err(format!("sbxw has no workspace recorded for '{sandbox}', so threads cannot name a repo"));
+        return match threads.iter().any(|t| t.repo.is_some()) {
+            true => Err(format!(
+                "sbxw has no workspace recorded for '{sandbox}', so threads cannot name a repo"
+            )),
+            false => Ok(()),
+        };
     };
     let dir = crate::thread_repos_dir();
-    for (t, repo) in asked {
+    for t in threads {
         let name = t.name.trim();
         let recorded = crate::repos::recorded(&dir, sandbox, name);
-        crate::repos::choose(&ws, recorded.as_deref(), name, Some(repo))
+        crate::repos::choose(&ws, recorded.as_deref(), name, t.repo.as_deref())
             .map_err(|e| format!("thread {name:?}: {e}"))?;
     }
     Ok(())
@@ -2895,21 +2891,17 @@ fn workspace_string(name: &str) -> Option<String> {
     crate::workspace_for(name).map(|p| p.to_string_lossy().into_owned())
 }
 
-/// `workspace_string` for an argument to `sbx`: empty when none is recorded,
-/// which leaves the script where `sbx exec` starts — the workspace too.
-fn workspace_arg(name: &str) -> String {
-    workspace_string(name).unwrap_or_default()
-}
-
 /// `GET /api/sandboxes/:name/threads/:thread` — what closing it would lose:
 /// uncommitted files, and commits its branch has that the base does not.
 async fn api_thread_status(Path((name, thread)): Path<(String, String)>) -> Json<serde_json::Value> {
     if let Some(bad) = reject_invalid_thread(&name, &thread) {
         return bad;
     }
-    let dir = thread_dir_arg(&name, &thread);
     blocking(
-        move || sbx::thread_status(&name, &dir, &thread),
+        move || {
+            let dir = settle_thread_repo(&name, &thread, None).map_err(anyhow::Error::msg)?;
+            sbx::thread_status(&name, &dir, &thread)
+        },
         |st| ok_json_with(serde_json::json!({ "status": st })),
     )
     .await
@@ -2936,11 +2928,11 @@ async fn api_thread_close(
     if let Some(bad) = reject_invalid_thread(&name, &thread) {
         return bad;
     }
-    let dir = thread_dir_arg(&name, &thread);
     let key = session_key(&name, &thread_mode(&thread));
     let bash_key = session_key(&name, &thread_bash_mode(&thread));
     let (sandbox, closed) = (name.clone(), thread.clone());
     let res = blocking_ok(move || {
+        let dir = settle_thread_repo(&name, &thread, None).map_err(anyhow::Error::msg)?;
         sbx::thread_close(&name, &dir, &thread, body.discard, body.delete_branch)
     })
     .await;
@@ -3335,10 +3327,8 @@ async fn api_plan_approve(
     // Each thread's repo is recorded before its session starts, so the launch
     // below — or its pane, whichever opens it first — finds it there.
     for t in &plan.threads {
-        if let Some(repo) = &t.repo {
-            if let Err(e) = settle_thread_repo(&sandbox, &t.name, Some(repo)) {
-                tracing::warn!("plans: thread '{}' of '{sandbox}': {e}", t.name);
-            }
+        if let Err(e) = settle_thread_repo(&sandbox, &t.name, t.repo.as_deref()) {
+            tracing::warn!("plans: thread '{}' of '{sandbox}': {e}", t.name);
         }
     }
 
@@ -5734,7 +5724,7 @@ fn get_or_create_session(
 
     if let Some(thread) = mode.strip_prefix(THREAD_BASH_PREFIX) {
         ensure_running_for_thread(sandbox, cfg, sessions)?;
-        let dir = thread_dir_arg(sandbox, thread);
+        let dir = settle_thread_repo(sandbox, thread, None).map_err(anyhow::Error::msg)?;
         let mut c = CommandBuilder::new("sbx");
         c.args(crate::sbx::thread_bash_args(sandbox, &dir, thread));
         return spawn_pty_session(c, key, sessions);
@@ -5754,11 +5744,7 @@ fn get_or_create_session(
                 if open == 1 { "" } else { "s" }
             );
         }
-        // The workspace is mounted at the same path inside the sandbox, so the
-        // thread's repo is `<workspace>/<repo>` there too. An unrecorded
-        // workspace (a sandbox sbxw did not create) leaves the script where
-        // `sbx exec` starts, which is the workspace too.
-        let dir = thread_dir_arg(sandbox, thread);
+        let dir = settle_thread_repo(sandbox, thread, None).map_err(anyhow::Error::msg)?;
         // A thread of an approved plan starts on its briefing, whoever
         // happens to open it first — the launch or its pane.
         let prompt = THREAD_PROMPTS.lock().unwrap().remove(&key).unwrap_or_default();
@@ -5967,8 +5953,10 @@ async fn bridge(
         let cfg = cfg.clone();
         let sessions = sessions.clone();
         move || {
-            if let Some(thread) = thread_of(&mode) {
-                settle_thread_repo(&sandbox, thread, repo.as_deref()).map_err(anyhow::Error::msg)?;
+            // The repo asked for is settled first; `get_or_create_session`
+            // then finds it recorded.
+            if let (Some(thread), Some(repo)) = (thread_of(&mode), repo.as_deref()) {
+                settle_thread_repo(&sandbox, thread, Some(repo)).map_err(anyhow::Error::msg)?;
             }
             get_or_create_session(&sandbox, &mode, &cfg, &sessions)
         }
