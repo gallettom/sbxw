@@ -288,6 +288,8 @@ function ingestSession(info, seed = false) {
   const key = thread ? `${info.sandbox}::thread:${thread}` : `${info.sandbox}::${mode}`;
   const prev = agentStates.get(key);
   if (info.state === 'exited') agentStates.delete(key);
+  // A main session that ended takes its lead role with it.
+  if (info.state === 'exited' && !thread && typeof refreshLeads === 'function') refreshLeads();
   else agentStates.set(key, info.state);
   // "Finished thinking" is a transition, not a state — `idle` is also where a
   // session sits between prompts, and that is not news.

@@ -36,6 +36,7 @@ mod codemap;
 mod config;
 mod envfile;
 mod hosts;
+mod plans;
 mod progress;
 mod relay;
 mod sandbox_fs;

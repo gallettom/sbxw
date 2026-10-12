@@ -151,6 +151,8 @@ function createPane(index) {
               title="Project — this sandbox's code map and the deliverables under .sbxw-artifacts/">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
+      <button class="pane-btn pane-plan-btn" id="pplan-${index}" hidden
+              title="This lead's plan is waiting for you">Review plan</button>
       <button class="pane-btn pane-thread-close" id="pthreadclose-${index}" hidden
               title="Close this thread — stop it, remove its worktree, and its branch">Close thread</button>
       <span class="spacer"></span>
@@ -164,6 +166,7 @@ function createPane(index) {
         <button class="mode-btn active" data-mode="claude" title="Claude" aria-label="Claude">✦<span class="mode-word"> Claude</span></button>
         <button class="mode-btn" data-mode="bash" title="Bash" aria-label="Bash">❯<span class="mode-word"> Bash</span></button>
         <button class="mode-btn" data-mode="thread" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own" aria-label="Thread">⑂<span class="mode-word"> Thread</span></button>
+        <button class="mode-btn" data-mode="lead" title="Lead — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself" aria-label="Lead">★<span class="mode-word"> Lead</span></button>
       </div>
       <button class="pane-close-btn" id="pclose-${index}" title="Close pane" style="display:none">✕</button>
     </div>
@@ -195,17 +198,28 @@ function createPane(index) {
   el.addEventListener('mousedown', () => setFocusedPane(index));
 
   // Mode buttons
-  const [claudeBtn, bashBtn, threadBtn] = el.querySelectorAll('.mode-btn');
+  // A main pane offers Claude, Bash, Thread and Lead. A thread's pane offers
+  // only Thread and Bash, both about *that* thread: its agent, and a shell in
+  // its worktree — see applyPaneChrome.
+  const [claudeBtn, bashBtn, threadBtn, leadBtn] = el.querySelectorAll('.mode-btn');
   claudeBtn.addEventListener('click', () => {
     if (pane.mode !== 'claude' && pane.sandbox) connectPane(index, pane.sandbox, 'claude');
     else setPaneMode(index, 'claude');
   });
   bashBtn.addEventListener('click', () => {
-    if (pane.mode !== 'bash' && pane.sandbox) connectPane(index, pane.sandbox, 'bash');
+    if (pane.mode !== 'bash' && pane.sandbox) connectPane(index, pane.sandbox, 'bash', pane.thread);
     else setPaneMode(index, 'bash');
   });
   threadBtn.addEventListener('click', () => {
-    if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX) openThread(index);
+    if (!pane.sandbox || pane.sandbox === MONITOR_SANDBOX) return;
+    if (pane.thread) { if (pane.mode !== 'thread') connectPane(index, pane.sandbox, 'thread', pane.thread); }
+    else openThread(index);
+  });
+  leadBtn.addEventListener('click', () => {
+    if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX && !pane.thread) startLead(index);
+  });
+  document.getElementById(`pplan-${index}`).addEventListener('click', () => {
+    if (pane.sandbox && typeof openPendingPlan === 'function') openPendingPlan(pane.sandbox);
   });
 
   document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
@@ -514,12 +528,13 @@ function paneModeFor(name, requested, current) {
   return current === 'monitor' || current === 'thread' ? 'claude' : current;
 }
 
-// Which session a pane holds, as one comparable string. A sandbox's agent and
-// its shell are one slot — showing both in two panes was never offered — while
-// each thread is a session of its own, so it can sit beside the agent.
+// Which slot a pane holds, as one comparable string. A sandbox's agent and
+// its shell are one slot — showing both in two panes was never offered — and
+// so are a thread's agent and the shell in its worktree, while each thread is
+// a slot of its own beside the agent.
 function sessionIdentity(sandbox, mode, thread) {
   if (!sandbox) return null;
-  return mode === 'thread' ? `${sandbox}::thread:${thread}` : `${sandbox}::main`;
+  return thread ? `${sandbox}::thread:${thread}` : `${sandbox}::main`;
 }
 
 // The pane bar as it depends on *what* a pane holds rather than on which
@@ -535,7 +550,7 @@ function applyPaneChrome(idx, name) {
   const label = document.getElementById(`plabel-${idx}`);
   // The command is the tooltip, not the label: `monitor_cmd` is bare `sbx`,
   // which as a pane title says nothing about what the pane is.
-  const thread = panes[idx].mode === 'thread' ? panes[idx].thread : null;
+  const thread = panes[idx].thread;
   // The thread's name is its role chip, painted by paintGroups().
   label.textContent = monitor ? 'monitor' : (name || '—');
   label.title = monitor ? `host monitor — ${MONITOR_CMD}`
@@ -545,7 +560,11 @@ function applyPaneChrome(idx, name) {
   // The monitor runs on the host and has no workspace, so it has no project
   // either — the same reason SSH and Env go dark on it.
   document.getElementById(`pfiles-${idx}`).disabled = !name || monitor;
-  panes[idx].el.querySelectorAll('.mode-btn').forEach(b => { b.hidden = monitor; });
+  // A thread's pane is about that thread: Claude would be the main agent, and
+  // Lead is something only the main session becomes.
+  panes[idx].el.querySelectorAll('.mode-btn').forEach(b => {
+    b.hidden = monitor || (!!thread && (b.dataset.mode === 'claude' || b.dataset.mode === 'lead'));
+  });
   document.getElementById(`pthreadclose-${idx}`).hidden = !(name && thread);
 }
 
@@ -586,7 +605,8 @@ function connectPane(idx, name, mode, thread) {
   const pane = panes[idx];
   const nextMode = paneModeFor(name, mode, pane.mode);
   // Reconnect and ↻ pass the mode alone; the thread is the one already here.
-  const nextThread = nextMode === 'thread'
+  // Bash keeps it too: a thread's Bash is a shell in its worktree.
+  const nextThread = nextMode === 'thread' || nextMode === 'bash'
     ? (thread || (name === pane.sandbox ? pane.thread : null))
     : null;
   if (nextMode === 'thread' && !nextThread) return;
@@ -844,6 +864,29 @@ document.addEventListener('keydown', e => {
   if (!closeOverlay.classList.contains('hidden')) closeCloseModal();
 });
 
+// ── Lead ──────────────────────────────────────────────────────────────────
+// Lead makes the sandbox's main session its lead: sbxw installs `/lead` and
+// the plan tools, then types `/lead` into the agent. The pane is switched to
+// that agent first, so you see it start.
+async function startLead(idx) {
+  const pane = panes[idx];
+  const sandbox = pane?.sandbox;
+  if (!sandbox || pane.thread) return;
+  if (pane.mode !== 'claude') connectPane(idx, sandbox, 'claude');
+  const btn = pane.el.querySelector('.mode-btn[data-mode="lead"]');
+  btn.disabled = true;
+  if (typeof markLeading === 'function') markLeading(sandbox);
+  let res;
+  try {
+    res = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/lead`, { method: 'POST' })).json();
+  } catch (e) {
+    res = { ok: false, error: e.message };
+  }
+  btn.disabled = false;
+  if (!res.ok && typeof refreshLeads === 'function') refreshLeads();
+  if (!res.ok) pane.term.write(`\r\n\x1b[31m[sbxw] Lead: ${res.error}\x1b[0m\r\n`);
+}
+
 // ── Groups ────────────────────────────────────────────────────────────────
 // A sandbox shown in more than one pane — its agent and its threads — is one
 // piece of work, so its panes sit side by side and share a thin outline. The
@@ -863,7 +906,7 @@ function regroupPanes() {
   const first = new Map();
   now.forEach((d, i) => { if (d.sandbox && !first.has(d.sandbox)) first.set(d.sandbox, i); });
   const want = now
-    .map((d, i) => ({ d, i, k: d.sandbox ? first.get(d.sandbox) : Infinity, sub: d.mode === 'thread' ? 1 : 0 }))
+    .map((d, i) => ({ d, i, k: d.sandbox ? first.get(d.sandbox) : Infinity, sub: d.thread ? 1 : 0 }))
     .sort((a, b) => a.k - b.k || a.sub - b.sub || a.i - b.i)
     .map(x => x.d);
   const same = (a, b) => a.sandbox === b.sandbox && a.mode === b.mode && a.thread === b.thread;
@@ -881,7 +924,11 @@ function schedulePaintGroups() {
 }
 window.addEventListener('resize', schedulePaintGroups);
 
+// How a thread's reported state reads on its chip.
+const PLAN_STATE_MARK = { starting: '…', working: '●', blocked: '?', done: '✓', failed: '✕' };
+
 function paintGroups() {
+  if (typeof refreshPlanButtons === 'function') refreshPlanButtons();
   const vis = panes.slice(0, paneCount);
   const count = new Map();
   vis.forEach(p => {
@@ -900,10 +947,21 @@ function paintGroups() {
     // A thread always names itself; the agent says "main" only when it has a
     // thread on screen to be told apart from.
     const chip = document.getElementById(`prole-${i}`);
-    const thread = p.sandbox && p.mode === 'thread' ? p.thread : null;
-    chip.textContent = thread ? `⑂ ${thread}` : 'main';
+    const thread = p.sandbox ? p.thread : null;
+    // Where a thread of an approved plan stands, from its own reports; and
+    // whether the main session is leading a plan right now.
+    const st = thread && typeof planThreadState === 'function' ? planThreadState(p.sandbox, thread) : null;
+    const leading = !thread && p.sandbox && typeof isLeading === 'function' && isLeading(p.sandbox);
+    chip.textContent = thread ? `⑂ ${thread}${st ? ` ${PLAN_STATE_MARK[st.state] || ''}` : ''}`
+      : leading ? '★ lead' : 'main';
+    chip.classList.toggle('lead', !!leading);
+    // The whole pane says it, not only the chip: ★ Lead lit, and the bar
+    // marked, for as long as this session is the lead.
+    p.el.classList.toggle('leading', !!leading && i < paneCount);
+    p.el.querySelector('.mode-btn[data-mode="lead"]')?.classList.toggle('active', !!leading);
+    chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
-    chip.hidden = !(i < paneCount && p.sandbox && (thread || color));
+    chip.hidden = !(i < paneCount && p.sandbox && (thread || color || leading));
     if (!color) { p.el.style.removeProperty('--group-color'); return; }
     p.el.style.setProperty('--group-color', color);
     p.el.classList.add('grouped');

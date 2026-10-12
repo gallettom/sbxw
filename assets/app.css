@@ -623,6 +623,31 @@
   .thread-check input { margin-top: .15rem; }
   .thread-check.danger { color: var(--c-red); }
   .thread-check[hidden] { display: none; }
+  /* ── Plan dialog ── */
+  .plan-modal { width: 640px; }
+  .plan-summary { margin: 0; color: var(--c-text-bright); font-size: 13px; }
+  .plan-threads { display: flex; flex-direction: column; gap: .6rem; }
+  .plan-thread {
+    display: grid; grid-template-columns: 1fr auto; gap: .35rem .5rem;
+    padding: .6rem; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg);
+  }
+  .plan-thread .field-input { width: 100%; box-sizing: border-box; }
+  .plan-thread textarea.field-input { min-height: 4.2em; resize: vertical; font: inherit; font-size: 12px; }
+  .plan-label {
+    grid-column: 1 / -1; display: flex; flex-direction: column; gap: .2rem;
+    color: var(--c-text-muted); font-size: 11px;
+  }
+  .plan-thread .plan-name { font-weight: 600; }
+  .plan-remove {
+    background: none; border: 1px solid var(--c-border); color: var(--c-text-muted);
+    border-radius: 6px; padding: 0 .55rem; cursor: pointer; font: inherit;
+  }
+  .plan-remove:hover { color: var(--c-red); border-color: var(--c-red); }
+  .plan-add { align-self: flex-start; }
+  /* A lead's pane bar: its plan waiting on you. Amber, the colour of "needs
+     you" everywhere else in the UI. */
+  .pane-bar .pane-plan-btn { color: var(--c-amber); border-color: var(--c-amber); }
+  .pane-bar .pane-plan-btn[hidden] { display: none; }
   .sbx-item {
     padding: .45rem .75rem;
     margin-top: 0.45rem;
@@ -1011,6 +1036,14 @@
     color: color-mix(in oklab, var(--group-color, var(--c-text)) 70%, var(--c-white));
   }
   .pane-bar .role-chip[hidden] { display: none; }
+  /* The main session made lead. Violet, the colour ★ Lead lights up in: the
+     chip says "★ lead" filled, and the bar carries a stripe on its left edge,
+     so the pane reads as the lead from across the grid, grouped or not. */
+  .pane-bar .role-chip.lead {
+    background: var(--c-purple-alt); border-color: var(--c-purple-alt); color: var(--c-bg);
+  }
+  .pane.leading .pane-bar { box-shadow: inset 4px 0 0 var(--c-purple-alt); }
+  .pane-bar .mode-switch button[data-mode="lead"].active { color: var(--c-purple-alt); }
   .pane-bar .pane-thread-close[hidden] { display: none; }
   .pane-bar {
     display: flex; align-items: center; gap: .5rem;
@@ -1161,9 +1194,10 @@
     .pane-bar .conn-label { display: none; }
   }
   @container pane (max-width: 500px) {
-    /* ✦, ❯ and ⑂ are the modes' own marks, and the active one keeps its
-       colour — purple for Claude, green for Bash, blue for a thread — so the
-       switch still reads at a glance without spelling any of them out. */
+    /* ✦, ❯, ⑂ and ★ are the modes' own marks, and the lit one keeps its
+       colour — purple for Claude, green for Bash, blue for a thread, violet
+       for a session that is the lead — so the switch still reads at a glance
+       without spelling any of them out. */
     .pane-bar .mode-switch .mode-word,
     .pane-bar .files-word { display: none; }
     .pane-bar .mode-switch button { padding: .2rem .45rem; }

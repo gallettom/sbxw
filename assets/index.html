@@ -342,6 +342,31 @@
     </div>
   </div>
 
+  <!-- ── Approve a plan ──
+       A lead session's proposal: threads to run in parallel, each with a goal
+       and the files it owns. Everything is editable before it starts, and
+       nothing starts until Approve. Filled by /js/plans.js. -->
+  <div class="modal-overlay hidden" id="plan-overlay">
+    <div class="modal plan-modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
+      <div class="modal-head">
+        <span class="modal-title" id="plan-title">Plan</span>
+        <button class="modal-close" id="plan-x" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="plan-summary" id="plan-summary"></p>
+        <div class="plan-threads" id="plan-threads"></div>
+        <button class="btn-add-port plan-add" id="plan-add" type="button">＋ Add thread</button>
+      </div>
+      <div class="modal-foot">
+        <span class="thread-count" id="plan-count"></span>
+        <span class="create-error hidden" id="plan-error"></span>
+        <button class="btn-cancel" id="plan-refuse">Refuse</button>
+        <button class="btn-cancel" id="plan-later">Later</button>
+        <button class="btn-create" id="plan-approve">Approve and start</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── SSH connection details ──
        What to type into an SSH client's "add a connection" form (Claude
        Desktop's is the one this is shaped after), plus the one-liner for a

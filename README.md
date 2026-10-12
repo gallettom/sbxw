@@ -567,7 +567,11 @@ nobody can review. Each thread therefore gets a **git worktree** and a
 <repo>/.sbxw-worktrees/<thread>   on branch   sbxw/<thread>
 ```
 
-- **Open one:** **⑂ Thread** in the pane's mode switch opens a dialog that asks
+- **A thread's pane** shows only **⑂ Thread** and **❯ Bash**, both about that
+  thread: its agent, and a shell in its worktree. Claude and Lead belong to
+  the main pane. The shell is not an agent and does not count against the
+  ceiling.
+- **Open one:** **⑂ Thread** in the main pane's mode switch opens a dialog that asks
   for a name (lower-case letters, digits, hyphens) and offers the existing
   threads as chips, a green dot marking the open ones. The thread opens in the
   first empty pane, or in a new one while the window has room, so the agent
@@ -619,6 +623,74 @@ nobody can review. Each thread therefore gets a **git worktree** and a
 The island answers prompts for the agent only. A thread runs in its worktree
 rather than in the recorded workspace, so it is classified as not sbxw's own
 terminal, and its questions are answered in its pane.
+
+## The lead: plan the threads, approve, follow
+
+Opening threads by hand means you do the splitting. **★ Lead** in the main
+pane's mode switch makes the sandbox's main session do it for you: sbxw types
+`/lead` into it, and from then on it asks what you want done, reads the
+repository, and proposes a **plan**, a few threads each with a name, a goal and
+the files it owns. As the lead it **does not code**. It plans, follows the
+threads, reviews their branches, and hands the merges to you. The lead is the
+conversation you already have, so it costs no extra session or worktree.
+
+```
+★ lead ──propose_plan──▶ sbxw ──▶ 🧑 plan dialog (edit, approve)
+                                        │
+                     ┌──────────────────┼──────────────────┐
+                     ▼                  ▼                  ▼
+               ⑂ api-auth         ⑂ login-form          (…)
+                     │ report_thread_status: working / blocked / done
+                     └──────────────▶ sbxw ──▶ [sbxw] note typed to the lead
+```
+
+- **Nothing starts without you.** The plan opens a dialog in the web UI. Every
+  thread's name, goal and scope can be edited, threads removed or added, and
+  the plan approved or refused. **Later** keeps it waiting; **Review plan** on
+  the main pane brings it back. A refused plan is final.
+- **The lead pane says so.** From the click on ★ Lead, the main pane's chip
+  reads `★ lead` in violet, ★ Lead stays lit and the bar carries a violet
+  stripe. The daemon remembers which session was made lead
+  (`GET /api/leads`), so a reload keeps the mark, and restarting that session,
+  a new conversation that never read `/lead`, removes it. A plan pending or
+  with threads at work keeps the mark too.
+- **Approving starts it.** sbxw opens each thread's session in its worktree,
+  with a briefing as its first message: its goal, its scope, and the rules
+  (commit on your branch, never merge or push, report your state). The
+  briefing is passed to `claude` as its start prompt, not typed into a session
+  still booting. The window opens a pane per thread while it has room.
+  Approval is refused, with the reason, if the threads would not fit under
+  `max_agent_sessions`.
+- **Threads report, the lead hears.** A thread calls `report_thread_status`.
+  Its chip shows the state: `…` starting, `●` working, `?` blocked, `✓` done,
+  `✕` failed. Hover for the report. When a thread is blocked or done, a note
+  quoting its report is typed into the main session. The lead answers with
+  `send_to_thread`, or asks you.
+- **The tools** come from the `sbxw-relay` MCP server and depend on the
+  session: the main session gets `propose_plan`, `check_plan`, `plan_status`
+  and `send_to_thread` (their descriptions say to use them only when leading);
+  a thread gets `report_thread_status` and none of those. A session knows which
+  it is from `SBXW_THREAD`, which sbxw sets when it starts a thread. **★ Lead**
+  installs `/lead` and refreshes the relay server first, so a sandbox created
+  before plans existed needs no re-up. A main session already running keeps
+  the server it started with: if `/lead` reports it has no `propose_plan`,
+  restart that session (`/exit`, then reopen the pane).
+
+**The exception to "a person decides every hop".** After approval, three things
+move without a click: a thread's report, the note to the lead, and the lead's
+message to a thread. They stay inside one sandbox and reach only threads a
+person approved by name. A plan's id is 128 random bits that only the
+proposing session and the browser see, and every lead call must name it, so
+another sandbox cannot list or write to threads that are not its own. A report
+carries no id, since a thread only knows its own name, so one could be forged:
+it changes a label, never what runs.
+
+**What is not locked yet.** Approve and refuse are browser endpoints, and the
+daemon cannot tell a browser from a script in a sandbox. They check that the
+request carries the web UI's own `Origin`, which stops an agent from approving
+by accident but not one that forges the header. The relay's approve route has
+the same gap. Closing it needs a secret the page holds and a sandbox cannot
+fetch.
 
 ## Asking another sandbox (the relay)
 
@@ -1570,6 +1642,11 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   [Asking another sandbox](#asking-another-sandbox-the-relay). A question is
   another agent's text arriving in your agent's prompt, so it is delivered
   quoted and labelled as untrusted input; read it before you route it.
+- A **plan** starts nothing until you approve it in the web UI. After that,
+  its threads' reports, the notes to the lead and the lead's messages to its
+  threads move without a click, inside one sandbox only. See
+  [The lead](#the-lead-plan-the-threads-approve-follow), including what that
+  approval route does not yet lock.
 - A **screenshot** is a picture of your screen going into an agent's context, so
   nothing goes anywhere until you attach it yourself, to one named sandbox,
   having seen the preview of every image you are sending — a set is sent whole,

@@ -803,11 +803,16 @@ pub fn codemap_run_args(name: &str, web_port: &str, prompt: &str) -> Vec<String>
 /// the pane beside it. `bash -lc` is a login shell, for `claude` on PATH (see
 /// `codemap_run_args`).
 ///
-/// Workspace and thread name are positional (`$1`, `$2`), never script text:
-/// the thread name comes from a WebSocket query parameter. It is validated
-/// (`crate::is_valid_thread_name`), and that is exactly why the property is easy
-/// to lose — nothing downstream would notice.
-pub fn thread_run_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
+/// `SBXW_THREAD` names the thread to everything the session starts — the relay
+/// MCP server reads it to know it serves a thread (and not the main session,
+/// which is the one that can lead). `prompt`, when given, is the session's first
+/// message — an approved plan's briefing.
+///
+/// Workspace, thread name and prompt are positional (`$1`–`$3`), never script
+/// text: the thread name comes from a WebSocket query parameter. It is
+/// validated (`crate::is_valid_thread_name`), and that is exactly why the
+/// property is easy to lose — nothing downstream would notice.
+pub fn thread_run_args(name: &str, workspace: &str, thread: &str, prompt: &str) -> Vec<String> {
     const SCRIPT: &str = r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
@@ -827,7 +832,8 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str) -> Vec<String>
             fi
         fi
         printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$2"
-        cd "$wt" && exec claude --dangerously-skip-permissions"#;
+        export SBXW_THREAD="$2"
+        cd "$wt" && exec claude --dangerously-skip-permissions ${3:+"$3"}"#;
     [
         "exec",
         "-it",
@@ -839,6 +845,7 @@ pub fn thread_run_args(name: &str, workspace: &str, thread: &str) -> Vec<String>
         "sbxw-thread",
         workspace,
         thread,
+        prompt,
     ]
     .iter()
     .map(|s| s.to_string())
@@ -910,6 +917,27 @@ const THREAD_END_SCRIPT: &str = r#"
         git -C "$root" branch -D "$br" >/dev/null || { echo "error=could not delete $br"; exit 6; }
     fi
     echo ok=1"#;
+
+/// Argv for a shell in thread `thread`'s worktree — what the Bash button opens
+/// in a thread's pane. Refuses rather than create the worktree: a shell is not
+/// how a thread is started. Positional arguments, as in `thread_run_args`.
+pub fn thread_bash_args(name: &str, workspace: &str, thread: &str) -> Vec<String> {
+    const SCRIPT: &str = r#"
+        [ -n "$1" ] && cd "$1" 2>/dev/null
+        if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+            printf '\033[31m[sbxw] %s is not a git repository.\033[0m\r\n' "$PWD"; exit 1
+        fi
+        wt="$(dirname "$common")/.sbxw-worktrees/$2"
+        if [ ! -d "$wt" ]; then
+            printf '\033[31m[sbxw] thread %s has no worktree (%s) - open the thread first.\033[0m\r\n' "$2" "$wt"
+            exit 1
+        fi
+        cd "$wt" && exec bash -l"#;
+    ["exec", "-it", name, "--", "bash", "-lc", SCRIPT, "sbxw-thread-bash", workspace, thread]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
 
 /// Argv for `THREAD_END_SCRIPT`. `action` is `status` or `close`.
 pub fn thread_end_args(
@@ -2101,6 +2129,18 @@ fn relay_doc() -> String {
 /// overwritten: Claude Code writes `#` memories into that same file, and the
 /// user may have put their own standing instructions there. `.claude.json` is
 /// merged for the same reason.
+/// Where `/lead` lands: a user-level command, like the kits' — not under
+/// `~/.claude/skills`, which in a sandbox is sbx's shared store on the host.
+const LEAD_COMMAND_PATH: &str = "/home/agent/.claude/commands/lead.md";
+
+/// Install `/lead`, the instructions the main session leads on. Written when
+/// Lead is clicked rather than at bring-up only, so a sandbox created before
+/// plans existed gets it without a re-up.
+pub fn install_lead_command(sandbox: &str) -> Result<()> {
+    const LEAD: &str = include_str!("../assets/lead.md");
+    write_file_stdin(sandbox, LEAD_COMMAND_PATH, LEAD.as_bytes())
+}
+
 pub fn install_relay_tool(sandbox: &str, web_port: &str) -> Result<()> {
     const TOOL: &str = include_str!("../assets/relay-tool.js");
     const MCP: &str = include_str!("../assets/relay-mcp.js");
@@ -2780,7 +2820,7 @@ local-policy                          local   all              network: 159 allo
     /// ever be spliced into the script.
     #[test]
     fn a_thread_passes_its_workspace_and_name_as_arguments_not_as_script() {
-        let args = thread_run_args("neos", "/Users/me/my $(id) app", "fix-login");
+        let args = thread_run_args("neos", "/Users/me/my $(id) app", "fix-login", "/lead $(id)");
         let script = &args[6];
         assert!(!script.contains("neos"), "{script}");
         assert!(!script.contains("fix-login"), "{script}");
@@ -2788,11 +2828,12 @@ local-policy                          local   all              network: 159 allo
         assert_eq!(&args[..6], ["exec", "-it", "neos", "--", "bash", "-lc"]);
         assert_eq!(
             &args[7..],
-            ["sbxw-thread", "/Users/me/my $(id) app", "fix-login"]
+            ["sbxw-thread", "/Users/me/my $(id) app", "fix-login", "/lead $(id)"]
         );
         // The worktree and branch the README promises.
         assert!(script.contains(r#""$root/.sbxw-worktrees/$2""#), "{script}");
         assert!(script.contains(r#""sbxw/$2""#), "{script}");
+        assert!(script.contains(r#"export SBXW_THREAD="$2""#), "{script}");
     }
 
     #[test]
