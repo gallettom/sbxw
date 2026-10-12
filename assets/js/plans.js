@@ -172,8 +172,7 @@ function setPlanEditing(row, on) {
 }
 
 function setPlanError(msg) {
-  planError.textContent = msg;
-  planError.classList.toggle('hidden', !msg);
+  showNote(planError, msg);
 }
 
 async function showPlan(plan) {
@@ -285,16 +284,7 @@ planApprove.addEventListener('click', async () => {
   planApprove.disabled = true;
   planApprove.textContent = 'Starting…';
   setPlanError('');
-  let res;
-  try {
-    res = await (await fetch(`/api/plans/${encodeURIComponent(id)}/approve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threads }),
-    })).json();
-  } catch (e) {
-    res = { ok: false, error: e.message };
-  }
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads });
   if (!res.ok) {
     setPlanError(res.error || 'could not approve the plan');
     planApprove.disabled = false;
@@ -309,16 +299,7 @@ planApprove.addEventListener('click', async () => {
 document.getElementById('plan-refuse').addEventListener('click', async () => {
   const id = planShown;
   if (!id) return;
-  let res;
-  try {
-    res = await (await fetch(`/api/plans/${encodeURIComponent(id)}/refuse`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    })).json();
-  } catch (e) {
-    res = { ok: false, error: e.message };
-  }
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/refuse`, {});
   if (!res.ok) { setPlanError(res.error || 'could not refuse the plan'); return; }
   ingestPlan(res.plan);
 });

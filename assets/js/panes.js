@@ -814,8 +814,7 @@ async function closeThread(idx) {
 }
 
 function setCloseError(msg) {
-  closeError.textContent = msg;
-  closeError.classList.toggle('hidden', !msg);
+  showNote(closeError, msg);
 }
 
 function updateCloseConfirm() {
@@ -832,16 +831,10 @@ closeConfirm.addEventListener('click', async () => {
   closeConfirm.disabled = true;
   closeConfirm.textContent = 'Closing…';
   setCloseError('');
-  let res;
-  try {
-    res = await (await fetch(`${ask.base}/close`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ discard: discardBox.checked, delete_branch: branchBox.checked }),
-    })).json();
-  } catch (e) {
-    res = { ok: false, error: e.message };
-  }
+  const res = await postJsonOrError(`${ask.base}/close`, {
+    discard: discardBox.checked,
+    delete_branch: branchBox.checked,
+  });
   if (!res.ok) {
     setCloseError(res.error || 'could not close the thread');
     closeConfirm.textContent = 'Close thread';

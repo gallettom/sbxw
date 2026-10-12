@@ -365,16 +365,12 @@ function wirePolicyForm() {
     errEl.classList.add('hidden');
     const jobId = startBgJob(`Adding ${decision} rule…`);
     try {
-      const r = await fetch(`/api/sandboxes/${encodeURIComponent(target)}/policy/rules`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resources, decision, global: hostWide }),
-      });
-      const data = await r.json();
+      const data = await postJson(`/api/sandboxes/${encodeURIComponent(target)}/policy/rules`,
+        { resources, decision, global: hostWide });
       if (data.ok) {
         if (portsTarget === target) await fetchPorts(target);
       } else {
-        errEl.textContent = data.error || 'Failed to add rule';
-        errEl.classList.remove('hidden');
+        showNote(errEl, data.error || 'Failed to add rule');
       }
     } finally {
       finishBgJob(jobId);
@@ -399,11 +395,7 @@ function wirePolicyDeletes() {
       btn.disabled = true;
       const jobId = startBgJob('Removing rule…');
       try {
-        const r = await fetch(`/api/sandboxes/${encodeURIComponent(target)}/policy/rules/rm`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rule }),
-        });
-        const data = await r.json();
+        const data = await postJson(`/api/sandboxes/${encodeURIComponent(target)}/policy/rules/rm`, { rule });
         if (data.ok) {
           if (portsTarget === target) await fetchPorts(target);
         } else {
@@ -464,11 +456,7 @@ async function fetchPorts(name) {
 
 async function deletePort(spec, btn) {
   btn.disabled = true;
-  const res = await fetch(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/unpublish`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ spec }),
-  });
-  const data = await res.json();
+  const data = await postJson(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/unpublish`, { spec });
   if (data.ok) {
     await fetchPorts(portsTarget);
   } else {
@@ -499,11 +487,7 @@ btnAddMapping.addEventListener('click', async () => {
   portsAddError.classList.add('hidden');
   const jobId = startBgJob(`Publishing port ${sbxPort}…`);
   try {
-    const res = await fetch(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/publish`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
+    const data = await postJson(`/api/sandboxes/${encodeURIComponent(portsTarget)}/ports/publish`, body);
     if (data.ok) {
       addSbxPort.value  = '';
       addHostPort.value = '';
@@ -512,12 +496,10 @@ btnAddMapping.addEventListener('click', async () => {
       addHostPort.placeholder = 'same';
       await fetchPorts(portsTarget);
       if (data.hosts_warning) {
-        portsAddError.textContent = '⚠ ' + data.hosts_warning;
-        portsAddError.classList.remove('hidden');
+        showNote(portsAddError, '⚠ ' + data.hosts_warning);
       }
     } else {
-      portsAddError.textContent = data.error || 'Failed to publish';
-      portsAddError.classList.remove('hidden');
+      showNote(portsAddError, data.error || 'Failed to publish');
     }
   } finally {
     finishBgJob(jobId);
