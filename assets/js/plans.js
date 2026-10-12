@@ -81,35 +81,110 @@ function openPendingPlan(sandbox) {
   if (p) showPlan(p);
 }
 
-function planRowHtml(t = { name: '', goal: '', scope: '' }) {
-  return `<div class="plan-thread">
-      <input class="field-input plan-name" type="text" maxlength="40" placeholder="name"
-             value="${escHtml(t.name)}" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Thread name">
-      <button type="button" class="plan-remove" title="Remove this thread from the plan" aria-label="Remove thread">✕</button>
-      <label class="plan-label">Goal
-        <textarea class="field-input plan-goal" placeholder="What this thread must do">${escHtml(t.goal)}</textarea>
-      </label>
-      <label class="plan-label">Owns
-        <input class="field-input plan-scope" type="text" placeholder="Files or areas only this thread edits"
-               value="${escHtml(t.scope || '')}">
-      </label>
+// The group hues, in the order panes use them: a thread keeps its colour from
+// the card edge to every file it owns, so whose-is-what reads at a glance.
+const PLAN_HUES = ['--c-group-1', '--c-group-2', '--c-group-3', '--c-group-4'];
+
+// A goal's opening sentence, as the one line saying what the thread does, and
+// the rest. A sentence ends at . ! or ? followed by a capital or an opening
+// quote — so `web.rs` or `e.g. a file` does not cut it short.
+function splitGoal(goal) {
+  const text = (goal || '').trim();
+  const m = text.match(/^([\s\S]+?[.!?])\s+(?=[A-Z("'`])/);
+  return m ? [m[1], text.slice(m[0].length)] : [text, ''];
+}
+
+// "Owns" as one entry per file or area: the lead writes them as a list
+// separated by commas, semicolons or lines.
+function scopeItems(scope) {
+  return (scope || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+}
+
+// The reading half of a card, rebuilt from its inputs whenever editing ends.
+function planViewHtml(t) {
+  const [lead, rest] = splitGoal(t.goal);
+  const items = scopeItems(t.scope);
+  return `<h3 class="plan-card-title">${t.name ? escHtml(t.name) : '<span class="plan-unnamed">Unnamed thread</span>'}</h3>
+      <p class="plan-lead">${lead ? escHtml(lead) : '<span class="plan-unnamed">No goal yet</span>'}</p>
+      ${rest ? `<p class="plan-rest">${escHtml(rest)}</p>
+      <button type="button" class="plan-more" aria-expanded="false" hidden>Show more</button>` : ''}
+      <div class="plan-owns">
+        <span class="plan-owns-label">Owns</span>
+        ${items.length
+          ? items.map(i => `<code class="plan-chip">${escHtml(i)}</code>`).join('')
+          : '<span class="plan-unnamed">Nothing named</span>'}
+      </div>`;
+}
+
+// One thread: a card to read, with the form that edits it kept beside it. The
+// inputs are the card's source of truth — Approve reads them whether or not
+// they were ever shown — so reading and editing cannot drift apart.
+function planRowHtml(t = { name: '', goal: '', scope: '' }, i = 0) {
+  return `<div class="plan-thread" style="--plan-accent: var(${PLAN_HUES[i % PLAN_HUES.length]})">
+      <div class="plan-card-tools">
+        <button type="button" class="plan-edit" aria-pressed="false">Edit</button>
+        <button type="button" class="plan-remove" title="Remove this thread from the plan" aria-label="Remove thread">✕</button>
+      </div>
+      <div class="plan-view">${planViewHtml(t)}</div>
+      <div class="plan-form">
+        <label class="plan-label">Name
+          <input class="field-input plan-name" type="text" maxlength="40" placeholder="name"
+                 value="${escHtml(t.name)}" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </label>
+        <label class="plan-label">Goal
+          <textarea class="field-input plan-goal" placeholder="What this thread must do">${escHtml(t.goal)}</textarea>
+        </label>
+        <label class="plan-label">Owns
+          <input class="field-input plan-scope" type="text" placeholder="Files or areas only this thread edits, separated by commas"
+                 value="${escHtml(t.scope || '')}">
+        </label>
+      </div>
     </div>`;
 }
 
+function rowThread(row) {
+  return {
+    name: row.querySelector('.plan-name').value.trim(),
+    goal: row.querySelector('.plan-goal').value.trim(),
+    scope: row.querySelector('.plan-scope').value.trim(),
+  };
+}
+
+// "Show more" only where the rest of a goal actually overflows its clamp,
+// which can only be measured once the dialog is on screen.
+function fitPlanMore(row) {
+  const rest = row.querySelector('.plan-rest');
+  const more = row.querySelector('.plan-more');
+  if (rest && more) more.hidden = rest.scrollHeight <= rest.clientHeight + 1;
+}
+
+function setPlanEditing(row, on) {
+  row.classList.toggle('editing', on);
+  const btn = row.querySelector('.plan-edit');
+  btn.setAttribute('aria-pressed', String(on));
+  btn.textContent = on ? 'Done' : 'Edit';
+  if (on) {
+    row.querySelector('.plan-goal').focus();
+  } else {
+    row.querySelector('.plan-view').innerHTML = planViewHtml(rowThread(row));
+    fitPlanMore(row);
+  }
+}
+
 function setPlanError(msg) {
-  planError.textContent = msg;
-  planError.classList.toggle('hidden', !msg);
+  showNote(planError, msg);
 }
 
 async function showPlan(plan) {
   planShown = plan.id;
   document.getElementById('plan-title').textContent = `Plan from the lead of ${plan.sandbox}`;
   document.getElementById('plan-summary').textContent = plan.summary || '';
-  planRows.innerHTML = plan.threads.map(planRowHtml).join('');
+  planRows.innerHTML = plan.threads.map((t, i) => planRowHtml(t, i)).join('');
   setPlanError('');
   planApprove.disabled = false;
   planApprove.textContent = 'Approve and start';
   planOverlay.classList.remove('hidden');
+  planRows.querySelectorAll('.plan-thread').forEach(fitPlanMore);
   updatePlanCount();
 }
 
@@ -170,41 +245,46 @@ function ingestPlan(plan, seed = false) {
 }
 
 planRows.addEventListener('click', e => {
-  const rm = e.target.closest('.plan-remove');
-  if (!rm) return;
-  rm.closest('.plan-thread').remove();
-  updatePlanCount();
+  const row = e.target.closest('.plan-thread');
+  if (!row) return;
+  if (e.target.closest('.plan-remove')) {
+    row.remove();
+    updatePlanCount();
+  } else if (e.target.closest('.plan-edit')) {
+    setPlanEditing(row, !row.classList.contains('editing'));
+  } else if (e.target.closest('.plan-more')) {
+    const more = e.target.closest('.plan-more');
+    const open = row.classList.toggle('expanded');
+    more.setAttribute('aria-expanded', String(open));
+    more.textContent = open ? 'Show less' : 'Show more';
+  }
 });
 document.getElementById('plan-add').addEventListener('click', () => {
-  planRows.insertAdjacentHTML('beforeend', planRowHtml());
-  planRows.lastElementChild.querySelector('.plan-name').focus();
+  const n = planRows.querySelectorAll('.plan-thread').length;
+  planRows.insertAdjacentHTML('beforeend', planRowHtml(undefined, n));
+  const row = planRows.lastElementChild;
+  setPlanEditing(row, true);
+  row.querySelector('.plan-name').focus();
   updatePlanCount();
 });
 
 planApprove.addEventListener('click', async () => {
   const id = planShown;
   if (!id) return;
-  const threads = [...planRows.querySelectorAll('.plan-thread')].map(row => ({
-    name: row.querySelector('.plan-name').value.trim(),
-    goal: row.querySelector('.plan-goal').value.trim(),
-    scope: row.querySelector('.plan-scope').value.trim(),
-  }));
-  const bad = threads.find(t => !THREAD_NAME.test(t.name));
+  const rows = [...planRows.querySelectorAll('.plan-thread')];
+  const threads = rows.map(rowThread);
+  const bad = threads.findIndex(t => !THREAD_NAME.test(t.name));
   if (!threads.length) { setPlanError('Keep at least one thread, or refuse the plan'); return; }
-  if (bad) { setPlanError(`"${bad.name}": lower-case letters, digits and inner hyphens only`); return; }
+  if (bad >= 0) {
+    setPlanError(`"${threads[bad].name}": lower-case letters, digits and inner hyphens only`);
+    if (!rows[bad].classList.contains('editing')) setPlanEditing(rows[bad], true);
+    rows[bad].querySelector('.plan-name').focus();
+    return;
+  }
   planApprove.disabled = true;
   planApprove.textContent = 'Starting…';
   setPlanError('');
-  let res;
-  try {
-    res = await (await fetch(`/api/plans/${encodeURIComponent(id)}/approve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ threads }),
-    })).json();
-  } catch (e) {
-    res = { ok: false, error: e.message };
-  }
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads });
   if (!res.ok) {
     setPlanError(res.error || 'could not approve the plan');
     planApprove.disabled = false;
@@ -219,16 +299,7 @@ planApprove.addEventListener('click', async () => {
 document.getElementById('plan-refuse').addEventListener('click', async () => {
   const id = planShown;
   if (!id) return;
-  let res;
-  try {
-    res = await (await fetch(`/api/plans/${encodeURIComponent(id)}/refuse`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    })).json();
-  } catch (e) {
-    res = { ok: false, error: e.message };
-  }
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/refuse`, {});
   if (!res.ok) { setPlanError(res.error || 'could not refuse the plan'); return; }
   ingestPlan(res.plan);
 });

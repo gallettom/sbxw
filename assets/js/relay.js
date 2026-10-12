@@ -653,12 +653,7 @@ relayOverlay.addEventListener('drop', ev => {
 
 async function relayPost(path, body) {
   try {
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {}),
-    });
-    const data = await res.json();
+    const data = await postJson(path, body || {});
     if (!data.ok) showToast(data.error || 'sbxw refused that', 'error');
     return data.ok === true;
   } catch (_) {

@@ -276,16 +276,7 @@ pub fn missing_aliases(aliases: &[HostAlias]) -> Vec<String> {
 pub fn read_hosts_block() -> Vec<HostAlias> {
     let content = std::fs::read_to_string(HOSTS).unwrap_or_default();
     let mut aliases = Vec::new();
-    let mut in_block = false;
-    for line in content.lines() {
-        if line.trim() == BEGIN {
-            in_block = true;
-            continue;
-        }
-        if line.trim() == END {
-            in_block = false;
-            continue;
-        }
+    for (in_block, line) in tagged_lines(&content) {
         if in_block {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
@@ -297,6 +288,23 @@ pub fn read_hosts_block() -> Vec<HostAlias> {
         }
     }
     aliases
+}
+
+/// Every line of `content` but the block's own markers, each tagged with
+/// whether it sits inside the sbxw-managed block.
+fn tagged_lines(content: &str) -> impl Iterator<Item = (bool, &str)> {
+    let mut in_block = false;
+    content.lines().filter_map(move |line| {
+        if line.trim() == BEGIN {
+            in_block = true;
+            None
+        } else if line.trim() == END {
+            in_block = false;
+            None
+        } else {
+            Some((in_block, line))
+        }
+    })
 }
 
 /// Remove the sbxw-managed block from /etc/hosts (leaves everything else).
@@ -311,16 +319,7 @@ pub fn clear_hosts_block() -> Result<()> {
 
 fn strip_block(content: &str) -> String {
     let mut out = String::new();
-    let mut in_block = false;
-    for line in content.lines() {
-        if line.trim() == BEGIN {
-            in_block = true;
-            continue;
-        }
-        if line.trim() == END {
-            in_block = false;
-            continue;
-        }
+    for (in_block, line) in tagged_lines(content) {
         if !in_block {
             out.push_str(line);
             out.push('\n');

@@ -7,6 +7,35 @@ function escHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ── JSON over HTTP ────────────────────────────────────────────────────────
+// Every mutating endpoint takes a JSON body and answers `{ok, …}`. `postJson`
+// rejects the way `fetch` does, for callers with their own catch;
+// `postJsonOrError` folds an unreachable daemon into the same `{ok: false,
+// error}` shape the daemon itself answers with.
+async function postJson(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  return res.json();
+}
+
+async function postJsonOrError(url, body) {
+  try {
+    return await postJson(url, body);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+// Put `msg` in an inline note (an error line under a form) and show it, or
+// hide the note when there is nothing to say.
+function showNote(el, msg) {
+  el.textContent = msg;
+  el.classList.toggle('hidden', !msg);
+}
+
 // ── Toast ─────────────────────────────────────────────────────────────────
 let pasteToastTimer = null;
 function showToast(msg, kind) {

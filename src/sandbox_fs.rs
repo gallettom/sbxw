@@ -202,12 +202,7 @@ fn host_entry(e: &std::fs::DirEntry) -> Entry {
         Some(m) if m.is_file() => "file",
         _ => "other",
     };
-    let modified = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let modified = meta.as_ref().map_or(0, mtime_secs);
     Entry {
         name: e.file_name().to_string_lossy().into_owned(),
         kind,
@@ -215,6 +210,15 @@ fn host_entry(e: &std::fs::DirEntry) -> Entry {
         size: meta.map(|m| m.len()).unwrap_or(0),
         modified,
     }
+}
+
+/// When a file was last modified, in Unix seconds; 0 when the platform cannot say.
+pub(crate) fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn parent_of(path: &str) -> Option<String> {

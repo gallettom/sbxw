@@ -10,7 +10,6 @@ const sshCard = bindPopover(sshPop, {
 });
 
 function toggleSshPop(sandbox, anchor) { sshCard.toggle(anchor, sandbox); }
-function closeSshPop() { sshCard.close(); }
 
 function fillSshFields(sandbox) {
   const host = `${sandbox}.sbx`;

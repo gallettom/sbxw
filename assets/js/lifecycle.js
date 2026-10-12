@@ -127,12 +127,7 @@ dupConfirm.addEventListener('click', () => {
   (async () => {
     addPendingSandbox(newName);
     try {
-      const res = await fetch(`/api/sandboxes/${encodeURIComponent(source)}/duplicate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ new_name: newName }),
-      });
-      const data = await res.json();
+      const data = await postJson(`/api/sandboxes/${encodeURIComponent(source)}/duplicate`, { new_name: newName });
       if (data.ok) {
         attachToEmptyPaneOrMarkReady(newName);
         await loadSandboxes();

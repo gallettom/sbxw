@@ -708,7 +708,7 @@ impl Loaded {
                 self.sources[0].display()
             ),
         };
-        let get = |k: &str| map.get(Value::String(k.into()));
+        let get = |k: &str| map.get(k);
         let as_str = |v: Option<&Value>| match v {
             Some(Value::String(s)) => Some(s.clone()),
             // A name or version written unquoted comes back as a number.
@@ -718,7 +718,7 @@ impl Loaded {
 
         let workspace = match get("workspace") {
             Some(Value::String(s)) => Some(s.clone()),
-            Some(Value::Mapping(w)) => as_str(w.get(Value::String("path".into()))),
+            Some(Value::Mapping(w)) => as_str(w.get("path")),
             _ => None,
         };
 
@@ -727,10 +727,10 @@ impl Loaded {
                 .iter()
                 .filter_map(|it| match it {
                     Value::Mapping(m) => {
-                        as_str(m.get(Value::String("path".into()))).map(|path| MountSpec {
+                        as_str(m.get("path")).map(|path| MountSpec {
                             path,
                             read_only: matches!(
-                                m.get(Value::String("readOnly".into())),
+                                m.get("readOnly"),
                                 Some(Value::Bool(true))
                             ),
                         })
@@ -773,7 +773,7 @@ impl Loaded {
         if let Some(Value::Sequence(items)) = get("ports") {
             for (i, it) in items.iter().enumerate() {
                 let Value::Mapping(m) = it else { continue };
-                let num = |k: &str| match m.get(Value::String(k.into())) {
+                let num = |k: &str| match m.get(k) {
                     Some(Value::Number(n)) => n.as_u64(),
                     // `host: "3000"` is wrong per the schema but unambiguous.
                     Some(Value::String(s)) => s.trim().parse::<u64>().ok(),
@@ -792,8 +792,8 @@ impl Loaded {
                     // Absent `host` means "give me an ephemeral one", which is
                     // a real choice in this format and not a missing value.
                     host: num("host").and_then(|h| u16::try_from(h).ok()),
-                    host_ip: as_str(m.get(Value::String("hostIP".into()))),
-                    protocol: as_str(m.get(Value::String("protocol".into()))),
+                    host_ip: as_str(m.get("hostIP")),
+                    protocol: as_str(m.get("protocol")),
                 });
             }
         }

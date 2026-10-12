@@ -235,11 +235,7 @@ function announceWatching(sandbox) {
   if (sandbox === announcedWatch) return;
   announcedWatch = sandbox;
   if (!sandbox) return;
-  fetch('/api/watching', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sandbox }),
-  }).catch(() => {});
+  postJson('/api/watching', { sandbox }).catch(() => {});
 }
 
 // Every element currently standing in for `sandbox`: the panes showing its

@@ -635,12 +635,7 @@
     setLensNote('Starting a session…');
     let data = {};
     try {
-      const res = await fetch(sandboxApi('/codemap/lens'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objective }),
-      });
-      data = await res.json();
+      data = await postJson(sandboxApi('/codemap/lens'), { objective });
     } catch (_) {
       data = { ok: false, error: 'could not reach the daemon' };
     }

@@ -60,12 +60,7 @@ async function loadFavourites() {
 async function toggleFavourite(path) {
   const on = isFavourite(path);
   try {
-    const res = await fetch('/api/fs/favourites', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, favourite: !on }),
-    });
-    const data = await res.json();
+    const data = await postJson('/api/fs/favourites', { path, favourite: !on });
     if (!data.ok) { showToast(data.error || 'Could not update favourites', 'error'); return; }
     favourites = data.favourites || [];
     renderFavourites();
@@ -136,8 +131,7 @@ btnBrowseNative.addEventListener('click', async () => {
     }
     // Cancelling the native dialog (data.cancelled) is a silent no-op.
   } catch (e) {
-    errEl.textContent = 'Failed to open native folder picker';
-    errEl.classList.remove('hidden');
+    showNote(errEl, 'Failed to open native folder picker');
   } finally {
     btnBrowseNative.disabled = false;
     btnBrowseNative.textContent = prevLabel;
@@ -408,8 +402,7 @@ function validateChatForm() {
   if (!name) { chatNameErr.classList.add('hidden'); chatConfirm.disabled = false; return; }
   const taken = sandboxes.some(s => s.name === name);
   if (taken) {
-    chatNameErr.textContent = `“${name}” already exists — pick another name`;
-    chatNameErr.classList.remove('hidden');
+    showNote(chatNameErr, `“${name}” already exists — pick another name`);
   }
   chatConfirm.disabled = taken || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
 }
@@ -451,12 +444,7 @@ chatConfirm.addEventListener('click', () => {
   addPendingSandbox(name);
   (async () => {
     try {
-      const res = await fetch('/api/sandboxes/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      const data = await res.json();
+      const data = await postJson('/api/sandboxes/chat', { name });
       if (data.ok) {
         attachToEmptyPaneOrMarkReady(data.name || name);
         await loadSandboxes();
@@ -496,12 +484,7 @@ document.getElementById('modal-create').addEventListener('click', () => {
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
-      const res = await fetch('/api/sandboxes/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, path, ports }),
-      });
-      const data = await res.json();
+      const data = await postJson('/api/sandboxes/create', { name, path, ports });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.

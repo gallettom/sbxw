@@ -49,16 +49,11 @@ async function envfileRender({ save = false } = {}) {
   envfileClearError();
   const jobId = startBgJob(save ? `writing sbxenv.yaml for ${name}` : null);
   try {
-    const res = await fetch(`/api/sandboxes/${encodeURIComponent(name)}/envfile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        dir: envfileRootInput.value.trim(),
-        save,
-        force: envfileOverwrite.checked,
-      }),
+    const data = await postJson(`/api/sandboxes/${encodeURIComponent(name)}/envfile`, {
+      dir: envfileRootInput.value.trim(),
+      save,
+      force: envfileOverwrite.checked,
     });
-    const data = await res.json();
     // The card can be closed, or pointed at another sandbox, while this is in
     // flight.
     if (envfileTarget !== name) return;
