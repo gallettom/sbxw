@@ -29,10 +29,28 @@ setup:
       content: |
         #!/usr/bin/env bash
         # Install Headroom and enable its durable Claude Code integration.
-        # Idempotent: safe to re-run on every container start.
+        # Idempotent: safe to re-run on every container start, and a restart
+        # that finds everything in place does no network work (no apt, no pip,
+        # no `headroom init`).
         # (No `set -u`: we read possibly-unset vars.)
         set -o pipefail
         info() { echo "  [headroom] $*"; }
+
+        # apt_install ARGS... — `apt-get install` that refreshes the package
+        # lists only when no kit has done so in the last hour (the stamp is
+        # shared with the other bundled kits), and once more if the install
+        # fails on lists that turned out to be stale.
+        APT_STAMP=/home/agent/.cache/sbxw-apt-updated
+        apt_update() {
+          if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
+          sudo apt-get update -qq || return 1
+          mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
+        }
+        apt_install() {
+          apt_update fresh || return 1
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" && return 0
+          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+        }
 
         BIN="$HOME/.local/bin"
         mkdir -p "$BIN"
@@ -54,7 +72,7 @@ setup:
         # ── 1b. C toolchain — required to compile headroom-ai's Rust extension
         if ! dpkg -s build-essential >/dev/null 2>&1; then
           info "installing build-essential…"
-          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends build-essential \
+          apt_install --no-install-recommends build-essential \
             || { info "build-essential install failed — skipping"; exit 0; }
         fi
 
@@ -62,7 +80,7 @@ setup:
         #    Debian/Ubuntu mark system Python externally-managed (PEP 668);
         #    --user --break-system-packages confines the install to ~/.local.
         #    [code] adds tree-sitter for AST-aware code compression (--code-aware).
-        if [ -x "$BIN/headroom" ] && "$PY" -c 'import tree_sitter' 2>/dev/null; then
+        if [ -x "$BIN/headroom" ] && "$PY" -c 'import importlib.util as u; raise SystemExit(u.find_spec("tree_sitter") is None)' 2>/dev/null; then
           info "headroom already installed"
         else
           info "installing headroom-ai[proxy,code] ($PY)…"
@@ -76,10 +94,24 @@ setup:
         # ── 3. Durable Claude Code integration ───────────────────────────────
         #    Writes ~/.claude/settings.json: ANTHROPIC_BASE_URL=http://127.0.0.1:8787
         #    plus SessionStart/PreToolUse hooks that auto-start the proxy.
-        info "configuring Claude Code integration (headroom init)…"
-        if ! "$BIN/headroom" init --global claude >/dev/null 2>&1; then
-          info "headroom init failed — Claude keeps direct API access"
-          exit 0
+        #    It clones a plugin marketplace from GitHub, so it runs only when
+        #    something calls for it: no successful init since headroom was last
+        #    (re)installed, no manifest, or settings.json no longer routing
+        #    through the proxy.
+        MANIFEST="$HOME/.headroom/deploy/init-user/manifest.json"
+        INIT_STAMP="$HOME/.headroom/.sbxw-init-done"
+        RAN_INIT=""
+        if [ "$INIT_STAMP" -nt "$BIN/headroom" ] && [ -f "$MANIFEST" ] \
+           && grep -qF "127.0.0.1:8787" "$HOME/.claude/settings.json" 2>/dev/null; then
+          info "Claude Code integration already configured"
+        else
+          info "configuring Claude Code integration (headroom init)…"
+          if ! "$BIN/headroom" init --global claude >/dev/null 2>&1; then
+            info "headroom init failed — Claude keeps direct API access"
+            exit 0
+          fi
+          touch "$INIT_STAMP" 2>/dev/null
+          RAN_INIT=1
         fi
 
         # ── 4. Patch the deployment manifest (the real source for proxy_args) ─
@@ -89,14 +121,16 @@ setup:
         #      - mode  token             → maximise token savings
         #      - --code-aware            → AST code compression (needs [code])
         #      - --intercept-tool-results→ compress tool outputs (file reads, cmds)
-        #    Idempotent. The hook-started proxy reads proxy_args from this file.
-        "$PY" - <<'PY' 2>/dev/null || true
+        #    Idempotent, and written only when it changes (exit 3 says it did).
+        #    The hook-started proxy reads proxy_args from this file.
+        "$PY" - <<'PY' 2>/dev/null
         import json, os
         mp = os.path.expanduser("~/.headroom/deploy/init-user/manifest.json")
         try:
             m = json.load(open(mp))
         except Exception:
             raise SystemExit(0)
+        before = json.dumps(m, sort_keys=True)
         m["host"] = "0.0.0.0"
         m["proxy_mode"] = "token"
         be = m.setdefault("base_env", {})
@@ -115,13 +149,20 @@ setup:
             if flag not in a:
                 a.append(flag)
         m["proxy_args"] = a
+        if json.dumps(m, sort_keys=True) == before:
+            raise SystemExit(0)
         json.dump(m, open(mp, "w"), indent=2)
+        raise SystemExit(3)
         PY
+        [ $? -eq 3 ] && RAN_INIT=1
 
         # Kill any proxy still bound to the old host; the SessionStart/PreToolUse
-        # hook restarts it from the patched manifest (on 0.0.0.0).
-        pid="$(lsof -t -i :8787 2>/dev/null | head -1)"
-        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        # hook restarts it from the patched manifest (on 0.0.0.0). Nothing to
+        # do when neither init nor the patch changed the manifest.
+        if [ -n "$RAN_INIT" ]; then
+          pid="$(lsof -t -i :8787 2>/dev/null | head -1)"
+          [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        fi
 
         info "done (token mode, host 0.0.0.0) — Reload the agent to route through Headroom"
 
