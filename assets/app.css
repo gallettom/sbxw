@@ -644,6 +644,7 @@
     color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber);
   }
   .thread-close-lead { margin: 0; color: var(--c-text); font-size: 13px; }
+  .lead-end-warn { margin: 0; color: var(--c-amber); font-size: 12px; line-height: 1.5; }
   .thread-close-path {
     display: block; padding: .4rem .55rem; border-radius: 6px; background: var(--c-bg);
     color: var(--c-text-muted); font-size: 11px; overflow-wrap: anywhere;

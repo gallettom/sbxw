@@ -918,6 +918,8 @@ async function startLead(idx) {
   const pane = panes[idx];
   const sandbox = pane?.sandbox;
   if (!sandbox || pane.thread) return;
+  // Lit, the button is the way out: it ends lead mode, after asking.
+  if (typeof isLeading === 'function' && isLeading(sandbox)) { askEndLead(idx); return; }
   if (pane.mode !== 'claude') connectPane(idx, sandbox, 'claude');
   const btn = pane.el.querySelector('.mode-btn[data-mode="lead"]');
   btn.disabled = true;
@@ -1004,7 +1006,14 @@ function paintGroups() {
     // The whole pane says it, not only the chip: ★ Lead lit, and the bar
     // marked, for as long as this session is the lead.
     p.el.classList.toggle('leading', !!leading && i < paneCount);
-    p.el.querySelector('.mode-btn[data-mode="lead"]')?.classList.toggle('active', !!leading);
+    const leadBtn = p.el.querySelector('.mode-btn[data-mode="lead"]');
+    if (leadBtn) {
+      leadBtn.classList.toggle('active', !!leading);
+      // The lit button ends lead mode; say so where a person hovers or listens.
+      leadBtn.dataset.title ??= leadBtn.title;
+      leadBtn.title = leading ? 'End lead mode — this session stops leading; its threads keep running' : leadBtn.dataset.title;
+      leadBtn.setAttribute('aria-label', leading ? 'End lead mode' : 'Lead');
+    }
     chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
     chip.hidden = !(i < paneCount && p.sandbox && (thread || color || leading));

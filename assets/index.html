@@ -350,6 +350,25 @@
     </div>
   </div>
 
+  <!-- ── End lead mode ──
+       Says what ending would leave behind — threads still running, a plan
+       still waiting — before the main session stops being the lead. Filled by
+       askEndLead() in /js/plans.js. -->
+  <div class="modal-overlay hidden" id="lead-end-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="lead-end-title" style="width:440px">
+      <div class="modal-head">
+        <span class="modal-title" id="lead-end-title">End lead mode</span>
+        <button class="modal-close" id="lead-end-x" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="lead-end-body"></div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="lead-end-error"></span>
+        <button class="btn-cancel" id="lead-end-cancel">Keep leading</button>
+        <button class="btn-create" id="lead-end-confirm">End lead mode</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Approve a plan ──
        A lead session's proposal: threads to run in parallel, each with a goal
        and the files it owns. Everything is editable before it starts, and

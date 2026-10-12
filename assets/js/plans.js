@@ -30,8 +30,9 @@ function planThreadState(sandbox, thread) {
   return best ? best.t : null;
 }
 
+// A plan whose lead mode was ended is over, whatever state it was left in.
 function pendingPlanFor(sandbox) {
-  for (const p of plans.values()) if (p.sandbox === sandbox && p.state === 'pending') return p;
+  for (const p of plans.values()) if (p.sandbox === sandbox && p.state === 'pending' && !p.closed) return p;
   return null;
 }
 
@@ -63,12 +64,79 @@ function markLeading(sandbox) {
 function isLeading(sandbox) {
   if (leadSessions.has(sandbox)) return true;
   for (const p of plans.values()) {
-    if (p.sandbox !== sandbox) continue;
+    if (p.sandbox !== sandbox || p.closed) continue;
     if (p.state === 'pending') return true;
     if (p.state === 'approved' && p.threads.some(t => !['done', 'failed'].includes(t.state))) return true;
   }
   return false;
 }
+
+// Lead mode ended, here or in another tab: the daemon has closed its plans
+// (they come back with `closed: true`), and this forgets the ★ Lead click.
+function forgetLeading(sandbox) {
+  leadSessions.delete(sandbox);
+  schedulePaintGroups();
+}
+
+// ── End lead mode ──
+// The lit ★ Lead button ends it, once a person has read what that leaves
+// behind: threads at work keep running, but nobody reads their reports.
+const leadEndOverlay = document.getElementById('lead-end-overlay');
+const leadEndConfirm = document.getElementById('lead-end-confirm');
+const leadEndError = document.getElementById('lead-end-error');
+let leadEndAsk = null; // { idx, sandbox }
+
+function askEndLead(idx) {
+  const sandbox = panes[idx]?.sandbox;
+  if (!sandbox) return;
+  leadEndAsk = { idx, sandbox };
+  let running = 0;
+  for (const p of plans.values()) {
+    if (p.sandbox !== sandbox || p.closed || p.state !== 'approved') continue;
+    running += p.threads.filter(t => !['done', 'failed'].includes(t.state)).length;
+  }
+  const pending = pendingPlanFor(sandbox);
+  const lines = [`The main session of ${sandbox} stops leading and goes back to being an ordinary session.`];
+  if (running) {
+    lines.push(`${running} thread${running === 1 ? ' is' : 's are'} still at work. ${running === 1 ? 'It keeps' : 'They keep'} running — close ${running === 1 ? 'it' : 'them'} with Close thread — but ${running === 1 ? 'its reports' : 'their reports'} will no longer reach the main session.`);
+  }
+  if (pending) lines.push('The plan waiting for your approval will be refused.');
+  document.getElementById('lead-end-body').innerHTML =
+    lines.map((l, i) => `<p class="${i ? 'lead-end-warn' : 'thread-close-lead'}">${escHtml(l)}</p>`).join('');
+  showNote(leadEndError, '');
+  leadEndConfirm.disabled = false;
+  leadEndConfirm.textContent = 'End lead mode';
+  leadEndOverlay.classList.remove('hidden');
+  leadEndConfirm.focus();
+}
+
+function closeLeadEnd() { leadEndOverlay.classList.add('hidden'); leadEndAsk = null; }
+
+leadEndConfirm.addEventListener('click', async () => {
+  const ask = leadEndAsk;
+  if (!ask) return;
+  leadEndConfirm.disabled = true;
+  leadEndConfirm.textContent = 'Ending…';
+  const res = await postJsonOrError(`/api/sandboxes/${encodeURIComponent(ask.sandbox)}/lead/end`, {});
+  if (leadEndAsk !== ask) return;
+  if (!res.ok) {
+    // Said in the dialog, and in the pane the way a failed Lead is.
+    showNote(leadEndError, res.error || 'could not end lead mode');
+    leadEndConfirm.disabled = false;
+    leadEndConfirm.textContent = 'End lead mode';
+    const pane = panes[ask.idx];
+    if (pane?.sandbox === ask.sandbox) pane.term.write(`\r\n\x1b[31m[sbxw] End lead mode: ${res.error}\x1b[0m\r\n`);
+    return;
+  }
+  closeLeadEnd();
+  forgetLeading(ask.sandbox);
+});
+document.getElementById('lead-end-cancel').addEventListener('click', closeLeadEnd);
+document.getElementById('lead-end-x').addEventListener('click', closeLeadEnd);
+leadEndOverlay.addEventListener('click', e => { if (e.target === leadEndOverlay) closeLeadEnd(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !leadEndOverlay.classList.contains('hidden')) closeLeadEnd();
+});
 
 // "Review plan" on the main pane, shown while its plan waits on a person —
 // the way back to a dialog closed with Later.
@@ -328,7 +396,7 @@ function ingestPlan(plan, seed = false) {
     panesOpenedFor.add(plan.id);
     openPlanPanes(plan);
   }
-  if (planShown === plan.id && plan.state !== 'pending') closePlan();
+  if (planShown === plan.id && (plan.state !== 'pending' || plan.closed)) closePlan();
   schedulePaintGroups();
 }
 
@@ -426,6 +494,7 @@ fetch('/api/plans')
 
 refreshLeads();
 sbxwStream.addEventListener('lead', ev => markLeading(ev.data));
+sbxwStream.addEventListener('lead-end', ev => forgetLeading(ev.data));
 
 sbxwStream.addEventListener('plan', ev => {
   try { ingestPlan(JSON.parse(ev.data)); } catch (_) {}
