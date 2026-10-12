@@ -2390,7 +2390,17 @@ pub(crate) fn provision_sandbox(
     // carried down to section 2. Moving it up also means a host whose `sbx`
     // cannot answer leaves no `.sbxw-artifacts/` behind for a sandbox that was
     // never going to come up.
-    let existed = sbx::exists(name)?;
+    //
+    // The same `sbx ls` row says whether it is up, which three steps below
+    // need: `running` carries it down, and goes back to "ask again" (`None`)
+    // once something here — a `kit add`, a `run -d` — may have changed it.
+    let initial = sbx::lookup(name);
+    let existed = initial.is_some();
+    let stopped = initial.as_ref().is_some_and(sbx::SandboxInfo::is_stopped);
+    let mut running = Some(initial.as_ref().is_some_and(sbx::SandboxInfo::is_running));
+    // Egress rules sbxw itself needs, applied in one `sbx policy allow` with the
+    // configured allowlist (section 3) rather than one call each.
+    let mut own_allow: Vec<String> = Vec::new();
     progress::plan(provision_plan(existed, cfg));
 
     // 0. Record the workspace path for this sandbox name (best-effort — used
@@ -2447,7 +2457,7 @@ pub(crate) fn provision_sandbox(
             );
         }
         if let Some(ref creds) = credentials_json {
-            if sbx::is_running(name).unwrap_or(false) {
+            if running == Some(true) {
                 // Running sandbox: refresh the credentials file in place over
                 // `sbx exec`: `kit add` recreates the sandbox
                 // container, which would kill any live agent/bash session
@@ -2459,9 +2469,7 @@ pub(crate) fn provision_sandbox(
                     );
                 }
                 // The OAuth kit also allowlists claude.ai egress; mirror that.
-                if let Err(e) = sbx::policy_allow_network(Some(name), "claude.ai") {
-                    tracing::warn!("could not allow claude.ai egress: {e:#}");
-                }
+                own_allow.push("claude.ai".into());
             } else {
                 // Stopped sandbox: `sbx exec` can't reach it, so go through
                 // `kit add`. The container re-creation this triggers preserves
@@ -2471,6 +2479,8 @@ pub(crate) fn provision_sandbox(
                     Ok(dir) => {
                         // Kept on disk: sbx re-resolves this path on every
                         // later container swap (see `oauth_kit_dir`).
+                        // The swap may leave it in another state than stopped.
+                        running = None;
                         if let Err(e) =
                             kit_add_repairing_oauth(name, &dir.to_string_lossy(), Some(creds))
                         {
@@ -2546,9 +2556,12 @@ pub(crate) fn provision_sandbox(
     // panes attached that a restart would cut. Doing it here, before the wait
     // below, also starts a stopped sandbox for the steps that need it up.
     if cfg.keep_running {
-        if !existed || !sbx::is_running(name).unwrap_or(true) {
+        if !existed || !running.unwrap_or_else(|| sbx::is_running(name).unwrap_or(true)) {
             match sbx::run_detached(name) {
-                Ok(()) => tracing::info!("'{name}' kept running until `sbxw stop {name}`"),
+                Ok(()) => {
+                    running = None;
+                    tracing::info!("'{name}' kept running until `sbxw stop {name}`")
+                }
                 Err(e) => tracing::warn!(
                     "keep_running: could not hold '{name}' up — it will stop once idle: {e:#}"
                 ),
@@ -2565,78 +2578,120 @@ pub(crate) fn provision_sandbox(
     // egress rule that lets them through have to name the same one.
     let web_port = web_port_of(&cfg.web_addr);
 
-    // 2b. Pre-trust the workspace so Claude Code doesn't show the "workspace
-    // has not been trusted" banner and ignore .claude/settings.local.json's
-    // permissions.allow entries on first launch. Requires the container to
-    // actually be running for `sbx exec` to reach it.
+    // 2b. The in-sandbox tooling, all of it in one `sbx exec` (see
+    // `sbx::Tooling`). Requires the container to actually be running for `sbx
+    // exec` to reach it.
+    //
+    // A sandbox that was stopped and that nothing here has touched since is not
+    // waited for: nothing in a bring-up starts it (the attach that follows does),
+    // so the wait could only ever run out — thirty seconds spent to reach the
+    // same warning. Anything else is polled: a fresh sandbox, one `run -d` or a
+    // `kit add` just restarted, one sbx reported in some third state.
     progress::step(progress::BOOT);
-    if sbx::wait_until_running(name, Duration::from_secs(30)) {
+    let up = match running {
+        Some(true) => true,
+        Some(false) if stopped => false,
+        _ => sbx::wait_until_running(name, Duration::from_secs(30)),
+    };
+    // 2d (part of the batch). The default model rides in as
+    // `ANTHROPIC_DEFAULT_MODEL` with the rest of the environment (see
+    // `Config::effective_env`), so there is nothing to install for it. What is
+    // left is undoing the *old* mechanism: sbxw used to write `model` into
+    // settings.json, and that key outranks the variable — a sandbox carrying
+    // one would ignore `claude_model` forever. Only sbxw's own leftover is
+    // removed; a `/model` choice that says something else stays.
+    let marker = model_migrated_marker(name);
+    let migrate_model = !cfg.claude_model.is_empty() && !marker.exists();
+    if up {
         progress::step(progress::TOOLING);
-        if let Err(e) = sbx::trust_workspace(name, workspace) {
-            tracing::warn!(
-                "could not pre-trust workspace (accept the trust dialog manually instead): {e:#}"
-            );
+        let mut tooling = sbx::Tooling::new()
+            // Pre-trust the workspace so Claude Code doesn't show the
+            // "workspace has not been trusted" banner and ignore
+            // .claude/settings.local.json's permissions.allow entries.
+            .trust_workspace(workspace)
+            // 2c. Enforce the .sbxw-artifacts convention (see
+            // assets/enforce-artifacts.js).
+            .artifact_hook()
+            // 2c-bis. Trusted session state: hooks that POST Claude Code
+            // lifecycle events to the daemon, which the island derives session
+            // state from.
+            .status_hooks(web_port)
+            // Subscription usage (5h / weekly %) via Claude Code's statusLine —
+            // it fetches the numbers itself and hands us structured JSON on
+            // stdin, so no OAuth token is reused out-of-band.
+            .usage_statusline(web_port)
+            // 2c-ter. The cross-sandbox relay: a CLI and MCP server this agent
+            // can use to ask *another* sandbox's agent something, with a human
+            // routing the question and releasing the answer.
+            .relay(web_port);
+        if migrate_model {
+            tooling = tooling.drop_stale_model(&cfg.claude_model);
         }
-        // 2c. Enforce the .sbxw-artifacts convention: block Claude from
-        // creating new non-code deliverables anywhere else (see
-        // assets/enforce-artifacts.js). Best-effort — the panel still works
-        // for anything the agent does place there even if this fails.
-        if let Err(e) = sbx::install_artifact_hook(name) {
-            tracing::warn!("could not install artifacts-enforcement hook: {e:#}");
-        }
-        // 2c-bis. Trusted session state: install hooks that POST Claude Code
-        // lifecycle events to the daemon (the island derives session state from
-        // these), and allow the sandbox to reach the host daemon. Best-effort —
-        // the island simply won't track a session whose events can't be delivered.
-        if let Err(e) = sbx::install_status_hooks(name, web_port) {
-            tracing::warn!("could not install status hooks: {e:#}");
-        }
-        // Subscription usage (5h / weekly %) via Claude Code's statusLine — it
-        // fetches the numbers itself and hands us structured JSON on stdin, so no
-        // OAuth token is reused out-of-band.
-        if let Err(e) = sbx::install_usage_statusline(name, web_port) {
-            tracing::warn!("could not install usage statusLine: {e:#}");
-        }
-        // 2c-ter. The cross-sandbox relay: a CLI this agent can run to ask
-        // *another* sandbox's agent something, with a human routing the question
-        // and releasing the answer (see `assets/relay-tool.js` and `/api/relay/*`).
-        // Best-effort — without it the agent simply has no one to ask.
-        if let Err(e) = sbx::install_relay_tool(name, web_port) {
-            tracing::warn!("could not install the cross-sandbox relay: {e:#}");
-        }
-        // The hook reaches the host daemon via host.docker.internal, but the
-        // proxy classifies that destination as `localhost:<port>` — so the
-        // allow rule must name the loopback host and port, not the DNS alias.
-        let hook_dest = format!("localhost:{web_port}");
-        if let Err(e) = sbx::policy_allow_network(Some(name), &hook_dest) {
-            tracing::warn!("could not allow {hook_dest} egress for hooks: {e:#}");
-        }
-        // 2d. The default model rides in as `ANTHROPIC_DEFAULT_MODEL` with the
-        // rest of the environment (see `Config::effective_env`), so there is
-        // nothing to install here. What is left is undoing the *old* mechanism:
-        // sbxw used to write `model` into settings.json, and that key outranks
-        // the variable — a sandbox carrying one would ignore `claude_model`
-        // forever. Only sbxw's own leftover is removed; a `/model` choice that
-        // says something else stays.
-        let marker = model_migrated_marker(name);
-        if !cfg.claude_model.is_empty() && !marker.exists() {
-            match sbx::drop_stale_settings_model(name, &cfg.claude_model) {
+        // Every piece is best-effort, and each says what it costs when it fails.
+        let warn_for = [
+            (
+                sbx::piece::TRUST,
+                "could not pre-trust workspace (accept the trust dialog manually instead)",
+            ),
+            (
+                sbx::piece::ARTIFACT_HOOK,
+                "could not install artifacts-enforcement hook",
+            ),
+            (sbx::piece::STATUS_HOOKS, "could not install status hooks"),
+            (
+                sbx::piece::USAGE_STATUSLINE,
+                "could not install usage statusLine",
+            ),
+            (sbx::piece::RELAY, "could not install the cross-sandbox relay"),
+            (
+                sbx::piece::STALE_MODEL,
+                "could not clear the old settings.json model key",
+            ),
+        ];
+        let model_cleared = match tooling.run(name) {
+            Ok(outcome) => {
+                for (piece, what) in warn_for {
+                    if let Some(e) = outcome.error(piece) {
+                        tracing::warn!("{what}: {e}");
+                    }
+                }
+                outcome.error(sbx::piece::STALE_MODEL).is_none()
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "could not install the agent tooling (workspace trust, hooks, \
+                     statusLine, relay): {e:#}"
+                );
+                false
+            }
+        };
+        if migrate_model {
+            if model_cleared {
                 // Recorded so the next bring-up spends nothing on it. A missing
                 // marker only ever costs a repeat of an idempotent no-op.
-                Ok(()) => {
-                    let _ = std::fs::write(&marker, "");
-                }
-                Err(e) => tracing::warn!(
-                    "could not clear the old settings.json model key: {e:#} — if this \
-                     sandbox predates ANTHROPIC_DEFAULT_MODEL it may stay on its old model"
-                ),
+                let _ = std::fs::write(&marker, "");
+            } else {
+                tracing::warn!(
+                    "if this sandbox predates ANTHROPIC_DEFAULT_MODEL it may stay on its old model"
+                );
             }
         }
+    } else if stopped && running == Some(false) {
+        tracing::warn!(
+            "sandbox '{name}' is stopped; skipping workspace trust pre-seed and tooling \
+             (they are refreshed on the next `sbxw up` while it runs)"
+        );
     } else {
         tracing::warn!(
             "sandbox '{name}' did not come up in time; skipping workspace trust pre-seed"
         );
     }
+    // The hooks reach the host daemon via host.docker.internal, but the proxy
+    // classifies that destination as `localhost:<port>` — so the allow rule
+    // must name the loopback host and port, not the DNS alias. Applied whether
+    // or not the tooling ran this time: hooks installed by an earlier bring-up
+    // need it just the same.
+    own_allow.push(format!("localhost:{web_port}"));
 
     // 3. Network policy (sandbox-scoped; requires the sandbox to exist).
     //    MUST run before kits: a kit's `startup` commands often download tools
@@ -2644,13 +2699,22 @@ pub(crate) fn provision_sandbox(
     if !cfg.network_allow.is_empty() || !cfg.network_deny.is_empty() {
         progress::step(progress::POLICY);
     }
+    //    sbxw's own rules (`own_allow`) ride in the same call as the
+    //    configured allowlist; on their own, a failure is only a warning.
     if !cfg.network_allow.is_empty() {
-        let resources = cfg.network_allow.join(",");
-        tracing::info!("network allowlist: {resources}");
+        tracing::info!("network allowlist: {}", cfg.network_allow.join(","));
+        let resources = [own_allow.as_slice(), cfg.network_allow.as_slice()]
+            .concat()
+            .join(",");
         apply_bringup_policy(
             "allowlist",
             sbx::policy_allow_network(Some(name), &resources),
         )?;
+    } else {
+        let resources = own_allow.join(",");
+        if let Err(e) = sbx::policy_allow_network(Some(name), &resources) {
+            tracing::warn!("could not allow {resources} egress: {e:#}");
+        }
     }
     if !cfg.network_deny.is_empty() {
         let resources = cfg.network_deny.join(",");
@@ -2744,12 +2808,10 @@ pub(crate) fn provision_sandbox(
     let prov_name = name.to_string();
     let prov_specs = port_specs;
     std::thread::spawn(move || {
-        // Wait up to ~60s for the sandbox to come up (started by `sbx run`).
-        for _ in 0..120 {
-            if sbx::is_running(&prov_name).unwrap_or(false) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(500));
+        // Wait up to ~60s for the sandbox to come up (started by `sbx run`) —
+        // unless section 2b already saw it up.
+        if !up {
+            sbx::wait_until_running(&prov_name, Duration::from_secs(60));
         }
         // Re-publish ports. sbx restores them on restart, but we republish anyway
         // in case conflict recovery chose a different host port than we expect.
