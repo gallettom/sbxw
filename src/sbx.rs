@@ -145,6 +145,13 @@ fn run_inherit(args: &[&str]) -> Result<()> {
     if let Some(sink) = crate::progress::sink() {
         return run_reporting(args, sink);
     }
+    run_interactive(args)
+}
+
+/// Run `sbx <args...>` on this process's terminal, always — for the commands
+/// that *are* a terminal session (`sbxw bash`, a `--no-web` agent attach), where
+/// a progress listener has nothing to forward.
+pub fn run_interactive(args: &[&str]) -> Result<()> {
     let status = Command::new(BIN)
         .args(args)
         .status()

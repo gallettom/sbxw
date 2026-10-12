@@ -586,13 +586,7 @@ fn main() -> Result<()> {
         }
         Cmd::Bash { name } => {
             // Foreground bash shell: `sbx exec -it <name> -- bash`, inheriting this terminal.
-            let status = std::process::Command::new("sbx")
-                .args(["exec", "-it", &name, "--", "bash"])
-                .status()?;
-            if !status.success() {
-                anyhow::bail!("`sbx exec -it {name} -- bash` exited with {status}");
-            }
-            Ok(())
+            sbx::run_interactive(&["exec", "-it", &name, "--", "bash"])
         }
         Cmd::Ssh {
             name,
@@ -1084,21 +1078,24 @@ fn quit_island() {
     let _ = std::process::Command::new("osascript")
         .args(["-e", &format!("quit app \"{ISLAND_PROC}\"")])
         .status();
-    for _ in 0..30 {
-        if !island_running() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+    if island_gone_within(30) {
+        return;
     }
     let _ = std::process::Command::new("pkill")
         .args(["-x", ISLAND_PROC])
         .status();
-    for _ in 0..20 {
+    island_gone_within(20);
+}
+
+/// Poll every 100 ms, up to `tries` times, for the island process to exit.
+fn island_gone_within(tries: u32) -> bool {
+    for _ in 0..tries {
         if !island_running() {
-            return;
+            return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    false
 }
 
 /// Fetches the latest release's tag name (e.g. "v1.0.8") from the GitHub API.
@@ -3970,15 +3967,10 @@ fn cmd_ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> 
 }
 
 fn run_agent_foreground(name: &str, cfg: &Config) -> Result<()> {
-    use std::process::Command;
     // Same argv as the web terminal's agent pane — including sbxw.toml's env,
     // which `sbx run` applies to the agent session. See `sbx::run_attach_args`.
     let args = sbx::run_attach_args(name, &cfg.env_pairs(), &cfg.env_files);
-    let status = Command::new("sbx").args(&args).status()?;
-    if !status.success() {
-        anyhow::bail!("`sbx run --name {name}` exited with {status}");
-    }
-    Ok(())
+    sbx::run_interactive(&args.iter().map(String::as_str).collect::<Vec<_>>())
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
