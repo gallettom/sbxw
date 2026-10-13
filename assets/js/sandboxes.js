@@ -342,6 +342,7 @@ function sandboxItemHtml(s, groupColor) {
       <span class="sbx-agent">${s.agent}</span>
       <div class="sbx-actions">${actions}</div>
     </div>
+    <div class="sbx-threads" data-sandbox="${s.name}" hidden></div>
   </div>`;
 }
 
@@ -409,6 +410,9 @@ function renderSidebar() {
 
 // Clicking a sandbox item (not a button) connects it to the focused pane.
 listEl.addEventListener('click', e => {
+  // A thread row reaches that thread — shown and focused — not its sandbox.
+  const threadRow = e.target.closest('.sbx-thread');
+  if (threadRow) { reachThread(threadRow.dataset.sandbox, threadRow.dataset.thread); return; }
   const btn = e.target.closest('button[data-action]');
   const item = e.target.closest('.sbx-item');
   if (!item) return;
@@ -435,6 +439,7 @@ async function loadSandboxes() {
     const res = await fetch('/api/sandboxes');
     sandboxes = await res.json();
     renderSidebar();
+    sandboxes.filter(s => s.status === 'running').forEach(s => refreshThreadList(s.name));
   } catch (_) {}
 }
 

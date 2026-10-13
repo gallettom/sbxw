@@ -582,7 +582,7 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   thread: its agent, and a shell in its worktree. Claude and Lead belong to
   the main pane. The shell is not an agent and does not count against the
   ceiling.
-- **Open one:** **⑂ Thread** on the main pane's bar, beside the mode switch, opens a dialog that asks
+- **Open one:** **⑂ Thread** on the main pane's bar opens a dialog that asks
   for a name (lower-case letters, digits, hyphens) and offers the existing
   threads as chips, a green dot marking the open ones. The thread opens in the
   first empty pane, or in a new one while the window has room, so the agent
@@ -622,6 +622,15 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   pane bars and draws a 2px outline on the group's outer edges only, so the
   group reads as one block. Moving a pane reconnects it, which replays its
   session; the session itself is untouched.
+- **Reach, fold, show:** once a sandbox has threads, **⑂ Thread** carries their
+  count (amber while one is blocked) and opens a menu: each thread with its
+  mark (● working, ? blocked, ✓ done, ○ stopped), a click to go to it, **Fold**
+  to close its pane, **Show all** / **Fold all**, and **+ New thread…** last.
+  Folding closes the pane, never the session; **Show all** fills only the room
+  the window has and starts stopped threads only up to the session ceiling.
+  The sidebar lists the same threads under each sandbox's row, to reach any of
+  them from anywhere. Every thread with a worktree is listed, so after sbxw
+  restarts its threads show as ○ stopped and a click starts one again.
 - **Threads told apart:** everything in a group wears the group's one hue.
   The agent's bar says `main`, filled; each thread's bar says `⑂ <name>`,
   outlined. Threads are told apart by name, not by colour: a hue per thread
@@ -696,9 +705,9 @@ conversation you already have, so it costs no extra session or worktree.
   thread's name, goal, scope and repo can be edited, threads removed or added, and
   the plan approved or refused. **Later** keeps it waiting; **Review plan** on
   the main pane brings it back. A refused plan is final.
-- **The lead pane says so.** From the click on ★ Lead mode, the main pane's chip
-  reads `★ lead` in violet, the toggle reads On in violet and the bar carries a violet
-  stripe. The daemon remembers which session was made lead
+- **The lead pane says so.** From the click on ★ Lead mode, the toggle reads On,
+  filled in violet (the group's hue when grouped) and kept on the bar even when
+  the pane is not focused, and the bar carries a stripe of the same colour. The daemon remembers which session was made lead
   (`GET /api/leads`), so a reload keeps the mark, and restarting that session,
   a new conversation that never read `/lead`, removes it. A plan pending or
   with threads at work keeps the mark too.

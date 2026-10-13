@@ -163,7 +163,7 @@ function createPane(index) {
            pane's other work (Project, the plan), left of the spacer, so they
            read apart from the session plumbing on the right; and last before
            the spacer, so showing them on demand moves nothing else. -->
-      <button class="pane-btn pane-main-action pane-new-thread" id="pnewthread-${index}" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own">⑂<span class="mode-word"> Thread</span></button>
+      <button class="pane-btn pane-main-action pane-new-thread" id="pnewthread-${index}" aria-haspopup="menu" aria-expanded="false" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own">⑂<span class="mode-word"> Thread</span><span class="thread-count" hidden></span></button>
       <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Lead mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Lead mode</span> <span class="lead-state">Off</span></button>
       <span class="spacer"></span>
       <button class="pane-btn pane-session-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
@@ -227,8 +227,12 @@ function createPane(index) {
     if (pane.thread) { if (pane.mode !== 'thread') connectPane(index, pane.sandbox, 'thread', pane.thread); }
     else openThread(index);
   });
+  // With threads, the button opens the menu of them; with none, the menu would
+  // hold only "New thread…", so it goes straight there.
   newThreadBtn.addEventListener('click', () => {
-    if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX && !pane.thread) openThread(index);
+    if (!pane.sandbox || pane.sandbox === MONITOR_SANDBOX || pane.thread) return;
+    if (knownThreads(pane.sandbox).length) toggleThreadMenu(index);
+    else openThread(index);
   });
   leadBtn.addEventListener('click', () => {
     if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX && !pane.thread) startLead(index);
@@ -943,6 +947,7 @@ closeConfirm.addEventListener('click', async () => {
   const at = panes.slice(0, paneCount)
     .findIndex(p => p.sandbox === ask.sandbox && p.mode === 'thread' && p.thread === ask.thread);
   if (at >= 0) { if (paneCount > 1) closePane(at); else emptyPane(at); }
+  refreshThreadList(ask.sandbox);
 });
 document.getElementById('thread-close-x').addEventListener('click', closeCloseModal);
 document.getElementById('thread-close-cancel').addEventListener('click', closeCloseModal);
@@ -952,7 +957,251 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   if (!threadOverlay.classList.contains('hidden')) closeThreadModal();
   if (!closeOverlay.classList.contains('hidden')) closeCloseModal();
+  if (threadMenu.idx != null) {
+    const idx = threadMenu.idx;
+    closeThreadMenu();
+    document.getElementById(`pnewthread-${idx}`)?.focus();
+  }
 });
+
+// ── Threads, shown and folded ─────────────────────────────────────────────
+// Folding a thread closes its pane, never its session: the PTY outlives the
+// socket, so showing it again reattaches to an agent that kept working. The
+// threads of a sandbox are listed twice — as tabs under its main pane, to show
+// or fold them all at once, and as rows under its sidebar entry, to reach any
+// of them from anywhere.
+
+// sandbox → { open: Map(thread → session running?), room: sessions the
+// ceiling still allows }, as the daemon last listed them. Every thread with a
+// worktree is in it, running or not: a restart of sbxw ends every session but
+// keeps the worktrees, and those threads are one click from running again.
+const threadLists = new Map();
+// The open Thread menu: its element, and the pane whose button opened it.
+const threadMenu = { el: null, idx: null };
+
+async function refreshThreadList(sandbox) {
+  if (!sandbox || sandbox === MONITOR_SANDBOX) return;
+  const info = await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads`)
+    .then(r => r.json()).catch(() => null);
+  if (!info?.ok) return;
+  threadLists.set(sandbox, {
+    open: new Map(info.threads.map(t => [t.name, !!t.open])),
+    room: Math.max(0, (info.max || 0) - (info.open || 0)),
+  });
+  renderThreadViews();
+}
+
+// A session is registered when its socket connects, a moment after the pane
+// asks: read the list again once it has.
+function refreshThreadListSoon(sandbox) { setTimeout(() => refreshThreadList(sandbox), 1500); }
+
+// What the daemon listed, plus what has turned up since: a thread whose hooks
+// have reported, or one already in a pane.
+function knownThreads(sandbox) {
+  const names = new Set(threadLists.get(sandbox)?.open.keys() || []);
+  const prefix = `${sandbox}::thread:`;
+  for (const key of agentStates.keys()) if (key.startsWith(prefix)) names.add(key.slice(prefix.length));
+  panes.slice(0, paneCount).forEach(p => { if (p.sandbox === sandbox && p.thread) names.add(p.thread); });
+  return [...names].sort();
+}
+
+function threadRunning(sandbox, name) {
+  return threadPaneIndex(sandbox, name) >= 0
+    || agentStates.has(`${sandbox}::thread:${name}`)
+    || !!threadLists.get(sandbox)?.open.get(name);
+}
+
+function threadPaneIndex(sandbox, name) {
+  return panes.slice(0, paneCount).findIndex(p => p.sandbox === sandbox && p.thread === name);
+}
+
+// Its plan state when it has one (the lead's view of it), else what its
+// session is doing right now.
+function threadMark(sandbox, name) {
+  if (!threadRunning(sandbox, name)) return { mark: '○', state: 'stopped' };
+  const st = typeof planThreadState === 'function' ? planThreadState(sandbox, name) : null;
+  if (st && PLAN_STATE_MARK[st.state]) return { mark: PLAN_STATE_MARK[st.state], state: st.state };
+  const live = agentStates.get(`${sandbox}::thread:${name}`);
+  if (live === 'working') return { mark: '●', state: 'working' };
+  if (live === 'attention') return { mark: '?', state: 'blocked' };
+  return { mark: '', state: '' };
+}
+
+// What clicking a thread does, for its tooltip.
+function threadVerb(sandbox, name) {
+  if (threadPaneIndex(sandbox, name) >= 0) return `Go to ${name}`;
+  return threadRunning(sandbox, name) ? `Show ${name}` : `Start ${name} again — its worktree is kept, its session had stopped`;
+}
+
+// A sidebar row: shown and focused on click, wherever it is.
+function threadRowHtml(sandbox, name) {
+  const at = threadPaneIndex(sandbox, name);
+  const { mark, state } = threadMark(sandbox, name);
+  const markHtml = mark ? `<span class="thread-mark" data-state="${state}">${mark}</span>` : '';
+  const badge = at >= 0 && paneCount > 1 ? `<span class="sbx-pane-badge">P${at + 1}</span>` : '';
+  return `<button type="button" class="sbx-thread${at >= 0 ? ' shown' : ''}" data-sandbox="${escHtml(sandbox)}"
+    data-thread="${escHtml(name)}" title="${escHtml(threadVerb(sandbox, name))}">⑂ ${escHtml(name)}${markHtml}${badge}</button>`;
+}
+
+// Only touched when it changed: these repaint on every agent event, and a
+// rebuilt button would drop the keyboard focus sitting on it.
+function setHtml(el, html) { if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; } }
+
+function renderThreadViews() {
+  // The Thread button counts the sandbox's threads, and turns amber while one
+  // of them is waiting for you — the menu is where you find which.
+  panes.forEach((p, i) => {
+    const count = document.getElementById(`pnewthread-${i}`)?.querySelector('.thread-count');
+    if (!count) return;
+    const main = i < paneCount && p.sandbox && !p.thread && p.sandbox !== MONITOR_SANDBOX;
+    const names = main ? knownThreads(p.sandbox) : [];
+    count.hidden = !names.length;
+    count.textContent = String(names.length);
+    count.dataset.state = names.some(n => threadMark(p.sandbox, n).state === 'blocked') ? 'blocked' : '';
+  });
+  listEl.querySelectorAll('.sbx-threads').forEach(box => {
+    const names = knownThreads(box.dataset.sandbox);
+    box.hidden = !names.length;
+    setHtml(box, names.map(n => threadRowHtml(box.dataset.sandbox, n)).join(''));
+  });
+  if (threadMenu.idx != null) renderThreadMenu();
+}
+
+// ── The Thread menu ──
+// One popover for the whole page, hung off <body> so a short pane cannot clip
+// it, and placed under whichever pane's Thread button opened it (`threadMenu`,
+// declared with `threadLists`).
+
+function toggleThreadMenu(idx) {
+  if (threadMenu.idx === idx) { closeThreadMenu(); return; }
+  closeThreadMenu();
+  if (!threadMenu.el) {
+    threadMenu.el = document.createElement('div');
+    threadMenu.el.className = 'thread-menu';
+    threadMenu.el.setAttribute('role', 'menu');
+    threadMenu.el.addEventListener('click', onThreadMenuClick);
+    document.body.appendChild(threadMenu.el);
+  }
+  threadMenu.idx = idx;
+  renderThreadMenu();
+  const btn = document.getElementById(`pnewthread-${idx}`);
+  btn.setAttribute('aria-expanded', 'true');
+  const r = btn.getBoundingClientRect();
+  const w = threadMenu.el.offsetWidth;
+  threadMenu.el.style.top = `${r.bottom + 4}px`;
+  threadMenu.el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+  threadMenu.el.querySelector('button')?.focus();
+}
+
+function closeThreadMenu() {
+  if (threadMenu.idx == null) return;
+  document.getElementById(`pnewthread-${threadMenu.idx}`)?.setAttribute('aria-expanded', 'false');
+  threadMenu.idx = null;
+  threadMenu.el.hidden = true;
+}
+
+function renderThreadMenu() {
+  const p = panes[threadMenu.idx];
+  const sandbox = p?.sandbox;
+  if (!sandbox || p.thread) { closeThreadMenu(); return; }
+  const names = knownThreads(sandbox);
+  const shown = names.filter(n => threadPaneIndex(sandbox, n) >= 0).length;
+  const rows = names.map(n => {
+    const at = threadPaneIndex(sandbox, n);
+    const { mark, state } = threadMark(sandbox, n);
+    return `<div class="thread-menu-row${at >= 0 ? ' shown' : ''}">
+      <button type="button" role="menuitem" data-go="${escHtml(n)}"
+        title="${escHtml(threadVerb(sandbox, n))}">⑂ ${escHtml(n)}${mark
+          ? `<span class="thread-mark" data-state="${state}">${mark}</span>` : ''}${at >= 0 && paneCount > 1
+          ? `<span class="sbx-pane-badge">P${at + 1}</span>` : ''}</button>
+      ${at >= 0 ? `<button type="button" role="menuitem" class="thread-menu-fold" data-fold="${escHtml(n)}"
+        title="Close its pane — it keeps running">Fold</button>` : ''}
+    </div>`;
+  }).join('');
+  setHtml(threadMenu.el, `
+    <div class="thread-menu-list">${rows}</div>
+    <div class="thread-menu-all">
+      <button type="button" role="menuitem" data-all="show" ${shown === names.length ? 'disabled' : ''}
+        title="Put every thread on screen, as far as the window has room">Show all</button>
+      <button type="button" role="menuitem" data-all="fold" ${shown ? '' : 'disabled'}
+        title="Close every thread's pane — their sessions keep running">Fold all</button>
+    </div>
+    <button type="button" role="menuitem" class="thread-menu-new" data-new>+ New thread…</button>`);
+  threadMenu.el.hidden = false;
+}
+
+function onThreadMenuClick(e) {
+  const idx = threadMenu.idx;
+  const sandbox = panes[idx]?.sandbox;
+  const b = e.target.closest('button');
+  if (!b || !sandbox || b.disabled) return;
+  // Fold keeps the menu open, so several can go in a row; anything that takes
+  // you somewhere closes it.
+  if (b.dataset.fold) { foldThread(sandbox, b.dataset.fold); return; }
+  closeThreadMenu();
+  if (b.dataset.go) reachThread(sandbox, b.dataset.go, idx);
+  else if (b.dataset.all === 'show') showAllThreads(sandbox, idx);
+  else if (b.dataset.all === 'fold') foldAllThreads(sandbox);
+  else if ('new' in b.dataset) openThread(idx);
+}
+
+document.addEventListener('mousedown', e => {
+  if (threadMenu.idx == null) return;
+  if (threadMenu.el.contains(e.target) || e.target.closest(`#pnewthread-${threadMenu.idx}`)) return;
+  closeThreadMenu();
+}, true);
+window.addEventListener('resize', closeThreadMenu);
+
+// On screen already: focus it. Otherwise show it, as the Thread button would.
+function reachThread(sandbox, name, fromIdx = focusedPane) {
+  const at = threadPaneIndex(sandbox, name);
+  if (at >= 0) { setFocusedPane(at); return; }
+  showThread(fromIdx, sandbox, name);
+  saveLayout();
+  refreshThreadListSoon(sandbox);
+}
+
+function foldThread(sandbox, name) {
+  const at = threadPaneIndex(sandbox, name);
+  if (at < 0) return;
+  if (paneCount > 1) closePane(at); else emptyPane(at);
+  saveLayout();
+  refreshThreadList(sandbox);
+}
+
+// Right to left, so closing one never moves the next one to close.
+function foldAllThreads(sandbox) {
+  panes.slice(0, paneCount)
+    .map((p, i) => (p.sandbox === sandbox && p.thread ? i : -1))
+    .filter(i => i >= 0).reverse()
+    .forEach(i => { if (paneCount > 1) closePane(i); else emptyPane(i); });
+  const main = panes.slice(0, paneCount).findIndex(p => p.sandbox === sandbox && !p.thread);
+  if (main >= 0) setFocusedPane(main);
+  saveLayout();
+  refreshThreadList(sandbox);
+}
+
+// Only into room the window has: showThread would otherwise take over a pane,
+// and "show all" must not hide one thread to show another. What does not fit
+// stays a folded tab.
+function showAllThreads(sandbox, fromIdx) {
+  const roomy = () => panes.slice(0, paneCount).some(p => !p.sandbox) || paneCount < computeMaxPanes();
+  // A stopped thread starts a session, and the daemon caps how many run.
+  let sessions = threadLists.get(sandbox)?.room ?? Infinity;
+  for (const name of knownThreads(sandbox)) {
+    if (threadPaneIndex(sandbox, name) >= 0) continue;
+    if (!roomy()) break;
+    const stopped = !threadRunning(sandbox, name);
+    if (stopped && sessions <= 0) continue;
+    if (stopped) sessions--;
+    showThread(fromIdx, sandbox, name);
+  }
+  refreshThreadListSoon(sandbox);
+  const main = panes.slice(0, paneCount).findIndex(p => p.sandbox === sandbox && !p.thread);
+  if (main >= 0) setFocusedPane(main);
+  saveLayout();
+  renderThreadViews();
+}
 
 // ── Lead ──────────────────────────────────────────────────────────────────
 // Lead makes the sandbox's main session its lead: sbxw installs `/lead` and
@@ -1012,7 +1261,7 @@ let groupsQueued = false;
 function schedulePaintGroups() {
   if (groupsQueued) return;
   groupsQueued = true;
-  requestAnimationFrame(() => { groupsQueued = false; paintGroups(); });
+  requestAnimationFrame(() => { groupsQueued = false; paintGroups(); renderThreadViews(); });
 }
 window.addEventListener('resize', schedulePaintGroups);
 

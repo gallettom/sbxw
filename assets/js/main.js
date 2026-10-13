@@ -223,6 +223,7 @@ function applyAgentStates() {
   listEl.querySelectorAll('.sbx-item')
     .forEach(row => paintLiseret(row, row.dataset.name, watchedSandbox));
 
+  if (typeof renderThreadViews === 'function') renderThreadViews();
   announceWatching(watchedSandbox);
 }
 
@@ -291,6 +292,9 @@ function ingestSession(info, seed = false) {
   // session sits between prompts, and that is not news.
   if (!seed && !thread && info.state === 'idle' && (prev === 'working' || prev === 'attention'))
     flashDone(info.sandbox);
+  // A thread that ended leaves its tab and its sidebar row: ask the daemon
+  // which are still open rather than guess from one event.
+  if (thread && info.state === 'exited' && typeof refreshThreadList === 'function') refreshThreadList(info.sandbox);
   applyAgentStates();
 }
 

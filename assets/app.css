@@ -859,6 +859,20 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     margin-bottom: .2rem; margin-right: -0.25rem;
   }
+  /* The threads of a sandbox, under its row: the way to any of them from
+     anywhere, folded or not. Hung off a hairline so they read as its
+     branches; a shown one is in full text, a folded one muted. */
+  .sbx-threads { margin: .3rem 0 0 .2rem; border-left: 1px solid var(--c-border); }
+  .sbx-threads[hidden] { display: none; }
+  .sbx-thread {
+    display: flex; align-items: center; gap: .3rem; width: 100%;
+    font: inherit; font-size: 11px; text-align: left; cursor: pointer;
+    padding: .2rem .5rem; background: none; border: none; border-radius: 0 4px 4px 0;
+    color: var(--c-text-muted);
+  }
+  .sbx-thread:hover { background: var(--c-elevated); color: var(--c-text); }
+  .sbx-thread.shown { color: var(--c-text); }
+  .sbx-thread .sbx-pane-badge { margin-left: auto; padding: .1rem .3rem; float: none; }
   .sbx-pane-badge {
     display: inline-block; font-size: 9px; color: var(--c-blue);
     background: var(--c-blue-tint); border: 1px solid var(--c-blue); border-radius: 4px;
@@ -1405,6 +1419,61 @@
   }
   .pane-close-btn:hover { color: var(--c-red); background: rgba(248,81,73,.1); }
   .pane-term { flex: 1; padding:0; min-height: 0; }
+  /* ── The Thread menu ──
+     Opened from a main pane's ⑂ Thread button once the sandbox has threads:
+     each thread (click to go to it, Fold to close its pane), Show all / Fold
+     all, and New thread last. A shown thread is in full text, a folded one
+     muted — the same reading as the sidebar rows. The mark after a name is the
+     chip's: ● working, ? blocked, ✓ done. */
+  .pane-bar .thread-count {
+    display: inline-block; min-width: 1.3em; margin-left: .35rem; padding: 0 .3rem;
+    border-radius: 8px; text-align: center; font-weight: 600;
+    background: var(--c-border); color: var(--c-text);
+  }
+  .pane-bar .thread-count[hidden] { display: none; }
+  .pane-bar .thread-count[data-state="blocked"] { background: var(--c-amber); color: var(--c-bg); }
+  .pane-bar .pane-new-thread[aria-expanded="true"] { background: var(--c-border); }
+  .thread-menu {
+    position: fixed; z-index: 60; min-width: 220px; max-width: 320px;
+    padding: .3rem; font-size: 12px;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(1, 4, 9, .5);
+  }
+  .thread-menu[hidden] { display: none; }
+  .thread-menu button {
+    font: inherit; color: var(--c-text); background: none; border: none;
+    border-radius: 4px; cursor: pointer; padding: .3rem .5rem; text-align: left;
+  }
+  .thread-menu button:hover:not(:disabled) { background: var(--c-elevated); }
+  .thread-menu button:disabled { color: var(--c-dim); cursor: default; }
+  .thread-menu button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  .thread-menu-list { max-height: 50vh; overflow-y: auto; }
+  .thread-menu-row { display: flex; align-items: center; }
+  .thread-menu-row > [data-go] {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: .35rem;
+    color: var(--c-text-muted); white-space: nowrap; overflow: hidden;
+  }
+  .thread-menu-row.shown > [data-go] { color: var(--c-text); }
+  .thread-menu-row .sbx-pane-badge { margin-left: auto; float: none; padding: .1rem .3rem; }
+  .thread-menu .thread-menu-fold { font-size: 11px; color: var(--c-text-muted); }
+  .thread-menu-all {
+    display: flex; gap: .2rem; margin-top: .3rem; padding-top: .3rem;
+    border-top: 1px solid var(--c-elevated);
+  }
+  .thread-menu-all button { flex: 1; text-align: center; }
+  .thread-menu .thread-menu-new {
+    display: block; width: 100%; margin-top: .3rem; padding-top: .4rem;
+    border-top: 1px solid var(--c-elevated); border-radius: 0 0 4px 4px; color: var(--c-blue);
+  }
+  .thread-mark { font-weight: 600; }
+  .thread-mark[data-state="working"]  { color: var(--c-blue); }
+  .thread-mark[data-state="blocked"]  { color: var(--c-amber); }
+  .thread-mark[data-state="done"]     { color: var(--c-green); }
+  .thread-mark[data-state="failed"]   { color: var(--c-red); }
+  .thread-mark[data-state="starting"] { color: var(--c-text-muted); }
+  /* ○ stopped: the worktree is there, the session is not (sbxw restarted, or
+     the agent exited). Going to it starts it again. */
+  .thread-mark[data-state="stopped"]  { color: var(--c-dim); font-weight: 400; }
   /* Ensure the scrollbar stays usable even when the terminal process hides
      the OS cursor (mouse-tracking mode sets cursor:none on .xterm). */
   .pane-term .xterm-viewport { cursor: default !important; scrollbar-color: var(--c-border) transparent; scrollbar-width: thin; }
