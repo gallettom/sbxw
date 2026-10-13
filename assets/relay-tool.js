@@ -165,6 +165,12 @@ function readStdin() {
 const me =
   process.env.SANDBOX_NAME || process.env.SANDBOX_VM_ID || os.hostname();
 
+// The thread this runs in, if any: sbxw starts a thread's session with
+// SBXW_THREAD set, and everything it runs inherits it. Sent with every request
+// a session opens, so the outcome is typed back into the thread that asked and
+// not into the sandbox's agent beside it.
+const thread = process.env.SBXW_THREAD || "";
+
 /// Write every released screenshot to a file, and return their paths.
 ///
 /// An image is the one thing an agent cannot be handed as text: it has to
@@ -298,7 +304,7 @@ async function main() {
     if (!question) usage(verb === "shot" ? "say what you need to see" : "nothing to ask");
     const res = await request(
       verb === "shot" ? "/api/relay/shot" : "/api/relay/ask",
-      { from: me, question, timeout },
+      { from: me, thread, question, timeout },
       (timeout + 10) * 1000,
     );
     process.stdout.write(collect(res).text);
@@ -346,6 +352,7 @@ module.exports = {
   collect,
   describeOutcome,
   me,
+  thread,
   DEFAULT_TIMEOUT,
   MAX_TIMEOUT,
   SHOT_MAX_TIMEOUT,

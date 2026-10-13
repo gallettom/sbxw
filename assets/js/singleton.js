@@ -43,6 +43,8 @@ const SBXW_APP_SCRIPTS = [
   '/js/relay.js',
   // Same reason: plan dialogs arrive on that stream too.
   '/js/plans.js',
+  // Same reason: the chat dock follows chats on that stream.
+  '/js/chat-dock.js',
 ];
 
 function sbxwLoadScript(src) {

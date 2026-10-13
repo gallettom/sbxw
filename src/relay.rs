@@ -124,6 +124,12 @@ pub(crate) struct RelayRequest {
     pub(crate) id: String,
     /// Sandbox that asked.
     pub(crate) from: String,
+    /// The thread in `from` that asked, when it was one (its `SBXW_THREAD`).
+    /// What decides whose session an outcome is typed into: a sandbox runs its
+    /// agent and its threads side by side, and an answer typed into the agent
+    /// lands with a session that never asked the question.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) from_thread: Option<String>,
     /// What is being asked for. Fixed at `open` — a request never changes what
     /// it is, only where it stands.
     pub(crate) kind: RelayKind,
@@ -247,9 +253,25 @@ impl Relay {
     /// Open a request. Always succeeds — deciding whether a question deserves
     /// asking, or an interruption deserves a screenshot, is the human's job and
     /// not this function's.
+    /// Only the tests open a request on behalf of nobody in particular: the
+    /// endpoints always say whether a thread asked (see `open_from`).
+    #[cfg(test)]
     pub(crate) fn open(
         &self,
         from: &str,
+        kind: RelayKind,
+        question: &str,
+        now: u64,
+    ) -> RelayRequest {
+        self.open_from(from, None, kind, question, now)
+    }
+
+    /// `open`, for a request asked by one of `from`'s threads rather than its
+    /// agent — see `RelayRequest::from_thread`.
+    pub(crate) fn open_from(
+        &self,
+        from: &str,
+        from_thread: Option<&str>,
         kind: RelayKind,
         question: &str,
         now: u64,
@@ -258,6 +280,7 @@ impl Relay {
         let req = RelayRequest {
             id: id.clone(),
             from: from.to_string(),
+            from_thread: from_thread.map(str::to_string),
             kind,
             question: question.to_string(),
             to: None,

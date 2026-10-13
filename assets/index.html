@@ -951,6 +951,37 @@
 
 <div class="paste-toast" id="paste-toast"></div>
 
+<!-- ── Chat dock ──
+     A chat with the ephemeral-chat sandboxes that needs no terminal: the
+     corner button opens a panel over the panes. See /js/chat-dock.js. -->
+<div class="cd-dock" id="cd-dock">
+  <button type="button" class="cd-peek" id="cd-peek" hidden>
+    <span class="cd-peek-who" id="cd-peek-who"></span>
+    <span class="cd-peek-text" id="cd-peek-text"></span>
+  </button>
+  <div class="cd-panel" id="cd-panel" role="dialog" aria-label="Chat" hidden>
+    <div class="cd-head">
+      <div class="cd-tabs" id="cd-tabs" role="tablist"></div>
+      <button type="button" class="cd-close" id="cd-close" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="cd-log" id="cd-log" aria-live="polite"></div>
+    <form class="cd-composer" id="cd-composer">
+      <div class="cd-row">
+        <textarea id="cd-input" rows="1" placeholder="Ask the sandbox…" aria-label="Message"></textarea>
+        <button type="submit" class="cd-send">Send</button>
+      </div>
+      <div class="cd-foot">
+        <span class="cd-hint" id="cd-hint"></span>
+        <button type="button" class="cd-to-pane" id="cd-to-pane">Open in a pane</button>
+      </div>
+    </form>
+  </div>
+  <button type="button" class="cd-launcher" id="cd-launcher" aria-expanded="false" aria-controls="cd-panel" title="Chat (⌥C)" aria-label="Chat">
+    <span class="cd-glyph" id="cd-glyph" aria-hidden="true"></span>
+    <span class="cd-badge" id="cd-badge" hidden></span>
+  </button>
+</div>
+
 <script>
 const INITIAL_SANDBOX = "__SANDBOX__";
 // The host monitor is one fixed command from sbxw.toml (`monitor_cmd`); with

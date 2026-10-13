@@ -563,6 +563,36 @@ Everything else is a normal sandbox: a chat sandbox still reads your
 a project sandbox already holds one of those host ports, sbx's conflict recovery
 gives the chat sandbox a different one.
 
+### The chat dock
+
+Asking a question and reading the answer doesn't need a terminal. The button in
+the web UI's bottom-right corner — the header's `>_` drawn in the same
+dot-matrix as the background-job cards — opens a chat panel over the panes,
+talking to the island's `ephemeral-chat[-N]` sandboxes. **⌥C** toggles it from
+anywhere, terminals included (Ctrl/⌘+K would have been the obvious pick, but
+Ctrl+K is kill-line in every shell a pane runs).
+
+- One tab per `ephemeral-chat[-N]` sandbox; **＋ New chat** sends the first
+  message with `fresh: true`, so the daemon picks the name and boots it. From
+  four sandboxes up the composer warns that each one holds disk and memory, as
+  the island does.
+- The avatar says what the agents are doing without opening anything: the
+  cursor blinks at rest, the grid fills and drains while one works, the button
+  turns amber when one asks you something, and a reply that arrives while the
+  panel is closed shows a badge and a two-line peek above the button.
+- A pending `AskUserQuestion` is answered in the panel (`POST /api/answer`, all
+  steps at once). A permission prompt, or one sbxw can't type into, offers
+  **Answer in a pane** instead; **Open in a pane** is always there for the full
+  session.
+
+It is the island's composer in the browser, on the same calls — `POST
+/api/chat/push`, the `session` events on `/api/stream`, the `reply` the `Stop`
+hook carries — so there is no server side of its own. The one consequence: the
+daemon keeps a single reply per session, so the transcript is the tab's own,
+held in `sessionStorage` (it survives a reload, not a closed tab). The code is
+`assets/js/chat-dock.js`. The background-job cards and the paste toast stack
+above the button, which owns the corner.
+
 ## Threads: several agents in one sandbox
 
 Claude already splits work inside one session, with subagents. That work is
@@ -825,7 +855,11 @@ approved answer, a refusal, or "still open, pick it up later with
 `check_sandbox_question`". It is bounded rather than blocking so an agent's tool
 call never hangs on a human who has stepped away. If the answer is approved while
 nobody is waiting on it, sbxw types it into the asking session instead, the same
-way the island's composer does.
+way the island's composer does. "The asking session" means the thread when a
+thread asked: the relay tools send its `SBXW_THREAD` with the request, so the
+answer doesn't land in the sandbox's agent beside it. A thread closed in the
+meantime is not reopened for this; the agent gets the answer, with a line naming
+the thread it was for.
 
 **Your side.** A popup opens in the web UI with the question and one button per
 running sandbox. Click one and the question is typed into that sandbox's agent,

@@ -460,7 +460,7 @@ async function callTool(name, args) {
     if (!question) return textResult("No question given.", true);
     const res = await relay.request(
       "/api/relay/ask",
-      { from: relay.me, question, timeout },
+      { from: relay.me, thread: THREAD, question, timeout },
       (timeout + 10) * 1000,
     );
     return outcomeResult(res);
@@ -475,7 +475,7 @@ async function callTool(name, args) {
     if (!reason) return textResult("No reason given — say what you need to see.", true);
     const res = await relay.request(
       "/api/relay/shot",
-      { from: relay.me, question: reason, timeout },
+      { from: relay.me, thread: THREAD, question: reason, timeout },
       (timeout + 10) * 1000,
     );
     return outcomeResult(res);

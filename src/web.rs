@@ -1153,6 +1153,7 @@ const STATIC_ASSETS: &[(&str, &str, &str)] = &[
     js!("main.js"),
     js!("relay.js"),
     js!("plans.js"),
+    js!("chat-dock.js"),
 ];
 
 pub async fn serve(
@@ -4383,6 +4384,10 @@ fn last_index_of(hay: &[u8], needle: &[u8]) -> Option<usize> {
 #[derive(Deserialize)]
 struct RelayAskBody {
     from: String,
+    /// The asking thread's name (`SBXW_THREAD`), absent or blank for the
+    /// sandbox's own agent. Older in-sandbox tools never send it.
+    #[serde(default)]
+    thread: Option<String>,
     question: String,
     /// Seconds the call may park before reporting back (see `relay_timeout`).
     #[serde(default)]
@@ -4612,10 +4617,19 @@ async fn relay_open_and_park(
     if question.is_empty() {
         return err_json("empty question");
     }
-    let req = state.relay.open(&body.from, kind, &question, now_ms());
+    let thread = non_blank(body.thread.as_deref());
+    if let Some(t) = &thread {
+        if let Some(rejected) = reject_invalid_thread(&body.from, t) {
+            return rejected;
+        }
+    }
+    let req = state
+        .relay
+        .open_from(&body.from, thread.as_deref(), kind, &question, now_ms());
     tracing::info!(
-        "relay: '{}' opened {} ({kind:?}) — {question:?}",
+        "relay: '{}'{} opened {} ({kind:?}) — {question:?}",
         body.from,
+        thread.as_deref().map(|t| format!(" (thread {t})")).unwrap_or_default(),
         req.id
     );
     relay_wait_reply(&state, &req.id, &body.from, body.timeout).await
@@ -4800,8 +4814,19 @@ fn relay_outcome_message(req: &crate::relay::RelayRequest) -> String {
 /// line — for those the pane itself is the receipt, since whatever was typed is
 /// typed where the human can see it.
 fn spawn_push(state: Arc<AppState>, sandbox: String, text: String, on_fail: Option<String>) {
+    spawn_push_to(state, sandbox, "claude".to_string(), text, on_fail);
+}
+
+/// `spawn_push`, into the session of `mode` — see `push_text_to`.
+fn spawn_push_to(
+    state: Arc<AppState>,
+    sandbox: String,
+    mode: String,
+    text: String,
+    on_fail: Option<String>,
+) {
     tokio::spawn(async move {
-        if let Err(e) = push_text(&state, &sandbox, &text).await {
+        if let Err(e) = push_text_to(&state, &sandbox, &mode, &text).await {
             tracing::warn!("could not deliver to '{sandbox}': {e}");
             if let Some(id) = on_fail {
                 let _ = state.relay.unroute(
@@ -4818,12 +4843,32 @@ fn spawn_push(state: Arc<AppState>, sandbox: String, text: String, on_fail: Opti
 /// whose own call already came back empty and moved on: nothing is waiting to
 /// collect the outcome, so typing it in is the only way it is ever read.
 fn tell_asker(state: &Arc<AppState>, req: &crate::relay::RelayRequest) {
-    spawn_push(
-        state.clone(),
-        req.from.clone(),
-        relay_outcome_message(req),
-        None,
-    );
+    let (mode, text) = asker_delivery(req, |mode| pty_alive(&state.sessions, &req.from, mode));
+    spawn_push_to(state.clone(), req.from.clone(), mode, text, None);
+}
+
+/// Whose session a settled request is typed into, and what is typed.
+///
+/// The thread that asked, while its session is open. A thread closed since
+/// then is not reopened for it — `push_text_to` would bring back a worktree
+/// somebody just closed, or merged — so the outcome goes to the sandbox's agent
+/// instead, saying which thread it was for. `alive` answers for a session mode.
+fn asker_delivery(
+    req: &crate::relay::RelayRequest,
+    alive: impl Fn(&str) -> bool,
+) -> (String, String) {
+    let text = relay_outcome_message(req);
+    match req.from_thread.as_deref() {
+        None => ("claude".to_string(), text),
+        Some(t) if alive(&thread_mode(t)) => (thread_mode(t), text),
+        Some(t) => (
+            "claude".to_string(),
+            format!(
+                "[sbxw relay] This was asked by thread \"{t}\", whose session is closed, so it \
+                 comes to you instead.\n\n{text}"
+            ),
+        ),
+    }
 }
 
 /// `POST /api/relay/:id/route` — a human picks the sandbox that gets the
@@ -6891,6 +6936,33 @@ mod tests {
         assert!(msg.contains("declined"), "{msg}");
         assert!(msg.contains("not over this channel"), "{msg}");
         assert!(msg.contains("do not re-send"), "{msg}");
+    }
+
+    /// An outcome goes back to the session that asked: the thread when a thread
+    /// asked and is still open, the sandbox's agent otherwise — never a thread
+    /// reopened just to be told.
+    #[test]
+    fn a_relay_outcome_goes_back_to_the_thread_that_asked() {
+        let relay = Relay::new();
+        let from_thread =
+            relay.open_from("alpha", Some("api-auth"), RelayKind::Screenshot, "the login page", 1_000);
+        let approved = relay
+            .approve(&from_thread.id, Some("looks right"), vec![], 2_000)
+            .unwrap();
+
+        let (mode, msg) = asker_delivery(&approved, |m| m == "thread:api-auth");
+        assert_eq!(mode, thread_mode("api-auth"));
+        assert!(!msg.contains("session is closed"), "{msg}");
+
+        let (mode, msg) = asker_delivery(&approved, |_| false);
+        assert_eq!(mode, "claude");
+        assert!(msg.contains("thread \"api-auth\", whose session is closed"), "{msg}");
+        assert!(msg.contains("looks right"), "{msg}");
+
+        let from_agent = relay.open("alpha", RelayKind::Question, "the base URL?", 3_000);
+        let denied = relay.deny(&from_agent.id, None, 4_000).unwrap();
+        let (mode, _) = asker_delivery(&denied, |_| true);
+        assert_eq!(mode, "claude");
     }
 
     /// Two favourites can easily end in the same folder name — `~/work/projects`
