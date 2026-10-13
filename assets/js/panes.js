@@ -1106,27 +1106,42 @@ function renderThreadMenu() {
   if (!sandbox || p.thread) { closeThreadMenu(); return; }
   const names = knownThreads(sandbox);
   const shown = names.filter(n => threadPaneIndex(sandbox, n) >= 0).length;
+  const hidden = names.length - shown;
+  // Each row says in words what the thread is doing and whether it is on
+  // screen, so the marks and pane badges need no legend.
   const rows = names.map(n => {
     const at = threadPaneIndex(sandbox, n);
     const { mark, state } = threadMark(sandbox, n);
+    const where = at < 0 ? 'not on screen' : paneCount > 1 ? `on screen in pane ${at + 1}` : 'on screen';
     return `<div class="thread-menu-row${at >= 0 ? ' shown' : ''}">
-      <button type="button" role="menuitem" data-go="${escHtml(n)}"
-        title="${escHtml(threadVerb(sandbox, n))}">⑂ ${escHtml(n)}${mark
-          ? `<span class="thread-mark" data-state="${state}">${mark}</span>` : ''}${at >= 0 && paneCount > 1
-          ? `<span class="sbx-pane-badge">P${at + 1}</span>` : ''}</button>
-      ${at >= 0 ? `<button type="button" role="menuitem" class="thread-menu-fold" data-fold="${escHtml(n)}"
-        title="Close its pane — it keeps running">Fold</button>` : ''}
+      <button type="button" role="menuitem" class="thread-menu-go" data-go="${escHtml(n)}"
+        title="${escHtml(threadVerb(sandbox, n))}">
+        <span class="thread-menu-name">${escHtml(n)}</span>
+        <span class="thread-menu-status"><span class="thread-mark" data-state="${state}">${mark || '•'}</span>
+          ${THREAD_STATE_WORDS[state] ?? 'Idle'}, ${where}</span>
+      </button>
+      ${at >= 0
+        ? `<button type="button" role="menuitem" class="thread-menu-act" data-fold="${escHtml(n)}"
+            title="Close its pane — the agent keeps running">Hide</button>`
+        : `<button type="button" role="menuitem" class="thread-menu-act" data-go="${escHtml(n)}"
+            title="${escHtml(threadVerb(sandbox, n))}">Show</button>`}
     </div>`;
   }).join('');
-  setHtml(threadMenu.el, `
-    <div class="thread-menu-list">${rows}</div>
+  // Only the bulk actions that would do something, and none for one thread.
+  const bulk = names.length < 2 ? '' : `
     <div class="thread-menu-all">
-      <button type="button" role="menuitem" data-all="show" ${shown === names.length ? 'disabled' : ''}
-        title="Put every thread on screen, as far as the window has room">Show all</button>
-      <button type="button" role="menuitem" data-all="fold" ${shown ? '' : 'disabled'}
-        title="Close every thread's pane — their sessions keep running">Fold all</button>
+      ${hidden ? `<button type="button" role="menuitem" data-all="show"
+        title="Put every thread on screen, as far as the window has room">Show all ${hidden}</button>` : ''}
+      ${shown ? `<button type="button" role="menuitem" data-all="fold"
+        title="Close every thread's pane — their agents keep running">Hide all</button>` : ''}
+    </div>`;
+  setHtml(threadMenu.el, `
+    <div class="thread-menu-head">
+      <strong>Threads</strong>
+      <span>Each is a separate agent working on its own copy of the code.</span>
     </div>
-    <button type="button" role="menuitem" class="thread-menu-new" data-new>+ New thread…</button>`);
+    <div class="thread-menu-list">${rows}</div>${bulk}
+    <button type="button" role="menuitem" class="thread-menu-new" data-new>+ New thread</button>`);
   threadMenu.el.hidden = false;
 }
 
@@ -1266,6 +1281,11 @@ function schedulePaintGroups() {
 window.addEventListener('resize', schedulePaintGroups);
 
 // How a thread's reported state reads on its chip.
+// The thread menu spells these out beside the mark.
+const THREAD_STATE_WORDS = {
+  starting: 'Starting', working: 'Working', blocked: 'Waiting for you', done: 'Done',
+  failed: 'Failed', stopped: 'Stopped',
+};
 const PLAN_STATE_MARK = { starting: '…', working: '●', blocked: '?', done: '✓', failed: '✕' };
 
 function paintGroups() {

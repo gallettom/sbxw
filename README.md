@@ -622,11 +622,12 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   pane bars and draws a 2px outline on the group's outer edges only, so the
   group reads as one block. Moving a pane reconnects it, which replays its
   session; the session itself is untouched.
-- **Reach, fold, show:** once a sandbox has threads, **⑂ Thread** carries their
-  count (amber while one is blocked) and opens a menu: each thread with its
-  mark (● working, ? blocked, ✓ done, ○ stopped), a click to go to it, **Fold**
-  to close its pane, **Show all** / **Fold all**, and **+ New thread…** last.
-  Folding closes the pane, never the session; **Show all** fills only the room
+- **Reach, hide, show:** once a sandbox has threads, **⑂ Thread** carries their
+  count (amber while one is blocked) and opens a menu: a line saying what a
+  thread is, then each thread with its state in words beside its mark
+  ("● Working, on screen in pane 2"), a click to go to it, **Show** or **Hide**
+  for its pane, **Show all** / **Hide all** when they would do something, and
+  **+ New thread** last. Hiding closes the pane, never the session; **Show all** fills only the room
   the window has and starts stopped threads only up to the session ceiling.
   The sidebar lists the same threads under each sandbox's row, to reach any of
   them from anywhere. Every thread with a worktree is listed, so after sbxw

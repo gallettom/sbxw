@@ -1421,10 +1421,11 @@
   .pane-term { flex: 1; padding:0; min-height: 0; }
   /* ── The Thread menu ──
      Opened from a main pane's ⑂ Thread button once the sandbox has threads:
-     each thread (click to go to it, Fold to close its pane), Show all / Fold
-     all, and New thread last. A shown thread is in full text, a folded one
-     muted — the same reading as the sidebar rows. The mark after a name is the
-     chip's: ● working, ? blocked, ✓ done. */
+     a one-line explanation of what a thread is, then one row per thread with
+     its state in words ("Working, on screen in pane 2") and the one action
+     that applies (Show or Hide), the bulk actions that would do something,
+     and New thread last. A shown thread's name is in full text, a hidden one
+     muted — the same reading as the sidebar rows. */
   .pane-bar .thread-count {
     display: inline-block; min-width: 1.3em; margin-left: .35rem; padding: 0 .3rem;
     border-radius: 8px; text-align: center; font-weight: 600;
@@ -1434,37 +1435,57 @@
   .pane-bar .thread-count[data-state="blocked"] { background: var(--c-amber); color: var(--c-bg); }
   .pane-bar .pane-new-thread[aria-expanded="true"] { background: var(--c-border); }
   .thread-menu {
-    position: fixed; z-index: 60; min-width: 220px; max-width: 320px;
-    padding: .3rem; font-size: 12px;
-    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(1, 4, 9, .5);
+    position: fixed; z-index: 60; width: 300px; max-width: calc(100vw - 16px);
+    padding: .35rem; font-size: 12px;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(var(--c-shadow-rgb), .5);
   }
   .thread-menu[hidden] { display: none; }
   .thread-menu button {
     font: inherit; color: var(--c-text); background: none; border: none;
-    border-radius: 4px; cursor: pointer; padding: .3rem .5rem; text-align: left;
+    border-radius: 5px; cursor: pointer; padding: .35rem .55rem; text-align: left;
   }
-  .thread-menu button:hover:not(:disabled) { background: var(--c-elevated); }
-  .thread-menu button:disabled { color: var(--c-dim); cursor: default; }
+  .thread-menu button:hover { background: var(--c-elevated); }
   .thread-menu button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-  .thread-menu-list { max-height: 50vh; overflow-y: auto; }
-  .thread-menu-row { display: flex; align-items: center; }
-  .thread-menu-row > [data-go] {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: .35rem;
-    color: var(--c-text-muted); white-space: nowrap; overflow: hidden;
+  .thread-menu-head {
+    display: flex; flex-direction: column; gap: .15rem;
+    padding: .3rem .55rem .5rem; margin-bottom: .25rem;
+    border-bottom: 1px solid var(--c-elevated);
   }
-  .thread-menu-row.shown > [data-go] { color: var(--c-text); }
-  .thread-menu-row .sbx-pane-badge { margin-left: auto; float: none; padding: .1rem .3rem; }
-  .thread-menu .thread-menu-fold { font-size: 11px; color: var(--c-text-muted); }
+  .thread-menu-head strong { color: var(--c-text-bright); font-size: 12.5px; }
+  .thread-menu-head span { color: var(--c-text-muted); line-height: 1.4; }
+  .thread-menu-list { max-height: 50vh; overflow-y: auto; }
+  .thread-menu-row { display: flex; align-items: center; gap: .25rem; }
+  .thread-menu .thread-menu-go {
+    flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem;
+  }
+  .thread-menu-name {
+    font-weight: 600; color: var(--c-text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .thread-menu-row.shown .thread-menu-name { color: var(--c-text-bright); }
+  .thread-menu-status {
+    display: flex; align-items: baseline; gap: .35rem;
+    font-size: 11px; color: var(--c-text-muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .thread-menu-status .thread-mark { width: .8em; text-align: center; flex-shrink: 0; }
+  .thread-menu .thread-menu-act {
+    flex-shrink: 0; padding: .2rem .6rem; font-size: 11px;
+    border: 1px solid var(--c-border); color: var(--c-text);
+  }
+  .thread-menu .thread-menu-act:hover { border-color: var(--c-dim); color: var(--c-text-bright); }
   .thread-menu-all {
-    display: flex; gap: .2rem; margin-top: .3rem; padding-top: .3rem;
+    display: flex; gap: .25rem; margin-top: .25rem; padding-top: .25rem;
     border-top: 1px solid var(--c-elevated);
   }
-  .thread-menu-all button { flex: 1; text-align: center; }
+  .thread-menu-all button { flex: 1; text-align: center; color: var(--c-text-muted); }
   .thread-menu .thread-menu-new {
-    display: block; width: 100%; margin-top: .3rem; padding-top: .4rem;
-    border-top: 1px solid var(--c-elevated); border-radius: 0 0 4px 4px; color: var(--c-blue);
+    display: block; width: 100%; margin-top: .25rem;
+    color: var(--c-blue); font-weight: 600;
   }
+  .thread-menu-all + .thread-menu-new,
+  .thread-menu-list + .thread-menu-new { border-top: 1px solid var(--c-elevated); border-radius: 0 0 5px 5px; }
   .thread-mark { font-weight: 600; }
   .thread-mark[data-state="working"]  { color: var(--c-blue); }
   .thread-mark[data-state="blocked"]  { color: var(--c-amber); }
