@@ -19,3 +19,10 @@
 
 # User-specific project config (use sbxw.toml.example as the template)
 /sbxw.toml
+
+# sbxw's Files panel: deliverables and exports (videos), not source
+/.sbxw-artifacts/
+
+# Local recordings and audio
+/assets/*.mov
+/assets/*.mp3
