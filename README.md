@@ -1,5 +1,13 @@
 # sbxw
 
+<p align="center">
+  <a href="docs/media/sbxw-teaser.mp4">
+    <img src="docs/media/sbxw-teaser.gif" alt="sbxw in 23 seconds: every agent deserves a sandbox — isolated, exposed on your terms, shipped" width="720">
+  </a>
+  <br>
+  <sub>▶ <a href="docs/media/sbxw-teaser.mp4">Watch with sound</a></sub>
+</p>
+
 An ultra-light Rust wrapper around the standalone **`sbx`** (Docker Sandboxes)
 CLI, tuned for running the **Claude Code** agent against a local project with a
 browser terminal, host-friendly port aliases, and a restrictive dev network
