@@ -363,8 +363,10 @@ Examples:
     },
     /// Check for a new sbxw release and install it in place of this binary.
     ///
-    /// On macOS this also refreshes an already-installed SbxwIsland.app when the
-    /// release carries a newer build of it (see --no-island).
+    /// Also rewrites the browser extension's folder with the new build's (see
+    /// `sbxw extension`). On macOS this also refreshes an already-installed
+    /// SbxwIsland.app when the release carries a newer build of it (see
+    /// --no-island).
     Update {
         /// Only check whether a newer version is available; don't install it.
         #[arg(long)]
@@ -376,8 +378,8 @@ Examples:
     /// Install the sbxw browser extension: a side panel beside the app you are
     /// testing, to chat with the sandbox that serves it (Chrome, Edge).
     ///
-    /// Writes it to ~/.sbxw/browser-extension/ and prints how to load it. Run
-    /// again after an sbxw update.
+    /// Writes it to ~/.sbxw/browser-extension/ and prints how to load it. The
+    /// installer and `sbxw update` keep that folder current.
     Extension {
         /// Path to sbxw.toml, for the daemon address (`web_addr`).
         #[arg(long, default_value = "sbxw.toml")]
@@ -386,6 +388,10 @@ Examples:
         /// Defaults to `web_addr`.
         #[arg(long)]
         daemon: Option<String>,
+        /// Rewrite the installed folder, keeping its daemon address (what the
+        /// installer and `sbxw update` run).
+        #[arg(long, hide = true)]
+        refresh: bool,
     },
     /// Print a shell completion script, so TAB completes subcommand and flag
     /// names instead of guessing (or running `sbxw help`).
@@ -801,9 +807,9 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Update { check, no_island } => cmd_update(check, no_island),
-        Cmd::Extension { config, daemon } => {
+        Cmd::Extension { config, daemon, refresh } => {
             let cfg = Config::load_or_default(&config)?;
-            extension::cmd(&cfg.web_addr, daemon)
+            extension::cmd(&cfg.web_addr, daemon, refresh)
         }
         Cmd::Completion { shell } => cmd_completion(shell),
     }
@@ -875,8 +881,13 @@ fn cmd_update(check_only: bool, no_island: bool) -> Result<()> {
         }
     };
 
+    let exe = std::env::current_exe().context("could not resolve current executable path")?;
+
     if parse_version(latest) <= parse_version(current) {
         println!("sbxw is already up to date.");
+        if !check_only {
+            refresh_extension(&exe);
+        }
         island(check_only);
         return Ok(());
     }
@@ -912,14 +923,26 @@ fn cmd_update(check_only: bool, no_island: bool) -> Result<()> {
 
     set_executable(&tmp_bin)?;
 
-    let exe = std::env::current_exe().context("could not resolve current executable path")?;
     install_binary(&tmp_bin, &exe)?;
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
     println!("sbxw updated: v{current} → {latest_tag}");
+    refresh_extension(&exe);
     island(false);
     println!("note: restart any running daemons to pick up the new build (`sbxw down` then `sbxw up …`).");
     Ok(())
+}
+
+/// Rewrites the browser extension's folder from the binary at `exe` — after an
+/// update that is the new one, whose extension this process does not carry.
+fn refresh_extension(exe: &std::path::Path) {
+    let ok = std::process::Command::new(exe)
+        .args(["extension", "--refresh"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        eprintln!("warning: could not refresh the browser extension — run `sbxw extension`");
+    }
 }
 
 // ── macOS companion app (sbxw Island) ────────────────────────────────────

@@ -7,7 +7,11 @@
 //!
 //! Chrome loads an unpacked extension from a folder, and keeps reading that
 //! folder: it has to outlive the command, and stay put across sbxw updates.
-//! Hence `~/.sbxw/browser-extension/`, rewritten whole on every run.
+//! Hence `~/.sbxw/browser-extension/`, rewritten whole on every run — by
+//! install.sh and `sbxw update` too (`--refresh`), so it follows the binary.
+//! Pointing Chrome at the folder is the one step only the user can take, once:
+//! Chrome installs no unpacked extension on its own. After that, the panel
+//! reloads the extension whenever the folder holds a newer one (panel.js).
 //!
 //! Its scripts and manifest are files under `assets/browser-extension/`. Its
 //! two pages are written from here, like the daemon's own `/sidepanel` shell,
@@ -105,14 +109,34 @@ pub fn daemon_url(web_addr: &str) -> String {
     format!("http://{host}:{port}")
 }
 
+/// The manifest's `version`. Chrome rereads the panel's files from the folder
+/// every time it opens, but keeps the manifest and service worker it loaded
+/// until the extension reloads; `defaults.js` repeats this version so the panel
+/// can tell the two apart. Bump it whenever either of those files changes.
+fn manifest_version() -> Result<String> {
+    let manifest: serde_json::Value = serde_json::from_slice(FILES[0].1)?;
+    Ok(manifest["version"].as_str().context("manifest.json has no version")?.to_string())
+}
+
+/// The daemon address an earlier install wrote into `dir`, if there is one.
+fn installed_daemon(dir: &Path) -> Option<String> {
+    let defaults = std::fs::read_to_string(dir.join("defaults.js")).ok()?;
+    let value = defaults.split("const SBXW_DAEMON_DEFAULT = ").nth(1)?.split(";\n").next()?;
+    serde_json::from_str(value).ok()
+}
+
 /// Write the extension into `dir`, replacing what an earlier run left there.
 pub fn install(dir: &Path, daemon: &str) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     let defaults = format!(
         "// Written by `sbxw extension`: the daemon address the panel starts from.\n\
          // The extension's options override it.\n\
-         const SBXW_DAEMON_DEFAULT = {};\n",
-        serde_json::to_string(daemon)?
+         const SBXW_DAEMON_DEFAULT = {};\n\
+         // The manifest version in this folder; the panel reloads the extension\n\
+         // when Chrome still runs another one.\n\
+         const SBXW_EXTENSION_VERSION = {};\n",
+        serde_json::to_string(daemon)?,
+        serde_json::to_string(&manifest_version()?)?
     );
     let all = FILES.iter().copied().chain(std::iter::once(("defaults.js", defaults.as_bytes())));
     for (name, body) in all {
@@ -126,11 +150,20 @@ pub fn install(dir: &Path, daemon: &str) -> Result<()> {
     Ok(())
 }
 
-/// The command: install, then say how to load it.
-pub fn cmd(web_addr: &str, daemon: Option<String>) -> Result<()> {
+/// The command: install, then say how to load it. With `refresh` (install.sh,
+/// `sbxw update`), keep the daemon address the folder was installed with, and
+/// say how to load it only if there was nothing to refresh.
+pub fn cmd(web_addr: &str, daemon: Option<String>, refresh: bool) -> Result<()> {
     let dir = default_dir();
-    let daemon = daemon.unwrap_or_else(|| daemon_url(web_addr));
+    let first = !dir.join("manifest.json").is_file();
+    let daemon = daemon
+        .or_else(|| if refresh { installed_daemon(&dir) } else { None })
+        .unwrap_or_else(|| daemon_url(web_addr));
     install(&dir, &daemon)?;
+    if refresh && !first {
+        println!("sbxw browser extension refreshed → {}", dir.display());
+        return Ok(());
+    }
     println!("sbxw browser extension → {}", dir.display());
     println!("  talks to the daemon at {daemon}\n");
     println!("First time, in Chrome or Edge:");
@@ -138,7 +171,7 @@ pub fn cmd(web_addr: &str, daemon: Option<String>) -> Result<()> {
     println!("  2. turn on Developer mode");
     println!("  3. Load unpacked → choose the folder above\n");
     println!("Then click the sbxw icon in the toolbar (Alt+Shift+S) on your app's tab.");
-    println!("After an sbxw update, run this again and click ↻ on the extension's card.");
+    println!("`sbxw update` keeps it current; the panel reloads the extension when it must.");
     Ok(())
 }
 
@@ -182,6 +215,35 @@ mod tests {
         }
         let defaults = std::fs::read_to_string(dir.join("defaults.js")).unwrap();
         assert!(defaults.contains(r#"const SBXW_DAEMON_DEFAULT = "http://127.0.0.1:7799";"#));
+        let version = format!("const SBXW_EXTENSION_VERSION = \"{}\";", manifest_version().unwrap());
+        assert!(defaults.contains(&version), "{defaults}");
+        // What a refresh keeps.
+        assert_eq!(installed_daemon(&dir).as_deref(), Some("http://127.0.0.1:7799"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Chrome keeps running the manifest and service worker it loaded until
+    /// the extension reloads, and the panel reloads it only when the version
+    /// changes: so either file changing without a new version would go unseen
+    /// by every install that already has the extension.
+    #[test]
+    fn the_manifest_version_changes_with_the_manifest_or_the_service_worker() {
+        // FNV-1a: stable across Rust releases, unlike `DefaultHasher`.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for (name, body) in FILES {
+            if *name == "manifest.json" || *name == "service-worker.js" {
+                for b in *body {
+                    hash = (hash ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+        }
+        let pinned = ("1.0.0", 0x9a1f_20b5_24ca_f737_u64);
+        let version = manifest_version().unwrap();
+        assert!(
+            (version.as_str(), hash) == pinned,
+            "manifest.json or service-worker.js changed: bump \"version\" in manifest.json \
+             if it still says {}, then pin (\"{version}\", {hash:#018x}) here",
+            pinned.0
+        );
     }
 }

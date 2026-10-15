@@ -250,6 +250,17 @@ else
   esac
 fi
 
+# ── Browser extension ─────────────────────────────────────────────────────────
+# Only files: Chrome loads no unpacked extension on its own, so the first time
+# the binary prints how to point Chrome at the folder. Re-installs (and
+# `sbxw update`) rewrite it in place, keeping its daemon address, and the panel
+# reloads the extension when it must.
+step "Browser extension…"
+if ! "${INSTALL_DIR}/${BINARY}" extension --refresh 2>/dev/null; then
+  warn "sbxw ${VERSION} could not write the browser extension (skipping)."
+  printf "  Run 'sbxw extension' any time to install it.\n"
+fi
+
 # ── Bundled kits (optional) ───────────────────────────────────────────────────
 step "Fetching bundled kits…"
 KITS_URL="https://github.com/${REPO}/releases/download/${VERSION}/sbxw-kits.tar.gz"
@@ -329,7 +340,7 @@ printf "   sbxw skills import            # share your host agents' skills with s
 printf "   sbxw logs <name>              # tail daemon log\n"
 printf "   sbxw hosts sync               # (re)apply the /etc/hosts aliases (asks for sudo)\n"
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
-printf "   sbxw update                   # update sbxw (and the island, if installed)\n"
+printf "   sbxw update                   # update sbxw, its extension (and the island, if installed)\n"
 printf "   sbxw completion --help       # TAB-complete commands (bash/zsh/fish/…)\n"
 if [ -d "$KITS_DIR" ]; then
   printf "   kits: %s/\n" "$KITS_DIR"

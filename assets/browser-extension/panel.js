@@ -174,5 +174,18 @@ chrome.storage.onChanged.addListener(changes => {
 document.getElementById('retry').addEventListener('click', start);
 document.getElementById('options').addEventListener('click', () => chrome.runtime.openOptionsPage());
 
-start();
-refreshTab();
+// ── After an sbxw update ──────────────────────────────────────────────────
+// install.sh and `sbxw update` rewrite this extension's folder. Chrome reads
+// the panel's own files from it afresh each time the panel opens, but keeps the
+// manifest and service worker it loaded until the extension reloads. When
+// defaults.js names another version than the one running, reload it: that
+// closes the panel, so say so first.
+if (typeof SBXW_EXTENSION_VERSION === 'string'
+    && SBXW_EXTENSION_VERSION !== chrome.runtime.getManifest().version) {
+  banner.textContent = 'sbxw updated its extension: reloading it. Click the sbxw icon again.';
+  banner.hidden = false;
+  setTimeout(() => chrome.runtime.reload(), 1500);
+} else {
+  start();
+  refreshTab();
+}
