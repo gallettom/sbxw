@@ -32,8 +32,9 @@ const MAX_DEPTH: usize = 3;
 /// folders are skipped anyway).
 const SKIPPED: &[&str] = &["node_modules", "target", "vendor", ".sbxw-worktrees"];
 
-/// Longest a `git status` may take before its repo is reported without one.
-const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest a host git command may take before it is killed and its answer
+/// reported as unknown.
+const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One repository under the workspace, as `GET /api/sandboxes/:name/repos`
 /// reports it.
@@ -146,25 +147,36 @@ fn status(rel: &str, dir: &Path) -> RepoInfo {
     }
 }
 
-/// The porcelain output, or `None` if git is missing, fails, or takes longer
-/// than `STATUS_TIMEOUT` (it is killed then). Output goes to a file rather
-/// than a pipe, so a large status cannot block git while this waits on it.
+/// The porcelain output, or `None` (see `git`).
 fn git_status(dir: &Path) -> Option<String> {
-    let out = tempfile_for_status()?;
+    git(dir, &["status", "--porcelain=v2", "--branch"])
+}
+
+/// Host git's output for `git -C dir args…`, or `None` if git is missing,
+/// fails, or takes longer than `GIT_TIMEOUT` (it is killed then). Output goes
+/// to a file rather than a pipe, so a large output cannot block git while this
+/// waits on it.
+///
+/// `--no-optional-locks`: the agents in the sandbox commit in these same
+/// repos, and a `git status` that refreshed the index from here would hold
+/// `index.lock` under a `git commit` of theirs, which then fails.
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    let out = tempfile_for_git()?;
     let mut child = Command::new("git")
+        .arg("--no-optional-locks")
         .arg("-C")
         .arg(dir)
-        .args(["status", "--porcelain=v2", "--branch"])
+        .args(args)
         .stdin(Stdio::null())
         .stdout(out.0.try_clone().ok()?)
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + STATUS_TIMEOUT;
+    let deadline = Instant::now() + GIT_TIMEOUT;
     let ok = loop {
         match child.try_wait() {
             Ok(Some(st)) => break st.success(),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -172,16 +184,17 @@ fn git_status(dir: &Path) -> Option<String> {
             }
         }
     };
-    let text = std::fs::read_to_string(&out.1).ok();
+    // Lossy: a commit subject is whatever bytes its author typed.
+    let text = std::fs::read(&out.1).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
     let _ = std::fs::remove_file(&out.1);
     text.filter(|_| ok)
 }
 
-/// A fresh file in the temp dir to collect one `git status` into.
-fn tempfile_for_status() -> Option<(std::fs::File, PathBuf)> {
+/// A fresh file in the temp dir to collect one git command's output into.
+fn tempfile_for_git() -> Option<(std::fs::File, PathBuf)> {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("sbxw-git-status-{}-{n}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("sbxw-git-{}-{n}", std::process::id()));
     let f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

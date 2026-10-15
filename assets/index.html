@@ -357,6 +357,25 @@
     </div>
   </div>
 
+  <!-- ── Worktrees ──
+       Where each thread's branch stands against the branch the lead works on,
+       as lanes off that branch with the same in words beside each. Opened
+       from the Thread menu; filled, and read again while open, by
+       /js/worktrees.js. -->
+  <div class="modal-overlay hidden" id="wt-overlay">
+    <div class="modal wt-modal" role="dialog" aria-modal="true" aria-labelledby="wt-title">
+      <div class="modal-head">
+        <span class="modal-title" id="wt-title">Worktrees</span>
+        <button class="modal-close" id="wt-x" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="wt-body"></div>
+      <div class="modal-foot">
+        <span class="wt-updated" id="wt-updated"></span>
+        <button class="btn-cancel" id="wt-close">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── End lead mode ──
        Says what ending would leave behind — threads still running, a plan
        still waiting — before the main session stops being the lead. Filled by

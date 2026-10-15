@@ -1152,6 +1152,7 @@ const STATIC_ASSETS: &[(&str, &str, &str)] = &[
     js!("main.js"),
     js!("relay.js"),
     js!("plans.js"),
+    js!("worktrees.js"),
     js!("chat-dock.js"),
 ];
 
@@ -1329,6 +1330,7 @@ pub async fn serve(
         .route("/api/sandboxes/:name/stop", post(api_stop))
         .route("/api/sandboxes/:name/threads", get(api_threads))
         .route("/api/sandboxes/:name/repos", get(api_repos))
+        .route("/api/sandboxes/:name/worktrees", get(api_worktrees))
         .route("/api/sandboxes/:name/lead", post(api_lead))
         .route("/api/sandboxes/:name/lead/end", post(api_lead_end))
         .route("/api/leads", get(api_leads))
@@ -2835,6 +2837,25 @@ async fn api_repos(Path(name): Path<String>) -> Json<serde_json::Value> {
     };
     let workspace = ws.to_string_lossy().into_owned();
     match tokio::task::spawn_blocking(move || crate::repos::list(&ws)).await {
+        Ok(repos) => ok_json_with(serde_json::json!({ "workspace": workspace, "repos": repos })),
+        Err(e) => err_json(e),
+    }
+}
+
+/// `GET /api/sandboxes/:name/worktrees` — where each thread's branch stands
+/// against the branch its repo's main checkout is on, the lead's: what the
+/// Worktrees view draws (`worktrees::read`). Only threads with a worktree, as
+/// the Thread menu lists them.
+async fn api_worktrees(Path(name): Path<String>) -> Json<serde_json::Value> {
+    if let Some(bad) = reject_invalid_name(&name) {
+        return bad;
+    }
+    let Some(ws) = crate::workspace_for(&name) else {
+        return err_json(format!("sbxw has no workspace recorded for '{name}'"));
+    };
+    let workspace = ws.to_string_lossy().into_owned();
+    let read = move || crate::worktrees::read(&ws, &thread_worktrees(&name));
+    match tokio::task::spawn_blocking(read).await {
         Ok(repos) => ok_json_with(serde_json::json!({ "workspace": workspace, "repos": repos })),
         Err(e) => err_json(e),
     }
