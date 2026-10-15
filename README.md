@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="docs/media/sbxw-teaser.mp4">
-    <img src="docs/media/sbxw-teaser.gif" alt="sbxw in 23 seconds: every agent deserves a sandbox — isolated, exposed on your terms, shipped" width="720">
+    <img src="docs/media/sbxw-teaser.gif" alt="sbxw in 23 seconds: every agent deserves a sandbox — isolated, exposing only what you want, working as a team" width="720">
   </a>
   <br>
   <sub>▶ <a href="docs/media/sbxw-teaser.mp4">Watch with sound</a></sub>
