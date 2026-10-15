@@ -14,6 +14,9 @@
 // notifications (no `id`) are acknowledged with silence, as the spec requires.
 // No dependencies: this has to run in a sandbox where nothing was installed for
 // it, and `npx`-ing a package would need network access the policy denies.
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const relay = require("./relay.js");
 
 const SERVER = { name: "sbxw-relay", version: "1" };
@@ -257,21 +260,6 @@ const LEAD_TOOLS = [
     },
   },
   {
-    name: "send_to_thread",
-    description:
-      "Write to one thread of an approved plan: answer it when it is blocked, or correct it. " +
-      "The message is typed into its session. Only for a thread that is running.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        thread: { type: "string", description: "The thread's name." },
-        message: { type: "string", description: "Short and specific; it knows nothing of your conversation." },
-        plan_id: { type: "string", description: "Defaults to the last plan." },
-      },
-      required: ["thread", "message"],
-    },
-  },
-  {
     name: "propose_merge",
     description:
       "Once you have reviewed the threads of an approved plan and they are done, propose " +
@@ -303,10 +291,11 @@ const THREAD_TOOLS = [
   {
     name: "report_thread_status",
     description:
-      "Tell sbxw, and through it the lead of your plan, where your thread stands. Report " +
-      "`working` when you start, `blocked` with your question whenever you need something you " +
-      "cannot settle yourself, and `done` with a short summary of what you changed (and what you " +
-      "did not) when you finish. The lead is told at once when you are blocked or done.",
+      "Tell sbxw where your thread stands, which is what the user sees on your mark in the sbxw " +
+      "window. Report `working` when you start, `blocked` with your question whenever you need " +
+      "something you cannot settle yourself, and `done` with a short summary of what you changed " +
+      "(and what you did not) when you finish. When you report blocked or done, the result says " +
+      "whether you must also tell the lead yourself, and under which name.",
     inputSchema: {
       type: "object",
       properties: {
@@ -325,6 +314,40 @@ else TOOLS.push(...LEAD_TOOLS);
 // only: a restarted server has forgotten it, and the id is still in the
 // conversation.
 let lastPlanId = null;
+
+// This session's name in Claude Code's registry of the sessions on this
+// machine, which is the address `SendMessage` routes by. The lead sends it with
+// its plan so its threads can write to it directly, rather than through sbxw
+// typing into its terminal. Empty when there is nothing to send to: no
+// messaging socket handed down (a Claude Code without that messaging), or no
+// registry entry that owns it.
+//
+// This server is a child of the session it serves, and Claude Code hands its
+// children that session's messaging socket, which the session's entry names.
+// The entry is `<pid>.json`, so the parent's is tried first; the scan covers a
+// server started through a wrapper, whose parent is not the session.
+function sessionName() {
+  const socket = process.env.CLAUDE_CODE_MESSAGING_SOCKET || "";
+  if (!socket) return "";
+  const dir = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"), "sessions");
+  const read = (file) => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+    } catch (_) {
+      return null;
+    }
+  };
+  const ours = (e) => e && e.messagingSocketPath === socket && typeof e.name === "string";
+  let entry = read(`${process.ppid}.json`);
+  if (!ours(entry)) {
+    let files = [];
+    try {
+      files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    } catch (_) {}
+    entry = files.map(read).find(ours) || null;
+  }
+  return entry ? entry.name.trim() : "";
+}
 
 function planText(res) {
   const p = res.plan || {};
@@ -368,7 +391,13 @@ async function callPlanTool(name, args) {
     const timeout = clampTimeout(args.timeout_seconds, relay.MAX_TIMEOUT);
     const res = await relay.request(
       "/api/plans/propose",
-      { from: relay.me, summary: String(args.summary || ""), threads: args.threads || [], timeout },
+      {
+        from: relay.me,
+        summary: String(args.summary || ""),
+        threads: args.threads || [],
+        lead: sessionName() || undefined,
+        timeout,
+      },
       (timeout + 10) * 1000,
     );
     return textResult(planText(res), false);
@@ -386,16 +415,6 @@ async function callPlanTool(name, args) {
     const res = await relay.request("/api/plans/status", { from: relay.me, id }, 15000);
     return textResult(planText(res), false);
   }
-  if (name === "send_to_thread") {
-    const id = planId();
-    if (!id) return textResult("No plan id given, and none proposed from this session.", true);
-    await relay.request(
-      "/api/plans/send",
-      { from: relay.me, id, thread: String(args.thread || ""), message: String(args.message || "") },
-      60000,
-    );
-    return textResult(`Sent to ${args.thread}.`, false);
-  }
   if (name === "propose_merge") {
     const id = planId();
     if (!id) return textResult("No plan id given, and none proposed from this session.", true);
@@ -412,12 +431,25 @@ async function callPlanTool(name, args) {
     );
   }
   if (name === "report_thread_status") {
-    await relay.request(
+    const state = String(args.state || "");
+    const res = await relay.request(
       "/api/plans/report",
-      { from: relay.me, thread: THREAD, state: String(args.state || ""), summary: String(args.summary || "") },
+      { from: relay.me, thread: THREAD, state, summary: String(args.summary || "") },
       15000,
     );
-    return textResult(`Reported ${args.state}.`, false);
+    // The plan names its lead's session: telling it is this thread's job, at
+    // the moment it reports, rather than a line of the briefing it read an
+    // hour ago. Without a name, sbxw has told the lead itself.
+    const lead = res && typeof res.lead === "string" ? res.lead : "";
+    if (lead && (state === "blocked" || state === "done")) {
+      const what = state === "blocked" ? "your question" : "what you changed, and what you did not";
+      return textResult(
+        `Reported ${state}. sbxw does not pass it on: tell your lead now with the SendMessage ` +
+          `tool, to: "${lead}", with ${what}.`,
+        false,
+      );
+    }
+    return textResult(`Reported ${state}.`, false);
   }
   return null;
 }

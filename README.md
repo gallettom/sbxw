@@ -711,12 +711,24 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   working directory. Its hooks report the same agent as the main session, and
   before threads were told apart, a busy thread painted the agent's pane as
   busy.
+- **Its session carries its name.** The thread runs `claude --name <thread>`,
+  so Claude Code lists it under that name, which is also its address for
+  `SendMessage` between the sessions of the sandbox. Without the flag it would
+  be `<thread>-5e` or a title Claude Code makes up from its first prompt,
+  neither of which a lead can know in advance.
 - The thread runs `claude --dangerously-skip-permissions` through `sbx exec`,
   the same flag sbx gives the agent it starts, so a thread is no more trusted
   than the pane beside it. An `env` change made in `sbxw.toml` after creation
   reaches the agent on its next attach, because sbx applies those flags to
   `sbx run`. A thread, started with `sbx exec`, is not guaranteed to see it. The
   workspace needs to be a git repository.
+- **No trust dialog.** Claude Code asks "Do you trust this folder?" in every
+  folder it has not seen, and the workspace being trusted does not cover the
+  worktrees under it. Before starting `claude`, the thread's script marks its
+  worktree trusted in `~/.claude.json` (`projects[<worktree>]
+  .hasTrustDialogAccepted`), as provisioning does for the workspace. Only the
+  first time, through a copy renamed over the file, its `0600` kept; a file
+  that does not parse is left alone and the dialog shows as before.
 - **Its model:** the New thread dialog offers the models of `GET /api/models`
   (`{ok, default, models:[{id,label}]}`: the `models` list of `sbxw.toml` and
   `claude_model` as the default). The pick reaches the daemon as
@@ -745,12 +757,12 @@ conversation you already have, so it costs no extra session or worktree.
 
 ```
 ★ lead ──propose_plan──▶ sbxw ──▶ 🧑 plan dialog (edit, approve)
-                                        │
-                     ┌──────────────────┼──────────────────┐
-                     ▼                  ▼                  ▼
-               ⑂ api-auth         ⑂ login-form          (…)
-                     │ report_thread_status: working / blocked / done
-                     └──────────────▶ sbxw ──▶ [sbxw] note typed to the lead
+  ▲                                     │
+  │                  ┌──────────────────┼──────────────────┐
+  │                  ▼                  ▼                  ▼
+  │            ⑂ api-auth         ⑂ login-form          (…)
+  │                  │ report_thread_status ──▶ sbxw ──▶ the thread's chip
+  └── SendMessage ───┘ (blocked, done, answers: Claude Code, not sbxw)
 ```
 
 - **Nothing starts without you.** The plan opens a dialog in the web UI. Every
@@ -775,11 +787,25 @@ conversation you already have, so it costs no extra session or worktree.
   still booting. The window opens a pane per thread while it has room.
   Approval is refused, with the reason, if the threads would not fit under
   `max_agent_sessions`.
-- **Threads report, the lead hears.** A thread calls `report_thread_status`.
-  Its chip shows the state: `…` starting, `●` working, `?` blocked, `✓` done,
-  `✕` failed. Hover for the report. When a thread is blocked or done, a note
-  quoting its report is typed into the main session. The lead answers with
-  `send_to_thread`, or asks you.
+- **Threads report to sbxw, and talk to the lead.** A thread calls
+  `report_thread_status`. Its chip shows the state: `…` starting, `●` working,
+  `?` blocked, `✓` done, `✕` failed. Hover for the report. The conversation
+  does not go through sbxw: the lead and its threads are Claude Code sessions
+  in one sandbox, and Claude Code lets them write to each other with
+  `SendMessage`, by name. A thread is named after itself (above). The lead's
+  name is read by the relay MCP server from Claude Code's session registry
+  (`~/.claude/sessions/`, the entry owning the session's messaging socket)
+  and sent with `propose_plan`. The plan keeps it as `lead`, and each
+  thread's briefing gives it. When a thread reports blocked or done, the
+  tool's result reminds it to write to that name. The lead answers the same
+  way, can ask to hear when a quiet thread stops (`notify_when_idle`), or asks
+  you. A plan without a lead name, from a relay server older than this, or a
+  Claude Code without that messaging, falls back to sbxw typing a note quoting
+  the report into the main session.
+- **Same permission mode, or the message waits.** Claude Code holds a message
+  from a session in another permission mode for its user's approval. sbxw
+  starts the agent and every thread with `--dangerously-skip-permissions`, so
+  they match unless you switch the lead's mode in its pane.
 - **Plans survive a restart.** Each change is written to
   `~/.sbxw/state/plans/<sandbox>.json` (directory `0700`: a plan id is a
   capability) and read back when the daemon starts, so a thread's chip, the
@@ -807,8 +833,8 @@ conversation you already have, so it costs no extra session or worktree.
   (conflict in X).` A failed merge can be clicked again after fixing the
   cause.
 - **The tools** come from the `sbxw-relay` MCP server and depend on the
-  session: the main session gets `propose_plan`, `check_plan`, `plan_status`,
-  `send_to_thread` and `propose_merge` (their descriptions say to use them only when leading);
+  session: the main session gets `propose_plan`, `check_plan`, `plan_status`
+  and `propose_merge` (their descriptions say to use them only when leading);
   a thread gets `report_thread_status` and none of those. A session knows which
   it is from `SBXW_THREAD`, which sbxw sets when it starts a thread. **★ Lead mode**
   installs `/lead` and refreshes the relay server first, so a sandbox created
@@ -816,12 +842,16 @@ conversation you already have, so it costs no extra session or worktree.
   the server it started with: if `/lead` reports it has no `propose_plan`,
   restart that session (`/exit`, then reopen the pane).
 
-**The exception to "a person decides every hop".** After approval, three things
-move without a click: a thread's report, the note to the lead, and the lead's
-message to a thread. They stay inside one sandbox and reach only threads a
-person approved by name. A plan's id is 128 random bits that only the
-proposing session and the browser see, and every lead call must name it, so
-another sandbox cannot list or write to threads that are not its own. A report
+**The exception to "a person decides every hop".** After approval, the lead and
+its threads write to each other without a click. That is Claude Code's own
+messaging between the sessions of one machine, and the sandbox is the
+machine: any Claude session in it can write to any other, sbxw or not, plan
+or not, so the boundary is the sandbox and not the plan. sbxw adds nothing to
+it, and nothing it carries reaches another sandbox. What sbxw itself moves
+without a click is a thread's report, and, for a plan without a lead name,
+the note to the lead. A plan's id is 128 random bits that only the proposing
+session and the browser see, and every lead call must name it, so another
+sandbox cannot read a plan that is not its own or propose its merge. A report
 carries no id, since a thread only knows its own name, so one could be forged:
 it changes a label, never what runs.
 

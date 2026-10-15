@@ -761,6 +761,18 @@ macro_rules! no_repo_fn {
 /// which is the one that can lead). `prompt`, when given, is the session's first
 /// message — an approved plan's briefing.
 ///
+/// `--name` makes the thread's name its address for Claude Code's own messaging
+/// between sessions on one machine: the lead writes to `api-auth` with
+/// `SendMessage`, and sbxw is not on that path. Without it the session is
+/// listed under a name derived from its folder (`api-auth-5e`) or a title
+/// Claude Code makes up from its first prompt, neither of which a lead can
+/// predict.
+///
+/// The worktree is marked trusted in `.claude.json` before `claude` starts, as
+/// `Tooling::trust_workspace` does for the workspace: Claude Code does not
+/// extend a folder's trust to the folders under it, so every new worktree
+/// would otherwise open on the trust dialog instead of on its briefing.
+///
 /// `model`, when given, is passed as `claude --model`, on a fresh start and on
 /// `--continue` alike; empty leaves the sandbox's default
 /// (`ANTHROPIC_DEFAULT_MODEL`) in charge.
@@ -797,6 +809,24 @@ pub fn thread_run_args(
         printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$2"
         export SBXW_THREAD="$2"
         cd "$wt" || exit 1
+        # Trusted, or the session stops on "Do you trust this folder?" before
+        # its briefing: a worktree is a folder Claude Code has never seen, and
+        # sitting under the trusted workspace does not count. Keyed by the cwd
+        # as Node sees it, which is what Claude Code looks up. Written to a
+        # copy renamed over the original, its mode kept, and only the first
+        # time; an unreadable file is left alone rather than replaced.
+        node -e '
+            const fs = require("fs"), p = process.argv[1], w = process.cwd();
+            let d, st;
+            try { st = fs.statSync(p); d = JSON.parse(fs.readFileSync(p, "utf8")); } catch (e) { process.exit(0); }
+            const was = (d.projects || {})[w];
+            if (was && was.hasTrustDialogAccepted) process.exit(0);
+            d.projects = d.projects || {};
+            d.projects[w] = Object.assign({}, was, { hasTrustDialogAccepted: true });
+            const t = p + ".sbxw-" + process.pid;
+            fs.writeFileSync(t, JSON.stringify(d, null, 2), { mode: st.mode & 0o777 });
+            fs.renameSync(t, p);
+        ' "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" 2>/dev/null
         # Reopened with nothing new to say (its pane after a restart of the
         # daemon or the sandbox): pick its conversation back up, if it had one.
         # Claude Code files transcripts under the cwd with every character
@@ -804,9 +834,9 @@ pub fn thread_run_args(
         tr="$HOME/.claude/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
         if [ -z "$3" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
             printf '\033[2m[sbxw] resuming its last conversation\033[0m\r\n'
-            exec claude --dangerously-skip-permissions ${4:+--model "$4"} --continue
+            exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} --continue
         fi
-        exec claude --dangerously-skip-permissions ${4:+--model "$4"} ${3:+"$3"}"#);
+        exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} ${3:+"$3"}"#);
     let mut args = owned(&["exec", "-it", name, "--", "bash", "-lc", SCRIPT, "sbxw-thread"]);
     args.extend([workspace, thread, prompt, model].map(pos));
     args
@@ -3082,6 +3112,13 @@ local-policy                          local   all              network: 159 allo
         );
         // The model, when given, on both the fresh and the resumed start.
         assert_eq!(script.matches(r#"${4:+--model "$4"}"#).count(), 2, "{script}");
+        // Its name is its address for SendMessage, on both starts too.
+        assert_eq!(script.matches(r#"--name "$2""#).count(), 2, "{script}");
+        // Its worktree is trusted before claude starts, or it opens on the
+        // trust dialog instead of its briefing.
+        let trust = script.find("hasTrustDialogAccepted: true").expect("trusts the worktree");
+        assert!(trust < script.find("exec claude").unwrap(), "{script}");
+        assert!(trust > script.find(r#"cd "$wt""#).unwrap(), "keyed by the worktree's cwd: {script}");
         assert!(script.contains(r#"${4:+--model "$4"} --continue"#), "{script}");
         // None given: an empty $4, so no flag at all — sent as a bare `=`,
         // never as the empty element `sbx exec` refuses.
