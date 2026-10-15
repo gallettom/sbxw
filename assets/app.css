@@ -1486,12 +1486,25 @@
   }
   .thread-menu-all + .thread-menu-new,
   .thread-menu-list + .thread-menu-new { border-top: 1px solid var(--c-elevated); border-radius: 0 0 5px 5px; }
-  .thread-menu .thread-menu-map {
-    display: flex; flex-direction: column; gap: .1rem; width: 100%;
-    margin-top: .25rem; border-top: 1px solid var(--c-elevated); border-radius: 0;
-    color: var(--c-text-bright); font-weight: 600;
+  /* The worktree graph's way in: the graph itself, in miniature, live. Its
+     border takes the lead's violet on hover, the colour of the branch every
+     lane in it is drawn against. */
+  .thread-menu .thread-menu-graph {
+    display: flex; align-items: center; gap: .7rem; width: 100%;
+    margin: .1rem 0 .35rem; padding: .5rem .6rem;
+    background: var(--c-surface-alt); border: 1px solid var(--c-border); border-radius: 6px;
   }
-  .thread-menu-map span { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
+  .thread-menu .thread-menu-graph:hover { background: var(--c-surface-alt); border-color: var(--c-purple-alt); }
+  .thread-menu-graph .wt-mini { flex-shrink: 0; }
+  .thread-menu-graph-text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+  .thread-menu-graph-text strong { color: var(--c-text-bright); font-size: 12.5px; }
+  .thread-menu-graph-text span { color: var(--c-text-muted); font-size: 11px; line-height: 1.35; }
+  .wt-mini .wt-edge { stroke-width: 1.5; }
+  .wt-mini .wt-dot { stroke-width: 1; stroke: var(--c-surface-alt); }
+  .wt-mini .wt-dot.wt-head { stroke: var(--c-purple); stroke-width: 1.25; }
+  .wt-mini .wt-hollow { fill: var(--c-surface-alt); stroke-width: 1.25; stroke-dasharray: none; }
+  /* Until the first answer: the shape, without what it says. */
+  .wt-mini.sketch { opacity: .55; }
 
   /* ── Worktrees ──
      Three columns over the same rows: who (the base, then each thread), the
@@ -1500,6 +1513,8 @@
      on its own when the history is wider than the dialog. The base is violet,
      the lead's colour; amber marks what to know before merging. */
   .wt-modal { width: 960px; }
+  .wt-intro { margin: 0; max-width: 76ch; color: var(--c-text-soft); font-size: 12px; line-height: 1.55; }
+  .wt-repos { display: flex; flex-direction: column; gap: .65rem; }
   .wt-repo { display: flex; flex-direction: column; gap: .4rem; }
   .wt-repo + .wt-repo { border-top: 1px solid var(--c-elevated); padding-top: .75rem; }
   .wt-repo-head { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }

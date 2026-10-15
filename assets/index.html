@@ -357,18 +357,22 @@
     </div>
   </div>
 
-  <!-- ── Worktrees ──
+  <!-- ── Worktree graph ──
        Where each thread's branch stands against the branch the lead works on,
        as lanes off that branch with the same in words beside each. Opened
-       from the Thread menu; filled, and read again while open, by
-       /js/worktrees.js. -->
+       from the miniature at the top of the Thread menu; filled, and read
+       again while open, by /js/worktrees.js. -->
   <div class="modal-overlay hidden" id="wt-overlay">
-    <div class="modal wt-modal" role="dialog" aria-modal="true" aria-labelledby="wt-title">
+    <div class="modal wt-modal" role="dialog" aria-modal="true" aria-labelledby="wt-title" aria-describedby="wt-intro">
       <div class="modal-head">
-        <span class="modal-title" id="wt-title">Worktrees</span>
+        <span class="modal-title" id="wt-title">Worktree graph</span>
         <button class="modal-close" id="wt-x" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body" id="wt-body"></div>
+      <div class="modal-body">
+        <p class="wt-intro" id="wt-intro">Each thread works in its own git worktree, on its own branch.
+          Here each branch is drawn against the lead's, where a merge lands.</p>
+        <div class="wt-repos" id="wt-body"></div>
+      </div>
       <div class="modal-foot">
         <span class="wt-updated" id="wt-updated"></span>
         <button class="btn-cancel" id="wt-close">Close</button>
