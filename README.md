@@ -660,14 +660,20 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   thread is, then each thread with its state in words beside its mark
   ("● Working, on screen in pane 2"), a click to go to it, **Show** or **Hide**
   for its pane, **Show all** / **Hide all** when they would do something,
-  **Worktrees** (below), and **+ New thread** last. Hiding closes the pane, never the session; **Show all** fills only the room
+  and **+ New thread** last. The worktree graph (below) opens from the top
+  of the menu. Hiding closes the pane, never the session; **Show all** fills only the room
   the window has and starts stopped threads only up to the session ceiling.
   The sidebar lists the same threads under each sandbox's row, to reach any of
   them from anywhere. Every thread with a worktree is listed, so after sbxw
   restarts its threads show as ○ stopped and a click starts one again.
-- **See where they stand:** **Worktrees** in the Thread menu opens a drawing
-  of every thread's branch against the branch the lead works on, which is the
-  one its repo's main checkout is on and the one a merge lands in. That branch
+- **See where they stand, the worktree graph:** the Thread menu opens on a
+  live miniature of it, under its header, which is also the way in. The
+  miniature shows the lead's branch with each thread forking off it, further
+  left the more it is behind, with a dot per commit (four at most). It is read
+  each time the menu opens. Clicked, it opens **Worktree graph of
+  <sandbox>**, a drawing of every thread's branch against the branch the lead
+  works on, which is the one its repo's main checkout is on and the one a
+  merge lands in. That branch
   is the top lane, in violet. Each thread forks off it on a row of its own, its
   commits as dots, its uncommitted work as a dashed amber ring, a merged one in
   green, running into its merge commit. Rows go by fork point, newest first,

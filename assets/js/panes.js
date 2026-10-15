@@ -1087,13 +1087,14 @@ function toggleThreadMenu(idx) {
   }
   threadMenu.idx = idx;
   renderThreadMenu();
+  if (typeof wtPrefetch === 'function') wtPrefetch(panes[idx].sandbox);
   const btn = document.getElementById(`pnewthread-${idx}`);
   btn.setAttribute('aria-expanded', 'true');
   const r = btn.getBoundingClientRect();
   const w = threadMenu.el.offsetWidth;
   threadMenu.el.style.top = `${r.bottom + 4}px`;
   threadMenu.el.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
-  threadMenu.el.querySelector('button')?.focus();
+  (threadMenu.el.querySelector('.thread-menu-go') || threadMenu.el.querySelector('button'))?.focus();
 }
 
 function closeThreadMenu() {
@@ -1143,10 +1144,8 @@ function renderThreadMenu() {
       <strong>Threads</strong>
       <span>Each is a separate agent working on its own copy of the code.</span>
     </div>
+    ${names.length && typeof wtMenuCardHtml === 'function' ? wtMenuCardHtml(sandbox, names) : ''}
     <div class="thread-menu-list">${rows}</div>${bulk}
-    ${names.length ? `<button type="button" role="menuitem" class="thread-menu-map" data-map
-      title="Each thread's branch drawn against the branch the lead works on">Worktrees
-      <span>How far each branch is from the lead's</span></button>` : ''}
     <button type="button" role="menuitem" class="thread-menu-new" data-new>+ New thread</button>`);
   threadMenu.el.hidden = false;
 }

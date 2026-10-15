@@ -1,10 +1,10 @@
-// ── Worktrees ─────────────────────────────────────────────────────────────
+// ── Worktree graph ────────────────────────────────────────────────────────
 // Where each thread's branch stands against the branch the lead works on: the
 // one its repo's main checkout is on, which is also where a merge lands. Drawn
 // as lanes off that branch, one row per thread, and said in words beside each
-// lane, so the drawing needs no legend. Opened from the Thread menu and read
-// again every few seconds while open (GET /api/sandboxes/:name/worktrees, see
-// src/worktrees.rs).
+// lane, so the drawing needs no legend. The Thread menu opens on a miniature
+// of it, which is also the way in; the dialog reads again every few seconds
+// while open (GET /api/sandboxes/:name/worktrees, see src/worktrees.rs).
 
 const wtOverlay = document.getElementById('wt-overlay');
 const wtBody = document.getElementById('wt-body');
@@ -24,7 +24,7 @@ const WT_THREAD_COLS = 10; // commits of one thread drawn at most
 
 function openWorktrees(sandbox, idx) {
   Object.assign(wtView, { sandbox, idx, data: null });
-  document.getElementById('wt-title').textContent = `Worktrees of ${sandbox}`;
+  document.getElementById('wt-title').textContent = `Worktree graph of ${sandbox}`;
   setHtml(wtBody, '<p class="wt-note">Reading the branches…</p>');
   wtUpdated.textContent = '';
   wtOverlay.classList.remove('hidden');
@@ -62,6 +62,7 @@ async function readWorktrees() {
     return;
   }
   wtView.data = res;
+  wtPreview.set(sandbox, res);
   paintWorktrees();
   wtUpdated.textContent = `Read at ${new Date().toLocaleTimeString()}, again every ${WT_POLL_MS / 1000} s`;
 }
@@ -164,7 +165,7 @@ function wtBaseLabel(r) {
 function wtThreadLabel(sandbox, t) {
   const { mark, state } = threadMark(sandbox, t.name);
   return `<button type="button" class="wt-name wt-go" data-thread="${escHtml(t.name)}"
-      title="${escHtml(threadVerb(sandbox, t.name))}">⑂ ${escHtml(t.name)}</button>
+      title="${escHtml(`${threadVerb(sandbox, t.name)} — worktree ${t.worktree}, branch ${t.branch}`)}">⑂ ${escHtml(t.name)}</button>
     <span class="wt-sub"><span class="thread-mark" data-state="${state}">${mark || '•'}</span> ${THREAD_STATE_WORDS[state] ?? 'Idle'}</span>`;
 }
 
@@ -258,6 +259,73 @@ function wtSvg(g, rows) {
   }
   const width = X(Math.max(g.cols, 1) - 1) + WT_PAD / 2;
   return `<svg class="wt-svg" width="${width}" height="${rows * WT_ROW}" aria-hidden="true">${out.join('')}</svg>`;
+}
+
+// ── In the Thread menu ──
+// The menu opens on the graph in miniature, drawn from the same answer, so
+// what the entry opens is plain before it is clicked. Read on every opening
+// of the menu, and kept fresh by the dialog while that is open.
+const wtPreview = new Map(); // sandbox → its last /worktrees answer
+
+async function wtPrefetch(sandbox) {
+  try {
+    const res = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/worktrees`)).json();
+    if (res?.ok) wtPreview.set(sandbox, res);
+  } catch { /* the miniature stays a sketch */ }
+  if (threadMenu.idx != null && panes[threadMenu.idx]?.sandbox === sandbox) renderThreadMenu();
+}
+
+// The entry: the miniature, then what it is. `names` are the threads the menu
+// lists, for a sketch of the right size until the first answer is in.
+function wtMenuCardHtml(sandbox, names) {
+  const repo = wtPreview.get(sandbox)?.repos.find(r => !r.error && r.threads.length);
+  const base = repo?.base || 'the lead\'s branch';
+  return `<button type="button" role="menuitem" class="thread-menu-graph" data-map
+      title="Open the worktree graph: every thread's branch against ${escHtml(base)}, live">
+      ${wtMiniSvg(repo, names)}
+      <span class="thread-menu-graph-text"><strong>Worktree graph</strong>
+        <span>Each thread's branch, drawn against ${escHtml(base)}</span></span>
+    </button>`;
+}
+
+// The graph in miniature: the lead's branch on top, each thread off it, forked
+// further left the more it is behind, with a dot per commit it would bring
+// (four at most). Rows go by fork, as in the dialog, so no link crosses a lane.
+function wtMiniSvg(repo, names) {
+  const S = 9, TOP = 6, ROW = 10, HEAD = 6 + 4 * S, MAX = 4;
+  const merged = t => !!t.tip && !t.ahead && !!repo?.log.some(c => c.parents.slice(1).includes(t.tip));
+  const lanes = (repo ? repo.threads : names.map(() => null)).map(t => ({
+    fork: HEAD - Math.min(t?.behind || 0, 4) * S,
+    ahead: Math.min(t?.ahead || 0, 4),
+    dirty: !!t?.dirty,
+    merged: !!t && merged(t),
+    sketch: !t || !t.tip,
+  })).sort((a, b) => b.fork - a.fork).slice(0, MAX);
+  const out = [];
+  lanes.forEach((l, i) => {
+    const y = TOP + (i + 1) * ROW;
+    const x = l.fork;
+    let end = x;
+    if (l.merged) {
+      out.push(`<path class="wt-edge wt-merged" d="M${x - 6} ${y} L${x - 3} ${y} Q${x} ${y} ${x} ${y - 3} L${x} ${TOP}"/>`,
+        `<circle class="wt-dot wt-merged" cx="${x - 6}" cy="${y}" r="2.6"/>`);
+    } else if (!l.ahead) {
+      end = x + S;
+      out.push(`<path class="wt-edge wt-faint" d="M${x} ${TOP} L${x} ${y - 3} Q${x} ${y} ${x + 3} ${y} L${end - 3} ${y}"/>`,
+        `<circle class="wt-hollow" cx="${end}" cy="${y}" r="2.6"/>`);
+    } else {
+      end = x + l.ahead * S;
+      out.push(`<path class="wt-edge wt-thread" d="M${x} ${TOP} L${x} ${y - 3} Q${x} ${y} ${x + 3} ${y} L${end} ${y}"/>`);
+      for (let k = 1; k <= l.ahead; k++) out.push(`<circle class="wt-dot wt-thread" cx="${x + k * S}" cy="${y}" r="2.6"/>`);
+    }
+    if (l.dirty) out.push(`<circle class="wt-hollow wt-dirty" cx="${end + S}" cy="${y}" r="2.8"/>`);
+  });
+  out.push(`<path class="wt-edge wt-faint" d="M1 ${TOP} L6 ${TOP}"/>`,
+    `<path class="wt-edge wt-base" d="M6 ${TOP} L${HEAD} ${TOP}"/>`);
+  for (let k = 0; k < 4; k++) out.push(`<circle class="wt-dot wt-base" cx="${6 + k * S}" cy="${TOP}" r="2.6"/>`);
+  out.push(`<circle class="wt-dot wt-base wt-head" cx="${HEAD}" cy="${TOP}" r="3.5"/>`);
+  const h = TOP + (Math.max(lanes.length, 1) + 1) * ROW - 2;
+  return `<svg class="wt-mini${repo ? '' : ' sketch'}" width="${HEAD + 6 * S}" height="${h}" aria-hidden="true">${out.join('')}</svg>`;
 }
 
 wtBody.addEventListener('click', e => {
