@@ -228,9 +228,12 @@ function createPane(index) {
     else openThread(index);
   });
   // With threads, the button opens the menu of them; with none, the menu would
-  // hold only "New thread…", so it goes straight there.
-  newThreadBtn.addEventListener('click', () => {
+  // hold only "New thread…", so it goes straight there. None known may only
+  // mean none read yet — a page just loaded, its threads off screen — so the
+  // list is read first.
+  newThreadBtn.addEventListener('click', async () => {
     if (!pane.sandbox || pane.sandbox === MONITOR_SANDBOX || pane.thread) return;
+    if (!knownThreads(pane.sandbox).length) await refreshThreadList(pane.sandbox);
     if (knownThreads(pane.sandbox).length) toggleThreadMenu(index);
     else openThread(index);
   });
@@ -1141,6 +1144,9 @@ function renderThreadMenu() {
       <span>Each is a separate agent working on its own copy of the code.</span>
     </div>
     <div class="thread-menu-list">${rows}</div>${bulk}
+    ${names.length ? `<button type="button" role="menuitem" class="thread-menu-map" data-map
+      title="Each thread's branch drawn against the branch the lead works on">Worktrees
+      <span>How far each branch is from the lead's</span></button>` : ''}
     <button type="button" role="menuitem" class="thread-menu-new" data-new>+ New thread</button>`);
   threadMenu.el.hidden = false;
 }
@@ -1157,6 +1163,7 @@ function onThreadMenuClick(e) {
   if (b.dataset.go) reachThread(sandbox, b.dataset.go, idx);
   else if (b.dataset.all === 'show') showAllThreads(sandbox, idx);
   else if (b.dataset.all === 'fold') foldAllThreads(sandbox);
+  else if ('map' in b.dataset) openWorktrees(sandbox, idx);
   else if ('new' in b.dataset) openThread(idx);
 }
 

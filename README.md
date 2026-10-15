@@ -659,12 +659,30 @@ nobody can review. Each thread therefore gets a **git worktree** and a
   count (amber while one is blocked) and opens a menu: a line saying what a
   thread is, then each thread with its state in words beside its mark
   ("● Working, on screen in pane 2"), a click to go to it, **Show** or **Hide**
-  for its pane, **Show all** / **Hide all** when they would do something, and
-  **+ New thread** last. Hiding closes the pane, never the session; **Show all** fills only the room
+  for its pane, **Show all** / **Hide all** when they would do something,
+  **Worktrees** (below), and **+ New thread** last. Hiding closes the pane, never the session; **Show all** fills only the room
   the window has and starts stopped threads only up to the session ceiling.
   The sidebar lists the same threads under each sandbox's row, to reach any of
   them from anywhere. Every thread with a worktree is listed, so after sbxw
   restarts its threads show as ○ stopped and a click starts one again.
+- **See where they stand:** **Worktrees** in the Thread menu opens a drawing
+  of every thread's branch against the branch the lead works on, which is the
+  one its repo's main checkout is on and the one a merge lands in. That branch
+  is the top lane, in violet. Each thread forks off it on a row of its own, its
+  commits as dots, its uncommitted work as a dashed amber ring, a merged one in
+  green, running into its merge commit. Rows go by fork point, newest first,
+  so no link crosses another lane. Beside each lane the same in words: `3 to
+  merge`, `4 behind main` (commits the base gained since the fork: what a merge
+  may conflict with), `2 uncommitted` (a merge takes commits only), `✓ merged
+  into main`, `no commits yet`, with its last commit and the thread's state.
+  Clicking a thread's name goes to it. The view reads again every 4 s while
+  open. Below 640px it keeps the words and drops the drawing. It comes from
+  `GET /api/sandboxes/<name>/worktrees` (`{ok, workspace, repos: [{path,
+  base, head, dirty, log, threads: [{name, branch, worktree, tip, fork, ahead,
+  behind, dirty, commits}], error}]}`, one entry per repo holding a thread).
+  It is read with git on the host, like the repo list, so it works on a
+  stopped sandbox. Every call passes `--no-optional-locks`, so the read never
+  holds the index lock a thread needs to commit.
 - **Threads told apart:** everything in a group wears the group's one hue.
   The agent's bar says `main`, filled; each thread's bar says `⑂ <name>`,
   outlined. Threads are told apart by name, not by colour: a hue per thread

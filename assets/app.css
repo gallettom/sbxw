@@ -1486,6 +1486,80 @@
   }
   .thread-menu-all + .thread-menu-new,
   .thread-menu-list + .thread-menu-new { border-top: 1px solid var(--c-elevated); border-radius: 0 0 5px 5px; }
+  .thread-menu .thread-menu-map {
+    display: flex; flex-direction: column; gap: .1rem; width: 100%;
+    margin-top: .25rem; border-top: 1px solid var(--c-elevated); border-radius: 0;
+    color: var(--c-text-bright); font-weight: 600;
+  }
+  .thread-menu-map span { color: var(--c-text-muted); font-size: 11px; font-weight: 400; }
+
+  /* ── Worktrees ──
+     Three columns over the same rows: who (the base, then each thread), the
+     lanes, and the same in words. The lanes are one SVG spanning every row,
+     so a fork can run from the base down to its thread; it scrolls sideways
+     on its own when the history is wider than the dialog. The base is violet,
+     the lead's colour; amber marks what to know before merging. */
+  .wt-modal { width: 960px; }
+  .wt-repo { display: flex; flex-direction: column; gap: .4rem; }
+  .wt-repo + .wt-repo { border-top: 1px solid var(--c-elevated); padding-top: .75rem; }
+  .wt-repo-head { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
+  .wt-repo-name { color: var(--c-text-bright); font-weight: 600; }
+  .wt-repo-path {
+    color: var(--c-text-dim); font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .wt-graph {
+    display: grid; column-gap: .75rem;
+    grid-template-columns: minmax(90px, 150px) minmax(140px, 1fr) minmax(180px, 1fr);
+    /* The last row is the lanes' scrollbar, when they need one. */
+    grid-template-rows: repeat(var(--wt-rows), var(--wt-row)) auto;
+  }
+  .wt-label, .wt-facts {
+    display: flex; flex-direction: column; justify-content: center; gap: .1rem; min-width: 0;
+  }
+  .wt-label { grid-column: 1; }
+  .wt-lanes { grid-column: 2; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
+  .wt-facts { grid-column: 3; }
+  .wt-name, .wt-line, .wt-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wt-name { font-weight: 600; color: var(--c-text-bright); }
+  .wt-base-name { color: var(--c-purple); }
+  .wt-go {
+    font: inherit; font-weight: 600; color: var(--c-text-bright); text-align: left;
+    background: none; border: none; padding: 0; cursor: pointer;
+  }
+  .wt-go:hover { color: var(--c-blue); text-decoration: underline; }
+  .wt-go:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; border-radius: 3px; }
+  .wt-line { font-size: 12px; color: var(--c-text); }
+  .wt-sub { font-size: 11px; color: var(--c-text-muted); }
+  .wt-line code, .wt-sub code { color: var(--c-text-bright); font-size: 11px; }
+  .wt-ahead { color: var(--c-text-bright); }
+  .wt-ok { color: var(--c-green); }
+  .wt-warn { color: var(--c-amber); }
+  .wt-muted { color: var(--c-text-muted); }
+  .wt-note { margin: 0; color: var(--c-text-muted); line-height: 1.5; }
+  .wt-updated { margin-right: auto; align-self: center; font-size: 11px; color: var(--c-text-dim); }
+  .wt-svg { display: block; }
+  .wt-edge { fill: none; stroke-width: 2; stroke-linecap: round; }
+  .wt-edge.wt-base { stroke: var(--c-purple-alt); }
+  .wt-edge.wt-thread { stroke: var(--c-text-muted); }
+  .wt-edge.wt-merged { stroke: var(--c-green); }
+  .wt-edge.wt-faint { stroke: var(--c-dim); stroke-dasharray: 2 4; }
+  .wt-edge.wt-dirty { stroke: var(--c-amber); stroke-dasharray: 2 3; stroke-width: 1.5; }
+  .wt-dot { stroke: var(--c-surface); stroke-width: 2; }
+  .wt-dot.wt-base { fill: var(--c-purple-alt); }
+  .wt-dot.wt-head { stroke: var(--c-purple); stroke-width: 2; }
+  .wt-dot.wt-thread { fill: var(--c-text); }
+  .wt-dot.wt-merged { fill: var(--c-green); }
+  .wt-hollow { fill: var(--c-surface); stroke: var(--c-text-muted); stroke-width: 1.5; }
+  .wt-hollow.wt-dirty { stroke: var(--c-amber); stroke-dasharray: 2 2; }
+  .wt-gap rect { fill: var(--c-surface); }
+  .wt-gap text { fill: var(--c-text-muted); font-size: 12px; text-anchor: middle; }
+  /* Too narrow for both: the words stay, since they say all the drawing does. */
+  @media (max-width: 640px) {
+    .wt-graph { grid-template-columns: minmax(80px, 40%) minmax(0, 1fr); }
+    .wt-lanes { display: none; }
+    .wt-facts { grid-column: 2; }
+  }
   .thread-mark { font-weight: 600; }
   .thread-mark[data-state="working"]  { color: var(--c-blue); }
   .thread-mark[data-state="blocked"]  { color: var(--c-amber); }

@@ -46,6 +46,9 @@ const SBXW_APP_SCRIPTS = [
   // Same reason: the chat dock follows chats on that stream. chat-core.js is
   // the part of it the browser side panel shares.
   '/js/chat-core.js',
+  // After plans.js: its lanes carry each thread's plan state.
+  '/js/worktrees.js',
+  // Same reason: the chat dock follows chats on that stream.
   '/js/chat-dock.js',
 ];
 

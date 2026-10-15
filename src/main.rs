@@ -45,6 +45,7 @@ mod repos;
 mod sandbox_fs;
 mod sbx;
 mod web;
+mod worktrees;
 
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
