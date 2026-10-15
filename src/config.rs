@@ -34,12 +34,9 @@ pub struct Config {
     /// `ANTHROPIC_DEFAULT_MODEL`. Accepts a full model id ("claude-sonnet-5-5")
     /// or an alias ("sonnet", "opus"). Empty => don't set it at all.
     ///
-    /// A *default*, and now genuinely one. sbxw used to write `model` into the
-    /// sandbox's `settings.json`, which sits **above** a saved `/model` choice
-    /// in Claude Code's precedence — so every `sbxw up` silently undid whatever
-    /// the user had picked in-session. `ANTHROPIC_DEFAULT_MODEL` sits *below*
-    /// it: Claude Code starts on this model only when nothing else selects one,
-    /// so a `/model` choice now survives.
+    /// A *default*: `ANTHROPIC_DEFAULT_MODEL` sits *below* a saved `/model`
+    /// choice in Claude Code's precedence, so Claude Code starts on this model
+    /// only when nothing else selects one.
     ///
     /// Requires Claude Code **2.1.236+** inside the sandbox, which comes from
     /// the sbx template rather than from sbxw. On an older one the variable is
@@ -52,7 +49,7 @@ pub struct Config {
     pub models: Vec<ModelChoice>,
     /// How sandboxes sbxw creates see sbx's shared skill store (populated by
     /// `sbxw skills import`): `"off"`, `"readonly"` or `"readwrite"`, passed as
-    /// `sbx create --skills=…` (sbx 0.43). Empty leaves it to sbx, whose
+    /// `sbx create --skills=…`. Empty leaves it to sbx, whose
     /// default is `"readonly"` — and whose `skills.defaultMode` setting can
     /// change that for the whole host, which is the better place for a
     /// preference that isn't about this project.
@@ -76,9 +73,8 @@ pub struct Config {
     ///
     /// Only read at *creation*, like `skills`.
     pub pull: String,
-    /// Keep the sandbox running when nobody is attached (sbx 0.47's
-    /// `sbx run -d`). Off, a sandbox stops by itself once idle — sbx's default
-    /// since 0.43, and the right one for an agent you talk to. On, it stays up
+    /// Keep the sandbox running when nobody is attached (`sbx run -d`). Off, a
+    /// sandbox stops by itself once idle — sbx's default, and the right one for an agent you talk to. On, it stays up
     /// until `sbxw stop` (or `sbx stop`), which is what a project serving an
     /// app behind its `ports` aliases wants: the dev server is still there
     /// when you open `neos.local` with no pane open.

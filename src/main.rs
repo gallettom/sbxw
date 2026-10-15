@@ -29,8 +29,8 @@
 //!     because `sbx kit add` recreates the container and would kill any
 //!     attached session.
 //!
-//! Requires **sbx 0.43 or newer** and assumes it throughout — there are no
-//! runtime fallbacks for older releases. See `sbx::MIN_SBX_VERSION`.
+//! Requires **sbx 0.47 or newer**, with no fallbacks for older releases. See
+//! `sbx::MIN_SBX_VERSION`.
 
 mod codemap;
 mod config;
@@ -330,7 +330,7 @@ Examples:
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// Run or write an `sbxenv.yaml` environment file (requires sbx 0.43+).
+    /// Run or write an `sbxenv.yaml` environment file (requires sbx 0.47+).
     ///
     /// An environment file is sbx's own committable project setup: agent,
     /// workspace, mounts, kits, env, secrets, MCP servers, ports. `run` brings
@@ -902,10 +902,9 @@ fn cmd_update(check_only: bool, no_island: bool) -> Result<()> {
 }
 
 // ── macOS companion app (sbxw Island) ────────────────────────────────────
-// The bundle installed by install.sh lives outside the binary's reach, so it
-// used to stay on whatever build shipped the day it was installed. `sbxw
-// update` now refreshes it in place — but only if the user already has it:
-// updating must never install something they declined.
+// The bundle installed by install.sh lives outside the binary, so `sbxw update`
+// refreshes it in place — but only if the user already has it: updating must
+// never install something they declined.
 const ISLAND_APP: &str = "SbxwIsland.app";
 /// Bundle executable name, i.e. what the running process is called.
 const ISLAND_PROC: &str = "SbxwIsland";
@@ -1604,12 +1603,12 @@ pub(crate) fn mint_chat_name() -> String {
     format!("chat-{:06x}", (nanos as u64) & 0xff_ffff)
 }
 
-/// sbx refuses a longer name (0.42) — it is a DNS label's limit, which is what
+/// sbx refuses a longer name — it is a DNS label's limit, which is what
 /// `<name>.sbx` and the `/etc/hosts` aliases make of it.
 pub(crate) const MAX_SANDBOX_NAME_LEN: usize = 63;
 
 /// Sandbox names go into shell commands, file names and hostnames, so keep them
-/// to an unambiguous alphabet — and within sbx's own rule since 0.42: at most
+/// to an unambiguous alphabet — and within sbx's own rule: at most
 /// 63 characters, not ending in a hyphen or period (sbxw allows no period).
 pub(crate) fn is_valid_sandbox_name(name: &str) -> bool {
     !name.is_empty()
@@ -2048,12 +2047,11 @@ fn kit_display_name(kit: &str) -> String {
 /// The part of `sbx inspect` output that lists the sandbox's kits, or the whole
 /// blob when no such part can be identified.
 ///
-/// The kit-skip test is a substring search, and `inspect` also reports the sandbox's
-/// **custom secrets** to what `inspect` reports. Searching the whole blob for a
-/// kit name therefore now collides with a secret (or any other field) that
-/// merely contains it, and the failure is the silent kind: sbxw concludes the
-/// kit is already applied and never applies it. Narrowing the haystack to the
-/// kits section fixes that.
+/// The kit-skip test is a substring search, and `inspect` also reports the
+/// sandbox's **custom secrets**. Searching the whole blob for a kit name would
+/// collide with a secret (or any other field) that merely contains it, and the
+/// failure is the silent kind: sbxw concludes the kit is already applied and
+/// never applies it. Hence the narrowing to the kits section.
 ///
 /// It degrades rather than guessing: `inspect`'s exact layout is not pinned by
 /// the CLI reference and may well be a table with a KITS *column*, where no
@@ -2529,10 +2527,8 @@ pub(crate) fn provision_sandbox(
             warn_if_kit_source_needs_allowlist(kit);
         }
 
-        // Every kit goes in here or the create fails outright. `--kit` is
-        // repeatable and documented as such, so there is nothing left to hedge
-        // against — sbxw used to retry with only the credentials kit because it
-        // could not be sure older releases composed several.
+        // Every kit goes in here (`--kit` is repeatable), or the create fails
+        // outright.
         create_with_port_fallback(
             name,
             &sbx::CreateOpts {
@@ -2553,8 +2549,8 @@ pub(crate) fn provision_sandbox(
         drop(kit_dir);
     }
 
-    // 2a. `keep_running`: hold the sandbox up past its last session (sbx
-    // 0.47's `run -d`). Only on one that was just created or is stopped —
+    // 2a. `keep_running`: hold the sandbox up past its last session (`sbx run
+    // -d`). Only on one that was just created or is stopped —
     // `run -d` restarts a sandbox that exists, and a running one may have
     // panes attached that a restart would cut. Doing it here, before the wait
     // below, also starts a stopped sandbox for the steps that need it up.
@@ -2598,11 +2594,9 @@ pub(crate) fn provision_sandbox(
     };
     // 2d (part of the batch). The default model rides in as
     // `ANTHROPIC_DEFAULT_MODEL` with the rest of the environment (see
-    // `Config::effective_env`), so there is nothing to install for it. What is
-    // left is undoing the *old* mechanism: sbxw used to write `model` into
-    // settings.json, and that key outranks the variable — a sandbox carrying
-    // one would ignore `claude_model` forever. Only sbxw's own leftover is
-    // removed; a `/model` choice that says something else stays.
+    // `Config::effective_env`). A `model` key in settings.json outranks the
+    // variable, so one left there by an older sbxw is removed; a `/model`
+    // choice that says something else stays.
     let marker = model_migrated_marker(name);
     let migrate_model = !cfg.claude_model.is_empty() && !marker.exists();
     if up {
@@ -2799,9 +2793,8 @@ pub(crate) fn provision_sandbox(
     progress::step(progress::PORTS);
     let aliases = wanted_aliases(cfg, extra_ports);
     // Non-fatal on purpose: the sandbox exists and works by now, and /etc/hosts
-    // is a convenience on top of it. Failing here used to abort provisioning
-    // *after* the sandbox was created — the web UI then saw an error, never
-    // attached the new sandbox to a pane, and left it sitting in the sidebar.
+    // is a convenience on top of it. Failing here would leave a created sandbox
+    // the web UI never attaches to a pane.
     let warnings = apply_host_aliases(&aliases);
     for (host_port, sandbox_port, alias) in all_ports.iter().filter(|(_, _, a)| !a.is_empty()) {
         tracing::info!("alias ready: http://{alias}:{host_port} (sandbox :{sandbox_port})");
@@ -2855,7 +2848,7 @@ pub(crate) fn provision_sandbox(
 /// The reason is not tidiness. The agent can write anywhere in a direct-mounted
 /// workspace, so an environment file inside one is a file the agent can
 /// rewrite — and it is the file that decides what the *next* sandbox gets:
-/// which kits, which mounts, which ports. sbx 0.42 binds the file read-only
+/// which kits, which mounts, which ports. sbx binds the file read-only
 /// into sandboxes that `sbx env` creates, but not into the ones `sbxw up`
 /// creates with `sbx create`, which mount the same directory. Outside, it is
 /// host-side configuration no sandbox can reach.
@@ -2888,10 +2881,10 @@ fn export_dir_for(workspace: &Path, explicit: Option<&Path>) -> PathBuf {
 
 /// `path`, as an environment file in `dir` should spell it.
 ///
-/// Relative — `./neos`, `../kits/headroom` — because sbx 0.43 resolves a
-/// relative path against the file that declares it, which makes it the one
-/// spelling that survives a checkout in a different place. It replaces
-/// `${SBXW_PROJECTS_ROOT:-/abs}/neos`, which 0.42 stopped expanding.
+/// Relative — `./neos`, `../kits/headroom` — because sbx resolves a relative
+/// path against the file that declares it, which makes it the one spelling
+/// that survives a checkout in a different place (sbx does not expand
+/// `${VAR}`).
 ///
 /// Absolute when the two share nothing but the filesystem root: a path that
 /// climbs all the way up is no more portable than the absolute one, and much
@@ -3507,13 +3500,9 @@ fn alias_for(cfg: &Config, sandbox_port: u16) -> String {
 
 /// Build the environment file for `name`, from a config and a set of ports.
 ///
-/// The one place an `EnvFile` is assembled. It used to be two — `cmd_env_export`
-/// and `render_env_file_for` each built the struct field by field — and they had
-/// already drifted: the same project exported `kits: ./local-kit` from the CLI
-/// and `kits: ${SBXW_PROJECTS_ROOT:-…}/local-kit` from the browser. What
-/// genuinely differs between the callers is where the ports come from and where
-/// the file goes, so those are the parameters; everything else is shared by
-/// construction.
+/// The one place an `EnvFile` is assembled, so the CLI and the browser export
+/// the same file. What differs between the callers is where the ports come
+/// from and where the file goes, so those are the parameters.
 ///
 /// Kits are written relative to `dir` as well as the workspace: a kit checked
 /// out beside the project is exactly as machine-specific as the project.
@@ -3817,10 +3806,9 @@ fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
 ///
 /// It lives here rather than in `Config::load_or_default` because resolution
 /// needs the config file's directory, and a `Config` doesn't remember where it
-/// came from. It used to be inline in `cmd_up`, which meant `sbxw web` and the
-/// web-only daemon — both of which create sandboxes — read the *unresolved*
-/// list, so a relative kit path worked or failed depending on which command you
-/// happened to type.
+/// came from. Every entry point that creates sandboxes (`sbxw up`, `sbxw web`,
+/// the web-only daemon) goes through it, so a relative kit path resolves the
+/// same way whichever command you type.
 fn load_config(config: &Path) -> Result<Config> {
     let mut cfg = Config::load_or_default(config)?;
     let dir = config_dir_of(config)?;
@@ -4122,11 +4110,9 @@ fn restrict_permissions(path: &std::path::Path, mode: u32) {
 
 /// The OAuth mixin's spec.yaml, in kit spec **v2**.
 ///
-/// v2 is the only grammar sbxw emits. It restructures exactly the two sections
-/// this kit uses — `network.allowedDomains` became `permissions.network.allow`,
-/// `commands.initFiles` became `setup.files` — and its loader *rejects* v1
-/// field names rather than tolerating them, so a spec has to commit to one.
-/// sbxw used to pick per host; with the floor past 0.39 there is one answer.
+/// v2 is the only grammar sbxw emits: `permissions.network.allow` and
+/// `setup.files`. Its loader *rejects* v1 field names, so a spec has to commit
+/// to one.
 fn oauth_kit_spec(credentials_json: &str) -> String {
     oauth_kit_spec_inner(Some(credentials_json))
 }
@@ -4424,7 +4410,7 @@ mod tests {
         assert!(format!("{err:#}").contains("failed to apply network allowlist"));
     }
 
-    /// sbx 0.43 resolves a relative path against the file that declares it, so
+    /// sbx resolves a relative path against the file that declares it, so
     /// relative is the spelling that survives a checkout somewhere else.
     #[test]
     fn a_path_is_written_relative_to_the_file() {
@@ -4683,8 +4669,8 @@ mod tests {
         assert_eq!(file.kits[0], "./kits/headroom");
         // A registry reference is not a path and must survive untouched.
         assert_eq!(file.kits[1], "docker.io/sbx/playwright-kit:latest");
-        // `skills` has a field of its own since 0.43, so it is carried rather
-        // than described.
+        // `skills` has a field of its own, so it is carried rather than
+        // described.
         assert_eq!(file.skills.as_deref(), Some("off"));
         assert!(!file.render("t").contains("${"), "no expression survives");
     }
@@ -4701,15 +4687,14 @@ mod tests {
             ..Config::default()
         };
         let ports = vec![(4200u16, 4200u16, "neos.local".to_string())];
-        // The skills setting is a field now, not a note.
+        // The skills setting is a field, not a note.
         assert!(!env_export_notes(&cfg, &ports).join("\n").contains("skills"));
         let notes = env_export_notes(&cfg, &ports).join("\n");
 
         assert!(notes.contains("sbx policy allow network \"github.com,pypi.org\""));
         assert!(notes.contains("sbx policy deny network \"telemetry.example\""));
-        // The model is no longer a *note*: it rides in the file's own `env:`
-        // block as ANTHROPIC_DEFAULT_MODEL, so an export carries it for real
-        // rather than describing what the reader would have to do by hand.
+        // The model is not a *note*: it rides in the file's own `env:` block as
+        // ANTHROPIC_DEFAULT_MODEL.
         assert!(!notes.contains("claude-sonnet-5-5"), "{notes}");
         assert!(notes.contains("neos.local:4200"));
         assert!(notes.contains("CLAUDE_CODE_OAUTH_TOKEN"));
@@ -4776,8 +4761,8 @@ mod tests {
         assert!(!kit_add_needs_recreate("no such sandbox: neos"));
     }
 
-    /// The real failure this guards: a container swap re-resolves the OAuth kit sbxw
-    /// used to delete, and the *unrelated* kit being added is what reports it.
+    /// A container swap re-resolves a deleted OAuth kit, and the *unrelated* kit
+    /// being added is what reports it.
     #[test]
     fn a_stale_oauth_kit_is_recognised_in_sbxs_own_message() {
         let dir = std::env::temp_dir().join("sbxw-oauth-kit-36226");
@@ -4951,7 +4936,7 @@ mod tests {
     #[test]
     fn sandbox_name_sanitization_keeps_only_the_valid_alphabet() {
         assert_eq!(sanitize_sandbox_name_component("my-project"), "my-project");
-        // A trailing hyphen is refused by sbx since 0.42, so none is left.
+        // A trailing hyphen is refused by sbx, so none is left.
         assert_eq!(sanitize_sandbox_name_component("my project!"), "my-project");
         assert_eq!(sanitize_sandbox_name_component(""), "sandbox");
         assert_eq!(sanitize_sandbox_name_component("!!"), "sandbox");

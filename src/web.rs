@@ -452,12 +452,11 @@ fn split_key(key: &str) -> (&str, &str) {
 /// Claude Code gives every session a `session_id`, and one container can hold
 /// several: the agent sbxw attached through its own PTY, plus anything started
 /// over SSH — Claude Desktop, a terminal, an editor. They all read the same
-/// `~/.claude/settings.json`, so they all fire sbxw's hooks. Keyed by sandbox
-/// alone they overwrote each other and the island showed one incoherent state
-/// for two agents; keyed by session they get a row each.
+/// `~/.claude/settings.json`, so they all fire sbxw's hooks. Keyed by session,
+/// each gets a row of its own.
 ///
 /// A hook that carries no session id (an older in-sandbox hook script) keeps
-/// the plain `<sandbox>::claude` key, which is exactly what it used to get.
+/// the plain `<sandbox>::claude` key.
 fn agent_status_key(sandbox: &str, session_id: &str) -> String {
     let base = session_key(sandbox, "claude");
     if session_id.is_empty() {
@@ -892,7 +891,7 @@ fn describe_tool(tool: &str, input: Option<&serde_json::Value>) -> String {
 
 /// Fold a Claude Code hook event into a session's status. Returns `true` when
 /// the session ended and its entry should be dropped. This is the single source
-/// of truth for session state — replacing the old terminal-scraping heuristics.
+/// of truth for session state.
 fn apply_hook(event: &str, tool: &str, body: &serde_json::Value, st: &mut SessionStatus) -> bool {
     match event {
         "SessionStart" => {
@@ -1174,7 +1173,7 @@ pub async fn serve(
     let (provision, _) = broadcast::channel::<ProvisionEvent>(512);
     let (client_count, _) = watch::channel::<usize>(0);
     let statuses: Statuses = Arc::new(Mutex::new(HashMap::new()));
-    // Hoisted above the reconciler because emitting a session's state now needs
+    // Hoisted above the reconciler because emitting a session's state needs
     // to know whether sbxw holds a PTY for its sandbox (see `is_answerable`).
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
     let relay = Arc::new(crate::relay::Relay::new());
@@ -1558,14 +1557,11 @@ async fn api_watch_events(
 /// `provision`, `codemap`).
 ///
 /// Plain HTTP has no multiplexing (no TLS here, so no ALPN, so no h2), and
-/// browsers cap concurrent connections to one origin at 6. Three separate
-/// long-lived `EventSource`s per tab meant two tabs already claimed 8 of
-/// those 6 sockets, so a third tab's very first `GET /` had nowhere to go —
-/// it just queued in the browser, forever, since the sockets ahead of it
-/// never close. One connection per tab instead of three buys the headroom
-/// back. `/api/events` and `/api/watch-events` stay mounted unchanged: the
-/// macOS island still reads those directly over its own connection pool,
-/// which this doesn't touch.
+/// browsers cap concurrent connections to one origin at 6. One long-lived
+/// `EventSource` per feed would exhaust that with a couple of tabs, and the
+/// next tab's `GET /` would queue forever. `/api/events` and
+/// `/api/watch-events` stay mounted for the macOS island, which reads them
+/// over its own connection pool.
 async fn api_stream(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
@@ -5655,21 +5651,13 @@ struct LensBody {
 /// the code map for one audience.
 ///
 /// The daemon writes nothing: the agent is the only party here that can read
-/// the map and judge what a product owner needs out of it. What changed is
-/// where it does that. A lens used to be typed into the agent pane, on the
-/// argument that a few minutes of work you may want to argue with belongs in
-/// front of you — but it took over the session you were in the middle of, and
-/// what it produced there was a document, not a conversation. So it runs in a
-/// background session like the map beside it (`sbx::codemap_run_args`), the
+/// the map and judge what a product owner needs out of it. It runs in a
+/// background session like the map beside it (`sbx::codemap_run_args`), so the
 /// pane stays yours, and the run is state the whole UI can read: a badge, a
 /// corner card, a toast when it lands.
 ///
-/// The brief goes over whole and unnamed. The daemon used to derive the lens's
-/// directory from the brief's opening words and pass it as `--into`: that
-/// bought the browser a path to quote back, and cost the lens its title, since
-/// the picker shows the directory and the opening words of a brief are not a
-/// title. Naming is a reading task — it belongs to whoever has read the map —
-/// so the agent picks it, and the browser says only where lenses land.
+/// The brief goes over whole and unnamed: naming the lens is a reading task, so
+/// the agent picks its directory, and the browser says only where lenses land.
 async fn api_codemap_lens(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
@@ -5880,7 +5868,7 @@ fn start_codemap(
 /// and judge what is worth saying about it, and the daemon's part is to start
 /// it, remember that it is running, and say so — see `src/codemap.rs`.
 ///
-/// Background rather than the agent pane — as the lens beside it now is too. A
+/// Background rather than the agent pane, like the lens beside it. A
 /// map is a long, uninterrupted read of a whole repository, and taking over the
 /// pane for it would cost the human the session they were in the middle of, for
 /// output they cannot usefully steer anyway.

@@ -180,8 +180,8 @@ pub fn ensure_loopback_aliases(aliases: &[HostAlias]) -> Result<()> {
         return Ok(()); // Linux already routes the whole 127.0.0.0/8.
     }
     // Read lo0 once, and only if there is something that could need adding:
-    // every `sbxw up` used to shell out to `sudo ifconfig` per alias, which is
-    // what made a long-running daemon hit the password prompt again and again.
+    // `sudo ifconfig` per alias on every `sbxw up` would hit the password
+    // prompt again and again.
     if aliases.iter().all(|a| a.ip == "127.0.0.1") {
         return Ok(());
     }

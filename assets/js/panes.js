@@ -141,8 +141,6 @@ function createPane(index) {
     <div class="pane-bar">
       <span class="dot term-disconnected" id="pdot-${index}" title="Terminal connection"></span>
       <span class="sandbox-label" id="plabel-${index}">—</span>
-      <span class="role-chip" id="prole-${index}" hidden></span>
-      <span class="conn-label" id="pconn-${index}"></span>
       <!-- Beside the name, not over with SSH/Env/Reconnect on the right: those
            act on the *session* in this pane, while a project is a fact about
            the sandbox the name belongs to — the same workspace, whichever pane
@@ -151,6 +149,8 @@ function createPane(index) {
               title="Project — this sandbox's code map and the deliverables under .sbxw-artifacts/">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
+      <span class="conn-label" id="pconn-${index}"></span>
+      <span class="role-chip" id="prole-${index}" hidden></span>
       <button class="pane-btn pane-plan-btn" id="pplan-${index}" hidden
               title="This lead's plan is waiting for you">Review plan</button>
       <button class="pane-btn pane-plan-btn" id="pmerge-${index}" hidden

@@ -83,11 +83,6 @@ old `mcp:<server>.client_secret` name is no longer read and has to be set again
 with `sbx secret set mcp:<server>:client_secret`. sbxw stores no MCP secrets
 itself, so that one is yours to redo.
 
-The one thing still *probed* rather than assumed is the skills flag of `sbx
-create`: it comes from release notes, not the published reference. Since an
-unknown flag fails the whole `create`, sbxw reads `sbx create --help` once
-before passing it — see [Shared skills](#shared-skills).
-
 To run against an older sbx anyway:
 
 ```bash
@@ -1480,12 +1475,9 @@ about one project. The old `share_skills = false` still works and means
 only — changing it does nothing to sandboxes that already exist. An exported
 environment file carries it as its own `skills:` field.
 
-The skills flag comes from release notes rather than the published `sbx create`
-reference, and an unknown flag fails the whole command. So sbxw reads `sbx
-create --help` once before passing it: `--skills=MODE` when listed, the
-deprecated `--no-share-skills` for `off` when only that is, and otherwise the
-sandbox with sbx's default and a warning that the setting couldn't be honoured,
-rather than no sandbox at all.
+sbxw passes `--skills=MODE` as-is. It used to read `sbx create --help` first
+and fall back to the pre-0.43 `--no-share-skills`; the 0.47 floor made that
+probe a second code path no supported sbx takes, so it is gone.
 
 How this relates to [kits](#kits): a kit can install *anything* (apt packages,
 binaries, startup commands) but applying one recreates the container. The skill
@@ -1800,9 +1792,8 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   `sbx create --no-share-skills` is the one that did **not** turn up: the 0.39
   reference lists `--clone --cpus --deny-network -e/--env --env-file --kit
   -m/--memory --name -p/--publish -q/--quiet -t/--template` and no skills flag.
-  0.43 replaced it with `--skills=MODE`, again from release notes only. Since
-  an unknown flag is a hard error, sbxw probes `sbx create --help` before
-  passing either — see [Shared skills](#shared-skills).
+  0.43 replaced it with `--skills=MODE`, which the `--help` of a real 0.47.0
+  binary lists; sbxw passes it unprobed — see [Shared skills](#shared-skills).
 - The shape of an environment file's `args:` block. The 0.42 notes document
   `${{ env.args.NAME }}` and `--env-arg`, not the block's grammar. sbxw reads
   `NAME: value`, `NAME: {default: value}` and a list of `{name, default}` for

@@ -28,11 +28,11 @@
 //!   file's header (`notes`); on run they come from `sbxw.toml`, which acts as
 //!   the fallback layer under the environment file.
 //!
-//! And three from sbx 0.42/0.43 that decide how a file is *read*:
+//! And three that decide how sbx *reads* a file:
 //!
 //! * **The project file is `sbxenv.yaml`**, not hidden, and a directory means
 //!   that name alone. `~/.sbxenv.yaml` is merged beneath it as shared defaults.
-//! * **`${VAR}` is no longer expanded.** The file's own expressions are
+//! * **`${VAR}` is not expanded.** The file's own expressions are
 //!   `${{ env.projectDir }}`, `${{ env.fileDir }}` and `${{ env.args.NAME }}`,
 //!   the last supplied with `--env-arg` or defaulted in an `args:` block.
 //! * **A relative path resolves against the file that declares it**, and a
@@ -64,7 +64,7 @@ pub struct Port {
     /// loopback); sbxw sets it only in `ip_per_app` mode, where the whole point
     /// is that each app gets a loopback address of its own.
     pub host_ip: Option<String>,
-    /// sbx's default (`tcp4` since 0.42) unless the file says otherwise.
+    /// sbx's default (`tcp4`) unless the file says otherwise.
     /// Carried so a rewrite doesn't turn someone's `udp` mapping into a TCP one.
     pub protocol: Option<String>,
 }
@@ -75,10 +75,8 @@ impl From<&crate::sbx::PortMapping> for Port {
     /// The two defaults are dropped rather than written out: sbx's own default
     /// host interface is loopback and its default protocol is `tcp4` (see
     /// `protocol_is_default`), so naming either adds noise to a file a person
-    /// reads. This conversion used to be
-    /// inlined at two call sites that disagreed about exactly that — one kept
-    /// `hostIP: 127.0.0.1`, the other dropped it — which meant `sbxw env run`
-    /// and the Env panel described the same sandbox differently.
+    /// reads. `sbxw env run` and the Env panel both go through here, so they
+    /// describe a sandbox the same way.
     fn from(m: &crate::sbx::PortMapping) -> Self {
         Port {
             sandbox: m.sandbox_port,
@@ -91,12 +89,10 @@ impl From<&crate::sbx::PortMapping> for Port {
 
 /// Would sbx pick `proto` anyway, for a port bound on `host_ip`?
 ///
-/// sbx 0.42 made `tcp4` the default, where it used to be dual-stack `tcp`. So
-/// a bare `tcp` is no longer the default in general and has to be written out
-/// to keep meaning "IPv6 too" — except on an explicit IPv4 address, which can
-/// only be bound over IPv4 whatever the protocol says. That is every port sbxw
-/// publishes itself, and dropping the word there keeps its exports as quiet as
-/// they were.
+/// sbx defaults to `tcp4`, so a dual-stack `tcp` has to be written out —
+/// except on an explicit IPv4 address, which can only be bound over IPv4
+/// whatever the protocol says. That is every port sbxw publishes itself, and
+/// dropping the word there keeps its exports quiet.
 pub fn protocol_is_default(proto: &str, host_ip: &str) -> bool {
     match proto {
         "" | "tcp4" => true,
@@ -119,7 +115,7 @@ pub struct EnvFile {
     pub agent: String,
     pub workspace: String,
     /// `off`, `readonly` or `readwrite`; `None` leaves sbx's default
-    /// (read-only sharing since 0.43).
+    /// (read-only sharing).
     pub skills: Option<String>,
     pub kits: Vec<String>,
     pub env: BTreeMap<String, String>,
@@ -236,7 +232,7 @@ fn scalar(s: &str) -> String {
 
 // ── Reading ──────────────────────────────────────────────────────────────────
 
-/// The one name sbx reads from a project directory (0.42+).
+/// The one name sbx reads from a project directory.
 pub const FILE_NAME: &str = "sbxenv.yaml";
 
 /// The user-level base, in the home directory, merged *beneath* every project
@@ -244,8 +240,8 @@ pub const FILE_NAME: &str = "sbxenv.yaml";
 /// place the hidden name is still read.
 pub const USER_FILE_NAME: &str = ".sbxenv.yaml";
 
-/// Names sbx read from a project directory before 0.42 and no longer does.
-/// Only used to explain a miss: a directory holding one of these and no
+/// Names sbx does not read from a project directory. Only used to explain a
+/// miss: a directory holding one of these and no
 /// `sbxenv.yaml` is a project that has not been renamed yet, and "no
 /// environment file here" would be the wrong thing to tell its owner.
 const RETIRED_NAMES: [&str; 3] = [".sbxenv.yaml", ".sbxenv.yml", "sbxenv.yml"];
@@ -268,7 +264,7 @@ pub fn resolve_paths(inputs: &[PathBuf], cwd: &Path) -> Result<Vec<PathBuf>> {
                 .find(|c| c.is_file())
             {
                 bail!(
-                    "{} is no longer read: since sbx 0.42 a project's environment file is \
+                    "{} is not read: a project's environment file is \
                      `{FILE_NAME}`, not hidden. Rename it (`mv {} {}`).",
                     old.display(),
                     old.display(),
@@ -338,8 +334,8 @@ pub struct Loaded {
     /// them — but reported, since an unresolved path is the likeliest cause of
     /// a confusing failure later.
     pub unresolved: Vec<String>,
-    /// `${VAR}` references, which sbx stopped expanding in 0.42. Reported so a
-    /// file written for an older sbx says why its paths no longer resolve.
+    /// `${VAR}` references, which sbx does not expand. Reported so a file
+    /// relying on them says why its paths don't resolve.
     pub legacy_vars: Vec<String>,
 }
 
@@ -352,8 +348,7 @@ pub struct Loaded {
 /// and the reason sbxw rewrites the document to change a port instead of
 /// layering a second file over it.
 ///
-/// Relative paths are resolved against **the file that declares them** (sbx
-/// 0.43), so they are made absolute per file, before the merge — after it,
+/// Relative paths are resolved against **the file that declares them**, so they are made absolute per file, before the merge — after it,
 /// nothing says which file a `./kits/x` came from.
 ///
 /// `cli_args` are the `--env-arg NAME=VALUE` pairs; they beat every `args:`
@@ -565,7 +560,7 @@ fn merge(base: Value, over: Value) -> Value {
     }
 }
 
-/// Substitute `${{ NAME }}` expressions in `text` (sbx 0.42+).
+/// Substitute `${{ NAME }}` expressions in `text`.
 ///
 /// `NAME` is a dotted path — `env.projectDir`, `env.fileDir`,
 /// `env.args.port` — and `lookup` decides what each one means. A reference
@@ -574,9 +569,8 @@ fn merge(base: Value, over: Value) -> Value {
 /// would quietly mount the wrong directory where leaving it alone produces an
 /// error that names the argument.
 ///
-/// Returns the text, the names with no value, and the names of any old-style
-/// `${VAR}` references — which 0.42 stopped expanding, and which are left
-/// exactly as they are, since that is what sbx does with them now.
+/// Returns the text, the names with no value, and the names of any `${VAR}`
+/// references — left exactly as they are, since sbx does not expand them.
 fn interpolate(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -595,7 +589,7 @@ fn interpolate(
             continue;
         }
         if chars.get(i + 2) != Some(&'{') {
-            // `${VAR}` — no longer sbx's syntax. Noted, and copied through.
+            // `${VAR}` — not sbx's syntax. Noted, and copied through.
             let mut j = i + 2;
             while j < chars.len() && is_name(chars[j]) {
                 j += 1;
@@ -652,7 +646,7 @@ pub struct Spec {
     pub name: Option<String>,
     pub agent: Option<String>,
     /// Absolute: resolved against the file that declared it. `None` means no
-    /// file declares one, which since sbx 0.42 means *no* workspace mount — not
+    /// file declares one, which means *no* workspace mount — not
     /// the directory holding the file.
     ///
     /// The object form's `clone` flag is deliberately *not* extracted: sbxw
@@ -820,12 +814,11 @@ impl Loaded {
     /// `secrets.<name>.command` entries that lean on a **relative path**, as
     /// `(secret, command)`.
     ///
-    /// sbx 0.46 runs a secret command from a fresh temporary directory on the
-    /// host, so `./credential-helper` or `cat ../token` no longer finds what it
-    /// found when it ran from the project — and the failure surfaces as a
-    /// secret that will not resolve, a long way from its cause. It is also the
-    /// point of the change: a helper inside a writable workspace is one the
-    /// agent could rewrite. So this is reported, not repaired; anchoring the
+    /// sbx runs a secret command from a fresh temporary directory on the host,
+    /// so `./credential-helper` or `cat ../token` finds nothing — and the
+    /// failure surfaces as a secret that will not resolve, a long way from its
+    /// cause. That is deliberate: a helper inside a writable workspace is one
+    /// the agent could rewrite. So this is reported, not repaired; anchoring the
     /// path the way `anchor` does a workspace would undo the protection.
     ///
     /// "Relative" is read the way a shell would see it: the program named by a
@@ -982,9 +975,8 @@ mod tests {
         assert!(legacy.is_empty());
     }
 
-    /// sbx 0.42 stopped expanding `${VAR}`. sbxw leaves it exactly as sbx now
-    /// does, and says so — a file written for 0.39 otherwise fails on a path
-    /// with a literal `${HOME}` in it and nothing explains why.
+    /// sbx does not expand `${VAR}`. sbxw leaves it as sbx does, and says so —
+    /// otherwise a path with a literal `${HOME}` fails and nothing explains why.
     #[test]
     fn an_old_style_variable_is_left_alone_and_reported() {
         let (out, missing, legacy) =
@@ -1107,7 +1099,7 @@ mod tests {
         assert!(out.contains("/abs/neos"), "{out}");
     }
 
-    /// No `workspace:` is no mount (sbx 0.42), not "the file's directory".
+    /// No `workspace:` is no mount, not "the file's directory".
     #[test]
     fn a_file_without_a_workspace_declares_none() {
         let spec = load_str("agent: claude\n", "no-workspace").spec().unwrap();
@@ -1126,7 +1118,7 @@ mod tests {
         assert_eq!(spec.ports[1].host, Some(4000));
     }
 
-    /// sbx 0.46 runs these from a temporary directory: a relative helper is
+    /// sbx runs these from a temporary directory: a relative helper is
     /// reported, a program found on PATH or by absolute path is not.
     #[test]
     fn a_secret_command_on_a_relative_path_is_reported() {
@@ -1269,7 +1261,7 @@ mod tests {
         let err = resolve_paths(std::slice::from_ref(&dir), &dir)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("no longer read"), "{err}");
+        assert!(err.contains("is not read"), "{err}");
         assert!(err.contains(FILE_NAME), "{err}");
 
         std::fs::write(dir.join(FILE_NAME), "agent: claude\n").unwrap();
@@ -1291,7 +1283,7 @@ mod tests {
         assert!(protocol_is_default("tcp4", ""));
         assert!(protocol_is_default("", "::1"));
         assert!(protocol_is_default("tcp", "127.0.0.2"));
-        // A dual-stack publish has to say so since 0.42.
+        // A dual-stack publish has to say so.
         assert!(!protocol_is_default("tcp", ""));
         assert!(!protocol_is_default("tcp", "::1"));
         assert!(!protocol_is_default("udp", "127.0.0.1"));

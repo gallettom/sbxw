@@ -1,35 +1,26 @@
-//! Thin, typed wrappers around the `sbx` CLI.
-//!
-//! Every command here maps to a subcommand confirmed against the published
-//! reference (docs.docker.com/reference/cli/sbx) for **sbx 0.39**, and moved
-//! to the 0.42/0.43 release notes where those changed it, then checked against
-//! the `--help` of a real 0.47.0 binary; 0.47 is `MIN_SBX_VERSION`. We never call `docker sandbox` — only the standalone
-//! `sbx` binary, as requested.
-//!
-//! One version, no gates. sbxw used to accept 0.37+ and branch at runtime for
-//! everything 0.38 and 0.39 added; that is gone, along with every fallback path
-//! it implied. What the code assumes is simply what the floor does.
+//! Thin, typed wrappers around the `sbx` CLI, written for `MIN_SBX_VERSION`.
+//! We never call `docker sandbox` — only the standalone `sbx` binary.
 //!
 //! ```text
-//! sbx create <agent> [PATH...] --name <name>   (PATH optional since 0.42: no mount)
+//! sbx create <agent> [PATH...] --name <name>   (no PATH: no mount)
 //!            [--kit REF]…      (repeatable; the only way to apply a kit whole)
 //!            [-p SPEC]…        (publish at creation — all-or-nothing, see create_claude)
 //!            [-e KEY=VALUE]…   (repeatable; bare KEY takes the host's value)
 //!            [--env-file FILE]… (--env beats any file; a later file beats an earlier one)
-//!            [--skills=off|readonly|readwrite]  (0.43; readonly is the default)
+//!            [--skills=off|readonly|readwrite]  (readonly is the default)
 //!            [--pull=always|missing|never]      (always is the default)
 //! sbx run    <agent> [PATH...] [--name <name>] [-e …] [-- AGENT_ARGS...]
 //! sbx run    --name <name>     (re-attach, incl. sandboxes created with --kit;
 //!                               -e applies to the agent session, so it takes
 //!                               effect on a re-attach too)
-//! sbx run    -d --name <name>  (0.47: keeps an existing sandbox running after
+//! sbx run    -d --name <name>  (keeps an existing sandbox running after
 //!                               every session has gone, until `sbx stop`)
 //! sbx ls [--json]              (columns found by header — see `parse_ls_table`;
-//!                               a hung guest shows as unresponsive since 0.45)
+//!                               a hung guest shows as unresponsive)
 //! sbx inspect SANDBOX          (lists kits, injected secrets, info)
-//! sbx exec   [-it|-d] [-u user] SANDBOX -- cmd...
+//! sbx exec   [-it] [-u user] SANDBOX -- cmd...
 //! sbx ports  SANDBOX [--publish [[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]]
-//!                              (PROTO defaults to tcp4 since 0.42, not dual-stack tcp)
+//!                              (PROTO defaults to tcp4, not dual-stack tcp)
 //! sbx prune  [--dry-run] [--filter until=DURATION] [-f]   (stopped sandboxes only)
 //! sbx env    create|run|exec|rm [PATH...] [--name N] [--env-arg K=V]…
 //!                              (sbxenv.yaml; experimental; shows a plan and asks)
@@ -40,13 +31,13 @@
 //! sbx policy log [SANDBOX]     (recent allow/deny decisions)
 //! sbx policy inspect <policy-or-rule>
 //! sbx policy rm network --id RULE_ID [--sandbox NAME] --force
-//!                              (global by default; --force since 0.45's prompt)
+//!                              (global by default; --force answers the prompt)
 //! sbx secret set [--sandbox NAME] <service>               (service-keyed, via stdin)
 //! sbx skills import [--dry-run|--force]
 //! sbx setup ssh [remove]       (managed `Host *.sbx` block => `ssh <name>.sbx`)
 //! ```
 //!
-//! Behaviours this module is built on, 0.39's unless marked:
+//! Behaviours this module is built on:
 //!   * `sbx kit add` RECREATES the sandbox container (state preserved) and
 //!     composes the kit's network allow/deny rules into the live policy — which
 //!     is why sbxw applies kits at *creation* and skips ones `inspect` already
@@ -61,27 +52,22 @@
 //!     one, and bring-up treats it as such.
 //!   * `inspect` also reports the sandbox's custom secrets, which widens what a
 //!     bare substring search for a kit name can collide with.
-//!   * A sandbox names itself in `SANDBOX_NAME` / `SANDBOX_ID`; `SANDBOX_VM_ID`
-//!     still carries the name but is deprecated. The in-sandbox JS under
-//!     `assets/` reads the current spelling first.
-//!   * **An unrecognised command, subcommand or flag is an error.** Before 0.39
-//!     it printed help and exited 0, which is why this file used to hedge on
-//!     whether a flag existed. Now a command that succeeds really ran — and a
-//!     flag sbx does not know costs the whole call, which is why the one flag
-//!     with no published reference is probed rather than assumed (see
-//!     `create_supports`).
-//!   * (0.42) Sandbox names longer than 63 characters, or ending in a hyphen
-//!     or period, are refused — `crate::is_valid_sandbox_name` says so first.
-//!   * (0.43) A sandbox made by `sbx create` **stops by itself once idle**.
-//!     Nothing here assumes a sandbox stays up: the daemon re-checks
-//!     `is_running` and re-publishes ports on every attach. (0.47) `sbx run -d`
-//!     is the way out, for a project that asks for it — see `keep_running`.
-//!   * (0.45) **Removing anything asks for confirmation**, and a prompt with no
+//!   * A sandbox names itself in `SANDBOX_NAME`, which the in-sandbox JS under
+//!     `assets/` reads.
+//!   * **An unrecognised command, subcommand or flag is an error**, so a
+//!     command that succeeds really ran — and a flag sbx does not know costs
+//!     the whole call.
+//!   * Sandbox names longer than 63 characters, or ending in a hyphen or
+//!     period, are refused — `crate::is_valid_sandbox_name` says so first.
+//!   * A sandbox made by `sbx create` **stops by itself once idle**. Nothing
+//!     here assumes a sandbox stays up: the daemon re-checks `is_running` and
+//!     re-publishes ports on every attach. `sbx run -d` keeps one up, for a
+//!     project that asks for it — see `keep_running`.
+//!   * **Removing anything asks for confirmation**, and a prompt with no
 //!     terminal to answer it is a refusal. Every removal sbxw runs passes
 //!     `--force`; the confirming, where there is any, is sbxw's own.
-//!   * (0.45) `sbx exec -d` fails outright instead of running in the
-//!     foreground. Nothing here detaches an exec: a background job is a
-//!     process the daemon holds (see `codemap_run_args`).
+//!   * `sbx exec -d` fails outright. Nothing here detaches an exec: a
+//!     background job is a process the daemon holds (see `codemap_run_args`).
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
@@ -168,14 +154,13 @@ pub fn run_interactive(args: &[&str]) -> Result<()> {
 /// daemon's log file, in the web UI's case).
 ///
 /// This is what makes an image pull visible in the browser — the one step of a
-/// first bring-up that takes minutes, and the one the old single "Creating…"
-/// row could not tell apart from being stuck.
+/// first bring-up that takes minutes, and otherwise indistinguishable from
+/// being stuck.
 ///
 /// Piping also takes the TTY away from sbx, which is what makes its output
 /// forwardable at all: on a terminal it redraws progress in place with escape
-/// sequences, off one it prints plain lines. And since the pipes exist anyway,
-/// a failure here can finally carry what sbx said, the way `run_checked`'s does
-/// — that used to be the trade for inheriting stdio.
+/// sequences, off one it prints plain lines. The pipes also let a failure carry
+/// what sbx said, the way `run_checked`'s does.
 fn run_reporting(args: &[&str], sink: crate::progress::Sink) -> Result<()> {
     let mut child = Command::new(BIN)
         .args(args)
@@ -239,9 +224,8 @@ fn forward_output<R: std::io::Read + Send + 'static>(
         if text.trim().is_empty() {
             continue;
         }
-        // Also into the daemon log, at debug: inheriting stdio used to put this
-        // there unconditionally, and a bring-up you are debugging after the
-        // fact has no browser tab left to have watched.
+        // Also into the daemon log, at debug: a bring-up you are debugging
+        // after the fact has no browser tab left to have watched.
         tracing::debug!(target: "sbx", "{}", text.trim());
         crate::progress::detail(sink, &text);
         if tail.len() == REPORTED_TAIL_LINES {
@@ -321,34 +305,8 @@ fn run_capture(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-/// Oldest `sbx` sbxw works against — and, since there are no feature gates left
-/// below it, simply the version sbxw is written for.
-///
-/// The floor used to be 0.37 with everything from 0.38 and 0.39 behind runtime
-/// gates, so one binary could serve three releases. That is gone: the gates
-/// cost a branch and a fallback at every call site, and each fallback was a
-/// second code path nobody ran. 0.39 brought `create -e/--env-file`, `prune`,
-/// `env create`, kit spec v2, `secret set --sandbox` and `SANDBOX_NAME`.
-///
-/// The floor moved to 0.43 because environment files changed shape under it
-/// and there is no way to write one file both sides can read: 0.42 renamed the
-/// project file to `sbxenv.yaml`, stopped expanding `${VAR}` and stopped
-/// mounting the file's directory by default, and 0.43 resolves relative paths
-/// against the declaring file and gave `sbx env` its `--name`. `--skills` is
-/// 0.43's too.
-///
-/// It moved to 0.47 for the same reason in a smaller key. 0.45 made every
-/// removal ask for confirmation, and `policy rm network` only learned the
-/// `--force` that answers it then — on 0.43 the flag is an error, without it on
-/// 0.45 the call hangs on a prompt nobody sees. 0.47's `run -d` is what keeps a
-/// sandbox up (`keep_running`). Each would have been a gate; the floor is
-/// cheaper.
-///
-/// What that buys, beyond the deletions: an unrecognised flag or subcommand is
-/// a hard error from 0.39 on (before, it printed help and exited 0). Code that
-/// can assume 0.39 can therefore trust a command's success, which is why the
-/// probes and retries that used to paper over "maybe this flag exists" are gone
-/// too.
+/// Oldest `sbx` sbxw works against, and the version it is written for: there
+/// are no feature gates or fallbacks below it.
 pub const MIN_SBX_VERSION: (u32, u32, u32) = (0, 47, 0);
 
 /// There is deliberately **no** upper bound. Newer sbx releases have so far
@@ -366,8 +324,7 @@ pub fn assert_available() -> Result<()> {
     // Once per process. `sbxw env run --no-web` reaches this twice — once on its
     // own way in, once through `cmd_up` — and the answer cannot change between
     // them, so the second call would be a process spawn spent re-reading a
-    // constant. (The version *cache* went with the feature gates; this is only
-    // the "already checked" latch.)
+    // constant.
     static CHECKED: OnceLock<()> = OnceLock::new();
     if CHECKED.get().is_some() {
         return Ok(());
@@ -396,7 +353,7 @@ pub fn assert_available() -> Result<()> {
             bail!(
                 "this sbx is {a}.{b}.{c}, but sbxw needs {min_a}.{min_b}.{min_c} or newer.\n\
                  Upgrade sbx, or set {SKIP_VERSION_CHECK_ENV}=1 to run anyway — but expect \
-                 failures rather than degraded behaviour: sbxw no longer carries fallbacks \
+                 failures rather than degraded behaviour: sbxw carries no fallbacks \
                  for older releases, so environment files (`sbxenv.yaml`, `${{{{ … }}}}`), \
                  `env create --name`, `create --skills`/`--pull`, `run -d`, \
                  `policy rm network --force` and kit spec v2 are all passed as-is."
@@ -556,7 +513,7 @@ pub struct CreateOpts<'a> {
     /// `-p`. See the note on `create_claude`.
     pub publish: &'a [String],
     /// `--skills=<mode>` (`off`, `readonly`, `readwrite`); `None` passes
-    /// nothing, which is sbx's own default — read-only sharing since 0.43.
+    /// nothing, which is sbx's own default — read-only sharing.
     pub skills: Option<&'a str>,
     /// `--pull=<policy>` (`always`, `missing`, `never`); `None` passes nothing,
     /// which is sbx's `always` — a registry round trip on every creation, even
@@ -591,72 +548,13 @@ pub struct CreateOpts<'a> {
 /// sandbox without its ports than no sandbox at all should go through
 /// `crate::create_with_port_fallback`.
 pub fn create_claude(name: &str, opts: &CreateOpts<'_>) -> Result<()> {
-    // Probed rather than assumed, and only when it would be used — see
-    // `create_supports`.
-    let skills = opts.skills.and_then(|mode| {
-        let flag = skills_flag(mode, create_supports("--skills"), || {
-            create_supports("--no-share-skills")
-        });
-        if flag.is_none() {
-            tracing::warn!(
-                "`sbx create` on this host takes no --skills flag, so skills = \"{mode}\" \
-                 cannot be honoured: '{name}' gets sbx's default. Creating it anyway — losing \
-                 the sandbox over a skills mount would be the worse trade."
-            );
-        }
-        flag
-    });
-    let args = create_args(name, opts, skills.as_deref());
+    let args = create_args(name, opts);
     run_inherit(&as_strs(&args))
-}
-
-/// The flag that asks `sbx create` for skills `mode`, given what its `--help`
-/// lists — or `None` when nothing it lists can say it.
-///
-/// `--skills=MODE` is 0.43's spelling. `--no-share-skills`, the one before it,
-/// survives as a deprecated alias for `--skills=off`, and is still worth using
-/// for exactly that on an sbx whose help lists nothing better. `readwrite` has
-/// no older spelling at all.
-fn skills_flag(mode: &str, has_skills: bool, has_legacy: impl FnOnce() -> bool) -> Option<String> {
-    if has_skills {
-        Some(format!("--skills={mode}"))
-    } else if mode == "off" && has_legacy() {
-        Some("--no-share-skills".into())
-    } else {
-        None
-    }
-}
-
-/// Does `sbx create --help` list `flag`?
-///
-/// A feature probe rather than a version gate, because this one is not only a
-/// version question. The skills flag came from release notes — `--no-share-skills`
-/// never appeared in the published `sbx create` reference, whose 0.39 options
-/// are `--clone --cpus --deny-network -e/--env --env-file --kit -m/--memory
-/// --name -p/--publish -q/--quiet -t/--template`, and 0.43 replaced it with
-/// `--skills` before the reference caught up.
-///
-/// Until 0.39 guessing wrong was survivable: an unrecognised argument printed
-/// help and exited 0. 0.39 made that an error, so a single unknown flag now
-/// fails the whole `create` — and a `skills` setting would cost you the
-/// sandbox rather than the setting. Reading `--help` is the cheap way to be
-/// sure, and it is only paid for by the configs that ask for the flag.
-///
-/// A `--help` that cannot be run answers **false**: not passing a flag loses a
-/// preference, passing one sbx doesn't know loses the sandbox.
-fn create_supports(flag: &str) -> bool {
-    static HELP: OnceLock<String> = OnceLock::new();
-    HELP.get_or_init(|| run_capture(&["create", "--help"]).unwrap_or_default())
-        .contains(flag)
 }
 
 /// The argv `create_claude` runs, split out so the flag grammar is testable
 /// without a live `sbx`.
-///
-/// `skills` is the flag the caller resolved rather than one probed here: it is
-/// the one flag whose spelling is uncertain, and a test wants to pin every
-/// answer without a live `sbx create --help`.
-fn create_args(name: &str, opts: &CreateOpts<'_>, skills: Option<&str>) -> Vec<String> {
+fn create_args(name: &str, opts: &CreateOpts<'_>) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "create".into(),
         "claude".into(),
@@ -675,8 +573,8 @@ fn create_args(name: &str, opts: &CreateOpts<'_>, skills: Option<&str>) -> Vec<S
         args.push("-p".into());
         args.push(spec.clone());
     }
-    if let Some(flag) = skills {
-        args.push(flag.into());
+    if let Some(mode) = opts.skills {
+        args.push(format!("--skills={mode}"));
     }
     if let Some(policy) = opts.pull {
         args.push(format!("--pull={policy}"));
@@ -722,10 +620,10 @@ pub fn run_attach_args(name: &str, env: &[String], env_files: &[String]) -> Vec<
 }
 
 /// `sbx run -d --name <name>` — start the sandbox if it is stopped, open no
-/// session, and (0.47) **keep it running** after every session has gone, until
+/// session, and **keep it running** after every session has gone, until
 /// `sbx stop` or `sbx rm`.
 ///
-/// Without it a sandbox stops by itself once idle (0.43), which is right for an
+/// Without it a sandbox stops by itself once idle, which is right for an
 /// agent and wrong for what sbxw publishes: a dev server behind `neos.local`
 /// that vanishes because nobody had a pane open. `keep_running` in sbxw.toml
 /// is the project saying which of the two it is.
@@ -1149,14 +1047,13 @@ pub fn thread_merge(name: &str, workspace: &str, thread: &str) -> Result<String>
 /// environment file's `secrets`, `bindings`, `registries` and `mcp` — the parts
 /// sbxw has no way to apply itself.
 ///
-/// `--name` (0.43) is always passed. sbx would otherwise default the name to
+/// `--name` is always passed. sbx would otherwise default the name to
 /// `<agent>-<workspace-basename>`, and sbxw would have to guess the same
-/// string — sanitising included — to find the sandbox afterwards. Before the
-/// flag existed that meant rewriting the file just to pin a name.
+/// string — sanitising included — to find the sandbox afterwards.
 ///
 /// stdio is inherited, and has to be: creation is long and chatty (image pulls,
-/// kit installs, secret resolution that may prompt a vault), and since 0.42
-/// sbx shows a plan of everything the file changes on the host and **asks
+/// kit installs, secret resolution that may prompt a vault), and sbx shows a
+/// plan of everything the file changes on the host and **asks
 /// before applying it** — a question only the person at the terminal can
 /// answer.
 pub fn env_create(paths: &[String], name: &str, env_args: &[String]) -> Result<()> {
@@ -1233,9 +1130,9 @@ pub struct SandboxInfo {
 }
 
 impl SandboxInfo {
-    /// Up, and answering. Since 0.45 a sandbox whose guest kernel stopped
-    /// responding is *reported* as such rather than wedged for good, and
-    /// whatever words sbx puts next to "running" for it, a sandbox nothing can
+    /// Up, and answering. sbx reports a sandbox whose guest kernel stopped
+    /// responding as such, and whatever words it puts next to "running" for
+    /// it, a sandbox nothing can
     /// `exec` into is not one sbxw should provision or attach to as if it were.
     pub fn is_running(&self) -> bool {
         let status = self.status.to_ascii_lowercase();
@@ -1257,15 +1154,13 @@ pub fn list_sandboxes() -> Vec<SandboxInfo> {
 /// The rows of an `sbx ls` table.
 ///
 /// Columns are found by their **headers** — `STATUS` (or `STATE`) and `AGENT`
-/// wherever they sit — and the name is the first column. 0.45 moved every list
-/// command onto one table format, and "the third word of the line is the
-/// status" was a guess about the old one that a new column, or a status of more
-/// than one word, would silently break: a sandbox read as stopped is one sbxw
-/// tries to start again.
+/// wherever they sit — and the name is the first column. Reading "the third
+/// word" instead would break on a new column or a multi-word status, and a
+/// sandbox misread as stopped is one sbxw tries to start again.
 ///
 /// A header that cannot be read that way (tabs instead of padding, a single
-/// column) falls back to the old reading, `NAME AGENT STATUS …` split on
-/// whitespace, so an unexpected layout costs precision rather than every row.
+/// column) falls back to `NAME AGENT STATUS …` split on whitespace, so an
+/// unexpected layout costs precision rather than every row.
 fn parse_ls_table(raw: &str) -> Vec<SandboxInfo> {
     let mut lines = raw.lines().filter(|l| !l.trim().is_empty());
     let Some(header) = lines.next() else {
@@ -1341,7 +1236,7 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
     run_checked(&args)
 }
 
-/// `sbx prune [--dry-run] [--filter until=DURATION] --force` (sbx 0.39+).
+/// `sbx prune [--dry-run] [--filter until=DURATION] --force`.
 ///
 /// The safe half of `rm --all`: a *running* sandbox is never a candidate, so
 /// this cannot take out the one you are working in — which is the whole reason
@@ -1355,9 +1250,8 @@ pub fn rm_sandboxes(names: &[&str], all: bool) -> Result<()> {
 ///
 /// The filter key is `until`: `until=168h` means "stopped before a week ago",
 /// i.e. stopped for longer than a week, and the value can also be an RFC 3339
-/// or Unix timestamp — sbx's parser, not sbxw's. sbxw used to send `since=`,
-/// which no release has accepted; its own `--since` flag keeps the name and
-/// the meaning, and only the word on the wire changed. A sandbox whose stop
+/// or Unix timestamp — sbx's parser, not sbxw's. sbxw's own `--since` flag maps
+/// onto it (sbx has no `since=` key). A sandbox whose stop
 /// time the daemon can't report is left alone by sbx, not by sbxw.
 pub fn prune(until: Option<&str>, dry_run: bool) -> Result<String> {
     let filter = until.map(prune_filter);
@@ -1585,9 +1479,8 @@ fn policy_rule_args<'a>(
 /// "Remove a policy rule" is how you delete far more than you meant to. The
 /// caller is responsible for sourcing the id from a rule-id column.
 ///
-/// The shape is from `sbx policy rm network --help` (0.47). sbxw used to call
-/// `sbx policy rm <rule>`, which `rm` — a group whose only subcommand is
-/// `network` — refuses outright, so the panel's ✕ never removed anything.
+/// `policy rm` is a group whose only subcommand is `network`; a bare
+/// `sbx policy rm <rule>` is refused.
 ///
 /// The rule is looked for in the **global** policy unless `--sandbox` names a
 /// sandbox, and the panel lists both kinds side by side without always saying
@@ -1595,7 +1488,7 @@ fn policy_rule_args<'a>(
 /// (`sandbox`, when given) and then in the other scope. A rule id is a UUID: the
 /// second attempt cannot hit a different rule than the one meant.
 ///
-/// `--force` because 0.45 made removal ask, and the daemon has no terminal to
+/// `--force` because removal asks for confirmation, and the daemon has no terminal to
 /// answer on. The browser already asked — see `wirePolicyDeletes`.
 pub fn policy_rm_rule(rule: &str, sandbox: Option<&str>) -> Result<()> {
     let attempt = |scope: Option<&str>| {
@@ -1848,10 +1741,8 @@ fn slice_at(line: &str, starts: &[usize]) -> Vec<String> {
 /// The scope arguments for `sbx secret set`.
 ///
 /// Global is the default and says nothing at all; sandbox scope takes
-/// `--sandbox NAME`. The older spellings — a bare positional sandbox, and `-g`
-/// for global — are gone: they print a
-/// deprecation warning on every call, and a warning nobody can act on is one
-/// people learn to ignore.
+/// `--sandbox NAME`. Not the positional sandbox or `-g`: sbx prints a
+/// deprecation warning for those on every call.
 fn secret_scope_args(global: bool, sandbox: Option<&str>) -> Vec<String> {
     match (global, sandbox) {
         (false, Some(name)) => vec!["--sandbox".into(), name.into()],
@@ -2181,14 +2072,12 @@ fn js<T: serde::Serialize + ?Sized>(v: &T) -> String {
 
 /// The in-sandbox half of a bring-up, as **one** `sbx exec`.
 ///
-/// Each piece used to be its own helper and its own round trips: write a hook
-/// file, write a Node script to `/tmp`, run it, remove it — four `sbx exec`
-/// calls for the artifact hook alone, 26 for the whole TOOLING step, each one a
-/// process spawn on the host and a hop through the sbx daemon into the VM. Now
-/// the pieces are collected here and run as a single Node script piped to
-/// `node -` on stdin, with every file it installs embedded in it.
+/// Every `sbx exec` is a process spawn on the host and a hop through the sbx
+/// daemon into the VM, so the pieces are collected here and run as a single
+/// Node script piped to `node -` on stdin, with every file it installs
+/// embedded in it.
 ///
-/// What each piece promises is unchanged:
+/// What each piece promises:
 ///   * **Merges, not overwrites.** `settings.json` and `.claude.json` are read
 ///     once, every piece mutates the parsed object, and each file is written
 ///     back once at the end. A missing or corrupt file parses as `{}`, so a
@@ -2378,12 +2267,10 @@ impl Tooling {
     /// Remove a `model` key from `settings.json` — but only when it still holds
     /// `written_by_sbxw`.
     ///
-    /// The model now travels as `ANTHROPIC_DEFAULT_MODEL` (see
+    /// The model travels as `ANTHROPIC_DEFAULT_MODEL` (see
     /// `crate::config::Config::claude_model`), which Claude Code consults
-    /// *last*: a `model` value in any settings file outranks it. Sandboxes sbxw
-    /// provisioned before that change have exactly such a value — one sbxw
-    /// itself wrote — so without this they would be deaf to the variable and
-    /// stuck on whatever `claude_model` said the day they were created.
+    /// *last*: a `model` value in any settings file outranks it, so a leftover
+    /// one sbxw wrote would pin the sandbox to its creation-day model.
     ///
     /// The equality test is what makes the deletion safe. A `model` that still
     /// matches the configured one is sbxw's own leftover, or a user who picked
@@ -2549,8 +2436,7 @@ mod tests {
     /// Tuple ordering is the whole comparison, so it is worth stating once.
     #[test]
     fn version_floor_compares_component_wise() {
-        // Everything below the floor is now a refusal, not a degradation:
-        // nothing in this file falls back to an older shape any more.
+        // Everything below the floor is a refusal, not a degradation.
         assert!(parse_version("0.34.9").unwrap() < MIN_SBX_VERSION);
         assert!(parse_version("0.38.9").unwrap() < MIN_SBX_VERSION);
         assert!(parse_version("0.42.1").unwrap() < MIN_SBX_VERSION);
@@ -2584,8 +2470,8 @@ mod tests {
         assert!(msg.contains("Ask platform@acme.example"), "{msg}");
     }
 
-    /// Global is the default and sandbox scope takes `--sandbox`; the older
-    /// positional and `-g` spellings are no longer emitted.
+    /// Global is the default and sandbox scope takes `--sandbox`; the
+    /// deprecated positional and `-g` spellings are never emitted.
     #[test]
     fn a_global_secret_says_nothing_and_a_scoped_one_takes_the_flag() {
         // Global is the default, so it passes no scope argument at all — and it
@@ -2613,36 +2499,20 @@ mod tests {
         }
     }
 
-    /// `--skills` when sbx lists it; the old flag only for the one mode it can
-    /// say; nothing — and a sandbox with sbx's default — otherwise.
+    /// `--skills=MODE` is passed as-is when set, and nothing when not.
     #[test]
-    fn the_skills_flag_follows_what_create_help_lists() {
-        let never = || -> bool { panic!("the legacy flag is only probed when it could be used") };
-        assert_eq!(
-            skills_flag("readwrite", true, never).as_deref(),
-            Some("--skills=readwrite")
-        );
-        assert_eq!(
-            skills_flag("off", true, never).as_deref(),
-            Some("--skills=off")
-        );
-        assert_eq!(
-            skills_flag("off", false, || true).as_deref(),
-            Some("--no-share-skills")
-        );
-        assert_eq!(skills_flag("off", false, || false), None);
-        assert_eq!(skills_flag("readwrite", false, || true), None);
-
-        let args = create_args("neos", &opts(&[], &[]), Some("--skills=off"));
+    fn the_skills_flag_is_passed_when_set() {
+        let mut o = opts(&[], &[]);
+        o.skills = Some("off");
+        let args = create_args("neos", &o);
         assert_eq!(args.last().map(String::as_str), Some("--skills=off"));
-        assert!(!create_args("neos", &opts(&[], &[]), None)
+        assert!(!create_args("neos", &opts(&[], &[]))
             .iter()
             .any(|a| a.contains("skills")));
     }
 
     /// The status is found under its header, wherever that column sits and
-    /// however many words it holds — the old "third word" reading took a new
-    /// column, or a two-word status, for something else.
+    /// however many words it holds.
     #[test]
     fn the_ls_table_is_read_by_its_headers() {
         let raw = "\
@@ -2663,7 +2533,7 @@ hung         claude   running (unresponsive)                        /p/hung
             "a guest that stopped answering is not up"
         );
 
-        // A column ahead of STATUS no longer shifts it.
+        // A column ahead of STATUS doesn't shift it.
         let raw = "\
 NAME   AGENT    CREATED      STATUS    WORKSPACE
 neos   claude   2 days ago   running   /p/neos
@@ -2673,7 +2543,7 @@ neos   claude   2 days ago   running   /p/neos
         assert!(rows[0].is_running());
     }
 
-    /// No header to read columns by — the old positional reading still works.
+    /// No header to read columns by — the positional reading takes over.
     #[test]
     fn an_ls_table_without_readable_headers_falls_back_to_positions() {
         let rows = parse_ls_table("NAME\tAGENT\tSTATUS\nneos\tclaude\tstopped\n");
@@ -2690,7 +2560,7 @@ neos   claude   2 days ago   running   /p/neos
     }
 
     /// `policy rm` is a group: the rule goes to its `network` subcommand, by
-    /// id, with the confirmation 0.45 added answered up front.
+    /// id, with the confirmation answered up front.
     #[test]
     fn a_rule_is_removed_through_policy_rm_network_by_id() {
         assert_eq!(
@@ -2726,11 +2596,11 @@ neos   claude   2 days ago   running   /p/neos
     #[test]
     fn a_pull_policy_reaches_create_only_when_one_is_set() {
         let mut o = opts(&[], &[]);
-        assert!(!create_args("neos", &o, None)
+        assert!(!create_args("neos", &o)
             .iter()
             .any(|a| a.starts_with("--pull")));
         o.pull = Some("missing");
-        assert!(create_args("neos", &o, None).contains(&"--pull=missing".to_string()));
+        assert!(create_args("neos", &o).contains(&"--pull=missing".to_string()));
     }
 
     #[test]
@@ -2764,7 +2634,7 @@ neos   claude   2 days ago   running   /p/neos
         let env = vec!["A=1".to_string(), "B=2".to_string()];
         let files = vec!["/p/.env".to_string()];
 
-        let modern = create_args("neos", &opts(&env, &files), None);
+        let modern = create_args("neos", &opts(&env, &files));
         assert_eq!(
             modern[5..],
             [
@@ -2814,7 +2684,7 @@ neos   claude   2 days ago   running   /p/neos
             "SPACED=a b".to_string(),
             "EQUALS=k=v".to_string(),
         ];
-        let args = create_args("neos", &opts(&env, &[]), None);
+        let args = create_args("neos", &opts(&env, &[]));
         assert_eq!(
             args[5..],
             [
