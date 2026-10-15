@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "sbxw",
+  "description": "Chat with the sbxw sandbox that serves the app in this tab, in a side panel beside it.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtAZ0WkYFZr/wL13Hc7WNVk2AsD6IvhueS/0ym6/xAJdl2YRP+/rv9sqA59XfifrNi6Yq+y7fQUgXafj+4LlDQo8T6zeMEWrOt1eG4debqIguG9WPP8K6Zf4U0mHo8OgpdXgbgU0MSeBWAT7g4asfVe/z8By9OHQIf32GmMCeC4bvvuq6m2OQhgyaQe0h8LcHCTYsnSpvwS/LDYTsaeb1FPjPlWBZOso6LLeAz6Cm2JuKhbsfCOgdp662IlB9szQYMa+IHpwrhm/4M4qmtlGmfbkc0JYOFahn5UNcgj68W0MkLH5uqdGbEETOaOC1Ti6PgXDfwCWvJpLmPtK8BW81wwIDAQAB",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "sbxw: chat with this app's sandbox",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Open the sbxw chat beside this tab"
+    }
+  }
+}

@@ -43,7 +43,9 @@ const SBXW_APP_SCRIPTS = [
   '/js/relay.js',
   // Same reason: plan dialogs arrive on that stream too.
   '/js/plans.js',
-  // Same reason: the chat dock follows chats on that stream.
+  // Same reason: the chat dock follows chats on that stream. chat-core.js is
+  // the part of it the browser side panel shares.
+  '/js/chat-core.js',
   '/js/chat-dock.js',
 ];
 

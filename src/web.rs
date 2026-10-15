@@ -34,6 +34,8 @@
 //!   POST /api/relay/:id/deny        → a human refuses; nothing is released
 //!   GET  /api/fs?path=<dir>         → directory listing for the folder picker
 //!   GET/POST /api/fs/favourites     → the picker's starred folders
+//!   GET  /api/embed/resolve?url=    → which sandbox serves a browser tab's page (side panel)
+//!   GET/POST /api/embed/pairings    → hand-made `host → sandbox` pairings; `/rm` forgets one
 //!   POST /api/fs/pick               → OS-native folder picker (Finder/Explorer/zenity)
 //!   GET  /api/sandboxes/:name/artifacts             → non-code files under .sbxw-artifacts
 //!   GET  /api/sandboxes/:name/artifacts/download     → download one of those files
@@ -1102,6 +1104,31 @@ struct WsQuery {
 
 const INDEX_HTML_TEMPLATE: &str = include_str!("../assets/index.html");
 
+/// The browser side panel's page, framed by the sbxw extension beside the tab
+/// of the app being tested (see `sidepanel_handler`). A shell only: the markup
+/// is built by `sidepanel.js` and styled by `app.css`, like everything else.
+const SIDEPANEL_HTML_TEMPLATE: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sbxw side panel</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body class="sp-body">
+<script>const SP_EXTENSION_ORIGIN = '__EXTENSION_ORIGIN__';</script>
+<script src="/js/chat-core.js"></script>
+<script src="/js/sidepanel.js"></script>
+</body>
+</html>
+"#;
+
+/// The sbxw browser extension's ID. Fixed, because Chrome derives it from the
+/// public `key` in `assets/browser-extension/manifest.json`, and the two must
+/// change together: the panel page trusts `postMessage` from this origin only,
+/// and only this origin (or sbxw itself) may frame it.
+const SIDEPANEL_EXTENSION_ID: &str = "ikdindkpcjhibhhmndgimmhndjbglgpe";
+
 /// One baked-in script: `js!("main.js")` serves `assets/js/main.js` at
 /// `/js/main.js`. A macro because `include_str!` needs a literal path.
 macro_rules! js {
@@ -1152,7 +1179,11 @@ const STATIC_ASSETS: &[(&str, &str, &str)] = &[
     js!("main.js"),
     js!("relay.js"),
     js!("plans.js"),
+    js!("chat-core.js"),
     js!("chat-dock.js"),
+    // The browser side panel's page (`/sidepanel`), not the main app's: the
+    // list `singleton.js` loads stops at chat-dock.js.
+    js!("sidepanel.js"),
 ];
 
 pub async fn serve(
@@ -1272,6 +1303,7 @@ pub async fn serve(
 
     let app = Router::new()
         .route("/", get(index_handler))
+        .route("/sidepanel", get(sidepanel_handler))
         .merge(static_assets())
         .route("/ws", get(ws_handler))
         .route("/api/events", get(api_events))
@@ -1353,6 +1385,12 @@ pub async fn serve(
         )
         .route("/api/fs", get(api_fs))
         .route("/api/fs/pick", post(api_fs_pick))
+        .route("/api/embed/resolve", get(api_embed_resolve))
+        .route(
+            "/api/embed/pairings",
+            get(api_embed_pairings).post(api_embed_pair),
+        )
+        .route("/api/embed/pairings/rm", post(api_embed_unpair))
         .route(
             "/api/fs/favourites",
             get(api_fs_favourites).post(api_fs_favourite_set),
@@ -1387,6 +1425,25 @@ fn static_assets() -> Router<Arc<AppState>> {
         );
     }
     router
+}
+
+/// `GET /sidepanel` — the chat the browser extension shows beside the app
+/// being tested. Served by the daemon rather than packaged in the extension so
+/// its calls stay same-origin (no CORS, and `from_browser` holds), and so an
+/// sbxw update reaches it without reinstalling anything.
+///
+/// `frame-ancestors` keeps any other page from framing it: what a panel types
+/// lands in an agent's prompt, and a page that could overlay it could steer
+/// the clicks that send it.
+async fn sidepanel_handler() -> impl IntoResponse {
+    let extension = format!("chrome-extension://{SIDEPANEL_EXTENSION_ID}");
+    (
+        [(
+            header::CONTENT_SECURITY_POLICY,
+            format!("frame-ancestors 'self' {extension}"),
+        )],
+        Html(SIDEPANEL_HTML_TEMPLATE.replace("__EXTENSION_ORIGIN__", &extension)),
+    )
 }
 
 async fn index_handler(State(state): State<Arc<AppState>>) -> Html<String> {
@@ -4015,6 +4072,11 @@ struct ChatPushBody {
     /// says where the message goes.
     #[serde(default)]
     fresh: bool,
+    /// Type into this thread of `name` instead of its main agent. The thread's
+    /// session must already be running: a thread is opened from the web UI,
+    /// with the repo and model it needs, never by a chat message.
+    #[serde(default)]
+    thread: Option<String>,
 }
 
 /// The name a brand-new ephemeral chat should take: `EPHEMERAL_CHAT`, else the
@@ -4113,6 +4175,25 @@ async fn api_chat_push(
     };
     if let Some(rejected) = reject_invalid_name(&name) {
         return rejected;
+    }
+    if let Some(thread) = non_blank(body.thread.as_deref()) {
+        if may_create {
+            return err_json("a thread is named together with its sandbox");
+        }
+        if !crate::is_valid_thread_name(&thread) {
+            return err_json(format!("'{thread}' is not a thread name"));
+        }
+        let mode = thread_mode(&thread);
+        if !pty_alive(&state.sessions, &name, &mode) {
+            return err_json(format!(
+                "thread '{thread}' of '{name}' is not running — open it in sbxw first"
+            ));
+        }
+        if let Err(e) = push_text_to(&state, &name, &mode, &text).await {
+            return err_json(e);
+        }
+        tracing::info!("side panel: pushed {} chars into thread '{thread}' of '{name}'", text.len());
+        return ok_json_with(serde_json::json!({ "name": name, "thread": thread, "created": false }));
     }
     // Same question as answering a prompt (see `is_answerable`): this types
     // into the PTY sbxw holds for the sandbox, so "the sandbox's agent" has to
@@ -5148,6 +5229,111 @@ async fn api_fs_favourite_set(Json(body): Json<FavouriteBody>) -> Json<serde_jso
             }
             Json(payload)
         },
+    )
+    .await
+}
+
+// ── Browser side panel: which sandbox serves this tab ─────────────────────
+// The side panel beside the app being tested knows its tab's URL and nothing
+// else; these routes turn that URL into the sandbox to chat with. The rules
+// live in `embed`; this is the plumbing that feeds them `sbx ls`, every
+// sandbox's `sbx ports`, the hosts block and the pairing file.
+
+#[derive(Deserialize)]
+struct EmbedResolveQuery {
+    url: String,
+}
+
+/// `GET /api/embed/resolve?url=` — the sandbox serving the page at `url`, or
+/// the sandboxes to choose from when there is no single answer. Always lists
+/// every sandbox, so the panel's picker needs no second request.
+async fn api_embed_resolve(Query(q): Query<EmbedResolveQuery>) -> Json<serde_json::Value> {
+    let Some(origin) = crate::embed::parse_origin(&q.url) else {
+        return err_json("not a web page: the side panel works on http:// and https:// tabs");
+    };
+    blocking(
+        move || {
+            let sandboxes: Vec<String> =
+                sbx::list_sandboxes().into_iter().map(|s| s.name).collect();
+            // One `sbx ports` per sandbox, side by side: each is a process
+            // spawn, and the panel is waiting on the slowest one only.
+            let ports: Vec<(String, sbx::PortMapping)> = std::thread::scope(|scope| {
+                let jobs: Vec<_> = sandboxes
+                    .iter()
+                    .map(|name| scope.spawn(move || (name.clone(), sbx::list_ports_parsed(name))))
+                    .collect();
+                jobs.into_iter()
+                    .filter_map(|job| job.join().ok())
+                    .flat_map(|(name, list)| list.into_iter().map(move |m| (name.clone(), m)))
+                    .collect()
+            });
+            let pairings = crate::embed::load_pairings(&crate::embed_pairings_path());
+            let aliases = hosts::read_hosts_block();
+            let r = crate::embed::resolve(&origin, &pairings, &aliases, &ports, &sandboxes);
+            Ok(serde_json::json!({
+                "host": origin.host,
+                "sandbox": r.sandbox,
+                "via": r.via.map(|v| v.as_str()),
+                "candidates": r.candidates,
+                "stale_pairing": r.stale_pairing,
+                "sandboxes": sandboxes,
+            }))
+        },
+        ok_json_with,
+    )
+    .await
+}
+
+/// The pairings as the UI lists them: one `{host, sandbox}` per row.
+fn pairings_payload(pairings: std::collections::BTreeMap<String, String>) -> Json<serde_json::Value> {
+    let rows: Vec<_> = pairings
+        .into_iter()
+        .map(|(host, sandbox)| serde_json::json!({ "host": host, "sandbox": sandbox }))
+        .collect();
+    ok_json_with(serde_json::json!({ "pairings": rows }))
+}
+
+/// `GET /api/embed/pairings` — every hand-made pairing.
+async fn api_embed_pairings() -> Json<serde_json::Value> {
+    blocking(
+        || Ok(crate::embed::load_pairings(&crate::embed_pairings_path())),
+        pairings_payload,
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct EmbedPairBody {
+    host: String,
+    #[serde(default)]
+    sandbox: Option<String>,
+}
+
+/// `POST /api/embed/pairings` — pair a tab's host with a sandbox. Browser-only
+/// (see `from_browser`): an agent that rewrote a pairing would be choosing who
+/// reads what the developer types next.
+async fn api_embed_pair(headers: HeaderMap, Json(body): Json<EmbedPairBody>) -> Json<serde_json::Value> {
+    if !from_browser(&headers) {
+        return err_json("pairings are made from the sbxw side panel or web UI");
+    }
+    let Some(sandbox) = non_blank(body.sandbox.as_deref()) else {
+        return err_json("no sandbox given");
+    };
+    blocking(
+        move || crate::embed::set_pairing(&crate::embed_pairings_path(), &body.host, Some(&sandbox)),
+        pairings_payload,
+    )
+    .await
+}
+
+/// `POST /api/embed/pairings/rm` — forget a host's pairing.
+async fn api_embed_unpair(headers: HeaderMap, Json(body): Json<EmbedPairBody>) -> Json<serde_json::Value> {
+    if !from_browser(&headers) {
+        return err_json("pairings are removed from the sbxw side panel or web UI");
+    }
+    blocking(
+        move || crate::embed::set_pairing(&crate::embed_pairings_path(), &body.host, None),
+        pairings_payload,
     )
     .await
 }

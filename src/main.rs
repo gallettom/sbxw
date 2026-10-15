@@ -34,6 +34,8 @@
 
 mod codemap;
 mod config;
+mod embed;
+mod extension;
 mod envfile;
 mod hosts;
 mod plans;
@@ -369,6 +371,20 @@ Examples:
         /// Leave SbxwIsland.app alone (don't quit/replace/relaunch it).
         #[arg(long)]
         no_island: bool,
+    },
+    /// Install the sbxw browser extension: a side panel beside the app you are
+    /// testing, to chat with the sandbox that serves it (Chrome, Edge).
+    ///
+    /// Writes it to ~/.sbxw/browser-extension/ and prints how to load it. Run
+    /// again after an sbxw update.
+    Extension {
+        /// Path to sbxw.toml, for the daemon address (`web_addr`).
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+        /// Daemon address the panel connects to, e.g. http://127.0.0.1:7681.
+        /// Defaults to `web_addr`.
+        #[arg(long)]
+        daemon: Option<String>,
     },
     /// Print a shell completion script, so TAB completes subcommand and flag
     /// names instead of guessing (or running `sbxw help`).
@@ -784,6 +800,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Update { check, no_island } => cmd_update(check, no_island),
+        Cmd::Extension { config, daemon } => {
+            let cfg = Config::load_or_default(&config)?;
+            extension::cmd(&cfg.web_addr, daemon)
+        }
         Cmd::Completion { shell } => cmd_completion(shell),
     }
 }
@@ -1388,6 +1408,13 @@ pub(crate) fn workspace_for(name: &str) -> Option<PathBuf> {
 /// Where each sandbox's `thread → repo` choices are kept (see `repos`).
 pub(crate) fn thread_repos_dir() -> PathBuf {
     state_dir().join("threads")
+}
+
+/// Where the browser side panel's hand-made `host → sandbox` pairings are kept
+/// (see `embed`). Host-side, like the favourites, because a pairing describes
+/// this machine's setup, not one browser profile.
+pub(crate) fn embed_pairings_path() -> PathBuf {
+    state_dir().join("embed-pairings.json")
 }
 
 // ── Favourite workspace folders ──────────────────────────────────────────────

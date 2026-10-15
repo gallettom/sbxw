@@ -2383,6 +2383,21 @@
   /* Claude's answers are read, not scanned: prose, like the code map's articles. */
   .cd-msg.ai { align-self: flex-start; font: 13.5px/1.55 var(--font-prose); color: var(--c-text); }
   .cd-msg.err { align-self: stretch; color: var(--c-red); font-size: 12px; }
+  /* The Markdown of an answer (chatMarkdown in js/chat-core.js). */
+  .cd-msg.ai strong { color: var(--c-text-bright); }
+  .cd-msg.ai a { color: var(--c-blue); }
+  .cd-msg.ai code { padding: 0 .25rem; background: var(--c-elevated); border-radius: 4px; font: 12px var(--font-mono); }
+  .cd-msg.ai pre {
+    margin: 0 0 .6em; padding: .45rem .55rem; overflow-x: auto; white-space: pre;
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 6px;
+  }
+  .cd-msg.ai pre code { padding: 0; background: none; }
+  .cd-msg.ai > div { white-space: normal; }
+  .cd-msg.ai p { margin: 0 0 .6em; }
+  .cd-msg.ai ul, .cd-msg.ai ol { margin: 0 0 .6em; padding-left: 1.3em; }
+  .cd-msg.ai li { margin: .2em 0; }
+  .cd-msg.ai li::marker { color: var(--c-text-dim); }
+  .cd-msg.ai > div > :last-child { margin-bottom: 0; }
   .cd-meta { display: block; margin-bottom: .15rem; font: 11px var(--font-mono); color: var(--c-text-dim); }
   .cd-status { display: flex; align-items: center; gap: .5rem; color: var(--c-purple); font-size: 12px; }
   .cd-bar {
@@ -2429,4 +2444,154 @@
   .cd-to-pane:hover { color: var(--c-text-bright); }
   @media (prefers-reduced-motion: reduce) {
     .cd-panel, .cd-peek, .cd-bar, .cd-cursor { animation: none !important; }
+  }
+
+  /* ── Browser side panel (see js/sidepanel.js) ──
+     The `/sidepanel` page, framed by the sbxw extension beside the app being
+     tested: a narrow, full-height column. One loud thing — the `>_` avatar,
+     which shows what the agent is doing — and everything around it quiet.
+     The transcript is the chat dock's `cd-*`, read here as prose on both
+     sides; monospace is kept for what is literally an address or code. */
+  body.sp-body [hidden] { display: none !important; }
+
+  .sp-head {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .6rem .5rem .6rem .7rem;
+    background: var(--c-surface); border-bottom: 1px solid var(--c-elevated);
+  }
+  .sp-avatar {
+    flex-shrink: 0; width: 38px; height: 38px; display: grid; place-items: center;
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 9px;
+    transition: border-color .2s;
+  }
+  .sp-avatar .cd-glyph { --px-size: 3px; }
+  .sp-avatar:not(.working) .cd-cursor.lit { animation: cd-blink 1.1s steps(1) infinite; }
+  .sp-avatar.working { border-color: rgba(210, 168, 255, .45); }
+  .sp-avatar.attention { border-color: var(--c-amber); }
+  .sp-who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+  .sp-row { display: flex; align-items: center; gap: .45rem; min-width: 0; }
+  .sp-spacer { flex: 1; }
+  .sp-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--c-text-bright); font: 600 13px var(--font-mono);
+  }
+  .sp-head select {
+    min-width: 0; max-width: 55%; padding: .05rem .25rem;
+    background: var(--c-bg); color: var(--c-text-muted);
+    border: 1px solid var(--c-border); border-radius: 6px; font: 11px var(--font-mono);
+  }
+  .sp-page {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--c-text-dim); font: 11px var(--font-mono);
+  }
+  .sp-icon {
+    flex-shrink: 0; width: 28px; height: 28px; display: inline-grid; place-items: center;
+    padding: 0; cursor: pointer; background: none; border: 0; border-radius: 7px;
+    color: var(--c-text-muted);
+  }
+  .sp-icon:hover:not(:disabled) { background: var(--c-elevated); color: var(--c-text-bright); }
+  .sp-icon:disabled { opacity: .35; cursor: default; }
+  .sp-icon:focus-visible, .sp-send:focus-visible, .sp-link:focus-visible,
+  .sp-choices button:focus-visible, .sp-menu-body :is(button, label):focus-within {
+    outline: 2px solid var(--c-blue); outline-offset: 1px;
+  }
+
+  /* The ⋯ menu: what is set once and rarely touched again. */
+  .sp-menu { position: relative; }
+  .sp-menu summary { list-style: none; }
+  .sp-menu summary::-webkit-details-marker { display: none; }
+  .sp-menu[open] summary { background: var(--c-elevated); color: var(--c-text-bright); }
+  .sp-menu-body {
+    position: absolute; right: 0; top: calc(100% + 6px); z-index: 10;
+    width: min(260px, calc(100vw - 1.5rem)); padding: .35rem;
+    display: flex; flex-direction: column;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px;
+    box-shadow: 0 14px 36px rgba(var(--c-shadow-rgb), .65);
+  }
+  .sp-menu-body hr { width: 100%; margin: .3rem 0; border: 0; border-top: 1px solid var(--c-elevated); }
+  .sp-check, .sp-menu-body button {
+    display: flex; align-items: flex-start; gap: .55rem; padding: .45rem .5rem;
+    background: none; border: 0; border-radius: 6px; cursor: pointer; text-align: left;
+    color: var(--c-text); font: 12.5px/1.4 var(--font-prose);
+  }
+  .sp-check:hover, .sp-menu-body button:hover { background: var(--c-elevated); color: var(--c-text-bright); }
+  .sp-check input { flex-shrink: 0; margin: .15rem 0 0; accent-color: var(--c-blue); }
+  .sp-check:has(input:disabled) { opacity: .45; cursor: default; }
+
+  /* Before there is a conversation: no page yet, or a sandbox to choose. */
+  .sp-notice { padding: 1rem .8rem; display: flex; flex-direction: column; gap: .6rem; }
+  .sp-notice p { margin: 0; font: 13px/1.5 var(--font-prose); color: var(--c-text); }
+  .sp-notice p.sp-dim { color: var(--c-text-muted); font-size: 12px; }
+  .sp-choices { display: flex; flex-direction: column; gap: .3rem; }
+  .sp-choices button {
+    display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+    padding: .5rem .65rem; cursor: pointer; text-align: left;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 8px;
+    color: var(--c-text); font: 12.5px var(--font-mono);
+  }
+  .sp-choices button:hover { border-color: var(--c-blue); color: var(--c-text-bright); }
+  .sp-choices button.sp-likely { border-color: var(--c-green-deep); }
+  .sp-choices small { color: var(--c-text-dim); font: 11px var(--font-prose); }
+  .sp-link {
+    flex-shrink: 0; background: none; border: 0; padding: 0; cursor: pointer;
+    color: var(--c-text-muted); font: 12px var(--font-prose);
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  .sp-link:hover { color: var(--c-text-bright); }
+
+  /* The conversation: yours on the right in a bubble, Claude's as prose. */
+  .sp-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .sp-body .sp-log { padding: 1rem .8rem .75rem; gap: 1rem; }
+  .sp-body .cd-msg.me {
+    max-width: 86%; padding: .45rem .7rem; border-radius: 13px 13px 3px 13px;
+    font: 13px/1.45 var(--font-prose);
+  }
+  .sp-body .cd-msg.me .cd-meta { margin-bottom: .2rem; color: #7d9cc4; font: 10.5px var(--font-mono); }
+  .sp-body .cd-msg.ai { max-width: 100%; }
+  .sp-body .cd-status { font: 12px var(--font-prose); }
+  .sp-empty { margin-top: auto; display: flex; flex-direction: column; gap: .4rem; }
+  .sp-empty p { margin: 0; font: 12.5px/1.5 var(--font-prose); color: var(--c-text-muted); }
+  .sp-empty .sp-empty-lead { font-size: 15px; line-height: 1.4; color: var(--c-text-bright); }
+  /* Something the panel did on its own: a screenshot Claude asked for. */
+  .cd-msg.note { align-self: stretch; max-width: none; color: var(--c-text-muted); font: 12px var(--font-prose); }
+  .sp-shot-note { display: grid; grid-template-columns: 16px 1fr; align-items: center; column-gap: .45rem; }
+  .sp-shot-note svg { color: var(--c-text-dim); }
+  .sp-shot-note img {
+    grid-column: 2; display: block; width: 168px; max-width: 100%; margin-top: .4rem;
+    border: 1px solid var(--c-border); border-radius: 6px;
+  }
+
+  /* One composer block: the words, then what goes with them. */
+  .sp-hint { margin: 0 .8rem .4rem; font: 11.5px/1.4 var(--font-prose); color: var(--c-text-muted); }
+  .sp-hint.warn { color: var(--c-amber); }
+  .sp-composer {
+    margin: 0 .6rem .6rem; display: flex; flex-direction: column;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 12px;
+    transition: border-color .15s;
+  }
+  .sp-composer:focus-within { border-color: var(--c-blue); }
+  .sp-composer textarea {
+    min-height: 40px; max-height: 160px; resize: none; padding: .65rem .75rem .2rem;
+    background: none; border: 0; outline: none;
+    color: var(--c-text-bright); font: 13px/1.45 var(--font-prose);
+  }
+  .sp-composer textarea::placeholder { color: var(--c-text-dim); }
+  .sp-tools { display: flex; align-items: center; gap: .25rem; padding: .2rem .35rem .35rem; }
+  .sp-send {
+    width: 28px; height: 28px; display: grid; place-items: center; padding: 0; cursor: pointer;
+    background: var(--c-green-deep); color: var(--c-white); border: 0; border-radius: 8px;
+    transition: opacity .15s;
+  }
+  .sp-send:hover { background: var(--c-green-strong); }
+  .sp-composer textarea:placeholder-shown ~ .sp-tools .sp-send { opacity: .45; }
+  .sp-shot {
+    display: flex; align-items: center; gap: .5rem; margin: .45rem .45rem 0; padding: .3rem;
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 8px;
+    color: var(--c-text-muted); font: 12px var(--font-prose);
+  }
+  .sp-shot img { width: 44px; height: 28px; object-fit: cover; object-position: top; border-radius: 4px; }
+  .sp-shot span { flex: 1; }
+  .sp-shot .sp-icon { width: 22px; height: 22px; }
+  @media (prefers-reduced-motion: reduce) {
+    .sp-avatar .cd-cursor { animation: none !important; }
   }

@@ -1,0 +1,56 @@
+/* sbxw extension: the shell around the daemon's `/sidepanel` page, and the
+   options page. The colours are sbxw's own (assets/app.css), so the frame and
+   the page it holds read as one. */
+:root {
+  color-scheme: dark;
+  --c-bg: #0d1117;
+  --c-surface: #161b22;
+  --c-elevated: #21262d;
+  --c-border: #30363d;
+  --c-text: #c9d1d9;
+  --c-text-bright: #e6edf3;
+  --c-text-muted: #8b949e;
+  --c-blue: #58a6ff;
+  --c-amber: #d29922;
+  --c-amber-tint: #3c2d0d;
+  --c-green-deep: #238636;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-prose: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+html, body { height: 100%; margin: 0; background: var(--c-bg); color: var(--c-text); font: 13px var(--font-mono); }
+body.panel { display: flex; flex-direction: column; }
+[hidden] { display: none !important; }
+
+#frame { flex: 1; width: 100%; border: 0; }
+
+.banner {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  padding: .45rem .6rem; border-bottom: 1px solid var(--c-amber);
+  background: var(--c-amber-tint); color: var(--c-text-bright);
+  font: 12px/1.45 var(--font-prose);
+}
+.banner span { flex: 1; min-width: 12rem; }
+button {
+  padding: .2rem .55rem; cursor: pointer;
+  background: var(--c-surface); color: var(--c-text-bright);
+  border: 1px solid var(--c-border); border-radius: 6px; font: 12px var(--font-mono);
+}
+button:hover { border-color: var(--c-blue); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+button.quiet { background: none; border-color: transparent; color: var(--c-text-muted); }
+button.primary { background: var(--c-green-deep); border-color: var(--c-green-deep); }
+
+.down { padding: 1rem .75rem; display: flex; flex-direction: column; gap: .6rem; font: 13px/1.5 var(--font-prose); }
+.down p { margin: 0; }
+.down code { font: 12px var(--font-mono); color: var(--c-text-bright); }
+.down .row { display: flex; gap: .5rem; align-items: center; }
+
+body.options { padding: 1rem; min-width: 22rem; }
+.options label { display: block; margin-bottom: .35rem; color: var(--c-text-muted); }
+.options .row { display: flex; gap: .5rem; }
+.options input {
+  flex: 1; padding: .35rem .5rem;
+  background: var(--c-bg); color: var(--c-text-bright);
+  border: 1px solid var(--c-border); border-radius: 6px; font: 12.5px var(--font-mono);
+}
+.options .note { min-height: 1.2em; margin: .5rem 0 0; color: var(--c-text-muted); font-size: 12px; }

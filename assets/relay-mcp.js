@@ -97,6 +97,13 @@ const TOOLS = [
       "here — a test that renders, a browser you can drive, a snapshot suite — do that instead; " +
       "this interrupts a person, and their attention is the scarcest thing you spend.\n" +
       "\n" +
+      "Unless the person has the sbxw side panel open beside the app in their browser: then the " +
+      "panel answers within seconds with a capture of that tab — their real session, logged in, " +
+      "at their window size — and nobody is interrupted. That capture is the page exactly as it " +
+      "is on screen; it is not resized, scrolled or navigated for you, so ask for one state per " +
+      "request, and if you need another, say in your reply what to bring on screen. When the " +
+      "panel is not open, the request goes to the person as described here.\n" +
+      "\n" +
       "Say what to capture and why, in one sentence: which screen, which state, which width. " +
       "If one picture will not settle it, name the views you need in that same sentence — a " +
       "before and an after, two breakpoints, the three steps of a flow — and they can attach " +
