@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="docs/media/sbxw-teaser.mp4">
-    <img src="docs/media/sbxw-teaser.gif" alt="sbxw in 40 seconds: every agent deserves a sandbox — isolated, exposing only what you want, working as a team — and how it works: one command, one browser tab, a relay you approve, a lead that plans" width="720">
+    <img src="docs/media/sbxw-teaser.webp" alt="sbxw in 40 seconds: every agent deserves a sandbox — isolated, exposing only what you want, working as a team — and how it works: one command, one browser tab, a relay you approve, a lead that plans" width="720">
   </a>
   <br>
   <sub>▶ <a href="docs/media/sbxw-teaser.mp4">Watch with sound</a></sub>
