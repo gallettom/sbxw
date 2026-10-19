@@ -229,11 +229,29 @@ impl Store {
     }
 
     /// The sandbox a presented agent token belongs to.
+    ///
+    /// The index is a cache of the records on disk, which another process may
+    /// have changed (the CLI mints a token under `--no-web`, `sbxw rm` forgets
+    /// one): a hit is confirmed against the record, and a miss or a mismatch
+    /// re-reads the records once.
     pub fn sandbox_for_token(&self, token: &str) -> Option<SandboxName> {
-        let idx = self.tokens.lock().unwrap();
-        idx.iter()
-            .find(|(t, _)| sbxw_core::ids::same_secret(t, token))
-            .and_then(|(_, name)| SandboxName::parse(name).ok())
+        let lookup = |s: &Self| {
+            let idx = s.tokens.lock().unwrap();
+            idx.iter()
+                .find(|(t, _)| sbxw_core::ids::same_secret(t, token))
+                .map(|(_, name)| name.clone())
+        };
+        let confirmed = |name: &str| {
+            self.get(name).token.is_some_and(|t| sbxw_core::ids::same_secret(&t, token))
+        };
+        let name = match lookup(self) {
+            Some(n) if confirmed(&n) => n,
+            _ => {
+                self.index_tokens();
+                lookup(self).filter(|n| confirmed(n))?
+            }
+        };
+        SandboxName::parse(&name).ok()
     }
 
     /// This sandbox's token, minted on first use.
@@ -403,6 +421,16 @@ mod tests {
         assert!(s.sandbox_for_token("sbxw_nope").is_none());
         let reopened = Store::open(s.paths.clone());
         assert_eq!(reopened.sandbox_for_token(&t).unwrap().as_str(), "neos");
+    }
+
+    #[test]
+    fn a_token_another_process_minted_or_forgot_is_seen() {
+        let (_d, daemon) = store();
+        let cli = Store::open(daemon.paths.clone());
+        let t = cli.token("neos").unwrap();
+        assert_eq!(daemon.sandbox_for_token(&t).unwrap().as_str(), "neos", "minted elsewhere");
+        cli.forget("neos");
+        assert!(daemon.sandbox_for_token(&t).is_none(), "forgotten elsewhere");
     }
 
     #[test]

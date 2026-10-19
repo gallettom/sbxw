@@ -115,6 +115,14 @@ ui "http://127.0.0.1:$UI/api/sandboxes/neos/ports" | grep -q '"host_port":4200' 
 ui "http://127.0.0.1:$UI/api/sandboxes/neos/envfile" | grep -q 'workspace: ./neos' || die "env export"
 ok "ports and env-file panels read the live sandbox"
 
+"$bin" up solo "$t/ws/neos" --no-web < /dev/null > "$t/solo.log" 2>&1 || { cat "$t/solo.log"; die "up --no-web"; }
+grep -q "claude (fake) in solo" "$t/solo.log" || { cat "$t/solo.log"; die "--no-web attaches the agent here"; }
+token2=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).token)' "$HOME/.sbxw/state/sandboxes/solo.json")
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "authorization: Bearer $token2" -H 'content-type: application/json' \
+  -d '{"hook_event_name":"SessionStart","session_id":"s2"}' "http://127.0.0.1:$AGENT/api/hook")
+[ "$code" = 200 ] || die "a token the CLI minted should be accepted by the running daemon, got $code"
+ok "--no-web runs the pipeline here and attaches; the daemon accepts its token"
+
 "$bin" rm neos >/dev/null || die "rm"
 [ ! -e "$HOME/.sbxw/state/sandboxes/neos.json" ] || die "rm forgets the record"
 ok "rm removes the sandbox and forgets its record"
