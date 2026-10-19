@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# A stand-in for the `sbx` CLI, for scripts/e2e.sh: enough of its surface for
+# sbxw to bring a sandbox up, attach a terminal and serve every panel — and
+# nothing that touches the machine. Every call is appended to
+# $FAKE_SBX_STATE/calls.log; sandboxes live as files under it.
+#
+# It never runs what sbxw pipes into `exec … node -` (that script writes into
+# $HOME/.claude, which on this machine is real): it reads it, keeps a copy for
+# the test to inspect, and answers the way the real script reports.
+set -u
+S="${FAKE_SBX_STATE:?set FAKE_SBX_STATE}"
+mkdir -p "$S/sandboxes" "$S/ports"
+printf '%s\n' "$*" >> "$S/calls.log"
+
+name_after() { # the value after --name
+  local prev=""
+  for a in "$@"; do
+    if [ "$prev" = "--name" ]; then echo "$a"; return; fi
+    prev="$a"
+  done
+}
+
+case "${1:-}" in
+  version) echo "sbx version 0.48.0" ;;
+  ls)
+    printf 'SANDBOX                AGENT    STATUS     WORKSPACE\n'
+    for f in "$S"/sandboxes/*; do
+      [ -e "$f" ] || continue
+      printf '%-22s %-8s %-10s %s\n' "$(basename "$f")" claude "$(cat "$f")" /w
+    done ;;
+  create)
+    n=$(name_after "$@")
+    echo "pulling docker.io/docker/sandbox-templates:claude 10%"
+    echo "pulling docker.io/docker/sandbox-templates:claude 100%"
+    echo running > "$S/sandboxes/$n"
+    : > "$S/ports/$n"
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "-p" ]; then
+        IFS=: read -r x y z <<< "$a"
+        if [ -n "${z:-}" ]; then echo "$x $y $z" >> "$S/ports/$n"; else echo "127.0.0.1 $x $y" >> "$S/ports/$n"; fi
+      fi
+      prev="$a"
+    done ;;
+  run)
+    if [ "${2:-}" = "-d" ]; then echo running > "$S/sandboxes/$(name_after "$@")"; exit 0; fi
+    n=$(name_after "$@")
+    echo running > "$S/sandboxes/$n"
+    # A tiny agent TUI: a prompt, then each submitted line acknowledged.
+    printf '\033[?2004h claude (fake) in %s\r\n> ' "$n"
+    while IFS= read -r line; do printf '\r\nGOT[%s]\r\n> ' "$line"; done ;;
+  exec)
+    shift
+    stdin=0; tty=0
+    while [ "${1:-}" != "--" ] && [ $# -gt 0 ]; do
+      case "$1" in -i) stdin=1 ;; -it) tty=1 ;; *) n="$1" ;; esac
+      shift
+    done
+    shift # --
+    case "${1:-}" in
+      node) cat > "$S/tooling-$n.js"; echo "SBXW-TOOLING []" ;;
+      test) exit 1 ;;
+      curl) echo '{"five_hour":{"utilization":12.0,"resets_at":"2030-01-01T00:00:00Z"},"seven_day":{"utilization":34.0}}' ;;
+      sh) if [ $stdin = 1 ]; then cat > /dev/null; fi ;;
+      bash) if [ $tty = 1 ] && [ $# -eq 1 ]; then exec sh; fi; exec "$@" ;;
+      *) exec "$@" ;;
+    esac ;;
+  ports)
+    n="$2"
+    if [ "${3:-}" = "--publish" ]; then
+      IFS=: read -r x y z <<< "$4"
+      if [ -n "${z:-}" ]; then echo "$x $y $z" >> "$S/ports/$n"; else echo "127.0.0.1 $x $y" >> "$S/ports/$n"; fi
+      sort -u -o "$S/ports/$n" "$S/ports/$n"
+    elif [ "${3:-}" = "--unpublish" ]; then
+      IFS=: read -r x y z <<< "$4"; grep -v "^$x $y $z\$" "$S/ports/$n" > "$S/ports/$n.tmp"; mv "$S/ports/$n.tmp" "$S/ports/$n"
+    else
+      echo "HOST IP     HOST PORT   SANDBOX PORT   PROTOCOL"
+      while read -r ip hp sp; do printf '%-11s %-11s %-14s tcp\n' "$ip" "$hp" "$sp"; done < "$S/ports/$n"
+    fi ;;
+  policy)
+    case "${2:-}" in
+      ls) echo "RULE ID   SANDBOX   RESOURCE          ACTION"; [ -f "$S/stale-rule" ] && echo "r-old     ${3:-}      localhost:$(cat "$S/stale-rule")    allow"; true ;;
+      log) echo "HOST   RULE   REASON" ;;
+      rm) rm -f "$S/stale-rule" ;;
+      *) : ;;
+    esac ;;
+  stop) echo stopped > "$S/sandboxes/$2" ;;
+  rm) shift; for n in "$@"; do case "$n" in --*) ;; *) rm -f "$S/sandboxes/$n" "$S/ports/$n" ;; esac; done ;;
+  secret) cat > /dev/null ;;
+  inspect) echo "Name: $2"; echo "Kits:" ;;
+  *) : ;;
+esac

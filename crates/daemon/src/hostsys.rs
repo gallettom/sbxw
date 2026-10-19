@@ -33,7 +33,17 @@ pub struct HostSys {
 }
 
 impl HostSys {
+    /// The real `/etc/hosts` — or, when `SBXW_HOSTS_FILE` names another file,
+    /// that one, written directly (the end-to-end tests, and anyone who keeps
+    /// a hosts file they own).
     pub fn system(elevation: Elevation) -> Self {
+        if let Some(file) = std::env::var_os("SBXW_HOSTS_FILE").filter(|f| !f.is_empty()) {
+            return Self {
+                hosts_file: PathBuf::from(file),
+                elevation,
+                privileged: false,
+            };
+        }
         Self {
             hosts_file: PathBuf::from("/etc/hosts"),
             elevation,
