@@ -272,7 +272,9 @@ impl App {
         let ws = self.store.workspace(name).ok_or_else(|| {
             anyhow!("sbxw doesn't know which workspace '{name}' was created on — bring it up once with sbxw")
         })?;
-        let cfg = self.config_for(name);
+        let mut cfg = self.config_for(name);
+        // sbx knows no `sbxw:` kit: the file names the written-out directory.
+        cfg.kits = crate::bundled::resolve(&self.store.paths, &cfg.kits)?;
         let live = self.sbx.ports(name).await;
         let ports: Vec<envfile::Port> = if live.is_empty() {
             envexport::ports_from_config(&cfg)

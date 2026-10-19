@@ -14,6 +14,18 @@
 
 use std::path::{Path, PathBuf};
 
+/// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
+pub const BUNDLED: [&str; 4] = ["codemap", "agent-skills", "md-to-pdf-tools", "k8s-tools"];
+
+/// What a project without a `kits` list gets. k8s-tools is opt-in: only
+/// Kubernetes projects need kubectl, k3d and skaffold.
+pub const DEFAULT_KITS: [&str; 3] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools"];
+
+/// The bundled kit a reference names (`sbxw:codemap` → `codemap`).
+pub fn bundled_name(kit: &str) -> Option<&str> {
+    kit.strip_prefix("sbxw:")
+}
+
 /// One `kits = [...]` entry resolved against the config's directory — when, and
 /// only when, it is a local path.
 ///

@@ -195,6 +195,8 @@ pub fn export(path: Option<PathBuf>, name: Option<String>, config: PathBuf, out:
         };
         std::fs::canonicalize(&parent).with_context(|| format!("no such directory: {}", parent.display()))?
     };
+    let mut cfg = cfg;
+    cfg.kits = sbxw_daemon::bundled::resolve(&sbxw_daemon::store::Paths::from_home(), &cfg.kits)?;
     let file = envexport::env_file_for(&name, &cfg, &workspace, envexport::ports_from_config(&cfg), &dir);
     let rendered = file.render(&format!("sbxw {}", env!("CARGO_PKG_VERSION")));
     if to_stdout {

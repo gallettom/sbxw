@@ -172,6 +172,23 @@ setup:
         set -uo pipefail
         info() { echo "  [md-to-pdf-tools] $*"; }
 
+        # ── The sbxw host cache ──────────────────────────────────────────────
+        # sbxw mounts ~/.sbxw/cache READ-ONLY into the sandboxes it creates and
+        # names it in SBXW_CACHE: what was downloaded once (apt packages and
+        # lists, the Python wheels) is copied from there instead of fetched again.
+        # Only sbxw's cache-warming sandbox, which runs no agent, sees it
+        # writable (SBXW_CACHE_FILL=1) and fills it. printenv, not the
+        # variable: set -u, and no dollar-brace defaults in kit content.
+        CACHE=""; FILL=""
+        SBXW_CACHE="$(printenv SBXW_CACHE)"
+        if [ -n "$SBXW_CACHE" ] && [ -d "$SBXW_CACHE" ]; then
+          CACHE="$SBXW_CACHE/$(dpkg --print-architecture 2>/dev/null)-$(. /etc/os-release 2>/dev/null; echo "$VERSION_CODENAME")"
+          if [ "$(printenv SBXW_CACHE_FILL)" = 1 ]; then
+            FILL=1; mkdir -p "$CACHE/apt/partial" "$CACHE/apt-lists" "$CACHE/wheels"
+          fi
+          [ -d "$CACHE" ] || CACHE=""
+        fi
+
         # apt_install ARGS... — `apt-get install` that refreshes the package
         # lists only when no kit has done so in the last hour (the stamp is
         # shared with the other bundled kits), and once more if the install
@@ -179,13 +196,31 @@ setup:
         APT_STAMP=/home/agent/.cache/sbxw-apt-updated
         apt_update() {
           if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
-          sudo apt-get update -qq || return 1
+          # Lists under a week old from the cache instead of the network.
+          if [ "$1" != force ] && [ -z "$FILL" ] && [ -n "$CACHE" ] && [ -n "$(find "$CACHE/apt-lists/.stamp" -mmin -10080 2>/dev/null)" ] \
+              && sudo cp "$CACHE"/apt-lists/*_* /var/lib/apt/lists/ 2>/dev/null; then
+            mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"; return 0
+          fi
+          sudo apt-get update -qq >/dev/null 2>&1 || return 1
           mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
+          if [ -n "$FILL" ]; then
+            find /var/lib/apt/lists -maxdepth 1 -type f -name '*_*' -exec cp {} "$CACHE/apt-lists/" \; 2>/dev/null
+            touch "$CACHE/apt-lists/.stamp"
+          fi
+        }
+        # Packages: the warming sandbox downloads into the cache; the others
+        # seed apt's own archive dir from it (apt checks each file's hash
+        # against the lists, and downloads whatever does not match).
+        apt_cache_opt() {
+          if [ -n "$FILL" ]; then echo "-o Dir::Cache::Archives=$CACHE/apt"; return; fi
+          [ -n "$CACHE" ] && sudo cp -n "$CACHE"/apt/*.deb /var/cache/apt/archives/ 2>/dev/null
+          echo ""
         }
         apt_install() {
           apt_update fresh || return 1
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" && return 0
-          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+          opt="$(apt_cache_opt)"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq "$@" && return 0
+          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq "$@"
         }
 
         # ── 1. System libs (WeasyPrint's renderer + poppler's pdftoppm) ──────
@@ -223,7 +258,12 @@ setup:
         else
           info "pip installing: $NEED_PIP"
           (
-            if pip3 install --break-system-packages -q $NEED_PIP; then
+            if [ -n "$FILL" ]; then
+              pip3 wheel -q -w "$CACHE/wheels" $NEED_PIP >/dev/null 2>&1 || info "could not build wheels into the cache"
+            fi
+            if [ -n "$CACHE" ] && pip3 install --break-system-packages -q --no-index --find-links "$CACHE/wheels" $NEED_PIP 2>/dev/null; then
+              info "python packages installed from the sbxw cache"
+            elif pip3 install --break-system-packages -q $NEED_PIP; then
               info "python packages installed"
             else
               info "pip install failed — skipping (check network_allow for pypi)"
@@ -244,6 +284,7 @@ setup:
         fi
 
         [ -n "$PIP_PID" ] && wait "$PIP_PID"
+        [ -n "$FILL" ] && touch "$CACHE/.filled-md-to-pdf-tools"
         info "done."
   startup:
     - command: ["bash", "/home/agent/.local/bin/sbxw-install-md-to-pdf"]

@@ -75,6 +75,15 @@ impl Paths {
     pub fn oauth_kit(&self, name: &str) -> PathBuf {
         self.state().join("kits").join(format!("{name}-oauth"))
     }
+    /// Where the bundled kits are written out: stable, because sbx keeps a
+    /// kit's path and re-resolves it on every container swap.
+    pub fn kits(&self) -> PathBuf {
+        self.root.join("kits")
+    }
+    /// Downloads the bundled kits share between sandboxes (read-only in them).
+    pub fn cache(&self) -> PathBuf {
+        self.root.join("cache")
+    }
     /// Documents `sbxw env run` derives for one sandbox.
     pub fn env_dir(&self, name: &str) -> PathBuf {
         self.state().join("env").join(name)

@@ -39,6 +39,9 @@ pub struct Config {
     pub ports: Vec<PortMap>,
     /// Kit references, applied at creation (`sbx create --kit`).
     pub kits: Vec<String>,
+    /// Mount `~/.sbxw/cache` read-only into new sandboxes, so the bundled kits
+    /// copy what was downloaded once instead of fetching it again.
+    pub cache: bool,
     /// `subscriptionType` of injected OAuth credentials.
     pub claude_subscription: String,
     /// Passed as `ANTHROPIC_DEFAULT_MODEL`: a default, below a saved `/model`.
@@ -127,7 +130,8 @@ impl Default for Config {
             // default here would hand every sandbox without a config one
             // project's ports and hostnames (and a sudo prompt for them).
             ports: vec![],
-            kits: vec![],
+            kits: crate::kits::DEFAULT_KITS.map(String::from).to_vec(),
+            cache: true,
             claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5-5".into(),
             models: default_models(),
@@ -204,6 +208,13 @@ impl Config {
                  listener and nothing else, so they need two ports",
                 self.web_addr
             );
+        }
+        for k in &self.kits {
+            if let Some(name) = crate::kits::bundled_name(k) {
+                if !crate::kits::BUNDLED.contains(&name) {
+                    bail!("kits: {k:?} — the bundled kits are {}", crate::kits::BUNDLED.map(|b| format!("sbxw:{b}")).join(", "));
+                }
+            }
         }
         for m in &self.models {
             if !crate::names::is_valid_model_id(&m.id) {
@@ -372,6 +383,15 @@ mod tests {
         let mut cfg = Config::default();
         cfg.env.insert(MODEL_VAR.into(), "opus".into());
         assert_eq!(cfg.effective_env()[MODEL_VAR], "opus");
+    }
+
+    #[test]
+    fn bundled_kits_are_on_by_default_and_checked() {
+        assert_eq!(Config::default().kits, ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools"]);
+        let bad: Config = toml::from_str("kits = [\"sbxw:nope\"]").unwrap();
+        assert!(bad.validate().is_err());
+        let ok: Config = toml::from_str("kits = [\"sbxw:k8s-tools\", \"/abs/kit\"]").unwrap();
+        ok.validate().unwrap();
     }
 
     #[test]

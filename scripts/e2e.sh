@@ -48,6 +48,13 @@ grep -q "policy allow network --sandbox neos localhost:$AGENT,registry.npmjs.org
 ! grep -q "localhost:$UI" "$t/state/calls.log" || die "the UI port must never be allowed"
 ok "created with ports; egress allows the agent port, never the UI port"
 
+c="$HOME/.sbxw/cache"
+grep "create claude $t/ws/neos" "$t/state/calls.log" | grep -q -- "$c:ro .*--kit $HOME/.sbxw/kits/codemap .*-e SBXW_CACHE=$c" || die "bundled kits + read-only cache at creation"
+for _ in $(seq 50); do grep -q "rm --force sbxw-cache-warm" "$t/state/calls.log" && break; sleep 0.1; done
+grep "create claude .*--name sbxw-cache-warm" "$t/state/calls.log" | grep -q -- " $c --kit .*SBXW_CACHE_FILL=1" || die "the warmer mounts the cache writable"
+"$bin" cache | grep -q "amd64-bookworm .*filled" || die "sbxw cache shows the filled flavour"
+ok "bundled kits resolved; the cache is read-only in sandboxes, filled once by a warmer"
+
 grep -q "neos.local" "$t/hosts" && grep -q "sbxw.localhost" "$t/hosts" || die "hosts block"
 ok "hosts aliases written (redirected file)"
 

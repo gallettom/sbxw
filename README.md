@@ -41,7 +41,7 @@ it fails on. What sbxw now assumes, unconditionally:
 | `policy rm network --id … --force` | the ✕ on a rule in the network-policy panel |
 | `run -d --name NAME` keeping a sandbox up (0.47) | `keep_running` in `sbxw.toml` |
 | `create --pull=always\|missing\|never` | `pull` in `sbxw.toml` |
-| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the five kits under `assets/` |
+| Kit spec **v2** (`schemaVersion: "2"`) | the OAuth credentials kit, and the four kits under `assets/` |
 | `secret set --sandbox NAME` | the Anthropic secret, without the deprecation warning the old spellings printed |
 | `SANDBOX_NAME` | the in-sandbox hooks naming their own sandbox |
 | `create --kit` repeated | every configured kit applied at creation, which is the only moment sbx applies one whole |
@@ -130,10 +130,11 @@ forgotten.
    `claude.ai` after an in-place OAuth refresh — go in the same call. A
    `localhost:<UI port>` rule an older sbxw gave the sandbox is revoked. **Runs
    before kits** so a kit's download commands have egress.
-4. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`.
-   `kit add` **recreates the sandbox container** (state is preserved), so kits
-   already listed by `sbx inspect` are skipped instead of
-   blindly re-applied on every `up`. See [Kits](#kits).
+4. **Kits** — a new sandbox got them at `sbx create --kit`, with the read-only
+   [kit cache](#the-kit-cache). For one that already existed, kits without
+   startup commands go through `sbx kit add` (which **recreates the container**,
+   state preserved — kits `sbx inspect` already lists are skipped); the others
+   are a message to recreate it. See [Kits](#kits).
 5. **Bidirectional code** — the workspace is the agent's Git working tree; edits
    from the agent appear on the host instantly and vice-versa. **Only that
    directory is shared** — the sandbox is a microVM with its own filesystem,
@@ -205,6 +206,7 @@ diagonally across the screen.
 | `sbxw env run [paths…] [--env-arg K=V]` | Bring a sandbox up from an `sbxenv.yaml` (over `~/.sbxenv.yaml`): `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
 | `sbxw env export [path]` | Write an `sbxenv.yaml` beside the workspace, with every path relative to the file so it is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
 | `sbxw logs [name] [-n N]` | Tail the daemon's log; with a name, only the lines about that sandbox. |
+| `sbxw cache [show\|warm [--force]\|clear]` | The bundled kits' shared download cache — see [The kit cache](#the-kit-cache). |
 | `sbxw hosts [show\|sync\|clear]` | Show the `/etc/hosts` block (plus anything a daemon parked), re-apply it — the one place `sudo` can ask for a password — or remove it. |
 | `sbxw down [name]` | Stop the daemon (closing every terminal it holds) **and** remove the `/etc/hosts` block; with a name, close that sandbox's terminals only. |
 | `sbxw update [--check] [--no-island]` | Install the latest release in place of this binary (or just check with `--check`). On macOS it also refreshes an already-installed `SbxwIsland.app` when the release ships a newer build of it — quitting and relaunching it if it was running; `--no-island` leaves the app alone. |
@@ -1394,7 +1396,7 @@ ERROR: kit "md-to-pdf-tools" declares commands.startup, which the kit-add
        via `sbx rm` + `sbx create --kit` to use this kit
 ```
 
-All five bundled kits declare startup commands — that is how they install
+All four bundled kits declare startup commands — that is how they install
 anything — so this is the normal case, not a corner one. **Adding a kit to
 `sbxw.toml` for a sandbox that already exists therefore means recreating it:**
 `sbxw rm <name>` then `sbxw up <name>`. sbxw says so and changes nothing rather
@@ -1410,23 +1412,65 @@ kit, run `sbx kit add <sandbox> <kit>` yourself:
 
 ```toml
 kits = [
-  "/abs/path/to/sbxw/assets/k8s-tools",   # relative paths resolve against sbxw.toml
+  "sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools",  # the defaults
+  "sbxw:k8s-tools",                                             # opt-in
+  "./my-kit",                   # relative paths resolve against sbxw.toml
 ]
 ```
 
 A kit reference is a **directory containing `spec.yaml`** (not a single `.yaml`),
-a `.zip`, an OCI ref, or a git URL. Validate one with `sbx kit validate <dir>`.
+a `.zip`, an OCI ref, a git URL — or **`sbxw:<name>`**, one of the kits built
+into the binary. Validate one with `sbx kit validate <dir>`.
+
+**Without a `kits` line, a sandbox gets `sbxw:codemap`, `sbxw:agent-skills` and
+`sbxw:md-to-pdf-tools`.** `sbxw:k8s-tools` is opt-in. Writing `kits` replaces
+the defaults (`kits = []` means none). A `sbxw:` kit is written to
+`~/.sbxw/kits/<name>/` and rewritten only when a new sbxw ships a different
+spec: sbx keeps a kit's *path* and re-resolves it on every container swap, so
+that path must outlive the sandbox. `sbxw env export` writes the path, since sbx
+knows no `sbxw:` kit.
+
+### The kit cache
+
+agent-skills and md-to-pdf-tools spend their startup downloading: ffmpeg and
+Chromium's libraries from apt, a Playwright Chromium, six skill tarballs,
+WeasyPrint's wheels. With `cache = true` (the default) sbxw mounts
+`~/.sbxw/cache` **read-only** into every new sandbox and sets `SBXW_CACHE`; the
+kits copy from it and fall back to the network for anything missing. What stays
+is the `dpkg` install itself — copying beats downloading, but the packages still
+unpack.
+
+- **Filling it.** After the first bring-up that uses those kits, the daemon
+  creates a throwaway sandbox, `sbxw-cache-warm`, with the cache mounted
+  *writable* and `SBXW_CACHE_FILL=1`, holding only the two caching kits. Each
+  kit writes what it downloaded, then a `.filled-<kit>` marker; once both are
+  there the sandbox is removed. One warmer at a time, across processes (a lock
+  file, given up after 25 minutes). That first sandbox installs from the
+  network meanwhile; the ones after copy.
+- **Per image flavour.** Files land under `<arch>-<codename>/` (e.g.
+  `arm64-bookworm`), so a `.deb` is never offered to the wrong distribution.
+  apt lists are reused for a week, then refreshed.
+- **Why read-only.** An agent that could write the cache would decide what the
+  next sandbox installs. Only the warmer writes it, and the warmer runs nothing
+  but the kits' own scripts — nobody attaches to it.
+- **Commands.** `sbxw cache` shows each flavour, its size and whether it is
+  filled; `sbxw cache warm [--force]` fills it now, in the foreground
+  (`--force` downloads everything again — after a kit's pinned versions
+  change); `sbxw cache clear` removes it. `cache = false` turns the mount off.
+
+Existing sandboxes keep what they were created with: the defaults and the cache
+mount reach a sandbox when it is (re)created.
 
 Bundled kits:
 
-- **`assets/k8s-tools`** — installs `kubectl` + `k3d` + `skaffold` into
+- **`sbxw:k8s-tools`** (`assets/k8s-tools`) — installs `kubectl` + `k3d` + `skaffold` into
   `~/.local/bin` (arch-aware, idempotent).
-- **`assets/md-to-pdf-tools`** — ships the `/md-to-pdf` skill itself
+- **`sbxw:md-to-pdf-tools`** — ships the `/md-to-pdf` skill itself
   (user-level, works regardless of which project is mounted) plus the
   WeasyPrint + poppler-utils + Pillow stack it needs, so the skill is
   available and first invocation has no install step. See
   `assets/md-to-pdf-tools/README.md`.
-- **`assets/agent-skills`** — `/archify` ([tt-a1i/archify](https://github.com/tt-a1i/archify):
+- **`sbxw:agent-skills`** — `/archify` ([tt-a1i/archify](https://github.com/tt-a1i/archify):
   validated, interactive HTML architecture / workflow / sequence / dataflow /
   lifecycle diagrams) and `/brag` + `/brag-slim`
   ([latent-spaces/brag](https://github.com/latent-spaces/brag): a launch video of
@@ -1437,9 +1481,9 @@ Bundled kits:
   each pinned to a commit, plus a headless Chromium (Playwright's,
   which has linux-arm64 builds) and FFmpeg. The skills land in
   `~/.sbxw/agent-skills/` with thin user-level commands pointing at them, never in
-  the shared skill store. Needs the Playwright CDN and the apt mirrors in
-  `network_allow`. See `assets/agent-skills/README.md`.
-- **`assets/codemap`** — ships the `/codemap` command, a format reference, an
+  the shared skill store. Its spec declares the Playwright CDN and the apt
+  mirrors it fetches from. See `assets/agent-skills/README.md`.
+- **`sbxw:codemap`** — ships the `/codemap` command, a format reference, an
   offline checker, and three Claude Code hooks, so an agent **reads a
   repository's code map before its source** and knows how to write one when
   there is none. The hooks are what stop that from being advice: the map's index
@@ -1464,9 +1508,9 @@ Bundled kits:
   Needs no network. See `assets/codemap/README.md`.
 
 The domains a kit declares under `permissions.network.allow` are composed into
-the sandbox policy when the kit is added; domains a kit does *not*
-declare (e.g. apt mirrors) still need adding to `sbxw.toml`'s `network_allow` —
-see each kit's README.
+the sandbox policy when the kit is applied. The bundled kits declare everything
+they fetch, apt mirrors included, so none of them needs a `network_allow`
+entry.
 
 The five bundled kits are **spec v2** (`schemaVersion: "2"`), like the OAuth
 kit sbxw generates: `permissions.network.allow`, `setup.files`, `setup.startup`.

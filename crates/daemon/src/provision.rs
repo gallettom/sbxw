@@ -19,6 +19,7 @@
 //! 5. ports are re-published once the sandbox runs, by a task the daemon owns.
 
 use crate::app::App;
+use crate::{bundled, cache};
 use crate::bus::{Event, ProvisionEvent};
 use anyhow::{anyhow, bail, Context, Result};
 use sbxw_core::artifacts;
@@ -118,7 +119,12 @@ impl App {
 
     async fn bring_up(self: &Arc<Self>, req: BringUp, sink: &Sink) -> Result<Vec<String>> {
         let name = &req.name;
-        let cfg = &req.config;
+        let wants_cache = req.config.cache && cache::wanted_by(&req.config.kits);
+        // `sbxw:<name>` kits become the stable directories they are written to.
+        let cfg = &Config {
+            kits: bundled::resolve(&self.store.paths, &req.config.kits)?,
+            ..req.config.clone()
+        };
         let mut run = Run { sink, warnings: vec![] };
         let workspace = req.workspace.to_string_lossy().into_owned();
         if !req.workspace.is_dir() {
@@ -197,18 +203,30 @@ impl App {
                 }
             }
             kit_refs.extend(cfg.kits.iter().cloned());
+            let mut ro_mounts = req.ro.clone();
+            let mut env = cfg.env_pairs();
+            if wants_cache {
+                // Read-only: see `cache` — no sandbox decides what the next installs.
+                let dir = cache::ensure_dir(&self.store.paths)?.to_string_lossy().into_owned();
+                env.push(format!("SBXW_CACHE={dir}"));
+                ro_mounts.push(dir);
+            }
             let opts = CreateOpts {
                 workspace: workspace.clone(),
-                ro_mounts: req.ro.clone(),
+                ro_mounts,
                 kits: kit_refs,
                 publish: specs.clone(),
                 skills: cfg.skills_mode().map(String::from),
                 pull: cfg.pull_policy().map(String::from),
-                env: cfg.env_pairs(),
+                env,
                 env_files: cfg.env_files.clone(),
+                ..Default::default()
             };
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
             created_with_kits = true;
+            if wants_cache {
+                self.warm_cache_in_background(cfg.pull_policy().map(String::from), &mut run);
+            }
         }
 
         if cfg.keep_running {
@@ -353,6 +371,24 @@ impl App {
         Ok(run.warnings)
     }
 
+    /// Fill the kit cache behind this bring-up, unless it is filled or being
+    /// filled. This sandbox installs from the network meanwhile; the next ones
+    /// copy.
+    fn warm_cache_in_background(self: &Arc<Self>, pull: Option<String>, run: &mut Run) {
+        let paths = &self.store.paths;
+        if cache::is_filled(paths) || cache::is_warming(paths) {
+            return;
+        }
+        run.info("filling the shared kit cache in the background — later sandboxes start faster (`sbxw cache`)");
+        let app = self.clone();
+        tokio::spawn(async move {
+            let say = |l: &str| tracing::info!("cache: {l}");
+            if let Err(e) = cache::warm(&app.sbx, &app.store.paths, pull, false, &say).await {
+                tracing::warn!("cache warm failed: {e:#}");
+            }
+        });
+    }
+
     /// `sbx create` with the port mappings, retried without them when the
     /// all-or-nothing `-p` loses the sandbox over one busy host port.
     async fn create_with_port_fallback(&self, name: &SandboxName, opts: &CreateOpts, sink: &Sink, run: &mut Run<'_>) -> Result<()> {
@@ -458,6 +494,7 @@ fn cfg_port(app: &App, _project: &Config) -> String {
 mod tests {
     use super::*;
     use crate::testing::{app_with, sbx_answer};
+    use crate::cache::WARM_SANDBOX as WARM;
     use sbxw_sbx::runner::Output;
 
     fn with_port() -> Config {
@@ -573,6 +610,70 @@ mod tests {
             .await
             .unwrap();
         assert!(w.iter().any(|w| w.contains("retrying without them")));
-        assert_eq!(fake.log().iter().filter(|c| c.starts_with("create")).count(), 2);
+        assert_eq!(fake.log().iter().filter(|c| c.starts_with("create claude") && c.contains("--name w ")).count(), 2);
+    }
+
+    #[tokio::test]
+    async fn bundled_kits_install_from_a_read_only_cache_a_warmer_fills() {
+        let made = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let m = made.clone();
+        let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("create") if a.contains(&WARM.to_string()) => {
+                // What the warming sandbox's kits do: fill, then mark.
+                let cache = a.iter().find_map(|x| x.strip_prefix("SBXW_CACHE=")).unwrap();
+                let flavour = std::path::Path::new(cache).join("amd64-bookworm");
+                std::fs::create_dir_all(&flavour).unwrap();
+                for k in bundled::CACHING {
+                    std::fs::write(flavour.join(format!(".filled-{k}")), "").unwrap();
+                }
+                Output::ok("")
+            }
+            Some("create") => {
+                m.store(true, std::sync::atomic::Ordering::SeqCst);
+                Output::ok("")
+            }
+            Some("ls") if m.load(std::sync::atomic::Ordering::SeqCst) => {
+                Output::ok(&format!("SANDBOX          AGENT    STATUS\nw                claude   running\n{WARM}  claude   running\n"))
+            }
+            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
+            _ => sbx_answer(a),
+        });
+        let ws = dir.path().join("w");
+        std::fs::create_dir_all(&ws).unwrap();
+        let req = BringUp {
+            name: SandboxName::parse("w").unwrap(),
+            workspace: ws,
+            ro: vec![],
+            config: Config::default(),
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            oauth_token: None,
+        };
+        app.provision(req, None).await.unwrap();
+        let paths = &app.store.paths;
+        let cache = paths.cache().to_string_lossy().into_owned();
+        let log = fake.log();
+        let create = log.iter().find(|c| c.contains("--name w ")).unwrap();
+        assert!(create.contains(&format!("{cache}:ro")), "{create}");
+        assert!(create.contains(&format!("-e SBXW_CACHE={cache}")) && !create.contains("FILL"));
+        for k in ["codemap", "agent-skills", "md-to-pdf-tools"] {
+            assert!(create.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}");
+        }
+        assert!(!create.contains("sbxw:"));
+
+        // The warmer runs behind the bring-up and cleans up after itself.
+        for _ in 0..100 {
+            if cache::is_filled(&app.store.paths) && !cache::is_warming(&app.store.paths) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let log = fake.log();
+        let warm = log.iter().find(|c| c.starts_with("create") && c.contains(WARM)).unwrap();
+        assert!(warm.contains(&format!(" {cache} ")) && !warm.contains(&format!("{cache}:ro")), "writable: {warm}");
+        assert!(warm.contains("SBXW_CACHE_FILL=1") && !warm.contains("codemap"));
+        assert!(log.iter().any(|c| c.starts_with("rm") && c.contains(WARM)));
+        assert!(cache::is_filled(paths) && !cache::is_warming(paths));
     }
 }

@@ -455,6 +455,48 @@ pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
     Ok(())
 }
 
+/// `sbxw cache`: the bundled kits' shared downloads (see `sbxw_daemon::cache`).
+pub fn cache(action: crate::CacheAction, config: &Path) -> Result<()> {
+    use sbxw_daemon::cache;
+    let paths = Paths::from_home();
+    match action {
+        crate::CacheAction::Show => {
+            let cfg = load_config(config)?;
+            println!("{}{}", paths.cache().display(), if cfg.cache { "" } else { "  (off: cache = false)" });
+            let flavours = cache::flavours(&paths);
+            if flavours.is_empty() {
+                println!("  empty — filled by the first `sbxw up` with a bundled kit, or `sbxw cache warm`");
+            }
+            for f in flavours {
+                let state = if f.filled.len() == sbxw_daemon::bundled::CACHING.len() {
+                    "filled".to_string()
+                } else if f.filled.is_empty() {
+                    "incomplete".to_string()
+                } else {
+                    format!("partial ({})", f.filled.join(", "))
+                };
+                println!("  {:<20} {:>8.1} MB  {state}", f.name, f.bytes as f64 / 1e6);
+            }
+            if cache::is_warming(&paths) {
+                println!("  a warm is running");
+            }
+            Ok(())
+        }
+        crate::CacheAction::Warm { force } => {
+            let cfg = load_config(config)?;
+            let rt = runtime();
+            check_sbx(&rt)?;
+            let say = |l: &str| println!("{l}");
+            rt.block_on(cache::warm(&Sbx::process(), &paths, cfg.pull_policy().map(String::from), force, &say))
+        }
+        crate::CacheAction::Clear => {
+            cache::clear(&paths)?;
+            println!("removed {}", paths.cache().display());
+            Ok(())
+        }
+    }
+}
+
 /// `sbx prune`, shown first and asked, then the same cleanup `rm` does for
 /// whatever disappeared — a name-set difference, robust to prune's output.
 pub fn prune(since: Option<&str>, dry_run: bool, yes: bool) -> Result<()> {

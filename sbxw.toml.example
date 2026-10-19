@@ -112,9 +112,9 @@ network_deny = []
 env_files = []
 
 # ── Kits ──────────────────────────────────────────────────────────────────────
-# Kits to apply via `sbx kit add` after the sandbox is created (and on every
-# `sbxw up`). Applied in order, AFTER the network policy so a kit's startup
-# commands have egress access.
+# Kits applied when the sandbox is created (`sbx create --kit`), the only
+# moment sbx applies a kit whole. Adding one later means recreating the
+# sandbox: `sbxw rm <name>` then `sbxw up <name>`.
 #
 # A kit reference is a DIRECTORY containing a spec.yaml (not a single .yaml),
 # a .zip, an OCI ref (ghcr.io/org/kit:tag), or a git URL. Relative paths are
@@ -125,22 +125,29 @@ env_files = []
 # table. In TOML, any key after [[ports]] belongs to that table, not the root,
 # and would be silently ignored.
 #
-# Examples (each requires uncommenting its network_allow entries above):
-#   assets/k8s-tools — install k3d + kubectl + skaffold
-#   assets/agent-skills — /archify (interactive architecture diagrams) and
-#                      /brag (a launch video of the project), /i-have-adhd,
-#                      /handoff, /grill-me and /frontend-design, pinned, with the
-#                      Chromium and ffmpeg they run on.
-#   assets/codemap   — /codemap: agents read (and write) a repo's code map in
-#                      .sbxw-artifacts/codemap/ before reading its source, with
-#                      an Archify diagram of the whole (drawn with agent-skills).
-#                      Needs no network of its own.
+# The kits sbxw ships are named `sbxw:<name>` — no path to keep in sync, they
+# are inside the binary. Without a `kits` line a sandbox gets the first three:
+#   sbxw:codemap         /codemap: agents read (and write) a repo's code map in
+#                        .sbxw-artifacts/codemap/ before reading its source.
+#   sbxw:agent-skills    /archify, /brag, /i-have-adhd, /handoff, /grill-me,
+#                        /frontend-design, pinned, with Chromium and ffmpeg.
+#   sbxw:md-to-pdf-tools /md-to-pdf, with WeasyPrint and poppler.
+#   sbxw:k8s-tools       kubectl + k3d + skaffold — opt-in, add it yourself.
+# Each declares the egress it needs; nothing to add to network_allow.
+# Writing `kits` replaces the defaults, so list them again to keep them:
 #
 # kits = [
-#   "path/to/sbxw/assets/agent-skills",
-#   "path/to/sbxw/assets/codemap",
-#   "path/to/sbxw/assets/k8s-tools",
+#   "sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools",
+#   "sbxw:k8s-tools",
+#   "./my-kit",
 # ]
+# kits = []            # none at all
+
+# Mount ~/.sbxw/cache read-only into new sandboxes: the bundled kits copy the
+# apt packages, Chromium, skill tarballs and wheels from it instead of
+# downloading them again. Filled once, in the background, by a throwaway
+# sandbox (`sbxw cache` shows it, `sbxw cache warm --force` refreshes it).
+# cache = true
 
 # ── Environment variables ────────────────────────────────────────────────────
 # Put variables in the sandbox: `sbx create -e KEY=VALUE` at creation (baked in,

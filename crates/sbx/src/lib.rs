@@ -182,6 +182,8 @@ pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 pub struct CreateOpts {
     pub workspace: String,
     pub ro_mounts: Vec<String>,
+    /// Extra directories mounted writable (only sbxw's cache-warming sandbox).
+    pub rw_mounts: Vec<String>,
     /// Every kit, credentials kit first: creation applies them whole.
     pub kits: Vec<String>,
     /// `-p` specs: all-or-nothing, a busy host port 409s the whole create.
@@ -194,6 +196,7 @@ pub struct CreateOpts {
 
 pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     let mut a: Vec<String> = vec!["create".into(), "claude".into(), o.workspace.clone(), "--name".into(), name.to_string()];
+    a.extend(o.rw_mounts.iter().cloned());
     a.extend(o.ro_mounts.iter().map(|m| format!("{m}:ro")));
     for k in &o.kits {
         a.extend(["--kit".into(), k.clone()]);
@@ -669,11 +672,12 @@ mod tests {
                 pull: Some("missing".into()),
                 env: vec!["A=1".into()],
                 env_files: vec!["/e".into()],
+                rw_mounts: vec!["/rw".into()],
             },
         );
         assert_eq!(
             a.join(" "),
-            "create claude /w --name neos /ro:ro --kit /k -p 4200:4200 --skills=off --pull=missing --env-file /e -e A=1"
+            "create claude /w --name neos /rw /ro:ro --kit /k -p 4200:4200 --skills=off --pull=missing --env-file /e -e A=1"
         );
     }
 

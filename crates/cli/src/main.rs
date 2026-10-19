@@ -148,6 +148,13 @@ enum Cmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// The shared download cache of the bundled kits: show, warm or clear it.
+    Cache {
+        #[command(subcommand)]
+        action: Option<CacheAction>,
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+    },
     /// Run or write an `sbxenv.yaml` environment file.
     Env {
         #[command(subcommand)]
@@ -241,6 +248,19 @@ pub enum HostsAction {
     Clear,
 }
 
+#[derive(Subcommand, Clone, Copy, Default)]
+pub enum CacheAction {
+    #[default]
+    Show,
+    /// Fill it now, in a throwaway sandbox (several minutes, in the foreground).
+    Warm {
+        /// Download everything again, even if it is filled.
+        #[arg(long)]
+        force: bool,
+    },
+    Clear,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
@@ -273,6 +293,7 @@ fn main() -> Result<()> {
         }
         Cmd::Env { cmd: EnvCmd::Export { path, name, config, out, force } } => cmd::env::export(path, name, config, out, force),
         Cmd::Hosts { action, config } => cmd::hosts(action.unwrap_or_default(), &config),
+        Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
         Cmd::Update { check, no_island } => update::run(check, no_island),
         Cmd::Extension { config, daemon, refresh } => {

@@ -280,6 +280,23 @@ setup:
         ENV_FILE=/etc/sandbox-persistent.sh
         mkdir -p "$BASE" "$BIN"
 
+        # ── The sbxw host cache ──────────────────────────────────────────────
+        # sbxw mounts ~/.sbxw/cache READ-ONLY into the sandboxes it creates and
+        # names it in SBXW_CACHE: what was downloaded once (apt packages and
+        # lists, Chromium, the skill tarballs) is copied from there instead of fetched again.
+        # Only sbxw's cache-warming sandbox, which runs no agent, sees it
+        # writable (SBXW_CACHE_FILL=1) and fills it. printenv, not the
+        # variable: set -u, and no dollar-brace defaults in kit content.
+        CACHE=""; FILL=""
+        SBXW_CACHE="$(printenv SBXW_CACHE)"
+        if [ -n "$SBXW_CACHE" ] && [ -d "$SBXW_CACHE" ]; then
+          CACHE="$SBXW_CACHE/$(dpkg --print-architecture 2>/dev/null)-$(. /etc/os-release 2>/dev/null; echo "$VERSION_CODENAME")"
+          if [ "$(printenv SBXW_CACHE_FILL)" = 1 ]; then
+            FILL=1; mkdir -p "$CACHE/apt/partial" "$CACHE/apt-lists" "$CACHE/tarballs" "$CACHE/ms-playwright"
+          fi
+          [ -d "$CACHE" ] || CACHE=""
+        fi
+
         # ── Pins. Move one to update: the next container start fetches it. ───
         ARCHIFY_REPO=tt-a1i/archify
         ARCHIFY_REV=73aaa0696e8f72c232ea710e6fa94fd953f3e773   # v3.0.1
@@ -306,7 +323,14 @@ setup:
           done
           if [ -z "$stale" ]; then info "$repo already at $rev"; return 0; fi
           tmp="$(mktemp -d)"
-          if ! curl -fsSL "https://codeload.github.com/$repo/tar.gz/$rev" | tar -xz -C "$tmp"; then
+          tarball="$CACHE/tarballs/$(echo "$repo" | tr / _)-$rev.tar.gz"
+          if [ -n "$CACHE" ] && [ -f "$tarball" ]; then
+            tar -xzf "$tarball" -C "$tmp" || { info "the cached $repo@$rev is unreadable"; rm -rf "$tmp"; return 1; }
+          elif [ -n "$FILL" ]; then
+            if ! { curl -fsSL "https://codeload.github.com/$repo/tar.gz/$rev" -o "$tarball.part" && mv "$tarball.part" "$tarball" && tar -xzf "$tarball" -C "$tmp"; }; then
+              info "could not download $repo@$rev"; rm -rf "$tmp" "$tarball.part"; return 1
+            fi
+          elif ! curl -fsSL "https://codeload.github.com/$repo/tar.gz/$rev" | tar -xz -C "$tmp"; then
             info "could not download $repo@$rev — keeping what is installed (is codeload.github.com allowed?)"
             rm -rf "$tmp"; return 1
           fi
@@ -341,13 +365,31 @@ setup:
         APT_STAMP=/home/agent/.cache/sbxw-apt-updated
         apt_update() {
           if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
+          # Lists under a week old from the cache instead of the network.
+          if [ "$1" != force ] && [ -z "$FILL" ] && [ -n "$CACHE" ] && [ -n "$(find "$CACHE/apt-lists/.stamp" -mmin -10080 2>/dev/null)" ] \
+              && sudo cp "$CACHE"/apt-lists/*_* /var/lib/apt/lists/ 2>/dev/null; then
+            mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"; return 0
+          fi
           sudo apt-get update -qq >/dev/null 2>&1 || return 1
           mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
+          if [ -n "$FILL" ]; then
+            find /var/lib/apt/lists -maxdepth 1 -type f -name '*_*' -exec cp {} "$CACHE/apt-lists/" \; 2>/dev/null
+            touch "$CACHE/apt-lists/.stamp"
+          fi
+        }
+        # Packages: the warming sandbox downloads into the cache; the others
+        # seed apt's own archive dir from it (apt checks each file's hash
+        # against the lists, and downloads whatever does not match).
+        apt_cache_opt() {
+          if [ -n "$FILL" ]; then echo "-o Dir::Cache::Archives=$CACHE/apt"; return; fi
+          [ -n "$CACHE" ] && sudo cp -n "$CACHE"/apt/*.deb /var/cache/apt/archives/ 2>/dev/null
+          echo ""
         }
         apt_install() {
           apt_update fresh || { info "apt-get update failed (are the apt mirrors in network_allow?)"; return 1; }
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1 && return 0
-          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" >/dev/null 2>&1
+          opt="$(apt_cache_opt)"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq --no-install-recommends "$@" >/dev/null 2>&1 && return 0
+          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq --no-install-recommends "$@" >/dev/null 2>&1
         }
 
         # ── Headless Chromium, for archify's browser gate and Hyperframes ────
@@ -358,13 +400,19 @@ setup:
           ls -d "$PW_BROWSERS"/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1
         }
         CHROME="$(find_chrome)"
+        if [ -z "$CHROME" ] && [ -z "$FILL" ] && [ -n "$CACHE" ] && ls -d "$CACHE"/ms-playwright/chromium-* >/dev/null 2>&1; then
+          mkdir -p "$PW_BROWSERS" && cp -a "$CACHE/ms-playwright/." "$PW_BROWSERS/" && info "chromium copied from the sbxw cache"
+          CHROME="$(find_chrome)"
+        fi
+        # The warming sandbox installs into the cache, then copies like the others.
+        PW_INSTALL="$PW_BROWSERS"; [ -n "$FILL" ] && PW_INSTALL="$CACHE/ms-playwright"
         CHROME_PID=""
         if [ -n "$CHROME" ]; then
           info "chromium already installed"
         else
           info "installing chromium (playwright@$PLAYWRIGHT)…"
           (
-            PLAYWRIGHT_BROWSERS_PATH="$PW_BROWSERS" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1 \
+            PLAYWRIGHT_BROWSERS_PATH="$PW_INSTALL" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1 \
               || info "chromium download failed (are registry.npmjs.org and cdn.playwright.dev allowed?)"
           ) &
           CHROME_PID=$!
@@ -428,6 +476,7 @@ setup:
 
         if [ -n "$CHROME_PID" ]; then
           wait "$CHROME_PID"
+          [ -n "$FILL" ] && mkdir -p "$PW_BROWSERS" && cp -a "$CACHE/ms-playwright/." "$PW_BROWSERS/"
           CHROME="$(find_chrome)"
           # The guess above can miss: whatever the binary itself still lacks.
           if [ -n "$CHROME" ] && chrome_libs_missing; then
@@ -482,6 +531,7 @@ setup:
         fi
 
         wait   # the skill fetches
+        [ -n "$FILL" ] && touch "$CACHE/.filled-agent-skills"
         info "done."
 
   startup:
