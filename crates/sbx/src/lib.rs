@@ -393,10 +393,10 @@ impl Sbx {
     }
 
     /// `sbx create`, its output forwarded line by line to `on_line`.
-    pub async fn create(&self, name: &SandboxName, opts: &CreateOpts, on_line: Option<Arc<dyn Fn(&str) + Send + Sync>>) -> Result<()> {
+    pub async fn create(&self, name: &SandboxName, opts: &CreateOpts, on_line: Option<runner::LineSink>) -> Result<()> {
         let tail = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::<String>::new()));
         let t = tail.clone();
-        let sink: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |line: &str| {
+        let sink: runner::LineSink = Arc::new(move |line: &str| {
             {
                 let mut t = t.lock().unwrap();
                 if t.len() == 12 {

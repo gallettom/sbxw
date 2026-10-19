@@ -562,9 +562,8 @@ pub fn answer_keystrokes(indices: &[u32], sizes: &[u32]) -> Vec<&'static [u8]> {
     let mut keys = Vec::new();
     for (n, idx) in indices.iter().enumerate() {
         let limit = sizes.get(n).copied().unwrap_or(MAX_MENU).max(1);
-        for _ in 0..(idx.clamp(&1, &limit) - 1) {
-            keys.push(DOWN);
-        }
+        let downs = (*idx).clamp(1, limit) - 1;
+        keys.extend(std::iter::repeat_n(DOWN, downs as usize));
         keys.push(ENTER);
     }
     keys.push(ENTER);

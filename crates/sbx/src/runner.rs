@@ -6,6 +6,9 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Where streamed output lines go.
+pub type LineSink = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// One invocation.
 #[derive(Clone, Default)]
 pub struct Invocation {
@@ -14,7 +17,7 @@ pub struct Invocation {
     pub stdin: Option<Vec<u8>>,
     /// Called with each line of output as it arrives (stdout and stderr, split
     /// on `\r` too — a progress bar without a TTY still returns to column 0).
-    pub on_line: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub on_line: Option<LineSink>,
 }
 
 impl Invocation {
@@ -57,7 +60,10 @@ impl Output {
     }
 }
 
+/// `async_trait` rather than native `async fn`: the runner is a trait
+/// object (`Arc<dyn Runner>`), which native async traits cannot be.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait Runner: Send + Sync {
     async fn run(&self, inv: Invocation) -> Result<Output>;
 }
@@ -105,7 +111,7 @@ impl Runner for Process {
 
 async fn drain<R: tokio::io::AsyncRead + Unpin>(
     pipe: Option<R>,
-    sink: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    sink: Option<LineSink>,
 ) -> Vec<u8> {
     let Some(mut pipe) = pipe else {
         return Vec::new();
@@ -136,7 +142,7 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(
     all
 }
 
-fn emit(sink: &Arc<dyn Fn(&str) + Send + Sync>, line: &[u8]) {
+fn emit(sink: &LineSink, line: &[u8]) {
     let text = strip_ansi(&String::from_utf8_lossy(line));
     if !text.trim().is_empty() {
         sink(text.trim());

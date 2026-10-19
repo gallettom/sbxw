@@ -52,7 +52,7 @@ pub fn allowed_hosts(web_addr: &str) -> Option<Vec<String>> {
 pub fn ui_allows(allowed: Option<&[String]>, host: Option<&str>, origin: Option<&str>) -> Result<(), &'static str> {
     let host = host.unwrap_or("").to_ascii_lowercase();
     if let Some(list) = allowed {
-        if !list.iter().any(|h| *h == host) {
+        if !list.contains(&host) {
             return Err("unknown Host — reach sbxw at http://sbxw.localhost:<port>");
         }
     }
