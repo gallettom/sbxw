@@ -160,14 +160,17 @@ env_files = []
 # NODE_ENV = "development"
 # API_URL = "http://api.neos.local:8000"
 
-# Apps to expose. `sandbox_port` is what your dev server listens on INSIDE the
-# sandbox — remember to bind it to 0.0.0.0 (ng serve --host 0.0.0.0).
-[[ports]]
-alias = "neos.local"
-sandbox_port = 4200
-host_port = 4200
-
-[[ports]]
-alias = "api.neos.local"
-sandbox_port = 8000
-host_port = 8000
+# Apps to expose — none by default: a project without [[ports]] publishes
+# nothing and adds no hostname (only sbxw.localhost, the web UI's own name).
+# `sandbox_port` is what your dev server listens on INSIDE the sandbox —
+# remember to bind it to 0.0.0.0 (ng serve --host 0.0.0.0). For example:
+#
+# [[ports]]
+# alias = "neos.local"
+# sandbox_port = 4200
+# host_port = 4200
+#
+# [[ports]]
+# alias = "api.neos.local"
+# sandbox_port = 8000
+# host_port = 8000

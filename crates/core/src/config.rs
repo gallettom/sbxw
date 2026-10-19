@@ -123,18 +123,10 @@ impl Default for Config {
             .to_vec(),
             network_deny: vec![],
             ip_per_app: false,
-            ports: vec![
-                PortMap {
-                    alias: "neos.local".into(),
-                    sandbox_port: 4200,
-                    host_port: 4200,
-                },
-                PortMap {
-                    alias: "api.neos.local".into(),
-                    sandbox_port: 8000,
-                    host_port: 8000,
-                },
-            ],
+            // None: a project publishes what its own sbxw.toml names. A
+            // default here would hand every sandbox without a config one
+            // project's ports and hostnames (and a sudo prompt for them).
+            ports: vec![],
             kits: vec![],
             claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5-5".into(),
@@ -383,9 +375,20 @@ mod tests {
     }
 
     #[test]
-    fn wanted_aliases_add_the_web_name_on_loopback() {
+    fn without_a_config_nothing_is_published_but_the_web_name() {
         let cfg = Config::default();
+        assert!(cfg.ports.is_empty());
         let names: Vec<String> = cfg.wanted_aliases(&[]).into_iter().map(|a| a.hostname).collect();
-        assert_eq!(names, ["neos.local", "api.neos.local", "sbxw.localhost"]);
+        assert_eq!(names, ["sbxw.localhost"]);
+    }
+
+    #[test]
+    fn wanted_aliases_add_the_web_name_on_loopback() {
+        let cfg: Config = toml::from_str(
+            "[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\nhost_port = 4200\n",
+        )
+        .unwrap();
+        let names: Vec<String> = cfg.wanted_aliases(&[]).into_iter().map(|a| a.hostname).collect();
+        assert_eq!(names, ["neos.local", "sbxw.localhost"]);
     }
 }

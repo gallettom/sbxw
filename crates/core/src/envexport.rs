@@ -265,9 +265,16 @@ mod tests {
         assert_eq!(path_relative_to(d, Path::new("/opt/kit")), "/opt/kit");
     }
 
+    fn neos() -> Config {
+        Config {
+            ports: vec![PortMap { alias: "neos.local".into(), sandbox_port: 4200, host_port: 4200 }],
+            ..Config::default()
+        }
+    }
+
     #[test]
     fn a_rendered_export_carries_its_omissions() {
-        let cfg = Config::default();
+        let cfg = neos();
         let f = env_file_for("neos", &cfg, Path::new("/d/neos"), ports_from_config(&cfg), Path::new("/d"));
         let yaml = f.render("sbxw test");
         assert!(yaml.contains("workspace: ./neos"));
@@ -281,7 +288,7 @@ mod tests {
             ports: vec![Port { sandbox: 4200, host: Some(4300), host_ip: None, protocol: None }],
             ..Default::default()
         };
-        let (cfg, report) = config_from_spec(&spec, Config::default());
+        let (cfg, report) = config_from_spec(&spec, neos());
         assert_eq!(cfg.ports[0].host_port, 4300);
         assert_eq!(cfg.ports[0].alias, "neos.local", "the alias survives the merge");
         assert!(report.iter().any(|r| r.contains("neos.local → :4300")));

@@ -460,6 +460,13 @@ mod tests {
     use crate::testing::{app_with, sbx_answer};
     use sbxw_sbx::runner::Output;
 
+    fn with_port() -> Config {
+        Config {
+            ports: vec![sbxw_core::config::PortMap { alias: "neos.local".into(), sandbox_port: 4200, host_port: 4200 }],
+            ..Config::default()
+        }
+    }
+
     #[test]
     fn the_announced_plan_matches_the_steps_taken() {
         let ids = |existed, cfg: &Config| plan(existed, cfg).into_iter().map(|s| s.id).collect::<Vec<_>>();
@@ -492,7 +499,7 @@ mod tests {
         });
         let ws = dir.path().join("neos");
         std::fs::create_dir_all(&ws).unwrap();
-        let cfg = Config { kits: vec!["/kits/codemap".into()], ..Config::default() };
+        let cfg = Config { kits: vec!["/kits/codemap".into()], ..with_port() };
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let s2 = seen.clone();
         let sink: Sink = Arc::new(move |p| s2.lock().unwrap().push(serde_json::to_string(&p).unwrap()));
@@ -555,7 +562,7 @@ mod tests {
                     name: SandboxName::parse("w").unwrap(),
                     workspace: ws,
                     ro: vec![],
-                    config: Config::default(),
+                    config: with_port(),
                     extra_ports: vec![],
                     chat: false,
                     api_key: None,
