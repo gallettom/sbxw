@@ -4,6 +4,11 @@
 # Host bind address for the browser terminal.
 web_addr = "127.0.0.1:7681"
 
+# The daemon's second listener: the only address sandboxes reach it on (their
+# hooks, the relay, plan reports — each call carrying the sandbox's token). It
+# must differ from web_addr: sandboxes are allowed this port, never the UI's.
+agent_addr = "127.0.0.1:7682"
+
 # Leave empty to attach the Claude agent (sbx run). Set to e.g. "bash" to open a
 # shell inside the sandbox instead (sbx exec -it … bash).
 web_shell = ""

@@ -125,9 +125,11 @@ forgotten.
 3. **Network policy** — applies a restrictive local-dev egress allowlist via
    `sbx policy allow network "<list>"` (npm, pypi, packagist, github, docker
    registries, `api.anthropic.com`). Not `**`. sbxw's own rules —
-   `localhost:<port>` for the hooks to reach the daemon, `claude.ai` after an
-   in-place OAuth refresh — go in the same call. **Runs before kits** so a
-   kit's download commands have egress.
+   `localhost:<agent port>` for the hooks and the relay to reach the daemon's
+   **agent listener** (never the UI port: see [Security notes](#security-notes)),
+   `claude.ai` after an in-place OAuth refresh — go in the same call. A
+   `localhost:<UI port>` rule an older sbxw gave the sandbox is revoked. **Runs
+   before kits** so a kit's download commands have egress.
 4. **Kits** — applies each kit in `sbxw.toml`'s `kits = [...]` via `sbx kit add`.
    `kit add` **recreates the sandbox container** (state is preserved), so kits
    already listed by `sbx inspect` are skipped instead of
@@ -162,13 +164,20 @@ forgotten.
    mappings and lets the per-port publishing take over, where a conflict is a
    warning naming that one port. Free the port (or change `host_port`) and run
    `sbxw ports <name>` to pick it up.
-8. **Web terminal** — backgrounds a daemon serving a browser TTY (xterm.js)
-   bridged over a WebSocket to a PTY. Each sandbox has two independent sessions:
-   the **Claude** agent (`sbx run`) and a **Bash** shell (`sbx exec -it … bash`),
+8. **Web terminal** — the daemon serves a browser TTY (xterm.js) bridged over
+   a WebSocket to a PTY. Each sandbox has two independent sessions: the
+   **Claude** agent (`sbx run`) and a **Bash** shell (`sbx exec -it … bash`),
    switchable from the UI.
 
-`sbxw up` prints the daemon pid + URL and detaches. Use `--tail` to follow its
-log, or `--no-web` to attach the agent in the current terminal instead.
+**There is one daemon.** `sbxw up` is its client: it writes the `/etc/hosts`
+aliases in your terminal (the one place `sudo` can ask), starts the daemon if
+nothing answers on `web_addr` (detached, logging to `~/.sbxw/run/daemon.log`),
+hands it the bring-up, and prints the steps as the daemon reports them — the
+same steps the browser's corner card shows. Then it exits; the daemon owns the
+sandbox's terminals, its port re-publishing and everything after. A second
+`sbxw up` for another sandbox talks to the same daemon. Use `--tail` to follow
+the log, or `--no-web` to run the pipeline in this process and attach the agent
+in the current terminal instead.
 
 With `--no-web` the terminal belongs to the agent, so step 7's port publishing —
 which by design finishes *after* `sbx run` has booted the sandbox — doesn't write
@@ -186,7 +195,7 @@ diagonally across the screen.
 | `sbxw bash <name>` | Open an interactive bash shell in a sandbox (foreground). |
 | `sbxw ssh [name] [-- cmd…]` | SSH into a sandbox as `<name>.sbx`, or run one command in it. `--setup` registers the SSH host block first. See [SSH](#ssh-experimental). |
 | `sbxw skills import [--dry-run] [--force]` | Import your host agents' skills into the store shared by all sandboxes. See [Shared skills](#shared-skills). |
-| `sbxw web <name>` | Serve the web TTY only (no provisioning). |
+| `sbxw web <name>` | Open the web UI on that sandbox (starts the daemon if needed; no provisioning). |
 | `sbxw ports <name>` | Re-publish the configured ports for a running sandbox. |
 | `sbxw ports-ls [name] [--all]` | Show published port mappings for one or all sandboxes. |
 | `sbxw ls` | List all sandboxes with status. |
@@ -195,13 +204,13 @@ diagonally across the screen.
 | `sbxw prune [--since D] [--dry-run] [--yes]` | Remove every **stopped** sandbox — a running one is never a candidate, so this can't take out the one you're in. Lists them and asks first. `--since 168h` (alias `--until`, sbx's word: it becomes `--filter until=168h`) keeps anything stopped more recently. |
 | `sbxw env run [paths…] [--env-arg K=V]` | Bring a sandbox up from an `sbxenv.yaml` (over `~/.sbxenv.yaml`): `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
 | `sbxw env export [path]` | Write an `sbxenv.yaml` beside the workspace, with every path relative to the file so it is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
-| `sbxw logs <name> [-n N]` | Tail a running daemon's log. |
+| `sbxw logs [name] [-n N]` | Tail the daemon's log; with a name, only the lines about that sandbox. |
 | `sbxw hosts [show\|sync\|clear]` | Show the `/etc/hosts` block (plus anything a daemon parked), re-apply it — the one place `sudo` can ask for a password — or remove it. |
-| `sbxw down [name]` | Kill the daemon for `name`; with no name, kill all daemons **and** remove the `/etc/hosts` block. |
+| `sbxw down [name]` | Stop the daemon (closing every terminal it holds) **and** remove the `/etc/hosts` block; with a name, close that sandbox's terminals only. |
 | `sbxw update [--check] [--no-island]` | Install the latest release in place of this binary (or just check with `--check`). On macOS it also refreshes an already-installed `SbxwIsland.app` when the release ships a newer build of it — quitting and relaunching it if it was running; `--no-island` leaves the app alone. |
 | `sbxw completion [shell]` | Print `source <(sbxw completion <shell>)` material for bash/zsh/fish/elvish/powershell; see `sbxw completion --help`. |
 
-The web-only daemon's log/pid are keyed as `web` — `sbxw logs web`, `sbxw down web`.
+The daemon's pid and log live in `~/.sbxw/run/`.
 
 ## Web UI
 
@@ -861,12 +870,12 @@ sandbox cannot read a plan that is not its own or propose its merge. A report
 carries no id, since a thread only knows its own name, so one could be forged:
 it changes a label, never what runs.
 
-**What is not locked yet.** Approve and refuse are browser endpoints, and the
-daemon cannot tell a browser from a script in a sandbox. They check that the
-request carries the web UI's own `Origin`, which stops an agent from approving
-by accident but not one that forges the header. The relay's approve route has
-the same gap. Closing it needs a secret the page holds and a sandbox cannot
-fetch.
+**Approval is out of a sandbox's reach.** Approve, refuse and merge exist only
+on the daemon's UI listener, and a sandbox's network policy allows the agent
+listener alone, so no agent — accidentally or by forging headers — can approve
+its own lead's plan. On the agent listener every call is authenticated by the
+sandbox's token, so a report or a merge proposal can only ever be for the
+caller's own sandbox.
 
 ## Asking another sandbox (the relay)
 
@@ -946,11 +955,13 @@ or replace it entirely — and only *then* does the asker receive it.
 
 **What a sandbox cannot do**, which is the point of routing everything through a
 person: name its own recipient, list or read anyone else's requests, see an
-answer a human has not released, or reply to a question it was not handed. The
-daemon can't verify which container an HTTP call came from, so a sandbox's claim
-about who it is is taken at its word — that is only safe because nothing acts on
-it alone. State lives in memory (`src/relay.rs`); a settled request is kept 30
-minutes for a late pickup, an unanswered one 6 hours.
+answer a human has not released, or reply to a question it was not handed. Who
+a sandbox *is* is no longer its own claim: each one presents the token sbxw
+installed in it (`~/.sbxw/token`), and the daemon derives the sandbox from it —
+a `from` in the request body is ignored. Routing, approving and refusing exist
+only on the UI listener, which sandboxes cannot reach. State lives in memory
+(`crates/core/src/relay.rs`); a settled request is kept 30 minutes for a late
+pickup, an unanswered one 6 hours.
 
 ### Asking *you* for a screenshot
 
@@ -1220,9 +1231,9 @@ same `/api/usage`, so they cannot disagree.
 
 **Session state comes from Claude Code hooks, not terminal scraping.** At
 provisioning time sbxw installs a small hook (`assets/status-hook.js`) into each
-sandbox that POSTs every lifecycle event to the daemon over
-`host.docker.internal`. This yields *trusted, structured* state — no guessing
-from the terminal:
+sandbox that POSTs every lifecycle event to the daemon's agent listener over
+`host.docker.internal`, with the sandbox's token. This yields *trusted,
+structured* state — no guessing from the terminal:
 
 | Hook event | State |
 | --- | --- |
@@ -1251,8 +1262,10 @@ It's powered by these daemon endpoints:
   [Chatting from the notch](#chatting-from-the-notch).
 
 Running sandboxes appear as `idle` immediately; live state flows as soon as the
-in-sandbox agent emits hook events (the daemon must be reachable from the
-sandbox at `host.docker.internal:<port>`, which sbxw allows automatically).
+in-sandbox agent emits hook events (the agent listener must be reachable from
+the sandbox at `host.docker.internal:<agent port>`, which sbxw allows
+automatically). A sandbox still running tooling from before the agent listener
+gets a `410` naming the fix: `sbxw up <name>`.
 Build and usage instructions are in [`macos/README.md`](macos/README.md).
 
 ## Installation
@@ -1551,6 +1564,14 @@ but a skill with no system dependencies belongs in the store instead.
 
 See `sbxw.toml.example`. Key choice: `ip_per_app`.
 
+`web_addr` (default `127.0.0.1:7681`) is where the browser, the island and the
+extension reach the daemon; `agent_addr` (default `127.0.0.1:7682`) is the only
+address sandboxes reach it on. They must differ — see
+[Security notes](#security-notes). The daemon's own pair is taken from the
+`sbxw.toml` it was started with; a sandbox otherwise keeps the `sbxw.toml` it
+was brought up with (its `env`, model, ports and policy), whoever started the
+daemon.
+
 - `false` (default): every app binds `127.0.0.1` on a distinct host port;
   `/etc/hosts` maps the alias to `127.0.0.1`. Reach it at `alias:host_port`.
 - `true`: each app gets its own `127.0.0.X` loopback IP (added on `lo0` on
@@ -1806,6 +1827,22 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   after use. `sbxw rm <name>` removes it. Prefer `--use-api-key` if you'd rather
   the credential lived only in sbx's own keychain; the token is the same secret
   the sandbox already holds at `~/.claude/.credentials.json` either way.
+- **Two listeners, two audiences.** The UI listener (`web_addr`, default
+  `127.0.0.1:7681`) serves the browser, the island and the extension; the agent
+  listener (`agent_addr`, default `127.0.0.1:7682`) serves sandboxes, and a
+  sandbox's policy allows that port only. Every decision that moves information
+  between sandboxes or starts work — routing a question, releasing an answer,
+  approving or merging a plan, pairing a host, opening a terminal — exists only
+  on the UI listener. Every agent call carries the sandbox's token (256 bits,
+  minted at bring-up, installed over stdin into `~/.sbxw/token` mode `0600`,
+  never on a command line), and the daemon derives *which* sandbox is calling
+  from it.
+- **The UI listener refuses other web pages.** A request must carry a `Host`
+  naming the daemon (`sbxw.localhost`, `localhost`, `127.0.0.1`, `[::1]` on its
+  port), which stops DNS rebinding, and, when it has an `Origin`, one that is
+  the daemon's own page or the browser extension — which stops a page you visit
+  from opening `/ws` (a shell in a sandbox, or `monitor_cmd` on the host) or
+  POSTing to the API. Native clients send no `Origin`.
 - `/etc/hosts` changes are confined to a marked block and removed by `sbxw down`.
   Off a terminal, `sudo` runs with `-n`: the daemon never steals your shell's
   terminal to prompt on, it fails fast and says what to run instead. sbxw holds
@@ -1831,6 +1868,31 @@ Nothing keeps the two files in step. Re-export after editing `sbxw.toml`.
   capture your screen — the browser's own picker is the permission, and it is
   asked for per capture. Refusing is a first-class answer, and it discards what
   was attached.
+
+## Architecture (for contributors)
+
+A Cargo workspace of four crates, dependencies pointing one way:
+
+```
+crates/core    sbxw-core    the rules: typed names and session keys, sbxw.toml,
+                            the relay / plan / code-map state machines, the hook
+                            state of agent sessions, every message typed into an
+                            agent, the parsers for what sbx prints. No processes,
+                            no sockets — most tests live here.
+crates/sbx     sbxw-sbx     the only door to `sbx`: one method per command, a
+                            pure argv builder and parser each, run through a
+                            Runner trait (tokio::process, or a scripted fake).
+crates/daemon  sbxw-daemon  one App value holding every service (no globals):
+                            the store (one record per sandbox), one event bus,
+                            PTY sessions, the bring-up pipeline, and the two
+                            HTTP listeners (UI, agent).
+crates/cli     sbxw         the binary; a client of the daemon.
+assets/                     the web UI (served as-is), kits, in-sandbox scripts.
+```
+
+`cargo test --workspace` runs the unit tests; `scripts/e2e.sh` runs the built
+binary end to end against `scripts/fake-sbx` in a throwaway `HOME`, and
+`scripts/ui-smoke.sh` loads the real web UI from it in headless Chromium.
 
 ## Unconfirmed against docs (verify locally)
 
