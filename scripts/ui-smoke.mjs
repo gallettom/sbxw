@@ -1,0 +1,59 @@
+// Load the real web UI from a running daemon in headless Chromium: no page
+// error, the sandbox listed, a pane attached to it, the usage chip filled —
+// then a screenshot. Usage: node ui-smoke.mjs <port> <sandbox> <png>
+// (PLAYWRIGHT_MODULE points at a playwright install when it is not resolvable.)
+const [port, sandbox, png] = process.argv.slice(2);
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const browser = await chromium.launch();
+// The CDN scripts (xterm) may come through a TLS-intercepting proxy in CI or a
+// sandbox; the page's own origin is plain HTTP on loopback either way.
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ignoreHTTPSErrors: true });
+const page = await context.newPage();
+// Offline: serve the CDN's xterm files from a local copy (same versions).
+if (process.env.XTERM_VENDOR) {
+  const fs = await import('node:fs');
+  await page.route('https://cdn.jsdelivr.net/**', (route) => {
+    const file = route.request().url().split('/').pop();
+    const body = fs.readFileSync(`${process.env.XTERM_VENDOR}/${file}`);
+    route.fulfill({ body, contentType: file.endsWith('.css') ? 'text/css' : 'application/javascript' });
+  });
+}
+const problems = [];
+page.on('pageerror', (e) => problems.push('pageerror: ' + e.message));
+page.on('console', (m) => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
+page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) problems.push(`HTTP ${r.status()} ${r.url()}`); });
+await page.goto(`http://127.0.0.1:${port}/#sandbox=${sandbox}`, { waitUntil: 'domcontentloaded' });
+let listed = false;
+for (let i = 0; i < 60 && !listed; i++) {
+  listed = await page.evaluate((n) => document.body.innerText.includes(n), sandbox);
+  if (!listed) await page.waitForTimeout(250);
+}
+await page.waitForTimeout(3000);
+// Open each panel the way a person would, and give it time to fetch.
+const tour = [];
+async function visit(label, open, after) {
+  const before = problems.length;
+  try {
+    await open();
+    await page.waitForTimeout(1200);
+    if (after) await after();
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    tour.push(`${label}: ${problems.length === before ? 'ok' : 'PROBLEM'}`);
+  } catch (e) {
+    tour.push(`${label}: could not open (${e.message.split('\n')[0]})`);
+  }
+}
+const button = (re) => page.getByRole('button', { name: re }).first();
+await visit('Project panel', () => button(/Project/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-project.png') }));
+await visit('Env card', () => button(/^Env$/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-env.png') }));
+await visit('Thread menu', () => button(/Thread/).click());
+await visit('Bash pane', () => button(/Bash/).click());
+await visit('Claude pane', () => button(/Claude/).click());
+await visit('Monitor', () => button(/Monitor Sandboxes/).click());
+await visit('Help', () => button(/^Help$/).click());
+const terminal = await page.evaluate(() => [...document.querySelectorAll('.xterm-rows')].map((e) => e.innerText).join('\n'));
+await page.screenshot({ path: png });
+await browser.close();
+console.log(JSON.stringify({ listed, terminal: terminal.slice(0, 300), tour, problems }, null, 2));
+process.exit(listed && problems.length === 0 ? 0 : 1);
