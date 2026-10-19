@@ -407,11 +407,18 @@ impl App {
     async fn revoke_ui_port(&self, name: &SandboxName, run: &mut Run<'_>) {
         let ui = format!("localhost:{}", self.cfg.web_port());
         let view = self.sbx.policy_ls(name, true).await;
-        for id in sbxw_core::policy::rule_ids_for(&view, &ui) {
+        let found = sbxw_core::policy::rule_ids_for(&view, &ui, name);
+        for id in found.mine {
             match self.sbx.policy_rm(&id, Some(name)).await {
                 Ok(()) => run.info(format!("revoked {ui} (the UI port) from '{name}' — sandboxes reach the agent port only")),
                 Err(e) => run.warn(format!("could not revoke the stale {ui} rule {id}: {e:#}")),
             }
+        }
+        for id in found.unsure {
+            run.warn(format!(
+                "a rule allows {ui} (the UI port) and the listing does not say whose it is; if it is \
+                 '{name}'s, remove it: `sbx policy rm network --id {id} --sandbox {name} --force`"
+            ));
         }
     }
 

@@ -122,20 +122,42 @@ fn scope_rows(rows: Vec<Vec<String>>, roles: &[&str], sandbox: &str) -> (Vec<Vec
     (kept, dropped)
 }
 
-/// The rule ids of `--wide` rows that allow exactly `resource` for `sandbox` —
-/// how a stale rule from an older sbxw is found to be revoked.
-pub fn rule_ids_for(view: &PolicyView, resource: &str) -> Vec<String> {
+/// Rule ids of `--wide` rows allowing exactly `resource`, split by what the
+/// listing proves about their scope: `mine` are scoped to `sandbox` by name
+/// (safe to remove), `unsure` carry no scope column (a host-wide rule would
+/// look the same, so they are reported, never removed).
+pub struct Found {
+    pub mine: Vec<String>,
+    pub unsure: Vec<String>,
+}
+
+pub fn rule_ids_for(view: &PolicyView, resource: &str, sandbox: &str) -> Found {
     let col = |role: &str| view.roles.iter().position(|r| *r == role);
+    let mut found = Found { mine: vec![], unsure: vec![] };
     let (Some(id), Some(host)) = (col("rule_id"), col("host")) else {
-        return Vec::new();
+        return found;
     };
     let action = col("action");
-    view.rows
-        .iter()
-        .filter(|r| r.get(host).is_some_and(|h| h.split(',').any(|h| h.trim() == resource)))
-        .filter(|r| action.is_none_or(|a| r.get(a).is_some_and(|v| v.eq_ignore_ascii_case("allow"))))
-        .filter_map(|r| r.get(id).cloned().filter(|v| !v.is_empty()))
-        .collect()
+    let scope = col("applies").map(|i| (i, false)).or_else(|| col("sandbox").map(|i| (i, true)));
+    for r in &view.rows {
+        let hit = r.get(host).is_some_and(|h| h.split(',').any(|h| h.trim() == resource))
+            && action.is_none_or(|a| r.get(a).is_some_and(|v| v.eq_ignore_ascii_case("allow")));
+        let Some(rule) = r.get(id).filter(|v| !v.is_empty()).cloned() else { continue };
+        if !hit {
+            continue;
+        }
+        match scope {
+            Some((i, bare)) => {
+                let cell = r.get(i).map(|c| c.trim()).unwrap_or("");
+                let named = if bare { cell == sandbox } else { cell == format!("sandbox:{sandbox}") };
+                if named {
+                    found.mine.push(rule);
+                }
+            }
+            None => found.unsure.push(rule),
+        }
+    }
+    found
 }
 
 pub const ARG_LIMIT: usize = 512;
@@ -201,7 +223,17 @@ mod tests {
                     r-2       neos      localhost:7682    allow\n\
                     r-3       other     localhost:7681    allow\n";
         let v = PolicyView::build(wide, true, "neos");
-        assert_eq!(rule_ids_for(&v, "localhost:7681"), ["r-1"]);
+        let f = rule_ids_for(&v, "localhost:7681", "neos");
+        assert_eq!(f.mine, ["r-1"]);
+        assert!(f.unsure.is_empty());
+        let global = "RULE ID   APPLIES TO     RESOURCE          ACTION\n\
+                      r-9       all            localhost:7681    allow\n";
+        let v = PolicyView::build(global, true, "neos");
+        assert!(rule_ids_for(&v, "localhost:7681", "neos").mine.is_empty(), "a host-wide rule is never revoked");
+        let bare = "RULE ID   RESOURCE          ACTION\n\
+                    r-5       localhost:7681    allow\n";
+        let v = PolicyView::build(bare, true, "neos");
+        assert_eq!(rule_ids_for(&v, "localhost:7681", "neos").unsure, ["r-5"]);
     }
 
     #[test]

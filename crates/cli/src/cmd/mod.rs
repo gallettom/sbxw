@@ -36,6 +36,38 @@ fn abs(p: &Path) -> Result<PathBuf> {
     Ok(if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir()?.join(p) })
 }
 
+/// Log lines held while the agent owns the terminal (`--no-web`): in raw mode
+/// a bare `\n` steps each line diagonally across a full-screen TUI. They are
+/// printed once the agent exits.
+static PARKED: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+struct Terminal;
+
+impl std::io::Write for Terminal {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if let Some(buf) = PARKED.lock().unwrap().as_mut() {
+            buf.extend_from_slice(b);
+            return Ok(b.len());
+        }
+        std::io::stderr().write(b)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stderr().flush()
+    }
+}
+
+fn park_logs() {
+    *PARKED.lock().unwrap() = Some(Vec::new());
+}
+
+fn flush_parked_logs() {
+    let parked = PARKED.lock().unwrap().take().unwrap_or_default();
+    if !parked.is_empty() {
+        eprintln!("\n─ notes from the bring-up (while the agent held the terminal) ─");
+        eprint!("{}", String::from_utf8_lossy(&parked));
+    }
+}
+
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -43,6 +75,7 @@ fn init_tracing() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("sbxw=info,sbxw_daemon=info,sbx=info")),
         )
         .with_target(false)
+        .with_writer(|| Terminal)
         .try_init();
 }
 
@@ -215,7 +248,9 @@ fn up_here(rt: tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: 
     rt.block_on(app.provision(req, Some(sink)))?;
     eprintln!("sbxw  attaching the agent in this terminal (Ctrl-C to detach)");
     let args = sbxw_sbx::attach_args(&name, &cfg.env_pairs(), &cfg.env_files);
+    park_logs();
     let out = rt.block_on(async move { tokio::task::spawn_blocking(move || sbxw_sbx::interactive(&args)).await });
+    flush_parked_logs();
     out?
 }
 
