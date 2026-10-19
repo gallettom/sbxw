@@ -462,36 +462,29 @@ pub fn cache(action: crate::CacheAction, config: &Path) -> Result<()> {
     match action {
         crate::CacheAction::Show => {
             let cfg = load_config(config)?;
+            let ttl = cfg.cache_ttl();
             println!("{}{}", paths.cache().display(), if cfg.cache { "" } else { "  (off: cache = false)" });
             let flavours = cache::flavours(&paths);
             if flavours.is_empty() {
-                println!("  empty — filled by the first `sbxw up` with a bundled kit, or `sbxw cache warm`");
+                println!("  empty — the next sandbox created with a bundled kit fills it");
             }
             for f in flavours {
-                let state = if f.filled.len() == sbxw_daemon::bundled::CACHING.len() {
-                    "filled".to_string()
-                } else if f.filled.is_empty() {
-                    "incomplete".to_string()
-                } else {
-                    format!("partial ({})", f.filled.join(", "))
+                let state = match f.age {
+                    Some(a) if a < ttl => format!("filled, expires in {}h", (ttl - a).as_secs() / 3600),
+                    Some(_) => "expired — the next sandbox refills it".to_string(),
+                    None if f.filled.is_empty() => "incomplete".to_string(),
+                    None => format!("partial ({})", f.filled.join(", ")),
                 };
                 println!("  {:<20} {:>8.1} MB  {state}", f.name, f.bytes as f64 / 1e6);
             }
-            if cache::is_warming(&paths) {
-                println!("  a warm is running");
+            if cache::is_filling(&paths) {
+                println!("  a sandbox is filling it");
             }
             Ok(())
         }
-        crate::CacheAction::Warm { force } => {
-            let cfg = load_config(config)?;
-            let rt = runtime();
-            check_sbx(&rt)?;
-            let say = |l: &str| println!("{l}");
-            rt.block_on(cache::warm(&Sbx::process(), &paths, cfg.pull_policy().map(String::from), force, &say))
-        }
         crate::CacheAction::Clear => {
             cache::clear(&paths)?;
-            println!("removed {}", paths.cache().display());
+            println!("removed {} — the next sandbox refills it", paths.cache().display());
             Ok(())
         }
     }

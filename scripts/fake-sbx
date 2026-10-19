@@ -43,7 +43,7 @@ case "${1:-}" in
       case "$prev=$a" in -e=SBXW_CACHE=*) cache="${a#SBXW_CACHE=}" ;; -e=SBXW_CACHE_FILL=1) fill=1 ;; esac
       prev="$a"
     done
-    # The caching kits of a warming sandbox: fill, then mark.
+    # The caching kits of the filling sandbox: fill, then mark.
     if [ -n "$fill" ] && [ -n "$cache" ]; then
       mkdir -p "$cache/amd64-bookworm" && echo deb > "$cache/amd64-bookworm/ffmpeg.deb"
       touch "$cache/amd64-bookworm/.filled-agent-skills" "$cache/amd64-bookworm/.filled-md-to-pdf-tools"

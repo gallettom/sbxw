@@ -148,7 +148,7 @@ enum Cmd {
         #[arg(long, short = 'y')]
         yes: bool,
     },
-    /// The shared download cache of the bundled kits: show, warm or clear it.
+    /// The shared download cache of the bundled kits: show or clear it.
     Cache {
         #[command(subcommand)]
         action: Option<CacheAction>,
@@ -252,12 +252,7 @@ pub enum HostsAction {
 pub enum CacheAction {
     #[default]
     Show,
-    /// Fill it now, in a throwaway sandbox (several minutes, in the foreground).
-    Warm {
-        /// Download everything again, even if it is filled.
-        #[arg(long)]
-        force: bool,
-    },
+    /// Empty it; the next sandbox created refills it.
     Clear,
 }
 

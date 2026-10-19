@@ -182,7 +182,7 @@ pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
 pub struct CreateOpts {
     pub workspace: String,
     pub ro_mounts: Vec<String>,
-    /// Extra directories mounted writable (only sbxw's cache-warming sandbox).
+    /// Extra directories mounted writable (the sandbox that fills the kit cache).
     pub rw_mounts: Vec<String>,
     /// Every kit, credentials kit first: creation applies them whole.
     pub kits: Vec<String>,

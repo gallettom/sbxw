@@ -281,11 +281,11 @@ setup:
         mkdir -p "$BASE" "$BIN"
 
         # ── The sbxw host cache ──────────────────────────────────────────────
-        # sbxw mounts ~/.sbxw/cache READ-ONLY into the sandboxes it creates and
+        # sbxw mounts ~/.sbxw/cache into the sandboxes it creates and
         # names it in SBXW_CACHE: what was downloaded once (apt packages and
         # lists, Chromium, the skill tarballs) is copied from there instead of fetched again.
-        # Only sbxw's cache-warming sandbox, which runs no agent, sees it
-        # writable (SBXW_CACHE_FILL=1) and fills it. printenv, not the
+        # Only the sandbox that fills it (the first, or the first after it
+        # expires) sees it writable, with SBXW_CACHE_FILL=1. printenv, not the
         # variable: set -u, and no dollar-brace defaults in kit content.
         CACHE=""; FILL=""
         SBXW_CACHE="$(printenv SBXW_CACHE)"
@@ -377,7 +377,7 @@ setup:
             touch "$CACHE/apt-lists/.stamp"
           fi
         }
-        # Packages: the warming sandbox downloads into the cache; the others
+        # Packages: the filling sandbox downloads into the cache; the others
         # seed apt's own archive dir from it (apt checks each file's hash
         # against the lists, and downloads whatever does not match).
         apt_cache_opt() {
@@ -404,7 +404,7 @@ setup:
           mkdir -p "$PW_BROWSERS" && cp -a "$CACHE/ms-playwright/." "$PW_BROWSERS/" && info "chromium copied from the sbxw cache"
           CHROME="$(find_chrome)"
         fi
-        # The warming sandbox installs into the cache, then copies like the others.
+        # The filling sandbox installs into the cache, then copies like the others.
         PW_INSTALL="$PW_BROWSERS"; [ -n "$FILL" ] && PW_INSTALL="$CACHE/ms-playwright"
         CHROME_PID=""
         if [ -n "$CHROME" ]; then

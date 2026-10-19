@@ -206,7 +206,7 @@ diagonally across the screen.
 | `sbxw env run [paths…] [--env-arg K=V]` | Bring a sandbox up from an `sbxenv.yaml` (over `~/.sbxenv.yaml`): `sbx env create` creates it, sbxw adds the policy, credentials, hooks, aliases and browser terminal. Busy host ports are renegotiated **before** anything is created. |
 | `sbxw env export [path]` | Write an `sbxenv.yaml` beside the workspace, with every path relative to the file so it is portable. Also available per pane from the web UI's **Env** button. See [Environment files](#environment-files-sbxenvyaml). |
 | `sbxw logs [name] [-n N]` | Tail the daemon's log; with a name, only the lines about that sandbox. |
-| `sbxw cache [show\|warm [--force]\|clear]` | The bundled kits' shared download cache — see [The kit cache](#the-kit-cache). |
+| `sbxw cache [show\|clear]` | The bundled kits' shared download cache — see [The kit cache](#the-kit-cache). |
 | `sbxw hosts [show\|sync\|clear]` | Show the `/etc/hosts` block (plus anything a daemon parked), re-apply it — the one place `sudo` can ask for a password — or remove it. |
 | `sbxw down [name]` | Stop the daemon (closing every terminal it holds) **and** remove the `/etc/hosts` block; with a name, close that sandbox's terminals only. |
 | `sbxw update [--check] [--no-island]` | Install the latest release in place of this binary (or just check with `--check`). On macOS it also refreshes an already-installed `SbxwIsland.app` when the release ships a newer build of it — quitting and relaunching it if it was running; `--no-island` leaves the app alone. |
@@ -1435,28 +1435,26 @@ knows no `sbxw:` kit.
 agent-skills and md-to-pdf-tools spend their startup downloading: ffmpeg and
 Chromium's libraries from apt, a Playwright Chromium, six skill tarballs,
 WeasyPrint's wheels. With `cache = true` (the default) sbxw mounts
-`~/.sbxw/cache` **read-only** into every new sandbox and sets `SBXW_CACHE`; the
-kits copy from it and fall back to the network for anything missing. What stays
-is the `dpkg` install itself — copying beats downloading, but the packages still
+`~/.sbxw/cache` into every new sandbox and sets `SBXW_CACHE`; the kits copy
+from it and fall back to the network for anything missing. What stays is the
+`dpkg` install itself — copying beats downloading, but the packages still
 unpack.
 
-- **Filling it.** After the first bring-up that uses those kits, the daemon
-  creates a throwaway sandbox, `sbxw-cache-warm`, with the cache mounted
-  *writable* and `SBXW_CACHE_FILL=1`, holding only the two caching kits. Each
-  kit writes what it downloaded, then a `.filled-<kit>` marker; once both are
-  there the sandbox is removed. One warmer at a time, across processes (a lock
-  file, given up after 25 minutes). That first sandbox installs from the
-  network meanwhile; the ones after copy.
+- **The first sandbox fills it.** When the cache is empty or expired, the
+  sandbox being created gets it *writable* with `SBXW_CACHE_FILL=1`: its kits
+  download into it, then write a `.filled-<kit>` marker. Every other sandbox
+  gets it **read-only**. One filler at a time (a lock file; a fill not done
+  within 30 minutes counts as failed and the next sandbox takes over).
+- **It expires.** After `cache_ttl_days` (default 7) the next sandbox empties
+  it and fills it again: fresh packages, and a bound on how long anything
+  survives in it. That matters because the filler can write the cache for its
+  whole life — an agent in it could leave something there for the next
+  sandboxes to install. A separate warming sandbox would close that gap; for a
+  dev tool, a week's TTL and `sbxw cache clear` are the trade.
 - **Per image flavour.** Files land under `<arch>-<codename>/` (e.g.
   `arm64-bookworm`), so a `.deb` is never offered to the wrong distribution.
-  apt lists are reused for a week, then refreshed.
-- **Why read-only.** An agent that could write the cache would decide what the
-  next sandbox installs. Only the warmer writes it, and the warmer runs nothing
-  but the kits' own scripts — nobody attaches to it.
-- **Commands.** `sbxw cache` shows each flavour, its size and whether it is
-  filled; `sbxw cache warm [--force]` fills it now, in the foreground
-  (`--force` downloads everything again — after a kit's pinned versions
-  change); `sbxw cache clear` removes it. `cache = false` turns the mount off.
+- **Commands.** `sbxw cache` shows each flavour, its size and when it expires;
+  `sbxw cache clear` empties it now. `cache = false` turns the mount off.
 
 Existing sandboxes keep what they were created with: the defaults and the cache
 mount reach a sandbox when it is (re)created.

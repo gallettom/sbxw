@@ -143,11 +143,13 @@ env_files = []
 # ]
 # kits = []            # none at all
 
-# Mount ~/.sbxw/cache read-only into new sandboxes: the bundled kits copy the
-# apt packages, Chromium, skill tarballs and wheels from it instead of
-# downloading them again. Filled once, in the background, by a throwaway
-# sandbox (`sbxw cache` shows it, `sbxw cache warm --force` refreshes it).
+# Mount ~/.sbxw/cache into new sandboxes: the bundled kits copy the apt
+# packages, Chromium, skill tarballs and wheels from it instead of downloading
+# them again. The first sandbox fills it (writable for that one only, read-only
+# for the rest); after cache_ttl_days the next one empties and refills it.
+# `sbxw cache` shows it, `sbxw cache clear` empties it.
 # cache = true
+# cache_ttl_days = 7
 
 # ── Environment variables ────────────────────────────────────────────────────
 # Put variables in the sandbox: `sbx create -e KEY=VALUE` at creation (baked in,

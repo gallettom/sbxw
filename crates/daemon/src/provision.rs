@@ -205,11 +205,19 @@ impl App {
             kit_refs.extend(cfg.kits.iter().cloned());
             let mut ro_mounts = req.ro.clone();
             let mut env = cfg.env_pairs();
+            let mut rw_mounts = vec![];
             if wants_cache {
-                // Read-only: see `cache` — no sandbox decides what the next installs.
-                let dir = cache::ensure_dir(&self.store.paths)?.to_string_lossy().into_owned();
+                // Writable only for the sandbox that fills it: see `cache`.
+                let (dir, mount) = cache::claim(&self.store.paths, cfg.cache_ttl())?;
+                let dir = dir.to_string_lossy().into_owned();
                 env.push(format!("SBXW_CACHE={dir}"));
-                ro_mounts.push(dir);
+                if mount == cache::Mount::Fill {
+                    run.info("this sandbox fills the shared kit cache — the next ones install from it");
+                    env.push("SBXW_CACHE_FILL=1".into());
+                    rw_mounts.push(dir);
+                } else {
+                    ro_mounts.push(dir);
+                }
             }
             let opts = CreateOpts {
                 workspace: workspace.clone(),
@@ -220,13 +228,10 @@ impl App {
                 pull: cfg.pull_policy().map(String::from),
                 env,
                 env_files: cfg.env_files.clone(),
-                ..Default::default()
+                rw_mounts,
             };
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
             created_with_kits = true;
-            if wants_cache {
-                self.warm_cache_in_background(cfg.pull_policy().map(String::from), &mut run);
-            }
         }
 
         if cfg.keep_running {
@@ -371,24 +376,6 @@ impl App {
         Ok(run.warnings)
     }
 
-    /// Fill the kit cache behind this bring-up, unless it is filled or being
-    /// filled. This sandbox installs from the network meanwhile; the next ones
-    /// copy.
-    fn warm_cache_in_background(self: &Arc<Self>, pull: Option<String>, run: &mut Run) {
-        let paths = &self.store.paths;
-        if cache::is_filled(paths) || cache::is_warming(paths) {
-            return;
-        }
-        run.info("filling the shared kit cache in the background — later sandboxes start faster (`sbxw cache`)");
-        let app = self.clone();
-        tokio::spawn(async move {
-            let say = |l: &str| tracing::info!("cache: {l}");
-            if let Err(e) = cache::warm(&app.sbx, &app.store.paths, pull, false, &say).await {
-                tracing::warn!("cache warm failed: {e:#}");
-            }
-        });
-    }
-
     /// `sbx create` with the port mappings, retried without them when the
     /// all-or-nothing `-p` loses the sandbox over one busy host port.
     async fn create_with_port_fallback(&self, name: &SandboxName, opts: &CreateOpts, sink: &Sink, run: &mut Run<'_>) -> Result<()> {
@@ -494,7 +481,6 @@ fn cfg_port(app: &App, _project: &Config) -> String {
 mod tests {
     use super::*;
     use crate::testing::{app_with, sbx_answer};
-    use crate::cache::WARM_SANDBOX as WARM;
     use sbxw_sbx::runner::Output;
 
     fn with_port() -> Config {
@@ -614,66 +600,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bundled_kits_install_from_a_read_only_cache_a_warmer_fills() {
-        let made = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    async fn the_first_sandbox_fills_the_cache_the_next_read_it() {
+        let made = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let m = made.clone();
         let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
-            Some("create") if a.contains(&WARM.to_string()) => {
-                // What the warming sandbox's kits do: fill, then mark.
-                let cache = a.iter().find_map(|x| x.strip_prefix("SBXW_CACHE=")).unwrap();
-                let flavour = std::path::Path::new(cache).join("amd64-bookworm");
-                std::fs::create_dir_all(&flavour).unwrap();
-                for k in bundled::CACHING {
-                    std::fs::write(flavour.join(format!(".filled-{k}")), "").unwrap();
-                }
-                Output::ok("")
-            }
             Some("create") => {
-                m.store(true, std::sync::atomic::Ordering::SeqCst);
+                let i = a.iter().position(|x| x == "--name").unwrap();
+                m.lock().unwrap().push(a[i + 1].clone());
                 Output::ok("")
             }
-            Some("ls") if m.load(std::sync::atomic::Ordering::SeqCst) => {
-                Output::ok(&format!("SANDBOX          AGENT    STATUS\nw                claude   running\n{WARM}  claude   running\n"))
+            Some("ls") => {
+                let rows: String = m.lock().unwrap().iter().map(|n| format!("{n:<10}claude   running\n")).collect();
+                Output::ok(&format!("SANDBOX   AGENT    STATUS\n{rows}"))
             }
-            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
             _ => sbx_answer(a),
         });
-        let ws = dir.path().join("w");
-        std::fs::create_dir_all(&ws).unwrap();
-        let req = BringUp {
-            name: SandboxName::parse("w").unwrap(),
-            workspace: ws,
-            ro: vec![],
-            config: Config::default(),
-            extra_ports: vec![],
-            chat: false,
-            api_key: None,
-            oauth_token: None,
+        let up = |name: &str| {
+            let ws = dir.path().join(name);
+            std::fs::create_dir_all(&ws).unwrap();
+            BringUp {
+                name: SandboxName::parse(name).unwrap(),
+                workspace: ws,
+                ro: vec![],
+                config: Config::default(),
+                extra_ports: vec![],
+                chat: false,
+                api_key: None,
+                oauth_token: None,
+            }
         };
-        app.provision(req, None).await.unwrap();
+        app.provision(up("a"), None).await.unwrap();
+        app.provision(up("b"), None).await.unwrap();
         let paths = &app.store.paths;
         let cache = paths.cache().to_string_lossy().into_owned();
         let log = fake.log();
-        let create = log.iter().find(|c| c.contains("--name w ")).unwrap();
-        assert!(create.contains(&format!("{cache}:ro")), "{create}");
-        assert!(create.contains(&format!("-e SBXW_CACHE={cache}")) && !create.contains("FILL"));
+        let create = |n: &str| log.iter().find(|c| c.starts_with("create") && c.contains(&format!("--name {n} "))).unwrap().clone();
+        let (a, b) = (create("a"), create("b"));
+        assert!(a.contains(&format!(" {cache} ")) && a.contains("SBXW_CACHE_FILL=1"), "the filler writes: {a}");
+        assert!(b.contains(&format!("{cache}:ro")) && b.contains(&format!("-e SBXW_CACHE={cache}")) && !b.contains("FILL"), "{b}");
         for k in ["codemap", "agent-skills", "md-to-pdf-tools"] {
-            assert!(create.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}");
+            assert!(b.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}");
         }
-        assert!(!create.contains("sbxw:"));
-
-        // The warmer runs behind the bring-up and cleans up after itself.
-        for _ in 0..100 {
-            if cache::is_filled(&app.store.paths) && !cache::is_warming(&app.store.paths) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        let log = fake.log();
-        let warm = log.iter().find(|c| c.starts_with("create") && c.contains(WARM)).unwrap();
-        assert!(warm.contains(&format!(" {cache} ")) && !warm.contains(&format!("{cache}:ro")), "writable: {warm}");
-        assert!(warm.contains("SBXW_CACHE_FILL=1") && !warm.contains("codemap"));
-        assert!(log.iter().any(|c| c.starts_with("rm") && c.contains(WARM)));
-        assert!(cache::is_filled(paths) && !cache::is_warming(paths));
+        assert!(!b.contains("sbxw:"));
     }
 }

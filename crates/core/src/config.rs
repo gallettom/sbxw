@@ -39,9 +39,12 @@ pub struct Config {
     pub ports: Vec<PortMap>,
     /// Kit references, applied at creation (`sbx create --kit`).
     pub kits: Vec<String>,
-    /// Mount `~/.sbxw/cache` read-only into new sandboxes, so the bundled kits
-    /// copy what was downloaded once instead of fetching it again.
+    /// Mount `~/.sbxw/cache` into new sandboxes, so the bundled kits copy what
+    /// was downloaded once instead of fetching it again.
     pub cache: bool,
+    /// After this many days the cache is emptied and the next sandbox refills
+    /// it — fresh packages, and a bound on what its filler could have left.
+    pub cache_ttl_days: u32,
     /// `subscriptionType` of injected OAuth credentials.
     pub claude_subscription: String,
     /// Passed as `ANTHROPIC_DEFAULT_MODEL`: a default, below a saved `/model`.
@@ -132,6 +135,7 @@ impl Default for Config {
             ports: vec![],
             kits: crate::kits::DEFAULT_KITS.map(String::from).to_vec(),
             cache: true,
+            cache_ttl_days: 7,
             claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5-5".into(),
             models: default_models(),
@@ -234,6 +238,10 @@ impl Config {
             "" => (!self.share_skills).then_some("off"),
             mode => Some(mode),
         }
+    }
+
+    pub fn cache_ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.cache_ttl_days) * 86_400)
     }
 
     pub fn pull_policy(&self) -> Option<&str> {

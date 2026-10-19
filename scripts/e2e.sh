@@ -49,11 +49,9 @@ grep -q "policy allow network --sandbox neos localhost:$AGENT,registry.npmjs.org
 ok "created with ports; egress allows the agent port, never the UI port"
 
 c="$HOME/.sbxw/cache"
-grep "create claude $t/ws/neos" "$t/state/calls.log" | grep -q -- "$c:ro .*--kit $HOME/.sbxw/kits/codemap .*-e SBXW_CACHE=$c" || die "bundled kits + read-only cache at creation"
-for _ in $(seq 50); do grep -q "rm --force sbxw-cache-warm" "$t/state/calls.log" && break; sleep 0.1; done
-grep "create claude .*--name sbxw-cache-warm" "$t/state/calls.log" | grep -q -- " $c --kit .*SBXW_CACHE_FILL=1" || die "the warmer mounts the cache writable"
-"$bin" cache | grep -q "amd64-bookworm .*filled" || die "sbxw cache shows the filled flavour"
-ok "bundled kits resolved; the cache is read-only in sandboxes, filled once by a warmer"
+grep "create claude $t/ws/neos" "$t/state/calls.log" | grep -q -- " $c --kit $HOME/.sbxw/kits/codemap .*-e SBXW_CACHE=$c -e SBXW_CACHE_FILL=1" || die "the first sandbox fills the cache"
+"$bin" cache | grep -q "amd64-bookworm .*filled, expires" || die "sbxw cache shows the filled flavour"
+ok "bundled kits resolved; the first sandbox fills the kit cache"
 
 grep -q "neos.local" "$t/hosts" && grep -q "sbxw.localhost" "$t/hosts" || die "hosts block"
 ok "hosts aliases written (redirected file)"
@@ -128,6 +126,7 @@ token2=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "authorization: Bearer $token2" -H 'content-type: application/json' \
   -d '{"hook_event_name":"SessionStart","session_id":"s2"}' "http://127.0.0.1:$AGENT/api/hook")
 [ "$code" = 200 ] || die "a token the CLI minted should be accepted by the running daemon, got $code"
+grep "create claude $t/ws/neos --name solo" "$t/state/calls.log" | grep -q -- "$HOME/.sbxw/cache:ro" || die "a later sandbox reads the cache"
 ok "--no-web runs the pipeline here and attaches; the daemon accepts its token"
 
 "$bin" rm neos >/dev/null || die "rm"
