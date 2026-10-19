@@ -96,28 +96,20 @@ jobs:
     needs: [build, island]
     runs-on: ubuntu-latest
     steps:
-      # Checkout first so the bundled kits under assets/ are available to package.
-      - uses: actions/checkout@v4
-
+      # The web UI and the bundled kits are embedded in the binary: only the
+      # binaries and the island ship.
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
 
-      # Package bundled kit directories so install.sh can fetch them.
-      # The web UI (assets/index.html) is embedded in the binary at build time,
-      # so only the kit directories need shipping.
-      - name: Package kits
-        run: tar -czf sbxw-kits.tar.gz -C assets k8s-tools md-to-pdf-tools codemap agent-skills
-
       - name: Generate checksums
-        run: sha256sum sbxw-macos-* sbxw-linux-* sbxw-kits.tar.gz SbxwIsland-macos.zip > sha256sums.txt
+        run: sha256sum sbxw-macos-* sbxw-linux-* SbxwIsland-macos.zip > sha256sums.txt
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             sbxw-macos-*
             sbxw-linux-*
-            sbxw-kits.tar.gz
             SbxwIsland-macos.zip
             island-version.txt
             sha256sums.txt

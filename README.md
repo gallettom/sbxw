@@ -1278,9 +1278,9 @@ Building from source also needs a Rust toolchain.
 
 ### Option A — install script (release binary)
 
-Downloads the prebuilt binary for your OS/arch into `/usr/local/bin` and the
-bundled kits into `~/.local/share/sbxw/kits`. The web UI is embedded in the
-binary, so that's all you need.
+Downloads the prebuilt binary for your OS/arch into `/usr/local/bin`. The web
+UI and the [bundled kits](#kits) are embedded in the binary, so that's all you
+need.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gallettom/sbxw/main/install.sh | sh

@@ -8,7 +8,6 @@ set -eu
 REPO="gallettom/sbxw"
 BINARY="sbxw"
 INSTALL_DIR="${SBXW_INSTALL_DIR:-/usr/local/bin}"
-KITS_DIR="${SBXW_KITS_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/sbxw/kits}"
 
 # ── Colours (disabled when not a tty) ────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -261,19 +260,6 @@ if ! "${INSTALL_DIR}/${BINARY}" extension --refresh 2>/dev/null; then
   printf "  Run 'sbxw extension' any time to install it.\n"
 fi
 
-# ── Bundled kits (optional) ───────────────────────────────────────────────────
-step "Fetching bundled kits…"
-KITS_URL="https://github.com/${REPO}/releases/download/${VERSION}/sbxw-kits.tar.gz"
-KITS_TMP="$(mktemp)"
-if curl -fsSL "$KITS_URL" -o "$KITS_TMP" 2>/dev/null; then
-  mkdir -p "$KITS_DIR"
-  tar -xzf "$KITS_TMP" -C "$KITS_DIR"
-  info "kits installed → ${KITS_DIR}"
-else
-  warn "No kits tarball in this release (skipping)."
-fi
-rm -f "$KITS_TMP"
-
 # ── macOS menu-bar island (optional) ─────────────────────────────────────────
 if [ "$OS" = "macos" ]; then
   step "Menu-bar island (optional)…"
@@ -319,12 +305,8 @@ fi
 
 printf "\n${BOLD}2. Project config${RESET}\n"
 printf "   Copy the example config into your project root:\n"
-if [ -f "${KITS_DIR}/../sbxw.toml.example" ] 2>/dev/null; then
-  printf "     cp %s/sbxw.toml.example ./sbxw.toml\n" "$(dirname "$KITS_DIR")"
-else
-  printf "     curl -fsSL https://raw.githubusercontent.com/%s/main/sbxw.toml.example -o sbxw.toml\n" "$REPO"
-fi
-printf "   Edit the [[ports]] and aliases to match your project.\n"
+printf "     curl -fsSL https://raw.githubusercontent.com/%s/main/sbxw.toml.example -o sbxw.toml\n" "$REPO"
+printf "   Optional: no ports are published until you add [[ports]].\n"
 
 printf "\n${BOLD}3. Launch${RESET}\n"
 printf "   cd /path/to/your/project\n"
@@ -342,9 +324,7 @@ printf "   sbxw hosts sync               # (re)apply the /etc/hosts aliases (ask
 printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n"
 printf "   sbxw update                   # update sbxw, its extension (and the island, if installed)\n"
 printf "   sbxw completion --help       # TAB-complete commands (bash/zsh/fish/…)\n"
-if [ -d "$KITS_DIR" ]; then
-  printf "   kits: %s/\n" "$KITS_DIR"
-  printf "         reference one in sbxw.toml, e.g.:\n"
-  printf "         kits = [\"%s/k8s-tools\"]\n" "$KITS_DIR"
-fi
+printf "   sbxw cache                    # the bundled kits' shared download cache\n"
+printf "   kits: codemap, agent-skills and md-to-pdf-tools are on by default;\n"
+printf "         add k8s-tools with kits = [..., \"sbxw:k8s-tools\"] in sbxw.toml\n"
 printf "\n"
