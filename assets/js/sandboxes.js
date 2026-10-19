@@ -255,7 +255,7 @@ function workspaceGroupColor(key) {
 // never bring them together — they group on the API's `chat` flag instead,
 // under a sentinel key no real path can collide with, and keep a fixed accent
 // (they're one recognisable kind, not one folder among many).
-const CHAT_GROUP = ' chat';
+const CHAT_GROUP = '\u0000chat';
 const CHAT_GROUP_COLOR = 'hsl(265, 60%, 68%)';
 
 function groupKeyOf(s) {
