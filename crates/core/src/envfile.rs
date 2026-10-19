@@ -69,7 +69,7 @@ pub struct Port {
     pub protocol: Option<String>,
 }
 
-impl From<&crate::sbx::PortMapping> for Port {
+impl From<&crate::ports::PortMapping> for Port {
     /// A published mapping, as an environment file would spell it.
     ///
     /// The two defaults are dropped rather than written out: sbx's own default
@@ -77,7 +77,7 @@ impl From<&crate::sbx::PortMapping> for Port {
     /// `protocol_is_default`), so naming either adds noise to a file a person
     /// reads. `sbxw env run` and the Env panel both go through here, so they
     /// describe a sandbox the same way.
-    fn from(m: &crate::sbx::PortMapping) -> Self {
+    fn from(m: &crate::ports::PortMapping) -> Self {
         Port {
             sandbox: m.sandbox_port,
             host: Some(m.host_port),
@@ -531,7 +531,7 @@ fn anchor(doc: &mut Value, dir: &Path) {
     if let Some(Value::Sequence(items)) = map.get_mut("kits") {
         for it in items {
             if let Value::String(s) = it {
-                *s = crate::resolve_kit_ref(dir, std::mem::take(s));
+                *s = crate::kits::resolve_kit_ref(dir, std::mem::take(s));
             }
         }
     }

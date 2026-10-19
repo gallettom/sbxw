@@ -1,0 +1,17 @@
+[package]
+name = "sbxw-core"
+description = "sbxw's domain rules: names, config, state machines, messages, parsers. No processes, no sockets."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+toml.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

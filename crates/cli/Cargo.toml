@@ -1,0 +1,24 @@
+[package]
+name = "sbxw"
+description = "Ultra-light wrapper around `sbx` (Docker Sandboxes) for local dev with Claude Code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sbxw"
+path = "src/main.rs"
+
+[dependencies]
+sbxw-core.workspace = true
+sbxw-sbx.workspace = true
+sbxw-daemon.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ureq.workspace = true

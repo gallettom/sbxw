@@ -6,7 +6,7 @@
 //!
 //!   * a **pairing** the developer chose by hand, keyed by the URL's `host`
 //!     (`app.test`, `localhost:4200`) and kept host-side under
-//!     `~/.sbxw/state/embed-pairings.json`. It wins because it is the one
+//!     `~/.sbxw/state/embed-pairings.json` (the daemon's store). It wins because it is the one
 //!     answer a person gave on purpose, and it is the only one for an app sbxw
 //!     did not route itself (company DNS, a hand-written `/etc/hosts` line, a
 //!     reverse proxy on the host);
@@ -23,10 +23,8 @@
 //! tested without a daemon or a sandbox.
 
 use crate::hosts::HostAlias;
-use crate::sbx::PortMapping;
-use anyhow::{bail, Context, Result};
+use crate::ports::PortMapping;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 /// The parts of a tab's URL that say where the page came from.
 #[derive(Debug, PartialEq)]
@@ -206,31 +204,21 @@ fn same_ip(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
-/// The pairings in `file`. Unreadable or corrupt reads as none: the panel
-/// still works, it just asks again.
-pub fn load_pairings(file: &Path) -> BTreeMap<String, String> {
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
-/// Pair `host` with `sandbox`, or forget its pairing when `sandbox` is `None`,
-/// returning the pairings as they now stand.
+/// Pair `host` with `sandbox`, or forget it, in `pairings`. The caller loads
+/// and saves the file (the daemon's store).
 pub fn set_pairing(
-    file: &Path,
+    pairings: &mut BTreeMap<String, String>,
     host: &str,
     sandbox: Option<&str>,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<(), String> {
     let host = host.trim().to_ascii_lowercase();
     if !valid_host(&host) {
-        bail!("'{host}' is not a host a browser tab could be on");
+        return Err(format!("'{host}' is not a host a browser tab could be on"));
     }
-    let mut pairings = load_pairings(file);
     match sandbox {
         Some(name) => {
-            if !crate::is_valid_sandbox_name(name) {
-                bail!(crate::INVALID_NAME_MSG);
+            if !crate::names::is_valid_sandbox_name(name) {
+                return Err(crate::names::INVALID_SANDBOX_NAME.into());
             }
             pairings.insert(host, name.to_string());
         }
@@ -238,9 +226,7 @@ pub fn set_pairing(
             pairings.remove(&host);
         }
     }
-    let body = serde_json::to_string_pretty(&pairings)?;
-    std::fs::write(file, body).with_context(|| format!("could not write {}", file.display()))?;
-    Ok(pairings)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -352,21 +338,13 @@ mod tests {
     }
 
     #[test]
-    fn pairings_are_set_and_forgotten_in_their_file() {
-        let dir = std::env::temp_dir().join(format!("sbxw-embed-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("embed-pairings.json");
-        let _ = std::fs::remove_file(&file);
-
-        let p = set_pairing(&file, " App.Test ", Some("neos")).unwrap();
+    fn pairings_are_set_and_forgotten() {
+        let mut p = BTreeMap::new();
+        set_pairing(&mut p, " App.Test ", Some("neos")).unwrap();
         assert_eq!(p.get("app.test").map(String::as_str), Some("neos"));
-        assert_eq!(load_pairings(&file), p);
-
-        assert!(set_pairing(&file, "app.test", Some("Not A Name!")).is_err());
-        assert!(set_pairing(&file, "app test/../x", Some("neos")).is_err());
-
-        let p = set_pairing(&file, "app.test", None).unwrap();
+        assert!(set_pairing(&mut p, "app.test", Some("Not A Name!")).is_err());
+        assert!(set_pairing(&mut p, "app test/../x", Some("neos")).is_err());
+        set_pairing(&mut p, "app.test", None).unwrap();
         assert!(p.is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

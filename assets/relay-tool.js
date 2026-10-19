@@ -44,6 +44,18 @@ const path = require("path");
 const PORT = __PORT__;
 const HOST = "host.docker.internal";
 
+// The sandbox's agent token, installed by sbxw at ~/.sbxw/token. The daemon
+// derives which sandbox is calling from it — a call cannot speak for another
+// sandbox by naming it. Read per call, so a token refreshed by `sbxw up` is
+// picked up without restarting anything.
+function agentToken() {
+  try {
+    return require("fs").readFileSync(require("path").join(require("os").homedir(), ".sbxw", "token"), "utf8").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
 /// Default seconds a single `ask`/`wait` call blocks before reporting back that
 /// the request is still open. Short enough to sit inside an agent's tool
 /// timeout, long enough that a human who is already looking usually settles it
@@ -105,7 +117,7 @@ function request(path, body, timeoutMs) {
         port: PORT,
         path,
         method: "POST",
-        headers: { "content-type": "application/json", "content-length": payload.length },
+        headers: { "content-type": "application/json", "content-length": payload.length, authorization: "Bearer " + agentToken() },
         // The socket must outlive the *server's* long poll, which is bounded by
         // the `timeout` in the body. Anything tighter would abort a call that
         // was about to answer.

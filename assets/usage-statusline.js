@@ -11,6 +11,18 @@ const fs = require("fs");
 const os = require("os");
 
 const PORT = __PORT__;
+
+// The sandbox's agent token, installed by sbxw at ~/.sbxw/token. The daemon
+// derives which sandbox is calling from it — a call cannot speak for another
+// sandbox by naming it. Read per call, so a token refreshed by `sbxw up` is
+// picked up without restarting anything.
+function agentToken() {
+  try {
+    return require("fs").readFileSync(require("path").join(require("os").homedir(), ".sbxw", "token"), "utf8").trim();
+  } catch (_) {
+    return "";
+  }
+}
 // statusLine fires on every render; only forward to the daemon this often.
 const THROTTLE_MS = 10000;
 const STAMP = "/tmp/sbxw-usage-last";
@@ -75,7 +87,7 @@ process.stdin.on("end", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "content-length": payload.length,
+        "content-length": payload.length, authorization: "Bearer " + agentToken(),
       },
       timeout: 1500,
     },
