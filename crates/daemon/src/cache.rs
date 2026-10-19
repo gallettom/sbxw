@@ -14,8 +14,8 @@
 //! which bounds how long anything it wrote survives.
 //!
 //! One filler at a time: a lock file taken at creation. It is never released,
-//! only outlived — the fill is done when the markers appear, and a lock older
-//! than [`FILL_TIMEOUT`] is a fill that failed.
+//! only outlived — the fill is done once every marker is newer than the lock,
+//! and a lock older than [`FILL_TIMEOUT`] is a fill that failed.
 
 use crate::bundled;
 use crate::store::Paths;
@@ -74,9 +74,13 @@ pub fn is_fresh(paths: &Paths, ttl: Duration) -> bool {
     flavours(paths).iter().any(|f| f.age.is_some_and(|a| a < ttl))
 }
 
-/// Is a fill under way (a lock younger than the timeout)?
+/// Is a fill under way: a lock younger than the timeout, and no flavour
+/// completed since it was taken?
 pub fn is_filling(paths: &Paths) -> bool {
-    age(&paths.cache().join(LOCK)).is_some_and(|a| a < FILL_TIMEOUT)
+    let Some(lock) = age(&paths.cache().join(LOCK)).filter(|a| *a < FILL_TIMEOUT) else {
+        return false;
+    };
+    !flavours(paths).iter().any(|f| f.age.is_some_and(|a| a <= lock))
 }
 
 /// Does this kit list use the cache at all?
@@ -168,9 +172,10 @@ mod tests {
         assert!(clear(&p).is_err(), "not under a running fill");
         fill(&p);
         assert!(is_fresh(&p, DAY));
+        assert!(!is_filling(&p), "done once the markers follow the lock");
         assert_eq!(flavours(&p)[0].bytes, 5);
-        std::fs::remove_file(p.cache().join(LOCK)).unwrap();
-        assert_eq!(claim(&p, DAY).unwrap().1, Mount::ReadOnly, "filled and fresh");
+        clear(&p).unwrap();
+        assert_eq!(claim(&p, DAY).unwrap().1, Mount::Fill, "cleared, so refilled");
     }
 
     #[test]
