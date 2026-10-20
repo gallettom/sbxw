@@ -597,7 +597,7 @@ gives the chat sandbox a different one.
 Asking a question and reading the answer doesn't need a terminal. The button in
 the web UI's bottom-right corner — the header's `>_` drawn in the same
 dot-matrix as the background-job cards — opens a chat panel over the panes,
-talking to the island's `ephemeral-chat[-N]` sandboxes. **⌥C** toggles it from
+talking to the island's `ephemeral-chat[-N]` sandboxes. **⌃⌥M** (Alt+M off a Mac) toggles it from
 anywhere, terminals included (Ctrl/⌘+K would have been the obvious pick, but
 Ctrl+K is kill-line in every shell a pane runs).
 

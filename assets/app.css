@@ -404,6 +404,25 @@
   .sidebar-footer .monitor-btn, .sidebar-footer .help-btn {
     width: 100%; justify-content: center;
   }
+  /* Shortcuts: one row per action, its name left and its keys right, so the
+     keycaps line up in a column you can find without reading. Quieter than
+     the buttons above (muted, no box around the block) but the keycaps
+     themselves have a raised bottom edge: the one cue that says "press". */
+  .shortcuts {
+    margin: .15rem 0 0; padding: .35rem .15rem 0;
+    display: flex; flex-direction: column; gap: .3rem;
+    border-top: 1px solid var(--c-elevated);
+  }
+  .shortcut { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+  .shortcut dt { font-size: 11px; color: var(--c-text-muted); }
+  .shortcut dd { margin: 0; display: flex; gap: 3px; }
+  .shortcut kbd {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box;
+    font-family: var(--font-prose); font-size: 10.5px; line-height: 1; color: var(--c-text);
+    background: var(--c-elevated);
+    border: 1px solid var(--c-border); border-bottom-width: 2px; border-radius: 4px;
+  }
   /* The last line in the window, and the quietest thing in it: two numbers you
      look up once — when something has gone wrong, or a bug report asks — and
      never again. Centred under the buttons rather than aligned with the rows

@@ -116,7 +116,7 @@
             <polyline points="3.4,1 3.4,3.8 6.2,3.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <button class="btn-new" id="btn-new-sandbox" title="New sandbox (Alt+N / ⌥N)">＋</button>
+        <button class="btn-new" id="btn-new-sandbox" title="New sandbox (Alt+N / ⌃⌥N)">＋</button>
       </span>
     </div>
     <div id="sandbox-list"></div>
@@ -156,6 +156,14 @@
         Monitor Sandboxes
       </button>
       <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart">Help</button>
+
+      <!-- The two global shortcuts, written as keycaps so they read as keys to
+           press and not as text. Mac or not decides which keys: filled in by
+           /js/main.js from the same IS_MAC the listeners use. -->
+      <dl class="shortcuts" aria-label="Keyboard shortcuts">
+        <div class="shortcut"><dt>New sandbox</dt><dd data-key="N"></dd></div>
+        <div class="shortcut"><dt>Chat</dt><dd data-key="M"></dd></div>
+      </dl>
 
       <!-- What this is running on, at the very bottom of the window: two
            numbers you look up once, when something has gone wrong or a bug
@@ -1050,7 +1058,7 @@
       </div>
     </form>
   </div>
-  <button type="button" class="cd-launcher" id="cd-launcher" aria-expanded="false" aria-controls="cd-panel" title="Chat (⌥C)" aria-label="Chat">
+  <button type="button" class="cd-launcher" id="cd-launcher" aria-expanded="false" aria-controls="cd-panel" title="Chat (Alt+M / ⌃⌥M)" aria-label="Chat">
     <span class="cd-glyph" id="cd-glyph" aria-hidden="true"></span>
     <span class="cd-badge" id="cd-badge" hidden></span>
   </button>

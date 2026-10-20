@@ -393,13 +393,12 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !kindOverlay.classList.contains('hidden')) closeKindModal();
 });
 
-// Alt+N (⌥N) opens the chooser from anywhere — Ctrl/⌘+N belongs to the
-// browser and cannot be taken. Matched on `code`, not `key`: on a Mac ⌥N types
-// a dead-key tilde. Listened for on window in the capture phase because xterm
+// Alt+N (⌃⌥N on a Mac, see isAppShortcut) opens the chooser from anywhere —
+// Ctrl/⌘+N belongs to the browser and cannot be taken. Listened for on window in the capture phase because xterm
 // stops the keydowns it handles, and the point is to work from a terminal pane.
 // Not while another dialog is open: one modal stacked on another is the bug.
 window.addEventListener('keydown', e => {
-  if (e.code !== 'KeyN' || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (!isAppShortcut(e, 'KeyN')) return;
   if (document.querySelector('.modal-overlay:not(.hidden)')) return;
   e.preventDefault();
   e.stopPropagation();

@@ -7,6 +7,17 @@ function escHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// The app's global shortcuts (⌥N new sandbox, ⌥M chat). On a Mac, Option
+// alone is how characters are typed — ⌥N is the tilde dead key on French and
+// US layouts alike, ⌥M is "µ" — so taking it breaks typing `~` in a
+// terminal pane. There the shortcut is ⌃⌥ instead, which types nothing.
+// Elsewhere Alt alone stays: Ctrl+Alt is AltGr on many Windows layouts.
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+function isAppShortcut(e, code) {
+  if (e.code !== code || !e.altKey || e.metaKey || e.shiftKey) return false;
+  return IS_MAC ? e.ctrlKey : !e.ctrlKey;
+}
+
 // ── JSON over HTTP ────────────────────────────────────────────────────────
 // Every mutating endpoint takes a JSON body and answers `{ok, …}`. `postJson`
 // rejects the way `fetch` does, for callers with their own catch;

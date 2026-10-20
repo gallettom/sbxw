@@ -91,6 +91,20 @@ sbxwStream.addEventListener('clients', ev => {
   el.hidden = false;
 })();
 
+// The footer's shortcut keycaps: ⌃ ⌥ on a Mac, Alt elsewhere — whatever
+// isAppShortcut (util.js) actually listens for.
+(function showShortcuts() {
+  const mods = IS_MAC ? ['⌃', '⌥'] : ['Alt'];
+  for (const dd of document.querySelectorAll('.shortcut dd')) {
+    for (const k of [...mods, dd.dataset.key]) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = k;
+      kbd.title = { '⌃': 'Control', '⌥': 'Option' }[k] ?? '';
+      dd.append(kbd);
+    }
+  }
+})();
+
 // Usage does move. `/api/usage` holds the 5-hour and weekly percentages Claude
 // Code's `/usage` prints — account-wide, so this is one figure for the window
 // and not one per sandbox. The daemon keeps it current by asking Anthropic

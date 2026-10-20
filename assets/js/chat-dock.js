@@ -262,12 +262,13 @@ cdPeek.addEventListener('click', () => {
 cdPanel.addEventListener('keydown', e => {
   if (e.key === 'Escape') { e.stopPropagation(); cdToggle(false); }
 });
-// Alt+C (⌥C), on the same terms as create.js's ⌥N: matched on `code` (⌥C is
-// "ç" on a Mac), in the capture phase because xterm swallows what it handles,
+// Alt+M (⌃⌥M on a Mac), on the same terms as create.js's Alt+N. Not C: window
+// managers (Rectangle, Magnet) take ⌃⌥C for "center window" before the page
+// ever sees it. In the capture phase because xterm swallows what it handles,
 // and not over a modal. Ctrl/⌘+K would have been the obvious pick, but Ctrl+K
 // is kill-line in every shell a pane runs.
 window.addEventListener('keydown', e => {
-  if (e.code !== 'KeyC' || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (!isAppShortcut(e, 'KeyM')) return;
   if (document.querySelector('.modal-overlay:not(.hidden)')) return;
   e.preventDefault();
   e.stopPropagation();
