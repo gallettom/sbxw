@@ -18,7 +18,8 @@ description: >
 # Chromium (it has linux-arm64 builds, which Chrome for Testing does not);
 # npm serves the Playwright installer and, at /brag time, `npx hyperframes`;
 # the Ubuntu/Debian mirrors serve ffmpeg and Chromium's shared libraries.
-# Keep sbxw.toml's network_allow in step with this list — see the README.
+# sbx composes this list into the sandbox policy when the kit is applied, so
+# sbxw.toml needs no network_allow entry for it (docs/kits-and-skills.md).
 permissions:
   network:
     allow:

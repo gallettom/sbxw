@@ -129,8 +129,9 @@ env_files = []
 # are inside the binary. Without a `kits` line a sandbox gets the first three:
 #   sbxw:codemap         /codemap: agents read (and write) a repo's code map in
 #                        .sbxw-artifacts/codemap/ before reading its source.
-#   sbxw:agent-skills    /archify, /brag, /i-have-adhd, /handoff, /grill-me,
-#                        /frontend-design, pinned, with Chromium and ffmpeg.
+#   sbxw:agent-skills    /archify, /brag, /brag-slim, /i-have-adhd, /handoff,
+#                        /grill-me, /grilling, /frontend-design, pinned, with
+#                        Chromium and ffmpeg.
 #   sbxw:md-to-pdf-tools /md-to-pdf, with WeasyPrint and poppler.
 #   sbxw:k8s-tools       kubectl + k3d + skaffold — opt-in, add it yourself.
 # Each declares the egress it needs; nothing to add to network_allow.
