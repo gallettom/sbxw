@@ -13,11 +13,11 @@ const REPO: &str = "gallettom/sbxw";
 /// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
 /// and installs it in place of the currently running binary.
 pub fn run(check_only: bool, no_island: bool) -> Result<()> {
+    let ui = Ui::new();
     let current = env!("CARGO_PKG_VERSION");
-    println!("current version: v{current}");
+    println!("{}\n", crate::banner());
 
-    println!("checking for updates…");
-    let latest_tag = latest_release_tag()?;
+    let latest_tag = ui.spin("checking for updates", latest_release_tag)?;
     let latest = latest_tag.trim_start_matches('v');
     let base = format!("https://github.com/{REPO}/releases/download/{latest_tag}");
 
@@ -27,27 +27,29 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
         if no_island {
             return;
         }
-        if let Err(e) = update_island(&base, check) {
-            eprintln!("warning: could not refresh SbxwIsland.app: {e:#}");
-            eprintln!("  install it manually from https://github.com/{REPO}/releases");
+        if let Err(e) = update_island(&ui, &base, check) {
+            ui.warn(&format!(
+                "could not refresh {ISLAND_APP}: {e:#}\ninstall it manually from https://github.com/{REPO}/releases"
+            ));
         }
     };
 
     let exe = std::env::current_exe().context("could not resolve current executable path")?;
 
     if parse_version(latest) <= parse_version(current) {
-        println!("sbxw is already up to date.");
+        ui.ok("sbxw", &format!("v{current} is the latest"));
         if !check_only {
-            refresh_extension(&exe);
+            refresh_extension(&ui, &exe);
         }
         island(check_only);
+        println!();
         return Ok(());
     }
 
-    println!("new version available: {latest_tag} (current: v{current})");
+    ui.ok("new release", &format!("{latest_tag}  (you have v{current})"));
     if check_only {
-        println!("run `sbxw update` to install it.");
         island(true);
+        println!("\n  run {} to install it\n", ui.cmd("sbxw update"));
         return Ok(());
     }
 
@@ -58,42 +60,149 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     std::fs::create_dir_all(&tmp_dir)?;
     let tmp_bin = tmp_dir.join(&artifact);
 
-    println!("downloading {artifact} ({latest_tag})…");
-    curl_download(&format!("{base}/{artifact}"), &tmp_bin)
-        .with_context(|| format!("failed to download {artifact} for {latest_tag}"))?;
+    ui.spin(&format!("downloading {artifact}"), || {
+        curl_download(&format!("{base}/{artifact}"), &tmp_bin)
+            .with_context(|| format!("failed to download {artifact} for {latest_tag}"))
+    })?;
+    ui.ok("downloaded", &artifact);
 
     // Best-effort checksum verification against the release's sha256sums.txt
     // (published alongside every release by .github/workflows/release.yml).
     let tmp_sums = tmp_dir.join("sha256sums.txt");
     if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
         verify_checksum(&tmp_bin, &artifact, &tmp_sums)
-            .context("checksum verification failed — aborting update")?;
-        println!("checksum verified.");
+            .context("checksum verification failed — aborting update")
+            .inspect_err(|_| ui.fail("checksum"))?;
+        ui.ok("checksum", "sha256 verified");
     } else {
-        eprintln!("warning: could not fetch sha256sums.txt — skipping checksum verification");
+        ui.warn("could not fetch sha256sums.txt — skipping checksum verification");
     }
 
     set_executable(&tmp_bin)?;
 
-    install_binary(&tmp_bin, &exe)?;
+    install_binary(&ui, &tmp_bin, &exe)?;
     let _ = std::fs::remove_dir_all(&tmp_dir);
+    ui.ok("installed", &exe.display().to_string());
 
-    println!("sbxw updated: v{current} → {latest_tag}");
-    refresh_extension(&exe);
+    refresh_extension(&ui, &exe);
     island(false);
-    println!("note: restart any running daemons to pick up the new build (`sbxw down` then `sbxw up …`).");
+
+    println!(
+        "\n  {}  sbxw {}v{current}{} → {}{latest_tag}{}\n",
+        ui.paint(GREEN, "✔"),
+        ui.code(DIM),
+        ui.code(RESET),
+        ui.code(GREEN),
+        ui.code(RESET),
+    );
+    if daemon_running() {
+        println!("  the daemon is still running the old build — restart it:");
+        println!("    {}\n", ui.cmd("sbxw down && sbxw up"));
+    }
     Ok(())
+}
+
+/// Whether a daemon answers on this directory's configured address — the
+/// only case in which the old build is still running somewhere.
+fn daemon_running() -> bool {
+    let cfg = crate::cmd::load_config(std::path::Path::new("sbxw.toml")).unwrap_or_default();
+    crate::client::Daemon::new(&cfg.web_addr).health().is_some()
 }
 
 /// Rewrites the browser extension's folder from the binary at `exe` — after an
 /// update that is the new one, whose extension this process does not carry.
-fn refresh_extension(exe: &std::path::Path) {
+fn refresh_extension(ui: &Ui, exe: &std::path::Path) {
     let ok = std::process::Command::new(exe)
         .args(["extension", "--refresh"])
-        .status()
-        .is_ok_and(|s| s.success());
-    if !ok {
-        eprintln!("warning: could not refresh the browser extension — run `sbxw extension`");
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if ok {
+        ui.ok("browser extension", "refreshed");
+    } else {
+        ui.warn("could not refresh the browser extension — run `sbxw extension`");
+    }
+}
+
+// ── Terminal output ──────────────────────────────────────────────────────
+// The same look as a bring-up (render.rs): one ✓ line per step, a spinner on
+// the step that is running, colours from the banner. Plain text when stdout
+// isn't a terminal or NO_COLOR is set.
+const BLUE: &str = "\x1b[1;38;5;75m";
+const GREEN: &str = "\x1b[1;38;5;77m";
+const YELLOW: &str = "\x1b[38;5;221m";
+const RED: &str = "\x1b[1;38;5;203m";
+const DIM: &str = "\x1b[2m";
+const RESET: &str = "\x1b[0m";
+/// Width of the label column, so the notes line up.
+const LABEL: usize = 18;
+
+struct Ui {
+    tty: bool,
+}
+
+impl Ui {
+    fn new() -> Self {
+        use std::io::IsTerminal;
+        Self { tty: std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() }
+    }
+
+    fn code(&self, c: &'static str) -> &'static str {
+        if self.tty {
+            c
+        } else {
+            ""
+        }
+    }
+
+    fn paint(&self, c: &'static str, s: &str) -> String {
+        format!("{}{s}{}", self.code(c), self.code(RESET))
+    }
+
+    fn cmd(&self, s: &str) -> String {
+        self.paint(BLUE, s)
+    }
+
+    fn ok(&self, label: &str, note: &str) {
+        println!("  {} {label:<LABEL$} {}", self.paint(GREEN, "✓"), self.paint(DIM, note));
+    }
+
+    fn fail(&self, label: &str) {
+        println!("  {} {label}", self.paint(RED, "✕"));
+    }
+
+    fn warn(&self, text: &str) {
+        println!("  {} {}", self.paint(YELLOW, "!"), self.paint(YELLOW, &text.replace('\n', "\n    ")));
+    }
+
+    /// Runs `work` with a spinner on `label…` — erased when it ends, so the
+    /// caller follows with its own ✓ line; a ✕ replaces it on failure.
+    fn spin<T>(&self, label: &str, work: impl FnOnce() -> Result<T>) -> Result<T> {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        if !self.tty {
+            return work().inspect_err(|_| self.fail(label));
+        }
+        let done = AtomicBool::new(false);
+        let result = std::thread::scope(|s| {
+            s.spawn(|| {
+                const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+                let mut out = std::io::stdout();
+                for f in FRAMES.iter().cycle() {
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let _ = write!(out, "\r\x1b[2K  {BLUE}{f}{RESET} {label}…");
+                    let _ = out.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                }
+                let _ = write!(out, "\r\x1b[2K");
+                let _ = out.flush();
+            });
+            let r = work();
+            done.store(true, Ordering::Relaxed);
+            r
+        });
+        result.inspect_err(|_| self.fail(label))
     }
 }
 
@@ -112,7 +221,7 @@ const ISLAND_PROC: &str = "SbxwIsland";
 /// The app's version is independent of the release tag, so the release
 /// publishes `island-version.txt` next to the zip (see macos/build-app.sh) —
 /// that's what tells us the bundle is stale without downloading it first.
-fn update_island(base: &str, check_only: bool) -> Result<()> {
+fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     if std::env::consts::OS != "macos" {
         return Ok(());
     }
@@ -131,7 +240,7 @@ fn update_island(base: &str, check_only: bool) -> Result<()> {
         // Releases before the island got its own version don't publish it.
         // Leaving the app alone beats bouncing it on every update.
         cleanup(&tmp_dir);
-        println!("island: release has no version marker — leaving {ISLAND_APP} as is.");
+        ui.ok("island", "no version marker in this release — left as is");
         return Ok(());
     }
     let latest = std::fs::read_to_string(&tmp_ver)?.trim().to_string();
@@ -139,27 +248,28 @@ fn update_island(base: &str, check_only: bool) -> Result<()> {
 
     if parse_version(&latest) <= parse_version(&installed) {
         cleanup(&tmp_dir);
-        println!("island: {ISLAND_APP} is up to date (v{installed}).");
+        ui.ok("island", &format!("v{installed} is up to date"));
         return Ok(());
     }
-    println!("island: new build available: v{installed} → v{latest}");
     if check_only {
+        ui.ok("island", &format!("v{latest} available  (you have v{installed})"));
         cleanup(&tmp_dir);
         return Ok(());
     }
 
     let artifact = "SbxwIsland-macos.zip";
     let tmp_zip = tmp_dir.join(artifact);
-    println!("island: downloading {artifact}…");
-    curl_download(&format!("{base}/{artifact}"), &tmp_zip)
-        .with_context(|| format!("failed to download {artifact}"))?;
+    ui.spin(&format!("downloading {artifact}"), || {
+        curl_download(&format!("{base}/{artifact}"), &tmp_zip)
+            .with_context(|| format!("failed to download {artifact}"))
+    })?;
 
     let tmp_sums = tmp_dir.join("sha256sums.txt");
     if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
         verify_checksum(&tmp_zip, artifact, &tmp_sums)
             .context("checksum verification failed — leaving the installed app alone")?;
     } else {
-        eprintln!("warning: could not fetch sha256sums.txt — skipping checksum verification");
+        ui.warn("could not fetch sha256sums.txt — skipping checksum verification");
     }
 
     // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
@@ -179,8 +289,10 @@ fn update_island(base: &str, check_only: bool) -> Result<()> {
     // quit it first — and put it back afterwards only if it *was* running.
     let was_running = island_running();
     if was_running {
-        println!("island: quitting the running app…");
-        quit_island();
+        ui.spin("quitting SbxwIsland", || {
+            quit_island();
+            Ok(())
+        })?;
     }
 
     // Past the quit, a failure must not leave the user without their island:
@@ -199,11 +311,11 @@ fn update_island(base: &str, check_only: bool) -> Result<()> {
         .status();
     cleanup(&tmp_dir);
 
-    println!("island: {ISLAND_APP} updated: v{installed} → v{latest}");
-    if was_running {
-        let _ = open_island(&app);
-        println!("island: relaunched.");
-    }
+    let relaunched = was_running && open_island(&app).is_ok_and(|s| s.success());
+    ui.ok(
+        "island",
+        &format!("v{installed} → v{latest}{}", if relaunched { "  (relaunched)" } else { "" }),
+    );
     Ok(())
 }
 
@@ -418,20 +530,21 @@ fn set_executable(path: &std::path::Path) -> Result<()> {
 /// case, unlike `std::fs::rename`) and, if that fails for lack of permission,
 /// retries with `sudo mv` — the same fallback install.sh uses for
 /// `/usr/local/bin`.
-fn install_binary(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
-    let status = std::process::Command::new("mv")
+fn install_binary(ui: &Ui, src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    // Output captured: its "Permission denied" is the expected case, said better below.
+    let out = std::process::Command::new("mv")
         .arg(src)
         .arg(dest)
-        .status()
+        .output()
         .context("failed to run mv")?;
-    if status.success() {
+    if out.status.success() {
         return Ok(());
     }
 
     let dir = dest.parent().unwrap_or(dest);
-    println!("sudo required to write to {}", dir.display());
+    println!("  {} {} is not writable — sudo needed", ui.paint(YELLOW, "⚿"), dir.display());
     let status = std::process::Command::new("sudo")
-        .arg("mv")
+        .args(["-p", "    password for %u: ", "mv"])
         .arg(src)
         .arg(dest)
         .status()
