@@ -225,6 +225,11 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
 - The workspace dialog has a folder picker and inline **port-forwarding** rows
   (sandbox→host port, optional host IP, optional `/etc/hosts` alias). This goes
   through the *same* provisioning pipeline as the CLI.
+- **Several repos in one sandbox**: ＋ on a row of the picker (or *Add this
+  folder*) adds it to the dialog's **Repos**. The first is the workspace —
+  always read-write, threads put their worktrees there; each other one is
+  mounted beside it at the same path, **RO** (the default) or **RW**. Add
+  nothing and the browsed folder is the workspace, alone, as before.
 - **Star the folders you keep projects under** (☆ on each row of the picker) and
   they become one-click shortcuts above it. See below.
 - **Watch the bring-up happen** — the card that appears in the bottom-right
@@ -256,10 +261,20 @@ Served at `http://sbxw.localhost:<port>` (default `7681`). From the browser you 
   and the list works from the keyboard: ↑/↓ walk and preview, Return opens a
   folder or downloads a file, Backspace goes up. Favourites on the left: `.sbxw-artifacts`, the
   workspace, the agent's home and `/` are built in, and ★ pins any other folder
-  (remembered per sandbox, in this browser). A running sandbox is read through
+  (remembered per sandbox, in this browser). **◷ Recent**, above them, lists
+  every file written in the last 7 days — workspace, RW mounts, home and
+  `/tmp`, minus `.git`, dependency and cache folders — newest first, grouped by
+  age, each with the folder it landed in and a **Show in folder** button: an
+  agent's file is not always where it was asked to go. Its badge counts the last
+  hour's files, and a blue dot marks them (and their folders) in any listing.
+  A running sandbox is read through
   `sbx exec`, so everything the agent sees is there; a stopped one shows its
   workspace from the host and says so, rather than being started to list a
-  folder. Read-only, and every file is served under `Content-Security-Policy:
+  folder. One write: 🗑 on the row, **Delete** in the preview, or the Delete key
+  removes a file, link or folder after a confirmation — only under the
+  workspace, a RW mount, home or `/tmp`, never one of those itself,
+  `.sbxw-artifacts` or `.git`, and the daemon re-checks the resolved path.
+  Every file is served under `Content-Security-Policy:
   sandbox` — an HTML file an agent wrote never runs with the daemon's origin.
 - **Read the project's code map** — the **Code map** tab of the **Project**
   panel opens the linked

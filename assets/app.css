@@ -244,6 +244,87 @@
       linear-gradient(90deg, var(--c-blue), var(--c-green)) border-box;
   }
   .sidebar-footer .skills-btn { width: 100%; }
+  /* Upload: the footer's one drop target, and its largest control — a file
+     dragged from the desktop needs somewhere obvious to land. Dashed at rest;
+     while a file is over it, the dash becomes the logo's blue-to-green ring
+     (the Skills button's) and the arrow lifts, so it says "let go here". */
+  .upload-box {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem;
+    min-height: 96px; padding: .7rem .6rem;
+    border: 1px dashed var(--c-border); border-radius: 8px; background: var(--c-bg);
+    color: var(--c-text-dim); cursor: pointer; text-align: center;
+    transition: border-color .12s, color .12s;
+  }
+  .upload-box:hover { border-color: var(--c-dim); color: var(--c-text); }
+  .upload-box:focus-within { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .upload-box-icon { margin-bottom: .25rem; }
+  .upload-arrow { transition: transform .18s ease-out; }
+  .upload-box-title { font-size: 12.5px; font-weight: 600; color: var(--c-text); }
+  .upload-box-sub { font-size: 11px; }
+  .upload-box.drag {
+    border: 1px solid transparent; color: var(--c-text-bright);
+    background:
+      linear-gradient(var(--c-blue-tint), var(--c-blue-tint)) padding-box,
+      linear-gradient(90deg, var(--c-blue), var(--c-green)) border-box;
+  }
+  .upload-box.drag .upload-box-icon { color: var(--c-blue); }
+  .upload-box.drag .upload-arrow { transform: translateY(-3px); }
+  @media (prefers-reduced-motion: reduce) { .upload-arrow { transition: none; } }
+
+  /* The modal: what is being sent, then where. Images show themselves; other
+     files show their extension, which is what a person recognises them by. */
+  .upload-files { display: flex; flex-direction: column; gap: .4rem; max-height: 9.5rem; overflow-y: auto; }
+  .upload-file {
+    display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: .65rem;
+    align-items: center;
+  }
+  .upload-thumb {
+    width: 40px; height: 40px; border-radius: 5px; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--c-elevated); color: var(--c-text-muted);
+    font: 600 10.5px var(--font-mono);
+  }
+  .upload-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .upload-file-name {
+    color: var(--c-text-bright); font: 600 12.5px var(--font-mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .upload-file-size { display: block; color: var(--c-text-dim); font-size: 11px; font-weight: 400; }
+
+  /* One box per sandbox. A stopped one is quieter — sending to it starts it —
+     and the pick is the blue of a picked repo row, with a check in its corner
+     so it reads at a glance, not just by border colour. */
+  .upload-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .5rem;
+    max-height: 44vh; overflow-y: auto; padding: 2px;
+  }
+  .upload-sbx {
+    position: relative; display: flex; flex-direction: column; gap: .35rem;
+    min-height: 74px; padding: .65rem .7rem; cursor: pointer;
+    border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface-alt);
+    transition: border-color .1s, background .1s;
+  }
+  .upload-sbx:hover { border-color: var(--c-dim); }
+  .upload-sbx input { position: absolute; opacity: 0; pointer-events: none; }
+  .upload-sbx:has(input:focus-visible) { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .upload-sbx:has(input:checked) { border-color: var(--c-blue); background: var(--c-blue-tint); }
+  .upload-sbx-head { display: flex; align-items: center; gap: .45rem; min-width: 0; padding-right: 1.1rem; }
+  .upload-sbx-name {
+    color: var(--c-text-bright); font: 600 13px var(--font-mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .upload-sbx.stopped .upload-sbx-name { color: var(--c-text-muted); }
+  .upload-sbx-agent { color: var(--c-text-muted); font-size: 11px; }
+  .upload-sbx-what { margin-top: auto; color: var(--c-text-dim); font-size: 11px; }
+  .upload-sbx.shown .upload-sbx-what { color: var(--c-green); }
+  .upload-sbx-check {
+    position: absolute; top: .55rem; right: .55rem; width: 15px; height: 15px; border-radius: 50%;
+    border: 1px solid var(--c-border);
+  }
+  .upload-sbx:has(input:checked) .upload-sbx-check {
+    border-color: var(--c-blue); background: var(--c-blue);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.3 7 10.7l4.6-5' fill='none' stroke='%230d1117' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
   /* In the modal: the kit's path is a label, not a heading. */
   .skills-kit {
     margin-left: auto; font-family: var(--font-mono); font-size: 10.5px;
@@ -1972,6 +2053,48 @@
   .fs-row-star.on:hover { background: var(--c-amber-strong); border-color: var(--c-amber-strong); }
   .fs-row-star:focus-visible { outline: 1px solid var(--c-blue); outline-offset: 1px; }
 
+  /* ＋ beside the star: puts that folder in the sandbox's repos without
+     entering it, so sibling repos are one click each. Green once added. */
+  .fs-row-add {
+    flex: 0 0 auto; cursor: pointer; font: inherit; line-height: 1;
+    font-size: 12px; padding: .25rem .40rem; border-radius: 5px;
+    background: transparent; color: var(--c-green);
+    border: 1px solid rgba(63, 185, 80, .45);
+  }
+  .fs-row-add:hover { border-color: var(--c-green); background: rgba(63, 185, 80, .16); }
+  .fs-row-add.on { background: var(--c-green-deep); border-color: var(--c-green-strong); color: var(--c-white); }
+  .fs-row-add:focus-visible { outline: 1px solid var(--c-blue); outline-offset: 1px; }
+
+  /* ── Repos of a new sandbox ── */
+  .repo-hint { margin: .3rem 0 0; font-size: 11px; color: var(--c-text-dim); line-height: 1.45; }
+  .repo-hint.error { color: var(--c-red); }
+  .repo-rows { display: flex; flex-direction: column; gap: .3rem; margin-top: .35rem; }
+  .repo-rows:empty { display: none; }
+  .repo-row {
+    display: flex; align-items: center; gap: .4rem;
+    background: var(--c-bg); border: 1px solid var(--c-elevated); border-radius: 4px;
+    padding: .2rem .3rem .2rem .55rem; font-size: 12px;
+  }
+  .repo-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  .repo-badge {
+    flex: 0 0 auto; font-size: 10px; color: var(--c-blue); background: var(--c-blue-tint);
+    border: 1px solid var(--c-blue); border-radius: 4px; padding: .05rem .35rem;
+  }
+  .repo-main {
+    flex: 0 0 auto; background: none; border: 1px solid transparent; border-radius: 4px;
+    color: var(--c-text-dim); font: inherit; font-size: 10px; cursor: pointer; padding: .05rem .35rem;
+  }
+  .repo-main:hover { color: var(--c-blue); border-color: var(--c-border); }
+  /* RW / RO as one two-state switch: the lit half is the mode. */
+  .repo-mode { flex: 0 0 auto; display: inline-flex; border: 1px solid var(--c-border); border-radius: 4px; overflow: hidden; }
+  .repo-mode button {
+    background: none; border: none; color: var(--c-text-dim); font: inherit; font-size: 10px;
+    padding: .1rem .4rem; cursor: pointer;
+  }
+  .repo-mode button.on[data-mode="rw"] { background: var(--c-amber-tint); color: var(--c-amber-strong); }
+  .repo-mode button.on[data-mode="ro"] { background: var(--c-green-tint); color: var(--c-green); }
+  .repo-mode button:disabled { cursor: default; }
+
   /* ── Code map viewer ──
      Three columns inside one wide modal: files on the left, the rendered
      document in the middle, backlinks and outline on the right. The colours
@@ -2301,6 +2424,18 @@
   .fx-fav-icon { width: 14px; text-align: center; color: var(--c-text-dim); flex-shrink: 0; }
   .fx-fav.main .fx-fav-icon { color: var(--c-amber-strong); }
   .fx-fav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Same colours as the create dialog's RW / RO switch. */
+  .fx-fav-mode { flex: 0 0 auto; font-size: 9.5px; font-weight: 600; border-radius: 3px; padding: 0 .3rem; line-height: 1.5; }
+  .fx-fav-mode.ro { background: var(--c-green-tint); color: var(--c-green); }
+  .fx-fav-mode.rw { background: var(--c-amber-tint); color: var(--c-amber-strong); }
+  /* Recent: what was written in the last hour, counted on its favourite — the
+     one number that says "go and look" (see fxFetchRecent in /js/files.js). */
+  .fx-fav.recent .fx-fav-icon { color: var(--c-blue); }
+  .fx-fav-count {
+    flex: 0 0 auto; font-size: 10px; font-weight: 600; line-height: 1.5;
+    padding: 0 .35rem; border-radius: 8px;
+    background: var(--c-blue-tint); color: var(--c-blue);
+  }
   .fx-fav-rm {
     visibility: hidden; background: none; border: none; color: var(--c-text-dim);
     cursor: pointer; font-size: 11px; padding: 0 .15rem;
@@ -2314,7 +2449,7 @@
   /* Download, on the row: was a double-click nobody could see. Shown on the
      row under the pointer and on the selected one, so the column is quiet
      until you are on a file; a touch screen keeps it on every row. */
-  .fx-act { width: 2.2rem; text-align: center; }
+  .fx-act { width: 4rem; text-align: right; }
   .fx-list td.fx-act { padding: 0 .4rem; }
   .fx-dl {
     background: none; border: 1px solid transparent; border-radius: 4px;
@@ -2322,6 +2457,10 @@
     padding: .2rem .35rem; cursor: pointer;
   }
   .fx-dl:hover { color: var(--c-text-bright); border-color: var(--c-border); background: var(--c-elevated); }
+  /* Delete: the panel's one write, so it is the one red control (see fxDelete). */
+  .fx-rm:hover { color: var(--c-red); }
+  .fx-prev-actions .fx-del { color: var(--c-red); }
+  .fx-prev-actions .fx-del:hover { border-color: var(--c-red); }
   @media (hover: hover) {
     .fx-row .fx-dl { visibility: hidden; }
     .fx-row:hover .fx-dl, .fx-row.selected .fx-dl { visibility: visible; }
@@ -2340,6 +2479,28 @@
   .fx-icon { display: inline-block; width: 1.3em; }
   .fx-row.dir .fx-label { color: var(--c-text-bright); }
   .fx-link { color: var(--c-text-dim); margin-left: .3rem; font-size: 10px; }
+  /* Written in the last hour: a dot after the name, in any folder. */
+  .fx-fresh {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--c-blue); margin-left: .45rem; vertical-align: middle;
+  }
+  /* The Recent view: age headings, and the folder each file landed in. */
+  .fx-group td {
+    position: sticky; top: 27px; z-index: 1; background: var(--c-surface);
+    color: var(--c-text-dim); font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; padding: .5rem .7rem .25rem;
+  }
+  .fx-where {
+    margin-left: .55rem; color: var(--c-text-dim);
+    font-family: var(--font-mono); font-size: 11px;
+  }
+  .fx-row.selected .fx-where { color: var(--c-text-muted); }
+  .fx-list.recent .fx-name { width: 72%; }
+  .fx-crumb-note { color: var(--c-text-dim); font-size: 11.5px; padding: 0 .3rem; flex-shrink: 0; }
+  .fx-prev-where {
+    margin-top: .45rem; color: var(--c-text-muted); font-family: var(--font-mono);
+    font-size: 11px; word-break: break-all;
+  }
   .fx-num { text-align: right; color: var(--c-text-muted); font-variant-numeric: tabular-nums; }
   .fx-time { color: var(--c-text-dim); }
   .fx-preview {

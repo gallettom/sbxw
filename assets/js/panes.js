@@ -523,6 +523,9 @@ function notifyAttention(sandboxName) {
 // Shared onmessage handler: binary frames are PTY output, text frames are
 // JSON control messages (currently only "attention").
 function handlePaneData(pane, ev) {
+  // When the terminal last drew: what "its TUI has settled" is timed from
+  // before something is typed into it (upload.js).
+  pane.lastOutput = Date.now();
   if (typeof ev.data === 'string') {
     try {
       const msg = JSON.parse(ev.data);
@@ -661,6 +664,7 @@ function connectPane(idx, name, mode, thread, repo, model) {
   // xterm mouse-tracking) can leave DECSET modes on, which would otherwise
   // survive into the new session and turn mouse moves into stray input.
   pane.term.reset();
+  pane.lastOutput = 0;
   pane.sandbox = name;
   // The liseret describes whoever is in the pane *now* — repainting drops the
   // outgoing session's state and picks up the incoming one's, mid-flash included.

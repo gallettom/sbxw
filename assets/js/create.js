@@ -77,6 +77,89 @@ fsFavsEl.addEventListener('click', ev => {
   if (path) browseTo(path);
 });
 
+// ── Repos ─────────────────────────────────────────────────────────────────
+//
+// A workspace is often one repo of several (`~/dev/shop/{backend,frontend}`),
+// and the agent needs the others beside it: to read a contract, or to change
+// both sides at once. The first repo is the workspace — always read-write,
+// threads put their worktrees in it; each other one is mounted beside it at
+// the same path, read-only unless switched. Nothing added means the folder
+// browsed to, alone, as before.
+const repoRowsEl = document.getElementById('repo-rows');
+const repoHintEl = document.getElementById('repo-hint');
+const btnAddRepo = document.getElementById('btn-add-repo');
+let repos = [];
+
+function hasRepo(path) {
+  return repos.some(r => r.path === path);
+}
+
+function toggleRepo(path) {
+  if (hasRepo(path)) repos = repos.filter(r => r.path !== path);
+  else repos.push({ path, readonly: true });
+  renderRepos();
+  renderFsList();
+}
+
+// sbx shares a directory once: a repo inside another is reached through the
+// outer mount, with its mode — so an RO one inside the workspace is writable.
+// The server refuses the pair; this says so before anyone presses Create.
+function nestedRepos() {
+  const inside = (a, b) => a.startsWith(b.endsWith('/') ? b : b + '/');
+  for (const a of repos) for (const b of repos) {
+    if (a !== b && inside(a.path, b.path)) return [a.path, b.path];
+  }
+  return null;
+}
+
+function renderRepos() {
+  const nested = nestedRepos();
+  repoHintEl.classList.toggle('error', !!nested);
+  repoHintEl.textContent = nested
+    ? `${nested[0]} is inside ${nested[1]}: sbx mounts only the outer one, so the inner one gets its mode. Pick sibling folders.`
+    : repos.length
+    ? 'The first is the workspace. The others are mounted beside it, at the same path.'
+    : 'Just the folder above, read-write. ＋ on a folder adds it — to mount several repos side by side.';
+  repoRowsEl.innerHTML = repos.map((r, i) => {
+    const mode = i === 0
+      ? `<span class="repo-badge">workspace</span>
+         <span class="repo-mode" title="The workspace is always read-write: threads write their worktrees into it">
+           <button type="button" data-mode="rw" class="on" disabled>RW</button></span>`
+      : `<button type="button" class="repo-main" data-main="${i}" title="Make this the workspace">⤒ workspace</button>
+         <span class="repo-mode">
+           <button type="button" data-mode="rw" data-i="${i}" class="${r.readonly ? '' : 'on'}" title="The agent may change it">RW</button><button
+                   type="button" data-mode="ro" data-i="${i}" class="${r.readonly ? 'on' : ''}" title="The agent can only read it">RO</button></span>`;
+    return `<div class="repo-row">
+       <span class="repo-path" title="${escHtml(r.path)}"><bdi>${escHtml(r.path)}</bdi></span>
+       ${mode}
+       <button class="btn-rm-port" type="button" data-rm="${i}" title="Remove">✕</button>
+     </div>`;
+  }).join('');
+  btnAddRepo.disabled = !selectedPath || hasRepo(selectedPath);
+  validateForm();
+}
+
+repoRowsEl.addEventListener('click', ev => {
+  const b = ev.target.closest('button');
+  if (!b || b.disabled) return;
+  if (b.dataset.rm !== undefined) {
+    repos.splice(Number(b.dataset.rm), 1);
+  } else if (b.dataset.main !== undefined) {
+    const [r] = repos.splice(Number(b.dataset.main), 1);
+    repos.unshift(r);
+  } else if (b.dataset.i !== undefined) {
+    repos[Number(b.dataset.i)].readonly = b.dataset.mode === 'ro';
+  } else {
+    return;
+  }
+  renderRepos();
+  renderFsList();
+});
+
+btnAddRepo.addEventListener('click', () => {
+  if (selectedPath && !hasRepo(selectedPath)) toggleRepo(selectedPath);
+});
+
 const portRowsEl = document.getElementById('port-rows');
 let portRowId = 0;
 
@@ -150,6 +233,8 @@ function openModal() {
   selectedPath = '';
   fsPath.textContent = '—';
   portRowsEl.innerHTML = '';
+  repos = [];
+  renderRepos();
   // Re-read every time the modal opens: another tab (or a hand-edited state
   // file) may have changed the list since this one was last used.
   loadFavourites();
@@ -180,9 +265,14 @@ function renderFsList() {
   // can see is a feature nobody finds — but dimmed until starred or hovered.
   html += fsListing.entries.map(e => {
     const on = isFavourite(e.path);
+    const added = hasRepo(e.path);
     return `<div class="fs-item" data-path="${escHtml(e.path)}">
        <span class="fs-icon">📁</span>
        <span class="fs-name">${escHtml(e.name)}</span>
+       <button type="button" class="fs-row-add${added ? ' on' : ''}"
+               data-add-path="${escHtml(e.path)}" aria-pressed="${added}"
+               title="${added ? 'Remove from this sandbox' : 'Add to this sandbox’s repos'}"
+       >${added ? '✓' : '＋'}</button>
        <button type="button" class="fs-row-star${on ? ' on' : ''}"
                data-star-path="${escHtml(e.path)}" aria-pressed="${on}"
                title="${on ? 'Unstar this folder' : 'Star this folder — pins it as a shortcut above'}"
@@ -221,7 +311,7 @@ async function browseTo(path) {
     if (seq !== browseSeq) return; // a later click already won
     selectedPath = data.path;
     fsPath.textContent = data.path;
-    validateForm();
+    renderRepos();
     fsListing = data;
     renderFsList();
   } catch (e) {
@@ -238,6 +328,12 @@ async function browseTo(path) {
 // starring doesn't have to re-bind anything. The star wins over the row: a
 // click on it must pin the folder, not walk into it.
 fsList.addEventListener('click', ev => {
+  const add = ev.target.closest('[data-add-path]');
+  if (add) {
+    ev.stopPropagation();
+    toggleRepo(add.dataset.addPath);
+    return;
+  }
   const star = ev.target.closest('[data-star-path]');
   if (star) {
     ev.stopPropagation();
@@ -249,9 +345,14 @@ fsList.addEventListener('click', ev => {
 });
 
 function validateForm() {
-  const nameOk = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(inpName.value.trim());
-  const pathOk = selectedPath.length > 0;
-  btnCreate.disabled = !(nameOk && pathOk);
+  const name = inpName.value.trim();
+  // Creating under a taken name would reuse that sandbox, its folders and all
+  // — never what this dialog's repos asked for.
+  const taken = sandboxes.some(s => s.name === name);
+  if (taken) showNote(nameErrEl, `“${name}” already exists — pick another name`);
+  const nameOk = !taken && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
+  const pathOk = repos.length > 0 || selectedPath.length > 0;
+  btnCreate.disabled = !(nameOk && pathOk) || !!nestedRepos();
 }
 
 function normalizeNameInput() {
@@ -475,8 +576,9 @@ document.getElementById('modal-create').addEventListener('click', () => {
   const name = inpName.value.trim();
   if (!name || btnCreate.disabled) { inpName.classList.add('error'); return; }
 
-  const path  = selectedPath;
-  const ports = collectPorts();
+  const path   = repos.length ? repos[0].path : selectedPath;
+  const mounts = repos.slice(1).map(r => ({ path: r.path, readonly: r.readonly }));
+  const ports  = collectPorts();
   closeModal();
 
   (async () => {
@@ -484,7 +586,7 @@ document.getElementById('modal-create').addEventListener('click', () => {
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
-      const data = await postJson('/api/sandboxes/create', { name, path, ports });
+      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.

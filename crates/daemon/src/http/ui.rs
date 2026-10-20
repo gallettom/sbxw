@@ -67,6 +67,10 @@ pub fn routes() -> Router<Arc<App>> {
             "/api/sandboxes/:name/paste-image",
             post(paste_image).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
+        .route(
+            "/api/sandboxes/:name/upload",
+            post(upload).layer(DefaultBodyLimit::max(UPLOAD_MAX)),
+        )
         .route("/api/hosts", get(hosts))
         // Threads and lead.
         .route("/api/sandboxes/:name/threads", get(threads))
@@ -100,6 +104,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/artifacts/download", get(artifact_download))
         .route("/api/sandboxes/:name/fs", get(sandbox_fs_list))
         .route("/api/sandboxes/:name/fs/file", get(sandbox_fs_file))
+        .route("/api/sandboxes/:name/fs/recent", get(sandbox_fs_recent))
+        .route("/api/sandboxes/:name/fs/delete", post(sandbox_fs_delete))
         // Code map runs.
         .route("/api/sandboxes/:name/codemap", post(codemap_start))
         .route("/api/sandboxes/:name/codemap/lens", post(codemap_lens))
@@ -245,18 +251,33 @@ impl PortEntry {
     }
 }
 
+/// A repo mounted beside the workspace, read-only unless asked otherwise.
+#[derive(Deserialize)]
+struct MountEntry {
+    path: String,
+    #[serde(default = "yes")]
+    readonly: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
 #[derive(Deserialize)]
 struct CreateBody {
     name: String,
     path: String,
     #[serde(default)]
     ports: Vec<PortEntry>,
+    #[serde(default)]
+    mounts: Vec<MountEntry>,
 }
 
 async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
     let name = sandbox(&b.name)?;
     let extra = b.ports.into_iter().map(PortEntry::wanted).collect::<Result<Vec<_>, _>>()?;
-    Ok(warnings(app.create(name, &b.path, extra, None).await?))
+    let mounts = b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect();
+    Ok(warnings(app.create(name, &b.path, mounts, extra, None).await?))
 }
 
 #[derive(Deserialize)]
@@ -300,6 +321,8 @@ struct UpBody {
     #[serde(default)]
     ro: Vec<String>,
     #[serde(default)]
+    rw: Vec<String>,
+    #[serde(default)]
     config: Option<PathBuf>,
     #[serde(default)]
     chat: bool,
@@ -321,6 +344,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         name,
         workspace: b.path,
         ro: b.ro,
+        rw: b.rw,
         config,
         extra_ports: b.extra_ports,
         chat: b.chat,
@@ -492,6 +516,46 @@ async fn paste_image(State(app): S, Path(name): Path<String>, headers: HeaderMap
     let dest = format!("/tmp/sbxw-pastes/paste-{}.{ext}", crate::now_ms());
     app.sbx.write_file(&sb, &dest, &body, false).await?;
     Ok(ok_with(json!({ "path": dest })))
+}
+
+/// Largest file the sidebar's upload box takes. It is held in memory on both
+/// sides of `sbx exec`, like a file the explorer opens.
+const UPLOAD_MAX: usize = 128 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    #[serde(default)]
+    name: String,
+}
+
+/// A file from the sidebar's upload box, kept under its own name so the path
+/// typed into the prompt after it still says what it is.
+async fn upload(State(app): S, Path(name): Path<String>, Query(q): Query<UploadQuery>, body: Bytes) -> ApiResult {
+    let sb = sandbox(&name)?;
+    if body.is_empty() {
+        return Err(ApiError::bad("empty file"));
+    }
+    let dest = format!("/tmp/sbxw-uploads/{}/{}", crate::now_ms(), upload_name(&q.name));
+    app.sbx.write_file(&sb, &dest, &body, false).await?;
+    tracing::info!("web UI: uploaded {} bytes to '{sb}' at {dest}", body.len());
+    Ok(ok_with(json!({ "path": dest })))
+}
+
+/// A browser's file name as one safe path component. The path is typed into a
+/// prompt, where a space would split it in two, so anything but `[A-Za-z0-9._-]`
+/// becomes `_`; leading dots go, so no `..` and no hidden file.
+pub(super) fn upload_name(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let safe: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .collect();
+    let safe: String = safe.trim_start_matches('.').chars().take(120).collect();
+    if safe.is_empty() {
+        "upload".into()
+    } else {
+        safe
+    }
 }
 
 async fn hosts(State(app): S) -> Json<Value> {
@@ -882,10 +946,65 @@ async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Quer
     let l = sandbox_fs::list(&app.sbx, &sb, ws.as_deref(), &q.path).await.map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     let ws_s = ws.map(|w| w.to_string_lossy().into_owned());
     let artifacts = ws_s.as_ref().map(|w| format!("{}/{}", w.trim_end_matches('/'), artifacts::ARTIFACTS_DIR));
+    let mounts = app.store.get(&sb).mounts;
     Ok(ok_with(json!({
         "path": l.path, "parent": l.parent, "entries": l.entries, "offline": l.offline,
-        "workspace": ws_s, "artifacts": artifacts, "home": sandbox_fs::SANDBOX_HOME,
+        "workspace": ws_s, "artifacts": artifacts, "home": sandbox_fs::SANDBOX_HOME, "mounts": mounts,
     })))
+}
+
+/// What was written lately, wherever: the workspace, the read-write mounts,
+/// home and `/tmp` — an agent's file is not always where it was asked to go.
+async fn sandbox_fs_recent(State(app): S, Path(name): Path<String>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    let ws = app.store.workspace(&sb);
+    let ws_s = ws.as_ref().map(|w| w.to_string_lossy().into_owned());
+    let roots = writable_roots(&app, &sb, ws_s.as_deref());
+    let (files, offline) = sandbox_fs::recent(&app.sbx, &sb, ws.as_deref(), &roots)
+        .await
+        .map_err(|e| ApiError::not_found(format!("{e:#}")))?;
+    Ok(ok_with(json!({
+        "files": files, "offline": offline, "roots": roots, "days": sandbox_fs::RECENT_DAYS,
+        "workspace": ws_s, "home": sandbox_fs::SANDBOX_HOME,
+    })))
+}
+
+/// Where an agent writes: the workspace, the read-write mounts, home and
+/// `/tmp`. What Recent scans, and the only places a file may be deleted from.
+fn writable_roots(app: &App, sb: &SandboxName, ws: Option<&str>) -> Vec<String> {
+    let mut roots: Vec<String> = ws.map(str::to_string).into_iter().collect();
+    roots.extend(app.store.get(sb).mounts.iter().filter(|m| !m.readonly).map(|m| m.path.to_string_lossy().into_owned()));
+    roots.extend([sandbox_fs::SANDBOX_HOME.to_string(), "/tmp".to_string()]);
+    roots
+}
+
+#[derive(Deserialize)]
+struct DeleteBody {
+    path: String,
+}
+
+/// Delete one file or folder — the stray one an agent left somewhere. Not the
+/// roots themselves, nor the deliverables folder or the repository's `.git`
+/// (see `sandbox_fs::refuse_delete`).
+async fn sandbox_fs_delete(State(app): S, Path(name): Path<String>, Json(b): Json<DeleteBody>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    let ws = app.store.workspace(&sb);
+    let ws_s = ws.as_ref().map(|w| w.to_string_lossy().into_owned());
+    let roots = writable_roots(&app, &sb, ws_s.as_deref());
+    let protected: Vec<String> = ws_s
+        .iter()
+        .flat_map(|w| {
+            let w = w.trim_end_matches('/');
+            [format!("{w}/{}", artifacts::ARTIFACTS_DIR), format!("{w}/.git")]
+        })
+        .collect();
+    if let Some(why) = sandbox_fs::refuse_delete(&b.path, &roots, &protected) {
+        return Err(ApiError::forbidden(why));
+    }
+    sandbox_fs::delete(&app.sbx, &sb, ws.as_deref(), &b.path, &roots, &protected)
+        .await
+        .map_err(|e| ApiError::bad(format!("{e:#}")))?;
+    Ok(ok_with(json!({ "path": b.path })))
 }
 
 /// A file from inside the sandbox, always under `CSP: sandbox` + `nosniff`:

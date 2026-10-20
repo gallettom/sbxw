@@ -21,6 +21,7 @@
 use crate::app::App;
 use crate::{bundled, cache};
 use crate::bus::{Event, ProvisionEvent};
+use crate::store::MountRecord;
 use anyhow::{anyhow, bail, Context, Result};
 use sbxw_core::artifacts;
 use sbxw_core::config::Config;
@@ -40,6 +41,8 @@ pub struct BringUp {
     pub name: SandboxName,
     pub workspace: PathBuf,
     pub ro: Vec<String>,
+    /// Extra directories mounted writable beside the workspace.
+    pub rw: Vec<String>,
     /// The project config — remembered for the sandbox, so its later attaches
     /// use the same `env`.
     pub config: Config,
@@ -145,6 +148,11 @@ impl App {
                 r.workspace = Some(req.workspace.clone());
                 r.config = cfg.source.clone();
                 r.chat = req.chat;
+                // Reused, the sandbox keeps the mounts it was created with.
+                if !existed {
+                    let mount = |p: &String, readonly| MountRecord { path: p.into(), readonly };
+                    r.mounts = req.ro.iter().map(|p| mount(p, true)).chain(req.rw.iter().map(|p| mount(p, false))).collect();
+                }
             })
             .context("recording the sandbox")?;
         let token = self.store.token(name)?;
@@ -184,7 +192,20 @@ impl App {
                     let dir = self.store.write_oauth_kit(name, Some(creds))?;
                     running = None;
                     if let Err(e) = self.kit_add_repairing(name, &dir.to_string_lossy(), Some(creds)).await {
-                        run.warn(format!("OAuth kit add failed (use /login in-session instead): {e:#}"));
+                        // sbx refuses `kit add` for a kit with `setup.files`
+                        // (the OAuth kit) — after starting the sandbox. Started,
+                        // it takes the file the way a running one does above.
+                        let wrote = self.sbx.wait_until_running(name, Duration::from_secs(30)).await
+                            && self
+                                .sbx
+                                .write_file(name, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true)
+                                .await
+                                .is_ok();
+                        if wrote {
+                            own_allow.push("claude.ai".into());
+                        } else {
+                            run.warn(format!("OAuth kit add failed (use /login in-session instead): {e:#}"));
+                        }
                     }
                 }
             }
@@ -205,7 +226,7 @@ impl App {
             kit_refs.extend(cfg.kits.iter().cloned());
             let mut ro_mounts = req.ro.clone();
             let mut env = cfg.env_pairs();
-            let mut rw_mounts = vec![];
+            let mut rw_mounts = req.rw.clone();
             if wants_cache {
                 // Writable only for the sandbox that fills it: see `cache`.
                 let (dir, mount) = cache::claim(&self.store.paths, cfg.cache_ttl())?;
@@ -532,6 +553,7 @@ mod tests {
                     name: SandboxName::parse("neos").unwrap(),
                     workspace: ws.clone(),
                     ro: vec![],
+                    rw: vec![],
                     config: cfg,
                     extra_ports: vec![],
                     chat: false,
@@ -585,6 +607,7 @@ mod tests {
                     name: SandboxName::parse("w").unwrap(),
                     workspace: ws,
                     ro: vec![],
+                    rw: vec![],
                     config: with_port(),
                     extra_ports: vec![],
                     chat: false,
@@ -622,6 +645,7 @@ mod tests {
                 name: SandboxName::parse(name).unwrap(),
                 workspace: ws,
                 ro: vec![],
+                rw: vec![],
                 config: Config::default(),
                 extra_ports: vec![],
                 chat: false,
@@ -642,5 +666,36 @@ mod tests {
             assert!(b.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}");
         }
         assert!(!b.contains("sbxw:"));
+    }
+
+    #[tokio::test]
+    async fn the_dialogs_other_repos_are_mounted_beside_the_workspace() {
+        let (dir, app, fake) = app_with(sbx_answer);
+        let [ws, docs, lib] = ["ws", "docs", "lib"].map(|n| {
+            let p = dir.path().join(n);
+            std::fs::create_dir_all(&p).unwrap();
+            p.canonicalize().unwrap().to_string_lossy().into_owned()
+        });
+        let name = SandboxName::parse("multi").unwrap();
+        let mounts = vec![(docs.clone(), true), (lib.clone(), false)];
+        app.create(name.clone(), &ws, mounts, vec![], None).await.unwrap();
+        let log = fake.log();
+        let create = log.iter().find(|c| c.starts_with("create")).unwrap();
+        assert!(create.starts_with(&format!("create claude {ws} --name multi {lib} ")), "{create}");
+        assert!(create.contains(&format!(" {docs}:ro")), "{create}");
+        let mounts = app.store.get("multi").mounts;
+        assert_eq!(mounts.iter().map(|m| (m.path.to_string_lossy().into_owned(), m.readonly)).collect::<Vec<_>>(), [(docs.clone(), true), (lib.clone(), false)]);
+        let twice = vec![(ws.clone(), false)];
+        let e = app.create(name.clone(), &ws, twice, vec![], None).await.unwrap_err();
+        assert!(e.to_string().contains("already mounted"), "{e}");
+        // A repo inside the workspace is reached through the workspace's own
+        // mount, writable: its `:ro` would be a lie, so it is refused.
+        let inner = format!("{ws}/frontend");
+        std::fs::create_dir_all(&inner).unwrap();
+        let e = app.create(name.clone(), &ws, vec![(inner, true)], vec![], None).await.unwrap_err();
+        assert!(e.to_string().contains("nested"), "{e}");
+        let outer = dir.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let e = app.create(name, &ws, vec![(outer, true)], vec![], None).await.unwrap_err();
+        assert!(e.to_string().contains("nested"), "{e}");
     }
 }

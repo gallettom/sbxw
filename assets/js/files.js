@@ -1,12 +1,13 @@
 // ── Project panel ─────────────────────────────────────────────────────────
 //
 // A file explorer over the sandbox's filesystem, opening on `.sbxw-artifacts/`
-// — what this repository has produced — with the code map button beside it.
+// — what this repository has produced — with the code map button beside it,
+// and a Recent view above the folders for the files an agent left elsewhere.
 // The whole filesystem is reachable, not just the deliverables: `/home/agent`,
 // a tool's cache, a log under `/tmp`. While the sandbox runs it is read through
 // `sbx exec`; stopped, the daemon falls back to the workspace on the host and
-// says so (see src/sandbox_fs.rs). Read-only either way: browse, preview,
-// download.
+// says so (see src/sandbox_fs.rs). Browse, preview, download — and delete,
+// for the stray file, under the places an agent writes to (see `fxDelete`).
 const filesOverlay = document.getElementById('files-modal-overlay');
 const filesNameEl  = document.getElementById('files-modal-name');
 const fxTbody      = document.getElementById('fx-tbody');
@@ -26,7 +27,13 @@ const fx = {
   history: [],
   selected: null,
   offline: false,
-  places: { workspace: null, artifacts: null, home: '/home/agent' },
+  // The Recent view, when it is the one on screen: the daemon's newest files
+  // across the workspace, the RW mounts, home and /tmp. `null` while browsing a
+  // folder. `fresh` is what the favourite's badge counts — kept apart so the
+  // badge survives leaving the view.
+  recent: null,
+  fresh: null,
+  places: { workspace: null, artifacts: null, home: '/home/agent', mounts: [] },
   seq: 0,              // the newest listing request; older answers are dropped
 };
 
@@ -54,11 +61,32 @@ function fullTime(unixSecs) {
   return unixSecs ? new Date(unixSecs * 1000).toLocaleString() : '';
 }
 
+/// "4 min ago", "3 h ago", "yesterday" — for the Recent view, where how long
+/// ago is the whole question and a date makes you do the subtraction.
+function agoTime(unixSecs) {
+  if (!unixSecs) return '—';
+  const s = Math.max(0, Date.now() / 1000 - unixSecs);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 2 * 86400) return 'yesterday';
+  return `${Math.floor(s / 86400)} days ago`;
+}
+
+/// Written in the last hour: the dot a listing puts on a file or folder, so a
+/// stray file shows up in its folder too, not only in Recent.
+const FX_FRESH_SECS = 3600;
+const isFresh = (e) => e.modified && Date.now() / 1000 - e.modified < FX_FRESH_SECS;
+
 const fxApi = (path, extra = '') =>
   `/api/sandboxes/${encodeURIComponent(filesTarget)}/fs${path}${extra}`;
 const fxFileUrl = (path, extra = '') =>
   fxApi('/file', `?path=${encodeURIComponent(path)}${extra}`);
 const fxJoin = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
+// A row's identity and its absolute path. Recent rows come from all over the
+// filesystem — two `notes.md` are two rows — so they are told apart by path.
+const fxKey = (e) => e.path || e.name;
+const fxPathOf = (e) => e.path || fxJoin(fx.path, e.name);
 
 /* ── Favourites ──
    Four are built in and always there — the deliverables folder first, since
@@ -80,8 +108,20 @@ function fxSaveFavourites(list) {
 function fxBuiltins() {
   const p = fx.places;
   return [
+    // Not a folder: the newest files wherever they were written. First, because
+    // "what did the agent just make, and where did it put it" is the question
+    // this panel is opened with most.
+    { path: FX_RECENT, label: 'Recent', icon: '◷', recent: true },
     p.artifacts && { path: p.artifacts, label: '.sbxw-artifacts', icon: '★', main: true },
     p.workspace && { path: p.workspace, label: 'Workspace', icon: '⌂' },
+    // The other repos mounted beside it, each saying how: an RO one is there
+    // to read, and the agent is refused any write to it.
+    ...p.mounts.map((m) => ({
+      path: m.path,
+      label: m.path.split('/').pop() || m.path,
+      icon: '⛁',
+      mode: m.readonly ? 'ro' : 'rw',
+    })),
     { path: p.home, label: 'Home', icon: '~' },
     { path: '/', label: 'Root', icon: '/' },
   ].filter(Boolean);
@@ -91,11 +131,18 @@ function fxRenderFavourites() {
   const builtin = fxBuiltins();
   const builtinPaths = new Set(builtin.map((f) => f.path));
   const user = fxUserFavourites().filter((p) => !builtinPaths.has(p));
+  const here = fx.recent ? FX_RECENT : fx.path;
   const row = (f, removable) => `
-    <div class="fx-fav${f.path === fx.path ? ' active' : ''}${f.main ? ' main' : ''}"
-         data-path="${escHtml(f.path)}" title="${escHtml(f.path)}">
+    <div class="fx-fav${f.path === here ? ' active' : ''}${f.main ? ' main' : ''}${f.recent ? ' recent' : ''}"
+         data-path="${escHtml(f.path)}"
+         title="${escHtml(f.recent ? 'Files written in the last few days — workspace, mounts, home and /tmp'
+           : f.path + (f.mode === 'ro' ? ' — read-only: the agent can read it, not change it'
+                                  : f.mode === 'rw' ? ' — read-write' : ''))}">
       <span class="fx-fav-icon">${escHtml(f.icon)}</span>
       <span class="fx-fav-name">${escHtml(f.label)}</span>
+      ${f.mode ? `<span class="fx-fav-mode ${f.mode}">${f.mode === 'ro' ? 'RO' : 'RW'}</span>` : ''}
+      ${f.recent && fx.fresh ? `<span class="fx-fav-count" title="${fx.fresh} file${
+        fx.fresh === 1 ? '' : 's'} written in the last hour">${fx.fresh}</span>` : ''}
       ${removable ? `<button class="fx-fav-rm" data-unfav="${escHtml(f.path)}"
         title="Remove from favourites" aria-label="Remove from favourites">✕</button>` : ''}
     </div>`;
@@ -108,7 +155,7 @@ function fxRenderFavourites() {
 
 function syncStar() {
   const star = document.getElementById('fx-star');
-  const builtin = fxBuiltins().some((f) => f.path === fx.path);
+  const builtin = !!fx.recent || fxBuiltins().some((f) => f.path === fx.path);
   const starred = builtin || fxUserFavourites().includes(fx.path);
   star.classList.toggle('on', starred);
   star.setAttribute('aria-pressed', String(starred));
@@ -154,7 +201,10 @@ async function fxOpen(path, { push = true, select = null } = {}) {
     else renderList();
     return;
   }
-  if (push && fx.path && fx.path !== data.path) fx.history.push(fx.path);
+  if (push && fx.recent) fx.history.push(FX_RECENT);
+  else if (push && fx.path && fx.path !== data.path) fx.history.push(fx.path);
+  fx.recent = null;
+  document.querySelector('.fx-list').classList.remove('recent');
   fx.path = data.path;
   fx.parent = data.parent;
   fx.entries = data.entries || [];
@@ -163,13 +213,16 @@ async function fxOpen(path, { push = true, select = null } = {}) {
     workspace: data.workspace || null,
     artifacts: data.artifacts || null,
     home: data.home || '/home/agent',
+    mounts: Array.isArray(data.mounts) ? data.mounts : [],
   };
   // A folder with a README opens on it, the way a repository page does: the
   // preview has something to say before anything is clicked.
   if (!select) select = fx.entries.find((e) => e.kind === 'file' && FX_README.test(e.name))?.name || null;
   fx.selected = select;
+  const ro = fx.places.mounts.find((m) => m.readonly && (fx.path === m.path || fx.path.startsWith(m.path + '/')));
   fxNotice(fx.offline
     ? 'This sandbox is stopped — showing its workspace from the host. Start it to browse the rest of its filesystem.'
+    : ro ? `Read-only — ${ro.path.split('/').pop()} is mounted RO: the agent can read it, not change it.`
     : '');
   document.getElementById('fx-filter').value = '';
   renderCrumbs();
@@ -186,6 +239,14 @@ async function fxOpen(path, { push = true, select = null } = {}) {
 }
 
 function renderCrumbs() {
+  if (fx.recent) {
+    const el = document.getElementById('fx-crumbs');
+    const n = fx.entries.length;
+    el.innerHTML = `<span class="fx-crumb last">◷ Recent</span><span class="fx-crumb-sep">—</span>
+      <span class="fx-crumb-note">${n} file${n === 1 ? '' : 's'} written in the last ${fx.recent.days || 7} days,
+      newest first</span>`;
+    return;
+  }
   const parts = fx.path.split('/').filter(Boolean);
   let acc = '';
   const crumbs = [`<button class="fx-crumb" data-path="/">/</button>`];
@@ -207,6 +268,10 @@ const FX_README = /^readme(\.(md|markdown|txt))?$/i;
 function fxVisible() {
   const q = document.getElementById('fx-filter').value.trim().toLowerCase();
   const hidden = document.getElementById('fx-show-hidden').checked;
+  // Recent filters on the whole path — "which of these went under /tmp" — and
+  // ignores the dotfile toggle: a file hidden in a dot-folder is exactly the
+  // one this view is for.
+  if (fx.recent) return fx.entries.filter((e) => !q || e.path.toLowerCase().includes(q));
   return fx.entries.filter((e) =>
     // Dotfiles are hidden by default — except the one folder this panel is for.
     (hidden || !e.name.startsWith('.') || e.name === '.sbxw-artifacts')
@@ -214,6 +279,7 @@ function fxVisible() {
 }
 
 function renderList() {
+  if (fx.recent) { renderRecentList(); return; }
   const rows = fxVisible();
   if (!rows.length) {
     fxTbody.innerHTML = `<tr><td colspan="4" class="ports-empty-msg">${
@@ -222,21 +288,187 @@ function renderList() {
   }
   fxTbody.innerHTML = rows.map((e) => `
     <tr class="fx-row${e.kind === 'dir' ? ' dir' : ''}${e.name === fx.selected ? ' selected' : ''}"
-        data-name="${escHtml(e.name)}">
+        data-key="${escHtml(e.name)}">
       <td class="fx-name"><span class="fx-icon">${FX_ICONS[e.kind] || '·'}</span>
-        <span class="fx-label">${escHtml(e.name)}</span>${e.link ? '<span class="fx-link" title="Symbolic link">↗</span>' : ''}</td>
+        <span class="fx-label">${escHtml(e.name)}</span>${e.link ? '<span class="fx-link" title="Symbolic link">↗</span>' : ''}${
+        isFresh(e) ? `<span class="fx-fresh" title="${e.kind === 'dir' ? 'Changed' : 'Written'} in the last hour"></span>` : ''}</td>
       <td class="fx-num">${e.kind === 'file' ? humanSize(e.size) : '—'}</td>
       <td class="fx-time" title="${escHtml(fullTime(e.modified))}">${humanTime(e.modified)}</td>
       <td class="fx-act">${e.kind === 'file'
         ? `<button class="fx-dl" type="button" tabindex="-1" title="Download"
-             aria-label="Download ${escHtml(e.name)}">⬇</button>` : ''}</td>
+             aria-label="Download ${escHtml(e.name)}">⬇</button>` : ''}${fxDeleteButton(e)}</td>
     </tr>`).join('');
   fxTbody.querySelector('.fx-row.selected')?.scrollIntoView({ block: 'nearest' });
 }
 
+/* ── Recent ──
+   Not a folder but a question: what was written lately, and where. The daemon
+   scans the workspace, the RW mounts, home and /tmp, skipping .git, dependency
+   and cache folders (see RECENT_PRUNE in src/sandbox_fs.rs), and answers with
+   the newest files first. Shown in the same table, grouped by how long ago,
+   each with the folder it landed in — the part you could not have guessed. */
+const FX_RECENT = 'recent:';
+
+/// Where a file is, said the short way: `./` for the workspace, `~/` for home.
+function fxShortDir(path) {
+  const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+  const ws = fx.places.workspace;
+  if (ws && (dir === ws || dir.startsWith(ws + '/'))) return '.' + dir.slice(ws.length);
+  const home = fx.places.home;
+  if (home && (dir === home || dir.startsWith(home + '/'))) return '~' + dir.slice(home.length);
+  return dir;
+}
+
+function fxRecentEntries(files) {
+  return (files || []).map((f) => ({
+    name: f.path.slice(f.path.lastIndexOf('/') + 1),
+    path: f.path,
+    kind: 'file',
+    size: f.size,
+    modified: f.modified,
+  }));
+}
+
+/// Fetch the recent files. Returns the daemon's answer, or `null` when it had
+/// none to give; the favourite's badge is refreshed either way.
+async function fxFetchRecent(name) {
+  try {
+    const res = await fetch(`/api/sandboxes/${encodeURIComponent(name)}/fs/recent`);
+    const data = await res.json();
+    if (filesTarget !== name) return null;
+    if (!data.ok) return data;
+    const now = Date.now() / 1000;
+    fx.fresh = (data.files || []).filter((f) => now - f.modified < FX_FRESH_SECS).length;
+    fxRenderFavourites();
+    return data;
+  } catch (_) {
+    return { ok: false, error: 'could not reach sbxw' };
+  }
+}
+
+async function fxOpenRecent({ push = true, select = null } = {}) {
+  if (!filesTarget) return;
+  const name = filesTarget;
+  const seq = ++fx.seq;
+  fxTbody.innerHTML = '<tr><td colspan="4" class="ports-empty-msg">Looking for recent files…</td></tr>';
+  const data = await fxFetchRecent(name);
+  if (seq !== fx.seq || !data) return;
+  if (!data.ok) { fxNotice(data.error || 'could not list recent files', 'error'); renderList(); return; }
+  if (push && !fx.recent && fx.path) fx.history.push(fx.path);
+  fx.recent = data;
+  fx.places.workspace ||= data.workspace || null;
+  fx.entries = fxRecentEntries(data.files);
+  fx.parent = null;
+  fx.selected = select && fx.entries.some((e) => e.path === select) ? select : null;
+  fxNotice(data.offline
+    ? 'This sandbox is stopped — only its workspace was searched. Start it to include home and /tmp.' : '');
+  document.getElementById('fx-filter').value = '';
+  document.querySelector('.fx-list').classList.add('recent');
+  renderCrumbs();
+  fxRenderFavourites();
+  renderList();
+  const entry = fx.selected && fx.entries.find((e) => e.path === fx.selected);
+  if (entry) fxPreview(entry); else fxPreviewEmpty();
+  document.getElementById('fx-back').disabled = !fx.history.length;
+  document.getElementById('fx-up').disabled = true;
+}
+
+/// Bucket by age, newest first — the list is already in that order.
+function fxAgeGroup(unixSecs) {
+  const s = Date.now() / 1000 - unixSecs;
+  if (s < 3600) return 'Last hour';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (unixSecs * 1000 >= today.getTime()) return 'Today';
+  if (unixSecs * 1000 >= today.getTime() - 86400000) return 'Yesterday';
+  return 'Earlier this week';
+}
+
+function renderRecentList() {
+  const rows = fxVisible();
+  if (!rows.length) {
+    fxTbody.innerHTML = `<tr><td colspan="4" class="ports-empty-msg">${fx.entries.length
+      ? 'Nothing matches' : `Nothing written in the last ${fx.recent.days || 7} days`}</td></tr>`;
+    return;
+  }
+  let group = null;
+  fxTbody.innerHTML = rows.map((e) => {
+    const g = fxAgeGroup(e.modified);
+    const head = g !== group ? `<tr class="fx-group"><td colspan="4">${escHtml(g)}</td></tr>` : '';
+    group = g;
+    const dir = fxShortDir(e.path);
+    return `${head}
+    <tr class="fx-row${e.path === fx.selected ? ' selected' : ''}" data-key="${escHtml(e.path)}">
+      <td class="fx-name" title="${escHtml(e.path)}"><span class="fx-icon">${FX_ICONS.file}</span>
+        <span class="fx-label">${escHtml(e.name)}</span>
+        <span class="fx-where">${escHtml(dir)}</span></td>
+      <td class="fx-num">${humanSize(e.size)}</td>
+      <td class="fx-time" title="${escHtml(fullTime(e.modified))}">${agoTime(e.modified)}</td>
+      <td class="fx-act"><button class="fx-dl" type="button" tabindex="-1" title="Download"
+             aria-label="Download ${escHtml(e.name)}">⬇</button>${fxDeleteButton(e)}</td>
+    </tr>`;
+  }).join('');
+  fxTbody.querySelector('.fx-row.selected')?.scrollIntoView({ block: 'nearest' });
+}
+
+/* ── Delete ──
+   The one write this panel makes: removing what an agent left where it should
+   not have. Offered only under the places an agent writes to — the workspace,
+   the read-write mounts, home and /tmp — and never on one of those itself, the
+   deliverables folder or the repository's .git. The daemon checks the same
+   again, on the resolved path (see refuse_delete in src/sandbox_fs.rs); this
+   copy only decides whether to show the button. Always confirmed. */
+function fxCanDelete(path) {
+  const p = fx.places;
+  const ws = p.workspace;
+  const roots = [ws, ...p.mounts.filter((m) => !m.readonly).map((m) => m.path), p.home, '/tmp']
+    .filter(Boolean).map((r) => r.replace(/\/+$/, ''));
+  const kept = ws ? [`${ws}/.sbxw-artifacts`, `${ws}/.git`] : [];
+  if (roots.includes(path) || kept.includes(path)) return false;
+  if (p.mounts.some((m) => m.readonly && path.startsWith(m.path + '/'))) return false;
+  return roots.some((r) => path.startsWith(r + '/'));
+}
+
+function fxDeleteButton(e) {
+  if (e.kind === 'other' && !e.link) return '';
+  return fxCanDelete(fxPathOf(e)) ? `<button class="fx-dl fx-rm" type="button" tabindex="-1"
+    title="Delete" aria-label="Delete ${escHtml(e.name)}">🗑</button>` : '';
+}
+
+async function fxDelete(entry) {
+  if (!filesTarget) return;
+  const name = filesTarget;
+  const path = fxPathOf(entry);
+  if (!fxCanDelete(path)) return;
+  const what = entry.kind === 'dir' && !entry.link ? 'the folder' : entry.link ? 'the link' : 'the file';
+  if (!confirm(`Delete ${what} ${path}?${entry.kind === 'dir' && !entry.link
+    ? '\n\nEverything in it goes too.' : ''}\n\nThis cannot be undone.`)) return;
+  let data;
+  try {
+    const res = await fetch(`/api/sandboxes/${encodeURIComponent(name)}/fs/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    data = await res.json();
+  } catch (_) {
+    data = { ok: false, error: 'could not reach sbxw' };
+  }
+  if (!data.ok) { showToast(data.error || 'Could not delete it', 'error'); return; }
+  showToast(`Deleted ${entry.name}`);
+  if (filesTarget !== name) return;
+  // The neighbour takes the selection, so ⌫ ⌫ ⌫ walks down a list of strays.
+  const rows = fxVisible();
+  const i = rows.findIndex((r) => fxKey(r) === fxKey(entry));
+  const next = rows[i + 1] || rows[i - 1];
+  const select = next ? fxKey(next) : null;
+  if (fx.recent) { fxOpenRecent({ push: false, select }); return; }
+  fxOpen(fx.path, { push: false, select });
+  fxFetchRecent(name);
+}
+
 function fxDownload(entry) {
   const a = document.createElement('a');
-  a.href = fxFileUrl(fxJoin(fx.path, entry.name), '&download=1');
+  a.href = fxFileUrl(fxPathOf(entry), '&download=1');
   a.download = entry.name;
   a.click();
 }
@@ -246,13 +478,15 @@ function fxDownload(entry) {
 /// opening them, as well as by the README a folder opens on.
 function fxShow(entry) {
   if (entry.kind === 'file') { fxPreview(entry); return; }
-  fx.selected = entry.name;
+  fx.selected = fxKey(entry);
   renderList();
   setPreviewOpen(true);
   document.getElementById('fx-preview').innerHTML = `
     <div class="fx-prev-head">
       <div class="fx-prev-name">${escHtml(entry.name)}</div>
       <div class="fx-prev-meta">${entry.kind === 'dir' ? 'Folder — Return to open it' : 'Not a regular file'}</div>
+      ${fxCanDelete(fxPathOf(entry)) ? `<div class="fx-prev-actions">
+        <button class="fx-copy fx-del" data-delete title="Delete it and everything in it (Del)">Delete</button></div>` : ''}
     </div>`;
 }
 
@@ -281,10 +515,10 @@ function fxPreviewEmpty() {
 }
 
 async function fxPreview(entry) {
-  fx.selected = entry.name;
+  fx.selected = fxKey(entry);
   renderList();
   setPreviewOpen(true);
-  const path = fxJoin(fx.path, entry.name);
+  const path = fxPathOf(entry);
   const host = document.getElementById('fx-preview');
   host.innerHTML = `
     <div class="fx-prev-head">
@@ -293,11 +527,15 @@ async function fxPreview(entry) {
       <div class="fx-prev-actions">
         <a class="dl-link" href="${fxFileUrl(path, '&download=1')}" download="${escHtml(entry.name)}">⬇ Download</a>
         <button class="fx-copy" data-copy="${escHtml(path)}" title="Copy the path">Copy path</button>
+        ${fx.recent ? `<button class="fx-copy" data-reveal="${escHtml(path)}"
+          title="Open the folder it was written to">Show in folder</button>` : ''}
+        ${fxCanDelete(path) ? '<button class="fx-copy fx-del" data-delete title="Delete it (Del)">Delete</button>' : ''}
       </div>
+      ${fx.recent ? `<div class="fx-prev-where" title="${escHtml(path)}">${escHtml(path)}</div>` : ''}
     </div>
     <div class="fx-prev-body" id="fx-prev-body"><p class="cm-empty-small">Loading…</p></div>`;
   const body = document.getElementById('fx-prev-body');
-  const stillHere = () => fx.selected === entry.name && document.getElementById('fx-prev-body') === body;
+  const stillHere = () => fx.selected === fxKey(entry) && document.getElementById('fx-prev-body') === body;
 
   if (entry.kind !== 'file') { body.innerHTML = '<p class="cm-empty-small">Not a regular file.</p>'; return; }
   if (FX_IMAGE.test(entry.name) && entry.size <= FX_IMAGE_MAX) {
@@ -415,7 +653,9 @@ async function generateCodemap(name) {
 function refreshFilesModal(name) {
   if (filesTarget !== name || filesOverlay.classList.contains('hidden')) return;
   fetchCodemapState(name);
+  if (fx.recent) { fxOpenRecent({ push: false, select: fx.selected }); return; }
   fxOpen(fx.path, { push: false, select: fx.selected });
+  fxFetchRecent(name);
 }
 
 /// What the code map button needs to know: is there a map, are there lenses,
@@ -441,10 +681,11 @@ async function openFilesModal(name) {
   filesTarget = name;
   filesNameEl.textContent = name;
   filesOverlay.classList.remove('hidden');
-  Object.assign(fx, { path: '', parent: null, entries: [], history: [], selected: null });
+  Object.assign(fx, { path: '', parent: null, entries: [], history: [], selected: null, recent: null, fresh: null });
   document.getElementById('fx-filter').value = '';
   fxNotice('');
   fetchCodemapState(name);
+  fxFetchRecent(name);
   document.getElementById('fx-list-wrap').focus({ preventScroll: true });
   await fxOpen('', { push: false });
   if (filesTarget !== name) return;
@@ -485,7 +726,8 @@ document.addEventListener('keydown', e => {
 
 document.getElementById('fx-back').addEventListener('click', () => {
   const prev = fx.history.pop();
-  if (prev) fxOpen(prev, { push: false });
+  if (prev === FX_RECENT) fxOpenRecent({ push: false });
+  else if (prev) fxOpen(prev, { push: false });
 });
 document.getElementById('fx-up').addEventListener('click', () => {
   if (fx.parent) fxOpen(fx.parent, { select: fx.path.split('/').pop() });
@@ -525,23 +767,25 @@ document.getElementById('fx-favourites').addEventListener('click', (e) => {
   const rm = e.target.closest('[data-unfav]');
   if (rm) { e.stopPropagation(); fxToggleFavourite(rm.dataset.unfav); return; }
   const fav = e.target.closest('.fx-fav');
-  if (fav && fav.dataset.path !== fx.path) fxOpen(fav.dataset.path);
+  if (fav?.dataset.path === FX_RECENT) { if (!fx.recent) fxOpenRecent(); return; }
+  if (fav && (fx.recent || fav.dataset.path !== fx.path)) fxOpen(fav.dataset.path);
 });
 
 fxTbody.addEventListener('click', (e) => {
   const row = e.target.closest('.fx-row');
   if (!row) return;
-  const entry = fx.entries.find((x) => x.name === row.dataset.name);
+  const entry = fx.entries.find((x) => fxKey(x) === row.dataset.key);
   if (!entry) return;
   // Keep the keyboard where the pointer just was, so ↑/↓ carry on from here.
   document.getElementById('fx-list-wrap').focus({ preventScroll: true });
+  if (e.target.closest('.fx-rm')) { fxDelete(entry); return; }
   if (e.target.closest('.fx-dl')) { fxDownload(entry); return; }
   if (entry.kind === 'dir') fxOpen(fxJoin(fx.path, entry.name));
   else fxPreview(entry);
 });
 fxTbody.addEventListener('dblclick', (e) => {
   const row = e.target.closest('.fx-row');
-  const entry = row && fx.entries.find((x) => x.name === row.dataset.name);
+  const entry = row && fx.entries.find((x) => fxKey(x) === row.dataset.key);
   if (!entry || entry.kind !== 'file' || e.target.closest('.fx-dl')) return;
   fxDownload(entry);
 });
@@ -552,7 +796,7 @@ fxTbody.addEventListener('dblclick', (e) => {
 document.getElementById('fx-list-wrap').addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const rows = fxVisible();
-  const i = rows.findIndex((r) => r.name === fx.selected);
+  const i = rows.findIndex((r) => fxKey(r) === fx.selected);
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     if (!rows.length) return;
@@ -564,6 +808,12 @@ document.getElementById('fx-list-wrap').addEventListener('keydown', (e) => {
     const entry = rows[i];
     if (entry.kind === 'dir') fxOpen(fxJoin(fx.path, entry.name));
     else if (entry.kind === 'file') fxDownload(entry);
+  } else if (e.key === 'Delete' && i !== -1) {
+    e.preventDefault();
+    fxDelete(rows[i]);
+  } else if (e.key === 'Backspace' && fx.recent && fx.history.length) {
+    e.preventDefault();
+    document.getElementById('fx-back').click();
   } else if (e.key === 'Backspace' && fx.parent) {
     e.preventDefault();
     fxOpen(fx.parent, { select: fx.path.split('/').pop() });
@@ -571,6 +821,17 @@ document.getElementById('fx-list-wrap').addEventListener('keydown', (e) => {
 });
 
 document.getElementById('fx-preview').addEventListener('click', (e) => {
+  if (e.target.closest('[data-delete]')) {
+    const entry = fx.entries.find((x) => fxKey(x) === fx.selected);
+    if (entry) fxDelete(entry);
+    return;
+  }
+  const reveal = e.target.closest('[data-reveal]');
+  if (reveal) {
+    const p = reveal.dataset.reveal;
+    fxOpen(p.slice(0, p.lastIndexOf('/')) || '/', { select: p.slice(p.lastIndexOf('/') + 1) });
+    return;
+  }
   const btn = e.target.closest('.fx-copy');
   if (!btn) return;
   if (navigator.clipboard) {

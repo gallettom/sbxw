@@ -137,6 +137,19 @@
       <!-- Skills first: the one footer control about what is *inside* every
            sandbox rather than about the list, ringed in the logo's blue and
            green so it does not read as a third grey utility button. -->
+      <!-- Upload above Skills: a file dropped (or picked) here goes into a
+           sandbox the modal below asks for, and its path lands in that
+           sandbox's prompt unsent, so there is room to say what it is for.
+           (/js/upload.js) -->
+      <label class="upload-box" id="upload-box" title="Drop a file to send it into a sandbox — or click to pick one">
+        <input type="file" id="upload-input" multiple hidden>
+        <svg class="upload-box-icon" width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <path class="upload-arrow" d="M13 15V4M8.5 8.5 13 4l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 14v5.5A2.5 2.5 0 0 0 6.5 22h13a2.5 2.5 0 0 0 2.5-2.5V14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>
+        <span class="upload-box-title">Drop files here</span>
+        <span class="upload-box-sub">or click to browse</span>
+      </label>
       <button id="btn-skills" class="skills-btn" title="Skills — the commands the bundled kits put in every sandbox">Skills</button>
       <button id="btn-monitor" class="monitor-btn" hidden
               title="Host monitor — every sandbox at once, in a pane of its own">
@@ -233,6 +246,18 @@
           <div class="fs-list" id="fs-list">
             <div class="fs-loading">Loading…</div>
           </div>
+        </div>
+        <!-- The repos this sandbox mounts. Empty means the folder browsed to
+             above, alone — the one-repo case costs no extra click. The first
+             row is the workspace; the others are mounted beside it, each
+             read-only or read-write. Filled by /js/create.js. -->
+        <div>
+          <div class="ports-header">
+            <label class="field-label" style="margin:0">Repos</label>
+            <button class="btn-add-port" id="btn-add-repo" type="button">＋ Add this folder</button>
+          </div>
+          <p class="repo-hint" id="repo-hint"></p>
+          <div class="repo-rows" id="repo-rows"></div>
         </div>
         <div>
           <div class="ports-header">
@@ -625,8 +650,8 @@
        A file explorer over the sandbox's own filesystem — the whole of it, read
        through `sbx exec` while the sandbox runs, the workspace alone from the
        host while it is stopped (see src/sandbox_fs.rs). `.sbxw-artifacts`, where
-       the agent leaves its deliverables, is the first favourite and where it
-       opens. Opened from the 📁 button beside the sandbox name in a pane's top
+       the agent leaves its deliverables, is where it opens; above it, Recent
+       lists the newest files wherever they were written. Opened from the 📁 button beside the sandbox name in a pane's top
        bar (see /js/panes.js, /js/files.js). -->
   <div class="modal-overlay hidden" id="files-modal-overlay">
     <div class="modal files-modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
@@ -882,6 +907,32 @@
       </div>
       <div class="modal-foot">
         <button class="btn-cancel" id="skills-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Upload: which sandbox? ──
+       Opened by a file landing in the sidebar's upload box. Picking a sandbox
+       uploads the file there and types its path into that sandbox's Claude
+       prompt, opening a pane for it first when none shows it. -->
+  <div class="modal-overlay hidden" id="upload-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title" style="width:540px">
+      <div class="modal-head">
+        <span class="modal-title" id="upload-modal-title">Send to a sandbox</span>
+        <button class="modal-close" id="upload-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="upload-files" id="upload-files"></div>
+        <div>
+          <span class="field-label" id="upload-sandbox-label">Into which sandbox?</span>
+          <div class="upload-grid" id="upload-sandboxes" role="radiogroup" aria-labelledby="upload-sandbox-label"></div>
+          <p class="repo-note" id="upload-note" hidden></p>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="upload-error"></span>
+        <button class="btn-cancel" id="upload-modal-cancel">Cancel</button>
+        <button class="btn-create" id="upload-modal-send" disabled>Send</button>
       </div>
     </div>
   </div>

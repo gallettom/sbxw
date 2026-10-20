@@ -192,6 +192,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             name,
             workspace,
             ro,
+            rw: vec![],
             config: load_config(&a.config)?,
             extra_ports: vec![],
             chat: a.chat,

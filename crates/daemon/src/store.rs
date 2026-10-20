@@ -110,6 +110,13 @@ pub struct ThreadRecord {
     pub model: Option<String>,
 }
 
+/// A directory mounted beside the workspace, at the same path inside.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MountRecord {
+    pub path: PathBuf,
+    pub readonly: bool,
+}
+
 /// Everything sbxw knows about one sandbox.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SandboxRecord {
@@ -127,6 +134,10 @@ pub struct SandboxRecord {
     pub token: Option<String>,
     #[serde(default)]
     pub threads: BTreeMap<String, ThreadRecord>,
+    /// The repos mounted beside the workspace at creation, the only moment
+    /// sbx applies them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<MountRecord>,
     /// The pre-`ANTHROPIC_DEFAULT_MODEL` settings key has been dealt with.
     #[serde(default)]
     pub model_migrated: bool,
@@ -343,6 +354,7 @@ impl Store {
             config: None,
             chat,
             token: None,
+            mounts: vec![],
             threads: threads
                 .into_iter()
                 .map(|(k, v)| {

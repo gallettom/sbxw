@@ -91,14 +91,29 @@ impl App {
         Ok(())
     }
 
-    /// A bring-up from the browser: the daemon's config, the dialog's ports.
-    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, extra: Vec<WantedPort>, sink: Option<Sink>) -> Result<Vec<String>> {
+    /// A bring-up from the browser: the daemon's config, the dialog's ports,
+    /// and the other repos it mounts beside the workspace as `(path, readonly)`.
+    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, mounts: Vec<(String, bool)>, extra: Vec<WantedPort>, sink: Option<Sink>) -> Result<Vec<String>> {
         let path = PathBuf::from(path.trim());
         if !path.is_dir() {
             bail!("path is not a directory");
         }
-        tracing::info!("web UI: provisioning sandbox '{name}' at {} ({} extra ports)", path.display(), extra.len());
-        let req = self.bring_up_request(name, path, self.cfg.clone(), extra, false);
+        // `provision` reuses a sandbox that exists, as `sbxw up` should — but
+        // this dialog's folders and modes would then be dropped in silence.
+        if self.sbx.exists(&name).await {
+            bail!("a sandbox named '{name}' already exists — pick another name, or remove it first");
+        }
+        let (ro, rw) = extra_mounts(&path, mounts)?;
+        tracing::info!(
+            "web UI: provisioning sandbox '{name}' at {} ({} read-only and {} writable repos beside it, {} extra ports)",
+            path.display(),
+            ro.len(),
+            rw.len(),
+            extra.len()
+        );
+        let mut req = self.bring_up_request(name, path, self.cfg.clone(), extra, false);
+        req.ro = ro;
+        req.rw = rw;
         self.provision(req, sink).await
     }
 
@@ -109,6 +124,7 @@ impl App {
             name,
             workspace,
             ro: vec![],
+            rw: vec![],
             config,
             extra_ports,
             chat,
@@ -292,6 +308,42 @@ impl App {
 }
 
 /// `CLAUDE_CODE_OAUTH_TOKEN`, or its legacy alias, when set and non-empty.
+/// The repos to mount beside `workspace`, split `(read-only, writable)`. Each
+/// is canonical — sbx mounts it at the same path inside — and apart from every
+/// other: sbx shares a directory once, so a repo inside the workspace (or inside
+/// another repo, or around one) is reached through that mount, with its mode —
+/// a `:ro` on it is silently writable.
+fn extra_mounts(workspace: &std::path::Path, mounts: Vec<(String, bool)>) -> Result<(Vec<String>, Vec<String>)> {
+    let workspace = std::fs::canonicalize(workspace).with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;
+    let mut seen = vec![workspace];
+    let (mut ro, mut rw) = (vec![], vec![]);
+    for (path, readonly) in mounts {
+        let shown = path.trim();
+        let dir = std::fs::canonicalize(shown).ok().filter(|d| d.is_dir()).ok_or_else(|| anyhow!("{shown} is not a directory"))?;
+        let s = dir.to_string_lossy().into_owned();
+        if s.contains(':') || s.contains(',') {
+            bail!("{shown}: sbx cannot mount a path containing ':' or ','");
+        }
+        if let Some(other) = seen.iter().find(|o| dir.starts_with(o) || o.starts_with(&dir)) {
+            if *other == dir {
+                bail!("{shown} is already mounted in this sandbox");
+            }
+            let other = other.display();
+            bail!(
+                "{shown} and {other} are nested: sbx mounts only the outer one, so the inner one gets its mode — \
+                 pick sibling folders (or make the outer one the only repo)"
+            );
+        }
+        seen.push(dir);
+        if readonly {
+            ro.push(s);
+        } else {
+            rw.push(s);
+        }
+    }
+    Ok((ro, rw))
+}
+
 pub fn oauth_token_from_env() -> Option<String> {
     ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_OAUTH_TOKEN"]
         .iter()
