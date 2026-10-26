@@ -267,13 +267,17 @@ function groupColorOf(key) {
   return key === CHAT_GROUP ? CHAT_GROUP_COLOR : workspaceGroupColor(key);
 }
 
-// Reorders sandboxes into three tiers, alphabetical within each: the chat
-// group first (it always forms, even with a single chat sandbox, and always
-// sorts to the very top so it's never buried under older workspaces), then
-// every other group — sorted by its label — and finally ungrouped sandboxes
-// on their own, sorted by name. Grouped sandboxes never interleave with
-// ungrouped ones this way: all the group cards sit together as one block,
-// with any singles trailing after rather than wedged between them.
+// Reorders sandboxes into three tiers: the chat group first (it always forms,
+// even with a single chat sandbox, and always sorts to the very top so it's
+// never buried under older workspaces), then every other group — sorted by its
+// label — and finally ungrouped sandboxes on their own. Grouped sandboxes never
+// interleave with ungrouped ones this way: all the group cards sit together as
+// one block, with any singles trailing after rather than wedged between them.
+//
+// Within a group, and among the ungrouped, the sandboxes on screen come first,
+// in pane order (P1 before P2), then the rest by name: the rows a person is
+// working in stay at the top of where they belong, not wherever the alphabet
+// puts them.
 function orderForGrouping(list, groupCounts) {
   const keyOf = s => {
     const k = groupKeyOf(s);
@@ -286,16 +290,24 @@ function orderForGrouping(list, groupCounts) {
     if (k) return 1;
     return 2;
   };
-  const sortLabel = s => {
+  const groupLabel = s => {
     const k = keyOf(s);
-    if (k && k !== CHAT_GROUP) return workspaceBasename(k).toLowerCase();
-    return s.name.toLowerCase();
+    return k && k !== CHAT_GROUP ? workspaceBasename(k).toLowerCase() : '';
   };
-  return list.slice().sort((a, b) => {
-    const tierCmp = tierOf(a) - tierOf(b);
-    if (tierCmp !== 0) return tierCmp;
-    return sortLabel(a).localeCompare(sortLabel(b)) || a.name.localeCompare(b.name);
-  });
+  const visible = panes.slice(0, paneCount);
+  const paneOf = s => {
+    const i = visible.findIndex(p => p.sandbox === s.name);
+    return i < 0 ? Infinity : i;
+  };
+  return list.slice().sort((a, b) =>
+    tierOf(a) - tierOf(b)
+    || groupLabel(a).localeCompare(groupLabel(b))
+    // Same group from here: two different workspaces with one basename stay
+    // apart, their rows not shuffled together by pane order.
+    || (keyOf(a) || '').localeCompare(keyOf(b) || '')
+    || (paneOf(a) === paneOf(b) ? 0 : paneOf(a) < paneOf(b) ? -1 : 1)
+    || a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    || a.name.localeCompare(b.name));
 }
 
 function sandboxItemHtml(s, groupColor) {

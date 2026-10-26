@@ -21,7 +21,7 @@ Served at <http://sbxw.localhost:7681> by default (`web_addr` in
 | Area | What's there |
 |---|---|
 | **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, for the background and the bar above it (kept in this browser; the defaults come from [`terminal_color` and `terminal_bar_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
-| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder. Chat sandboxes go under **💬 Chats**. A sandbox's [threads](threads-and-lead.md) are listed under its row |
+| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder. Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row |
 | **Panes** | One terminal each. A sandbox's panes sit next to each other in a shared colour |
 | **Bottom right** | Background-job cards (bring-ups, code maps, relay requests) and the [chat dock](chat.md#the-chat-dock) button |
 

@@ -35,6 +35,8 @@ function setLayout(n) {
   });
   updateLayoutSwitchLabel();
   updateCloseButtons();
+  // A pane hidden or shown moves its sandbox in or out of the top of its group.
+  if (sandboxes.length) renderSidebar();
   saveLayout();
 }
 

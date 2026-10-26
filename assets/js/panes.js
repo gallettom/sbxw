@@ -619,6 +619,7 @@ function emptyPane(idx) {
   // The liseret speaks for whoever is in the pane, and now nobody is.
   applyAgentStates();
   schedulePaintGroups();
+  renderSidebar();
 }
 
 // `repo` names the git repo a thread works in, and `model` the Claude model it
