@@ -587,11 +587,8 @@ async function fxPreview(entry) {
 ///  - **Writing a lens…** — same session, different document, and the map it is
 ///    written from is still there to read. So it says what is happening and
 ///    stays clickable: a lens being written is no reason to lock the map away.
-///  - **Generate code map** — there is none. This used to be the disabled state
-///    with a tooltip naming the command that writes one, which told you what
-///    you were missing and left you to go and type it in a pane. A project
-///    without a map is the case where the button has the most to do, not the
-///    least.
+///  - **Generate code map** — there is none. Enabled: a project without a map
+///    is the case where the button has the most to do.
 ///
 /// A lens counts as something to open. A project whose map was deleted but
 /// whose lenses survive still has documents in that panel, and a button that

@@ -67,7 +67,7 @@ function sbxwLoadScript(src) {
 
 // Scripts share one global scope and depend on load order (main.js reads
 // globals `panes.js` and friends declare), so this loads them one at a time
-// rather than in parallel — the same order they used to run in as static tags.
+// rather than in parallel.
 function sbxwLoadApp() {
   SBXW_APP_SCRIPTS
     .reduce((chain, src) => chain.then(() => sbxwLoadScript(src)), Promise.resolve())
@@ -75,7 +75,7 @@ function sbxwLoadApp() {
 }
 
 // Older browsers without BroadcastChannel have no way to detect a duplicate
-// tab — just boot normally, same as sbxw did before this existed.
+// tab — just boot normally.
 if (typeof BroadcastChannel === 'undefined') {
   sbxwLoadApp();
 } else {

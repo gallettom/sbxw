@@ -300,16 +300,10 @@ function copyViaExecCommand(text) {
 // than geometry: opening one, closing it on Escape, closing it on a click
 // elsewhere, and re-placing it when the layout moves are the same problem every
 // time, and the last three are the ones easy to get subtly wrong.
-//
-// This lives in util.js rather than in whichever feature file happened to need
-// it first. When `positionPopover` sat in ssh.js, every later card had to be
-// loaded after it — a load-order rule recorded in a comment instead of in the
-// dependency.
 
-/// The popover currently open, so opening one closes the other. That used to
-/// happen by accident: clicking the second button tripped the first card's own
-/// outside-click handler. Accidental exclusion works until two cards are opened
-/// from somewhere that isn't a click.
+/// The popover currently open, so opening one closes the other — explicitly,
+/// not as a side effect of the outside-click handler, which only fires on a
+/// click.
 let openPopover = null;
 
 /// Place a popover under its button, flipping above when the viewport floor is

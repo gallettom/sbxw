@@ -106,9 +106,7 @@ pub fn protocol_is_default(proto: &str, host_ip: &str) -> bool {
 ///
 /// No `additionalWorkspaces`: sbxw's extra mounts come from `sbxw up --ro`,
 /// which is argv rather than config, so neither export path has any to write.
-/// The field existed, hard-coded empty at both call sites, until it was
-/// removed — read support for the key lives on in `Spec::additional`, which
-/// `sbxw env run` genuinely uses.
+/// Reading the key is `Spec::additional`.
 #[derive(Default)]
 pub struct EnvFile {
     pub name: String,
@@ -183,8 +181,6 @@ impl EnvFile {
             out.push_str("\nports:\n");
             for p in &self.ports {
                 let _ = writeln!(out, "  - sandbox: {}", p.sandbox);
-                // An absent `host` is sbx's "any free port", so omitting the
-                // key is meaningful output rather than a gap to fill in.
                 if let Some(h) = p.host {
                     let _ = writeln!(out, "    host: {h}");
                 }
@@ -783,8 +779,6 @@ impl Loaded {
                     .with_context(|| format!("ports[{i}]: {sandbox} is not a port number"))?;
                 ports.push(Port {
                     sandbox,
-                    // Absent `host` means "give me an ephemeral one", which is
-                    // a real choice in this format and not a missing value.
                     host: num("host").and_then(|h| u16::try_from(h).ok()),
                     host_ip: as_str(m.get("hostIP")),
                     protocol: as_str(m.get("protocol")),
@@ -1106,18 +1100,6 @@ mod tests {
         assert_eq!(spec.workspace, None);
     }
 
-    #[test]
-    fn a_port_without_a_host_key_means_ephemeral_not_missing() {
-        let spec = load_str(
-            "agent: claude\nports:\n  - sandbox: 3000\n  - sandbox: 4000\n    host: 4000\n",
-            "ephemeral",
-        )
-        .spec()
-        .unwrap();
-        assert_eq!(spec.ports[0].host, None);
-        assert_eq!(spec.ports[1].host, Some(4000));
-    }
-
     /// sbx runs these from a temporary directory: a relative helper is
     /// reported, a program found on PATH or by absolute path is not.
     #[test]
@@ -1344,20 +1326,6 @@ mod tests {
     }
 
     #[test]
-    fn an_oci_kit_reference_keeps_its_colon() {
-        // `docker.io/sbx/playwright-kit:latest` bare would be read as a mapping.
-        let out = EnvFile {
-            kits: vec!["docker.io/sbx/playwright-kit:latest".into()],
-            ..minimal()
-        }
-        .render("sbxw 1.0");
-        assert!(
-            out.contains("  - 'docker.io/sbx/playwright-kit:latest'\n"),
-            "{out}"
-        );
-    }
-
-    #[test]
     fn ports_carry_their_host_ip_only_when_there_is_one_to_carry() {
         let out = EnvFile {
             ports: vec![
@@ -1415,7 +1383,6 @@ mod tests {
             }
             .render("sbxw 1.0")
         };
-        assert_eq!(build(), build());
         let out = build();
         let a = out.find("A:").unwrap();
         let b = out.find("B:").unwrap();

@@ -1133,8 +1133,7 @@ async fn health(State(app): S) -> Json<Value> {
     }))
 }
 
-/// Everything a tab needs to draw itself, in one call — what it used to seed
-/// from six. `/api/stream` carries every change from then on.
+/// Everything a tab needs to draw itself, in one call. `/api/stream` carries every change from then on.
 async fn state(State(app): S) -> Json<Value> {
     Json(json!({
         "sessions": app.session_infos(),
