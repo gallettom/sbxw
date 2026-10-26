@@ -32,9 +32,8 @@
     return dot !== -1 && SOURCE_EXTS.includes(head.slice(dot).toLowerCase());
   };
 
-  const escapeHtml = (s) => s
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  // util.js's, under the name this file has always used.
+  const escapeHtml = escHtml;
 
   const slug = (parts) => parts.join('--').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';

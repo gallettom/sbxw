@@ -19,10 +19,10 @@ function renderPortsTable(ports) {
   }
   portsTbody.innerHTML = ports.map(p =>
     `<tr>
-      <td><strong>${p.sandbox_port}</strong></td>
-      <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${p.host_ip}:${p.host_port}</td>
-      <td><span class="proto-badge">${p.proto}</span></td>
-      <td><button class="btn-del-port" data-spec="${p.spec}" title="Unpublish">✕</button></td>
+      <td><strong>${escHtml(p.sandbox_port)}</strong></td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${escHtml(p.host_ip)}:${escHtml(p.host_port)}</td>
+      <td><span class="proto-badge">${escHtml(p.proto)}</span></td>
+      <td><button class="btn-del-port" data-spec="${escHtml(p.spec)}" title="Unpublish">✕</button></td>
     </tr>`
   ).join('');
   portsTbody.querySelectorAll('.btn-del-port').forEach(btn => {
@@ -38,8 +38,8 @@ function renderHostsTable(hostEntries) {
   }
   hostsTbody.innerHTML = rows.map(e =>
     `<tr>
-      <td style="color:#c9d1d9">${e.hostname}</td>
-      <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${e.ip}</td>
+      <td style="color:#c9d1d9">${escHtml(e.hostname)}</td>
+      <td style="font-family:ui-monospace,monospace;font-size:11px;color:#8b949e">${escHtml(e.ip)}</td>
     </tr>`
   ).join('');
 }

@@ -318,17 +318,17 @@ function sandboxItemHtml(s, groupColor) {
     ? `<span class="sbx-map-badge" title="Writing the ${codemapWhat(mapRun)} in a background session">`
       + `${isLensRun(mapRun) ? 'lens' : 'map'}…</span>`
     : '';
-  const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${s.name}" title="Duplicate (new sandbox, same workspace)">⧉</button>`;
+  const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`;
   const actions = isRunning
-    ? `<button class="icon-btn stop-btn" data-action="stop" data-name="${s.name}" title="Stop">■</button>
-       <button class="icon-btn restart-btn" data-action="restart" data-name="${s.name}" title="Reload">↺</button>
-       <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Ports &amp; network policy">⇌</button>
+    ? `<button class="icon-btn stop-btn" data-action="stop" data-name="${escHtml(s.name)}" title="Stop">■</button>
+       <button class="icon-btn restart-btn" data-action="restart" data-name="${escHtml(s.name)}" title="Reload">↺</button>
+       <button class="icon-btn ports-btn" data-action="ports" data-name="${escHtml(s.name)}" title="Ports &amp; network policy">⇌</button>
        ${dupBtn}
-       <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`
-    : `<button class="icon-btn connect-btn" data-action="connect" data-name="${s.name}" title="Connect">▶</button>
-       <button class="icon-btn ports-btn" data-action="ports" data-name="${s.name}" title="Ports &amp; network policy">⇌</button>
+       <button class="icon-btn rm-btn" data-action="rm" data-name="${escHtml(s.name)}" title="Remove permanently">✕</button>`
+    : `<button class="icon-btn connect-btn" data-action="connect" data-name="${escHtml(s.name)}" title="Connect">▶</button>
+       <button class="icon-btn ports-btn" data-action="ports" data-name="${escHtml(s.name)}" title="Ports &amp; network policy">⇌</button>
        ${dupBtn}
-       <button class="icon-btn rm-btn" data-action="rm" data-name="${s.name}" title="Remove permanently">✕</button>`;
+       <button class="icon-btn rm-btn" data-action="rm" data-name="${escHtml(s.name)}" title="Remove permanently">✕</button>`;
   // Active state is on border-right and the group colour on border-left, so
   // a row can carry both. Ungrouped rows still get a left border — just a
   // neutral grey (the same one buttons use), so the sidebar's left edge
@@ -339,15 +339,15 @@ function sandboxItemHtml(s, groupColor) {
   const ageTag = age
     ? `<span class="sbx-age" title="Created ${escHtml(new Date(s.created_at).toLocaleString())}">${escHtml(age.replace(' ago', ''))}</span>`
     : '';
-  return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}" data-name="${s.name}"${borderStyle}>
-    <div class="sbx-name">${s.name}${paneTag}${readyDot}${mapBadge}${ageTag}</div>
+  return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
+    <div class="sbx-name">${escHtml(s.name)}${paneTag}${readyDot}${mapBadge}${ageTag}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
-      <span class="sbx-status">${s.status}</span>
-      <span class="sbx-agent">${s.agent}</span>
+      <span class="sbx-status">${escHtml(s.status)}</span>
+      <span class="sbx-agent">${escHtml(s.agent)}</span>
       <div class="sbx-actions">${actions}</div>
     </div>
-    <div class="sbx-threads" data-sandbox="${s.name}" hidden></div>
+    <div class="sbx-threads" data-sandbox="${escHtml(s.name)}" hidden></div>
   </div>`;
 }
 
@@ -396,8 +396,8 @@ function renderSidebar() {
         const title = isChat ? 'Chat sandboxes — each on its own empty workspace' : groupKey;
         const label = isChat ? '💬 Chats' : `📁 ${workspaceBasename(groupKey)}`;
         html += `<div class="sbx-group${isChat ? ' sbx-group-chat' : ''}" style="--group-color:${groupColorOf(groupKey)}">
-          <div class="sbx-group-label" title="${title}">
-            <span class="sbx-group-dot"></span>${label}
+          <div class="sbx-group-label" title="${escHtml(title)}">
+            <span class="sbx-group-dot"></span>${escHtml(label)}
           </div>`;
       }
       openGroup = groupKey;
