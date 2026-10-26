@@ -28,6 +28,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     ("/app.css", "text/css; charset=utf-8", include_str!("../../../../assets/app.css")),
     js!("singleton.js"),
     js!("util.js"),
+    js!("term-color.js"),
     js!("panes.js"),
     js!("pane-controls.js"),
     js!("sandboxes.js"),
@@ -39,6 +40,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("envfile.js"),
     js!("help.js"),
     js!("skills.js"),
+    js!("templates.js"),
     js!("upload.js"),
     js!("lifecycle.js"),
     js!("main.js"),
@@ -74,7 +76,7 @@ pub fn routes() -> Router<Arc<App>> {
     r
 }
 
-/// The shell, with the four values it carries baked in. Quotes are stripped
+/// The shell, with the six values it carries baked in. Quotes are stripped
 /// from the monitor command rather than escaped: it lands in a JS string.
 async fn index(State(app): State<Arc<App>>) -> impl IntoResponse {
     let monitor = app.cfg.monitor_cmd.join(" ").replace(['"', '\\'], "");
@@ -83,6 +85,8 @@ async fn index(State(app): State<Arc<App>>) -> impl IntoResponse {
         INDEX
             .replace("__SANDBOX__", &initial)
             .replace("__MONITOR__", &monitor)
+            .replace("__TERM_COLOR__", &app.cfg.terminal_color)
+            .replace("__TERM_BAR_COLOR__", &app.cfg.terminal_bar_color)
             .replace("__SBXW_VERSION__", &app.versions.sbxw)
             .replace("__SBX_VERSION__", app.versions.sbx.as_deref().unwrap_or("")),
     )

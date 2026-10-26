@@ -15,6 +15,8 @@ const SPECS: &[(&str, &str)] = &[
     ("agent-skills", include_str!("../../../assets/agent-skills/spec.yaml")),
     ("md-to-pdf-tools", include_str!("../../../assets/md-to-pdf-tools/spec.yaml")),
     ("k8s-tools", include_str!("../../../assets/k8s-tools/spec.yaml")),
+    ("git-identity", include_str!("../../../assets/git-identity/spec.yaml")),
+    ("ssh-agent", include_str!("../../../assets/ssh-agent/spec.yaml")),
 ];
 
 /// The kits that fill the shared cache, in the order they are applied.
@@ -28,6 +30,16 @@ pub fn resolve(paths: &Paths, kits: &[String]) -> Result<Vec<String>> {
             Some(name) => write_out(paths, name),
         })
         .collect()
+}
+
+/// [`sbxw_core::templates::fingerprint`] of the kits `kits` resolves to: each
+/// local kit's `spec.yaml`, else the reference itself.
+pub fn fingerprint(paths: &Paths, kits: &[String]) -> Result<String> {
+    let specs: Vec<String> = resolve(paths, kits)?
+        .into_iter()
+        .map(|k| std::fs::read_to_string(std::path::Path::new(&k).join("spec.yaml")).unwrap_or(k))
+        .collect();
+    Ok(sbxw_core::templates::fingerprint(&specs))
 }
 
 fn write_out(paths: &Paths, name: &str) -> Result<String> {

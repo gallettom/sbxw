@@ -21,7 +21,8 @@ function loadLayout() {
 function setLayout(n) {
   paneCount = n;
 
-  while (panes.length < n) panes.push(createPane(panes.length));
+  // A new pane is empty: its bar starts as an empty pane's, not as the markup's.
+  while (panes.length < n) { panes.push(createPane(panes.length)); applyPaneChrome(panes.length - 1, null); }
   panes.forEach((p, i) => { p.el.style.display = i < n ? '' : 'none'; });
   applyGridTemplate(n);
 

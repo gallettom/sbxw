@@ -20,13 +20,14 @@ Served at <http://sbxw.localhost:7681> by default (`web_addr` in
 
 | Area | What's there |
 |---|---|
-| **Header** | The terminal-count switch (1 to several panes), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
+| **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, for the background and the bar above it (kept in this browser; the defaults come from [`terminal_color` and `terminal_bar_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
 | **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder. Chat sandboxes go under **💬 Chats**. A sandbox's [threads](threads-and-lead.md) are listed under its row |
 | **Panes** | One terminal each. A sandbox's panes sit next to each other in a shared colour |
 | **Bottom right** | Background-job cards (bring-ups, code maps, relay requests) and the [chat dock](chat.md#the-chat-dock) button |
 
 Each sandbox row has buttons to **stop**, **reload**, open **ports and network**
-(⇌), **duplicate**, and **remove** (✕).
+(⇌), **duplicate**, and **remove** (✕). Beside the name: its age (hover for the
+creation time).
 
 **Usage.** The 5-hour and weekly percentages are account-wide, the same numbers
 as Claude Code's `/usage`. They turn amber at 75% and red at 90%. They are
@@ -58,6 +59,26 @@ forwarding. It goes through the same pipeline as `sbxw up`.
 
 The **chat sandbox** dialog is the browser version of `sbxw chat`. See
 [Chat](chat.md).
+
+### The automatic template
+
+With `template = "auto"` in `sbxw.toml`, **Create** first checks the template
+for the configured kits. If it was made by another version of sbx, or the kits'
+specs changed since (an sbxw release that leaves the kits alone does not
+count), or there is none yet, a dialog shows what changed and offers:
+
+- **Rebuild template**: the sandbox is created from sbx's image. Once its kits'
+  startup installs have finished, its agent token and credentials are taken
+  out, it is saved as the new template, and they are put back. Only then does
+  it open, so the snapshot holds no one's work. The first time takes several
+  minutes. The old template is removed once the new one is saved.
+- **Use the old one**: create from the out-of-date template.
+- **Without template**: create from sbx's image and leave the template alone.
+
+Closing the dialog returns to the create dialog. A template that is up to date
+is used without asking; to rebuild it anyway, tick **Rebuild the automatic
+template from this sandbox** at the bottom of the create dialog (shown only
+then).
 
 ### Watching the bring-up
 
@@ -93,9 +114,8 @@ things about the **session** in the pane.
 | **Project** | Opens the [Project panel](#the-project-panel): files and code map |
 | **⑂ Thread** | Opens another Claude session in its own git worktree. See [Threads](threads-and-lead.md) |
 | **★ Lead mode** | Turns the main session into a planner. See [The lead](threads-and-lead.md#the-lead) |
-| **SSH** | Connection details for SSH clients. See [below](#environment-file-and-ssh-cards) |
-| **Env** | Export the sandbox as `sbxenv.yaml`. See [below](#environment-file-and-ssh-cards) |
-| **Reconnect** / **↻** | Reopen the WebSocket / also rebuild the terminal widget. Both replay the last 256 KB of the session |
+| **⋯** | A menu: **SSH** (connection details for SSH clients), **Environment file** (export the sandbox as `sbxenv.yaml`), both [below](#environment-file-and-ssh-cards), and **Reconnect** (reopen the WebSocket) |
+| **↻** | Rebuild the terminal widget, then reconnect. Reconnect and ↻ both replay the last 256 KB of the session |
 | **Claude ↔ Bash** | Switch between the agent and a shell. Both keep running server-side, with their scrollback |
 
 Notes:
@@ -186,8 +206,9 @@ so the panel combines three:
 
 | Section | From | Answers |
 |---|---|---|
+| **Blocked recently** | `sbx policy log <name> --format json` | Each host this sandbox was refused, newest first, with a count and an **Allow** button |
 | **Rules** | `sbx policy ls <name> --wide` | Which domains are allowed or denied (with a filter, since a global policy can have hundreds) |
-| **Recent egress** | `sbx policy log <name>` | What was actually allowed or blocked, and why |
+| **Recent egress** | `sbx policy log <name>` | What was actually allowed or blocked, and why. Click the **ACTION** header to put denies (or allows) first |
 | **Policies governing this sandbox** | `sbx policy ls <name>` | Each policy with its source (`local`, `kit`, `org`) and rule counts |
 
 Plus the **domains sbxw allows on up**, from `sbxw.toml`.
@@ -203,6 +224,16 @@ verbatim rather than as a misleading empty list.
 - **✕ on a rule** runs `sbx policy rm network --id <rule-id> --force`, after a
   confirmation. It appears only when sbx reports a rule id. Rules from an `org`
   source show 🔒: sbx won't let you remove them.
+- **Allow on a blocked host** adds an allow rule for that host (without its
+  port), for this sandbox only, after a confirmation. A host blocked by
+  organisation policy shows 🔒 instead.
+- **↻ Re-read policy now** runs `sbx policy refresh` (sbx 0.49): the policy is
+  re-read at once, after an AI Governance change say, instead of at the next
+  poll. Open connections stay open.
+
+**MCP servers.** The servers registered on this host (`sbx mcp ls`). **Unload**
+detaches one from this sandbox with `sbx mcp unload`, without restarting its
+agent.
 
 Rules changed here are **not** written to `sbxw.toml`; the next `sbxw up`
 re-applies the configured allowlist. For a permanent change, edit
@@ -210,14 +241,14 @@ re-applies the configured allowlist. For a permanent change, edit
 
 ## Environment file and SSH cards
 
-**Env** opens a card that exports the sandbox as an `sbxenv.yaml`: live
+**⋯ → Environment file** opens a card that exports the sandbox as an `sbxenv.yaml`: live
 preview, an editable target folder, **Copy** and **Save file**. It reads the
 ports the sandbox *actually* has, including ones you added in the UI. See
 [Environment files](environment-files.md#sbxw-env-export-write-the-file).
 
 <img src="images/env.png" alt="The Env card: target folder, a preview of the generated sbxenv.yaml, Copy and Save" width="600">
 
-**SSH** opens a card with one copy button per field of an *Add SSH connection*
+**⋯ → SSH** opens a card with one copy button per field of an *Add SSH connection*
 form: **Name**, **SSH Host** (`<name>.sbx`), and **SSH Port** / **Identity
 File** shown as *leave empty* (the managed `Host *.sbx` block supplies them).
 The last row is the whole command, `ssh <name>.sbx`. See [SSH](ssh.md).
@@ -230,6 +261,7 @@ Both cards close with Escape or a click outside.
 |---|---|
 | **Drop files here** | Drop or pick a file, choose a sandbox, and it is copied in. Its path is typed into that sandbox's Claude prompt, not submitted, so you can say what it's for. Up to 128 MB |
 | **Skills** | Lists the commands the bundled kits put in every sandbox, which run on their own (*default*) and which only when typed (*manual*) |
+| **Templates** | Lists the saved templates (`sbx template ls`), marking the one `template` in `sbxw.toml` names (*in use*) and the ones `template = "auto"` keeps (*automatic*). **Remove** deletes one. Pick a sandbox and a tag, then **Save**, to snapshot it as a new template: its agent token and Claude credentials are taken out first and put back after, as with `sbxw template save`. sbx may stop the sandbox for the snapshot; sbxw starts it again |
 | **Monitor Sandboxes** | Runs `monitor_cmd` (default: `sbx`, its all-sandboxes dashboard) in the focused pane, on the host. Click again to go back. `monitor_cmd = []` hides it |
 | **Help** | Fixes for an empty sandbox list (below) |
 | Shortcuts | The [keyboard shortcuts](#keyboard-shortcuts) for this platform |

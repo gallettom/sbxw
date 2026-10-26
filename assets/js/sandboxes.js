@@ -334,8 +334,13 @@ function sandboxItemHtml(s, groupColor) {
   // neutral grey (the same one buttons use), so the sidebar's left edge
   // reads consistently whether or not a row belongs to a group.
   const borderStyle = ` style="border-left-color:${groupColor || '#c9d1d9'}"`;
+  // From `sbx ls --format json` (0.48): how old the sandbox is.
+  const age = timeAgo(s.created_at);
+  const ageTag = age
+    ? `<span class="sbx-age" title="Created ${escHtml(new Date(s.created_at).toLocaleString())}">${escHtml(age.replace(' ago', ''))}</span>`
+    : '';
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}" data-name="${s.name}"${borderStyle}>
-    <div class="sbx-name">${s.name}${paneTag}${readyDot}${mapBadge}</div>
+    <div class="sbx-name">${s.name}${paneTag}${readyDot}${mapBadge}${ageTag}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       <span class="sbx-status">${s.status}</span>

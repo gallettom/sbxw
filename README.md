@@ -33,7 +33,7 @@ sbxw only ever calls `sbx`, never `docker sandbox`.
 
 ## Install
 
-You need the [`sbx`](https://docs.docker.com/reference/cli/sbx) CLI **0.47.0 or
+You need the [`sbx`](https://docs.docker.com/reference/cli/sbx) CLI **0.48.0 or
 newer** on your `PATH`, and `sbx login` done once.
 
 ```bash

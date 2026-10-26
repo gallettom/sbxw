@@ -115,6 +115,31 @@ pub fn web_alias(web_addr: &str) -> Option<HostAlias> {
 ///
 /// The IPv6 mirror sbx adds for each IPv4 publish is dropped; every distinct
 /// IPv4 binding is kept — including the extra loopbacks of `ip_per_app`.
+/// `sbx ports N --format json` (0.48+): rows of `host_ip`, `host_port`,
+/// `sandbox_port`, `protocol`. `None` when `raw` is not that, so the caller
+/// can read it as a table. IPv6 bindings are dropped, as in [`parse_ports`].
+pub fn parse_ports_json(raw: &str) -> Option<Vec<PortMapping>> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
+    let port = |v: &serde_json::Value, k: &str| {
+        let x = v.get(k)?;
+        x.as_u64().and_then(|n| u16::try_from(n).ok()).or_else(|| x.as_str()?.parse().ok())
+    };
+    let mut seen = std::collections::HashSet::new();
+    Some(
+        rows.iter()
+            .filter_map(|v| {
+                Some(PortMapping {
+                    sandbox_port: port(v, "sandbox_port")?,
+                    host_port: port(v, "host_port")?,
+                    host_ip: v.get("host_ip").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).unwrap_or("0.0.0.0").to_string(),
+                    proto: v.get("protocol").and_then(|x| x.as_str()).filter(|s| !s.is_empty()).unwrap_or("tcp").to_string(),
+                })
+            })
+            .filter(|p| !p.host_ip.contains(':') && seen.insert((p.host_ip.clone(), p.host_port, p.sandbox_port, p.proto.clone())))
+            .collect(),
+    )
+}
+
 pub fn parse_ports(raw: &str) -> Vec<PortMapping> {
     let mut lines = raw.lines().filter(|l| !l.trim().is_empty());
     let Some(header) = lines.next().map(str::trim) else {
@@ -253,5 +278,16 @@ mod tests {
             }]
         );
         assert!(parse_ports("").is_empty());
+    }
+
+    #[test]
+    fn the_ports_json_uses_the_documented_fields() {
+        let raw = r#"[{"host_ip":"127.0.0.2","host_port":4200,"sandbox_port":4200,"protocol":"tcp4"},
+                     {"host_ip":"::1","host_port":4200,"sandbox_port":4200,"protocol":"tcp6"}]"#;
+        let p = parse_ports_json(raw).unwrap();
+        assert_eq!(p.len(), 1, "IPv6 bindings dropped");
+        assert_eq!(p[0].spec(), "127.0.0.2:4200:4200");
+        assert_eq!(parse_ports_json("[]").unwrap(), vec![]);
+        assert!(parse_ports_json("HOST IP  HOST PORT  SANDBOX PORT\n").is_none());
     }
 }

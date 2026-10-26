@@ -120,6 +120,20 @@ ui "http://127.0.0.1:$UI/api/sandboxes/neos/ports" | grep -q '"host_port":4200' 
 ui "http://127.0.0.1:$UI/api/sandboxes/neos/envfile" | grep -q 'workspace: ./neos' || die "env export"
 ok "ports and env-file panels read the live sandbox"
 
+ui "http://127.0.0.1:$UI/api/sandboxes/neos/policy" | grep -q '"resource":"pastebin.com"' || die "blocked hosts from the JSON log"
+ui -X POST -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$UI/api/policy/refresh" | grep -q '"ok":true' || die "policy refresh"
+grep -q "^policy refresh" "$t/state/calls.log" || die "policy refresh reached sbx"
+ui "http://127.0.0.1:$UI/api/sandboxes/neos/mcp" | grep -q '"name":"github"' || die "mcp list"
+ui -X POST -H 'content-type: application/json' -d '{"server":"github"}' "http://127.0.0.1:$UI/api/sandboxes/neos/mcp/unload" | grep -q '"ok":true' || die "mcp unload"
+grep -q "^mcp unload github --sandbox neos" "$t/state/calls.log" || die "mcp unload argv"
+ui "http://127.0.0.1:$UI/api/sandboxes" | grep -q '"detached":false' || die "sandbox list carries the JSON fields"
+ok "network panel: blocked hosts, policy refresh, MCP list and unload"
+
+"$bin" doctor > "$t/doctor.log" 2>&1 || { cat "$t/doctor.log"; die "doctor"; }
+grep -q "✓ daemon" "$t/doctor.log" && grep -q "! global network policy — not initialized" "$t/doctor.log" || { cat "$t/doctor.log"; die "doctor output"; }
+ok "doctor checks sbxw and summarises sbx diagnose"
+
+
 "$bin" up solo "$t/ws/neos" --no-web < /dev/null > "$t/solo.log" 2>&1 || { cat "$t/solo.log"; die "up --no-web"; }
 grep -q "claude (fake) in solo" "$t/solo.log" || { cat "$t/solo.log"; die "--no-web attaches the agent here"; }
 token2=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).token)' "$HOME/.sbxw/state/sandboxes/solo.json")
@@ -128,6 +142,36 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "authorization: Bearer 
 [ "$code" = 200 ] || die "a token the CLI minted should be accepted by the running daemon, got $code"
 grep "create claude $t/ws/neos --name solo" "$t/state/calls.log" | grep -q -- "$HOME/.sbxw/cache:ro" || die "a later sandbox reads the cache"
 ok "--no-web runs the pipeline here and attaches; the daemon accepts its token"
+
+# Top-level key: appended, it would land in the last [[ports]] table.
+{ echo 'template = "auto"'; cat "$t/ws/sbxw.toml"; } > "$t/toml" && mv "$t/toml" "$t/ws/sbxw.toml"
+"$bin" up tpl "$t/ws/neos" --rebuild-template > "$t/tpl.log" 2>&1 || { cat "$t/tpl.log"; die "up --rebuild-template"; }
+grep -q "^create claude $t/ws/neos --name tpl " "$t/state/calls.log" && ! grep "^create claude $t/ws/neos --name tpl " "$t/state/calls.log" | grep -q -- --template || die "a rebuild creates from sbx's image"
+grep -q "^exec tpl -- rm -f /home/agent/.sbxw/token" "$t/state/calls.log" || { cat "$t/tpl.log"; grep tpl "$t/state/calls.log"; die "secrets taken out before the snapshot"; }
+tag=$(grep -o "^template save tpl sbxw-auto:[^ ]*" "$t/state/calls.log" | awk '{print $4}')
+[ -n "$tag" ] && grep -q "\"tag\": \"$tag\"" "$HOME/.sbxw/state/templates.json" || die "the template is saved and recorded"
+"$bin" up tpl2 "$t/ws/neos" > /dev/null 2>&1 || die "up from the template"
+grep -q "^create claude $t/ws/neos --name tpl2 --template $tag" "$t/state/calls.log" || die "the next sandbox starts from it"
+! grep "^create claude $t/ws/neos --name tpl2 " "$t/state/calls.log" | grep -q "/.sbxw/cache" || die "a sandbox from a template does not mount the kit cache"
+"$bin" up tpl2 "$t/ws/neos" > /dev/null 2>&1 || die "re-up"
+[ "$(grep -c "^policy ls tpl2 --wide" "$t/state/calls.log")" = 0 ] || die "a sandbox this sbxw created is never searched for the old UI-port rule"
+grep -q "^kit add tpl2" "$t/state/calls.log" && die "a re-up re-applies no kit sbxw recorded"
+"$bin" up tpl2 "$t/ws/neos" --rebuild-template > "$t/tpl2.log" 2>&1 || die "re-up with --rebuild-template"
+grep -q "already exists — a template is only rebuilt from a sandbox being created" "$t/tpl2.log" || { cat "$t/tpl2.log"; die "a rebuild asked of an existing sandbox says why not"; }
+ok "template = auto: rebuilt from a new sandbox without its secrets, then used"
+
+# The web UI's Templates dialog: list, save one from a sandbox, remove both.
+post() { ui -X POST -H 'content-type: application/json' -d "$2" "http://127.0.0.1:$UI$1"; }
+ui "http://127.0.0.1:$UI/api/templates" > "$t/tpls.json"
+grep -q "\"tag\":\"$tag\"" "$t/tpls.json" && grep -q '"auto":{' "$t/tpls.json" || die "the automatic template is listed as one"
+post /api/templates/save '{"sandbox":"tpl2","tag":"me/base:1"}' | grep -q '"ok":true' || die "save a template from the UI"
+grep -q "^template save tpl2 me/base:1" "$t/state/calls.log" || die "the UI's save reaches sbx"
+ui "http://127.0.0.1:$UI/api/templates" | grep -q '"tag":"me/base:1"' || die "the saved template is listed"
+post /api/templates/rm '{"tag":"me/base:1"}' | grep -q '"ok":true' || die "remove a template from the UI"
+post /api/templates/rm "{\"tag\":\"$tag\"}" | grep -q '"ok":true' || die "remove the automatic template"
+! grep -q "\"tag\": \"$tag\"" "$HOME/.sbxw/state/templates.json" || die "removing an automatic template forgets its record"
+post /api/templates/save '{"sandbox":"tpl2","tag":"--force"}' | grep -q '"ok":false' || die "a tag that reads as a flag is refused"
+ok "Templates dialog: list, save without secrets, remove"
 
 "$bin" rm neos >/dev/null || die "rm"
 [ ! -e "$HOME/.sbxw/state/sandboxes/neos.json" ] || die "rm forgets the record"

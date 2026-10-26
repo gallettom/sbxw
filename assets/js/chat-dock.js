@@ -36,6 +36,8 @@ const cdForm = cdEl('cd-composer');
 const cdHint = cdEl('cd-hint');
 const cdPeek = cdEl('cd-peek');
 const cdBadge = cdEl('cd-badge');
+const cdDock = cdEl('cd-dock');
+const cdTuck = cdEl('cd-tuck');
 
 // name → { log: [{who: 'me'|'ai'|'err', text}], state, steps, answerable, activity }
 // `active === null` is the "＋ New chat" tab: its first message mints a sandbox.
@@ -45,6 +47,7 @@ let cdOpen = false;
 let cdUnread = 0;
 let cdSendingNew = null; // text of a fresh chat being provisioned, if any
 let cdPeekTimer = null;
+let cdTucked = false;
 
 function cdChat(name) {
   if (!cdChats.has(name)) cdChats.set(name, chatNew());
@@ -151,8 +154,33 @@ function cdRenderLauncher() {
   cdBadge.hidden = !cdUnread || cdOpen;
   cdBadge.textContent = cdUnread;
   cdPanel.hidden = !cdOpen;
-  if (cdOpen) cdPeek.hidden = true;
+  if (cdOpen) { cdPeek.hidden = true; cdSetTucked(false); }
+  // Tucked, the tab carries what the launcher would have said.
+  cdTuck.classList.toggle('attention', states.includes('attention'));
+  cdTuck.classList.toggle('unread', !!cdUnread);
 }
+
+// ── Out of the way ────────────────────────────────────────────────────────
+// The launcher sits over the bottom-right corner of whichever pane is there,
+// on the last lines of its terminal. While that terminal has focus, the
+// launcher slides off the edge and leaves a tab; the tab brings it back, and
+// so does focus going anywhere else. Focus, not the pointer: typing is when
+// the corner matters, and a launcher that fled the pointer could not be hit.
+const CD_CORNER = 80; // px from the window's corner the launcher covers, gap included
+function cdCoversPane(pane) {
+  const r = pane.getBoundingClientRect();
+  return r.right > window.innerWidth - CD_CORNER && r.bottom > window.innerHeight - CD_CORNER;
+}
+function cdSetTucked(on) {
+  cdTucked = on && !cdOpen;
+  cdDock.classList.toggle('tucked', cdTucked);
+  cdTuck.hidden = !cdTucked;
+}
+document.addEventListener('focusin', e => {
+  if (cdDock.contains(e.target)) return;
+  const term = e.target.closest?.('.pane-term');
+  cdSetTucked(!!term && cdCoversPane(term));
+});
 
 function cdRender() {
   cdRenderLauncher();
@@ -251,6 +279,7 @@ sbxwStream.addEventListener('session', ev => {
 
 // ── Wiring ────────────────────────────────────────────────────────────────
 cdLauncher.addEventListener('click', () => cdToggle());
+cdTuck.addEventListener('click', () => { cdSetTucked(false); cdLauncher.focus(); });
 cdEl('cd-close').addEventListener('click', () => cdToggle(false));
 cdEl('cd-to-pane').addEventListener('click', () => { if (cdActive) cdOpenInPane(cdActive); });
 cdPeek.addEventListener('click', () => {

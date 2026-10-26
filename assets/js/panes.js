@@ -166,10 +166,11 @@ function createPane(index) {
       <button class="pane-btn pane-main-action pane-new-thread" id="pnewthread-${index}" aria-haspopup="menu" aria-expanded="false" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own">⑂<span class="mode-word"> Thread</span><span class="thread-count" hidden></span></button>
       <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Lead mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Lead mode</span> <span class="lead-state">Off</span></button>
       <span class="spacer"></span>
-      <button class="pane-btn pane-session-btn" id="pssh-${index}" title="SSH details for this sandbox — fields for a client, and the shell command (run 'sbxw ssh --setup' once first)" disabled>SSH</button>
-      <button class="pane-btn pane-session-btn" id="penv-${index}" title="Environment file (.sbxenv.yaml) for this sandbox — its workspace and published ports in sbx's own format, for a colleague to bring the same sandbox up" disabled>Env</button>
-      <button class="pane-btn pane-session-btn pane-reconnect-btn" id="preconnect-${index}">Reconnect</button>
-      <button class="pane-btn pane-session-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
+      <!-- SSH, Env and Reconnect behind one ⋯: each is done now and then, and
+           three words were what a narrow pane ran out of room for first. The
+           menu itself is one element for every pane (see togglePaneMenu). -->
+      <button class="pane-btn pane-session-btn pane-more-btn" id="pmore-${index}" aria-haspopup="menu" aria-expanded="false" title="SSH, environment file, reconnect" aria-label="More actions"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="8" r="1.5"/></svg></button>
+      <button class="pane-btn pane-session-btn pane-refresh-btn" id="prefresh-${index}" title="Rebuild this pane's terminal from scratch — fixes a broken layout that Reconnect alone can't, by destroying and recreating the terminal widget (then reconnecting)">↻</button>
       <div class="mode-switch" role="tablist">
         <!-- The word is wrapped so a narrow pane can drop it and keep the
              glyph, which carries the mode on its own (see app.css). -->
@@ -247,18 +248,10 @@ function createPane(index) {
     if (pane.sandbox && typeof openMergePlan === 'function') openMergePlan(pane.sandbox);
   });
 
-  document.getElementById(`preconnect-${index}`).addEventListener('click', () => {
-    if (pane.sandbox) connectPane(index, pane.sandbox, pane.mode);
-  });
+  document.getElementById(`pmore-${index}`).addEventListener('click', () => togglePaneMenu(index));
   document.getElementById(`prefresh-${index}`).addEventListener('click', () => recreatePaneTerminal(index));
   document.getElementById(`pthreadclose-${index}`).addEventListener('click', () => closeThread(index));
   document.getElementById(`pclose-${index}`).addEventListener('click', () => closePane(index));
-  document.getElementById(`pssh-${index}`).addEventListener('click', ev => {
-    if (pane.sandbox) toggleSshPop(pane.sandbox, ev.currentTarget);
-  });
-  document.getElementById(`penv-${index}`).addEventListener('click', ev => {
-    if (pane.sandbox) toggleEnvPop(pane.sandbox, ev.currentTarget);
-  });
   document.getElementById(`pfiles-${index}`).addEventListener('click', () => {
     if (pane.sandbox) openFilesModal(pane.sandbox);
   });
@@ -277,8 +270,9 @@ function setupTerminal(pane) {
   const term = new Terminal({
     cursorBlink: true, fontSize: 13,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    // --c-bg, so the terminal and the chrome around it are one black, not two.
-    theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
+    // The picked colour (term-color.js); --c-term paints the padding around
+    // it, so the terminal and its tile stay one colour, not two.
+    theme: termTheme(),
     scrollback: 10000,
   });
   const fit = new FitAddon.FitAddon();
@@ -583,19 +577,19 @@ function applyPaneChrome(idx, name) {
   label.textContent = monitor ? 'monitor' : (name || '—');
   label.title = monitor ? `host monitor — ${MONITOR_CMD}`
     : thread ? `Thread "${thread}" — worktree .sbxw-worktrees/${thread}, branch sbxw/${thread}` : '';
-  document.getElementById(`pssh-${idx}`).disabled = !name || monitor;
-  document.getElementById(`penv-${idx}`).disabled = !name || monitor;
-  // The monitor runs on the host and has no workspace, so it has no project
-  // either — the same reason SSH and Env go dark on it.
+  // SSH and Env (in the ⋯ menu) read `pane.sandbox` when it opens, and go dark
+  // on the monitor there. It runs on the host and has no workspace, so it has
+  // no project either.
   document.getElementById(`pfiles-${idx}`).disabled = !name || monitor;
   // A thread's pane is about that thread: Claude would be the main agent, a
   // new thread is opened from the main pane, and Lead mode is something only
   // the main session is in. On a main pane, ⑂ Thread is the button beside.
+  // An empty pane has no sandbox to open a thread in or to lead from.
   panes[idx].el.querySelectorAll('.mode-btn').forEach(b => {
     b.hidden = monitor || b.dataset.mode === (thread ? 'claude' : 'thread');
   });
-  document.getElementById(`pnewthread-${idx}`).hidden = monitor || !!thread;
-  document.getElementById(`plead-${idx}`).hidden = monitor || !!thread;
+  document.getElementById(`pnewthread-${idx}`).hidden = !name || monitor || !!thread;
+  document.getElementById(`plead-${idx}`).hidden = !name || monitor || !!thread;
   document.getElementById(`pthreadclose-${idx}`).hidden = !(name && thread);
 }
 
@@ -960,8 +954,90 @@ document.getElementById('thread-close-x').addEventListener('click', closeCloseMo
 document.getElementById('thread-close-cancel').addEventListener('click', closeCloseModal);
 closeOverlay.addEventListener('click', e => { if (e.target === closeOverlay) closeCloseModal(); });
 
+// ── The ⋯ menu ──
+// One element for every pane, like the Thread menu, placed under whichever
+// pane's ⋯ opened it. SSH and Env open their cards hung off the ⋯ itself, since
+// the row that was clicked is gone by the time the card is placed.
+const paneMenu = { el: null, idx: null };
+
+function togglePaneMenu(idx) {
+  if (paneMenu.idx === idx) { closePaneMenu(); return; }
+  closePaneMenu();
+  if (!paneMenu.el) {
+    paneMenu.el = document.createElement('div');
+    paneMenu.el.className = 'pane-menu';
+    paneMenu.el.setAttribute('role', 'menu');
+    paneMenu.el.addEventListener('click', onPaneMenuClick);
+    document.body.appendChild(paneMenu.el);
+    document.addEventListener('pointerdown', e => {
+      if (paneMenu.idx == null || paneMenu.el.contains(e.target)) return;
+      if (document.getElementById(`pmore-${paneMenu.idx}`)?.contains(e.target)) return;
+      closePaneMenu();
+    }, true);
+  }
+  const name = panes[idx].sandbox;
+  const host = !name || name === MONITOR_SANDBOX;
+  paneMenu.idx = idx;
+  paneMenu.el.innerHTML = `
+    <button type="button" role="menuitem" data-act="ssh"${host ? ' disabled' : ''}
+      title="Fields for an SSH client, and the shell command (run 'sbxw ssh --setup' once first)">
+      <span class="pane-menu-name">SSH</span><span class="pane-menu-hint">Connect from a client or a shell</span></button>
+    <button type="button" role="menuitem" data-act="env"${host ? ' disabled' : ''}
+      title="This sandbox's workspace and published ports in sbx's own format (.sbxenv.yaml)">
+      <span class="pane-menu-name">Environment file</span><span class="pane-menu-hint">For a colleague to bring the same sandbox up</span></button>
+    <button type="button" role="menuitem" data-act="reconnect"${name ? '' : ' disabled'}
+      title="Close this pane's socket and open it again — the session keeps running">
+      <span class="pane-menu-name">Reconnect</span><span class="pane-menu-hint">Reattach to the running session</span></button>`;
+  paneMenu.el.hidden = false;
+  const btn = document.getElementById(`pmore-${idx}`);
+  btn.setAttribute('aria-expanded', 'true');
+  // Right-aligned on the button, which sits at the right of the bar.
+  const r = btn.getBoundingClientRect();
+  const w = paneMenu.el.offsetWidth;
+  paneMenu.el.style.top = `${r.bottom + 6}px`;
+  paneMenu.el.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+  paneMenu.el.querySelector('button:not(:disabled)')?.focus();
+}
+
+function closePaneMenu() {
+  if (paneMenu.idx == null) return;
+  document.getElementById(`pmore-${paneMenu.idx}`)?.setAttribute('aria-expanded', 'false');
+  paneMenu.idx = null;
+  paneMenu.el.hidden = true;
+}
+
+function onPaneMenuClick(e) {
+  const item = e.target.closest('button[data-act]');
+  if (!item || item.disabled) return;
+  const idx = paneMenu.idx;
+  const pane = panes[idx];
+  const anchor = document.getElementById(`pmore-${idx}`);
+  closePaneMenu();
+  if (!pane?.sandbox) return;
+  if (item.dataset.act === 'ssh') toggleSshPop(pane.sandbox, anchor);
+  else if (item.dataset.act === 'env') toggleEnvPop(pane.sandbox, anchor);
+  else connectPane(idx, pane.sandbox, pane.mode);
+}
+
+// Arrow keys move between the menu's rows, as in any menu.
+document.addEventListener('keydown', e => {
+  if (paneMenu.idx == null || !['ArrowDown', 'ArrowUp'].includes(e.key)) return;
+  const items = [...paneMenu.el.querySelectorAll('button:not(:disabled)')];
+  if (!items.length) return;
+  const at = items.indexOf(document.activeElement);
+  const next = e.key === 'ArrowDown' ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
+  items[next].focus();
+  e.preventDefault();
+});
+window.addEventListener('resize', closePaneMenu);
+
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
+  if (paneMenu.idx != null) {
+    const idx = paneMenu.idx;
+    closePaneMenu();
+    document.getElementById(`pmore-${idx}`)?.focus();
+  }
   if (!threadOverlay.classList.contains('hidden')) closeThreadModal();
   if (!closeOverlay.classList.contains('hidden')) closeCloseModal();
   if (threadMenu.idx != null) {

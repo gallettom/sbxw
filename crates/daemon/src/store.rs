@@ -91,6 +91,10 @@ impl Paths {
     pub fn chat_workspace(&self, name: &str) -> PathBuf {
         self.chat_root.join(name)
     }
+    fn templates(&self) -> PathBuf {
+        self.state().join("templates.json")
+    }
+
     fn favourites(&self) -> PathBuf {
         self.state().join("favourites.json")
     }
@@ -141,6 +145,14 @@ pub struct SandboxRecord {
     /// The pre-`ANTHROPIC_DEFAULT_MODEL` settings key has been dealt with.
     #[serde(default)]
     pub model_migrated: bool,
+    /// Kit references sbxw applied — at creation or by `kit add` — so a
+    /// bring-up never re-applies one (each `kit add` recreates the container).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kits: Vec<String>,
+    /// The `localhost:<UI port>` rule an older sbxw added has been looked for.
+    /// A sandbox this sbxw created never had it.
+    #[serde(default)]
+    pub ui_rule_checked: bool,
 }
 
 #[derive(Debug)]
@@ -366,7 +378,18 @@ impl Store {
                 })
                 .collect(),
             model_migrated: s.join(format!("{name}.model-migrated")).exists(),
+            kits: vec![],
+            ui_rule_checked: false,
         }
+    }
+
+    /// The automatic templates (`template = "auto"`), one per kit list.
+    pub fn templates(&self) -> Vec<sbxw_core::templates::Record> {
+        read_json(&self.paths.templates())
+    }
+
+    pub fn set_templates(&self, list: &[sbxw_core::templates::Record]) -> Result<()> {
+        write_atomic(&self.paths.templates(), &serde_json::to_vec_pretty(list)?)
     }
 
     pub fn favourites(&self) -> Vec<String> {

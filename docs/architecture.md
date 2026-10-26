@@ -48,7 +48,7 @@ loads xterm from jsDelivr, or from `XTERM_VENDOR` offline.
 
 ## The sbx version floor
 
-sbxw requires **sbx 0.47.0+** and has no fallbacks. It used to support 0.37 and
+sbxw requires **sbx 0.48.0+** and has no fallbacks. It used to support 0.37 and
 up behind runtime checks, but each check was a branch plus a fallback at every
 call site, and every fallback was a code path nobody ran.
 
@@ -71,6 +71,15 @@ What sbxw assumes, unconditionally:
 | `secret set --sandbox NAME` | the Anthropic secret |
 | `SANDBOX_NAME` | in-sandbox hooks naming their own sandbox |
 | `create --kit` repeated | every kit applied at creation |
+| `--format json` on `ls`, `ports`, `rm` (0.48) | sandbox state, live ports, per-target removal |
+| `kit add` with startup commands (0.48) | kits added to an existing sandbox |
+| `policy log --format json` (0.48) | blocked hosts in the network panel |
+| `mcp ls --format json`, `mcp unload --sandbox` (0.48) | the MCP section of the network panel |
+| `git-identity@1`, `ssh-agent@1` kit capabilities (0.48) | `sbxw:git-identity`, `sbxw:ssh-agent` |
+| `template save`, `create --template` | `sbxw template save`, `template` |
+| `policy refresh` (0.49) | **Re-read policy now** — fails with a clear error on 0.48 |
+| `kit validate --offline` (0.49) | kit checks before create, `sbxw doctor` — skipped on 0.48 |
+| `diagnose --format json` | `sbxw doctor` |
 
 Why each step of the floor moved:
 
@@ -82,9 +91,16 @@ Why each step of the floor moved:
   web UI.
 - **0.47:** 0.45 made every removal ask for confirmation, and `policy rm network`
   only gained `--force` then. 0.47's `sbx run -d` is what `keep_running` uses.
+- **0.48:** every human-readable table changed (state marks, a creation-time
+  column in `sbx ls`), so what sbxw parses it reads as `--format json`: `ls`
+  (a bare array), `ports` (`host_ip`, `host_port`, `sandbox_port`,
+  `protocol`) and `rm` (one result per target, failures included, so a partial
+  removal forgets exactly what went). A piped answer no longer confirms a
+  prompt; `secret set` refused for want of a confirmation is retried with
+  `--force`. `kit add` accepts kits with startup commands.
 
-Other behaviour sbxw follows: `sbx ls` is read by column headers (0.45 unified
-table formats); a sandbox whose guest stopped responding is not treated as
+Other behaviour sbxw follows: if `sbx ls --format json` fails or is not JSON,
+the table is read by column headers, past any state mark; a sandbox whose guest stopped responding is not treated as
 running; sandboxes made with `sbx create` stop by themselves once idle (0.43).
 
 MCP OAuth client secrets are stored as `mcp:<server>:client_secret` since 0.43.
@@ -96,7 +112,17 @@ sbxw stores no MCP secrets itself.
 Things sbxw relies on that the published reference doesn't pin down. Verify
 locally if something looks off.
 
-- **The exact column layout of `sbx ls`**, used to detect existence and state.
+- **The exact column layout of `sbx ls`**, and the status field name in its
+  JSON (`status`, else `state`), used to detect existence and state.
+- **`sbx create --template TAG`.** The reference documents `sbx run -t TAG`;
+  sbxw assumes `create` takes the same flag.
+- **The shape of `sbx diagnose --format json`.** `sbxw doctor` summarises any
+  object that names a check and gives it a status; if it finds none, it
+  prints the document.
+- **The fields of `sbx mcp ls --format json`** beyond `name` and `type`.
+
+Confirmed on a real 0.49.2: `sbx template save` refuses `--description` (and
+`--capture-mode`) without `--cloud`, so sbxw never passes it.
 - **Whether `sbx create` accepts `DIR:ro`** extra workspaces like `sbx run`
   (documented for `run`, assumed for `create`).
 - **`sbx inspect`'s output format.** sbxw only substring-matches it to *skip*

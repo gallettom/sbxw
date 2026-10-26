@@ -26,6 +26,7 @@ pub mod progress;
 pub mod relay;
 pub mod session;
 pub mod table;
+pub mod templates;
 pub mod terminal;
 pub mod tooling;
 pub mod usage;

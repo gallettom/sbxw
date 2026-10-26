@@ -239,7 +239,25 @@ function openModal() {
   // file) may have changed the list since this one was last used.
   loadFavourites();
   browseTo(null);
+  showTemplateForce();
   inpName.focus();
+}
+
+// The "rebuild" box, offered only when the automatic template is up to date:
+// otherwise Create asks anyway (askTemplate).
+const tplForce = document.getElementById('tpl-force');
+const tplForceBox = document.getElementById('tpl-force-box');
+
+async function showTemplateForce() {
+  tplForceBox.checked = false;
+  tplForce.classList.add('hidden');
+  let status;
+  try { status = await (await fetch('/api/template/status')).json(); } catch (_) { return; }
+  const t = status && status.auto && status.template;
+  if (!t || t.state !== 'fresh') return;
+  document.getElementById('tpl-force-note').textContent =
+    `Replaces ${t.record.tag}. This sandbox opens once its kits have installed and it is saved — several minutes.`;
+  tplForce.classList.remove('hidden');
 }
 
 function closeModal() { overlay.classList.add('hidden'); }
@@ -567,17 +585,82 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeModal();
 });
 
+// ── The automatic template ────────────────────────────────────────────────
+// With `template = "auto"`, a create first asks whether the template for these
+// kits is still the one this sbx and sbxw would make. If it is, nothing is
+// asked. If it was saved by another version — or never — the person chooses:
+// rebuild it from the sandbox being created (which then opens only once its
+// kits have finished installing and it is saved), use the old one, or go
+// without. Resolves to the choice, or null when the dialog is closed.
+const tplOverlay = document.getElementById('tpl-modal-overlay');
+
+async function askTemplate() {
+  let status;
+  try { status = await (await fetch('/api/template/status')).json(); }
+  catch (_) { return 'default'; }
+  if (!status || !status.auto) return 'default';
+  const t = status.template || {};
+  if (t.state === 'fresh') return 'default';
+
+  const cur = status.current || {};
+  const rec = t.record;
+  const row = (label, was, now) =>
+    `<tr><td>${label}</td><td>${escHtml(was)}</td><td>→</td>` +
+    `<td class="${was === now ? '' : 'changed'}">${escHtml(now)}</td></tr>`;
+  document.getElementById('tpl-modal-title').textContent = rec ? 'Template out of date' : 'No template yet';
+  // What made it stale: sbx itself, or the kits' specs (an sbxw release that
+  // leaves the kits alone does not count).
+  const changed = (t.changed || []).filter(c => !c.startsWith('sbx '));
+  document.getElementById('tpl-versions').innerHTML = rec
+    ? `<tr><td>Template</td><td class="tpl-tag" colspan="3">${escHtml(rec.tag)}</td></tr>` +
+      row('sbx', rec.sbx, cur.sbx) +
+      changed.map(c => `<tr><td>Kits</td><td class="changed" colspan="3">${escHtml(c)}</td></tr>`).join('')
+    : `<tr><td>sbx</td><td>${escHtml(cur.sbx)}</td></tr><tr><td>sbxw</td><td>${escHtml(cur.sbxw)}</td></tr>`;
+  document.getElementById('tpl-explain').textContent =
+    (rec ? 'What it holds was made by another sbx, or from kits that have changed since. ' : 'No template has been saved for these kits. ') +
+    'Rebuild creates this sandbox from sbx\'s image, waits for its kits to finish installing, and saves it as the template ' +
+    '(its token and credentials taken out) before it opens — several minutes this once. ' +
+    (rec ? 'The old template is removed once the new one is saved.' : 'Later sandboxes start from it.');
+  document.getElementById('tpl-keep').classList.toggle('hidden', !rec);
+  tplOverlay.classList.remove('hidden');
+  document.getElementById('tpl-rebuild').focus();
+
+  return new Promise(resolve => {
+    const done = choice => {
+      tplOverlay.classList.add('hidden');
+      for (const [id, fn] of handlers) document.getElementById(id).removeEventListener('click', fn);
+      document.removeEventListener('keydown', onKey, true);
+      resolve(choice);
+    };
+    const handlers = [
+      ['tpl-rebuild', () => done('rebuild')],
+      ['tpl-keep', () => done('keep')],
+      ['tpl-skip', () => done('skip')],
+      ['tpl-modal-close', () => done(null)],
+    ];
+    // Escape closes this dialog only, not the create dialog under it.
+    const onKey = e => { if (e.key === 'Escape') { e.stopImmediatePropagation(); done(null); } };
+    for (const [id, fn] of handlers) document.getElementById(id).addEventListener('click', fn);
+    document.addEventListener('keydown', onKey, true);
+  });
+}
+
 // Provisioning (network policy, kits, ports…) can take a while, so this
 // doesn't block the UI: the modal closes right away and the request runs
 // in the background behind a corner card reporting its steps, leaving every
 // other sandbox/pane fully interactive in the meantime.
-document.getElementById('modal-create').addEventListener('click', () => {
+document.getElementById('modal-create').addEventListener('click', async () => {
   const name = inpName.value.trim();
   if (!name || btnCreate.disabled) { inpName.classList.add('error'); return; }
 
   const path   = repos.length ? repos[0].path : selectedPath;
   const mounts = repos.slice(1).map(r => ({ path: r.path, readonly: r.readonly }));
   const ports  = collectPorts();
+  // Asked over the create dialog, which stays open if this one is closed —
+  // unless the person already asked for a rebuild with the box.
+  const forced = !tplForce.classList.contains('hidden') && tplForceBox.checked;
+  const template = forced ? 'rebuild' : await askTemplate();
+  if (template === null) return;
   closeModal();
 
   (async () => {
@@ -585,7 +668,7 @@ document.getElementById('modal-create').addEventListener('click', () => {
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
-      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports });
+      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.

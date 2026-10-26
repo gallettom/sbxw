@@ -10,7 +10,8 @@ use sbxw_core::envexport;
 use sbxw_core::envfile;
 use sbxw_core::hosts::HostAlias;
 use sbxw_core::names;
-use sbxw_core::policy::PolicyView;
+use sbxw_core::policy::{BlockedHost, PolicyView};
+use sbxw_core::templates;
 use sbxw_core::ports::WantedPort;
 use sbxw_core::progress::Sink;
 use sbxw_core::session::{SessionKey, SessionKind};
@@ -29,6 +30,10 @@ pub struct SandboxItem {
     pub workspace: Option<String>,
     /// A genuine chat sandbox (its own throwaway workspace): grouped apart.
     pub chat: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Held up with nobody attached (`keep_running`, `sbx run -d`).
+    pub detached: bool,
 }
 
 #[derive(Serialize)]
@@ -44,6 +49,9 @@ pub struct PolicyPanel {
     pub policies: PolicyView,
     pub rules: PolicyView,
     pub log: PolicyView,
+    /// Hosts refused recently, one row each, from `policy log --format json`;
+    /// empty when this sbx gave a table instead.
+    pub blocked: Vec<BlockedHost>,
     pub configured_allow: Vec<String>,
     pub configured_deny: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,19 +76,28 @@ impl App {
                 name: s.name,
                 agent: s.agent,
                 status: s.status,
+                created_at: s.created_at,
+                detached: s.detached,
             })
             .collect()
     }
 
     /// Remove a sandbox and everything sbxw keeps about it: its sessions, its
-    /// record and kit, and — a chat's — its throwaway workspace.
+    /// record and kit, and — a chat's — its throwaway workspace. Only what sbx
+    /// reports removed is forgotten; the rest is the error.
     pub async fn remove(&self, names: &[SandboxName]) -> Result<()> {
-        let chats: Vec<PathBuf> = names.iter().filter_map(|n| self.store.chat_workspace(n)).collect();
-        self.sbx.rm(names, false).await?;
-        for n in names {
+        let results = self.sbx.rm(names).await?;
+        let gone: Vec<&SandboxName> = names.iter().filter(|n| results.iter().any(|r| r.removed && r.name == n.as_str())).collect();
+        let chats: Vec<PathBuf> = gone.iter().filter_map(|n| self.store.chat_workspace(n)).collect();
+        for n in &gone {
             self.sessions.drop_sandbox(n);
             self.store.forget(n);
         }
+        let failed: Vec<String> = results
+            .iter()
+            .filter(|r| !r.removed)
+            .map(|r| format!("'{}': {}", r.name, r.error.as_deref().unwrap_or("not removed")))
+            .collect();
         for dir in chats {
             if let Err(e) = std::fs::remove_dir_all(&dir) {
                 if e.kind() != std::io::ErrorKind::NotFound {
@@ -88,12 +105,15 @@ impl App {
                 }
             }
         }
+        if !failed.is_empty() {
+            bail!("sbx could not remove {}", failed.join("; "));
+        }
         Ok(())
     }
 
     /// A bring-up from the browser: the daemon's config, the dialog's ports,
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
-    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, mounts: Vec<(String, bool)>, extra: Vec<WantedPort>, sink: Option<Sink>) -> Result<Vec<String>> {
+    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, mounts: Vec<(String, bool)>, extra: Vec<WantedPort>, template: templates::Choice, sink: Option<Sink>) -> Result<Vec<String>> {
         let path = PathBuf::from(path.trim());
         if !path.is_dir() {
             bail!("path is not a directory");
@@ -114,7 +134,85 @@ impl App {
         let mut req = self.bring_up_request(name, path, self.cfg.clone(), extra, false);
         req.ro = ro;
         req.rw = rw;
+        req.template = template;
         self.provision(req, sink).await
+    }
+
+    /// The automatic template as the create dialog sees it: `auto` off, or
+    /// fresh, stale or missing for the daemon config's kits.
+    pub fn template_status(&self) -> serde_json::Value {
+        if self.cfg.template_mode() != templates::Mode::Auto {
+            return serde_json::json!({ "auto": false });
+        }
+        let (sbx, sbxw) = self.template_versions();
+        let content = crate::bundled::fingerprint(&self.store.paths, &self.cfg.kits).unwrap_or_default();
+        let now = templates::Current { sbx: &sbx, sbxw, content: &content };
+        let state = templates::check(&self.store.templates(), &self.cfg.kits, &now);
+        serde_json::json!({ "auto": true, "current": { "sbx": sbx, "sbxw": sbxw }, "template": state })
+    }
+
+    /// Every saved template, each marked with what sbxw makes of it: the one
+    /// `template` in sbxw.toml names, and the automatic ones it keeps.
+    pub async fn templates(&self) -> Result<serde_json::Value> {
+        let list = self.sbx.template_ls().await?;
+        let records = self.store.templates();
+        let configured = match self.cfg.template_mode() {
+            templates::Mode::Tag(t) => Some(t),
+            _ => None,
+        };
+        let rows: Vec<serde_json::Value> = list
+            .into_iter()
+            .map(|t| {
+                let auto = records.iter().find(|r| r.tag == t.tag);
+                serde_json::json!({
+                    "tag": t.tag,
+                    "size": t.size,
+                    "created": t.created,
+                    "configured": configured.as_deref() == Some(t.tag.as_str()),
+                    "auto": auto.map(|r| serde_json::json!({ "kits": r.kits, "sbx": r.sbx, "sbxw": r.sbxw, "created_at": r.created_at })),
+                })
+            })
+            .collect();
+        Ok(serde_json::json!({ "templates": rows, "configured": configured }))
+    }
+
+    /// Snapshot a sandbox as template `tag`, its secrets taken out first
+    /// (see [`App::snapshot`]). A stopped sandbox is started for it.
+    pub async fn save_template(&self, name: &SandboxName, tag: &str) -> Result<Vec<String>> {
+        let tag = tag.trim();
+        if tag.is_empty() || tag.starts_with('-') || tag.contains(char::is_whitespace) {
+            bail!("'{tag}' is not a template tag");
+        }
+        if !self.sbx.exists(name).await {
+            bail!("no sandbox named '{name}'");
+        }
+        let mut warnings = Vec::new();
+        if !self.sbx.is_running(name).await {
+            self.sbx.run_detached(name).await.context("starting the sandbox to take its secrets out")?;
+            if !self.sbx.wait_until_running(name, std::time::Duration::from_secs(60)).await {
+                bail!("'{name}' did not come up — nothing was saved");
+            }
+            warnings.push(format!("'{name}' was started to take its secrets out before the snapshot"));
+        }
+        tracing::info!("web UI: saving '{name}' as template {tag}");
+        let (saved, more) = self.snapshot(name, tag, self.cfg.keep_running).await;
+        warnings.extend(more);
+        saved?;
+        Ok(warnings)
+    }
+
+    /// Remove a template, and sbxw's record of it if it was an automatic one:
+    /// the next bring-up with those kits then finds none and says so.
+    pub async fn remove_template(&self, tag: &str) -> Result<()> {
+        tracing::info!("web UI: removing template {tag}");
+        self.sbx.template_rm(tag).await?;
+        let mut records = self.store.templates();
+        let before = records.len();
+        records.retain(|r| r.tag != tag);
+        if records.len() != before {
+            self.store.set_templates(&records).context("forgetting the automatic template")?;
+        }
+        Ok(())
     }
 
     /// What a bring-up asked from inside the daemon carries: its credentials
@@ -133,6 +231,7 @@ impl App {
                 .then(|| std::env::var("ANTHROPIC_API_KEY").ok())
                 .flatten(),
             oauth_token: oauth_token_from_env(),
+            template: Default::default(),
         }
     }
 
@@ -246,6 +345,7 @@ impl App {
             self.sbx.policy_ls(sandbox, true),
             self.sbx.policy_log(sandbox)
         );
+        let (log, egress) = log;
         let ok = policies.error.is_none() || rules.error.is_none() || log.error.is_none();
         let error = (!ok).then(|| policies.error.clone()).flatten();
         PolicyPanel {
@@ -253,6 +353,7 @@ impl App {
             policies,
             rules,
             log,
+            blocked: egress.map(|e| e.blocked_hosts()).unwrap_or_default(),
             configured_allow: cfg.network_allow,
             configured_deny: cfg.network_deny,
             error,
@@ -350,4 +451,46 @@ pub fn oauth_token_from_env() -> Option<String> {
         .filter_map(|v| std::env::var(v).ok())
         .map(|v| v.trim().to_string())
         .find(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::testing::{app_with, sbx_answer};
+    use sbxw_core::SandboxName;
+    use sbxw_sbx::runner::Output;
+
+    #[tokio::test]
+    async fn the_policy_panel_lists_blocked_hosts_from_the_json_log() {
+        let (_d, app, _fake) = app_with(|a: &[String]| {
+            if a.starts_with(&["policy".into(), "log".into()]) && a.contains(&"json".to_string()) {
+                return Output::ok(
+                    r#"{"updated_at":"x","allowed":[],"blocked":[{"host":"registry.npmjs.org:443","rule":"default-deny-all","reason":"no matching allow rule","count":2,"last_seen":"2026-10-26T09:00:00Z"}]}"#,
+                );
+            }
+            sbx_answer(a)
+        });
+        let p = app.policy_panel(&SandboxName::parse("neos").unwrap()).await;
+        assert_eq!(p.blocked.len(), 1);
+        assert_eq!(p.blocked[0].resource, "registry.npmjs.org");
+        assert_eq!(p.log.rows.len(), 1, "the log view is built from the same document");
+    }
+
+    #[tokio::test]
+    async fn a_partial_removal_forgets_only_what_went() {
+        let (_d, app, _fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("rm") => Output {
+                code: Some(1),
+                stdout: br#"[{"action":"removed","name":"a"},{"action":"failed","name":"b","error":"busy"}]"#.to_vec(),
+                stderr: vec![],
+            },
+            _ => sbx_answer(a),
+        });
+        let (a, b) = (SandboxName::parse("a").unwrap(), SandboxName::parse("b").unwrap());
+        for n in [&a, &b] {
+            app.store.update(n, |r| r.chat = false).unwrap();
+        }
+        let e = app.remove(&[a.clone(), b.clone()]).await.unwrap_err();
+        assert!(format!("{e:#}").contains("'b': busy"), "{e:#}");
+        assert!(!app.store.exists("a") && app.store.exists("b"));
+    }
 }

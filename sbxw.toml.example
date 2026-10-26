@@ -54,6 +54,19 @@ skills = ""
 # Empty leaves it to sbx. Read at CREATION only.
 pull = ""
 
+# Start new sandboxes from a template instead of sbx's image, skipping the
+# pull and the kits' installs:
+#   "auto"   sbxw keeps one per kit list. When it was saved by another sbx,
+#            or the kits' specs changed since (or there is none yet), the web
+#            UI's create dialog asks whether to
+#            rebuild it from the sandbox being created — which then opens once
+#            its kits have installed and it is saved; the old one is removed.
+#            From the CLI: `sbxw up <name> --rebuild-template`.
+#   "<tag>"  one you saved with `sbxw template save <sandbox> <tag>`. Its files
+#            outside the workspace come along — keep it on this host.
+# Read at CREATION only.
+template = ""
+
 # Keep the sandbox running with nobody attached (sbx 0.47's `sbx run -d`),
 # until `sbxw stop`. Off, it stops by itself once idle — fine for an agent, not
 # for a dev server you reach through the aliases below with no pane open.
@@ -73,6 +86,13 @@ max_agent_sessions = 4
 # free-form box: the daemon listens on localhost and this is the whole of what
 # the browser can start there. Set it to [] to drop the button entirely.
 monitor_cmd = ["sbx"]
+
+# Colours of the web UI's terminals, as #rrggbb: the background, and the bar
+# above each one. Empty keeps the built-in #0d1117 and darkslategrey. The
+# colour picker in the UI's header overrides them in that browser (stored in
+# localStorage); its Reset comes back to these values.
+terminal_color = ""
+terminal_bar_color = ""
 
 # One loopback IP per app => clean hostnames on their natural ports
 # (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds

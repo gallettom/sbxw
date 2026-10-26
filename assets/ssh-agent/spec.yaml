@@ -1,0 +1,22 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: ssh-agent
+description: >
+  Forwards the host's SSH agent into the sandbox (ssh-agent@1, sbx 0.48+),
+  restricted: keys may sign Git objects and authenticate to the common Git
+  hosts, nothing else. The keys never enter the sandbox; SSH_AUTH_SOCK points
+  at a socket sbx serves. Optional: a host with no agent running gets a sandbox
+  without one, not a failed create.
+capabilities:
+  - type: com.docker.sandbox/ssh-agent@1
+    optional: true
+    description: Sign commits and reach Git hosts over SSH with the host's keys
+    config:
+      phase: runtime
+      unrestricted: false
+      sign: [git]
+      authenticate:
+        - git@github.com
+        - git@gitlab.com
+        - git@bitbucket.org

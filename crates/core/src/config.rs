@@ -57,12 +57,20 @@ pub struct Config {
     pub share_skills: bool,
     /// `always` | `missing` | `never`; empty leaves it to sbx.
     pub pull: String,
+    /// A saved template (`sbxw template save`) new sandboxes start from,
+    /// `auto` for one sbxw keeps and rebuilds itself; empty is sbx's image.
+    pub template: String,
     /// Hold the sandbox up with nobody attached (`sbx run -d`).
     pub keep_running: bool,
     /// Agent + threads one sandbox may hold open.
     pub max_agent_sessions: usize,
     /// The host monitor pane's argv; empty hides it.
     pub monitor_cmd: Vec<String>,
+    /// Terminal background, `#rrggbb`; empty keeps the built-in one. The UI's
+    /// colour picker overrides it per browser.
+    pub terminal_color: String,
+    /// The bar above each terminal, `#rrggbb`; empty keeps darkslategrey.
+    pub terminal_bar_color: String,
     /// Environment baked in at creation and re-applied on every attach.
     pub env: BTreeMap<String, String>,
     /// `--env-file`s, in order.
@@ -142,9 +150,12 @@ impl Default for Config {
             skills: String::new(),
             share_skills: true,
             pull: String::new(),
+            template: String::new(),
             keep_running: false,
             max_agent_sessions: 4,
             monitor_cmd: vec!["sbx".into()],
+            terminal_color: String::new(),
+            terminal_bar_color: String::new(),
             env: BTreeMap::new(),
             env_files: vec![],
             source: None,
@@ -154,6 +165,12 @@ impl Default for Config {
 
 pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
 pub const PULL_POLICIES: [&str; 3] = ["always", "missing", "never"];
+
+/// `#rrggbb` and nothing else: the value is templated into the page as a JS
+/// string, so this is also what keeps it from carrying anything but a colour.
+fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
 const MODEL_VAR: &str = "ANTHROPIC_DEFAULT_MODEL";
 
 impl Config {
@@ -225,6 +242,11 @@ impl Config {
                 bail!("models: {:?} is not a model id", m.id);
             }
         }
+        for (key, v) in [("terminal_color", &self.terminal_color), ("terminal_bar_color", &self.terminal_bar_color)] {
+            if !v.is_empty() && !is_hex_color(v) {
+                bail!("{key} = {v:?} — expected #rrggbb");
+            }
+        }
         for p in &self.ports {
             if !p.alias.is_empty() && !crate::hosts::is_hostname(&p.alias) {
                 bail!("ports: alias {:?} is not a hostname", p.alias);
@@ -246,6 +268,10 @@ impl Config {
 
     pub fn pull_policy(&self) -> Option<&str> {
         Some(self.pull.trim()).filter(|p| !p.is_empty())
+    }
+
+    pub fn template_mode(&self) -> crate::templates::Mode {
+        crate::templates::mode(&self.template)
     }
 
     /// `env`, plus `ANTHROPIC_DEFAULT_MODEL` from `claude_model` unless `env`
@@ -367,6 +393,22 @@ mod tests {
         assert!(bad("agent_addr = \"127.0.0.1:7681\""));
         assert!(bad("models = [{ id = \"Bad Id\", label = \"x\" }]"));
         assert!(!bad("skills = \"off\""));
+    }
+
+    #[test]
+    fn terminal_color_is_a_hex_colour_or_nothing() {
+        let mut cfg = Config::default();
+        assert!(cfg.validate().is_ok());
+        cfg.terminal_color = "#1A1b26".into();
+        assert!(cfg.validate().is_ok());
+        for bad in ["navy", "#fff", "#12345g", "\"#000000"] {
+            cfg.terminal_color = bad.into();
+            assert!(cfg.validate().is_err(), "{bad} was accepted");
+            cfg.terminal_color = String::new();
+            cfg.terminal_bar_color = bad.into();
+            assert!(cfg.validate().is_err(), "{bad} was accepted as a bar colour");
+            cfg.terminal_bar_color = String::new();
+        }
     }
 
     #[test]

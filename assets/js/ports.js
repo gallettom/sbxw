@@ -258,9 +258,11 @@ function renderPolicyLog(log) {
   if (!log.columns || !log.columns.length)
     return log.raw ? policySectionLabel('Recent egress', 'sbx policy log') + `<pre class="policy-raw">${escHtml(log.raw)}</pre>` : '';
   if (!log.rows.length) return '';
-  const { columns, rows } = policyDropImpliedColumns(log, ['sandbox', 'applies']);
+  const dropped = ['sandbox', 'applies'];
+  const { columns, rows } = policyDropImpliedColumns(log, dropped);
+  const iAction = (log.roles || []).filter(r => !dropped.includes(r)).indexOf('action');
   return policySectionLabel('Recent egress', 'sbx policy log') +
-    `<div class="policy-scroll">${policyTableHtml(columns, rows)}</div>` +
+    `<div class="policy-scroll" id="policy-log-wrap" data-action-col="${iAction}">${policyTableHtml(columns, rows)}</div>` +
     (log.truncated ? `<div class="policy-note">+ ${log.truncated} older entr${log.truncated === 1 ? 'y' : 'ies'} — run <code>sbx policy log</code> for the full history.</div>` : '');
 }
 
@@ -286,7 +288,7 @@ function renderPolicy(data) {
     return;
   }
 
-  const parts = [];
+  const parts = [policyToolbar(), renderBlockedHosts(data.blocked)];
   const hasRules = policyHasRows(data.rules);
 
   // Nothing rule-level to show: say so with whatever sbx did give us, rather
@@ -331,10 +333,135 @@ function renderPolicy(data) {
   if (raw)
     parts.push(`<details class="policy-details"><summary>Raw <code>sbx policy ls</code> output</summary><pre class="policy-raw">${escHtml(raw)}</pre></details>`);
 
+  parts.push('<div id="mcp-section"></div>');
   policyContent.innerHTML = parts.filter(Boolean).join('');
   wirePolicyFilter();
+  wirePolicyLogSort();
   wirePolicyForm();
   wirePolicyDeletes();
+  wirePolicyRefresh();
+  wireBlockedAllows();
+  fetchMcp(portsTarget);
+}
+
+// `sbx policy refresh` (0.49): re-read the policy now — after an AI Governance
+// change, say — instead of at the next poll. Open connections stay open.
+function policyToolbar() {
+  return `<div class="policy-toolbar">` +
+    `<button class="refresh-btn" id="policy-refresh-btn" title="sbx policy refresh — re-read the policy now instead of at the next poll">↻ Re-read policy now</button>` +
+    `<span class="ports-error-msg hidden" id="policy-refresh-error"></span></div>`;
+}
+
+function wirePolicyRefresh() {
+  const btn = document.getElementById('policy-refresh-btn');
+  const errEl = document.getElementById('policy-refresh-error');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const target = portsTarget;
+    btn.disabled = true;
+    const jobId = startBgJob('Refreshing network policy…');
+    try {
+      const data = await postJson('/api/policy/refresh', {});
+      if (data.ok) {
+        showToast('Network policy re-read');
+        if (portsTarget === target) await fetchPorts(target);
+      } else {
+        showNote(errEl, data.error || 'sbx policy refresh failed');
+        btn.disabled = false;
+      }
+    } finally {
+      finishBgJob(jobId);
+    }
+  });
+}
+
+// What this sandbox tried to reach and was refused, newest first, one row per
+// host — the list people open this panel for. Allow writes a rule for this
+// sandbox only; a host blocked by organisation policy gets no button, since
+// sbx refuses that allow anyway.
+function renderBlockedHosts(blocked) {
+  if (!blocked || !blocked.length) return '';
+  const rows = blocked.map(b => {
+    const when = timeAgo(b.last_seen);
+    const action = b.governed
+      ? `<span class="rule-locked" title="${escHtml(b.reason || 'Blocked by organisation policy')}">🔒 org</span>`
+      : `<button class="btn-allow-host" data-resource="${escHtml(b.resource)}" title="Allow ${escHtml(b.resource)} for this sandbox">Allow</button>`;
+    return `<tr><td><span class="policy-cell">${escHtml(b.host)}</span></td>` +
+      `<td class="blocked-count">${b.count > 1 ? `×${b.count}` : ''}</td>` +
+      `<td class="blocked-when" title="${escHtml(b.reason || '')}">${escHtml(when)}</td>` +
+      `<td class="rule-actions">${action}</td></tr>`;
+  }).join('');
+  return policySectionLabel('Blocked recently', 'sbx policy log', 'blocked-host-count', blocked.length) +
+    `<div class="policy-scroll blocked-hosts"><table class="ports-table"><tbody>${rows}</tbody></table></div>` +
+    `<span class="ports-error-msg hidden" id="blocked-allow-error"></span>`;
+}
+
+function wireBlockedAllows() {
+  const errEl = document.getElementById('blocked-allow-error');
+  for (const btn of policyContent.querySelectorAll('.btn-allow-host')) {
+    btn.addEventListener('click', async () => {
+      const resources = btn.dataset.resource;
+      const target = portsTarget;
+      if (!confirm(`Allow '${target}' to reach:\n\n  ${resources}\n\nThe rule applies to this sandbox only.`)) return;
+      btn.disabled = true;
+      const jobId = startBgJob(`Allowing ${resources}…`);
+      try {
+        const data = await postJson(`/api/sandboxes/${encodeURIComponent(target)}/policy/rules`,
+          { resources, decision: 'allow', global: false });
+        if (data.ok) {
+          showToast(`${resources} allowed for ${target}`);
+          if (portsTarget === target) await fetchPorts(target);
+        } else {
+          btn.disabled = false;
+          showNote(errEl, data.error || 'Failed to allow');
+        }
+      } finally {
+        finishBgJob(jobId);
+      }
+    });
+  }
+}
+
+// The host's MCP servers, each detachable from this sandbox without restarting
+// its agent (`sbx mcp unload`, 0.48). Fetched on its own: a slow `mcp ls` must
+// not hold back the policy.
+async function fetchMcp(name) {
+  const el = document.getElementById('mcp-section');
+  if (!el || !name) return;
+  let data;
+  try { data = await (await fetch(`/api/sandboxes/${encodeURIComponent(name)}/mcp`)).json(); }
+  catch (_) { data = null; }
+  if (portsTarget !== name || !document.body.contains(el)) return;
+  if (!data || !data.ok) {
+    el.innerHTML = policySectionLabel('MCP servers', 'sbx mcp ls') +
+      `<div class="policy-note">${escHtml((data && data.error) || 'Could not list MCP servers')}</div>`;
+    return;
+  }
+  const servers = data.servers || [];
+  if (!servers.length) { el.innerHTML = ''; return; }
+  el.innerHTML = policySectionLabel('MCP servers', 'sbx mcp ls', null, 0) +
+    `<table class="ports-table mcp-servers"><tbody>` +
+    servers.map(s => `<tr><td><span class="policy-cell">${escHtml(s.name)}</span></td>` +
+      `<td><span class="policy-cell">${escHtml(s.type || '')}</span></td>` +
+      `<td class="rule-actions"><button class="btn-del-rule btn-mcp-unload" data-server="${escHtml(s.name)}" title="Detach ${escHtml(s.name)} from this sandbox — the agent keeps running">Unload</button></td></tr>`).join('') +
+    `</tbody></table><span class="ports-error-msg hidden" id="mcp-unload-error"></span>` +
+    `<div class="policy-note">Unload detaches a server from this sandbox only; the agent keeps running.</div>`;
+  for (const btn of el.querySelectorAll('.btn-mcp-unload')) {
+    btn.addEventListener('click', async () => {
+      const server = btn.dataset.server;
+      if (!confirm(`Unload MCP server '${server}' from '${name}'?`)) return;
+      btn.disabled = true;
+      const data = await postJson(`/api/sandboxes/${encodeURIComponent(name)}/mcp/unload`, { server });
+      if (data.ok) {
+        showToast(`${server} unloaded from ${name}`);
+        btn.closest('tr').classList.add('mcp-unloaded');
+        btn.textContent = 'Unloaded';
+      } else {
+        btn.disabled = false;
+        showNote(document.getElementById('mcp-unload-error'), data.error || 'Failed to unload');
+      }
+    });
+  }
 }
 
 // Add a rule. A host-wide one is confirmed first: it outlives this sandbox and
@@ -428,6 +555,42 @@ function wirePolicyFilter() {
     }
     if (count) count.textContent = q ? `${shown} of ${rows.length}` : `${rows.length}`;
   });
+}
+
+// Click the ACTION header of the egress log to cycle: sbx's own order (most
+// recent first) → deny first → allow first. A plain reorder of rows already in
+// the DOM; within each group the recency order is kept. The choice outlives a
+// refresh, so re-reading the log doesn't throw away what you were looking at.
+const POLICY_LOG_SORTS = ['recent', 'deny', 'allow'];
+let policyLogSort = 'recent';
+
+function wirePolicyLogSort() {
+  const wrap = document.getElementById('policy-log-wrap');
+  const col = wrap ? +wrap.dataset.actionCol : -1;
+  if (!wrap || col < 0) return;
+  const th = wrap.querySelectorAll('thead th')[col];
+  const tbody = wrap.querySelector('tbody');
+  if (!th || !tbody) return;
+  const rows = Array.from(tbody.rows);
+  const apply = () => {
+    const rank = tr => {
+      const v = (tr.cells[col]?.textContent || '').trim().toLowerCase();
+      return policyLogSort === 'recent' || v === policyLogSort ? 0 : 1;
+    };
+    rows.map((tr, i) => ({ tr, i, k: rank(tr) }))
+      .sort((a, b) => a.k - b.k || a.i - b.i)
+      .forEach(({ tr }) => tbody.appendChild(tr));
+    const label = { recent: '', deny: ' · deny first', allow: ' · allow first' }[policyLogSort];
+    th.innerHTML = `${escHtml(th.dataset.label)}<span class="policy-sort-ind">${label}</span>`;
+    th.title = `Sorted: ${policyLogSort === 'recent' ? 'most recent first' : policyLogSort + ' first'} — click to change`;
+  };
+  th.dataset.label = th.textContent;
+  th.classList.add('policy-sortable');
+  th.addEventListener('click', () => {
+    policyLogSort = POLICY_LOG_SORTS[(POLICY_LOG_SORTS.indexOf(policyLogSort) + 1) % POLICY_LOG_SORTS.length];
+    apply();
+  });
+  apply();
 }
 
 async function fetchPorts(name) {

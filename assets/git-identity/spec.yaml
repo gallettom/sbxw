@@ -1,0 +1,14 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: git-identity
+description: >
+  Commits made in the sandbox carry your name and email: sbx copies user.name
+  and user.email from the host's Git config into the agent's global Git config
+  (git-identity@1, sbx 0.48+). Nothing else from the host config is imported.
+  Optional: a host without both values gets a sandbox without them, not a
+  failed create.
+capabilities:
+  - type: com.docker.sandbox/git-identity@1
+    optional: true
+    description: Attribute commits to the host's Git identity

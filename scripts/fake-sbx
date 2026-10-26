@@ -23,6 +23,15 @@ name_after() { # the value after --name
 case "${1:-}" in
   version) echo "sbx version 0.48.0" ;;
   ls)
+    if [ "${2:-}" = "--format" ]; then # 0.48: a bare array
+      sep=""; printf '['
+      for f in "$S"/sandboxes/*; do
+        [ -e "$f" ] || continue
+        n=$(basename "$f"); d=false; [ -e "$S/detached-$n" ] && d=true
+        printf '%s{"name":"%s","agent":"claude","status":"%s","workspace":"/w","created_at":"2026-10-26T08:00:00Z","detached":%s}' "$sep" "$n" "$(cat "$f")" "$d"; sep=","
+      done
+      printf ']\n'; exit 0
+    fi
     printf 'SANDBOX                AGENT    STATUS     WORKSPACE\n'
     for f in "$S"/sandboxes/*; do
       [ -e "$f" ] || continue
@@ -49,7 +58,7 @@ case "${1:-}" in
       touch "$cache/amd64-bookworm/.filled-agent-skills" "$cache/amd64-bookworm/.filled-md-to-pdf-tools"
     fi ;;
   run)
-    if [ "${2:-}" = "-d" ]; then echo running > "$S/sandboxes/$(name_after "$@")"; exit 0; fi
+    if [ "${2:-}" = "-d" ]; then n=$(name_after "$@"); echo running > "$S/sandboxes/$n"; : > "$S/detached-$n"; exit 0; fi
     n=$(name_after "$@")
     echo running > "$S/sandboxes/$n"
     # A tiny agent TUI: a prompt, then each submitted line acknowledged.
@@ -69,6 +78,8 @@ case "${1:-}" in
       curl) echo '{"five_hour":{"utilization":12.0,"resets_at":"2030-01-01T00:00:00Z"},"seven_day":{"utilization":34.0}}' ;;
       sh) if [ $stdin = 1 ]; then cat > /dev/null; fi ;;
       bash) if [ $tty = 1 ] && [ $# -eq 1 ]; then exec sh; fi; exec "$@" ;;
+      # Guest paths are this machine's real home here: never read or delete them.
+      cat|rm) case "$*" in */home/agent/*) [ "$1" = cat ] && echo "guest-secret"; exit 0 ;; esac; exec "$@" ;;
       *) exec "$@" ;;
     esac ;;
   ports)
@@ -79,6 +90,10 @@ case "${1:-}" in
       sort -u -o "$S/ports/$n" "$S/ports/$n"
     elif [ "${3:-}" = "--unpublish" ]; then
       IFS=: read -r x y z <<< "$4"; grep -v "^$x $y $z\$" "$S/ports/$n" > "$S/ports/$n.tmp"; mv "$S/ports/$n.tmp" "$S/ports/$n"
+    elif [ "${3:-}" = "--format" ]; then
+      sep=""; printf '['
+      while read -r ip hp sp; do printf '%s{"host_ip":"%s","host_port":%s,"sandbox_port":%s,"protocol":"tcp"}' "$sep" "$ip" "$hp" "$sp"; sep=","; done < "$S/ports/$n"
+      printf ']\n'
     else
       echo "HOST IP     HOST PORT   SANDBOX PORT   PROTOCOL"
       while read -r ip hp sp; do printf '%-11s %-11s %-14s tcp\n' "$ip" "$hp" "$sp"; done < "$S/ports/$n"
@@ -86,13 +101,45 @@ case "${1:-}" in
   policy)
     case "${2:-}" in
       ls) echo "RULE ID   SANDBOX   RESOURCE          ACTION"; [ -f "$S/stale-rule" ] && echo "r-old     ${3:-}      localhost:$(cat "$S/stale-rule")    allow"; true ;;
-      log) echo "HOST   RULE   REASON" ;;
+      log)
+        case "$*" in
+          *--format*) echo '{"updated_at":"2026-10-26T10:00:00Z","allowed":[],"blocked":[{"sandbox_id":"s1","host":"pastebin.com:443","proxy_type":"https","rule":"default-deny-all","reason":"no matching allow rule","count":3,"first_seen":"2026-10-26T09:00:00Z","last_seen":"2026-10-26T09:30:00Z"}]}' ;;
+          *) echo "HOST   RULE   REASON" ;;
+        esac ;;
       rm) rm -f "$S/stale-rule" ;;
+      refresh) : ;;
       *) : ;;
     esac ;;
   stop) echo stopped > "$S/sandboxes/$2" ;;
-  rm) shift; for n in "$@"; do case "$n" in --*) ;; *) rm -f "$S/sandboxes/$n" "$S/ports/$n" ;; esac; done ;;
+  template) # As a real 0.49.2: a local save refuses the cloud-only flags.
+    case "$* " in *" --description "*|*" --capture-mode "*) case "$*" in *--cloud*) ;; *)
+      echo "error: --description and --capture-mode are only supported with --cloud" >&2; exit 1 ;; esac ;; esac
+    mkdir -p "$S/templates"
+    case "${2:-}" in
+      save) echo "$4 $3" > "$S/templates/$(printf %s "$4" | cksum | cut -d' ' -f1)" ;;
+      rm) f="$S/templates/$(printf %s "$3" | cksum | cut -d' ' -f1)"; [ -e "$f" ] || { echo "error: no template $3" >&2; exit 1; }; rm -f "$f" ;;
+      ls) # No --format here: sbxw falls back to the table.
+        case "$*" in *--format*) echo "error: unknown flag: --format" >&2; exit 1 ;; esac
+        echo "TAG                                  SANDBOX"
+        for f in "$S/templates"/*; do [ -e "$f" ] || continue; read -r tg sb < "$f"; printf '%-36s %s\n' "$tg" "$sb"; done ;;
+    esac ;;
+  rm)
+    shift; sep=""; printf '['
+    for n in "$@"; do
+      case "$n" in --*|json) continue ;; esac
+      if [ -e "$S/sandboxes/$n" ]; then act=removed; err=""; else act=failed; err=',"error":"no such sandbox"'; fi
+      rm -f "$S/sandboxes/$n" "$S/ports/$n"
+      printf '%s{"action":"%s","resource":"sandbox","name":"%s"%s}' "$sep" "$act" "$n" "$err"; sep=","
+    done
+    printf ']\n' ;;
   secret) cat > /dev/null ;;
+  mcp)
+    case "${2:-}" in
+      ls) echo '[{"name":"github","type":"remote","gateway":{"name":"default"}}]' ;;
+      unload) : ;;
+    esac ;;
+  kit) [ "${2:-}" = validate ] && [ -e "${3:-}" ] || [ "${2:-}" != validate ] ;;
+  diagnose) echo '{"checks":[{"name":"mkfs.ext4","status":"ok"},{"name":"global network policy","status":"warning","message":"not initialized"}]}' ;;
   inspect) echo "Name: $2"; echo "Kits:" ;;
   *) : ;;
 esac

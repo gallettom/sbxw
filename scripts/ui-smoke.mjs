@@ -46,12 +46,15 @@ async function visit(label, open, after) {
 }
 const button = (re) => page.getByRole('button', { name: re }).first();
 await visit('Project panel', () => button(/Project/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-project.png') }));
-await visit('Env card', () => button(/^Env$/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-env.png') }));
+await visit('More menu', () => button(/More actions/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-more.png') }));
+await visit('Env card', async () => { await button(/More actions/).click(); await page.getByRole('menuitem', { name: /Environment file/ }).click(); },
+  () => page.screenshot({ path: png.replace(/\.png$/, '-env.png') }));
 await visit('Thread menu', () => button(/Thread/).click());
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
 await visit('Monitor', () => button(/Monitor Sandboxes/).click());
 await visit('Help', () => button(/^Help$/).click());
+await visit('Templates', () => button(/^Templates$/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-templates.png') }));
 const terminal = await page.evaluate(() => [...document.querySelectorAll('.xterm-rows')].map((e) => e.innerText).join('\n'));
 await page.screenshot({ path: png });
 await browser.close();

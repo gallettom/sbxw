@@ -193,9 +193,198 @@ pub fn clean_resources(raw: &str) -> Result<String, String> {
     Ok(parts.join(","))
 }
 
+/// One host in `sbx policy log --format json` (0.48+).
+#[derive(Serialize, Debug, Clone, PartialEq, Default)]
+pub struct EgressEntry {
+    pub host: String,
+    pub rule: String,
+    pub reason: String,
+    pub proxy_type: String,
+    pub count: u64,
+    pub last_seen: String,
+}
+
+/// `sbx policy log --format json`: `{updated_at, allowed: [...], blocked: [...]}`.
+#[derive(Serialize, Debug, Default, PartialEq)]
+pub struct EgressLog {
+    pub allowed: Vec<EgressEntry>,
+    pub blocked: Vec<EgressEntry>,
+}
+
+impl EgressLog {
+    /// `None` when `raw` is not that document, so the caller can read a table.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+        let obj = v.as_object()?;
+        if !obj.contains_key("allowed") && !obj.contains_key("blocked") {
+            return None;
+        }
+        let list = |k: &str| -> Vec<EgressEntry> {
+            let mut out: Vec<EgressEntry> = obj
+                .get(k)
+                .and_then(|x| x.as_array())
+                .map(|rows| rows.iter().filter_map(entry).collect())
+                .unwrap_or_default();
+            // Most recent first: what the person just tried is what they look for.
+            out.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+            out
+        };
+        Some(Self { allowed: list("allowed"), blocked: list("blocked") })
+    }
+
+    /// Blocked hosts grouped by host (one row per host, counts summed), the
+    /// ones an organisation policy blocks marked so the UI offers no allow.
+    pub fn blocked_hosts(&self) -> Vec<BlockedHost> {
+        let mut out: Vec<BlockedHost> = Vec::new();
+        for e in &self.blocked {
+            match out.iter_mut().find(|b| b.host == e.host) {
+                Some(b) => b.count += e.count,
+                None => out.push(BlockedHost {
+                    resource: allow_resource(&e.host),
+                    host: e.host.clone(),
+                    count: e.count,
+                    last_seen: e.last_seen.clone(),
+                    reason: e.reason.clone(),
+                    governed: is_org_block(&e.reason) || is_org_block(&e.rule),
+                }),
+            }
+        }
+        out.truncate(VIEW_ROW_LIMIT);
+        out
+    }
+
+    /// The log as a table view, so the panel's "Recent egress" renders it the
+    /// way it renders a parsed table.
+    pub fn view(&self) -> PolicyView {
+        let columns: Vec<String> = ["HOST", "ACTION", "RULE", "REASON", "COUNT", "LAST SEEN"].map(String::from).to_vec();
+        let mut rows: Vec<(String, Vec<String>)> = self
+            .allowed
+            .iter()
+            .map(|e| ("allow", e))
+            .chain(self.blocked.iter().map(|e| ("deny", e)))
+            .map(|(action, e)| {
+                (e.last_seen.clone(), vec![e.host.clone(), action.into(), e.rule.clone(), e.reason.clone(), e.count.to_string(), e.last_seen.clone()])
+            })
+            .collect();
+        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut rows: Vec<Vec<String>> = rows.into_iter().map(|(_, r)| r).collect();
+        let truncated = rows.len().saturating_sub(VIEW_ROW_LIMIT);
+        rows.truncate(VIEW_ROW_LIMIT);
+        PolicyView {
+            roles: column_roles(&columns),
+            columns,
+            rows,
+            truncated,
+            sandbox_scoped: true,
+            ..Default::default()
+        }
+    }
+}
+
+fn entry(v: &serde_json::Value) -> Option<EgressEntry> {
+    let text = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let host = text("host");
+    if host.is_empty() {
+        return None;
+    }
+    Some(EgressEntry {
+        host,
+        rule: text("rule"),
+        reason: text("reason"),
+        proxy_type: text("proxy_type"),
+        count: v.get("count").and_then(|x| x.as_u64()).unwrap_or(1),
+        last_seen: text("last_seen"),
+    })
+}
+
+/// A host the sandbox tried to reach and was refused.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct BlockedHost {
+    pub host: String,
+    /// What an allow rule for it names: the host without its port.
+    pub resource: String,
+    pub count: u64,
+    pub last_seen: String,
+    pub reason: String,
+    /// Blocked by organisation policy: sbx will refuse an allow, so none is offered.
+    pub governed: bool,
+}
+
+fn is_org_block(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.contains("org policy") || t.contains("organization") || t.contains("organisation") || t.contains("governance")
+}
+
+/// The host part of a logged destination, the form an allow rule takes:
+/// `api.x.com:443` → `api.x.com`. A bracketed IPv6 literal is kept whole.
+pub fn allow_resource(host: &str) -> String {
+    let h = host.trim().trim_end_matches('.');
+    if h.starts_with('[') {
+        return h.split_once(']').map(|(a, _)| format!("{a}]")).unwrap_or_else(|| h.to_string());
+    }
+    match h.rsplit_once(':') {
+        Some((name, port)) if !name.contains(':') && port.chars().all(|c| c.is_ascii_digit()) => name.to_string(),
+        _ => h.to_string(),
+    }
+}
+
+/// One server in `sbx mcp ls --format json` (0.48+: a bare array).
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct McpServer {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+pub fn parse_mcp_ls(raw: &str) -> Option<Vec<McpServer>> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
+    Some(
+        rows.iter()
+            .filter_map(|v| {
+                Some(McpServer {
+                    name: v.get("name")?.as_str()?.to_string(),
+                    kind: v.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                })
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_egress_log_json_groups_blocked_hosts() {
+        let raw = r#"{"updated_at":"2026-10-26T10:00:00Z",
+          "allowed":[{"sandbox_id":"s1","host":"api.anthropic.com:443","proxy_type":"https","rule":"r1","reason":"allowed","count":9,"first_seen":"2026-10-26T09:00:00Z","last_seen":"2026-10-26T09:59:00Z"}],
+          "blocked":[{"sandbox_id":"s1","host":"registry.npmjs.org:443","proxy_type":"https","rule":"default-deny-all","reason":"no matching allow rule","count":3,"first_seen":"a","last_seen":"2026-10-26T09:58:00Z"},
+                     {"sandbox_id":"s1","host":"registry.npmjs.org:443","proxy_type":"https","rule":"default-deny-all","reason":"no matching allow rule","count":2,"first_seen":"a","last_seen":"2026-10-26T09:50:00Z"},
+                     {"sandbox_id":"s1","host":"pastebin.com:443","proxy_type":"https","rule":"","reason":"Blocked by org policy","count":1,"first_seen":"a","last_seen":"2026-10-26T09:40:00Z"}]}"#;
+        let log = EgressLog::parse(raw).unwrap();
+        let b = log.blocked_hosts();
+        assert_eq!(b.len(), 2);
+        assert_eq!((b[0].host.as_str(), b[0].count), ("registry.npmjs.org:443", 5));
+        assert!(!b[0].governed && b[1].governed, "an org block offers no allow");
+        let v = log.view();
+        assert_eq!(v.rows.len(), 4);
+        assert_eq!(v.rows[0][1], "allow", "newest first");
+        assert!(EgressLog::parse("HOST  RULE  REASON\n").is_none());
+    }
+
+    #[test]
+    fn an_allow_rule_names_the_host_not_the_port() {
+        assert_eq!(allow_resource("registry.npmjs.org:443"), "registry.npmjs.org");
+        assert_eq!(allow_resource("example.com."), "example.com");
+        assert_eq!(allow_resource("[::1]:8080"), "[::1]");
+        assert_eq!(allow_resource("10.0.0.1"), "10.0.0.1");
+    }
+
+    #[test]
+    fn mcp_servers_are_a_bare_array() {
+        let s = parse_mcp_ls(r#"[{"name":"github","type":"remote","gateway":{"url":"x"}},{"type":"stdio"}]"#).unwrap();
+        assert_eq!(s, vec![McpServer { name: "github".into(), kind: "remote".into() }]);
+    }
 
     const LS: &str = "POLICY          SOURCE   APPLIES TO        SUMMARY\n\
                       local-default   local    all               12 rules\n\

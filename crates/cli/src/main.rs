@@ -71,6 +71,10 @@ enum Cmd {
         /// Follow the daemon log afterwards.
         #[arg(long)]
         tail: bool,
+        /// With `template = "auto"`: once this new sandbox is up, save it as
+        /// the template for its kits and remove the previous one.
+        #[arg(long)]
+        rebuild_template: bool,
     },
     /// A throwaway chat sandbox: an agent on an empty workspace.
     #[command(after_help = "Examples:\n  sbxw chat\n  sbxw chat brainstorm\n  sbxw rm brainstorm")]
@@ -147,6 +151,20 @@ enum Cmd {
         dry_run: bool,
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+    /// Check sbxw (sbx version, config, daemon, local kits), then summarise
+    /// `sbx diagnose`.
+    Doctor {
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+        /// Print sbx's full diagnose report as JSON instead.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Snapshot a set-up sandbox, so new ones start from it (`template` in sbxw.toml).
+    Template {
+        #[command(subcommand)]
+        cmd: TemplateCmd,
     },
     /// The shared download cache of the bundled kits: show or clear it.
     Cache {
@@ -240,6 +258,18 @@ enum SkillsCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum TemplateCmd {
+    /// Save a sandbox as a local template (its secrets are taken out first).
+    Save {
+        name: String,
+        /// The template's tag, e.g. `myproject:base`.
+        tag: String,
+    },
+    /// List saved templates.
+    Ls,
+}
+
 #[derive(Subcommand, Clone, Copy, Default)]
 pub enum HostsAction {
     #[default]
@@ -259,8 +289,8 @@ pub enum CacheAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Up { name, path, ro, add_sandbox, config, no_web, use_api_key, tail } => {
-            cmd::up(cmd::UpArgs { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false })
+        Cmd::Up { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template } => {
+            cmd::up(cmd::UpArgs { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template })
         }
         Cmd::Chat { name, config, no_web, use_api_key, tail } => cmd::chat(name, config, no_web, use_api_key, tail),
         Cmd::Logs { name, lines } => cmd::logs(name, lines),
@@ -288,6 +318,9 @@ fn main() -> Result<()> {
         }
         Cmd::Env { cmd: EnvCmd::Export { path, name, config, out, force } } => cmd::env::export(path, name, config, out, force),
         Cmd::Hosts { action, config } => cmd::hosts(action.unwrap_or_default(), &config),
+        Cmd::Doctor { config, json } => cmd::doctor::run(&config, json),
+        Cmd::Template { cmd: TemplateCmd::Save { name, tag } } => cmd::template::save(&name, &tag),
+        Cmd::Template { cmd: TemplateCmd::Ls } => cmd::template::ls(),
         Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
         Cmd::Update { check, no_island } => update::run(check, no_island),

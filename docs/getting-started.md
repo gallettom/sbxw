@@ -12,7 +12,7 @@
 ## Requirements
 
 - The standalone [`sbx`](https://docs.docker.com/reference/cli/sbx) CLI on your
-  `PATH`, **version 0.47.0 or newer**. Check with `sbx version`.
+  `PATH`, **version 0.48.0 or newer**. Check with `sbx version`.
 - `sbx login` done once.
 - To build from source: a Rust toolchain.
 

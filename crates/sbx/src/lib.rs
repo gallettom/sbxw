@@ -1,8 +1,9 @@
 //! The only door to the `sbx` CLI. sbxw never calls `docker sandbox`.
 //!
-//! Written for sbx 0.47 and newer, with no fallbacks below it: since 0.39 an
+//! Written for sbx 0.48 and newer, with no fallbacks below it: since 0.39 an
 //! unrecognised command or flag is an *error*, so a command that succeeded
-//! really ran, and a fallback path would be code nobody runs.
+//! really ran, and a fallback path would be code nobody runs. 0.48 rewrote
+//! every human-readable table, so what sbxw parses it reads as `--format json`.
 //!
 //! ```text
 //! sbx create claude PATH --name N [PATH:ro]… [--kit K]… [-p SPEC]…
@@ -11,22 +12,30 @@
 //!                                              -p is all-or-nothing)
 //! sbx run --name N [--env-file F]… [-e K=V]…  (attach; -e applies to the agent session)
 //! sbx run -d --name N                         (keep running with nobody attached)
-//! sbx ls                                      (read by column headers)
+//! sbx ls --format json                        (a bare array; table read by headers as a fallback)
 //! sbx exec [-i|-it] N -- cmd…                 (only a *running* sandbox; -d fails)
-//! sbx ports N [--publish|--unpublish SPEC]
+//! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC
 //! sbx policy allow|deny network [--sandbox N] RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)
 //! sbx policy rm network --id RULE_ID [--sandbox N] --force
-//! sbx secret set [--sandbox N] SERVICE        (value on stdin)
-//! sbx kit add N REF                           (recreates the container)
+//! sbx secret set [--sandbox N] SERVICE [--force]  (value on stdin)
+//! sbx kit add N REF                           (recreates the container; startup commands since 0.48)
 //! sbx env create PATH… --name N [--env-arg K=V]…   (shows a plan and asks)
 //! sbx prune [--dry-run] [--filter until=D] --force
-//! sbx rm --force (N…|--all) · sbx stop N · sbx skills import · sbx setup ssh
+//! sbx rm --force --format json N…            (one result per target)
+//! sbx stop N
+//! sbx policy log [N] --format json · sbx policy refresh
+//! sbx mcp ls --format json · sbx mcp unload SERVER --sandbox N
+//! sbx kit validate REF --offline              (local dir or ZIP; no daemon, no sign-in)
+//! sbx template save N TAG                    (--description is cloud-only: refused locally)
+//! sbx template ls · sbx template rm TAG · create --template TAG
+//! sbx diagnose --format json · sbx skills import · sbx setup ssh
 //! ```
 //!
 //! Facts the methods below are built on:
 //! * every removal asks for confirmation since 0.45, and a prompt with no
-//!   terminal is a refusal — sbxw passes `--force` and does its own asking;
+//!   terminal is a refusal (since 0.48 even a piped `y`) — sbxw passes
+//!   `--force` and does its own asking;
 //! * a sandbox made with `sbx create` stops by itself once idle;
 //! * a sandbox whose guest stopped responding is not running;
 //! * `policy allow|deny` refused with "managed by your organization" is a
@@ -37,7 +46,7 @@ pub mod scripts;
 
 use anyhow::{anyhow, bail, Result};
 use runner::{Invocation, Output, Runner};
-use sbxw_core::policy::PolicyView;
+use sbxw_core::policy::{parse_mcp_ls, EgressLog, McpServer, PolicyView};
 use sbxw_core::ports::PortMapping;
 use sbxw_core::table;
 use sbxw_core::tooling::{Tooling, ToolingOutcome};
@@ -49,7 +58,7 @@ use std::time::Duration;
 pub use scripts::ThreadStatus;
 
 /// Oldest sbx sbxw works against, and the one it is written for.
-pub const MIN_VERSION: (u32, u32, u32) = (0, 47, 0);
+pub const MIN_VERSION: (u32, u32, u32) = (0, 48, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
 /// Longest tail of a failing command's stderr folded into the error: sbx's
@@ -79,17 +88,141 @@ pub struct SandboxInfo {
     pub name: String,
     pub agent: String,
     pub status: String,
+    /// RFC 3339, from the 0.48 JSON; absent from the table fallback.
+    pub created_at: Option<String>,
+    /// Running with nobody attached (`sbx run -d`).
+    pub detached: bool,
 }
 
 impl SandboxInfo {
-    /// Up *and answering*: a hung guest reported as running is not.
+    /// Up *and answering*: a hung guest reported as running is not (0.47 said
+    /// "unresponsive", 0.48 "not responding").
     pub fn is_running(&self) -> bool {
         let s = self.status.to_ascii_lowercase();
-        s.split_whitespace().next() == Some("running") && !s.contains("unresponsive")
+        self.state() == "running" && !s.contains("unresponsive") && !s.contains("not responding")
     }
     pub fn is_stopped(&self) -> bool {
-        self.status.to_ascii_lowercase().split_whitespace().next() == Some("stopped")
+        self.state() == "stopped"
     }
+    /// The first word of the status, past any state mark (0.48 prints `● running`).
+    fn state(&self) -> String {
+        self.status
+            .split_whitespace()
+            .find(|w| w.chars().any(char::is_alphanumeric))
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    }
+}
+
+/// `sbx ls --format json` (0.48+: a bare array of snake_case rows); `None`
+/// when `raw` is not that, so the caller can read it as a table.
+pub fn parse_ls_json(raw: &str) -> Option<Vec<SandboxInfo>> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
+    let text = |v: &serde_json::Value, keys: &[&str]| {
+        keys.iter().find_map(|k| v.get(*k).and_then(|x| x.as_str())).unwrap_or("").to_string()
+    };
+    Some(
+        rows.iter()
+            .filter_map(|v| {
+                let name = text(v, &["name", "sandbox"]);
+                if name.is_empty() {
+                    return None;
+                }
+                let mut status = text(v, &["status", "state"]);
+                // A hung guest may be a flag beside a "running" status.
+                let hung = ["not_responding", "unresponsive"].iter().any(|k| v.get(*k).and_then(|x| x.as_bool()) == Some(true))
+                    || v.get("responsive").and_then(|x| x.as_bool()) == Some(false);
+                if hung && !status.to_ascii_lowercase().contains("respon") {
+                    status.push_str(" (not responding)");
+                }
+                Some(SandboxInfo {
+                    name,
+                    agent: text(v, &["agent"]),
+                    status: if status.is_empty() { "unknown".into() } else { status },
+                    created_at: Some(text(v, &["created_at"])).filter(|c| !c.is_empty()),
+                    detached: v.get("detached").and_then(|x| x.as_bool()).unwrap_or(false),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// One saved template, as `sbx template ls` lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TemplateInfo {
+    /// What `create --template` and `template rm` take.
+    pub tag: String,
+    pub size: Option<String>,
+    pub created: Option<String>,
+}
+
+/// `sbx template ls`, as JSON (an array, bare or under `templates`) or by its
+/// headers: a tag column (`TAG`, `NAME`, `TEMPLATE`, `REFERENCE`), or
+/// `REPOSITORY` + `TAG` joined as docker does. Not sbx's own format to rely
+/// on: every shape it might take is read, and anything else lists nothing.
+pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+        let rows = v.as_array().or_else(|| v.get("templates").and_then(|t| t.as_array())).cloned().unwrap_or_default();
+        let text = |v: &serde_json::Value, keys: &[&str]| keys.iter().find_map(|k| v.get(*k).and_then(|x| x.as_str())).filter(|s| !s.is_empty()).map(String::from);
+        return rows
+            .iter()
+            .filter_map(|v| {
+                let tag = match (text(v, &["repository", "repo"]), text(v, &["tag"])) {
+                    (Some(r), Some(t)) if !t.contains(':') => format!("{r}:{t}"),
+                    _ => text(v, &["tag", "name", "template", "reference", "ref"])?,
+                };
+                Some(TemplateInfo { tag, size: text(v, &["size"]), created: text(v, &["created_at", "created"]) })
+            })
+            .collect();
+    }
+    let t = table::parse(raw);
+    let col = |names: &[&str]| t.columns.iter().position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
+    let (repo, tag) = (col(&["REPOSITORY"]), col(&["TAG", "NAME", "TEMPLATE", "REFERENCE"]));
+    let (size, created) = (col(&["SIZE"]), col(&["CREATED", "CREATED AT"]));
+    let Some(tag) = tag.or(repo) else {
+        return Vec::new();
+    };
+    let cell = |row: &Vec<String>, i: Option<usize>| i.and_then(|i| row.get(i)).filter(|c| !c.is_empty()).cloned();
+    t.rows
+        .iter()
+        .filter_map(|row| {
+            let t = cell(row, Some(tag))?;
+            let tag = match cell(row, repo) {
+                Some(r) if Some(tag) != repo && !t.contains(':') => format!("{r}:{t}"),
+                _ => t,
+            };
+            Some(TemplateInfo { tag, size: cell(row, size), created: cell(row, created) })
+        })
+        .collect()
+}
+
+/// What `sbx rm` did with one target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RmResult {
+    pub name: String,
+    /// `removed` or `removing`: sbxw may forget it.
+    pub removed: bool,
+    pub error: Option<String>,
+}
+
+/// `sbx rm --format json` (0.48+): one result per target, missing and failed
+/// ones included. `None` when `raw` is not that.
+pub fn parse_rm_json(raw: &str) -> Option<Vec<RmResult>> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
+    Some(
+        rows.iter()
+            .filter_map(|v| {
+                let name = v.get("name")?.as_str()?.to_string();
+                let action = v.get("action").and_then(|a| a.as_str()).unwrap_or("").to_ascii_lowercase();
+                let error = v.get("error").and_then(|e| e.as_str()).filter(|e| !e.is_empty()).map(String::from);
+                Some(RmResult {
+                    name,
+                    removed: matches!(action.as_str(), "removed" | "removing") && error.is_none(),
+                    error,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// `sbx ls`, by its headers (`STATUS`/`STATE`, `AGENT`, name first); a layout
@@ -108,13 +241,16 @@ pub fn parse_ls(raw: &str) -> Vec<SandboxInfo> {
             lines
                 .filter_map(|line| {
                     let cells = table::slice_at(line, &starts);
-                    let name = cells.first()?.split_whitespace().next()?.to_string();
+                    // Past a leading state mark, as in the status column.
+                    let name = cells.first()?.split_whitespace().find(|w| w.chars().any(char::is_alphanumeric))?.to_string();
                     let cell = |i: Option<usize>| i.and_then(|i| cells.get(i)).cloned().unwrap_or_default();
                     let status = cell(Some(status_col));
                     Some(SandboxInfo {
                         name,
                         agent: cell(agent_col),
                         status: if status.is_empty() { "unknown".into() } else { status },
+                        created_at: None,
+                        detached: false,
                     })
                 })
                 .collect()
@@ -126,6 +262,8 @@ pub fn parse_ls(raw: &str) -> Vec<SandboxInfo> {
                     name: cols.next()?.to_string(),
                     agent: cols.next().unwrap_or("").to_string(),
                     status: cols.next().unwrap_or("unknown").to_string(),
+                    created_at: None,
+                    detached: false,
                 })
             })
             .collect(),
@@ -192,10 +330,16 @@ pub struct CreateOpts {
     pub pull: Option<String>,
     pub env: Vec<String>,
     pub env_files: Vec<String>,
+    /// A saved template (`sbx template save`): a local snapshot needs no
+    /// registry round-trip, so creation skips the image pull.
+    pub template: Option<String>,
 }
 
 pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     let mut a: Vec<String> = vec!["create".into(), "claude".into(), o.workspace.clone(), "--name".into(), name.to_string()];
+    if let Some(t) = &o.template {
+        a.extend(["--template".into(), t.clone()]);
+    }
     a.extend(o.rw_mounts.iter().cloned());
     a.extend(o.ro_mounts.iter().map(|m| format!("{m}:ro")));
     for k in &o.kits {
@@ -281,12 +425,24 @@ pub fn secret_args(service: &str, sandbox: Option<&SandboxName>) -> Vec<String> 
     a
 }
 
+/// Snapshot a sandbox into a local template. No `--description`: sbx 0.49
+/// takes it only with `--cloud` and refuses a local save that carries it.
+pub fn template_save_args(name: &SandboxName, tag: &str) -> Vec<String> {
+    vec!["template".to_string(), "save".into(), name.to_string(), tag.into()]
+}
+
 pub fn prune_args(until: Option<&str>, dry_run: bool) -> Vec<String> {
     let mut a = vec!["prune".to_string(), if dry_run { "--dry-run" } else { "--force" }.into()];
     if let Some(u) = until {
         a.extend(["--filter".into(), format!("until={u}")]);
     }
     a
+}
+
+/// Did sbx refuse because it wanted a yes it could not ask for?
+pub fn wants_confirmation(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("--force") || e.contains("confirm") || e.contains("not a terminal") || e.contains("non-interactive")
 }
 
 /// The typed client.
@@ -361,9 +517,13 @@ impl Sbx {
     }
 
     /// Every sandbox; empty when `sbx ls` fails (callers treat empty as
-    /// "could not tell", never as "all gone").
+    /// "could not tell", never as "all gone"). JSON, because 0.48 reshaped the
+    /// table with state marks and a creation-time column.
     pub async fn ls(&self) -> Vec<SandboxInfo> {
-        self.capture(s(&["ls"])).await.map(|r| parse_ls(&r)).unwrap_or_default()
+        match self.capture(s(&["ls", "--format", "json"])).await {
+            Ok(raw) => parse_ls_json(&raw).unwrap_or_else(|| parse_ls(&raw)),
+            Err(_) => self.capture(s(&["ls"])).await.map(|r| parse_ls(&r)).unwrap_or_default(),
+        }
     }
 
     pub async fn lookup(&self, name: &SandboxName) -> Option<SandboxInfo> {
@@ -437,25 +597,35 @@ impl Sbx {
     }
 
     /// `--force`: sbxw's own daemon keeps a session attached, and an unforced
-    /// rm refuses a sandbox in use.
-    pub async fn rm(&self, names: &[SandboxName], all: bool) -> Result<()> {
-        let mut a = s(&["rm", "--force"]);
-        if all {
-            a.push("--all".into());
-        } else {
-            a.extend(names.iter().map(|n| n.to_string()));
+    /// rm refuses a sandbox in use. One result per target, so a partial
+    /// failure still lets the caller forget the sandboxes that did go; an
+    /// error only when sbx gave no per-target answer.
+    pub async fn rm(&self, names: &[SandboxName]) -> Result<Vec<RmResult>> {
+        let mut a = s(&["rm", "--force", "--format", "json"]);
+        a.extend(names.iter().map(|n| n.to_string()));
+        let out = self.runner.run(Invocation::new(a.clone())).await?;
+        if let Some(results) = parse_rm_json(&out.stdout_str()).filter(|r| !r.is_empty()) {
+            return Ok(results);
         }
-        self.checked(Invocation::new(a)).await.map(drop)
+        if !out.success() {
+            return Err(command_error(&a, &out));
+        }
+        Ok(names
+            .iter()
+            .map(|n| RmResult { name: n.to_string(), removed: true, error: None })
+            .collect())
     }
 
     pub async fn prune(&self, until: Option<&str>, dry_run: bool) -> Result<String> {
         self.capture(prune_args(until, dry_run)).await
     }
 
+    /// The live mappings, from the documented 0.48 JSON rows (the table, if
+    /// the output is not JSON).
     pub async fn ports(&self, name: &SandboxName) -> Vec<PortMapping> {
-        self.ports_raw(name)
+        self.capture(s(&["ports", name.as_str(), "--format", "json"]))
             .await
-            .map(|r| sbxw_core::ports::parse_ports(&r))
+            .map(|r| sbxw_core::ports::parse_ports_json(&r).unwrap_or_else(|| sbxw_core::ports::parse_ports(&r)))
             .unwrap_or_default()
     }
 
@@ -514,19 +684,107 @@ impl Sbx {
         self.policy_view(scoped, unscoped, sandbox).await
     }
 
-    pub async fn policy_log(&self, sandbox: &SandboxName) -> PolicyView {
-        self.policy_view(s(&["policy", "log", sandbox.as_str()]), s(&["policy", "log"]), sandbox).await
+    /// What the sandbox reached and was refused, from the 0.48 JSON document;
+    /// `None` beside a table view when sbx gave one instead.
+    pub async fn policy_log(&self, sandbox: &SandboxName) -> (PolicyView, Option<EgressLog>) {
+        if let Ok(raw) = self.capture(s(&["policy", "log", sandbox.as_str(), "--format", "json"])).await {
+            if let Some(log) = EgressLog::parse(&raw) {
+                return (log.view(), Some(log));
+            }
+        }
+        (self.policy_view(s(&["policy", "log", sandbox.as_str()]), s(&["policy", "log"]), sandbox).await, None)
     }
 
-    /// A secret by stdin, never argv.
+    /// `sbx policy refresh` (0.49): re-read policy now, e.g. after an AI
+    /// Governance change, instead of at the next poll. Connections stay open.
+    pub async fn policy_refresh(&self) -> Result<()> {
+        self.checked(Invocation::new(s(&["policy", "refresh"]))).await.map(drop)
+    }
+
+    /// The MCP servers registered on this host.
+    pub async fn mcp_ls(&self) -> Result<Vec<McpServer>> {
+        let raw = self.capture(s(&["mcp", "ls", "--format", "json"])).await?;
+        parse_mcp_ls(&raw).ok_or_else(|| anyhow!("`sbx mcp ls --format json` gave no JSON array:\n{}", raw.trim()))
+    }
+
+    /// Detach a loaded MCP server from one sandbox without restarting its agent (0.48).
+    pub async fn mcp_unload(&self, server: &str, sandbox: &SandboxName) -> Result<()> {
+        self.checked(Invocation::new(s(&["mcp", "unload", server, "--sandbox", sandbox.as_str()]))).await.map(drop)
+    }
+
+    /// Check a local kit (directory or ZIP) without the daemon or a sign-in
+    /// (0.49), so a broken kit fails in a second rather than mid-create.
+    pub async fn kit_validate_offline(&self, kit: &str) -> Result<()> {
+        self.checked(Invocation::new(s(&["kit", "validate", kit, "--offline"]))).await.map(drop)
+    }
+
+    /// Snapshot a sandbox from the daemon, where no terminal can answer a
+    /// prompt: a save refused for want of one (sbx asking to stop the
+    /// sandbox first) is retried after stopping it. True when it was stopped.
+    pub async fn template_save(&self, name: &SandboxName, tag: &str) -> Result<bool> {
+        let args = template_save_args(name, tag);
+        let Err(first) = self.checked(Invocation::new(args.clone())).await else {
+            return Ok(false);
+        };
+        let said = format!("{first:#}").to_lowercase();
+        if !(wants_confirmation(&said) || said.contains("stop") || said.contains("running")) {
+            return Err(first);
+        }
+        self.stop(name).await?;
+        self.checked(Invocation::new(args))
+            .await
+            .map(|_| true)
+            .map_err(|e| anyhow!("{e:#}\n(retried after stopping '{name}'; first attempt: {first:#})"))
+    }
+
+    /// The saved templates. `--format json` first; an sbx that refuses the
+    /// flag is asked for its table.
+    pub async fn template_ls(&self) -> Result<Vec<TemplateInfo>> {
+        let raw = match self.capture(s(&["template", "ls", "--format", "json"])).await {
+            Ok(raw) => raw,
+            Err(_) => self.capture(s(&["template", "ls"])).await?,
+        };
+        Ok(parse_template_ls(&raw))
+    }
+
+    /// Remove a template; a refusal for want of a confirmation is retried
+    /// with `--force`, as every sbx removal asks since 0.45.
+    pub async fn template_rm(&self, tag: &str) -> Result<()> {
+        let Err(first) = self.checked(Invocation::new(s(&["template", "rm", tag]))).await else {
+            return Ok(());
+        };
+        if !wants_confirmation(&format!("{first:#}")) {
+            return Err(first);
+        }
+        self.checked(Invocation::new(s(&["template", "rm", tag, "--force"]))).await.map(drop)
+    }
+
+    /// `sbx diagnose --format json`, unparsed: its shape is sbx's to change.
+    pub async fn diagnose(&self) -> Result<String> {
+        self.capture(s(&["diagnose", "--format", "json"])).await
+    }
+
+    /// A secret by stdin, never argv. Replacing one may ask to confirm, and
+    /// since 0.48 no terminal is a refusal: that refusal is retried with
+    /// `--force` — the caller asked to store this value.
     pub async fn secret_set(&self, service: &str, value: &str, sandbox: Option<&SandboxName>) -> Result<()> {
-        self.checked(Invocation {
-            args: secret_args(service, sandbox),
+        let inv = |args: Vec<String>| Invocation {
+            args,
             stdin: Some(value.as_bytes().to_vec()),
             on_line: None,
-        })
-        .await
-        .map(drop)
+        };
+        let Err(first) = self.checked(inv(secret_args(service, sandbox))).await else {
+            return Ok(());
+        };
+        if !wants_confirmation(&format!("{first:#}")) {
+            return Err(first);
+        }
+        let mut forced = secret_args(service, sandbox);
+        forced.push("--force".into());
+        self.checked(inv(forced))
+            .await
+            .map(drop)
+            .map_err(|e| anyhow!("{e:#}\n(retried with --force after: {first:#})"))
     }
 
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
@@ -657,6 +915,59 @@ mod tests {
         assert!(!l[1].is_running(), "a hung guest is not running");
         assert!(l[2].is_stopped());
         assert_eq!(parse_ls("x\na b c\n")[0].name, "a", "positional fallback");
+        let marked = parse_ls("  SANDBOX   AGENT    STATUS              CREATED\n● neos      claude   ● running           2h ago\n");
+        assert_eq!(marked[0].name, "neos", "0.48 state marks are not names");
+        assert!(marked[0].is_running());
+    }
+
+    #[test]
+    fn the_ls_json_is_a_bare_array() {
+        let raw = r#"[{"name":"neos","agent":"claude","status":"running","created_at":"2026-10-20T10:00:00Z","detached":false},
+                     {"name":"hung","agent":"claude","status":"running (not responding)"},
+                     {"name":"flagged","agent":"claude","status":"running","responsive":false},
+                     {"name":"off","agent":"claude","state":"stopped"}]"#;
+        let l = parse_ls_json(raw).unwrap();
+        assert_eq!(l.len(), 4);
+        assert!(l[0].is_running());
+        assert!(!l[1].is_running() && !l[2].is_running(), "a guest that stopped answering is not running");
+        assert!(l[3].is_stopped());
+        assert!(parse_ls_json("SANDBOX  AGENT  STATUS\n").is_none(), "a table is not JSON");
+    }
+
+    #[test]
+    fn template_ls_is_read_as_json_or_by_its_headers() {
+        let json = r#"[{"tag":"me/base:1","size":"1.2GB","created_at":"2026-10-20T10:00:00Z"},{"repository":"sbxw-auto","tag":"abc-2.1.3-0.49.1"}]"#;
+        let l = parse_template_ls(json);
+        assert_eq!(l.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>(), ["me/base:1", "sbxw-auto:abc-2.1.3-0.49.1"]);
+        assert_eq!(l[0].size.as_deref(), Some("1.2GB"));
+        let table = "REPOSITORY   TAG               SIZE    CREATED\nme/base      1                 1.2GB   2 days ago\n";
+        let l = parse_template_ls(table);
+        assert_eq!(l, [TemplateInfo { tag: "me/base:1".into(), size: Some("1.2GB".into()), created: Some("2 days ago".into()) }]);
+        assert_eq!(parse_template_ls("TAG          SIZE\nme/base:1    1GB\n")[0].tag, "me/base:1");
+        assert!(parse_template_ls("No templates.\n").is_empty());
+        assert!(parse_template_ls("[]").is_empty());
+    }
+
+    #[test]
+    fn rm_results_keep_the_failures() {
+        let raw = r#"[{"action":"removed","resource":"sandbox","name":"a"},
+                     {"action":"failed","resource":"sandbox","name":"b","error":"no such sandbox"}]"#;
+        let r = parse_rm_json(raw).unwrap();
+        assert!(r[0].removed);
+        assert!(!r[1].removed);
+        assert_eq!(r[1].error.as_deref(), Some("no such sandbox"));
+    }
+
+    #[tokio::test]
+    async fn a_partial_rm_still_names_what_went() {
+        let fake = Fake::new(|_| Output {
+            code: Some(1),
+            stdout: br#"[{"action":"removed","name":"a"},{"action":"failed","name":"b","error":"busy"}]"#.to_vec(),
+            stderr: vec![],
+        });
+        let r = Sbx::new(fake.clone()).rm(&[sb("a"), sb("b")]).await.unwrap();
+        assert_eq!(r.iter().filter(|r| r.removed).count(), 1);
+        assert_eq!(fake.log(), ["rm --force --format json a b"]);
     }
 
     #[test]
@@ -673,11 +984,12 @@ mod tests {
                 env: vec!["A=1".into()],
                 env_files: vec!["/e".into()],
                 rw_mounts: vec!["/rw".into()],
+                template: Some("me/base:1".into()),
             },
         );
         assert_eq!(
             a.join(" "),
-            "create claude /w --name neos /rw /ro:ro --kit /k -p 4200:4200 --skills=off --pull=missing --env-file /e -e A=1"
+            "create claude /w --name neos --template me/base:1 /rw /ro:ro --kit /k -p 4200:4200 --skills=off --pull=missing --env-file /e -e A=1"
         );
     }
 
@@ -687,6 +999,7 @@ mod tests {
         assert_eq!(policy_rule_args("deny", Some(&sb("n")), "x.com").join(" "), "policy deny network --sandbox n x.com");
         assert_eq!(policy_rm_args("r-1", None).join(" "), "policy rm network --id r-1 --force");
         assert_eq!(secret_args("anthropic", None).join(" "), "secret set anthropic");
+        assert_eq!(template_save_args(&sb("n"), "me/base:1").join(" "), "template save n me/base:1");
         assert_eq!(prune_args(Some("168h"), false).join(" "), "prune --force --filter until=168h");
         assert_eq!(env_create_args(&["/d".into()], &sb("n"), &["p=1".into()]).join(" "), "env create /d --name n --env-arg p=1");
     }
@@ -735,8 +1048,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_replaced_secret_is_confirmed_with_force() {
+        let fake = Fake::new(|a| {
+            if a.contains(&"--force".to_string()) {
+                Output::ok("")
+            } else {
+                Output::fail(1, "secret exists; confirmation required (stdin is not a terminal) — use --force")
+            }
+        });
+        Sbx::new(fake.clone()).secret_set("anthropic", "sk-123", None).await.unwrap();
+        assert_eq!(fake.log(), ["secret set anthropic", "secret set anthropic --force"]);
+        assert_eq!(fake.stdins.lock().unwrap()[1], b"sk-123", "the value travels on stdin both times");
+    }
+
+    #[tokio::test]
     async fn the_version_floor_is_enforced() {
-        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.46.9")));
+        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.47.9")));
         assert!(old.check_version(false).await.is_err());
         assert!(old.check_version(true).await.is_ok());
         let new = Sbx::new(Fake::new(|_| Output::ok("sbx 0.48.0")));

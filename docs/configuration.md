@@ -25,6 +25,8 @@ lists every key with its default.
 | `web_addr` | `127.0.0.1:7681` | The **UI listener**: browser, island, extension |
 | `agent_addr` | `127.0.0.1:7682` | The **agent listener**, the only address sandboxes reach. Must differ from `web_addr` ([why](security.md#two-listeners)) |
 | `monitor_cmd` | `["sbx"]` | argv of the **Monitor Sandboxes** pane, run on the host. `[]` hides the button |
+| `terminal_color` | `""` | Terminal background in the web UI, `#rrggbb`. Empty is the built-in `#0d1117`. The header's colour picker overrides it per browser |
+| `terminal_bar_color` | `""` | The bar above each terminal, `#rrggbb`. Empty is the built-in `darkslategrey`. Same picker, same override |
 | `max_agent_sessions` | `4` | Agent + [threads](threads-and-lead.md) one sandbox may hold open |
 
 ### Sandbox creation
@@ -39,6 +41,7 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `skills` | `""` (sbx decides) | `off`, `readonly` or `readwrite`. See [Shared skills](kits-and-skills.md#shared-skills) |
 | `share_skills` | `true` | Old spelling: `false` means `skills = "off"` |
 | `pull` | `""` (sbx decides) | Image pull policy: `always`, `missing` or `never` |
+| `template` | `""` (sbx's image) | Template new sandboxes start from, with no registry pull: `"auto"` for one sbxw keeps per kit list and offers to rebuild when sbx or sbxw changes, or a tag saved with `sbxw template save` |
 
 ### Agent
 

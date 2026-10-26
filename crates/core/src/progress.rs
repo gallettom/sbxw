@@ -14,6 +14,7 @@ pub const TOOLING: &str = "tooling";
 pub const POLICY: &str = "policy";
 pub const KITS: &str = "kits";
 pub const PORTS: &str = "ports";
+pub const TEMPLATE: &str = "template";
 
 const MAX_DETAIL: usize = 160;
 

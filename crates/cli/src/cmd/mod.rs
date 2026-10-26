@@ -1,6 +1,8 @@
 //! The commands.
 
+pub mod doctor;
 pub mod env;
+pub mod template;
 
 use crate::client::Daemon;
 use crate::render::Renderer;
@@ -79,9 +81,35 @@ fn init_tracing() {
         .try_init();
 }
 
-fn check_sbx(rt: &tokio::runtime::Runtime) -> Result<Option<String>> {
+/// The sbx version, checked against the floor. Cached per sbx binary (its
+/// path, size and modification time), so a `sbxw` command spawns `sbx version`
+/// only after sbx was installed or upgraded. Only a version that passed the
+/// floor is cached.
+pub(crate) fn check_sbx(rt: &tokio::runtime::Runtime) -> Result<Option<String>> {
     let skip = std::env::var_os(sbxw_sbx::SKIP_VERSION_CHECK_ENV).is_some();
-    rt.block_on(Sbx::process().check_version(skip))
+    let cache = Paths::from_home().run().join("sbx-version");
+    let key = sbx_binary_key();
+    if let (Some(key), Ok(saved)) = (&key, std::fs::read_to_string(&cache)) {
+        if let Some((k, v)) = saved.split_once('\n') {
+            if k == key && !v.trim().is_empty() {
+                return Ok(Some(v.trim().to_string()));
+            }
+        }
+    }
+    let v = rt.block_on(Sbx::process().check_version(skip))?;
+    if let (Some(key), Some(v)) = (key, &v) {
+        let _ = sbxw_daemon::store::write_atomic(&cache, format!("{key}\n{v}\n").as_bytes());
+    }
+    Ok(v)
+}
+
+/// `path|size|mtime` of the `sbx` that PATH resolves to; `None` if not found.
+fn sbx_binary_key() -> Option<String> {
+    let path = std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("sbx")).find(|p| p.is_file())?;
+    let real = std::fs::canonicalize(&path).unwrap_or(path);
+    let meta = std::fs::metadata(&real).ok()?;
+    let mtime = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some(format!("{}|{}|{mtime}", real.display(), meta.len()))
 }
 
 /// A sandbox name for a workspace: its folder's name, sanitised, and
@@ -138,6 +166,16 @@ pub struct UpArgs {
     pub use_api_key: bool,
     pub tail: bool,
     pub chat: bool,
+    /// With `template = "auto"`: snapshot this new sandbox as the template.
+    pub rebuild_template: bool,
+}
+
+fn template_choice(rebuild: bool) -> sbxw_core::templates::Choice {
+    if rebuild {
+        sbxw_core::templates::Choice::Rebuild
+    } else {
+        sbxw_core::templates::Choice::Default
+    }
 }
 
 pub fn up(a: UpArgs) -> Result<()> {
@@ -198,6 +236,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             chat: a.chat,
             api_key,
             oauth_token,
+            template: template_choice(a.rebuild_template),
         });
     }
 
@@ -212,6 +251,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             "chat": a.chat,
             "api_key": api_key,
             "oauth_token": oauth_token,
+            "template": template_choice(a.rebuild_template),
         }),
         |v| {
             if let Some(p) = v.get("progress").and_then(|p| serde_json::from_value::<Progress>(p.clone()).ok()) {
@@ -274,6 +314,7 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
         use_api_key,
         tail,
         chat: true,
+        rebuild_template: false,
     })
 }
 
@@ -368,11 +409,14 @@ pub fn ls() -> Result<()> {
     }
     let wn = list.iter().map(|s| s.name.len()).max().unwrap_or(7).max(7);
     let wa = list.iter().map(|s| s.agent.len()).max().unwrap_or(5).max(5);
-    println!("{:<wn$}  {:<wa$}  STATUS", "SANDBOX", "AGENT");
-    println!("{:-<wn$}  {:-<wa$}  ------", "", "");
+    println!("{:<wn$}  {:<wa$}  {:<20}  STATUS", "SANDBOX", "AGENT", "CREATED");
+    println!("{:-<wn$}  {:-<wa$}  {:-<20}  ------", "", "", "");
     for s in &list {
         let dot = if s.is_running() { "●" } else if s.is_stopped() { "○" } else { "?" };
-        println!("{:<wn$}  {:<wa$}  {dot} {}", s.name, s.agent, s.status);
+        // RFC 3339 cut to the minute: `2026-10-20T10:00` reads at a glance.
+        let created: String = s.created_at.as_deref().unwrap_or("").replace('T', " ").chars().take(16).collect();
+        let held = if s.detached { "  (kept up)" } else { "" };
+        println!("{:<wn$}  {:<wa$}  {created:<20}  {dot} {}{held}", s.name, s.agent, s.status);
     }
     Ok(())
 }
@@ -438,20 +482,34 @@ pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
     } else {
         names.iter().map(|n| SandboxName::parse(n)).collect::<Result<_, _>>()?
     };
+    if targets.is_empty() {
+        println!("No sandboxes.");
+        return Ok(());
+    }
     let store = Store::open(Paths::from_home());
-    let chats: Vec<PathBuf> = targets.iter().filter_map(|n| store.chat_workspace(n)).collect();
-    rt.block_on(sbx.rm(&targets, all))?;
+    // Named, even for --all: the list is already known, and sbx then answers per name.
+    let results = rt.block_on(sbx.rm(&targets))?;
+    let gone: Vec<&SandboxName> = targets.iter().filter(|n| results.iter().any(|r| r.removed && r.name == n.as_str())).collect();
+    let chats: Vec<PathBuf> = gone.iter().filter_map(|n| store.chat_workspace(n)).collect();
     let cfg = load_config(Path::new("sbxw.toml")).unwrap_or_default();
     let daemon = Daemon::new(&cfg.web_addr);
-    for n in &targets {
+    let live = daemon.health().is_some();
+    for n in &gone {
         store.forget(n);
-        if daemon.health().is_some() {
+        if live {
             let _ = daemon.post(&format!("/api/sandboxes/{n}/detach"), json!({}));
         }
         println!("removed  {n}");
     }
     for dir in chats {
         let _ = std::fs::remove_dir_all(dir);
+    }
+    let failed: Vec<_> = results.iter().filter(|r| !r.removed).collect();
+    for r in &failed {
+        eprintln!("failed   {}: {}", r.name, r.error.as_deref().unwrap_or("not removed"));
+    }
+    if !failed.is_empty() {
+        bail!("{} of {} sandbox(es) not removed", failed.len(), results.len());
     }
     Ok(())
 }

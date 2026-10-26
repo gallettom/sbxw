@@ -62,6 +62,13 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/policy", get(policy_panel))
         .route("/api/sandboxes/:name/policy/rules", post(policy_add))
         .route("/api/sandboxes/:name/policy/rules/rm", post(policy_rm))
+        .route("/api/policy/refresh", post(policy_refresh))
+        .route("/api/template/status", get(template_status))
+        .route("/api/templates", get(templates_list))
+        .route("/api/templates/save", post(template_save))
+        .route("/api/templates/rm", post(template_rm))
+        .route("/api/sandboxes/:name/mcp", get(mcp_list))
+        .route("/api/sandboxes/:name/mcp/unload", post(mcp_unload))
         .route("/api/sandboxes/:name/envfile", get(envfile).post(envfile))
         .route(
             "/api/sandboxes/:name/paste-image",
@@ -271,13 +278,48 @@ struct CreateBody {
     ports: Vec<PortEntry>,
     #[serde(default)]
     mounts: Vec<MountEntry>,
+    #[serde(default)]
+    template: sbxw_core::templates::Choice,
 }
 
 async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
     let name = sandbox(&b.name)?;
     let extra = b.ports.into_iter().map(PortEntry::wanted).collect::<Result<Vec<_>, _>>()?;
     let mounts = b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect();
-    Ok(warnings(app.create(name, &b.path, mounts, extra, None).await?))
+    Ok(warnings(app.create(name, &b.path, mounts, extra, b.template, None).await?))
+}
+
+/// Whether the create dialog should ask about the automatic template.
+async fn template_status(State(app): S) -> ApiResult {
+    Ok(Json(json!(app.template_status())))
+}
+
+/// The saved templates, for the sidebar's Templates dialog.
+async fn templates_list(State(app): S) -> ApiResult {
+    Ok(ok_with(app.templates().await?))
+}
+
+#[derive(Deserialize)]
+struct TemplateSaveBody {
+    sandbox: String,
+    tag: String,
+}
+
+async fn template_save(State(app): S, Json(b): Json<TemplateSaveBody>) -> ApiResult {
+    let name = sandbox(&b.sandbox)?;
+    let tag = policy::clean_arg(&b.tag, "tag")?;
+    Ok(warnings(app.save_template(&name, &tag).await?))
+}
+
+#[derive(Deserialize)]
+struct TemplateRmBody {
+    tag: String,
+}
+
+async fn template_rm(State(app): S, Json(b): Json<TemplateRmBody>) -> ApiResult {
+    let tag = policy::clean_arg(&b.tag, "tag")?;
+    app.remove_template(&tag).await?;
+    Ok(ok())
 }
 
 #[derive(Deserialize)]
@@ -332,6 +374,8 @@ struct UpBody {
     oauth_token: Option<String>,
     #[serde(default)]
     extra_ports: Vec<WantedPort>,
+    #[serde(default)]
+    template: sbxw_core::templates::Choice,
 }
 
 async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> Result<Response, ApiError> {
@@ -350,6 +394,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         chat: b.chat,
         api_key: b.api_key,
         oauth_token: b.oauth_token,
+        template: b.template,
     };
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let line = |v: Value| format!("{v}\n");
@@ -472,6 +517,31 @@ async fn policy_rm(State(app): S, Path(name): Path<String>, Json(b): Json<RuleRm
     let rule = policy::clean_arg(&b.rule, "rule id")?;
     tracing::info!("web UI: removing policy rule {rule} (from sandbox '{sb}' panel)");
     app.sbx.policy_rm(&rule, Some(&sb)).await?;
+    Ok(ok())
+}
+
+async fn policy_refresh(State(app): S) -> ApiResult {
+    tracing::info!("web UI: refreshing network policy");
+    app.sbx.policy_refresh().await?;
+    Ok(ok())
+}
+
+/// The host's registered MCP servers; the sandbox only scopes the unload.
+async fn mcp_list(State(app): S, Path(name): Path<String>) -> ApiResult {
+    sandbox(&name)?;
+    Ok(ok_with(json!({ "servers": app.sbx.mcp_ls().await? })))
+}
+
+#[derive(Deserialize)]
+struct McpUnloadBody {
+    server: String,
+}
+
+async fn mcp_unload(State(app): S, Path(name): Path<String>, Json(b): Json<McpUnloadBody>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    let server = policy::clean_arg(&b.server, "server")?;
+    tracing::info!("web UI: unloading MCP server {server} from '{sb}'");
+    app.sbx.mcp_unload(&server, &sb).await?;
     Ok(ok())
 }
 

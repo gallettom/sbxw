@@ -1,12 +1,12 @@
 //! Kits: sbx's declarative extension point, and the facts sbxw has learnt
 //! about applying them.
 //!
-//! * **Creation is the only moment a kit is applied whole.** `sbx kit add` on
-//!   an existing sandbox recreates its container and *refuses* a kit that
-//!   declares startup commands ("does not yet apply"). So every configured kit
-//!   goes to `sbx create --kit`, and an existing sandbox only gets the ones
-//!   without startup commands — the rest is a message telling the person to
-//!   recreate, never a recreate sbxw decides on its own.
+//! * **Creation is still the cheapest moment to apply a kit.** `sbx kit add` on
+//!   an existing sandbox recreates its container, so every configured kit goes
+//!   to `sbx create --kit`. Since 0.48 `kit add` also takes a kit that declares
+//!   startup commands (they run after the add and on every start), so an
+//!   existing sandbox gets every kit; a refusal sbx still gives is a message
+//!   telling the person to recreate, never a recreate sbxw decides on its own.
 //! * **sbx keeps a kit's path, not a copy.** A container swap re-resolves every
 //!   kit applied before it by its original path; a kit directory that is gone
 //!   fails the swap and names the *wrong* kit. Hence the durable OAuth kit
@@ -15,10 +15,12 @@
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
-pub const BUNDLED: [&str; 4] = ["codemap", "agent-skills", "md-to-pdf-tools", "k8s-tools"];
+pub const BUNDLED: [&str; 6] = ["codemap", "agent-skills", "md-to-pdf-tools", "k8s-tools", "git-identity", "ssh-agent"];
 
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
-/// Kubernetes projects need kubectl, k3d and skaffold.
+/// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
+/// ssh-agent (v3 capability kits, sbx 0.48+): each hands the sandbox something
+/// of the person's — their name and email, their SSH keys' signatures.
 pub const DEFAULT_KITS: [&str; 3] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools"];
 
 /// The bundled kit a reference names (`sbxw:codemap` → `codemap`).
@@ -54,7 +56,8 @@ pub fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
 pub fn display_name(kit: &str, spec: Option<&str>) -> String {
     if let Some(spec) = spec {
         for line in spec.lines() {
-            if let Some(rest) = line.strip_prefix("name:") {
+            // `name:` (v2) or `displayName:` (v3, which has no identity name).
+            if let Some(rest) = line.strip_prefix("name:").or_else(|| line.strip_prefix("displayName:")) {
                 let n = rest.trim().trim_matches(|c| c == '"' || c == '\'');
                 if !n.is_empty() {
                     return n.to_string();
@@ -70,10 +73,10 @@ pub fn display_name(kit: &str, spec: Option<&str>) -> String {
         .to_string()
 }
 
-/// Does a spec declare startup commands — `setup.startup` (v2) or
-/// `commands.startup` (v1)? Such a kit cannot go through `kit add`.
-pub fn declares_startup(spec: &str) -> bool {
-    spec.lines().any(|l| l.trim() == "startup:")
+/// Is a failed `sbx kit validate --offline` an sbx too old for the flag (0.48)?
+pub fn validate_unsupported(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("unknown flag") || e.contains("unknown command")
 }
 
 /// Is a failed `sbx kit add` the "recreate the sandbox instead" refusal?
@@ -108,6 +111,32 @@ pub fn inspect_kits_section(raw: &str) -> String {
     json_kits_section(raw)
         .or_else(|| text_kits_section(raw))
         .unwrap_or_else(|| raw.to_string())
+}
+
+/// Is `kit` already applied to a sandbox? Asked before `sbx kit add`, which
+/// recreates the container, so a miss costs a recreate on every bring-up.
+///
+/// sbxw's own record of what it applied answers first. Then `sbx inspect`,
+/// which lists kits by the *path or reference* they were applied from (0.49:
+/// `Kits: /a/codemap, /b/agent-skills`): the same reference, or the same last
+/// segment — a bundled kit applied from an older path is the same kit — is a
+/// match. The spec's `name:` is only a last resort, matched against those
+/// segments: it need not be the folder's name (`k8s-tools` is `k8s-dev-tools`).
+pub fn already_applied(kit: &str, spec: Option<&str>, inspect_section: &str, recorded: &[String]) -> bool {
+    if recorded.iter().any(|r| r == kit) {
+        return true;
+    }
+    let applied: Vec<&str> = inspect_section
+        .split([',', '\n'])
+        .map(|r| r.trim().trim_start_matches("- ").trim_matches(|c| matches!(c, '"' | '[' | ']' | '\'')).trim())
+        .filter(|r| !r.is_empty())
+        .collect();
+    let segment = display_name(kit, None);
+    let named = display_name(kit, spec);
+    applied.iter().any(|r| {
+        let theirs = display_name(r.trim_end_matches('/'), None);
+        *r == kit || (theirs.len() >= 3 && (theirs == segment || theirs == named))
+    })
 }
 
 fn json_kits_section(raw: &str) -> Option<String> {
@@ -216,14 +245,15 @@ mod tests {
     #[test]
     fn display_names_come_from_the_spec_or_the_reference() {
         assert_eq!(display_name("/x/codemap", Some("schemaVersion: \"2\"\nname: codemap\n")), "codemap");
+        assert_eq!(display_name("/x/git-identity", Some("schemaVersion: \"3\"\ndisplayName: git-identity\n")), "git-identity");
         assert_eq!(display_name("ghcr.io/o/kit:1.0", None), "kit");
         assert_eq!(display_name("/x/kit.zip", None), "kit");
     }
 
     #[test]
     fn startup_and_refusals_are_recognised() {
-        assert!(declares_startup("setup:\n  startup:\n    - command: [a]\n"));
-        assert!(!declares_startup("setup:\n  files: []\n"));
+        assert!(validate_unsupported("Error: unknown flag: --offline"));
+        assert!(!validate_unsupported("spec.yaml: unknown field `setpu`"));
         assert!(add_needs_recreate("kit declares commands.startup, which the kit-add recreate flow does not yet apply"));
         assert!(!add_needs_recreate("network unreachable"));
     }
@@ -246,6 +276,19 @@ mod tests {
         let json = r#"{"name":"neos","kits":["a"],"secrets":["b"]}"#;
         assert_eq!(inspect_kits_section(json), r#"["a"]"#);
         assert_eq!(inspect_kits_section("NAME KITS\nneos a"), "NAME KITS\nneos a");
+    }
+
+    #[test]
+    fn an_applied_kit_is_found_by_record_path_or_segment() {
+        // What sbx 0.49.2 prints.
+        let raw = "    Name:            sbxw-2\n    Agent:           claude\n    Kits:            /Users/t/.sbxw/state/kits/sbxw-2-oauth, /Users/t/sbxw 2/assets/md-to-pdf-tools, /Users/t/sbxw 2/assets/codemap, /Users/t/.sbxw/kits/k8s-tools\n";
+        let section = inspect_kits_section(raw);
+        assert!(already_applied("/Users/t/sbxw 2/assets/codemap", None, &section, &[]), "same path");
+        assert!(already_applied("/Users/t/.sbxw/kits/md-to-pdf-tools", None, &section, &[]), "a bundled kit from an older path");
+        assert!(already_applied("/Users/t/.sbxw/kits/k8s-tools", Some("name: k8s-dev-tools\n"), &section, &[]), "the folder, not the spec name");
+        assert!(!already_applied("/Users/t/.sbxw/kits/agent-skills", None, &section, &[]), "not listed");
+        assert!(already_applied("/k/agent-skills", None, "", &["/k/agent-skills".into()]), "sbxw's own record");
+        assert!(!already_applied("/k/map", None, &section, &[]), "a short name is not a substring match");
     }
 
     #[test]
