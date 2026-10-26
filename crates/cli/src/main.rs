@@ -26,14 +26,21 @@ fn banner() -> String {
     } else {
         ("", "", "")
     };
-    const ROWS: [(&str, &str, &str); 3] = [
-        ("▀█▄   ", "█▀▀▀ █▀▀▄", "▀▄ ▄▀ █    █"),
-        (" ▄█▀  ", "▀▀▀█ █▀▀▄", " ▄▀▄  █ ▄▄ █"),
-        ("▀▀ ▀▀▀", "▀▀▀▀ ▀▀▀ ", "▀   ▀  ▀  ▀ "),
+    // The web UI's header — `>_` then `sb` and `xw` in bold monospace — drawn
+    // from DejaVu Sans Mono Bold in quadrant blocks: 2×2 dots a cell, sampled
+    // twice as finely across as down, since a cell is about twice as tall as
+    // it is wide.
+    const ROWS: [(&str, &str, &str); 6] = [
+        ("                   ", "        ▐█▌", ""),
+        ("▗▄▖                ", " ▗▄▄▄▄  ▐█▙▄▄▄ ", " ▄▄  ▄▄ ▄▖    ▄▄"),
+        ("▝▀▜██▄▄            ", "▗██▀▀▀  ▐█▛▀▜█▌", " ▝█▙▟█▘ ▜█ ▄▄ █▌"),
+        ("  ▄▄▟██▘           ", " ▀▜██▙▖ ▐█▌  ██", "  ▗██▌  ▐█▄██▐█▘"),
+        ("▐█▀▀▘   ▄▄▄▄▄▄▄▖   ", "▗▄▄▄▟█▌ ▐█▙▄▟█▌", " ▗█▛▜█▄  ██▌▜██"),
+        ("        ▀▀▀▀▀▀▀▘   ", " ▀▀▀▀▘  ▝▀▘▀▀▘ ", " ▀▀  ▀▀▘ ▀▀ ▝▀▘"),
     ];
     let mut out = String::from("\n");
     for (p, sb, xw) in ROWS {
-        out.push_str(&format!("  {green}{p}{reset}  {blue}{sb}{green} {xw}{reset}\n"));
+        out.push_str(&format!("  {green}{p}{blue}{sb}{green}{xw}{reset}\n"));
     }
     out.pop();
     out
