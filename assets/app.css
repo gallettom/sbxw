@@ -2528,6 +2528,15 @@
      (which are two modals) changes what is inside the frame, not the frame. */
   .files-modal { width: 1760px; max-width: 97vw; height: 94vh; max-height: 94vh; }
 
+  /* ── Host monitor ── */
+  .monitor-modal { width: 97vw; height: 94vh; max-height: 94vh; overflow: hidden; }
+  .monitor-modal .modal-title { display: flex; align-items: center; gap: .5rem; }
+  .monitor-modal .dot { width: 7px; height: 7px; }
+  .monitor-modal .dot.term-connected    { background: var(--c-blue); box-shadow: 0 0 5px #58a6ff66; }
+  .monitor-modal .dot.term-disconnected { background: var(--c-dim); }
+  .monitor-cmd { color: var(--c-text-dim); font-weight: 400; font-size: 12px; }
+  .monitor-term { border-radius: 0 0 var(--r-lg) var(--r-lg); overflow: hidden; }
+
   /* ── Project tabs: Files | Code map ──
      Underlined tabs beside the title, shared by the two modals that make up
      the Project panel. The active tab is the one you are on and is not a

@@ -698,6 +698,23 @@
     </div>
   </div>
 
+  <!-- ── Host monitor ──
+       `monitor_cmd` in a terminal of its own, nearly the whole window: a TUI
+       showing every sandbox at once has nothing to show in a quarter of the
+       grid. No Escape to close — the TUI needs that key (see /js/create.js). -->
+  <div class="modal-overlay hidden" id="monitor-overlay">
+    <div class="modal monitor-modal" role="dialog" aria-modal="true" aria-labelledby="monitor-title">
+      <div class="modal-head">
+        <span class="modal-title" id="monitor-title">
+          <span class="dot term-disconnected" id="monitor-dot" title="Terminal connection"></span>
+          Monitor Sandboxes <code class="monitor-cmd" id="monitor-cmd"></code>
+        </span>
+        <button class="modal-close" id="monitor-close" aria-label="Close">✕</button>
+      </div>
+      <div class="pane-term monitor-term" id="monitor-term"></div>
+    </div>
+  </div>
+
   <!-- ── Project modal ──
        A file explorer over the sandbox's own filesystem — the whole of it, read
        through `sbx exec` while the sandbox runs, the workspace alone from the

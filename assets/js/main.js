@@ -384,10 +384,9 @@ document.addEventListener('visibilitychange', async () => {
   const n = (saved?.n >= 1 && saved?.n <= maxPanes) ? saved.n : 1;
   setLayout(n);
   await loadSandboxes();
-  // The monitor pane has no sandbox to still exist, so it restores on the
-  // command being configured instead.
-  const exists = name =>
-    name === MONITOR_SANDBOX ? !!MONITOR_CMD : sandboxes.some(s => s.name === name);
+  // A layout saved when the monitor still opened in a pane leaves that pane
+  // empty: the monitor is a modal now.
+  const exists = name => name !== MONITOR_SANDBOX && sandboxes.some(s => s.name === name);
 
   if (saved?.panes?.length) {
     // Restore saved pane connections for sandboxes that still exist.

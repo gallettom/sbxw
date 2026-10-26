@@ -95,6 +95,7 @@ function applyTermColors() {
   if (typeof panes !== 'undefined') {
     const theme = termTheme(bg);
     panes.forEach(p => { if (p && p.term) p.term.options.theme = theme; });
+    if (typeof monitorPane !== 'undefined' && monitorPane) monitorPane.term.options.theme = theme;
   }
   paintPane(document.getElementById('term-color-swatch'), bg, bar);
 

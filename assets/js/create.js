@@ -453,34 +453,61 @@ document.getElementById('chat-modal-back').addEventListener('click', () => {
 // The button sits at the foot of the sidebar, under the list: it shows every
 // sandbox at once, which is the whole of what that column is about — and it
 // stays put there while the list above it scrolls.
+//
+// It opens in a modal nearly the size of the window, not in a pane: a TUI
+// listing every sandbox is unreadable in a quarter of the grid, and the panes
+// stay as they were underneath. The modal's terminal is built by the same
+// setupTerminal as a pane's, so copy, OSC 52 and fitting behave the same.
 const btnMonitor = document.getElementById('btn-monitor');
+const monitorOverlay = document.getElementById('monitor-overlay');
+const monitorDot = document.getElementById('monitor-dot');
+let monitorPane = null;
+
+function openMonitor() {
+  monitorOverlay.classList.remove('hidden');
+  if (!monitorPane) {
+    monitorPane = {
+      index: 'monitor', termEl: document.getElementById('monitor-term'),
+      ws: null, sandbox: MONITOR_SANDBOX, lastSelection: '',
+      getLastSelection: () => monitorPane.lastSelection,
+    };
+    setupTerminal(monitorPane);
+  }
+  const pane = monitorPane;
+  if (pane.ws) { pane.term.focus(); return; }
+  // The PTY outlives the modal; a fresh socket replays its screen.
+  pane.term.reset();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(MONITOR_SANDBOX)}&mode=monitor`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    monitorDot.className = 'dot term-connected';
+    fitPane(pane, 'socket open');
+    pane.term.focus();
+  };
+  ws.onmessage = ev => handlePaneData(pane, ev);
+  ws.onclose = () => {
+    monitorDot.className = 'dot term-disconnected';
+    if (pane.ws === ws) pane.ws = null;
+  };
+  pane.ws = ws;
+}
+
+function closeMonitor() {
+  monitorOverlay.classList.add('hidden');
+  if (monitorPane?.ws) { try { monitorPane.ws.close(); } catch (_) {} monitorPane.ws = null; }
+  monitorDot.className = 'dot term-disconnected';
+  panes[focusedPane]?.term.focus();
+}
+
 if (MONITOR_CMD) {
   btnMonitor.hidden = false;
-  btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in its own pane`;
-  btnMonitor.addEventListener('click', () => {
-    // A toggle, and it undoes exactly what opening did: a monitor that arrived
-    // in a pane of its own leaves by closing that pane; one that had to take a
-    // pane over puts it back on the sandbox it evicted.
-    const open = panes.slice(0, paneCount).findIndex(p => p.sandbox === MONITOR_SANDBOX);
-    if (open >= 0) {
-      const back = panes[open].beforeMonitor;
-      if (back) connectPane(open, back.sandbox, back.mode, back.thread);
-      else closePane(open);
-      return;
-    }
-    // The monitor asks for a pane of its own rather than evicting whatever the
-    // focused one is showing — reading it is usually a glance *alongside* a
-    // session, not instead of it. Only a grid with no room left falls back to
-    // the takeover, where `beforeMonitor` remembers the way back.
-    if (paneCount < computeMaxPanes()) {
-      setLayout(paneCount + 1);
-      const idx = paneCount - 1;
-      setFocusedPane(idx);
-      connectPane(idx, MONITOR_SANDBOX, 'monitor');
-    } else {
-      connectPane(focusedPane, MONITOR_SANDBOX, 'monitor');
-    }
-  });
+  btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in a large window`;
+  document.getElementById('monitor-cmd').textContent = MONITOR_CMD;
+  btnMonitor.addEventListener('click', () =>
+    monitorOverlay.classList.contains('hidden') ? openMonitor() : closeMonitor());
+  document.getElementById('monitor-close').addEventListener('click', closeMonitor);
+  monitorOverlay.addEventListener('mousedown', e => { if (e.target === monitorOverlay) closeMonitor(); });
 }
 
 // ── Chat sandbox: an agent on an empty temp folder (no code access) ────────

@@ -262,7 +262,7 @@ Both cards close with Escape or a click outside.
 | **Drop files here** | Drop or pick a file, choose a sandbox, and it is copied in. Its path is typed into that sandbox's Claude prompt, not submitted, so you can say what it's for. Up to 128 MB |
 | **Skills** | Lists the commands the bundled kits put in every sandbox, which run on their own (*default*) and which only when typed (*manual*) |
 | **Templates** | Lists the saved templates (`sbx template ls`), marking the one `template` in `sbxw.toml` names (*in use*) and the ones `template = "auto"` keeps (*automatic*). **Remove** deletes one. Pick a sandbox and a tag, then **Save**, to snapshot it as a new template: its agent token and Claude credentials are taken out first and put back after, as with `sbxw template save`. sbx may stop the sandbox for the snapshot; sbxw starts it again |
-| **Monitor Sandboxes** | Runs `monitor_cmd` (default: `sbx`, its all-sandboxes dashboard) in the focused pane, on the host. Click again to go back. `monitor_cmd = []` hides it |
+| **Monitor Sandboxes** | Runs `monitor_cmd` (default: `sbx`, its all-sandboxes dashboard) on the host, in a window nearly the size of the screen, over the panes. ✕, a click outside it or the button again closes it; Escape goes to the TUI. `monitor_cmd = []` hides it |
 | **Help** | Fixes for an empty sandbox list (below) |
 | Shortcuts | The [keyboard shortcuts](#keyboard-shortcuts) for this platform |
 | Versions | `sbx` and `sbxw`, for bug reports and for "is my sbx too old?" |

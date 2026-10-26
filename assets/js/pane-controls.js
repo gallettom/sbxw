@@ -68,9 +68,6 @@ function closePane(idx) {
     dst.mode    = src.mode;
     dst.thread  = src.thread;
     dst.ws      = src.ws;
-    // Travels with the session: it says where *this* session's pane goes back
-    // to when the monitor button is pressed again, not where dst used to be.
-    dst.beforeMonitor = src.beforeMonitor;
 
     if (dst.ws) {
       // Rewire incoming data to the destination terminal element.

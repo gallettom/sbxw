@@ -190,9 +190,6 @@ function createPane(index) {
     ws: null, sandbox: null, mode: 'claude',
     // Name of the thread shown, when `mode` is 'thread'.
     thread: null,
-    // Sandbox this pane was on before the monitor took it over, so the
-    // Monitor button toggles.
-    beforeMonitor: null,
     lastSelection: '',
     getLastSelection: () => pane.lastSelection,
   };
@@ -614,7 +611,6 @@ function emptyPane(idx) {
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
   pane.sandbox = null;
   pane.thread = null;
-  pane.beforeMonitor = null;
   pane.term.reset();
   pane.lastSelection = '';
   document.getElementById(`pconn-${idx}`).textContent = '';
@@ -641,17 +637,8 @@ function connectPane(idx, name, mode, thread, repo, model) {
   // Refuse to duplicate a session already open in a different visible pane.
   const id = sessionIdentity(name, nextMode, nextThread);
   if (panes.slice(0, paneCount).some((p, i) => i !== idx && sessionIdentity(p.sandbox, p.mode, p.thread) === id)) return;
-  const monitor = name === MONITOR_SANDBOX;
-  const from = { sandbox: pane.sandbox, mode: pane.mode, thread: pane.thread };
-
   pane.thread = nextThread;
   setPaneMode(idx, nextMode, false);
-
-  // Where the Monitor button sends you back to. Only a real sandbox is worth
-  // remembering, and leaving the monitor clears it.
-  pane.beforeMonitor = monitor
-    ? (from.sandbox && from.sandbox !== MONITOR_SANDBOX ? from : pane.beforeMonitor)
-    : null;
 
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
   // Full reset, not just clear(): a previous session (e.g. a TUI that enabled
