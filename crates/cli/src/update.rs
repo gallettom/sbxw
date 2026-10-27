@@ -36,9 +36,14 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
 
     let exe = std::env::current_exe().context("could not resolve current executable path")?;
 
+    // The island bullet only when there is one to refresh: updating never
+    // installs what the user declined.
+    let island_planned = !no_island && std::env::consts::OS == "macos" && installed_island_app().is_some();
+
     if parse_version(latest) <= parse_version(current) {
         ui.ok("sbxw", &format!("v{current} is the latest"));
         if !check_only {
+            ui.plan("sbxw update will refresh", &[PlanItem::extension(), PlanItem::island(island_planned)]);
             refresh_extension(&ui, &exe);
         }
         island(check_only);
@@ -47,6 +52,19 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     }
 
     ui.ok("new release", &format!("{latest_tag}  (you have v{current})"));
+    ui.plan(
+        if check_only { "sbxw update would install" } else { "sbxw update will install" },
+        &[
+            Some(PlanItem {
+                colour: BLUE,
+                title: format!("sbxw {latest_tag}"),
+                place: exe.display().to_string(),
+                why: "CLI and daemon, sha256-checked".into(),
+            }),
+            PlanItem::extension(),
+            PlanItem::island(island_planned),
+        ],
+    );
     if check_only {
         island(true);
         println!("\n  run {} to install it\n", ui.cmd("sbxw update"));
@@ -123,6 +141,35 @@ fn refresh_extension(ui: &Ui, exe: &std::path::Path) {
     }
 }
 
+/// One row of the plan printed before anything is written: a coloured
+/// chevron, what gets installed, where, and why.
+struct PlanItem {
+    colour: &'static str,
+    title: String,
+    place: String,
+    why: String,
+}
+
+impl PlanItem {
+    fn extension() -> Option<Self> {
+        Some(Self {
+            colour: ORANGE,
+            title: "browser extension".into(),
+            place: "~/.sbxw/browser-extension/".into(),
+            why: "side panel".into(),
+        })
+    }
+
+    fn island(installed: bool) -> Option<Self> {
+        installed.then(|| Self {
+            colour: PINK,
+            title: "sbxw Island".into(),
+            place: "~/Applications".into(),
+            why: "menu-bar app, if a newer one ships".into(),
+        })
+    }
+}
+
 // ── Terminal output ──────────────────────────────────────────────────────
 // The same look as a bring-up (render.rs): one ✓ line per step, a spinner on
 // the step that is running, colours from the banner. Plain text when stdout
@@ -131,6 +178,9 @@ const BLUE: &str = "\x1b[1;38;5;75m";
 const GREEN: &str = "\x1b[1;38;5;77m";
 const YELLOW: &str = "\x1b[38;5;221m";
 const RED: &str = "\x1b[1;38;5;203m";
+const ORANGE: &str = "\x1b[1;38;5;215m";
+const PINK: &str = "\x1b[1;38;5;211m";
+const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 /// Width of the label column, so the notes line up.
@@ -164,6 +214,22 @@ impl Ui {
 
     fn ok(&self, label: &str, note: &str) {
         println!("  {} {label:<LABEL$} {}", self.paint(GREEN, "✓"), self.paint(DIM, note));
+    }
+
+    /// The plan: what is about to be installed, before any of it is.
+    fn plan(&self, heading: &str, items: &[Option<PlanItem>]) {
+        // Padded before painting, so the escape codes don't skew the columns.
+        println!("\n  {}\n", self.paint(BOLD, heading));
+        for item in items.iter().flatten() {
+            println!(
+                "  {} {} {:<28} {}",
+                self.paint(item.colour, "›"),
+                self.paint(BOLD, &format!("{:<19}", item.title)),
+                item.place,
+                self.paint(DIM, &item.why)
+            );
+        }
+        println!();
     }
 
     fn fail(&self, label: &str) {
@@ -252,7 +318,10 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
         return Ok(());
     }
     if check_only {
-        ui.ok("island", &format!("v{latest} available  (you have v{installed})"));
+        ui.ok(
+            "island",
+            &format!("v{latest} available  (you have v{installed})"),
+        );
         cleanup(&tmp_dir);
         return Ok(());
     }
@@ -314,7 +383,10 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     let relaunched = was_running && open_island(&app).is_ok_and(|s| s.success());
     ui.ok(
         "island",
-        &format!("v{installed} → v{latest}{}", if relaunched { "  (relaunched)" } else { "" }),
+        &format!(
+            "v{installed} → v{latest}{}",
+            if relaunched { "  (relaunched)" } else { "" }
+        ),
     );
     Ok(())
 }
@@ -432,7 +504,13 @@ fn latest_release_tag() -> Result<String> {
 fn parse_version(s: &str) -> Vec<u64> {
     s.trim_start_matches('v')
         .split('.')
-        .map(|p| p.chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap_or(0))
+        .map(|p| {
+            p.chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        })
         .collect()
 }
 
@@ -542,7 +620,11 @@ fn install_binary(ui: &Ui, src: &std::path::Path, dest: &std::path::Path) -> Res
     }
 
     let dir = dest.parent().unwrap_or(dest);
-    println!("  {} {} is not writable — sudo needed", ui.paint(YELLOW, "⚿"), dir.display());
+    println!(
+        "  {} {} is not writable — sudo needed",
+        ui.paint(YELLOW, "⚿"),
+        dir.display()
+    );
     let status = std::process::Command::new("sudo")
         .args(["-p", "    password for %u: ", "mv"])
         .arg(src)
@@ -554,4 +636,3 @@ fn install_binary(ui: &Ui, src: &std::path::Path, dest: &std::path::Path) -> Res
     }
     Ok(())
 }
-

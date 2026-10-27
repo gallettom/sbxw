@@ -15,15 +15,29 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   BOLD='\033[1m'; RESET='\033[0m'
   # Wordmark tones, matching the favicon: sb #58a6ff, xw #3fb950.
   MARK_B='\033[1;38;5;75m'; MARK_G='\033[1;38;5;77m'
+  # One colour per thing installed: its bullet in the plan, and its step header.
+  C_BIN="$MARK_B"; C_COMP='\033[1;38;5;141m'; C_SSH='\033[1;38;5;80m'
+  C_EXT='\033[1;38;5;215m'; C_ISLAND='\033[1;38;5;211m'
+  DIM='\033[2m'
 else
   RED=''; YELLOW=''; GREEN=''; BOLD=''; RESET=''
   MARK_B=''; MARK_G=''
+  C_BIN=''; C_COMP=''; C_SSH=''; C_EXT=''; C_ISLAND=''; DIM=''
 fi
 
 info()  { printf "${GREEN}✓${RESET} %s\n" "$*"; }
 warn()  { printf "${YELLOW}⚠${RESET}  %s\n" "$*" >&2; }
 err()   { printf "${RED}✗${RESET}  %s\n" "$*" >&2; }
 step()  { printf "\n${BOLD}%s${RESET}\n" "$*"; }
+# A step that installs something: its plan chevron and colour, then why, dimmed.
+#   istep <colour> <title> <why>
+istep() { printf "\n%b›${RESET} ${BOLD}%s${RESET}  ${DIM}%s${RESET}\n" "$1" "$2" "$3"; }
+# One row of the plan, in columns: what gets installed, where, and why.
+# The colour codes sit outside the padded fields so the columns stay aligned.
+#   bullet <colour> <title> <where> <why>
+bullet() {
+  printf "  %b›${RESET} ${BOLD}%-19s${RESET} %-28s ${DIM}%s${RESET}\n" "$1" "$2" "$3" "$4"
+}
 die()   { err "$*"; exit 1; }
 
 # Adds a single `source <(sbxw completion <shell>)` line (or fish's pipe
@@ -141,11 +155,25 @@ if [ -z "$VERSION" ]; then
     | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
 fi
 [ -n "$VERSION" ] || die "Could not determine latest version. Pass a version as the first argument, e.g.: sh -s v1.0.0"
+info "sbxw ${VERSION} for ${OS}/${ARCH}"
+
+# ── The plan ─────────────────────────────────────────────────────────────────
+# Everything this script may write, said before it writes any of it. The
+# optional ones still ask, below; this is so the questions come as no surprise.
+step "sbxw will install"
+printf "\n"
+bullet "$C_BIN" "sbxw ${VERSION}" "${INSTALL_DIR}/${BINARY}" "CLI and daemon"
+bullet "$C_COMP" "Shell completion" "shell rc file (asks)" "TAB-complete"
+bullet "$C_SSH" "SSH access" "~/.ssh/config" "ssh <name>.sbx, VS Code, Cursor"
+bullet "$C_EXT" "Browser extension" "~/.sbxw/browser-extension/" "side panel"
+if [ "$OS" = "macos" ]; then
+  bullet "$C_ISLAND" "sbxw Island" "~/Applications (asks)" "menu-bar app"
+fi
 
 ARTIFACT="${BINARY}-${OS}-${ARCH}"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARTIFACT}"
 
-step "Downloading sbxw ${VERSION} (${OS}/${ARCH})…"
+istep "$C_BIN" "sbxw ${VERSION}" "downloading the ${OS}/${ARCH} build…"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
@@ -153,7 +181,6 @@ curl -fsSL --progress-bar "$URL" -o "$TMP" || die "Download failed. Check that $
 chmod +x "$TMP"
 
 # ── Install binary ─────────────────────────────────────────────────────────────
-step "Installing binary…"
 if [ -w "$INSTALL_DIR" ]; then
   mv "$TMP" "${INSTALL_DIR}/${BINARY}"
 else
@@ -175,7 +202,7 @@ case ":${PATH}:" in
 esac
 
 # ── Shell completions (optional) ────────────────────────────────────────────
-step "Shell completions…"
+istep "$C_COMP" "Shell completion" "TAB-complete"
 SHELL_NAME="$(basename "${SHELL:-}" 2>/dev/null || true)"
 # `-r /dev/tty` only checks permission bits — the node can exist yet have no
 # controlling terminal behind it (e.g. CI, `curl | sh` with stdin redirected
@@ -205,7 +232,7 @@ fi
 # button, and remote-dev tools like VS Code/Cursor — resolve at all. It is
 # idempotent, but we still skip it when the block is already there so a re-run
 # stays quiet.
-step "SSH access to sandboxes…"
+istep "$C_SSH" "SSH access" "ssh <name>.sbx, VS Code, Cursor"
 
 # Experimental upstream, so a failure here must never sink the install.
 setup_ssh() {
@@ -254,7 +281,7 @@ fi
 # the binary prints how to point Chrome at the folder. Re-installs (and
 # `sbxw update`) rewrite it in place, keeping its daemon address, and the panel
 # reloads the extension when it must.
-step "Browser extension…"
+istep "$C_EXT" "Browser extension" "side panel, in ~/.sbxw/browser-extension/"
 if ! "${INSTALL_DIR}/${BINARY}" extension --refresh 2>/dev/null; then
   warn "sbxw ${VERSION} could not write the browser extension (skipping)."
   printf "  Run 'sbxw extension' any time to install it.\n"
@@ -262,7 +289,7 @@ fi
 
 # ── macOS menu-bar island (optional) ─────────────────────────────────────────
 if [ "$OS" = "macos" ]; then
-  step "Menu-bar island (optional)…"
+  istep "$C_ISLAND" "sbxw Island" "menu-bar app, optional"
   ISLAND_URL="https://github.com/${REPO}/releases/download/${VERSION}/SbxwIsland-macos.zip"
   ISLAND_APP_DIR="$HOME/Applications"
   if ! (: 2>/dev/null >/dev/tty) 2>/dev/null; then
