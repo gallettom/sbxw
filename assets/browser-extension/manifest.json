@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "sbxw",
   "description": "Chat with the sbxw sandbox that serves the app in this tab, in a side panel beside it.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtAZ0WkYFZr/wL13Hc7WNVk2AsD6IvhueS/0ym6/xAJdl2YRP+/rv9sqA59XfifrNi6Yq+y7fQUgXafj+4LlDQo8T6zeMEWrOt1eG4debqIguG9WPP8K6Zf4U0mHo8OgpdXgbgU0MSeBWAT7g4asfVe/z8By9OHQIf32GmMCeC4bvvuq6m2OQhgyaQe0h8LcHCTYsnSpvwS/LDYTsaeb1FPjPlWBZOso6LLeAz6Cm2JuKhbsfCOgdp662IlB9szQYMa+IHpwrhm/4M4qmtlGmfbkc0JYOFahn5UNcgj68W0MkLH5uqdGbEETOaOC1Ti6PgXDfwCWvJpLmPtK8BW81wwIDAQAB",
   "icons": {
@@ -15,6 +15,11 @@
     "sidePanel",
     "activeTab",
     "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "http://[::1]/*"
   ],
   "optional_host_permissions": [
     "http://*/*",

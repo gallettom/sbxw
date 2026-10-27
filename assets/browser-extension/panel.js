@@ -7,7 +7,8 @@
 //   * say which URL the tab beside the panel shows (`sbxw:tab`), and follow
 //     it as the developer switches tabs or navigates;
 //   * screenshot that tab (`sbxw:capture` → `sbxw:capture-result`);
-//   * reload it (`sbxw:reload`).
+//   * reload it (`sbxw:reload`);
+//   * bring the sbxw web UI's tab forward (`sbxw:show-app`).
 //
 // Messages are exchanged with the daemon's origin only, and only with the
 // frame this shell created.
@@ -68,8 +69,25 @@ window.addEventListener('message', e => {
     capture(m.id);
   } else if (m.type === 'sbxw:reload') {
     if (tab) chrome.tabs.reload(tab.id);
+  } else if (m.type === 'sbxw:show-app') {
+    showApp();
   }
 });
+
+// ── The sbxw tab ──────────────────────────────────────────────────────────
+// "Answer in sbxw" points the web UI at the sandbox over `/api/focus`, but a
+// page cannot bring its own background tab forward (Chrome ignores its
+// `window.focus()`): the extension does. Finding the tab by URL takes host
+// permission on the daemon's origin; the manifest's loopback ones cover the
+// address `sbxw extension` writes by default.
+async function showApp() {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: `${daemonOrigin}/*` }); } catch (_) {}
+  const app = tabs.find(t => t.url && new URL(t.url).pathname !== '/sidepanel');
+  if (!app) return;
+  await chrome.tabs.update(app.id, { active: true });
+  await chrome.windows.update(app.windowId, { focused: true });
+}
 
 // ── The tab beside the panel ──────────────────────────────────────────────
 async function refreshTab() {

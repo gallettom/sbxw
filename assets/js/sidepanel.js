@@ -5,8 +5,8 @@
 // and its SSO all keep working.
 //
 // The extension is a thin shell: it tells this page which URL its tab shows,
-// takes screenshots and reloads the tab, all over `postMessage`. Everything
-// else happens here, same-origin with the daemon:
+// takes screenshots, reloads the tab and brings the sbxw tab forward, all over
+// `postMessage`. Everything else happens here, same-origin with the daemon:
 //
 //   * `GET /api/embed/resolve` turns the tab's URL into the sandbox serving it
 //     (a hand-made pairing, else the published ports — see src/embed.rs);
@@ -490,12 +490,17 @@ function spHint(text, warn = false) {
   h.classList.toggle('warn', warn);
 }
 
-// The full session lives in the web UI: point the sbxw tab at this sandbox,
-// or open one when there is none (`#sandbox=` is the island's deep link).
+// The full session lives in the web UI: point the sbxw tab at this sandbox
+// and have the extension bring that tab forward, or open one when there is
+// none (`#sandbox=` is the island's deep link).
 async function spOpenInSbxw() {
   const r = await spJson('/api/focus', { sandbox: spSandbox });
-  if (!r || !r.clients) window.open(`${location.origin}/#sandbox=${encodeURIComponent(spSandbox)}`, '_blank');
-  else spHint(`${spSandbox} is open in your sbxw tab.`);
+  if (!r || !r.clients) {
+    window.open(`${location.origin}/#sandbox=${encodeURIComponent(spSandbox)}`, '_blank');
+    return;
+  }
+  spToParent({ type: 'sbxw:show-app' });
+  spHint(`${spSandbox} is open in your sbxw tab.`);
 }
 
 // ── Sending ───────────────────────────────────────────────────────────────

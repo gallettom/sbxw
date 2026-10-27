@@ -237,7 +237,7 @@ mod tests {
                 }
             }
         }
-        let pinned = ("1.0.0", 0x9a1f_20b5_24ca_f737_u64);
+        let pinned = ("1.0.1", 0xf5c0_0ff4_4f3d_c57d_u64);
         let version = manifest_version().unwrap();
         assert!(
             (version.as_str(), hash) == pinned,
