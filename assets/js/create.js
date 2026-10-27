@@ -249,6 +249,7 @@ function openModal() {
   loadFavourites();
   browseTo(null);
   showTemplateForce();
+  showKitMounts();
   document.getElementById('rc-box').checked = false;
   inpName.focus();
 }
@@ -269,6 +270,51 @@ async function showTemplateForce() {
   note.textContent = 'Save this sandbox as the new starting point. Takes several extra minutes.';
   note.title = `Replaces ${t.record.tag}. The sandbox opens once its kits have installed and it is saved.`;
   tplForce.classList.remove('hidden');
+}
+
+// The host mounts the configured kits declare, one row each: a folder typed or
+// picked here is passed as `--mount HOST:TARGET`; one left empty keeps what
+// `kit_mounts` says, or sbx's own folder for the kit.
+const kmRows = document.getElementById('km-rows');
+
+async function showKitMounts() {
+  const opt = document.getElementById('km-option');
+  opt.classList.add('hidden');
+  kmRows.innerHTML = '';
+  let data;
+  try { data = await (await fetch('/api/kit-mounts')).json(); } catch (_) { return; }
+  const mounts = (data && data.mounts) || [];
+  if (!mounts.length) return;
+  kmRows.innerHTML = mounts.map(m => `<div class="km-row">
+      <code class="km-target" title="Declared by ${escHtml(m.kit)}">${escHtml(m.target)}</code>
+      <input class="port-input km-host" data-target="${escHtml(m.target)}" value="${escHtml(m.host || '')}"
+             placeholder="sbx's own folder" spellcheck="false">
+      <button class="btn-add-port km-pick" type="button">Choose…</button>
+    </div>`).join('');
+  opt.classList.remove('hidden');
+}
+
+kmRows.addEventListener('click', async e => {
+  const btn = e.target.closest('.km-pick');
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    const data = await (await fetch('/api/fs/pick', { method: 'POST' })).json();
+    if (data.ok) btn.parentElement.querySelector('.km-host').value = data.path;
+    else if (data.error) showNote(errEl, data.error);
+  } catch (_) {
+    showNote(errEl, 'Failed to open native folder picker');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function collectKitMounts() {
+  const out = {};
+  for (const inp of kmRows.querySelectorAll('.km-host')) {
+    if (inp.value.trim()) out[inp.dataset.target] = inp.value.trim();
+  }
+  return out;
 }
 
 function closeModal() { overlay.classList.add('hidden'); }
@@ -693,6 +739,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   const path   = repos.length ? repos[0].path : selectedPath;
   const mounts = repos.slice(1).map(r => ({ path: r.path, readonly: r.readonly }));
   const ports  = collectPorts();
+  const kit_mounts = collectKitMounts();
   // Asked over the create dialog, which stays open if this one is closed —
   // unless the person already asked for a rebuild with the box.
   const forced = !tplForce.classList.contains('hidden') && tplForceBox.checked;
@@ -706,7 +753,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
-      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control });
+      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control, kit_mounts });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.

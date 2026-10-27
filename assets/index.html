@@ -331,6 +331,18 @@
             </div>
           </div>
 
+          <!-- Host folders for the host mounts the configured kits declare
+               (host-mount@1, sbx 0.50): only at creation, so only here. Hidden
+               when no kit declares one. Filled by /js/create.js. -->
+          <div class="create-opt hidden" id="km-option">
+            <div class="create-opt-text">
+              <span class="create-opt-title">Kit folders</span>
+              <p class="create-opt-desc">Folders on your machine behind the paths your kits share with it.
+                Left empty, sbx keeps its own folder for that kit.</p>
+            </div>
+            <div class="km-rows create-opt-full" id="km-rows"></div>
+          </div>
+
           <!-- Only at creation: the credentials kit sbx re-applies on every
                container swap would bring the token back to a sandbox switched
                over later. See sbxw_core::remote. -->

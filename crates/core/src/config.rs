@@ -39,6 +39,15 @@ pub struct Config {
     pub ports: Vec<PortMap>,
     /// Kit references, applied at creation (`sbx create --kit`).
     pub kits: Vec<String>,
+    /// Host directories for kit-declared host mounts (`host-mount@1`, sbx
+    /// 0.50): sandbox target path → host directory, passed as `--mount` at
+    /// creation. sbx refuses a target no kit in the set declares.
+    pub kit_mounts: BTreeMap<String, String>,
+    /// Sandbox paths kept on persistent block storage (`volume@1`, sbx 0.50):
+    /// package caches and toolchains outside the workspace, which survive
+    /// `sbxw rm` and come back with a sandbox recreated under the same name.
+    /// Applied at creation only.
+    pub volumes: Vec<String>,
     /// Mount `~/.sbxw/cache` into new sandboxes, so the bundled kits copy what
     /// was downloaded once instead of fetching it again.
     pub cache: bool,
@@ -149,6 +158,8 @@ impl Default for Config {
             // project's ports and hostnames (and a sudo prompt for them).
             ports: vec![],
             kits: crate::kits::DEFAULT_KITS.map(String::from).to_vec(),
+            kit_mounts: BTreeMap::new(),
+            volumes: vec![],
             cache: true,
             cache_ttl_days: 7,
             claude_subscription: "pro".into(),
@@ -183,7 +194,27 @@ fn is_hex_color(s: &str) -> bool {
 }
 const MODEL_VAR: &str = "ANTHROPIC_DEFAULT_MODEL";
 
+/// A host directory from the config: `~/` is the home, anything relative is
+/// against the config's own directory.
+fn resolve_host_dir(dir: &Path, host: &str) -> String {
+    if let Some(rest) = host.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return Path::new(&home).join(rest).to_string_lossy().into_owned();
+        }
+    }
+    if Path::new(host).is_absolute() {
+        host.to_string()
+    } else {
+        dir.join(host).to_string_lossy().into_owned()
+    }
+}
+
 impl Config {
+    /// `--mount HOST:TARGET` arguments for the kit-declared host mounts.
+    pub fn kit_mount_specs(&self) -> Vec<String> {
+        self.kit_mounts.iter().map(|(target, host)| format!("{host}:{target}")).collect()
+    }
+
     /// Read `path`, or the defaults when it does not exist; validate; resolve
     /// relative paths against the file's directory.
     pub fn load(path: &Path, cwd: &Path) -> Result<Self> {
@@ -213,6 +244,10 @@ impl Config {
                     dir.join(f).to_string_lossy().into_owned()
                 }
             })
+            .collect();
+        cfg.kit_mounts = std::mem::take(&mut cfg.kit_mounts)
+            .into_iter()
+            .map(|(target, host)| (target, resolve_host_dir(&dir, &host)))
             .collect();
         cfg.source = Some(abs);
         Ok(cfg)
@@ -245,6 +280,19 @@ impl Config {
                 if !crate::kits::BUNDLED.contains(&name) {
                     bail!("kits: {k:?} — the bundled kits are {}", crate::kits::BUNDLED.map(|b| format!("sbxw:{b}")).join(", "));
                 }
+            }
+        }
+        for (target, host) in &self.kit_mounts {
+            if !target.starts_with('/') {
+                bail!("kit_mounts: {target:?} — the sandbox target must be an absolute path, as the kit declares it");
+            }
+            if host.trim().is_empty() || host.contains(':') || target.contains(':') {
+                bail!("kit_mounts: {target:?} = {host:?} — expected a host directory, with no ':'");
+            }
+        }
+        for v in &self.volumes {
+            if !v.starts_with('/') || v.trim_end_matches('/').is_empty() {
+                bail!("volumes: {v:?} — expected an absolute path inside the sandbox, such as /home/agent/.npm");
             }
         }
         for m in &self.models {
@@ -390,6 +438,17 @@ mod tests {
         assert_eq!(cfg.kits[0], canon.to_string_lossy());
         assert_eq!(cfg.kits[1], "docker.io/sbx/k:1");
         assert_eq!(cfg.env_files[0], dir.path().join(".env").to_string_lossy());
+    }
+
+    #[test]
+    fn kit_mounts_resolve_and_become_mount_specs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("sbxw.toml"), "[kit_mounts]\n\"/home/agent/data\" = \"./data\"\n").unwrap();
+        let cfg = Config::load(Path::new("sbxw.toml"), dir.path()).unwrap();
+        assert_eq!(cfg.kit_mount_specs(), [format!("{}:/home/agent/data", dir.path().join("./data").display())]);
+        for bad in ["[kit_mounts]\n\"data\" = \"/x\"\n", "[kit_mounts]\n\"/d\" = \"/x:ro\"\n"] {
+            assert!(toml::from_str::<Config>(bad).unwrap().validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -247,6 +247,16 @@ function policyAddForm() {
       `<input type="checkbox" id="policy-add-global"><span>all sandboxes</span>` +
     `</label>` +
     `<button class="btn-add-mapping" id="policy-add-btn" disabled>＋ Add rule</button>` +
+    // Narrowing to some HTTP requests: closed by default, a whole-host rule
+    // is the common case. Every field set is required of a request.
+    `<details class="policy-http"><summary>Only some HTTP requests</summary>` +
+      `<input id="policy-add-methods" class="port-input" type="text" autocomplete="off" spellcheck="false"` +
+      ` placeholder="GET, HEAD" title="HTTP methods (comma-separated); ANY matches all">` +
+      `<input id="policy-add-path" class="port-input" type="text" autocomplete="off" spellcheck="false"` +
+      ` placeholder="/v1/**" title="Path glob; empty is /**">` +
+      `<input id="policy-add-query" class="port-input" type="text" autocomplete="off" spellcheck="false"` +
+      ` placeholder="org=acme, label=release*" title="Query parameters the request must carry, name=value (the value may be a pattern), comma-separated — every one is required">` +
+    `</details>` +
     `<span class="ports-error-msg hidden" id="policy-add-error" style="flex-basis:100%"></span>` +
   `</div>`;
 }
@@ -482,6 +492,8 @@ function wirePolicyForm() {
     const resources = res.value.trim();
     const decision  = dec.value;
     const hostWide  = global.checked;
+    const field = id => (document.getElementById(id)?.value || '').trim();
+    const methods = field('policy-add-methods'), path = field('policy-add-path'), query = field('policy-add-query');
     if (!resources) return;
     if (hostWide && !confirm(
       `Add a host-wide ${decision} rule for:\n\n  ${resources}\n\n` +
@@ -493,7 +505,7 @@ function wirePolicyForm() {
     const jobId = startBgJob(`Adding ${decision} rule…`);
     try {
       const data = await postJson(`/api/sandboxes/${encodeURIComponent(target)}/policy/rules`,
-        { resources, decision, global: hostWide });
+        { resources, decision, global: hostWide, methods, path, query });
       if (data.ok) {
         if (portsTarget === target) await fetchPorts(target);
       } else {

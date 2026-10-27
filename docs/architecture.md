@@ -48,7 +48,7 @@ loads xterm from jsDelivr, or from `XTERM_VENDOR` offline.
 
 ## The sbx version floor
 
-sbxw requires **sbx 0.48.0+** and has no fallbacks. It used to support 0.37 and
+sbxw requires **sbx 0.50.0+** and has no fallbacks. It used to support 0.37 and
 up behind runtime checks, but each check was a branch plus a fallback at every
 call site, and every fallback was a code path nobody ran.
 
@@ -77,9 +77,23 @@ What sbxw assumes, unconditionally:
 | `mcp ls --format json`, `mcp unload --sandbox` (0.48) | the MCP section of the network panel |
 | `git-identity@1`, `ssh-agent@1` kit capabilities (0.48) | `sbxw:git-identity`, `sbxw:ssh-agent` |
 | `template save`, `create --template` | `sbxw template save`, `template` |
-| `policy refresh` (0.49) | **Re-read policy now** — fails with a clear error on 0.48 |
-| `kit validate --offline` (0.49) | kit checks before create, `sbxw doctor` — skipped on 0.48 |
+| `policy refresh` (0.49) | **Re-read policy now** |
+| `kit validate --offline` (0.49) | kit checks before create, `sbxw doctor` — v3 kits skipped: 0.50's validator cannot read them |
 | `diagnose --format json` | `sbxw doctor` |
+| `create --mount HOST:TARGET` (0.50) | `kit_mounts`, **Kit folders** in the create dialog |
+| `mounts:` in environment files (0.50) | `sbxw env export` / `env run` |
+| `volume@1` storage kept across `rm` (0.50) | `volumes` |
+| `policy … network --method/--path/--query` (0.50) | **Only some HTTP requests** in the network panel |
+| `sbx exec` exit status 125 (0.50) | "could not run" told apart from the command's own failure |
+
+0.50 also changed what sbx provisions: subscription-OAuth Claude sandboxes
+get no API-key helper. A sandbox created earlier may still carry an
+`apiKeyHelper`, which outranks `/login`; the Remote Control button detects it
+and says to recreate the sandbox. sbxw's own host calls follow 0.50's
+hardening: host `git` reads pin off every program a repo's config can name
+(`core.fsmonitor`, filters, hooks…), and host helpers (`osascript`, `sudo`,
+`caffeinate`, `curl`…) are run from system directories, never looked up on
+`PATH`.
 
 Why each step of the floor moved:
 
@@ -91,6 +105,12 @@ Why each step of the floor moved:
   web UI.
 - **0.47:** 0.45 made every removal ask for confirmation, and `policy rm network`
   only gained `--force` then. 0.47's `sbx run -d` is what `keep_running` uses.
+- **0.50:** the security fixes (host Git, trusted helpers, MCP OAuth
+  redirects, `sbx cp` symlinks) are reason enough not to run older, and
+  `--mount`, `volume@1` retention, `--query` and exit 125 are used directly.
+  The table fallbacks for `ls` and `ports` went with it. Note `sbx exec`
+  *starts* a stopped sandbox: sbxw asks `is_running` first wherever waking
+  one would be a side effect.
 - **0.48:** every human-readable table changed (state marks, a creation-time
   column in `sbx ls`), so what sbxw parses it reads as `--format json`: `ls`
   (a bare array), `ports` (`host_ip`, `host_port`, `sandbox_port`,
@@ -100,7 +120,7 @@ Why each step of the floor moved:
   `--force`. `kit add` accepts kits with startup commands.
 
 Other behaviour sbxw follows: if `sbx ls --format json` fails or is not JSON,
-the table is read by column headers, past any state mark; a sandbox whose guest stopped responding is not treated as
+the state is "could not tell", never "none"; a sandbox whose guest stopped responding is not treated as
 running; sandboxes made with `sbx create` stop by themselves once idle (0.43).
 
 MCP OAuth client secrets are stored as `mcp:<server>:client_secret` since 0.43.

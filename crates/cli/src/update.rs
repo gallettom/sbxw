@@ -342,7 +342,7 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     }
 
     // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
-    let status = std::process::Command::new("ditto")
+    let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
         .args(["-x", "-k"])
         .arg(&tmp_zip)
         .arg(&tmp_dir)
@@ -374,7 +374,7 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
         return Err(e);
     }
     // Ad-hoc-signed, not notarised: without this Gatekeeper refuses to open it.
-    let _ = std::process::Command::new("xattr")
+    let _ = std::process::Command::new(sbxw_core::sysbin::sys_bin("xattr"))
         .args(["-dr", "com.apple.quarantine"])
         .arg(&app)
         .status();
@@ -396,7 +396,7 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
 fn swap_bundle(staged: &std::path::Path, app: &std::path::Path) -> Result<()> {
     std::fs::remove_dir_all(app)
         .with_context(|| format!("could not remove {} (permissions?)", app.display()))?;
-    let status = std::process::Command::new("mv")
+    let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("mv"))
         .arg(staged)
         .arg(app)
         .status()
@@ -408,7 +408,7 @@ fn swap_bundle(staged: &std::path::Path, app: &std::path::Path) -> Result<()> {
 }
 
 fn open_island(app: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
-    std::process::Command::new("open").arg(app).status()
+    std::process::Command::new(sbxw_core::sysbin::sys_bin("open")).arg(app).status()
 }
 
 /// Where install.sh puts the app, most-specific first. `None` when the user
@@ -426,7 +426,7 @@ fn installed_island_app() -> Option<PathBuf> {
 /// read (an old or hand-built bundle) — which makes it compare as stale.
 fn island_bundle_version(app: &std::path::Path) -> String {
     let plist = app.join("Contents").join("Info");
-    let out = std::process::Command::new("defaults")
+    let out = std::process::Command::new(sbxw_core::sysbin::sys_bin("defaults"))
         .arg("read")
         .arg(&plist)
         .arg("CFBundleShortVersionString")
@@ -445,7 +445,7 @@ fn island_bundle_version(app: &std::path::Path) -> String {
 }
 
 fn island_running() -> bool {
-    std::process::Command::new("pgrep")
+    std::process::Command::new(sbxw_core::sysbin::sys_bin("pgrep"))
         .args(["-x", ISLAND_PROC])
         .output()
         .map(|o| o.status.success())
@@ -455,13 +455,13 @@ fn island_running() -> bool {
 /// Asks the app to quit (AppleScript, so it shuts down cleanly), then waits for
 /// the process to go away, escalating to a signal if it doesn't.
 fn quit_island() {
-    let _ = std::process::Command::new("osascript")
+    let _ = std::process::Command::new(sbxw_core::sysbin::sys_bin("osascript"))
         .args(["-e", &format!("quit app \"{ISLAND_PROC}\"")])
         .status();
     if island_gone_within(30) {
         return;
     }
-    let _ = std::process::Command::new("pkill")
+    let _ = std::process::Command::new(sbxw_core::sysbin::sys_bin("pkill"))
         .args(["-x", ISLAND_PROC])
         .status();
     island_gone_within(20);
@@ -481,7 +481,7 @@ fn island_gone_within(tries: u32) -> bool {
 /// Fetches the latest release's tag name (e.g. "v1.0.8") from the GitHub API.
 fn latest_release_tag() -> Result<String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let out = std::process::Command::new("curl")
+    let out = std::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
         .args(["-fsSL", &url])
         .output()
         .context("failed to run curl — is it installed?")?;
@@ -531,7 +531,7 @@ fn target_os_arch() -> Result<(&'static str, &'static str)> {
 }
 
 fn curl_download(url: &str, dest: &std::path::Path) -> Result<()> {
-    let status = std::process::Command::new("curl")
+    let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
         .args(["-fsSL", url, "-o"])
         .arg(dest)
         .status()
@@ -570,14 +570,14 @@ fn verify_checksum(
 /// Computes a file's sha256 by shelling out to `sha256sum` (Linux) or
 /// `shasum -a 256` (macOS), avoiding a crypto crate dependency for one command.
 fn sha256_hex(path: &std::path::Path) -> Result<String> {
-    let out = if std::process::Command::new("sha256sum")
+    let out = if std::process::Command::new(sbxw_core::sysbin::sys_bin("sha256sum"))
         .arg("--version")
         .output()
         .is_ok()
     {
-        std::process::Command::new("sha256sum").arg(path).output()
+        std::process::Command::new(sbxw_core::sysbin::sys_bin("sha256sum")).arg(path).output()
     } else {
-        std::process::Command::new("shasum")
+        std::process::Command::new(sbxw_core::sysbin::sys_bin("shasum"))
             .args(["-a", "256"])
             .arg(path)
             .output()
@@ -610,7 +610,7 @@ fn set_executable(path: &std::path::Path) -> Result<()> {
 /// `/usr/local/bin`.
 fn install_binary(ui: &Ui, src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
     // Output captured: its "Permission denied" is the expected case, said better below.
-    let out = std::process::Command::new("mv")
+    let out = std::process::Command::new(sbxw_core::sysbin::sys_bin("mv"))
         .arg(src)
         .arg(dest)
         .output()
@@ -625,7 +625,7 @@ fn install_binary(ui: &Ui, src: &std::path::Path, dest: &std::path::Path) -> Res
         ui.paint(YELLOW, "⚿"),
         dir.display()
     );
-    let status = std::process::Command::new("sudo")
+    let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("sudo"))
         .args(["-p", "    password for %u: ", "mv"])
         .arg(src)
         .arg(dest)

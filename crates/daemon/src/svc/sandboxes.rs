@@ -66,6 +66,18 @@ pub struct RenderedEnvFile {
     pub dir: PathBuf,
 }
 
+/// What the create dialog asks for beyond a name and a folder.
+#[derive(Default)]
+pub struct CreateForm {
+    /// Other repos mounted beside the workspace, as `(path, readonly)`.
+    pub mounts: Vec<(String, bool)>,
+    pub ports: Vec<WantedPort>,
+    pub template: templates::Choice,
+    pub remote_control: bool,
+    /// Host folders for kit-declared host mounts, over `kit_mounts`.
+    pub kit_mounts: std::collections::BTreeMap<String, String>,
+}
+
 impl App {
     pub async fn sandboxes(&self) -> Vec<SandboxItem> {
         self.sbx
@@ -117,7 +129,8 @@ impl App {
 
     /// A bring-up from the browser: the daemon's config, the dialog's ports,
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
-    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, mounts: Vec<(String, bool)>, extra: Vec<WantedPort>, template: templates::Choice, remote_control: bool, sink: Option<Sink>) -> Result<Vec<String>> {
+    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, form: CreateForm, sink: Option<Sink>) -> Result<Vec<String>> {
+        let CreateForm { mounts, ports: extra, template, remote_control, kit_mounts } = form;
         let path = PathBuf::from(path.trim());
         if !path.is_dir() {
             bail!("path is not a directory");
@@ -135,12 +148,32 @@ impl App {
             rw.len(),
             extra.len()
         );
-        let mut req = self.bring_up_request(name, path, self.cfg.clone(), extra, false);
+        let mut cfg = self.cfg.clone();
+        cfg.kit_mounts.extend(kit_mounts.into_iter().filter(|(_, host)| !host.trim().is_empty()));
+        cfg.validate()?;
+        let mut req = self.bring_up_request(name, path, cfg, extra, false);
         req.ro = ro;
         req.rw = rw;
         req.template = template;
         req.remote_control = remote_control;
         self.provision(req, sink).await
+    }
+
+    /// The host mounts the daemon config's kits declare (`host-mount@1`), each
+    /// with the host directory `kit_mounts` already gives it: what the create
+    /// dialog offers a folder for. A kit that is not a local directory is not
+    /// read, so its targets are not offered (a path typed in still works).
+    pub fn declared_host_mounts(&self) -> Vec<serde_json::Value> {
+        let refs = crate::bundled::resolve(&self.store.paths, &self.cfg.kits).unwrap_or_default();
+        let mut out = Vec::new();
+        for (kit, dir) in self.cfg.kits.iter().zip(refs) {
+            let Ok(spec) = std::fs::read_to_string(PathBuf::from(&dir).join("spec.yaml")) else { continue };
+            for target in sbxw_core::kits::host_mount_targets(&spec) {
+                let host = self.cfg.kit_mounts.get(&target).cloned().unwrap_or_default();
+                out.push(serde_json::json!({ "kit": kit, "target": target, "host": host }));
+            }
+        }
+        out
     }
 
     /// The automatic template as the create dialog sees it: `auto` off, or

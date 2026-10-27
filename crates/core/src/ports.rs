@@ -103,21 +103,10 @@ pub fn web_alias(web_addr: &str) -> Option<HostAlias> {
     })
 }
 
-/// Parse `sbx ports <name>`.
-///
-/// Confirmed format (four columns, one header row):
-/// ```text
-/// HOST IP     HOST PORT   SANDBOX PORT   PROTOCOL
-/// 127.0.0.1   3000        3000           tcp
-/// ::1         3000        3000           tcp
-/// ```
-/// with a fallback for Docker's arrow style `3000/tcp -> 0.0.0.0:3000`.
-///
-/// The IPv6 mirror sbx adds for each IPv4 publish is dropped; every distinct
-/// IPv4 binding is kept — including the extra loopbacks of `ip_per_app`.
-/// `sbx ports N --format json` (0.48+): rows of `host_ip`, `host_port`,
-/// `sandbox_port`, `protocol`. `None` when `raw` is not that, so the caller
-/// can read it as a table. IPv6 bindings are dropped, as in [`parse_ports`].
+/// `sbx ports N --format json`: rows of `host_ip`, `host_port`,
+/// `sandbox_port`, `protocol`; `None` when `raw` is not that. The IPv6
+/// mirror sbx adds for each IPv4 publish is dropped; every distinct IPv4
+/// binding is kept — including the extra loopbacks of `ip_per_app`.
 pub fn parse_ports_json(raw: &str) -> Option<Vec<PortMapping>> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
     let port = |v: &serde_json::Value, k: &str| {
@@ -138,69 +127,6 @@ pub fn parse_ports_json(raw: &str) -> Option<Vec<PortMapping>> {
             .filter(|p| !p.host_ip.contains(':') && seen.insert((p.host_ip.clone(), p.host_port, p.sandbox_port, p.proto.clone())))
             .collect(),
     )
-}
-
-pub fn parse_ports(raw: &str) -> Vec<PortMapping> {
-    let mut lines = raw.lines().filter(|l| !l.trim().is_empty());
-    let Some(header) = lines.next().map(str::trim) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    if header.contains("HOST IP") && header.contains("SANDBOX PORT") {
-        for line in lines {
-            let c: Vec<&str> = line.split_whitespace().collect();
-            if c.len() < 3 {
-                continue;
-            }
-            let (Ok(host_port), Ok(sandbox_port)) = (c[1].parse(), c[2].parse()) else {
-                continue;
-            };
-            out.push(PortMapping {
-                sandbox_port,
-                proto: c.get(3).unwrap_or(&"tcp").to_string(),
-                host_ip: c[0].to_string(),
-                host_port,
-            });
-        }
-    } else {
-        for line in std::iter::once(header).chain(lines) {
-            let line = line.trim();
-            if line.split_whitespace().all(|w| w == w.to_uppercase()) {
-                continue; // a header row
-            }
-            let (left, right) = match line.split_once("->") {
-                Some((l, r)) => (l.trim(), r.trim()),
-                None => match line.split_once(char::is_whitespace) {
-                    Some((l, r)) => (l.trim(), r.trim()),
-                    None => continue,
-                },
-            };
-            let (port, proto) = left.split_once('/').unwrap_or((left, "tcp"));
-            let Ok(sandbox_port) = port.parse() else { continue };
-            let (host_ip, host_port) = match right.rsplit_once(':') {
-                Some((ip, p)) => match p.parse() {
-                    Ok(p) => (ip.to_string(), p),
-                    Err(_) => continue,
-                },
-                None => match right.parse() {
-                    Ok(p) => ("0.0.0.0".to_string(), p),
-                    Err(_) => continue,
-                },
-            };
-            out.push(PortMapping {
-                sandbox_port,
-                proto: proto.to_string(),
-                host_ip,
-                host_port,
-            });
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|p| {
-        !p.host_ip.contains(':')
-            && seen.insert((p.host_ip.clone(), p.host_port, p.sandbox_port, p.proto.clone()))
-    });
-    out
 }
 
 #[cfg(test)]
@@ -251,33 +177,6 @@ mod tests {
         assert!(web_alias("127.0.0.1:7681").is_some());
         assert!(web_alias("[::1]:7681").is_none());
         assert!(web_alias("192.168.1.2:7681").is_none());
-    }
-
-    #[test]
-    fn the_columnar_listing_is_read_and_ipv6_mirrors_dropped() {
-        let raw = "HOST IP     HOST PORT   SANDBOX PORT   PROTOCOL\n\
-                   127.0.0.1   3000        3000           tcp\n\
-                   ::1         3000        3000           tcp\n\
-                   127.0.0.2   4200        4200           tcp4\n";
-        let p = parse_ports(raw);
-        assert_eq!(p.len(), 2);
-        assert_eq!(p[1].spec(), "127.0.0.2:4200:4200");
-        assert_eq!(p[1].proto, "tcp4");
-    }
-
-    #[test]
-    fn the_arrow_style_is_read_too() {
-        let p = parse_ports("3000/tcp -> 0.0.0.0:3001\n");
-        assert_eq!(
-            p,
-            [PortMapping {
-                sandbox_port: 3000,
-                proto: "tcp".into(),
-                host_ip: "0.0.0.0".into(),
-                host_port: 3001
-            }]
-        );
-        assert!(parse_ports("").is_empty());
     }
 
     #[test]

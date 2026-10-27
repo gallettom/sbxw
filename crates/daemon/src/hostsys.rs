@@ -102,7 +102,7 @@ impl HostSys {
 
     fn can_elevate(&self) -> bool {
         self.elevation == Elevation::Interactive
-            || Command::new("sudo")
+            || Command::new(sbxw_core::sysbin::sys_bin("sudo"))
                 .args(["-n", "true"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -112,7 +112,7 @@ impl HostSys {
     }
 
     fn sudo(&self, args: &[&str]) -> Command {
-        let mut c = Command::new("sudo");
+        let mut c = Command::new(sbxw_core::sysbin::sys_bin("sudo"));
         if self.elevation == Elevation::Background {
             c.arg("-n");
         }
@@ -174,7 +174,7 @@ impl HostSys {
         if !cfg!(target_os = "macos") || !self.privileged || aliases.iter().all(|a| a.ip == "127.0.0.1") {
             return Ok(());
         }
-        let present = Command::new("ifconfig")
+        let present = Command::new(sbxw_core::sysbin::sys_bin("ifconfig"))
             .arg("lo0")
             .output()
             .ok()
@@ -237,7 +237,7 @@ fn run_as_admin(shell_command: &str) -> Result<()> {
         "do shell script {} with administrator privileges",
         hosts::applescript_quote(shell_command)
     );
-    let out = Command::new("osascript")
+    let out = Command::new(sbxw_core::sysbin::sys_bin("osascript"))
         .args(["-e", &script])
         .stdin(Stdio::null())
         .output()

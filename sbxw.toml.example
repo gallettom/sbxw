@@ -176,6 +176,18 @@ env_files = []
 # ]
 # kits = []            # none at all
 
+# Host directories for kit-declared host mounts (sbx 0.50+): a kit declares a
+# `host-mount@1` capability at a sandbox path, and this picks the host folder
+# behind it (`sbx create --mount HOST:TARGET`). The target must be exactly the
+# path a kit in `kits` declares; sbx refuses any other. `~/` and relative
+# paths resolve as for kits. Read at creation only.
+# kit_mounts = { "/home/agent/datasets" = "~/datasets" }
+
+# Sandbox paths kept on persistent storage (sbx 0.50+): they survive
+# `sbxw rm` and come back when a sandbox of the same name is created again.
+# For caches and toolchains outside the workspace. Read at creation only.
+# volumes = ["/home/agent/.npm", "/home/agent/.cache/pip"]
+
 # Mount ~/.sbxw/cache into new sandboxes: the bundled kits copy the apt
 # packages, Chromium, skill tarballs and wheels from it instead of downloading
 # them again. The first sandbox fills it (writable for that one only, read-only

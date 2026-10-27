@@ -41,7 +41,7 @@ because creation applies a kit in one step, with no container swap.
 A kit added to `kits` later reaches an existing sandbox on the next `sbxw up`,
 via `sbx kit add`. That recreates the container (state kept), so sbxw skips
 kits it already applied: it records them itself, and also recognises the paths
-`sbx inspect` lists. Since sbx 0.48 this includes kits with
+`sbx inspect` lists. This includes kits with
 startup commands, like all the bundled ones: their commands run after the add
 and on every later start. If sbx still refuses a kit, sbxw tells you to
 recreate (`sbxw rm <name>`, then `sbxw up <name>`) and changes nothing — it
@@ -124,7 +124,7 @@ and the WeasyPrint stack it needs, so the first use has no install step. See
 
 ### `sbxw:git-identity` and `sbxw:ssh-agent`
 
-Two kit spec v3 capability kits (sbx 0.48+), opt-in because each hands the
+Two kit spec v3 capability kits, opt-in because each hands the
 sandbox something of yours:
 
 - **git-identity** (`git-identity@1`): sbx copies `user.name` and `user.email`
@@ -144,10 +144,39 @@ in cloud sandboxes.
 
 On every `sbxw up`, each of your own local kits (a directory or ZIP, not a
 bundled one, not a registry reference) is checked with
-`sbx kit validate --offline` (sbx 0.49) before the sandbox is created or
-changed. A broken kit fails the bring-up in a second with sbx's message, not
-after the image pull. With sbx 0.48, which lacks `--offline`, the check is
-skipped. `sbxw doctor` runs the same check.
+`sbx kit validate --offline` before the sandbox is created or changed. A
+broken kit fails the bring-up in a second with sbx's message, not after the
+image pull. A v3 kit (`schemaVersion: "3"`) is not checked: sbx 0.50's
+validator refuses every v3 spec, valid or not, so it is left to `sbx create`.
+`sbxw doctor` runs the same check.
+
+## Persistent volumes
+
+```toml
+volumes = ["/home/agent/.npm", "/home/agent/.cache/pip", "/home/agent/.cargo/registry"]
+```
+
+Paths inside the sandbox kept on storage that outlives it (sbx 0.50,
+`volume@1`): `sbxw rm` then `sbxw up` under the same name — switching to Remote
+Control, say — finds them as they were. sbxw writes them as a small kit at
+`~/.sbxw/state/kits/<name>-volumes/` and keeps that folder when the sandbox is
+removed, because sbx reattaches the storage only to the same kit. They apply
+at creation: changing the list on an existing sandbox warns and changes
+nothing. Your workspace (and its `node_modules`) is your own folder already;
+this is for what lives outside it.
+
+## Kit folders (host mounts)
+
+A kit can declare a folder it shares with your machine (`host-mount@1`, sbx
+0.50). By default sbx picks that folder; `kit_mounts` picks it yourself:
+
+```toml
+kit_mounts = { "/home/agent/history" = "~/agent-history" }
+```
+
+The create dialog shows the same thing as **Kit folders**, one row per path
+your configured kits declare, with a folder picker. Only declared paths are
+accepted, and only at creation.
 
 ## The kit cache
 

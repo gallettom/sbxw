@@ -65,6 +65,7 @@ impl App {
                 "Claude in '{sandbox}' is signed in with a setup token (CLAUDE_CODE_OAUTH_TOKEN), which Remote Control refuses — \
                  switch it to a claude.ai login first"
             ),
+            Login::ApiKeyHelper => bail!("{}", remote::helper_advice(sandbox.as_str())),
         }
         self.watch_remote(sandbox);
         self.push_text(sandbox, kind, remote::COMMAND).await.map_err(anyhow::Error::msg)
@@ -102,7 +103,7 @@ mod tests {
 
     fn signed_in_with(probe: &'static str) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
         move |a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\nneos      claude   running\n"),
+            Some("ls") => crate::testing::ls(&[("neos", "running")]),
             Some("exec") if a.iter().any(|x| x == "-e") => Output::ok(probe),
             _ => sbx_answer(a),
         }

@@ -26,6 +26,10 @@ sbxw both **runs** on one and **writes** one.
   pipeline needs a workspace. Write `workspace: .` to mount the file's folder.
 - **`sbx env create` shows a plan and asks** before changing the host, so
   `sbxw env run` needs you at the terminal for that step.
+- **`mounts:` maps a kit's declared host mount to a folder** (sbx 0.50):
+  `mounts: { /home/agent/history: ./history }`. The host side is relative to
+  the file; `sbxw env export` writes `kit_mounts` there, and `env run` reads
+  it back over `kit_mounts`.
 - **`secrets.<name>.command` runs from a fresh temporary directory** (sbx
   0.46+). sbxw warns about one using `./helper` or `../token`: use an absolute
   path outside the workspace, or a program on `PATH`.

@@ -116,6 +116,9 @@ pub struct EnvFile {
     /// (read-only sharing).
     pub skills: Option<String>,
     pub kits: Vec<String>,
+    /// Kit-declared host mounts: sandbox target → host directory, relative
+    /// to the file (sbx 0.50 `mounts`).
+    pub mounts: BTreeMap<String, String>,
     pub env: BTreeMap<String, String>,
     pub ports: Vec<Port>,
     /// Header lines recording what sbxw does that this file cannot express.
@@ -167,6 +170,13 @@ impl EnvFile {
             out.push_str("\nkits:\n");
             for k in &self.kits {
                 let _ = writeln!(out, "  - {}", scalar(k));
+            }
+        }
+
+        if !self.mounts.is_empty() {
+            out.push_str("\nmounts:\n");
+            for (target, host) in &self.mounts {
+                let _ = writeln!(out, "  {}: {}", scalar(target), scalar(host));
             }
         }
 
@@ -483,8 +493,8 @@ fn arg_defaults(raw: &str) -> BTreeMap<String, String> {
 
 /// Make one file's relative paths absolute, against that file's directory.
 ///
-/// The workspace (either form), every additional workspace, and every kit
-/// entry that names a local path. A kit given as a mapping is left alone: sbx
+/// The workspace (either form), every additional workspace, every kit
+/// entry that names a local path, and the host side of every `mounts` entry. A kit given as a mapping is left alone: sbx
 /// documents per-kit `args` there but not the name of the reference key, and
 /// guessing it would be worse than leaving the entry to sbx — which resolves it
 /// against the same directory anyway, as long as the file stays where it is.
@@ -528,6 +538,16 @@ fn anchor(doc: &mut Value, dir: &Path) {
         for it in items {
             if let Value::String(s) = it {
                 *s = crate::kits::resolve_kit_ref(dir, std::mem::take(s));
+            }
+        }
+    }
+    // Host sides only: the keys are sandbox paths. `~/` is sbx's to expand.
+    if let Some(Value::Mapping(m)) = map.get_mut("mounts") {
+        for (_, v) in m.iter_mut() {
+            if let Value::String(s) = v {
+                if !s.starts_with('~') {
+                    *s = abs(s);
+                }
             }
         }
     }
@@ -652,6 +672,9 @@ pub struct Spec {
     pub workspace: Option<String>,
     pub additional: Vec<MountSpec>,
     pub kits: Vec<String>,
+    /// `mounts`: sandbox target → host directory (absolute, resolved against
+    /// the declaring file), for kit-declared host mounts.
+    pub mounts: BTreeMap<String, String>,
     pub env: BTreeMap<String, String>,
     pub ports: Vec<Port>,
     /// How many of `ports` come from the user-level base. They are first,
@@ -742,6 +765,11 @@ impl Loaded {
             _ => vec![],
         };
 
+        let mounts = match get("mounts") {
+            Some(Value::Mapping(m)) => m.iter().filter_map(|(k, v)| Some((as_str(Some(k))?, as_str(Some(v))?))).collect(),
+            _ => BTreeMap::new(),
+        };
+
         let env = match get("env") {
             Some(Value::Mapping(m)) => m
                 .iter()
@@ -798,6 +826,7 @@ impl Loaded {
             workspace,
             additional,
             kits,
+            mounts,
             env,
             ports,
             user_ports,
@@ -1186,6 +1215,7 @@ mod tests {
                 "docker.io/sbx/playwright-kit:latest".into(),
                 "./kits/headroom".into(),
             ],
+            mounts: BTreeMap::from([("/home/agent/history".into(), "./history".into())]),
             env: BTreeMap::from([
                 ("NODE_ENV".into(), "test".into()),
                 // The values that make `scalar`'s quoting load-bearing.
@@ -1232,6 +1262,7 @@ mod tests {
         assert_eq!(spec.kits[0], "docker.io/sbx/playwright-kit:latest");
         assert_eq!(spec.env, written.env, "every value kept its type and text");
         assert_eq!(spec.ports, written.ports, "including the absent host port");
+        assert_eq!(spec.mounts["/home/agent/history"], dir.join("history").to_string_lossy(), "the host side moves with the file");
         // The header is comments, so it contributes nothing but `skills`.
         assert_eq!(spec.delegated, vec!["skills"]);
     }

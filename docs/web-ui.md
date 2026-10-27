@@ -120,9 +120,9 @@ things about the **session** in the pane.
 
 Notes:
 
-- **Bash on a stopped sandbox** connects over [SSH](ssh.md), which starts the
-  sandbox on the way in. That needs `sbxw ssh --setup` done once; the pane says
-  so if it isn't.
+- **Bash on a stopped sandbox** starts it: `sbx exec` starts a stopped
+  sandbox before running the shell (sbx 0.50). Busy host ports are released
+  first, as for the agent.
 - **Replays are repainted, never re-answered.** Terminal queries in the replay
   (`CSI 6n`, `CSI c`) are stripped, so a reconnect doesn't type
   `37;3R37;3R…` onto your command line.
@@ -221,13 +221,17 @@ verbatim rather than as a misleading empty list.
 - The form takes sbx's syntax (`example.com`, `*.acme.dev`, `host:443`,
   comma-separated) with allow or deny. It's scoped to this sandbox unless you
   tick **all sandboxes**, which asks for confirmation.
+- **Only some HTTP requests** narrows the rule: methods (`GET, HEAD`), a path
+  glob (`/v1/**`) and query parameters every request must carry
+  (`org=acme, label=release*`), sent as `--method`, `--path` and `--query`
+  (sbx 0.50). Allow `api.example.com` only for `org=acme`, for instance.
 - **✕ on a rule** runs `sbx policy rm network --id <rule-id> --force`, after a
   confirmation. It appears only when sbx reports a rule id. Rules from an `org`
   source show 🔒: sbx won't let you remove them.
 - **Allow on a blocked host** adds an allow rule for that host (without its
   port), for this sandbox only, after a confirmation. A host blocked by
   organisation policy shows 🔒 instead.
-- **↻ Re-read policy now** runs `sbx policy refresh` (sbx 0.49): the policy is
+- **↻ Re-read policy now** runs `sbx policy refresh`: the policy is
   re-read at once, after an AI Governance change say, instead of at the next
   poll. Open connections stay open.
 

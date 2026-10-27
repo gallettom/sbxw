@@ -64,6 +64,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/policy/rules/rm", post(policy_rm))
         .route("/api/policy/refresh", post(policy_refresh))
         .route("/api/template/status", get(template_status))
+        .route("/api/kit-mounts", get(kit_mounts))
         .route("/api/templates", get(templates_list))
         .route("/api/templates/save", post(template_save))
         .route("/api/templates/rm", post(template_rm))
@@ -284,13 +285,25 @@ struct CreateBody {
     template: sbxw_core::templates::Choice,
     #[serde(default)]
     remote_control: bool,
+    /// Sandbox target → host folder, for the kits' declared host mounts.
+    #[serde(default)]
+    kit_mounts: std::collections::BTreeMap<String, String>,
 }
 
 async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
     let name = sandbox(&b.name)?;
-    let extra = b.ports.into_iter().map(PortEntry::wanted).collect::<Result<Vec<_>, _>>()?;
-    let mounts = b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect();
-    Ok(warnings(app.create(name, &b.path, mounts, extra, b.template, b.remote_control, None).await?))
+    let form = crate::svc::sandboxes::CreateForm {
+        ports: b.ports.into_iter().map(PortEntry::wanted).collect::<Result<Vec<_>, _>>()?,
+        mounts: b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect(),
+        template: b.template,
+        remote_control: b.remote_control,
+        kit_mounts: b.kit_mounts,
+    };
+    Ok(warnings(app.create(name, &b.path, form, None).await?))
+}
+
+async fn kit_mounts(State(app): S) -> Json<Value> {
+    Json(json!({ "mounts": app.declared_host_mounts() }))
 }
 
 /// Whether the create dialog should ask about the automatic template.
@@ -498,6 +511,14 @@ struct RuleBody {
     resources: String,
     decision: Option<String>,
     global: Option<bool>,
+    /// HTTP narrowing, as typed: comma-separated methods and `name=value`
+    /// query pairs, a path glob.
+    #[serde(default)]
+    methods: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    query: String,
 }
 
 async fn policy_add(State(app): S, Path(name): Path<String>, Json(b): Json<RuleBody>) -> ApiResult {
@@ -508,11 +529,13 @@ async fn policy_add(State(app): S, Path(name): Path<String>, Json(b): Json<RuleB
         other => return Err(ApiError::bad(format!("unknown decision '{other}' — use allow or deny"))),
     };
     let global = b.global.unwrap_or(false);
+    let http = policy::HttpMatch::parse(&b.methods, &b.path, &b.query).map_err(ApiError::bad)?;
     tracing::info!(
-        "web UI: adding {decision} network rule for {} — {resources}",
-        if global { "ALL sandboxes".to_string() } else { format!("sandbox '{sb}'") }
+        "web UI: adding {decision} network rule for {} — {resources} {}",
+        if global { "ALL sandboxes".to_string() } else { format!("sandbox '{sb}'") },
+        http.args().join(" ")
     );
-    app.sbx.policy(decision, (!global).then_some(&sb), &resources).await?;
+    app.sbx.policy_http(decision, (!global).then_some(&sb), &resources, &http).await?;
     Ok(ok())
 }
 
@@ -726,8 +749,10 @@ async fn remote_state(State(app): S, Path(name): Path<String>, Query(q): Query<R
         sbxw_core::remote::Login::Full => "full",
         sbxw_core::remote::Login::TokenOnly => "token",
         sbxw_core::remote::Login::Missing => "missing",
+        sbxw_core::remote::Login::ApiKeyHelper => "helper",
     };
-    Ok(ok_with(json!({ "login": login, "active": state.active })))
+    let advice = (state.login == sbxw_core::remote::Login::ApiKeyHelper).then(|| sbxw_core::remote::helper_advice(&name));
+    Ok(ok_with(json!({ "login": login, "active": state.active, "advice": advice })))
 }
 
 async fn remote_control(State(app): S, Path(name): Path<String>, b: Option<Json<RemoteControlBody>>) -> ApiResult {
@@ -867,15 +892,15 @@ fn pick_folder_native() -> anyhow::Result<Option<String>> {
         (out.status.success() && !p.is_empty()).then_some(p)
     };
     if cfg!(target_os = "macos") {
-        let out = Command::new("osascript")
+        let out = Command::new(sbxw_core::sysbin::sys_bin("osascript"))
             .args(["-e", r#"POSIX path of (choose folder with prompt "Select workspace folder")"#])
             .output()?;
         return Ok(read(out));
     }
-    if let Ok(out) = Command::new("zenity").args(["--file-selection", "--directory", "--title=Select workspace folder"]).output() {
+    if let Ok(out) = Command::new(sbxw_core::sysbin::sys_bin("zenity")).args(["--file-selection", "--directory", "--title=Select workspace folder"]).output() {
         return Ok(read(out));
     }
-    if let Ok(out) = Command::new("kdialog")
+    if let Ok(out) = Command::new(sbxw_core::sysbin::sys_bin("kdialog"))
         .arg("--getexistingdirectory")
         .arg(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
         .output()

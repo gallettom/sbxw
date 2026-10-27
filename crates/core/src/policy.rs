@@ -178,6 +178,61 @@ pub fn clean_arg(value: &str, what: &str) -> Result<String, String> {
     Ok(v.to_string())
 }
 
+/// What narrows a network rule to some HTTP requests: methods, a path glob,
+/// and query parameters the request must carry (`--query name=value`, sbx
+/// 0.50, a value pattern; every one is required). Empty is the whole host.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HttpMatch {
+    pub methods: Vec<String>,
+    pub path: Option<String>,
+    pub query: Vec<String>,
+}
+
+impl HttpMatch {
+    /// From what the panel sends: comma-separated methods and `name=value`
+    /// pairs, a path glob. Each part checked the way a resource is.
+    pub fn parse(methods: &str, path: &str, query: &str) -> Result<Self, String> {
+        let list = |raw: &str| raw.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect::<Vec<_>>();
+        let methods: Vec<String> = list(methods).into_iter().map(|m| m.to_ascii_uppercase()).collect();
+        if let Some(m) = methods.iter().find(|m| !m.chars().all(|c| c.is_ascii_uppercase())) {
+            return Err(format!("method {m:?} — expected names like GET, POST or ANY"));
+        }
+        let path = Some(path.trim()).filter(|p| !p.is_empty()).map(String::from);
+        if let Some(p) = &path {
+            if !p.starts_with('/') || p.len() > ARG_LIMIT {
+                return Err(format!("path {p:?} — expected a glob starting with /, such as /v1/**"));
+            }
+        }
+        let query = list(query);
+        for q in &query {
+            let ok = q.split_once('=').is_some_and(|(n, _)| !n.trim().is_empty()) && !q.starts_with('-') && q.len() <= ARG_LIMIT;
+            if !ok {
+                return Err(format!("query {q:?} — expected name=value (the value may be a pattern, release*)"));
+            }
+        }
+        Ok(Self { methods, path, query })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.methods.is_empty() && self.path.is_none() && self.query.is_empty()
+    }
+
+    /// The flags, in sbx's spelling.
+    pub fn args(&self) -> Vec<String> {
+        let mut a = Vec::new();
+        if !self.methods.is_empty() {
+            a.extend(["--method".into(), self.methods.join(",")]);
+        }
+        if let Some(p) = &self.path {
+            a.extend(["--path".into(), p.clone()]);
+        }
+        for q in &self.query {
+            a.extend(["--query".into(), q.clone()]);
+        }
+        a
+    }
+}
+
 /// "a.com, b.com" (what a person types) → "a.com,b.com" (what sbx wants).
 pub fn clean_resources(raw: &str) -> Result<String, String> {
     let cleaned = clean_arg(raw, "resource")?;
@@ -353,6 +408,17 @@ pub fn parse_mcp_ls(raw: &str) -> Option<Vec<McpServer>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_http_match_is_checked_and_spelled_as_sbx_flags() {
+        let m = HttpMatch::parse("get, head", "/search", "team=platform, label=release*").unwrap();
+        assert_eq!(m.args().join(" "), "--method GET,HEAD --path /search --query team=platform --query label=release*");
+        assert!(HttpMatch::parse("", "", "").unwrap().is_empty());
+        assert!(HttpMatch::parse("GET;rm", "", "").is_err());
+        assert!(HttpMatch::parse("", "search", "").is_err(), "a path is a glob from /");
+        assert!(HttpMatch::parse("", "", "=x").is_err());
+        assert!(HttpMatch::parse("", "", "--sandbox=x").is_err(), "never a flag");
+    }
 
     #[test]
     fn the_egress_log_json_groups_blocked_hosts() {

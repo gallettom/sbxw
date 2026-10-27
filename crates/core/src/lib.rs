@@ -27,6 +27,7 @@ pub mod progress;
 pub mod relay;
 pub mod remote;
 pub mod session;
+pub mod sysbin;
 pub mod table;
 pub mod templates;
 pub mod terminal;

@@ -12,11 +12,17 @@ use std::sync::Arc;
 /// What a well-behaved sbx answers when the test does not care.
 pub fn sbx_answer(a: &[String]) -> Output {
     match a.first().map(String::as_str) {
-        Some("version") => Output::ok("sbx version 0.48.0\n"),
-        Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
+        Some("version") => Output::ok("sbx version 0.50.0\n"),
+        Some("ls") => ls(&[]),
         Some("exec") if a.iter().any(|x| x == "node") => Output::ok("SBXW-TOOLING []\n"),
         _ => Output::ok(""),
     }
+}
+
+/// `sbx ls --format json` listing `(name, status)` Claude sandboxes.
+pub fn ls(rows: &[(&str, &str)]) -> Output {
+    let rows: Vec<_> = rows.iter().map(|(n, st)| serde_json::json!({ "name": n, "agent": "claude", "status": st })).collect();
+    Output::ok(&serde_json::Value::Array(rows).to_string())
 }
 
 pub fn app_in(dir: &Path) -> Arc<App> {
@@ -30,7 +36,7 @@ fn build(dir: &Path, fake: Arc<Fake>) -> Arc<App> {
         sbx: Sbx::new(fake),
         hosts: hostsys::for_tests(&dir.join("hosts")),
         use_api_key: true,
-        sbx_version: Some("0.48.0".into()),
+        sbx_version: Some("0.50.0".into()),
     }
     .build()
 }

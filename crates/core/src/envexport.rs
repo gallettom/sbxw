@@ -99,6 +99,11 @@ pub fn env_file_for(name: &str, cfg: &Config, workspace: &Path, ports: Vec<Port>
                 }
             })
             .collect(),
+        mounts: cfg
+            .kit_mounts
+            .iter()
+            .map(|(target, host)| (target.clone(), path_relative_to(dir, Path::new(host))))
+            .collect(),
         env: cfg.effective_env(),
         ports,
         notes: notes(cfg, &aliases),
@@ -155,6 +160,13 @@ pub fn notes(cfg: &Config, aliases: &[(u16, String)]) -> Vec<String> {
             "the /etc/hosts aliases ({}) — sbxw writes those on the host.\n\
              The ports below are published either way; only the names are missing.",
             named.join(", ")
+        ));
+    }
+    if !cfg.volumes.is_empty() {
+        notes.push(format!(
+            "persistent volumes ({}) — sbxw gives them as a volume@1 kit it writes at creation;\n\
+             add a kit declaring them to `kits:` to have them from `sbx env run` too.",
+            cfg.volumes.join(", ")
         ));
     }
     notes.push(
@@ -222,6 +234,16 @@ pub fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<S
     } else if !cfg.kits.is_empty() {
         report.push(format!("kits ({})", cfg.kits.join(", ")));
     }
+    // sbx creates from the file, and a host mount exists only from creation:
+    // the config's own mounts would never reach the sandbox, so they are
+    // replaced, and named when the file has none.
+    if spec.mounts.is_empty() && !cfg.kit_mounts.is_empty() {
+        report.push(format!(
+            "nothing from kit_mounts ({}) — add them under `mounts:` in the environment file",
+            cfg.kit_mounts.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    cfg.kit_mounts = spec.mounts.clone();
     if !cfg.network_allow.is_empty() {
         report.push(format!(
             "the egress allowlist ({} rules) — an environment file has no field for it",

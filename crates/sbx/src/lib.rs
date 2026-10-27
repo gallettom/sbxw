@@ -1,25 +1,27 @@
 //! The only door to the `sbx` CLI. sbxw never calls `docker sandbox`.
 //!
-//! Written for sbx 0.48 and newer, with no fallbacks below it: since 0.39 an
+//! Written for sbx 0.50 and newer, with no fallbacks below it: an
 //! unrecognised command or flag is an *error*, so a command that succeeded
-//! really ran, and a fallback path would be code nobody runs. 0.48 rewrote
-//! every human-readable table, so what sbxw parses it reads as `--format json`.
+//! really ran, and a fallback path would be code nobody runs. What sbxw
+//! parses it reads as `--format json`; only `policy ls` and `template ls`
+//! are still read as tables.
 //!
 //! ```text
 //! sbx create claude PATH --name N [PATH:ro]… [--kit K]… [-p SPEC]…
 //!            [--skills=off|readonly|readwrite] [--pull=always|missing|never]
+//!            [--mount HOST:TARGET]…           (only a target a kit declares)
 //!            [--env-file F]… [-e K=V]…        (creation: the only moment kits apply whole;
 //!                                              -p is all-or-nothing)
 //! sbx run --name N [--env-file F]… [-e K=V]…  (attach; -e applies to the agent session)
 //! sbx run -d --name N                         (keep running with nobody attached)
-//! sbx ls --format json                        (a bare array; table read by headers as a fallback)
-//! sbx exec [-i|-it] N -- cmd…                 (only a *running* sandbox; -d fails)
+//! sbx ls --format json                        (a bare array)
+//! sbx exec [-i|-it] N -- cmd…                 (starts a stopped sandbox first; -d fails; 125 = not run)
 //! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC
-//! sbx policy allow|deny network [--sandbox N] RESOURCES
+//! sbx policy allow|deny network [--sandbox N] [--method M,…] [--path GLOB] [--query K=V]… RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)
 //! sbx policy rm network --id RULE_ID [--sandbox N] --force
 //! sbx secret set [--sandbox N] SERVICE [--force]  (value on stdin)
-//! sbx kit add N REF                           (recreates the container; startup commands since 0.48)
+//! sbx kit add N REF                           (recreates the container; startup commands too)
 //! sbx env create PATH… --name N [--env-arg K=V]…   (shows a plan and asks)
 //! sbx prune [--dry-run] [--filter until=D] --force
 //! sbx rm --force --format json N…            (one result per target)
@@ -34,7 +36,7 @@
 //!
 //! Facts the methods below are built on:
 //! * every removal asks for confirmation since 0.45, and a prompt with no
-//!   terminal is a refusal (since 0.48 even a piped `y`) — sbxw passes
+//!   terminal is a refusal (even a piped `y`) — sbxw passes
 //!   `--force` and does its own asking;
 //! * a sandbox made with `sbx create` stops by itself once idle;
 //! * a sandbox whose guest stopped responding is not running;
@@ -46,7 +48,7 @@ pub mod scripts;
 
 use anyhow::{anyhow, bail, Result};
 use runner::{Invocation, Output, Runner};
-use sbxw_core::policy::{parse_mcp_ls, EgressLog, McpServer, PolicyView};
+use sbxw_core::policy::{parse_mcp_ls, EgressLog, HttpMatch, McpServer, PolicyView};
 use sbxw_core::ports::PortMapping;
 use sbxw_core::table;
 use sbxw_core::tooling::{Tooling, ToolingOutcome};
@@ -58,8 +60,13 @@ use std::time::Duration;
 pub use scripts::ThreadStatus;
 
 /// Oldest sbx sbxw works against, and the one it is written for.
-pub const MIN_VERSION: (u32, u32, u32) = (0, 48, 0);
+pub const MIN_VERSION: (u32, u32, u32) = (0, 50, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
+
+/// `sbx exec`'s status when it could not run the command at all — no such
+/// sandbox, for one. (A stopped sandbox is not that: `exec` starts it first,
+/// which is why callers that must not wake one ask `is_running` before.)
+pub const EXEC_NOT_RUN: i32 = 125;
 
 /// Longest tail of a failing command's stderr folded into the error: sbx's
 /// policy denials carry a multi-line explanation and an org support message.
@@ -88,15 +95,15 @@ pub struct SandboxInfo {
     pub name: String,
     pub agent: String,
     pub status: String,
-    /// RFC 3339, from the 0.48 JSON; absent from the table fallback.
+    /// RFC 3339.
     pub created_at: Option<String>,
     /// Running with nobody attached (`sbx run -d`).
     pub detached: bool,
 }
 
 impl SandboxInfo {
-    /// Up *and answering*: a hung guest reported as running is not (0.47 said
-    /// "unresponsive", 0.48 "not responding").
+    /// Up *and answering*: a hung guest reported as running ("not
+    /// responding") is not.
     pub fn is_running(&self) -> bool {
         let s = self.status.to_ascii_lowercase();
         self.state() == "running" && !s.contains("unresponsive") && !s.contains("not responding")
@@ -104,7 +111,7 @@ impl SandboxInfo {
     pub fn is_stopped(&self) -> bool {
         self.state() == "stopped"
     }
-    /// The first word of the status, past any state mark (0.48 prints `● running`).
+    /// The first word of the status, past any state mark (`● running`).
     fn state(&self) -> String {
         self.status
             .split_whitespace()
@@ -114,8 +121,8 @@ impl SandboxInfo {
     }
 }
 
-/// `sbx ls --format json` (0.48+: a bare array of snake_case rows); `None`
-/// when `raw` is not that, so the caller can read it as a table.
+/// `sbx ls --format json`: a bare array of snake_case rows; `None` when
+/// `raw` is not that.
 pub fn parse_ls_json(raw: &str) -> Option<Vec<SandboxInfo>> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
     let text = |v: &serde_json::Value, keys: &[&str]| {
@@ -205,7 +212,7 @@ pub struct RmResult {
     pub error: Option<String>,
 }
 
-/// `sbx rm --format json` (0.48+): one result per target, missing and failed
+/// `sbx rm --format json`: one result per target, missing and failed
 /// ones included. `None` when `raw` is not that.
 pub fn parse_rm_json(raw: &str) -> Option<Vec<RmResult>> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
@@ -225,53 +232,32 @@ pub fn parse_rm_json(raw: &str) -> Option<Vec<RmResult>> {
     )
 }
 
-/// `sbx ls`, by its headers (`STATUS`/`STATE`, `AGENT`, name first); a layout
-/// without readable headers falls back to `NAME AGENT STATUS`.
-pub fn parse_ls(raw: &str) -> Vec<SandboxInfo> {
-    let mut lines = raw.lines().filter(|l| !l.trim().is_empty());
-    let Some(header) = lines.next() else {
-        return Vec::new();
-    };
-    let spans = table::header_spans(header);
-    let find = |names: &[&str]| spans.iter().position(|(h, _)| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
-    let (agent_col, status_col) = (find(&["AGENT"]), find(&["STATUS", "STATE"]));
-    match status_col {
-        Some(status_col) if spans.len() >= 2 => {
-            let starts: Vec<usize> = spans.iter().map(|(_, at)| *at).collect();
-            lines
-                .filter_map(|line| {
-                    let cells = table::slice_at(line, &starts);
-                    // Past a leading state mark, as in the status column.
-                    let name = cells.first()?.split_whitespace().find(|w| w.chars().any(char::is_alphanumeric))?.to_string();
-                    let cell = |i: Option<usize>| i.and_then(|i| cells.get(i)).cloned().unwrap_or_default();
-                    let status = cell(Some(status_col));
-                    Some(SandboxInfo {
-                        name,
-                        agent: cell(agent_col),
-                        status: if status.is_empty() { "unknown".into() } else { status },
-                        created_at: None,
-                        detached: false,
-                    })
-                })
-                .collect()
-        }
-        _ => lines
-            .filter_map(|line| {
-                let mut cols = line.split_whitespace();
-                Some(SandboxInfo {
-                    name: cols.next()?.to_string(),
-                    agent: cols.next().unwrap_or("").to_string(),
-                    status: cols.next().unwrap_or("unknown").to_string(),
-                    created_at: None,
-                    detached: false,
-                })
-            })
-            .collect(),
-    }
-}
-
 /// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
 /// inside a longer token ("sha256") or a four-digit year is not one.
+/// What to tell the person once, on the first run after sbx moved from
+/// `before` to `now`: what the upgrade costs them that sbxw cannot hide.
+pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
+    let (Some(before), Some(now)) = (parse_version(before), parse_version(now)) else {
+        return Vec::new();
+    };
+    let mut notes = Vec::new();
+    if before < (0, 50, 0) && now >= (0, 50, 0) {
+        notes.push(
+            "sbx 0.50 rebuilds each local kit once: the next sandbox created with one of your own kits (or sbxw's) \
+             takes the time of a first build.",
+        );
+        notes.push(
+            "Automatic templates were made by the older sbx and are now out of date: the next create asks before \
+             rebuilding (`sbxw up <name> --rebuild-template`).",
+        );
+        notes.push(
+            "Sandboxes created before 0.50 keep their old storage (persistent kit volumes apply to new ones) and \
+             may carry an apiKeyHelper that outranks /login — recreate one to get both.",
+        );
+    }
+    notes
+}
+
 pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let chars: Vec<char> = raw.chars().collect();
     let mut i = 0;
@@ -326,6 +312,8 @@ pub struct CreateOpts {
     pub kits: Vec<String>,
     /// `-p` specs: all-or-nothing, a busy host port 409s the whole create.
     pub publish: Vec<String>,
+    /// `HOST:TARGET` for kit-declared host mounts (`--mount`, 0.50).
+    pub kit_mounts: Vec<String>,
     pub skills: Option<String>,
     pub pull: Option<String>,
     pub env: Vec<String>,
@@ -347,6 +335,9 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     }
     for p in &o.publish {
         a.extend(["-p".into(), p.clone()]);
+    }
+    for m in &o.kit_mounts {
+        a.extend(["--mount".into(), m.clone()]);
     }
     if let Some(m) = &o.skills {
         a.push(format!("--skills={m}"));
@@ -396,11 +387,12 @@ pub fn env_create_args(paths: &[String], name: &SandboxName, env_args: &[String]
     a
 }
 
-pub fn policy_rule_args(decision: &str, sandbox: Option<&SandboxName>, resources: &str) -> Vec<String> {
+pub fn policy_rule_args(decision: &str, sandbox: Option<&SandboxName>, resources: &str, http: &HttpMatch) -> Vec<String> {
     let mut a = vec!["policy".to_string(), decision.into(), "network".into()];
     if let Some(n) = sandbox {
         a.extend(["--sandbox".into(), n.to_string()]);
     }
+    a.extend(http.args());
     a.push(resources.into());
     a
 }
@@ -517,12 +509,14 @@ impl Sbx {
     }
 
     /// Every sandbox; empty when `sbx ls` fails (callers treat empty as
-    /// "could not tell", never as "all gone"). JSON, because 0.48 reshaped the
-    /// table with state marks and a creation-time column.
+    /// "could not tell", never as "all gone").
     pub async fn ls(&self) -> Vec<SandboxInfo> {
         match self.capture(s(&["ls", "--format", "json"])).await {
-            Ok(raw) => parse_ls_json(&raw).unwrap_or_else(|| parse_ls(&raw)),
-            Err(_) => self.capture(s(&["ls"])).await.map(|r| parse_ls(&r)).unwrap_or_default(),
+            Ok(raw) => parse_ls_json(&raw).unwrap_or_else(|| {
+                tracing::warn!("`sbx ls --format json` printed something other than JSON");
+                Vec::new()
+            }),
+            Err(_) => Vec::new(),
         }
     }
 
@@ -620,12 +614,12 @@ impl Sbx {
         self.capture(prune_args(until, dry_run)).await
     }
 
-    /// The live mappings, from the documented 0.48 JSON rows (the table, if
-    /// the output is not JSON).
+    /// The live mappings, from the documented JSON rows.
     pub async fn ports(&self, name: &SandboxName) -> Vec<PortMapping> {
         self.capture(s(&["ports", name.as_str(), "--format", "json"]))
             .await
-            .map(|r| sbxw_core::ports::parse_ports_json(&r).unwrap_or_else(|| sbxw_core::ports::parse_ports(&r)))
+            .ok()
+            .and_then(|r| sbxw_core::ports::parse_ports_json(&r))
             .unwrap_or_default()
     }
 
@@ -643,7 +637,12 @@ impl Sbx {
 
     /// `None` writes a host-wide rule — every sandbox, present and future.
     pub async fn policy(&self, decision: &str, sandbox: Option<&SandboxName>, resources: &str) -> Result<()> {
-        self.checked(Invocation::new(policy_rule_args(decision, sandbox, resources))).await.map(drop)
+        self.policy_http(decision, sandbox, resources, &HttpMatch::default()).await
+    }
+
+    /// A rule narrowed to some HTTP requests (`--method`, `--path`, `--query`).
+    pub async fn policy_http(&self, decision: &str, sandbox: Option<&SandboxName>, resources: &str, http: &HttpMatch) -> Result<()> {
+        self.checked(Invocation::new(policy_rule_args(decision, sandbox, resources, http))).await.map(drop)
     }
 
     /// Remove one rule by **rule** id: tried in the sandbox's policy first,
@@ -684,7 +683,7 @@ impl Sbx {
         self.policy_view(scoped, unscoped, sandbox).await
     }
 
-    /// What the sandbox reached and was refused, from the 0.48 JSON document;
+    /// What the sandbox reached and was refused, from the JSON document;
     /// `None` beside a table view when sbx gave one instead.
     pub async fn policy_log(&self, sandbox: &SandboxName) -> (PolicyView, Option<EgressLog>) {
         if let Ok(raw) = self.capture(s(&["policy", "log", sandbox.as_str(), "--format", "json"])).await {
@@ -695,7 +694,7 @@ impl Sbx {
         (self.policy_view(s(&["policy", "log", sandbox.as_str()]), s(&["policy", "log"]), sandbox).await, None)
     }
 
-    /// `sbx policy refresh` (0.49): re-read policy now, e.g. after an AI
+    /// `sbx policy refresh`: re-read policy now, e.g. after an AI
     /// Governance change, instead of at the next poll. Connections stay open.
     pub async fn policy_refresh(&self) -> Result<()> {
         self.checked(Invocation::new(s(&["policy", "refresh"]))).await.map(drop)
@@ -707,7 +706,7 @@ impl Sbx {
         parse_mcp_ls(&raw).ok_or_else(|| anyhow!("`sbx mcp ls --format json` gave no JSON array:\n{}", raw.trim()))
     }
 
-    /// Detach a loaded MCP server from one sandbox without restarting its agent (0.48).
+    /// Detach a loaded MCP server from one sandbox without restarting its agent.
     pub async fn mcp_unload(&self, server: &str, sandbox: &SandboxName) -> Result<()> {
         self.checked(Invocation::new(s(&["mcp", "unload", server, "--sandbox", sandbox.as_str()]))).await.map(drop)
     }
@@ -765,7 +764,7 @@ impl Sbx {
     }
 
     /// A secret by stdin, never argv. Replacing one may ask to confirm, and
-    /// since 0.48 no terminal is a refusal: that refusal is retried with
+    /// with no terminal that is a refusal: that refusal is retried with
     /// `--force` — the caller asked to store this value.
     pub async fn secret_set(&self, service: &str, value: &str, sandbox: Option<&SandboxName>) -> Result<()> {
         let inv = |args: Vec<String>| Invocation {
@@ -804,7 +803,24 @@ impl Sbx {
         }
         a.extend([name.to_string(), "--".into()]);
         a.extend(args.iter().map(|x| x.to_string()));
-        self.runner.run(Invocation { args: a, stdin, on_line: None }).await
+        let out = self.runner.run(Invocation { args: a.clone(), stdin, on_line: None }).await?;
+        if out.code == Some(EXEC_NOT_RUN) {
+            // sbx itself refused: the command never ran, so its "failure"
+            // must not be read as the command's answer.
+            return Err(command_error(&a, &out).context(format!("sbx could not run the command in '{name}'")));
+        }
+        Ok(out)
+    }
+
+    /// Start a stopped sandbox without attaching anything: `sbx exec` starts
+    /// one before running its command, and `true` is the command that does
+    /// nothing else. A running sandbox costs one round trip.
+    pub async fn start(&self, name: &SandboxName) -> Result<()> {
+        let out = self.exec(name, &["true"], None).await?;
+        if !out.success() {
+            return Err(command_error(&s(&["exec", name.as_str(), "--", "true"]), &out));
+        }
+        Ok(())
     }
 
     /// Write `data` to `dest` in the sandbox; the path is `$1`, never script.
@@ -896,28 +912,18 @@ mod tests {
     }
 
     #[test]
+    fn crossing_0_50_is_announced_once_and_only_then() {
+        assert_eq!(upgrade_notes("0.49.2", "0.50.0").len(), 3);
+        assert!(upgrade_notes("0.50.0", "0.50.1").is_empty());
+        assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
+    }
+
+    #[test]
     fn version_is_found_however_sbx_frames_it() {
         assert_eq!(parse_version("sbx version 0.47.1"), Some((0, 47, 1)));
         assert_eq!(parse_version("Version: v0.50"), Some((0, 50, 0)));
         assert_eq!(parse_version("built 2026-01-02 sha256 abc, 1.2.3-rc1"), Some((1, 2, 3)));
         assert_eq!(parse_version("nothing"), None);
-    }
-
-    #[test]
-    fn the_ls_table_is_read_by_its_headers() {
-        let raw = "SANDBOX   AGENT    STATUS                 WORKSPACE\n\
-                   neos      claude   running                /w\n\
-                   old       claude   running (unresponsive) /x\n\
-                   gone      claude   stopped                /y\n";
-        let l = parse_ls(raw);
-        assert_eq!(l.len(), 3);
-        assert!(l[0].is_running());
-        assert!(!l[1].is_running(), "a hung guest is not running");
-        assert!(l[2].is_stopped());
-        assert_eq!(parse_ls("x\na b c\n")[0].name, "a", "positional fallback");
-        let marked = parse_ls("  SANDBOX   AGENT    STATUS              CREATED\n● neos      claude   ● running           2h ago\n");
-        assert_eq!(marked[0].name, "neos", "0.48 state marks are not names");
-        assert!(marked[0].is_running());
     }
 
     #[test]
@@ -979,6 +985,7 @@ mod tests {
                 ro_mounts: vec!["/ro".into()],
                 kits: vec!["/k".into()],
                 publish: vec!["4200:4200".into()],
+                kit_mounts: vec!["/h:/home/agent/data".into()],
                 skills: Some("off".into()),
                 pull: Some("missing".into()),
                 env: vec!["A=1".into()],
@@ -989,14 +996,14 @@ mod tests {
         );
         assert_eq!(
             a.join(" "),
-            "create claude /w --name neos --template me/base:1 /rw /ro:ro --kit /k -p 4200:4200 --skills=off --pull=missing --env-file /e -e A=1"
+            "create claude /w --name neos --template me/base:1 /rw /ro:ro --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
         );
     }
 
     #[test]
     fn small_argvs() {
         assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[]).join(" "), "run --name n -e A=1");
-        assert_eq!(policy_rule_args("deny", Some(&sb("n")), "x.com").join(" "), "policy deny network --sandbox n x.com");
+        assert_eq!(policy_rule_args("deny", Some(&sb("n")), "x.com", &HttpMatch::default()).join(" "), "policy deny network --sandbox n x.com");
         assert_eq!(policy_rm_args("r-1", None).join(" "), "policy rm network --id r-1 --force");
         assert_eq!(secret_args("anthropic", None).join(" "), "secret set anthropic");
         assert_eq!(template_save_args(&sb("n"), "me/base:1").join(" "), "template save n me/base:1");
@@ -1040,6 +1047,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_exec_sbx_could_not_run_is_an_error_not_an_answer() {
+        let fake = Fake::new(|_| Output::fail(EXEC_NOT_RUN, "sandbox 'n' not found"));
+        let err = Sbx::new(fake.clone()).exec(&sb("n"), &["test", "-f", "/x"], None).await.unwrap_err();
+        assert!(format!("{err:#}").contains("not found"), "{err:#}");
+        let fake = Fake::new(|_| Output::fail(1, ""));
+        assert_eq!(Sbx::new(fake).exec(&sb("n"), &["test", "-f", "/x"], None).await.unwrap().code, Some(1), "the command's own failure is its answer");
+    }
+
+    #[tokio::test]
     async fn secrets_travel_on_stdin() {
         let fake = Fake::new(|_| Output::ok(""));
         Sbx::new(fake.clone()).secret_set("anthropic", "sk-123", None).await.unwrap();
@@ -1063,11 +1079,11 @@ mod tests {
 
     #[tokio::test]
     async fn the_version_floor_is_enforced() {
-        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.47.9")));
+        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.49.2")));
         assert!(old.check_version(false).await.is_err());
         assert!(old.check_version(true).await.is_ok());
-        let new = Sbx::new(Fake::new(|_| Output::ok("sbx 0.48.0")));
-        assert_eq!(new.check_version(false).await.unwrap().as_deref(), Some("0.48.0"));
+        let new = Sbx::new(Fake::new(|_| Output::ok("sbx 0.50.0")));
+        assert_eq!(new.check_version(false).await.unwrap().as_deref(), Some("0.50.0"));
     }
 
     #[tokio::test]

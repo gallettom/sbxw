@@ -54,7 +54,9 @@ same threads under the sandbox.
 - **Reopened, it picks up where it was.** After a daemon or sandbox restart, a
   thread resumes with `claude --continue`.
 - **A stopped sandbox comes back** when you open one of its threads: sbxw
-  attaches the main session first (which starts the sandbox), then the thread.
+  starts it directly (`sbx exec` starts a stopped sandbox, sbx 0.50) after
+  releasing any busy host port, then opens the thread. The main session is
+  not opened for it.
 - **Ceiling:** `max_agent_sessions` (default 4) counts the agent plus open
   threads. They share CPU, memory and your usage. The agent is never refused;
   a new thread over the limit is, with the reason in its pane.

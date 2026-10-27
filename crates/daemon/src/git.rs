@@ -22,10 +22,40 @@ const BASE_LOG: usize = 60;
 const THREAD_LOG: usize = 20;
 const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%ct%x1f%s";
 
-/// `git -C dir args…`, stdout on success; `None` on failure or timeout.
-pub async fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let child = tokio::process::Command::new("git")
-        .arg("--no-optional-locks")
+/// Settings that make git start a program, pinned off for every host read.
+/// The repo's `.git` is writable from inside the sandbox, so its config is the
+/// sandbox's word: a `core.fsmonitor` set there would run on the host at the
+/// next `git status` (sbx 0.50 closed the same door for its own git calls).
+/// Command-line `-c` outranks every config file.
+const NO_PROGRAMS: &[&str] = &[
+    "core.fsmonitor=false",
+    "core.hooksPath=/dev/null",
+    "core.pager=cat",
+    "core.sshCommand=",
+    "core.askPass=",
+    "diff.external=",
+    "credential.helper=",
+];
+
+/// Clean/smudge filters are named by the repo, so they are found first —
+/// `git config` reads without running anything — then blanked: git runs no
+/// filter whose command is empty. `status` is the read that would run one.
+async fn filter_overrides(dir: &Path) -> Vec<String> {
+    let Some(out) = run_git(dir, &[], &["config", "--includes", "--name-only", "--get-regexp", r"^filter\..*\.(clean|smudge|process)$"]).await
+    else {
+        return Vec::new();
+    };
+    out.lines().filter(|k| !k.is_empty()).flat_map(|k| ["-c".to_string(), format!("{k}=")]).collect()
+}
+
+async fn run_git(dir: &Path, overrides: &[String], args: &[&str]) -> Option<String> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.arg("--no-optional-locks");
+    for kv in NO_PROGRAMS {
+        cmd.args(["-c", kv]);
+    }
+    let child = cmd
+        .args(overrides)
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -36,6 +66,13 @@ pub async fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let out = tokio::time::timeout(GIT_TIMEOUT, child).await.ok()?.ok()?;
     // Lossy: a commit subject is whatever bytes its author typed.
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// `git -C dir args…`, stdout on success; `None` on failure or timeout. Never
+/// runs a program the repo's own config names ([`NO_PROGRAMS`]).
+pub async fn git(dir: &Path, args: &[&str]) -> Option<String> {
+    let filters = if args.first() == Some(&"status") { filter_overrides(dir).await } else { Vec::new() };
+    run_git(dir, &filters, args).await
 }
 
 fn has_git(dir: &Path) -> bool {
@@ -481,6 +518,35 @@ mod tests {
             thread_worktrees(d.path(), &BTreeMap::new()),
             [("t1".to_string(), "a".to_string())]
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_read_runs_no_program_the_repo_config_names() {
+        use std::os::unix::fs::PermissionsExt;
+        if !git_ok() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path().join("repo");
+        std::fs::create_dir(&r).unwrap();
+        run(&r, &["init", "-q"]);
+        std::fs::write(r.join("a.txt"), "1").unwrap();
+        run(&r, &["add", "a.txt"]);
+        run(&r, &["commit", "-qm", "one"]);
+        // What a sandbox could plant: a hook-style fsmonitor and a clean filter.
+        let marker = d.path().join("ran");
+        let evil = d.path().join("evil.sh");
+        std::fs::write(&evil, format!("#!/bin/sh\ntouch '{}'\ncat\n", marker.display())).unwrap();
+        std::fs::set_permissions(&evil, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let e = evil.to_str().unwrap();
+        run(&r, &["config", "core.fsmonitor", e]);
+        run(&r, &["config", "filter.x.clean", e]);
+        std::fs::write(r.join(".gitattributes"), "*.txt filter=x\n").unwrap();
+        std::fs::write(r.join("a.txt"), "changed").unwrap();
+        let out = git(&r, &["status", "--porcelain=v2", "--branch"]).await;
+        assert!(out.is_some_and(|o| o.contains("a.txt")));
+        assert!(!marker.exists(), "a repo-configured program ran on the host");
     }
 
     #[tokio::test]

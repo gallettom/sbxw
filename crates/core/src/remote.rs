@@ -48,6 +48,11 @@ pub fn without_auth_env(pairs: Vec<String>) -> Vec<String> {
 /// connected (null once disconnected). Entries outlive their process, and a pid
 /// is reused across container lifetimes, so an entry is live only when that
 /// pid's start time (`/proc/<pid>/stat`, field 22) is its `procStart`.
+///
+/// It also says whether an `apiKeyHelper` is configured: Claude Code puts a
+/// helper's key ahead of any login, and sbx provisions one in Claude
+/// sandboxes — before 0.50 even for subscription OAuth — so such a sandbox
+/// answers with an API key whatever `/login` did.
 pub const PROBE_SCRIPT: &str = r#"const fs = require('fs');
 let c = {};
 try { c = JSON.parse(fs.readFileSync('/home/agent/.claude/.credentials.json', 'utf8')).claudeAiOauth || {}; } catch (_) {}
@@ -63,7 +68,11 @@ for (const n of names) {
     if (String(e.procStart) === start) sessions.push({ cwd: e.cwd, rc: !!e.bridgeSessionId });
   } catch (_) {}
 }
-console.log(JSON.stringify({ present: !!c.accessToken, scopes: Array.isArray(c.scopes) ? c.scopes : [], sessions }));"#;
+let helper = false;
+for (const f of ['/home/agent/.claude/settings.json', '/etc/claude-code/managed-settings.json']) {
+  try { if (JSON.parse(fs.readFileSync(f, 'utf8')).apiKeyHelper) helper = true; } catch (_) {}
+}
+console.log(JSON.stringify({ present: !!c.accessToken, scopes: Array.isArray(c.scopes) ? c.scopes : [], helper, sessions }));"#;
 
 /// Whether Remote Control is on in a live session started in `cwd`, as the
 /// probe saw it. Any of them counts: a thread and the main agent never share
@@ -97,6 +106,21 @@ pub enum Login {
     TokenOnly,
     /// A `/login` session.
     Full,
+    /// An `apiKeyHelper` outranks every login: Claude answers with an API key,
+    /// which Remote Control refuses. Only recreating the sandbox on sbx 0.50+
+    /// (or removing the helper by hand) changes it.
+    ApiKeyHelper,
+}
+
+/// What to do about [`Login::ApiKeyHelper`]: the helper came with the
+/// sandbox, so the sandbox has to go.
+pub fn helper_advice(sandbox: &str) -> String {
+    format!(
+        "Claude in '{sandbox}' takes its key from an apiKeyHelper, which outranks /login, and Remote Control refuses \
+         an API key. sbx provisioned the helper at creation (before 0.50 even for subscription OAuth): on sbx 0.50+, \
+         recreate it without --use-api-key — `sbxw rm {sandbox}` then `sbxw up {sandbox} --remote-control` \
+         (anything outside the workspace is lost)"
+    )
 }
 
 /// Read the probe's output. Anything unreadable is `Missing`, which only
@@ -105,6 +129,9 @@ pub fn login_state(probe: &str) -> Login {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(probe.trim()) else {
         return Login::Missing;
     };
+    if v["helper"] == true {
+        return Login::ApiKeyHelper;
+    }
     if v["present"] != true {
         return Login::Missing;
     }
@@ -141,6 +168,11 @@ mod tests {
             Login::Full
         );
         assert_eq!(login_state("node: not found"), Login::Missing);
+        assert_eq!(
+            login_state(r#"{"present":true,"scopes":["user:inference","user:profile"],"helper":true}"#),
+            Login::ApiKeyHelper,
+            "a helper outranks any login"
+        );
     }
 
     #[test]

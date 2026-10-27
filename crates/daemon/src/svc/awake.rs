@@ -34,7 +34,7 @@ impl Awake {
         }
         match (held, self.caffeinate.take()) {
             (true, None) => {
-                let spawned = tokio::process::Command::new("caffeinate")
+                let spawned = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("caffeinate"))
                     .args(power::caffeinate_args(std::process::id()))
                     .kill_on_drop(true)
                     .spawn();
@@ -148,7 +148,7 @@ impl App {
 }
 
 async fn read_battery() -> Option<Battery> {
-    let out = tokio::process::Command::new("pmset").args(["-g", "batt"]).output().await.ok()?;
+    let out = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("pmset")).args(["-g", "batt"]).output().await.ok()?;
     power::parse_pmset(&String::from_utf8_lossy(&out.stdout))
 }
 
@@ -162,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn only_sandboxes_with_remote_control_on_are_found() {
         let (_d, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\nneos      claude   running\nplain     claude   running\n"),
+            Some("ls") => crate::testing::ls(&[("neos", "running"), ("plain", "running")]),
             Some("exec") if a.iter().any(|x| x == "-e") => Output::ok(r#"{"sessions":[{"cwd":"/w","rc":true}]}"#),
             _ => sbx_answer(a),
         });

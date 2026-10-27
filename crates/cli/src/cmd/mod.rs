@@ -97,6 +97,11 @@ pub(crate) fn check_sbx(rt: &tokio::runtime::Runtime) -> Result<Option<String>> 
         }
     }
     let v = rt.block_on(Sbx::process().check_version(skip))?;
+    // The cache still holds the sbx it was written for: a new one is an upgrade.
+    let before = std::fs::read_to_string(&cache).ok().and_then(|s| s.lines().nth(1).map(str::to_string)).unwrap_or_default();
+    for note in sbxw_sbx::upgrade_notes(&before, v.as_deref().unwrap_or_default()) {
+        eprintln!("sbxw  note: {note}");
+    }
     if let (Some(key), Some(v)) = (key, &v) {
         let _ = sbxw_daemon::store::write_atomic(&cache, format!("{key}\n{v}\n").as_bytes());
     }
@@ -338,7 +343,7 @@ pub fn logs(name: Option<String>, lines: u32) -> Result<()> {
     if !log.exists() {
         bail!("no daemon log yet ({}) — start it with `sbxw up`", log.display());
     }
-    let mut tail = std::process::Command::new("tail");
+    let mut tail = std::process::Command::new(sbxw_core::sysbin::sys_bin("tail"));
     tail.args(["-n", &lines.to_string(), "-f"]).arg(&log);
     match name {
         None => {
@@ -661,7 +666,7 @@ pub fn down(name: Option<String>) -> Result<()> {
                 let _ = daemon.post("/api/shutdown", json!({}));
                 println!("stopped the sbxw daemon");
             } else if let Ok(pid) = std::fs::read_to_string(paths.daemon_pid()) {
-                let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+                let _ = std::process::Command::new(sbxw_core::sysbin::sys_bin("kill")).arg(pid.trim()).status();
                 println!("stopped the sbxw daemon (pid {})", pid.trim());
             } else {
                 println!("no sbxw daemon is running");

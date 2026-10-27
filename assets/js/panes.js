@@ -1416,6 +1416,7 @@ async function startRemoteControl(idx) {
     if (!state.ok) { say(state.error); return; }
     on = !!state.active;
     if (on) return;
+    if (state.login === 'helper') { say(state.advice || 'an apiKeyHelper outranks the login — recreate this sandbox on sbx 0.50+'); return; }
     if (state.login === 'missing') { say('not logged in to claude.ai — run /login here, then press Remote again'); return; }
     if (state.login === 'token') {
       const yes = confirm(

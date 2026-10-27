@@ -3,7 +3,7 @@
 //! sbxw's checks are the ones only it can make (its config, its daemon, the
 //! kits it will hand to `sbx create`); everything about sbx itself — running
 //! CLI and shim processes, the global network policy, the ZFS setting that
-//! slows image builds — is `sbx diagnose`'s (0.49), read as JSON and
+//! slows image builds — is `sbx diagnose`'s, read as JSON and
 //! summarised without pinning its shape.
 
 use super::{check_sbx, load_config, runtime};
@@ -81,6 +81,20 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
             Default::default()
         }
     };
+    // sbx 0.50 warns about these on macOS and Windows, where sbx otherwise
+    // uses the system trust store: a replaced store breaks HTTPS verification
+    // (the proxy, kit pulls, sign-in) in ways that look like network faults.
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        for var in ["SSL_CERT_FILE", "SSL_CERT_DIR"] {
+            if let Some(v) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+                r.line(
+                    Level::Warn,
+                    var,
+                    &format!("set to {} — it replaces the system trust store and can make sbx's HTTPS checks fail", v.to_string_lossy()),
+                );
+            }
+        }
+    }
     match Daemon::new(&cfg.web_addr).health() {
         Some(_) => r.line(Level::Ok, "daemon", &format!("answering on {}", cfg.web_addr)),
         None => r.line(Level::Warn, "daemon", &format!("not running on {} — `sbxw up` starts it", cfg.web_addr)),
@@ -118,11 +132,12 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
             }
             continue;
         }
+        if kits::is_v3_kit(Path::new(kit)) {
+            r.line(Level::Ok, &format!("kit {kit}"), "v3 — `sbx kit validate` cannot read v3 specs; checked by sbx at creation");
+            continue;
+        }
         match rt.block_on(sbx.kit_validate_offline(kit)) {
             Ok(()) => r.line(Level::Ok, &format!("kit {kit}"), "valid"),
-            Err(e) if kits::validate_unsupported(&format!("{e:#}")) => {
-                r.line(Level::Warn, &format!("kit {kit}"), "not checked — offline validation needs sbx 0.49")
-            }
             Err(e) => r.line(Level::Fail, &format!("kit {kit}"), &format!("{e:#}")),
         }
     }

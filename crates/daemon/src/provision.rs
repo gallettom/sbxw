@@ -224,6 +224,20 @@ impl App {
         let mut created_with_kits = false;
         if existed {
             run.info(format!("sandbox '{name}' already exists — reusing it"));
+            // Block storage exists only from creation: a list that is not the
+            // one this sandbox was created with is a recreate, never applied.
+            if !cfg.volumes.is_empty() {
+                let wanted = kits::volumes_kit_spec(&cfg.volumes);
+                let had = std::fs::read_to_string(self.store.paths.volumes_kit(name).join("spec.yaml")).ok();
+                let created_with = self.store.get(name).kits.iter().any(|k| std::path::Path::new(k) == self.store.paths.volumes_kit(name));
+                if !created_with || had.as_deref() != Some(wanted.as_str()) {
+                    run.warn(format!(
+                        "volumes ({}) apply when a sandbox is created — '{name}' is unchanged. \
+                         `sbxw rm {name}` then `sbxw up {name}` creates it with them.",
+                        cfg.volumes.join(", ")
+                    ));
+                }
+            }
             if let Some(creds) = &creds {
                 if running == Some(true) {
                     // `kit add` would recreate the container under live sessions.
@@ -271,6 +285,11 @@ impl App {
                 }
             }
             kit_refs.extend(cfg.kits.iter().cloned());
+            if !cfg.volumes.is_empty() {
+                let dir = self.store.write_volumes_kit(name, &cfg.volumes)?;
+                run.info(format!("persistent volumes: {} (kept if the sandbox is removed)", cfg.volumes.join(", ")));
+                kit_refs.push(dir.to_string_lossy().into_owned());
+            }
             let mut ro_mounts = req.ro.clone();
             let mut env = if remote { remote::without_auth_env(cfg.env_pairs()) } else { cfg.env_pairs() };
             let mut rw_mounts = req.rw.clone();
@@ -292,6 +311,7 @@ impl App {
                 ro_mounts,
                 kits: kit_refs,
                 publish: specs.clone(),
+                kit_mounts: cfg.kit_mount_specs(),
                 skills: cfg.skills_mode().map(String::from),
                 pull: cfg.pull_policy().map(String::from),
                 env,
@@ -710,24 +730,23 @@ impl App {
             .map_err(|e| anyhow!("{e:#}\n(create with port mappings had failed with: {first:#})"))
     }
 
-    /// Check the person's own local kits offline (sbx 0.49) before anything is
-    /// created: a broken kit fails here in a second, not after the image pull.
-    /// Bundled kits ship tested; remote references cannot be checked offline.
-    /// An sbx without `--offline` (0.48) skips the check rather than fail.
+    /// Check the person's own local kits offline before anything is created: a
+    /// broken kit fails here in a second, not after the image pull. Bundled
+    /// kits ship tested; remote references cannot be checked offline, and
+    /// neither can a v3 kit, which `kit validate` cannot read ([`kits::is_v3_kit`]).
     async fn validate_kits(&self, kits: &[String]) -> Result<()> {
         let local: Vec<&String> = kits
             .iter()
-            .filter(|k| kits::bundled_name(k).is_none() && std::path::Path::new(k.as_str()).exists())
+            .filter(|k| {
+                let path = std::path::Path::new(k.as_str());
+                kits::bundled_name(k).is_none() && path.exists() && !kits::is_v3_kit(path)
+            })
             .collect();
         let checks = local.iter().map(|k| self.sbx.kit_validate_offline(k));
         let mut broken = Vec::new();
         for (kit, r) in local.iter().zip(futures_util::future::join_all(checks).await) {
             match r {
                 Ok(()) => {}
-                Err(e) if kits::validate_unsupported(&format!("{e:#}")) => {
-                    tracing::debug!("this sbx cannot validate kits offline — skipping the check");
-                    return Ok(());
-                }
                 Err(e) => broken.push(format!("{kit}: {e:#}")),
             }
         }
@@ -901,7 +920,7 @@ mod tests {
         assert!(at("template save") < at("template rm sbxw-auto:old"), "the old one goes once the new one exists");
         let records = app.store.templates();
         assert_eq!(records.len(), 1);
-        assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.48.0"));
+        assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.50.0"));
         assert!(log.iter().any(|c| c == &format!("template save neos {}", records[0].tag)));
     }
 
@@ -909,7 +928,7 @@ mod tests {
     async fn a_fresh_template_is_used_and_a_stale_one_only_warns() {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
-        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.48.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &kits).unwrap() };
+        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &kits).unwrap() };
         app.store.set_templates(std::slice::from_ref(&fresh)).unwrap();
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let s2 = seen.clone();
@@ -921,7 +940,7 @@ mod tests {
         let (dir, app, fake) = app_with(auto_sbx(0));
         app.store.set_templates(&[templates::Record { sbx: "0.47.0".into(), ..fresh }]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
-        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.48.0)")), "{w:?}");
+        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.50.0)")), "{w:?}");
         let log = fake.log();
         assert!(log.iter().any(|c| c.starts_with("create") && !c.contains("--template")));
         assert!(!log.iter().any(|c| c.starts_with("template")), "nothing saved or removed unasked");
@@ -960,15 +979,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_sbx_without_offline_validation_still_creates() {
+    async fn a_v3_kit_is_left_to_create() {
         let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("kit") => Output::fail(1, "Error: unknown flag: --offline"),
+            // What sbx 0.50's `kit validate` says of every v3 spec.
+            Some("kit") => Output::fail(1, "field capabilities not found in type spec.SpecFile"),
             _ => sbx_answer(a),
         });
         let ws = dir.path().join("neos");
         let kit = dir.path().join("k");
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::create_dir_all(&kit).unwrap();
+        std::fs::write(kit.join("spec.yaml"), "schemaVersion: \"3\"\nkind: mixin\n").unwrap();
         let req = BringUp {
             name: SandboxName::parse("neos").unwrap(),
             workspace: ws,
@@ -983,7 +1004,9 @@ mod tests {
             remote_control: false,
         };
         let _ = app.provision(req, None).await;
-        assert!(fake.log().iter().any(|c| c.starts_with("create")), "{:?}", fake.log());
+        let log = fake.log();
+        assert!(!log.iter().any(|c| c.starts_with("kit validate")), "{log:?}");
+        assert!(log.iter().any(|c| c.starts_with("create")), "{log:?}");
     }
 
     #[tokio::test]
@@ -994,9 +1017,9 @@ mod tests {
             let joined = a.join(" ");
             match a.first().map(String::as_str) {
                 Some("ls") if c.load(std::sync::atomic::Ordering::SeqCst) => {
-                    Output::ok("SANDBOX   AGENT    STATUS\nneos      claude   running\n")
+                    crate::testing::ls(&[("neos", "running")])
                 }
-                Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
+                Some("ls") => crate::testing::ls(&[]),
                 Some("create") => {
                     c.store(true, std::sync::atomic::Ordering::SeqCst);
                     Output::ok("pulling image\n")
@@ -1055,9 +1078,9 @@ mod tests {
         let c = created.clone();
         let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
             Some("ls") if c.load(std::sync::atomic::Ordering::SeqCst) => {
-                Output::ok("SANDBOX   AGENT    STATUS\nneos      claude   running\n")
+                crate::testing::ls(&[("neos", "running")])
             }
-            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
+            Some("ls") => crate::testing::ls(&[]),
             Some("create") => {
                 c.store(true, std::sync::atomic::Ordering::SeqCst);
                 Output::ok("")
@@ -1109,9 +1132,9 @@ mod tests {
                 Output::ok("")
             }
             Some("ls") if m.load(std::sync::atomic::Ordering::SeqCst) => {
-                Output::ok("SANDBOX   AGENT    STATUS\nw         claude   running\n")
+                crate::testing::ls(&[("w", "running")])
             }
-            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
+            Some("ls") => crate::testing::ls(&[]),
             _ => sbx_answer(a),
         });
         let ws = dir.path().join("w");
@@ -1150,8 +1173,8 @@ mod tests {
                 Output::ok("")
             }
             Some("ls") => {
-                let rows: String = m.lock().unwrap().iter().map(|n| format!("{n:<10}claude   running\n")).collect();
-                Output::ok(&format!("SANDBOX   AGENT    STATUS\n{rows}"))
+                let names = m.lock().unwrap().clone();
+                crate::testing::ls(&names.iter().map(|n| (n.as_str(), "running")).collect::<Vec<_>>())
             }
             _ => sbx_answer(a),
         });
@@ -1188,7 +1211,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn volumes_are_a_kit_given_at_creation() {
+        let (dir, app, fake) = app_with(sbx_answer);
+        let ws = dir.path().join("neos");
+        std::fs::create_dir_all(&ws).unwrap();
+        let req = BringUp {
+            name: SandboxName::parse("neos").unwrap(),
+            workspace: ws,
+            ro: vec![],
+            rw: vec![],
+            config: Config { kits: vec![], volumes: vec!["/home/agent/.npm".into()], ..Config::default() },
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            oauth_token: None,
+            template: Default::default(),
+            remote_control: false,
+        };
+        app.provision(req, None).await.unwrap();
+        let kit = app.store.paths.volumes_kit("neos");
+        let log = fake.log();
+        let create = log.iter().find(|c| c.starts_with("create")).unwrap();
+        assert!(create.contains(&format!("--kit {}", kit.display())), "{create}");
+        assert!(std::fs::read_to_string(kit.join("spec.yaml")).unwrap().contains("path: '/home/agent/.npm'"));
+    }
+
+    #[tokio::test]
+    async fn a_kit_folder_picked_in_the_dialog_is_a_mount_at_creation() {
+        use crate::svc::sandboxes::CreateForm;
+        let (dir, app, fake) = app_with(sbx_answer);
+        let ws = dir.path().join("ws");
+        let kit = dir.path().join("hist-kit");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&kit).unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "schemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: com.docker.sandbox/host-mount@1\n    config: {path: /home/agent/history}\n",
+        )
+        .unwrap();
+        let mut app = Arc::try_unwrap(app).ok().unwrap();
+        app.cfg.kits = vec![kit.to_string_lossy().into_owned()];
+        let app = Arc::new(app);
+        let offered = app.declared_host_mounts();
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0]["target"], "/home/agent/history");
+
+        let form = CreateForm { kit_mounts: [("/home/agent/history".to_string(), "/h/hist".to_string())].into(), ..Default::default() };
+        app.create(SandboxName::parse("km").unwrap(), &ws.to_string_lossy(), form, None).await.unwrap();
+        let log = fake.log();
+        let create = log.iter().find(|c| c.starts_with("create")).unwrap();
+        assert!(create.contains("--mount /h/hist:/home/agent/history"), "{create}");
+    }
+
+    #[tokio::test]
     async fn the_dialogs_other_repos_are_mounted_beside_the_workspace() {
+        use crate::svc::sandboxes::CreateForm;
         let (dir, app, fake) = app_with(sbx_answer);
         let [ws, docs, lib] = ["ws", "docs", "lib"].map(|n| {
             let p = dir.path().join(n);
@@ -1197,7 +1274,7 @@ mod tests {
         });
         let name = SandboxName::parse("multi").unwrap();
         let mounts = vec![(docs.clone(), true), (lib.clone(), false)];
-        app.create(name.clone(), &ws, mounts, vec![], Default::default(), false, None).await.unwrap();
+        app.create(name.clone(), &ws, CreateForm { mounts, ..Default::default() }, None).await.unwrap();
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.starts_with(&format!("create claude {ws} --name multi {lib} ")), "{create}");
@@ -1205,16 +1282,16 @@ mod tests {
         let mounts = app.store.get("multi").mounts;
         assert_eq!(mounts.iter().map(|m| (m.path.to_string_lossy().into_owned(), m.readonly)).collect::<Vec<_>>(), [(docs.clone(), true), (lib.clone(), false)]);
         let twice = vec![(ws.clone(), false)];
-        let e = app.create(name.clone(), &ws, twice, vec![], Default::default(), false, None).await.unwrap_err();
+        let e = app.create(name.clone(), &ws, CreateForm { mounts: twice, ..Default::default() }, None).await.unwrap_err();
         assert!(e.to_string().contains("already mounted"), "{e}");
         // A repo inside the workspace is reached through the workspace's own
         // mount, writable: its `:ro` would be a lie, so it is refused.
         let inner = format!("{ws}/frontend");
         std::fs::create_dir_all(&inner).unwrap();
-        let e = app.create(name.clone(), &ws, vec![(inner, true)], vec![], Default::default(), false, None).await.unwrap_err();
+        let e = app.create(name.clone(), &ws, CreateForm { mounts: vec![(inner, true)], ..Default::default() }, None).await.unwrap_err();
         assert!(e.to_string().contains("nested"), "{e}");
         let outer = dir.path().canonicalize().unwrap().to_string_lossy().into_owned();
-        let e = app.create(name, &ws, vec![(outer, true)], vec![], Default::default(), false, None).await.unwrap_err();
+        let e = app.create(name, &ws, CreateForm { mounts: vec![(outer, true)], ..Default::default() }, None).await.unwrap_err();
         assert!(e.to_string().contains("nested"), "{e}");
     }
 }

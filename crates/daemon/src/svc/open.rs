@@ -7,7 +7,7 @@ use crate::bus::Event;
 use crate::git;
 use crate::pty::{PtySession, Spawn};
 use crate::typing;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Result, Context};
 use futures_util::future::BoxFuture;
 use sbxw_core::agents::SessionState;
 use sbxw_core::config::Config;
@@ -18,12 +18,8 @@ use sbxw_sbx::scripts;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Shown in a Bash pane on a stopped sandbox, before `ssh` (which starts it)
-/// can fail on its one prerequisite. The name is `$1`, never script text.
 /// A stopped sandbox starts its container, then boots Claude Code.
 const COLD_START_TIMEOUT: Duration = Duration::from_secs(120);
-
-const SSH_BANNER: &str = r#"printf '\033[2m[sbxw] %s is stopped - connecting over SSH to start it.\r\n[sbxw] If this fails, run: sbxw ssh --setup\033[0m\r\n' "$1"; exec ssh -t "$1.sbx""#;
 
 /// Is a host port held by someone else? Something answering on it is
 /// enough; a failed bind catches a listener that does not answer. Both,
@@ -70,7 +66,8 @@ impl App {
             }
         }
         let cfg = self.config_for(&sandbox);
-        // The two kinds that start a stopped sandbox: `sbx run` and SSH.
+        // The two kinds that start a stopped sandbox: `sbx run` and `sbx exec`
+        // (threads release ports in `ensure_running_for_thread`).
         if matches!(key.kind, SessionKind::Agent | SessionKind::Bash) && !self.sbx.is_running(&sandbox).await {
             self.release_busy_ports(&sandbox, &cfg).await;
         }
@@ -85,19 +82,8 @@ impl App {
                 Spawn::sbx(sbxw_sbx::attach_args(&sandbox, &env, &cfg.env_files))
             }
             SessionKind::Agent => Spawn::sbx(sbxw_sbx::shell_args(&sandbox, &cfg.web_shell)),
-            SessionKind::Bash => {
-                // `sbx exec` only reaches a running sandbox; SSH starts one.
-                if self.sbx.is_running(&sandbox).await {
-                    Spawn::sbx(sbxw_sbx::bash_args(&sandbox))
-                } else {
-                    tracing::info!("'{sandbox}' is stopped — opening the Bash pane over SSH to start it");
-                    Spawn {
-                        program: "sh".into(),
-                        args: vec!["-c".into(), SSH_BANNER.into(), "sh".into(), sandbox.to_string()],
-                        env: vec![],
-                    }
-                }
-            }
+            // `sbx exec` starts a stopped sandbox first (0.50).
+            SessionKind::Bash => Spawn::sbx(sbxw_sbx::bash_args(&sandbox)),
             SessionKind::ThreadBash(thread) => {
                 self.ensure_running_for_thread(&sandbox).await?;
                 let dir = self.settle_thread_repo(&sandbox, thread, None).map_err(|e| anyhow!(e))?;
@@ -167,20 +153,18 @@ impl App {
         }
     }
 
-    /// A thread runs through `sbx exec`, which only reaches a running sandbox.
-    /// sbx has no plain "start": attaching the main session (`sbx run`) is
-    /// what starts it — not `run -d`, which is `keep_running`'s call.
+    /// A thread runs through `sbx exec`, which starts a stopped sandbox
+    /// itself (0.50) — no main session to open and wait for. Started here,
+    /// rather than by the thread's own exec, so busy host ports are released
+    /// first (sbx refuses to start while one is taken) and a failure is an
+    /// error, not a pane that dies.
     pub async fn ensure_running_for_thread(self: &Arc<Self>, sandbox: &SandboxName) -> Result<()> {
         if self.sbx.is_running(sandbox).await {
             return Ok(());
         }
-        tracing::info!("'{sandbox}' is stopped — starting it through its main session for a thread");
-        self.open_session(&SessionKey::agent(sandbox)).await?;
-        if self.sbx.wait_until_running(sandbox, Duration::from_secs(90)).await {
-            Ok(())
-        } else {
-            bail!("'{sandbox}' did not start within 90 s; open its main pane and try the thread again")
-        }
+        tracing::info!("'{sandbox}' is stopped — starting it for a thread");
+        self.release_busy_ports(sandbox, &self.config_for(sandbox)).await;
+        self.sbx.start(sandbox).await.with_context(|| format!("starting '{sandbox}' for a thread"))
     }
 
     /// Which repo `thread` works in, settled and recorded, as the directory
@@ -311,6 +295,33 @@ mod tests {
         app.release_busy_ports(&SandboxName::parse("chat").unwrap(), &Config::default()).await;
         assert!(fake.called(&format!("ports chat --unpublish 127.0.0.1:{busy}:8000")), "{:?}", fake.log());
         assert!(!fake.log().iter().any(|c| c.contains(&format!(":{free}:3000"))), "a free port stays published");
+    }
+
+    #[tokio::test]
+    async fn a_thread_starts_a_stopped_sandbox_itself_ports_first() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let busy = held.local_addr().unwrap().port();
+        let rows = format!(r#"[{{"host_ip":"127.0.0.1","host_port":{busy},"sandbox_port":8000,"protocol":"tcp"}}]"#);
+        let (_d, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("neos", "stopped")]),
+            Some("ports") if a.get(2).map(String::as_str) == Some("--format") => Output::ok(&rows),
+            _ => sbx_answer(a),
+        });
+        app.ensure_running_for_thread(&SandboxName::parse("neos").unwrap()).await.unwrap();
+        let log = fake.log();
+        let at = |p: &str| log.iter().position(|c| c.starts_with(p)).unwrap_or_else(|| panic!("no `{p}` in {log:?}"));
+        assert!(at("ports neos --unpublish") < at("exec neos -- true"), "{log:?}");
+        assert!(!log.iter().any(|c| c.starts_with("run ")), "no main session opened for it: {log:?}");
+    }
+
+    #[tokio::test]
+    async fn a_thread_on_a_missing_sandbox_is_an_error() {
+        let (_d, app, _fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("exec") => Output::fail(sbxw_sbx::EXEC_NOT_RUN, "sandbox 'gone' not found"),
+            _ => sbx_answer(a),
+        });
+        let e = app.ensure_running_for_thread(&SandboxName::parse("gone").unwrap()).await.unwrap_err();
+        assert!(format!("{e:#}").contains("not found"), "{e:#}");
     }
 
     /// `sbx run` on a stopped sandbox: a line, a long silence while the

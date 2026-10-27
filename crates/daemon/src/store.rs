@@ -75,6 +75,12 @@ impl Paths {
     pub fn oauth_kit(&self, name: &str) -> PathBuf {
         self.state().join("kits").join(format!("{name}-oauth"))
     }
+    /// `state/kits/<name>-volumes/`: **not** removed with the sandbox. sbx
+    /// keeps volume storage after `rm` and reattaches it to the same name
+    /// created with the same kit, so the kit has to be there, unchanged.
+    pub fn volumes_kit(&self, name: &str) -> PathBuf {
+        self.state().join("kits").join(format!("{name}-volumes"))
+    }
     /// Where the bundled kits are written out: stable, because sbx keeps a
     /// kit's path and re-resolves it on every container swap.
     pub fn kits(&self) -> PathBuf {
@@ -441,6 +447,18 @@ impl Store {
         let _ = std::fs::remove_file(self.paths.pending_hosts());
     }
 
+    /// Write the volumes kit for `name`, rewritten only when its list changed
+    /// (a rewrite is another kit to sbx, whose storage it would not find).
+    pub fn write_volumes_kit(&self, name: &str, paths: &[String]) -> Result<PathBuf> {
+        let dir = self.paths.volumes_kit(name);
+        let spec = sbxw_core::kits::volumes_kit_spec(paths);
+        let file = dir.join("spec.yaml");
+        if std::fs::read_to_string(&file).ok().as_deref() != Some(spec.as_str()) {
+            write_atomic(&file, spec.as_bytes())?;
+        }
+        Ok(dir)
+    }
+
     /// Write the OAuth mixin kit for `name` (0600 spec in a 0700 directory),
     /// at the stable path sbx will re-resolve.
     pub fn write_oauth_kit(&self, name: &str, credentials_json: Option<&str>) -> Result<PathBuf> {
@@ -488,11 +506,13 @@ mod tests {
         let t = s.token("neos").unwrap();
         s.write_oauth_kit("neos", Some("{}")).unwrap();
         std::fs::create_dir_all(s.paths.env_dir("neos")).unwrap();
+        s.write_volumes_kit("neos", &["/home/agent/.npm".into()]).unwrap();
         s.forget("neos");
         assert!(!s.exists("neos"));
         assert!(!s.paths.oauth_kit("neos").exists());
         assert!(!s.paths.env_dir("neos").exists());
         assert!(s.sandbox_for_token(&t).is_none());
+        assert!(s.paths.volumes_kit("neos").join("spec.yaml").exists(), "sbx reattaches the volumes to the same kit");
     }
 
     #[test]
