@@ -82,6 +82,10 @@ enum Cmd {
         /// the template for its kits and remove the previous one.
         #[arg(long)]
         rebuild_template: bool,
+        /// Create the sandbox for Remote Control: no OAuth token or API key
+        /// from sbxw; run /login in its agent to sign in to claude.ai.
+        #[arg(long)]
+        remote_control: bool,
     },
     /// A throwaway chat sandbox: an agent on an empty workspace.
     #[command(after_help = "Examples:\n  sbxw chat\n  sbxw chat brainstorm\n  sbxw rm brainstorm")]
@@ -296,8 +300,8 @@ pub enum CacheAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Up { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template } => {
-            cmd::up(cmd::UpArgs { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template })
+        Cmd::Up { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control } => {
+            cmd::up(cmd::UpArgs { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control })
         }
         Cmd::Chat { name, config, no_web, use_api_key, tail } => cmd::chat(name, config, no_web, use_api_key, tail),
         Cmd::Logs { name, lines } => cmd::logs(name, lines),

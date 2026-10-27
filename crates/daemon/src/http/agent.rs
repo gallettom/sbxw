@@ -38,9 +38,18 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/codemap/done", post(codemap_done))
 }
 
-async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> StatusCode {
+/// Answered with what the hook should print: on a prompt from a Remote
+/// Control session, a low-battery note for the agent's context. Empty
+/// otherwise — a hook printing nothing changes nothing.
+async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> Json<Value> {
+    let prompt = body["hook_event_name"] == "UserPromptSubmit";
     app.ingest_hook(&me, body);
-    StatusCode::OK
+    match prompt.then(|| app.battery_notice(&me)).flatten() {
+        Some(note) => Json(json!({
+            "hookSpecificOutput": { "hookEventName": "UserPromptSubmit", "additionalContext": note }
+        })),
+        None => Json(json!({})),
+    }
 }
 
 async fn usage(State(app): S, Agent(_): Agent, Json(r): Json<Reading>) -> StatusCode {

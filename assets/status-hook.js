@@ -2,8 +2,11 @@
 // host so the island can show *trusted, structured* session state instead of
 // scraping the terminal.
 //
-// It is fire-and-forget: it never blocks Claude Code, never influences a tool
-// decision, and always exits 0 with no stdout (so "no decision, normal flow").
+// It never blocks Claude Code, never influences a tool decision, and always
+// exits 0. Its stdout is empty ("no decision, normal flow") except when the
+// daemon answers with a note for the agent's context — a low host battery,
+// told to a Remote Control session on its next prompt — which is printed as
+// the daemon wrote it.
 // The daemon port is templated in at install time (see sbx::install_status_hooks).
 const http = require("http");
 const os = require("os");
@@ -159,9 +162,18 @@ process.stdin.on("end", () => {
         });
         return;
       }
-      res.resume();
-      log("ok status=" + res.statusCode);
-      done();
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        log("ok status=" + res.statusCode);
+        let out = null;
+        try {
+          out = JSON.parse(body);
+        } catch (_) {}
+        if (out && out.hookSpecificOutput) process.stdout.write(JSON.stringify(out), done);
+        else done();
+      });
     },
   );
   req.on("error", (e) => {

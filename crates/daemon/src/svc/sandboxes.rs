@@ -34,6 +34,8 @@ pub struct SandboxItem {
     pub created_at: Option<String>,
     /// Held up with nobody attached (`keep_running`, `sbx run -d`).
     pub detached: bool,
+    /// Created for Remote Control: its agent logs in to claude.ai itself.
+    pub remote_control: bool,
 }
 
 #[derive(Serialize)]
@@ -72,6 +74,7 @@ impl App {
             .into_iter()
             .map(|s| SandboxItem {
                 chat: self.store.chat_workspace(&s.name).is_some(),
+                remote_control: self.store.get(&s.name).remote_control,
                 workspace: self.store.workspace(&s.name).map(|w| w.to_string_lossy().into_owned()),
                 name: s.name,
                 agent: s.agent,
@@ -93,6 +96,7 @@ impl App {
             self.sessions.drop_sandbox(n);
             self.store.forget(n);
         }
+        self.forget_remote(&gone);
         let failed: Vec<String> = results
             .iter()
             .filter(|r| !r.removed)
@@ -113,7 +117,7 @@ impl App {
 
     /// A bring-up from the browser: the daemon's config, the dialog's ports,
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
-    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, mounts: Vec<(String, bool)>, extra: Vec<WantedPort>, template: templates::Choice, sink: Option<Sink>) -> Result<Vec<String>> {
+    pub async fn create(self: &Arc<Self>, name: SandboxName, path: &str, mounts: Vec<(String, bool)>, extra: Vec<WantedPort>, template: templates::Choice, remote_control: bool, sink: Option<Sink>) -> Result<Vec<String>> {
         let path = PathBuf::from(path.trim());
         if !path.is_dir() {
             bail!("path is not a directory");
@@ -135,6 +139,7 @@ impl App {
         req.ro = ro;
         req.rw = rw;
         req.template = template;
+        req.remote_control = remote_control;
         self.provision(req, sink).await
     }
 
@@ -232,6 +237,7 @@ impl App {
                 .flatten(),
             oauth_token: oauth_token_from_env(),
             template: Default::default(),
+            remote_control: false,
         }
     }
 
@@ -265,11 +271,27 @@ impl App {
 
     /// The island's composer and the chat dock: type into a chat agent,
     /// creating the sandbox first only when the daemon picked the name.
-    pub async fn chat_push(self: &Arc<Self>, text: &str, name: Option<SandboxName>, fresh: bool, thread: Option<names::ThreadName>) -> Result<(SandboxName, bool, Option<String>), String> {
+    /// `session` is the dock's "New chat": another conversation in
+    /// `ephemeral-chat` (a `chat-N` thread), the sandbox made only if missing.
+    pub async fn chat_push(self: &Arc<Self>, text: &str, name: Option<SandboxName>, fresh: bool, session: bool, thread: Option<names::ThreadName>) -> Result<(SandboxName, bool, Option<String>), String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("empty message".into());
         }
+        let (name, thread) = if session {
+            let name = SandboxName::parse(names::EPHEMERAL_CHAT).expect("valid");
+            if !self.sessions.is_live(&SessionKey::agent(&name)) && !self.sbx.exists(&name).await {
+                // No chat sandbox yet: its own agent is the first conversation.
+                self.create_chat(name.clone()).await.map_err(|e| format!("{e:#}"))?;
+                self.push_text(&name, SessionKind::Agent, text).await?;
+                return Ok((name, true, None));
+            }
+            let mut taken: Vec<String> = self.store.get(&name).threads.into_keys().collect();
+            taken.extend(self.sessions.open_threads(&name));
+            (Some(name), Some(names::next_chat_session(taken.iter().map(String::as_str))))
+        } else {
+            (name, thread)
+        };
         let (name, may_create) = match name {
             Some(n) => (n, false),
             None if fresh => {
@@ -282,7 +304,11 @@ impl App {
             if may_create {
                 return Err("a thread is named together with its sandbox".into());
             }
-            if !self.sessions.is_live(&SessionKey::thread(&name, &thread)) {
+            // A chat's conversations are opened from here; any other thread
+            // is opened in sbxw, where its repo and model are chosen.
+            if let Some(ws) = self.store.chat_workspace(&name) {
+                git::init_chat_repo(&ws)?;
+            } else if !self.sessions.is_live(&SessionKey::thread(&name, &thread)) {
                 return Err(format!("thread '{thread}' of '{name}' is not running — open it in sbxw first"));
             }
             self.push_text(&name, SessionKind::Thread(thread.clone()), text).await?;

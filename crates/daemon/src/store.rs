@@ -153,6 +153,10 @@ pub struct SandboxRecord {
     /// A sandbox this sbxw created never had it.
     #[serde(default)]
     pub ui_rule_checked: bool,
+    /// Created for Remote Control: sbxw never signs its agent in — no OAuth
+    /// kit, no auth variables — so it logs in to claude.ai itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remote_control: bool,
 }
 
 #[derive(Debug)]
@@ -380,6 +384,7 @@ impl Store {
             model_migrated: s.join(format!("{name}.model-migrated")).exists(),
             kits: vec![],
             ui_rule_checked: false,
+            remote_control: false,
         }
     }
 

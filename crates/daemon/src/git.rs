@@ -47,6 +47,32 @@ pub fn enclosing_repo(workspace: &Path) -> Option<PathBuf> {
     workspace.ancestors().find(|d| has_git(d)).map(Path::to_path_buf)
 }
 
+/// Make a chat workspace a repo with one empty commit, so its extra
+/// conversations can be threads: a thread is a worktree, and a worktree needs
+/// a commit to branch from. Nothing is ever committed after that. A no-op on
+/// a workspace already in a repo.
+pub fn init_chat_repo(dir: &Path) -> Result<(), String> {
+    if has_git(dir) {
+        return Ok(());
+    }
+    // A chat workspace lives under /tmp, which macOS sweeps; `git -C` into a
+    // vanished one fails before the sandbox is even started.
+    std::fs::create_dir_all(dir).map_err(|e| format!("could not re-create chat workspace {}: {e}", dir.display()))?;
+    for args in [&["init", "-q"][..], &["commit", "-q", "--allow-empty", "-m", "sbxw chat"][..]] {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=sbxw@localhost", "-c", "user.name=sbxw", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .output()
+            .map_err(|e| format!("could not run git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("git {} in {} failed: {}", args[0], dir.display(), String::from_utf8_lossy(&out.stderr).trim()));
+        }
+    }
+    Ok(())
+}
+
 /// Repos under `workspace`, relative: `['']` when it is in one, else its
 /// subfolders that are repos, to depth 3, skipping hidden and build folders.
 pub fn scan(workspace: &Path) -> Vec<String> {
@@ -397,6 +423,29 @@ mod tests {
             .status
             .success();
         assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn a_chat_workspace_becomes_a_repo_once() {
+        if !git_ok() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        init_chat_repo(d.path()).unwrap();
+        assert_eq!(scan(d.path()), [""]);
+        init_chat_repo(d.path()).unwrap();
+        run(d.path(), &["worktree", "add", "-q", "-b", "sbxw/chat-2", ".sbxw-worktrees/chat-2"]);
+    }
+
+    #[test]
+    fn a_swept_chat_workspace_is_re_created() {
+        if !git_ok() {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let gone = d.path().join("ephemeral-chat");
+        init_chat_repo(&gone).unwrap();
+        assert_eq!(scan(&gone), [""]);
     }
 
     #[test]

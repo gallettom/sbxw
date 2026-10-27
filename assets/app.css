@@ -1061,11 +1061,19 @@
     width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     background: var(--group-color);
   }
+  /* One line, always: the name gives way (ellipsis), its badges never do —
+     a floated pane badge used to drop under a name that filled the row. */
   .sbx-name {
+    display: flex; align-items: center; min-width: 0;
     color: var(--c-text-bright); font-weight: 500; font-size: 13px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
     margin-bottom: .2rem; margin-right: -0.25rem;
   }
+  .sbx-name-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sbx-name > :not(.sbx-name-text) { flex-shrink: 0; }
+  /* Pane badges at the right end, as the float had them. */
+  .sbx-name > .sbx-pane-badge { order: 1; float: none; }
+  .sbx-name-text + .sbx-pane-badge { margin-left: auto; }
   /* The threads of a sandbox, under its row: the way to any of them from
      anywhere, folded or not. Hung off a hairline so they read as its
      branches; a shown one is in full text, a folded one muted. */
@@ -1114,7 +1122,9 @@
   }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
   .sbx-agent  { color: var(--c-text-dim); font-size: 10px; }
-  .sbx-age    { color: var(--c-text-dim); font-size: 10px; font-weight: 400; white-space: nowrap; margin-left: .35rem; }
+  /* Bottom right, on the status line; the row's actions take its place when
+     they show, and the name line keeps its width for the name. */
+  .sbx-age    { color: var(--c-text-dim); font-size: 10px; font-weight: 400; white-space: nowrap; margin-left: auto; flex-shrink: 0; }
   .sbx-actions { display: flex; gap: .2rem; align-items: center; margin-left: auto; flex-shrink: 0; }
   .sbx-actions button {
     background: var(--c-elevated); color: var(--c-text);
@@ -1155,7 +1165,12 @@
     .sbx-item.focused .sbx-actions,
     .sbx-item:hover .sbx-actions,
     .sbx-item:focus-within .sbx-actions { display: flex; }
+    .sbx-item.focused .sbx-age,
+    .sbx-item:hover .sbx-age,
+    .sbx-item:focus-within .sbx-age { display: none; }
   }
+  /* Without hover the actions always show: the age sits just before them. */
+  .sbx-age + .sbx-actions { margin-left: 0; }
   .ports-section-label {
     color: var(--c-text-muted); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;
@@ -1449,7 +1464,17 @@
   }
   .pane-bar .pane-lead-toggle[aria-pressed="true"]:hover { filter: brightness(1.12); }
   .pane-bar .pane-lead-toggle .lead-state { font-weight: 600; }
-  .pane-bar .pane-new-thread[hidden], .pane-bar .pane-lead-toggle[hidden] { display: none; }
+  /* Remote Control on: filled green, the colour of a live connection. */
+  .pane-bar .pane-remote-btn[aria-pressed="true"],
+  .pane-bar .pane-remote-btn[aria-pressed="true"]:hover {
+    color: var(--c-bg); border-color: var(--c-green); background: var(--c-green);
+  }
+  /* On, it is an indicator, not a control: lit, not greyed like a disabled
+     button, and nothing to press. */
+  .pane-bar .pane-remote-btn[aria-pressed="true"]:disabled { opacity: 1; cursor: default; filter: none; }
+  .pane-bar .pane-remote-btn .rc-state { font-weight: 600; }
+  .pane-bar .pane-new-thread[hidden], .pane-bar .pane-lead-toggle[hidden],
+  .pane-bar .pane-remote-btn[hidden] { display: none; }
   .pane-bar .pane-thread-close[hidden] { display: none; }
   .pane-bar {
     display: flex; align-items: center; gap: .5rem;
@@ -2289,6 +2314,59 @@
   .repo-mode button.on[data-mode="ro"] { background: var(--c-green-tint); color: var(--c-green); }
   .repo-mode button:disabled { cursor: default; }
 
+  /* ── Create-sandbox dialog: required on top, optional below ──
+     Labels here are sentence case at reading size, not the 11px caps used for
+     form labels elsewhere: in this dialog the label is the instruction. Each
+     optional setting is one row — title, one plain line, its control on the
+     right — so the list scans as a column of yes/no decisions. */
+  .create-body { gap: 1rem; }
+  .create-field { display: flex; flex-direction: column; gap: .3rem; }
+  .create-body .field-label {
+    text-transform: none; letter-spacing: 0; font-size: 13px;
+    color: var(--c-text-bright); margin-bottom: 0;
+  }
+  .create-hint { font-size: 11.5px; color: var(--c-text-dim); line-height: 1.4; }
+  .create-body .fs-favs { margin: .15rem 0 0; }
+  .create-body .fs-path { display: flex; align-items: center; gap: .5rem; color: var(--c-text-bright); font-size: 12px; }
+  .create-body .fs-path bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .fs-path-tag {
+    flex: 0 0 auto; font-size: 10.5px; color: var(--c-green);
+    background: var(--c-green-tint); border-radius: var(--r-xs); padding: .05rem .35rem;
+  }
+  .fs-path-tag.browsing { color: var(--c-text-muted); background: var(--c-elevated); }
+  .fs-legend {
+    display: flex; flex-wrap: wrap; gap: .2rem 1rem; margin: 0;
+    font-size: 11px; color: var(--c-text-dim);
+  }
+  .fs-legend-key { font-weight: 700; }
+  .fs-legend-key.add { color: var(--c-green); }
+  .fs-legend-key.star { color: var(--c-amber); }
+
+  .create-optional { display: flex; flex-direction: column; border-top: 1px solid var(--c-elevated); padding-top: .6rem; }
+  .create-optional-title { font-size: 13px; color: var(--c-text-muted); margin-bottom: .15rem; }
+  .create-opt {
+    display: grid; grid-template-columns: 1fr auto; column-gap: .9rem; align-items: center;
+    padding: .55rem 0; border-bottom: 1px solid var(--c-elevated);
+  }
+  .create-opt:last-child { border-bottom: none; }
+  .create-opt-text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+  .create-opt-title { font-size: 12.5px; color: var(--c-text); font-weight: 600; }
+  .create-optional .create-opt-desc { margin: 0; font-size: 11.5px; color: var(--c-text-dim); line-height: 1.4; }
+  .create-optional .create-opt-desc.error { color: var(--c-red); }
+  .create-opt-desc code { font-size: 11px; color: var(--c-text-soft); }
+  .create-opt-full { grid-column: 1 / -1; }
+  .create-opt-full:not(:empty) { margin-top: .45rem; }
+  .create-opt-check { cursor: pointer; }
+  .create-opt-check.hidden { display: none; }
+  .create-opt-check:hover .create-opt-title { color: var(--c-text-bright); }
+  .create-opt-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--c-green); cursor: pointer; }
+  .port-head {
+    display: grid; grid-template-columns: 1fr 16px 1fr 1fr auto; gap: .35rem;
+    margin-bottom: .25rem; padding: 0 .05rem;
+  }
+  .create-opt-ports:has(#port-rows:empty) .create-opt-full { display: none; }
+  .port-head .port-col-label { text-align: left; padding-left: .1rem; }
+
   /* ── Code map viewer ──
      Three columns inside one wide modal: files on the left, the rendered
      document in the middle, backlinks and outline on the right. The colours
@@ -2844,6 +2922,12 @@
   .cd-tab:hover { background: var(--c-elevated); color: var(--c-text); }
   .cd-tab[aria-selected="true"] { background: var(--c-elevated); border-color: var(--c-border); color: var(--c-text-bright); }
   .cd-tab.cd-new { color: var(--c-blue); }
+  .cd-tabwrap { flex-shrink: 0; display: flex; align-items: center; }
+  .cd-tab-x {
+    background: none; border: 0; border-radius: var(--r-sm); padding: .1rem .3rem; cursor: pointer;
+    color: var(--c-dim); font: 13px var(--font-mono); line-height: 1;
+  }
+  .cd-tab-x:hover, .cd-tab-x:focus-visible { background: var(--c-elevated); color: var(--c-text-bright); }
   .cd-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-dim); }
   .cd-dot.idle { background: var(--c-green); }
   .cd-dot.working { background: var(--c-purple); }

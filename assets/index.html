@@ -246,63 +246,104 @@
         <span class="modal-title" id="modal-title">New sandbox</span>
         <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body">
-        <div>
-          <label class="field-label" for="inp-name">Sandbox name</label>
+      <div class="modal-body create-body">
+        <!-- Two required choices on top, everything else under "Optional",
+             each option a title + one plain line, its control on the right:
+             the dialog reads top to bottom as "what you must answer" then
+             "what you may change". -->
+        <div class="create-field">
+          <label class="field-label" for="inp-name">Name</label>
           <input id="inp-name" class="field-input" type="text" maxlength="63" placeholder="my-project"
-                 pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false">
+                 pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 aria-describedby="name-hint">
+          <span class="create-hint" id="name-hint">Lowercase letters, digits and dashes.</span>
           <span class="create-error hidden" id="name-error" style="align-self:flex-start;margin-top:.3rem;display:block"></span>
         </div>
-        <div>
+        <div class="create-field">
           <div class="ports-header">
-            <label class="field-label" style="margin:0">Workspace folder</label>
+            <label class="field-label" style="margin:0">Project folder</label>
             <button class="btn-add-port" id="btn-browse-native" type="button">📂 Browse…</button>
           </div>
+          <span class="create-hint">The agent works in this folder and can change its files.</span>
           <!-- Starred folders: one click into the root a project lives under,
                so the browser below is left doing the part that actually
                differs each time — picking the subfolder. Filled by
                /js/create.js from /api/fs/favourites; the row is absent
                entirely until something is starred. -->
           <div class="fs-favs" id="fs-favs" hidden></div>
+          <!-- The folder the list below is showing — which, with no extra
+               repos added, is the one the sandbox gets. Filled by create.js. -->
           <div class="fs-path" id="fs-path">—</div>
           <div class="fs-list" id="fs-list">
             <div class="fs-loading">Loading…</div>
           </div>
+          <!-- The row buttons are icons; this is what they mean, once. -->
+          <p class="fs-legend">
+            <span>Click a name to open it</span>
+            <span><span class="fs-legend-key add">＋</span> extra folder</span>
+            <span><span class="fs-legend-key star">☆</span> shortcut</span>
+          </p>
         </div>
-        <!-- The repos this sandbox mounts. Empty means the folder browsed to
-             above, alone — the one-repo case costs no extra click. The first
-             row is the workspace; the others are mounted beside it, each
-             read-only or read-write. Filled by /js/create.js. -->
-        <div>
-          <div class="ports-header">
-            <label class="field-label" style="margin:0">Repos</label>
+
+        <div class="create-optional" role="group" aria-labelledby="create-optional-title">
+          <div class="create-optional-title" id="create-optional-title">Optional</div>
+
+          <!-- The repos this sandbox mounts. Empty means the folder browsed to
+               above, alone — the one-repo case costs no extra click. The first
+               row is the workspace; the others are mounted beside it, each
+               read-only or read-write. Filled by /js/create.js. -->
+          <div class="create-opt">
+            <div class="create-opt-text">
+              <span class="create-opt-title">Extra folders</span>
+              <p class="create-opt-desc repo-hint" id="repo-hint"></p>
+            </div>
             <button class="btn-add-port" id="btn-add-repo" type="button">＋ Add this folder</button>
+            <div class="repo-rows create-opt-full" id="repo-rows"></div>
           </div>
-          <p class="repo-hint" id="repo-hint"></p>
-          <div class="repo-rows" id="repo-rows"></div>
-        </div>
-        <div>
-          <div class="ports-header">
-            <label class="field-label" style="margin:0">Port forwarding</label>
+
+          <div class="create-opt create-opt-ports">
+            <div class="create-opt-text">
+              <span class="create-opt-title">Ports</span>
+              <p class="create-opt-desc">Open a server running in the sandbox from your browser.</p>
+            </div>
             <button class="btn-add-port" id="btn-add-port" type="button">＋ Add port</button>
+            <div class="create-opt-full">
+              <!-- Column names only once there is a row for them to name. -->
+              <div class="port-head">
+                <span class="port-col-label">In sandbox</span>
+                <span></span>
+                <span class="port-col-label">On your machine</span>
+                <span class="port-col-label">Hostname</span>
+                <span></span>
+              </div>
+              <div id="port-rows" style="display:flex;flex-direction:column;gap:.35rem"></div>
+            </div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 16px 1fr 1fr auto;gap:.35rem;margin-top:.45rem;padding:0 .05rem">
-            <span class="port-col-label">Sandbox</span>
-            <span></span>
-            <span class="port-col-label">Host</span>
-            <span class="port-col-label">Hostname (opt.)</span>
-            <span></span>
-          </div>
-          <div id="port-rows" style="display:flex;flex-direction:column;gap:.35rem;margin-top:.25rem"></div>
+
+          <!-- Only at creation: the credentials kit sbx re-applies on every
+               container swap would bring the token back to a sandbox switched
+               over later. See sbxw_core::remote. -->
+          <label class="create-opt create-opt-check" id="rc-option">
+            <span class="create-opt-text">
+              <span class="create-opt-title">Remote control</span>
+              <span class="create-opt-desc">Use this sandbox from claude.ai/code or the Claude app.
+                You log in once with <code>/login</code> in its pane.</span>
+            </span>
+            <input type="checkbox" id="rc-box"
+                   title="sbxw injects no OAuth token or API key here: Remote Control refuses them">
+          </label>
+
+          <!-- With `template = "auto"` and a template that is up to date, the
+               one way to rebuild it on purpose. A stale or missing one is asked
+               about on Create instead (tpl-modal). Shown by /js/create.js. -->
+          <label class="create-opt create-opt-check tpl-force hidden" id="tpl-force">
+            <span class="create-opt-text">
+              <span class="create-opt-title">Rebuild the starting template</span>
+              <span class="create-opt-desc" id="tpl-force-note"></span>
+            </span>
+            <input type="checkbox" id="tpl-force-box">
+          </label>
         </div>
-        <!-- With `template = "auto"` and a template that is up to date, the
-             one way to rebuild it on purpose. A stale or missing one is asked
-             about on Create instead (tpl-modal). Shown by /js/create.js. -->
-        <label class="tpl-force hidden" id="tpl-force">
-          <input type="checkbox" id="tpl-force-box">
-          <span>Rebuild the automatic template from this sandbox
-            <span class="tpl-force-note" id="tpl-force-note"></span></span>
-        </label>
       </div>
       <div class="modal-foot">
         <!-- Both wizards are now reached through the kind chooser, so both give

@@ -40,15 +40,15 @@ collected is in [Dynamic Island](island.md#subscription-usage).
 
 ![The new sandbox chooser: workspace sandbox or chat sandbox](images/create-chooser.png)
 
-The **workspace sandbox** dialog has a folder picker, repos and port
-forwarding. It goes through the same pipeline as `sbxw up`.
+The **workspace sandbox** dialog asks for a name and a project folder, then
+lists the optional settings below: extra folders, ports, Remote control. It goes through the same pipeline as `sbxw up`.
 
 <img src="images/create-workspace.png" alt="The workspace sandbox dialog: name, folder picker, repos, and a port forwarding row" width="480">
 
-- **Port forwarding** rows: sandbox port → host port, optional host IP, optional
+- **Ports** rows: sandbox port → host port, optional host IP, optional
   `/etc/hosts` alias.
 - **Several repos in one sandbox.** **＋** on a folder (or **＋ Add this
-  folder**) adds it to **Repos**. The first is the workspace, always read-write;
+  folder**) adds it to **Extra folders**. The first is the workspace, always read-write;
   threads put their worktrees there. Others are mounted beside it at the same
   path, read-only by default or read-write.
 - **Favourite folders.** ☆ on a folder pins it as a shortcut chip above the
@@ -76,8 +76,8 @@ count), or there is none yet, a dialog shows what changed and offers:
 - **Without template**: create from sbx's image and leave the template alone.
 
 Closing the dialog returns to the create dialog. A template that is up to date
-is used without asking; to rebuild it anyway, tick **Rebuild the automatic
-template from this sandbox** at the bottom of the create dialog (shown only
+is used without asking; to rebuild it anyway, tick **Rebuild the starting
+template** at the bottom of the create dialog (shown only
 then).
 
 ### Watching the bring-up

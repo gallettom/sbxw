@@ -352,11 +352,12 @@ function sandboxItemHtml(s, groupColor) {
     ? `<span class="sbx-age" title="Created ${escHtml(new Date(s.created_at).toLocaleString())}">${escHtml(age.replace(' ago', ''))}</span>`
     : '';
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name">${escHtml(s.name)}${paneTag}${readyDot}${mapBadge}${ageTag}</div>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(s.name)}</span>${paneTag}${readyDot}${mapBadge}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       <span class="sbx-status">${escHtml(s.status)}</span>
       <span class="sbx-agent">${escHtml(s.agent)}</span>
+      ${ageTag}
       <div class="sbx-actions">${actions}</div>
     </div>
     <div class="sbx-threads" data-sandbox="${escHtml(s.name)}" hidden></div>

@@ -252,6 +252,19 @@ pub fn next_ephemeral_chat<'a>(taken: impl IntoIterator<Item = &'a str> + Clone)
         .unwrap_or_else(|| SandboxName(EPHEMERAL_CHAT.into()))
 }
 
+/// The thread a new conversation in `ephemeral-chat` takes: `chat-N`, the
+/// first free one counting from 2 (the sandbox's own agent is chat 1). The
+/// chat dock's "New chat" is another session in that sandbox, not another
+/// sandbox. `taken` holds the sandbox's thread names.
+pub fn next_chat_session<'a>(taken: impl IntoIterator<Item = &'a str> + Clone) -> ThreadName {
+    let has = |n: &str| taken.clone().into_iter().any(|t| t == n);
+    (2..)
+        .map(|n| format!("chat-{n}"))
+        .find(|c| !has(c))
+        .map(ThreadName)
+        .expect("an unbounded range has a free name")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +342,14 @@ mod tests {
             "ephemeral-chat-2",
             "a freed name is reused"
         );
+    }
+
+    #[test]
+    fn chat_sessions_are_numbered_by_availability() {
+        assert_eq!(next_chat_session([]).as_str(), "chat-2");
+        assert_eq!(next_chat_session(["chat-2", "t1"]).as_str(), "chat-3");
+        assert_eq!(next_chat_session(["chat-3"]).as_str(), "chat-2", "a freed name is reused");
+        assert!(is_valid_thread_name(next_chat_session(["chat-2"]).as_str()));
     }
 
     #[test]

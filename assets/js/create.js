@@ -112,14 +112,22 @@ function nestedRepos() {
   return null;
 }
 
+// The folder on screen is the sandbox's folder until extra ones are added;
+// after that the first of those is, and this one is only where you are.
+function paintPath() {
+  if (!selectedPath) { fsPath.textContent = '—'; return; }
+  const tag = repos.length ? 'Browsing' : 'Selected';
+  fsPath.innerHTML = `<span class="fs-path-tag${repos.length ? ' browsing' : ''}">${tag}</span><bdi>${escHtml(selectedPath)}</bdi>`;
+}
+
 function renderRepos() {
   const nested = nestedRepos();
   repoHintEl.classList.toggle('error', !!nested);
   repoHintEl.textContent = nested
-    ? `${nested[0]} is inside ${nested[1]}: sbx mounts only the outer one, so the inner one gets its mode. Pick sibling folders.`
+    ? `${nested[0]} is inside ${nested[1]}. Pick folders side by side, not one inside another.`
     : repos.length
-    ? 'The first is the workspace. The others are mounted beside it, at the same path.'
-    : 'Just the folder above, read-write. ＋ on a folder adds it — to mount several repos side by side.';
+    ? 'The agent works in the first one. The others sit beside it, at the same path.'
+    : 'Other repos the agent can read, or change, next to the project folder.';
   repoRowsEl.innerHTML = repos.map((r, i) => {
     const mode = i === 0
       ? `<span class="repo-badge">workspace</span>
@@ -136,6 +144,7 @@ function renderRepos() {
      </div>`;
   }).join('');
   btnAddRepo.disabled = !selectedPath || hasRepo(selectedPath);
+  paintPath();
   validateForm();
 }
 
@@ -240,6 +249,7 @@ function openModal() {
   loadFavourites();
   browseTo(null);
   showTemplateForce();
+  document.getElementById('rc-box').checked = false;
   inpName.focus();
 }
 
@@ -255,8 +265,9 @@ async function showTemplateForce() {
   try { status = await (await fetch('/api/template/status')).json(); } catch (_) { return; }
   const t = status && status.auto && status.template;
   if (!t || t.state !== 'fresh') return;
-  document.getElementById('tpl-force-note').textContent =
-    `Replaces ${t.record.tag}. This sandbox opens once its kits have installed and it is saved — several minutes.`;
+  const note = document.getElementById('tpl-force-note');
+  note.textContent = 'Save this sandbox as the new starting point. Takes several extra minutes.';
+  note.title = `Replaces ${t.record.tag}. The sandbox opens once its kits have installed and it is saved.`;
   tplForce.classList.remove('hidden');
 }
 
@@ -328,7 +339,6 @@ async function browseTo(path) {
     const data = await res.json();
     if (seq !== browseSeq) return; // a later click already won
     selectedPath = data.path;
-    fsPath.textContent = data.path;
     renderRepos();
     fsListing = data;
     renderFsList();
@@ -686,6 +696,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   // Asked over the create dialog, which stays open if this one is closed —
   // unless the person already asked for a rebuild with the box.
   const forced = !tplForce.classList.contains('hidden') && tplForceBox.checked;
+  const remote_control = document.getElementById('rc-box').checked;
   const template = forced ? 'rebuild' : await askTemplate();
   if (template === null) return;
   closeModal();
@@ -695,7 +706,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
-      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template });
+      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.
@@ -710,7 +721,9 @@ document.getElementById('modal-create').addEventListener('click', async () => {
         showToast(
           warnings.length
             ? `Sandbox “${name}” is ready — ⚠ ${warnings[warnings.length - 1]}`
-            : `Sandbox “${name}” is ready`,
+            : remote_control
+              ? `Sandbox “${name}” is ready — log in with /login in its pane, then press Remote`
+              : `Sandbox “${name}” is ready`,
           warnings.length ? 'error' : 'ok');
       } else {
         showToast(`Failed to create “${name}”: ${data.error || 'unknown error'}`, 'error');

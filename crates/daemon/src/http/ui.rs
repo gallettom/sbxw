@@ -86,6 +86,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/threads/:thread", get(thread_status))
         .route("/api/sandboxes/:name/threads/:thread/close", post(thread_close))
         .route("/api/sandboxes/:name/lead", post(lead))
+        .route("/api/sandboxes/:name/remote-control", get(remote_state).post(remote_control))
+        .route("/api/sandboxes/:name/remote-control/login", post(remote_login))
         .route("/api/sandboxes/:name/lead/end", post(lead_end))
         // Plans (the browser's half).
         .route("/api/plans", get(plans))
@@ -280,13 +282,15 @@ struct CreateBody {
     mounts: Vec<MountEntry>,
     #[serde(default)]
     template: sbxw_core::templates::Choice,
+    #[serde(default)]
+    remote_control: bool,
 }
 
 async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
     let name = sandbox(&b.name)?;
     let extra = b.ports.into_iter().map(PortEntry::wanted).collect::<Result<Vec<_>, _>>()?;
     let mounts = b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect();
-    Ok(warnings(app.create(name, &b.path, mounts, extra, b.template, None).await?))
+    Ok(warnings(app.create(name, &b.path, mounts, extra, b.template, b.remote_control, None).await?))
 }
 
 /// Whether the create dialog should ask about the automatic template.
@@ -345,13 +349,15 @@ struct ChatPushBody {
     #[serde(default)]
     fresh: bool,
     #[serde(default)]
+    session: bool,
+    #[serde(default)]
     thread: Option<String>,
 }
 
 async fn chat_push(State(app): S, Json(b): Json<ChatPushBody>) -> ApiResult {
     let name = non_blank(b.name).map(|n| sandbox(&n)).transpose()?;
     let thread = non_blank(b.thread).map(|t| ThreadName::parse(&t)).transpose()?;
-    let (name, created, thread) = app.chat_push(&b.text, name, b.fresh, thread).await?;
+    let (name, created, thread) = app.chat_push(&b.text, name, b.fresh, b.session, thread).await?;
     Ok(ok_with(json!({ "name": name, "created": created, "thread": thread })))
 }
 
@@ -376,6 +382,8 @@ struct UpBody {
     extra_ports: Vec<WantedPort>,
     #[serde(default)]
     template: sbxw_core::templates::Choice,
+    #[serde(default)]
+    remote_control: bool,
 }
 
 async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> Result<Response, ApiError> {
@@ -395,6 +403,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         api_key: b.api_key,
         oauth_token: b.oauth_token,
         template: b.template,
+        remote_control: b.remote_control,
     };
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let line = |v: Value| format!("{v}\n");
@@ -686,6 +695,51 @@ async fn lead_end(State(app): S, Path(name): Path<String>) -> ApiResult {
     Ok(ok())
 }
 
+/// The session to start Remote Control in: a thread's, else the main one.
+#[derive(Deserialize, Default)]
+struct RemoteControlBody {
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+impl RemoteControlBody {
+    fn kind(b: Option<Json<Self>>) -> Result<SessionKind, ApiError> {
+        Ok(match non_blank(b.map(|Json(b)| b).unwrap_or_default().thread) {
+            Some(t) => SessionKind::Thread(ThreadName::parse(&t)?),
+            None => SessionKind::Agent,
+        })
+    }
+}
+
+/// What the button shows and decides from: how Claude is signed in, and
+/// whether Remote Control is on in this pane's session.
+#[derive(Deserialize)]
+struct RemoteStateQuery {
+    #[serde(default)]
+    thread: Option<String>,
+}
+
+async fn remote_state(State(app): S, Path(name): Path<String>, Query(q): Query<RemoteStateQuery>) -> ApiResult {
+    let kind = RemoteControlBody::kind(Some(Json(RemoteControlBody { thread: q.thread })))?;
+    let state = app.remote_state(&sandbox(&name)?, &kind).await?;
+    let login = match state.login {
+        sbxw_core::remote::Login::Full => "full",
+        sbxw_core::remote::Login::TokenOnly => "token",
+        sbxw_core::remote::Login::Missing => "missing",
+    };
+    Ok(ok_with(json!({ "login": login, "active": state.active })))
+}
+
+async fn remote_control(State(app): S, Path(name): Path<String>, b: Option<Json<RemoteControlBody>>) -> ApiResult {
+    app.remote_control(&sandbox(&name)?, RemoteControlBody::kind(b)?).await?;
+    Ok(ok())
+}
+
+async fn remote_login(State(app): S, Path(name): Path<String>, b: Option<Json<RemoteControlBody>>) -> ApiResult {
+    app.switch_to_login(&sandbox(&name)?, RemoteControlBody::kind(b)?).await?;
+    Ok(ok())
+}
+
 // ── Plans ────────────────────────────────────────────────────────────────
 
 async fn plans(State(app): S) -> Json<Value> {
@@ -877,7 +931,10 @@ struct UrlQuery {
 async fn embed_resolve(State(app): S, Query(q): Query<UrlQuery>) -> ApiResult {
     let origin = sbxw_core::embed::parse_origin(&q.url)
         .ok_or_else(|| ApiError::bad("not a web page: the side panel works on http:// and https:// tabs"))?;
-    let names: Vec<String> = app.sbx.ls().await.into_iter().map(|s| s.name).collect();
+    let all = app.sbx.ls().await;
+    let names: Vec<String> = all.iter().map(|s| s.name.clone()).collect();
+    // The panel offers only these: a stopped sandbox serves no page to test.
+    let running: Vec<&str> = all.iter().filter(|s| s.is_running()).map(|s| s.name.as_str()).collect();
     let reads = names.iter().filter_map(|n| SandboxName::parse(n).ok()).map(|n| {
         let app = app.clone();
         async move { app.sbx.ports(&n).await.into_iter().map(move |m| (n.to_string(), m)).collect::<Vec<_>>() }
@@ -892,6 +949,7 @@ async fn embed_resolve(State(app): S, Query(q): Query<UrlQuery>) -> ApiResult {
         "candidates": r.candidates,
         "stale_pairing": r.stale_pairing,
         "sandboxes": names,
+        "running": running,
     })))
 }
 

@@ -168,6 +168,8 @@ pub struct UpArgs {
     pub chat: bool,
     /// With `template = "auto"`: snapshot this new sandbox as the template.
     pub rebuild_template: bool,
+    /// Create it for Remote Control: sbxw signs its agent in with nothing.
+    pub remote_control: bool,
 }
 
 fn template_choice(rebuild: bool) -> sbxw_core::templates::Choice {
@@ -237,6 +239,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             api_key,
             oauth_token,
             template: template_choice(a.rebuild_template),
+            remote_control: a.remote_control,
         });
     }
 
@@ -252,6 +255,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             "api_key": api_key,
             "oauth_token": oauth_token,
             "template": template_choice(a.rebuild_template),
+            "remote_control": a.remote_control,
         }),
         |v| {
             if let Some(p) = v.get("progress").and_then(|p| serde_json::from_value::<Progress>(p.clone()).ok()) {
@@ -315,6 +319,7 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
         tail,
         chat: true,
         rebuild_template: false,
+        remote_control: false,
     })
 }
 

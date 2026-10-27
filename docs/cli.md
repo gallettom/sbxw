@@ -126,8 +126,10 @@ calls, and every step is safe to run again.
    changes*).
 7. **Ports.** A new sandbox is created with its mappings (`sbx create … -p …`),
    live from first boot. For a reused one, sbxw waits for `running` and
-   publishes each with `sbx ports <name> --publish …`. Ports don't survive a
-   stop, which is why this is automated. If one host port is busy, sbx refuses
+   publishes each with `sbx ports <name> --publish …`. Ports published later
+   don't survive a stop, which is why this is automated. Mappings made at
+   creation do, and a busy host port among them would stop the sandbox from
+   starting: sbxw unpublishes that one before starting it, with a warning. If one host port is busy, sbx refuses
    the whole create; sbxw retries without the mappings and publishes them one by
    one, so only the busy port fails, with a warning. Free it (or change
    `host_port`) and run `sbxw ports <name>`.

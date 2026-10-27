@@ -28,6 +28,9 @@ lists every key with its default.
 | `terminal_color` | `""` | Terminal background in the web UI, `#rrggbb`. Empty is the built-in `#0d1117`. The header's colour picker overrides it per browser |
 | `terminal_bar_color` | `""` | The bar above each terminal, `#rrggbb`. Empty is the built-in `darkslategrey`. Same picker, same override |
 | `max_agent_sessions` | `4` | Agent + [threads](threads-and-lead.md) one sandbox may hold open |
+| `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
+| `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
+| `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
 
 ### Sandbox creation
 

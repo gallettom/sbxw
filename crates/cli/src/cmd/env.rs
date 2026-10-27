@@ -175,6 +175,7 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
         tail,
         chat: false,
         rebuild_template: false,
+        remote_control: false,
     })
 }
 

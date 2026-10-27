@@ -11,6 +11,11 @@
 // and `POST /api/answer` picks an option of a pending question. Nothing here is
 // chat-specific on the server side.
 //
+// "＋ New chat" is another session in `ephemeral-chat` — a `chat-N` thread,
+// in a worktree of the chat's throwaway repo — not another sandbox: one
+// container answers every conversation. The sandbox is made only when there
+// is none. Older `ephemeral-chat-N` sandboxes still show while they exist.
+//
 // The daemon keeps one reply per session — the last turn's — so the
 // transcript is this tab's own, kept in sessionStorage so a reload doesn't
 // lose it. That fits what these sandboxes are; "Open in a pane" is the way to
@@ -22,8 +27,6 @@
 
 const CHAT_DOCK_RE = /^ephemeral-chat(-\d+)?$/;
 const CHAT_DOCK_STORE = 'sbxw-chat-dock';
-// Same threshold as the island's composer: every ＋ costs a container.
-const CHAT_DOCK_WARN_AT = 4;
 const CHAT_DOCK_PEEK_MS = 15000;
 
 const cdEl = id => document.getElementById(id);
@@ -39,13 +42,14 @@ const cdBadge = cdEl('cd-badge');
 const cdDock = cdEl('cd-dock');
 const cdTuck = cdEl('cd-tuck');
 
-// name → { log: [{who: 'me'|'ai'|'err', text}], state, steps, answerable, activity }
-// `active === null` is the "＋ New chat" tab: its first message mints a sandbox.
+// key → { log: [{who: 'me'|'ai'|'err', text}], state, steps, answerable, activity }
+// A key is a sandbox (its own agent) or `<sandbox>::<thread>` (a chat session).
+// `active === null` is the "＋ New chat" tab: its first message opens a session.
 const cdChats = new Map();
 let cdActive = null;
 let cdOpen = false;
 let cdUnread = 0;
-let cdSendingNew = null; // text of a fresh chat being provisioned, if any
+let cdSendingNew = null; // text of a new chat being opened, if any
 let cdPeekTimer = null;
 let cdTucked = false;
 
@@ -69,11 +73,29 @@ function cdLoad() {
   } catch (_) {}
 }
 
-// Chats are the sandboxes that exist under a chat name, plus one being
-// provisioned. A chat whose sandbox was removed leaves the dock with it.
+function cdKey(sandbox, thread) {
+  return thread ? `${sandbox}::${thread}` : sandbox;
+}
+function cdSplit(key) {
+  const [sandbox, thread = null] = key.split('::');
+  return { sandbox, thread };
+}
+// The tab's label: a session goes by its thread, `chat-2`.
+function cdLabel(key) {
+  const { sandbox, thread } = cdSplit(key);
+  return thread || sandbox;
+}
+
+// Chats are the sandboxes that exist under a chat name, and the sessions seen
+// in them. A chat whose sandbox was removed leaves the dock with it.
 function cdNames() {
   const live = sandboxes.map(s => s.name).filter(n => CHAT_DOCK_RE.test(n));
-  return live.sort((a, b) => (+(a.split('-')[2] || 1)) - (+(b.split('-')[2] || 1)));
+  const sessions = [...cdChats.keys()].filter(k => k.includes('::') && live.includes(cdSplit(k).sandbox));
+  const num = s => +(s.split('-').pop()) || 1;
+  return [...live, ...sessions].sort((a, b) => {
+    const x = cdSplit(a), y = cdSplit(b);
+    return num(x.sandbox) - num(y.sandbox) || (x.thread ? num(x.thread) : 0) - (y.thread ? num(y.thread) : 0);
+  });
 }
 
 // ── Avatar ────────────────────────────────────────────────────────────────
@@ -96,16 +118,30 @@ function cdRenderTabs() {
     b.setAttribute('aria-selected', String(name === cdActive));
     const dot = document.createElement('span');
     dot.className = 'cd-dot ' + c.state;
-    b.append(dot, name);
+    b.append(dot, cdLabel(name));
     b.addEventListener('click', () => { cdActive = name; cdRender(); cdInput.focus(); });
-    cdTabs.appendChild(b);
+    // A session can be closed; the sandbox's own agent is the chat itself and
+    // goes with `sbxw rm`. A sibling of the tab, not inside it: a button
+    // cannot hold another.
+    if (!cdSplit(name).thread) { cdTabs.appendChild(b); return; }
+    const wrap = document.createElement('span');
+    wrap.className = 'cd-tabwrap';
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'cd-tab-x';
+    x.title = `Close ${cdLabel(name)}`;
+    x.setAttribute('aria-label', `Close ${cdLabel(name)}`);
+    x.textContent = '×';
+    x.addEventListener('click', () => cdCloseSession(name));
+    wrap.append(b, x);
+    cdTabs.appendChild(wrap);
   });
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'cd-tab cd-new';
   add.setAttribute('role', 'tab');
   add.setAttribute('aria-selected', String(cdActive === null));
-  add.title = 'Start a new throwaway sandbox';
+  add.title = 'Start another conversation in ephemeral-chat';
   add.textContent = cdSendingNew ? 'starting…' : '＋ New chat';
   add.addEventListener('click', () => { cdActive = null; cdRender(); cdInput.focus(); });
   cdTabs.appendChild(add);
@@ -115,18 +151,20 @@ function cdRenderLog() {
   cdLog.replaceChildren();
   if (cdActive === null) {
     if (cdSendingNew) {
-      cdLog.append(chatLine('me', cdSendingNew), chatStatus('Starting a sandbox. The first answer takes a little longer.'));
+      cdLog.append(chatLine('me', cdSendingNew), chatStatus('Starting a session. The first answer takes a little longer.'));
     } else {
-      cdLog.appendChild(chatLine('ai', 'Ask anything. Your first message starts a throwaway sandbox with its own agent, and every next message answers as fast as Claude does.', 'new chat'));
+      cdLog.appendChild(chatLine('ai', 'Ask anything. Your first message starts a new session in ephemeral-chat, and every next message answers as fast as Claude does.', 'new chat'));
     }
     return;
   }
   const c = cdChat(cdActive);
-  if (!c.log.length) cdLog.appendChild(chatLine('ai', 'No messages in this tab yet. Earlier turns of this chat are in its pane.', cdActive));
+  if (!c.log.length) cdLog.appendChild(chatLine('ai', 'No messages in this tab yet. Earlier turns of this chat are in its pane.', cdLabel(cdActive)));
   c.log.forEach(m => cdLog.appendChild(chatLine(m.who, m.text, m.who === 'ai' ? 'claude' : null)));
   const name = cdActive;
+  const { sandbox, thread } = cdSplit(name);
   const tail = chatTail(c, {
-    sandbox: name,
+    sandbox,
+    mode: thread ? `thread:${thread}` : 'claude',
     openLabel: 'Answer in a pane',
     onOpen: () => cdOpenInPane(name),
     onChange: () => { cdSave(); cdRender(); },
@@ -136,13 +174,7 @@ function cdRenderLog() {
 }
 
 function cdRenderHint() {
-  if (cdActive === null && sandboxes.length >= CHAT_DOCK_WARN_AT) {
-    cdHint.textContent = `${sandboxes.length} sandboxes already hold disk and memory. Reply in a chat you have, or remove the ones you're done with.`;
-    cdHint.classList.add('warn');
-  } else {
-    cdHint.textContent = 'Enter to send · Shift+Enter for a new line';
-    cdHint.classList.remove('warn');
-  }
+  cdHint.textContent = 'Enter to send · Shift+Enter for a new line';
   cdEl('cd-to-pane').hidden = cdActive === null;
 }
 
@@ -205,9 +237,31 @@ function cdToggle(open = !cdOpen) {
   else cdLauncher.focus();
 }
 
-function cdOpenInPane(name) {
+function cdOpenInPane(key) {
   cdToggle(false);
-  focusSandbox(name);
+  const { sandbox, thread } = cdSplit(key);
+  if (!thread) { focusSandbox(sandbox); return; }
+  const open = panes.slice(0, paneCount).findIndex(p => p.sandbox === sandbox && p.mode === 'thread' && p.thread === thread);
+  if (open >= 0) setFocusedPane(open);
+  else connectPane(focusedPane, sandbox, 'thread', thread);
+}
+
+// Closing a session ends its agent and removes its worktree and branch: a
+// chat worktree holds nothing (the repo is one empty commit), so there is
+// nothing to keep. Asked only while it is mid-answer.
+async function cdCloseSession(key) {
+  const { sandbox, thread } = cdSplit(key);
+  if (cdChat(key).state === 'working' && !confirm(`${thread} is still answering. Close it anyway?`)) return;
+  const res = await postJsonOrError(`/api/sandboxes/${encodeURIComponent(sandbox)}/threads/${encodeURIComponent(thread)}/close`, { discard: true, delete_branch: true });
+  if (!res.ok) {
+    cdChat(key).log.push({ who: 'err', text: `Not closed: ${res.error || 'no answer from the daemon'}` });
+  } else {
+    cdChats.delete(key);
+    if (cdActive === key) cdActive = sandbox;
+    afterThreadClosed(sandbox, thread);
+  }
+  cdSave();
+  cdRender();
 }
 
 // ── Sending ───────────────────────────────────────────────────────────────
@@ -223,15 +277,17 @@ async function cdSend(text) {
     c.activity = null;
   }
   cdRender();
-  const res = await postJsonOrError('/api/chat/push', target === null ? { text, fresh: true } : { text, name: target });
+  const to = target === null ? null : cdSplit(target);
+  const res = await postJsonOrError('/api/chat/push', to === null ? { text, session: true } : { text, name: to.sandbox, thread: to.thread });
   if (target === null) {
     cdSendingNew = null;
     if (res.ok && res.name) {
-      const c = cdChat(res.name);
+      const key = cdKey(res.name, res.thread);
+      const c = cdChat(key);
       c.log.push({ who: 'me', text });
       if (c.state !== 'idle' || !c.log.some(m => m.who === 'ai')) c.state = 'working';
       // Only follow it if nobody switched tabs while it booted.
-      if (cdActive === null) cdActive = res.name;
+      if (cdActive === null) cdActive = key;
       await loadSandboxes();
     } else {
       cdInput.value = cdInput.value || text;
@@ -250,14 +306,17 @@ async function cdSend(text) {
 chatComposer(cdForm, cdInput, cdSend);
 
 // ── Session events ────────────────────────────────────────────────────────
-// Only a chat's own agent: its threads (a worktree cwd) and a bash pane are
-// not the conversation the dock shows.
+// A chat's agents — its own and its sessions (a worktree cwd) — but not a
+// bash pane.
 function cdIngest(info, seed = false) {
   if (!info || !CHAT_DOCK_RE.test(info.sandbox || '')) return;
-  if ((info.mode || 'claude') !== 'claude' || threadOfCwd(info.cwd) || !chatOwnSession(info)) return;
-  const news = chatIngest(cdChat(info.sandbox), info, seed);
-  if (news?.reply && (!cdOpen || cdActive !== info.sandbox)) cdNotify(info.sandbox, news.reply);
-  else if (news?.asked && !cdOpen) cdNotify(info.sandbox, news.asked);
+  if ((info.mode || 'claude') !== 'claude' || !chatOwnSession(info)) return;
+  const key = cdKey(info.sandbox, threadOfCwd(info.cwd));
+  // The end of a session closed here would otherwise bring its tab back.
+  if (info.state === 'exited' && !cdChats.has(key)) return;
+  const news = chatIngest(cdChat(key), info, seed);
+  if (news?.reply && (!cdOpen || cdActive !== key)) cdNotify(key, news.reply);
+  else if (news?.asked && !cdOpen) cdNotify(key, news.asked);
   cdSave();
   cdRender();
 }
@@ -265,7 +324,7 @@ function cdIngest(info, seed = false) {
 function cdNotify(name, text) {
   cdUnread++;
   if (cdOpen) return;
-  cdEl('cd-peek-who').textContent = `${name} replied`;
+  cdEl('cd-peek-who').textContent = `${cdLabel(name)} replied`;
   cdEl('cd-peek-text').textContent = text;
   cdPeek.dataset.name = name;
   cdPeek.hidden = false;

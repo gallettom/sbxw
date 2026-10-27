@@ -310,13 +310,26 @@ impl App {
     /// the branch if asked. Dirty work is refused without `discard` — the
     /// daemon does not trust a click it did not see.
     pub async fn close_thread(&self, sandbox: &SandboxName, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
-        let dir = self.settle_thread_repo(sandbox, thread, None)?;
-        self.sbx
-            .thread_close(sandbox, &dir, thread, discard, delete_branch)
-            .await
-            .map_err(|e| format!("{e:#}"))?;
+        match self.settle_thread_repo(sandbox, thread, None) {
+            Ok(dir) => self
+                .sbx
+                .thread_close(sandbox, &dir, thread, discard, delete_branch)
+                .await
+                .map_err(|e| format!("{e:#}"))?,
+            // A chat's workspace is throwaway and may have been swept (or
+            // never made a repo): no repo, no worktree, nothing to remove —
+            // only the session and its record to forget.
+            Err(e) if self.store.chat_workspace(sandbox).is_some() => {
+                tracing::info!("closing chat session '{thread}' of '{sandbox}' with no worktree to remove ({e})");
+            }
+            Err(e) => return Err(e),
+        }
         self.sessions.remove(&SessionKey::thread(sandbox, thread));
         self.sessions.remove(&SessionKey::new(sandbox.clone(), SessionKind::ThreadBash(thread.clone())));
+        let gone = self.agents.lock().unwrap().forget_thread(sandbox.as_str(), thread.as_str(), now_ms());
+        for info in gone {
+            self.send(Event::Session(info));
+        }
         if let Err(e) = self.store.update(sandbox, |r| {
             r.threads.remove(thread.as_str());
         }) {
@@ -381,6 +394,28 @@ mod tests {
     use sbxw_core::plans::{PlanState, PlanThread, ThreadState};
     use sbxw_core::SandboxName;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_chat_session_without_a_repo_still_closes() {
+        let (_d, app) = app();
+        let name = SandboxName::parse("ephemeral-chat").unwrap();
+        let ws = app.store.paths.chat_workspace(name.as_str());
+        std::fs::create_dir_all(&ws).unwrap();
+        let thread = sbxw_core::ThreadName::parse("chat-2").unwrap();
+        app.store
+            .update(&name, |r| {
+                r.workspace = Some(ws.clone());
+                r.threads.entry("chat-2".into()).or_default();
+            })
+            .unwrap();
+        app.close_thread(&name, &thread, true, true).await.unwrap();
+        assert!(!app.store.get(&name).threads.contains_key("chat-2"), "the record is forgotten");
+
+        let other = SandboxName::parse("neos").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        app.store.update(&other, |r| r.workspace = Some(dir.path().to_path_buf())).unwrap();
+        assert!(app.close_thread(&other, &thread, true, true).await.is_err(), "anywhere else it still asks for a repo");
+    }
 
     fn t(name: &str) -> PlanThread {
         PlanThread {

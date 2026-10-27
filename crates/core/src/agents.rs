@@ -505,6 +505,27 @@ impl AgentBook {
             .collect()
     }
 
+    /// Drop the sessions of `sandbox` running in thread `thread`'s worktree.
+    /// Closing a thread kills its agent, which sends no `SessionEnd`. Returns
+    /// their `Exited` payloads.
+    pub fn forget_thread(&mut self, sandbox: &str, thread: &str, now: u64) -> Vec<SessionInfo> {
+        let tail = format!("/.sbxw-worktrees/{thread}");
+        let gone: Vec<AgentKey> = self
+            .statuses
+            .iter()
+            .filter(|(k, st)| k.sandbox == sandbox && st.cwd.as_deref().is_some_and(|c| c.trim_end_matches('/').ends_with(&tail)))
+            .map(|(k, _)| k.clone())
+            .collect();
+        gone.into_iter()
+            .filter_map(|k| {
+                let st = self.statuses.remove(&k)?;
+                let mut info = build(&k, &st, false, now);
+                info.state = SessionState::Exited;
+                Some(info)
+            })
+            .collect()
+    }
+
     fn infos_for(&self, sandbox: &str, has_pty: bool, now: u64) -> Vec<SessionInfo> {
         self.statuses
             .iter()
@@ -669,6 +690,19 @@ mod tests {
         assert_eq!(e(1, &none, &none, Some("/elsewhere")), SessionOrigin::Remote);
         assert_eq!(e(1, &none, &none, None), SessionOrigin::Unknown);
         assert_eq!(e(2, &none, &none, None), SessionOrigin::Tty);
+    }
+
+    #[test]
+    fn a_closed_thread_forgets_only_its_own_session() {
+        let mut book = AgentBook::new();
+        let s = |id: &str, cwd: &str| json!({"hook_event_name": "SessionStart", "session_id": id, "cwd": cwd});
+        book.apply("c", &ev(&s("main", "/w")), SessionOrigin::Tty, true, 1);
+        book.apply("c", &ev(&s("t2", "/w/.sbxw-worktrees/chat-2")), SessionOrigin::Remote, true, 2);
+        book.apply("c", &ev(&s("t3", "/w/.sbxw-worktrees/chat-22")), SessionOrigin::Remote, true, 3);
+        let gone = book.forget_thread("c", "chat-2", 4);
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].state, SessionState::Exited);
+        assert_eq!(book.snapshot(|_| true, 5).len(), 2, "the main agent and chat-22 stay");
     }
 
     #[test]

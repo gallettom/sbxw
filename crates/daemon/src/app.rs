@@ -64,6 +64,8 @@ pub struct App {
     /// An approved plan's briefing, for a thread whose session has not
     /// started yet — handed to `open_session`, never typed into a boot.
     pub(crate) briefings: Mutex<HashMap<(String, String), String>>,
+    /// `caffeinate`, the battery and who is on Remote Control.
+    pub(crate) awake: Mutex<crate::svc::awake::Awake>,
 }
 
 pub struct AppBuilder {
@@ -102,6 +104,7 @@ impl AppBuilder {
             hook_log: Mutex::new(VecDeque::new()),
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
+            awake: Mutex::new(Default::default()),
         })
     }
 }
@@ -144,7 +147,7 @@ impl App {
     }
 
     /// Spawn the slow loops: relay/plan pruning, session reconciliation, the
-    /// usage poller.
+    /// usage poller, keep-awake.
     pub fn start_background(self: &Arc<Self>) {
         let app = self.clone();
         tokio::spawn(async move {
@@ -166,6 +169,7 @@ impl App {
             let app = self.clone();
             tokio::spawn(async move { app.poll_usage().await });
         }
+        self.start_keep_awake();
     }
 
     fn prune(&self) {
@@ -182,9 +186,10 @@ impl App {
 
     /// Hook state of sandboxes `sbx ls` no longer reports running is dropped,
     /// with an `Exited` first — a sandbox stopped out of band sends no
-    /// `SessionEnd`.
+    /// `SessionEnd` — and so is their Remote Control, for keep-awake.
     async fn reconcile_sessions(&self) {
         let running: Vec<String> = self.sbx.ls().await.into_iter().filter(|s| s.is_running()).map(|s| s.name).collect();
+        self.keep_remote_running(&running);
         let gone = self.agents.lock().unwrap().reconcile(&running, now_ms());
         for info in gone {
             tracing::info!("reconcile: dropped stale session of '{}' (sandbox gone)", info.sandbox);

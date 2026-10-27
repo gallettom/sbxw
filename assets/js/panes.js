@@ -165,6 +165,9 @@ function createPane(index) {
            the spacer, so showing them on demand moves nothing else. -->
       <button class="pane-btn pane-main-action pane-new-thread" id="pnewthread-${index}" aria-haspopup="menu" aria-expanded="false" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own">⑂<span class="mode-word"> Thread</span><span class="thread-count" hidden></span></button>
       <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Lead mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Lead mode</span> <span class="lead-state">Off</span></button>
+      <!-- About the Claude session in this pane, main or thread, so it goes
+           dark on Bash. The daemon checks the login before typing anything. -->
+      <button class="pane-btn pane-main-action pane-remote-btn" id="premote-${index}" hidden aria-pressed="false" title="Remote control — drive this Claude session from claude.ai/code or the Claude app (needs a claude.ai login: /login)">⇄<span class="mode-word"> Remote</span> <span class="rc-state">Off</span></button>
       <span class="spacer"></span>
       <!-- SSH, Env and Reconnect behind one ⋯: each is done now and then, and
            three words were what a narrow pane ran out of room for first. The
@@ -238,6 +241,7 @@ function createPane(index) {
   leadBtn.addEventListener('click', () => {
     if (pane.sandbox && pane.sandbox !== MONITOR_SANDBOX && !pane.thread) startLead(index);
   });
+  document.getElementById(`premote-${index}`).addEventListener('click', () => startRemoteControl(index));
   document.getElementById(`pplan-${index}`).addEventListener('click', () => {
     if (pane.sandbox && typeof openPendingPlan === 'function') openPendingPlan(pane.sandbox);
   });
@@ -398,6 +402,7 @@ function setPaneMode(idx, mode, save = true) {
   if (!pane) return;
   pane.mode = mode;
   pane.el.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  applyRemoteButton(idx);
   applyAgentStates();
   schedulePaintGroups();
   if (save) saveLayout();
@@ -588,6 +593,16 @@ function applyPaneChrome(idx, name) {
   document.getElementById(`pnewthread-${idx}`).hidden = !name || monitor || !!thread;
   document.getElementById(`plead-${idx}`).hidden = !name || monitor || !!thread;
   document.getElementById(`pthreadclose-${idx}`).hidden = !(name && thread);
+  applyRemoteButton(idx);
+}
+
+function applyRemoteButton(idx) {
+  const pane = panes[idx];
+  const name = pane.sandbox;
+  const btn = document.getElementById(`premote-${idx}`);
+  btn.hidden = !name || name === MONITOR_SANDBOX || pane.mode === 'bash';
+  paintRemoteButton(idx, null);
+  if (!btn.hidden) refreshRemoteState(idx);
 }
 
 /**
@@ -932,12 +947,19 @@ closeConfirm.addEventListener('click', async () => {
     return;
   }
   closeCloseModal();
-  // The pane may have moved while the dialog was open.
-  const at = panes.slice(0, paneCount)
-    .findIndex(p => p.sandbox === ask.sandbox && p.mode === 'thread' && p.thread === ask.thread);
-  if (at >= 0) { if (paneCount > 1) closePane(at); else emptyPane(at); }
-  refreshThreadList(ask.sandbox);
+  // The pane may have moved while the dialog was open: found again by name.
+  afterThreadClosed(ask.sandbox, ask.thread);
 });
+
+// A closed thread leaves the screen: its pane, its row under the sandbox, and
+// the state its hooks last reported — its agent was killed, so no
+// `SessionEnd` comes to clear it. Shared with the chat dock's ×.
+function afterThreadClosed(sandbox, thread) {
+  const at = panes.slice(0, paneCount).findIndex(p => p.sandbox === sandbox && p.mode === 'thread' && p.thread === thread);
+  if (at >= 0) { if (paneCount > 1) closePane(at); else emptyPane(at); }
+  agentStates.delete(`${sandbox}::thread:${thread}`);
+  refreshThreadList(sandbox);
+}
 document.getElementById('thread-close-x').addEventListener('click', closeCloseModal);
 document.getElementById('thread-close-cancel').addEventListener('click', closeCloseModal);
 closeOverlay.addEventListener('click', e => { if (e.target === closeOverlay) closeCloseModal(); });
@@ -1315,6 +1337,103 @@ async function startLead(idx) {
   btn.disabled = false;
   if (!res.ok && typeof refreshLeads === 'function') refreshLeads();
   if (!res.ok) pane.term.write(`\r\n\x1b[31m[sbxw] Lead: ${res.error}\x1b[0m\r\n`);
+}
+
+// ── Remote Control ──
+// Started by typing /remote-control into the session, which then prints its
+// claude.ai/code link in the pane. Whether it is on is read from Claude Code's
+// own session registry inside the sandbox, not from the screen: on connect, a
+// few times after a press (connecting takes seconds), and every 15 s for the
+// panes showing the button. On, the button is only an indicator.
+//
+// Remote Control refuses the setup token sbxw injects, so the login is read
+// too: a token sandbox is offered the switch to a claude.ai login (sbxw stops
+// injecting the token for good and types /login), one with no login is told
+// to log in.
+const REMOTE_POLL_MS = 15000;
+const remoteInFlight = new Set();
+
+function remoteBase(sandbox) {
+  return `/api/sandboxes/${encodeURIComponent(sandbox)}/remote-control`;
+}
+
+// `active`: true, false, or null for not known (yet). On, the button is an
+// indicator: it is turned off from the session (/remote-control) or claude.ai.
+function paintRemoteButton(idx, active) {
+  const btn = document.getElementById(`premote-${idx}`);
+  if (!btn) return;
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  btn.disabled = !!active;
+  btn.title = active
+    ? 'Remote control is on — this session is reachable from claude.ai/code and the Claude app. Turn it off with /remote-control in the session, or from claude.ai.'
+    : 'Remote control — drive this Claude session from claude.ai/code or the Claude app (needs a claude.ai login: /login)';
+  btn.querySelector('.rc-state').textContent = active == null ? '…' : active ? 'On' : 'Off';
+}
+
+async function refreshRemoteState(idx) {
+  const pane = panes[idx];
+  const sandbox = pane?.sandbox;
+  if (!sandbox || sandbox === MONITOR_SANDBOX || pane.mode === 'bash' || remoteInFlight.has(idx)) return null;
+  const thread = pane.thread;
+  remoteInFlight.add(idx);
+  let state;
+  try {
+    const q = thread ? `?thread=${encodeURIComponent(thread)}` : '';
+    state = await (await fetch(remoteBase(sandbox) + q)).json();
+  } catch (e) {
+    state = { ok: false, error: e.message };
+  } finally {
+    remoteInFlight.delete(idx);
+  }
+  // The pane may show something else by now.
+  if (pane.sandbox !== sandbox || pane.thread !== thread || pane.mode === 'bash') return null;
+  paintRemoteButton(idx, state.ok ? !!state.active : null);
+  return state;
+}
+
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  for (let i = 0; i < paneCount; i++) {
+    if (!document.getElementById(`premote-${i}`)?.hidden) refreshRemoteState(i);
+  }
+}, REMOTE_POLL_MS);
+
+async function startRemoteControl(idx) {
+  const pane = panes[idx];
+  const sandbox = pane?.sandbox;
+  if (!sandbox || sandbox === MONITOR_SANDBOX || pane.mode === 'bash') return;
+  const base = remoteBase(sandbox);
+  const body = { thread: pane.thread || null };
+  const say = (msg, color = 31) => pane.term.write(`\r\n\x1b[${color}m[sbxw] Remote control: ${msg}\x1b[0m\r\n`);
+  const btn = document.getElementById(`premote-${idx}`);
+  if (btn.getAttribute('aria-pressed') === 'true') return;
+  btn.disabled = true;
+  let on = false;
+  try {
+    const state = await refreshRemoteState(idx);
+    if (!state) return;
+    if (!state.ok) { say(state.error); return; }
+    on = !!state.active;
+    if (on) return;
+    if (state.login === 'missing') { say('not logged in to claude.ai — run /login here, then press Remote again'); return; }
+    if (state.login === 'token') {
+      const yes = confirm(
+        `“${sandbox}” is signed in with a setup token (CLAUDE_CODE_OAUTH_TOKEN), which Remote Control refuses.\n\n` +
+        'Switch it to a claude.ai login? sbxw stops injecting the token into this sandbox for good, and types /login ' +
+        'here for you to finish. Then press Remote again.');
+      if (!yes) return;
+      const res = await postJsonOrError(`${base}/login`, body);
+      if (res.ok) say('finish the login above, then press Remote again', 33);
+      else say(res.error);
+      return;
+    }
+    const res = await postJsonOrError(base, body);
+    if (!res.ok) { say(res.error); return; }
+    // Lit by the registry once Claude has connected, not before.
+    for (const ms of [2500, 6000, 12000]) setTimeout(() => refreshRemoteState(idx), ms);
+  } finally {
+    btn.disabled = on;
+  }
 }
 
 // ── Groups ────────────────────────────────────────────────────────────────

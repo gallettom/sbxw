@@ -14,8 +14,14 @@
 // in the same container (`origin: 'remote'`) is not the conversation shown —
 // and its events, re-emitted alongside every sibling's (see `emit_info`),
 // would otherwise overwrite this one's state with theirs.
+//
+// A thread's agent is sbxw's too, but the daemon reads it as `remote`: origin
+// is decided by "started in the workspace", and a thread starts in its
+// worktree. It stays `remote` there on purpose — the main agent must remain the
+// one tty session that typing and answering pick (`is_answerable`) — so the
+// worktree is recognised here instead.
 function chatOwnSession(info) {
-  return info.origin !== 'remote';
+  return info.origin !== 'remote' || /\/\.sbxw-worktrees\/[a-z0-9-]+\/?$/.test(info.cwd || '');
 }
 
 function chatNew() {

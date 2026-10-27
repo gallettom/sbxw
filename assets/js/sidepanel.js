@@ -263,8 +263,14 @@ async function spResolve() {
   if (seq !== spResolveSeq) return;
   if (!r.ok) return spNote(r.error || 'sbxw could not tell which sandbox serves this page.');
   spResolved = r;
-  if (r.sandbox) spSetSandbox(r.sandbox);
+  if (r.sandbox && spIsRunning(r.sandbox)) spSetSandbox(r.sandbox);
   else spRender();
+}
+
+// Only running sandboxes are offered. An older daemon sends no `running`:
+// then every sandbox counts.
+function spIsRunning(name) {
+  return !spResolved?.running || spResolved.running.includes(name);
 }
 
 async function spSetSandbox(name) {
@@ -335,15 +341,19 @@ function spRenderPicker() {
   why.className = 'sp-dim';
   why.textContent = r.stale_pairing
     ? `It was paired with ${r.stale_pairing}, which no longer exists. Your choice is remembered for ${r.host}.`
+    : r.sandbox && !spIsRunning(r.sandbox)
+      ? `It is paired with ${r.sandbox}, which is stopped. Start it in sbxw, or pick a running one.`
     : r.candidates.length > 1
       ? `${r.candidates.length} sandboxes publish this address. Your choice is remembered for ${r.host}.`
       : `sbxw does not route ${r.host} itself, so it can't tell. Your choice is remembered for ${r.host}.`;
   spNotice.appendChild(why);
 
-  const others = r.sandboxes.filter(n => !r.candidates.includes(n));
+  const live = r.sandboxes.filter(spIsRunning);
+  const likely = r.candidates.filter(spIsRunning);
+  const others = live.filter(n => !likely.includes(n));
   const list = document.createElement('div');
   list.className = 'sp-choices';
-  [...r.candidates, ...others].forEach(name => {
+  [...likely, ...others].forEach(name => {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = name;
@@ -361,11 +371,18 @@ function spRenderPicker() {
     b.addEventListener('click', () => spPair(name));
     list.appendChild(b);
   });
-  if (!r.sandboxes.length) {
+  if (!live.length) {
     const none = document.createElement('p');
     none.className = 'sp-dim';
-    none.textContent = 'No sandbox exists yet. Create one from the sbxw web UI, then come back to this tab.';
-    list.appendChild(none);
+    none.textContent = r.sandboxes.length
+      ? 'No sandbox is running. Start or create one in sbxw, then come back to this tab.'
+      : 'No sandbox exists yet. Create one in sbxw, then come back to this tab.';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'sp-likely';
+    go.textContent = 'Open sbxw';
+    go.addEventListener('click', () => window.open(`${location.origin}/`, '_blank'));
+    list.append(none, go);
   }
   spNotice.appendChild(list);
 
@@ -619,6 +636,10 @@ new EventSource('/api/events').onmessage = ev => {
 chatComposer(spEl('sp-composer'), spInput, spSend);
 spTarget.addEventListener('change', () => { spThread = spTarget.value || null; spRender(); spInput.focus(); });
 spTarget.addEventListener('focus', spLoadThreads);
+// Back from sbxw, where a sandbox may just have been started: ask again.
+window.addEventListener('focus', () => {
+  if (spUrl && spResolved && !spSandbox && !spPicking) spResolve();
+});
 spEl('sp-change').addEventListener('click', async () => {
   spMenu.open = false;
   spPicking = true;

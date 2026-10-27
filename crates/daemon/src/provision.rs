@@ -28,6 +28,7 @@ use sbxw_core::config::Config;
 use sbxw_core::kits;
 use sbxw_core::ports::{self, WantedPort};
 use sbxw_core::progress::{self, Progress, Sink, Step};
+use sbxw_core::remote;
 use sbxw_core::templates;
 use sbxw_core::tooling::{self, Tooling};
 use sbxw_core::SandboxName;
@@ -56,6 +57,10 @@ pub struct BringUp {
     pub oauth_token: Option<String>,
     /// What to do about an automatic template (`template = "auto"`).
     pub template: templates::Choice,
+    /// Create it for Remote Control: no credentials from sbxw, a claude.ai
+    /// login inside instead (`sbxw_core::remote`). Only a new sandbox takes
+    /// it; one already recorded with it keeps it.
+    pub remote_control: bool,
 }
 
 /// How long a kit's startup commands may run before an automatic template is
@@ -170,8 +175,18 @@ impl App {
 
         // ── Workspace ────────────────────────────────────────────────────
         run.step(progress::WORKSPACE);
+        // The credentials kit would come back on every container swap, so
+        // only creation can leave it out.
+        let recorded_remote = self.store.get(name).remote_control;
+        if existed && req.remote_control && !recorded_remote {
+            run.warn(format!(
+                "'{name}' was created without Remote Control — press Remote in its pane to switch it to a claude.ai login"
+            ));
+        }
+        let remote = recorded_remote || (!existed && req.remote_control);
         self.store
             .update(name, |r| {
+                r.remote_control = remote;
                 r.workspace = Some(req.workspace.clone());
                 r.config = cfg.source.clone();
                 r.chat = req.chat;
@@ -194,10 +209,15 @@ impl App {
         let creds = req
             .oauth_token
             .as_deref()
+            .filter(|_| !remote)
             .map(|t| kits::oauth_credentials_json(t, &cfg.claude_subscription));
         let wanted = cfg.wanted_ports(&req.extra_ports);
         let specs = ports::publish_specs(&wanted, cfg.ip_per_app);
         let mut own_allow: Vec<String> = Vec::new();
+        if remote {
+            run.info("Remote Control: no credentials injected — log in with /login in the agent's pane");
+            own_allow.extend(remote::LOGIN_HOSTS.iter().map(|h| h.to_string()));
+        }
 
         // ── Create, or reuse ─────────────────────────────────────────────
         run.step(progress::CREATE);
@@ -252,7 +272,7 @@ impl App {
             }
             kit_refs.extend(cfg.kits.iter().cloned());
             let mut ro_mounts = req.ro.clone();
-            let mut env = cfg.env_pairs();
+            let mut env = if remote { remote::without_auth_env(cfg.env_pairs()) } else { cfg.env_pairs() };
             let mut rw_mounts = req.rw.clone();
             if wants_cache {
                 // Writable only for the sandbox that fills it: see `cache`.
@@ -429,7 +449,7 @@ impl App {
             }
         }
 
-        if let Some(key) = req.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        if let Some(key) = req.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty() && !remote) {
             run.info("storing ANTHROPIC_API_KEY as the global `anthropic` secret");
             self.sbx.secret_set("anthropic", key, None).await.context("failed to store the anthropic secret")?;
         }
@@ -824,6 +844,7 @@ mod tests {
             api_key: None,
             oauth_token: None,
             template,
+            remote_control: false,
         }
     }
 
@@ -929,6 +950,7 @@ mod tests {
             api_key: None,
             oauth_token: None,
             template: Default::default(),
+            remote_control: false,
         };
         let e = app.provision(req, None).await.unwrap_err();
         assert!(format!("{e:#}").contains("unknown field `setpu`"), "{e:#}");
@@ -958,6 +980,7 @@ mod tests {
             api_key: None,
             oauth_token: None,
             template: Default::default(),
+            remote_control: false,
         };
         let _ = app.provision(req, None).await;
         assert!(fake.log().iter().any(|c| c.starts_with("create")), "{:?}", fake.log());
@@ -1001,6 +1024,7 @@ mod tests {
                     api_key: None,
                     oauth_token: Some("tok".into()),
                     template: Default::default(),
+                    remote_control: false,
                 },
                 Some(sink),
             )
@@ -1023,6 +1047,55 @@ mod tests {
         let token = rec.token.unwrap();
         assert!(log.iter().all(|c| !c.contains(&token)));
         assert!(fake.stdins.lock().unwrap().iter().any(|s| String::from_utf8_lossy(s).contains(&token)));
+    }
+
+    #[tokio::test]
+    async fn a_remote_control_sandbox_is_given_no_credentials_and_keeps_the_choice() {
+        let created = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let c = created.clone();
+        let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") if c.load(std::sync::atomic::Ordering::SeqCst) => {
+                Output::ok("SANDBOX   AGENT    STATUS\nneos      claude   running\n")
+            }
+            Some("ls") => Output::ok("SANDBOX   AGENT    STATUS\n"),
+            Some("create") => {
+                c.store(true, std::sync::atomic::Ordering::SeqCst);
+                Output::ok("")
+            }
+            Some("exec") if a.join(" ").contains("node -") => Output::ok("SBXW-TOOLING []\n"),
+            _ => sbx_answer(a),
+        });
+        let ws = dir.path().join("neos");
+        std::fs::create_dir_all(&ws).unwrap();
+        let mut cfg = Config::default();
+        cfg.env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), "from-config".into());
+        let req = BringUp {
+            name: SandboxName::parse("neos").unwrap(),
+            workspace: ws,
+            ro: vec![],
+            rw: vec![],
+            config: cfg,
+            extra_ports: vec![],
+            chat: false,
+            api_key: Some("sk-key".into()),
+            oauth_token: Some("tok".into()),
+            template: Default::default(),
+            remote_control: true,
+        };
+        app.provision(req.clone(), None).await.unwrap();
+        let log = fake.log();
+        let create = log.iter().find(|c| c.starts_with("create")).unwrap();
+        assert!(!create.contains("-oauth") && !create.contains("from-config"), "{create}");
+        assert!(log.iter().all(|c| !c.starts_with("secret set")), "{log:?}");
+        assert!(log.iter().all(|c| !c.contains(".credentials.json")), "{log:?}");
+        let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
+        assert!(allow.contains("claude.ai") && allow.contains("platform.claude.com"), "{allow}");
+        assert!(app.store.get("neos").remote_control);
+
+        // Brought up again without asking, it still gets no token.
+        app.provision(BringUp { remote_control: false, ..req }, None).await.unwrap();
+        assert!(fake.log().iter().all(|c| !c.contains(".credentials.json") && !c.contains("kit add")));
+        assert!(app.store.get("neos").remote_control);
     }
 
     #[tokio::test]
@@ -1056,6 +1129,7 @@ mod tests {
                     api_key: None,
                     oauth_token: None,
                     template: Default::default(),
+                    remote_control: false,
                 },
                 None,
             )
@@ -1095,6 +1169,7 @@ mod tests {
                 api_key: None,
                 oauth_token: None,
                 template: Default::default(),
+                remote_control: false,
             }
         };
         app.provision(up("a"), None).await.unwrap();
@@ -1122,7 +1197,7 @@ mod tests {
         });
         let name = SandboxName::parse("multi").unwrap();
         let mounts = vec![(docs.clone(), true), (lib.clone(), false)];
-        app.create(name.clone(), &ws, mounts, vec![], Default::default(), None).await.unwrap();
+        app.create(name.clone(), &ws, mounts, vec![], Default::default(), false, None).await.unwrap();
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.starts_with(&format!("create claude {ws} --name multi {lib} ")), "{create}");
@@ -1130,16 +1205,16 @@ mod tests {
         let mounts = app.store.get("multi").mounts;
         assert_eq!(mounts.iter().map(|m| (m.path.to_string_lossy().into_owned(), m.readonly)).collect::<Vec<_>>(), [(docs.clone(), true), (lib.clone(), false)]);
         let twice = vec![(ws.clone(), false)];
-        let e = app.create(name.clone(), &ws, twice, vec![], Default::default(), None).await.unwrap_err();
+        let e = app.create(name.clone(), &ws, twice, vec![], Default::default(), false, None).await.unwrap_err();
         assert!(e.to_string().contains("already mounted"), "{e}");
         // A repo inside the workspace is reached through the workspace's own
         // mount, writable: its `:ro` would be a lie, so it is refused.
         let inner = format!("{ws}/frontend");
         std::fs::create_dir_all(&inner).unwrap();
-        let e = app.create(name.clone(), &ws, vec![(inner, true)], vec![], Default::default(), None).await.unwrap_err();
+        let e = app.create(name.clone(), &ws, vec![(inner, true)], vec![], Default::default(), false, None).await.unwrap_err();
         assert!(e.to_string().contains("nested"), "{e}");
         let outer = dir.path().canonicalize().unwrap().to_string_lossy().into_owned();
-        let e = app.create(name, &ws, vec![(outer, true)], vec![], Default::default(), None).await.unwrap_err();
+        let e = app.create(name, &ws, vec![(outer, true)], vec![], Default::default(), false, None).await.unwrap_err();
         assert!(e.to_string().contains("nested"), "{e}");
     }
 }

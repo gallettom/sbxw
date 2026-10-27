@@ -64,6 +64,13 @@ pub struct Config {
     pub keep_running: bool,
     /// Agent + threads one sandbox may hold open.
     pub max_agent_sessions: usize,
+    /// macOS: hold the host awake with `caffeinate` — `remote` while Remote
+    /// Control is on somewhere, `always`, or `off`.
+    pub keep_awake: crate::power::KeepAwake,
+    /// On battery at or below this percentage, the host is let go to sleep.
+    pub keep_awake_min_battery: u8,
+    /// On battery at or below this, Remote Control agents are told.
+    pub battery_warn_below: u8,
     /// The host monitor pane's argv; empty hides it.
     pub monitor_cmd: Vec<String>,
     /// Terminal background, `#rrggbb`; empty keeps the built-in one. The UI's
@@ -153,6 +160,9 @@ impl Default for Config {
             template: String::new(),
             keep_running: false,
             max_agent_sessions: 4,
+            keep_awake: crate::power::KeepAwake::Remote,
+            keep_awake_min_battery: 5,
+            battery_warn_below: 20,
             monitor_cmd: vec!["sbx".into()],
             terminal_color: String::new(),
             terminal_bar_color: String::new(),
@@ -245,6 +255,11 @@ impl Config {
         for (key, v) in [("terminal_color", &self.terminal_color), ("terminal_bar_color", &self.terminal_bar_color)] {
             if !v.is_empty() && !is_hex_color(v) {
                 bail!("{key} = {v:?} — expected #rrggbb");
+            }
+        }
+        for (key, v) in [("keep_awake_min_battery", self.keep_awake_min_battery), ("battery_warn_below", self.battery_warn_below)] {
+            if v > 100 {
+                bail!("{key} = {v} — expected a percentage, 0 to 100");
             }
         }
         for p in &self.ports {
@@ -442,6 +457,17 @@ mod tests {
         assert!(bad.validate().is_err());
         let ok: Config = toml::from_str("kits = [\"sbxw:k8s-tools\", \"/abs/kit\"]").unwrap();
         ok.validate().unwrap();
+    }
+
+    #[test]
+    fn keep_awake_is_a_mode_and_its_floors_are_percentages() {
+        assert_eq!(Config::default().keep_awake, crate::power::KeepAwake::Remote);
+        let cfg: Config = toml::from_str("keep_awake = \"always\"\nkeep_awake_min_battery = 10").unwrap();
+        assert_eq!(cfg.keep_awake, crate::power::KeepAwake::Always);
+        cfg.validate().unwrap();
+        assert!(toml::from_str::<Config>("keep_awake = \"sometimes\"").is_err());
+        let bad: Config = toml::from_str("battery_warn_below = 120").unwrap();
+        assert!(bad.validate().is_err());
     }
 
     #[test]

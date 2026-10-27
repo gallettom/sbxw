@@ -127,6 +127,29 @@ Host environment variables do **not** reach sandboxes by themselves. Pick one:
    its first launch. Set `claude_subscription` in `sbxw.toml` to your plan so
    the in-session label is right.
 3. **Interactive.** Run `/login` in the agent's pane.
+4. **Remote Control.** Tick *Remote control* in the create dialog (or
+   `sbxw up … --remote-control`). Remote Control refuses the setup token and an
+   API key, so sbxw gives this sandbox neither — no OAuth kit, no auth variable
+   from `env` — and allows the login hosts. Run `/login` in its pane once, then
+   press **⇄ Remote** in the pane bar: sbxw types `/remote-control` and Claude
+   prints the claude.ai/code link. The button reads **On** while Remote Control
+   is connected in that pane's session (read from Claude Code's session
+   registry in the sandbox, every 15 s); it is then only an indicator — turn
+   Remote Control off with `/remote-control` in the session, or from claude.ai. On a sandbox already signed in with the
+   token, Remote offers to switch it: sbxw rewrites its OAuth kit without the
+   token (sbx re-reads the kit on every container swap, so the old one would
+   put the token back), stops injecting it, and types `/login`. A global
+   `anthropic` secret (`--use-api-key`) is sbx's, for every sandbox; remove it
+   if the agent signs in with it instead.
+
+   **On a Mac, sbxw keeps the host awake** while Remote Control is on in at
+   least one session (`caffeinate -i -s`, tied to the daemon). On battery at or
+   below `keep_awake_min_battery` (5 %) it lets go, so a forgotten session never
+   drains the Mac flat. Below `battery_warn_below` (20 %) the agent is told on
+   your next prompt, and passes it on, since claude.ai does not show the Mac's
+   battery. A closed lid on battery still sleeps whatever is held; for that,
+   plug in, or see `pmset disablesleep`. `keep_awake = "always"` or `"off"`
+   changes the rule.
 
 <details>
 <summary>How the OAuth token gets in</summary>

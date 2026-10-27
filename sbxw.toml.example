@@ -80,6 +80,18 @@ keep_running = false
 # usage, so this is a budget. The agent itself is never refused.
 max_agent_sessions = 4
 
+# macOS: hold the Mac awake (`caffeinate -i -s`, gone with the daemon) so
+# Docker and every sandbox stay reachable from claude.ai.
+#   "remote"  while Remote Control is on in at least one session
+#   "always"  for as long as the daemon runs
+#   "off"     never
+# On battery at or below keep_awake_min_battery %, the Mac is let go to sleep
+# anyway. At or below battery_warn_below %, Remote Control agents are told on
+# their next prompt and pass it on. A closed lid on battery sleeps regardless.
+keep_awake = "remote"
+keep_awake_min_battery = 5
+battery_warn_below = 20
+
 # Command behind the web UI's Monitor pane, as argv (no shell involved).
 # Bare `sbx` opens the CLI's own all-sandboxes dashboard. It runs on the HOST,
 # outside every sandbox, which is why it is one fixed command and not a
