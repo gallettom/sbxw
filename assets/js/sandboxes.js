@@ -490,8 +490,11 @@ document.getElementById('btn-refresh').addEventListener('click', loadSandboxes);
 
 // Pane-count popover: toggled by its trigger button, closed on an outside
 // click, an Escape press, or once a count is picked (see renderLayoutSwitch).
+// The trigger stops its click, so the colour picker beside it — whose outside
+// click would close it — is closed here instead: one popover at a time.
 document.getElementById('layout-switch-btn').addEventListener('click', e => {
   e.stopPropagation();
+  closeTermColorPanel();
   const panel = document.getElementById('layout-switch-panel');
   const trigger = document.getElementById('layout-switch-btn');
   const willOpen = panel.hidden;

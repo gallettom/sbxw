@@ -162,6 +162,9 @@ function closeTermColorPanel() {
   const trigger = document.getElementById('term-color-btn');
   trigger.addEventListener('click', e => {
     e.stopPropagation();
+    // The stopped click never reaches the pane-count picker's outside-click
+    // close, so close it here: one popover at a time.
+    closeLayoutSwitchPanel();
     const willOpen = panel.hidden;
     panel.hidden = !willOpen;
     trigger.classList.toggle('open', willOpen);

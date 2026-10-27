@@ -58,13 +58,22 @@
     <div class="layout-switch-panel" id="layout-switch-panel" hidden></div>
   </div>
 
-  <!-- Terminal colours: the swatch is a tiny pane — its top bar over its
-       background. The popover has one section per colour, each filled in by
-       term-color.js; every preset is drawn as a small pane in its own colours,
-       so you pick from what the panes will look like. -->
+  <!-- Terminal colours: joined to the pane-count switch, the second half of
+       one "terms" control, so it reads as a setting of the terminals rather
+       than a second "open a terminal" button. The swatch is a tiny pane — its
+       top bar over its background — with a palette mark, not `>_`, which the
+       count switch already wears. The popover has one section per colour,
+       each filled in by term-color.js; every preset is drawn as a small pane
+       in its own colours, so you pick from what the panes will look like. -->
   <div class="term-color" id="term-color">
-    <button class="term-color-trigger" id="term-color-btn" title="Terminal colours" aria-haspopup="true" aria-expanded="false">
-      <span class="term-color-swatch" id="term-color-swatch"><i></i>&gt;_</span>
+    <button class="term-color-trigger" id="term-color-btn" title="Terminal colours: background and bar" aria-label="Terminal colours" aria-haspopup="true" aria-expanded="false">
+      <span class="term-color-swatch" id="term-color-swatch"><i></i></span>
+      <svg class="term-color-mark" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 1.6a6.4 6.4 0 1 0 0 12.8c.9 0 1.4-.6 1.4-1.3 0-.4-.2-.7-.4-1-.2-.3-.4-.6-.4-1 0-.7.6-1.3 1.3-1.3h1.6a2.9 2.9 0 0 0 2.9-2.9C14.4 4 11.5 1.6 8 1.6Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+        <circle cx="4.7" cy="7.6" r="1" fill="currentColor"/>
+        <circle cx="6.6" cy="4.7" r="1" fill="currentColor"/>
+        <circle cx="10" cy="4.7" r="1" fill="currentColor"/>
+      </svg>
     </button>
     <div class="term-color-panel" id="term-color-panel" hidden></div>
   </div>
@@ -104,14 +113,16 @@
   <div class="usage" id="usage" hidden title="Claude subscription usage, account-wide">
     <span class="usage-title">Usage</span>
     <span class="usage-win" id="usage-5h" hidden>
-      <span class="usage-lbl">5h</span>
+      <span class="usage-lbl">5-hour</span>
       <span class="usage-bar"><i></i></span>
       <span class="usage-pct"></span>
+      <span class="usage-reset" hidden><span class="usage-reset-word">resets in </span><b></b></span>
     </span>
     <span class="usage-win" id="usage-7d" hidden>
-      <span class="usage-lbl">7d</span>
+      <span class="usage-lbl">Weekly</span>
       <span class="usage-bar"><i></i></span>
       <span class="usage-pct"></span>
+      <span class="usage-reset" hidden><span class="usage-reset-word">resets in </span><b></b></span>
     </span>
   </div>
 </header>

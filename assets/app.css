@@ -124,7 +124,11 @@
      erased — .45 took the amber to 2.4:1 against the header, which is not
      "treat this with suspicion", it is "cannot read this at all". */
   .usage-win.stale { opacity: .72; }
-  .usage-lbl { color: var(--c-text-dim); font-size: 11px; }
+  /* Said in words, at a contrast that reads (#8b949e, ~6:1 on the header):
+     "5h" and "7d" in the dim grey were the hardest thing up here to read. */
+  .usage-lbl { color: var(--c-text-muted); font-size: 12px; }
+  /* Each window one unit, the second set off from the first by a rule. */
+  .usage-win + .usage-win { padding-left: 1.1rem; border-left: 1px solid var(--c-elevated); }
   /* The headline, and sized like one: bright, and a shade larger than the
      controls it sits in a row with. `tabular-nums` and a four-character floor
      keep 9% and 100% the same width, so nothing in the header shifts sideways
@@ -133,13 +137,28 @@
     color: var(--c-text-bright); font-size: 14px; font-weight: 600;
     font-variant-numeric: tabular-nums; min-width: 4ch; text-align: right;
   }
+  /* Time to the reset: second to the percentage, so smaller — but the time
+     itself in the body colour, since it is what you read the line for. */
+  .usage-reset { color: var(--c-text-muted); font-size: 12px; white-space: nowrap; margin-left: .2rem; }
+  .usage-reset b { color: var(--c-text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .usage-reset[hidden] { display: none; }
   /* A gauge, not a progress bar — nothing here is being waited for. Fixed
      width, so the two windows are read against each other rather than each
      scaled to itself. */
   .usage-bar {
-    width: 68px; height: 7px; border-radius: var(--r-xs);
-    background: var(--c-elevated); overflow: hidden;
+    position: relative;
+    width: 80px; height: 8px; border-radius: var(--r-xs);
+    background: var(--c-border); overflow: hidden;
   }
+  /* Notches at 75% and 90%, where the gauge turns amber and then red: how near
+     the next step is reads off the bar, not only from its colour once there.
+     Cut in the header's colour, so they show on the track and the fill alike. */
+  .usage-bar::before, .usage-bar::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 1px; z-index: 1;
+    background: var(--c-surface);
+  }
+  .usage-bar::before { left: 75%; }
+  .usage-bar::after { left: 90%; }
   .usage-bar i { display: block; height: 100%; width: 0;
     background: var(--c-green); transition: width .3s ease; }
   /* amber-strong rather than amber: the base shade is a dark ochre that reads as
@@ -149,6 +168,10 @@
   .usage-win.warn .usage-pct   { color: var(--c-amber-strong); }
   .usage-win.hot  .usage-bar i { background: var(--c-red); }
   .usage-win.hot  .usage-pct   { color: var(--c-red); }
+  /* A narrow header keeps the times and drops the words around them, then the
+     times: the percentages are what must never be squeezed out. */
+  @media (max-width: 1280px) { .usage-reset-word { display: none; } }
+  @media (max-width: 1024px) { .usage-reset { display: none; } }
 
   /* ── Duplicate-tab interstitial (see singleton.js) ── */
   .singleton-overlay {
@@ -410,15 +433,24 @@
      Same trigger as the pane-count switch beside it. The swatch and every
      preset are drawn as tiny panes — a bar over a background, `>_` in the
      text colour — rather than as flat dots: a colour behind text, under a
-     bar, reads differently from a colour alone. */
-  .term-color { position: relative; margin-left: -1.2rem; }
+     bar, reads differently from a colour alone.
+     Joined to the pane-count switch — the header's gap cancelled, the shared
+     edge one border wide, the outer corners only rounded — so the pair reads
+     as one "terms" control: how many, and in what colours. */
+  .term-color { position: relative; margin-left: calc(-1.8rem - 1px); }
+  .layout-switch-trigger { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .term-color-trigger {
-    display: inline-flex; align-items: center; justify-content: center;
-    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
-    height: 28px; padding: 0 4px; cursor: pointer;
-    transition: border-color .1s;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    background: var(--c-bg); color: var(--c-text-bright);
+    border: 1px solid var(--c-border); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    height: 28px; padding: 0 7px 0 6px; cursor: pointer;
+    transition: border-color .1s, color .1s;
   }
-  .term-color-trigger:hover { border-color: var(--c-dim); }
+  /* Raised over the count switch's edge, so its hover and open border shows
+     on all four sides. */
+  .term-color-trigger:hover { border-color: var(--c-dim); position: relative; }
+  .term-color-trigger.open { position: relative; }
+  .term-color-mark { flex-shrink: 0; }
   .term-color-trigger.open { border-color: var(--c-blue); }
   .term-color-trigger:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .term-color-swatch, .term-color-presets button {
@@ -431,7 +463,10 @@
   .term-color-swatch i, .term-color-presets i {
     position: absolute; left: 0; right: 0; top: 0; height: 5px;
   }
-  .term-color-swatch { width: 26px; height: 18px; padding-top: 4px; box-sizing: border-box; }
+  /* Sized to the `terms` icon's box, a shade larger, and ringed in the dim
+     grey: a dark terminal background on the dark button vanished otherwise. */
+  .term-color-swatch { width: 22px; height: 16px; box-shadow: inset 0 0 0 1px var(--c-dim); }
+  .term-color-swatch i { height: 5px; }
   .term-color-panel {
     position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; width: 196px;
     display: flex; flex-direction: column; gap: 10px;

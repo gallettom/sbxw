@@ -118,6 +118,17 @@ sbxwStream.addEventListener('clients', ev => {
 const USAGE_POLL_MS = 30000;
 const usageEl = document.getElementById('usage');
 
+/// "3d 4h", "2h 14m", "38m", "<1m": how long until a window resets. The two
+/// largest units only — the unit you plan the next long run in; a clock time
+/// made you do the subtraction.
+function untilText(ms) {
+  const m = Math.ceil(ms / 60000);
+  if (m < 1) return '<1m';
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+}
+
 // One window's chip. `resetsAt` is unix *seconds*, and a reset already in the
 // past is the honest reason a percentage looks wrong: nobody has run an agent
 // since the window rolled over, so the daemon is still holding the last figure
@@ -138,6 +149,11 @@ function renderUsageWindow(id, label, pct, resetsAt) {
   const reset = typeof resetsAt === 'number' ? new Date(resetsAt * 1000) : null;
   const stale = !!reset && reset.getTime() < Date.now();
   el.classList.toggle('stale', stale);
+  // The countdown: gone once the reset is past, since the figure beside it
+  // then belongs to the old window.
+  const until = el.querySelector('.usage-reset');
+  until.hidden = !reset || stale;
+  until.querySelector('b').textContent = until.hidden ? '' : untilText(reset.getTime() - Date.now());
   el.title = `${label}: ${rounded}% of the subscription window used`
     + (reset
         ? stale
