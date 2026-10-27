@@ -33,7 +33,7 @@ const fx = {
   // badge survives leaving the view.
   recent: null,
   fresh: null,
-  places: { workspace: null, artifacts: null, home: '/home/agent', mounts: [] },
+  places: { workspace: null, artifacts: null, home: '/home/agent', mounts: [], worktrees: [] },
   seq: 0,              // the newest listing request; older answers are dropped
 };
 
@@ -105,26 +105,56 @@ function fxSaveFavourites(list) {
   try { localStorage.setItem(FX_FAV_KEY(filesTarget), JSON.stringify(list)); } catch (_) {}
 }
 
+/// One line icon per kind of place, drawn at 16px and coloured by kind (see
+/// `.fx-fav-icon.<kind>` in app.css): the glyphs they replace were a few pixels
+/// of dim text, and a worktree, a mount and home could not be told apart.
+const FX_FAV_SVG = {
+  recent: '<circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/>',
+  artifacts: '<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>',
+  workspace: '<path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/>',
+  mount: '<ellipse cx="8" cy="3.8" rx="5.5" ry="2"/><path d="M2.5 3.8v8.4c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2V3.8M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2"/>',
+  thread: '<circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5.5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 7.1c0 2.6-7 2-7 3.8"/>',
+  home: '<path d="M2 7.5L8 2.5l6 5M3.5 6.5V13.5h3.2V10h2.6v3.5h3.2V6.5"/>',
+  root: '<rect x="1.5" y="4" width="13" height="8" rx="1.2"/><path d="M4 8h.01M7 8h5"/>',
+  starred: '<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>',
+};
+const fxFavIcon = (kind) => `<svg class="fx-fav-icon ${kind}" width="16" height="16" viewBox="0 0 16 16"
+  fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"
+  aria-hidden="true">${FX_FAV_SVG[kind]}</svg>`;
+
 function fxBuiltins() {
   const p = fx.places;
   return [
     // Not a folder: the newest files wherever they were written. First, because
     // "what did the agent just make, and where did it put it" is the question
     // this panel is opened with most.
-    { path: FX_RECENT, label: 'Recent', icon: '◷', recent: true },
-    p.artifacts && { path: p.artifacts, label: '.sbxw-artifacts', icon: '★', main: true },
-    p.workspace && { path: p.workspace, label: 'Workspace', icon: '⌂' },
+    { path: FX_RECENT, label: 'Recent', icon: 'recent', recent: true },
+    p.artifacts && { path: p.artifacts, label: '.sbxw-artifacts', icon: 'artifacts', main: true },
+    p.workspace && { path: p.workspace, label: 'Workspace', icon: 'workspace' },
     // The other repos mounted beside it, each saying how: an RO one is there
     // to read, and the agent is refused any write to it.
     ...p.mounts.map((m) => ({
       path: m.path,
       label: m.path.split('/').pop() || m.path,
-      icon: '⛁',
+      icon: 'mount',
       mode: m.readonly ? 'ro' : 'rw',
     })),
-    { path: p.home, label: 'Home', icon: '~' },
-    { path: '/', label: 'Root', icon: '/' },
+    // Each thread's worktree, on its deliverables when it has any: what a
+    // thread made stays on its branch, under .sbxw-worktrees/, until merged.
+    ...p.worktrees.map((w) => ({
+      path: w.artifacts || w.path,
+      label: w.thread,
+      icon: 'thread',
+      thread: w,
+    })),
+    { path: p.home, label: 'Home', icon: 'home' },
+    { path: '/', label: 'Root', icon: 'root' },
   ].filter(Boolean);
+}
+
+/// The thread whose worktree `path` is in, if any.
+function fxWorktreeOf(path) {
+  return fx.places.worktrees.find((w) => path === w.path || path.startsWith(w.path + '/')) || null;
 }
 
 function fxRenderFavourites() {
@@ -136,9 +166,10 @@ function fxRenderFavourites() {
     <div class="fx-fav${f.path === here ? ' active' : ''}${f.main ? ' main' : ''}${f.recent ? ' recent' : ''}"
          data-path="${escHtml(f.path)}"
          title="${escHtml(f.recent ? 'Files written in the last few days — workspace, mounts, home and /tmp'
+           : f.thread ? `Thread "${f.thread.thread}" — ${f.path}, branch sbxw/${f.thread.thread}`
            : f.path + (f.mode === 'ro' ? ' — read-only: the agent can read it, not change it'
                                   : f.mode === 'rw' ? ' — read-write' : ''))}">
-      <span class="fx-fav-icon">${escHtml(f.icon)}</span>
+      ${fxFavIcon(f.icon)}
       <span class="fx-fav-name">${escHtml(f.label)}</span>
       ${f.mode ? `<span class="fx-fav-mode ${f.mode}">${f.mode === 'ro' ? 'RO' : 'RW'}</span>` : ''}
       ${f.recent && fx.fresh ? `<span class="fx-fav-count" title="${fx.fresh} file${
@@ -146,10 +177,16 @@ function fxRenderFavourites() {
       ${removable ? `<button class="fx-fav-rm" data-unfav="${escHtml(f.path)}"
         title="Remove from favourites" aria-label="Remove from favourites">✕</button>` : ''}
     </div>`;
+  // The threads' worktrees under a label of their own, after the places every
+  // sandbox has: a list of bare thread names read as more folders.
+  const places = builtin.filter((f) => !f.thread);
+  const threads = builtin.filter((f) => f.thread);
   document.getElementById('fx-favourites').innerHTML =
-    builtin.map((f) => row(f, false)).join('')
+    places.map((f) => row(f, false)).join('')
+    + (threads.length ? `<div class="cm-side-label fx-fav-group">Threads</div>${
+      threads.map((f) => row(f, false)).join('')}` : '')
     + (user.length ? '<div class="fx-fav-sep"></div>' : '')
-    + user.map((p) => row({ path: p, label: p.split('/').pop() || '/', icon: '☆' }, true)).join('');
+    + user.map((p) => row({ path: p, label: p.split('/').pop() || '/', icon: 'starred' }, true)).join('');
   syncStar();
 }
 
@@ -214,15 +251,18 @@ async function fxOpen(path, { push = true, select = null } = {}) {
     artifacts: data.artifacts || null,
     home: data.home || '/home/agent',
     mounts: Array.isArray(data.mounts) ? data.mounts : [],
+    worktrees: Array.isArray(data.worktrees) ? data.worktrees : [],
   };
   // A folder with a README opens on it, the way a repository page does: the
   // preview has something to say before anything is clicked.
   if (!select) select = fx.entries.find((e) => e.kind === 'file' && FX_README.test(e.name))?.name || null;
   fx.selected = select;
   const ro = fx.places.mounts.find((m) => m.readonly && (fx.path === m.path || fx.path.startsWith(m.path + '/')));
+  const wt = fxWorktreeOf(fx.path);
   fxNotice(fx.offline
     ? 'This sandbox is stopped — showing its workspace from the host. Start it to browse the rest of its filesystem.'
     : ro ? `Read-only — ${ro.path.split('/').pop()} is mounted RO: the agent can read it, not change it.`
+    : wt ? `Thread "${wt.thread}"'s worktree — branch sbxw/${wt.thread}, not in the main checkout until it is merged.`
     : '');
   document.getElementById('fx-filter').value = '';
   renderCrumbs();
@@ -273,8 +313,9 @@ function fxVisible() {
   // one this view is for.
   if (fx.recent) return fx.entries.filter((e) => !q || e.path.toLowerCase().includes(q));
   return fx.entries.filter((e) =>
-    // Dotfiles are hidden by default — except the one folder this panel is for.
-    (hidden || !e.name.startsWith('.') || e.name === '.sbxw-artifacts')
+    // Dotfiles are hidden by default — except the deliverables, and the threads'
+    // worktrees, where a thread's deliverables are until it is merged.
+    (hidden || !e.name.startsWith('.') || e.name === '.sbxw-artifacts' || e.name === '.sbxw-worktrees')
     && (!q || e.name.toLowerCase().includes(q)));
 }
 
@@ -312,6 +353,8 @@ const FX_RECENT = 'recent:';
 /// Where a file is, said the short way: `./` for the workspace, `~/` for home.
 function fxShortDir(path) {
   const dir = path.slice(0, path.lastIndexOf('/')) || '/';
+  const wt = fxWorktreeOf(dir);
+  if (wt) return `⑂ ${wt.thread}` + dir.slice(wt.path.length);
   const ws = fx.places.workspace;
   if (ws && (dir === ws || dir.startsWith(ws + '/'))) return '.' + dir.slice(ws.length);
   const home = fx.places.home;
@@ -422,7 +465,9 @@ function fxCanDelete(path) {
   const ws = p.workspace;
   const roots = [ws, ...p.mounts.filter((m) => !m.readonly).map((m) => m.path), p.home, '/tmp']
     .filter(Boolean).map((r) => r.replace(/\/+$/, ''));
-  const kept = ws ? [`${ws}/.sbxw-artifacts`, `${ws}/.git`] : [];
+  // A worktree goes with its thread (Close thread), never from here.
+  const kept = [...(ws ? [`${ws}/.sbxw-artifacts`, `${ws}/.git`, `${ws}/.sbxw-worktrees`] : []),
+    ...p.worktrees.map((w) => w.path)];
   if (roots.includes(path) || kept.includes(path)) return false;
   if (p.mounts.some((m) => m.readonly && path.startsWith(m.path + '/'))) return false;
   return roots.some((r) => path.startsWith(r + '/'));
@@ -497,6 +542,7 @@ function fxShow(entry) {
    page with this tab's origin could call the daemon's API. Images go straight
    into an <img>, which runs nothing. */
 const FX_IMAGE = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
+const FX_VIDEO = /\.(mp4|m4v|webm|mov)$/i;
 const FX_HTML = /\.html?$/i;
 const FX_TEXT_MAX = 1024 * 1024;
 const FX_HTML_MAX = 8 * 1024 * 1024;
@@ -540,6 +586,12 @@ async function fxPreview(entry) {
   if (entry.kind !== 'file') { body.innerHTML = '<p class="cm-empty-small">Not a regular file.</p>'; return; }
   if (FX_IMAGE.test(entry.name) && entry.size <= FX_IMAGE_MAX) {
     body.innerHTML = `<img class="fx-prev-img" alt="${escHtml(entry.name)}" src="${fxFileUrl(path)}">`;
+    return;
+  }
+  // Played by the browser from the same capped endpoint; only the metadata is
+  // read until Play.
+  if (FX_VIDEO.test(entry.name) && entry.size <= FX_IMAGE_MAX * 4) {
+    body.innerHTML = `<video class="fx-prev-img" controls preload="metadata" src="${fxFileUrl(path)}"></video>`;
     return;
   }
   const html = FX_HTML.test(entry.name);

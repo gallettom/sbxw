@@ -2720,8 +2720,18 @@
   }
   .fx-fav:hover { background: var(--c-hover-subtle); }
   .fx-fav.active { background: #1f6feb22; color: var(--c-text-bright); }
-  .fx-fav-icon { width: 14px; text-align: center; color: var(--c-text-dim); flex-shrink: 0; }
-  .fx-fav.main .fx-fav-icon { color: var(--c-amber-strong); }
+  .fx-fav-icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--c-text-muted); }
+  /* One colour per kind, so the column reads at a glance. */
+  .fx-fav-icon.recent { color: var(--c-blue); }
+  .fx-fav-icon.artifacts { color: var(--c-amber-strong); fill: var(--c-amber-tint); }
+  .fx-fav-icon.workspace { color: var(--c-text-soft); }
+  .fx-fav-icon.mount { color: var(--c-green); }
+  .fx-fav-icon.thread { color: var(--c-purple); }
+  .fx-fav-icon.starred { color: var(--c-amber); }
+  .fx-fav.active .fx-fav-icon.workspace,
+  .fx-fav.active .fx-fav-icon.home,
+  .fx-fav.active .fx-fav-icon.root { color: var(--c-text-bright); }
+  .fx-fav-group { margin-top: .6rem; }
   .fx-fav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Same colours as the create dialog's RW / RO switch. */
   .fx-fav-mode { flex: 0 0 auto; font-size: 9.5px; font-weight: 600; border-radius: 3px; padding: 0 .3rem; line-height: 1.5; }
@@ -2729,7 +2739,6 @@
   .fx-fav-mode.rw { background: var(--c-amber-tint); color: var(--c-amber-strong); }
   /* Recent: what was written in the last hour, counted on its favourite — the
      one number that says "go and look" (see fxFetchRecent in /js/files.js). */
-  .fx-fav.recent .fx-fav-icon { color: var(--c-blue); }
   .fx-fav-count {
     flex: 0 0 auto; font-size: 10px; font-weight: 600; line-height: 1.5;
     padding: 0 .35rem; border-radius: var(--r-md);

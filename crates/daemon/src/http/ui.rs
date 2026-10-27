@@ -1075,10 +1075,37 @@ async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Quer
     let ws_s = ws.map(|w| w.to_string_lossy().into_owned());
     let artifacts = ws_s.as_ref().map(|w| format!("{}/{}", w.trim_end_matches('/'), artifacts::ARTIFACTS_DIR));
     let mounts = app.store.get(&sb).mounts;
+    let worktrees = thread_worktrees(&app, &sb).await;
     Ok(ok_with(json!({
         "path": l.path, "parent": l.parent, "entries": l.entries, "offline": l.offline,
         "workspace": ws_s, "artifacts": artifacts, "home": sandbox_fs::SANDBOX_HOME, "mounts": mounts,
+        "worktrees": worktrees,
     })))
+}
+
+/// Each thread's worktree, and its `.sbxw-artifacts` when it has one: what a
+/// thread delivers sits on its branch, under `.sbxw-worktrees/<thread>`, until
+/// it is merged — a dot-folder nobody finds by browsing. Paths are the same in
+/// the sandbox and on the host (the workspace is mounted at its own path).
+async fn thread_worktrees(app: &App, sb: &SandboxName) -> Vec<Value> {
+    let Some(ws) = app.store.workspace(sb) else { return vec![] };
+    let recorded: std::collections::BTreeMap<String, String> =
+        app.store.get(sb).threads.iter().map(|(k, v)| (k.clone(), v.repo.clone())).collect();
+    tokio::task::spawn_blocking(move || {
+        crate::git::thread_worktrees(&ws, &recorded)
+            .into_iter()
+            .filter_map(|(thread, repo)| {
+                let dir = crate::git::repo_root(&ws, &repo)?.join(".sbxw-worktrees").join(&thread);
+                let arts = dir.join(artifacts::ARTIFACTS_DIR);
+                Some(json!({
+                    "thread": thread, "repo": repo, "path": dir,
+                    "artifacts": arts.is_dir().then_some(arts),
+                }))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// What was written lately, wherever: the workspace, the read-write mounts,
@@ -1123,8 +1150,10 @@ async fn sandbox_fs_delete(State(app): S, Path(name): Path<String>, Json(b): Jso
         .iter()
         .flat_map(|w| {
             let w = w.trim_end_matches('/');
-            [format!("{w}/{}", artifacts::ARTIFACTS_DIR), format!("{w}/.git")]
+            [format!("{w}/{}", artifacts::ARTIFACTS_DIR), format!("{w}/.git"), format!("{w}/.sbxw-worktrees")]
         })
+        // A thread's worktree goes with the thread (Close thread), not from here.
+        .chain(thread_worktrees(&app, &sb).await.iter().filter_map(|w| w["path"].as_str().map(str::to_string)))
         .collect();
     if let Some(why) = sandbox_fs::refuse_delete(&b.path, &roots, &protected) {
         return Err(ApiError::forbidden(why));
