@@ -419,9 +419,8 @@ document.addEventListener('visibilitychange', async () => {
       panes[0].term.write('\r\n  \x1b[90mNo sandbox attached. Pick one from the sidebar, or create a new one with ＋.\x1b[0m\r\n');
     }
   }
-  // A layout saved before threads were grouped, or one a pane was dropped
-  // into by hand, comes back with each sandbox's panes side by side.
-  regroupPanes();
+  // The saved layout comes back as it was left, not regrouped: its order may
+  // be one a person dragged the panes into (see movePane).
   // A `#sandbox=<name>` fragment (e.g. opened from the macOS notch companion)
   // wins over the restored layout: attach that sandbox to the focused pane.
   applySandboxHash();

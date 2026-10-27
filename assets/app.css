@@ -1051,6 +1051,11 @@
     background: color-mix(in srgb, var(--group-color) 15%, var(--c-bg));
     border-radius: var(--r-md);
   }
+  /* The ungrouped, in a card of their own so their rows sit at the same inset
+     as every group's. Dark, and without a dot: it is no workspace. */
+  .sbx-group-other {
+    background: color-mix(in srgb, #000 35%, transparent);
+  }
   .sbx-group-label {
     display: flex; align-items: center; gap: .35rem;
     padding: .35rem .75rem .15rem;
@@ -1414,6 +1419,12 @@
     border: 1px solid var(--c-elevated); border-radius: var(--r-md);
   }
   .pane.focused { border-color: color-mix(in oklab, var(--c-blue) 45%, var(--c-elevated)); }
+  /* Reordering: the bar is the handle, the pane lifted reads as lifted, and
+     the pane it would take the place of is outlined. */
+  .pane-bar[draggable="true"] { cursor: grab; }
+  .pane-bar[draggable="true"]:active { cursor: grabbing; }
+  .pane.dragging { opacity: .55; }
+  .pane.drop-target { outline: 2px dashed var(--c-blue); outline-offset: -2px; }
   /* ── Groups ──
      A sandbox shown in several panes — its agent and its threads — is one
      piece of work. paintGroups() gives the group a hue (--group-color) and
@@ -1449,6 +1460,13 @@
     color: color-mix(in oklab, var(--group-color, var(--c-text)) 70%, var(--c-white));
   }
   .pane-bar .role-chip[hidden] { display: none; }
+  .pane-bar .role-chip { cursor: pointer; font-family: inherit; }
+  .pane-bar .role-chip:hover { filter: brightness(1.12); }
+  /* The chip's colour picker: present for showPicker() to anchor on, unseen. */
+  .group-color-input {
+    position: fixed; width: 1px; height: 1px; padding: 0; border: 0;
+    opacity: 0; pointer-events: none;
+  }
   /* The main session made lead: the Lead mode toggle lit On (below) and a
      stripe on the bar's left edge, so the pane reads as the lead from across
      the grid. Both in the group's hue — violet beside a rose bar read as a

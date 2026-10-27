@@ -258,6 +258,9 @@ function workspaceGroupColor(key) {
 const CHAT_GROUP = '\u0000chat';
 const CHAT_GROUP_COLOR = 'hsl(265, 60%, 68%)';
 
+// The card the ungrouped share: no workspace, so no hue — a dark one.
+const OTHER_GROUP = '\u0000other';
+
 function groupKeyOf(s) {
   if (s.chat) return CHAT_GROUP;
   return s.workspace || null;
@@ -388,8 +391,8 @@ function renderSidebar() {
   }
 
   // Only sandboxes sharing a group key with at least one other — an identical
-  // workspace path, or being a chat sandbox — get grouped. A lone sandbox on a
-  // unique workspace renders exactly as before.
+  // workspace path, or being a chat sandbox — get grouped. The lone ones on a
+  // unique workspace share the dark "Other" card at the bottom.
   const groupCounts = new Map();
   sandboxes.forEach(s => {
     const k = groupKeyOf(s);
@@ -402,18 +405,23 @@ function renderSidebar() {
   ordered.forEach(s => {
     const key = groupKeyOf(s);
     const groupKey = (key === CHAT_GROUP || (key && groupCounts.get(key) > 1)) ? key : null;
-    if (groupKey !== openGroup) {
+    // The ungrouped sit in a card of their own too, a dark one, so every row
+    // has the same inset and the coloured left borders line up down the list.
+    const cardKey = groupKey ?? OTHER_GROUP;
+    if (cardKey !== openGroup) {
       if (openGroup !== null) html += '</div>';
-      if (groupKey !== null) {
-        const isChat = groupKey === CHAT_GROUP;
-        const title = isChat ? 'Chat sandboxes — each on its own empty workspace' : groupKey;
-        const label = isChat ? '💬 Chats' : `📁 ${workspaceBasename(groupKey)}`;
-        html += `<div class="sbx-group${isChat ? ' sbx-group-chat' : ''}" style="--group-color:${groupColorOf(groupKey)}">
-          <div class="sbx-group-label" title="${escHtml(title)}">
-            <span class="sbx-group-dot"></span>${escHtml(label)}
-          </div>`;
-      }
-      openGroup = groupKey;
+      const isChat = cardKey === CHAT_GROUP;
+      const isOther = cardKey === OTHER_GROUP;
+      const title = isChat ? 'Chat sandboxes — each on its own empty workspace'
+        : isOther ? 'Sandboxes whose workspace no other sandbox shares' : cardKey;
+      const label = isChat ? '💬 Chats' : isOther ? 'Other' : `📁 ${workspaceBasename(cardKey)}`;
+      const cls = isChat ? ' sbx-group-chat' : isOther ? ' sbx-group-other' : '';
+      const color = isOther ? '' : ` style="--group-color:${groupColorOf(cardKey)}"`;
+      html += `<div class="sbx-group${cls}"${color}>
+        <div class="sbx-group-label" title="${escHtml(title)}">
+          ${isOther ? '' : '<span class="sbx-group-dot"></span>'}${escHtml(label)}
+        </div>`;
+      openGroup = cardKey;
     }
     html += sandboxItemHtml(s, groupKey ? groupColorOf(groupKey) : null);
   });

@@ -138,7 +138,7 @@ function createPane(index) {
   el.className = 'pane';
   el.id = `pane-${index}`;
   el.innerHTML = `
-    <div class="pane-bar">
+    <div class="pane-bar" draggable="true">
       <span class="dot term-disconnected" id="pdot-${index}" title="Terminal connection"></span>
       <span class="sandbox-label" id="plabel-${index}">—</span>
       <!-- Beside the name, not over with SSH/Env/Reconnect on the right: those
@@ -150,7 +150,8 @@ function createPane(index) {
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M1.5 3.5h4l1.2 1.6h7.3a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5z"/></svg><span class="files-word">Project</span>
       </button>
       <span class="conn-label" id="pconn-${index}"></span>
-      <span class="role-chip" id="prole-${index}" hidden></span>
+      <button type="button" class="role-chip" id="prole-${index}" hidden
+              title="Click to choose this group's colour; right-click to reset it"></button>
       <button class="pane-btn pane-plan-btn" id="pplan-${index}" hidden
               title="This lead's plan is waiting for you">Review plan</button>
       <button class="pane-btn pane-plan-btn" id="pmerge-${index}" hidden
@@ -1444,9 +1445,70 @@ async function startRemoteControl(idx) {
 
 const GROUP_COLORS = ['var(--c-group-1)', 'var(--c-group-2)', 'var(--c-group-3)', 'var(--c-group-4)'];
 
+// A colour picked for a sandbox's group, from its chip. Kept in this browser
+// only, like the terminal colours: it is how this person tells their groups
+// apart, not a fact about the sandbox.
+const GROUP_COLOR_KEY = sandbox => `sbxw.groupColor.${sandbox}`;
+function pickedGroupColor(sandbox) {
+  try { const c = localStorage.getItem(GROUP_COLOR_KEY(sandbox)); return /^#[0-9a-f]{6}$/i.test(c || '') ? c : ''; }
+  catch (_) { return ''; }
+}
+function setGroupColor(sandbox, c) {
+  try { c ? localStorage.setItem(GROUP_COLOR_KEY(sandbox), c) : localStorage.removeItem(GROUP_COLOR_KEY(sandbox)); }
+  catch (_) {}
+  schedulePaintGroups();
+}
+
+// A native picker opened under the chip clicked. A fresh input each time: a
+// browser keeps a still-open picker where it first anchored, so moving one
+// input to another chip opened it under the previous chip. A
+// `var(--c-group-n)` default is resolved to hex, the only form it takes.
+let groupColorInput = null;
+function newGroupColorInput(r) {
+  groupColorInput?.remove();
+  groupColorInput = Object.assign(document.createElement('input'), { type: 'color', className: 'group-color-input', tabIndex: -1 });
+  groupColorInput.setAttribute('aria-hidden', 'true');
+  Object.assign(groupColorInput.style, { left: `${r.left}px`, top: `${r.bottom}px` });
+  document.body.appendChild(groupColorInput);
+  return groupColorInput;
+}
+function toHex(css) {
+  const probe = document.createElement('span');
+  probe.style.color = css;
+  document.body.appendChild(probe);
+  const rgb = getComputedStyle(probe).color.match(/\d+/g) || [0, 0, 0];
+  probe.remove();
+  return '#' + rgb.slice(0, 3).map(n => Number(n).toString(16).padStart(2, '0')).join('');
+}
+document.addEventListener('click', e => {
+  const chip = e.target.closest('.pane-bar .role-chip');
+  if (!chip) return;
+  const p = panes[Number(chip.id.slice('prole-'.length))];
+  if (!p || !p.sandbox) return;
+  const sandbox = p.sandbox;
+  const input = newGroupColorInput(chip.getBoundingClientRect());
+  input.value = toHex(p.el.style.getPropertyValue('--group-color') || 'var(--c-group-1)');
+  input.oninput = () => setGroupColor(sandbox, input.value.toLowerCase());
+  // Laid out before it opens: a picker shown on an input the browser has not
+  // placed yet anchors at the window's top-left corner.
+  void input.getBoundingClientRect();
+  requestAnimationFrame(() => { input.showPicker ? input.showPicker() : input.click(); });
+});
+document.addEventListener('contextmenu', e => {
+  const chip = e.target.closest('.pane-bar .role-chip');
+  if (!chip) return;
+  const p = panes[Number(chip.id.slice('prole-'.length))];
+  if (!p || !p.sandbox || !pickedGroupColor(p.sandbox)) return;
+  e.preventDefault();
+  setGroupColor(p.sandbox, '');
+});
+
 // Reorder the visible panes so each sandbox's panes are contiguous, in the
-// order the sandboxes first appear, the agent ahead of its threads, and empty
-// panes last — a gap inside the grid would split the groups apart. Only the
+// order the sandboxes first appear, keeping the order they are in within a
+// group (a person may have dragged a thread ahead of its agent). An empty
+// pane keeps its slot, so one can be swapped anywhere, unless it sits inside
+// a group — a gap there would split the group apart — which it then follows.
+// Only the
 // panes whose content changes are reconnected — a reconnect replays the
 // session, so it costs a repaint, never the session.
 function regroupPanes() {
@@ -1455,9 +1517,16 @@ function regroupPanes() {
   const first = new Map();
   now.forEach((d, i) => { if (d.sandbox && !first.has(d.sandbox)) first.set(d.sandbox, i); });
   const want = now
-    .map((d, i) => ({ d, i, k: d.sandbox ? first.get(d.sandbox) : Infinity, sub: d.thread ? 1 : 0 }))
-    .sort((a, b) => a.k - b.k || a.sub - b.sub || a.i - b.i)
+    .map((d, i) => ({ d, i, k: d.sandbox ? first.get(d.sandbox) : i }))
+    .sort((a, b) => a.k - b.k || a.i - b.i)
     .map(x => x.d);
+  applyPaneOrder(now, want);
+}
+
+// Put the sessions `want` lists into the visible panes, in that order. `now`
+// is what the panes show. Only the panes whose content changes are emptied
+// first, then reconnected, so no session is ever open in two panes at once.
+function applyPaneOrder(now, want) {
   const same = (a, b) => a.sandbox === b.sandbox && a.mode === b.mode && a.thread === b.thread;
   const moved = want.map((d, i) => (same(d, now[i]) ? -1 : i)).filter(i => i >= 0);
   if (!moved.length) return;
@@ -1491,7 +1560,7 @@ function paintGroups() {
   const colorOf = new Map();
   vis.forEach(p => {
     if ((count.get(p.sandbox) || 0) > 1 && !colorOf.has(p.sandbox))
-      colorOf.set(p.sandbox, GROUP_COLORS[colorOf.size % GROUP_COLORS.length]);
+      colorOf.set(p.sandbox, pickedGroupColor(p.sandbox) || GROUP_COLORS[colorOf.size % GROUP_COLORS.length]);
   });
   const rects = vis.map(p => p.el.getBoundingClientRect());
   const near = (a, b) => Math.abs(a - b) <= 3;

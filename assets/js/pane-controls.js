@@ -127,6 +127,66 @@ function closePane(idx) {
   saveLayout();
 }
 
+// ── Reorder panes by drag and drop ───────────────────────────────────────
+// A pane is picked up by its bar and dropped on another pane: the two swap,
+// and stay where they were put. No `regroupPanes` after: the grid is a grid,
+// so a group's panes can be neighbours across rows (top-left over bottom-left)
+// that the linear order would call apart, and a person placing them knows.
+let paneDrag = null;
+// The pane an element is in, bar included (`paneFromEl` knows only terminals).
+const paneOfEl = el => panes.find(p => p.el.contains(el)) || null;
+
+function movePane(from, to) {
+  const now = panes.slice(0, paneCount).map(p => ({ sandbox: p.sandbox, mode: p.mode, thread: p.thread }));
+  const want = now.slice();
+  [want[from], want[to]] = [want[to], want[from]];
+  const d = now[from];
+  applyPaneOrder(now, want);
+  const id = sessionIdentity(d.sandbox, d.mode, d.thread);
+  const at = panes.slice(0, paneCount).findIndex(p => sessionIdentity(p.sandbox, p.mode, p.thread) === id);
+  setFocusedPane(at >= 0 ? at : to);
+  refitPanes('pane moved');
+}
+
+function clearDropTargets() {
+  document.querySelectorAll('.pane.drop-target').forEach(el => el.classList.remove('drop-target'));
+}
+
+document.addEventListener('dragstart', e => {
+  const bar = e.target.closest?.('.pane-bar');
+  const pane = bar && paneOfEl(bar);
+  // An empty pane has nothing to move, and one pane has nowhere to go.
+  if (!pane || !pane.sandbox || paneCount < 2) { if (bar) e.preventDefault(); return; }
+  paneDrag = pane.index;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', pane.sandbox);
+  pane.el.classList.add('dragging');
+});
+document.addEventListener('dragover', e => {
+  if (paneDrag == null) return;
+  const pane = paneOfEl(e.target);
+  if (!pane || pane.index >= paneCount) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (!pane.el.classList.contains('drop-target')) {
+    clearDropTargets();
+    if (pane.index !== paneDrag) pane.el.classList.add('drop-target');
+  }
+});
+document.addEventListener('drop', e => {
+  if (paneDrag == null) return;
+  e.preventDefault();
+  const pane = paneOfEl(e.target);
+  const from = paneDrag;
+  if (pane && pane.index < paneCount && pane.index !== from) movePane(from, pane.index);
+});
+document.addEventListener('dragend', () => {
+  if (paneDrag == null) return;
+  panes[paneDrag]?.el.classList.remove('dragging');
+  paneDrag = null;
+  clearDropTargets();
+});
+
 // ── Custom drag selection ─────────────────────────────────────────────────
 // Intercepts mouse drag inside terminal areas so text can be selected even
 // when the process has mouse-tracking mode active (which normally steals drags).
