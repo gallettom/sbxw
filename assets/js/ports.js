@@ -698,12 +698,10 @@ function openPortsModal(name) {
 
 function closePortsModal() { portsOverlay.classList.add('hidden'); portsTarget = null; }
 
+// Only its own buttons close it: no backdrop click, no Escape, so a stray
+// click while editing a rule never throws the dialog away.
 document.getElementById('ports-modal-close').addEventListener('click', closePortsModal);
 document.getElementById('ports-modal-close2').addEventListener('click', closePortsModal);
 document.getElementById('ports-modal-refresh').addEventListener('click', () => {
   if (portsTarget) fetchPorts(portsTarget);
-});
-portsOverlay.addEventListener('click', e => { if (e.target === portsOverlay) closePortsModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !portsOverlay.classList.contains('hidden')) closePortsModal();
 });
