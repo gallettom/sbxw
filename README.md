@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="docs/media/sbxw-teaser.mp4">
-    <img src="docs/media/sbxw-teaser.webp" alt="sbxw in 40 seconds: every agent deserves a sandbox — isolated, exposing only what you want, working as a team — and how it works: one command, one browser tab, a relay you approve, a lead that plans" width="720">
+    <img src="docs/media/sbxw-teaser.webp" alt="sbxw in one minute: every agent deserves a sandbox — isolated, exposing only what you want, working as a team — and how it works: one command, one browser tab, threads and a lead that plans, a relay between sandboxes you approve, Remote Control with the Mac kept awake, throwaway chats, Monitor, kits and templates" width="720">
   </a>
   <br>
   <sub>▶ <a href="docs/media/sbxw-teaser.mp4">Watch with sound</a></sub>
