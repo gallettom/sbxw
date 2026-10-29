@@ -45,10 +45,11 @@ function boardSpan(ms) {
 }
 
 // "7 files claimed · 2 open questions", for the Thread menu miniature.
-// A question stays open until the thread it asks has written something after.
+// A question stays open until the thread it asks answers with a decision,
+// handoff or warning after it.
 function boardOpenQuestions(b) {
   return b.entries.filter(q => q.kind === 'question'
-    && !b.entries.some(e => e.at > q.at && (!q.to || e.by === q.to) && e.kind !== 'question')).length;
+    && !b.entries.some(e => e.at > q.at && (!q.to || e.by === q.to) && ['decision', 'handoff', 'warning'].includes(e.kind))).length;
 }
 function boardSummary(b) {
   const n = b.claims.length, q = boardOpenQuestions(b);
