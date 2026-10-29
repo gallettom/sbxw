@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use sbxw_core::plans::{PlanThread, ThreadState};
+use sbxw_core::plans::{DistillItem, PlanThread, ThreadState, Variant};
 use sbxw_core::relay::{agent_view, RelayKind};
 use sbxw_core::usage::Reading;
 use sbxw_core::{SandboxName, ThreadName};
@@ -115,13 +115,17 @@ struct ProposeBody {
     summary: String,
     threads: Vec<PlanThread>,
     #[serde(default)]
+    variant: Variant,
+    #[serde(default)]
+    justification: String,
+    #[serde(default)]
     lead: Option<String>,
     #[serde(default)]
     timeout: Option<u64>,
 }
 
 async fn propose(State(app): S, Agent(me): Agent, Json(b): Json<ProposeBody>) -> ApiResult {
-    let plan = app.plan_propose(&me, &b.summary, b.threads, b.lead.as_deref())?;
+    let plan = app.plan_propose(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref())?;
     let plan = app.plan_wait(&plan.id, &me, wait_bound(b.timeout)).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
 }
@@ -147,13 +151,17 @@ async fn plan_status(State(app): S, Agent(me): Agent, Json(b): Json<PlanIdBody>)
 #[derive(Deserialize)]
 struct MergeProposeBody {
     id: String,
+    /// A shared plan's may be empty: it merges every thread.
+    #[serde(default)]
     order: Vec<String>,
     #[serde(default)]
     note: String,
+    #[serde(default)]
+    distillate: Vec<DistillItem>,
 }
 
 async fn propose_merge(State(app): S, Agent(me): Agent, Json(b): Json<MergeProposeBody>) -> ApiResult {
-    let plan = app.plan_propose_merge(&b.id, &me, b.order, &b.note)?;
+    let plan = app.plan_propose_merge(&b.id, &me, b.order, &b.note, b.distillate)?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
 }
 

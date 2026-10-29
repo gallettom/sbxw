@@ -31,6 +31,55 @@ pub enum PlanState {
     Refused,
 }
 
+/// How a plan's threads share the code (Team mode). Chosen when the plan is
+/// proposed, maybe changed in the approval dialog, fixed once approved.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Variant {
+    /// A worktree and branch per thread, each merged at the end.
+    #[default]
+    Split,
+    /// One worktree and one branch for every thread, merged once.
+    Shared,
+}
+
+impl Variant {
+    pub fn is_split(&self) -> bool {
+        *self == Variant::Split
+    }
+}
+
+/// What the lead proposes to keep once a shared plan is merged: what still
+/// holds, written to the sandbox's Claude Code auto memory.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum DistillKind {
+    Decision,
+    Warning,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct DistillItem {
+    pub kind: DistillKind,
+    pub text: String,
+}
+
+pub const MAX_DISTILLATE: usize = 40;
+
+/// Distillate items trimmed and clipped, empty ones dropped, at most
+/// `MAX_DISTILLATE`.
+pub fn clean_distillate(items: Vec<DistillItem>) -> Result<Vec<DistillItem>, String> {
+    let items: Vec<DistillItem> = items
+        .into_iter()
+        .map(|i| DistillItem { kind: i.kind, text: clip(&i.text) })
+        .filter(|i| !i.text.is_empty())
+        .collect();
+    if items.len() > MAX_DISTILLATE {
+        return Err(format!("a distillate has at most {MAX_DISTILLATE} items"));
+    }
+    Ok(items)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadState {
@@ -99,6 +148,9 @@ pub struct Merge {
     pub base: Option<String>,
     #[serde(default)]
     pub results: Vec<MergeResult>,
+    /// Proposed by the lead, then as the person approved it at Merge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub distillate: Vec<DistillItem>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -108,6 +160,14 @@ pub struct Plan {
     pub summary: String,
     pub threads: Vec<PlanThread>,
     pub state: PlanState,
+    #[serde(default)]
+    pub variant: Variant,
+    /// The lead's one line on why this variant.
+    #[serde(default)]
+    pub justification: String,
+    /// A shared plan's worktree, set when it is approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     /// The lead's Claude Code session name — its threads' `SendMessage` address.
@@ -120,6 +180,59 @@ pub struct Plan {
     pub merge: Option<Merge>,
     pub created_ms: u64,
     pub updated_ms: u64,
+}
+
+impl Plan {
+    /// A shared plan's worktree folder under `.sbxw-worktrees/`, and its
+    /// branch after `sbxw/`: `team-<plan id>`, a valid thread name, so the
+    /// thread scripts handle it as one.
+    pub fn team_name(&self) -> String {
+        team_name(&self.id)
+    }
+}
+
+impl Plan {
+    /// The approved distillate as one Claude Code auto memory: its file name,
+    /// its contents, and its line for the `MEMORY.md` index. `None` when
+    /// nothing was kept.
+    pub fn distillate_memory(&self) -> Option<(String, String, String)> {
+        let items = &self.merge.as_ref()?.distillate;
+        if items.is_empty() {
+            return None;
+        }
+        let file = format!("{}.md", self.team_name());
+        let one_line = |s: &str, n: usize| {
+            let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            match s.char_indices().nth(n) {
+                Some((i, _)) => format!("{}…", &s[..i]),
+                None => s,
+            }
+        };
+        let what = if self.summary.is_empty() { "a team plan".to_string() } else { one_line(&self.summary, 100) };
+        let mut body = format!(
+            "---\nname: {team}\ndescription: {description}\n\
+             metadata:\n  type: project\n---\n\n\
+             Kept from sbxw team plan {id} when its branch sbxw/{team} was merged. The plan: {what}\n\n",
+            team = self.team_name(),
+            id = self.id,
+            // JSON's string is a YAML double-quoted scalar: a summary with
+            // `: ` in it stays one value.
+            description = serde_json::to_string(&format!("Decisions and warnings that still hold after {what}")).unwrap_or_default(),
+        );
+        for i in items {
+            let kind = match i.kind {
+                DistillKind::Decision => "Decision",
+                DistillKind::Warning => "Warning",
+            };
+            body.push_str(&format!("- **{kind}:** {}\n", one_line(&i.text, MAX_TEXT)));
+        }
+        let index = format!("- [Team plan {}]({file}) — decisions and warnings from: {}", self.id, one_line(&what, 80));
+        Some((file, body, index))
+    }
+}
+
+pub fn team_name(plan_id: &str) -> String {
+    format!("team-{plan_id}")
 }
 
 pub fn clip(s: &str) -> String {
@@ -243,17 +356,30 @@ impl PlanBook {
         Ok(plan)
     }
 
-    /// One pending plan per sandbox.
+    /// One pending plan per sandbox, saying why its variant.
+    #[allow(clippy::too_many_arguments)]
     pub fn propose(
         &mut self,
         id: String,
         sandbox: &str,
         summary: &str,
         threads: Vec<PlanThread>,
+        variant: Variant,
+        justification: &str,
         lead: Option<&str>,
         now: u64,
     ) -> Result<Plan, String> {
         let threads = validate(threads)?;
+        let justification = clip(justification);
+        if justification.is_empty() {
+            return Err(format!(
+                "say in one line why this plan is {:?} (justification): shared when threads touch \
+                 overlapping files, must integrate live or share a dev server; split when the work \
+                 streams are independent, long or risky",
+                variant
+            )
+            .to_lowercase());
+        }
         if let Some(p) = self
             .plans
             .values()
@@ -270,6 +396,9 @@ impl PlanBook {
             summary: clip(summary),
             threads,
             state: PlanState::Pending,
+            variant,
+            justification,
+            worktree: None,
             note: None,
             lead: lead_address(lead),
             closed: false,
@@ -306,7 +435,16 @@ impl PlanBook {
     /// The threads a person approved, as left in the dialog. A thread still
     /// running under another approved plan of the sandbox is refused: two plans
     /// writing to one worktree is what worktrees exist to prevent.
-    pub fn approve(&mut self, id: &str, threads: Vec<PlanThread>, now: u64) -> Result<Plan, String> {
+    /// `variant`, when given, is the dialog's choice; the proposal's otherwise.
+    /// A shared plan's worktree is recorded with it.
+    pub fn approve(
+        &mut self,
+        id: &str,
+        threads: Vec<PlanThread>,
+        variant: Option<Variant>,
+        worktree: Option<String>,
+        now: u64,
+    ) -> Result<Plan, String> {
         let threads = validate(threads)?;
         let sandbox = self.plans.get(id).map(|p| p.sandbox.clone()).unwrap_or_default();
         let taken: HashSet<String> = self
@@ -326,6 +464,10 @@ impl PlanBook {
             for t in &mut p.threads {
                 t.updated_ms = now;
             }
+            if let Some(v) = variant {
+                p.variant = v;
+            }
+            p.worktree = if p.variant.is_split() { None } else { worktree };
             p.state = PlanState::Approved;
             Ok(())
         })
@@ -359,19 +501,33 @@ impl PlanBook {
             .collect()
     }
 
-    /// The lead proposes merging finished threads, in order.
+    /// The lead proposes merging finished threads, in order. A shared plan has
+    /// one branch: every thread is merged at once, so all must be done, and an
+    /// empty order means all of them.
     pub fn propose_merge(
         &mut self,
         id: &str,
         sandbox: &str,
         order: Vec<String>,
         note: &str,
+        distillate: Vec<DistillItem>,
         now: u64,
     ) -> Result<Plan, String> {
         let plan = self.led(id, sandbox)?;
         if plan.state != PlanState::Approved {
             return Err(format!("plan {id} is not approved, so there is nothing to merge"));
         }
+        let distillate = clean_distillate(distillate)?;
+        let order = match plan.variant {
+            Variant::Split => order,
+            Variant::Shared => {
+                let all: Vec<String> = plan.threads.iter().map(|t| t.name.clone()).collect();
+                if let Some(n) = order.iter().find(|n| !all.contains(n)) {
+                    return Err(format!("{n:?} is not a thread of plan {id}"));
+                }
+                all
+            }
+        };
         if order.is_empty() {
             return Err("name the threads to merge, in order".into());
         }
@@ -404,13 +560,15 @@ impl PlanBook {
                 state: MergeState::Proposed,
                 base: None,
                 results: vec![],
+                distillate,
             });
             Ok(())
         })
     }
 
-    /// A person clicked Merge.
-    pub fn start_merge(&mut self, id: &str, base: Option<String>, now: u64) -> Result<Plan, String> {
+    /// A person clicked Merge, keeping `distillate` (`None`: as proposed).
+    pub fn start_merge(&mut self, id: &str, base: Option<String>, distillate: Option<Vec<DistillItem>>, now: u64) -> Result<Plan, String> {
+        let distillate = distillate.map(clean_distillate).transpose()?;
         self.mutate(id, now, |p| {
             if p.state != PlanState::Approved {
                 return Err(format!("plan {id} is not approved"));
@@ -423,6 +581,9 @@ impl PlanBook {
             m.state = MergeState::Merging;
             m.base = base;
             m.results.clear();
+            if let Some(d) = distillate {
+                m.distillate = d;
+            }
             Ok(())
         })
     }
@@ -438,10 +599,13 @@ impl PlanBook {
         })
     }
 
+    /// Merged when every result is in and ok: one per thread, or the one
+    /// branch of a shared plan.
     pub fn finish_merge(&mut self, id: &str, now: u64) -> Result<Plan, String> {
         self.mutate(id, now, |p| {
+            let expected = if p.variant.is_split() { p.merge.as_ref().map_or(0, |m| m.order.len()) } else { 1 };
             let m = p.merge.as_mut().ok_or_else(|| format!("plan {id} has no merge"))?;
-            let all = m.order.len() == m.results.len() && m.results.iter().all(|r| r.ok);
+            let all = m.results.len() == expected && m.results.iter().all(|r| r.ok);
             m.state = if all { MergeState::Merged } else { MergeState::Failed };
             Ok(())
         })
@@ -453,6 +617,19 @@ impl PlanBook {
             .filter(|p| p.sandbox == sandbox && p.state == PlanState::Approved)
             .flat_map(|p| p.threads.iter().map(|t| (p.id.clone(), t.clone())))
             .collect()
+    }
+
+    /// The shared plan `thread` works under, if it does: the latest approved
+    /// plan holding its name, when that plan is shared and not merged yet. Its
+    /// sessions open in the plan's worktree rather than one of their own.
+    pub fn team_of(&self, sandbox: &str, thread: &str) -> Option<&Plan> {
+        self.plans
+            .values()
+            .filter(|p| p.sandbox == sandbox && p.state == PlanState::Approved)
+            .filter(|p| p.threads.iter().any(|t| t.name == thread))
+            .max_by_key(|p| p.created_ms)
+            .filter(|p| p.variant == Variant::Shared)
+            .filter(|p| !p.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged))
     }
 
     /// Where a thread stands. A thread reports only the reportable states; the
@@ -524,7 +701,7 @@ mod tests {
     }
 
     fn proposed(book: &mut PlanBook, sb: &str, names: &[&str]) -> Plan {
-        book.propose(format!("p-{sb}"), sb, "s", names.iter().map(|n| t(n)).collect(), Some("lead-1"), 1)
+        book.propose(format!("p-{sb}"), sb, "s", names.iter().map(|n| t(n)).collect(), Variant::Split, "why", Some("lead-1"), 1)
             .unwrap()
     }
 
@@ -533,17 +710,17 @@ mod tests {
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "neos", &["api"]);
         assert_eq!(p.state, PlanState::Pending);
-        assert!(b.propose("p-2".into(), "neos", "s", vec![t("x")], None, 2).is_err());
+        assert!(b.propose("p-2".into(), "neos", "s", vec![t("x")], Variant::Split, "why", None, 2).is_err());
         assert!(b.set_thread("neos", "api", ThreadState::Working, "", false, 3).is_err());
-        b.approve(&p.id, vec![t("api")], 4).unwrap();
+        b.approve(&p.id, vec![t("api")], None, None, 4).unwrap();
         b.set_thread("neos", "api", ThreadState::Working, "on it", false, 5).unwrap();
-        assert!(b.approve(&p.id, vec![t("api")], 6).is_err(), "settled once");
+        assert!(b.approve(&p.id, vec![t("api")], None, None, 6).is_err(), "settled once");
     }
 
     #[test]
     fn proposals_are_checked() {
         let mut b = PlanBook::new();
-        let bad = |b: &mut PlanBook, th: Vec<PlanThread>| b.propose("p".into(), "n", "", th, None, 1).is_err();
+        let bad = |b: &mut PlanBook, th: Vec<PlanThread>| b.propose("p".into(), "n", "", th, Variant::Split, "why", None, 1).is_err();
         assert!(bad(&mut b, vec![]));
         assert!(bad(&mut b, vec![t("Bad")]));
         assert!(bad(&mut b, vec![t("a"), t("a")]));
@@ -565,24 +742,24 @@ mod tests {
     fn a_running_thread_cannot_be_approved_twice() {
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "n", &["api"]);
-        b.approve(&p.id, vec![t("api")], 2).unwrap();
-        let q = b.propose("p-2".into(), "n", "", vec![t("api")], None, 3).unwrap();
-        assert!(b.approve(&q.id, vec![t("api")], 4).is_err());
+        b.approve(&p.id, vec![t("api")], None, None, 2).unwrap();
+        let q = b.propose("p-2".into(), "n", "", vec![t("api")], Variant::Split, "why", None, 3).unwrap();
+        assert!(b.approve(&q.id, vec![t("api")], None, None, 4).is_err());
     }
 
     #[test]
     fn a_merge_needs_a_led_approved_plan_of_done_threads() {
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "n", &["a", "b"]);
-        assert!(b.propose_merge(&p.id, "n", vec!["a".into()], "", 2).is_err(), "pending");
-        b.approve(&p.id, vec![t("a"), t("b")], 3).unwrap();
-        assert!(b.propose_merge(&p.id, "n", vec!["a".into()], "", 4).is_err(), "not done");
+        assert!(b.propose_merge(&p.id, "n", vec!["a".into()], "", vec![], 2).is_err(), "pending");
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 3).unwrap();
+        assert!(b.propose_merge(&p.id, "n", vec!["a".into()], "", vec![], 4).is_err(), "not done");
         b.set_thread("n", "a", ThreadState::Done, "ok", false, 5).unwrap();
-        assert!(b.propose_merge(&p.id, "x", vec!["a".into()], "", 6).is_err(), "not its plan");
-        assert!(b.propose_merge(&p.id, "n", vec!["a".into(), "a".into()], "", 6).is_err());
-        b.propose_merge(&p.id, "n", vec!["a".into()], "go", 7).unwrap();
-        b.start_merge(&p.id, Some("main".into()), 8).unwrap();
-        assert!(b.start_merge(&p.id, None, 9).is_err(), "a second click");
+        assert!(b.propose_merge(&p.id, "x", vec!["a".into()], "", vec![], 6).is_err(), "not its plan");
+        assert!(b.propose_merge(&p.id, "n", vec!["a".into(), "a".into()], "", vec![], 6).is_err());
+        b.propose_merge(&p.id, "n", vec!["a".into()], "go", vec![], 7).unwrap();
+        b.start_merge(&p.id, Some("main".into()), None, 8).unwrap();
+        assert!(b.start_merge(&p.id, None, None, 9).is_err(), "a second click");
         b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None }, 10).unwrap();
         let done = b.finish_merge(&p.id, 11).unwrap();
         assert_eq!(done.merge.unwrap().state, MergeState::Merged);
@@ -592,8 +769,8 @@ mod tests {
     fn ending_lead_refuses_the_pending_and_closes_the_approved() {
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "n", &["a"]);
-        b.approve(&p.id, vec![t("a")], 2).unwrap();
-        let q = b.propose("p-q".into(), "n", "", vec![t("b")], None, 3).unwrap();
+        b.approve(&p.id, vec![t("a")], None, None, 2).unwrap();
+        let q = b.propose("p-q".into(), "n", "", vec![t("b")], Variant::Split, "why", None, 3).unwrap();
         let changed = b.end_lead("n", 4);
         assert_eq!(changed.len(), 2);
         assert_eq!(b.get(&q.id).unwrap().state, PlanState::Refused);
@@ -615,14 +792,69 @@ mod tests {
                        "state":"approved","created_ms":1,"updated_ms":1}]"#;
         let plans: Vec<Plan> = serde_json::from_str(raw).unwrap();
         let b = PlanBook::load(plans);
-        assert_eq!(b.get("p-1").unwrap().threads[0].state, ThreadState::Starting);
+        let p = b.get("p-1").unwrap();
+        assert_eq!(p.threads[0].state, ThreadState::Starting);
+        assert_eq!((p.variant, p.justification.as_str(), p.worktree.as_deref()), (Variant::Split, "", None));
+        let raw = r#"{"order":["a"],"note":"","state":"merged"}"#;
+        assert!(serde_json::from_str::<Merge>(raw).unwrap().distillate.is_empty());
+    }
+
+    #[test]
+    fn a_proposal_says_why_its_variant() {
+        let mut b = PlanBook::new();
+        assert!(b.propose("p".into(), "n", "", vec![t("a")], Variant::Shared, " ", None, 1).is_err());
+        let p = b.propose("p".into(), "n", "", vec![t("a")], Variant::Shared, "same files", None, 1).unwrap();
+        assert_eq!(p.variant, Variant::Shared);
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!((v["variant"].as_str(), v["justification"].as_str()), (Some("shared"), Some("same files")));
+    }
+
+    #[test]
+    fn a_shared_plan_merges_its_one_branch_once_all_threads_are_done() {
+        let mut b = PlanBook::new();
+        let p = b.propose("p-s".into(), "n", "", vec![t("a"), t("b")], Variant::Shared, "live", Some("l"), 1).unwrap();
+        let p = b.approve(&p.id, vec![t("a"), t("b")], None, Some("/w/.sbxw-worktrees/team-p-s".into()), 2).unwrap();
+        assert_eq!(p.worktree.as_deref(), Some("/w/.sbxw-worktrees/team-p-s"));
+        assert_eq!(p.team_name(), "team-p-s");
+        assert_eq!(b.team_of("n", "a").map(|p| p.id.as_str()), Some("p-s"));
+        assert!(b.team_of("n", "zz").is_none());
+        b.set_thread("n", "a", ThreadState::Done, "", false, 3).unwrap();
+        assert!(b.propose_merge(&p.id, "n", vec![], "", vec![], 4).is_err(), "b is not done");
+        b.set_thread("n", "b", ThreadState::Done, "", false, 5).unwrap();
+        let d = vec![
+            DistillItem { kind: DistillKind::Decision, text: "prices in cents".into() },
+            DistillItem { kind: DistillKind::Warning, text: " ".into() },
+        ];
+        let m = b.propose_merge(&p.id, "n", vec![], "", d, 6).unwrap().merge.unwrap();
+        assert_eq!(m.order, ["a", "b"], "every thread goes in");
+        assert_eq!(m.distillate.len(), 1, "the empty item is dropped");
+        let kept = vec![DistillItem { kind: DistillKind::Warning, text: "no float money".into() }];
+        let m = b.start_merge(&p.id, None, Some(kept.clone()), 7).unwrap().merge.unwrap();
+        assert_eq!(m.distillate, kept, "the person's version wins");
+        b.merge_result(&p.id, MergeResult { thread: "team-p-s".into(), ok: true, commit: None, error: None }, 8).unwrap();
+        let merged = b.finish_merge(&p.id, 9).unwrap();
+        assert_eq!(merged.merge.as_ref().unwrap().state, MergeState::Merged);
+        let (file, body, index) = merged.distillate_memory().unwrap();
+        assert_eq!(file, "team-p-s.md");
+        assert!(body.starts_with("---\nname: team-p-s\n") && body.contains("- **Warning:** no float money\n"));
+        assert!(index.starts_with("- [Team plan p-s](team-p-s.md) — "));
+        assert!(b.team_of("n", "a").is_none(), "merged: the threads are on their own again");
+    }
+
+    #[test]
+    fn a_split_plan_has_no_shared_worktree() {
+        let mut b = PlanBook::new();
+        let p = proposed(&mut b, "n", &["a"]);
+        let p = b.approve(&p.id, vec![t("a")], None, Some("/w".into()), 2).unwrap();
+        assert_eq!(p.worktree, None);
+        assert!(b.team_of("n", "a").is_none());
     }
 
     #[test]
     fn prune_keeps_running_work() {
         let mut b = PlanBook::new();
         let p = proposed(&mut b, "n", &["a"]);
-        b.approve(&p.id, vec![t("a")], 0).unwrap();
+        b.approve(&p.id, vec![t("a")], None, None, 0).unwrap();
         assert!(b.prune(PRUNE_AFTER_MS * 2, PRUNE_AFTER_MS).is_empty());
         b.set_thread("n", "a", ThreadState::Failed, "", true, 0).unwrap();
         assert_eq!(b.prune(PRUNE_AFTER_MS * 2, PRUNE_AFTER_MS), ["n"]);

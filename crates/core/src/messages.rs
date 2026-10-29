@@ -6,7 +6,7 @@
 //! the agent what to do next rather than only what happened.
 
 use crate::agents::clip;
-use crate::plans::{Merge, Plan, PlanThread, ThreadState};
+use crate::plans::{Merge, Plan, PlanThread, ThreadState, Variant};
 use crate::relay::{RelayKind, RelayRequest, RelayState};
 
 /// Trim and cap text from an agent, keeping every line, and say so when cut.
@@ -171,6 +171,24 @@ pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
                  other threads: go through the lead."
             .to_string(),
     };
+    let worktree = match plan.variant {
+        Variant::Split => format!(
+            "- You are in your own git worktree, on branch sbxw/{name}. Commit your work on this \
+             branch as you go. Never merge, rebase onto, or push other branches, and never edit \
+             another thread's worktree.",
+            name = t.name
+        ),
+        Variant::Shared => format!(
+            "- This is a shared plan (Team mode): every thread works in the same git worktree, \
+             on branch sbxw/{team}, and sees the others' changes as they make them. Edit only \
+             the files of your scope; commit only them, by path (`git commit -- <paths>`), never \
+             `git add -A`, `git commit -a` or `git stash`. Never switch, merge, rebase or push \
+             branches. Do not start a dev server: the lead's pane runs the one server. Run only \
+             your scope's tests; a failure in another thread's files is a question to it, \
+             through the lead, never a fix.",
+            team = plan.team_name()
+        ),
+    };
     format!(
         "You are thread \"{name}\" of a plan the user approved in sbxw. The lead is another \
          session in this sandbox, which split the work and will review it.\n\n\
@@ -178,9 +196,7 @@ pub fn thread_briefing(plan: &Plan, t: &PlanThread) -> String {
          Your goal: {goal}\n\n\
          Your scope (the files or areas you own): {scope}\n\n\
          Rules:\n\
-         - You are in your own git worktree, on branch sbxw/{name}. Commit your work on this \
-         branch as you go. Never merge, rebase onto, or push other branches, and never edit \
-         another thread's worktree.\n\
+         {worktree}\n\
          - Report with the `report_thread_status` tool (MCP server sbxw-relay): \"working\" now, \
          \"blocked\" with your question whenever you need something, \"done\" with a short \
          summary of what you changed when you finish. That moves your mark in the sbxw window.\n\
@@ -295,6 +311,9 @@ mod tests {
             summary: String::new(),
             threads: vec![t.clone()],
             state: PlanState::Approved,
+            variant: Default::default(),
+            justification: String::new(),
+            worktree: None,
             note: None,
             lead: lead.map(String::from),
             closed: false,
@@ -314,6 +333,10 @@ mod tests {
         assert!(b.contains("(none given)"));
         let (p, t) = plan(None);
         assert!(!thread_briefing(&p, &t).contains("named \""));
+        let shared = Plan { variant: Variant::Shared, ..p };
+        let b = thread_briefing(&shared, &t);
+        assert!(b.contains("branch sbxw/team-p") && b.contains("git commit -- <paths>"));
+        assert!(!b.contains("your own git worktree"));
     }
 
     #[test]
@@ -327,6 +350,7 @@ mod tests {
                 MergeResult { thread: "a".into(), ok: true, commit: None, error: None },
                 MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict in x\ny".into()) },
             ],
+            distillate: vec![],
         };
         assert_eq!(merge_summary(&m), "[sbxw] Merged: a. Failed: b (conflict in x y). Not tried: c.");
     }
