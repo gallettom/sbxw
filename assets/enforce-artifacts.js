@@ -42,6 +42,9 @@ process.stdin.on('end', () => {
     // message would have offered one anyway, quoting a `../../../..` relative
     // path as the offending name.
     const insideWorkspace = abs.startsWith(cwd + path.sep);
+    // .claude/ is Claude Code's own config — skills, commands, agents — read
+    // only from there. A SKILL.md moved into .sbxw-artifacts/ is never loaded.
+    const insideClaudeDir = path.relative(cwd, abs).split(path.sep).includes('.claude');
 
     let alreadyExists = false;
     try { alreadyExists = fs.existsSync(abs); } catch (e) { /* fail open */ }
@@ -49,6 +52,7 @@ process.stdin.on('end', () => {
     if (
       insideWorkspace &&
       !insideArtifactsDir &&
+      !insideClaudeDir &&
       !alreadyExists &&
       EXTENSIONS.has(ext) &&
       !EXEMPT_BASENAMES.has(base)
