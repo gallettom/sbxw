@@ -167,7 +167,7 @@ impl App {
         let existed = initial.is_some();
         let stopped = initial.as_ref().is_some_and(|i| i.is_stopped());
         let mut running = Some(initial.as_ref().is_some_and(|i| i.is_running()));
-        let (template, rebuild) = self.template_for(&req, cfg, existed, &mut run);
+        let (template, rebuild) = self.template_for(&req, cfg, existed, &mut run).await;
         // A template holds the kits' installs: its kits find everything in
         // place and would never fill the cache this sandbox claimed.
         wants_cache &= template.is_none();
@@ -285,6 +285,13 @@ impl App {
                 }
             }
             kit_refs.extend(cfg.kits.iter().cloned());
+            // The skills the person kept from a sandbox: every new one gets
+            // them, whatever its `kits` say — they are the person's, not the project's.
+            match self.my_skills_kit() {
+                Ok(Some(dir)) => kit_refs.push(dir.to_string_lossy().into_owned()),
+                Ok(None) => {}
+                Err(e) => run.warn(format!("your kept skills are left out: {e:#}")),
+            }
             if !cfg.volumes.is_empty() {
                 let dir = self.store.write_volumes_kit(name, &cfg.volumes)?;
                 run.info(format!("persistent volumes: {} (kept if the sandbox is removed)", cfg.volumes.join(", ")));
@@ -506,7 +513,7 @@ impl App {
 
     /// The template `sbx create` starts from, and whether this bring-up saves
     /// a new automatic one. Only a sandbox being created is concerned.
-    fn template_for(&self, req: &BringUp, cfg: &Config, existed: bool, run: &mut Run<'_>) -> (Option<String>, bool) {
+    async fn template_for(&self, req: &BringUp, cfg: &Config, existed: bool, run: &mut Run<'_>) -> (Option<String>, bool) {
         if existed {
             if req.template == templates::Choice::Rebuild {
                 run.warn(format!(
@@ -527,8 +534,19 @@ impl App {
                 let (sbx, sbxw) = self.template_versions();
                 let content = templates::fingerprint(&spec_texts(&cfg.kits));
                 let now = templates::Current { sbx: &sbx, sbxw, content: &content };
-                let fresh = templates::check(&self.store.templates(), &req.config.kits, &now);
+                let mut fresh = templates::check(&self.store.templates(), &req.config.kits, &now);
                 use templates::{Choice, Freshness};
+                // Asked of sbx only for a template this bring-up would use.
+                let used = match (&fresh, req.template) {
+                    (Freshness::Fresh { record }, Choice::Default | Choice::Keep) | (Freshness::Stale { record, .. }, Choice::Keep) => Some(record.tag.clone()),
+                    _ => None,
+                };
+                if let Some(tag) = used {
+                    if !self.template_present(&tag).await {
+                        self.forget_template(&tag, run);
+                        fresh = Freshness::Missing;
+                    }
+                }
                 match (fresh, req.template) {
                     (_, Choice::Skip) => (None, false),
                     (_, Choice::Rebuild) => (None, true),
@@ -554,6 +572,29 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Whether sbx still has template `tag`. A record outlives a template
+    /// removed with `sbx template rm` or a Docker prune, and `create
+    /// --template` with a tag sbx lacks goes looking for it in a registry and
+    /// fails there (403), which no retry mends. A listing sbx refuses proves
+    /// nothing, so it counts as present.
+    async fn template_present(&self, tag: &str) -> bool {
+        match self.sbx.template_ls().await {
+            Ok(list) => list.iter().any(|t| t.tag == tag || t.tag.ends_with(&format!("/{tag}"))),
+            Err(_) => true,
+        }
+    }
+
+    /// Drop the record of an automatic template sbx no longer has, so this
+    /// bring-up and the create dialog both see it as missing.
+    fn forget_template(&self, tag: &str, run: &mut Run<'_>) {
+        let mut records = self.store.templates();
+        records.retain(|r| r.tag != tag);
+        match self.store.set_templates(&records) {
+            Ok(()) => run.warn(format!("the automatic template {tag} is no longer in sbx (removed outside sbxw?) — its record is dropped")),
+            Err(e) => run.warn(format!("the automatic template {tag} is no longer in sbx, and its record could not be dropped: {e:#}")),
         }
     }
 
@@ -710,6 +751,12 @@ impl App {
         let first = match self.sbx.create(name, opts, Some(lines.clone())).await {
             Ok(()) => return Ok(()),
             Err(e) if opts.publish.is_empty() => return Err(e),
+            // An image sbx cannot find is not a port problem: without ports it
+            // would fail the same way, under a message blaming the ports.
+            Err(e) if format!("{e:#}").contains("pull failed") => {
+                let from = opts.template.as_deref().map_or_else(|| "sbx's image".to_string(), |t| format!("template {t}"));
+                return Err(e.context(format!("sbx could not find {from} to create '{name}' from")));
+            }
             Err(e) => e,
         };
         if self.sbx.exists(name).await {
@@ -890,6 +937,7 @@ mod tests {
                     }
                 }
                 Some("exec") if joined.contains(" cat ") => Output::ok("secret"),
+                Some("template") if joined.starts_with("template ls") => Output::ok(r#"[{"tag":"sbxw-auto:fresh"}]"#),
                 _ => sbx_answer(a),
             }
         }
@@ -944,6 +992,19 @@ mod tests {
         let log = fake.log();
         assert!(log.iter().any(|c| c.starts_with("create") && !c.contains("--template")));
         assert!(!log.iter().any(|c| c.starts_with("template")), "nothing saved or removed unasked");
+    }
+
+    #[tokio::test]
+    async fn a_template_gone_from_sbx_is_forgotten_not_pulled() {
+        let (dir, app, fake) = app_with(auto_sbx(0));
+        let kits = vec!["sbxw:codemap".to_string()];
+        let content = crate::bundled::fingerprint(&app.store.paths, &kits).unwrap();
+        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content };
+        app.store.set_templates(&[gone]).unwrap();
+        let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("sbxw-auto:gone is no longer in sbx")), "{w:?}");
+        assert!(fake.log().iter().any(|c| c.starts_with("create") && !c.contains("--template")), "created from sbx's image");
+        assert!(app.store.templates().is_empty(), "the record is dropped");
     }
 
     #[tokio::test]
@@ -1204,7 +1265,7 @@ mod tests {
         let (a, b) = (create("a"), create("b"));
         assert!(a.contains(&format!(" {cache} ")) && a.contains("SBXW_CACHE_FILL=1"), "the filler writes: {a}");
         assert!(b.contains(&format!("{cache}:ro")) && b.contains(&format!("-e SBXW_CACHE={cache}")) && !b.contains("FILL"), "{b}");
-        for k in ["codemap", "agent-skills", "md-to-pdf-tools"] {
+        for k in ["codemap", "agent-skills", "md-to-pdf-tools", "retro"] {
             assert!(b.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}");
         }
         assert!(!b.contains("sbxw:"));

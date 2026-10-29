@@ -352,6 +352,6 @@ printf "   sbxw down                     # kill all daemons + clean /etc/hosts\n
 printf "   sbxw update                   # update sbxw, its extension (and the island, if installed)\n"
 printf "   sbxw completion --help       # TAB-complete commands (bash/zsh/fish/…)\n"
 printf "   sbxw cache                    # the bundled kits' shared download cache\n"
-printf "   kits: codemap, agent-skills and md-to-pdf-tools are on by default;\n"
+printf "   kits: codemap, agent-skills, md-to-pdf-tools and retro are on by default;\n"
 printf "         add k8s-tools with kits = [..., \"sbxw:k8s-tools\"] in sbxw.toml\n"
 printf "\n"

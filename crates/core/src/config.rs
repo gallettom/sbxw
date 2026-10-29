@@ -215,6 +215,14 @@ impl Config {
         self.kit_mounts.iter().map(|(target, host)| format!("{host}:{target}")).collect()
     }
 
+    /// `raw` read and validated as an sbxw.toml, nothing resolved: what a
+    /// rewritten file must pass before it replaces the one on disk.
+    pub fn parse(raw: &str) -> Result<Self> {
+        let cfg: Config = toml::from_str(raw)?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
     /// Read `path`, or the defaults when it does not exist; validate; resolve
     /// relative paths against the file's directory.
     pub fn load(path: &Path, cwd: &Path) -> Result<Self> {
@@ -511,7 +519,7 @@ mod tests {
 
     #[test]
     fn bundled_kits_are_on_by_default_and_checked() {
-        assert_eq!(Config::default().kits, ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools"]);
+        assert_eq!(Config::default().kits, ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro"]);
         let bad: Config = toml::from_str("kits = [\"sbxw:nope\"]").unwrap();
         assert!(bad.validate().is_err());
         let ok: Config = toml::from_str("kits = [\"sbxw:k8s-tools\", \"/abs/kit\"]").unwrap();

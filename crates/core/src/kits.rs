@@ -15,13 +15,108 @@
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
-pub const BUNDLED: [&str; 6] = ["codemap", "agent-skills", "md-to-pdf-tools", "k8s-tools", "git-identity", "ssh-agent"];
+pub const BUNDLED: [&str; 7] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent"];
 
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
 /// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
 /// ssh-agent (v3 capability kits): each hands the sandbox something
 /// of the person's — their name and email, their SSH keys' signatures.
-pub const DEFAULT_KITS: [&str; 3] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools"];
+pub const DEFAULT_KITS: [&str; 4] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro"];
+
+/// One line per bundled kit, for the web UI's Kits dialog.
+pub fn about(name: &str) -> &'static str {
+    match name {
+        "codemap" => "/codemap and /codemap-lens: agents read a repo's code map before its source",
+        "agent-skills" => "/archify, /brag, /i-have-adhd, /handoff, /grilling, /frontend-design, with Chromium and FFmpeg",
+        "md-to-pdf-tools" => "/md-to-pdf, with WeasyPrint, poppler-utils and Pillow",
+        "retro" => "/retro: past sessions read back for what should become a script, hook, skill, rule or kit",
+        "k8s-tools" => "kubectl, k3d and skaffold in ~/.local/bin",
+        "git-identity" => "your host's Git user.name and user.email in the sandbox",
+        "ssh-agent" => "your host's SSH agent, restricted to signing commits and the common Git hosts",
+        _ => "",
+    }
+}
+
+/// The bundled kit a local path is a copy of: `…/assets/<name>` in an sbxw
+/// checkout, or `~/.sbxw/kits/<name>` where sbxw writes them out. Configs
+/// written before `sbxw:` names list kits that way; the Kits dialog says so.
+pub fn bundled_by_path(kit: &str) -> Option<&'static str> {
+    let p = Path::new(kit.trim_end_matches('/'));
+    let name = p.file_name()?.to_str()?;
+    let parent = p.parent()?.file_name()?.to_str()?;
+    let found = BUNDLED.iter().find(|b| **b == name)?;
+    (parent == "assets" || parent == "kits").then_some(*found)
+}
+
+/// The root `kits` of `raw` (an sbxw.toml) as written; `None` when there is no
+/// such line, and the defaults apply.
+pub fn read_kits_line(raw: &str) -> anyhow::Result<Option<Vec<String>>> {
+    let v: toml::Value = toml::from_str(raw)?;
+    Ok(v.get("kits").and_then(|k| k.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(String::from)).collect()))
+}
+
+/// `raw` (an sbxw.toml) with its root `kits` replaced by `kits`, one entry
+/// per line, or removed when `None` (the defaults then apply). Everything
+/// else — comments, order, the `[[ports]]` tables — is left as written: this
+/// is a file the person keeps by hand. A root key goes before the first
+/// table, where TOML needs it; `toml_edit` places it there.
+pub fn set_kits_line(raw: &str, kits: Option<&[String]>) -> anyhow::Result<String> {
+    let mut doc: toml_edit::DocumentMut = raw.parse()?;
+    match kits {
+        None => {
+            doc.remove("kits");
+        }
+        Some(kits) => {
+            // Comments inside the list — often kits commented out for later —
+            // belong to the slot they sit in: an entry kept keeps its own, one
+            // replaced in place (a path turned into its `sbxw:` name) hands
+            // them to its replacement, and one removed to the next entry kept.
+            let old = doc.get("kits").and_then(|k| k.as_array()).cloned().unwrap_or_default();
+            let olds: Vec<Option<&str>> = old.iter().map(|v| v.as_str()).collect();
+            let comment = |v: &toml_edit::Value| {
+                let p = v.decor().prefix().and_then(|p| p.as_str()).unwrap_or("");
+                p.contains('#').then(|| format!("\n{}\n", p.trim_matches(|c: char| c.is_whitespace())))
+            };
+            let mut above: std::collections::HashMap<&str, String> = Default::default();
+            let mut carry = String::new();
+            for (i, v) in old.iter().enumerate() {
+                let own = comment(v).unwrap_or_default();
+                match v.as_str() {
+                    Some(k) if kits.iter().any(|n| n == k) => {
+                        above.insert(k, std::mem::take(&mut carry) + &own);
+                    }
+                    _ => match kits.get(i).filter(|n| !olds.contains(&Some(n.as_str()))) {
+                        Some(n) => {
+                            above.insert(n.as_str(), std::mem::take(&mut carry) + &own);
+                        }
+                        None => carry += &own,
+                    },
+                }
+            }
+            let mut arr = toml_edit::Array::new();
+            for k in kits {
+                let lead = match above.get(k.as_str()).filter(|c| !c.is_empty()) {
+                    Some(c) => format!("{}    ", c.replace("\n\n", "\n")),
+                    None => "\n    ".into(),
+                };
+                arr.push_formatted(toml_edit::Value::from(k.as_str()).decorated(lead, ""));
+            }
+            // Comments after the last entry stay, on lines of their own, with
+            // those of removed entries no later entry took.
+            let tail = old.trailing().as_str().filter(|t| t.contains('#')).map(|t| format!("\n{}\n", t.trim_matches(|c: char| c.is_whitespace())));
+            let trailing = (carry + &tail.unwrap_or_default()).replace("\n\n", "\n");
+            arr.set_trailing(if trailing.is_empty() { "\n".to_string() } else { trailing });
+            arr.set_trailing_comma(true);
+            // Keep the comment block above an existing line.
+            let prefix = doc.as_table().key("kits").and_then(|k| k.leaf_decor().prefix()).cloned();
+            doc["kits"] = toml_edit::value(arr);
+            if let (Some(prefix), Some(mut key)) = (prefix, doc.as_table_mut().key_mut("kits")) {
+                key.leaf_decor_mut().set_prefix(prefix);
+            }
+        }
+    }
+    Ok(doc.to_string())
+}
 
 /// The bundled kit a reference names (`sbxw:codemap` → `codemap`).
 pub fn bundled_name(kit: &str) -> Option<&str> {
@@ -274,6 +369,58 @@ pub fn oauth_kit_spec(credentials_json: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_kits_line_is_rewritten_and_the_rest_of_the_file_kept() {
+        let raw = "# top\ntemplate = \"auto\"\n\n# which kits\nkits = [\n  \"sbxw:codemap\", # inline\n]\n\n# Apps\n[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\n";
+        let out = set_kits_line(raw, Some(&["sbxw:codemap".into(), "/a b/assets/retro".into()])).unwrap();
+        assert!(out.starts_with("# top\ntemplate = \"auto\"\n\n# which kits\nkits = [\n    \"sbxw:codemap\",\n    \"/a b/assets/retro\",\n# inline\n]\n"), "{out}");
+        assert!(out.ends_with("# Apps\n[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\n"), "{out}");
+        let back: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(back["kits"].as_array().unwrap().len(), 2);
+        assert!(back.get("ports").is_some());
+    }
+
+    #[test]
+    fn kits_commented_out_inside_the_list_are_kept() {
+        let raw = "kits = [\n#   \"/x/assets/headroom\",\n    \"/x/assets/codemap\",\n    \"/x/assets/retro\"\n]\n";
+        let out = set_kits_line(raw, Some(&["/x/assets/codemap".into(), "sbxw:k8s-tools".into()])).unwrap();
+        assert_eq!(out, "kits = [\n#   \"/x/assets/headroom\",\n    \"/x/assets/codemap\",\n    \"sbxw:k8s-tools\",\n]\n");
+    }
+
+    #[test]
+    fn a_path_turned_into_its_name_keeps_the_comments_above_it() {
+        let raw = "kits = [\n#   \"/x/assets/headroom\",\n    \"/x/assets/codemap\",\n    \"/x/my-kit\",\n    \"/x/assets/retro\"\n]\n";
+        let out = set_kits_line(raw, Some(&["sbxw:codemap".into(), "/x/my-kit".into(), "sbxw:retro".into()])).unwrap();
+        assert_eq!(out, "kits = [\n#   \"/x/assets/headroom\",\n    \"sbxw:codemap\",\n    \"/x/my-kit\",\n    \"sbxw:retro\",\n]\n");
+        let out = set_kits_line(raw, Some(&["/x/my-kit".into()])).unwrap();
+        assert_eq!(out, "kits = [\n#   \"/x/assets/headroom\",\n    \"/x/my-kit\",\n]\n", "a removed entry's comments go to the next one kept");
+        let out = set_kits_line(raw, Some(&[])).unwrap();
+        assert_eq!(out, "kits = [\n#   \"/x/assets/headroom\",\n]\n", "or to the end of the list");
+    }
+
+    #[test]
+    fn a_kits_line_goes_at_the_root_never_under_ports() {
+        let raw = "template = \"auto\"\n\n[[ports]]\nalias = \"a.local\"\nsandbox_port = 3000\n";
+        let out = set_kits_line(raw, Some(&["sbxw:retro".into()])).unwrap();
+        let back: toml::Value = toml::from_str(&out).unwrap();
+        assert_eq!(back["kits"][0].as_str(), Some("sbxw:retro"), "{out}");
+        assert!(back["ports"][0].get("kits").is_none(), "{out}");
+        let gone = set_kits_line(&out, None).unwrap();
+        assert!(!gone.contains("kits"), "no line: the defaults apply\n{gone}");
+        assert_eq!(set_kits_line("", Some(&[])).unwrap().trim(), "kits = [\n]");
+    }
+
+    #[test]
+    fn a_checkout_or_written_out_path_is_known_as_its_bundled_kit() {
+        assert_eq!(bundled_by_path("/Users/t/sbxw 2/assets/codemap"), Some("codemap"));
+        assert_eq!(bundled_by_path("/Users/t/.sbxw/kits/retro/"), Some("retro"));
+        assert_eq!(bundled_by_path("/Users/t/my-kits/codemap"), None);
+        assert_eq!(bundled_by_path("/Users/t/sbxw/assets/headroom"), None);
+        for b in BUNDLED {
+            assert!(!about(b).is_empty(), "{b}");
+        }
+    }
 
     #[test]
     fn kit_refs_resolve_only_when_they_are_paths() {

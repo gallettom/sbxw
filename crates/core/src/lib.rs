@@ -18,6 +18,7 @@ pub mod hosts;
 pub mod ids;
 pub mod kits;
 pub mod messages;
+pub mod my_skills;
 pub mod names;
 pub mod plans;
 pub mod policy;

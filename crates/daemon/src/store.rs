@@ -90,6 +90,17 @@ impl Paths {
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }
+    /// The skills the person kept from a sandbox, one folder each: data on
+    /// the host, installed in new sandboxes by the kit below.
+    pub fn my_skills(&self) -> PathBuf {
+        self.root.join("skills")
+    }
+    /// `state/kits/sbxw-my-skills/`: one kit for every sandbox, rewritten when
+    /// a skill is kept or dropped. sbx re-reads it on a container swap, so an
+    /// older sandbox picks up the new list then too.
+    pub fn my_skills_kit(&self) -> PathBuf {
+        self.state().join("kits").join(sbxw_core::my_skills::KIT_NAME)
+    }
     /// Documents `sbxw env run` derives for one sandbox.
     pub fn env_dir(&self, name: &str) -> PathBuf {
         self.state().join("env").join(name)

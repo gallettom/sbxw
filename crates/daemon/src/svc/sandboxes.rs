@@ -148,7 +148,7 @@ impl App {
             rw.len(),
             extra.len()
         );
-        let mut cfg = self.cfg.clone();
+        let mut cfg = self.daemon_config();
         cfg.kit_mounts.extend(kit_mounts.into_iter().filter(|(_, host)| !host.trim().is_empty()));
         cfg.validate()?;
         let mut req = self.bring_up_request(name, path, cfg, extra, false);
@@ -164,9 +164,10 @@ impl App {
     /// dialog offers a folder for. A kit that is not a local directory is not
     /// read, so its targets are not offered (a path typed in still works).
     pub fn declared_host_mounts(&self) -> Vec<serde_json::Value> {
-        let refs = crate::bundled::resolve(&self.store.paths, &self.cfg.kits).unwrap_or_default();
+        let cfg = self.daemon_config();
+        let refs = crate::bundled::resolve(&self.store.paths, &cfg.kits).unwrap_or_default();
         let mut out = Vec::new();
-        for (kit, dir) in self.cfg.kits.iter().zip(refs) {
+        for (kit, dir) in cfg.kits.iter().zip(refs) {
             let Ok(spec) = std::fs::read_to_string(PathBuf::from(&dir).join("spec.yaml")) else { continue };
             for target in sbxw_core::kits::host_mount_targets(&spec) {
                 let host = self.cfg.kit_mounts.get(&target).cloned().unwrap_or_default();
@@ -183,9 +184,10 @@ impl App {
             return serde_json::json!({ "auto": false });
         }
         let (sbx, sbxw) = self.template_versions();
-        let content = crate::bundled::fingerprint(&self.store.paths, &self.cfg.kits).unwrap_or_default();
+        let kits = self.daemon_config().kits;
+        let content = crate::bundled::fingerprint(&self.store.paths, &kits).unwrap_or_default();
         let now = templates::Current { sbx: &sbx, sbxw, content: &content };
-        let state = templates::check(&self.store.templates(), &self.cfg.kits, &now);
+        let state = templates::check(&self.store.templates(), &kits, &now);
         serde_json::json!({ "auto": true, "current": { "sbx": sbx, "sbxw": sbxw }, "template": state })
     }
 
@@ -283,7 +285,7 @@ impl App {
     pub async fn create_chat(self: &Arc<Self>, name: SandboxName) -> Result<Vec<String>> {
         let ws = self.prepare_chat_workspace(&name)?;
         tracing::info!("provisioning chat sandbox '{name}' at {}", ws.display());
-        let req = self.bring_up_request(name, ws, self.cfg.clone(), vec![], true);
+        let req = self.bring_up_request(name, ws, self.daemon_config(), vec![], true);
         self.provision(req, None).await
     }
 

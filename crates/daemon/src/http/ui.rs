@@ -68,6 +68,11 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/templates", get(templates_list))
         .route("/api/templates/save", post(template_save))
         .route("/api/templates/rm", post(template_rm))
+        .route("/api/kits", get(kits_panel).post(kits_set))
+        .route("/api/my-skills", get(my_skills_list))
+        .route("/api/my-skills/rm", post(my_skills_rm))
+        .route("/api/sandboxes/:name/skills", get(sandbox_skills))
+        .route("/api/sandboxes/:name/skills/keep", post(keep_skill))
         .route("/api/sandboxes/:name/mcp", get(mcp_list))
         .route("/api/sandboxes/:name/mcp/unload", post(mcp_unload))
         .route("/api/sandboxes/:name/envfile", get(envfile).post(envfile))
@@ -339,6 +344,55 @@ async fn template_rm(State(app): S, Json(b): Json<TemplateRmBody>) -> ApiResult 
     Ok(ok())
 }
 
+/// The sbxw.toml files the Kits dialog may edit, with their `kits` lines.
+async fn kits_panel(State(app): S) -> ApiResult {
+    Ok(ok_with(app.kits_panel()))
+}
+
+#[derive(Deserialize)]
+struct KitsBody {
+    path: std::path::PathBuf,
+    /// `null` removes the line: the defaults apply.
+    kits: Option<Vec<String>>,
+}
+
+async fn kits_set(State(app): S, Json(b): Json<KitsBody>) -> ApiResult {
+    Ok(warnings(app.set_kits(&b.path, b.kits)?))
+}
+
+/// The skills kept from sandboxes, which every new sandbox gets.
+async fn my_skills_list(State(app): S) -> ApiResult {
+    Ok(ok_with(app.my_skills_list()))
+}
+
+#[derive(Deserialize)]
+struct SkillNameBody {
+    name: String,
+}
+
+async fn my_skills_rm(State(app): S, Json(b): Json<SkillNameBody>) -> ApiResult {
+    app.forget_skill(&b.name)?;
+    Ok(ok())
+}
+
+/// The skills a sandbox has that could be kept.
+async fn sandbox_skills(State(app): S, Path(name): Path<String>) -> ApiResult {
+    Ok(ok_with(app.sandbox_skills(&sandbox(&name)?).await?))
+}
+
+#[derive(Deserialize)]
+struct KeepSkillBody {
+    origin: sbxw_core::my_skills::Origin,
+    name: String,
+    #[serde(default)]
+    replace: bool,
+}
+
+/// Keep one: on the UI listener only, since it reaches every later sandbox.
+async fn keep_skill(State(app): S, Path(name): Path<String>, Json(b): Json<KeepSkillBody>) -> ApiResult {
+    Ok(warnings(app.keep_skill(&sandbox(&name)?, b.origin, &b.name, b.replace).await?))
+}
+
 #[derive(Deserialize)]
 struct ChatBody {
     #[serde(default)]
@@ -403,7 +457,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
     let name = sandbox(&name)?;
     let config = match &b.config {
         Some(p) => Config::load(p, std::path::Path::new("/"))?,
-        None => app.cfg.clone(),
+        None => app.daemon_config(),
     };
     let req = BringUp {
         name,

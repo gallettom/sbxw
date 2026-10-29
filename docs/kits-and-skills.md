@@ -6,6 +6,7 @@
 - [Bundled kits](#bundled-kits)
 - [The kit cache](#the-kit-cache)
 - [Shared skills](#shared-skills)
+- [Keeping a skill you made](#keeping-a-skill-you-made)
 - [Writing your own kit](#writing-your-own-kit)
 
 ## Kits
@@ -16,13 +17,14 @@ network rules and startup commands. List them in `sbxw.toml`:
 ```toml
 kits = [
   "sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools",  # the defaults
+  "sbxw:retro",                                                 # default too
   "sbxw:k8s-tools",                                             # opt-in
   "./my-kit",                   # relative paths resolve against sbxw.toml
 ]
 ```
 
-**Without a `kits` line**, a sandbox gets `sbxw:codemap`, `sbxw:agent-skills`
-and `sbxw:md-to-pdf-tools`. Writing `kits` replaces the defaults; `kits = []`
+**Without a `kits` line**, a sandbox gets `sbxw:codemap`, `sbxw:agent-skills`,
+`sbxw:md-to-pdf-tools` and `sbxw:retro`. Writing `kits` replaces the defaults; `kits = []`
 means none.
 
 A kit reference is one of:
@@ -32,6 +34,9 @@ A kit reference is one of:
 - a `.zip`, an OCI ref (`ghcr.io/org/kit:tag`), or a git URL.
 
 Validate one with `sbx kit validate <dir>`.
+
+The web UI's **Kits** button edits the same line without opening the file:
+see [the sidebar footer](web-ui.md#the-sidebar-footer).
 
 ### Kits go in at creation
 
@@ -64,6 +69,7 @@ path, since sbx doesn't know `sbxw:` names.
 | `sbxw:codemap` | ✓ | `/codemap` and `/codemap-lens`: agents read a repo's code map before its source |
 | `sbxw:agent-skills` | ✓ | `/archify`, `/brag`, `/brag-slim`, `/i-have-adhd`, `/handoff`, `/grill-me`, `/grilling`, `/frontend-design`, plus headless Chromium and FFmpeg |
 | `sbxw:md-to-pdf-tools` | ✓ | `/md-to-pdf`, with WeasyPrint, poppler-utils and Pillow |
+| `sbxw:retro` | ✓ | `/retro`: reads past sessions and proposes what should become a script, hook, skill, rule or kit |
 | `sbxw:k8s-tools` | | `kubectl`, `k3d` and `skaffold` in `~/.local/bin` |
 | `sbxw:git-identity` | | Your host's Git `user.name` and `user.email` in the sandbox |
 | `sbxw:ssh-agent` | | Your host's SSH agent, restricted to signing commits and the common Git hosts |
@@ -116,6 +122,18 @@ them, never in the shared skill store. See
 The `/md-to-pdf` skill (user-level, so it works whatever project is mounted)
 and the WeasyPrint stack it needs, so the first use has no install step. See
 [`assets/md-to-pdf-tools/README.md`](../assets/md-to-pdf-tools/README.md).
+
+### `sbxw:retro`
+
+`/retro` reads back over Claude Code sessions (`/retro` for this one, `/retro
+last 5` for the five newest) and finds what should stop depending on the agent
+remembering: a fixed command sequence that wants to be a script, a step that
+must happen on every event and wants to be a hook, a correction given twice
+that wants to be a `CLAUDE.md` rule, a tool installed by hand that wants to be
+a kit. A digest script does the counting over the transcripts. The report, with
+evidence for each candidate, goes to `.sbxw-artifacts/retro/`; nothing is built
+or installed until you pick a candidate. Needs no network. See
+[`assets/retro/README.md`](../assets/retro/README.md).
 
 ### `sbxw:k8s-tools`
 
@@ -232,6 +250,38 @@ old `share_skills = false` still works and means `"off"`. It's read at
 one recreates the container. The store carries only skill files and costs
 nothing to update. A skill with system dependencies (like `/md-to-pdf`, which
 needs WeasyPrint) must be a kit; one without belongs in the store.
+
+## Keeping a skill you made
+
+A skill an agent wrote in one sandbox — under the project's
+`.claude/skills/<name>/` or the sandbox's own `~/.claude/skills/<name>/` — can
+be **kept**, so every sandbox created afterwards has it:
+
+1. Open **Skills** in the web UI's sidebar footer.
+2. Under **Your skills**, pick the sandbox and press **Show its skills**.
+3. Press **Keep** on the one you want (**Replace** if you kept one of that name before).
+
+sbxw copies the folder to `~/.sbxw/skills/<name>/` on your machine and writes
+one kit, `~/.sbxw/state/kits/sbxw-my-skills/`, that every new sandbox gets
+whatever its `kits` line says. In the sandbox the files land in
+`~/.sbxw/my-skills/<name>/`, with a `/name` command pointing at its `SKILL.md`
+— the same arrangement as the bundled kits. **Remove** stops new sandboxes
+getting it.
+
+- **Only you keep a skill.** It happens on the web UI's own port, never from a
+  sandbox. An agent wrote it and every later agent will follow it: read the
+  `SKILL.md` before pressing Keep.
+- **Your host's Claude Code never sees it.** The copy is data: it is never
+  put in your own `~/.claude/skills`, and nothing in it is executable on your
+  machine. Files executable in the sandbox are executable again in the next ones.
+- **Text only, small.** At most 200 files and 512 KB; links, binaries,
+  `node_modules/` and `.git/` are left out (the dialog says which). A skill
+  needing packages belongs in a [kit](#writing-your-own-kit).
+- **New sandboxes.** An existing sandbox gets the change only when sbx swaps
+  its container. A sandbox made from an [automatic template](configuration.md)
+  saved before a Remove still carries the removed skill: rebuild the template.
+- Skills in sbx's [shared store](#shared-skills) are not offered: they reach
+  every sandbox already.
 
 ## Writing your own kit
 

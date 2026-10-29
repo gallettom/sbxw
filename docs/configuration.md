@@ -38,7 +38,7 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `kits` | the three default kits | See [Kits](kits-and-skills.md) |
+| `kits` | the four default kits | See [Kits](kits-and-skills.md) |
 | `kit_mounts` | `{}` | Sandbox path → host directory for kit-declared host mounts (`host-mount@1`, sbx 0.50+), passed as `--mount HOST:TARGET`. The target must be one a kit declares |
 | `volumes` | `[]` | Sandbox paths kept on persistent storage across `sbxw rm` / `sbxw up` of the same name. See [Persistent volumes](kits-and-skills.md#persistent-volumes) |
 | `cache` | `true` | Mount the [kit cache](kits-and-skills.md#the-kit-cache) |

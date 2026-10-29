@@ -381,9 +381,31 @@
   .tpl-rm:hover { background: var(--c-red-tint); border-color: var(--c-red); }
   .tpl-rm:disabled { opacity: .5; cursor: not-allowed; }
   .tpl-form { display: flex; gap: .5rem; }
+  /* Kits dialog: bundled kits as checkbox rows, the rest as template-style rows. */
+  .kit-list { max-height: 300px; }
+  .kit-row { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; column-gap: .5rem; padding: .4rem .6rem; cursor: pointer; }
+  .kit-row + .kit-row { border-top: 1px solid var(--c-elevated); }
+  .kit-row input { align-self: center; }
+  .kit-ref { font-family: var(--font-mono); font-size: 12px; color: var(--c-text-bright); }
+  .kit-row .skills-tag { justify-self: start; }
+  .kit-about { grid-column: 2 / -1; font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
+  .kit-via { grid-column: 2 / -1; font-family: var(--font-mono); font-size: 10.5px; color: var(--c-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kit-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .kit-link { background: none; border: none; padding: 0; font: inherit; font-size: 11px; color: var(--c-blue); cursor: pointer; }
+  .kit-link:hover { text-decoration: underline; }
+  .kit-link.hidden { display: none; }
+  .kit-add { margin-top: .5rem; }
+  #kits-other .tpl-rm { margin-left: auto; }
   .tpl-form select { flex: 0 0 38%; min-width: 0; }
   .tpl-form input { flex: 1; min-width: 0; }
   .skills-row { display: flex; flex-direction: column; gap: .2rem; }
+  /* Skills dialog: the person's kept skills, and a sandbox's that could be. */
+  .my-skill { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: .5rem; padding: .4rem .6rem; }
+  .my-skill + .my-skill { border-top: 1px solid var(--c-elevated); }
+  .my-skill-about { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
+  .my-skill-from { font-family: var(--font-mono); font-size: 10.5px; color: var(--c-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #my-skills-found { margin-top: .5rem; }
+  #my-skills-found.hidden, #my-skills-error.hidden { display: none; }
   .skills-row + .skills-row { border-top: 1px solid var(--c-elevated); padding-top: .5rem; }
   .skills-cmd { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
   .skills-cmd code {

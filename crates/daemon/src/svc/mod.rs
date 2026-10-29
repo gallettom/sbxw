@@ -3,6 +3,8 @@
 pub mod agents;
 pub mod awake;
 pub mod codemap;
+pub mod kits;
+pub mod my_skills;
 pub mod open;
 pub mod plans;
 pub mod relay;

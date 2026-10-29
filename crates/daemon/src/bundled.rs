@@ -14,6 +14,7 @@ const SPECS: &[(&str, &str)] = &[
     ("codemap", include_str!("../../../assets/codemap/spec.yaml")),
     ("agent-skills", include_str!("../../../assets/agent-skills/spec.yaml")),
     ("md-to-pdf-tools", include_str!("../../../assets/md-to-pdf-tools/spec.yaml")),
+    ("retro", include_str!("../../../assets/retro/spec.yaml")),
     ("k8s-tools", include_str!("../../../assets/k8s-tools/spec.yaml")),
     ("git-identity", include_str!("../../../assets/git-identity/spec.yaml")),
     ("ssh-agent", include_str!("../../../assets/ssh-agent/spec.yaml")),

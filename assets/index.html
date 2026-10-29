@@ -172,10 +172,11 @@
         <span class="upload-box-title">Drop files here</span>
         <span class="upload-box-sub">or click to browse</span>
       </label>
-      <button id="btn-skills" class="skills-btn" title="Skills — the commands the bundled kits put in every sandbox">Skills</button>
+      <button id="btn-skills" class="skills-btn" title="Skills — the commands the bundled kits put in every sandbox, and the ones you kept">Skills</button>
       <!-- Templates under Skills: also about what a sandbox starts with, but
            something you manage rather than read, so a plain footer button. -->
       <button id="btn-templates" class="help-btn" title="Templates — snapshots new sandboxes can start from: save one, remove one">Templates</button>
+      <button id="btn-kits" class="help-btn" title="Kits — which kits sandboxes get: edits the kits line of sbxw.toml">Kits</button>
       <button id="btn-monitor" class="monitor-btn" hidden
               title="Host monitor — every sandbox at once, in a pane of its own">
         Monitor Sandboxes
@@ -965,7 +966,8 @@
   </div>
 
   <!-- ── Skills modal ──
-       What the bundled kits put in a sandbox, command by command. Static: the
+       The person's kept skills first (live, from the daemon), then what the
+       bundled kits put in a sandbox, command by command. That part is static: the
        kits are files in this repository, and a sandbox only has a kit's
        commands if sbxw.toml's `kits` lists it — the lead says so rather than
        the page pretending to know. Opened from the sidebar footer (/js/skills.js). -->
@@ -984,6 +986,24 @@
           button, or another skill; <strong>manual</strong> ones only when you type them.
           Hover a tag for the reason.
         </p>
+        <!-- Your own skills: kept from a sandbox, installed in every new one by
+             a kit sbxw writes (svc/my_skills.rs). Filled by /js/skills.js. -->
+        <div class="help-step" id="my-skills">
+          <div class="help-step-head">Your skills <span class="skills-kit">~/.sbxw/skills</span></div>
+          <p class="help-step-body">
+            A skill you made in a sandbox — under the project’s <code>.claude/skills/</code> or the
+            sandbox’s <code>~/.claude/skills/</code> — can be kept: every sandbox created afterwards
+            gets it as <code>/name</code>. Read it before keeping it: an agent wrote it, and every
+            later agent will follow it.
+          </p>
+          <div class="tpl-list" id="my-skills-list"><p class="repo-note">Loading…</p></div>
+          <div class="tpl-form kit-add">
+            <select id="my-skills-sandbox" class="field-input" aria-label="Sandbox to keep a skill from"></select>
+            <button class="btn-cancel" id="my-skills-look">Show its skills</button>
+          </div>
+          <div class="tpl-list hidden" id="my-skills-found"></div>
+          <p class="create-error hidden" id="my-skills-error"></p>
+        </div>
         <div class="help-step">
           <div class="help-step-head">Agent skills kit <span class="skills-kit">assets/agent-skills</span></div>
           <div class="skills-row">
@@ -1037,6 +1057,13 @@
             <p class="help-step-body">Converts a Markdown file to a styled PDF and a stitched full-page PNG.</p>
           </div>
         </div>
+        <div class="help-step">
+          <div class="help-step-head">Retro kit <span class="skills-kit">assets/retro</span></div>
+          <div class="skills-row">
+            <div class="skills-cmd"><code>/retro</code> <span class="skills-tag skills-tag-manual" title="Runs only when you type it, or when the agent decides to">manual</span></div>
+            <p class="help-step-body">Reads back over past sessions and proposes what should become a script, a hook, a skill, a rule or a kit — with the evidence, building nothing until you pick.</p>
+          </div>
+        </div>
       </div>
       <div class="modal-foot">
         <button class="btn-cancel" id="skills-modal-close2">Close</button>
@@ -1049,6 +1076,51 @@
        save a sandbox as a new one. Saving goes through the daemon, which takes
        the sandbox's agent token and Claude credentials out first and puts
        them back after (provision.rs, App::snapshot). (/js/templates.js) -->
+  <div class="modal-overlay hidden" id="kits-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="kits-modal-title" style="width:640px">
+      <div class="modal-head">
+        <span class="modal-title" id="kits-modal-title">Kits</span>
+        <button class="modal-close" id="kits-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-lead">
+          The kits a sandbox gets, as the <code>kits</code> line of <code>sbxw.toml</code>.
+          Only that line is rewritten; the rest of the file stays as you wrote it.
+          New sandboxes get the change at once; an existing one at its next <code>sbxw up</code>.
+        </p>
+        <div>
+          <span class="field-label">File</span>
+          <select id="kits-file" class="field-input" aria-label="sbxw.toml"></select>
+          <p class="repo-note" id="kits-file-note"></p>
+        </div>
+        <div>
+          <div class="kit-head">
+            <span class="field-label">Bundled</span>
+            <button class="kit-link hidden" id="kits-by-name"
+                    title="Replace each …/assets/&lt;kit&gt; path with its sbxw: name — the copy inside the sbxw binary, which follows sbxw releases instead of your checkout">Use sbxw: names</button>
+          </div>
+          <div class="tpl-list kit-list" id="kits-bundled"></div>
+        </div>
+        <div>
+          <span class="field-label">Other kits</span>
+          <div class="tpl-list" id="kits-other"><p class="repo-note">Loading…</p></div>
+          <div class="tpl-form kit-add">
+            <input id="kits-add-input" class="field-input" type="text" spellcheck="false"
+                   placeholder="./my-kit, /abs/path, ghcr.io/org/kit:1, a git URL" aria-label="Kit reference">
+            <button class="btn-cancel" id="kits-add">Add</button>
+          </div>
+          <p class="repo-note">A directory holding a <code>spec.yaml</code>, a <code>.zip</code>, an OCI ref or a git URL. Relative paths resolve against the file's folder.</p>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="kits-error"></span>
+        <button class="btn-cancel" id="kits-defaults" title="Remove the kits line: the default kits apply">Use defaults</button>
+        <button class="btn-cancel" id="kits-modal-close2">Close</button>
+        <button class="btn-create" id="kits-save" disabled>Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="templates-modal-overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="templates-modal-title" style="width:600px">
       <div class="modal-head">

@@ -947,6 +947,7 @@ dependencies = [
  "serde_norway",
  "tempfile",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]

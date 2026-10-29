@@ -37,4 +37,5 @@ Component READMEs: [macOS island](../macos/README.md),
 [codemap kit](../assets/codemap/README.md),
 [agent-skills kit](../assets/agent-skills/README.md),
 [md-to-pdf kit](../assets/md-to-pdf-tools/README.md),
+[retro kit](../assets/retro/README.md),
 [k8s kit](../assets/k8s-tools/README.md).

@@ -38,6 +38,7 @@ const SBXW_APP_SCRIPTS = [
   '/js/help.js',
   '/js/skills.js',
   '/js/templates.js',
+  '/js/kits.js',
   '/js/upload.js',
   '/js/lifecycle.js',
   '/js/main.js',

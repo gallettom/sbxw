@@ -158,19 +158,21 @@ env_files = []
 # and would be silently ignored.
 #
 # The kits sbxw ships are named `sbxw:<name>` — no path to keep in sync, they
-# are inside the binary. Without a `kits` line a sandbox gets the first three:
+# are inside the binary. Without a `kits` line a sandbox gets the first four:
 #   sbxw:codemap         /codemap: agents read (and write) a repo's code map in
 #                        .sbxw-artifacts/codemap/ before reading its source.
 #   sbxw:agent-skills    /archify, /brag, /brag-slim, /i-have-adhd, /handoff,
 #                        /grill-me, /grilling, /frontend-design, pinned, with
 #                        Chromium and ffmpeg.
 #   sbxw:md-to-pdf-tools /md-to-pdf, with WeasyPrint and poppler.
+#   sbxw:retro           /retro: past sessions read back for what should become
+#                        a script, a hook, a skill, a rule or a kit.
 #   sbxw:k8s-tools       kubectl + k3d + skaffold — opt-in, add it yourself.
 # Each declares the egress it needs; nothing to add to network_allow.
 # Writing `kits` replaces the defaults, so list them again to keep them:
 #
 # kits = [
-#   "sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools",
+#   "sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro",
 #   "sbxw:k8s-tools",
 #   "./my-kit",
 # ]
