@@ -129,6 +129,10 @@ pub struct ThreadRecord {
     pub repo: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A session in the main checkout, beside the main agent, rather than in
+    /// a worktree of its own: no worktree, no branch, the same files.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub same_worktree: bool,
 }
 
 /// A directory mounted beside the workspace, at the same path inside.
@@ -392,7 +396,7 @@ impl Store {
                 .into_iter()
                 .map(|(k, v)| {
                     let rec = match v {
-                        Old::Repo(repo) => ThreadRecord { repo, model: None },
+                        Old::Repo(repo) => ThreadRecord { repo, ..Default::default() },
                         Old::Full(r) => r,
                     };
                     (k, rec)

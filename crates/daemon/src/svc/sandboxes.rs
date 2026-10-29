@@ -388,9 +388,15 @@ impl App {
         };
         let mut threads: BTreeMap<String, (bool, String)> =
             found.into_iter().filter(|(t, _)| !teams.contains(t)).map(|(t, r)| (t, (false, r))).collect();
+        let team_members: std::collections::HashSet<String> = team_threads.iter().cloned().collect();
         for t in team_threads {
             let repo = recorded.get(&t).cloned().unwrap_or_default();
             threads.entry(t).or_insert((false, repo));
+        }
+        // Sessions in the main checkout have no worktree to be found by: they
+        // are listed from their record, running or not, until closed.
+        for (t, r) in rec.threads.iter().filter(|(_, r)| r.same_worktree) {
+            threads.entry(t.clone()).or_insert((false, r.repo.clone()));
         }
         for t in self.sessions.open_threads(sandbox) {
             let repo = recorded.get(&t).cloned().unwrap_or_default();
@@ -401,7 +407,16 @@ impl App {
                 .into_iter()
                 .map(|(name, (open, repo))| {
                     let model = rec.threads.get(&name).and_then(|r| r.model.clone());
-                    serde_json::json!({ "name": name, "open": open, "repo": repo, "model": model })
+                    // Where it works: the main checkout (`same`), a shared
+                    // plan's one worktree (`team`), or a worktree of its own.
+                    let worktree = if rec.threads.get(&name).is_some_and(|r| r.same_worktree) {
+                        "same"
+                    } else if team_members.contains(&name) {
+                        "team"
+                    } else {
+                        "own"
+                    };
+                    serde_json::json!({ "name": name, "open": open, "repo": repo, "model": model, "worktree": worktree })
                 })
                 .collect(),
             open: self.sessions.agents_open(sandbox),

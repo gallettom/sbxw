@@ -49,7 +49,25 @@ await visit('Project panel', () => button(/Project/).click(), () => page.screens
 await visit('More menu', () => button(/More actions/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-more.png') }));
 await visit('Env card', async () => { await button(/More actions/).click(); await page.getByRole('menuitem', { name: /Environment file/ }).click(); },
   () => page.screenshot({ path: png.replace(/\.png$/, '-env.png') }));
-await visit('Thread menu', () => button(/Thread/).click());
+await visit('Sessions menu', () => page.locator('#psessions-0').click(), () => page.screenshot({ path: png.replace(/\.png$/, '-sessions.png') }));
+// A session on the main checkout, opened from that menu: it lands in a pane
+// of its own and is listed under its kind.
+await visit('New session on the main checkout', async () => {
+  await page.locator('#psessions-0').click();
+  await page.getByRole('menuitem', { name: /^\+ Session$/ }).click();
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: png.replace(/\.png$/, '-new-session.png') });
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2500);
+}, async () => {
+  const label = await page.evaluate(() => panes.slice(0, paneCount).map(p => p.thread).filter(Boolean).join(','));
+  if (label !== 's1') problems.push(`new session: panes hold threads [${label}], want s1`);
+  await page.locator('#psessions-0').click();
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: png.replace(/\.png$/, '-sessions-after.png') });
+});
+await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first().click(),
+  () => page.screenshot({ path: png.replace(/\.png$/, '-sidebar.png') }));
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
 await visit('Monitor', () => button(/Monitor Sandboxes/).click());

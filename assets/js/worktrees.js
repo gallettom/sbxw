@@ -295,7 +295,7 @@ async function wtPrefetch(sandbox) {
   } catch { /* the miniature stays a sketch */ }
   const board = await fetchBoard(sandbox);
   if (boardIsShared(board)) wtBoards.set(sandbox, board); else wtBoards.delete(sandbox);
-  if (threadMenu.idx != null && panes[threadMenu.idx]?.sandbox === sandbox) renderThreadMenu();
+  if (sessionMenu.idx != null && panes[sessionMenu.idx]?.sandbox === sandbox) renderSessionMenu();
 }
 
 // The entry: the miniature, then what it is. `names` are the threads the menu

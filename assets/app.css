@@ -1142,17 +1142,47 @@
   /* The threads of a sandbox, under its row: the way to any of them from
      anywhere, folded or not. Hung off a hairline so they read as its
      branches; a shown one is in full text, a folded one muted. */
-  .sbx-threads { margin: .3rem 0 0 .2rem; border-left: 1px solid var(--c-border); }
-  .sbx-threads[hidden] { display: none; }
-  .sbx-thread {
-    display: flex; align-items: center; gap: .3rem; width: 100%;
-    font: inherit; font-size: 11px; text-align: left; cursor: pointer;
-    padding: .2rem .5rem; background: none; border: none; border-radius: 0 var(--r-xs) var(--r-xs) 0;
-    color: var(--c-text-muted);
+  .sbx-sessions[hidden] { display: none; }
+  /* The fold over them: "▸ Sessions 3", with the most urgent mark of the lot
+     while folded, so a thread waiting for you shows without opening it. */
+  .sbx-sessions-toggle {
+    display: flex; align-items: center; gap: .3rem; margin-top: .25rem; padding: .1rem .2rem;
+    font: inherit; font-size: 11px; color: var(--c-text-muted); cursor: pointer;
+    background: none; border: none; border-radius: var(--r-xs);
   }
-  .sbx-thread:hover { background: var(--c-elevated); color: var(--c-text); }
-  .sbx-thread.shown { color: var(--c-text); }
+  .sbx-sessions-toggle:hover { color: var(--c-text); background: var(--c-elevated); }
+  .sbx-sessions-caret { display: inline-block; font-size: 9px; transition: transform .12s; }
+  .sbx-sessions-toggle[aria-expanded="true"] .sbx-sessions-caret { transform: rotate(90deg); }
+  .sbx-sessions-count {
+    min-width: 1.3em; padding: 0 .3rem; border-radius: var(--r-md); text-align: center;
+    font-weight: 600; background: var(--c-border); color: var(--c-text);
+  }
+  .sbx-threads { margin: .15rem 0 0 .2rem; border-left: 1px solid var(--c-border); }
+  /* A heading per kind, in sentence case and the row's own size, set apart
+     by weight and its glyph rather than by shrinking it into a caption. */
+  .sbx-sessions-kind {
+    display: flex; align-items: center; gap: .35rem;
+    padding: .35rem .5rem .1rem; font-size: 10.5px; font-weight: 600; color: var(--c-text-dim);
+  }
+  .sbx-sessions-kind span { font-weight: 400; }
+  .sbx-thread {
+    display: flex; align-items: center; gap: .4rem; width: 100%;
+    font: inherit; font-size: 11.5px; text-align: left; cursor: pointer;
+    padding: .22rem .5rem; background: none; border: none; border-radius: 0 var(--r-xs) var(--r-xs) 0;
+    color: var(--c-text);
+  }
+  .sbx-thread:hover { background: var(--c-elevated); color: var(--c-text-bright); }
+  .sbx-thread.shown .sbx-sname { color: var(--c-text-bright); font-weight: 600; }
+  .sbx-thread[data-state="stopped"] { color: var(--c-text-dim); }
+  .sbx-smark { width: .9em; flex-shrink: 0; text-align: center; color: var(--c-text-dim); }
+  .sbx-sname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sbx-sstate { margin-left: auto; flex-shrink: 0; font-size: 10.5px; color: var(--c-text-dim); }
+  .sbx-sstate[data-state="working"] { color: var(--c-blue); }
+  .sbx-sstate[data-state="blocked"] { color: var(--c-amber-strong); font-weight: 600; }
+  .sbx-sstate[data-state="done"] { color: var(--c-green); }
+  .sbx-sstate[data-state="failed"] { color: var(--c-red); }
   .sbx-thread .sbx-pane-badge { margin-left: auto; padding: .1rem .3rem; float: none; }
+  .sbx-thread .sbx-sstate + .sbx-pane-badge { margin-left: .35rem; }
   .sbx-pane-badge {
     display: inline-block; font-size: 9px; color: var(--c-blue);
     background: var(--c-blue-tint); border: 1px solid var(--c-blue); border-radius: var(--r-xs);
@@ -1546,17 +1576,8 @@
   }
   .pane-bar .pane-lead-toggle[aria-pressed="true"]:hover { filter: brightness(1.12); }
   .pane-bar .pane-lead-toggle .lead-state { font-weight: 600; }
-  /* Remote Control on: filled green, the colour of a live connection. */
-  .pane-bar .pane-remote-btn[aria-pressed="true"],
-  .pane-bar .pane-remote-btn[aria-pressed="true"]:hover {
-    color: var(--c-bg); border-color: var(--c-green); background: var(--c-green);
-  }
-  /* On, it is an indicator, not a control: lit, not greyed like a disabled
-     button, and nothing to press. */
-  .pane-bar .pane-remote-btn[aria-pressed="true"]:disabled { opacity: 1; cursor: default; filter: none; }
-  .pane-bar .pane-remote-btn .rc-state { font-weight: 600; }
-  .pane-bar .pane-new-thread[hidden], .pane-bar .pane-lead-toggle[hidden],
-  .pane-bar .pane-remote-btn[hidden] { display: none; }
+  .pane-bar .pane-lead-toggle[hidden],
+  .pane-bar .pane-sessions-btn[hidden] { display: none; }
   .pane-bar .pane-thread-close[hidden] { display: none; }
   .pane-bar {
     display: flex; align-items: center; gap: .5rem;
@@ -1756,6 +1777,21 @@
   .pane-bar .pane-more-btn { padding: .15rem .4rem; line-height: 0; }
   .pane-bar .pane-more-btn svg { display: block; }
   .pane-bar .pane-more-btn[aria-expanded="true"] { background: var(--c-border); }
+  /* Remote control on, said from the bar now that its row is under ⋯: a green
+     dot on the corner, the colour of a live connection. Shown whatever the
+     on-demand rule below does with the button itself. */
+  .pane-bar .pane-more-btn { position: relative; }
+  .pane-bar .pane-more-btn.remote-on::after {
+    content: ''; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--c-green); border: 1px solid var(--c-pane-bar, darkslategrey);
+  }
+  @media (hover: hover) {
+    .pane .pane-bar .pane-more-btn.remote-on { display: inline-block; }
+  }
+  .pane-menu .rc-state { font-weight: 600; color: var(--c-text-muted); margin-left: .25rem; }
+  .pane-menu button[aria-pressed="true"] .rc-state { color: var(--c-green); }
+  /* On, the row is an indicator: lit, not greyed like a disabled one. */
+  .pane-menu button[data-act="remote"][aria-pressed="true"]:disabled { opacity: 1; cursor: default; }
   /* ── The ⋯ menu ──
      Three rows, each a name and what it is for, so the menu explains itself
      the first time without tooltips. Same shell as the Thread menu. */
@@ -1800,14 +1836,101 @@
      that applies (Show or Hide), the bulk actions that would do something,
      and New thread last. A shown thread's name is in full text, a hidden one
      muted — the same reading as the sidebar rows. */
-  .pane-bar .thread-count {
+  /* The Sessions button's count, amber while a session waits for you. */
+  .pane-bar .session-count {
     display: inline-block; min-width: 1.3em; margin-left: .35rem; padding: 0 .3rem;
     border-radius: var(--r-md); text-align: center; font-weight: 600;
     background: var(--c-border); color: var(--c-text);
   }
-  .pane-bar .thread-count[hidden] { display: none; }
-  .pane-bar .thread-count[data-state="blocked"] { background: var(--c-amber); color: var(--c-bg); }
-  .pane-bar .pane-new-thread[aria-expanded="true"] { background: var(--c-border); }
+  .pane-bar .session-count[hidden] { display: none; }
+  .pane-bar .session-count[data-state="blocked"] { background: var(--c-amber); color: var(--c-bg); }
+  .pane-bar .pane-sessions-btn[aria-expanded="true"] { background: var(--c-border); }
+  /* ── The Sessions menu ──
+     Read top to bottom as: which sandbox, then two sections, each a heading
+     with its own "+", then one line per session. A line is a mark, a name,
+     a state in words (coloured as the mark is), and where it is on screen;
+     the explanations live in tooltips, so what stays on screen is names and
+     states. The session in this pane carries a blue bar on its left edge; a
+     stopped one is dimmed so the live ones read first. */
+  .thread-menu.session-menu { width: 320px; padding: .25rem; }
+  .sm-head {
+    display: flex; align-items: baseline; gap: .5rem;
+    padding: .35rem .55rem .45rem;
+  }
+  .sm-head strong { color: var(--c-text-bright); font-size: 13px; }
+  .sm-sandbox {
+    color: var(--c-text-muted); font-size: 11.5px; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sm-section { padding: .3rem 0 .2rem; border-top: 1px solid var(--c-elevated); }
+  .sm-kind { display: flex; align-items: center; gap: .45rem; padding: .15rem .25rem .3rem .55rem; }
+  .sm-kind-name { color: var(--c-text); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .sm-kind-glyph { color: var(--c-text-dim); margin-right: .35rem; font-weight: 400; }
+  .sm-kind-hint {
+    flex: 1; min-width: 0; color: var(--c-text-dim); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-menu .sm-new {
+    flex-shrink: 0; padding: .15rem .45rem; font-size: 11px; font-weight: 600; color: var(--c-blue);
+  }
+  .session-menu .sm-new:hover { background: var(--c-blue-tint); }
+  .sm-list { max-height: 40vh; overflow-y: auto; }
+  .sm-empty { margin: 0; padding: .1rem .55rem .35rem 1.55rem; color: var(--c-text-dim); font-size: 11px; }
+
+  .sm-row { position: relative; display: flex; align-items: center; border-radius: var(--r-xs); }
+  .sm-row:hover, .sm-row:focus-within { background: var(--c-elevated); }
+  .sm-row.here { background: var(--c-blue-tint); }
+  .sm-row.here::before {
+    content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px;
+    border-radius: 2px; background: var(--c-blue);
+  }
+  .session-menu .sm-row .sm-go {
+    flex: 1; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: .45rem;
+    padding: .38rem .4rem .38rem .55rem; background: none;
+  }
+  .session-menu .sm-row .sm-go:hover { background: none; }
+  .session-menu .sm-row.here .sm-go { cursor: default; }
+  .sm-mark { width: .9em; flex-shrink: 0; text-align: center; color: var(--c-text-dim); }
+  .sm-name {
+    color: var(--c-text-bright); font-weight: 600; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sm-tag {
+    flex-shrink: 0; font-size: 10px; line-height: 1.4; padding: 0 .3rem;
+    border: 1px solid var(--c-border); border-radius: var(--r-xs); color: var(--c-text-muted);
+  }
+  .sm-state { margin-left: auto; padding-left: .5rem; flex-shrink: 0; font-size: 11px; color: var(--c-text-muted); }
+  .sm-state[data-state="working"] { color: var(--c-blue); }
+  .sm-state[data-state="blocked"] { color: var(--c-amber-strong); font-weight: 600; }
+  .sm-state[data-state="done"] { color: var(--c-green); }
+  .sm-state[data-state="failed"] { color: var(--c-red); }
+  .sm-state[data-state="stopped"] { color: var(--c-text-dim); }
+  .sm-row[data-state="stopped"] .sm-name { color: var(--c-text-muted); font-weight: 500; }
+  /* Where it is, in a fixed slot at the right edge, so the states line up. */
+  .sm-where {
+    flex-shrink: 0; width: 3.9rem; margin-right: .3rem; text-align: center;
+    font-size: 10.5px; color: var(--c-text-muted);
+  }
+  .sm-row.here .sm-where { color: var(--c-blue); font-weight: 600; }
+  .sm-row .sm-act { display: none; }
+  /* Beside or Hide takes the "where" slot while the row is pointed at. */
+  .sm-row.has-act:hover .sm-where, .sm-row.has-act:focus-within .sm-where { display: none; }
+  .session-menu .sm-row.has-act:hover .sm-act,
+  .session-menu .sm-row.has-act:focus-within .sm-act {
+    display: block; flex-shrink: 0; width: 3.9rem; margin-right: .3rem; padding: .15rem 0; text-align: center;
+    font-size: 11px; border: 1px solid var(--c-border); background: var(--c-surface);
+  }
+  .session-menu .sm-act:hover { border-color: var(--c-dim); color: var(--c-text-bright); }
+  .sm-bulk { display: flex; gap: .25rem; padding: .15rem .3rem 0 1.4rem; }
+  .session-menu .sm-bulk button { padding: .15rem .35rem; font-size: 11px; color: var(--c-text-muted); }
+  .session-menu .sm-bulk button:hover { color: var(--c-text-bright); }
+  /* The board or the worktree graph, last in its section and slimmer than a
+     row's neighbour would make it: a way into a dialog, not a session. */
+  .session-menu .thread-menu-graph { margin: .35rem .3rem .1rem; width: calc(100% - .6rem); padding: .4rem .55rem; }
+  .session-menu .thread-menu-graph-text strong { font-size: 11.5px; }
+  .session-menu .thread-menu-graph-text span {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .thread-menu {
     position: fixed; z-index: 60; width: 300px; max-width: calc(100vw - 16px);
     padding: .35rem; font-size: 12px;

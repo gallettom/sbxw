@@ -115,6 +115,9 @@ pub struct OriginEvidence<'a> {
     pub ancestry: &'a [String],
     pub cwd: Option<&'a str>,
     pub workspace: Option<&'a str>,
+    /// `SBXW_THREAD`: the session sbxw started under that name — a thread, or
+    /// a session sharing the main checkout. Never the main agent.
+    pub thread: Option<&'a str>,
 }
 
 /// Is this session the one sbxw attached? Any marker of a client is enough —
@@ -128,6 +131,11 @@ pub fn classify_origin(ev: &OriginEvidence<'_>) -> SessionOrigin {
         n == "server" || n == "sshd" || n == "ssh" || n.starts_with("sshd:")
     });
     if client || !ev.ssh_env.is_empty() {
+        return SessionOrigin::Remote;
+    }
+    // Named by sbxw, so not its main agent — even when it works in the same
+    // checkout, where the cwd below would read it as the tty's.
+    if ev.thread.is_some() {
         return SessionOrigin::Remote;
     }
     match classify_by_cwd(ev.cwd, ev.workspace) {
@@ -701,6 +709,7 @@ mod tests {
                 ancestry: anc,
                 cwd,
                 workspace: Some("/w"),
+                thread: None,
             })
         };
         assert_eq!(e(2, &none, &["node".into(), "server".into()], Some("/w")), SessionOrigin::Remote);
@@ -709,6 +718,15 @@ mod tests {
         assert_eq!(e(1, &none, &none, Some("/elsewhere")), SessionOrigin::Remote);
         assert_eq!(e(1, &none, &none, None), SessionOrigin::Unknown);
         assert_eq!(e(2, &none, &none, None), SessionOrigin::Tty);
+        let named = classify_origin(&OriginEvidence {
+            hook_version: 2,
+            ssh_env: &none,
+            ancestry: &none,
+            cwd: Some("/w"),
+            workspace: Some("/w"),
+            thread: Some("s1"),
+        });
+        assert_eq!(named, SessionOrigin::Remote, "a session in main's checkout, started under a name, is not the tty's");
     }
 
     #[test]

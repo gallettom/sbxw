@@ -24,6 +24,8 @@ pub struct WsQuery {
     thread: Option<String>,
     repo: Option<String>,
     model: Option<String>,
+    /// `1` on a session's first open: in the main checkout, not a worktree.
+    checkout: Option<String>,
 }
 
 pub async fn handler(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(app): State<Arc<App>>) -> Response {
@@ -40,26 +42,34 @@ pub async fn handler(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(app):
             Err(e) => return (StatusCode::BAD_REQUEST, e.0).into_response(),
         }
     };
-    // Only a thread's own session chooses its repo and model.
-    let (repo, model) = match key.kind {
-        SessionKind::Thread(_) => (q.repo, q.model.filter(|m| !m.is_empty())),
-        _ => (None, None),
+    // Only a thread's own session chooses its repo, its model, and whether it
+    // shares the main checkout.
+    let (repo, model, checkout) = match key.kind {
+        SessionKind::Thread(_) => (q.repo, q.model.filter(|m| !m.is_empty()), q.checkout.as_deref() == Some("1")),
+        _ => (None, None, false),
     };
     if model.as_deref().is_some_and(|m| !sbxw_core::names::is_valid_model_id(m)) {
         return (StatusCode::BAD_REQUEST, "invalid model id").into_response();
     }
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = bridge(socket, app, key, repo, model).await {
+        if let Err(e) = bridge(socket, app, key, repo, model, checkout).await {
             tracing::warn!("tty bridge ended: {e:#}");
         }
     })
 }
 
-async fn bridge(socket: WebSocket, app: Arc<App>, key: SessionKey, repo: Option<String>, model: Option<String>) -> anyhow::Result<()> {
+async fn bridge(
+    socket: WebSocket,
+    app: Arc<App>,
+    key: SessionKey,
+    repo: Option<String>,
+    model: Option<String>,
+    checkout: bool,
+) -> anyhow::Result<()> {
     let (mut tx, mut rx) = socket.split();
     let opened = async {
         if let Some(sb) = &key.sandbox {
-            settle_ws_thread(&app, sb, &key.kind, repo.as_deref(), model.as_deref()).map_err(anyhow::Error::msg)?;
+            settle_ws_thread(&app, sb, &key.kind, repo.as_deref(), model.as_deref(), checkout).map_err(anyhow::Error::msg)?;
         }
         app.open_session(&key).await
     }

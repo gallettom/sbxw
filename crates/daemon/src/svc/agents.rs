@@ -50,6 +50,7 @@ impl App {
             ancestry: &ev.strings("ancestry"),
             cwd: ev.cwd(),
             workspace: workspace.as_ref().and_then(|p| p.to_str()),
+            thread: ev.thread(),
         });
         let has_pty = self.sessions.is_live(&SessionKey::agent(sandbox));
         let infos = self.agents.lock().unwrap().apply(sandbox, &ev, origin, has_pty, now_ms());

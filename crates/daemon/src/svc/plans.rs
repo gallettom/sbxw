@@ -483,22 +483,44 @@ impl App {
     /// the branch if asked. Dirty work is refused without `discard` — the
     /// daemon does not trust a click it did not see.
     pub async fn close_thread(&self, sandbox: &SandboxName, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
-        match self.settle_thread_repo(sandbox, thread, None) {
-            Ok(dir) => self
-                .sbx
-                .thread_close(sandbox, &dir, thread, discard, delete_branch)
-                .await
-                .map_err(|e| format!("{e:#}"))?,
-            // A chat's workspace is throwaway and may have been swept (or
-            // never made a repo): no repo, no worktree, nothing to remove —
-            // only the session and its record to forget.
-            Err(e) if self.store.chat_workspace(sandbox).is_some() => {
-                tracing::info!("closing chat session '{thread}' of '{sandbox}' with no worktree to remove ({e})");
+        // A session in the main checkout has no worktree to remove, and its
+        // folder is the main agent's: nothing there is killed by cwd.
+        // A shared plan's thread has no worktree of its own either: it leaves
+        // its plan, and the plan's worktree goes with the last of them.
+        let mut team_end = None;
+        if self.is_same_worktree(sandbox, thread) {
+            tracing::info!("closing session '{thread}' of '{sandbox}', in the main checkout");
+        } else if let Some(team) = self.team_for(sandbox, thread) {
+            let dir = self.settle_thread_repo(sandbox, thread, None).ok();
+            let left = self.plans.lock().unwrap().drop_team_thread(sandbox.as_str(), thread.as_str(), now_ms());
+            if let Some(plan) = left {
+                tracing::info!("closing '{thread}' of '{sandbox}': it leaves shared plan {}", plan.id);
+                if plan.state == PlanState::Refused {
+                    team_end = dir.map(|d| (d, team.worktree));
+                }
+                self.plan_changed(plan);
             }
-            Err(e) => return Err(e),
+        } else {
+            match self.settle_thread_repo(sandbox, thread, None) {
+                Ok(dir) => self
+                    .sbx
+                    .thread_close(sandbox, &dir, thread, discard, delete_branch)
+                    .await
+                    .map_err(|e| format!("{e:#}"))?,
+                // A chat's workspace is throwaway and may have been swept (or
+                // never made a repo): no repo, no worktree, nothing to remove —
+                // only the session and its record to forget.
+                Err(e) if self.store.chat_workspace(sandbox).is_some() => {
+                    tracing::info!("closing chat session '{thread}' of '{sandbox}' with no worktree to remove ({e})");
+                }
+                Err(e) => return Err(e),
+            }
         }
         self.sessions.remove(&SessionKey::thread(sandbox, thread));
         self.sessions.remove(&SessionKey::new(sandbox.clone(), SessionKind::ThreadBash(thread.clone())));
+        if let Some((dir, team)) = team_end {
+            self.end_team_worktree(sandbox, &dir, &team).await;
+        }
         let gone = self.agents.lock().unwrap().forget_thread(sandbox.as_str(), thread.as_str(), now_ms());
         for info in gone {
             self.send(Event::Session(info));
@@ -509,6 +531,24 @@ impl App {
             tracing::warn!("threads: could not forget the repo of '{thread}': {e:#}");
         }
         Ok(())
+    }
+
+    /// The shared worktree of a plan whose every thread was closed: removed
+    /// with its branch when it holds nothing — no uncommitted file, no commit
+    /// its base lacks. Anything in it is work, and is left for a person.
+    async fn end_team_worktree(&self, sandbox: &SandboxName, dir: &str, team: &ThreadName) {
+        match self.sbx.thread_status(sandbox, dir, team).await {
+            Ok(st) if st.dirty == 0 && st.ahead == 0 => {
+                if let Err(e) = self.sbx.thread_close(sandbox, dir, team, false, true).await {
+                    tracing::warn!("plans: could not remove the empty worktree {team} of '{sandbox}': {e:#}");
+                }
+            }
+            Ok(st) => tracing::info!(
+                "plans: keeping {} of '{sandbox}': {} uncommitted file(s), {} commit(s) not in {}",
+                st.worktree, st.dirty, st.ahead, st.base
+            ),
+            Err(e) => tracing::warn!("plans: could not read the worktree {team} of '{sandbox}': {e:#}"),
+        }
     }
 
     /// ★ Lead: install `/lead` and refresh the relay server (a sandbox from

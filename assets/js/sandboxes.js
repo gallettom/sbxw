@@ -363,7 +363,7 @@ function sandboxItemHtml(s, groupColor) {
       ${ageTag}
       <div class="sbx-actions">${actions}</div>
     </div>
-    <div class="sbx-threads" data-sandbox="${escHtml(s.name)}" hidden></div>
+    <div class="sbx-sessions" data-sandbox="${escHtml(s.name)}" data-running="${isRunning ? 1 : 0}" hidden></div>
   </div>`;
 }
 
@@ -436,9 +436,12 @@ function renderSidebar() {
 
 // Clicking a sandbox item (not a button) connects it to the focused pane.
 listEl.addEventListener('click', e => {
-  // A thread row reaches that thread — shown and focused — not its sandbox.
+  // The fold under a row opens or closes its sessions, and connects nothing.
+  const fold = e.target.closest('.sbx-sessions-toggle');
+  if (fold) { setSessionsOpen(fold.dataset.sandbox, !sessionsOpen(fold.dataset.sandbox)); return; }
+  // A session row reaches that session — shown and focused — not its sandbox.
   const threadRow = e.target.closest('.sbx-thread');
-  if (threadRow) { reachThread(threadRow.dataset.sandbox, threadRow.dataset.thread); return; }
+  if (threadRow) { reachSession(threadRow.dataset.sandbox, threadRow.dataset.thread || null); return; }
   const btn = e.target.closest('button[data-action]');
   const item = e.target.closest('.sbx-item');
   if (!item) return;

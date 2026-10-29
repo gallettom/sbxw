@@ -29,17 +29,25 @@ impl App {
         let out = self.sbx.exec(sandbox, &["node", "-e", remote::PROBE_SCRIPT], None).await?;
         let probe = out.stdout_str();
         let active = match self.session_dir(sandbox, kind) {
-            Some(dir) => remote::active_in(&probe, &dir),
+            Some(dir) => remote::active_in(&probe, &dir, kind.thread().map(|t| t.as_str())),
             None => false,
         };
         Ok(RemoteState { login: remote::login_state(&probe), active })
     }
 
     /// The directory Claude Code was started in for `kind`: the workspace (sbx
-    /// mounts it at the same path), or the thread's worktree.
+    /// mounts it at the same path) for the main agent and a session in its
+    /// checkout, else the thread's worktree — its own, or its shared plan's.
     fn session_dir(&self, sandbox: &SandboxName, kind: &SessionKind) -> Option<String> {
         match kind {
-            SessionKind::Thread(t) => self.settle_thread_repo(sandbox, t, None).ok().filter(|d| !d.is_empty()),
+            SessionKind::Thread(t) if self.is_same_worktree(sandbox, t) => {
+                self.store.workspace(sandbox).map(|w| w.to_string_lossy().into_owned())
+            }
+            SessionKind::Thread(t) => {
+                let repo = self.settle_thread_repo(sandbox, t, None).ok().filter(|d| !d.is_empty())?;
+                let folder = self.team_for(sandbox, t).map_or_else(|| t.to_string(), |team| team.worktree.to_string());
+                Some(std::path::Path::new(&repo).join(".sbxw-worktrees").join(folder).to_string_lossy().into_owned())
+            }
             _ => self.store.workspace(sandbox).map(|w| w.to_string_lossy().into_owned()),
         }
     }

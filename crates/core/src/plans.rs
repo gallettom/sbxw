@@ -632,6 +632,24 @@ impl PlanBook {
             .filter(|p| !p.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged))
     }
 
+    /// A person closed `thread` of a shared plan: it leaves the plan, so the
+    /// thread list (which lists a shared plan's threads from the plan, having
+    /// no worktree of their own to find them by) stops offering it. The plan
+    /// that lost its last thread has nothing left to do or merge: it is
+    /// refused, which takes its board with it. `None` when `thread` is in no
+    /// shared plan at work.
+    pub fn drop_team_thread(&mut self, sandbox: &str, thread: &str, now: u64) -> Option<Plan> {
+        let id = self.team_of(sandbox, thread)?.id.clone();
+        let p = self.plans.get_mut(&id)?;
+        p.threads.retain(|t| t.name != thread);
+        if p.threads.is_empty() {
+            p.state = PlanState::Refused;
+            p.note = Some("every thread was closed".into());
+        }
+        p.updated_ms = now;
+        Some(p.clone())
+    }
+
     /// The sandbox's shared plan at work: the latest approved one that is
     /// shared and not merged yet. What its board belongs to.
     pub fn team_plan(&self, sandbox: &str) -> Option<&Plan> {
@@ -817,6 +835,22 @@ mod tests {
         assert_eq!(p.variant, Variant::Shared);
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!((v["variant"].as_str(), v["justification"].as_str()), (Some("shared"), Some("same files")));
+    }
+
+    #[test]
+    fn closing_a_shared_plans_threads_empties_and_then_ends_it() {
+        let mut b = PlanBook::new();
+        let p = b.propose("p-s".into(), "n", "", vec![t("a"), t("b")], Variant::Shared, "live", Some("l"), 1).unwrap();
+        b.approve(&p.id, vec![t("a"), t("b")], None, Some("/w/.sbxw-worktrees/team-p-s".into()), 2).unwrap();
+        assert!(b.drop_team_thread("n", "zz", 3).is_none(), "not in a shared plan");
+        let p = b.drop_team_thread("n", "a", 3).unwrap();
+        assert_eq!(p.threads.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["b"]);
+        assert_eq!(p.state, PlanState::Approved);
+        assert!(b.team_of("n", "a").is_none(), "a is listed no more");
+        assert!(b.team_plan("n").is_some(), "b still works on its board");
+        let p = b.drop_team_thread("n", "b", 4).unwrap();
+        assert_eq!(p.state, PlanState::Refused, "no thread left: the plan is over");
+        assert!(b.team_plan("n").is_none(), "and its board with it");
     }
 
     #[test]

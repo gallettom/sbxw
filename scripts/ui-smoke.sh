@@ -10,6 +10,8 @@ t="$(mktemp -d)"
 trap '"$bin" down >/dev/null 2>&1 || true; rm -rf "$t"' EXIT
 mkdir -p "$t/fakebin" "$t/home" "$t/ws/neos" "$t/state"
 cp "$here/fake-sbx" "$t/fakebin/sbx"
+# A thread or session runs `claude` through `sbx exec`, which the fake runs here.
+printf '#!/bin/sh\necho "claude (fake) $*"\nexec sh\n' > "$t/fakebin/claude"; chmod +x "$t/fakebin/claude"
 free_port() { node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'; }
 UI=$(free_port); AGENT=$(free_port)
 export HOME="$t/home" PATH="$t/fakebin:$PATH" FAKE_SBX_STATE="$t/state" SBXW_HOSTS_FILE="$t/hosts"

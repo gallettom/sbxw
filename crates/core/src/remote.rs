@@ -47,7 +47,10 @@ pub fn without_auth_env(pairs: Vec<String>) -> Vec<String> {
 /// <pid>.json` and sets `bridgeSessionId` in it while Remote Control is
 /// connected (null once disconnected). Entries outlive their process, and a pid
 /// is reused across container lifetimes, so an entry is live only when that
-/// pid's start time (`/proc/<pid>/stat`, field 22) is its `procStart`.
+/// pid's start time (`/proc/<pid>/stat`, field 22) is its `procStart`. Its
+/// `SBXW_THREAD`, read from the process's environment, tells apart sessions
+/// that share a directory: the main agent and a session in its checkout, or
+/// the threads of a shared plan.
 ///
 /// It also says whether an `apiKeyHelper` is configured: Claude Code puts a
 /// helper's key ahead of any login, and sbx provisions one in Claude
@@ -65,7 +68,13 @@ for (const n of names) {
     const e = JSON.parse(fs.readFileSync(`${dir}/${n}`, 'utf8'));
     const stat = fs.readFileSync(`/proc/${e.pid}/stat`, 'utf8');
     const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
-    if (String(e.procStart) === start) sessions.push({ cwd: e.cwd, rc: !!e.bridgeSessionId });
+    if (String(e.procStart) !== start) continue;
+    let thread = '';
+    try {
+      const env = fs.readFileSync(`/proc/${e.pid}/environ`, 'utf8').split('\0').find(v => v.startsWith('SBXW_THREAD='));
+      if (env) thread = env.slice('SBXW_THREAD='.length);
+    } catch (_) {}
+    sessions.push({ cwd: e.cwd, thread, rc: !!e.bridgeSessionId });
   } catch (_) {}
 }
 let helper = false;
@@ -74,17 +83,23 @@ for (const f of ['/home/agent/.claude/settings.json', '/etc/claude-code/managed-
 }
 console.log(JSON.stringify({ present: !!c.accessToken, scopes: Array.isArray(c.scopes) ? c.scopes : [], helper, sessions }));"#;
 
-/// Whether Remote Control is on in a live session started in `cwd`, as the
-/// probe saw it. Any of them counts: a thread and the main agent never share
-/// a directory.
-pub fn active_in(probe: &str, cwd: &str) -> bool {
+/// Whether Remote Control is on in a live session started in `cwd` under
+/// `thread` (`None`: the main agent, started under no name), as the probe saw
+/// it. A probe from before the name was read carries none, and is matched by
+/// directory alone.
+pub fn active_in(probe: &str, cwd: &str, thread: Option<&str>) -> bool {
     let want = cwd.trim_end_matches('/');
+    let name = thread.unwrap_or("");
     serde_json::from_str::<serde_json::Value>(probe.trim())
         .ok()
         .and_then(|v| v["sessions"].as_array().cloned())
         .unwrap_or_default()
         .iter()
-        .any(|s| s["rc"] == true && s["cwd"].as_str().is_some_and(|c| c.trim_end_matches('/') == want))
+        .any(|s| {
+            s["rc"] == true
+                && s["cwd"].as_str().is_some_and(|c| c.trim_end_matches('/') == want)
+                && s["thread"].as_str().is_none_or(|t| t == name)
+        })
 }
 
 /// Whether Remote Control is on in any live session the probe saw.
@@ -180,11 +195,14 @@ mod tests {
         let probe = r#"{"present":true,"scopes":[],"sessions":[
             {"cwd":"/w/app","rc":true},
             {"cwd":"/w/app/.sbxw-worktrees/t1","rc":false}]}"#;
-        assert!(active_in(probe, "/w/app"));
-        assert!(active_in(probe, "/w/app/"));
-        assert!(!active_in(probe, "/w/app/.sbxw-worktrees/t1"));
-        assert!(!active_in(probe, "/w/other"));
-        assert!(!active_in("garbage", "/w/app"));
+        assert!(active_in(probe, "/w/app", None));
+        assert!(active_in(probe, "/w/app/", None));
+        assert!(!active_in(probe, "/w/app/.sbxw-worktrees/t1", Some("t1")));
+        assert!(!active_in(probe, "/w/other", None));
+        assert!(!active_in("garbage", "/w/app", None));
+        let shared = r#"{"sessions":[{"cwd":"/w/app","thread":"","rc":false},{"cwd":"/w/app","thread":"s1","rc":true}]}"#;
+        assert!(active_in(shared, "/w/app", Some("s1")), "one checkout, told apart by name");
+        assert!(!active_in(shared, "/w/app", None));
         assert!(any_active(probe));
         assert!(!any_active(r#"{"sessions":[{"cwd":"/w/app","rc":false}]}"#));
         assert!(!any_active("garbage"));

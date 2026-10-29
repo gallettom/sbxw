@@ -435,7 +435,7 @@
       </div>
       <div class="modal-body">
         <div>
-          <label class="field-label" for="thread-name">Thread name</label>
+          <label class="field-label" for="thread-name" id="thread-name-label">Thread name</label>
           <input id="thread-name" class="field-input" type="text" maxlength="40" placeholder="fix-login"
                  autocomplete="off" autocapitalize="off" spellcheck="false">
           <p class="thread-hint" id="thread-hint"></p>
@@ -456,7 +456,7 @@
           <div class="model-seg" id="thread-models" role="radiogroup" aria-labelledby="thread-model-label"></div>
         </div>
         <div id="thread-existing-wrap" hidden>
-          <span class="field-label">Existing threads</span>
+          <span class="field-label" id="thread-existing-label">Existing threads</span>
           <div class="thread-chips" id="thread-existing"></div>
         </div>
       </div>
@@ -480,7 +480,7 @@
         <button class="modal-close" id="thread-close-x" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
-        <p class="thread-close-lead">The session stops and its worktree is removed:</p>
+        <p class="thread-close-lead" id="thread-close-lead">The session stops and its worktree is removed:</p>
         <code class="thread-close-path" id="thread-close-path"></code>
         <label class="thread-check danger" id="thread-close-dirty-row" hidden>
           <input type="checkbox" id="thread-close-discard">

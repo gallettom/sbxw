@@ -746,6 +746,25 @@ async fn worktrees(State(app): S, Path(name): Path<String>) -> ApiResult {
 async fn thread_status(State(app): S, Path((name, thread)): Path<(String, String)>) -> ApiResult {
     let (sb, t) = (sandbox(&name)?, ThreadName::parse(&thread)?);
     let dir = app.settle_thread_repo(&sb, &t, None)?;
+    // A session in the main checkout has no worktree or branch to lose:
+    // closing it only ends the session.
+    if app.is_same_worktree(&sb, &t) {
+        return Ok(ok_with(json!({ "status": {
+            "worktree": dir, "branch": "", "base": "", "has_branch": false, "dirty": 0, "ahead": 0,
+            "same_worktree": true,
+        } })));
+    }
+    // A shared plan's thread leaves its plan: the shared worktree is not its
+    // to remove, unless it is the last thread (and the worktree holds
+    // nothing — the daemon checks again when it closes).
+    if let Some(team) = app.team_for(&sb, &t) {
+        let last = app.plans.lock().unwrap().team_of(sb.as_str(), t.as_str()).is_some_and(|p| p.threads.len() == 1);
+        return Ok(ok_with(json!({ "status": {
+            "worktree": format!("{}/.sbxw-worktrees/{}", dir.trim_end_matches('/'), team.worktree),
+            "branch": "", "base": "", "has_branch": false, "dirty": 0, "ahead": 0,
+            "team": team.plan, "last": last,
+        } })));
+    }
     let st = app.sbx.thread_status(&sb, &dir, &t).await?;
     Ok(ok_with(json!({ "status": st })))
 }
@@ -1345,9 +1364,19 @@ async fn shutdown(State(app): S) -> Json<Value> {
 }
 
 /// The thread a WebSocket asks for may choose its repo and model on first open.
-pub fn settle_ws_thread(app: &App, sb: &SandboxName, kind: &SessionKind, repo: Option<&str>, model: Option<&str>) -> Result<(), String> {
+pub fn settle_ws_thread(
+    app: &App,
+    sb: &SandboxName,
+    kind: &SessionKind,
+    repo: Option<&str>,
+    model: Option<&str>,
+    checkout: bool,
+) -> Result<(), String> {
     if let SessionKind::Thread(t) = kind {
-        if repo.is_some() || model.is_some() {
+        if checkout {
+            app.settle_same_worktree(sb, t)?;
+        }
+        if !checkout && (repo.is_some() || model.is_some()) {
             app.settle_thread_repo(sb, t, repo)?;
         }
         if let Some(m) = model.filter(|m| !m.is_empty()) {

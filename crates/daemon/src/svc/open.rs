@@ -84,6 +84,11 @@ impl App {
             SessionKind::Agent => Spawn::sbx(sbxw_sbx::shell_args(&sandbox, &cfg.web_shell)),
             // `sbx exec` starts a stopped sandbox first (0.50).
             SessionKind::Bash => Spawn::sbx(sbxw_sbx::bash_args(&sandbox)),
+            // A session in the main checkout has no worktree: its shell is the
+            // sandbox's own.
+            SessionKind::ThreadBash(thread) if self.is_same_worktree(&sandbox, thread) => {
+                Spawn::sbx(sbxw_sbx::bash_args(&sandbox))
+            }
             SessionKind::ThreadBash(thread) => {
                 self.ensure_running_for_thread(&sandbox).await?;
                 let dir = self.settle_thread_repo(&sandbox, thread, None).map_err(|e| anyhow!(e))?;
@@ -125,6 +130,9 @@ impl App {
                     .and_then(|r| r.model.clone())
                     .or_else(|| Some(cfg.claude_model.clone()))
                     .and_then(|m| ModelId::parse(&m).ok());
+                if self.is_same_worktree(&sandbox, thread) {
+                    return Ok(Spawn::sbx(scripts::same_worktree_run_args(&sandbox, &dir, thread, model.as_ref())));
+                }
                 let team = self.team_for(&sandbox, thread);
                 Spawn::sbx(scripts::thread_run_args(&sandbox, &dir, thread, &briefing, model.as_ref(), team.as_ref()))
             }
@@ -178,6 +186,10 @@ impl App {
     /// its scripts start in. Every thread path goes through here (its
     /// session, its Bash, status, close, merge) so they cannot disagree.
     pub fn settle_thread_repo(&self, sandbox: &SandboxName, thread: &ThreadName, requested: Option<&str>) -> Result<String, String> {
+        // A session in the main checkout starts where the main agent does.
+        if self.is_same_worktree(sandbox, thread) {
+            return Ok(self.store.workspace(sandbox).map(|w| w.to_string_lossy().into_owned()).unwrap_or_default());
+        }
         let Some(ws) = self.store.workspace(sandbox) else {
             return match requested {
                 Some(_) => Err(format!("sbxw has no workspace recorded for '{sandbox}', so it cannot pick a repo in it")),
@@ -192,6 +204,31 @@ impl App {
                 .map_err(|e| format!("could not record the repo of thread {thread}: {e:#}"))?;
         }
         Ok(git::thread_dir(&ws, &chosen).to_string_lossy().into_owned())
+    }
+
+    /// Is `thread` a session in the main checkout rather than in a worktree?
+    pub fn is_same_worktree(&self, sandbox: &SandboxName, thread: &ThreadName) -> bool {
+        self.store.get(sandbox).threads.get(thread.as_str()).is_some_and(|r| r.same_worktree)
+    }
+
+    /// Record that `thread` is a session in the main checkout, on its first
+    /// open. A name that already has a worktree is refused: it would start a
+    /// second session in a folder the thread's own worktree does not use.
+    pub fn settle_same_worktree(&self, sandbox: &SandboxName, thread: &ThreadName) -> Result<(), String> {
+        let rec = self.store.get(sandbox);
+        match rec.threads.get(thread.as_str()) {
+            Some(r) if r.same_worktree => return Ok(()),
+            Some(_) => return Err(format!("'{thread}' is already a thread with a worktree of its own: pick another name")),
+            None => {}
+        }
+        if let Some(ws) = &rec.workspace {
+            if git::thread_worktrees(ws, &Default::default()).iter().any(|(t, _)| t == thread.as_str()) {
+                return Err(format!("'{thread}' is already a thread with a worktree of its own: pick another name"));
+            }
+        }
+        self.store
+            .update(sandbox, |r| r.threads.entry(thread.to_string()).or_default().same_worktree = true)
+            .map_err(|e| format!("could not record session {thread}: {e:#}"))
     }
 
     /// Record a thread's model the first time one is asked for: it keeps the

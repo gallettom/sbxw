@@ -179,6 +179,30 @@ pub fn thread_run_args(
     args
 }
 
+/// Argv for a session in the main checkout: another Claude beside the main
+/// agent, in the workspace itself — no worktree, no branch, the same files.
+/// Two agents in one checkout can overwrite each other's edits; that is what
+/// the person chose it for (a second conversation about the same code), and
+/// the menu that offers it says so.
+///
+/// Like a thread, it runs through `sbx exec` under `SBXW_THREAD` and
+/// `--name`, which is how its hooks are filed under its name and not read as
+/// the main agent's. It never `--continue`s: it shares the main agent's cwd,
+/// so "its last conversation" would be the main agent's.
+///
+/// Workspace, name and model are positional, as in `thread_run_args`.
+pub fn same_worktree_run_args(name: &SandboxName, workspace: &str, thread: &ThreadName, model: Option<&ModelId>) -> Vec<String> {
+    const SCRIPT: &str = concat!(unwrap_args!(), r#"
+        [ -n "$1" ] && cd "$1" 2>/dev/null
+        printf '\033[2m[sbxw] session %s - same checkout as the main session (%s)\033[0m\r\n' "$2" "$PWD"
+        export SBXW_THREAD="$2"
+        exec claude --dangerously-skip-permissions --name "$2" ${3:+--model "$3"}"#);
+    let mut args = owned(&["exec", "-it", name.as_str(), "--", "bash", "-lc", SCRIPT, "sbxw-session"]);
+    let model = model.map(ModelId::as_str).unwrap_or("");
+    args.extend([workspace, thread.as_str(), model].map(pos));
+    args
+}
+
 /// The shared plan a thread works under (Team mode).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Team {
@@ -445,6 +469,17 @@ mod tests {
         assert_eq!(&args[..3], ["exec", "-it", "neos"]);
         let no_model = thread_run_args(&sb(), "", &th(), "", None, None);
         assert_eq!(no_model[11], "=");
+    }
+
+    #[test]
+    fn a_same_worktree_session_starts_in_the_checkout_under_its_name() {
+        let model = ModelId::parse("claude-opus-5-5").unwrap();
+        let args = same_worktree_run_args(&sb(), "/w s", &th(), Some(&model));
+        let script = &args[6];
+        assert!(!script.contains("api-auth") && !script.contains("/w s"));
+        assert!(!script.contains("worktree add") && !script.contains("--continue"), "no worktree, never main's conversation");
+        assert!(script.contains(r#"export SBXW_THREAD="$2""#) && script.contains(r#"--name "$2""#));
+        assert_eq!(&args[7..], ["sbxw-session", "=/w s", "=api-auth", "=claude-opus-5-5"]);
     }
 
     #[test]
