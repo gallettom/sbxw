@@ -238,12 +238,12 @@ const LEAD_TOOLS = [
         },
         justification: {
           type: "string",
-          description: "One line, shown to the user in the plan dialog: why this variant.",
+          description: "One line: why split or shared. Shown to the user in the plan dialog.",
         },
         threads: { type: "array", items: THREAD_ITEM, minItems: 1 },
         timeout_seconds: { type: "number", description: "How long to wait for the user. Default 90, max 600." },
       },
-      required: ["summary", "threads"],
+      required: ["summary", "justification", "threads"],
     },
   },
   {
@@ -286,8 +286,9 @@ const LEAD_TOOLS = [
         order: {
           type: "array",
           items: { type: "string" },
-          minItems: 1,
-          description: "Thread names, in the order to merge them. Every one must be done.",
+          description:
+            "Thread names, in the order to merge them. Every one must be done. Empty for a shared " +
+            "plan, whose threads all work on one branch.",
         },
         note: {
           type: "string",
@@ -637,8 +638,8 @@ async function callPlanTool(name, args) {
       {
         from: relay.me,
         summary: String(args.summary || ""),
-        variant: args.variant ? String(args.variant) : undefined,
-        justification: args.justification ? String(args.justification) : undefined,
+        variant: String(args.variant || "split"),
+        justification: String(args.justification || ""),
         threads: args.threads || [],
         lead: sessionName() || undefined,
         timeout,

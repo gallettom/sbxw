@@ -186,6 +186,7 @@ impl Board {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn log(&mut self, now: u64, kind: Kind, by: &str, to: Option<&str>, text: Option<String>, files: Vec<String>, hash: Option<String>) -> Entry {
         self.next_id += 1;
         let e = Entry {
@@ -387,19 +388,28 @@ impl Board {
     }
 
     /// Files a command changed: the caller's own claims are renewed, and
-    /// those outside them are returned and logged as a warning.
+    /// those outside them are returned. Each is logged: a warning to the
+    /// caller, and a conflict to the owner of a file another session held.
     pub fn record_writes(&mut self, session: &str, files: &[String], now: u64) -> Result<Vec<String>, String> {
         let files = normalize_files(files)?;
         self.expire(now);
         let mut outside = Vec::new();
+        let mut trespass: Vec<(String, String)> = Vec::new();
         for f in files {
             match self.claims.get_mut(&f) {
                 Some(c) if c.owner == session => c.until = c.until.max(now + LEASE_MS),
-                _ => outside.push(f),
+                Some(c) => {
+                    trespass.push((c.owner.clone(), f.clone()));
+                    outside.push(f);
+                }
+                None => outside.push(f),
             }
         }
         if !outside.is_empty() {
             self.log(now, Kind::Warning, SBXW, Some(session), Some(format!("{session} wrote outside its claims")), outside.clone(), None);
+        }
+        for (owner, f) in trespass {
+            self.log(now, Kind::Conflict, session, Some(&owner), Some("written without the claim".into()), vec![f], None);
         }
         Ok(outside)
     }
@@ -450,8 +460,8 @@ impl Board {
     }
 
     /// What `session` has not seen yet, filtered to what concerns it:
-    /// decisions and warnings, entries addressed to it, and claims on files
-    /// it has read. Its own entries are skipped. Advances its cursor.
+    /// decisions and warnings for everyone, entries addressed to it, and
+    /// claims on files it has read. Its own entries are skipped. Advances its cursor.
     pub fn delta(&mut self, session: &str, now: u64) -> Vec<Entry> {
         self.expire(now);
         let from = self.cursors.get(session).copied().unwrap_or(0);
@@ -461,7 +471,7 @@ impl Board {
             .iter()
             .filter(|e| e.id > from && e.by != session)
             .filter(|e| match e.kind {
-                Kind::Decision | Kind::Warning => true,
+                Kind::Decision | Kind::Warning => e.to.as_deref().is_none_or(|t| t == session),
                 Kind::Claim => read.is_some_and(|r| e.files.iter().any(|f| r.contains(f))),
                 _ => e.to.as_deref() == Some(session),
             })
@@ -628,12 +638,17 @@ mod tests {
     }
 
     #[test]
-    fn writes_outside_claims_are_flagged() {
+    fn writes_outside_claims_are_flagged_to_the_writer_and_the_owner() {
         let mut b = Board::new("n");
         b.claim("api", &f(&["a"]), 0).unwrap();
-        assert_eq!(b.record_writes("api", &f(&["a", "b"]), 5 * MIN).unwrap(), f(&["b"]));
+        b.claim("front", &f(&["c"]), 0).unwrap();
+        assert_eq!(b.record_writes("api", &f(&["a", "b", "c"]), 5 * MIN).unwrap(), f(&["b", "c"]));
         assert_eq!(b.claims["a"].until, 5 * MIN + LEASE_MS);
-        assert_eq!(b.entries.last().unwrap().kind, Kind::Warning);
+        let api: Vec<_> = b.delta("api", 6 * MIN).into_iter().map(|e| e.kind).collect();
+        assert_eq!(api, [Kind::Warning]);
+        let front: Vec<_> = b.delta("front", 6 * MIN).into_iter().map(|e| (e.kind, e.files)).collect();
+        assert_eq!(front, [(Kind::Conflict, f(&["c"]))]);
+        assert!(b.delta("db", 6 * MIN).is_empty(), "nobody else hears of it");
     }
 
     #[test]

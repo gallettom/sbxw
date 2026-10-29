@@ -24,6 +24,9 @@ pub const STATUS_HOOK_PATH: &str = "/home/agent/.sbxw/status-hook.js";
 pub const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
 pub const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
 pub const RELAY_MCP_PATH: &str = "/home/agent/.sbxw/relay-mcp.js";
+pub const TEAM_GUARD_PATH: &str = "/home/agent/.sbxw/team-guard.js";
+/// The tools Team mode's guard checks before they run.
+pub const TEAM_GUARD_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 pub const TOKEN_PATH: &str = "/home/agent/.sbxw/token";
 pub const RELAY_MCP_NAME: &str = "sbxw-relay";
 pub const USER_MEMORY_PATH: &str = "/home/agent/.claude/CLAUDE.md";
@@ -50,6 +53,7 @@ const STATUS_HOOK: &str = include_str!("../../../assets/status-hook.js");
 const USAGE_STATUSLINE: &str = include_str!("../../../assets/usage-statusline.js");
 const RELAY_TOOL: &str = include_str!("../../../assets/relay-tool.js");
 const RELAY_MCP: &str = include_str!("../../../assets/relay-mcp.js");
+const TEAM_GUARD: &str = include_str!("../../../assets/team-guard.js");
 pub const LEAD_COMMAND: &str = include_str!("../../../assets/lead.md");
 
 /// Names a failed piece is reported under.
@@ -222,7 +226,10 @@ impl Tooling {
         self.piece(piece::USAGE_STATUSLINE, body)
     }
 
-    /// The relay: CLI, MCP server (user scope) and the fenced memory section.
+    /// The relay: CLI, MCP server (user scope) and the fenced memory section;
+    /// and Team mode's guard, a hook beside it that uses the relay to reach the
+    /// board and does nothing outside a shared plan's threads. Installed here
+    /// rather than with the status hooks so that Lead refreshes it too.
     pub fn relay(self, agent_port: &str) -> Self {
         let body = format!(
             "put({tool_path},{tool});put({mcp_path},{mcp});const d=json({claude_json});\
@@ -233,7 +240,12 @@ impl Tooling {
              const from=cur.indexOf(begin),to=cur.indexOf(end);\
              let rest=(from>=0&&to>from)?cur.slice(0,from)+cur.slice(to+end.length):cur;\
              rest=rest.replace(/\\n{{3,}}/g,'\\n\\n').trim();\
-             put(p,(rest?rest+'\\n\\n':'')+doc);",
+             put(p,(rest?rest+'\\n\\n':'')+doc);\
+             const guard={guard_path};put(guard,{guard});const st=json({settings});st.hooks=st.hooks||{{}};\
+             for(const [ev,matcher] of [['PreToolUse',{matcher}],['PostToolUse',undefined]]){{\
+             st.hooks[ev]=(st.hooks[ev]||[]).filter(e=>!(e.hooks||[]).some(h=>(h.args||[]).includes(guard)));\
+             const entry={{hooks:[{{type:'command',command:'node',args:[guard]}}]}};if(matcher)entry.matcher=matcher;\
+             st.hooks[ev].push(entry);}}",
             tool_path = js(RELAY_TOOL_PATH),
             tool = js(&RELAY_TOOL.replace("__PORT__", agent_port)),
             mcp_path = js(RELAY_MCP_PATH),
@@ -244,6 +256,10 @@ impl Tooling {
             begin = js(RELAY_DOC_BEGIN),
             end = js(RELAY_DOC_END),
             doc = js(&relay_doc()),
+            guard_path = js(TEAM_GUARD_PATH),
+            guard = js(TEAM_GUARD),
+            settings = js(SETTINGS_PATH),
+            matcher = js(TEAM_GUARD_MATCHER),
         );
         self.piece(piece::RELAY, body)
     }
@@ -379,7 +395,9 @@ mod tests {
         let s: serde_json::Value = serde_json::from_str(&first.0).unwrap();
         assert!(s.get("model").is_none());
         assert_eq!(s["statusLine"]["command"], "mine");
-        assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 3);
+        assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 4, "the user's, artifacts, status, team guard");
+        assert_eq!(s["hooks"]["PostToolUse"].as_array().unwrap().len(), 2, "status, team guard");
+        assert!(read(".sbxw/team-guard.js").contains("SBXW_TEAM"));
         let c: serde_json::Value = serde_json::from_str(&first.1).unwrap();
         assert_eq!(c["projects"]["/work"]["hasTrustDialogAccepted"], true);
         assert_eq!(c["mcpServers"][RELAY_MCP_NAME]["command"], "node");
@@ -394,6 +412,59 @@ mod tests {
         let hook = read(".sbxw/status-hook.js");
         assert!(!hook.contains("__PORT__") && hook.contains("7682") && hook.contains("Bearer"));
         assert!(read(".claude/commands/lead.md").len() > 100);
+    }
+
+    /// The guard's exit code and stderr for one hook call in `cwd`.
+    fn guard(dir: &std::path::Path, env_team: Option<&str>, input: serde_json::Value) -> (i32, String) {
+        let script = dir.join("team-guard.js");
+        std::fs::write(&script, TEAM_GUARD).unwrap();
+        let mut cmd = Command::new("node");
+        cmd.arg(&script).current_dir(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.env_remove("SBXW_TEAM").env("SBXW_THREAD", "api");
+        if let Some(t) = env_team {
+            cmd.env("SBXW_TEAM", t);
+        }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+
+    #[test]
+    fn the_team_guard_refuses_shared_index_git_and_sleeps_outside_team_mode() {
+        let have = |c: &str| Command::new(c).arg("--version").output().is_ok();
+        if !have("node") || !have("git") {
+            eprintln!("node or git not found — skipping");
+            return;
+        }
+        let repo = tempfile::tempdir().unwrap();
+        let d = repo.path();
+        assert!(Command::new("git").arg("init").arg("-q").current_dir(d).status().unwrap().success());
+        let bash = |cmd: &str| {
+            serde_json::json!({
+                "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": format!("t{}", cmd.len()),
+                "cwd": d, "tool_input": { "command": cmd },
+            })
+        };
+        for refused in ["git add -A", "git add . && git commit -m x", "git commit -am x", "git stash", "git commit -m x"] {
+            let (code, err) = guard(d, Some("shared"), bash(refused));
+            assert_eq!(code, 2, "{refused}");
+            assert!(err.contains("git"), "{refused}: {err}");
+        }
+        assert_eq!(guard(d, None, bash("git stash")).0, 0, "inactive outside a shared plan");
+        assert_eq!(guard(d, Some("split"), bash("git stash")).0, 0);
+        // Allowed (the daemon is unreachable here, so claims fail open).
+        let commit = "git add a.ts && git commit -m x -- a.ts";
+        assert_eq!(guard(d, Some("shared"), bash(commit)).0, 0);
+        assert_eq!(guard(d, Some("shared"), bash("sed -i s/a/b/ a.ts > out.txt")).0, 0);
+        let lock = d.join(".git/sbxw-commit.lock");
+        assert!(lock.exists(), "the commit took the lock");
+        let post = serde_json::json!({
+            "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": format!("t{}", commit.len()),
+            "cwd": d, "tool_input": { "command": commit },
+        });
+        assert_eq!(guard(d, Some("shared"), post).0, 0);
+        assert!(!lock.exists(), "and dropped it after");
     }
 
     #[test]

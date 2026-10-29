@@ -13,6 +13,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
 
+/// After a tool call: the writes outside the caller's claims, the claims its
+/// commit released, and the board's news for it.
+pub type AfterCall = (Vec<String>, Vec<String>, Vec<Entry>);
+
 /// A refused write is told to the lead at most once per file and session in
 /// this window: a thread retrying is one conflict, not ten.
 const TELL_LEAD_EVERY_MS: u64 = 10 * 60 * 1000;
@@ -88,6 +92,7 @@ impl App {
         self.with_board(sandbox, None, |b| b.approve_extension(files, now_ms()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn board_note(&self, sandbox: &str, plan: Option<&str>, by: &str, kind: Kind, text: &str, to: Option<&str>, files: &[String]) -> Result<Entry, String> {
         self.with_board(sandbox, plan, |b| b.note(by, kind, text, to, files, now_ms()))
     }
@@ -126,7 +131,6 @@ impl App {
     /// After a tool call: record what the session read and wrote and what it
     /// committed, and answer with the writes outside its claims and the
     /// board's news for it.
-    #[allow(clippy::too_many_arguments)]
     pub fn board_after(
         &self,
         sandbox: &str,
@@ -135,7 +139,7 @@ impl App {
         read: &[String],
         written: &[String],
         commit: Option<(&str, &str, &[String])>,
-    ) -> Result<(Vec<String>, Vec<String>, Vec<Entry>), String> {
+    ) -> Result<AfterCall, String> {
         let now = now_ms();
         self.with_board(sandbox, plan, |b| {
             b.record_reads(session, read);
