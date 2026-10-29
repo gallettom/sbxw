@@ -292,6 +292,7 @@ impl App {
         let merge = plan.merge.clone().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
         let sandbox = SandboxName::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         if plan.variant == Variant::Shared {
+            self.refuse_while_claimed(&plan)?;
             return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate).await;
         }
         // Where each thread merges — read first, so the base is known from the
@@ -358,6 +359,26 @@ impl App {
         }
         self.tell_lead_merged(&sandbox, id, &summary).await;
         Ok(merge)
+    }
+
+    /// A shared plan's merge waits for its board: files still claimed are
+    /// work still in flight. Expired leases do not count.
+    fn refuse_while_claimed(&self, plan: &Plan) -> Result<(), String> {
+        let now = now_ms();
+        let held: Vec<(String, String)> = self.with_board(&plan.sandbox, Some(&plan.id), |b| {
+            b.expire(now);
+            b.claims.values().map(|c| (c.file.clone(), c.owner.clone())).collect()
+        });
+        if held.is_empty() {
+            return Ok(());
+        }
+        let list: Vec<String> = held.iter().map(|(f, o)| format!("{f} ({o})")).collect();
+        let n = list.len();
+        Err(format!(
+            "{n} file{} still claimed: {} - release them or force_release first",
+            if n == 1 { "" } else { "s" },
+            list.join(", ")
+        ))
     }
 
     async fn tell_lead_merged(self: &Arc<Self>, sandbox: &SandboxName, id: &str, summary: &str) {
@@ -683,5 +704,39 @@ mod tests {
         let p = app.plans.lock().unwrap().approve(&p.id, vec![on("x", "a"), on("y", "b")], None, None, 1).unwrap();
         assert_eq!((p.variant, p.worktree), (Variant::Split, None));
         assert!(app.team_for(&sb, &sbxw_core::ThreadName::parse("x").unwrap()).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_shared_plan_is_not_merged_while_files_are_claimed() {
+        let (_d, app, _fake) = app_with(|a| {
+            let has = |x: &str| a.iter().any(|y| y == x);
+            match a.first().map(String::as_str) {
+                Some("ls") => ls(&[("neos", "running")]),
+                Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
+                Some("exec") if has("sbxw-memory") => Output::ok("path=/m/team.md\nok=1\n"),
+                Some("exec") if has("sbxw-thread-end") => Output::ok("ok=1\n"),
+                _ => sbx_answer(a),
+            }
+        });
+        let sb = SandboxName::parse("neos").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join(".git")).unwrap();
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+        let p = app.plan_propose(&sb, "cart", vec![t("api"), t("web")], Variant::Shared, "same files", Some("lead")).unwrap();
+        let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).unwrap();
+        app.plans.lock().unwrap().approve(&p.id, vec![t("api"), t("web")], None, worktree, 1).unwrap();
+        for n in ["api", "web"] {
+            app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
+        }
+        app.plan_propose_merge(&p.id, &sb, vec![], "", vec![]).unwrap();
+
+        let files = vec!["a.rs".to_string()];
+        app.board_claim("neos", Some(&p.id), "api", &files).unwrap();
+        let err = app.plan_merge(&p.id, false, None).await.unwrap_err();
+        assert!(err.contains("1 file still claimed: a.rs (api)") && err.contains("force_release"), "{err}");
+        assert_ne!(app.plan(&p.id).unwrap().merge.unwrap().state, MergeState::Merged, "nothing was merged");
+
+        app.board_release("neos", Some(&p.id), "api", &files).unwrap();
+        assert_eq!(app.plan_merge(&p.id, false, None).await.unwrap().state, MergeState::Merged);
     }
 }

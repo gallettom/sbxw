@@ -1531,12 +1531,12 @@
     position: fixed; width: 1px; height: 1px; padding: 0; border: 0;
     opacity: 0; pointer-events: none;
   }
-  /* The main session made lead: the Lead mode toggle lit On (below) and a
+  /* The main session made lead: the Team mode toggle lit On (below) and a
      stripe on the bar's left edge, so the pane reads as the lead from across
      the grid. Both in the group's hue — violet beside a rose bar read as a
      second group — and violet only when the pane is ungrouped. */
   .pane.leading .pane-bar { box-shadow: inset 4px 0 0 var(--group-color, var(--c-purple-alt)); }
-  /* Lead mode as a toggle: Off reads like any button, On is filled the way
+  /* Team mode as a toggle: Off reads like any button, On is filled the way
      the lead chip is — same colour (the group's, else violet), dark text —
      because violet text on a faint violet wash sank into the slate bar. */
   .pane-bar .pane-lead-toggle[aria-pressed="true"],
@@ -1743,10 +1743,10 @@
     .pane:hover .pane-session-btn,
     .pane:focus-within .pane-session-btn,
     .pane:has(.term-disconnected) .pane-more-btn { display: inline-block; }
-    /* ⑂ Thread and ★ Lead mode follow the same rule from the left side of the
+    /* ⑂ Thread and ★ Team mode follow the same rule from the left side of the
        spacer, where they sit last so their coming and going moves nothing.
        :not([hidden]) keeps a thread's pane and the monitor without them.
-       Lit On, Lead mode stays: it is the one place the bar says "lead". */
+       Lit On, Team mode stays: it is the one place the bar says "team". */
     .pane .pane-main-action { display: none; }
     .pane.focused .pane-main-action:not([hidden]),
     .pane:hover .pane-main-action:not([hidden]),
