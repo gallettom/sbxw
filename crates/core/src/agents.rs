@@ -12,7 +12,7 @@
 //! | `UserPromptSubmit` | working (captures the prompt) |
 //! | `PreToolUse` `AskUserQuestion` | attention + the structured question |
 //! | `PreToolUse` / `PostToolUse` | working (the tool is the activity) |
-//! | `Notification` | attention |
+//! | `Notification` | attention (`idle_prompt`: idle; `auth_success`: unchanged) |
 //! | `Stop` | idle (captures the reply) |
 //! | `SessionEnd` | exited, dropped |
 
@@ -332,6 +332,19 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             }
             st.state = SessionState::Working;
         }
+        // Claude Code also notifies a minute into an idle prompt ("waiting for
+        // your input"). It is not a summons — after a `Stop` it only repeats
+        // what is already known — but it is the one word that a turn cut short
+        // with Esc ever gets: an interrupt fires no `Stop`, and without this
+        // the session would read as working (or, after a rejected permission
+        // prompt, as wanting you) until the next prompt.
+        "Notification" if event.str("notification_type") == "idle_prompt" => {
+            st.state = SessionState::Idle;
+            st.prompt.clear();
+            st.activity = None;
+        }
+        // A login finishing is news to nobody watching the strip.
+        "Notification" if event.str("notification_type") == "auth_success" => {}
         "Notification" => {
             st.state = SessionState::Attention;
             if let Some(m) = body.get("message").and_then(Value::as_str) {
@@ -658,6 +671,33 @@ mod tests {
         let out = book.apply("neos", &ev(&prompt), SessionOrigin::Unknown, true, 4);
         assert_eq!(out[0].reply, None, "a new prompt clears the reply");
         assert_eq!(out[0].origin, SessionOrigin::Tty, "unknown never demotes");
+    }
+
+    #[test]
+    fn an_idle_reminder_is_not_a_summons() {
+        let mut book = AgentBook::new();
+        let stop = json!({"hook_event_name": "Stop", "session_id": "s1"});
+        let idle = json!({"hook_event_name": "Notification", "session_id": "s1",
+            "notification_type": "idle_prompt", "message": "Claude is waiting for your input"});
+        let perm = json!({"hook_event_name": "Notification", "session_id": "s1",
+            "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"});
+        let auth = json!({"hook_event_name": "Notification", "session_id": "s1",
+            "notification_type": "auth_success", "message": "Authenticated"});
+        let tool = json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash"});
+        book.apply("n", &ev(&stop), SessionOrigin::Tty, true, 1);
+        let out = book.apply("n", &ev(&idle), SessionOrigin::Tty, true, 2);
+        assert_eq!(out[0].state, SessionState::Idle);
+        let out = book.apply("n", &ev(&auth), SessionOrigin::Tty, true, 3);
+        assert_eq!(out[0].state, SessionState::Idle, "a login is not a summons");
+        let out = book.apply("n", &ev(&perm), SessionOrigin::Tty, true, 4);
+        assert_eq!(out[0].state, SessionState::Attention);
+        // Esc on the permission prompt: no `Stop`, only the idle reminder.
+        let out = book.apply("n", &ev(&idle), SessionOrigin::Tty, true, 5);
+        assert_eq!(out[0].state, SessionState::Idle, "an interrupted ask settles");
+        // Esc mid-tool: likewise.
+        book.apply("n", &ev(&tool), SessionOrigin::Tty, true, 6);
+        let out = book.apply("n", &ev(&idle), SessionOrigin::Tty, true, 7);
+        assert_eq!(out[0].state, SessionState::Idle, "an interrupted turn settles");
     }
 
     #[test]
