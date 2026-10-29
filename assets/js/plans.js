@@ -194,6 +194,103 @@ function openMergePlan(sandbox) {
   if (p) showMerge(p);
 }
 
+// ── Shared plans at the merge ──
+// Commits by thread, open claims (they block Merge until released) and the
+// distillate the lead proposes, all from the board, read again every few
+// seconds while the merge is open. `mergeBoard` is null until the first read
+// and for a split plan; `distillateEdits` holds what the person changed.
+let mergeBoard = null;
+let mergeBoardTimer = null;
+let distillateEdits = null; // [{kind, text, keep}] once the list is first painted
+const mergeTeam = document.getElementById('merge-team');
+
+function stopMergeBoard() {
+  clearInterval(mergeBoardTimer);
+  mergeBoardTimer = null;
+  mergeBoard = null;
+  distillateEdits = null;
+  mergeTeam.innerHTML = '';
+  delete mergeTeam.dataset.key;
+}
+
+function startMergeBoard(plan) {
+  clearInterval(mergeBoardTimer);
+  mergeTeam.innerHTML = '';
+  delete mergeTeam.dataset.key;
+  if (plan.variant !== 'shared') return;
+  const read = async () => {
+    const b = await fetchBoard(plan.sandbox);
+    if (planShown !== plan.id || planView !== 'merge') return;
+    // A board that cannot be read does not hold Merge for ever: the daemon
+    // refuses a merge with claims open anyway.
+    if (b) mergeBoard = b; else if (!mergeBoard) mergeBoard = { claims: [], entries: [], unread: true };
+    const now = plans.get(plan.id);
+    if (now?.merge) paintMerge(now);
+  };
+  read();
+  mergeBoardTimer = setInterval(() => { if (document.visibilityState === 'visible') read(); }, 4000);
+}
+
+const mergeClaimsOpen = plan => plan.variant === 'shared' ? (mergeBoard ? mergeBoard.claims.length : null) : 0;
+
+function distillateOf(plan) {
+  if (!distillateEdits) distillateEdits = (plan.merge.distillate || []).map(d => ({ ...d, keep: true }));
+  return distillateEdits;
+}
+
+// The distillate the merge sends: what the person kept, as edited.
+const keptDistillate = () => (distillateEdits || []).filter(d => d.keep && d.text.trim())
+  .map(d => ({ kind: d.kind, text: d.text.trim() }));
+
+function paintMergeTeam(plan) {
+  if (plan.variant !== 'shared') { mergeTeam.innerHTML = ''; return; }
+  const over = plan.merge.state === 'merged' || plan.merge.state === 'failed';
+  const claims = mergeBoard?.claims || [];
+  const commits = new Map();
+  (mergeBoard?.entries || []).filter(e => e.kind === 'commit').sort((a, b) => a.at - b.at)
+    .forEach(e => { if (!commits.has(e.by)) commits.set(e.by, []); commits.get(e.by).push(e); });
+  const hue = name => Math.max(0, plan.threads.findIndex(t => t.name === name));
+  let html = '';
+  if (claims.length) {
+    html += `<div class="merge-claims" role="alert"><strong>${wtPlural(claims.length, 'file')} still claimed</strong> — Merge waits until they are released.
+      <ul>${claims.map(c => `<li><code>${escHtml(c.file)}</code> · ${escHtml(c.owner)}</li>`).join('')}</ul></div>`;
+  }
+  html += `<h3 class="merge-h">Commits by thread</h3>` + (commits.size
+    ? [...commits].map(([name, list]) => `<div class="merge-commits" style="--plan-accent: var(${PLAN_HUES[hue(name) % PLAN_HUES.length]})">
+        <div class="merge-commits-name">${escHtml(name)} <span class="merge-commits-n">${wtPlural(list.length, 'commit')}</span></div>
+        <ul>${list.map(e => `<li>${e.hash ? `<code>${escHtml(wtShort(e.hash))}</code> ` : ''}${escHtml(e.text || '')}</li>`).join('')}</ul></div>`).join('')
+    : `<p class="wt-note">${mergeBoard ? mergeBoard.unread ? 'The board could not be read.' : 'No commit on the board.' : 'Reading the board…'}</p>`);
+  const dist = distillateOf(plan);
+  if (dist.length || !over) {
+    html += `<h3 class="merge-h">Distillate</h3>
+      <p class="wt-note">Decisions and warnings that still hold. What you keep goes to auto memory with the merge.</p>
+      <ul class="merge-distillate">${dist.map((d, i) => `<li class="merge-dist ${d.keep ? '' : 'dropped'}" data-i="${i}">
+        <input type="checkbox" class="merge-dist-keep" aria-label="Keep this ${escHtml(d.kind)}"${d.keep ? ' checked' : ''}${over ? ' disabled' : ''}>
+        <span class="merge-dist-kind" data-kind="${escHtml(d.kind)}">${d.kind === 'warning' ? '▲ Warning' : '◆ Decision'}</span>
+        <textarea class="field-input merge-dist-text" rows="2"${over ? ' disabled' : ''}>${escHtml(d.text)}</textarea></li>`).join('')
+        || '<li class="wt-note">The lead proposed nothing to keep.</li>'}</ul>`;
+  }
+  // Repainting while typing would drop the caret: only rebuild when the
+  // structure changed, otherwise leave the inputs alone.
+  const key = JSON.stringify([claims.map(c => c.file + c.owner), [...commits].map(([n, l]) => [n, l.map(e => e.hash || e.id)]),
+    dist.length, over, !!mergeBoard]);
+  if (mergeTeam.dataset.key === key) return;
+  mergeTeam.dataset.key = key;
+  mergeTeam.innerHTML = html;
+}
+
+mergeTeam.addEventListener('input', e => {
+  const t = e.target.closest('.merge-dist-text');
+  if (t) distillateEdits[+t.closest('.merge-dist').dataset.i].text = t.value;
+});
+mergeTeam.addEventListener('change', e => {
+  const k = e.target.closest('.merge-dist-keep');
+  if (!k) return;
+  const li = k.closest('.merge-dist');
+  distillateEdits[+li.dataset.i].keep = k.checked;
+  li.classList.toggle('dropped', !k.checked);
+});
+
 function setPlanView(view) {
   planView = view;
   planOverlay.querySelector('.plan-modal').classList.toggle('merge-view', view === 'merge');
@@ -202,6 +299,9 @@ function setPlanView(view) {
 async function showMerge(plan) {
   planShown = plan.id;
   setPlanView('merge');
+  mergeBoard = null;
+  distillateEdits = null;
+  startMergeBoard(plan);
   if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
   document.getElementById('plan-title').textContent = `Merge the threads of ${plan.sandbox}`;
   mergeClose.checked = true;
@@ -276,8 +376,11 @@ function paintMerge(plan) {
   const running = !over && (m.state === 'merging' || mergeAsk === plan.id);
   document.getElementById('merge-close-row').hidden = over;
   mergeClose.disabled = running;
+  paintMergeTeam(plan);
+  const open = mergeClaimsOpen(plan);
   mergeAll.hidden = over;
-  mergeAll.disabled = running;
+  mergeAll.disabled = running || open !== 0;
+  mergeAll.title = open ? `${wtPlural(open, 'file')} still claimed: release them first` : open === null ? 'Reading the board…' : '';
   mergeAll.textContent = running ? 'Merging…' : 'Merge all';
   // Closing never stops a merge under way: the pane's Merging… button leads back.
   mergeLater.textContent = over ? 'Close' : running ? 'Hide' : 'Not now';
@@ -286,11 +389,13 @@ function paintMerge(plan) {
 mergeAll.addEventListener('click', async () => {
   const id = planShown;
   const plan = plans.get(id);
-  if (!plan?.merge || mergeAsk) return;
+  if (!plan?.merge || mergeAsk || mergeClaimsOpen(plan) !== 0) return;
   mergeAsk = id;
   showNote(mergeError, '');
   paintMerge(plan);
-  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/merge`, { close_threads: mergeClose.checked });
+  const body = { close_threads: mergeClose.checked };
+  if (plan.variant === 'shared') body.distillate = keptDistillate();
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/merge`, body);
   mergeAsk = null;
   const now = plans.get(id);
   if (res.ok && res.merge && now) plans.set(id, { ...now, merge: res.merge });
@@ -488,6 +593,23 @@ function setPlanEditing(row, on) {
   }
 }
 
+// ── Variant ──
+// Split: a worktree and a branch per thread. Shared: one worktree, one branch,
+// file claims on a board. The lead proposes one with its justification; the
+// choice made here is what Approve sends.
+const planVariant = document.getElementById('plan-variant');
+function paintPlanVariant(plan) {
+  const v = plan.variant === 'shared' ? 'shared' : 'split';
+  const opt = (val, name, hint) => `<label class="plan-variant-opt"><input type="radio" name="plan-variant" value="${val}"${val === v ? ' checked' : ''}>
+      <span><strong>${name}</strong> <span class="plan-variant-hint">${hint}</span></span></label>`;
+  planVariant.innerHTML = `<div class="plan-variant-opts" role="radiogroup" aria-label="Variant">
+      ${opt('split', 'Split', 'a worktree and a branch per thread')}
+      ${opt('shared', 'Shared', 'one worktree, one branch, files claimed on a board')}
+    </div>
+    ${plan.justification ? `<p class="plan-justification"><span class="plan-owns-label">Why</span> ${escHtml(plan.justification)}</p>` : ''}`;
+}
+const planVariantChoice = () => planVariant.querySelector('input:checked')?.value || 'split';
+
 function setPlanError(msg) {
   showNote(planError, msg);
 }
@@ -498,6 +620,7 @@ async function showPlan(plan) {
   if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
   document.getElementById('plan-title').textContent = `Plan from the lead of ${plan.sandbox}`;
   document.getElementById('plan-summary').textContent = plan.summary || '';
+  paintPlanVariant(plan);
   planRows.innerHTML = plan.threads.map((t, i) => planRowHtml(t, i)).join('');
   setPlanError('');
   planApprove.disabled = false;
@@ -534,6 +657,7 @@ async function updatePlanCount() {
 }
 
 function closePlan() {
+  stopMergeBoard();
   planOverlay.classList.add('hidden');
   planShown = null;
   mergeAsk = null;
@@ -643,7 +767,7 @@ planApprove.addEventListener('click', async () => {
   planApprove.disabled = true;
   planApprove.textContent = 'Starting…';
   setPlanError('');
-  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads });
+  const res = await postJsonOrError(`/api/plans/${encodeURIComponent(id)}/approve`, { threads, variant: planVariantChoice() });
   if (!res.ok) {
     planApprove.textContent = 'Approve and start';
     updatePlanReady();

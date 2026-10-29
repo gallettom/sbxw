@@ -3251,3 +3251,92 @@
   @media (prefers-reduced-motion: reduce) {
     .sp-avatar .cd-cursor { animation: none !important; }
   }
+
+  /* ── Team board ──
+     The shared variant's replacement for the worktree graph: claims on top,
+     the feed under them. A thread keeps its plan-card hue (--bd-hue) on the
+     edge of whatever it owns or wrote. Amber is a claim held past 1 h 30, red
+     a conflict. Colours are tokens only, so a theme restyles it with the rest.
+     Claims are a list of wrapping rows rather than a table, so below 640px
+     the same markup is the single list. */
+  .bd { display: flex; flex-direction: column; gap: .9rem; min-width: 0; }
+  .bd-summary { margin: 0; color: var(--c-text-muted); font-size: 12px; }
+  .bd-sec { display: flex; flex-direction: column; gap: .45rem; min-width: 0; }
+  .bd-h { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
+  .bd-claims, .bd-feed { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .35rem; }
+  .bd-claim {
+    display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr) auto; align-items: baseline; gap: .2rem .75rem;
+    padding: .45rem .7rem; border: 1px solid var(--c-border); border-left: 3px solid var(--bd-hue);
+    border-radius: var(--r-sm); background: var(--c-bg); min-width: 0;
+  }
+  .bd-file { color: var(--c-text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bd-owner { color: var(--bd-hue); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bd-when { color: var(--c-text-muted); font-size: 12px; }
+  .bd-held { color: var(--c-text-dim); }
+  .bd-flag { font-size: 11px; font-weight: 600; justify-self: end; }
+  .bd-claim.long { background: var(--c-amber-tint); border-color: var(--c-amber); border-left-color: var(--c-amber); }
+  .bd-claim.long .bd-flag, .bd-claim.long .bd-when { color: var(--c-amber-strong); }
+  .bd-claim.conflict { background: var(--c-red-tint); border-color: var(--c-red-border); border-left-color: var(--c-red); }
+  .bd-claim.conflict .bd-flag, .bd-claim.conflict .bd-when { color: var(--c-red); }
+  .bd-filters { display: flex; flex-direction: column; gap: .35rem; }
+  .bd-chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+  .bd-chipbtn {
+    font: inherit; font-size: 12px; padding: .15rem .6rem; cursor: pointer;
+    color: var(--c-text-muted); background: none; border: 1px solid var(--c-border); border-radius: var(--r-pill);
+  }
+  .bd-chipbtn:hover { color: var(--c-text-bright); border-color: var(--c-dim); }
+  .bd-chipbtn[aria-pressed="true"] { color: var(--c-text-bright); background: var(--c-elevated); border-color: var(--c-text-muted); }
+  .bd-chipbtn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .bd-entry {
+    display: flex; gap: .6rem; padding: .45rem .7rem; min-width: 0;
+    border: 1px solid var(--c-elevated); border-left: 3px solid var(--bd-hue); border-radius: var(--r-sm); background: var(--c-surface-alt);
+  }
+  .bd-mark { flex: none; width: 1.2em; text-align: center; color: var(--c-text-muted); }
+  .bd-entry[data-kind="decision"] .bd-mark { color: var(--c-blue); }
+  .bd-entry[data-kind="warning"] .bd-mark { color: var(--c-amber); }
+  .bd-entry[data-kind="question"] .bd-mark { color: var(--c-purple); }
+  .bd-entry[data-kind="commit"] .bd-mark { color: var(--c-green); }
+  .bd-entry[data-kind="conflict"] .bd-mark { color: var(--c-red); }
+  .bd-entry-main { display: flex; flex-direction: column; gap: .2rem; min-width: 0; flex: 1; }
+  .bd-entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .6rem; font-size: 12px; }
+  .bd-kind { color: var(--c-text-bright); font-weight: 600; }
+  .bd-by { color: var(--bd-hue); }
+  .bd-hash { color: var(--c-text-bright); font-size: 11px; }
+  .bd-at { margin-left: auto; color: var(--c-text-dim); font-size: 11px; }
+  .bd-text { margin: 0; line-height: 1.5; overflow-wrap: anywhere; font-family: var(--font-prose); }
+  .bd-files { display: flex; flex-wrap: wrap; gap: .25rem; }
+  .bd-chip { font-size: 11px; padding: 0 .4rem; border-radius: var(--r-xs); background: var(--c-elevated); color: var(--c-text); overflow-wrap: anywhere; }
+  @media (max-width: 640px) {
+    .bd-claim { grid-template-columns: minmax(0, 1fr) auto; }
+    .bd-claim .bd-when { grid-column: 1 / -1; }
+    .bd-at { margin-left: 0; flex-basis: 100%; }
+  }
+
+  /* Plan dialog, shared variant: the choice at review, the team's side of the
+     merge (claims that block it, commits by thread, the distillate). */
+  .plan-variant { display: flex; flex-direction: column; gap: .5rem; }
+  .plan-variant-opts { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .plan-variant-opt {
+    display: flex; gap: .5rem; align-items: flex-start; flex: 1 1 14rem; cursor: pointer;
+    padding: .5rem .7rem; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-bg);
+  }
+  .plan-variant-opt:has(input:checked) { border-color: var(--c-blue); background: var(--c-blue-tint); }
+  .plan-variant-hint { display: block; color: var(--c-text-muted); font-size: 11px; }
+  .plan-justification { margin: 0; color: var(--c-text-soft); font-family: var(--font-prose); line-height: 1.5; }
+  .merge-team { display: flex; flex-direction: column; gap: .5rem; }
+  .merge-team:empty { display: none; }
+  .merge-h { margin: .4rem 0 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-muted); }
+  .merge-claims { padding: .55rem .7rem; border-radius: var(--r-sm); font-size: 12px; line-height: 1.5; color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber); }
+  .merge-claims ul { margin: .3rem 0 0; padding-left: 1.2rem; color: var(--c-text); }
+  .merge-commits { padding: .45rem .7rem; border: 1px solid var(--c-border); border-left: 3px solid var(--plan-accent); border-radius: var(--r-sm); background: var(--c-bg); }
+  .merge-commits-name { color: var(--plan-accent); font-weight: 600; }
+  .merge-commits-n { color: var(--c-text-dim); font-weight: 400; font-size: 11px; }
+  .merge-commits ul { margin: .25rem 0 0; padding: 0; list-style: none; font-size: 12px; }
+  .merge-commits li { overflow-wrap: anywhere; }
+  .merge-commits code { color: var(--c-text-bright); font-size: 11px; }
+  .merge-distillate { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .4rem; }
+  .merge-dist { display: grid; grid-template-columns: auto 1fr; gap: .2rem .6rem; align-items: center; }
+  .merge-dist-kind { font-size: 11px; font-weight: 600; color: var(--c-blue); }
+  .merge-dist-kind[data-kind="warning"] { color: var(--c-amber); }
+  .merge-dist-text { grid-column: 1 / -1; width: 100%; resize: vertical; font-family: var(--font-prose); font-size: 13px; line-height: 1.5; }
+  .merge-dist.dropped .merge-dist-text { opacity: .5; text-decoration: line-through; }
