@@ -173,7 +173,7 @@ pub struct Plan {
     /// The lead's Claude Code session name — its threads' `SendMessage` address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lead: Option<String>,
-    /// Lead mode ended: threads run on, reports no longer reach the lead.
+    /// Team mode ended: threads run on, reports no longer reach the lead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -481,7 +481,7 @@ impl PlanBook {
         })
     }
 
-    /// Lead mode ended: the pending plan is refused, approved ones closed.
+    /// Team mode ended: the pending plan is refused, approved ones closed.
     pub fn end_lead(&mut self, sandbox: &str, now: u64) -> Vec<Plan> {
         self.plans
             .values_mut()

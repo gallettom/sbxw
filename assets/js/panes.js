@@ -159,13 +159,13 @@ function createPane(index) {
       <button class="pane-btn pane-thread-close" id="pthreadclose-${index}" hidden
               title="Close this thread — stop it, remove its worktree, and its branch">Close thread</button>
       <!-- A main pane's two actions, kept out of the switch because neither is
-           a view of this pane: Thread opens another session, and Lead mode is
+           a view of this pane: Thread opens another session, and Team mode is
            a state of the main session, turned on and off. They sit with the
            pane's other work (Project, the plan), left of the spacer, so they
            read apart from the session plumbing on the right; and last before
            the spacer, so showing them on demand moves nothing else. -->
       <button class="pane-btn pane-main-action pane-new-thread" id="pnewthread-${index}" aria-haspopup="menu" aria-expanded="false" title="Thread — another Claude session in this sandbox, in a git worktree and branch of its own">⑂<span class="mode-word"> Thread</span><span class="thread-count" hidden></span></button>
-      <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Lead mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Lead mode</span> <span class="lead-state">Off</span></button>
+      <button class="pane-btn pane-main-action pane-lead-toggle" id="plead-${index}" aria-pressed="false" title="Team mode — make this sandbox's main session plan the work into threads, have you approve the plan, and follow them; it stops coding itself">★<span class="mode-word"> Team mode</span> <span class="lead-state">Off</span></button>
       <!-- About the Claude session in this pane, main or thread, so it goes
            dark on Bash. The daemon checks the login before typing anything. -->
       <button class="pane-btn pane-main-action pane-remote-btn" id="premote-${index}" hidden aria-pressed="false" title="Remote control — drive this Claude session from claude.ai/code or the Claude app (needs a claude.ai login: /login)">⇄<span class="mode-word"> Remote</span> <span class="rc-state">Off</span></button>
@@ -210,7 +210,7 @@ function createPane(index) {
 
   // Mode buttons
   // A main pane switches between Claude and Bash, beside a Thread button and
-  // the Lead mode toggle. A thread's pane switches between Thread and Bash,
+  // the Team mode toggle. A thread's pane switches between Thread and Bash,
   // both about *that* thread: its agent, and a shell in its worktree — see
   // applyPaneChrome.
   const [claudeBtn, threadBtn, bashBtn] = el.querySelectorAll('.mode-btn');
@@ -585,7 +585,7 @@ function applyPaneChrome(idx, name) {
   // no project either.
   document.getElementById(`pfiles-${idx}`).disabled = !name || monitor;
   // A thread's pane is about that thread: Claude would be the main agent, a
-  // new thread is opened from the main pane, and Lead mode is something only
+  // new thread is opened from the main pane, and Team mode is something only
   // the main session is in. On a main pane, ⑂ Thread is the button beside.
   // An empty pane has no sandbox to open a thread in or to lead from.
   panes[idx].el.querySelectorAll('.mode-btn').forEach(b => {
@@ -1323,7 +1323,7 @@ async function startLead(idx) {
   const pane = panes[idx];
   const sandbox = pane?.sandbox;
   if (!sandbox || pane.thread) return;
-  // Lit, the button is the way out: it ends lead mode, after asking.
+  // Lit, the button is the way out: it ends team mode, after asking.
   if (typeof isLeading === 'function' && isLeading(sandbox)) { askEndLead(idx); return; }
   if (pane.mode !== 'claude') connectPane(idx, sandbox, 'claude');
   const btn = document.getElementById(`plead-${idx}`);
@@ -1576,7 +1576,7 @@ function paintGroups() {
     // whether the main session is leading a plan right now.
     const st = thread && typeof planThreadState === 'function' ? planThreadState(p.sandbox, thread) : null;
     const leading = !thread && p.sandbox && typeof isLeading === 'function' && isLeading(p.sandbox);
-    // Lead mode is said once, by its toggle lit On (kept on the bar while it
+    // Team mode is said once, by its toggle lit On (kept on the bar while it
     // is, focused or not) and the stripe on the bar — not a second time by a
     // "★ lead" chip beside it. The chip stays "main" among its threads.
     chip.textContent = thread ? `⑂ ${thread}${st ? ` ${PLAN_STATE_MARK[st.state] || ''}` : ''}` : 'main';
@@ -1585,9 +1585,9 @@ function paintGroups() {
     if (leadBtn) {
       leadBtn.setAttribute('aria-pressed', String(!!leading));
       leadBtn.querySelector('.lead-state').textContent = leading ? 'On' : 'Off';
-      // On, the toggle ends lead mode; say so where a person hovers.
+      // On, the toggle ends team mode; say so where a person hovers.
       leadBtn.dataset.title ??= leadBtn.title;
-      leadBtn.title = leading ? 'Lead mode is on — click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
+      leadBtn.title = leading ? 'Team mode is on — click to end it: this session stops leading; its threads keep running' : leadBtn.dataset.title;
     }
     chip.title = st ? `${st.state}${st.summary ? ` — ${st.summary}` : ''}` : '';
     chip.classList.toggle('thread', !!thread);
