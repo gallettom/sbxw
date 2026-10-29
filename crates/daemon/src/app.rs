@@ -54,6 +54,7 @@ pub struct App {
     /// asking session instead, or it is never read.
     pub(crate) relay_waiters: Mutex<HashMap<String, usize>>,
     pub(crate) plans: Mutex<PlanBook>,
+    pub(crate) boards: Mutex<HashMap<String, sbxw_core::board::Board>>,
     pub(crate) codemap: Mutex<RunBook>,
     pub(crate) usage: Mutex<Usage>,
     /// Sandboxes whose main session was made lead, and *which* session (its
@@ -98,6 +99,7 @@ impl AppBuilder {
             relay: Mutex::new(RelayBook::new()),
             relay_waiters: Mutex::new(HashMap::new()),
             plans: Mutex::new(PlanBook::load(plans)),
+            boards: Mutex::new(HashMap::new()),
             codemap: Mutex::new(RunBook::new()),
             usage: Mutex::new(Usage::default()),
             leads: Mutex::new(HashMap::new()),
@@ -170,6 +172,7 @@ impl App {
             tokio::spawn(async move { app.poll_usage().await });
         }
         self.start_keep_awake();
+        self.start_board_listener();
     }
 
     fn prune(&self) {

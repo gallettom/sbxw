@@ -35,6 +35,8 @@ pub enum Event {
     Plan(Plan),
     Lead(String),
     LeadEnd(String),
+    /// A sandbox's Team-mode board changed.
+    Board(String),
 }
 
 impl Event {
@@ -50,6 +52,7 @@ impl Event {
             Event::Plan(_) => "plan",
             Event::Lead(_) => "lead",
             Event::LeadEnd(_) => "lead-end",
+            Event::Board(_) => "board",
         }
     }
 
@@ -62,7 +65,7 @@ impl Event {
             Event::Provision(v) => json(v),
             Event::Codemap(v) => json(v),
             Event::Plan(v) => json(v),
-            Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) => s.clone(),
+            Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.clone(),
         }
     }
 }
