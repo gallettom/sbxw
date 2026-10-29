@@ -71,6 +71,16 @@ impl App {
         })
     }
 
+    /// The board as the UI reads it: `plan` is the sandbox's shared plan at
+    /// work, in full (its variant, its threads), or null when there is none —
+    /// which is what tells the UI to draw the worktree graph instead.
+    pub fn board_ui_view(&self, sandbox: &SandboxName) -> Value {
+        let mut v = self.board_view(sandbox);
+        let team = self.plans.lock().unwrap().team_plan(sandbox).cloned();
+        v["plan"] = team.map_or(Value::Null, |p| self.plan_view(&p));
+        v
+    }
+
     pub fn board_claim(&self, sandbox: &str, plan: Option<&str>, session: &str, files: &[String]) -> Result<ClaimOutcome, String> {
         self.with_board(sandbox, plan, |b| b.claim(session, files, now_ms()))
     }
@@ -257,6 +267,25 @@ mod tests {
         assert_eq!(claims[0]["owner"], "front");
         let last = v["entries"].as_array().unwrap().last().unwrap().clone();
         assert_eq!((last["kind"].as_str(), last["text"].as_str()), (Some("release"), Some("thread finished")));
+    }
+
+    #[tokio::test]
+    async fn the_ui_reads_the_shared_plan_at_work_even_before_any_claim() {
+        let (_d, app) = app();
+        let sb = SandboxName::parse("neos").unwrap();
+        assert!(app.board_ui_view(&sb)["plan"].is_null(), "no shared plan: the UI draws the graph");
+        let threads = || vec![t("api"), t("front")];
+        let p = app
+            .plans
+            .lock()
+            .unwrap()
+            .propose("p-1".into(), &sb, "", threads(), Variant::Shared, "api and front share files", None, 0)
+            .unwrap();
+        app.plans.lock().unwrap().approve(&p.id, threads(), None, None, 1).unwrap();
+        let v = app.board_ui_view(&sb);
+        assert_eq!((v["plan"]["id"].as_str(), v["plan"]["variant"].as_str()), (Some("p-1"), Some("shared")), "{v}");
+        assert_eq!(v["plan"]["threads"][1]["name"], "front");
+        assert!(v["claims"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

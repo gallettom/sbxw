@@ -117,6 +117,9 @@ process.stdin.on("end", () => {
   evt.hook_version = HOOK_VERSION;
   evt.ssh_env = sshEnvNames();
   evt.ancestry = ancestry();
+  // The thread sbxw started this session as, if any. Its worktree says the
+  // same for a split plan, but a shared plan's threads all share one.
+  if (process.env.SBXW_THREAD) evt.sbxw_thread = process.env.SBXW_THREAD;
   // Sessions sbxw itself started in the background — writing a code map or a
   // lens on it — say so, and the daemon files their events nowhere. Nobody attached
   // them, no pane shows them, and there is no terminal in which their prompts

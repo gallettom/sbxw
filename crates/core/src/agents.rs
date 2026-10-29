@@ -78,6 +78,10 @@ pub struct SessionInfo {
     pub session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// The thread sbxw started this session as (`SBXW_THREAD`), when it is
+    /// one: what tells a shared plan's threads apart, since they share a cwd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
     pub origin: SessionOrigin,
     pub answerable: bool,
     pub ts: u64,
@@ -100,6 +104,7 @@ struct Status {
     prompt: Vec<Question>,
     reply: Option<String>,
     cwd: Option<String>,
+    thread: Option<String>,
     origin: SessionOrigin,
 }
 
@@ -172,6 +177,10 @@ impl<'a> HookEvent<'a> {
     }
     pub fn cwd(&self) -> Option<&'a str> {
         Some(self.str("cwd")).filter(|s| !s.is_empty())
+    }
+    /// The thread the session was started as (`SBXW_THREAD`), from the status hook.
+    pub fn thread(&self) -> Option<&'a str> {
+        Some(self.str("sbxw_thread")).filter(|s| !s.is_empty())
     }
     pub fn hook_version(&self) -> u64 {
         self.body.get("hook_version").and_then(Value::as_u64).unwrap_or(0)
@@ -400,6 +409,9 @@ impl AgentBook {
         if let Some(cwd) = event.cwd() {
             st.cwd = Some(cwd.to_string());
         }
+        if let Some(thread) = event.thread() {
+            st.thread = Some(thread.to_string());
+        }
         // Only ever upgraded away from Unknown: one unreadable read must not
         // demote a session whose origin was already established.
         if origin != SessionOrigin::Unknown {
@@ -513,7 +525,13 @@ impl AgentBook {
         let gone: Vec<AgentKey> = self
             .statuses
             .iter()
-            .filter(|(k, st)| k.sandbox == sandbox && st.cwd.as_deref().is_some_and(|c| c.trim_end_matches('/').ends_with(&tail)))
+            .filter(|(k, st)| {
+                k.sandbox == sandbox
+                    && match st.thread.as_deref() {
+                        Some(t) => t == thread,
+                        None => st.cwd.as_deref().is_some_and(|c| c.trim_end_matches('/').ends_with(&tail)),
+                    }
+            })
             .map(|(k, _)| k.clone())
             .collect();
         gone.into_iter()
@@ -565,6 +583,7 @@ fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo
         reply: st.reply.clone(),
         session_id: (!key.session_id.is_empty()).then(|| key.session_id.clone()),
         cwd: st.cwd.clone(),
+        thread: st.thread.clone(),
         origin: st.origin,
         answerable,
         ts: now,
@@ -703,6 +722,22 @@ mod tests {
         assert_eq!(gone.len(), 1);
         assert_eq!(gone[0].state, SessionState::Exited);
         assert_eq!(book.snapshot(|_| true, 5).len(), 2, "the main agent and chat-22 stay");
+    }
+
+    #[test]
+    fn a_shared_plans_threads_are_told_apart_by_name_not_cwd() {
+        let mut book = AgentBook::new();
+        let team = "/w/.sbxw-worktrees/team-p-1";
+        let s = |id: &str, thread: &str| {
+            json!({"hook_event_name": "SessionStart", "session_id": id, "cwd": team, "sbxw_thread": thread})
+        };
+        book.apply("c", &ev(&s("t1", "api")), SessionOrigin::Remote, true, 1);
+        let infos = book.apply("c", &ev(&s("t2", "web")), SessionOrigin::Remote, true, 2);
+        assert_eq!(infos.last().and_then(|i| i.thread.as_deref()), Some("web"));
+        let gone = book.forget_thread("c", "api", 3);
+        assert_eq!(gone.iter().map(|i| i.thread.as_deref()).collect::<Vec<_>>(), [Some("api")]);
+        assert!(book.forget_thread("c", "team-p-1", 4).is_empty(), "the shared worktree is no thread");
+        assert_eq!(book.snapshot(|_| true, 5).len(), 1, "web stays");
     }
 
     #[test]

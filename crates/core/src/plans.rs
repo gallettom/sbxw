@@ -632,6 +632,16 @@ impl PlanBook {
             .filter(|p| !p.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged))
     }
 
+    /// The sandbox's shared plan at work: the latest approved one that is
+    /// shared and not merged yet. What its board belongs to.
+    pub fn team_plan(&self, sandbox: &str) -> Option<&Plan> {
+        self.plans
+            .values()
+            .filter(|p| p.sandbox == sandbox && p.state == PlanState::Approved && p.variant == Variant::Shared)
+            .filter(|p| !p.merge.as_ref().is_some_and(|m| m.state == MergeState::Merged))
+            .max_by_key(|p| p.created_ms)
+    }
+
     /// Where a thread stands. A thread reports only the reportable states; the
     /// daemon may set any. The latest approved plan holding the name wins.
     pub fn set_thread(
@@ -818,6 +828,8 @@ mod tests {
         assert_eq!(p.team_name(), "team-p-s");
         assert_eq!(b.team_of("n", "a").map(|p| p.id.as_str()), Some("p-s"));
         assert!(b.team_of("n", "zz").is_none());
+        assert_eq!(b.team_plan("n").map(|p| p.id.as_str()), Some("p-s"));
+        assert!(b.team_plan("other").is_none());
         b.set_thread("n", "a", ThreadState::Done, "", false, 3).unwrap();
         assert!(b.propose_merge(&p.id, "n", vec![], "", vec![], 4).is_err(), "b is not done");
         b.set_thread("n", "b", ThreadState::Done, "", false, 5).unwrap();
@@ -839,6 +851,7 @@ mod tests {
         assert!(body.starts_with("---\nname: team-p-s\n") && body.contains("- **Warning:** no float money\n"));
         assert!(index.starts_with("- [Team plan p-s](team-p-s.md) — "));
         assert!(b.team_of("n", "a").is_none(), "merged: the threads are on their own again");
+        assert!(b.team_plan("n").is_none(), "merged: no board to show");
     }
 
     #[test]
@@ -848,6 +861,7 @@ mod tests {
         let p = b.approve(&p.id, vec![t("a")], None, Some("/w".into()), 2).unwrap();
         assert_eq!(p.worktree, None);
         assert!(b.team_of("n", "a").is_none());
+        assert!(b.team_plan("n").is_none());
     }
 
     #[test]

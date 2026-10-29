@@ -168,7 +168,7 @@ async fn approve_extension(State(app): S, Agent(me): Agent, Json(b): Json<Body>)
 
 async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {
     let name = SandboxName::parse(&name)?;
-    Ok(Json(app.board_view(&name)))
+    Ok(Json(app.board_ui_view(&name)))
 }
 
 #[cfg(test)]
@@ -214,7 +214,7 @@ mod tests {
         let get = Request::builder().uri("/api/sandboxes/neos/board").header("host", "127.0.0.1:7681").body(Body::empty()).unwrap();
         let (s, v) = call(ui_router(app.clone()), get).await;
         assert_eq!(s, StatusCode::OK);
-        assert_eq!(v["plan"], "p-1");
+        assert!(v["plan"].is_null(), "the UI gets the shared plan at work in full, and p-1 is in no plan book: {v}");
         assert_eq!(v["claims"][0]["file"], "src/cart.ts");
         let kinds: Vec<_> = v["entries"].as_array().unwrap().iter().map(|e| e["kind"].clone()).collect();
         assert_eq!(kinds, [json!("claim"), json!("conflict")]);

@@ -90,6 +90,12 @@ impl App {
                 Spawn::sbx(scripts::thread_bash_args(&sandbox, &dir, thread, self.team_for(&sandbox, thread).as_ref()))
             }
             SessionKind::Thread(thread) => {
+                // A shared plan's worktree is named like a thread but is none:
+                // a session opened under its name would find no briefing and
+                // resume whichever thread's conversation that folder holds.
+                if self.plans.lock().unwrap().of(&sandbox).iter().any(|p| p.team_name() == thread.as_str()) {
+                    bail!("'{thread}' is the worktree a shared plan's threads share, not a thread: open one of its threads instead");
+                }
                 self.ensure_running_for_thread(&sandbox).await?;
                 // The ceiling refuses a *new* thread only; the agent never.
                 let open = self.sessions.agents_open(&sandbox);

@@ -114,10 +114,12 @@ function spChat(key = spKey()) {
   return spChats.get(key);
 }
 
-// Same rule as main.js's `threadOfCwd`: a thread's agent runs in its worktree.
-function spThreadOf(cwd) {
-  const m = /\/\.sbxw-worktrees\/([a-z0-9-]+)(?:\/|$)/.exec(cwd || '');
-  return m ? m[1] : null;
+// Same rule as main.js's `threadOfSession`: the name sbxw gave the thread,
+// else its worktree — never a shared plan's `team-<plan>`.
+function spThreadOf(info) {
+  if (info?.thread) return info.thread;
+  const m = /\/\.sbxw-worktrees\/([a-z0-9-]+)(?:\/|$)/.exec(info?.cwd || '');
+  return m && !/^team-p-[0-9a-f]+$/.test(m[1]) ? m[1] : null;
 }
 
 async function spJson(url, body) {
@@ -622,7 +624,7 @@ new EventSource('/api/relay/events').onmessage = ev => {
 // threads, never a bash pane.
 function spIngest(info, seed = false) {
   if (!info || info.sandbox !== spSandbox || (info.mode || 'claude') !== 'claude' || !chatOwnSession(info)) return;
-  const thread = spThreadOf(info.cwd);
+  const thread = spThreadOf(info);
   const c = spChat(`${info.sandbox}::${thread || ''}`);
   const news = chatIngest(c, info, seed);
   // Answering types keystrokes into a PTY, and sbxw only knows it is typing

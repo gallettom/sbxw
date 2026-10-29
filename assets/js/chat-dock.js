@@ -311,7 +311,7 @@ chatComposer(cdForm, cdInput, cdSend);
 function cdIngest(info, seed = false) {
   if (!info || !CHAT_DOCK_RE.test(info.sandbox || '')) return;
   if ((info.mode || 'claude') !== 'claude' || !chatOwnSession(info)) return;
-  const key = cdKey(info.sandbox, threadOfCwd(info.cwd));
+  const key = cdKey(info.sandbox, threadOfSession(info));
   // The end of a session closed here would otherwise bring its tab back.
   if (info.state === 'exited' && !cdChats.has(key)) return;
   const news = chatIngest(cdChat(key), info, seed);

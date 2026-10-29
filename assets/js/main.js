@@ -303,15 +303,22 @@ function flashDone(sandbox) {
 // `claude`, reading the same settings. Its working directory is what tells it
 // apart, and filing it under its own key is what stops a busy thread from
 // painting the agent's pane and sidebar row as busy.
-function threadOfCwd(cwd) {
-  const m = /\/\.sbxw-worktrees\/([a-z0-9-]+)(?:\/|$)/.exec(cwd || '');
-  return m ? m[1] : null;
+//
+// The thread's own name comes first: sbxw starts it with SBXW_THREAD and the
+// status hook sends that as `thread`. The worktree is the fallback for hooks
+// older than that, but never a shared plan's: `team-<plan>` holds every thread
+// of that plan and is none of them — read as a thread, it became a phantom one
+// whose pane started a second session there.
+function threadOfSession(info) {
+  if (info?.thread) return info.thread;
+  const m = /\/\.sbxw-worktrees\/([a-z0-9-]+)(?:\/|$)/.exec(info?.cwd || '');
+  return m && !/^team-p-[0-9a-f]+$/.test(m[1]) ? m[1] : null;
 }
 
 function ingestSession(info, seed = false) {
   if (!info || !info.sandbox) return;
   const mode = info.mode || 'claude';
-  const thread = mode === 'claude' ? threadOfCwd(info.cwd) : null;
+  const thread = mode === 'claude' ? threadOfSession(info) : null;
   const key = thread ? `${info.sandbox}::thread:${thread}` : `${info.sandbox}::${mode}`;
   const prev = agentStates.get(key);
   if (info.state === 'exited') agentStates.delete(key);

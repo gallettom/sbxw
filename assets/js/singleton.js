@@ -50,10 +50,11 @@ const SBXW_APP_SCRIPTS = [
   // Same reason: the chat dock follows chats on that stream. chat-core.js is
   // the part of it the browser side panel shares.
   '/js/chat-core.js',
+  // Before worktrees.js, which binds the board's filters as it loads; board.js
+  // only calls that file's helpers once drawn, so it may come first.
+  '/js/board.js',
   // After plans.js: its lanes carry each thread's plan state.
   '/js/worktrees.js',
-  // After worktrees.js: it draws with that file's helpers.
-  '/js/board.js',
   // Same reason: the chat dock follows chats on that stream.
   '/js/chat-dock.js',
 ];
