@@ -120,6 +120,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/codemap", post(codemap_start))
         .route("/api/sandboxes/:name/codemap/lens", post(codemap_lens))
         .route("/api/codemap", get(codemap_runs))
+        .merge(super::board::ui_routes())
         // The daemon itself.
         .route("/api/health", get(health))
         .route("/api/state", get(state))
