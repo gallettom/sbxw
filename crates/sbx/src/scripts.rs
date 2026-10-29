@@ -93,9 +93,17 @@ macro_rules! no_repo_fn {
 /// `--continue` alike; empty leaves the sandbox's default
 /// (`ANTHROPIC_DEFAULT_MODEL`) in charge.
 ///
-/// Workspace, thread name, prompt and model are positional (`$1`–`$4`), never
-/// script text: the thread name comes from a WebSocket query parameter. It is
-/// a `ThreadName`, and that is exactly why the
+/// `team`, for a thread of a shared plan (Team mode), is that plan: the
+/// session opens in the plan's one worktree, `.sbxw-worktrees/team-<plan>` on
+/// branch `sbxw/team-<plan>`, made by whichever thread starts first (under a
+/// lock: they all start at once), with `SBXW_TEAM=shared` and
+/// `SBXW_TEAM_PLAN=<plan>` set. Such a thread never `--continue`s: every
+/// thread shares the cwd its transcripts are filed under, so "its last
+/// conversation" could be another thread's.
+///
+/// Workspace, thread name, prompt, model and plan are positional (`$1`–`$6`),
+/// never script text: the thread name comes from a WebSocket query parameter.
+/// It is a `ThreadName`, and that is exactly why the
 /// property is easy to lose — nothing downstream would notice.
 pub fn thread_run_args(
     name: &SandboxName,
@@ -103,6 +111,7 @@ pub fn thread_run_args(
     thread: &ThreadName,
     prompt: &str,
     model: Option<&ModelId>,
+    team: Option<&Team>,
 ) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
@@ -110,20 +119,30 @@ pub fn thread_run_args(
             printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"
             exit 1
         fi
-        wt="$root/.sbxw-worktrees/$2"
+        key="${5:-$2}"
+        wt="$root/.sbxw-worktrees/$key"
+        if [ ! -d "$wt" ] && [ -n "$5" ] && command -v flock >/dev/null; then
+            # A shared plan's threads all start at once: one makes the worktree.
+            exec 9>"$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/sbxw-$key.lock"
+            flock -w 60 9
+        fi
         if [ ! -d "$wt" ]; then
             ex=$(git -C "$root" rev-parse --git-path info/exclude)
             case "$ex" in /*) ;; *) ex="$root/$ex" ;; esac
             mkdir -p "$(dirname "$ex")"
             grep -qxF '/.sbxw-worktrees/' "$ex" 2>/dev/null || printf '/.sbxw-worktrees/\n' >> "$ex"
-            if git -C "$root" show-ref --verify --quiet "refs/heads/sbxw/$2"; then
-                git -C "$root" worktree add "$wt" "sbxw/$2" || exit 1
+            if git -C "$root" show-ref --verify --quiet "refs/heads/sbxw/$key"; then
+                git -C "$root" worktree add "$wt" "sbxw/$key" || exit 1
             else
-                git -C "$root" worktree add -b "sbxw/$2" "$wt" || exit 1
+                git -C "$root" worktree add -b "sbxw/$key" "$wt" || exit 1
             fi
         fi
-        printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$2"
+        exec 9>&-
+        printf '\033[2m[sbxw] thread %s - worktree %s, branch sbxw/%s\033[0m\r\n' "$2" "$wt" "$key"
         export SBXW_THREAD="$2"
+        if [ -n "$5" ]; then
+            export SBXW_TEAM=shared SBXW_TEAM_PLAN="$6"
+        fi
         cd "$wt" || exit 1
         # Trusted, or the session stops on "Do you trust this folder?" before
         # its briefing: a worktree is a folder Claude Code has never seen, and
@@ -148,15 +167,26 @@ pub fn thread_run_args(
         # Claude Code files transcripts under the cwd with every character
         # outside [A-Za-z0-9] turned into '-'.
         tr="$HOME/.claude/projects/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
-        if [ -z "$3" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
+        if [ -z "$3" ] && [ -z "$5" ] && ls "$tr"/*.jsonl >/dev/null 2>&1; then
             printf '\033[2m[sbxw] resuming its last conversation\033[0m\r\n'
             exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} --continue
         fi
         exec claude --dangerously-skip-permissions --name "$2" ${4:+--model "$4"} ${3:+"$3"}"#);
     let mut args = owned(&["exec", "-it", name.as_str(), "--", "bash", "-lc", SCRIPT, "sbxw-thread"]);
     let model = model.map(ModelId::as_str).unwrap_or("");
-    args.extend([workspace, thread.as_str(), prompt, model].map(pos));
+    let (worktree, plan) = team.map_or(("", ""), |t| (t.worktree.as_str(), t.plan.as_str()));
+    args.extend([workspace, thread.as_str(), prompt, model, worktree, plan].map(pos));
     args
+}
+
+/// The shared plan a thread works under (Team mode).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Team {
+    /// Its plan's id: `SBXW_TEAM_PLAN`.
+    pub plan: String,
+    /// Its worktree's folder under `.sbxw-worktrees/`, and its branch after
+    /// `sbxw/`: `team-<plan>`.
+    pub worktree: ThreadName,
 }
 
 /// Where a thread stands, read before closing it: what closing would throw
@@ -226,22 +256,24 @@ pub const THREAD_END_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
     echo ok=1"#);
 
 /// Argv for a shell in thread `thread`'s worktree — what the Bash button opens
-/// in a thread's pane. Refuses rather than create the worktree: a shell is not
-/// how a thread is started. Positional arguments, as in `thread_run_args`.
-pub fn thread_bash_args(name: &SandboxName, workspace: &str, thread: &ThreadName) -> Vec<String> {
+/// in a thread's pane; a shared plan's worktree for one of its threads.
+/// Refuses rather than create the worktree: a shell is not how a thread is
+/// started. Positional arguments, as in `thread_run_args`.
+pub fn thread_bash_args(name: &SandboxName, workspace: &str, thread: &ThreadName, team: Option<&Team>) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
         if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
             printf '\033[31m[sbxw] %s\033[0m\r\n' "$(sbxw_no_repo)"; exit 1
         fi
-        wt="$(dirname "$common")/.sbxw-worktrees/$2"
+        wt="$(dirname "$common")/.sbxw-worktrees/${3:-$2}"
         if [ ! -d "$wt" ]; then
             printf '\033[31m[sbxw] thread %s has no worktree (%s) - open the thread first.\033[0m\r\n' "$2" "$wt"
             exit 1
         fi
         cd "$wt" && exec bash -l"#);
     let mut args = owned(&["exec", "-it", name.as_str(), "--", "bash", "-lc", SCRIPT, "sbxw-thread-bash"]);
-    args.extend([workspace, thread.as_str()].map(pos));
+    let worktree = team.map_or("", |t| t.worktree.as_str());
+    args.extend([workspace, thread.as_str(), worktree].map(pos));
     args
 }
 
@@ -348,6 +380,35 @@ pub fn script_fields(stdout: &str) -> Result<std::collections::HashMap<String, S
     }
 }
 
+/// Write a memory into Claude Code's auto memory for the repo under `$1` —
+/// what a shared plan's approved distillate becomes once it is merged.
+///
+/// Auto memory is per repository and shared by its worktrees: Claude Code
+/// files it under `~/.claude/projects/<repo root, every character outside
+/// [A-Za-z0-9] turned into '-'>/memory/`, keyed by the main checkout. The
+/// memory goes in file `$2` (read from stdin, replaced if there), and one
+/// pointer line `$3` goes in that folder's `MEMORY.md` index unless it is
+/// there already. Arguments for `Sbx::exec` (after `--`), positional as in
+/// `thread_run_args`.
+pub fn memory_write_args(workspace: &str, file: &str, index_line: &str) -> Vec<String> {
+    const SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
+        [ -n "$1" ] && cd "$1" 2>/dev/null
+        if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+            echo "error=$(sbxw_no_repo)"; exit 3
+        fi
+        root=$(dirname "$common")
+        mem="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$root" | sed 's/[^A-Za-z0-9]/-/g')/memory"
+        mkdir -p "$mem" || { echo "error=could not make $mem"; exit 4; }
+        cat > "$mem/$2.sbxw-$$" && mv "$mem/$2.sbxw-$$" "$mem/$2" || { echo "error=could not write $mem/$2"; exit 5; }
+        grep -qF "($2)" "$mem/MEMORY.md" 2>/dev/null || printf '%s
+' "$3" >> "$mem/MEMORY.md"
+        echo "path=$mem/$2"
+        echo ok=1"#);
+    let mut args = owned(&["bash", "-lc", SCRIPT, "sbxw-memory"]);
+    args.extend([workspace, file, index_line].map(pos));
+    args
+}
+
 /// Argv for a background session writing one codemap document:
 /// `sbx exec <name> -- bash -lc <script> sbxw-codemap <agent-port> <name> <prompt>`.
 ///
@@ -377,13 +438,75 @@ mod tests {
     #[test]
     fn a_thread_passes_everything_as_arguments_not_as_script() {
         let model = ModelId::parse("claude-opus-5-5").unwrap();
-        let args = thread_run_args(&sb(), "/w s", &th(), "do it; rm -rf /", Some(&model));
+        let args = thread_run_args(&sb(), "/w s", &th(), "do it; rm -rf /", Some(&model), None);
         let script = &args[6];
         assert!(!script.contains("rm -rf") && !script.contains("api-auth") && !script.contains("/w s"));
-        assert_eq!(&args[7..], ["sbxw-thread", "=/w s", "=api-auth", "=do it; rm -rf /", "=claude-opus-5-5"]);
+        assert_eq!(&args[7..], ["sbxw-thread", "=/w s", "=api-auth", "=do it; rm -rf /", "=claude-opus-5-5", "=", "="]);
         assert_eq!(&args[..3], ["exec", "-it", "neos"]);
-        let no_model = thread_run_args(&sb(), "", &th(), "", None);
-        assert_eq!(no_model.last().unwrap(), "=");
+        let no_model = thread_run_args(&sb(), "", &th(), "", None, None);
+        assert_eq!(no_model[11], "=");
+    }
+
+    #[test]
+    fn a_shared_plan_thread_opens_in_the_plan_worktree_with_its_env() {
+        let team = Team { plan: "p-1".into(), worktree: ThreadName::parse("team-p-1").unwrap() };
+        let args = thread_run_args(&sb(), "/w", &th(), "", None, Some(&team));
+        assert_eq!(&args[12..], ["=team-p-1", "=p-1"]);
+        let script = &args[6];
+        assert!(script.contains(r#"wt="$root/.sbxw-worktrees/$key""#) && script.contains(r#"key="${5:-$2}""#));
+        assert!(script.contains(r#"export SBXW_TEAM=shared SBXW_TEAM_PLAN="$6""#));
+        let bash = thread_bash_args(&sb(), "/w", &th(), Some(&team));
+        assert_eq!(&bash[7..], ["sbxw-thread-bash", "=/w", "=api-auth", "=team-p-1"]);
+    }
+
+    #[test]
+    fn a_shared_plan_worktree_is_made_once_and_carries_the_env() {
+        // The script itself, against a real repo: two threads land in one
+        // worktree on one branch, with the team's env. `claude` and `node` are
+        // stubbed by functions; `exec claude` becomes a printout.
+        let ok = |c: &mut std::process::Command| c.output().map(|o| o.status.success()).unwrap_or(false);
+        if !ok(std::process::Command::new("git").arg("--version")) {
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("sbxw-team-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let r = d.join("repo");
+        std::fs::create_dir(&r).unwrap();
+        let git = |args: &[&str]| {
+            assert!(ok(std::process::Command::new("git")
+                .arg("-C")
+                .arg(&r)
+                .args(["-c", "user.email=t@t", "-c", "user.name=t", "-c", "init.defaultBranch=main"])
+                .args(args)));
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+        let team = Team { plan: "p-1".into(), worktree: ThreadName::parse("team-p-1").unwrap() };
+        for t in ["api", "web"] {
+            let args = thread_run_args(&sb(), r.to_str().unwrap(), &ThreadName::parse(t).unwrap(), "go", None, Some(&team));
+            let script = args[6].replace("exec claude", "echo claude").replace("node -e", "true");
+            let out = std::process::Command::new("bash")
+                .env("HOME", &d)
+                .args(["-c", &script])
+                .args(&args[7..])
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(text.contains("worktree") && text.contains("branch sbxw/team-p-1"), "{text}");
+        }
+        let wt = r.join(".sbxw-worktrees/team-p-1");
+        assert!(wt.is_dir());
+        assert!(!r.join(".sbxw-worktrees/api").exists(), "no worktree of its own");
+        let env = std::process::Command::new("bash")
+            .args(["-c", &thread_run_args(&sb(), "", &th(), "", None, Some(&team))[6].replace("exec claude", "env #").replace("node -e", "true")])
+            .args(["x", &format!("={}", r.display()), "=api-auth", "=", "=", "=team-p-1", "=p-1"])
+            .env("HOME", &d)
+            .output()
+            .unwrap();
+        let env = String::from_utf8_lossy(&env.stdout);
+        assert!(env.contains("SBXW_TEAM=shared") && env.contains("SBXW_TEAM_PLAN=p-1") && env.contains("SBXW_THREAD=api-auth"), "{env}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -406,6 +529,9 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
         let m = thread_merge_args(&sb(), "/w", &th());
         assert_eq!(&m[7..], ["=/w", "=api-auth"]);
         assert!(!THREAD_MERGE_SCRIPT.contains("api-auth"));
+        let w = memory_write_args("/w", "team-p-1.md", "- [x](team-p-1.md) — y; z");
+        assert_eq!(&w[4..], ["=/w", "=team-p-1.md", "=- [x](team-p-1.md) — y; z"]);
+        assert!(!w[2].contains("team-p-1"));
     }
 
     #[test]

@@ -100,6 +100,28 @@ each with a name, a goal and the files it owns.
 As lead it **does not code**. It plans, follows the threads, reviews their
 branches, and proposes the merge.
 
+### Team mode: split or shared
+
+Each plan has a **variant**, which the lead picks with a one-line
+justification shown in the plan dialog. You can change it before approving;
+not after.
+
+| | split | shared |
+|---|---|---|
+| Worktrees | one per thread, `.sbxw-worktrees/<thread>` | one for all, `.sbxw-worktrees/team-<plan>` |
+| Branches | `sbxw/<thread>` each | one, `sbxw/team-<plan>` |
+| Threads see each other's work | at merge | as it is written |
+| Dev server | one per worktree, if any | one, in the main pane's Bash, from the shared worktree |
+| Merge | each branch, in order | the one branch, once every thread is done |
+| Pick it when | the work streams are independent, long, or risky (one may be thrown away) | threads touch overlapping files, must integrate live, or share a dev server |
+
+A shared plan trades merge conflicts for live ones: two threads in one
+worktree can step on each other's files. Its threads are told to edit and
+commit only their scope (`git commit -- <paths>`, never `git add -A`,
+`git commit -a` or `git stash`), and the lead arbitrates. All of a shared
+plan's threads work in one repo; a proposal naming two is refused.
+`max_agent_sessions` counts sessions the same way in both variants.
+
 ```
 ★ lead ──propose_plan──▶ sbxw ──▶ 🧑 plan dialog (edit, approve)
   ▲                                     │
@@ -115,7 +137,7 @@ branches, and proposes the merge.
 ![A plan from the lead of neos: three threads, each with a goal, the files it owns and a model, and Refuse, Later, Approve and start](images/plan.png)
 
 Nothing starts without you. Edit any thread's name, goal, scope, repo or model;
-remove or add threads; then **Approve and start**, **Refuse** (final), or
+remove or add threads; check the variant against the lead's justification; then **Approve and start**, **Refuse** (final), or
 **Later** (**Review plan** on the main pane brings it back). Approval is
 refused if the threads wouldn't fit under `max_agent_sessions`.
 
@@ -133,6 +155,11 @@ report your state).
   so the lead knows its address in advance; each briefing gives the lead's
   name. If that messaging isn't available, sbxw types a note into the main
   session instead.
+- **In a shared plan**, every thread opens in the plan's worktree, made by the
+  first one to start, with `SBXW_TEAM=shared` and `SBXW_TEAM_PLAN=<plan id>` in
+  its environment. A thread reopened after a restart starts a fresh
+  conversation there rather than `--continue`: the threads share one folder,
+  so "the last conversation in it" could be another thread's.
 - All sessions run with `--dangerously-skip-permissions`. If you change the
   lead's permission mode, Claude Code holds messages between them for approval.
 
@@ -149,6 +176,15 @@ With **close threads** ticked, merged threads are then closed and their branches
 deleted. The lead is told the result in one line, e.g.
 `[sbxw] Merged: a, b. Failed: c (conflict in X).` A failed merge can be retried
 after fixing the cause.
+
+A **shared** plan has one branch: once every thread is done, **Merge** runs
+`git merge --no-ff sbxw/team-<plan>` once, with the same checks. The lead's
+proposal also carries a **distillate**: the decisions and warnings from the
+work that still hold. You approve (or trim) them with the merge, and sbxw
+writes them to the repo's Claude Code auto memory, as `team-<plan>.md` with a
+line in its `MEMORY.md`, so the next session starts knowing them. With
+**close threads** ticked, the threads' sessions are closed, then the shared
+worktree and its branch.
 
 ### Leaving lead mode
 
@@ -214,10 +250,18 @@ lead's session also removes the mark.
   (directory `0700`) and survive a daemon restart. A plan whose threads are all
   done or failed is dropped a day after its last change. `GET /api/leads` lists
   which session leads.
+- **Variant.** The plan carries `variant` (`split`, the default and what older
+  plan files read as, or `shared`), `justification`, and for a shared plan
+  `worktree`, the shared worktree's path, set on approval. `propose_plan` takes
+  `variant` and `justification`; `POST /api/plans/<id>/approve` takes
+  `{threads, variant?}`.
 - **Merge state.** The plan carries
-  `merge: {order, note, state, base, results}`; `state` goes `proposed` →
-  `merging` → `merged` or `failed`. `POST /api/plans/<id>/merge` with
-  `{close_threads}` runs it.
+  `merge: {order, note, state, base, results, distillate}`; `state` goes
+  `proposed` → `merging` → `merged` or `failed`. A shared plan's `order` is every
+  thread and its `results` hold one entry, named `team-<plan>`. `distillate` is
+  `[{kind: "decision" | "warning", text}]`. `POST /api/plans/<id>/merge` with
+  `{close_threads, distillate?}` runs it; `distillate`, when given, replaces the
+  proposed one.
 - **End.** `POST /api/sandboxes/<name>/lead/end`.
 
 </details>

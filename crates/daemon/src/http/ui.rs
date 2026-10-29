@@ -14,7 +14,7 @@ use axum::{Json, Router};
 use sbxw_core::artifacts;
 use sbxw_core::config::Config;
 use sbxw_core::favourites;
-use sbxw_core::plans::PlanThread;
+use sbxw_core::plans::{DistillItem, PlanThread, Variant};
 use sbxw_core::policy;
 use sbxw_core::ports::WantedPort;
 use sbxw_core::progress::Progress;
@@ -828,10 +828,13 @@ async fn plans(State(app): S) -> Json<Value> {
 #[derive(Deserialize)]
 struct ApproveBody {
     threads: Vec<PlanThread>,
+    /// The dialog's choice; the proposal's when absent.
+    #[serde(default)]
+    variant: Option<Variant>,
 }
 
 async fn plan_approve(State(app): S, Path(id): Path<String>, Json(b): Json<ApproveBody>) -> ApiResult {
-    let plan = app.plan_approve(&id, b.threads).await?;
+    let plan = app.plan_approve(&id, b.threads, b.variant).await?;
     Ok(ok_with(json!({ "plan": plan })))
 }
 
@@ -850,10 +853,12 @@ async fn plan_refuse(State(app): S, Path(id): Path<String>, Json(b): Json<Refuse
 #[serde(default)]
 struct MergeBody {
     close_threads: bool,
+    /// The distillate items the person approved; as proposed when absent.
+    distillate: Option<Vec<DistillItem>>,
 }
 
 async fn plan_merge(State(app): S, Path(id): Path<String>, Json(b): Json<MergeBody>) -> ApiResult {
-    let merge = app.plan_merge(&id, b.close_threads).await?;
+    let merge = app.plan_merge(&id, b.close_threads, b.distillate).await?;
     Ok(ok_with(json!({ "merge": merge })))
 }
 

@@ -373,7 +373,25 @@ impl App {
             Some(ws) => git::thread_worktrees(ws, &recorded),
             None => vec![],
         };
-        let mut threads: BTreeMap<String, (bool, String)> = found.into_iter().map(|(t, r)| (t, (false, r))).collect();
+        // A shared plan's worktree is not a thread; its threads have no
+        // worktree of their own, so they are listed from the plan.
+        let (teams, team_threads) = {
+            let book = self.plans.lock().unwrap();
+            let plans = book.of(sandbox);
+            let teams: std::collections::HashSet<String> = plans.iter().map(|p| p.team_name()).collect();
+            let members: Vec<String> = plans
+                .iter()
+                .flat_map(|p| p.threads.iter().map(|t| t.name.clone()))
+                .filter(|t| book.team_of(sandbox, t).is_some())
+                .collect();
+            (teams, members)
+        };
+        let mut threads: BTreeMap<String, (bool, String)> =
+            found.into_iter().filter(|(t, _)| !teams.contains(t)).map(|(t, r)| (t, (false, r))).collect();
+        for t in team_threads {
+            let repo = recorded.get(&t).cloned().unwrap_or_default();
+            threads.entry(t).or_insert((false, repo));
+        }
         for t in self.sessions.open_threads(sandbox) {
             let repo = recorded.get(&t).cloned().unwrap_or_default();
             threads.entry(t).or_insert((false, repo)).0 = true;

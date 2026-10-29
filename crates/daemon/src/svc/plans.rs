@@ -6,7 +6,8 @@ use crate::bus::Event;
 use crate::git;
 use crate::store::write_atomic;
 use sbxw_core::messages;
-use sbxw_core::plans::{MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState};
+use sbxw_core::plans::{DistillItem, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
+use sbxw_sbx::scripts::Team;
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::tooling::Tooling;
 use sbxw_core::{ModelId, SandboxName, ThreadName};
@@ -86,14 +87,62 @@ impl App {
         Ok(())
     }
 
-    pub fn plan_propose(&self, sandbox: &SandboxName, summary: &str, threads: Vec<PlanThread>, lead: Option<&str>) -> Result<Plan, String> {
+    /// A shared plan's threads all work in one worktree, so in one repo: the
+    /// one they resolve to, and the worktree's path in it. `Ok(None)` when the
+    /// sandbox has no workspace recorded (the scripts find the repo there).
+    fn shared_worktree(&self, sandbox: &SandboxName, threads: &[PlanThread], team: &str) -> Result<Option<String>, String> {
+        let Some(ws) = self.store.workspace(sandbox) else { return Ok(None) };
+        let rec = self.store.get(sandbox);
+        let mut repos = std::collections::BTreeSet::new();
+        for t in threads {
+            let name = t.name.trim();
+            let recorded = rec.threads.get(name).map(|r| r.repo.as_str());
+            repos.insert(git::choose(&ws, recorded, name, t.repo.as_deref()).map_err(|e| format!("thread {name:?}: {e}"))?);
+        }
+        match repos.len() {
+            1 => {
+                let rel = repos.into_iter().next().unwrap_or_default();
+                Ok(git::team_worktree(&ws, &rel, team).map(|p| p.to_string_lossy().into_owned()))
+            }
+            _ => Err(format!(
+                "a shared plan works in one worktree, so its threads need one repo; these name {}. \
+                 Pick one repo, or make the plan split.",
+                repos.iter().map(|r| if r.is_empty() { "the workspace".to_string() } else { format!("'{r}'") }).collect::<Vec<_>>().join(", ")
+            )),
+        }
+    }
+
+    /// The shared plan `thread` works under, as its scripts take it.
+    pub fn team_for(&self, sandbox: &SandboxName, thread: &ThreadName) -> Option<Team> {
+        let plans = self.plans.lock().unwrap();
+        let plan = plans.team_of(sandbox, thread)?;
+        Some(Team { plan: plan.id.clone(), worktree: ThreadName::parse(&plan.team_name()).ok()? })
+    }
+
+    pub fn plan_propose(
+        &self,
+        sandbox: &SandboxName,
+        summary: &str,
+        threads: Vec<PlanThread>,
+        variant: Variant,
+        justification: &str,
+        lead: Option<&str>,
+    ) -> Result<Plan, String> {
         self.check_plan_repos(sandbox, &threads)?;
-        let plan = self
-            .plans
-            .lock()
-            .unwrap()
-            .propose(sbxw_core::ids::plan_id(), sandbox, summary, threads, lead, now_ms())?;
-        tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s))", plan.id, plan.threads.len());
+        if variant == Variant::Shared {
+            self.shared_worktree(sandbox, &threads, "team")?;
+        }
+        let plan = self.plans.lock().unwrap().propose(
+            sbxw_core::ids::plan_id(),
+            sandbox,
+            summary,
+            threads,
+            variant,
+            justification,
+            lead,
+            now_ms(),
+        )?;
+        tracing::info!("plans: '{sandbox}' proposed {} ({} thread(s), {:?})", plan.id, plan.threads.len(), plan.variant);
         Ok(self.plan_changed(plan))
     }
 
@@ -121,10 +170,10 @@ impl App {
         self.plans.lock().unwrap().led(id, sandbox).cloned()
     }
 
-    pub fn plan_propose_merge(&self, id: &str, sandbox: &SandboxName, order: Vec<String>, note: &str) -> Result<Plan, String> {
+    pub fn plan_propose_merge(&self, id: &str, sandbox: &SandboxName, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
         let order: Vec<String> = order.iter().map(|t| t.trim().to_string()).collect();
         let note = messages::clip_text(note, sbxw_core::plans::MAX_TEXT);
-        let plan = self.plans.lock().unwrap().propose_merge(id, sandbox, order, &note, now_ms())?;
+        let plan = self.plans.lock().unwrap().propose_merge(id, sandbox, order, &note, distillate, now_ms())?;
         tracing::info!("plans: '{sandbox}' proposed merging {id}");
         Ok(self.plan_changed(plan))
     }
@@ -147,11 +196,13 @@ impl App {
         Ok(plan.lead)
     }
 
-    /// A person approves (maybe after editing): the daemon records each
-    /// thread's repo and model, then opens one session per thread with its
-    /// briefing as its start prompt. Refused, before anything is recorded,
-    /// when the threads would not fit under the ceiling.
-    pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>) -> Result<Plan, String> {
+    /// A person approves (maybe after editing, maybe changing the variant):
+    /// the daemon records each thread's repo and model, then opens one session
+    /// per thread with its briefing as its start prompt — in its own worktree,
+    /// or all in the plan's one worktree when it is shared. Refused, before
+    /// anything is recorded, when the threads would not fit under the ceiling
+    /// or a shared plan's threads name more than one repo.
+    pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>, variant: Option<Variant>) -> Result<Plan, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let sandbox = SandboxName::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         let cfg = self.config_for(&sandbox);
@@ -172,9 +223,13 @@ impl App {
             ));
         }
         self.check_plan_repos(&sandbox, &threads)?;
-        let plan = self.plans.lock().unwrap().approve(id, threads, now_ms())?;
+        let worktree = match variant.unwrap_or(plan.variant) {
+            Variant::Split => None,
+            Variant::Shared => self.shared_worktree(&sandbox, &threads, &plan.team_name())?,
+        };
+        let plan = self.plans.lock().unwrap().approve(id, threads, variant, worktree, now_ms())?;
         let plan = self.plan_changed(plan);
-        tracing::info!("plans: {id} approved for '{sandbox}' ({} thread(s))", plan.threads.len());
+        tracing::info!("plans: {id} approved for '{sandbox}' ({} thread(s), {:?})", plan.threads.len(), plan.variant);
         for t in &plan.threads {
             let Ok(name) = ThreadName::parse(&t.name) else { continue };
             if let Err(e) = self.settle_thread_repo(&sandbox, &name, t.repo.as_deref()) {
@@ -230,11 +285,15 @@ impl App {
     /// its repo's main checkout is on, inside the sandbox (started first),
     /// stopping at the first failure; the plan broadcast after each. With
     /// `close_threads`, once all merged, each is closed, branch and all. The
-    /// lead hears how it went in one line.
-    pub async fn plan_merge(self: &Arc<Self>, id: &str, close_threads: bool) -> Result<sbxw_core::plans::Merge, String> {
+    /// lead hears how it went in one line. A shared plan has one branch,
+    /// merged once ([`App::plan_merge_shared`]).
+    pub async fn plan_merge(self: &Arc<Self>, id: &str, close_threads: bool, distillate: Option<Vec<DistillItem>>) -> Result<sbxw_core::plans::Merge, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let merge = plan.merge.clone().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
         let sandbox = SandboxName::parse(&plan.sandbox).map_err(|e| e.to_string())?;
+        if plan.variant == Variant::Shared {
+            return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate).await;
+        }
         // Where each thread merges — read first, so the base is known from the
         // first broadcast on.
         let dirs: Vec<(String, Result<String, String>)> = merge
@@ -257,7 +316,7 @@ impl App {
             })
             .collect();
         let base = if bases.len() == 1 { bases.into_iter().next().flatten() } else { None };
-        let p = self.plans.lock().unwrap().start_merge(id, base, now_ms())?;
+        let p = self.plans.lock().unwrap().start_merge(id, base, distillate, now_ms())?;
         self.plan_changed(p);
         tracing::info!("plans: merging {id} for '{sandbox}' ({} thread(s))", merge.order.len());
 
@@ -297,13 +356,106 @@ impl App {
                 summary.push_str(&format!(" Not closed: {}.", unclosed.join(", ")).replace('\n', " "));
             }
         }
+        self.tell_lead_merged(&sandbox, id, &summary).await;
+        Ok(merge)
+    }
+
+    async fn tell_lead_merged(self: &Arc<Self>, sandbox: &SandboxName, id: &str, summary: &str) {
         tracing::info!("plans: {id}: {summary}");
-        if self.sessions.is_live(&SessionKey::agent(&sandbox)) {
-            if let Err(e) = self.push_text(&sandbox, SessionKind::Agent, &summary).await {
+        if self.sessions.is_live(&SessionKey::agent(sandbox)) {
+            if let Err(e) = self.push_text(sandbox, SessionKind::Agent, summary).await {
                 tracing::warn!("plans: could not tell the lead of '{sandbox}' about the merge: {e}");
             }
         }
+    }
+
+    /// A shared plan's merge: one `git merge --no-ff sbxw/team-<plan>` into
+    /// the branch its repo's main checkout is on, recorded as one result
+    /// named after the worktree. Once merged, the approved distillate is
+    /// written to the repo's Claude Code auto memory; with `close_threads`,
+    /// each thread's session is closed, then the shared worktree and branch.
+    async fn plan_merge_shared(
+        self: &Arc<Self>,
+        plan: Plan,
+        merge: sbxw_core::plans::Merge,
+        sandbox: &SandboxName,
+        close_threads: bool,
+        distillate: Option<Vec<DistillItem>>,
+    ) -> Result<sbxw_core::plans::Merge, String> {
+        let id = plan.id.as_str();
+        let team = ThreadName::parse(&plan.team_name()).map_err(|e| e.to_string())?;
+        // Every thread is in the one repo; the first one's settles it.
+        let dir = match plan.threads.first() {
+            Some(t) => ThreadName::parse(&t.name).map_err(|e| e.to_string()).and_then(|name| {
+                let recorded = self.store.get(sandbox).threads.contains_key(t.name.as_str());
+                self.settle_thread_repo(sandbox, &name, if recorded { None } else { t.repo.as_deref() })
+            }),
+            None => Err(format!("plan {id} has no thread")),
+        };
+        let base = match &dir {
+            Ok(d) if !d.is_empty() => git::branch_of(std::path::Path::new(d)),
+            _ => None,
+        };
+        let p = self.plans.lock().unwrap().start_merge(id, base, distillate, now_ms())?;
+        self.plan_changed(p);
+        tracing::info!("plans: merging shared {id} for '{sandbox}' (branch sbxw/{team})");
+        let outcome = match (self.ensure_running_for_thread(sandbox).await, dir) {
+            (Err(e), _) => Err(format!("the sandbox could not be started: {e:#}")),
+            (Ok(()), Err(e)) => Err(e),
+            (Ok(()), Ok(dir)) => self.sbx.thread_merge(sandbox, &dir, &team).await.map(|c| (c, dir)).map_err(|e| format!("{e:#}")),
+        };
+        let (result, dir) = match outcome {
+            Ok((commit, dir)) => (MergeResult { thread: team.to_string(), ok: true, commit: Some(commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
+            Err(e) => (MergeResult { thread: team.to_string(), ok: false, commit: None, error: Some(e) }, None),
+        };
+        self.plans.lock().unwrap().merge_result(id, result, now_ms())?;
+        let plan = self.plans.lock().unwrap().finish_merge(id, now_ms())?;
+        let plan = self.plan_changed(plan);
+        let merge = plan.merge.clone().unwrap_or(merge);
+        let mut summary = messages::merge_summary(&merge);
+        if let (Some(dir), MergeState::Merged) = (&dir, merge.state) {
+            summary = format!("[sbxw] Merged sbxw/{team} (threads {}).", merge.order.join(", "));
+            if let Some((file, body, index)) = plan.distillate_memory() {
+                match self.write_memory(sandbox, dir, &file, &body, &index).await {
+                    Ok(path) => summary.push_str(&format!(" Distillate saved to auto memory: {path}.")),
+                    Err(e) => {
+                        tracing::warn!("plans: could not save the distillate of {id}: {e}");
+                        summary.push_str(&format!(" The distillate was not saved ({e}).").replace('\n', " "));
+                    }
+                }
+            }
+            if close_threads {
+                let mut unclosed = Vec::new();
+                for t in &merge.order {
+                    let Ok(name) = ThreadName::parse(t) else { continue };
+                    if let Err(e) = self.close_thread(sandbox, &name, false, true).await {
+                        unclosed.push(format!("{t} ({e})"));
+                    }
+                }
+                if let Err(e) = self.sbx.thread_close(sandbox, dir, &team, false, true).await {
+                    unclosed.push(format!("its worktree ({e:#})"));
+                }
+                if !unclosed.is_empty() {
+                    tracing::warn!("plans: after merging {id}, not closed: {}", unclosed.join(", "));
+                    summary.push_str(&format!(" Not closed: {}.", unclosed.join(", ")).replace('\n', " "));
+                }
+            }
+        }
+        self.tell_lead_merged(sandbox, id, &summary).await;
         Ok(merge)
+    }
+
+    /// One memory into the auto memory of the repo under `dir`, inside the
+    /// sandbox; where it went.
+    async fn write_memory(&self, sandbox: &SandboxName, dir: &str, file: &str, body: &str, index: &str) -> Result<String, String> {
+        let args = sbxw_sbx::scripts::memory_write_args(dir, file, index);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.sbx.exec(sandbox, &args, Some(body.as_bytes().to_vec())).await.map_err(|e| format!("{e:#}"))?;
+        let fields = sbxw_sbx::scripts::script_fields(&out.stdout_str())?;
+        if !out.success() {
+            return Err(format!("the memory script failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        Ok(fields.get("path").cloned().unwrap_or_default())
     }
 
     /// Close a thread: stop what runs in its worktree, remove the worktree,
@@ -390,8 +542,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use crate::testing::app;
-    use sbxw_core::plans::{PlanState, PlanThread, ThreadState};
+    use crate::testing::{app, app_with, ls, sbx_answer};
+    use sbxw_core::plans::{DistillItem, DistillKind, MergeState, PlanState, PlanThread, ThreadState, Variant};
+    use sbxw_sbx::runner::Output;
     use sbxw_core::SandboxName;
     use std::time::Duration;
 
@@ -434,7 +587,7 @@ mod tests {
     async fn a_proposal_is_persisted_and_survives_a_restart() {
         let (dir, app) = app();
         let sb = SandboxName::parse("neos").unwrap();
-        let p = app.plan_propose(&sb, "split", vec![t("api")], Some("lead")).unwrap();
+        let p = app.plan_propose(&sb, "split", vec![t("api")], Variant::Split, "independent", Some("lead")).unwrap();
         let file = app.store.paths.plans().join("neos.json");
         assert!(file.exists());
         let again = crate::testing::app_in(dir.path());
@@ -447,12 +600,88 @@ mod tests {
     async fn a_refusal_wakes_the_lead() {
         let (_d, app) = app();
         let sb = SandboxName::parse("neos").unwrap();
-        let p = app.plan_propose(&sb, "", vec![t("api")], None).unwrap();
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one thread", None).unwrap();
         let a = app.clone();
         let (id, s) = (p.id.clone(), sb.clone());
         let w = tokio::spawn(async move { a.plan_wait(&id, &s, Duration::from_secs(5)).await });
         tokio::time::sleep(Duration::from_millis(30)).await;
         app.plan_refuse(&p.id, Some("no".into())).unwrap();
         assert_eq!(w.await.unwrap().unwrap().state, PlanState::Refused);
+    }
+
+    #[tokio::test]
+    async fn a_shared_plan_works_in_one_worktree_and_merges_one_branch() {
+        let (_d, app, fake) = app_with(|a| {
+            let has = |x: &str| a.iter().any(|y| y == x);
+            match a.first().map(String::as_str) {
+                Some("ls") => ls(&[("neos", "running")]),
+                Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
+                Some("exec") if has("sbxw-memory") => Output::ok("path=/home/agent/.claude/projects/-w/memory/team.md\nok=1\n"),
+                Some("exec") if has("sbxw-thread-end") => Output::ok("ok=1\n"),
+                _ => sbx_answer(a),
+            }
+        });
+        let sb = SandboxName::parse("neos").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir(ws.path().join(".git")).unwrap();
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+
+        let p = app.plan_propose(&sb, "cart", vec![t("api"), t("web")], Variant::Shared, "same files", Some("lead")).unwrap();
+        let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).unwrap();
+        let team = format!("team-{}", p.id);
+        assert_eq!(worktree, Some(ws.path().join(".sbxw-worktrees").join(&team).to_string_lossy().into_owned()));
+        app.plans.lock().unwrap().approve(&p.id, vec![t("api"), t("web")], None, worktree, 1).unwrap();
+
+        // Each thread opens in the plan's worktree, with the team's env.
+        let api = sbxw_core::ThreadName::parse("api").unwrap();
+        let tm = app.team_for(&sb, &api).unwrap();
+        assert_eq!((tm.plan.as_str(), tm.worktree.as_str()), (p.id.as_str(), team.as_str()));
+        let argv = sbxw_sbx::scripts::thread_run_args(&sb, "/w", &api, "", None, Some(&tm));
+        assert_eq!(&argv[argv.len() - 2..], [format!("={team}"), format!("={}", p.id)]);
+        let listed: Vec<String> = app.threads(&sb).await.threads.iter().map(|v| v["name"].as_str().unwrap().to_string()).collect();
+        assert_eq!(listed, ["api", "web"], "its threads are listed though they have no worktree of their own");
+
+        for n in ["api", "web"] {
+            app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
+        }
+        let d = vec![DistillItem { kind: DistillKind::Decision, text: "prices in cents".into() }];
+        app.plan_propose_merge(&p.id, &sb, vec![], "", d).unwrap();
+        let merge = app.plan_merge(&p.id, true, None).await.unwrap();
+        assert_eq!(merge.state, MergeState::Merged);
+        assert_eq!(merge.results.len(), 1);
+        assert_eq!(merge.results[0].thread, team);
+
+        let log = fake.log();
+        let merges: Vec<&String> = log.iter().filter(|c| c.contains("sbxw-thread-merge")).collect();
+        assert_eq!(merges.len(), 1, "one merge, of one branch");
+        assert!(merges[0].ends_with(&format!("={team}")));
+        assert!(log.iter().any(|c| c.contains("sbxw-memory") && c.contains(&format!("={team}.md"))));
+        let stdin = String::from_utf8(fake.stdins.lock().unwrap().last().unwrap().clone()).unwrap();
+        assert!(stdin.contains("- **Decision:** prices in cents"));
+        assert!(
+            log.iter().any(|c| c.contains("sbxw-thread-end") && c.contains(&format!("={team} =close =0 =1"))),
+            "the shared worktree is closed, branch and all"
+        );
+        assert!(app.team_for(&sb, &api).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_shared_plan_needs_one_repo_and_a_split_plan_is_as_before() {
+        let (_d, app) = app();
+        let sb = SandboxName::parse("neos").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        for r in ["a/.git", "b/.git"] {
+            std::fs::create_dir_all(ws.path().join(r)).unwrap();
+        }
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+        let on = |name: &str, repo: &str| PlanThread { repo: Some(repo.into()), ..t(name) };
+        let err = app
+            .plan_propose(&sb, "", vec![on("x", "a"), on("y", "b")], Variant::Shared, "live", None)
+            .unwrap_err();
+        assert!(err.contains("one repo"), "{err}");
+        let p = app.plan_propose(&sb, "", vec![on("x", "a"), on("y", "b")], Variant::Split, "independent", None).unwrap();
+        let p = app.plans.lock().unwrap().approve(&p.id, vec![on("x", "a"), on("y", "b")], None, None, 1).unwrap();
+        assert_eq!((p.variant, p.worktree), (Variant::Split, None));
+        assert!(app.team_for(&sb, &sbxw_core::ThreadName::parse("x").unwrap()).is_none());
     }
 }

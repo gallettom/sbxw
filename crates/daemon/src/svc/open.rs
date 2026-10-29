@@ -87,7 +87,7 @@ impl App {
             SessionKind::ThreadBash(thread) => {
                 self.ensure_running_for_thread(&sandbox).await?;
                 let dir = self.settle_thread_repo(&sandbox, thread, None).map_err(|e| anyhow!(e))?;
-                Spawn::sbx(scripts::thread_bash_args(&sandbox, &dir, thread))
+                Spawn::sbx(scripts::thread_bash_args(&sandbox, &dir, thread, self.team_for(&sandbox, thread).as_ref()))
             }
             SessionKind::Thread(thread) => {
                 self.ensure_running_for_thread(&sandbox).await?;
@@ -119,7 +119,8 @@ impl App {
                     .and_then(|r| r.model.clone())
                     .or_else(|| Some(cfg.claude_model.clone()))
                     .and_then(|m| ModelId::parse(&m).ok());
-                Spawn::sbx(scripts::thread_run_args(&sandbox, &dir, thread, &briefing, model.as_ref()))
+                let team = self.team_for(&sandbox, thread);
+                Spawn::sbx(scripts::thread_run_args(&sandbox, &dir, thread, &briefing, model.as_ref(), team.as_ref()))
             }
         })
     }
