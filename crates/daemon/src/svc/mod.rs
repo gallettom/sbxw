@@ -2,6 +2,7 @@
 
 pub mod agents;
 pub mod awake;
+pub mod board;
 pub mod codemap;
 pub mod open;
 pub mod plans;
