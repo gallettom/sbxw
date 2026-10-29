@@ -197,7 +197,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crate::testing::app;
-    use sbxw_core::plans::{PlanThread, ThreadState};
+    use sbxw_core::plans::{PlanThread, ThreadState, Variant};
     use sbxw_core::SandboxName;
     use std::time::Duration;
 
@@ -231,8 +231,16 @@ mod tests {
         let (_d, app) = app();
         app.start_board_listener();
         let sb = SandboxName::parse("neos").unwrap();
-        let p = app.plan_propose(&sb, "", vec![t("api"), t("front")], None).unwrap();
-        app.plans.lock().unwrap().approve(&p.id, vec![t("api"), t("front")], 1).unwrap();
+        // The book directly: a shared plan's worktree needs a repository this
+        // test does not have, and the board only cares about thread states.
+        let threads = || vec![t("api"), t("front")];
+        let p = app
+            .plans
+            .lock()
+            .unwrap()
+            .propose("p-1".into(), &sb, "", threads(), Variant::Shared, "api and front share files", None, 0)
+            .unwrap();
+        app.plans.lock().unwrap().approve(&p.id, threads(), Some(Variant::Shared), None, 1).unwrap();
         app.board_claim(&sb, Some(&p.id), "api", &["a".into()]).unwrap();
         app.board_claim(&sb, Some(&p.id), "front", &["b".into()]).unwrap();
 
