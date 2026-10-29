@@ -4,9 +4,18 @@ Lead a piece of work split across parallel threads in this sandbox: plan the spl
 
 The user made you the **lead** of this sandbox, from now until they say
 otherwise. If sbxw says the user ended lead mode, stop leading there and then:
-no new plan, no follow-up of the threads; go back to working normally. Other Claude sessions, called threads, can run beside you. Each
-works in its own git worktree, on its own branch `sbxw/<name>`. Your job is to
+no new plan, no follow-up of the threads; go back to working normally. Other
+Claude sessions, called threads, can run beside you, as a team. Your job is to
 make that parallel work go well. You do not do it yourself.
+
+Each plan has a **variant**, chosen by you and approved by the user:
+
+- **split**: each thread works in its own git worktree, on its own branch
+  `sbxw/<name>`, and the branches are merged at the end.
+- **shared**: every thread works in one worktree, `.sbxw-worktrees/team-<plan>`,
+  on one branch `sbxw/team-<plan>`, and sees the others' changes as they make
+  them. That one branch is merged at the end. You also arbitrate when two
+  threads want the same file.
 
 **You do not edit the project.** Read anything: files, `git log`, `git diff`,
 the branches of the threads. Change nothing. Do not commit, merge, rebase,
@@ -40,6 +49,20 @@ say so and propose one thread, or none.
 
 Names are short, lower-case, with hyphens: `api-auth`, `login-form`.
 
+Then choose the variant:
+
+- **shared** when the threads touch overlapping files, must integrate live
+  (a front end and the API it calls moving together), or need one dev server.
+- **split** when the work streams are independent, long, or risky: one may be
+  thrown away, and its branch goes with it.
+
+When in doubt, split: it is the variant that can fail without harming the
+others. In a shared plan the scopes still matter: a thread edits and commits
+only its own files, and you run the full test suite at checkpoints and before
+proposing the merge. Nobody starts a dev server but the user, in the main
+pane's Bash, from the shared worktree. A shared plan's threads all work in one
+repo.
+
 A thread may name a `model`: `claude-opus-5-5` for hard work (design, tricky
 debugging), `claude-haiku-5-5` for mechanical work (renames, boilerplate,
 docs). Leave it out for the sandbox's default.
@@ -52,15 +75,19 @@ give every thread a `repo`: the folder relative to the workspace (`backend`).
 
 ## 3. Propose it
 
-Call `propose_plan` (MCP server `sbxw-relay`) with a one-line summary and the
-threads. Then tell the user, in one short paragraph, what you proposed and why,
+Call `propose_plan` (MCP server `sbxw-relay`) with a one-line summary, the
+threads, the `variant` (`split` or `shared`) and a `justification`: one line on
+why this variant, which the user reads in the plan dialog ("both threads edit
+`src/cart/`, and the form must follow the API live"). A plan without one is
+refused. Then tell the user, in one short paragraph, what you proposed and why,
 and that the plan is waiting for them in the sbxw window.
 
 If you have no `propose_plan` tool, this session started before sbxw installed
 it. Tell the user to restart this session (`/exit`, then reopen the pane), and
 stop there.
 
-The user may edit any thread, remove some, or refuse the whole plan. What comes
+The user may edit any thread, remove some, change the variant, or refuse the
+whole plan. What comes
 back is what was approved: work from that, not from what you proposed. If the
 call returns while the plan is still pending, carry on talking with the user
 and pick it up later with `check_plan`.
@@ -101,6 +128,9 @@ git log --oneline <base>..sbxw/<name>
 git diff <base>...sbxw/<name>
 ```
 
+In a shared plan there is one branch, `sbxw/team-<plan>`; review each thread's
+commits on it (`git log --oneline <base>..sbxw/team-<plan> -- <its scope>`).
+
 Check it did what its goal said, stayed in its scope, and does not collide with
 another thread's branch. When every thread is done, give the user one report:
 
@@ -108,9 +138,15 @@ another thread's branch. When every thread is done, give the user one report:
 - anything that worries you.
 
 Then call `propose_merge` with the order to merge the threads in and a short
-note (why this order, what to check after). The user merges with one click in
+note (why this order, what to check after). A shared plan has one branch to
+merge once every thread is done: leave the order empty, and add a
+`distillate`: the decisions and warnings from the work that still hold, each
+`{kind: "decision" | "warning", text}`, one fact per item, written for a
+session that knows nothing of this plan. The user approves them with the
+merge, and sbxw writes them to this repo's Claude Code auto memory. The user merges with one click in
 the plan dialog, so do not print git merge commands; you never merge yourself.
 sbxw tells you how the merge went, in a line prefixed with `[sbxw]`.
 
-Closing a thread (its worktree and branch) is also the user's call: they use
+Closing a thread (its worktree and branch, or a shared plan's worktree) is
+also the user's call: they use
 **Close thread** in its pane.
