@@ -27,7 +27,9 @@
 //! sbx rm --force --format json N…            (one result per target)
 //! sbx stop N
 //! sbx policy log [N] --format json · sbx policy refresh
-//! sbx mcp ls --format json · sbx mcp unload SERVER --sandbox N
+//! sbx mcp ls --format json · sbx mcp load|unload SERVER --sandbox N
+//! sbx mcp add NAME --url=U [--header=H]… --skip-auth | --command=C [--args=A,B] [--dir=D]
+//! sbx mcp rm NAME · sbx mcp inspect NAME
 //! sbx kit validate REF --offline              (local dir or ZIP; no daemon, no sign-in)
 //! sbx template save N TAG                    (--description is cloud-only: refused locally)
 //! sbx template ls · sbx template rm TAG · create --template TAG
@@ -48,7 +50,8 @@ pub mod scripts;
 
 use anyhow::{anyhow, bail, Result};
 use runner::{Invocation, Output, Runner};
-use sbxw_core::policy::{parse_mcp_ls, EgressLog, HttpMatch, McpServer, PolicyView};
+use sbxw_core::mcp::{parse_mcp_ls, McpServer, McpSpec};
+use sbxw_core::policy::{EgressLog, HttpMatch, PolicyView};
 use sbxw_core::ports::PortMapping;
 use sbxw_core::table;
 use sbxw_core::tooling::{Tooling, ToolingOutcome};
@@ -704,6 +707,38 @@ impl Sbx {
     pub async fn mcp_ls(&self) -> Result<Vec<McpServer>> {
         let raw = self.capture(s(&["mcp", "ls", "--format", "json"])).await?;
         parse_mcp_ls(&raw).ok_or_else(|| anyhow!("`sbx mcp ls --format json` gave no JSON array:\n{}", raw.trim()))
+    }
+
+    /// Register an MCP server on the host. The spec is checked here, so a
+    /// bad one never reaches sbx.
+    pub async fn mcp_add(&self, spec: &McpSpec) -> Result<()> {
+        let args = spec.add_args().map_err(|e| anyhow!(e))?;
+        self.checked(Invocation::new(args)).await.map(drop)
+    }
+
+    /// Forget a registered MCP server and its OAuth token. Removals ask for
+    /// confirmation since 0.45, so a refusal for want of one is retried with
+    /// `--force`, as `secret_set` does.
+    pub async fn mcp_rm(&self, server: &str) -> Result<()> {
+        let Err(first) = self.checked(Invocation::new(s(&["mcp", "rm", server]))).await else {
+            return Ok(());
+        };
+        if !wants_confirmation(&format!("{first:#}")) {
+            return Err(first);
+        }
+        self.checked(Invocation::new(s(&["mcp", "rm", server, "--force"]))).await.map(drop)
+    }
+
+    /// `sbx mcp inspect`, as text: header templates and whether their secrets
+    /// are set, never their values.
+    pub async fn mcp_inspect(&self, server: &str) -> Result<String> {
+        self.capture(s(&["mcp", "inspect", server])).await
+    }
+
+    /// Attach a registered MCP server to one running sandbox; its agent sees
+    /// the tools through `tools/list_changed`, without a restart.
+    pub async fn mcp_load(&self, server: &str, sandbox: &SandboxName) -> Result<()> {
+        self.checked(Invocation::new(s(&["mcp", "load", server, "--sandbox", sandbox.as_str()]))).await.map(drop)
     }
 
     /// Detach a loaded MCP server from one sandbox without restarting its agent.

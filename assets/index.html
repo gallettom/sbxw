@@ -156,10 +156,7 @@
          recognise. Monitor stays hidden until `monitor_cmd` says there is
          something to open. -->
     <div class="sidebar-footer">
-      <!-- Skills first: the one footer control about what is *inside* every
-           sandbox rather than about the list, ringed in the logo's blue and
-           green so it does not read as a third grey utility button. -->
-      <!-- Upload above Skills: a file dropped (or picked) here goes into a
+      <!-- Upload above Setup: a file dropped (or picked) here goes into a
            sandbox the modal below asks for, and its path lands in that
            sandbox's prompt unsent, so there is room to say what it is for.
            (/js/upload.js) -->
@@ -172,16 +169,21 @@
         <span class="upload-box-title">Drop files here</span>
         <span class="upload-box-sub">or click to browse</span>
       </label>
-      <button id="btn-skills" class="skills-btn" title="Skills — the commands the bundled kits put in every sandbox, and the ones you kept">Skills</button>
-      <!-- Templates under Skills: also about what a sandbox starts with, but
-           something you manage rather than read, so a plain footer button. -->
-      <button id="btn-templates" class="help-btn" title="Templates — snapshots new sandboxes can start from: save one, remove one">Templates</button>
-      <button id="btn-kits" class="help-btn" title="Kits — which kits sandboxes get: edits the kits line of sbxw.toml">Kits</button>
-      <button id="btn-monitor" class="monitor-btn" hidden
-              title="Host monitor — every sandbox at once, in a pane of its own">
-        Monitor Sandboxes
-      </button>
-      <button id="btn-help" class="help-btn" title="Help — empty sandbox list, sbx login, daemon restart">Help</button>
+      <!-- One row for what used to be six: Setup opens Skills, Templates, Kits
+           and MCP as tabs of one dialog (/js/setup.js) — all four are about
+           what a sandbox starts with, and you move between them more often
+           than you need any one from the sidebar. Ringed in the logo's blue
+           and green, as Skills alone was, so it does not read as a third grey
+           utility button. Help is a "?" keycap: the one glyph nobody has to
+           learn. -->
+      <div class="footer-row">
+        <button id="btn-setup" class="skills-btn" title="Setup — skills, templates, kits and MCP servers for your sandboxes">Setup</button>
+        <button id="btn-monitor" class="monitor-btn" hidden
+                title="Monitor Sandboxes — every sandbox at once, in a pane of its own">
+          Monitor
+        </button>
+        <button id="btn-help" class="help-btn" aria-label="Help" title="Help — empty sandbox list, sbx login, daemon restart">?</button>
+      </div>
 
       <!-- The two global shortcuts, written as keycaps so they read as keys to
            press and not as text. Mac or not decides which keys: filled in by
@@ -974,7 +976,7 @@
        commands if sbxw.toml's `kits` lists it — the lead says so rather than
        the page pretending to know. Opened from the sidebar footer (/js/skills.js). -->
   <div class="modal-overlay hidden" id="skills-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="skills-modal-title" style="width:600px">
+    <div class="modal setup-modal" data-setup-tab="skills" role="dialog" aria-modal="true" aria-labelledby="skills-modal-title">
       <div class="modal-head">
         <span class="modal-title" id="skills-modal-title">Skills in your sandboxes</span>
         <button class="modal-close" id="skills-modal-close" aria-label="Close">✕</button>
@@ -984,6 +986,8 @@
           Type the command in a sandbox’s agent pane. A sandbox has a kit’s commands
           when <code>sbxw.toml</code>’s <code>kits</code> lists it; a sandbox created
           before the kit was added needs <code>sbxw rm</code> then <code>sbxw up</code>.
+        </p>
+        <p class="help-lead">
           <strong>Default</strong> skills are run by sbxw on its own — a hook, a web UI
           button, or another skill; <strong>manual</strong> ones only when you type them.
           Hover a tag for the reason.
@@ -1079,7 +1083,7 @@
        the sandbox's agent token and Claude credentials out first and puts
        them back after (provision.rs, App::snapshot). (/js/templates.js) -->
   <div class="modal-overlay hidden" id="kits-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="kits-modal-title" style="width:640px">
+    <div class="modal setup-modal" data-setup-tab="kits" role="dialog" aria-modal="true" aria-labelledby="kits-modal-title">
       <div class="modal-head">
         <span class="modal-title" id="kits-modal-title">Kits</span>
         <button class="modal-close" id="kits-modal-close" aria-label="Close">✕</button>
@@ -1123,8 +1127,71 @@
     </div>
   </div>
 
+  <!-- ── MCP modal ──
+       The MCP servers registered on this host (`sbx mcp ls`): add one, edit
+       one (sbx has no edit — the daemon removes then adds it), remove one,
+       and load it into or unload it from a sandbox. (/js/mcp.js) -->
+  <div class="modal-overlay hidden" id="mcp-modal-overlay">
+    <div class="modal setup-modal" data-setup-tab="mcp" role="dialog" aria-modal="true" aria-labelledby="mcp-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="mcp-modal-title">MCP servers</span>
+        <button class="modal-close" id="mcp-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-lead">
+          The MCP servers registered on this host, through <code>sbx mcp</code>. A server
+          reaches a sandbox once it is <strong>loaded</strong> there; its agent picks up the
+          tools without a restart.
+        </p>
+        <section class="mcp-section">
+          <div class="mcp-section-head">
+            <span class="field-label">Registered</span>
+            <label class="mcp-target">
+              <span>Load into</span>
+              <select id="mcp-sandbox" class="field-input" aria-label="Sandbox"></select>
+            </label>
+          </div>
+          <div class="tpl-list" id="mcp-list"><p class="repo-note">Loading…</p></div>
+          <pre class="policy-raw hidden" id="mcp-inspect"></pre>
+        </section>
+        <section class="mcp-section mcp-form">
+          <span class="field-label" id="mcp-form-title">New server</span>
+          <div class="mcp-card">
+            <div class="tpl-form">
+              <input id="mcp-name" class="field-input" type="text" spellcheck="false" placeholder="name" aria-label="Name">
+              <select id="mcp-kind" class="field-input" aria-label="Transport">
+                <option value="remote">Remote (URL)</option>
+                <option value="stdio">Local command (stdio)</option>
+              </select>
+            </div>
+            <div class="mcp-remote">
+              <input id="mcp-url" class="field-input" type="text" spellcheck="false" placeholder="https://mcp.example.com/mcp" aria-label="URL">
+              <textarea id="mcp-headers" class="field-input" rows="2" spellcheck="false"
+                        placeholder="Authorization: Bearer ${api-key}&#10;one header per line" aria-label="Headers"></textarea>
+              <div id="mcp-secrets"></div>
+              <p class="mcp-hint">A <code>${key}</code> in a header is a secret, stored as <code>mcp:&lt;name&gt;:&lt;key&gt;</code>.
+                OAuth servers are added unauthorized: run <code>sbx mcp auth &lt;name&gt;</code> in a terminal.</p>
+            </div>
+            <div class="mcp-stdio hidden">
+              <input id="mcp-command" class="field-input" type="text" spellcheck="false" placeholder="npx, node, docker…" aria-label="Command">
+              <input id="mcp-args" class="field-input" type="text" spellcheck="false" placeholder="arguments, space separated: -y @playwright/mcp@latest" aria-label="Arguments">
+              <input id="mcp-dir" class="field-input" type="text" spellcheck="false" placeholder="working directory on the host (optional)" aria-label="Directory">
+              <p class="mcp-hint">Runs on the host, not in the sandbox.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="mcp-error"></span>
+        <button class="btn-cancel hidden" id="mcp-cancel-edit">Cancel edit</button>
+        <button class="btn-cancel" id="mcp-modal-close2">Close</button>
+        <button class="btn-create" id="mcp-save">Add</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="templates-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="templates-modal-title" style="width:600px">
+    <div class="modal setup-modal" data-setup-tab="templates" role="dialog" aria-modal="true" aria-labelledby="templates-modal-title">
       <div class="modal-head">
         <span class="modal-title" id="templates-modal-title">Templates</span>
         <button class="modal-close" id="templates-modal-close" aria-label="Close">✕</button>

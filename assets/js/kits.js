@@ -192,7 +192,6 @@ kitsDefaults.addEventListener('click', () => {
   kitsWrite(null);
 });
 
-document.getElementById('btn-kits').addEventListener('click', openKitsModal);
 document.getElementById('kits-modal-close').addEventListener('click', closeKitsModal);
 document.getElementById('kits-modal-close2').addEventListener('click', closeKitsModal);
 kitsOverlay.addEventListener('click', e => { if (e.target === kitsOverlay) closeKitsModal(); });

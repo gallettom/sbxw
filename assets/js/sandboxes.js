@@ -363,7 +363,7 @@ function sandboxItemHtml(s, groupColor) {
       ${ageTag}
       <div class="sbx-actions">${actions}</div>
     </div>
-    <div class="sbx-sessions" data-sandbox="${escHtml(s.name)}" data-running="${isRunning ? 1 : 0}" hidden></div>
+    <div class="sbx-sessions" data-sandbox="${escHtml(s.name)}" hidden></div>
   </div>`;
 }
 

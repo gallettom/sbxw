@@ -14,6 +14,7 @@ use axum::{Json, Router};
 use sbxw_core::artifacts;
 use sbxw_core::config::Config;
 use sbxw_core::favourites;
+use sbxw_core::mcp;
 use sbxw_core::plans::{DistillItem, PlanThread, Variant};
 use sbxw_core::policy;
 use sbxw_core::ports::WantedPort;
@@ -22,6 +23,7 @@ use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::{names, ModelId, SandboxName, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -73,7 +75,10 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/my-skills/rm", post(my_skills_rm))
         .route("/api/sandboxes/:name/skills", get(sandbox_skills))
         .route("/api/sandboxes/:name/skills/keep", post(keep_skill))
-        .route("/api/sandboxes/:name/mcp", get(mcp_list))
+        .route("/api/mcp", get(mcp_list).post(mcp_save))
+        .route("/api/mcp/:server", get(mcp_inspect))
+        .route("/api/mcp/:server/rm", post(mcp_rm))
+        .route("/api/sandboxes/:name/mcp/load", post(mcp_load))
         .route("/api/sandboxes/:name/mcp/unload", post(mcp_unload))
         .route("/api/sandboxes/:name/envfile", get(envfile).post(envfile))
         .route(
@@ -613,20 +618,72 @@ async fn policy_refresh(State(app): S) -> ApiResult {
     Ok(ok())
 }
 
-/// The host's registered MCP servers; the sandbox only scopes the unload.
-async fn mcp_list(State(app): S, Path(name): Path<String>) -> ApiResult {
-    sandbox(&name)?;
+/// The host's registered MCP servers. They are the host's, not a sandbox's:
+/// a sandbox only scopes load and unload.
+async fn mcp_list(State(app): S) -> ApiResult {
     Ok(ok_with(json!({ "servers": app.sbx.mcp_ls().await? })))
 }
 
+async fn mcp_inspect(State(app): S, Path(server): Path<String>) -> ApiResult {
+    let server = mcp::check_name(&server)?;
+    Ok(ok_with(json!({ "text": app.sbx.mcp_inspect(&server).await? })))
+}
+
 #[derive(Deserialize)]
-struct McpUnloadBody {
+struct McpSaveBody {
+    spec: mcp::McpSpec,
+    /// The name being edited: removed once the new spec has been checked.
+    replace: Option<String>,
+    /// Header placeholder → value; an empty value keeps the stored secret.
+    #[serde(default)]
+    secrets: BTreeMap<String, String>,
+}
+
+/// Create a server, or edit one: sbx has no edit, so it is `rm` then `add`.
+async fn mcp_save(State(app): S, Json(b): Json<McpSaveBody>) -> ApiResult {
+    b.spec.add_args()?;
+    let name = mcp::check_name(&b.spec.name)?;
+    let keys = b.spec.placeholders();
+    if let Some(old) = &b.replace {
+        let old = mcp::check_name(old)?;
+        tracing::info!("web UI: replacing MCP server {old} with {name}");
+        app.sbx.mcp_rm(&old).await?;
+    } else {
+        tracing::info!("web UI: adding MCP server {name}");
+    }
+    app.sbx.mcp_add(&b.spec).await.map_err(|e| match &b.replace {
+        Some(old) => anyhow::anyhow!("{old} was removed, but adding {name} failed: {e:#}"),
+        None => e,
+    })?;
+    for (key, value) in b.secrets.iter().filter(|(k, v)| !v.is_empty() && keys.contains(k)) {
+        app.sbx.secret_set(&mcp::secret_service(&name, key), value, None).await?;
+    }
+    Ok(ok())
+}
+
+async fn mcp_rm(State(app): S, Path(server): Path<String>) -> ApiResult {
+    let server = mcp::check_name(&server)?;
+    tracing::info!("web UI: removing MCP server {server}");
+    app.sbx.mcp_rm(&server).await?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct McpServerBody {
     server: String,
 }
 
-async fn mcp_unload(State(app): S, Path(name): Path<String>, Json(b): Json<McpUnloadBody>) -> ApiResult {
+async fn mcp_load(State(app): S, Path(name): Path<String>, Json(b): Json<McpServerBody>) -> ApiResult {
     let sb = sandbox(&name)?;
-    let server = policy::clean_arg(&b.server, "server")?;
+    let server = mcp::check_name(&b.server)?;
+    tracing::info!("web UI: loading MCP server {server} into '{sb}'");
+    app.sbx.mcp_load(&server, &sb).await?;
+    Ok(ok())
+}
+
+async fn mcp_unload(State(app): S, Path(name): Path<String>, Json(b): Json<McpServerBody>) -> ApiResult {
+    let sb = sandbox(&name)?;
+    let server = mcp::check_name(&b.server)?;
     tracing::info!("web UI: unloading MCP server {server} from '{sb}'");
     app.sbx.mcp_unload(&server, &sb).await?;
     Ok(ok())

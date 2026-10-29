@@ -136,7 +136,8 @@ case "${1:-}" in
   mcp)
     case "${2:-}" in
       ls) echo '[{"name":"github","type":"remote","gateway":{"name":"default"}}]' ;;
-      unload) : ;;
+      load|unload|add|rm) : ;;
+      inspect) echo "Name: ${3:-}"; echo "Headers: none" ;;
     esac ;;
   kit) [ "${2:-}" = validate ] && [ -e "${3:-}" ] || [ "${2:-}" != validate ] ;;
   diagnose) echo '{"checks":[{"name":"mkfs.ext4","status":"ok"},{"name":"global network policy","status":"warning","message":"not initialized"}]}' ;;

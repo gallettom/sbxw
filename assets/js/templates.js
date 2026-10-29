@@ -81,7 +81,6 @@ templatesSave.addEventListener('click', async () => {
 });
 templatesTag.addEventListener('keydown', e => { if (e.key === 'Enter') templatesSave.click(); });
 
-document.getElementById('btn-templates').addEventListener('click', openTemplatesModal);
 document.getElementById('templates-modal-close').addEventListener('click', closeTemplatesModal);
 document.getElementById('templates-modal-close2').addEventListener('click', closeTemplatesModal);
 templatesOverlay.addEventListener('click', e => { if (e.target === templatesOverlay) closeTemplatesModal(); });

@@ -105,7 +105,6 @@ mySkillsList.addEventListener('click', e => {
   if (btn) mySkillsForget(btn);
 });
 
-document.getElementById('btn-skills').addEventListener('click', openSkillsModal);
 document.getElementById('skills-modal-close').addEventListener('click', closeSkillsModal);
 document.getElementById('skills-modal-close2').addEventListener('click', closeSkillsModal);
 skillsOverlay.addEventListener('click', e => { if (e.target === skillsOverlay) closeSkillsModal(); });

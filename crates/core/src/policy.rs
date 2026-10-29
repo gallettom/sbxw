@@ -383,28 +383,6 @@ pub fn allow_resource(host: &str) -> String {
     }
 }
 
-/// One server in `sbx mcp ls --format json` (0.48+: a bare array).
-#[derive(Serialize, Debug, Clone, PartialEq)]
-pub struct McpServer {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-}
-
-pub fn parse_mcp_ls(raw: &str) -> Option<Vec<McpServer>> {
-    let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
-    Some(
-        rows.iter()
-            .filter_map(|v| {
-                Some(McpServer {
-                    name: v.get("name")?.as_str()?.to_string(),
-                    kind: v.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string(),
-                })
-            })
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,12 +422,6 @@ mod tests {
         assert_eq!(allow_resource("example.com."), "example.com");
         assert_eq!(allow_resource("[::1]:8080"), "[::1]");
         assert_eq!(allow_resource("10.0.0.1"), "10.0.0.1");
-    }
-
-    #[test]
-    fn mcp_servers_are_a_bare_array() {
-        let s = parse_mcp_ls(r#"[{"name":"github","type":"remote","gateway":{"url":"x"}},{"type":"stdio"}]"#).unwrap();
-        assert_eq!(s, vec![McpServer { name: "github".into(), kind: "remote".into() }]);
     }
 
     const LS: &str = "POLICY          SOURCE   APPLIES TO        SUMMARY\n\

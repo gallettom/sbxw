@@ -280,7 +280,11 @@
       linear-gradient(var(--c-active-bg), var(--c-active-bg)) padding-box,
       linear-gradient(90deg, var(--c-blue), var(--c-green)) border-box;
   }
-  .sidebar-footer .skills-btn { width: 100%; }
+  /* Setup, Monitor and Help share one row: Setup and Monitor split it, Help
+     is a square keycap at the end. */
+  .footer-row { display: flex; gap: .35rem; }
+  .footer-row > .skills-btn, .footer-row > .monitor-btn { flex: 1; min-width: 0; padding: 0 .4rem; justify-content: center; }
+  .footer-row > #btn-help { flex: 0 0 28px; padding: 0; justify-content: center; font-weight: 600; }
   /* Upload: the footer's one drop target, and its largest control — a file
      dragged from the desktop needs somewhere obvious to land. Dashed at rest;
      while a file is over it, the dash becomes the logo's blue-to-green ring
@@ -561,9 +565,8 @@
   }
   /* Full width and centred: in a column two buttons of different word-lengths
      sitting at their own widths read as a ragged edge, not as a pair. */
-  .sidebar-footer .monitor-btn, .sidebar-footer .help-btn {
-    width: 100%; justify-content: center;
-  }
+  .sidebar-footer .skills-btn:focus-visible, .sidebar-footer .monitor-btn:focus-visible,
+  .sidebar-footer .help-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   /* Shortcuts: one row per action, its name left and its keys right, so the
      keycaps line up in a column you can find without reading. Quieter than
      the buttons above (muted, no box around the block) but the keycaps
@@ -1454,7 +1457,126 @@
   }
   .btn-allow-host:hover { background: var(--c-elevated); }
   .btn-allow-host:disabled { opacity: .4; cursor: not-allowed; }
-  .mcp-unloaded td { opacity: .5; }
+  /* ── Setup dialog ──
+     Skills, Templates, Kits and MCP: four dialogs of one width under one tab
+     strip (/js/setup.js), so switching reads as a tab change, not a new
+     window. The strip *is* the head: the active tab's underline sits on the
+     head's own bottom rule, in the logo's blue-to-green the Setup button is
+     ringed with. */
+  /* One height too: a tab change that also resized the window would read as
+     a different dialog. Taller content scrolls in the body. */
+  .setup-modal { width: 860px; height: min(760px, 88vh); }
+  .setup-modal .modal-head { padding: 0 .75rem 0 1.1rem; align-items: stretch; }
+  .setup-modal .modal-close { align-self: center; }
+  .setup-modal .modal-body { padding: 1.1rem 1.35rem 1.25rem; gap: 1.1rem; }
+  .setup-modal .modal-foot { padding: .8rem 1.35rem; align-items: center; }
+  /* Each tab is a padded target with its own hover well (the ::before), not
+     bare text: the gap between labels belongs to a tab, so a click just off
+     a word still lands. The well sits inset from the head's top and bottom
+     so it never touches the rule the active underline sits on. The active
+     tab keeps the same weight as the rest — colour and underline mark it —
+     so the strip does not shift sideways when the selection moves. */
+  .setup-tabs { display: flex; gap: .15rem; margin-left: -.55rem; }
+  .setup-tab {
+    position: relative; background: none; border: none; padding: 1rem .7rem .95rem;
+    font: inherit; font-size: 13px; font-weight: 500; letter-spacing: .01em;
+    color: var(--c-text-muted); cursor: pointer; transition: color .12s;
+  }
+  .setup-tab::before {
+    content: ""; position: absolute; inset: .45rem 0; border-radius: var(--r-sm);
+    background: var(--c-elevated); opacity: 0; transition: opacity .12s;
+  }
+  .setup-tab:hover { color: var(--c-text-bright); }
+  .setup-tab:hover:not([aria-selected="true"])::before { opacity: .7; }
+  .setup-tab[aria-selected="true"] { color: var(--c-text-bright); cursor: default; }
+  .setup-tab[aria-selected="true"]::after {
+    content: ""; position: absolute; left: .7rem; right: .7rem; bottom: -1px; height: 2px;
+    border-radius: 2px 2px 0 0;
+    background: linear-gradient(90deg, var(--c-blue), var(--c-green));
+  }
+  .setup-tab:focus-visible { outline: none; }
+  .setup-tab:focus-visible::before { opacity: 1; box-shadow: inset 0 0 0 2px var(--c-blue); background: transparent; }
+
+  /* Prose in the Setup tabs is read, not scanned: it takes the prose face
+     (as the code map's articles do), across the full width of its card.
+     Commands, paths and tags stay monospace — they are what you type or look
+     for, and the change of face is what marks them out. */
+  .setup-modal .help-lead,
+  .setup-modal .help-step-body,
+  .setup-modal .my-skill-about,
+  .setup-modal .kit-about,
+  .setup-modal .repo-note {
+    font-family: var(--font-prose);
+  }
+  .setup-modal .help-lead { font-size: 13.5px; line-height: 1.6; color: var(--c-text-soft); }
+  .setup-modal .help-lead + .help-lead { margin-top: -.45rem; }
+  .setup-modal .help-step-body { font-size: 13px; line-height: 1.6; }
+  .setup-modal .help-lead code, .setup-modal .help-step-body code { font-size: .86em; }
+  .setup-modal .help-step { padding: .95rem 1.05rem; gap: .7rem; }
+  .setup-modal .help-step-head { font-size: 13.5px; }
+  .setup-modal .repo-note { font-size: 12.5px; }
+  .setup-modal .my-skill-about,
+  .setup-modal .kit-about { font-size: 12.5px; line-height: 1.5; }
+
+  /* One skill: its command, then what it does. The command is the thing you
+     type, so it leads in green; the tag and the source are facts about it,
+     kept small and quiet on the same line. The description is indented by
+     nothing and spaced from the next skill by more than its own leading, so
+     each row reads as one block rather than a run of lines. */
+  .setup-modal .skills-row { gap: .3rem; }
+  .setup-modal .skills-row + .skills-row { padding-top: .8rem; margin-top: .15rem; }
+  .setup-modal .skills-cmd { gap: .55rem; row-gap: .2rem; }
+  .setup-modal .skills-cmd code { font-size: 13px; }
+  .setup-modal .skills-row .help-step-body { color: var(--c-text); }
+  .setup-modal .skills-src {
+    margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--c-text-dim);
+  }
+  .setup-modal .skills-src:hover { color: var(--c-blue); }
+  /* Tags in sentence case, not shouted: they are a word of context, and two
+     of them on screen at once already set each other apart by colour. */
+  .setup-modal .skills-tag {
+    text-transform: none; letter-spacing: 0; font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 500; padding: .05em .5em; border-radius: var(--r-pill);
+  }
+
+  /* MCP tab: two sections — what is registered, and the form for one more —
+     each a label over its content. The form's fields sit in one inset well so
+     they read as a single server being described, not five loose inputs. */
+  .mcp-section { display: flex; flex-direction: column; gap: .5rem; }
+  .mcp-section .field-label { margin: 0; }
+  .mcp-section-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem; min-height: 28px; }
+  .mcp-target { display: flex; align-items: center; gap: .5rem; font-size: 11.5px; color: var(--c-text-muted); }
+  .mcp-target select { width: auto; min-width: 11rem; height: 28px; padding: 0 .55rem; font-size: 12px; }
+  .mcp-empty {
+    margin: 0; padding: 1.1rem .75rem; text-align: center;
+    font-size: 12px; color: var(--c-text-dim);
+  }
+  #mcp-list { background: var(--c-surface-alt); }
+  #mcp-list .tpl-row { padding: .5rem .5rem .5rem .75rem; }
+  .mcp-card {
+    display: flex; flex-direction: column; gap: .55rem;
+    padding: .85rem; border: 1px solid var(--c-elevated); border-radius: var(--r-md);
+    background: var(--c-surface-alt);
+  }
+  .mcp-card .field-input { height: 34px; }
+  .mcp-card textarea.field-input { height: auto; min-height: 58px; resize: vertical; line-height: 1.5; }
+  .mcp-card .tpl-form select { flex: 0 0 34%; }
+  .mcp-remote, .mcp-stdio { display: flex; flex-direction: column; gap: .55rem; }
+  .mcp-hint { margin: .1rem 0 0; font-size: 11px; line-height: 1.6; color: var(--c-text-dim); }
+  .mcp-hint code { font-size: 10.5px; color: var(--c-text-muted); }
+  .mcp-remote.hidden, .mcp-stdio.hidden, #mcp-inspect.hidden, #mcp-cancel-edit.hidden { display: none; }
+  #mcp-secrets:empty { display: none; }
+  #mcp-secrets { display: flex; flex-direction: column; gap: .45rem; }
+  .mcp-secret { display: flex; align-items: center; gap: .5rem; }
+  .mcp-secret code { flex: 0 0 auto; font-size: 12px; }
+  .mcp-btn {
+    flex-shrink: 0; background: none; border: 1px solid transparent; border-radius: var(--r-sm);
+    color: var(--c-text-muted); font: inherit; font-size: 12px; padding: .1rem .45rem; cursor: pointer;
+  }
+  .mcp-btn:hover { background: var(--c-elevated); border-color: var(--c-border); color: var(--c-text-bright); }
+  .mcp-btn:disabled { opacity: .5; cursor: not-allowed; }
+  #mcp-list .tpl-meta { margin-left: .5rem; }
+  #mcp-list .tpl-row > .mcp-actions { margin-left: auto; display: flex; white-space: nowrap; }
   .policy-note { color: var(--c-text-dim); font-size: 11px; margin-top: .35rem; }
   .policy-note.warn { color: var(--c-amber); }
   .policy-chips { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .3rem; }

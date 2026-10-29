@@ -70,9 +70,20 @@ await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first
   () => page.screenshot({ path: png.replace(/\.png$/, '-sidebar.png') }));
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
-await visit('Monitor', () => button(/Monitor Sandboxes/).click());
+await visit('Monitor', () => button(/^Monitor$/).click());
 await visit('Help', () => button(/^Help$/).click());
-await visit('Templates', () => button(/^Templates$/).click(), () => page.screenshot({ path: png.replace(/\.png$/, '-templates.png') }));
+// Setup is one dialog with a tab per part: open it, then walk the tabs.
+const tab = (re) => page.locator('.modal-overlay:not(.hidden) .setup-tab').filter({ hasText: re });
+await visit('Setup: Skills', async () => { await button(/^Setup$/).click(); await tab(/^Skills$/).click(); });
+await visit('Setup: Templates', async () => { await button(/^Setup$/).click(); await tab(/^Templates$/).click(); },
+  () => page.screenshot({ path: png.replace(/\.png$/, '-templates.png') }));
+await visit('Setup: Kits', async () => { await button(/^Setup$/).click(); await tab(/^Kits$/).click(); });
+await visit('Setup: MCP', async () => { await button(/^Setup$/).click(); await tab(/^MCP$/).click(); }, async () => {
+  await page.screenshot({ path: png.replace(/\.png$/, '-mcp.png') });
+  await page.locator('#mcp-list .mcp-btn[data-act="edit"]').first().click();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: png.replace(/\.png$/, '-mcp-edit.png') });
+});
 const terminal = await page.evaluate(() => [...document.querySelectorAll('.xterm-rows')].map((e) => e.innerText).join('\n'));
 await page.screenshot({ path: png });
 await browser.close();

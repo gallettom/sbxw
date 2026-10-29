@@ -343,7 +343,6 @@ function renderPolicy(data) {
   if (raw)
     parts.push(`<details class="policy-details"><summary>Raw <code>sbx policy ls</code> output</summary><pre class="policy-raw">${escHtml(raw)}</pre></details>`);
 
-  parts.push('<div id="mcp-section"></div>');
   policyContent.innerHTML = parts.filter(Boolean).join('');
   wirePolicyFilter();
   wirePolicyLogSort();
@@ -351,7 +350,6 @@ function renderPolicy(data) {
   wirePolicyDeletes();
   wirePolicyRefresh();
   wireBlockedAllows();
-  fetchMcp(portsTarget);
 }
 
 // `sbx policy refresh` (0.49): re-read the policy now — after an AI Governance
@@ -427,48 +425,6 @@ function wireBlockedAllows() {
         }
       } finally {
         finishBgJob(jobId);
-      }
-    });
-  }
-}
-
-// The host's MCP servers, each detachable from this sandbox without restarting
-// its agent (`sbx mcp unload`, 0.48). Fetched on its own: a slow `mcp ls` must
-// not hold back the policy.
-async function fetchMcp(name) {
-  const el = document.getElementById('mcp-section');
-  if (!el || !name) return;
-  let data;
-  try { data = await (await fetch(`/api/sandboxes/${encodeURIComponent(name)}/mcp`)).json(); }
-  catch (_) { data = null; }
-  if (portsTarget !== name || !document.body.contains(el)) return;
-  if (!data || !data.ok) {
-    el.innerHTML = policySectionLabel('MCP servers', 'sbx mcp ls') +
-      `<div class="policy-note">${escHtml((data && data.error) || 'Could not list MCP servers')}</div>`;
-    return;
-  }
-  const servers = data.servers || [];
-  if (!servers.length) { el.innerHTML = ''; return; }
-  el.innerHTML = policySectionLabel('MCP servers', 'sbx mcp ls', null, 0) +
-    `<table class="ports-table mcp-servers"><tbody>` +
-    servers.map(s => `<tr><td><span class="policy-cell">${escHtml(s.name)}</span></td>` +
-      `<td><span class="policy-cell">${escHtml(s.type || '')}</span></td>` +
-      `<td class="rule-actions"><button class="btn-del-rule btn-mcp-unload" data-server="${escHtml(s.name)}" title="Detach ${escHtml(s.name)} from this sandbox — the agent keeps running">Unload</button></td></tr>`).join('') +
-    `</tbody></table><span class="ports-error-msg hidden" id="mcp-unload-error"></span>` +
-    `<div class="policy-note">Unload detaches a server from this sandbox only; the agent keeps running.</div>`;
-  for (const btn of el.querySelectorAll('.btn-mcp-unload')) {
-    btn.addEventListener('click', async () => {
-      const server = btn.dataset.server;
-      if (!confirm(`Unload MCP server '${server}' from '${name}'?`)) return;
-      btn.disabled = true;
-      const data = await postJson(`/api/sandboxes/${encodeURIComponent(name)}/mcp/unload`, { server });
-      if (data.ok) {
-        showToast(`${server} unloaded from ${name}`);
-        btn.closest('tr').classList.add('mcp-unloaded');
-        btn.textContent = 'Unloaded';
-      } else {
-        btn.disabled = false;
-        showNote(document.getElementById('mcp-unload-error'), data.error || 'Failed to unload');
       }
     });
   }

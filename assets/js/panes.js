@@ -1249,7 +1249,9 @@ function renderThreadViews() {
   });
   listEl.querySelectorAll('.sbx-sessions').forEach(box => {
     const sandbox = box.dataset.sandbox;
-    box.hidden = !knownThreads(sandbox).length && box.dataset.running !== '1';
+    // Main alone says nothing the row above it does not: the fold shows once
+    // there is a second session to tell apart.
+    box.hidden = !knownThreads(sandbox).length;
     setHtml(box, sidebarSessionsHtml(sandbox));
   });
   if (sessionMenu.idx != null) renderSessionMenu();
