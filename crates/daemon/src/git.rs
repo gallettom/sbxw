@@ -157,6 +157,12 @@ pub fn thread_dir(workspace: &Path, rel: &str) -> PathBuf {
     }
 }
 
+/// A shared plan's worktree in repo `rel`: `<repo>/.sbxw-worktrees/<team>`,
+/// where its threads' scripts make it.
+pub fn team_worktree(workspace: &Path, rel: &str, team: &str) -> Option<PathBuf> {
+    repo_root(workspace, rel).map(|r| r.join(".sbxw-worktrees").join(team))
+}
+
 /// `rel` checked against the workspace: normalised, a folder under it (after
 /// symlinks), and a repo.
 pub fn validate(workspace: &Path, rel: &str) -> Result<String, String> {

@@ -191,6 +191,46 @@ impl Plan {
     }
 }
 
+impl Plan {
+    /// The approved distillate as one Claude Code auto memory: its file name,
+    /// its contents, and its line for the `MEMORY.md` index. `None` when
+    /// nothing was kept.
+    pub fn distillate_memory(&self) -> Option<(String, String, String)> {
+        let items = &self.merge.as_ref()?.distillate;
+        if items.is_empty() {
+            return None;
+        }
+        let file = format!("{}.md", self.team_name());
+        let one_line = |s: &str, n: usize| {
+            let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            match s.char_indices().nth(n) {
+                Some((i, _)) => format!("{}…", &s[..i]),
+                None => s,
+            }
+        };
+        let what = if self.summary.is_empty() { "a team plan".to_string() } else { one_line(&self.summary, 100) };
+        let mut body = format!(
+            "---\nname: {team}\ndescription: {description}\n\
+             metadata:\n  type: project\n---\n\n\
+             Kept from sbxw team plan {id} when its branch sbxw/{team} was merged. The plan: {what}\n\n",
+            team = self.team_name(),
+            id = self.id,
+            // JSON's string is a YAML double-quoted scalar: a summary with
+            // `: ` in it stays one value.
+            description = serde_json::to_string(&format!("Decisions and warnings that still hold after {what}")).unwrap_or_default(),
+        );
+        for i in items {
+            let kind = match i.kind {
+                DistillKind::Decision => "Decision",
+                DistillKind::Warning => "Warning",
+            };
+            body.push_str(&format!("- **{kind}:** {}\n", one_line(&i.text, MAX_TEXT)));
+        }
+        let index = format!("- [Team plan {}]({file}) — decisions and warnings from: {}", self.id, one_line(&what, 80));
+        Some((file, body, index))
+    }
+}
+
 pub fn team_name(plan_id: &str) -> String {
     format!("team-{plan_id}")
 }
@@ -316,7 +356,8 @@ impl PlanBook {
         Ok(plan)
     }
 
-    /// One pending plan per sandbox.
+    /// One pending plan per sandbox, saying why its variant.
+    #[allow(clippy::too_many_arguments)]
     pub fn propose(
         &mut self,
         id: String,
@@ -791,7 +832,12 @@ mod tests {
         let m = b.start_merge(&p.id, None, Some(kept.clone()), 7).unwrap().merge.unwrap();
         assert_eq!(m.distillate, kept, "the person's version wins");
         b.merge_result(&p.id, MergeResult { thread: "team-p-s".into(), ok: true, commit: None, error: None }, 8).unwrap();
-        assert_eq!(b.finish_merge(&p.id, 9).unwrap().merge.unwrap().state, MergeState::Merged);
+        let merged = b.finish_merge(&p.id, 9).unwrap();
+        assert_eq!(merged.merge.as_ref().unwrap().state, MergeState::Merged);
+        let (file, body, index) = merged.distillate_memory().unwrap();
+        assert_eq!(file, "team-p-s.md");
+        assert!(body.starts_with("---\nname: team-p-s\n") && body.contains("- **Warning:** no float money\n"));
+        assert!(index.starts_with("- [Team plan p-s](team-p-s.md) — "));
         assert!(b.team_of("n", "a").is_none(), "merged: the threads are on their own again");
     }
 
