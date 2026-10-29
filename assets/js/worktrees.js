@@ -12,7 +12,7 @@ const wtUpdated = document.getElementById('wt-updated');
 // The sandbox shown, the pane whose Thread menu opened it (where a thread
 // clicked here opens, as from the menu), the poll timer, whether a read is on
 // its way, and the last answer.
-const wtView = { sandbox: null, idx: null, timer: null, busy: false, data: null, lanes: 360 };
+const wtView = { sandbox: null, idx: null, timer: null, busy: false, data: null, lanes: 360, board: null };
 
 const WT_POLL_MS = 4000;
 const WT_ROW = 40;         // px per lane: the base first, then a thread per row
@@ -23,7 +23,7 @@ const WT_BASE_COLS = 24;   // commits of the base drawn at most
 const WT_THREAD_COLS = 10; // commits of one thread drawn at most
 
 function openWorktrees(sandbox, idx) {
-  Object.assign(wtView, { sandbox, idx, data: null });
+  Object.assign(wtView, { sandbox, idx, data: null, board: null });
   document.getElementById('wt-title').textContent = `Worktree graph of ${sandbox}`;
   setHtml(wtBody, '<p class="wt-note">Reading the branches…</p>');
   wtUpdated.textContent = '';
@@ -39,13 +39,26 @@ function openWorktrees(sandbox, idx) {
 function closeWorktrees() {
   wtOverlay.classList.add('hidden');
   clearInterval(wtView.timer);
-  Object.assign(wtView, { sandbox: null, idx: null, timer: null, data: null });
+  Object.assign(wtView, { sandbox: null, idx: null, timer: null, data: null, board: null });
 }
 
 async function readWorktrees() {
   const sandbox = wtView.sandbox;
   if (!sandbox || wtView.busy) return;
   wtView.busy = true;
+  // A shared plan has one worktree, so the board is shown in place of the graph.
+  const board = await fetchBoard(sandbox);
+  if (wtView.sandbox !== sandbox) { wtView.busy = false; return; }
+  if (boardIsShared(board)) {
+    wtView.busy = false;
+    wtView.board = board;
+    wtBoards.set(sandbox, board);
+    paintWorktrees();
+    wtUpdated.textContent = `Read at ${new Date().toLocaleTimeString()}, again every ${WT_POLL_MS / 1000} s`;
+    return;
+  }
+  wtView.board = null;
+  wtBoards.delete(sandbox);
   let res;
   try {
     res = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/worktrees`)).json();
@@ -68,7 +81,14 @@ async function readWorktrees() {
 }
 
 function paintWorktrees() {
-  const { sandbox, data } = wtView;
+  const { sandbox, data, board } = wtView;
+  const shared = !!board;
+  document.getElementById('wt-title').textContent = `${shared ? 'Board' : 'Worktree graph'} of ${sandbox}`;
+  document.getElementById('wt-intro').textContent = shared
+    ? 'The threads of this plan share one worktree and one branch. A file is claimed by one thread at a time; the feed is what they tell each other.'
+    : 'Each thread works in its own git worktree, on its own branch. Here each branch is drawn against the lead\'s, where a merge lands.';
+  wtBody.classList.toggle('bd-on', shared);
+  if (shared) { setHtml(wtBody, boardHtml(board)); return; }
   if (!sandbox || !data) return;
   // A lane strip keeps its scroll across repaints; a new one starts with HEAD
   // in view, at its right edge, and the forks before it.
@@ -266,18 +286,29 @@ function wtSvg(g, rows) {
 // what the entry opens is plain before it is clicked. Read on every opening
 // of the menu, and kept fresh by the dialog while that is open.
 const wtPreview = new Map(); // sandbox → its last /worktrees answer
+const wtBoards = new Map();  // sandbox → its last /board answer, while its plan is shared
 
 async function wtPrefetch(sandbox) {
   try {
     const res = await (await fetch(`/api/sandboxes/${encodeURIComponent(sandbox)}/worktrees`)).json();
     if (res?.ok) wtPreview.set(sandbox, res);
   } catch { /* the miniature stays a sketch */ }
+  const board = await fetchBoard(sandbox);
+  if (boardIsShared(board)) wtBoards.set(sandbox, board); else wtBoards.delete(sandbox);
   if (threadMenu.idx != null && panes[threadMenu.idx]?.sandbox === sandbox) renderThreadMenu();
 }
 
 // The entry: the miniature, then what it is. `names` are the threads the menu
 // lists, for a sketch of the right size until the first answer is in.
 function wtMenuCardHtml(sandbox, names) {
+  const board = wtBoards.get(sandbox);
+  if (board) {
+    return `<button type="button" role="menuitem" class="thread-menu-graph" data-map
+      title="Open the board: who holds which file, and what the threads tell each other, live">
+      <span class="thread-menu-graph-text"><strong>Board</strong>
+        <span>${escHtml(boardSummary(board))}</span></span>
+    </button>`;
+  }
   const repo = wtPreview.get(sandbox)?.repos.find(r => !r.error && r.threads.length);
   const base = repo?.base || 'the lead\'s branch';
   return `<button type="button" role="menuitem" class="thread-menu-graph" data-map
@@ -336,6 +367,7 @@ wtBody.addEventListener('click', e => {
   const from = idx != null && panes[idx]?.sandbox === sandbox ? idx : focusedPane;
   reachThread(sandbox, b.dataset.thread, from);
 });
+boardBindFilters(wtBody, paintWorktrees);
 document.getElementById('wt-x').addEventListener('click', closeWorktrees);
 document.getElementById('wt-close').addEventListener('click', closeWorktrees);
 wtOverlay.addEventListener('click', e => { if (e.target === wtOverlay) closeWorktrees(); });

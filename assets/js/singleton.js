@@ -51,6 +51,8 @@ const SBXW_APP_SCRIPTS = [
   '/js/chat-core.js',
   // After plans.js: its lanes carry each thread's plan state.
   '/js/worktrees.js',
+  // After worktrees.js: it draws with that file's helpers.
+  '/js/board.js',
   // Same reason: the chat dock follows chats on that stream.
   '/js/chat-dock.js',
 ];
