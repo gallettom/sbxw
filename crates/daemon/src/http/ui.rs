@@ -78,6 +78,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/mcp", get(mcp_list).post(mcp_save))
         .route("/api/mcp/:server", get(mcp_inspect))
         .route("/api/mcp/:server/rm", post(mcp_rm))
+        .route("/api/mcp/:server/auth", post(mcp_auth))
         .route("/api/sandboxes/:name/mcp/load", post(mcp_load))
         .route("/api/sandboxes/:name/mcp/unload", post(mcp_unload))
         .route("/api/sandboxes/:name/envfile", get(envfile).post(envfile))
@@ -666,6 +667,13 @@ async fn mcp_rm(State(app): S, Path(server): Path<String>) -> ApiResult {
     tracing::info!("web UI: removing MCP server {server}");
     app.sbx.mcp_rm(&server).await?;
     Ok(ok())
+}
+
+async fn mcp_auth(State(app): S, Path(server): Path<String>) -> ApiResult {
+    let server = mcp::check_name(&server)?;
+    tracing::info!("web UI: signing in to MCP server {server}");
+    let text = app.sbx.mcp_auth(&server).await?;
+    Ok(ok_with(json!({ "text": text })))
 }
 
 #[derive(Deserialize)]

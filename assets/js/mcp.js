@@ -58,6 +58,7 @@ function mcpRenderList() {
         <span class="mcp-actions">
           <button class="mcp-btn" data-act="load" ${target ? '' : 'disabled'} title="Attach to ${escHtml(target || 'a running sandbox')} — its agent picks up the tools without a restart">Load</button>
           <button class="mcp-btn" data-act="unload" ${target ? '' : 'disabled'} title="Detach from ${escHtml(target || 'a running sandbox')} — its agent keeps running">Unload</button>
+          ${mcpIsStdio(s) ? '' : `<button class="mcp-btn" data-act="auth" title="sbx mcp auth — sign in from this host's browser; the token serves every sandbox">Sign in</button>`}
           <button class="mcp-btn" data-act="inspect" title="sbx mcp inspect — header templates and whether their secrets are set">Inspect</button>
           <button class="mcp-btn" data-act="edit" title="Edit — saved as remove then add">Edit</button>
           <button class="tpl-rm" data-act="rm" title="Unregister from this host">Remove</button>
@@ -170,6 +171,19 @@ async function mcpRowAction(btn) {
     if (!r.ok) { showNote(mcpError, r.error || 'Could not inspect'); return; }
     mcpInspect.textContent = r.text.trim() || '(no output)';
     mcpInspect.classList.remove('hidden');
+    return;
+  }
+  if (act === 'auth') {
+    btn.disabled = true;
+    const jobId = startBgJob(`Signing in to ${server}… finish in the browser`);
+    try {
+      const r = await postJsonOrError(`/api/mcp/${encodeURIComponent(server)}/auth`, {});
+      if (r.ok) showToast(`Signed in to ${server}`);
+      else showNote(mcpError, r.error || `sbx mcp auth ${server} failed`);
+    } finally {
+      btn.disabled = false;
+      finishBgJob(jobId);
+    }
     return;
   }
   if (act === 'rm' && !confirm(

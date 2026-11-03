@@ -74,7 +74,7 @@ What sbxw assumes, unconditionally:
 | `--format json` on `ls`, `ports`, `rm` (0.48) | sandbox state, live ports, per-target removal |
 | `kit add` with startup commands (0.48) | kits added to an existing sandbox |
 | `policy log --format json` (0.48) | blocked hosts in the network panel |
-| `mcp ls --format json`, `mcp add\|rm\|inspect`, `mcp load\|unload --sandbox` (0.48) | the MCP dialog |
+| `mcp ls --format json`, `mcp add\|rm\|inspect\|auth`, `mcp load\|unload --sandbox` (0.48) | the MCP dialog |
 | `git-identity@1`, `ssh-agent@1` kit capabilities (0.48) | `sbxw:git-identity`, `sbxw:ssh-agent` |
 | `template save`, `create --template` | `sbxw template save`, `template` |
 | `policy refresh` (0.49) | **Re-read policy now** |
@@ -140,6 +140,8 @@ locally if something looks off.
   object that names a check and gives it a status; if it finds none, it
   prints the document.
 - **The fields of `sbx mcp ls --format json`** beyond `name` and `type`.
+- **`sbx mcp auth NAME`.** sbxw assumes it opens the host's browser itself
+  and returns once the sign-in is done, with no terminal needed.
 
 Confirmed on a real 0.49.2: `sbx template save` refuses `--description` (and
 `--capture-mode`) without `--cloud`, so sbxw never passes it.

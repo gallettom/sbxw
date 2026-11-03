@@ -136,7 +136,7 @@ case "${1:-}" in
   mcp)
     case "${2:-}" in
       ls) echo '[{"name":"github","type":"remote","gateway":{"name":"default"}}]' ;;
-      load|unload|add|rm) : ;;
+      load|unload|add|rm|auth) : ;;
       inspect) echo "Name: ${3:-}"; echo "Headers: none" ;;
     esac ;;
   kit) [ "${2:-}" = validate ] && [ -e "${3:-}" ] || [ "${2:-}" != validate ] ;;

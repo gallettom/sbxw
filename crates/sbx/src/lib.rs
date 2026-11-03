@@ -29,7 +29,7 @@
 //! sbx policy log [N] --format json · sbx policy refresh
 //! sbx mcp ls --format json · sbx mcp load|unload SERVER --sandbox N
 //! sbx mcp add NAME --url=U [--header=H]… --skip-auth | --command=C [--args=A,B] [--dir=D]
-//! sbx mcp rm NAME · sbx mcp inspect NAME
+//! sbx mcp rm NAME · sbx mcp inspect NAME · sbx mcp auth NAME   (OAuth; opens the host's browser)
 //! sbx kit validate REF --offline              (local dir or ZIP; no daemon, no sign-in)
 //! sbx template save N TAG                    (--description is cloud-only: refused locally)
 //! sbx template ls · sbx template rm TAG · create --template TAG
@@ -733,6 +733,13 @@ impl Sbx {
     /// are set, never their values.
     pub async fn mcp_inspect(&self, server: &str) -> Result<String> {
         self.capture(s(&["mcp", "inspect", server])).await
+    }
+
+    /// Sign in to a server that wants OAuth. The token is the host's, so every
+    /// sandbox that loads the server gets it. sbx opens the host's browser and
+    /// returns once the sign-in is done.
+    pub async fn mcp_auth(&self, server: &str) -> Result<String> {
+        self.capture(s(&["mcp", "auth", server])).await
     }
 
     /// Attach a registered MCP server to one running sandbox; its agent sees
