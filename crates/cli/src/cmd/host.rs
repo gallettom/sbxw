@@ -2,7 +2,8 @@
 //!
 //! Not `sbxw hosts`, which is the `/etc/hosts` block. The rules and the ssh
 //! argv live in `sbxw_core::remote_hosts`; this file runs ssh, asks the
-//! question about the host key and touches the disk.
+//! question about the host key and touches the disk. `check` lives in
+//! `host_check`.
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -30,6 +31,15 @@ pub enum HostCmd {
     Ls,
     /// Check that a host answers over ssh and has `sbx`.
     Test { name: String },
+    /// Exercise ssh, sbx detection, the link, tunnels, the host's disk, kit
+    /// copies and git on a real host. Creates no sandbox. EXPERIMENTAL.
+    #[command(after_help = "Works in a temp dir on the host and removes it. Exit 0 only if every step passed or was skipped with a reason.\nExample:\n  sbxw host check buildbox")]
+    Check {
+        name: String,
+        /// Leave the temp dir on the host and print its path.
+        #[arg(long)]
+        keep: bool,
+    },
     /// Change a host; only the flags given are changed.
     Edit {
         name: String,
@@ -81,6 +91,7 @@ pub fn run(cmd: HostCmd) -> Result<()> {
         HostCmd::Add { name, conn, trust_secrets, yes } => add(&name, conn, trust_secrets, yes),
         HostCmd::Ls => ls(),
         HostCmd::Test { name } => test(&name),
+        HostCmd::Check { name, keep } => super::host_check::run(&name, &load()?, keep),
         HostCmd::Edit { name, conn, trust_secrets, no_trust_secrets, yes } => {
             let trust = if trust_secrets {
                 Some(true)
