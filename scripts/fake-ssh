@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# A stand-in for `ssh`, for tests of the SSH transport: enough of its command
+# line for sbxw's SshExec and host Link, and no network.
+#
+#   FAKE_SSH_LOG   every call's argv is appended here, one line per call.
+#                  Never stdin: that is where secrets travel, and the tests
+#                  check they stay out of this log.
+#   FAKE_SSH_HOME  the "remote" home: commands run there, with HOME set to it.
+#   FAKE_SSH_DOWN  a path; while it exists the host is unreachable (exit 255,
+#                  as ssh does when it cannot connect).
+#
+# Modes, as ssh decides them:
+#   -M -N -S CP …     the master: writes its pid to CP (the "socket") and
+#                     stays up until killed.
+#   -S CP -O OP …     check | forward | cancel | exit, against that master.
+#   … DEST [--] WORDS the remote command: WORDS joined with spaces and run by
+#                     `sh -c`, which is what sshd does with them.
+set -u
+log="${FAKE_SSH_LOG:-/dev/null}"
+printf '%s\n' "$*" >> "$log"
+
+master=0 ctl="" op=""
+# Options that take a value, as in ssh(1).
+with_value="BbcDEeFIiJLlmOoPpQRSWw"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    -?*) ;;
+    *) break ;;
+  esac
+  cluster="${1#-}"; shift
+  while [ -n "$cluster" ]; do
+    letter="${cluster:0:1}"; cluster="${cluster:1}"
+    case "$with_value" in
+      *"$letter"*)
+        if [ -n "$cluster" ]; then value="$cluster"; cluster=""; else value="${1:-}"; shift || true; fi
+        case "$letter" in
+          S) ctl="$value" ;;
+          O) op="$value" ;;
+        esac ;;
+      M) master=1 ;;
+      *) ;; # -N, -T, -tt, -q…: nothing to fake
+    esac
+  done
+done
+dest="${1:-}"; [ $# -gt 0 ] && shift
+[ "${1:-}" = "--" ] && shift
+
+alive() { # is the master on $ctl running?
+  [ -n "$ctl" ] && [ -f "$ctl" ] && kill -0 "$(cat "$ctl" 2>/dev/null)" 2>/dev/null
+}
+
+down() { [ -n "${FAKE_SSH_DOWN:-}" ] && [ -e "$FAKE_SSH_DOWN" ]; }
+
+if [ -n "$op" ]; then
+  if ! alive; then
+    echo "Control socket connect($ctl): No such file or directory" >&2
+    exit 255
+  fi
+  pid=$(cat "$ctl")
+  case "$op" in
+    check) echo "Master running (pid=$pid)" >&2 ;;
+    forward | cancel) ;;
+    exit) kill "$pid"; echo "Exit request sent." >&2 ;;
+    *) echo "ssh: unknown -O command $op" >&2; exit 255 ;;
+  esac
+  exit 0
+fi
+
+if down; then
+  echo "ssh: connect to host $dest port 22: Connection refused" >&2
+  exit 255
+fi
+
+if [ "$master" = 1 ]; then
+  if alive; then
+    echo "ControlSocket $ctl already exists, disabling multiplexing" >&2
+    exit 255
+  fi
+  echo $$ > "$ctl"
+  # `wait` returns on a trapped signal at once; a foreground sleep would not.
+  sleep 1000000 < /dev/null > /dev/null 2>&1 &
+  sp=$!
+  trap 'kill $sp 2>/dev/null; rm -f "$ctl"; exit 0' TERM INT HUP
+  wait $sp
+  exit 0
+fi
+
+home="${FAKE_SSH_HOME:?set FAKE_SSH_HOME}"
+cd "$home" || exit 1
+export HOME="$home"
+if [ $# -eq 0 ]; then exec sh; fi
+exec sh -c "$*"
