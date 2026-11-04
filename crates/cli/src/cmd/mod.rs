@@ -10,7 +10,7 @@ use crate::HostsAction;
 use anyhow::{bail, Context, Result};
 use sbxw_core::config::Config;
 use sbxw_core::hosts;
-use sbxw_core::names::{self, SandboxName};
+use sbxw_core::names::{self, SandboxName, SandboxRef};
 use sbxw_core::progress::{Progress, Sink};
 use sbxw_daemon::hostsys::{Elevation, HostSys};
 use sbxw_daemon::provision::BringUp;
@@ -21,6 +21,14 @@ use serde_json::json;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+/// A sandbox named on the command line, as a ref: `neos` (this machine),
+/// `local~neos` (the same) or `buildbox~neos`. Another host's is refused
+/// until remote hosts are wired.
+pub fn sandbox_arg(raw: &str) -> Result<SandboxName> {
+    let r = SandboxRef::parse(raw)?;
+    Ok(r.local_name().map_err(|e| anyhow::anyhow!("'{r}': {e}"))?.clone())
+}
 
 pub fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
@@ -199,7 +207,7 @@ pub fn up(a: UpArgs) -> Result<()> {
         None => std::env::current_dir()?,
     };
     let name = match (a.name, a.add_sandbox) {
-        (Some(n), _) => Some(SandboxName::parse(&n)?),
+        (Some(n), _) => Some(sandbox_arg(&n)?),
         (None, true) => {
             let ws = std::fs::canonicalize(&workspace).with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;
             let n = derive_name(&store, &ws);
@@ -306,7 +314,7 @@ fn up_here(rt: tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: 
 
 pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bool, tail: bool) -> Result<()> {
     let name = match name {
-        Some(n) => SandboxName::parse(&n)?,
+        Some(n) => sandbox_arg(&n)?,
         None => names::mint_chat_name(u32::from_str_radix(&sbxw_core::ids::random_hex(4), 16).unwrap_or(0)),
     };
     let paths = Paths::from_home();
@@ -329,7 +337,7 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
 }
 
 pub fn web(name: &str, config: &Path) -> Result<()> {
-    let name = SandboxName::parse(name)?;
+    let name = sandbox_arg(name)?;
     let cfg = load_config(config)?;
     let daemon = Daemon::new(&cfg.web_addr);
     daemon.ensure(&Paths::from_home(), &cfg.source.clone().map_or_else(|| abs(config), Ok)?, false)?;
@@ -350,6 +358,8 @@ pub fn logs(name: Option<String>, lines: u32) -> Result<()> {
             tail.status()?;
         }
         Some(n) => {
+            // The log names a sandbox by its ref's canonical form.
+            let n = SandboxRef::parse(&n).map(|r| r.to_string()).unwrap_or(n);
             let child = tail.stdout(std::process::Stdio::piped()).spawn()?;
             let out = std::io::BufReader::new(child.stdout.context("no output")?);
             for line in std::io::BufRead::lines(out) {
@@ -364,7 +374,7 @@ pub fn logs(name: Option<String>, lines: u32) -> Result<()> {
 }
 
 pub fn ports(name: &str, config: &Path) -> Result<()> {
-    let name = SandboxName::parse(name)?;
+    let name = sandbox_arg(name)?;
     let cfg = load_config(config)?;
     let rt = runtime();
     let sbx = Sbx::process();
@@ -378,7 +388,7 @@ pub fn ports(name: &str, config: &Path) -> Result<()> {
 }
 
 pub fn bash(name: &str) -> Result<()> {
-    sbxw_sbx::interactive(&sbxw_sbx::bash_args(&SandboxName::parse(name)?))
+    sbxw_sbx::interactive(&sbxw_sbx::bash_args(&sandbox_arg(name)?))
 }
 
 pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> {
@@ -392,7 +402,7 @@ pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> 
     let Some(name) = name else {
         bail!("specify a sandbox name, or pass --setup to register the `*.sbx` SSH host block");
     };
-    let name = SandboxName::parse(&name)?;
+    let name = sandbox_arg(&name)?;
     let host = format!("{name}.sbx");
     let status = std::process::Command::new("ssh")
         .arg(&host)
@@ -444,7 +454,7 @@ pub fn ports_ls(name: Option<String>, all: bool) -> Result<()> {
     }
     let multi = names.len() > 1;
     for n in names {
-        let sb = SandboxName::parse(&n)?;
+        let sb = sandbox_arg(&n)?;
         if multi {
             println!("=== {n} ===");
         }
@@ -474,7 +484,7 @@ pub fn stop(names: Vec<String>, all: bool) -> Result<()> {
         println!("No running sandboxes to stop.");
     }
     for n in targets {
-        rt.block_on(sbx.stop(&SandboxName::parse(&n)?)).with_context(|| format!("failed to stop '{n}'"))?;
+        rt.block_on(sbx.stop(&sandbox_arg(&n)?)).with_context(|| format!("failed to stop '{n}'"))?;
         println!("stopped  {n}");
     }
     Ok(())
@@ -490,7 +500,7 @@ pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
     } else if names.is_empty() {
         bail!("specify at least one sandbox name, or use --all");
     } else {
-        names.iter().map(|n| SandboxName::parse(n)).collect::<Result<_, _>>()?
+        names.iter().map(|n| sandbox_arg(n)).collect::<Result<_, _>>()?
     };
     if targets.is_empty() {
         println!("No sandboxes.");
@@ -655,7 +665,7 @@ pub fn down(name: Option<String>) -> Result<()> {
     let paths = Paths::from_home();
     match name {
         Some(n) => {
-            let n = SandboxName::parse(&n)?;
+            let n = sandbox_arg(&n)?;
             if daemon.health().is_none() {
                 println!("no sbxw daemon is running");
                 return Ok(());
@@ -711,6 +721,16 @@ pub fn daemon(config: &Path, use_api_key: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sandbox_argument_is_a_ref() {
+        assert_eq!(sandbox_arg("neos").unwrap().as_str(), "neos");
+        assert_eq!(sandbox_arg("local~neos").unwrap().as_str(), "neos");
+        let e = sandbox_arg("buildbox~neos").unwrap_err().to_string();
+        assert!(e.contains("remote hosts are not wired yet") && e.contains("buildbox~neos"), "{e}");
+        assert!(sandbox_arg("a~b~c").is_err());
+        assert!(sandbox_arg("ne os").is_err());
+    }
 
     #[test]
     fn a_derived_name_steps_aside_for_another_path() {
