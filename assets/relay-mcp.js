@@ -218,7 +218,9 @@ const LEAD_TOOLS = [
       "Propose splitting the work into parallel threads, each a Claude session in its own git " +
       "worktree and branch in this sandbox. The user reviews the plan in the sbxw window, may " +
       "edit or remove threads, and approves or refuses it; nothing starts before that. On " +
-      "approval sbxw opens one pane per thread and gives each its goal.\n" +
+      "approval sbxw opens one pane per thread and gives each its goal. A thread's goal and " +
+      "scope are each at most 16000 characters: a longer one is refused with an error, never " +
+      "cut, so shorten it and propose again.\n" +
       "\n" +
       "Returns within ~90 s with the plan as approved (work from that, not from what you sent), " +
       "the refusal, or 'pending' with a plan id to pick up later with `check_plan`. One pending " +
