@@ -89,6 +89,28 @@ const [c, r] = (wide || '0x0').split('x').map(Number);
 if (narrow !== `${c - 1}x${r}` || last !== wide || resizes.tracked !== wide) {
   problems.push(`reconnect repaint: sent resizes [${resizes.sent}], want ...,${c - 1}x${r},${wide} and sentSize ${wide} (got ${resizes.tracked})`);
 }
+// A failed plan merge can be retried: with a faked plan in that state, the
+// dialog keeps the error and offers Retry merge, and the pane's button leads there.
+const retry = await page.evaluate((sbx) => {
+  const id = 'smoke-failed-merge';
+  plans.set(id, { id, sandbox: sbx, variant: 'split', state: 'approved', closed: false, created_ms: Date.now(),
+    threads: [{ name: 'a', state: 'done' }, { name: 'b', state: 'done' }],
+    merge: { state: 'failed', order: ['a', 'b'], note: '', results: [{ thread: 'a', ok: true, commit: 'abc1234' }, { thread: 'b', ok: false, error: 'conflict' }] } });
+  refreshPlanButtons();
+  const pane = document.getElementById('pmerge-0');
+  const out = { pane: pane && !pane.hidden ? pane.textContent : null };
+  openMergePlan(sbx);
+  const all = document.getElementById('merge-all');
+  out.retry = all.hidden ? null : `${all.textContent}${all.disabled ? ' (disabled)' : ''}`;
+  out.error = document.getElementById('merge-outcome').textContent;
+  closePlan();
+  plans.delete(id);
+  refreshPlanButtons();
+  return out;
+}, sandbox);
+if (retry.pane !== 'Retry merge' || !/^Retry merge/.test(retry.retry || '') || !/conflict/.test(retry.error)) {
+  problems.push(`failed merge: ${JSON.stringify(retry)}, want a Retry merge pane button and dialog button, error shown`);
+}
 await visit('Monitor', () => button(/^Monitor$/).click());
 await visit('Help', () => button(/^Help$/).click());
 // Setup is one dialog with a tab per part: open it, then walk the tabs.

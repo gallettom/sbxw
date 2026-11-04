@@ -154,7 +154,7 @@ function refreshPlanButtons() {
     if (!merge) return;
     const mp = i < paneCount && p.sandbox && !p.thread ? mergePlanFor(p.sandbox) : null;
     merge.hidden = !mp;
-    if (mp) merge.textContent = mp.merge.state === 'merging' ? 'Merging…' : 'Merge';
+    if (mp) merge.textContent = mp.merge.state === 'merging' ? 'Merging…' : mp.merge.state === 'failed' ? 'Retry merge' : 'Merge';
   });
 }
 
@@ -177,13 +177,13 @@ const mergeClose = document.getElementById('merge-close');
 // The plan id a Merge all is on its way for, until the daemon answers.
 let mergeAsk = null;
 
-// The plan of `sandbox` whose merge waits on a person or is under way: the
-// latest, if several. Plans whose lead mode was ended are over.
+// The plan of `sandbox` whose merge waits on a person, is under way or failed
+// (and can be retried): the latest, if several. Plans whose lead mode was ended are over.
 function mergePlanFor(sandbox) {
   let best = null;
   for (const p of plans.values()) {
     if (p.sandbox !== sandbox || p.closed || !p.merge) continue;
-    if (!['proposed', 'merging'].includes(p.merge.state)) continue;
+    if (!['proposed', 'merging', 'failed'].includes(p.merge.state)) continue;
     if (!best || p.created_ms > best.created_ms) best = p;
   }
   return best;
@@ -244,7 +244,7 @@ const keptDistillate = () => (distillateEdits || []).filter(d => d.keep && d.tex
 
 function paintMergeTeam(plan) {
   if (plan.variant !== 'shared') { mergeTeam.innerHTML = ''; return; }
-  const over = plan.merge.state === 'merged' || plan.merge.state === 'failed';
+  const over = plan.merge.state === 'merged';
   const claims = mergeBoard?.claims || [];
   const commits = new Map();
   (mergeBoard?.entries || []).filter(e => e.kind === 'commit').sort((a, b) => a.at - b.at)
@@ -372,7 +372,9 @@ function paintMerge(plan) {
   }
   outcome.hidden = !outcome.textContent;
 
-  const over = m.state === 'merged' || m.state === 'failed';
+  // 'merged' is final; 'failed' stays open for a retry.
+  const over = m.state === 'merged';
+  const failed = m.state === 'failed';
   const running = !over && (m.state === 'merging' || mergeAsk === plan.id);
   document.getElementById('merge-close-row').hidden = over;
   mergeClose.disabled = running;
@@ -381,9 +383,9 @@ function paintMerge(plan) {
   mergeAll.hidden = over;
   mergeAll.disabled = running || open !== 0;
   mergeAll.title = open ? `${wtPlural(open, 'file')} still claimed: release them first` : open === null ? 'Reading the board…' : '';
-  mergeAll.textContent = running ? 'Merging…' : 'Merge all';
+  mergeAll.textContent = running ? 'Merging…' : failed ? 'Retry merge' : 'Merge all';
   // Closing never stops a merge under way: the pane's Merging… button leads back.
-  mergeLater.textContent = over ? 'Close' : running ? 'Hide' : 'Not now';
+  mergeLater.textContent = over ? 'Close' : running ? 'Hide' : failed ? 'Close' : 'Not now';
 }
 
 mergeAll.addEventListener('click', async () => {
