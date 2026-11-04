@@ -7,7 +7,7 @@
 //! where the wire protocol names them (the WebSocket's `mode=` query and the
 //! `mode` field the island reads).
 
-use crate::names::{SandboxName, ThreadName};
+use crate::names::{SandboxRef, ThreadName};
 use serde::Serialize;
 use std::fmt;
 
@@ -85,25 +85,25 @@ pub const MONITOR_SANDBOX: &str = "__host__";
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionKey {
     /// `None` only for the monitor.
-    pub sandbox: Option<SandboxName>,
+    pub sandbox: Option<SandboxRef>,
     pub kind: SessionKind,
 }
 
 impl SessionKey {
-    pub fn new(sandbox: SandboxName, kind: SessionKind) -> Self {
+    pub fn new(sandbox: impl Into<SandboxRef>, kind: SessionKind) -> Self {
         debug_assert!(kind != SessionKind::Monitor);
         Self {
-            sandbox: Some(sandbox),
+            sandbox: Some(sandbox.into()),
             kind,
         }
     }
 
-    pub fn agent(sandbox: &SandboxName) -> Self {
-        Self::new(sandbox.clone(), SessionKind::Agent)
+    pub fn agent(sandbox: impl Into<SandboxRef>) -> Self {
+        Self::new(sandbox, SessionKind::Agent)
     }
 
-    pub fn thread(sandbox: &SandboxName, thread: &ThreadName) -> Self {
-        Self::new(sandbox.clone(), SessionKind::Thread(thread.clone()))
+    pub fn thread(sandbox: impl Into<SandboxRef>, thread: &ThreadName) -> Self {
+        Self::new(sandbox, SessionKind::Thread(thread.clone()))
     }
 
     pub fn monitor() -> Self {
@@ -113,19 +113,49 @@ impl SessionKey {
         }
     }
 
-    pub fn sandbox_str(&self) -> &str {
-        self.sandbox.as_deref().unwrap_or(MONITOR_SANDBOX)
+    /// The sandbox's ref in text form (`neos`, `buildbox~neos`), or the
+    /// monitor's pseudo-sandbox.
+    pub fn sandbox_str(&self) -> String {
+        self.sandbox.as_ref().map_or_else(|| MONITOR_SANDBOX.to_string(), |s| s.to_string())
     }
 
+    /// Whether this is a session of `sandbox`, given as a ref's text form.
     pub fn belongs_to(&self, sandbox: &str) -> bool {
-        self.sandbox.as_deref() == Some(sandbox)
+        self.sandbox.as_ref().is_some_and(|s| s == sandbox)
+    }
+
+    pub fn belongs_to_ref(&self, sandbox: &SandboxRef) -> bool {
+        self.sandbox.as_ref() == Some(sandbox)
     }
 }
 
 impl fmt::Display for SessionKey {
-    /// The old wire key, `<sandbox>::<mode>`, for logs and `/api/ptys`.
+    /// The old wire key, `<sandbox>::<mode>`, for logs and `/api/ptys`; a
+    /// remote sandbox's is `<host>~<sandbox>::<mode>`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}::{}", self.sandbox_str(), self.kind.mode())
+    }
+}
+
+impl SessionKey {
+    /// The key back from its wire form. The kind's thread name is checked
+    /// like any other.
+    pub fn parse(raw: &str) -> Result<Self, &'static str> {
+        let (sb, mode) = raw.rsplit_once("::").ok_or("a session key is <sandbox>::<mode>")?;
+        let kind = match mode {
+            "claude" => SessionKind::Agent,
+            "bash" => SessionKind::Bash,
+            "monitor" => SessionKind::Monitor,
+            m => match m.split_once(':') {
+                Some(("thread", t)) => SessionKind::Thread(ThreadName::parse(t).map_err(|e| e.0)?),
+                Some(("thread-bash", t)) => SessionKind::ThreadBash(ThreadName::parse(t).map_err(|e| e.0)?),
+                _ => return Err("unknown session mode"),
+            },
+        };
+        if kind == SessionKind::Monitor {
+            return if sb == MONITOR_SANDBOX { Ok(Self::monitor()) } else { Err("only the host has a monitor") };
+        }
+        Ok(Self::new(SandboxRef::parse(sb).map_err(|e| e.0)?, kind))
     }
 }
 
@@ -139,8 +169,8 @@ impl Serialize for SessionKey {
 mod tests {
     use super::*;
 
-    fn sb(n: &str) -> SandboxName {
-        SandboxName::parse(n).unwrap()
+    fn sb(n: &str) -> SandboxRef {
+        SandboxRef::parse(n).unwrap()
     }
     fn th(n: &str) -> ThreadName {
         ThreadName::parse(n).unwrap()
@@ -155,6 +185,31 @@ mod tests {
             SessionKey::new(sb("n"), SessionKind::ThreadBash(th("a"))).to_string(),
             "n::thread-bash:a"
         );
+    }
+
+    #[test]
+    fn a_remote_key_names_its_host_and_round_trips() {
+        let local = SessionKey::agent(sb("local~neos"));
+        assert_eq!(local.to_string(), "neos::claude", "local is byte-identical to today");
+        let remote = SessionKey::agent(sb("buildbox~neos"));
+        assert_eq!(remote.to_string(), "buildbox~neos::claude");
+        assert_ne!(local, remote);
+        assert!(remote.belongs_to("buildbox~neos") && !remote.belongs_to("neos"));
+        for key in [
+            local,
+            remote,
+            SessionKey::thread(sb("buildbox~neos"), &th("api")),
+            SessionKey::new(sb("buildbox~n"), SessionKind::ThreadBash(th("a"))),
+            SessionKey::new(sb("n"), SessionKind::Bash),
+            SessionKey::monitor(),
+        ] {
+            assert_eq!(SessionKey::parse(&key.to_string()), Ok(key.clone()), "{key}");
+        }
+        assert!(SessionKey::parse("neos").is_err());
+        assert!(SessionKey::parse("neos::weird").is_err());
+        assert!(SessionKey::parse("neos::monitor").is_err());
+        assert!(SessionKey::parse("a~b~c::claude").is_err());
+        assert!(SessionKey::parse("neos::thread:Bad").is_err());
     }
 
     #[test]
