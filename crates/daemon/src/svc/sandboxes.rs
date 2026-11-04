@@ -127,8 +127,10 @@ impl App {
             let Ok(r) = self.remote(&name).await else { continue };
             let known: Vec<SandboxRef> = self.store.names().into_iter().filter(|n| n.host == name).collect();
             let up = r.link.settle(LIST_WAIT).await == crate::host::link::LinkState::Up;
+            // Not `Sbx::ls`, which reads a host that stopped answering as
+            // "no sandboxes": that is unreachable, not empty.
             let listed = match (up, r.sbx().await) {
-                (true, Ok(sbx)) => Some(sbx.ls().await),
+                (true, Ok(sbx)) => list_strict(&sbx).await.ok(),
                 _ => None,
             };
             match (listed, r.down_since()) {
@@ -632,7 +634,17 @@ impl App {
     }
 }
 
-/// `CLAUDE_CODE_OAUTH_TOKEN`, or its legacy alias, when set and non-empty.
+/// `sbx ls`, failing when the host cannot be asked instead of answering
+/// with an empty list.
+pub async fn list_strict(sbx: &sbxw_sbx::Sbx) -> Result<Vec<sbxw_sbx::SandboxInfo>> {
+    let args: Vec<String> = ["ls", "--format", "json"].map(String::from).into();
+    let out = sbx.raw(sbxw_sbx::runner::Invocation::new(args.clone())).await?;
+    if !out.success() {
+        return Err(sbxw_sbx::command_error(&args, &out));
+    }
+    Ok(sbxw_sbx::parse_ls_json(&out.stdout_str()).unwrap_or_default())
+}
+
 /// The repos to mount beside `workspace`, split `(read-only, writable)`. Each
 /// is canonical — sbx mounts it at the same path inside — and apart from every
 /// other: sbx shares a directory once, so a repo inside the workspace (or inside
@@ -672,6 +684,7 @@ async fn extra_mounts(host: &Host, workspace: &std::path::Path, mounts: Vec<(Str
     Ok((ro, rw))
 }
 
+/// `CLAUDE_CODE_OAUTH_TOKEN`, or its legacy alias, when set and non-empty.
 pub fn oauth_token_from_env() -> Option<String> {
     ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_OAUTH_TOKEN"]
         .iter()

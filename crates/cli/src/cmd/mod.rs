@@ -620,15 +620,9 @@ pub fn ls() -> Result<()> {
 /// `sbx ls` on a remote host. Unlike `Sbx::ls`, a host that cannot be
 /// reached is an error (a `HostUnreachable`), not an empty list.
 async fn remote_ls(host: &HostName) -> Result<Vec<sbxw_sbx::SandboxInfo>> {
-    use sbxw_sbx::runner::{Invocation, Runner};
     let exec = remote_exec(host)?;
-    let runner = exec.on_host().await?;
-    let args: Vec<String> = ["ls", "--format", "json"].map(String::from).into();
-    let out = runner.run(Invocation::new(args.clone())).await?;
-    if !out.success() {
-        return Err(sbxw_sbx::command_error(&args, &out));
-    }
-    Ok(sbxw_sbx::parse_ls_json(&out.stdout_str()).unwrap_or_default())
+    let sbx = Sbx::new(Arc::new(exec.on_host().await?));
+    sbxw_daemon::svc::sandboxes::list_strict(&sbx).await
 }
 
 pub fn ports_ls(name: Option<String>, all: bool) -> Result<()> {
