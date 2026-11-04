@@ -10,13 +10,14 @@ use sbxw_core::codemap::Run;
 use sbxw_core::plans::Plan;
 use sbxw_core::progress::Progress;
 use sbxw_core::relay::RelayRequest;
+use sbxw_core::SandboxRef;
 use serde::Serialize;
 use tokio::sync::{broadcast, watch};
 
 /// A bring-up's progress, with the sandbox it is about, flattened on the wire.
 #[derive(Clone, Serialize, Debug)]
 pub struct ProvisionEvent {
-    pub sandbox: String,
+    pub sandbox: SandboxRef,
     #[serde(flatten)]
     pub progress: Progress,
 }
@@ -26,17 +27,17 @@ pub enum Event {
     /// A hook moved an agent session.
     Session(SessionInfo),
     /// The island asks open tabs to show a sandbox.
-    Focus(String),
+    Focus(SandboxRef),
     /// A tab is now reading a sandbox's terminal (for the island).
-    Watching(String),
+    Watching(SandboxRef),
     Relay(RelayRequest),
     Provision(ProvisionEvent),
     Codemap(Run),
     Plan(Plan),
-    Lead(String),
-    LeadEnd(String),
+    Lead(SandboxRef),
+    LeadEnd(SandboxRef),
     /// A sandbox's Team-mode board changed.
-    Board(String),
+    Board(SandboxRef),
 }
 
 impl Event {
@@ -56,7 +57,8 @@ impl Event {
         }
     }
 
-    /// The SSE `data:` payload: JSON for structures, the bare name for names.
+    /// The SSE `data:` payload: JSON for structures, a ref's text form
+    /// (`neos`, `buildbox~neos`) for sandboxes.
     pub fn data(&self) -> String {
         let json = |v: &dyn erased::Ser| v.to_json();
         match self {
@@ -65,7 +67,7 @@ impl Event {
             Event::Provision(v) => json(v),
             Event::Codemap(v) => json(v),
             Event::Plan(v) => json(v),
-            Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.clone(),
+            Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.to_string(),
         }
     }
 }

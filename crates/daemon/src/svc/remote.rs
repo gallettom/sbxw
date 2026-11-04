@@ -121,16 +121,16 @@ mod tests {
     async fn a_token_sandbox_is_switched_for_good() {
         let (_d, app, fake) = app_with(signed_in_with(r#"{"present":true,"scopes":["user:inference"]}"#));
         let name = SandboxName::parse("neos").unwrap();
-        app.store.write_oauth_kit("neos", Some("{\"claudeAiOauth\":{}}")).unwrap();
+        app.store.write_oauth_kit(sbxw_core::SandboxRef::parse("neos").unwrap(), Some("{\"claudeAiOauth\":{}}")).unwrap();
         let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("switch"), "{e:#}");
 
         // Typing /login needs a live session, which the fake has none of; what
         // must already hold by then is that the token cannot come back.
         let _ = app.switch_to_login(&name, SessionKind::Agent).await;
-        let spec = std::fs::read_to_string(app.store.paths.oauth_kit("neos").join("spec.yaml")).unwrap();
+        let spec = std::fs::read_to_string(app.store.paths.oauth_kit(sbxw_core::SandboxRef::parse("neos").unwrap()).join("spec.yaml")).unwrap();
         assert!(!spec.contains("credentials.json"), "{spec}");
-        assert!(app.store.get("neos").remote_control);
+        assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
         assert!(fake.log().iter().any(|c| c.starts_with("policy allow") && c.contains("platform.claude.com")));
     }
 
@@ -140,13 +140,13 @@ mod tests {
             r#"{"present":true,"scopes":["user:profile"],"sessions":[{"cwd":"/w/neos","rc":true}]}"#,
         ));
         let name = SandboxName::parse("neos").unwrap();
-        app.store.update("neos", |r| r.workspace = Some("/w/neos".into())).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.workspace = Some("/w/neos".into())).unwrap();
         let state = app.remote_state(&name, &SessionKind::Agent).await.unwrap();
         assert!(state.active && state.login == sbxw_core::remote::Login::Full);
         // On already, the button is an indicator: nothing is typed.
         let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("already on"), "{e:#}");
-        app.store.update("neos", |r| r.workspace = Some("/w/other".into())).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.workspace = Some("/w/other".into())).unwrap();
         assert!(!app.remote_state(&name, &SessionKind::Agent).await.unwrap().active);
     }
 
@@ -156,6 +156,6 @@ mod tests {
         let name = SandboxName::parse("neos").unwrap();
         let e = app.switch_to_login(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("nothing to switch"));
-        assert!(!app.store.get("neos").remote_control);
+        assert!(!app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
     }
 }

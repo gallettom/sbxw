@@ -84,10 +84,17 @@ impl App {
             .ls()
             .await
             .into_iter()
-            .map(|s| SandboxItem {
-                chat: self.store.chat_workspace(&s.name).is_some(),
-                remote_control: self.store.get(&s.name).remote_control,
-                workspace: self.store.workspace(&s.name).map(|w| w.to_string_lossy().into_owned()),
+            .map(|s| {
+                // sbx lists this machine's sandboxes; one whose name sbxw would
+                // refuse has no record to look up.
+                let rec = SandboxName::parse(&s.name).map(|n| self.store.get(&n)).unwrap_or_default();
+                let chat = SandboxName::parse(&s.name).is_ok_and(|n| self.store.chat_workspace(&n).is_some());
+                (s, rec, chat)
+            })
+            .map(|(s, rec, chat)| SandboxItem {
+                chat,
+                remote_control: rec.remote_control,
+                workspace: rec.workspace.map(|w| w.to_string_lossy().into_owned()),
                 name: s.name,
                 agent: s.agent,
                 status: s.status,
@@ -103,10 +110,10 @@ impl App {
     pub async fn remove(&self, names: &[SandboxName]) -> Result<()> {
         let results = self.sbx.rm(names).await?;
         let gone: Vec<&SandboxName> = names.iter().filter(|n| results.iter().any(|r| r.removed && r.name == n.as_str())).collect();
-        let chats: Vec<PathBuf> = gone.iter().filter_map(|n| self.store.chat_workspace(n)).collect();
+        let chats: Vec<PathBuf> = gone.iter().filter_map(|n| self.store.chat_workspace(*n)).collect();
         for n in &gone {
             self.sessions.drop_sandbox(n);
-            self.store.forget(n);
+            self.store.forget(*n);
         }
         self.forget_remote(&gone);
         let failed: Vec<String> = results
@@ -585,6 +592,6 @@ mod tests {
         }
         let e = app.remove(&[a.clone(), b.clone()]).await.unwrap_err();
         assert!(format!("{e:#}").contains("'b': busy"), "{e:#}");
-        assert!(!app.store.exists("a") && app.store.exists("b"));
+        assert!(!app.store.exists(sbxw_core::SandboxRef::parse("a").unwrap()) && app.store.exists(sbxw_core::SandboxRef::parse("b").unwrap()));
     }
 }

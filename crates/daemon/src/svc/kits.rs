@@ -42,7 +42,7 @@ impl App {
         }
         for name in self.store.names() {
             if let Some(p) = self.store.get(&name).config {
-                out.entry(p).or_default().sandboxes.push(name);
+                out.entry(p).or_default().sandboxes.push(name.to_string());
             }
         }
         out
@@ -157,7 +157,7 @@ mod tests {
         let cfg = dir.path().join("proj/sbxw.toml");
         std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
         std::fs::write(&cfg, "# mine\ntemplate = \"auto\"\n\n[[ports]]\nalias = \"a.local\"\nhost_port = 3000\nsandbox_port = 3000\n").unwrap();
-        app.store.update("neos", |r| r.config = Some(cfg.clone())).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.config = Some(cfg.clone())).unwrap();
 
         let other = dir.path().join("elsewhere.toml");
         assert!(app.set_kits(&other, Some(vec!["sbxw:retro".into()])).is_err(), "a path the page names is refused");

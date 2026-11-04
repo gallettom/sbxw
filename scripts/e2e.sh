@@ -13,7 +13,7 @@ bin="${SBXW_BIN:-${CARGO_TARGET_DIR:-$root/target}/debug/sbxw}"
 t="$(mktemp -d)"
 trap '"$bin" down >/dev/null 2>&1 || true; rm -rf "$t"' EXIT
 mkdir -p "$t/fakebin" "$t/home" "$t/ws/neos" "$t/state"
-cp "$here/fake-sbx" "$t/fakebin/sbx"
+cp "$here/fake-sbx" "$t/fakebin/sbx"; chmod +x "$t/fakebin/sbx"
 free_port() { node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'; }
 UI=$(free_port); AGENT=$(free_port)
 export HOME="$t/home" PATH="$t/fakebin:$PATH" FAKE_SBX_STATE="$t/state" SBXW_HOSTS_FILE="$t/hosts"
@@ -182,6 +182,17 @@ post /api/templates/rm "{\"tag\":\"$tag\"}" | grep -q '"ok":true' || die "remove
 ! grep -q "\"tag\": \"$tag\"" "$HOME/.sbxw/state/templates.json" || die "removing an automatic template forgets its record"
 post /api/templates/save '{"sandbox":"tpl2","tag":"--force"}' | grep -q '"ok":false' || die "a tag that reads as a flag is refused"
 ok "Templates dialog: list, save without secrets, remove"
+
+# Sandboxes are refs: local~neos is neos, a remote host's is refused until
+# hosts are wired, and nothing local is touched by asking.
+ui "http://127.0.0.1:$UI/api/sandboxes/local~neos/threads" | grep -q '"ok":false' && die "local~neos is the local sandbox"
+code=$(curl -s -o "$t/remote.json" -w '%{http_code}' -H "host: 127.0.0.1:$UI" "http://127.0.0.1:$UI/api/sandboxes/buildbox~neos/ports")
+[ "$code" = 501 ] && grep -q 'remote hosts are not wired yet' "$t/remote.json" || die "a remote ref is refused with 501 (got $code)"
+"$bin" stop buildbox~neos > "$t/remote-stop.log" 2>&1 && die "the CLI refuses a remote ref"
+grep -q 'remote hosts are not wired yet' "$t/remote-stop.log" || { cat "$t/remote-stop.log"; die "the CLI says why"; }
+grep -q "^stop buildbox" "$t/state/calls.log" && die "nothing reaches sbx for a remote ref"
+[ ! -e "$HOME/.sbxw/state/hosts" ] || die "asking about a remote ref writes nothing"
+ok "refs: local~neos is neos, a remote ref is refused cleanly"
 
 "$bin" rm neos >/dev/null || die "rm"
 [ ! -e "$HOME/.sbxw/state/sandboxes/neos.json" ] || die "rm forgets the record"

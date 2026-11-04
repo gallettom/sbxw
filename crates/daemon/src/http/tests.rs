@@ -68,7 +68,7 @@ async fn an_agent_needs_a_valid_token() {
     let wrong = json_req(post("/api/hook", hook.clone()).header("authorization", "Bearer sbxw_nope"), hook.clone());
     assert_eq!(call(agent_router(app.clone()), wrong).await.0, StatusCode::UNAUTHORIZED);
 
-    let token = app.store.token("neos").unwrap();
+    let token = app.store.token(sbxw_core::SandboxRef::parse("neos").unwrap()).unwrap();
     let ok = json_req(post("/api/hook", hook.clone()).header("authorization", format!("Bearer {token}")), hook);
     assert_eq!(call(agent_router(app.clone()), ok).await.0, StatusCode::OK);
     assert_eq!(app.session_infos()[0].sandbox, "neos", "identity comes from the token");
@@ -77,8 +77,8 @@ async fn an_agent_needs_a_valid_token() {
 #[tokio::test]
 async fn a_sandbox_cannot_claim_another_identity_or_reach_human_decisions() {
     let (_d, app) = app();
-    let alpha = app.store.token("alpha").unwrap();
-    let beta = app.store.token("beta").unwrap();
+    let alpha = app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap();
+    let beta = app.store.token(sbxw_core::SandboxRef::parse("beta").unwrap()).unwrap();
     // alpha asks (with a lying `from`, which is ignored), parks briefly.
     let ask = json!({"from": "beta", "question": "q?", "timeout": 1});
     let (s, v) = call(
@@ -110,7 +110,7 @@ async fn a_sandbox_cannot_claim_another_identity_or_reach_human_decisions() {
 #[tokio::test]
 async fn a_code_map_report_is_for_the_callers_own_sandbox() {
     let (_d, app) = app();
-    let alpha = app.store.token("alpha").unwrap();
+    let alpha = app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap();
     let req = Request::builder()
         .method("POST")
         .uri(format!("/api/sandboxes/beta/codemap/done?token={alpha}"))
@@ -173,4 +173,37 @@ fn an_upload_keeps_its_name_as_one_safe_component() {
     assert_eq!(upload_name(".env"), "env");
     assert_eq!(upload_name("..."), "upload");
     assert_eq!(upload_name("été.jpg"), "_t_.jpg");
+}
+
+#[tokio::test]
+async fn a_remote_sandbox_is_refused_cleanly_until_hosts_are_wired() {
+    let (_d, app) = app();
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    for path in ["/api/sandboxes/buildbox~neos/ports", "/api/sandboxes/buildbox~neos/threads", "/api/sandboxes/buildbox~neos/board"] {
+        let (s, v) = call(ui_router(app.clone()), get(path)).await;
+        assert_eq!(s, StatusCode::NOT_IMPLEMENTED, "{path}");
+        assert_eq!(v["error"], "remote hosts are not wired yet", "{path}");
+    }
+    let stop = json_req(post("/api/sandboxes/buildbox~neos/stop", json!({})).header("host", HOST), json!({}));
+    assert_eq!(call(ui_router(app.clone()), stop).await.0, StatusCode::NOT_IMPLEMENTED);
+    let (s, _) = call(ui_router(app.clone()), get("/api/sandboxes/a~b~c/ports")).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a malformed ref is a bad request, not a missing feature");
+
+    // A token on file for a remote sandbox is known, and still refused.
+    let token = app.store.token(sbxw_core::SandboxRef::parse("buildbox~neos").unwrap()).unwrap();
+    let hook = json!({"hook_event_name": "SessionStart", "session_id": "s"});
+    let req = json_req(post("/api/hook", hook.clone()).header("authorization", format!("Bearer {token}")), hook);
+    assert_eq!(call(agent_router(app.clone()), req).await.0, StatusCode::NOT_IMPLEMENTED);
+    assert!(app.session_infos().is_empty());
+}
+
+#[tokio::test]
+async fn the_initial_sandbox_may_be_a_remote_ref() {
+    let (_d, app) = app();
+    let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "local~neos"}));
+    assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
+    assert_eq!(*app.initial_sandbox.lock().unwrap(), "neos", "normalised");
+    let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "buildbox~neos"}));
+    assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
+    assert_eq!(*app.initial_sandbox.lock().unwrap(), "buildbox~neos");
 }

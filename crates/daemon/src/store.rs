@@ -13,10 +13,14 @@
 //! A record missing from the new layout is rebuilt from the old files on first
 //! read, so sandboxes created by an older sbxw keep their workspace, threads
 //! and model migration.
+//!
+//! Everything is keyed by a `SandboxRef`. A local sandbox's files are where
+//! they always were; a remote host's go under `state/hosts/<host>/`, with the
+//! same layout inside (`sandboxes/<name>.json`, `kits/<name>-oauth/`, …).
 
 use anyhow::{Context, Result};
 use sbxw_core::hosts::HostAlias;
-use sbxw_core::SandboxName;
+use sbxw_core::{HostName, SandboxName, SandboxRef};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -64,22 +68,36 @@ impl Paths {
     pub fn daemon_log(&self) -> PathBuf {
         self.run().join("daemon.log")
     }
-    fn sandboxes(&self) -> PathBuf {
-        self.state().join("sandboxes")
+    /// Where a host's sandboxes are filed: `state/` itself for this machine
+    /// (the layout every older sbxw wrote), `state/hosts/<host>/` for another.
+    pub fn host_state(&self, host: &HostName) -> PathBuf {
+        if host.is_local() {
+            self.state()
+        } else {
+            self.state().join("hosts").join(host.as_str())
+        }
+    }
+    fn hosts(&self) -> PathBuf {
+        self.state().join("hosts")
+    }
+    fn sandboxes(&self, host: &HostName) -> PathBuf {
+        self.host_state(host).join("sandboxes")
     }
     pub fn plans(&self) -> PathBuf {
         self.state().join("plans")
     }
     /// `state/kits/<name>-oauth/`: kept as long as the sandbox, because sbx
     /// re-resolves a kit by its original path on every container swap.
-    pub fn oauth_kit(&self, name: &str) -> PathBuf {
-        self.state().join("kits").join(format!("{name}-oauth"))
+    pub fn oauth_kit(&self, sb: impl Into<SandboxRef>) -> PathBuf {
+        let sb = sb.into();
+        self.host_state(&sb.host).join("kits").join(format!("{}-oauth", sb.name))
     }
     /// `state/kits/<name>-volumes/`: **not** removed with the sandbox. sbx
     /// keeps volume storage after `rm` and reattaches it to the same name
     /// created with the same kit, so the kit has to be there, unchanged.
-    pub fn volumes_kit(&self, name: &str) -> PathBuf {
-        self.state().join("kits").join(format!("{name}-volumes"))
+    pub fn volumes_kit(&self, sb: impl Into<SandboxRef>) -> PathBuf {
+        let sb = sb.into();
+        self.host_state(&sb.host).join("kits").join(format!("{}-volumes", sb.name))
     }
     /// Where the bundled kits are written out: stable, because sbx keeps a
     /// kit's path and re-resolves it on every container swap.
@@ -102,11 +120,13 @@ impl Paths {
         self.state().join("kits").join(sbxw_core::my_skills::KIT_NAME)
     }
     /// Documents `sbxw env run` derives for one sandbox.
-    pub fn env_dir(&self, name: &str) -> PathBuf {
-        self.state().join("env").join(name)
+    pub fn env_dir(&self, sb: impl Into<SandboxRef>) -> PathBuf {
+        let sb = sb.into();
+        self.host_state(&sb.host).join("env").join(sb.name.as_str())
     }
-    pub fn chat_workspace(&self, name: &str) -> PathBuf {
-        self.chat_root.join(name)
+    /// A chat sandbox's empty workspace. Chats are made on this machine.
+    pub fn chat_workspace(&self, name: &SandboxName) -> PathBuf {
+        self.chat_root.join(name.as_str())
     }
     fn templates(&self) -> PathBuf {
         self.state().join("templates.json")
@@ -184,7 +204,7 @@ pub struct SandboxRecord {
 pub struct Store {
     pub paths: Paths,
     lock: Mutex<()>,
-    tokens: Mutex<HashMap<String, String>>,
+    tokens: Mutex<HashMap<String, SandboxRef>>,
 }
 
 fn restrict(path: &Path, mode: u32) {
@@ -231,22 +251,50 @@ impl Store {
         store
     }
 
-    fn record_path(&self, name: &str) -> PathBuf {
-        self.paths.sandboxes().join(format!("{name}.json"))
+    fn record_path(&self, sb: &SandboxRef) -> PathBuf {
+        self.paths.sandboxes(&sb.host).join(format!("{}.json", sb.name))
+    }
+
+    /// The hosts that have a directory of records: this machine, then every
+    /// `state/hosts/<host>/` whose name is a valid host.
+    fn hosts(&self) -> Vec<HostName> {
+        let mut out = vec![HostName::local()];
+        let mut remote: Vec<HostName> = std::fs::read_dir(self.paths.hosts())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| HostName::parse(e.file_name().to_str()?).ok())
+            .filter(|h| !h.is_local())
+            .collect();
+        remote.sort();
+        out.extend(remote);
+        out
+    }
+
+    /// The refs with a record on `host`, by file name.
+    fn records_of(&self, host: &HostName) -> Vec<SandboxRef> {
+        std::fs::read_dir(self.paths.sandboxes(host))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.extension()? != "json" {
+                    return None;
+                }
+                let name = SandboxName::parse(p.file_stem()?.to_str()?).ok()?;
+                Some(SandboxRef::new(host.clone(), name))
+            })
+            .collect()
     }
 
     fn index_tokens(&self) {
         let mut idx = HashMap::new();
-        if let Ok(dir) = std::fs::read_dir(self.paths.sandboxes()) {
-            for e in dir.flatten() {
-                let p = e.path();
-                let Some(name) = p.file_stem().and_then(|s| s.to_str()) else { continue };
-                if p.extension().is_none_or(|x| x != "json") {
-                    continue;
-                }
-                let rec: SandboxRecord = read_json(&p);
+        for host in self.hosts() {
+            for sb in self.records_of(&host) {
+                let rec: SandboxRecord = read_json(&self.record_path(&sb));
                 if let Some(t) = rec.token {
-                    idx.insert(t, name.to_string());
+                    idx.insert(t, sb);
                 }
             }
         }
@@ -254,32 +302,39 @@ impl Store {
     }
 
     /// The record, rebuilt from the old layout when there is no new one.
-    pub fn get(&self, name: &str) -> SandboxRecord {
-        let path = self.record_path(name);
+    pub fn get(&self, sb: impl Into<SandboxRef>) -> SandboxRecord {
+        let sb = sb.into();
+        let path = self.record_path(&sb);
         if path.exists() {
             return read_json(&path);
         }
-        self.legacy(name)
+        if sb.is_local() {
+            return self.legacy(&sb.name);
+        }
+        SandboxRecord::default()
     }
 
-    pub fn exists(&self, name: &str) -> bool {
-        self.record_path(name).exists() || self.paths.state().join(format!("{name}.workspace")).exists()
+    pub fn exists(&self, sb: impl Into<SandboxRef>) -> bool {
+        let sb = sb.into();
+        self.record_path(&sb).exists()
+            || (sb.is_local() && self.paths.state().join(format!("{}.workspace", sb.name)).exists())
     }
 
     /// Change a record and write it back.
-    pub fn update<T>(&self, name: &str, f: impl FnOnce(&mut SandboxRecord) -> T) -> Result<T> {
+    pub fn update<T>(&self, sb: impl Into<SandboxRef>, f: impl FnOnce(&mut SandboxRecord) -> T) -> Result<T> {
+        let sb = sb.into();
         let _guard = self.lock.lock().unwrap();
-        let mut rec = self.get(name);
+        let mut rec = self.get(&sb);
         let before_token = rec.token.clone();
         let out = f(&mut rec);
-        write_atomic(&self.record_path(name), &serde_json::to_vec_pretty(&rec)?)?;
+        write_atomic(&self.record_path(&sb), &serde_json::to_vec_pretty(&rec)?)?;
         if rec.token != before_token {
             let mut idx = self.tokens.lock().unwrap();
             if let Some(old) = before_token {
                 idx.remove(&old);
             }
             if let Some(new) = &rec.token {
-                idx.insert(new.clone(), name.to_string());
+                idx.insert(new.clone(), sb.clone());
             }
         }
         Ok(out)
@@ -291,85 +346,91 @@ impl Store {
     /// have changed (the CLI mints a token under `--no-web`, `sbxw rm` forgets
     /// one): a hit is confirmed against the record, and a miss or a mismatch
     /// re-reads the records once.
-    pub fn sandbox_for_token(&self, token: &str) -> Option<SandboxName> {
+    pub fn sandbox_for_token(&self, token: &str) -> Option<SandboxRef> {
         let lookup = |s: &Self| {
             let idx = s.tokens.lock().unwrap();
             idx.iter()
                 .find(|(t, _)| sbxw_core::ids::same_secret(t, token))
                 .map(|(_, name)| name.clone())
         };
-        let confirmed = |name: &str| {
-            self.get(name).token.is_some_and(|t| sbxw_core::ids::same_secret(&t, token))
+        let confirmed = |sb: &SandboxRef| {
+            self.get(sb).token.is_some_and(|t| sbxw_core::ids::same_secret(&t, token))
         };
-        let name = match lookup(self) {
-            Some(n) if confirmed(&n) => n,
+        match lookup(self) {
+            Some(n) if confirmed(&n) => Some(n),
             _ => {
                 self.index_tokens();
-                lookup(self).filter(|n| confirmed(n))?
+                lookup(self).filter(|n| confirmed(n))
             }
-        };
-        SandboxName::parse(&name).ok()
+        }
     }
 
     /// This sandbox's token, minted on first use.
-    pub fn token(&self, name: &str) -> Result<String> {
-        if let Some(t) = self.get(name).token {
+    pub fn token(&self, sb: impl Into<SandboxRef>) -> Result<String> {
+        let sb = sb.into();
+        if let Some(t) = self.get(&sb).token {
             return Ok(t);
         }
-        self.update(name, |r| r.token.get_or_insert_with(sbxw_core::ids::agent_token).clone())
+        self.update(&sb, |r| r.token.get_or_insert_with(sbxw_core::ids::agent_token).clone())
     }
 
-    pub fn workspace(&self, name: &str) -> Option<PathBuf> {
-        self.get(name).workspace
+    pub fn workspace(&self, sb: impl Into<SandboxRef>) -> Option<PathBuf> {
+        self.get(sb).workspace
     }
 
     /// The chat workspace this sandbox owns — its own directory under the chat
     /// root, named after it. A duplicate of a chat sandbox points at the
-    /// source's directory and is not a chat any more.
-    pub fn chat_workspace(&self, name: &str) -> Option<PathBuf> {
-        self.workspace(name)
+    /// source's directory and is not a chat any more. Only a local sandbox
+    /// has one.
+    pub fn chat_workspace(&self, sb: impl Into<SandboxRef>) -> Option<PathBuf> {
+        let sb = sb.into();
+        if !sb.is_local() {
+            return None;
+        }
+        self.workspace(&sb)
             .filter(|w| w.starts_with(&self.paths.chat_root))
-            .filter(|w| w.file_name().is_some_and(|n| n == name))
+            .filter(|w| w.file_name().is_some_and(|n| n == sb.name.as_str()))
     }
 
-    /// Everything kept about `name`, gone. Best effort: the sandbox is already
-    /// removed when this runs.
-    pub fn forget(&self, name: &str) {
+    /// Everything kept about a sandbox, gone. Best effort: the sandbox is
+    /// already removed when this runs.
+    pub fn forget(&self, sb: impl Into<SandboxRef>) {
+        let sb = sb.into();
         let _guard = self.lock.lock().unwrap();
-        if let Some(t) = self.get(name).token {
+        if let Some(t) = self.get(&sb).token {
             self.tokens.lock().unwrap().remove(&t);
         }
-        for dir in [self.paths.oauth_kit(name), self.paths.env_dir(name)] {
+        for dir in [self.paths.oauth_kit(&sb), self.paths.env_dir(&sb)] {
             let _ = std::fs::remove_dir_all(dir);
         }
-        let s = self.paths.state();
-        for file in [
-            self.record_path(name),
-            s.join(format!("{name}.workspace")),
-            s.join(format!("{name}.model-migrated")),
-            s.join("threads").join(format!("{name}.json")),
-        ] {
-            let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_file(self.record_path(&sb));
+        if sb.is_local() {
+            let s = self.paths.state();
+            let name = &sb.name;
+            for file in [
+                s.join(format!("{name}.workspace")),
+                s.join(format!("{name}.model-migrated")),
+                s.join("threads").join(format!("{name}.json")),
+            ] {
+                let _ = std::fs::remove_file(file);
+            }
         }
     }
 
-    /// Every name that has a record (or an old-layout workspace file).
-    pub fn names(&self) -> Vec<String> {
-        let mut out: Vec<String> = std::fs::read_dir(self.paths.sandboxes())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let p = e.path();
-                (p.extension()? == "json").then(|| p.file_stem()?.to_str().map(str::to_string))?
-            })
-            .collect();
-        out.sort();
+    /// Every sandbox that has a record, local ones first, each host sorted.
+    pub fn names(&self) -> Vec<SandboxRef> {
+        let mut out = Vec::new();
+        for host in self.hosts() {
+            let mut refs = self.records_of(&host);
+            refs.sort();
+            out.extend(refs);
+        }
         out
     }
 
-    /// A record rebuilt from the files an older sbxw wrote.
-    fn legacy(&self, name: &str) -> SandboxRecord {
+    /// A record rebuilt from the files an older sbxw wrote (local only: no
+    /// older sbxw knew another host).
+    fn legacy(&self, name: &SandboxName) -> SandboxRecord {
         let s = self.paths.state();
         let workspace = std::fs::read_to_string(s.join(format!("{name}.workspace")))
             .ok()
@@ -385,7 +446,7 @@ impl Store {
         let threads: BTreeMap<String, Old> = read_json(&s.join("threads").join(format!("{name}.json")));
         let chat = workspace
             .as_ref()
-            .is_some_and(|w| w.starts_with(&self.paths.chat_root) && w.file_name().is_some_and(|n| n == name));
+            .is_some_and(|w| w.starts_with(&self.paths.chat_root) && w.file_name().is_some_and(|n| n == name.as_str()));
         SandboxRecord {
             workspace,
             config: None,
@@ -464,8 +525,8 @@ impl Store {
 
     /// Write the volumes kit for `name`, rewritten only when its list changed
     /// (a rewrite is another kit to sbx, whose storage it would not find).
-    pub fn write_volumes_kit(&self, name: &str, paths: &[String]) -> Result<PathBuf> {
-        let dir = self.paths.volumes_kit(name);
+    pub fn write_volumes_kit(&self, sb: impl Into<SandboxRef>, paths: &[String]) -> Result<PathBuf> {
+        let dir = self.paths.volumes_kit(sb);
         let spec = sbxw_core::kits::volumes_kit_spec(paths);
         let file = dir.join("spec.yaml");
         if std::fs::read_to_string(&file).ok().as_deref() != Some(spec.as_str()) {
@@ -476,8 +537,8 @@ impl Store {
 
     /// Write the OAuth mixin kit for `name` (0600 spec in a 0700 directory),
     /// at the stable path sbx will re-resolve.
-    pub fn write_oauth_kit(&self, name: &str, credentials_json: Option<&str>) -> Result<PathBuf> {
-        let dir = self.paths.oauth_kit(name);
+    pub fn write_oauth_kit(&self, sb: impl Into<SandboxRef>, credentials_json: Option<&str>) -> Result<PathBuf> {
+        let dir = self.paths.oauth_kit(sb);
         write_atomic(&dir.join("spec.yaml"), sbxw_core::kits::oauth_kit_spec(credentials_json).as_bytes())?;
         Ok(dir)
     }
@@ -486,6 +547,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn r(raw: &str) -> SandboxRef {
+        SandboxRef::parse(raw).unwrap()
+    }
 
     fn store() -> (tempfile::TempDir, Store) {
         let d = tempfile::tempdir().unwrap();
@@ -496,38 +561,38 @@ mod tests {
     #[test]
     fn a_record_round_trips_and_indexes_its_token() {
         let (_d, s) = store();
-        s.update("neos", |r| r.workspace = Some("/w".into())).unwrap();
-        let t = s.token("neos").unwrap();
-        assert_eq!(s.token("neos").unwrap(), t, "minted once");
-        assert_eq!(s.sandbox_for_token(&t).unwrap().as_str(), "neos");
+        s.update(r("neos"), |r| r.workspace = Some("/w".into())).unwrap();
+        let t = s.token(r("neos")).unwrap();
+        assert_eq!(s.token(r("neos")).unwrap(), t, "minted once");
+        assert_eq!(s.sandbox_for_token(&t).unwrap(), r("neos"));
         assert!(s.sandbox_for_token("sbxw_nope").is_none());
         let reopened = Store::open(s.paths.clone());
-        assert_eq!(reopened.sandbox_for_token(&t).unwrap().as_str(), "neos");
+        assert_eq!(reopened.sandbox_for_token(&t).unwrap(), r("neos"));
     }
 
     #[test]
     fn a_token_another_process_minted_or_forgot_is_seen() {
         let (_d, daemon) = store();
         let cli = Store::open(daemon.paths.clone());
-        let t = cli.token("neos").unwrap();
-        assert_eq!(daemon.sandbox_for_token(&t).unwrap().as_str(), "neos", "minted elsewhere");
-        cli.forget("neos");
+        let t = cli.token(r("neos")).unwrap();
+        assert_eq!(daemon.sandbox_for_token(&t).unwrap(), r("neos"), "minted elsewhere");
+        cli.forget(r("neos"));
         assert!(daemon.sandbox_for_token(&t).is_none(), "forgotten elsewhere");
     }
 
     #[test]
     fn forgetting_removes_every_trace() {
         let (_d, s) = store();
-        let t = s.token("neos").unwrap();
-        s.write_oauth_kit("neos", Some("{}")).unwrap();
-        std::fs::create_dir_all(s.paths.env_dir("neos")).unwrap();
-        s.write_volumes_kit("neos", &["/home/agent/.npm".into()]).unwrap();
-        s.forget("neos");
-        assert!(!s.exists("neos"));
-        assert!(!s.paths.oauth_kit("neos").exists());
-        assert!(!s.paths.env_dir("neos").exists());
+        let t = s.token(r("neos")).unwrap();
+        s.write_oauth_kit(r("neos"), Some("{}")).unwrap();
+        std::fs::create_dir_all(s.paths.env_dir(r("neos"))).unwrap();
+        s.write_volumes_kit(r("neos"), &["/home/agent/.npm".into()]).unwrap();
+        s.forget(r("neos"));
+        assert!(!s.exists(r("neos")));
+        assert!(!s.paths.oauth_kit(r("neos")).exists());
+        assert!(!s.paths.env_dir(r("neos")).exists());
         assert!(s.sandbox_for_token(&t).is_none());
-        assert!(s.paths.volumes_kit("neos").join("spec.yaml").exists(), "sbx reattaches the volumes to the same kit");
+        assert!(s.paths.volumes_kit(r("neos")).join("spec.yaml").exists(), "sbx reattaches the volumes to the same kit");
     }
 
     #[test]
@@ -542,7 +607,7 @@ mod tests {
             r#"{"api":"backend","ui":{"repo":"","model":"claude-opus-5-5"}}"#,
         )
         .unwrap();
-        let r = s.get("neos");
+        let r = s.get(r("neos"));
         assert_eq!(r.workspace.as_deref(), Some(Path::new("/w/neos")));
         assert!(r.model_migrated);
         assert_eq!(r.threads["api"].repo, "backend");
@@ -552,11 +617,11 @@ mod tests {
     #[test]
     fn files_are_private() {
         let (_d, s) = store();
-        s.token("neos").unwrap();
+        s.token(r("neos")).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let f = s.record_path("neos");
+            let f = s.record_path(&r("neos"));
             assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
             let d = f.parent().unwrap();
             assert_eq!(std::fs::metadata(d).unwrap().permissions().mode() & 0o777, 0o700);
@@ -566,11 +631,52 @@ mod tests {
     #[test]
     fn chat_workspaces_are_their_own_directory() {
         let (_d, s) = store();
-        let own = s.paths.chat_workspace("chat-1");
-        s.update("chat-1", |r| r.workspace = Some(own.clone())).unwrap();
-        s.update("dup", |r| r.workspace = Some(own.clone())).unwrap();
-        assert_eq!(s.chat_workspace("chat-1"), Some(own));
-        assert_eq!(s.chat_workspace("dup"), None);
+        let own = s.paths.chat_workspace(&r("chat-1").name);
+        s.update(r("chat-1"), |r| r.workspace = Some(own.clone())).unwrap();
+        s.update(r("dup"), |r| r.workspace = Some(own.clone())).unwrap();
+        assert_eq!(s.chat_workspace(r("chat-1")), Some(own));
+        assert_eq!(s.chat_workspace(r("dup")), None);
+    }
+
+    #[test]
+    fn a_remote_sandbox_is_filed_under_its_host() {
+        let (_d, s) = store();
+        let local = r("neos");
+        let remote = r("buildbox~neos");
+        s.update(&local, |r| r.workspace = Some("/w/local".into())).unwrap();
+        s.update(&remote, |r| r.workspace = Some("/w/remote".into())).unwrap();
+        let st = s.paths.state();
+        assert!(st.join("sandboxes/neos.json").exists(), "local layout unchanged");
+        assert!(st.join("hosts/buildbox/sandboxes/neos.json").exists());
+        assert_eq!(s.workspace(&local).as_deref(), Some(Path::new("/w/local")));
+        assert_eq!(s.workspace(&remote).as_deref(), Some(Path::new("/w/remote")), "same name, separate record");
+        assert_eq!(s.names(), vec![local.clone(), remote.clone()], "local first, then each host");
+
+        let t = s.token(&remote).unwrap();
+        assert_eq!(s.sandbox_for_token(&t), Some(remote.clone()));
+        let reopened = Store::open(s.paths.clone());
+        assert_eq!(reopened.sandbox_for_token(&t), Some(remote.clone()), "indexed from the host's directory");
+
+        s.write_oauth_kit(&remote, None).unwrap();
+        std::fs::create_dir_all(s.paths.env_dir(&remote)).unwrap();
+        assert!(st.join("hosts/buildbox/kits/neos-oauth/spec.yaml").exists());
+        assert!(st.join("hosts/buildbox/env/neos").exists());
+        assert_eq!(s.paths.oauth_kit(&local), st.join("kits/neos-oauth"), "local kits unchanged");
+
+        s.forget(&remote);
+        assert!(!s.exists(&remote));
+        assert!(!st.join("hosts/buildbox/kits/neos-oauth").exists());
+        assert!(s.sandbox_for_token(&t).is_none());
+        assert!(s.exists(&local), "forgetting the remote one leaves the local one");
+        assert_eq!(s.chat_workspace(&remote), None);
+    }
+
+    #[test]
+    fn local_tilde_is_the_local_record() {
+        let (_d, s) = store();
+        s.update(r("local~neos"), |r| r.chat = true).unwrap();
+        assert!(s.paths.state().join("sandboxes/neos.json").exists());
+        assert!(s.get(r("neos")).chat);
     }
 
     #[test]

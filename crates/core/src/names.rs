@@ -119,6 +119,174 @@ impl<'de> Deserialize<'de> for ModelId {
     }
 }
 
+/// The host the daemon runs on. Reserved: no remote host may take this name.
+pub const LOCAL_HOST: &str = "local";
+
+/// What separates a host from a sandbox in a ref. URL-safe (unreserved in
+/// RFC 3986, left alone by `encodeURIComponent`) and outside the name
+/// alphabet, so a ref splits in exactly one place.
+pub const REF_SEP: char = '~';
+
+pub const INVALID_HOST_NAME: &str =
+    "a host name is 1–63 letters, digits and hyphens, and must not end with a hyphen";
+
+/// Why an operation on a remote sandbox was refused in this phase.
+pub const REMOTE_NOT_WIRED: &str = "remote hosts are not wired yet";
+
+/// A host sandboxes run on, valid by construction: the sandbox-name rule.
+/// `local` is the daemon's own machine.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct HostName(String);
+
+impl HostName {
+    pub fn parse(raw: &str) -> Result<Self, NameError> {
+        let raw = raw.trim();
+        if is_valid_sandbox_name(raw) {
+            Ok(Self(raw.to_string()))
+        } else {
+            Err(NameError(INVALID_HOST_NAME))
+        }
+    }
+
+    pub fn local() -> Self {
+        Self(LOCAL_HOST.into())
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.0 == LOCAL_HOST
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for HostName {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        HostName::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A sandbox, wherever it runs: the key sbxw files everything under.
+///
+/// Text form: `neos` for a local sandbox — byte-identical to the bare name, so
+/// every key, file and URL a local sandbox had stays what it was — and
+/// `buildbox~neos` for one on host `buildbox`. `local~neos` is accepted and
+/// means `neos`.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SandboxRef {
+    pub host: HostName,
+    pub name: SandboxName,
+}
+
+impl SandboxRef {
+    pub fn new(host: HostName, name: SandboxName) -> Self {
+        Self { host, name }
+    }
+
+    pub fn local(name: SandboxName) -> Self {
+        Self { host: HostName::local(), name }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, NameError> {
+        let raw = raw.trim();
+        match raw.split_once(REF_SEP) {
+            None => Ok(Self::local(SandboxName::parse(raw)?)),
+            Some((host, name)) => {
+                if name.contains(REF_SEP) {
+                    return Err(NameError(INVALID_SANDBOX_NAME));
+                }
+                // Trimmed as a whole, not per part: `a ~b` is not a ref.
+                if host != host.trim() || name != name.trim() {
+                    return Err(NameError(INVALID_SANDBOX_NAME));
+                }
+                Ok(Self::new(HostName::parse(host)?, SandboxName::parse(name)?))
+            }
+        }
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.host.is_local()
+    }
+
+    /// The sandbox's name, if it is one this phase can act on.
+    pub fn local_name(&self) -> Result<&SandboxName, NameError> {
+        if self.is_local() {
+            Ok(&self.name)
+        } else {
+            Err(NameError(REMOTE_NOT_WIRED))
+        }
+    }
+}
+
+impl From<SandboxName> for SandboxRef {
+    fn from(name: SandboxName) -> Self {
+        Self::local(name)
+    }
+}
+
+impl From<&SandboxRef> for SandboxRef {
+    fn from(r: &SandboxRef) -> Self {
+        r.clone()
+    }
+}
+
+impl From<&SandboxName> for SandboxRef {
+    fn from(name: &SandboxName) -> Self {
+        Self::local(name.clone())
+    }
+}
+
+impl fmt::Display for SandboxRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_local() {
+            f.write_str(self.name.as_str())
+        } else {
+            write!(f, "{}{REF_SEP}{}", self.host.as_str(), self.name.as_str())
+        }
+    }
+}
+
+impl fmt::Debug for SandboxRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.to_string(), f)
+    }
+}
+
+impl PartialEq<str> for SandboxRef {
+    fn eq(&self, other: &str) -> bool {
+        SandboxRef::parse(other).is_ok_and(|o| &o == self)
+    }
+}
+
+impl PartialEq<&str> for SandboxRef {
+    fn eq(&self, other: &&str) -> bool {
+        self == *other
+    }
+}
+
+impl Serialize for SandboxRef {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for SandboxRef {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        SandboxRef::parse(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::str::FromStr for SandboxRef {
+    type Err = NameError;
+    fn from_str(s: &str) -> Result<Self, NameError> {
+        Self::parse(s)
+    }
+}
+
 macro_rules! string_like {
     ($($t:ty),*) => {$(
         impl fmt::Display for $t {
@@ -155,6 +323,17 @@ macro_rules! string_like {
     )*};
 }
 string_like!(SandboxName, ThreadName, ModelId);
+
+impl fmt::Display for HostName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl fmt::Debug for HostName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
 
 /// Why a name was refused, in words a person can act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,6 +529,62 @@ mod tests {
         assert_eq!(next_chat_session(["chat-2", "t1"]).as_str(), "chat-3");
         assert_eq!(next_chat_session(["chat-3"]).as_str(), "chat-2", "a freed name is reused");
         assert!(is_valid_thread_name(next_chat_session(["chat-2"]).as_str()));
+    }
+
+
+    #[test]
+    fn a_ref_parses_local_and_remote_forms() {
+        let l = SandboxRef::parse("neos").unwrap();
+        assert!(l.is_local());
+        assert_eq!(l.name.as_str(), "neos");
+        assert_eq!(l.to_string(), "neos", "local is byte-identical to the bare name");
+        let n = SandboxRef::parse("local~neos").unwrap();
+        assert_eq!(n, l, "local~ is normalised");
+        assert_eq!(n.to_string(), "neos");
+        let r = SandboxRef::parse("buildbox~neos").unwrap();
+        assert!(!r.is_local());
+        assert_eq!(r.host.as_str(), "buildbox");
+        assert_eq!(r.to_string(), "buildbox~neos");
+        assert_ne!(r, l);
+        assert_eq!(SandboxRef::parse(" buildbox~neos ").unwrap(), r, "trimmed at the door");
+    }
+
+    #[test]
+    fn a_ref_round_trips_through_text_and_serde() {
+        for raw in ["neos", "buildbox~neos", "h-1~a-2"] {
+            let r = SandboxRef::parse(raw).unwrap();
+            assert_eq!(SandboxRef::parse(&r.to_string()).unwrap(), r);
+            let json = serde_json::to_string(&r).unwrap();
+            assert_eq!(json, format!("\"{raw}\""));
+            assert_eq!(serde_json::from_str::<SandboxRef>(&json).unwrap(), r);
+        }
+        assert_eq!(serde_json::to_string(&SandboxRef::parse("local~x").unwrap()).unwrap(), "\"x\"");
+    }
+
+    #[test]
+    fn bad_refs_are_refused() {
+        for bad in ["", "~", "~neos", "box~", "a~b~c", "bad host~neos", "box~ne os", "box-~neos", "box~neos-", "a ~b", "a~ b", "__host__", "box~__host__"] {
+            assert!(SandboxRef::parse(bad).is_err(), "{bad:?}");
+        }
+        assert!(SandboxRef::parse(&format!("{}~n", "h".repeat(64))).is_err());
+        assert!(serde_json::from_str::<SandboxRef>("\"a~b~c\"").is_err());
+    }
+
+    #[test]
+    fn only_a_local_ref_can_be_acted_on() {
+        assert_eq!(SandboxRef::parse("neos").unwrap().local_name().unwrap().as_str(), "neos");
+        let e = SandboxRef::parse("buildbox~neos").unwrap().local_name().unwrap_err();
+        assert_eq!(e.0, REMOTE_NOT_WIRED);
+        assert!(HostName::local().is_local());
+        assert!(!HostName::parse("buildbox").unwrap().is_local());
+    }
+
+    #[test]
+    fn a_ref_compares_with_its_text() {
+        let r = SandboxRef::parse("buildbox~neos").unwrap();
+        assert!(r == "buildbox~neos");
+        assert!(SandboxRef::parse("neos").unwrap() == "local~neos");
+        assert!(r != "neos");
     }
 
     #[test]

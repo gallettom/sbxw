@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use sbxw_core::plans::{DistillItem, PlanThread, ThreadState, Variant};
 use sbxw_core::relay::{agent_view, RelayKind};
 use sbxw_core::usage::Reading;
-use sbxw_core::{SandboxName, ThreadName};
+use sbxw_core::{SandboxName, SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -188,7 +188,7 @@ struct DoneBody {
 /// The agent says the document is written. The path names a sandbox, and it
 /// has to be the caller's own.
 async fn codemap_done(State(app): S, Agent(me): Agent, Path(name): Path<String>, body: Option<Json<DoneBody>>) -> ApiResult {
-    if me.as_str() != name {
+    if SandboxRef::parse(&name).ok() != Some(SandboxRef::local(me.clone())) {
         return Err(ApiError::forbidden(format!("'{me}' cannot report for '{name}'")));
     }
     let b = body.map(|Json(b)| b).unwrap_or_default();

@@ -242,7 +242,7 @@ impl App {
             self.briefings
                 .lock()
                 .unwrap()
-                .insert((sandbox.to_string(), name.to_string()), messages::thread_briefing(&plan, t));
+                .insert(((&sandbox).into(), name.to_string()), messages::thread_briefing(&plan, t));
         }
         for t in plan.threads.clone() {
             let app = self.clone();
@@ -260,7 +260,7 @@ impl App {
             Ok((session, _)) => {
                 // Still here: the session was already running and never read its
                 // briefing as a start prompt — type it in instead.
-                let unread = self.briefings.lock().unwrap().remove(&(sandbox.to_string(), name.to_string()));
+                let unread = self.briefings.lock().unwrap().remove(&(sandbox.into(), name.to_string()));
                 match unread {
                     Some(b) => crate::typing::type_and_submit(&session, &b, false).await,
                     None => Ok(()),
@@ -565,14 +565,14 @@ impl App {
         }
         self.push_text(sandbox, SessionKind::Agent, messages::LEAD_COMMAND).await?;
         if let Some(s) = self.sessions.live(&SessionKey::agent(sandbox)) {
-            self.leads.lock().unwrap().insert(sandbox.to_string(), Arc::as_ptr(&s) as usize);
-            self.send(Event::Lead(sandbox.to_string()));
+            self.leads.lock().unwrap().insert(sandbox.into(), Arc::as_ptr(&s) as usize);
+            self.send(Event::Lead(sandbox.into()));
         }
         Ok(())
     }
 
     pub async fn lead_end(self: &Arc<Self>, sandbox: &SandboxName) {
-        self.leads.lock().unwrap().remove(sandbox.as_str());
+        self.leads.lock().unwrap().remove(&sandbox.into());
         let ended = self.plans.lock().unwrap().end_lead(sandbox, now_ms());
         tracing::info!("plans: lead mode ended for '{sandbox}' ({} plan(s) refused or closed)", ended.len());
         for p in ended {
@@ -583,19 +583,18 @@ impl App {
                 tracing::warn!("plans: could not tell '{sandbox}' that lead mode ended: {e}");
             }
         }
-        self.send(Event::LeadEnd(sandbox.to_string()));
+        self.send(Event::LeadEnd(sandbox.into()));
     }
 
     /// Sandboxes whose main session is still the very session made lead.
     pub fn leading(&self) -> Vec<String> {
         let mut leads = self.leads.lock().unwrap();
-        leads.retain(|name, ptr| {
-            SandboxName::parse(name)
-                .ok()
-                .and_then(|n| self.sessions.live(&SessionKey::agent(&n)))
+        leads.retain(|sb, ptr| {
+            self.sessions
+                .live(&SessionKey::agent(sb))
                 .is_some_and(|s| Arc::as_ptr(&s) as usize == *ptr)
         });
-        let mut out: Vec<String> = leads.keys().cloned().collect();
+        let mut out: Vec<String> = leads.keys().map(|r| r.to_string()).collect();
         out.sort();
         out
     }
@@ -613,7 +612,7 @@ mod tests {
     async fn a_chat_session_without_a_repo_still_closes() {
         let (_d, app) = app();
         let name = SandboxName::parse("ephemeral-chat").unwrap();
-        let ws = app.store.paths.chat_workspace(name.as_str());
+        let ws = app.store.paths.chat_workspace(&name);
         std::fs::create_dir_all(&ws).unwrap();
         let thread = sbxw_core::ThreadName::parse("chat-2").unwrap();
         app.store

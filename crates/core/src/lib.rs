@@ -38,4 +38,4 @@ pub mod terminal;
 pub mod tooling;
 pub mod usage;
 
-pub use names::{ModelId, SandboxName, ThreadName};
+pub use names::{HostName, ModelId, SandboxName, SandboxRef, ThreadName};

@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use sbxw_core::board::{Kind, LEAD};
-use sbxw_core::{SandboxName, ThreadName};
+use sbxw_core::{SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -167,7 +167,7 @@ async fn approve_extension(State(app): S, Agent(me): Agent, Json(b): Json<Body>)
 }
 
 async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {
-    let name = SandboxName::parse(&name)?;
+    let name = SandboxRef::parse(&name)?.local_name()?.clone();
     Ok(Json(app.board_ui_view(&name)))
 }
 
@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn a_claimed_path_is_refused_to_another_thread_and_the_ui_sees_it() {
         let (_d, app) = app();
-        let token = app.store.token("neos").unwrap();
+        let token = app.store.token(sbxw_core::SandboxRef::parse("neos").unwrap()).unwrap();
         let agent = |path: &str, body: Value| {
             Request::builder()
                 .method("POST")
