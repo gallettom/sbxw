@@ -15,7 +15,7 @@ use sbxw_core::config::Config;
 use sbxw_core::plans::{Plan, PlanBook};
 use sbxw_core::relay::RelayBook;
 use sbxw_core::usage::Usage;
-use sbxw_core::SandboxName;
+use sbxw_core::{SandboxName, SandboxRef};
 use sbxw_sbx::Sbx;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
@@ -54,17 +54,18 @@ pub struct App {
     /// asking session instead, or it is never read.
     pub(crate) relay_waiters: Mutex<HashMap<String, usize>>,
     pub(crate) plans: Mutex<PlanBook>,
+    /// Keyed by the ref's text form, as the plans that own boards name it.
     pub(crate) boards: Mutex<HashMap<String, sbxw_core::board::Board>>,
     pub(crate) codemap: Mutex<RunBook>,
     pub(crate) usage: Mutex<Usage>,
     /// Sandboxes whose main session was made lead, and *which* session (its
     /// address): a restarted agent never read `/lead`.
-    pub(crate) leads: Mutex<HashMap<String, usize>>,
+    pub(crate) leads: Mutex<HashMap<SandboxRef, usize>>,
     pub(crate) hook_log: Mutex<VecDeque<serde_json::Value>>,
     pub(crate) stale_hooks: Mutex<HashSet<String>>,
     /// An approved plan's briefing, for a thread whose session has not
     /// started yet — handed to `open_session`, never typed into a boot.
-    pub(crate) briefings: Mutex<HashMap<(String, String), String>>,
+    pub(crate) briefings: Mutex<HashMap<(SandboxRef, String), String>>,
     /// `caffeinate`, the battery and who is on Remote Control.
     pub(crate) awake: Mutex<crate::svc::awake::Awake>,
 }

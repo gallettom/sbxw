@@ -7,7 +7,7 @@ use crate::bus::Event;
 use crate::store::write_atomic;
 use sbxw_core::board::{Board, ClaimOutcome, Entry, ExtendOutcome, Kind, Taken, LEAD};
 use sbxw_core::session::{SessionKey, SessionKind};
-use sbxw_core::SandboxName;
+use sbxw_core::{SandboxName, SandboxRef};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,8 +22,13 @@ pub type AfterCall = (Vec<String>, Vec<String>, Vec<Entry>);
 const TELL_LEAD_EVERY_MS: u64 = 10 * 60 * 1000;
 
 impl App {
+    /// `state/boards/<name>.json`, or the host's own `boards/` for a remote
+    /// sandbox. `sandbox` is a ref's text form, as a plan records it.
     fn board_path(&self, sandbox: &str) -> PathBuf {
-        self.store.paths.state().join("boards").join(format!("{sandbox}.json"))
+        match SandboxRef::parse(sandbox) {
+            Ok(r) => self.store.paths.host_state(&r.host).join("boards").join(format!("{}.json", r.name)),
+            Err(_) => self.store.paths.state().join("boards").join(format!("{sandbox}.json")),
+        }
     }
 
     fn load_board(&self, sandbox: &str) -> Board {
@@ -51,7 +56,9 @@ impl App {
         if let Err(e) = bytes.map_err(anyhow::Error::from).and_then(|b| write_atomic(&path, &b)) {
             tracing::warn!("board: could not save {}: {e:#}", path.display());
         }
-        self.send(Event::Board(sandbox.to_string()));
+        if let Ok(r) = SandboxRef::parse(sandbox) {
+            self.send(Event::Board(r));
+        }
         out
     }
 

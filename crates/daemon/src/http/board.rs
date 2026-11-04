@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use sbxw_core::board::{Kind, LEAD};
-use sbxw_core::{SandboxName, ThreadName};
+use sbxw_core::{SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -167,7 +167,7 @@ async fn approve_extension(State(app): S, Agent(me): Agent, Json(b): Json<Body>)
 }
 
 async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {
-    let name = SandboxName::parse(&name)?;
+    let name = SandboxRef::parse(&name)?.local_name()?.clone();
     Ok(Json(app.board_ui_view(&name)))
 }
 

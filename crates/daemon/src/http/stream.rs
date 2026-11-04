@@ -91,7 +91,7 @@ async fn stream(State(app): State<Arc<App>>) -> SseResponse {
 
 #[derive(Deserialize)]
 struct SandboxBody {
-    sandbox: String,
+    sandbox: sbxw_core::SandboxRef,
 }
 
 /// The island asks open tabs to show a sandbox; `clients` tells it whether a

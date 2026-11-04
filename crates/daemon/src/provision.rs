@@ -133,7 +133,7 @@ impl App {
     /// `Done` whichever way it went.
     pub async fn provision(self: &Arc<Self>, req: BringUp, extra: Option<Sink>) -> Result<Vec<String>> {
         let bus = self.bus.clone();
-        let name = req.name.to_string();
+        let name = sbxw_core::SandboxRef::local(req.name.clone());
         let sink: Sink = Arc::new(move |p: Progress| {
             if let Some(f) = &extra {
                 f(p.clone());

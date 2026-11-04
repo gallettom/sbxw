@@ -13,7 +13,7 @@ use sbxw_core::agents::SessionState;
 use sbxw_core::config::Config;
 use sbxw_core::{ports, remote};
 use sbxw_core::session::{SessionKey, SessionKind};
-use sbxw_core::{ModelId, SandboxName, ThreadName};
+use sbxw_core::{ModelId, SandboxName, SandboxRef, ThreadName};
 use sbxw_sbx::scripts;
 use std::sync::Arc;
 use std::time::Duration;
@@ -119,7 +119,7 @@ impl App {
                     .briefings
                     .lock()
                     .unwrap()
-                    .remove(&(sandbox.to_string(), thread.to_string()))
+                    .remove(&(SandboxRef::local(sandbox.clone()), thread.to_string()))
                     .unwrap_or_default();
                 // Spelled out even for the default: `sbx exec` carries the
                 // environment the sandbox was *created* with, which may name a

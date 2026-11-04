@@ -20,7 +20,7 @@ use sbxw_core::policy;
 use sbxw_core::ports::WantedPort;
 use sbxw_core::progress::Progress;
 use sbxw_core::session::{SessionKey, SessionKind};
-use sbxw_core::{names, ModelId, SandboxName, ThreadName};
+use sbxw_core::{names, ModelId, SandboxName, SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -29,8 +29,11 @@ use std::sync::Arc;
 
 type S = State<Arc<App>>;
 
-fn sandbox(name: &str) -> Result<SandboxName, ApiError> {
-    Ok(SandboxName::parse(name)?)
+/// A sandbox named on the wire, as a ref (`neos`, `buildbox~neos`), that
+/// this phase can act on: a remote one is refused with 501, `remote hosts
+/// are not wired yet`, since everything past here runs sbx, git or a PTY.
+fn sandbox(raw: &str) -> Result<SandboxName, ApiError> {
+    Ok(SandboxRef::parse(raw)?.local_name()?.clone())
 }
 
 fn non_blank(s: Option<String>) -> Option<String> {
@@ -1410,7 +1413,8 @@ struct InitialBody {
 
 /// The sandbox a freshly opened page shows (`sbxw web <name>`).
 async fn set_initial(State(app): S, Json(b): Json<InitialBody>) -> ApiResult {
-    let sb = sandbox(&b.sandbox)?;
+    // Any ref: the page opens on it, and a remote one's pane says what is missing.
+    let sb = SandboxRef::parse(&b.sandbox)?;
     *app.initial_sandbox.lock().unwrap() = sb.to_string();
     Ok(ok())
 }
