@@ -91,6 +91,7 @@ async fn index(State(app): State<Arc<App>>) -> impl IntoResponse {
             .replace("__MONITOR__", &monitor)
             .replace("__TERM_COLOR__", &app.cfg.terminal_color)
             .replace("__TERM_BAR_COLOR__", &app.cfg.terminal_bar_color)
+            .replace("__TERM_TEXT_COLOR__", &app.cfg.terminal_text_color)
             .replace("__SBXW_VERSION__", &app.versions.sbxw)
             .replace("__SBX_VERSION__", app.versions.sbx.as_deref().unwrap_or("")),
     )

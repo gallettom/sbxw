@@ -27,6 +27,7 @@ lists every key with its default.
 | `monitor_cmd` | `["sbx"]` | argv of the **Monitor Sandboxes** window, run on the host. `[]` hides the button |
 | `terminal_color` | `""` | Terminal background in the web UI, `#rrggbb`. Empty is the built-in `#0d1117`. The header's colour picker overrides it per browser |
 | `terminal_bar_color` | `""` | The bar above each terminal, `#rrggbb`. Empty is the built-in `darkslategrey`. Same picker, same override |
+| `terminal_text_color` | `""` | Terminal text: the default foreground and ANSI white / bright white, `#rrggbb` or `auto`. Empty is `auto` (light or dark, following the background). Same picker, same override. Text printed in an explicit 24-bit colour is not affected |
 | `max_agent_sessions` | `4` | Agent + [threads](threads-and-lead.md) one sandbox may hold open |
 | `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |

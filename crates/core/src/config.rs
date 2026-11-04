@@ -87,6 +87,9 @@ pub struct Config {
     pub terminal_color: String,
     /// The bar above each terminal, `#rrggbb`; empty keeps darkslategrey.
     pub terminal_bar_color: String,
+    /// Terminal text (default foreground and ANSI white), `#rrggbb` or `auto`;
+    /// empty is `auto`, which follows the background's lightness.
+    pub terminal_text_color: String,
     /// Environment baked in at creation and re-applied on every attach.
     pub env: BTreeMap<String, String>,
     /// `--env-file`s, in order.
@@ -177,6 +180,7 @@ impl Default for Config {
             monitor_cmd: vec!["sbx".into()],
             terminal_color: String::new(),
             terminal_bar_color: String::new(),
+            terminal_text_color: String::new(),
             env: BTreeMap::new(),
             env_files: vec![],
             source: None,
@@ -312,6 +316,10 @@ impl Config {
             if !v.is_empty() && !is_hex_color(v) {
                 bail!("{key} = {v:?} — expected #rrggbb");
             }
+        }
+        let t = &self.terminal_text_color;
+        if !t.is_empty() && t != "auto" && !is_hex_color(t) {
+            bail!("terminal_text_color = {t:?} — expected #rrggbb or auto");
         }
         for (key, v) in [("keep_awake_min_battery", self.keep_awake_min_battery), ("battery_warn_below", self.battery_warn_below)] {
             if v > 100 {
@@ -490,6 +498,13 @@ mod tests {
             cfg.terminal_bar_color = bad.into();
             assert!(cfg.validate().is_err(), "{bad} was accepted as a bar colour");
             cfg.terminal_bar_color = String::new();
+            cfg.terminal_text_color = bad.into();
+            assert!(cfg.validate().is_err(), "{bad} was accepted as a text colour");
+            cfg.terminal_text_color = String::new();
+        }
+        for good in ["auto", "#FFFFFF"] {
+            cfg.terminal_text_color = good.into();
+            assert!(cfg.validate().is_ok(), "{good} was refused as a text colour");
         }
     }
 
