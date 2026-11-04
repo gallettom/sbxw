@@ -109,7 +109,7 @@ impl Runner for Process {
     }
 }
 
-async fn drain<R: tokio::io::AsyncRead + Unpin>(
+pub(crate) async fn drain<R: tokio::io::AsyncRead + Unpin>(
     pipe: Option<R>,
     sink: Option<LineSink>,
 ) -> Vec<u8> {

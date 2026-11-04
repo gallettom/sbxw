@@ -45,8 +45,10 @@
 //! * `policy allow|deny` refused with "managed by your organization" is a
 //!   governed host, not a broken one.
 
+pub mod host;
 pub mod runner;
 pub mod scripts;
+pub mod ssh;
 
 use anyhow::{anyhow, bail, Result};
 use runner::{Invocation, Output, Runner};
