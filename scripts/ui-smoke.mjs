@@ -70,6 +70,25 @@ await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first
   () => page.screenshot({ path: png.replace(/\.png$/, '-sidebar.png') }));
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
+// A reconnect (the pane's ↻) forces one full TUI repaint: a resize to one column
+// narrower, then straight back to the real size — see nudgePaneRepaint.
+const resizes = await page.evaluate(async () => {
+  const sent = [];
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (d) {
+    try { const m = JSON.parse(d); if (m.type === 'resize') sent.push(`${m.cols}x${m.rows}`); } catch (_) {}
+    return send.call(this, d);
+  };
+  recreatePaneTerminal(0);
+  await new Promise(r => setTimeout(r, 800));
+  WebSocket.prototype.send = send;
+  return { sent, now: `${panes[0].term.cols}x${panes[0].term.rows}`, tracked: panes[0].ws?.sentSize };
+});
+const [wide, narrow, last] = [resizes.now, resizes.sent.at(-2), resizes.sent.at(-1)];
+const [c, r] = (wide || '0x0').split('x').map(Number);
+if (narrow !== `${c - 1}x${r}` || last !== wide || resizes.tracked !== wide) {
+  problems.push(`reconnect repaint: sent resizes [${resizes.sent}], want ...,${c - 1}x${r},${wide} and sentSize ${wide} (got ${resizes.tracked})`);
+}
 await visit('Monitor', () => button(/^Monitor$/).click());
 await visit('Help', () => button(/^Help$/).click());
 // Setup is one dialog with a tab per part: open it, then walk the tabs.

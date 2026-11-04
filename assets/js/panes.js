@@ -418,6 +418,42 @@ function sendPaneResize(pane) {
   termLog(pane, 'resize sent');
 }
 
+// Make the program in the PTY redraw everything, once, after a fresh socket's
+// replay has gone into the terminal.
+//
+// The daemon replays only the last 256 KB of raw output, and a TUI like Claude
+// Code redraws incrementally (changed cells only), so that tail is often diffs
+// without the frame they apply to: a status line of stray digits, no box
+// borders — and ↻ replays the same bytes, so it looks identical. A resize is the
+// one thing that makes such a program repaint all of it (SIGWINCH), which is why
+// resizing the pane "fixes" it. So we resize by one column and straight back.
+// It is done for bash too: a shell prompt redraws harmlessly, and a full-screen
+// program run in it (vim, htop) has the same problem.
+//
+// Only here, once per socket — never from a tab focus or a refit, which is the
+// extra-SIGWINCH wave main.js's visibilitychange handler avoids. The replay is
+// sent right after the socket opens and has no end marker, so we give it a
+// moment to arrive; the repaint must land after it, or it would be drawn first
+// and then overwritten by stale diffs.
+const REPAINT_DELAY_MS = 150;
+const REPAINT_RESTORE_MS = 75;
+function nudgePaneRepaint(pane, ws) {
+  setTimeout(() => {
+    const live = () => pane.ws === ws && ws.readyState === WebSocket.OPEN;
+    // Nothing to nudge if the socket is gone, or if the size was never announced
+    // (no box to measure yet): the observer's first fit will do the announcing.
+    if (!live() || pane.term.cols < 3 || termSize(pane) !== ws.sentSize) return;
+    ws.send(JSON.stringify({ type: 'resize', cols: pane.term.cols - 1, rows: pane.term.rows }));
+    ws.sentSize = `${pane.term.cols - 1}x${pane.term.rows}`;
+    termLog(pane, 'repaint nudge sent');
+    setTimeout(() => {
+      // Always restore on a live socket, at whatever size the pane has by now:
+      // sentSize must never be left one column short.
+      if (live()) sendPaneResize(pane);
+    }, REPAINT_RESTORE_MS);
+  }, REPAINT_DELAY_MS);
+}
+
 // Sizing trace, off unless asked for: `sbxwTermLog()` turns it on and remembers
 // across reloads, `sbxwTermLog(false)` stops it, `sbxwSizes()` prints the current
 // state once. It answers the only question a terminal drawn at the wrong width
@@ -691,6 +727,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
     // size — unless the pane has no box to measure, in which case it declines
     // and the observer does it the moment there is one.
     fitPane(pane, 'socket open');
+    nudgePaneRepaint(pane, pane.ws);
     if (focusedPane === idx) pane.term.focus();
     loadSandboxes();
   };
