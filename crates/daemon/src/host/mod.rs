@@ -49,6 +49,7 @@ pub struct DirEntry {
 
 /// A host's filesystem. `async_trait` because it is used as `Arc<dyn HostFs>`.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait HostFs: Send + Sync {
     /// Follows symlinks; `None` = absent (including a dangling symlink).
     async fn stat(&self, p: &Path) -> Result<Option<Meta>>;
@@ -114,7 +115,7 @@ fn walk_into(dir: &Path, rel: &str, depth: usize, skip: &[String], out: &mut Vec
     for e in std::fs::read_dir(dir).with_context(|| dir.display().to_string())? {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
-        if skip.iter().any(|s| *s == name) {
+        if skip.contains(&name) {
             continue;
         }
         let meta = meta_of(&e.metadata()?);

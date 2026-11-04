@@ -65,6 +65,7 @@ impl fmt::Debug for HostCmd {
 /// `async_trait` for the same reason as [`Runner`]: it is used as
 /// `Arc<dyn HostExec>`.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait HostExec: Send + Sync {
     /// Ok(Output) whenever the command ran, whatever its exit code. Err only when the host
     /// could not be reached; that error must be a `HostUnreachable` (downcastable via anyhow).

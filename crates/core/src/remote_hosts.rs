@@ -9,6 +9,7 @@
 //! ssh = "buildbox"        # an alias from ~/.ssh/config, OR host/user/port/key
 //! agent_port = 7682       # default 7682
 //! trust_secrets = false   # default false
+//! sbx_path = "/opt/sbx/bin/sbx"   # default: `sbx` on the PATH ssh gives
 //! ```
 //!
 //! `key` is a PATH to an identity file; this module never holds a key or a
@@ -41,6 +42,9 @@ pub struct RemoteHost {
     pub target: Target,
     pub agent_port: u16,
     pub trust_secrets: bool,
+    /// The `sbx` to run there; `None` = `sbx` on the PATH a non-interactive
+    /// ssh session gets (often not the login PATH).
+    pub sbx_path: Option<String>,
 }
 
 /// The whole registry, ordered by name.
@@ -64,6 +68,7 @@ struct RawHost {
     key: Option<String>,
     agent_port: Option<u16>,
     trust_secrets: Option<bool>,
+    sbx_path: Option<String>,
 }
 
 /// A value that ends up as one ssh argument: non-empty, no whitespace or
@@ -135,7 +140,22 @@ impl RemoteHost {
         if agent_port == 0 {
             bail!("host '{name}': agent_port must be 1 to 65535");
         }
-        Ok(Self { name, target, agent_port, trust_secrets })
+        Ok(Self { name, target, agent_port, trust_secrets, sbx_path: None })
+    }
+
+    /// Set (or clear) the `sbx` to run on the host, checked like the other
+    /// words that reach ssh's command line.
+    pub fn with_sbx_path(mut self, sbx_path: Option<String>) -> Result<Self> {
+        if let Some(p) = &sbx_path {
+            check_word("sbx_path", p).map_err(|e| anyhow::anyhow!("host '{}': {e}", self.name))?;
+        }
+        self.sbx_path = sbx_path;
+        Ok(self)
+    }
+
+    /// The program to run for `sbx` on this host.
+    pub fn sbx_program(&self) -> &str {
+        self.sbx_path.as_deref().unwrap_or("sbx")
     }
 
     /// The name ssh connects to (alias or address), for display and ssh-keyscan.
@@ -176,7 +196,8 @@ impl RemoteHosts {
         let raw: RawFile = toml::from_str(text).map_err(|e| anyhow::anyhow!("hosts.toml: {e}"))?;
         let mut hosts = BTreeMap::new();
         for (name, r) in raw.hosts {
-            let h = RemoteHost::new(&name, r.ssh, r.host, r.user, r.port, r.key, r.agent_port, r.trust_secrets.unwrap_or(false))?;
+            let h = RemoteHost::new(&name, r.ssh, r.host, r.user, r.port, r.key, r.agent_port, r.trust_secrets.unwrap_or(false))?
+                .with_sbx_path(r.sbx_path)?;
             hosts.insert(name, h);
         }
         Ok(Self { hosts })
@@ -207,6 +228,9 @@ impl RemoteHosts {
             }
             out.push_str(&format!("agent_port = {}\n", h.agent_port));
             out.push_str(&format!("trust_secrets = {}\n", h.trust_secrets));
+            if let Some(p) = &h.sbx_path {
+                out.push_str(&format!("sbx_path = {}\n", q(p)));
+            }
         }
         out
     }
@@ -283,6 +307,19 @@ mod tests {
         let h = alias("x", "a").unwrap();
         assert_eq!(h.agent_port, 7682);
         assert!(!h.trust_secrets);
+        assert_eq!(h.sbx_path, None);
+        assert_eq!(h.sbx_program(), "sbx");
+    }
+
+    #[test]
+    fn sbx_path_is_checked_like_other_words() {
+        let h = alias("x", "a").unwrap().with_sbx_path(Some("/opt/sbx/bin/sbx".into())).unwrap();
+        assert_eq!(h.sbx_program(), "/opt/sbx/bin/sbx");
+        assert_eq!(h.clone().with_sbx_path(None).unwrap().sbx_path, None);
+        for bad in ["", "-x", "a b", "a\nb"] {
+            assert!(alias("x", "a").unwrap().with_sbx_path(Some(bad.into())).is_err(), "{bad:?}");
+        }
+        assert!(RemoteHosts::parse("[hosts.a]\nssh = \"x\"\nsbx_path = \"-oops\"\n").is_err());
     }
 
     #[test]
@@ -306,6 +343,7 @@ port = 2222
 key = "~/.ssh/id_ed25519"
 agent_port = 9000
 trust_secrets = true
+sbx_path = "/opt/sbx/bin/sbx"
 unknown = "dropped"
 
 [hosts.buildbox]
@@ -321,6 +359,9 @@ ssh = "buildbox"
         assert!(text.find("buildbox").unwrap() < text.find("zed").unwrap());
         let b = RemoteHosts::parse(&text).unwrap();
         assert_eq!(a, b);
+        assert_eq!(b.get("zed").unwrap().sbx_path.as_deref(), Some("/opt/sbx/bin/sbx"));
+        assert_eq!(b.get("buildbox").unwrap().sbx_path, None);
+        assert!(!text[..text.find("[hosts.zed]").unwrap()].contains("sbx_path"));
         assert_eq!(text, b.render());
     }
 
