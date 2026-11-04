@@ -196,6 +196,11 @@ enum Cmd {
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
     },
+    /// Remote hosts: the registry in ~/.sbxw/hosts.toml (not the /etc/hosts block).
+    Host {
+        #[command(subcommand)]
+        cmd: cmd::host::HostCmd,
+    },
     /// Stop the daemon and remove the /etc/hosts block; with a name, close
     /// that sandbox's terminals only.
     Down { name: Option<String> },
@@ -329,6 +334,7 @@ fn main() -> Result<()> {
         }
         Cmd::Env { cmd: EnvCmd::Export { path, name, config, out, force } } => cmd::env::export(path, name, config, out, force),
         Cmd::Hosts { action, config } => cmd::hosts(action.unwrap_or_default(), &config),
+        Cmd::Host { cmd } => cmd::host::run(cmd),
         Cmd::Doctor { config, json } => cmd::doctor::run(&config, json),
         Cmd::Template { cmd: TemplateCmd::Save { name, tag } } => cmd::template::save(&name, &tag),
         Cmd::Template { cmd: TemplateCmd::Ls } => cmd::template::ls(),

@@ -2,6 +2,7 @@
 
 pub mod doctor;
 pub mod env;
+pub mod host;
 pub mod template;
 
 use crate::client::Daemon;
