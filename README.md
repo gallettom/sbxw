@@ -74,6 +74,7 @@ or the published ports won't reach them.
 | [Configuration](docs/configuration.md) | Every `sbxw.toml` key, models, environment variables |
 | [Environment files](docs/environment-files.md) | `sbxw env run` / `sbxw env export` with `sbxenv.yaml` |
 | [SSH](docs/ssh.md) | `<name>.sbx` hosts, VS Code, Claude Desktop |
+| [Remote hosts](docs/remote-hosts.md) | EXPERIMENTAL: drive `sbx` on another machine, `sbxw host check` |
 | [Security](docs/security.md) | Trust boundaries, listeners, tokens, what a sandbox cannot do |
 | [Architecture](docs/architecture.md) | Crates, tests, `sbx` version floor, open questions |
 

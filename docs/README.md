@@ -17,6 +17,7 @@
 | [Relay](relay.md) | Questions between sandboxes, screenshot requests |
 | [Dynamic Island](island.md) | The macOS notch companion, session hooks, usage |
 | [SSH](ssh.md) | `<name>.sbx` hosts, VS Code, Claude Desktop |
+| [Remote hosts](remote-hosts.md) | EXPERIMENTAL: drive `sbx` on another machine, `sbxw host check` |
 
 ## Configure it
 
