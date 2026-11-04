@@ -38,8 +38,9 @@ while [ $# -gt 0 ]; do
           S) ctl="$value" ;;
           O) op="$value" ;;
         esac ;;
-      M) master=1 ;;
-      *) ;; # -N, -T, -tt, -q…: nothing to fake
+      *)
+        # -N, -T, -tt, -q…: nothing to fake
+        [ "$letter" = M ] && master=1 ;;
     esac
   done
 done
@@ -78,11 +79,10 @@ if [ "$master" = 1 ]; then
     exit 255
   fi
   echo $$ > "$ctl"
-  # `wait` returns on a trapped signal at once; a foreground sleep would not.
-  sleep 1000000 < /dev/null > /dev/null 2>&1 &
-  sp=$!
-  trap 'kill $sp 2>/dev/null; rm -f "$ctl"; exit 0' TERM INT HUP
-  wait $sp
+  trap 'rm -f "$ctl"; exit 0' TERM INT HUP
+  # Short sleeps, not one long one: a master killed hard (SIGKILL, as a
+  # dropped Link does) leaves its sleep behind, and this one ends soon.
+  while :; do sleep 0.1; done
   exit 0
 fi
 

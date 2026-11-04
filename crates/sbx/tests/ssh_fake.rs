@@ -5,7 +5,6 @@ use sbxw_core::remote_hosts::RemoteHost;
 use sbxw_sbx::host::{is_unreachable, HostCmd, HostExec};
 use sbxw_sbx::ssh::SshExec;
 use sbxw_sbx::Sbx;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -59,9 +58,19 @@ impl Drop for World {
     }
 }
 
+/// Written by a child `sh`, not by this process: a test on another thread may
+/// fork while we hold the file open for writing, and its child keeps that fd
+/// until it execs, which makes running the script fail with ETXTBSY.
 fn write_exe(p: &Path, body: &str) {
-    std::fs::write(p, body).unwrap();
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    use std::io::Write;
+    let mut c = std::process::Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        .arg(p)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(body.as_bytes()).unwrap();
+    assert!(c.wait().unwrap().success());
 }
 
 fn host() -> RemoteHost {
