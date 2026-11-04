@@ -345,14 +345,14 @@ mod tests {
     async fn a_second_run_copies_nothing_and_a_changed_kit_gets_a_new_directory() {
         let r = rig();
         let k = kit(&r.local, "kits/mine", &[("spec.yaml", "name: a\n", 0o644), ("bin/run.sh", "#!/bin/sh\n", 0o755)]);
-        let first = run(&r, &[k.clone()], false).await.unwrap();
+        let first = run(&r, std::slice::from_ref(&k), false).await.unwrap();
         assert_eq!(first.copied, first.refs);
         let dir = PathBuf::from(&first.refs[0]);
         assert!(dir.starts_with(r.remote.join("kits")));
         assert_eq!(std::fs::read_to_string(dir.join("spec.yaml")).unwrap(), "name: a\n");
         assert_eq!(std::fs::metadata(dir.join("bin/run.sh")).unwrap().permissions().mode() & 0o7777, 0o755);
 
-        let again = run(&r, &[k.clone()], false).await.unwrap();
+        let again = run(&r, std::slice::from_ref(&k), false).await.unwrap();
         assert_eq!(again.refs, first.refs);
         assert!(again.copied.is_empty(), "unchanged: nothing sent");
 
@@ -367,7 +367,7 @@ mod tests {
     async fn an_interrupted_copy_is_redone() {
         let r = rig();
         let k = kit(&r.local, "kits/mine", &[("spec.yaml", "x", 0o644)]);
-        let first = run(&r, &[k.clone()], false).await.unwrap();
+        let first = run(&r, std::slice::from_ref(&k), false).await.unwrap();
         let dir = PathBuf::from(&first.refs[0]);
         let marker = r.remote.join("kits").join(format!(".{}.ok", dir.file_name().unwrap().to_string_lossy()));
         std::fs::remove_file(&marker).unwrap();
@@ -384,7 +384,7 @@ mod tests {
         // Renamed, but still writes the credentials file.
         let renamed = kit(&r.local, "state/kits/other", &[("spec.yaml", "path: /home/agent/.claude/.credentials.json", 0o644)]);
         for k in [&oauth, &skills, &renamed] {
-            let e = run(&r, &[k.clone()], false).await.unwrap_err().to_string();
+            let e = run(&r, std::slice::from_ref(&k), false).await.unwrap_err().to_string();
             assert!(e.contains("trust_secrets"), "{e}");
         }
         assert!(!r.remote.join("kits").exists(), "nothing was sent");
@@ -519,7 +519,7 @@ mod tests {
         let k = kit(&r.local, "kits/mine", &[("spec.yaml", "a", 0o600), ("a b/c.sh", "#!/bin/sh\n", 0o755), ("a b/e", "", 0o644)]);
         std::fs::set_permissions(r.local.join("kits/mine/a b"), std::fs::Permissions::from_mode(0o750)).unwrap();
         let exec = Counting { calls: AtomicUsize::new(0), no_tar: false };
-        let m = mirror_via(&LocalFs, Some(&exec), &r.local, &r.remote, &[k.clone()], false).await.unwrap();
+        let m = mirror_via(&LocalFs, Some(&exec), &r.local, &r.remote, std::slice::from_ref(&k), false).await.unwrap();
         assert_eq!(exec.calls.load(Ordering::SeqCst), 1);
         let dir = PathBuf::from(&m.refs[0]);
         assert_eq!(mode_of(&dir.join("spec.yaml")), 0o600);
