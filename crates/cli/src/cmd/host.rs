@@ -40,6 +40,20 @@ pub enum HostCmd {
         #[arg(long)]
         keep: bool,
     },
+    /// Install and sign in `sbx` on a plain Ubuntu host, interactively (EXPERIMENTAL).
+    #[command(after_help = "Checks the host (Ubuntu 24.04+, KVM, kvm group), installs sbx over `ssh -t` (sudo asks for its password in your terminal), signs in with a Docker PAT typed here and sent on stdin, sets the network policy, then runs `sbxw host check`.\nExample:\n  sbxw host provision buildbox --dry-run")]
+    Provision {
+        name: String,
+        /// Accept the safe defaults without asking (installs, Balanced policy). Never supplies the Docker token.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Do not install sbx (it must already be there).
+        #[arg(long)]
+        skip_install: bool,
+        /// Run only the read-only checks and print every command that would change the host.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Change a host; only the flags given are changed.
     Edit {
         name: String,
@@ -92,6 +106,9 @@ pub fn run(cmd: HostCmd) -> Result<()> {
         HostCmd::Ls => ls(),
         HostCmd::Test { name } => test(&name),
         HostCmd::Check { name, keep } => super::host_check::run(&name, &load()?, keep),
+        HostCmd::Provision { name, yes, skip_install, dry_run } => {
+            super::host_provision::run(&name, &load()?, super::host_provision::Opts { yes, skip_install, dry_run })
+        }
         HostCmd::Edit { name, conn, trust_secrets, no_trust_secrets, yes } => {
             let trust = if trust_secrets {
                 Some(true)

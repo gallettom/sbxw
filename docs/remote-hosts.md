@@ -2,8 +2,9 @@
 
 [← Back to README](../README.md)
 
-> **EXPERIMENTAL.** Remote hosts have been tested against a fake `ssh` only.
-> `sbxw host check` has never been run on a real host, and nothing has been run
+> **EXPERIMENTAL.** Remote hosts are tested against a fake `ssh`, and
+> `sbxw host check` passed 16/16 on a real Ubuntu 26.04 host on 2026-11-04.
+> That host had no KVM, so no sandbox was created there: nothing has been run
 > on a real KVM host. To check a real host, use `sbxw host check <name>` or
 > `scripts/remote-smoke.sh <name>`. Read [What is not tested](#what-is-not-tested)
 > before relying on it.
@@ -23,7 +24,7 @@ sbxw up buildbox~neos --path /home/me/code   # --path is a path on the host
 On the host:
 
 - Ubuntu 24.04 or newer, with KVM (`/dev/kvm`) and your user in the `kvm` group.
-- `sbx` 0.50 or newer, installed and signed in.
+- `sbx` 0.50 or newer, installed and signed in (`sbxw host provision` does both).
 - The **first-run network policy question answered once**: `sbx` asks it on
   the first `sbx run`. Run `sbx run` (or create any sandbox) by hand on the host
   and answer it. `sbx ls` does not ask. sbxw closes stdin on remote commands, so
@@ -53,8 +54,62 @@ yes. After that ssh refuses a changed key, and so does sbxw: it never accepts a
 new key on its own. `-y` skips the question for scripts; only use it when you
 verified the fingerprint some other way.
 
-Other commands: `sbxw host ls`, `sbxw host edit`, `sbxw host rm`. See the
+Other commands: `sbxw host ls`, `sbxw host edit`, `sbxw host rm`, `sbxw host provision`. See the
 [CLI reference](cli.md#remote-hosts).
+
+## Provisioning
+
+`sbxw host provision <name>` takes a plain Ubuntu host to "sbx installed, signed
+in, network policy set". Run it in your own terminal: sudo on the host asks for
+its password there, and sbxw never sees it.
+
+```bash
+sbxw host add buildbox --ssh buildbox
+sbxw host provision buildbox --dry-run    # what it would do
+sbxw host provision buildbox
+```
+
+Each step prints `✓`, `-` (skipped, with the reason) or `✗`, and it stops at the
+first `✗` with what to do.
+
+1. **Checks, before anything is installed.** Ubuntu 24.04 or newer; x86-64 or
+   arm64; `/dev/kvm` present; your user in the `kvm` group. Without `/dev/kvm`
+   it explains nested virtualization and stops (on AWS you need an Intel
+   instance type with the NestedVirtualization CPU option, C8i, M8i or R8i at
+   least; t3a cannot). If only the group is missing it offers
+   `sudo usermod -aG kvm <user>`, then asks you to reconnect and run it again,
+   because a group change only reaches new logins.
+2. **Install sbx** unless `sbx version` already answers 0.50.0 or newer. The
+   commands are Docker's documented ones, run over `ssh -t`:
+   `curl -fsSL https://get.docker.com | sudo REPO_ONLY=1 sh`, then
+   `sudo apt install -y docker-sbx`.
+3. **Sign in.** `sbx` has no read-only command that says whether it is signed
+   in (an unauthenticated `sbx ls` just lists nothing), so sbxw asks. If you say
+   yes it explains what a PAT (Personal Access Token) is (Docker Hub, Account
+   settings, Personal access tokens), asks for your Docker username and the
+   token without echo, and pipes the token to
+   `sbx login --username <u> --password-stdin --no-input` on the host. The token
+   travels on stdin only: never in an argument, a file or a log, and sbxw does
+   not keep it.
+4. **Network policy.** You pick Open, Balanced (default) or Locked Down, and
+   sbxw runs `sbx policy init allow-all|balanced|deny-all --no-input`, which
+   Docker's CLI reference documents as the way to set it without the first-run
+   prompt. If the host already has a policy the step is skipped; to change one,
+   `sbx policy reset` on the host clears it.
+5. **`sbxw host check <name>`**, and its verdict.
+
+Flags: `--yes` takes the safe defaults (installs, Balanced) and never supplies
+the token, so it skips sign-in; `--skip-install` fails if sbx is missing instead
+of installing it; `--dry-run` still runs the read-only probes over ssh (it needs
+them to know what a real run would do) and prints every command that would
+change the host instead of running it.
+
+Verified from Docker's published CLI reference (2026-11-04): `sbx login
+--username/--password-stdin`, `sbx policy init`, and the global `--no-input`.
+Not verified on a real host: the whole run, how `sbx policy init` words its
+refusal when a policy is already set (sbxw skips on the word "already"; any
+other failure is shown with the command to run by hand), and whether
+`sbx login` is needed before `sbx policy init` on a new install.
 
 ## `trust_secrets`
 
@@ -150,6 +205,9 @@ Nobody has run these on a real KVM host yet:
 3. **The sandbox → host → your machine leg of the `-R` tunnel.** `host check`
    proves host → your machine only; a sandbox's own network path to the host's
    loopback depends on `sbx`.
+4. **`sbxw host provision` end to end**: the sudo install over `ssh -t`, the PAT
+   sign-in and `sbx policy init`. Its logic is unit-tested against a fake host;
+   the commands come from Docker's published docs.
 
 If you run it on a KVM host, please report what worked and what did not. Until
 then remote hosts stay marked EXPERIMENTAL here and in `sbxw host --help`.

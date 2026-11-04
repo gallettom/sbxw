@@ -4,6 +4,7 @@ pub mod doctor;
 pub mod env;
 pub mod host;
 pub mod host_check;
+pub mod host_provision;
 pub mod template;
 
 use crate::client::Daemon;
