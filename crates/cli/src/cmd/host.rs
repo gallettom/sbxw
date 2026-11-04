@@ -71,7 +71,7 @@ pub struct Conn {
     /// Port of the agent on the host (default 7682).
     #[arg(long)]
     agent_port: Option<u16>,
-    /// The `sbx` to run on the host (default: `sbx` on ssh's PATH).
+    /// The `sbx` to run on the host (default: detected with `sh -lc 'command -v sbx'`).
     #[arg(long)]
     sbx_path: Option<String>,
 }

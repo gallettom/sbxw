@@ -9,7 +9,7 @@
 //! ssh = "buildbox"        # an alias from ~/.ssh/config, OR host/user/port/key
 //! agent_port = 7682       # default 7682
 //! trust_secrets = false   # default false
-//! sbx_path = "/opt/sbx/bin/sbx"   # default: `sbx` on the PATH ssh gives
+//! sbx_path = "/opt/sbx/bin/sbx"   # default: found with `sh -lc 'command -v sbx'`
 //! ```
 //!
 //! `key` is a PATH to an identity file; this module never holds a key or a
@@ -42,8 +42,10 @@ pub struct RemoteHost {
     pub target: Target,
     pub agent_port: u16,
     pub trust_secrets: bool,
-    /// The `sbx` to run there; `None` = `sbx` on the PATH a non-interactive
-    /// ssh session gets (often not the login PATH).
+    /// The `sbx` to run there. `None` = detect it: when the SSH link to the
+    /// host connects, the transport runs `sh -lc 'command -v sbx'` (a login
+    /// shell, since a non-interactive ssh PATH often lacks it) and caches the
+    /// answer for that link. Set it when detection finds the wrong one.
     pub sbx_path: Option<String>,
 }
 
@@ -153,7 +155,8 @@ impl RemoteHost {
         Ok(self)
     }
 
-    /// The program to run for `sbx` on this host.
+    /// The program to run for `sbx` on this host: `sbx_path`, or a bare `sbx`
+    /// when unset (the SSH transport replaces that with what it detects).
     pub fn sbx_program(&self) -> &str {
         self.sbx_path.as_deref().unwrap_or("sbx")
     }
