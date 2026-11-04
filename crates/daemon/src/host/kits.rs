@@ -384,7 +384,7 @@ mod tests {
         // Renamed, but still writes the credentials file.
         let renamed = kit(&r.local, "state/kits/other", &[("spec.yaml", "path: /home/agent/.claude/.credentials.json", 0o644)]);
         for k in [&oauth, &skills, &renamed] {
-            let e = run(&r, std::slice::from_ref(&k), false).await.unwrap_err().to_string();
+            let e = run(&r, std::slice::from_ref(k), false).await.unwrap_err().to_string();
             assert!(e.contains("trust_secrets"), "{e}");
         }
         assert!(!r.remote.join("kits").exists(), "nothing was sent");
