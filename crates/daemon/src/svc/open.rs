@@ -57,6 +57,8 @@ impl App {
             };
             return Ok(Spawn { program: program.clone(), args: args.to_vec(), env: vec![] });
         };
+        // Nothing runs on another host yet: no sbx, no PTY there.
+        let sandbox = sandbox.local_name().map_err(|e| anyhow!(e.to_string()))?.clone();
         // A chat workspace under /tmp may have been swept away; `sbx run` then
         // refuses to start the sandbox. It is empty by definition: re-create it.
         if let Some(dir) = self.store.chat_workspace(&sandbox) {

@@ -84,7 +84,8 @@ pub async fn ui_guard(State(app): State<Arc<App>>, req: Request, next: Next) -> 
 
 /// The sandbox an agent call comes from, proven by its token: the
 /// `Authorization: Bearer` header, or `?token=` (the code map kit's bare
-/// `curl "$SBXW_CODEMAP_DONE"`).
+/// `curl "$SBXW_CODEMAP_DONE"`). Only a local sandbox's tooling can call in
+/// for now: a remote one's is refused with `remote hosts are not wired yet`.
 pub struct Agent(pub SandboxName);
 
 #[axum::async_trait]
@@ -111,10 +112,11 @@ impl FromRequestParts<Arc<App>> for Agent {
                 "no agent token — this sandbox's tooling predates it; run `sbxw up <name>` to reinstall it",
             ));
         };
-        app.store
+        let sb = app
+            .store
             .sandbox_for_token(&token)
-            .map(Agent)
-            .ok_or_else(|| ApiError::unauthorized("unknown agent token — run `sbxw up <name>` to reinstall the tooling"))
+            .ok_or_else(|| ApiError::unauthorized("unknown agent token — run `sbxw up <name>` to reinstall the tooling"))?;
+        Ok(Agent(sb.local_name()?.clone()))
     }
 }
 

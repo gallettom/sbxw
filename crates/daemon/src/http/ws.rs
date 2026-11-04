@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::terminal::strip_replay_side_effects;
-use sbxw_core::SandboxName;
+use sbxw_core::SandboxRef;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -37,7 +37,7 @@ pub async fn handler(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(app):
         SessionKey::monitor()
     } else {
         let raw = q.sandbox.unwrap_or_else(|| app.initial_sandbox.lock().unwrap().clone());
-        match SandboxName::parse(&raw) {
+        match SandboxRef::parse(&raw) {
             Ok(sb) => SessionKey::new(sb, kind),
             Err(e) => return (StatusCode::BAD_REQUEST, e.0).into_response(),
         }
@@ -69,6 +69,8 @@ async fn bridge(
     let (mut tx, mut rx) = socket.split();
     let opened = async {
         if let Some(sb) = &key.sandbox {
+            // A remote sandbox's pane opens, and says so: nothing runs there yet.
+            let sb = sb.local_name().map_err(|e| anyhow::anyhow!(e.to_string()))?;
             settle_ws_thread(&app, sb, &key.kind, repo.as_deref(), model.as_deref(), checkout).map_err(anyhow::Error::msg)?;
         }
         app.open_session(&key).await

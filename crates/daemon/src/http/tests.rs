@@ -68,7 +68,7 @@ async fn an_agent_needs_a_valid_token() {
     let wrong = json_req(post("/api/hook", hook.clone()).header("authorization", "Bearer sbxw_nope"), hook.clone());
     assert_eq!(call(agent_router(app.clone()), wrong).await.0, StatusCode::UNAUTHORIZED);
 
-    let token = app.store.token("neos").unwrap();
+    let token = app.store.token(sbxw_core::SandboxRef::parse("neos").unwrap()).unwrap();
     let ok = json_req(post("/api/hook", hook.clone()).header("authorization", format!("Bearer {token}")), hook);
     assert_eq!(call(agent_router(app.clone()), ok).await.0, StatusCode::OK);
     assert_eq!(app.session_infos()[0].sandbox, "neos", "identity comes from the token");
@@ -77,8 +77,8 @@ async fn an_agent_needs_a_valid_token() {
 #[tokio::test]
 async fn a_sandbox_cannot_claim_another_identity_or_reach_human_decisions() {
     let (_d, app) = app();
-    let alpha = app.store.token("alpha").unwrap();
-    let beta = app.store.token("beta").unwrap();
+    let alpha = app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap();
+    let beta = app.store.token(sbxw_core::SandboxRef::parse("beta").unwrap()).unwrap();
     // alpha asks (with a lying `from`, which is ignored), parks briefly.
     let ask = json!({"from": "beta", "question": "q?", "timeout": 1});
     let (s, v) = call(
@@ -110,7 +110,7 @@ async fn a_sandbox_cannot_claim_another_identity_or_reach_human_decisions() {
 #[tokio::test]
 async fn a_code_map_report_is_for_the_callers_own_sandbox() {
     let (_d, app) = app();
-    let alpha = app.store.token("alpha").unwrap();
+    let alpha = app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap();
     let req = Request::builder()
         .method("POST")
         .uri(format!("/api/sandboxes/beta/codemap/done?token={alpha}"))

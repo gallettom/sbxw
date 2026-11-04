@@ -613,7 +613,7 @@ mod tests {
     async fn a_chat_session_without_a_repo_still_closes() {
         let (_d, app) = app();
         let name = SandboxName::parse("ephemeral-chat").unwrap();
-        let ws = app.store.paths.chat_workspace(name.as_str());
+        let ws = app.store.paths.chat_workspace(&name);
         std::fs::create_dir_all(&ws).unwrap();
         let thread = sbxw_core::ThreadName::parse("chat-2").unwrap();
         app.store

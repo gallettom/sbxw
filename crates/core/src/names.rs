@@ -227,6 +227,12 @@ impl From<SandboxName> for SandboxRef {
     }
 }
 
+impl From<&SandboxRef> for SandboxRef {
+    fn from(r: &SandboxRef) -> Self {
+        r.clone()
+    }
+}
+
 impl From<&SandboxName> for SandboxRef {
     fn from(name: &SandboxName) -> Self {
         Self::local(name.clone())

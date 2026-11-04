@@ -1123,7 +1123,7 @@ mod tests {
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
         assert!(allow.contains("localhost:7682") && !allow.contains("localhost:7681"), "{allow}");
         assert!(ws.join(".sbxw-artifacts/README.md").exists());
-        let rec = app.store.get("neos");
+        let rec = app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap());
         assert!(rec.token.is_some() && rec.workspace.as_deref() == Some(ws.as_path()));
         let events = seen.lock().unwrap().join("\n");
         assert!(events.contains("\"kind\":\"plan\"") && events.contains("pulling image") && events.contains("\"kind\":\"done\""));
@@ -1174,12 +1174,12 @@ mod tests {
         assert!(log.iter().all(|c| !c.contains(".credentials.json")), "{log:?}");
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
         assert!(allow.contains("claude.ai") && allow.contains("platform.claude.com"), "{allow}");
-        assert!(app.store.get("neos").remote_control);
+        assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
 
         // Brought up again without asking, it still gets no token.
         app.provision(BringUp { remote_control: false, ..req }, None).await.unwrap();
         assert!(fake.log().iter().all(|c| !c.contains(".credentials.json") && !c.contains("kit add")));
-        assert!(app.store.get("neos").remote_control);
+        assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
     }
 
     #[tokio::test]
@@ -1290,7 +1290,7 @@ mod tests {
             remote_control: false,
         };
         app.provision(req, None).await.unwrap();
-        let kit = app.store.paths.volumes_kit("neos");
+        let kit = app.store.paths.volumes_kit(sbxw_core::SandboxRef::parse("neos").unwrap());
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.contains(&format!("--kit {}", kit.display())), "{create}");
@@ -1340,7 +1340,7 @@ mod tests {
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.starts_with(&format!("create claude {ws} --name multi {lib} ")), "{create}");
         assert!(create.contains(&format!(" {docs}:ro")), "{create}");
-        let mounts = app.store.get("multi").mounts;
+        let mounts = app.store.get(sbxw_core::SandboxRef::parse("multi").unwrap()).mounts;
         assert_eq!(mounts.iter().map(|m| (m.path.to_string_lossy().into_owned(), m.readonly)).collect::<Vec<_>>(), [(docs.clone(), true), (lib.clone(), false)]);
         let twice = vec![(ws.clone(), false)];
         let e = app.create(name.clone(), &ws, CreateForm { mounts: twice, ..Default::default() }, None).await.unwrap_err();

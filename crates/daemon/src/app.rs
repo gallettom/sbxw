@@ -133,8 +133,8 @@ fn load_plans(dir: &Path) -> Vec<Plan> {
 impl App {
     /// The config a sandbox was brought up with, or the daemon's. Read each
     /// time: an edited `env` reaches the agent on its next attach.
-    pub fn config_for(&self, name: &str) -> Config {
-        let path = self.store.get(name).config.filter(|p| p.exists());
+    pub fn config_for(&self, sb: impl Into<sbxw_core::SandboxRef>) -> Config {
+        let path = self.store.get(sb).config.filter(|p| p.exists());
         match path {
             Some(p) => Config::load(&p, Path::new("/")).unwrap_or_else(|e| {
                 tracing::warn!("{}: {e:#} — using the daemon's config", p.display());

@@ -111,7 +111,14 @@ impl App {
     /// Running sandboxes with Remote Control on in some live session. Only
     /// the ones it may be on in are probed: one `sbx exec` each.
     pub(crate) async fn remote_sessions(&self) -> HashSet<String> {
-        let mut candidates: Vec<String> = self.store.names().into_iter().filter(|n| self.store.get(n).remote_control).collect();
+        // Probing runs `sbx exec`: this machine's sandboxes only, for now.
+        let mut candidates: Vec<String> = self
+            .store
+            .names()
+            .into_iter()
+            .filter(|n| n.is_local() && self.store.get(n).remote_control)
+            .map(|n| n.to_string())
+            .collect();
         candidates.extend(self.awake.lock().unwrap().watched.iter().cloned());
         candidates.sort();
         candidates.dedup();
@@ -166,8 +173,8 @@ mod tests {
             Some("exec") if a.iter().any(|x| x == "-e") => Output::ok(r#"{"sessions":[{"cwd":"/w","rc":true}]}"#),
             _ => sbx_answer(a),
         });
-        app.store.update("neos", |r| r.remote_control = true).unwrap();
-        app.store.update("plain", |r| r.workspace = Some("/w".into())).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.remote_control = true).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("plain").unwrap(), |r| r.workspace = Some("/w".into())).unwrap();
         let on = app.remote_sessions().await;
         assert_eq!(on.into_iter().collect::<Vec<_>>(), ["neos"]);
         // `plain` was never probed: Remote Control was not turned on there.

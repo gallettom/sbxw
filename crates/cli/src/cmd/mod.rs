@@ -500,12 +500,12 @@ pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
     // Named, even for --all: the list is already known, and sbx then answers per name.
     let results = rt.block_on(sbx.rm(&targets))?;
     let gone: Vec<&SandboxName> = targets.iter().filter(|n| results.iter().any(|r| r.removed && r.name == n.as_str())).collect();
-    let chats: Vec<PathBuf> = gone.iter().filter_map(|n| store.chat_workspace(n)).collect();
+    let chats: Vec<PathBuf> = gone.iter().filter_map(|n| store.chat_workspace(*n)).collect();
     let cfg = load_config(Path::new("sbxw.toml")).unwrap_or_default();
     let daemon = Daemon::new(&cfg.web_addr);
     let live = daemon.health().is_some();
     for n in &gone {
-        store.forget(n);
+        store.forget(*n);
         if live {
             let _ = daemon.post(&format!("/api/sandboxes/{n}/detach"), json!({}));
         }
@@ -592,10 +592,12 @@ pub fn prune(since: Option<&str>, dry_run: bool, yes: bool) -> Result<()> {
     let after: Vec<String> = rt.block_on(sbx.ls()).into_iter().map(|s| s.name).collect();
     let store = Store::open(Paths::from_home());
     for gone in before.iter().filter(|n| !after.contains(n)) {
-        if let Some(dir) = store.chat_workspace(gone) {
+        // sbx lists this machine's sandboxes only.
+        let Ok(gone) = SandboxName::parse(gone) else { continue };
+        if let Some(dir) = store.chat_workspace(&gone) {
             let _ = std::fs::remove_dir_all(dir);
         }
-        store.forget(gone);
+        store.forget(&gone);
     }
     Ok(())
 }
@@ -717,7 +719,7 @@ mod tests {
         let a = d.join("x/neos");
         let b = d.join("y/neos");
         assert_eq!(derive_name(&store, &a).as_str(), "neos");
-        store.update("neos", |r| r.workspace = Some(a.clone())).unwrap();
+        store.update(SandboxName::parse("neos").unwrap(), |r| r.workspace = Some(a.clone())).unwrap();
         assert_eq!(derive_name(&store, &a).as_str(), "neos", "its own record is no clash");
         assert_eq!(derive_name(&store, &b).as_str(), "neos-copy");
         let _ = std::fs::remove_dir_all(d);

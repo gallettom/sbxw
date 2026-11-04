@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn a_claimed_path_is_refused_to_another_thread_and_the_ui_sees_it() {
         let (_d, app) = app();
-        let token = app.store.token("neos").unwrap();
+        let token = app.store.token(sbxw_core::SandboxRef::parse("neos").unwrap()).unwrap();
         let agent = |path: &str, body: Value| {
             Request::builder()
                 .method("POST")

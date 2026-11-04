@@ -57,9 +57,16 @@ impl From<String> for ApiError {
     }
 }
 
+/// A name refused, or a remote sandbox asked for something that would run
+/// on its host, which this phase does not do yet (501, not 400: the request
+/// is well-formed).
 impl From<sbxw_core::names::NameError> for ApiError {
     fn from(e: sbxw_core::names::NameError) -> Self {
-        Self::bad(e.0)
+        if e.0 == sbxw_core::names::REMOTE_NOT_WIRED {
+            Self::new(StatusCode::NOT_IMPLEMENTED, e.0)
+        } else {
+            Self::bad(e.0)
+        }
     }
 }
 
