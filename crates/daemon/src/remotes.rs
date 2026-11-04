@@ -22,8 +22,9 @@ use sbxw_core::SandboxRef;
 use sbxw_sbx::host::{HostExec, HostUnreachable};
 use sbxw_sbx::Sbx;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// How long the first action on a host waits for its link to come up. A
 /// host that has already failed once is refused at once, not after this.
@@ -37,6 +38,13 @@ pub struct Remote {
     sbx: tokio::sync::OnceCell<Sbx>,
     /// The host's `~/.sbxw`, asked once.
     root: tokio::sync::OnceCell<PathBuf>,
+    /// Whether the link has ever been up: the hosts list tells "down since"
+    /// from "never connected" by it. Set by a task watching the link state,
+    /// so a link that came up and dropped between two looks still counts.
+    ever_up: Arc<AtomicBool>,
+    /// The last round trip over the link and when it was timed (see
+    /// `svc::hosts`), so the hosts list does not ssh on every look.
+    pub(crate) latency: Mutex<Option<(Instant, Duration)>>,
 }
 
 impl Remote {
@@ -48,7 +56,25 @@ impl Remote {
         let link = Link::start(lc);
         let exec: Arc<dyn HostExec> = link.exec();
         let host = Host { name: cfg.name.clone(), exec: exec.clone(), fs: Arc::new(ExecFs::new(exec)) };
-        Self { cfg, link, host, sbx: Default::default(), root: Default::default() }
+        let ever_up = Arc::new(AtomicBool::new(false));
+        let (flag, mut rx) = (ever_up.clone(), link.state());
+        // Ends with the link: dropping it drops the state's sender.
+        tokio::spawn(async move {
+            loop {
+                if *rx.borrow_and_update() == LinkState::Up {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                if rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+        Self { cfg, link, host, sbx: Default::default(), root: Default::default(), ever_up, latency: Mutex::new(None) }
+    }
+
+    /// Whether the link has been up at least once since it was started.
+    pub fn ever_up(&self) -> bool {
+        self.ever_up.load(Ordering::SeqCst)
     }
 
     /// `Some(since)` (unix seconds) while the link is down.
@@ -137,6 +163,23 @@ impl App {
             Arc::new(Remote::start(cfg, &self.store.paths, &self.cfg.agent_addr, ssh))
         });
         Ok(r.clone())
+    }
+
+    /// Re-read `hosts.toml` after it was written: a host gone from it, or
+    /// changed, loses its link (dropping it stops the ssh master), so the next
+    /// ask starts one from what the file says now. Hosts left as they were
+    /// keep theirs, tunnels and all.
+    pub fn reload_remotes(&self) -> Result<()> {
+        let hosts = load_hosts(&self.store.paths)?;
+        let mut map = self.remotes.lock().unwrap();
+        map.retain(|name, r| {
+            let keep = hosts.get(name.as_str()) == Some(&r.cfg);
+            if !keep {
+                tracing::info!(target: "host", "{name}: hosts.toml changed, its link is restarted on next use");
+            }
+            keep
+        });
+        Ok(())
     }
 
     /// Remote hosts already started, without starting any.
