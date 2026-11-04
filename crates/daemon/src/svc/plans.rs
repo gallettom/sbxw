@@ -306,8 +306,10 @@ impl App {
         }
         // Where each thread merges — read first, so the base is known from the
         // first broadcast on.
+        // A retry skips the threads that already merged.
+        let done: std::collections::HashSet<&str> = merge.results.iter().filter(|r| r.ok).map(|r| r.thread.as_str()).collect();
         let mut dirs: Vec<(String, Result<String, String>)> = Vec::new();
-        for t in &merge.order {
+        for t in merge.order.iter().filter(|t| !done.contains(t.as_str())) {
             let planned = plan.threads.iter().find(|p| &p.name == t).and_then(|p| p.repo.clone());
             let dir = match ThreadName::parse(t) {
                 Ok(name) => {
@@ -741,6 +743,45 @@ mod tests {
             "the shared worktree is closed, branch and all"
         );
         assert!(app.team_for(&sb, &api).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_retried_merge_only_merges_the_threads_not_yet_merged() {
+        let b_fails = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let flag = b_fails.clone();
+        let (_d, app, fake) = app_with(move |a| {
+            let has = |x: &str| a.iter().any(|y| y == x);
+            match a.first().map(String::as_str) {
+                Some("ls") => ls(&[("neos", "running")]),
+                Some("exec") if has("sbxw-thread-merge") && a.iter().any(|y| y == "=b") && flag.load(std::sync::atomic::Ordering::SeqCst) => Output::ok("error=conflict in x.rs\n"),
+                Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
+                _ => sbx_answer(a),
+            }
+        });
+        let sb = SandboxRef::parse("neos").unwrap();
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join("r/.git")).unwrap();
+        app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
+        let on = |n: &str| PlanThread { repo: Some("r".into()), ..t(n) };
+        let p = app.plan_propose(&sb, "", vec![on("a"), on("b")], Variant::Split, "independent", Some("lead")).await.unwrap();
+        app.plans.lock().unwrap().approve(&p.id, vec![on("a"), on("b")], None, None, 1).unwrap();
+        for n in ["a", "b"] {
+            app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
+        }
+        app.plan_propose_merge(&p.id, &sb, vec!["a".into(), "b".into()], "", vec![]).unwrap();
+        let first = app.plan_merge(&p.id, false, None).await.unwrap();
+        assert_eq!(first.state, MergeState::Failed);
+        assert_eq!(first.results.iter().map(|r| r.ok).collect::<Vec<_>>(), [true, false]);
+
+        b_fails.store(false, std::sync::atomic::Ordering::SeqCst);
+        let before = fake.log().iter().filter(|c| c.contains("sbxw-thread-merge")).count();
+        let retry = app.plan_merge(&p.id, false, None).await.unwrap();
+        assert_eq!(retry.state, MergeState::Merged);
+        assert_eq!(retry.results.iter().map(|r| (r.thread.as_str(), r.ok)).collect::<Vec<_>>(), [("a", true), ("b", true)]);
+        let log = fake.log();
+        let merges: Vec<&String> = log.iter().filter(|c| c.contains("sbxw-thread-merge")).skip(before).collect();
+        assert_eq!(merges.len(), 1, "only b is merged again: {merges:?}");
+        assert!(merges[0].ends_with("=b"));
     }
 
     #[tokio::test]

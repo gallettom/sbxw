@@ -19,6 +19,10 @@ use std::collections::{HashMap, HashSet};
 
 pub const MAX_THREADS: usize = 8;
 pub const MAX_TEXT: usize = 4000;
+/// A thread's goal and scope are a brief (rules, done criteria), not a note:
+/// over this a proposal is refused rather than cut, since a goal cut
+/// mid-sentence reaches the thread as if it were whole.
+pub const MAX_BRIEF: usize = 16000;
 /// Settled plans whose threads all finished are dropped this long after their
 /// last change.
 pub const PRUNE_AFTER_MS: u64 = 24 * 3600 * 1000;
@@ -238,9 +242,19 @@ pub fn team_name(plan_id: &str) -> String {
 pub fn clip(s: &str) -> String {
     let s = s.trim();
     match s.char_indices().nth(MAX_TEXT) {
-        Some((i, _)) => format!("{}…", &s[..i]),
+        Some((i, _)) => format!("{}\n…[truncated by sbxw]", &s[..i]),
         None => s.to_string(),
     }
+}
+
+/// `s` trimmed, or an error naming `what` when it is over `max` chars.
+fn brief(s: &str, max: usize, what: &str) -> Result<String, String> {
+    let s = s.trim();
+    let n = s.chars().count();
+    if n > max {
+        return Err(format!("{what} is {n} characters, over the limit of {max}: shorten it (or put the detail in a file in the repo and point to it)"));
+    }
+    Ok(s.to_string())
 }
 
 /// The threads of a proposal or of an edited plan: names a worktree can be
@@ -265,7 +279,8 @@ pub fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
             if !seen.insert(name.clone()) {
                 return Err(format!("thread name {name:?} is used twice"));
             }
-            let goal = clip(&t.goal);
+            let goal = brief(&t.goal, MAX_BRIEF, &format!("the goal of thread {name:?}"))?;
+            let scope = brief(&t.scope, MAX_BRIEF, &format!("the scope of thread {name:?}"))?;
             if goal.is_empty() {
                 return Err(format!("thread {name:?} has no goal"));
             }
@@ -282,7 +297,7 @@ pub fn validate(threads: Vec<PlanThread>) -> Result<Vec<PlanThread>, String> {
             Ok(PlanThread {
                 name,
                 goal,
-                scope: clip(&t.scope),
+                scope,
                 repo,
                 model,
                 state: ThreadState::Starting,
@@ -580,7 +595,9 @@ impl PlanBook {
             }
             m.state = MergeState::Merging;
             m.base = base;
-            m.results.clear();
+            // A retry keeps what already merged (and so skips those threads): they
+            // may have been closed since, and merging twice is never wanted.
+            m.results.retain(|r| r.ok);
             if let Some(d) = distillate {
                 m.distillate = d;
             }
@@ -756,6 +773,47 @@ mod tests {
         assert!(bad(&mut b, vec![PlanThread { repo: Some("../x".into()), ..t("a") }]));
         assert!(bad(&mut b, vec![PlanThread { model: Some("Opus!".into()), ..t("a") }]));
         assert!(bad(&mut b, (0..9).map(|i| t(&format!("t{i}"))).collect()));
+    }
+
+    #[test]
+    fn a_goal_over_the_cap_is_refused_not_cut() {
+        let mut b = PlanBook::new();
+        let mut propose = |goal: String, scope: String| b.propose("p".into(), "n", "", vec![PlanThread { goal, scope, ..t("api") }], Variant::Split, "why", None, 1);
+        let long = "é".repeat(MAX_BRIEF + 1);
+        let e = propose(long.clone(), String::new()).unwrap_err();
+        assert!(e.contains("\"api\"") && e.contains("goal") && e.contains(&MAX_BRIEF.to_string()), "{e}");
+        let e = propose("ok".into(), long).unwrap_err();
+        assert!(e.contains("scope") && e.contains("\"api\""), "{e}");
+        let whole = "x".repeat(MAX_BRIEF);
+        let p = propose(whole.clone(), String::new()).unwrap();
+        assert_eq!(p.threads[0].goal, whole, "a brief at the cap arrives whole");
+    }
+
+    #[test]
+    fn other_texts_say_when_they_are_cut() {
+        let c = clip(&"x".repeat(MAX_TEXT + 5));
+        assert!(c.ends_with("[truncated by sbxw]"), "{c}");
+    }
+
+    #[test]
+    fn a_retry_keeps_the_threads_that_merged() {
+        let mut b = PlanBook::new();
+        let p = proposed(&mut b, "n", &["a", "b"]);
+        b.approve(&p.id, vec![t("a"), t("b")], None, None, 3).unwrap();
+        b.set_thread("n", "a", ThreadState::Done, "ok", false, 4).unwrap();
+        b.set_thread("n", "b", ThreadState::Done, "ok", false, 5).unwrap();
+        b.propose_merge(&p.id, "n", vec!["a".into(), "b".into()], "", vec![], 6).unwrap();
+        b.start_merge(&p.id, None, None, 7).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "a".into(), ok: true, commit: Some("abc".into()), error: None }, 8).unwrap();
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: false, commit: None, error: Some("conflict".into()) }, 9).unwrap();
+        assert_eq!(b.finish_merge(&p.id, 10).unwrap().merge.unwrap().state, MergeState::Failed);
+        let m = b.start_merge(&p.id, None, None, 11).unwrap().merge.unwrap();
+        assert_eq!(m.results.len(), 1, "only a's ok result is kept");
+        assert_eq!(m.results[0].thread, "a");
+        b.merge_result(&p.id, MergeResult { thread: "b".into(), ok: true, commit: Some("def".into()), error: None }, 12).unwrap();
+        let m = b.finish_merge(&p.id, 13).unwrap().merge.unwrap();
+        assert_eq!(m.state, MergeState::Merged);
+        assert!(m.results.iter().all(|r| r.ok) && m.results.len() == 2);
     }
 
     #[test]
