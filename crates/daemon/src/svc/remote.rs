@@ -8,7 +8,7 @@ use crate::app::App;
 use anyhow::{bail, Context, Result};
 use sbxw_core::remote::{self, Login};
 use sbxw_core::session::SessionKind;
-use sbxw_core::SandboxName;
+use sbxw_core::SandboxRef;
 use std::sync::Arc;
 
 /// What the button shows: how Claude is signed in, and whether Remote Control
@@ -22,11 +22,11 @@ pub struct RemoteState {
 impl App {
     /// Read inside the sandbox, so only scopes and session flags come out,
     /// never the token.
-    pub async fn remote_state(&self, sandbox: &SandboxName, kind: &SessionKind) -> Result<RemoteState> {
-        if !self.sbx.is_running(sandbox).await {
+    pub async fn remote_state(&self, sandbox: &SandboxRef, kind: &SessionKind) -> Result<RemoteState> {
+        if !self.sbx_for(sandbox).await?.is_running(&sandbox.name).await {
             bail!("'{sandbox}' is not running — open its Claude pane first");
         }
-        let out = self.sbx.exec(sandbox, &["node", "-e", remote::PROBE_SCRIPT], None).await?;
+        let out = self.sbx_for(sandbox).await?.exec(&sandbox.name, &["node", "-e", remote::PROBE_SCRIPT], None).await?;
         let probe = out.stdout_str();
         let active = match self.session_dir(sandbox, kind).await {
             Some(dir) => remote::active_in(&probe, &dir, kind.thread().map(|t| t.as_str())),
@@ -38,7 +38,7 @@ impl App {
     /// The directory Claude Code was started in for `kind`: the workspace (sbx
     /// mounts it at the same path) for the main agent and a session in its
     /// checkout, else the thread's worktree — its own, or its shared plan's.
-    async fn session_dir(&self, sandbox: &SandboxName, kind: &SessionKind) -> Option<String> {
+    async fn session_dir(&self, sandbox: &SandboxRef, kind: &SessionKind) -> Option<String> {
         match kind {
             SessionKind::Thread(t) if self.is_same_worktree(sandbox, t) => {
                 self.store.workspace(sandbox).map(|w| w.to_string_lossy().into_owned())
@@ -56,7 +56,7 @@ impl App {
     /// it is on already — typed again, `/remote-control` opens a disconnect
     /// dialog — and, with the way out, when the login would make Claude refuse
     /// it: typing it then only leaves an error in the pane.
-    pub async fn remote_control(self: &Arc<Self>, sandbox: &SandboxName, kind: SessionKind) -> Result<()> {
+    pub async fn remote_control(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind) -> Result<()> {
         let state = self.remote_state(sandbox, &kind).await?;
         tracing::info!(
             "web UI: Remote Control in '{sandbox}' ({}) reads {}",
@@ -73,7 +73,7 @@ impl App {
                 "Claude in '{sandbox}' is signed in with a setup token (CLAUDE_CODE_OAUTH_TOKEN), which Remote Control refuses — \
                  switch it to a claude.ai login first"
             ),
-            Login::ApiKeyHelper => bail!("{}", remote::helper_advice(sandbox.as_str())),
+            Login::ApiKeyHelper => bail!("{}", remote::helper_advice(&sandbox.to_string())),
         }
         self.watch_remote(sandbox);
         self.push_text(sandbox, kind, remote::COMMAND).await.map_err(anyhow::Error::msg)
@@ -86,7 +86,7 @@ impl App {
     /// The OAuth kit is rewritten without its file rather than left alone:
     /// sbx re-reads a kit from its path on every container swap, so the old
     /// spec would put the token back over the login at the next one.
-    pub async fn switch_to_login(self: &Arc<Self>, sandbox: &SandboxName, kind: SessionKind) -> Result<()> {
+    pub async fn switch_to_login(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind) -> Result<()> {
         if self.remote_state(sandbox, &kind).await?.login != Login::TokenOnly {
             bail!("Claude in '{sandbox}' is not signed in with a setup token — nothing to switch");
         }
@@ -95,7 +95,7 @@ impl App {
             self.store.write_oauth_kit(sandbox, None).context("rewriting the OAuth kit without its token")?;
         }
         self.store.update(sandbox, |r| r.remote_control = true).context("recording the switch")?;
-        if let Err(e) = self.sbx.policy("allow", Some(sandbox), &remote::LOGIN_HOSTS.join(",")).await {
+        if let Err(e) = self.sbx_for(sandbox).await?.policy("allow", Some(&sandbox.name), &remote::LOGIN_HOSTS.join(",")).await {
             tracing::warn!("could not allow the login hosts for '{sandbox}': {e:#}");
         }
         self.push_text(sandbox, kind, remote::LOGIN_COMMAND).await.map_err(anyhow::Error::msg)
@@ -106,7 +106,7 @@ impl App {
 mod tests {
     use crate::testing::{app_with, sbx_answer};
     use sbxw_core::session::SessionKind;
-    use sbxw_core::SandboxName;
+    use sbxw_core::SandboxRef;
     use sbxw_sbx::runner::Output;
 
     fn signed_in_with(probe: &'static str) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
@@ -120,7 +120,7 @@ mod tests {
     #[tokio::test]
     async fn a_token_sandbox_is_switched_for_good() {
         let (_d, app, fake) = app_with(signed_in_with(r#"{"present":true,"scopes":["user:inference"]}"#));
-        let name = SandboxName::parse("neos").unwrap();
+        let name = SandboxRef::parse("neos").unwrap();
         app.store.write_oauth_kit(sbxw_core::SandboxRef::parse("neos").unwrap(), Some("{\"claudeAiOauth\":{}}")).unwrap();
         let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("switch"), "{e:#}");
@@ -139,7 +139,7 @@ mod tests {
         let (_d, app, _fake) = app_with(signed_in_with(
             r#"{"present":true,"scopes":["user:profile"],"sessions":[{"cwd":"/w/neos","rc":true}]}"#,
         ));
-        let name = SandboxName::parse("neos").unwrap();
+        let name = SandboxRef::parse("neos").unwrap();
         app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.workspace = Some("/w/neos".into())).unwrap();
         let state = app.remote_state(&name, &SessionKind::Agent).await.unwrap();
         assert!(state.active && state.login == sbxw_core::remote::Login::Full);
@@ -153,7 +153,7 @@ mod tests {
     #[tokio::test]
     async fn only_a_token_login_is_switched() {
         let (_d, app, _fake) = app_with(signed_in_with(r#"{"present":false,"scopes":[]}"#));
-        let name = SandboxName::parse("neos").unwrap();
+        let name = SandboxRef::parse("neos").unwrap();
         let e = app.switch_to_login(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("nothing to switch"));
         assert!(!app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);

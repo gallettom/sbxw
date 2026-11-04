@@ -12,11 +12,16 @@ bin="${SBXW_BIN:-${CARGO_TARGET_DIR:-$root/target}/debug/sbxw}"
 
 t="$(mktemp -d)"
 trap '"$bin" down >/dev/null 2>&1 || true; rm -rf "$t"' EXIT
-mkdir -p "$t/fakebin" "$t/home" "$t/ws/neos" "$t/state"
+mkdir -p "$t/fakebin" "$t/home" "$t/ws/neos" "$t/state" "$t/remote/bin" "$t/rstate"
 cp "$here/fake-sbx" "$t/fakebin/sbx"; chmod +x "$t/fakebin/sbx"
+# A remote host, faked: `ssh` runs its commands in $t/remote (its HOME), and
+# its `sbx` keeps its own sandboxes in $t/rstate.
+cp "$here/fake-ssh" "$t/fakebin/ssh"; chmod +x "$t/fakebin/ssh"
+printf '#!/bin/sh\nFAKE_SBX_STATE="%s" exec "%s" "$@"\n' "$t/rstate" "$here/fake-sbx" > "$t/remote/bin/sbx"; chmod +x "$t/remote/bin/sbx"
 free_port() { node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})'; }
-UI=$(free_port); AGENT=$(free_port)
+UI=$(free_port); AGENT=$(free_port); RAGENT=$(free_port)
 export HOME="$t/home" PATH="$t/fakebin:$PATH" FAKE_SBX_STATE="$t/state" SBXW_HOSTS_FILE="$t/hosts"
+export FAKE_SSH_HOME="$t/remote" FAKE_SSH_LOG="$t/ssh.log" FAKE_SSH_DOWN="$t/remote-down"
 unset CLAUDE_CODE_OAUTH_TOKEN CLAUDE_OAUTH_TOKEN ANTHROPIC_API_KEY
 printf '127.0.0.1\tlocalhost\n' > "$t/hosts"
 cat > "$t/ws/sbxw.toml" <<TOML
@@ -183,16 +188,67 @@ post /api/templates/rm "{\"tag\":\"$tag\"}" | grep -q '"ok":true' || die "remove
 post /api/templates/save '{"sandbox":"tpl2","tag":"--force"}' | grep -q '"ok":false' || die "a tag that reads as a flag is refused"
 ok "Templates dialog: list, save without secrets, remove"
 
-# Sandboxes are refs: local~neos is neos, a remote host's is refused until
-# hosts are wired, and nothing local is touched by asking.
+# Sandboxes are refs: local~neos is neos; a host nobody registered is not
+# found, and nothing local is touched by asking.
 ui "http://127.0.0.1:$UI/api/sandboxes/local~neos/threads" | grep -q '"ok":false' && die "local~neos is the local sandbox"
 code=$(curl -s -o "$t/remote.json" -w '%{http_code}' -H "host: 127.0.0.1:$UI" "http://127.0.0.1:$UI/api/sandboxes/buildbox~neos/ports")
-[ "$code" = 501 ] && grep -q 'remote hosts are not wired yet' "$t/remote.json" || die "a remote ref is refused with 501 (got $code)"
-"$bin" stop buildbox~neos > "$t/remote-stop.log" 2>&1 && die "the CLI refuses a remote ref"
-grep -q 'remote hosts are not wired yet' "$t/remote-stop.log" || { cat "$t/remote-stop.log"; die "the CLI says why"; }
-grep -q "^stop buildbox" "$t/state/calls.log" && die "nothing reaches sbx for a remote ref"
-[ ! -e "$HOME/.sbxw/state/hosts" ] || die "asking about a remote ref writes nothing"
-ok "refs: local~neos is neos, a remote ref is refused cleanly"
+[ "$code" = 404 ] && grep -q "no remote host named 'buildbox'" "$t/remote.json" || die "an unregistered host is 404 (got $code)"
+"$bin" stop buildbox~neos > "$t/remote-stop.log" 2>&1 && die "the CLI refuses an unregistered host"
+grep -q "no remote host named 'buildbox'" "$t/remote-stop.log" || { cat "$t/remote-stop.log"; die "the CLI says why"; }
+grep -q "^stop buildbox" "$t/state/calls.log" && die "nothing reaches sbx for an unknown host"
+[ ! -e "$HOME/.sbxw/state/hosts/buildbox" ] || die "asking about an unknown host writes nothing"
+ok "refs: local~neos is neos, an unregistered host is refused cleanly"
+
+# ── Remote host (experimental), against fake-ssh and its own fake sbx ──
+ssh-keygen -q -t ed25519 -N '' -f "$t/hostkey" >/dev/null
+mkdir -p "$HOME/.ssh"; echo "fakehost $(cut -d' ' -f1,2 "$t/hostkey.pub")" > "$HOME/.ssh/known_hosts"
+"$bin" host add fake --host fakehost --sbx-path "$t/remote/bin/sbx" --agent-port "$RAGENT" --yes > "$t/host.log" 2>&1 || { cat "$t/host.log"; die "host add"; }
+mkdir -p "$t/remote/srv/neos"
+printf 'network_allow = ["example.org"]\n' > "$t/remote/srv/neos/sbxw.toml"
+out=$(CLAUDE_CODE_OAUTH_TOKEN=tok-not-for-untrusted "$bin" up fake~neos --path "$t/remote/srv/neos" 2>&1) || { echo "$out"; die "sbxw up on a remote host"; }
+echo "$out" | grep -q "'fake~neos' is up" || { echo "$out"; die "remote up output"; }
+grep -q "^create claude $t/remote/srv/neos --name neos" "$t/rstate/calls.log" || die "created by the host's sbx"
+! grep -q "$t/remote/srv" "$t/state/calls.log" || die "nothing of it reached this machine's sbx"
+ok "sbxw up fake~neos creates the sandbox on the host, through ssh"
+
+grep "^create claude $t/remote/srv/neos" "$t/rstate/calls.log" | grep -q -- "--kit $t/remote/.sbxw/kits/" || die "kits passed by their host path"
+ls "$t/remote/.sbxw/kits/"*/spec.yaml >/dev/null 2>&1 && ls -a "$t/remote/.sbxw/kits/" | grep -q '^\..*\.ok$' || die "kits mirrored to the host, marked complete"
+grep "^create claude $t/remote/srv/neos" "$t/rstate/calls.log" | grep -q -- "SBXW_CACHE=$t/remote/.sbxw/cache" || die "the kit cache is the host's"
+grep -q "policy allow network --sandbox neos localhost:$RAGENT,example.org" "$t/rstate/calls.log" || die "the host's agent port and the host's sbxw.toml"
+ok "kits mirrored to the host; its sbxw.toml, kit cache and agent port are used"
+
+rtoken=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).token)' "$HOME/.sbxw/state/hosts/fake/sandboxes/neos.json")
+grep -q "$rtoken" "$t/rstate/tooling-neos.js" || die "the agent token installed on the host, over stdin"
+! grep -q "$rtoken" "$t/rstate/calls.log" "$t/ssh.log" || die "the token leaked into an argv"
+! grep -rq "tok-not-for-untrusted" "$t/remote" "$t/rstate" "$t/ssh.log" || die "a secret went to an untrusted host"
+echo "$out" | grep -q "not sent to host 'fake'" || { echo "$out"; die "the bring-up says the token stayed here"; }
+ok "the agent token goes over stdin; the Claude token stays off an untrusted host"
+
+"$bin" ls > "$t/ls.log" 2>&1 || { cat "$t/ls.log"; die "sbxw ls"; }
+grep -q "^fake~neos .*● running" "$t/ls.log" || { cat "$t/ls.log"; die "sbxw ls shows the remote sandbox"; }
+ui "http://127.0.0.1:$UI/api/sandboxes" | grep -q '"name":"fake~neos"' || die "the API lists it by ref"
+"$bin" stop fake~neos > /dev/null || die "stop a remote sandbox"
+[ "$(cat "$t/rstate/sandboxes/neos")" = stopped ] || die "stopped on the host"
+"$bin" ls | grep -q "^fake~neos .*○ stopped" || die "listed stopped"
+ok "sbxw ls lists it by ref; stop reaches the host"
+
+# The host goes away: its link drops (the master is killed) and stays down.
+: > "$FAKE_SSH_DOWN"
+for f in "$HOME/.sbxw/run/ssh/"*; do kill "$(cat "$f")" 2>/dev/null || true; done
+for _ in $(seq 50); do ui "http://127.0.0.1:$UI/api/sandboxes" | grep -q '"unreachable_since"' && break; sleep 0.2; done
+ui "http://127.0.0.1:$UI/api/sandboxes" | grep -q '"name":"fake~neos".*"status":"stopped".*"unreachable_since"' || die "the API keeps it listed, last state, unreachable"
+code=$(curl -s -o "$t/down.json" -w '%{http_code}' -X POST -H "host: 127.0.0.1:$UI" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$UI/api/sandboxes/fake~neos/stop")
+[ "$code" = 503 ] && grep -q "host 'fake' is unreachable" "$t/down.json" || { cat "$t/down.json"; die "an action on it is 503, naming the host (got $code)"; }
+"$bin" ls > "$t/ls-down.log" 2>&1 || die "sbxw ls with a host down"
+grep -q "^fake~neos .*unreachable (last seen stopped)" "$t/ls-down.log" || { cat "$t/ls-down.log"; die "sbxw ls marks it unreachable"; }
+"$bin" stop fake~neos > "$t/stop-down.log" 2>&1 && die "stop on an unreachable host fails"
+grep -q "host 'fake' is unreachable" "$t/stop-down.log" || { cat "$t/stop-down.log"; die "and says so"; }
+ok "an unreachable host: listed with its last state, actions refused cleanly"
+
+rm -f "$FAKE_SSH_DOWN"
+"$bin" rm fake~neos > /dev/null || die "rm a remote sandbox"
+[ ! -e "$t/rstate/sandboxes/neos" ] && [ ! -e "$HOME/.sbxw/state/hosts/fake/sandboxes/neos.json" ] || die "removed on the host and forgotten here"
+ok "rm removes it on the host and forgets its record"
 
 "$bin" rm neos >/dev/null || die "rm"
 [ ! -e "$HOME/.sbxw/state/sandboxes/neos.json" ] || die "rm forgets the record"

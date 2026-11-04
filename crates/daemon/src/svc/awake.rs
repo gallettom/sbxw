@@ -5,7 +5,7 @@
 
 use crate::app::App;
 use sbxw_core::power::{self, Battery, NoticeBook};
-use sbxw_core::{remote, SandboxName};
+use sbxw_core::{remote, SandboxRef};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,11 +88,11 @@ impl App {
 
     /// Removed sandboxes: no longer looked at, and the Mac let go at once if
     /// one was the last on Remote Control — not a poll later.
-    pub(crate) fn forget_remote(&self, names: &[&SandboxName]) {
+    pub(crate) fn forget_remote(&self, names: &[&SandboxRef]) {
         let mut a = self.awake.lock().unwrap();
         for n in names {
-            a.watched.remove(n.as_str());
-            a.remote.remove(n.as_str());
+            a.watched.remove(&n.to_string());
+            a.remote.remove(&n.to_string());
         }
         self.reassess(&mut a);
     }
@@ -111,12 +111,14 @@ impl App {
     /// Running sandboxes with Remote Control on in some live session. Only
     /// the ones it may be on in are probed: one `sbx exec` each.
     pub(crate) async fn remote_sessions(&self) -> HashSet<String> {
-        // Probing runs `sbx exec`: this machine's sandboxes only, for now.
+        // Remote hosts' sandboxes too: an agent on Remote Control there is
+        // still driven from this Mac. A host that cannot be reached is
+        // skipped, not waited on.
         let mut candidates: Vec<String> = self
             .store
             .names()
             .into_iter()
-            .filter(|n| n.is_local() && self.store.get(n).remote_control)
+            .filter(|n| self.store.get(n).remote_control)
             .map(|n| n.to_string())
             .collect();
         candidates.extend(self.awake.lock().unwrap().watched.iter().cloned());
@@ -124,11 +126,15 @@ impl App {
         candidates.dedup();
         let mut on = HashSet::new();
         for name in candidates {
-            let Ok(sb) = SandboxName::parse(&name) else { continue };
-            if !self.sbx.is_running(&sb).await {
+            let Ok(sb) = SandboxRef::parse(&name) else { continue };
+            if !sb.is_local() && self.remote(&sb.host).await.ok().and_then(|r| r.down_since()).is_some() {
                 continue;
             }
-            if let Ok(out) = self.sbx.exec(&sb, &["node", "-e", remote::PROBE_SCRIPT], None).await {
+            let Ok(sbx) = self.sbx_for(&sb).await else { continue };
+            if !sbx.is_running(&sb.name).await {
+                continue;
+            }
+            if let Ok(out) = sbx.exec(&sb.name, &["node", "-e", remote::PROBE_SCRIPT], None).await {
                 if remote::any_active(&out.stdout_str()) {
                     on.insert(name);
                 }
@@ -138,19 +144,19 @@ impl App {
     }
 
     /// Remote Control was turned on in `sandbox`: look at it from now on.
-    pub(crate) fn watch_remote(&self, sandbox: &SandboxName) {
+    pub(crate) fn watch_remote(&self, sandbox: &SandboxRef) {
         self.awake.lock().unwrap().watched.insert(sandbox.to_string());
     }
 
     /// The battery note to add to `sandbox`'s next prompt, if one is due.
     /// Only for Remote Control sessions: at the Mac, the menu bar says it.
-    pub fn battery_notice(&self, sandbox: &SandboxName) -> Option<String> {
+    pub fn battery_notice(&self, sandbox: &SandboxRef) -> Option<String> {
         let mut a = self.awake.lock().unwrap();
-        if !a.remote.contains(sandbox.as_str()) {
+        if !a.remote.contains(&sandbox.to_string()) {
             return None;
         }
         let battery = a.battery;
-        a.notices.due(sandbox.as_str(), battery, self.cfg.battery_warn_below, self.cfg.keep_awake_min_battery, self.cfg.keep_awake)
+        a.notices.due(&sandbox.to_string(), battery, self.cfg.battery_warn_below, self.cfg.keep_awake_min_battery, self.cfg.keep_awake)
     }
 }
 
@@ -163,7 +169,7 @@ async fn read_battery() -> Option<Battery> {
 mod tests {
     use crate::testing::{app_with, sbx_answer};
     use sbxw_core::power::Battery;
-    use sbxw_core::SandboxName;
+    use sbxw_core::SandboxRef;
     use sbxw_sbx::runner::Output;
 
     #[tokio::test]
@@ -180,14 +186,14 @@ mod tests {
         // `plain` was never probed: Remote Control was not turned on there.
         assert!(!fake.log().iter().any(|c| c.starts_with("exec") && c.contains("plain")));
 
-        app.watch_remote(&SandboxName::parse("plain").unwrap());
+        app.watch_remote(&SandboxRef::parse("plain").unwrap());
         assert_eq!(app.remote_sessions().await.len(), 2);
     }
 
     #[tokio::test]
     async fn the_low_battery_note_goes_to_remote_sessions_once() {
         let (_d, app, _fake) = app_with(sbx_answer);
-        let neos = SandboxName::parse("neos").unwrap();
+        let neos = SandboxRef::parse("neos").unwrap();
         {
             let mut a = app.awake.lock().unwrap();
             a.battery = Some(Battery { percent: 12, on_battery: true });
@@ -195,13 +201,13 @@ mod tests {
         }
         assert!(app.battery_notice(&neos).unwrap().contains("12%"));
         assert!(app.battery_notice(&neos).is_none());
-        assert!(app.battery_notice(&SandboxName::parse("other").unwrap()).is_none());
+        assert!(app.battery_notice(&SandboxRef::parse("other").unwrap()).is_none());
     }
 
     #[tokio::test]
     async fn a_removed_or_stopped_sandbox_is_off_remote_control_at_once() {
         let (_d, app, _fake) = app_with(sbx_answer);
-        let neos = SandboxName::parse("neos").unwrap();
+        let neos = SandboxRef::parse("neos").unwrap();
         app.watch_remote(&neos);
         {
             let mut a = app.awake.lock().unwrap();

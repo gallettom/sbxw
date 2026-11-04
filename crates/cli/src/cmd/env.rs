@@ -167,6 +167,7 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
     up(UpArgs {
         name: Some(name.to_string()),
         path: Some(workspace),
+        git: None,
         ro: vec![],
         add_sandbox: false,
         config: merged,

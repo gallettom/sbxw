@@ -63,19 +63,19 @@ fn lead_only(raw: &Option<String>) -> Result<(), ApiError> {
 
 async fn claim(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
     let who = session(&b.thread)?;
-    let out = app.board_claim(&me, b.plan.as_deref(), &who, &b.files)?;
+    let out = app.board_claim(&me.to_string(), b.plan.as_deref(), &who, &b.files)?;
     Ok(ok_with(json!({ "granted": out.granted, "taken": out.taken })))
 }
 
 async fn release(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
     let who = session(&b.thread)?;
-    let released = app.board_release(&me, b.plan.as_deref(), &who, &b.files)?;
+    let released = app.board_release(&me.to_string(), b.plan.as_deref(), &who, &b.files)?;
     Ok(ok_with(json!({ "released": released })))
 }
 
 async fn extend(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
     let who = session(&b.thread)?;
-    let out = app.board_extend(&me, b.plan.as_deref(), &who, &b.files)?;
+    let out = app.board_extend(&me.to_string(), b.plan.as_deref(), &who, &b.files)?;
     Ok(ok_with(json!({ "extended": out.extended, "needs_lead": out.needs_lead, "not_held": out.not_held })))
 }
 
@@ -101,12 +101,12 @@ async fn note(State(app): S, Agent(me): Agent, Json(b): Json<NoteBody>) -> ApiRe
         Some(LEAD) => Some(LEAD.to_string()),
         Some(t) => Some(ThreadName::parse(t)?.to_string()),
     };
-    let e = app.board_note(&me, b.plan.as_deref(), &who, b.kind, &b.text, to.as_deref(), &b.files)?;
+    let e = app.board_note(&me.to_string(), b.plan.as_deref(), &who, b.kind, &b.text, to.as_deref(), &b.files)?;
     Ok(ok_with(json!({ "entry": e })))
 }
 
 async fn read(State(app): S, Agent(me): Agent) -> Json<Value> {
-    Json(app.board_view(&me))
+    Json(app.board_view(&me.to_string()))
 }
 
 async fn check(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
@@ -141,7 +141,7 @@ struct AfterBody {
 async fn after(State(app): S, Agent(me): Agent, Json(b): Json<AfterBody>) -> ApiResult {
     let who = session(&b.thread)?;
     let commit = b.commit.as_ref().map(|c| (c.hash.as_str(), c.subject.as_str(), c.files.as_slice()));
-    let (outside, released, news) = app.board_after(&me, b.plan.as_deref(), &who, &b.read, &b.written, commit)?;
+    let (outside, released, news) = app.board_after(&me.to_string(), b.plan.as_deref(), &who, &b.read, &b.written, commit)?;
     Ok(ok_with(json!({ "outside": outside, "released": released, "news": news })))
 }
 
@@ -156,18 +156,18 @@ struct ForceBody {
 
 async fn force_release(State(app): S, Agent(me): Agent, Json(b): Json<ForceBody>) -> ApiResult {
     lead_only(&b.thread)?;
-    let released = app.board_force_release(&me, &b.files, &b.reason)?;
+    let released = app.board_force_release(&me.to_string(), &b.files, &b.reason)?;
     Ok(ok_with(json!({ "released": released })))
 }
 
 async fn approve_extension(State(app): S, Agent(me): Agent, Json(b): Json<Body>) -> ApiResult {
     lead_only(&b.thread)?;
-    let extended = app.board_approve_extension(&me, &b.files)?;
+    let extended = app.board_approve_extension(&me.to_string(), &b.files)?;
     Ok(ok_with(json!({ "extended": extended })))
 }
 
 async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {
-    let name = SandboxRef::parse(&name)?.local_name()?.clone();
+    let name = SandboxRef::parse(&name)?;
     Ok(Json(app.board_ui_view(&name)))
 }
 

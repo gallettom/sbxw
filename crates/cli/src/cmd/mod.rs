@@ -12,24 +12,82 @@ use crate::HostsAction;
 use anyhow::{bail, Context, Result};
 use sbxw_core::config::Config;
 use sbxw_core::hosts;
-use sbxw_core::names::{self, SandboxName, SandboxRef};
+use sbxw_core::names::{self, HostName, SandboxName, SandboxRef};
 use sbxw_core::progress::{Progress, Sink};
 use sbxw_daemon::hostsys::{Elevation, HostSys};
 use sbxw_daemon::provision::BringUp;
 use sbxw_daemon::store::{Paths, Store};
 use sbxw_daemon::AppBuilder;
+use sbxw_sbx::host::HostExec;
+use sbxw_sbx::ssh::SshExec;
 use sbxw_sbx::Sbx;
 use serde_json::json;
+use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// A sandbox named on the command line, as a ref: `neos` (this machine),
-/// `local~neos` (the same) or `buildbox~neos`. Another host's is refused
-/// until remote hosts are wired.
-pub fn sandbox_arg(raw: &str) -> Result<SandboxName> {
-    let r = SandboxRef::parse(raw)?;
-    Ok(r.local_name().map_err(|e| anyhow::anyhow!("'{r}': {e}"))?.clone())
+/// `local~neos` (the same) or `buildbox~neos`, on a host from `sbxw host add`
+/// (remote hosts are experimental).
+pub fn sandbox_arg(raw: &str) -> Result<SandboxRef> {
+    Ok(SandboxRef::parse(raw)?)
+}
+
+/// A remote host from `~/.sbxw/hosts.toml`, reached through `ssh` on the
+/// same ControlPath as the daemon's link: its master when it holds one,
+/// a connection of its own when not.
+fn remote_exec(host: &HostName) -> Result<Arc<SshExec>> {
+    let paths = Paths::from_home();
+    let hosts = sbxw_daemon::remotes::load_hosts(&paths)?;
+    let h = hosts.get(host.as_str()).with_context(|| format!("no remote host named '{host}' — add it with `sbxw host add {host}`"))?;
+    let home = paths.root.parent().map(Path::to_path_buf).unwrap_or_default();
+    Ok(Arc::new(SshExec::new(h.clone(), sbxw_sbx::ssh::control_path(&home, host))))
+}
+
+/// The `sbx` that manages sandboxes on `host`: this machine's, or the
+/// host's over ssh.
+fn sbx_on(rt: &tokio::runtime::Runtime, host: &HostName) -> Result<Sbx> {
+    if host.is_local() {
+        return Ok(Sbx::process());
+    }
+    let exec = remote_exec(host)?;
+    Ok(Sbx::new(Arc::new(rt.block_on(exec.on_host())?)))
+}
+
+/// One `sbx` per host the refs name, made once each.
+struct SbxPerHost<'a> {
+    rt: &'a tokio::runtime::Runtime,
+    made: HashMap<HostName, Sbx>,
+}
+
+impl<'a> SbxPerHost<'a> {
+    fn new(rt: &'a tokio::runtime::Runtime) -> Self {
+        Self { rt, made: HashMap::new() }
+    }
+    fn get(&mut self, host: &HostName) -> Result<Sbx> {
+        if let Some(s) = self.made.get(host) {
+            return Ok(s.clone());
+        }
+        let s = sbx_on(self.rt, host)?;
+        self.made.insert(host.clone(), s.clone());
+        Ok(s)
+    }
+}
+
+/// `sbx …` interactively on a remote host: `ssh -tt` with the host's `sbx`.
+fn interactive_on(rt: &tokio::runtime::Runtime, host: &HostName, args: &[String]) -> Result<()> {
+    if host.is_local() {
+        return sbxw_sbx::interactive(args);
+    }
+    let exec = remote_exec(host)?;
+    let sbx = rt.block_on(exec.sbx_program())?;
+    let (program, argv) = exec.tty_argv(&sbx, args);
+    let status = std::process::Command::new(&program).args(&argv).status().with_context(|| format!("could not run {program}"))?;
+    if !status.success() {
+        bail!("`sbx {}` on host '{host}' exited with {status}", args.first().map(String::as_str).unwrap_or(""));
+    }
+    Ok(())
 }
 
 pub fn runtime() -> tokio::runtime::Runtime {
@@ -174,6 +232,8 @@ fn apply_aliases_here(store: &Store, cfg: &Config) {
 pub struct UpArgs {
     pub name: Option<String>,
     pub path: Option<PathBuf>,
+    /// Clone this into `path` first, when it does not exist yet.
+    pub git: Option<String>,
     pub ro: Vec<PathBuf>,
     pub add_sandbox: bool,
     pub config: PathBuf,
@@ -214,7 +274,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             let ws = std::fs::canonicalize(&workspace).with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;
             let n = derive_name(&store, &ws);
             eprintln!("sbxw  --add-sandbox → using sandbox name '{n}'");
-            Some(n)
+            Some(SandboxRef::local(n))
         }
         (None, false) => None,
     };
@@ -227,13 +287,31 @@ pub fn up(a: UpArgs) -> Result<()> {
         eprintln!("sbxw  daemon ready → {}", web_url(&cfg, None));
         return if a.tail { logs(None, 20) } else { Ok(()) };
     };
-    let workspace = std::fs::canonicalize(&workspace).with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;
-    let ro: Vec<String> = a
-        .ro
-        .iter()
-        .map(|p| std::fs::canonicalize(p).map(|c| c.to_string_lossy().into_owned()))
-        .collect::<std::io::Result<_>>()
-        .context("a --ro path does not exist")?;
+    let (workspace, ro) = if name.is_local() {
+        // With --git, a path not there yet is cloned into by the daemon.
+        let workspace = match (&a.git, std::fs::canonicalize(&workspace)) {
+            (_, Ok(w)) => w,
+            (Some(_), Err(_)) => abs(&workspace)?,
+            (None, Err(_)) => bail!("workspace path does not exist: {}", workspace.display()),
+        };
+        let ro: Vec<String> = a
+            .ro
+            .iter()
+            .map(|p| std::fs::canonicalize(p).map(|c| c.to_string_lossy().into_owned()))
+            .collect::<std::io::Result<_>>()
+            .context("a --ro path does not exist")?;
+        (workspace, ro)
+    } else {
+        // The host's paths, checked on the host by the bring-up.
+        eprintln!("sbxw  note: remote hosts are experimental — not yet tried on a real KVM host");
+        if a.path.is_none() || !workspace.is_absolute() {
+            bail!("a sandbox on host '{}' needs --path with an absolute path on that host", name.host);
+        }
+        if let Some(p) = a.ro.iter().find(|p| !p.is_absolute()) {
+            bail!("--ro {}: give an absolute path on host '{}'", p.display(), name.host);
+        }
+        (workspace, a.ro.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+    };
     let api_key = a.use_api_key.then(|| std::env::var("ANTHROPIC_API_KEY").ok()).flatten();
     if a.use_api_key && api_key.is_none() {
         eprintln!("sbxw  warning: --use-api-key set but ANTHROPIC_API_KEY is empty or unset");
@@ -255,6 +333,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             oauth_token,
             template: template_choice(a.rebuild_template),
             remote_control: a.remote_control,
+            git: a.git.clone(),
         });
     }
 
@@ -271,6 +350,7 @@ pub fn up(a: UpArgs) -> Result<()> {
             "oauth_token": oauth_token,
             "template": template_choice(a.rebuild_template),
             "remote_control": a.remote_control,
+            "git": a.git,
         }),
         |v| {
             if let Some(p) = v.get("progress").and_then(|p| serde_json::from_value::<Progress>(p.clone()).ok()) {
@@ -281,7 +361,7 @@ pub fn up(a: UpArgs) -> Result<()> {
     if last["ok"] != true {
         bail!("{}", last["error"].as_str().unwrap_or("the bring-up failed"));
     }
-    eprintln!("sbxw  '{name}' is up → {}", web_url(&cfg, Some(name.as_str())));
+    eprintln!("sbxw  '{name}' is up → {}", web_url(&cfg, Some(&name.to_string())));
     if a.tail {
         logs(Some(name.to_string()), 20)?;
     }
@@ -307,16 +387,46 @@ fn up_here(rt: tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: 
     let name = req.name.clone();
     rt.block_on(app.provision(req, Some(sink)))?;
     eprintln!("sbxw  attaching the agent in this terminal (Ctrl-C to detach)");
-    let args = sbxw_sbx::attach_args(&name, &cfg.env_pairs(), &cfg.env_files);
+    let args = sbxw_sbx::attach_args(&name.name, &cfg.env_pairs(), &cfg.env_files);
+    // A remote sandbox's agent through this process's link to its host,
+    // which stays up (and keeps the hooks' tunnel) while it runs.
+    let (program, args) = if name.is_local() {
+        ("sbx".to_string(), args)
+    } else {
+        rt.block_on(async {
+            let r = app.ready_remote(&name).await?;
+            let exec = r.link.exec();
+            let sbx = exec.sbx_program().await?;
+            anyhow::Ok(exec.tty_argv(&sbx, &args))
+        })?
+    };
     park_logs();
-    let out = rt.block_on(async move { tokio::task::spawn_blocking(move || sbxw_sbx::interactive(&args)).await });
+    let out = rt.block_on(async move {
+        tokio::task::spawn_blocking(move || {
+            if program == "sbx" {
+                return sbxw_sbx::interactive(&args);
+            }
+            let status = std::process::Command::new(&program).args(&args).status()?;
+            if !status.success() {
+                bail!("the agent exited with {status}");
+            }
+            Ok(())
+        })
+        .await
+    });
     flush_parked_logs();
     out?
 }
 
 pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bool, tail: bool) -> Result<()> {
     let name = match name {
-        Some(n) => sandbox_arg(&n)?,
+        Some(n) => {
+            let r = sandbox_arg(&n)?;
+            if !r.is_local() {
+                bail!("'{r}': chat sandboxes run on this machine only");
+            }
+            r.name
+        }
         None => names::mint_chat_name(u32::from_str_radix(&sbxw_core::ids::random_hex(4), 16).unwrap_or(0)),
     };
     let paths = Paths::from_home();
@@ -326,6 +436,7 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
     up(UpArgs {
         name: Some(name.to_string()),
         path: Some(ws),
+        git: None,
         ro: vec![],
         add_sandbox: false,
         config,
@@ -344,7 +455,7 @@ pub fn web(name: &str, config: &Path) -> Result<()> {
     let daemon = Daemon::new(&cfg.web_addr);
     daemon.ensure(&Paths::from_home(), &cfg.source.clone().map_or_else(|| abs(config), Ok)?, false)?;
     daemon.post("/api/initial", json!({ "sandbox": name }))?;
-    eprintln!("sbxw  → {}", web_url(&cfg, Some(name.as_str())));
+    eprintln!("sbxw  → {}", web_url(&cfg, Some(&name.to_string())));
     Ok(())
 }
 
@@ -378,10 +489,25 @@ pub fn logs(name: Option<String>, lines: u32) -> Result<()> {
 pub fn ports(name: &str, config: &Path) -> Result<()> {
     let name = sandbox_arg(name)?;
     let cfg = load_config(config)?;
+    if !name.is_local() {
+        // Published on the host and forwarded here by the daemon's link.
+        let daemon = Daemon::new(&cfg.web_addr);
+        if daemon.health().is_none() {
+            bail!("'{name}' is on another host: its ports are forwarded by the daemon — start it with `sbxw up`");
+        }
+        for p in cfg.wanted_ports(&[]) {
+            let body = json!({ "sandbox_port": p.sandbox_port, "host_port": p.host_port });
+            match daemon.post(&format!("/api/sandboxes/{name}/ports/publish"), body) {
+                Ok(_) => println!("published {}:{} on host '{}', forwarded here", p.host_port, p.sandbox_port, name.host),
+                Err(e) => eprintln!("could not publish {}: {e:#}", p.sandbox_port),
+            }
+        }
+        return Ok(());
+    }
     let rt = runtime();
     let sbx = Sbx::process();
     for spec in sbxw_core::ports::publish_specs(&cfg.wanted_ports(&[]), cfg.ip_per_app) {
-        match rt.block_on(sbx.publish(&name, &spec)) {
+        match rt.block_on(sbx.publish(&name.name, &spec)) {
             Ok(()) => println!("published {spec}"),
             Err(e) => eprintln!("could not publish {spec}: {e:#}"),
         }
@@ -390,7 +516,8 @@ pub fn ports(name: &str, config: &Path) -> Result<()> {
 }
 
 pub fn bash(name: &str) -> Result<()> {
-    sbxw_sbx::interactive(&sbxw_sbx::bash_args(&sandbox_arg(name)?))
+    let name = sandbox_arg(name)?;
+    interactive_on(&runtime(), &name.host, &sbxw_sbx::bash_args(&name.name))
 }
 
 pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> {
@@ -405,7 +532,10 @@ pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> 
         bail!("specify a sandbox name, or pass --setup to register the `*.sbx` SSH host block");
     };
     let name = sandbox_arg(&name)?;
-    let host = format!("{name}.sbx");
+    if !name.is_local() {
+        bail!("`sbxw ssh` reaches this machine's sandboxes; for '{name}' use `sbxw bash {name}`");
+    }
+    let host = format!("{}.sbx", name.name);
     let status = std::process::Command::new("ssh")
         .arg(&host)
         .args(command)
@@ -423,31 +553,85 @@ pub fn ssh(name: Option<String>, setup: bool, command: &[String]) -> Result<()> 
     bail!("`ssh {host}` exited with {status}")
 }
 
+/// One row of `sbxw ls`.
+struct LsRow {
+    name: String,
+    agent: String,
+    created: String,
+    status: String,
+}
+
+/// Every sandbox: this machine's, then each remote host's by ref. A host
+/// that cannot be reached is listed from sbxw's records, with the state last
+/// seen, marked unreachable.
 pub fn ls() -> Result<()> {
-    let list = runtime().block_on(Sbx::process().ls());
-    if list.is_empty() {
-        println!("No sandboxes.");
-        return Ok(());
-    }
-    let wn = list.iter().map(|s| s.name.len()).max().unwrap_or(7).max(7);
-    let wa = list.iter().map(|s| s.agent.len()).max().unwrap_or(5).max(5);
-    println!("{:<wn$}  {:<wa$}  {:<20}  STATUS", "SANDBOX", "AGENT", "CREATED");
-    println!("{:-<wn$}  {:-<wa$}  {:-<20}  ------", "", "", "");
-    for s in &list {
+    let rt = runtime();
+    let row = |name: String, s: &sbxw_sbx::SandboxInfo| {
         let dot = if s.is_running() { "●" } else if s.is_stopped() { "○" } else { "?" };
         // RFC 3339 cut to the minute: `2026-10-20T10:00` reads at a glance.
         let created: String = s.created_at.as_deref().unwrap_or("").replace('T', " ").chars().take(16).collect();
         let held = if s.detached { "  (kept up)" } else { "" };
-        println!("{:<wn$}  {:<wa$}  {created:<20}  {dot} {}{held}", s.name, s.agent, s.status);
+        LsRow { name, agent: s.agent.clone(), created, status: format!("{dot} {}{held}", s.status) }
+    };
+    let mut rows: Vec<LsRow> = rt.block_on(Sbx::process().ls()).iter().map(|s| row(s.name.clone(), s)).collect();
+    let paths = Paths::from_home();
+    let store = Store::open(paths.clone());
+    let hosts = sbxw_daemon::remotes::load_hosts(&paths).unwrap_or_else(|e| {
+        eprintln!("sbxw  warning: {e:#}");
+        Default::default()
+    });
+    for h in hosts.hosts.values() {
+        let known: Vec<SandboxRef> = store.names().into_iter().filter(|n| n.host == h.name).collect();
+        match rt.block_on(remote_ls(&h.name)) {
+            Ok(list) => {
+                for s in &list {
+                    let Ok(n) = SandboxName::parse(&s.name) else { continue };
+                    let r = SandboxRef::new(h.name.clone(), n);
+                    if known.contains(&r) && store.get(&r).last_status.as_deref() != Some(s.status.as_str()) {
+                        let st = s.status.clone();
+                        let _ = store.update(&r, |rec| rec.last_status = Some(st));
+                    }
+                    rows.push(row(r.to_string(), s));
+                }
+            }
+            Err(e) if sbxw_sbx::host::is_unreachable(&e) => {
+                eprintln!("sbxw  {e:#}");
+                for r in known {
+                    let last = store.get(&r).last_status.unwrap_or_else(|| "unknown".into());
+                    rows.push(LsRow { name: r.to_string(), agent: "claude".into(), created: String::new(), status: format!("✕ unreachable (last seen {last})") });
+                }
+            }
+            Err(e) => eprintln!("sbxw  warning: host '{}': {e:#}", h.name),
+        }
+    }
+    if rows.is_empty() {
+        println!("No sandboxes.");
+        return Ok(());
+    }
+    let wn = rows.iter().map(|r| r.name.len()).max().unwrap_or(7).max(7);
+    let wa = rows.iter().map(|r| r.agent.len()).max().unwrap_or(5).max(5);
+    println!("{:<wn$}  {:<wa$}  {:<20}  STATUS", "SANDBOX", "AGENT", "CREATED");
+    println!("{:-<wn$}  {:-<wa$}  {:-<20}  ------", "", "", "");
+    for r in &rows {
+        println!("{:<wn$}  {:<wa$}  {:<20}  {}", r.name, r.agent, r.created, r.status);
     }
     Ok(())
 }
 
+/// `sbx ls` on a remote host. Unlike `Sbx::ls`, a host that cannot be
+/// reached is an error (a `HostUnreachable`), not an empty list.
+async fn remote_ls(host: &HostName) -> Result<Vec<sbxw_sbx::SandboxInfo>> {
+    let exec = remote_exec(host)?;
+    let sbx = Sbx::new(Arc::new(exec.on_host().await?));
+    sbxw_daemon::svc::sandboxes::list_strict(&sbx).await
+}
+
 pub fn ports_ls(name: Option<String>, all: bool) -> Result<()> {
     let rt = runtime();
-    let sbx = Sbx::process();
+    let mut per_host = SbxPerHost::new(&rt);
     let names: Vec<String> = match (all, name) {
-        (true, _) => rt.block_on(sbx.ls()).into_iter().map(|s| s.name).collect(),
+        // This machine's: a remote host's are listed by naming them.
+        (true, _) => rt.block_on(Sbx::process().ls()).into_iter().map(|s| s.name).collect(),
         (false, Some(n)) => vec![n],
         (false, None) => bail!("specify a sandbox name, or pass --all"),
     };
@@ -460,7 +644,7 @@ pub fn ports_ls(name: Option<String>, all: bool) -> Result<()> {
         if multi {
             println!("=== {n} ===");
         }
-        match rt.block_on(sbx.ports_raw(&sb)) {
+        match per_host.get(&sb.host).and_then(|sbx| rt.block_on(sbx.ports_raw(&sb.name))) {
             Ok(out) if out.trim().is_empty() => println!("  (no ports published)"),
             Ok(out) => println!("{}", out.trim_end()),
             Err(e) => eprintln!("  error: {e:#}"),
@@ -474,9 +658,10 @@ pub fn ports_ls(name: Option<String>, all: bool) -> Result<()> {
 
 pub fn stop(names: Vec<String>, all: bool) -> Result<()> {
     let rt = runtime();
-    let sbx = Sbx::process();
+    let mut per_host = SbxPerHost::new(&rt);
     let targets: Vec<String> = if all {
-        rt.block_on(sbx.ls()).into_iter().filter(|s| s.is_running()).map(|s| s.name).collect()
+        // This machine's: a remote host's are stopped by naming them.
+        rt.block_on(Sbx::process().ls()).into_iter().filter(|s| s.is_running()).map(|s| s.name).collect()
     } else if names.is_empty() {
         bail!("specify at least one sandbox name, or use --all");
     } else {
@@ -486,19 +671,21 @@ pub fn stop(names: Vec<String>, all: bool) -> Result<()> {
         println!("No running sandboxes to stop.");
     }
     for n in targets {
-        rt.block_on(sbx.stop(&sandbox_arg(&n)?)).with_context(|| format!("failed to stop '{n}'"))?;
+        let sb = sandbox_arg(&n)?;
+        let sbx = per_host.get(&sb.host).with_context(|| format!("failed to stop '{n}'"))?;
+        rt.block_on(sbx.stop(&sb.name)).with_context(|| format!("failed to stop '{n}'"))?;
         println!("stopped  {n}");
     }
     Ok(())
 }
 
 /// Remove, then forget everything kept about them; the daemon closes their
-/// terminals if it runs.
+/// terminals if it runs. Each host's sandboxes are removed by its own sbx.
 pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
     let rt = runtime();
-    let sbx = Sbx::process();
-    let targets: Vec<SandboxName> = if all {
-        rt.block_on(sbx.ls()).into_iter().filter_map(|s| SandboxName::parse(&s.name).ok()).collect()
+    let targets: Vec<SandboxRef> = if all {
+        // This machine's: a remote host's are removed by naming them.
+        rt.block_on(Sbx::process().ls()).into_iter().filter_map(|s| SandboxName::parse(&s.name).ok()).map(SandboxRef::local).collect()
     } else if names.is_empty() {
         bail!("specify at least one sandbox name, or use --all");
     } else {
@@ -508,30 +695,45 @@ pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
         println!("No sandboxes.");
         return Ok(());
     }
+    let mut by_host: std::collections::BTreeMap<HostName, Vec<SandboxName>> = Default::default();
+    for t in &targets {
+        by_host.entry(t.host.clone()).or_default().push(t.name.clone());
+    }
+    let mut per_host = SbxPerHost::new(&rt);
     let store = Store::open(Paths::from_home());
-    // Named, even for --all: the list is already known, and sbx then answers per name.
-    let results = rt.block_on(sbx.rm(&targets))?;
-    let gone: Vec<&SandboxName> = targets.iter().filter(|n| results.iter().any(|r| r.removed && r.name == n.as_str())).collect();
-    let chats: Vec<PathBuf> = gone.iter().filter_map(|n| store.chat_workspace(*n)).collect();
     let cfg = load_config(Path::new("sbxw.toml")).unwrap_or_default();
     let daemon = Daemon::new(&cfg.web_addr);
     let live = daemon.health().is_some();
-    for n in &gone {
-        store.forget(*n);
-        if live {
-            let _ = daemon.post(&format!("/api/sandboxes/{n}/detach"), json!({}));
+    let (mut failed, mut total) = (0, 0);
+    for (host, list) in by_host {
+        let sbx = per_host.get(&host)?;
+        // Named, even for --all: the list is already known, and sbx then answers per name.
+        let results = rt.block_on(sbx.rm(&list))?;
+        total += results.len();
+        let gone: Vec<SandboxRef> = list
+            .iter()
+            .filter(|n| results.iter().any(|r| r.removed && r.name == n.as_str()))
+            .map(|n| SandboxRef::new(host.clone(), n.clone()))
+            .collect();
+        let chats: Vec<PathBuf> = gone.iter().filter_map(|n| store.chat_workspace(n)).collect();
+        for n in &gone {
+            store.forget(n);
+            if live {
+                let _ = daemon.post(&format!("/api/sandboxes/{n}/detach"), json!({}));
+            }
+            println!("removed  {n}");
         }
-        println!("removed  {n}");
+        for dir in chats {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        for r in results.iter().filter(|r| !r.removed) {
+            failed += 1;
+            let shown = SandboxName::parse(&r.name).map(|n| SandboxRef::new(host.clone(), n).to_string()).unwrap_or_else(|_| r.name.clone());
+            eprintln!("failed   {shown}: {}", r.error.as_deref().unwrap_or("not removed"));
+        }
     }
-    for dir in chats {
-        let _ = std::fs::remove_dir_all(dir);
-    }
-    let failed: Vec<_> = results.iter().filter(|r| !r.removed).collect();
-    for r in &failed {
-        eprintln!("failed   {}: {}", r.name, r.error.as_deref().unwrap_or("not removed"));
-    }
-    if !failed.is_empty() {
-        bail!("{} of {} sandbox(es) not removed", failed.len(), results.len());
+    if failed > 0 {
+        bail!("{failed} of {total} sandbox(es) not removed");
     }
     Ok(())
 }
@@ -726,10 +928,10 @@ mod tests {
 
     #[test]
     fn a_sandbox_argument_is_a_ref() {
-        assert_eq!(sandbox_arg("neos").unwrap().as_str(), "neos");
-        assert_eq!(sandbox_arg("local~neos").unwrap().as_str(), "neos");
-        let e = sandbox_arg("buildbox~neos").unwrap_err().to_string();
-        assert!(e.contains("remote hosts are not wired yet") && e.contains("buildbox~neos"), "{e}");
+        assert_eq!(sandbox_arg("neos").unwrap().to_string(), "neos");
+        assert_eq!(sandbox_arg("local~neos").unwrap().to_string(), "neos");
+        let r = sandbox_arg("buildbox~neos").unwrap();
+        assert_eq!((r.host.as_str(), r.name.as_str()), ("buildbox", "neos"));
         assert!(sandbox_arg("a~b~c").is_err());
         assert!(sandbox_arg("ne os").is_err());
     }

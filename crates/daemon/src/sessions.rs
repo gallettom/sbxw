@@ -170,7 +170,7 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_opens_nothing_and_a_dead_session_is_dropped() {
         let s = Sessions::new();
-        let key = SessionKey::agent(&SandboxName::parse("n").unwrap());
+        let key = SessionKey::agent(SandboxName::parse("n").unwrap());
         assert!(s.get_or_open(&key, 0, || async { anyhow::bail!("no") }).await.is_err());
         let (first, _) = s.get_or_open(&key, 0, || async { Ok(sh("exit 0")) }).await.unwrap();
         for _ in 0..50 {

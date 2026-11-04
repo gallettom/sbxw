@@ -5,7 +5,7 @@ use crate::app::{now_ms, App};
 use crate::bus::Event;
 use sbxw_core::codemap::{self, Kind, Run};
 use sbxw_core::tooling::{CODEMAP_COMMAND_PATH, CODEMAP_LENS_COMMAND_PATH};
-use sbxw_core::SandboxName;
+use sbxw_core::SandboxRef;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ impl App {
     /// Write the map (`lens: None`) or retell it for a reader. The three
     /// refusals a run would otherwise discover minutes later come first: a
     /// stopped sandbox, no command (the kit is not applied), already writing.
-    pub async fn codemap_start(self: &Arc<Self>, sandbox: &SandboxName, lens: Option<&str>) -> Result<(Run, &'static str), String> {
+    pub async fn codemap_start(self: &Arc<Self>, sandbox: &SandboxRef, lens: Option<&str>) -> Result<(Run, &'static str), String> {
         let (kind, prompt, command, path, dir) = match lens {
             None => (Kind::Map, "/codemap".to_string(), "/codemap", CODEMAP_COMMAND_PATH, codemap::CODEMAP_DIR),
             Some(brief) => {
@@ -34,20 +34,21 @@ impl App {
                 (Kind::Lens, format!("/codemap-lens {brief}"), "/codemap-lens", CODEMAP_LENS_COMMAND_PATH, codemap::LENS_DIR)
             }
         };
-        if let Some(k) = self.codemap.lock().unwrap().writing(sandbox) {
-            return Err(codemap::already_writing(sandbox, k));
+        if let Some(k) = self.codemap.lock().unwrap().writing(&sandbox.to_string()) {
+            return Err(codemap::already_writing(&sandbox.to_string(), k));
         }
-        if !self.sbx.is_running(sandbox).await {
+        let sbx = self.sbx_for(sandbox).await.map_err(|e| format!("{e:#}"))?;
+        if !sbx.is_running(&sandbox.name).await {
             return Err(format!("'{sandbox}' is not running — start it first, then ask again"));
         }
-        if !self.sbx.file_exists(sandbox, path).await {
+        if !sbx.file_exists(&sandbox.name, path).await {
             return Err(format!(
                 "'{sandbox}' has no {command} command — add the codemap kit to this project \
                  (`kits = [\"…/assets/codemap\"]` in sbxw.toml) and run `sbxw up`"
             ));
         }
         // Claimed before the session starts, so two clicks cannot both start one.
-        let run = self.codemap.lock().unwrap().begin(sandbox, kind, now_ms())?;
+        let run = self.codemap.lock().unwrap().begin(&sandbox.to_string(), kind, now_ms())?;
         self.send(Event::Codemap(run.clone()));
         tracing::info!("codemap: '{sandbox}' is writing {} under {dir}/", kind.what());
         let app = self.clone();
@@ -56,9 +57,16 @@ impl App {
         Ok((run, dir))
     }
 
-    async fn run_codemap_session(&self, sandbox: &SandboxName, kind: Kind, prompt: &str) {
-        let args = sbxw_sbx::scripts::codemap_run_args(sandbox, self.cfg.agent_port(), prompt);
-        let out = tokio::time::timeout(CODEMAP_MAX, self.sbx.raw(sbxw_sbx::runner::Invocation::new(args))).await;
+    async fn run_codemap_session(&self, sandbox: &SandboxRef, kind: Kind, prompt: &str) {
+        let port = self.agent_port_for(sandbox).await.unwrap_or_else(|_| self.cfg.agent_port().to_string());
+        let args = sbxw_sbx::scripts::codemap_run_args(&sandbox.name, &port, prompt);
+        let run = async {
+            match self.sbx_for(sandbox).await {
+                Ok(sbx) => sbx.raw(sbxw_sbx::runner::Invocation::new(args)).await,
+                Err(e) => Err(e),
+            }
+        };
+        let out = tokio::time::timeout(CODEMAP_MAX, run).await;
         let (ok, note) = match out {
             Err(_) => (false, format!("still going after {} minutes — stopped", CODEMAP_MAX.as_secs() / 60)),
             Ok(Err(e)) => (false, format!("could not start a session: {e:#}")),
@@ -71,7 +79,7 @@ impl App {
                 (false, format!("exit {} — {tail}", o.code.unwrap_or(-1)))
             }
         };
-        if self.codemap_finish(sandbox, ok, Some(&note)).is_some() {
+        if self.codemap_finish(&sandbox.to_string(), ok, Some(&note)).is_some() {
             if ok {
                 tracing::info!("codemap: '{sandbox}' finished {} — {note}", kind.what());
             } else {

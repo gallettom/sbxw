@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use sbxw_core::plans::{DistillItem, PlanThread, ThreadState, Variant};
 use sbxw_core::relay::{agent_view, RelayKind};
 use sbxw_core::usage::Reading;
-use sbxw_core::{SandboxName, SandboxRef, ThreadName};
+use sbxw_core::{SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -71,7 +71,7 @@ struct AskBody {
     timeout: Option<u64>,
 }
 
-async fn open_and_park(app: Arc<App>, me: SandboxName, b: AskBody, kind: RelayKind) -> ApiResult {
+async fn open_and_park(app: Arc<App>, me: SandboxRef, b: AskBody, kind: RelayKind) -> ApiResult {
     let thread = thread_of(b.thread)?;
     let req = app.relay_open(&me, thread.as_ref(), kind, &b.question)?;
     let got = app.relay_wait(&req.id, &me, wait_bound(b.timeout)).await?;
@@ -188,12 +188,12 @@ struct DoneBody {
 /// The agent says the document is written. The path names a sandbox, and it
 /// has to be the caller's own.
 async fn codemap_done(State(app): S, Agent(me): Agent, Path(name): Path<String>, body: Option<Json<DoneBody>>) -> ApiResult {
-    if SandboxRef::parse(&name).ok() != Some(SandboxRef::local(me.clone())) {
+    if SandboxRef::parse(&name).ok() != Some(me.clone()) {
         return Err(ApiError::forbidden(format!("'{me}' cannot report for '{name}'")));
     }
     let b = body.map(|Json(b)| b).unwrap_or_default();
     let ok = b.ok.unwrap_or(true);
-    let tracked = app.codemap_finish(&me, ok, b.note.as_deref()).is_some();
+    let tracked = app.codemap_finish(&me.to_string(), ok, b.note.as_deref()).is_some();
     tracing::info!("codemap: '{me}' reports {} (run in flight: {tracked})", if ok { "it is written" } else { "it gave up" });
     Ok(ok_with(json!({ "tracked": tracked })))
 }

@@ -204,6 +204,11 @@ pub struct SandboxRecord {
     /// kit, no auth variables — so it logs in to claude.ai itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remote_control: bool,
+    /// A remote sandbox's status the last time its host answered: what it
+    /// is listed with while the host is unreachable. Never set for this
+    /// machine's sandboxes, so their records are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_status: Option<String>,
 }
 
 #[derive(Debug)]
@@ -473,6 +478,7 @@ impl Store {
             kits: vec![],
             ui_rule_checked: false,
             remote_control: false,
+            last_status: None,
         }
     }
 

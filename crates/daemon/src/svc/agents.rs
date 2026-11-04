@@ -5,7 +5,7 @@ use crate::bus::Event;
 use crate::typing;
 use sbxw_core::agents::{self, answer_keystrokes, HookEvent, OriginEvidence, SessionInfo};
 use sbxw_core::session::{SessionKey, SessionKind};
-use sbxw_core::SandboxName;
+use sbxw_core::{SandboxName, SandboxRef};
 use std::sync::Arc;
 
 const HOOK_LOG_MAX: usize = 100;
@@ -19,10 +19,10 @@ pub enum AnswerError {
 
 impl App {
     /// One hook event from `sandbox` (its identity, from its token).
-    pub fn ingest_hook(&self, sandbox: &SandboxName, mut body: serde_json::Value) {
+    pub fn ingest_hook(&self, sandbox: &SandboxRef, mut body: serde_json::Value) {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("received_ms".into(), now_ms().into());
-            obj.insert("sandbox".into(), sandbox.as_str().into());
+            obj.insert("sandbox".into(), sandbox.to_string().into());
         }
         {
             let mut log = self.hook_log.lock().unwrap();
@@ -53,7 +53,7 @@ impl App {
             thread: ev.thread(),
         });
         let has_pty = self.sessions.is_live(&SessionKey::agent(sandbox));
-        let infos = self.agents.lock().unwrap().apply(sandbox, &ev, origin, has_pty, now_ms());
+        let infos = self.agents.lock().unwrap().apply(&sandbox.to_string(), &ev, origin, has_pty, now_ms());
         for info in infos {
             self.send(Event::Session(info));
         }
@@ -79,7 +79,7 @@ impl App {
     /// type. Refused (409) unless exactly one session of the sandbox is
     /// identifiably the one sbxw's terminal drives — an island too old to know
     /// would otherwise answer one session's question in another's terminal.
-    pub async fn answer(self: &Arc<Self>, sandbox: &SandboxName, kind: SessionKind, indices: Vec<u32>) -> Result<(), AnswerError> {
+    pub async fn answer(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind, indices: Vec<u32>) -> Result<(), AnswerError> {
         let Some(session) = self.sessions.live(&SessionKey::new(sandbox.clone(), kind)) else {
             return Err(AnswerError::NoSession);
         };
@@ -88,7 +88,7 @@ impl App {
         }
         let (key, sizes) = {
             let book = self.agents.lock().unwrap();
-            let key = book.answerable(sandbox).map_err(|e| AnswerError::Ambiguous(e.to_string()))?;
+            let key = book.answerable(&sandbox.to_string()).map_err(|e| AnswerError::Ambiguous(e.to_string()))?;
             let sizes = book.prompt_sizes(&key);
             (key, sizes)
         };
@@ -102,7 +102,7 @@ impl App {
     }
 
     /// Raw bytes into a terminal the caller names: no inference, so no guard.
-    pub async fn input(&self, sandbox: &SandboxName, kind: SessionKind, data: &[u8]) -> bool {
+    pub async fn input(&self, sandbox: &SandboxRef, kind: SessionKind, data: &[u8]) -> bool {
         match self.sessions.live(&SessionKey::new(sandbox.clone(), kind)) {
             Some(s) => {
                 s.write(&[data]).await;

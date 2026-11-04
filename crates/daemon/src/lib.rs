@@ -7,7 +7,8 @@
 //!   sbxw ships and the read-only download cache they share;
 //! * `svc` — the services, as `impl App` blocks;
 //! * `http` — the UI listener (browser, island, extension) and the agent
-//!   listener (the only one sandboxes can reach, token-authenticated).
+//!   listener (the only one sandboxes can reach, token-authenticated);
+//! * `remotes` — the remote hosts (experimental): a link, a host and an sbx each.
 
 pub mod app;
 pub mod bundled;
@@ -19,6 +20,7 @@ pub mod host;
 pub mod hostsys;
 pub mod provision;
 pub mod pty;
+pub mod remotes;
 pub mod sandbox_fs;
 pub mod sessions;
 pub mod store;

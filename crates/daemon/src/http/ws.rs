@@ -69,8 +69,6 @@ async fn bridge(
     let (mut tx, mut rx) = socket.split();
     let opened = async {
         if let Some(sb) = &key.sandbox {
-            // A remote sandbox's pane opens, and says so: nothing runs there yet.
-            let sb = sb.local_name().map_err(|e| anyhow::anyhow!(e.to_string()))?;
             settle_ws_thread(&app, sb, &key.kind, repo.as_deref(), model.as_deref(), checkout).await.map_err(anyhow::Error::msg)?;
         }
         app.open_session(&key).await
