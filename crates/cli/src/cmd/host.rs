@@ -204,7 +204,7 @@ fn ls() -> Result<()> {
                     format!("{u}{host}{p}")
                 }
             };
-            [h.name.clone(), target, h.agent_port.to_string(), if h.trust_secrets { "yes" } else { "no" }.into()]
+            [h.name.to_string(), target, h.agent_port.to_string(), if h.trust_secrets { "yes" } else { "no" }.into()]
         })
         .collect();
     let head = ["NAME", "TARGET", "AGENT PORT", "TRUST SECRETS"];
