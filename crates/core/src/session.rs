@@ -178,8 +178,8 @@ mod tests {
 
     #[test]
     fn the_wire_modes_are_the_old_ones() {
-        assert_eq!(SessionKey::agent(&sb("neos")).to_string(), "neos::claude");
-        assert_eq!(SessionKey::thread(&sb("neos"), &th("api")).to_string(), "neos::thread:api");
+        assert_eq!(SessionKey::agent(sb("neos")).to_string(), "neos::claude");
+        assert_eq!(SessionKey::thread(sb("neos"), &th("api")).to_string(), "neos::thread:api");
         assert_eq!(SessionKey::monitor().to_string(), "__host__::monitor");
         assert_eq!(
             SessionKey::new(sb("n"), SessionKind::ThreadBash(th("a"))).to_string(),
