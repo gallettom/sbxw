@@ -124,7 +124,7 @@ Each host's header shows:
 
 | Part | Meaning |
 |---|---|
-| Dot and text | Green with a latency (`12 ms`, the last round trip over the SSH link, timed again every 30 s or so): the link is up. Red, **down since HH:MM**: it was up and dropped; sbxw keeps retrying. Grey, **never connected**: sbxw has not reached it yet |
+| Dot and text | Green with a latency (`12 ms`, the last round trip over the SSH link, timed again every 30 s or so): the link is up. Red, **down HH:MM**: it was up and dropped at that time; sbxw keeps retrying. Grey, **never**: sbxw has not reached it yet. Hover the dot for the full sentence |
 | Count | Sandboxes sbxw holds a record of there |
 | **⋯** | **Test** runs `sbx version` over the link and times a round trip. **Provision** shows the command that installs `sbx` on the host, `sbxw host provision <host>`, to copy and run in a terminal on this machine: it asks for your sudo password on the host and for a Docker token, which the page never sees. **Edit** opens **Setup → Hosts** on that host |
 
