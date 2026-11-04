@@ -125,7 +125,7 @@ struct ProposeBody {
 }
 
 async fn propose(State(app): S, Agent(me): Agent, Json(b): Json<ProposeBody>) -> ApiResult {
-    let plan = app.plan_propose(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref())?;
+    let plan = app.plan_propose(&me, &b.summary, b.threads, b.variant, &b.justification, b.lead.as_deref()).await?;
     let plan = app.plan_wait(&plan.id, &me, wait_bound(b.timeout)).await?;
     Ok(ok_with(json!({ "plan": app.plan_view(&plan) })))
 }

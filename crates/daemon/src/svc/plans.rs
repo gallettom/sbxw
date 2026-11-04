@@ -4,6 +4,7 @@
 use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::git;
+use crate::host::Host;
 use crate::store::write_atomic;
 use sbxw_core::messages;
 use sbxw_core::plans::{DistillItem, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
@@ -70,7 +71,7 @@ impl App {
 
     /// Every thread's repo resolvable, without recording anything: a plan
     /// whose threads could not start is refused before anything is started.
-    fn check_plan_repos(&self, sandbox: &SandboxName, threads: &[PlanThread]) -> Result<(), String> {
+    async fn check_plan_repos(&self, sandbox: &SandboxName, threads: &[PlanThread]) -> Result<(), String> {
         let Some(ws) = self.store.workspace(sandbox) else {
             return if threads.iter().any(|t| t.repo.is_some()) {
                 Err(format!("sbxw has no workspace recorded for '{sandbox}', so threads cannot name a repo"))
@@ -82,7 +83,7 @@ impl App {
         for t in threads {
             let name = t.name.trim();
             let recorded = rec.threads.get(name).map(|r| r.repo.as_str());
-            git::choose(&ws, recorded, name, t.repo.as_deref()).map_err(|e| format!("thread {name:?}: {e}"))?;
+            git::choose(&Host::local(), &ws, recorded, name, t.repo.as_deref()).await.map_err(|e| format!("thread {name:?}: {e}"))?;
         }
         Ok(())
     }
@@ -90,19 +91,19 @@ impl App {
     /// A shared plan's threads all work in one worktree, so in one repo: the
     /// one they resolve to, and the worktree's path in it. `Ok(None)` when the
     /// sandbox has no workspace recorded (the scripts find the repo there).
-    fn shared_worktree(&self, sandbox: &SandboxName, threads: &[PlanThread], team: &str) -> Result<Option<String>, String> {
+    async fn shared_worktree(&self, sandbox: &SandboxName, threads: &[PlanThread], team: &str) -> Result<Option<String>, String> {
         let Some(ws) = self.store.workspace(sandbox) else { return Ok(None) };
         let rec = self.store.get(sandbox);
         let mut repos = std::collections::BTreeSet::new();
         for t in threads {
             let name = t.name.trim();
             let recorded = rec.threads.get(name).map(|r| r.repo.as_str());
-            repos.insert(git::choose(&ws, recorded, name, t.repo.as_deref()).map_err(|e| format!("thread {name:?}: {e}"))?);
+            repos.insert(git::choose(&Host::local(), &ws, recorded, name, t.repo.as_deref()).await.map_err(|e| format!("thread {name:?}: {e}"))?);
         }
         match repos.len() {
             1 => {
                 let rel = repos.into_iter().next().unwrap_or_default();
-                Ok(git::team_worktree(&ws, &rel, team).map(|p| p.to_string_lossy().into_owned()))
+                Ok(git::team_worktree(&Host::local(), &ws, &rel, team).await.map(|p| p.to_string_lossy().into_owned()))
             }
             _ => Err(format!(
                 "a shared plan works in one worktree, so its threads need one repo; these name {}. \
@@ -119,7 +120,7 @@ impl App {
         Some(Team { plan: plan.id.clone(), worktree: ThreadName::parse(&plan.team_name()).ok()? })
     }
 
-    pub fn plan_propose(
+    pub async fn plan_propose(
         &self,
         sandbox: &SandboxName,
         summary: &str,
@@ -128,9 +129,9 @@ impl App {
         justification: &str,
         lead: Option<&str>,
     ) -> Result<Plan, String> {
-        self.check_plan_repos(sandbox, &threads)?;
+        self.check_plan_repos(sandbox, &threads).await?;
         if variant == Variant::Shared {
-            self.shared_worktree(sandbox, &threads, "team")?;
+            self.shared_worktree(sandbox, &threads, "team").await?;
         }
         let plan = self.plans.lock().unwrap().propose(
             sbxw_core::ids::plan_id(),
@@ -222,17 +223,17 @@ impl App {
                  max_agent_sessions = {max}. Remove threads, or raise the ceiling in sbxw.toml."
             ));
         }
-        self.check_plan_repos(&sandbox, &threads)?;
+        self.check_plan_repos(&sandbox, &threads).await?;
         let worktree = match variant.unwrap_or(plan.variant) {
             Variant::Split => None,
-            Variant::Shared => self.shared_worktree(&sandbox, &threads, &plan.team_name())?,
+            Variant::Shared => self.shared_worktree(&sandbox, &threads, &plan.team_name()).await?,
         };
         let plan = self.plans.lock().unwrap().approve(id, threads, variant, worktree, now_ms())?;
         let plan = self.plan_changed(plan);
         tracing::info!("plans: {id} approved for '{sandbox}' ({} thread(s), {:?})", plan.threads.len(), plan.variant);
         for t in &plan.threads {
             let Ok(name) = ThreadName::parse(&t.name) else { continue };
-            if let Err(e) = self.settle_thread_repo(&sandbox, &name, t.repo.as_deref()) {
+            if let Err(e) = self.settle_thread_repo(&sandbox, &name, t.repo.as_deref()).await {
                 tracing::warn!("plans: thread '{name}' of '{sandbox}': {e}");
             } else if let Some(m) = t.model.as_deref().and_then(|m| ModelId::parse(m).ok()) {
                 if let Err(e) = self.settle_thread_model(&sandbox, &name, &m, true) {
@@ -297,25 +298,25 @@ impl App {
         }
         // Where each thread merges — read first, so the base is known from the
         // first broadcast on.
-        let dirs: Vec<(String, Result<String, String>)> = merge
-            .order
-            .iter()
-            .map(|t| {
-                let planned = plan.threads.iter().find(|p| &p.name == t).and_then(|p| p.repo.clone());
-                let dir = ThreadName::parse(t).map_err(|e| e.to_string()).and_then(|name| {
+        let mut dirs: Vec<(String, Result<String, String>)> = Vec::new();
+        for t in &merge.order {
+            let planned = plan.threads.iter().find(|p| &p.name == t).and_then(|p| p.repo.clone());
+            let dir = match ThreadName::parse(t) {
+                Ok(name) => {
                     let recorded = self.store.get(&sandbox).threads.contains_key(t.as_str());
-                    self.settle_thread_repo(&sandbox, &name, if recorded { None } else { planned.as_deref() })
-                });
-                (t.clone(), dir)
-            })
-            .collect();
-        let bases: std::collections::BTreeSet<Option<String>> = dirs
-            .iter()
-            .map(|(_, d)| match d {
-                Ok(dir) if !dir.is_empty() => git::branch_of(std::path::Path::new(dir)),
+                    self.settle_thread_repo(&sandbox, &name, if recorded { None } else { planned.as_deref() }).await
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            dirs.push((t.clone(), dir));
+        }
+        let mut bases: std::collections::BTreeSet<Option<String>> = std::collections::BTreeSet::new();
+        for (_, d) in &dirs {
+            bases.insert(match d {
+                Ok(dir) if !dir.is_empty() => git::branch_of(&Host::local(), std::path::Path::new(dir)).await,
                 _ => None,
-            })
-            .collect();
+            });
+        }
         let base = if bases.len() == 1 { bases.into_iter().next().flatten() } else { None };
         let p = self.plans.lock().unwrap().start_merge(id, base, distillate, now_ms())?;
         self.plan_changed(p);
@@ -407,14 +408,17 @@ impl App {
         let team = ThreadName::parse(&plan.team_name()).map_err(|e| e.to_string())?;
         // Every thread is in the one repo; the first one's settles it.
         let dir = match plan.threads.first() {
-            Some(t) => ThreadName::parse(&t.name).map_err(|e| e.to_string()).and_then(|name| {
-                let recorded = self.store.get(sandbox).threads.contains_key(t.name.as_str());
-                self.settle_thread_repo(sandbox, &name, if recorded { None } else { t.repo.as_deref() })
-            }),
+            Some(t) => match ThreadName::parse(&t.name) {
+                Ok(name) => {
+                    let recorded = self.store.get(sandbox).threads.contains_key(t.name.as_str());
+                    self.settle_thread_repo(sandbox, &name, if recorded { None } else { t.repo.as_deref() }).await
+                }
+                Err(e) => Err(e.to_string()),
+            },
             None => Err(format!("plan {id} has no thread")),
         };
         let base = match &dir {
-            Ok(d) if !d.is_empty() => git::branch_of(std::path::Path::new(d)),
+            Ok(d) if !d.is_empty() => git::branch_of(&Host::local(), std::path::Path::new(d)).await,
             _ => None,
         };
         let p = self.plans.lock().unwrap().start_merge(id, base, distillate, now_ms())?;
@@ -491,7 +495,7 @@ impl App {
         if self.is_same_worktree(sandbox, thread) {
             tracing::info!("closing session '{thread}' of '{sandbox}', in the main checkout");
         } else if let Some(team) = self.team_for(sandbox, thread) {
-            let dir = self.settle_thread_repo(sandbox, thread, None).ok();
+            let dir = self.settle_thread_repo(sandbox, thread, None).await.ok();
             let left = self.plans.lock().unwrap().drop_team_thread(sandbox.as_str(), thread.as_str(), now_ms());
             if let Some(plan) = left {
                 tracing::info!("closing '{thread}' of '{sandbox}': it leaves shared plan {}", plan.id);
@@ -501,7 +505,7 @@ impl App {
                 self.plan_changed(plan);
             }
         } else {
-            match self.settle_thread_repo(sandbox, thread, None) {
+            match self.settle_thread_repo(sandbox, thread, None).await {
                 Ok(dir) => self
                     .sbx
                     .thread_close(sandbox, &dir, thread, discard, delete_branch)
@@ -647,7 +651,7 @@ mod tests {
     async fn a_proposal_is_persisted_and_survives_a_restart() {
         let (dir, app) = app();
         let sb = SandboxName::parse("neos").unwrap();
-        let p = app.plan_propose(&sb, "split", vec![t("api")], Variant::Split, "independent", Some("lead")).unwrap();
+        let p = app.plan_propose(&sb, "split", vec![t("api")], Variant::Split, "independent", Some("lead")).await.unwrap();
         let file = app.store.paths.plans().join("neos.json");
         assert!(file.exists());
         let again = crate::testing::app_in(dir.path());
@@ -660,7 +664,7 @@ mod tests {
     async fn a_refusal_wakes_the_lead() {
         let (_d, app) = app();
         let sb = SandboxName::parse("neos").unwrap();
-        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one thread", None).unwrap();
+        let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one thread", None).await.unwrap();
         let a = app.clone();
         let (id, s) = (p.id.clone(), sb.clone());
         let w = tokio::spawn(async move { a.plan_wait(&id, &s, Duration::from_secs(5)).await });
@@ -686,8 +690,8 @@ mod tests {
         std::fs::create_dir(ws.path().join(".git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
 
-        let p = app.plan_propose(&sb, "cart", vec![t("api"), t("web")], Variant::Shared, "same files", Some("lead")).unwrap();
-        let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).unwrap();
+        let p = app.plan_propose(&sb, "cart", vec![t("api"), t("web")], Variant::Shared, "same files", Some("lead")).await.unwrap();
+        let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).await.unwrap();
         let team = format!("team-{}", p.id);
         assert_eq!(worktree, Some(ws.path().join(".sbxw-worktrees").join(&team).to_string_lossy().into_owned()));
         app.plans.lock().unwrap().approve(&p.id, vec![t("api"), t("web")], None, worktree, 1).unwrap();
@@ -737,9 +741,10 @@ mod tests {
         let on = |name: &str, repo: &str| PlanThread { repo: Some(repo.into()), ..t(name) };
         let err = app
             .plan_propose(&sb, "", vec![on("x", "a"), on("y", "b")], Variant::Shared, "live", None)
+            .await
             .unwrap_err();
         assert!(err.contains("one repo"), "{err}");
-        let p = app.plan_propose(&sb, "", vec![on("x", "a"), on("y", "b")], Variant::Split, "independent", None).unwrap();
+        let p = app.plan_propose(&sb, "", vec![on("x", "a"), on("y", "b")], Variant::Split, "independent", None).await.unwrap();
         let p = app.plans.lock().unwrap().approve(&p.id, vec![on("x", "a"), on("y", "b")], None, None, 1).unwrap();
         assert_eq!((p.variant, p.worktree), (Variant::Split, None));
         assert!(app.team_for(&sb, &sbxw_core::ThreadName::parse("x").unwrap()).is_none());
@@ -761,8 +766,8 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         std::fs::create_dir(ws.path().join(".git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
-        let p = app.plan_propose(&sb, "cart", vec![t("api"), t("web")], Variant::Shared, "same files", Some("lead")).unwrap();
-        let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).unwrap();
+        let p = app.plan_propose(&sb, "cart", vec![t("api"), t("web")], Variant::Shared, "same files", Some("lead")).await.unwrap();
+        let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).await.unwrap();
         app.plans.lock().unwrap().approve(&p.id, vec![t("api"), t("web")], None, worktree, 1).unwrap();
         for n in ["api", "web"] {
             app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
