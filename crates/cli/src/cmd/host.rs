@@ -14,7 +14,7 @@ use std::process::{Command, Stdio};
 
 #[derive(Subcommand)]
 pub enum HostCmd {
-    /// Register a remote host; shows its SSH host key to confirm first.
+    /// Register a remote host (EXPERIMENTAL); shows its SSH host key to confirm first.
     #[command(after_help = "Examples:\n  sbxw host add buildbox --ssh buildbox\n  sbxw host add lab --host 10.0.0.5 --user tom --port 2222 --key ~/.ssh/id_ed25519")]
     Add {
         name: String,
