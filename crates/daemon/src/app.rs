@@ -68,6 +68,11 @@ pub struct App {
     pub(crate) briefings: Mutex<HashMap<(SandboxRef, String), String>>,
     /// `caffeinate`, the battery and who is on Remote Control.
     pub(crate) awake: Mutex<crate::svc::awake::Awake>,
+    /// Remote hosts acted on so far, each with its link (see `remotes`).
+    /// Not `hosts`: that is the `/etc/hosts` block.
+    pub(crate) remotes: Mutex<HashMap<sbxw_core::names::HostName, Arc<crate::remotes::Remote>>>,
+    /// The `ssh` remote hosts are reached with; tests put scripts/fake-ssh here.
+    pub ssh_program: Mutex<std::path::PathBuf>,
 }
 
 pub struct AppBuilder {
@@ -108,6 +113,8 @@ impl AppBuilder {
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
             awake: Mutex::new(Default::default()),
+            remotes: Mutex::new(HashMap::new()),
+            ssh_program: Mutex::new("ssh".into()),
         })
     }
 }
@@ -192,7 +199,30 @@ impl App {
     /// with an `Exited` first — a sandbox stopped out of band sends no
     /// `SessionEnd` — and so is their Remote Control, for keep-awake.
     async fn reconcile_sessions(&self) {
-        let running: Vec<String> = self.sbx.ls().await.into_iter().filter(|s| s.is_running()).map(|s| s.name).collect();
+        let mut running: Vec<String> = self.sbx.ls().await.into_iter().filter(|s| s.is_running()).map(|s| s.name).collect();
+        // Remote hosts already in use: what runs there, by ref. One that
+        // cannot be asked keeps its sessions — unreachable is not stopped.
+        // An empty local list is a failed `sbx ls`, never "all gone", so
+        // nothing is reconciled then, as before remote hosts.
+        if !running.is_empty() {
+            for r in self.started_remotes() {
+                let host = r.cfg.name.clone();
+                let listed = match r.down_since() {
+                    None => match r.sbx().await {
+                        Ok(sbx) => sbx.ls().await,
+                        Err(_) => vec![],
+                    },
+                    Some(_) => vec![],
+                };
+                if listed.is_empty() {
+                    running.extend(self.store.names().into_iter().filter(|n| n.host == host).map(|n| n.to_string()));
+                } else {
+                    running.extend(listed.into_iter().filter(|s| s.is_running()).filter_map(|s| {
+                        SandboxName::parse(&s.name).ok().map(|n| SandboxRef::new(host.clone(), n).to_string())
+                    }));
+                }
+            }
+        }
         self.keep_remote_running(&running);
         let gone = self.agents.lock().unwrap().reconcile(&running, now_ms());
         for info in gone {
@@ -201,7 +231,7 @@ impl App {
         }
     }
 
-    pub fn workspace(&self, name: &SandboxName) -> Option<std::path::PathBuf> {
+    pub fn workspace(&self, name: &SandboxRef) -> Option<std::path::PathBuf> {
         self.store.workspace(name)
     }
 }

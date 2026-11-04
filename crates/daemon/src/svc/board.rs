@@ -7,7 +7,7 @@ use crate::bus::Event;
 use crate::store::write_atomic;
 use sbxw_core::board::{Board, ClaimOutcome, Entry, ExtendOutcome, Kind, Taken, LEAD};
 use sbxw_core::session::{SessionKey, SessionKind};
-use sbxw_core::{SandboxName, SandboxRef};
+use sbxw_core::SandboxRef;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -81,9 +81,9 @@ impl App {
     /// The board as the UI reads it: `plan` is the sandbox's shared plan at
     /// work, in full (its variant, its threads), or null when there is none —
     /// which is what tells the UI to draw the worktree graph instead.
-    pub fn board_ui_view(&self, sandbox: &SandboxName) -> Value {
-        let mut v = self.board_view(sandbox);
-        let team = self.plans.lock().unwrap().team_plan(sandbox).cloned();
+    pub fn board_ui_view(&self, sandbox: &SandboxRef) -> Value {
+        let mut v = self.board_view(&sandbox.to_string());
+        let team = self.plans.lock().unwrap().team_plan(&sandbox.to_string()).cloned();
         v["plan"] = team.map_or(Value::Null, |p| self.plan_view(&p));
         v
     }
@@ -116,9 +116,9 @@ impl App {
 
     /// Before a write: what another session holds. A refusal is logged on
     /// the board and the lead is told, in one line typed into its session.
-    pub fn board_check(self: &Arc<Self>, sandbox: &SandboxName, plan: Option<&str>, session: &str, files: &[String]) -> Result<Vec<Taken>, String> {
+    pub fn board_check(self: &Arc<Self>, sandbox: &SandboxRef, plan: Option<&str>, session: &str, files: &[String]) -> Result<Vec<Taken>, String> {
         let now = now_ms();
-        let (taken, fresh) = self.with_board(sandbox, plan, |b| {
+        let (taken, fresh) = self.with_board(&sandbox.to_string(), plan, |b| {
             let recent = |file: &str| {
                 b.entries.iter().rev().take_while(|e| now.saturating_sub(e.at) < TELL_LEAD_EVERY_MS).any(|e| {
                     e.kind == Kind::Conflict && e.by == session && e.files.iter().any(|f| f == file)
@@ -215,7 +215,7 @@ impl App {
 mod tests {
     use crate::testing::app;
     use sbxw_core::plans::{PlanThread, ThreadState, Variant};
-    use sbxw_core::SandboxName;
+    use sbxw_core::SandboxRef;
     use std::time::Duration;
 
     fn t(name: &str) -> PlanThread {
@@ -234,8 +234,8 @@ mod tests {
     #[tokio::test]
     async fn a_board_is_persisted_and_survives_a_restart() {
         let (dir, app) = app();
-        let sb = SandboxName::parse("neos").unwrap();
-        app.board_claim(&sb, Some("p-1"), "api", &["src/a.ts".into()]).unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
+        app.board_claim(&sb.to_string(), Some("p-1"), "api", &["src/a.ts".into()]).unwrap();
         assert!(app.store.paths.state().join("boards/neos.json").exists());
         let again = crate::testing::app_in(dir.path());
         let taken = again.board_check(&sb, None, "front", &["src/a.ts".into()]).unwrap();
@@ -247,7 +247,7 @@ mod tests {
     async fn a_thread_reporting_done_releases_its_claims() {
         let (_d, app) = app();
         app.start_board_listener();
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         // The book directly: a shared plan's worktree needs a repository this
         // test does not have, and the board only cares about thread states.
         let threads = || vec![t("api"), t("front")];
@@ -255,11 +255,11 @@ mod tests {
             .plans
             .lock()
             .unwrap()
-            .propose("p-1".into(), &sb, "", threads(), Variant::Shared, "api and front share files", None, 0)
+            .propose("p-1".into(), &sb.to_string(), "", threads(), Variant::Shared, "api and front share files", None, 0)
             .unwrap();
         app.plans.lock().unwrap().approve(&p.id, threads(), Some(Variant::Shared), None, 1).unwrap();
-        app.board_claim(&sb, Some(&p.id), "api", &["a".into()]).unwrap();
-        app.board_claim(&sb, Some(&p.id), "front", &["b".into()]).unwrap();
+        app.board_claim(&sb.to_string(), Some(&p.id), "api", &["a".into()]).unwrap();
+        app.board_claim(&sb.to_string(), Some(&p.id), "front", &["b".into()]).unwrap();
 
         app.plan_report(&sb, &sbxw_core::ThreadName::parse("api").unwrap(), ThreadState::Done, "ok").unwrap();
         for _ in 0..100 {
@@ -279,14 +279,14 @@ mod tests {
     #[tokio::test]
     async fn the_ui_reads_the_shared_plan_at_work_even_before_any_claim() {
         let (_d, app) = app();
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         assert!(app.board_ui_view(&sb)["plan"].is_null(), "no shared plan: the UI draws the graph");
         let threads = || vec![t("api"), t("front")];
         let p = app
             .plans
             .lock()
             .unwrap()
-            .propose("p-1".into(), &sb, "", threads(), Variant::Shared, "api and front share files", None, 0)
+            .propose("p-1".into(), &sb.to_string(), "", threads(), Variant::Shared, "api and front share files", None, 0)
             .unwrap();
         app.plans.lock().unwrap().approve(&p.id, threads(), None, None, 1).unwrap();
         let v = app.board_ui_view(&sb);
@@ -298,12 +298,12 @@ mod tests {
     #[tokio::test]
     async fn after_a_tool_call_a_commit_releases_and_news_arrives() {
         let (_d, app) = app();
-        let sb = SandboxName::parse("neos").unwrap();
-        app.board_claim(&sb, None, "api", &["a".into(), "b".into()]).unwrap();
-        app.board_note(&sb, None, "front", sbxw_core::board::Kind::Decision, "cents", None, &[]).unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
+        app.board_claim(&sb.to_string(), None, "api", &["a".into(), "b".into()]).unwrap();
+        app.board_note(&sb.to_string(), None, "front", sbxw_core::board::Kind::Decision, "cents", None, &[]).unwrap();
         let files = vec!["a".to_string()];
         let (outside, released, news) = app
-            .board_after(&sb, None, "api", &[], &["a".into(), "c".into()], Some(("abc1", "Cart", &files)))
+            .board_after(&sb.to_string(), None, "api", &[], &["a".into(), "c".into()], Some(("abc1", "Cart", &files)))
             .unwrap();
         assert_eq!(outside, ["c"]);
         assert_eq!(released, ["a"]);

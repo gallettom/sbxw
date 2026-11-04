@@ -44,8 +44,17 @@ impl IntoResponse for ApiError {
 
 /// A failure from below (sbx, the filesystem): the whole context chain, since
 /// sbx's own words are what the person can act on.
+///
+/// A remote host that cannot be reached is 503: the request was fine, the
+/// host is down, and asking again later may work.
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
+        if e.chain().any(|c| c.is::<crate::remotes::UnknownHost>()) {
+            return Self::not_found(format!("{e:#}"));
+        }
+        if sbxw_sbx::host::is_unreachable(&e) {
+            return Self::new(StatusCode::SERVICE_UNAVAILABLE, format!("{e:#}"));
+        }
         Self::new(StatusCode::BAD_GATEWAY, format!("{e:#}"))
     }
 }
@@ -57,16 +66,10 @@ impl From<String> for ApiError {
     }
 }
 
-/// A name refused, or a remote sandbox asked for something that would run
-/// on its host, which this phase does not do yet (501, not 400: the request
-/// is well-formed).
+/// A name refused.
 impl From<sbxw_core::names::NameError> for ApiError {
     fn from(e: sbxw_core::names::NameError) -> Self {
-        if e.0 == sbxw_core::names::REMOTE_NOT_WIRED {
-            Self::new(StatusCode::NOT_IMPLEMENTED, e.0)
-        } else {
-            Self::bad(e.0)
-        }
+        Self::bad(e.0)
     }
 }
 
@@ -96,5 +99,9 @@ mod tests {
         let e: ApiError = anyhow::anyhow!("outer").context("ctx").into();
         assert_eq!(e.status, StatusCode::BAD_GATEWAY);
         assert_eq!(e.message, "ctx: outer");
+        let down = sbxw_sbx::host::HostUnreachable { host: "bb".into(), reason: "refused".into() };
+        let e: ApiError = anyhow::Error::new(down).context("stopping x").into();
+        assert_eq!(e.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(e.message.contains("host 'bb' is unreachable"), "{}", e.message);
     }
 }

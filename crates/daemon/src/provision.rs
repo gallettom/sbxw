@@ -31,8 +31,10 @@ use sbxw_core::progress::{self, Progress, Sink, Step};
 use sbxw_core::remote;
 use sbxw_core::templates;
 use sbxw_core::tooling::{self, Tooling};
-use sbxw_core::SandboxName;
+use sbxw_core::SandboxRef;
 use sbxw_sbx::CreateOpts;
+use crate::host::Host;
+use crate::remotes::Remote;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,7 +42,7 @@ use std::time::Duration;
 /// One bring-up, as asked.
 #[derive(Clone, Debug)]
 pub struct BringUp {
-    pub name: SandboxName,
+    pub name: SandboxRef,
     pub workspace: PathBuf,
     pub ro: Vec<String>,
     /// Extra directories mounted writable beside the workspace.
@@ -61,6 +63,9 @@ pub struct BringUp {
     /// login inside instead (`sbxw_core::remote`). Only a new sandbox takes
     /// it; one already recorded with it keeps it.
     pub remote_control: bool,
+    /// Clone this into `workspace` first, on the sandbox's host, when
+    /// `workspace` does not exist yet (`sbxw up --git <url>`).
+    pub git: Option<String>,
 }
 
 /// How long a kit's startup commands may run before an automatic template is
@@ -133,7 +138,7 @@ impl App {
     /// `Done` whichever way it went.
     pub async fn provision(self: &Arc<Self>, req: BringUp, extra: Option<Sink>) -> Result<Vec<String>> {
         let bus = self.bus.clone();
-        let name = sbxw_core::SandboxRef::local(req.name.clone());
+        let name = req.name.clone();
         let sink: Sink = Arc::new(move |p: Progress| {
             if let Some(f) = &extra {
                 f(p.clone());
@@ -147,8 +152,27 @@ impl App {
         out
     }
 
-    async fn bring_up(self: &Arc<Self>, req: BringUp, sink: &Sink) -> Result<Vec<String>> {
+    async fn bring_up(self: &Arc<Self>, mut req: BringUp, sink: &Sink) -> Result<Vec<String>> {
+        // A remote host: its link first. The -R tunnel the hooks call home
+        // through must be up before they are installed.
+        let on_host: Option<Arc<Remote>> = match req.name.is_local() {
+            true => None,
+            false => Some(self.ready_remote(&req.name).await?),
+        };
+        let host = self.host_for(&req.name).await?;
+        let sbx = self.sbx_for(&req.name).await?;
+        if let Some(url) = req.git.clone() {
+            clone_if_missing(&host, &url, &req.workspace).await?;
+        }
+        if on_host.is_some() {
+            // sbxw.toml is the project's, so it is on the host, beside the code.
+            req.config = remote_config(&host, &req.workspace).await?;
+        }
+        // Secrets (the OAuth token, the API key, the kept skills) go only to a
+        // host trusted with them.
+        let trusted = on_host.as_ref().is_none_or(|r| r.cfg.trust_secrets);
         let name = &req.name;
+        let n = &name.name;
         let mut wants_cache = req.config.cache && cache::wanted_by(&req.config.kits);
         // `sbxw:<name>` kits become the stable directories they are written to.
         let cfg = &Config {
@@ -157,13 +181,13 @@ impl App {
         };
         let mut run = Run { sink, warnings: vec![] };
         let workspace = req.workspace.to_string_lossy().into_owned();
-        if !req.workspace.is_dir() {
-            bail!("{workspace} is not a directory");
+        if !is_dir_on(&host, &req.workspace).await? {
+            bail!("{workspace} is not a directory{}", on_host.as_ref().map(|r| format!(" on host '{}'", r.cfg.name)).unwrap_or_default());
         }
         self.validate_kits(&req.config.kits).await?;
 
         // Asked first: it decides two of the announced steps.
-        let initial = self.sbx.lookup(name).await;
+        let initial = sbx.lookup(n).await;
         let existed = initial.is_some();
         let stopped = initial.as_ref().is_some_and(|i| i.is_stopped());
         let mut running = Some(initial.as_ref().is_some_and(|i| i.is_running()));
@@ -199,20 +223,29 @@ impl App {
             .context("recording the sandbox")?;
         let token = self.store.token(name)?;
         let artifacts_dir = req.workspace.join(artifacts::ARTIFACTS_DIR);
-        if !artifacts_dir.exists() {
-            if std::fs::create_dir_all(&artifacts_dir).is_ok() {
-                let _ = std::fs::write(artifacts_dir.join("README.md"), artifacts::README);
+        if !matches!(host.fs.stat(&artifacts_dir).await, Ok(Some(_))) {
+            if host.fs.create_dir_all(&artifacts_dir).await.is_ok() {
+                let _ = host.fs.write_atomic(&artifacts_dir.join("README.md"), artifacts::README.as_bytes(), 0o644).await;
             } else {
                 run.warn(format!("could not create {}", artifacts_dir.display()));
             }
         }
+        if req.oauth_token.is_some() && !remote && !trusted {
+            run.warn(format!(
+                "your Claude token is not sent to host '{}' (trust_secrets = false) — log in with /login in the agent's pane, \
+                 or `sbxw host edit {} --trust-secrets`",
+                name.host, name.host
+            ));
+        }
         let creds = req
             .oauth_token
             .as_deref()
-            .filter(|_| !remote)
+            .filter(|_| !remote && trusted)
             .map(|t| kits::oauth_credentials_json(t, &cfg.claude_subscription));
         let wanted = cfg.wanted_ports(&req.extra_ports);
-        let specs = ports::publish_specs(&wanted, cfg.ip_per_app);
+        // Forwarded from the host's 127.0.0.1 over the link: one address per
+        // app means nothing there.
+        let specs = ports::publish_specs(&wanted, cfg.ip_per_app && on_host.is_none());
         let mut own_allow: Vec<String> = Vec::new();
         if remote {
             run.info("Remote Control: no credentials injected — log in with /login in the agent's pane");
@@ -222,6 +255,9 @@ impl App {
         // ── Create, or reuse ─────────────────────────────────────────────
         run.step(progress::CREATE);
         let mut created_with_kits = false;
+        // The project's kits as `sbx` on the sandbox's host names them:
+        // mirrored there for a remote host, as they are here.
+        let kits_here = self.kits_on(on_host.as_deref(), &cfg.kits, &mut run).await?;
         if existed {
             run.info(format!("sandbox '{name}' already exists — reusing it"));
             // Block storage exists only from creation: a list that is not the
@@ -241,27 +277,20 @@ impl App {
             if let Some(creds) = &creds {
                 if running == Some(true) {
                     // `kit add` would recreate the container under live sessions.
-                    match self
-                        .sbx
-                        .write_file(name, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true)
-                        .await
-                    {
+                    match sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await {
                         Ok(()) => own_allow.push("claude.ai".into()),
                         Err(e) => run.warn(format!("OAuth credential refresh failed (use /login in-session instead): {e:#}")),
                     }
                 } else {
                     let dir = self.store.write_oauth_kit(name, Some(creds))?;
+                    let dir = self.kits_on(on_host.as_deref(), &[dir.to_string_lossy().into_owned()], &mut run).await?.remove(0);
                     running = None;
-                    if let Err(e) = self.kit_add_repairing(name, &dir.to_string_lossy(), Some(creds)).await {
+                    if let Err(e) = self.kit_add_repairing(name, &dir, Some(creds)).await {
                         // sbx refuses `kit add` for a kit with `setup.files`
                         // (the OAuth kit) — after starting the sandbox. Started,
                         // it takes the file the way a running one does above.
-                        let wrote = self.sbx.wait_until_running(name, Duration::from_secs(30)).await
-                            && self
-                                .sbx
-                                .write_file(name, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true)
-                                .await
-                                .is_ok();
+                        let wrote = sbx.wait_until_running(n, Duration::from_secs(30)).await
+                            && sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await.is_ok();
                         if wrote {
                             own_allow.push("claude.ai".into());
                         } else {
@@ -273,9 +302,12 @@ impl App {
         } else {
             run.info(format!("creating sandbox '{name}' on workspace {workspace}"));
             let mut kit_refs: Vec<String> = Vec::new();
+            // sbxw's own kits, written here; mirrored together below.
+            let mut own: Vec<String> = Vec::new();
             if let Some(creds) = &creds {
-                kit_refs.push(self.store.write_oauth_kit(name, Some(creds))?.to_string_lossy().into_owned());
+                own.push(self.store.write_oauth_kit(name, Some(creds))?.to_string_lossy().into_owned());
             }
+            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &mut run).await?);
             for k in &cfg.kits {
                 if kits::needs_allowlist(k) {
                     run.warn(format!(
@@ -284,25 +316,31 @@ impl App {
                     ));
                 }
             }
-            kit_refs.extend(cfg.kits.iter().cloned());
+            kit_refs.extend(kits_here.iter().cloned());
+            let mut own: Vec<String> = Vec::new();
             // The skills the person kept from a sandbox: every new one gets
             // them, whatever its `kits` say — they are the person's, not the project's.
             match self.my_skills_kit() {
-                Ok(Some(dir)) => kit_refs.push(dir.to_string_lossy().into_owned()),
+                Ok(Some(_)) if !trusted => run.info(format!("your kept skills stay here: host '{}' is not trusted with secrets", name.host)),
+                Ok(Some(dir)) => own.push(dir.to_string_lossy().into_owned()),
                 Ok(None) => {}
                 Err(e) => run.warn(format!("your kept skills are left out: {e:#}")),
             }
             if !cfg.volumes.is_empty() {
                 let dir = self.store.write_volumes_kit(name, &cfg.volumes)?;
                 run.info(format!("persistent volumes: {} (kept if the sandbox is removed)", cfg.volumes.join(", ")));
-                kit_refs.push(dir.to_string_lossy().into_owned());
+                own.push(dir.to_string_lossy().into_owned());
             }
+            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &mut run).await?);
             let mut ro_mounts = req.ro.clone();
             let mut env = if remote { remote::without_auth_env(cfg.env_pairs()) } else { cfg.env_pairs() };
             let mut rw_mounts = req.rw.clone();
             if wants_cache {
                 // Writable only for the sandbox that fills it: see `cache`.
-                let (dir, mount) = cache::claim(&self.store.paths, cfg.cache_ttl())?;
+                let (dir, mount) = match &on_host {
+                    None => cache::claim(&self.store.paths, cfg.cache_ttl())?,
+                    Some(r) => cache::claim_on(&*host.fs, &r.root().await?, cfg.cache_ttl()).await?,
+                };
                 let dir = dir.to_string_lossy().into_owned();
                 env.push(format!("SBXW_CACHE={dir}"));
                 if mount == cache::Mount::Fill {
@@ -340,10 +378,10 @@ impl App {
         if cfg.keep_running {
             let up = match running {
                 Some(r) => r,
-                None => self.sbx.is_running(name).await,
+                None => sbx.is_running(n).await,
             };
             if !existed || !up {
-                match self.sbx.run_detached(name).await {
+                match sbx.run_detached(n).await {
                     Ok(()) => {
                         running = None;
                         run.info(format!("'{name}' kept running until `sbxw stop {name}`"));
@@ -358,13 +396,16 @@ impl App {
         let up = match running {
             Some(true) => true,
             Some(false) if stopped => false,
-            _ => self.sbx.wait_until_running(name, Duration::from_secs(30)).await,
+            _ => sbx.wait_until_running(n, Duration::from_secs(30)).await,
         };
 
         // ── Tooling and policy ───────────────────────────────────────────
         // Independent of each other — one is a script in the guest, the other
         // a host-side rule — so they run side by side and are reported in order.
-        let agent_port = cfg_port(self, cfg);
+        // The daemon's agent port, whatever the project file says (the hooks
+        // must reach the process that listens); on a remote host, the far
+        // end of the link's -R tunnel.
+        let agent_port = self.agent_port_for(name).await?;
         // The proxy sees host.docker.internal as localhost:<port>.
         own_allow.push(format!("localhost:{agent_port}"));
         let allow = [own_allow.as_slice(), cfg.network_allow.as_slice()].concat().join(",");
@@ -386,11 +427,11 @@ impl App {
         let (tooled, allowed) = tokio::join!(
             async {
                 match up {
-                    true => Some(self.sbx.tooling(name, &batch).await),
+                    true => Some(sbx.tooling(n, &batch).await),
                     false => None,
                 }
             },
-            self.sbx.policy("allow", Some(name), &allow)
+            sbx.policy("allow", Some(n), &allow)
         );
         if let Some(tooled) = tooled {
             match tooled {
@@ -426,7 +467,7 @@ impl App {
             Err(e) => return Err(e).context("failed to apply the network allowlist"),
         }
         if !cfg.network_deny.is_empty() {
-            match self.sbx.policy("deny", Some(name), &cfg.network_deny.join(",")).await {
+            match sbx.policy("deny", Some(n), &cfg.network_deny.join(",")).await {
                 Ok(()) => {}
                 Err(e) if kits::policy_is_governed(&format!("{e:#}")) => {
                     run.warn(format!("network denylist not applied — your organization manages this policy:\n{e:#}"))
@@ -443,14 +484,14 @@ impl App {
         if !created_with_kits && !cfg.kits.is_empty() {
             run.step(progress::KITS);
             let recorded = self.store.get(name).kits;
-            let pending: Vec<&String> = cfg.kits.iter().filter(|k| !recorded.contains(k)).collect();
+            let pending: Vec<&String> = kits_here.iter().filter(|k| !recorded.contains(k)).collect();
             // `sbx inspect` only when sbxw's own record does not settle it.
             let present = match pending.is_empty() {
                 true => String::new(),
-                false => kits::inspect_kits_section(&self.sbx.inspect(name).await.unwrap_or_default()),
+                false => kits::inspect_kits_section(&sbx.inspect(n).await.unwrap_or_default()),
             };
-            for kit in &cfg.kits {
-                let spec = std::fs::read_to_string(std::path::Path::new(kit).join("spec.yaml")).ok();
+            for (kit, local) in kits_here.iter().zip(&cfg.kits) {
+                let spec = std::fs::read_to_string(std::path::Path::new(local).join("spec.yaml")).ok();
                 if kits::already_applied(kit, spec.as_deref(), &present, &recorded) {
                     run.info(format!("kit '{kit}' already applied — skipping"));
                     if !recorded.contains(kit) {
@@ -477,22 +518,31 @@ impl App {
         }
 
         if let Some(key) = req.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty() && !remote) {
-            run.info("storing ANTHROPIC_API_KEY as the global `anthropic` secret");
-            self.sbx.secret_set("anthropic", key, None).await.context("failed to store the anthropic secret")?;
+            if trusted {
+                run.info("storing ANTHROPIC_API_KEY as the global `anthropic` secret");
+                sbx.secret_set("anthropic", key, None).await.context("failed to store the anthropic secret")?;
+            } else {
+                run.warn(format!("ANTHROPIC_API_KEY is not sent to host '{}' (trust_secrets = false)", name.host));
+            }
         }
 
         // ── Aliases and ports ────────────────────────────────────────────
         run.step(progress::PORTS);
-        let aliases = cfg.wanted_aliases(&req.extra_ports);
-        let app = self.clone();
-        let warnings = tokio::task::spawn_blocking(move || app.hosts.apply(&app.store, &aliases))
-            .await
-            .unwrap_or_default();
-        for w in warnings {
-            run.warn(w);
-        }
-        for p in wanted.iter().filter(|p| !p.alias.is_empty()) {
-            run.info(format!("alias ready: http://{}:{} (sandbox :{})", p.alias, p.host_port, p.sandbox_port));
+        // A remote sandbox's ports are reached through the link, on a local
+        // port told when it is forwarded, as `<name>.<host>.localhost`: the
+        // /etc/hosts aliases name this machine's sandboxes only.
+        if on_host.is_none() {
+            let aliases = cfg.wanted_aliases(&req.extra_ports);
+            let app = self.clone();
+            let warnings = tokio::task::spawn_blocking(move || app.hosts.apply(&app.store, &aliases))
+                .await
+                .unwrap_or_default();
+            for w in warnings {
+                run.warn(w);
+            }
+            for p in wanted.iter().filter(|p| !p.alias.is_empty()) {
+                run.info(format!("alias ready: http://{}:{} (sandbox :{})", p.alias, p.host_port, p.sandbox_port));
+            }
         }
         self.republish_ports(name.clone(), specs, up);
 
@@ -534,7 +584,7 @@ impl App {
                 let (sbx, sbxw) = self.template_versions();
                 let content = templates::fingerprint(&spec_texts(&cfg.kits));
                 let now = templates::Current { sbx: &sbx, sbxw, content: &content };
-                let mut fresh = templates::check(&self.store.templates(), &req.config.kits, &now);
+                let mut fresh = templates::check(&self.store.templates_of(&req.name.host), &req.config.kits, &now);
                 use templates::{Choice, Freshness};
                 // Asked of sbx only for a template this bring-up would use.
                 let used = match (&fresh, req.template) {
@@ -542,8 +592,8 @@ impl App {
                     _ => None,
                 };
                 if let Some(tag) = used {
-                    if !self.template_present(&tag).await {
-                        self.forget_template(&tag, run);
+                    if !self.template_present(&req.name, &tag).await {
+                        self.forget_template(&req.name, &tag, run);
                         fresh = Freshness::Missing;
                     }
                 }
@@ -580,8 +630,9 @@ impl App {
     /// --template` with a tag sbx lacks goes looking for it in a registry and
     /// fails there (403), which no retry mends. A listing sbx refuses proves
     /// nothing, so it counts as present.
-    async fn template_present(&self, tag: &str) -> bool {
-        match self.sbx.template_ls().await {
+    async fn template_present(&self, sb: &SandboxRef, tag: &str) -> bool {
+        let Ok(sbx) = self.sbx_for(sb).await else { return true };
+        match sbx.template_ls().await {
             Ok(list) => list.iter().any(|t| t.tag == tag || t.tag.ends_with(&format!("/{tag}"))),
             Err(_) => true,
         }
@@ -589,10 +640,10 @@ impl App {
 
     /// Drop the record of an automatic template sbx no longer has, so this
     /// bring-up and the create dialog both see it as missing.
-    fn forget_template(&self, tag: &str, run: &mut Run<'_>) {
-        let mut records = self.store.templates();
+    fn forget_template(&self, sb: &SandboxRef, tag: &str, run: &mut Run<'_>) {
+        let mut records = self.store.templates_of(&sb.host);
         records.retain(|r| r.tag != tag);
-        match self.store.set_templates(&records) {
+        match self.store.set_templates_of(&sb.host, &records) {
             Ok(()) => run.warn(format!("the automatic template {tag} is no longer in sbx (removed outside sbxw?) — its record is dropped")),
             Err(e) => run.warn(format!("the automatic template {tag} is no longer in sbx, and its record could not be dropped: {e:#}")),
         }
@@ -605,7 +656,7 @@ impl App {
 
     /// Snapshot the sandbox just brought up as this kit list's automatic
     /// template, then remove the one it replaces.
-    async fn save_auto_template(&self, name: &SandboxName, kits: &[String], resolved: &[String], keep_running: bool, run: &mut Run<'_>) -> Result<()> {
+    async fn save_auto_template(&self, name: &SandboxRef, kits: &[String], resolved: &[String], keep_running: bool, run: &mut Run<'_>) -> Result<()> {
         let commands: Vec<String> = resolved
             .iter()
             .filter_map(|k| std::fs::read_to_string(std::path::Path::new(k).join("spec.yaml")).ok())
@@ -636,12 +687,12 @@ impl App {
             created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             content: templates::fingerprint(&spec_texts(resolved)),
         };
-        let mut records = self.store.templates();
+        let mut records = self.store.templates_of(&name.host);
         let old = templates::replace(&mut records, record);
-        self.store.set_templates(&records).context("recording the automatic template")?;
+        self.store.set_templates_of(&name.host, &records).context("recording the automatic template")?;
         run.info(format!("new sandboxes with these kits now start from {tag}"));
         if let Some(old) = old.filter(|o| o.tag != tag) {
-            match self.sbx.template_rm(&old.tag).await {
+            match self.sbx_for(name).await?.template_rm(&old.tag).await {
                 Ok(()) => run.info(format!("removed the previous template {}", old.tag)),
                 Err(e) => run.warn(format!("could not remove the previous template {} ({e:#}) — `sbx template rm` it by hand", old.tag)),
             }
@@ -653,41 +704,46 @@ impl App {
     /// taken out, the snapshot taken, and they are put back whatever it did.
     /// A save that had to stop the sandbox leaves it running again, unless
     /// `keep_running` is off. The warnings are about putting things back.
-    pub async fn snapshot(&self, name: &SandboxName, tag: &str, keep_running: bool) -> (Result<()>, Vec<String>) {
+    pub async fn snapshot(&self, sb: &SandboxRef, tag: &str, keep_running: bool) -> (Result<()>, Vec<String>) {
         let mut warnings = Vec::new();
+        let sbx = match self.sbx_for(sb).await {
+            Ok(s) => s,
+            Err(e) => return (Err(e), warnings),
+        };
+        let name = &sb.name;
         let mut kept: Vec<(&str, Vec<u8>)> = Vec::new();
         for path in templates::SECRETS {
-            match self.sbx.exec(name, &["cat", path], None).await {
+            match sbx.exec(name, &["cat", path], None).await {
                 Ok(out) if out.success() => kept.push((path, out.stdout)),
                 Ok(_) => {}
                 Err(e) => return (Err(e), warnings),
             }
         }
         let scrub: Vec<&str> = ["rm", "-f"].into_iter().chain(templates::SECRETS).collect();
-        match self.sbx.exec(name, &scrub, None).await {
+        match sbx.exec(name, &scrub, None).await {
             Ok(out) if out.success() => {}
             Ok(out) => return (Err(anyhow!("could not take the sandbox's secrets out: {}", String::from_utf8_lossy(&out.stderr).trim())), warnings),
             Err(e) => return (Err(e), warnings),
         }
 
-        let saved = self.sbx.template_save(name, tag).await;
+        let saved = sbx.template_save(name, tag).await;
 
-        let stopped = matches!(saved, Ok(true)) || !self.sbx.is_running(name).await;
+        let stopped = matches!(saved, Ok(true)) || !sbx.is_running(name).await;
         if stopped {
-            let back = self.sbx.run_detached(name).await.is_ok() && self.sbx.wait_until_running(name, Duration::from_secs(60)).await;
+            let back = sbx.run_detached(name).await.is_ok() && sbx.wait_until_running(name, Duration::from_secs(60)).await;
             if !back {
                 warnings.push(format!("'{name}' did not come back after the snapshot — its token returns on `sbxw up {name}`"));
                 return (saved.map(drop), warnings);
             }
         }
         for (path, data) in &kept {
-            if let Err(e) = self.sbx.write_file(name, path, data, true).await {
+            if let Err(e) = sbx.write_file(name, path, data, true).await {
                 warnings.push(format!("could not put {path} back after the snapshot ({e:#}) — `sbxw up {name}` reinstalls it"));
             }
         }
         if stopped && !keep_running {
             // `run -d` holds it up with nobody attached; give it back its idle stop.
-            let _ = self.sbx.stop(name).await;
+            let _ = sbx.stop(name).await;
         }
         (saved.map(drop), warnings)
     }
@@ -695,10 +751,12 @@ impl App {
     /// Until none of the kits' startup commands is running in the guest:
     /// they run in the background after `sbx create` returns, and a snapshot
     /// taken mid-install is a broken template.
-    async fn wait_for_startups(&self, name: &SandboxName, commands: &[String], run: &mut Run<'_>) -> Result<()> {
+    async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], run: &mut Run<'_>) -> Result<()> {
         if commands.is_empty() {
             return Ok(());
         }
+        let sbx = self.sbx_for(sb).await?;
+        let name = &sb.name;
         run.info("waiting for the kits' startup installs to finish before the snapshot");
         let started = tokio::time::Instant::now();
         let deadline = started + STARTUP_TIMEOUT;
@@ -706,7 +764,7 @@ impl App {
         let mut seen = false;
         let mut shown = String::new();
         loop {
-            let out = self.sbx.exec(name, &["sh", "-c", templates::PROCESS_LIST], None).await?;
+            let out = sbx.exec(name, &["sh", "-c", templates::PROCESS_LIST], None).await?;
             if !out.success() {
                 bail!("could not list the sandbox's processes: {}", String::from_utf8_lossy(&out.stderr).trim());
             }
@@ -741,14 +799,16 @@ impl App {
 
     /// `sbx create` with the port mappings, retried without them when the
     /// all-or-nothing `-p` loses the sandbox over one busy host port.
-    async fn create_with_port_fallback(&self, name: &SandboxName, opts: &CreateOpts, sink: &Sink, run: &mut Run<'_>) -> Result<()> {
+    async fn create_with_port_fallback(&self, sb: &SandboxRef, opts: &CreateOpts, sink: &Sink, run: &mut Run<'_>) -> Result<()> {
+        let sbx = self.sbx_for(sb).await?;
+        let name = &sb.name;
         let s = sink.clone();
         let lines: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |l: &str| {
             if let Some(p) = progress::detail(l) {
                 s(p);
             }
         });
-        let first = match self.sbx.create(name, opts, Some(lines.clone())).await {
+        let first = match sbx.create(name, opts, Some(lines.clone())).await {
             Ok(()) => return Ok(()),
             Err(e) if opts.publish.is_empty() => return Err(e),
             // An image sbx cannot find is not a port problem: without ports it
@@ -759,7 +819,7 @@ impl App {
             }
             Err(e) => e,
         };
-        if self.sbx.exists(name).await {
+        if sbx.exists(name).await {
             run.warn(format!(
                 "'{name}' was created but its ports could not be published at creation ({first:#}); \
                  they are retried one by one once it runs"
@@ -771,7 +831,7 @@ impl App {
              port is then published on its own, so a busy host port costs that port, not the sandbox"
         ));
         let bare = CreateOpts { publish: vec![], ..opts.clone() };
-        self.sbx
+        sbx
             .create(name, &bare, Some(lines))
             .await
             .map_err(|e| anyhow!("{e:#}\n(create with port mappings had failed with: {first:#})"))
@@ -789,6 +849,8 @@ impl App {
                 kits::bundled_name(k).is_none() && path.exists() && !kits::is_v3_kit(path)
             })
             .collect();
+        // The kits are files here, so this machine's sbx checks them, even
+        // for a sandbox on another host.
         let checks = local.iter().map(|k| self.sbx.kit_validate_offline(k));
         let mut broken = Vec::new();
         for (kit, r) in local.iter().zip(futures_util::future::join_all(checks).await) {
@@ -805,8 +867,10 @@ impl App {
 
     /// `sbx kit add`, repairing once a stale OAuth kit reference an older
     /// sbxw left in a temp dir (sbx names the *wrong* kit when it fails).
-    async fn kit_add_repairing(&self, name: &SandboxName, kit: &str, creds: Option<&str>) -> Result<()> {
-        let Err(first) = self.sbx.kit_add(name, kit).await else {
+    async fn kit_add_repairing(&self, sb: &SandboxRef, kit: &str, creds: Option<&str>) -> Result<()> {
+        let sbx = self.sbx_for(sb).await?;
+        let name = &sb.name;
+        let Err(first) = sbx.kit_add(name, kit).await else {
             return Ok(());
         };
         let Some(stale) = kits::stale_oauth_kit_path(&format!("{first:#}")) else {
@@ -814,20 +878,21 @@ impl App {
         };
         tracing::warn!("restoring a stale OAuth kit at {} so '{name}' can be recomposed", stale.display());
         crate::store::write_atomic(&stale.join("spec.yaml"), kits::oauth_kit_spec(creds).as_bytes())?;
-        self.sbx
-            .kit_add(name, kit)
+        sbx.kit_add(name, kit)
             .await
             .map_err(|e| anyhow!("{e:#}\n(retried after restoring {}; first attempt: {first:#})", stale.display()))
     }
 
     /// An older sbxw gave sandboxes `localhost:<ui port>`, through which they
     /// could reach the browser's endpoints. Remove that rule if it is there.
-    async fn revoke_ui_port(&self, name: &SandboxName, run: &mut Run<'_>) {
+    async fn revoke_ui_port(&self, sb: &SandboxRef, run: &mut Run<'_>) {
         let ui = format!("localhost:{}", self.cfg.web_port());
-        let view = self.sbx.policy_ls(name, true).await;
+        let Ok(sbx) = self.sbx_for(sb).await else { return };
+        let name = &sb.name;
+        let view = sbx.policy_ls(name, true).await;
         let found = sbxw_core::policy::rule_ids_for(&view, &ui, name);
         for id in found.mine {
-            match self.sbx.policy_rm(&id, Some(name)).await {
+            match sbx.policy_rm(&id, Some(name)).await {
                 Ok(()) => run.info(format!("revoked {ui} (the UI port) from '{name}' — sandboxes reach the agent port only")),
                 Err(e) => run.warn(format!("could not revoke the stale {ui} rule {id}: {e:#}")),
             }
@@ -843,19 +908,26 @@ impl App {
     /// Wait for `running`, then (re)publish every mapping: they do not survive
     /// a stop. A busy host port costs that port, reported, never the rest. A
     /// task of the daemon, so it outlives the request that started it.
-    fn republish_ports(self: &Arc<Self>, name: SandboxName, specs: Vec<String>, up: bool) {
+    fn republish_ports(self: &Arc<Self>, name: SandboxRef, specs: Vec<String>, up: bool) {
         if specs.is_empty() {
             return;
         }
         let app = self.clone();
         tokio::spawn(async move {
-            if !up && !app.sbx.wait_until_running(&name, Duration::from_secs(60)).await {
+            let sbx = match app.sbx_for(&name).await {
+                Ok(s) => s,
+                Err(e) => return tracing::warn!("ports of '{name}' not published: {e:#}"),
+            };
+            if !up && !sbx.wait_until_running(&name.name, Duration::from_secs(60)).await {
                 tracing::info!("'{name}' is not running; its ports are published on its next start");
                 return;
             }
             for spec in &specs {
-                match app.sbx.publish(&name, spec).await {
-                    Ok(()) => tracing::info!("published {spec} for '{name}'"),
+                match sbx.publish(&name.name, spec).await {
+                    Ok(()) => {
+                        tracing::info!("published {spec} for '{name}'");
+                        app.forward_port(&name, spec).await;
+                    }
                     Err(e) => tracing::warn!(
                         "could not publish {spec} for '{name}': {e:#}\nif that host port is taken, free \
                          it (or change host_port) and run `sbxw ports {name}`"
@@ -866,10 +938,82 @@ impl App {
     }
 }
 
-fn cfg_port(app: &App, _project: &Config) -> String {
-    // The agent port is the daemon's, whatever the project file says: the
-    // hooks have to reach the process that is actually listening.
-    app.cfg.agent_port().to_string()
+impl App {
+    /// The kits `refs` as `sbx` on `on_host` names them: unchanged here,
+    /// mirrored for a remote host (once per content), refusing a kit that
+    /// carries secrets to a host not trusted with them.
+    async fn kits_on(&self, on_host: Option<&Remote>, refs: &[String], run: &mut Run<'_>) -> Result<Vec<String>> {
+        let Some(r) = on_host else { return Ok(refs.to_vec()) };
+        if refs.is_empty() {
+            return Ok(vec![]);
+        }
+        let root = r.root().await?;
+        // TODO(kits-tar): mirror_via(&*r.host.fs, Some(&*r.host.exec), ..)
+        let m = crate::host::kits::mirror(&*r.host.fs, &self.store.paths.root, &root, refs, r.cfg.trust_secrets)
+            .await
+            .with_context(|| format!("copying kits to host '{}'", r.cfg.name))?;
+        for c in &m.copied {
+            run.info(format!("kit copied to host '{}': {c}", r.cfg.name));
+        }
+        Ok(m.refs)
+    }
+
+    /// For a remote sandbox, forward the host port of a just-published
+    /// `ip:host_port:sandbox_port` here, through its host's link.
+    pub(crate) async fn forward_port(&self, sb: &SandboxRef, spec: &str) {
+        if sb.is_local() {
+            return;
+        }
+        let Some(port) = spec.split(':').rev().nth(1).and_then(|p| p.parse::<u16>().ok()) else { return };
+        let Ok(r) = self.remote(&sb.host).await else { return };
+        match r.link.forward(port).await {
+            Ok(local) => tracing::info!("'{sb}': port {port} on host '{}' → http://{}.{}.localhost:{local}", sb.host, sb.name, sb.host),
+            Err(e) => tracing::warn!("'{sb}': could not forward port {port}: {e:#}"),
+        }
+    }
+}
+
+/// Whether `p` is a directory on `host`.
+async fn is_dir_on(host: &Host, p: &std::path::Path) -> Result<bool> {
+    Ok(matches!(host.fs.stat(p).await?, Some(m) if m.kind == crate::host::Kind::Dir))
+}
+
+/// `git clone <url> <dir>` on `host`, when `dir` is not there yet.
+async fn clone_if_missing(host: &Host, url: &str, dir: &std::path::Path) -> Result<()> {
+    if host.fs.lstat(dir).await?.is_some() {
+        return Ok(());
+    }
+    if url.starts_with('-') {
+        bail!("'{url}' is not a git URL");
+    }
+    let d = dir.to_string_lossy().into_owned();
+    let out = host
+        .exec
+        .exec(sbxw_sbx::host::HostCmd::new("git", vec!["clone".into(), "--".into(), url.into(), d.clone()]))
+        .await?;
+    if !out.success() {
+        bail!("git clone {url} {d} failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
+/// A remote workspace's `sbxw.toml`, read on its host; the defaults when it
+/// has none. Relative paths are the host's, against the workspace. Its
+/// `source` stays unset: the file is not on this machine to re-read.
+async fn remote_config(host: &Host, workspace: &std::path::Path) -> Result<Config> {
+    let p = workspace.join("sbxw.toml");
+    if host.fs.stat(&p).await?.is_none() {
+        return Ok(Config::default());
+    }
+    let raw = host.fs.read(&p, 1 << 20).await?;
+    let mut cfg = Config::parse(&String::from_utf8_lossy(&raw)).with_context(|| format!("{} on host '{}'", p.display(), host.name))?;
+    let rel = |v: String| if v.starts_with("./") || v.starts_with("../") { workspace.join(v).to_string_lossy().into_owned() } else { v };
+    cfg.kits = std::mem::take(&mut cfg.kits).into_iter().map(rel).collect();
+    cfg.env_files = std::mem::take(&mut cfg.env_files)
+        .into_iter()
+        .map(|f| if std::path::Path::new(&f).is_absolute() { f } else { workspace.join(f).to_string_lossy().into_owned() })
+        .collect();
+    Ok(cfg)
 }
 
 #[cfg(test)]
@@ -900,7 +1044,7 @@ mod tests {
         let ws = dir.join("neos");
         std::fs::create_dir_all(&ws).unwrap();
         BringUp {
-            name: SandboxName::parse("neos").unwrap(),
+            name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -911,6 +1055,7 @@ mod tests {
             oauth_token: None,
             template,
             remote_control: false,
+            git: None,
         }
     }
 
@@ -1020,7 +1165,7 @@ mod tests {
         }
         let kits = vec![good.to_string_lossy().into_owned(), broken.to_string_lossy().into_owned(), "sbxw:codemap".into(), "docker.io/o/k:1".into()];
         let req = BringUp {
-            name: SandboxName::parse("neos").unwrap(),
+            name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1031,6 +1176,7 @@ mod tests {
             oauth_token: None,
             template: Default::default(),
             remote_control: false,
+            git: None,
         };
         let e = app.provision(req, None).await.unwrap_err();
         assert!(format!("{e:#}").contains("unknown field `setpu`"), "{e:#}");
@@ -1052,7 +1198,7 @@ mod tests {
         std::fs::create_dir_all(&kit).unwrap();
         std::fs::write(kit.join("spec.yaml"), "schemaVersion: \"3\"\nkind: mixin\n").unwrap();
         let req = BringUp {
-            name: SandboxName::parse("neos").unwrap(),
+            name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1063,6 +1209,7 @@ mod tests {
             oauth_token: None,
             template: Default::default(),
             remote_control: false,
+            git: None,
         };
         let _ = app.provision(req, None).await;
         let log = fake.log();
@@ -1098,7 +1245,7 @@ mod tests {
         let warnings = app
             .provision(
                 BringUp {
-                    name: SandboxName::parse("neos").unwrap(),
+                    name: SandboxRef::parse("neos").unwrap(),
                     workspace: ws.clone(),
                     ro: vec![],
                     rw: vec![],
@@ -1109,6 +1256,7 @@ mod tests {
                     oauth_token: Some("tok".into()),
                     template: Default::default(),
                     remote_control: false,
+                    git: None,
                 },
                 Some(sink),
             )
@@ -1154,7 +1302,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), "from-config".into());
         let req = BringUp {
-            name: SandboxName::parse("neos").unwrap(),
+            name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1165,6 +1313,7 @@ mod tests {
             oauth_token: Some("tok".into()),
             template: Default::default(),
             remote_control: true,
+            git: None,
         };
         app.provision(req.clone(), None).await.unwrap();
         let log = fake.log();
@@ -1203,7 +1352,7 @@ mod tests {
         let w = app
             .provision(
                 BringUp {
-                    name: SandboxName::parse("w").unwrap(),
+                    name: SandboxRef::parse("w").unwrap(),
                     workspace: ws,
                     ro: vec![],
                     rw: vec![],
@@ -1214,6 +1363,7 @@ mod tests {
                     oauth_token: None,
                     template: Default::default(),
                     remote_control: false,
+                    git: None,
                 },
                 None,
             )
@@ -1243,7 +1393,7 @@ mod tests {
             let ws = dir.path().join(name);
             std::fs::create_dir_all(&ws).unwrap();
             BringUp {
-                name: SandboxName::parse(name).unwrap(),
+                name: SandboxRef::parse(name).unwrap(),
                 workspace: ws,
                 ro: vec![],
                 rw: vec![],
@@ -1254,6 +1404,7 @@ mod tests {
                 oauth_token: None,
                 template: Default::default(),
                 remote_control: false,
+                git: None,
             }
         };
         app.provision(up("a"), None).await.unwrap();
@@ -1277,7 +1428,7 @@ mod tests {
         let ws = dir.path().join("neos");
         std::fs::create_dir_all(&ws).unwrap();
         let req = BringUp {
-            name: SandboxName::parse("neos").unwrap(),
+            name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1288,6 +1439,7 @@ mod tests {
             oauth_token: None,
             template: Default::default(),
             remote_control: false,
+            git: None,
         };
         app.provision(req, None).await.unwrap();
         let kit = app.store.paths.volumes_kit(sbxw_core::SandboxRef::parse("neos").unwrap());
@@ -1318,7 +1470,7 @@ mod tests {
         assert_eq!(offered[0]["target"], "/home/agent/history");
 
         let form = CreateForm { kit_mounts: [("/home/agent/history".to_string(), "/h/hist".to_string())].into(), ..Default::default() };
-        app.create(SandboxName::parse("km").unwrap(), &ws.to_string_lossy(), form, None).await.unwrap();
+        app.create(SandboxRef::parse("km").unwrap(), &ws.to_string_lossy(), form, None).await.unwrap();
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.contains("--mount /h/hist:/home/agent/history"), "{create}");
@@ -1333,7 +1485,7 @@ mod tests {
             std::fs::create_dir_all(&p).unwrap();
             p.canonicalize().unwrap().to_string_lossy().into_owned()
         });
-        let name = SandboxName::parse("multi").unwrap();
+        let name = SandboxRef::parse("multi").unwrap();
         let mounts = vec![(docs.clone(), true), (lib.clone(), false)];
         app.create(name.clone(), &ws, CreateForm { mounts, ..Default::default() }, None).await.unwrap();
         let log = fake.log();

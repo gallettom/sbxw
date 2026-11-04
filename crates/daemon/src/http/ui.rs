@@ -30,11 +30,10 @@ use std::sync::Arc;
 
 type S = State<Arc<App>>;
 
-/// A sandbox named on the wire, as a ref (`neos`, `buildbox~neos`), that
-/// this phase can act on: a remote one is refused with 501, `remote hosts
-/// are not wired yet`, since everything past here runs sbx, git or a PTY.
-fn sandbox(raw: &str) -> Result<SandboxName, ApiError> {
-    Ok(SandboxRef::parse(raw)?.local_name()?.clone())
+/// A sandbox named on the wire, as a ref (`neos`, `buildbox~neos`). Each
+/// service routes it to its host: `App::sbx_for`, `App::host_for`.
+fn sandbox(raw: &str) -> Result<SandboxRef, ApiError> {
+    Ok(SandboxRef::parse(raw)?)
 }
 
 fn non_blank(s: Option<String>) -> Option<String> {
@@ -169,7 +168,7 @@ struct Addressed {
 }
 
 impl Addressed {
-    fn key(&self) -> Result<(SandboxName, SessionKind), ApiError> {
+    fn key(&self) -> Result<(SandboxRef, SessionKind), ApiError> {
         let sb = sandbox(&self.sandbox)?;
         let (mode, thread) = match self.mode.as_deref() {
             Some(m) if m.starts_with("thread:") => (Some("thread"), m.strip_prefix("thread:")),
@@ -413,7 +412,7 @@ struct ChatBody {
 async fn chat(State(app): S, Json(b): Json<ChatBody>) -> ApiResult {
     let name = match non_blank(b.name) {
         Some(n) => sandbox(&n)?,
-        None => names::mint_chat_name(u32::from_str_radix(&sbxw_core::ids::random_hex(4), 16).unwrap_or(0)),
+        None => names::mint_chat_name(u32::from_str_radix(&sbxw_core::ids::random_hex(4), 16).unwrap_or(0)).into(),
     };
     let w = app.create_chat(name.clone()).await?;
     Ok(ok_with(json!({ "name": name, "warnings": w })))
@@ -462,6 +461,9 @@ struct UpBody {
     template: sbxw_core::templates::Choice,
     #[serde(default)]
     remote_control: bool,
+    /// Clone this into `path` first when it does not exist yet.
+    #[serde(default)]
+    git: Option<String>,
 }
 
 async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> Result<Response, ApiError> {
@@ -482,6 +484,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         oauth_token: b.oauth_token,
         template: b.template,
         remote_control: b.remote_control,
+        git: b.git,
     };
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let line = |v: Value| format!("{v}\n");
@@ -505,7 +508,7 @@ use futures_util::StreamExt;
 
 /// Close every terminal sbxw holds for a sandbox (`sbxw down <name>`).
 async fn detach(State(app): S, Path(name): Path<String>) -> ApiResult {
-    app.sessions.drop_sandbox(&sandbox(&name)?);
+    app.sessions.drop_sandbox(&sandbox(&name)?.to_string());
     Ok(ok())
 }
 
@@ -520,7 +523,8 @@ async fn duplicate(State(app): S, Path(name): Path<String>, Json(b): Json<Duplic
 }
 
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {
-    app.sbx.stop(&sandbox(&name)?).await?;
+    let sb = sandbox(&name)?;
+    app.sbx_for(&sb).await?.stop(&sb.name).await?;
     Ok(ok())
 }
 
@@ -530,9 +534,11 @@ async fn rm(State(app): S, Path(name): Path<String>) -> ApiResult {
 }
 
 async fn ports(State(app): S, Path(name): Path<String>) -> ApiResult {
+    let sb = sandbox(&name)?;
     let list: Vec<Value> = app
-        .sbx
-        .ports(&sandbox(&name)?)
+        .sbx_for(&sb)
+        .await?
+        .ports(&sb.name)
         .await
         .into_iter()
         .map(|p| json!({ "spec": p.spec(), "sandbox_port": p.sandbox_port, "proto": p.proto, "host_ip": p.host_ip, "host_port": p.host_port }))
@@ -563,7 +569,8 @@ struct SpecBody {
 
 async fn unpublish(State(app): S, Path(name): Path<String>, Json(b): Json<SpecBody>) -> ApiResult {
     let spec = policy::clean_arg(&b.spec, "spec")?;
-    app.sbx.unpublish(&sandbox(&name)?, &spec).await?;
+    let sb = sandbox(&name)?;
+    app.sbx_for(&sb).await?.unpublish(&sb.name, &spec).await?;
     Ok(ok())
 }
 
@@ -600,7 +607,7 @@ async fn policy_add(State(app): S, Path(name): Path<String>, Json(b): Json<RuleB
         if global { "ALL sandboxes".to_string() } else { format!("sandbox '{sb}'") },
         http.args().join(" ")
     );
-    app.sbx.policy_http(decision, (!global).then_some(&sb), &resources, &http).await?;
+    app.sbx_for(&sb).await?.policy_http(decision, (!global).then_some(&sb.name), &resources, &http).await?;
     Ok(ok())
 }
 
@@ -613,7 +620,7 @@ async fn policy_rm(State(app): S, Path(name): Path<String>, Json(b): Json<RuleRm
     let sb = sandbox(&name)?;
     let rule = policy::clean_arg(&b.rule, "rule id")?;
     tracing::info!("web UI: removing policy rule {rule} (from sandbox '{sb}' panel)");
-    app.sbx.policy_rm(&rule, Some(&sb)).await?;
+    app.sbx_for(&sb).await?.policy_rm(&rule, Some(&sb.name)).await?;
     Ok(ok())
 }
 
@@ -689,7 +696,7 @@ async fn mcp_load(State(app): S, Path(name): Path<String>, Json(b): Json<McpServ
     let sb = sandbox(&name)?;
     let server = mcp::check_name(&b.server)?;
     tracing::info!("web UI: loading MCP server {server} into '{sb}'");
-    app.sbx.mcp_load(&server, &sb).await?;
+    app.sbx_for(&sb).await?.mcp_load(&server, &sb.name).await?;
     Ok(ok())
 }
 
@@ -697,7 +704,7 @@ async fn mcp_unload(State(app): S, Path(name): Path<String>, Json(b): Json<McpSe
     let sb = sandbox(&name)?;
     let server = mcp::check_name(&b.server)?;
     tracing::info!("web UI: unloading MCP server {server} from '{sb}'");
-    app.sbx.mcp_unload(&server, &sb).await?;
+    app.sbx_for(&sb).await?.mcp_unload(&server, &sb.name).await?;
     Ok(ok())
 }
 
@@ -716,10 +723,12 @@ async fn envfile(State(app): S, Path(name): Path<String>, body: Option<Json<EnvF
     let r = app.render_env_file(&sb, dir.as_deref()).await?;
     let mut written = None;
     if b.save.unwrap_or(false) {
-        if r.dest.exists() && !b.force.unwrap_or(false) {
+        // Beside the workspace, so on the sandbox's host.
+        let host = app.host_for(&sb).await?;
+        if host.fs.lstat(&r.dest).await?.is_some() && !b.force.unwrap_or(false) {
             return Err(ApiError::conflict(format!("{} already exists — tick overwrite to replace it", r.dest.display())));
         }
-        std::fs::write(&r.dest, &r.yaml).map_err(|e| ApiError::bad(format!("writing {}: {e}", r.dest.display())))?;
+        host.fs.write_atomic(&r.dest, r.yaml.as_bytes(), 0o644).await.map_err(|e| ApiError::bad(format!("writing {}: {e:#}", r.dest.display())))?;
         tracing::info!("web UI: wrote environment file {}", r.dest.display());
         written = Some(r.dest.to_string_lossy().into_owned());
     }
@@ -740,7 +749,7 @@ async fn paste_image(State(app): S, Path(name): Path<String>, headers: HeaderMap
         _ => "png",
     };
     let dest = format!("/tmp/sbxw-pastes/paste-{}.{ext}", crate::now_ms());
-    app.sbx.write_file(&sb, &dest, &body, false).await?;
+    app.sbx_for(&sb).await?.write_file(&sb.name, &dest, &body, false).await?;
     Ok(ok_with(json!({ "path": dest })))
 }
 
@@ -762,7 +771,7 @@ async fn upload(State(app): S, Path(name): Path<String>, Query(q): Query<UploadQ
         return Err(ApiError::bad("empty file"));
     }
     let dest = format!("/tmp/sbxw-uploads/{}/{}", crate::now_ms(), upload_name(&q.name));
-    app.sbx.write_file(&sb, &dest, &body, false).await?;
+    app.sbx_for(&sb).await?.write_file(&sb.name, &dest, &body, false).await?;
     tracing::info!("web UI: uploaded {} bytes to '{sb}' at {dest}", body.len());
     Ok(ok_with(json!({ "path": dest })))
 }
@@ -803,7 +812,7 @@ async fn repos(State(app): S, Path(name): Path<String>) -> ApiResult {
         .store
         .workspace(&sb)
         .ok_or_else(|| ApiError::not_found(format!("sbxw has no workspace recorded for '{sb}'")))?;
-    let repos = crate::git::list(&Host::local(), &ws).await;
+    let repos = crate::git::list(&app.host_for(&sb).await?, &ws).await;
     Ok(ok_with(json!({ "workspace": ws, "repos": repos })))
 }
 
@@ -827,14 +836,14 @@ async fn thread_status(State(app): S, Path((name, thread)): Path<(String, String
     // to remove, unless it is the last thread (and the worktree holds
     // nothing — the daemon checks again when it closes).
     if let Some(team) = app.team_for(&sb, &t) {
-        let last = app.plans.lock().unwrap().team_of(sb.as_str(), t.as_str()).is_some_and(|p| p.threads.len() == 1);
+        let last = app.plans.lock().unwrap().team_of(&sb.to_string(), t.as_str()).is_some_and(|p| p.threads.len() == 1);
         return Ok(ok_with(json!({ "status": {
             "worktree": format!("{}/.sbxw-worktrees/{}", dir.trim_end_matches('/'), team.worktree),
             "branch": "", "base": "", "has_branch": false, "dirty": 0, "ahead": 0,
             "team": team.plan, "last": last,
         } })));
     }
-    let st = app.sbx.thread_status(&sb, &dir, &t).await?;
+    let st = app.sbx_for(&sb).await?.thread_status(&sb.name, &dir, &t).await?;
     Ok(ok_with(json!({ "status": st })))
 }
 
@@ -996,13 +1005,27 @@ async fn relay_deny(State(app): S, Path(id): Path<String>, Json(b): Json<DenyBod
 #[derive(Deserialize)]
 struct PathQuery {
     path: Option<String>,
+    /// A remote host's folders instead of this machine's.
+    #[serde(default)]
+    host: Option<String>,
 }
 
-/// Host folders for the create dialog's picker.
-async fn fs_browse(Query(q): Query<PathQuery>) -> Json<Value> {
-    // This machine for now; the picker is written against `HostFs` so a
-    // remote host's folders can be browsed the same way.
-    let host = Host::local();
+/// Host folders for the create dialog's picker: this machine's, or with
+/// `host=<name>` a remote host's, through the same `HostFs`.
+async fn fs_browse(State(app): S, Query(q): Query<PathQuery>) -> ApiResult {
+    let host = match non_blank(q.host) {
+        None => Host::local(),
+        Some(h) => {
+            let h = sbxw_core::names::HostName::parse(&h)?;
+            if h.is_local() {
+                Host::local()
+            } else {
+                let r = app.remote(&h).await?;
+                r.ready().await?;
+                r.host.clone()
+            }
+        }
+    };
     let base = match q.path {
         Some(p) => PathBuf::from(p),
         None => host.exec.home().await.unwrap_or_else(|_| "/".into()),
@@ -1025,7 +1048,7 @@ async fn fs_browse(Query(q): Query<PathQuery>) -> Json<Value> {
         }
     }
     entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-    Json(json!({ "path": dir, "parent": dir.parent(), "entries": entries }))
+    Ok(Json(json!({ "path": dir, "parent": dir.parent(), "entries": entries })))
 }
 
 /// The OS-native folder picker. Dismissing it is not an error, nor a path.
@@ -1064,12 +1087,20 @@ fn pick_folder_native() -> anyhow::Result<Option<String>> {
     anyhow::bail!("no native folder picker found — install zenity or kdialog")
 }
 
-fn favourites_payload(list: Vec<String>) -> Value {
-    json!({ "favourites": favourites::payload(list, |p| std::path::Path::new(p).is_dir()) })
+/// Starred folders are this machine's: they feed its picker.
+async fn favourites_payload(list: Vec<String>) -> Value {
+    let fs = Host::local().fs;
+    let mut dirs = std::collections::HashSet::new();
+    for p in &list {
+        if fs.stat(std::path::Path::new(p)).await.ok().flatten().is_some_and(|m| m.kind == Kind::Dir) {
+            dirs.insert(p.clone());
+        }
+    }
+    json!({ "favourites": favourites::payload(list, |p| dirs.contains(p)) })
 }
 
 async fn favourites_get(State(app): S) -> Json<Value> {
-    Json(favourites_payload(app.store.favourites()))
+    Json(favourites_payload(app.store.favourites()).await)
 }
 
 #[derive(Deserialize)]
@@ -1084,10 +1115,11 @@ async fn favourites_set(State(app): S, Json(b): Json<FavouriteBody>) -> ApiResul
         return Err(ApiError::bad("no folder given"));
     }
     let mut list = app.store.favourites();
-    let canonical = std::fs::canonicalize(raw).ok();
+    let fs = Host::local().fs;
+    let canonical = fs.canonicalize(std::path::Path::new(raw)).await.ok();
     if b.favourite {
         let c = canonical.ok_or_else(|| ApiError::bad(format!("cannot star '{raw}'")))?;
-        if !c.is_dir() {
+        if !fs.stat(&c).await.ok().flatten().is_some_and(|m| m.kind == Kind::Dir) {
             return Err(ApiError::bad(format!("'{raw}' is not a folder")));
         }
         favourites::star(&mut list, c.to_string_lossy().into_owned())?;
@@ -1096,7 +1128,7 @@ async fn favourites_set(State(app): S, Json(b): Json<FavouriteBody>) -> ApiResul
         favourites::unstar(&mut list, raw, c.as_deref());
     }
     app.store.set_favourites(&list)?;
-    let mut payload = favourites_payload(list);
+    let mut payload = favourites_payload(list).await;
     payload["ok"] = true.into();
     Ok(Json(payload))
 }
@@ -1166,12 +1198,12 @@ async fn unpair(State(app): S, Json(b): Json<PairBody>) -> ApiResult {
 /// `.sbxw-artifacts`, read on the host side of the mount.
 async fn artifacts_list(State(app): S, Path(name): Path<String>) -> ApiResult {
     let sb = sandbox(&name)?;
-    let run = app.codemap_run(&sb);
+    let run = app.codemap_run(&sb.to_string());
     let Some(ws) = app.store.workspace(&sb) else {
         return Ok(Json(json!({ "dir": "", "entries": [], "codemap": null, "lenses": [], "run": run })));
     };
     let dir = ws.join(artifacts::ARTIFACTS_DIR);
-    let entries = walk_artifacts(&Host::local(), &dir).await;
+    let entries = walk_artifacts(&app.host_for(&sb).await?, &dir).await;
     let (entries, codemap, lenses) = artifacts::fold(entries);
     Ok(Json(json!({ "dir": dir, "entries": entries, "codemap": codemap, "lenses": lenses, "run": run })))
 }
@@ -1197,7 +1229,7 @@ async fn walk_artifacts(host: &Host, root: &std::path::Path) -> Vec<artifacts::E
 async fn artifact_download(State(app): S, Path(name): Path<String>, Query(q): Query<PathQuery>) -> Result<Response, ApiError> {
     let sb = sandbox(&name)?;
     let ws = app.store.workspace(&sb).ok_or_else(|| ApiError::not_found("unknown sandbox"))?;
-    let host = Host::local();
+    let host = app.host_for(&sb).await?;
     let root = host.fs.canonicalize(&ws.join(artifacts::ARTIFACTS_DIR)).await.map_err(|_| ApiError::not_found("no artifacts directory"))?;
     let file = host
         .fs
@@ -1236,7 +1268,8 @@ struct FsQuery {
 async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Query<FsQuery>) -> ApiResult {
     let sb = sandbox(&name)?;
     let ws = app.store.workspace(&sb);
-    let l = sandbox_fs::list(&app.sbx, &Host::local(), &sb, ws.as_deref(), &q.path).await.map_err(|e| ApiError::not_found(format!("{e:#}")))?;
+    let (sbx, host) = (app.sbx_for(&sb).await?, app.host_for(&sb).await?);
+    let l = sandbox_fs::list(&sbx, &host, &sb.name, ws.as_deref(), &q.path).await.map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     let ws_s = ws.map(|w| w.to_string_lossy().into_owned());
     let artifacts = ws_s.as_ref().map(|w| format!("{}/{}", w.trim_end_matches('/'), artifacts::ARTIFACTS_DIR));
     let mounts = app.store.get(&sb).mounts;
@@ -1252,11 +1285,11 @@ async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Quer
 /// thread delivers sits on its branch, under `.sbxw-worktrees/<thread>`, until
 /// it is merged — a dot-folder nobody finds by browsing. Paths are the same in
 /// the sandbox and on the host (the workspace is mounted at its own path).
-async fn thread_worktrees(app: &App, sb: &SandboxName) -> Vec<Value> {
+async fn thread_worktrees(app: &App, sb: &SandboxRef) -> Vec<Value> {
     let Some(ws) = app.store.workspace(sb) else { return vec![] };
     let recorded: std::collections::BTreeMap<String, String> =
         app.store.get(sb).threads.iter().map(|(k, v)| (k.clone(), v.repo.clone())).collect();
-    let host = Host::local();
+    let Ok(host) = app.host_for(sb).await else { return vec![] };
     let mut out = Vec::new();
     for (thread, repo) in crate::git::thread_worktrees(&host, &ws, &recorded).await {
         let Some(root) = crate::git::repo_root(&host, &ws, &repo).await else { continue };
@@ -1275,7 +1308,8 @@ async fn sandbox_fs_recent(State(app): S, Path(name): Path<String>) -> ApiResult
     let ws = app.store.workspace(&sb);
     let ws_s = ws.as_ref().map(|w| w.to_string_lossy().into_owned());
     let roots = writable_roots(&app, &sb, ws_s.as_deref());
-    let (files, offline) = sandbox_fs::recent(&app.sbx, &Host::local(), &sb, ws.as_deref(), &roots)
+    let (sbx, host) = (app.sbx_for(&sb).await?, app.host_for(&sb).await?);
+    let (files, offline) = sandbox_fs::recent(&sbx, &host, &sb.name, ws.as_deref(), &roots)
         .await
         .map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     Ok(ok_with(json!({
@@ -1286,7 +1320,7 @@ async fn sandbox_fs_recent(State(app): S, Path(name): Path<String>) -> ApiResult
 
 /// Where an agent writes: the workspace, the read-write mounts, home and
 /// `/tmp`. What Recent scans, and the only places a file may be deleted from.
-fn writable_roots(app: &App, sb: &SandboxName, ws: Option<&str>) -> Vec<String> {
+fn writable_roots(app: &App, sb: &SandboxRef, ws: Option<&str>) -> Vec<String> {
     let mut roots: Vec<String> = ws.map(str::to_string).into_iter().collect();
     roots.extend(app.store.get(sb).mounts.iter().filter(|m| !m.readonly).map(|m| m.path.to_string_lossy().into_owned()));
     roots.extend([sandbox_fs::SANDBOX_HOME.to_string(), "/tmp".to_string()]);
@@ -1318,7 +1352,8 @@ async fn sandbox_fs_delete(State(app): S, Path(name): Path<String>, Json(b): Jso
     if let Some(why) = sandbox_fs::refuse_delete(&b.path, &roots, &protected) {
         return Err(ApiError::forbidden(why));
     }
-    sandbox_fs::delete(&app.sbx, &Host::local(), &sb, ws.as_deref(), &b.path, &roots, &protected)
+    let (sbx, host) = (app.sbx_for(&sb).await?, app.host_for(&sb).await?);
+    sandbox_fs::delete(&sbx, &host, &sb.name, ws.as_deref(), &b.path, &roots, &protected)
         .await
         .map_err(|e| ApiError::bad(format!("{e:#}")))?;
     Ok(ok_with(json!({ "path": b.path })))
@@ -1330,7 +1365,8 @@ async fn sandbox_fs_file(State(app): S, Path(name): Path<String>, Query(q): Quer
     let sb = sandbox(&name)?;
     let ws = app.store.workspace(&sb);
     let max = q.max.unwrap_or(sandbox_fs::MAX_FILE);
-    let data = sandbox_fs::read(&app.sbx, &Host::local(), &sb, ws.as_deref(), &q.path, max, q.head.is_some())
+    let (sbx, host) = (app.sbx_for(&sb).await?, app.host_for(&sb).await?);
+    let data = sandbox_fs::read(&sbx, &host, &sb.name, ws.as_deref(), &q.path, max, q.head.is_some())
         .await
         .map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     let filename = q.path.rsplit('/').next().unwrap_or("download").replace(['"', '\\', '\r', '\n'], "");
@@ -1423,7 +1459,7 @@ async fn shutdown(State(app): S) -> Json<Value> {
 /// The thread a WebSocket asks for may choose its repo and model on first open.
 pub async fn settle_ws_thread(
     app: &App,
-    sb: &SandboxName,
+    sb: &SandboxRef,
     kind: &SessionKind,
     repo: Option<&str>,
     model: Option<&str>,

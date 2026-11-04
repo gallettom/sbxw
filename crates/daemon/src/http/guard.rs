@@ -20,7 +20,7 @@ use axum::http::{header, request::Parts};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use sbxw_core::ports;
-use sbxw_core::SandboxName;
+use sbxw_core::SandboxRef;
 use std::sync::Arc;
 
 /// The extension's fixed id (from the public key in its manifest).
@@ -86,7 +86,7 @@ pub async fn ui_guard(State(app): State<Arc<App>>, req: Request, next: Next) -> 
 /// `Authorization: Bearer` header, or `?token=` (the code map kit's bare
 /// `curl "$SBXW_CODEMAP_DONE"`). Only a local sandbox's tooling can call in
 /// for now: a remote one's is refused with `remote hosts are not wired yet`.
-pub struct Agent(pub SandboxName);
+pub struct Agent(pub SandboxRef);
 
 #[axum::async_trait]
 impl FromRequestParts<Arc<App>> for Agent {
@@ -116,7 +116,7 @@ impl FromRequestParts<Arc<App>> for Agent {
             .store
             .sandbox_for_token(&token)
             .ok_or_else(|| ApiError::unauthorized("unknown agent token — run `sbxw up <name>` to reinstall the tooling"))?;
-        Ok(Agent(sb.local_name()?.clone()))
+        Ok(Agent(sb))
     }
 }
 

@@ -57,10 +57,22 @@ struct Cli {
 enum Cmd {
     /// Create (if needed) and provision a sandbox, served by the sbxw daemon.
     /// Omit the name to just start the daemon (browse/create from the UI).
+    #[command(after_help = "Remote hosts (EXPERIMENTAL, not yet tried on a real KVM host):\n  \
+        sbxw up buildbox~neos --path /srv/neos      a sandbox on host `buildbox` (see `sbxw host add`)\n  \
+        sbxw up buildbox~neos --path /srv/neos --git https://example.org/neos.git\n\n\
+        The path is the host's; its sbxw.toml is read there. Secrets go only to a host added with --trust-secrets.")]
     Up {
+        /// A sandbox name, or `<host>~<name>` for one on a remote host (experimental).
         name: Option<String>,
         /// Code path the agent edits in place. Defaults to the current directory.
+        /// For a remote sandbox, an absolute path on that host.
         path: Option<PathBuf>,
+        /// The same as the PATH argument, spelled as a flag.
+        #[arg(long = "path", value_name = "DIR", conflicts_with = "path")]
+        path_flag: Option<PathBuf>,
+        /// Clone this Git URL into the path first, when the path does not exist yet.
+        #[arg(long, value_name = "URL")]
+        git: Option<String>,
         /// Extra directories to mount read-only (repeatable).
         #[arg(long = "ro", value_name = "DIR")]
         ro: Vec<PathBuf>,
@@ -305,8 +317,8 @@ pub enum CacheAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Up { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control } => {
-            cmd::up(cmd::UpArgs { name, path, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control })
+        Cmd::Up { name, path, path_flag, git, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control } => {
+            cmd::up(cmd::UpArgs { name, path: path.or(path_flag), git, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control })
         }
         Cmd::Chat { name, config, no_web, use_api_key, tail } => cmd::chat(name, config, no_web, use_api_key, tail),
         Cmd::Logs { name, lines } => cmd::logs(name, lines),

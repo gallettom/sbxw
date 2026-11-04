@@ -21,6 +21,7 @@ use sbxw_sbx::ssh::{SshExec, SSH_UNREACHABLE};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -73,6 +74,10 @@ struct Shared {
     state: watch::Sender<LinkState>,
     /// local port → remote port, for `-O cancel` and for replay on restart.
     forwards: Mutex<BTreeMap<u16, u16>>,
+    /// Masters started so far that have ended (or never came up). A caller
+    /// that finds the link Down tells "still connecting" from "tried and
+    /// failed" by this, without waiting out a whole connect timeout.
+    tried: AtomicU32,
 }
 
 /// The link to one host. Dropping it stops the master.
@@ -95,13 +100,35 @@ impl Link {
     pub fn start(cfg: LinkConfig) -> Self {
         let exec = Arc::new(SshExec::with_ssh(cfg.host.clone(), cfg.control_path.clone(), cfg.ssh.clone()));
         let (state, _) = watch::channel(LinkState::Down { since: now_secs() });
-        let shared = Arc::new(Shared { cfg, state, forwards: Mutex::new(BTreeMap::new()) });
+        let shared = Arc::new(Shared { cfg, state, forwards: Mutex::new(BTreeMap::new()), tried: AtomicU32::new(0) });
         let task = tokio::spawn(supervise(shared.clone()));
         Self { shared, exec, task }
     }
 
     pub fn state(&self) -> watch::Receiver<LinkState> {
         self.shared.state.subscribe()
+    }
+
+    /// The state once the first connection attempt has had its chance: Up as
+    /// soon as it is, Down as soon as one attempt has failed, or whatever it
+    /// is when `timeout` runs out.
+    pub async fn settle(&self, timeout: Duration) -> LinkState {
+        let mut rx = self.state();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let s = *rx.borrow_and_update();
+            if s == LinkState::Up || self.shared.tried.load(Ordering::SeqCst) > 0 {
+                return s;
+            }
+            if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+                return s;
+            }
+        }
+    }
+
+    /// The host this link reaches.
+    pub fn host(&self) -> &RemoteHost {
+        &self.shared.cfg.host
     }
 
     /// Commands on this host, through this link's ControlPath.
@@ -200,6 +227,9 @@ async fn supervise(shared: Arc<Shared>) {
     loop {
         let up_for = run_master(&shared).await;
         set_down(&shared);
+        shared.tried.fetch_add(1, Ordering::SeqCst);
+        // Wake `settle`: a master that never came up changes no state.
+        shared.state.send_modify(|_| {});
         // Reset only after a link that held: one that drops right after it
         // comes up (a refused -R, a flaky network) must still back off.
         if up_for.is_some_and(|d| d >= cfg.backoff_max) {
@@ -443,6 +473,9 @@ mod tests {
         std::fs::write(&w.down, "").unwrap();
         let link = w.link();
         let mut rx = link.state();
+        let t = Instant::now();
+        assert!(matches!(link.settle(Duration::from_secs(20)).await, LinkState::Down { .. }));
+        assert!(t.elapsed() < Duration::from_secs(5), "settle returns after the first failed attempt");
         tokio::time::sleep(Duration::from_millis(700)).await;
         assert!(matches!(*rx.borrow(), LinkState::Down { .. }));
         assert!(w.log().matches("-M -N").count() >= 2, "{}", w.log());

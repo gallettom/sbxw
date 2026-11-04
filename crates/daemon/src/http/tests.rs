@@ -176,25 +176,25 @@ fn an_upload_keeps_its_name_as_one_safe_component() {
 }
 
 #[tokio::test]
-async fn a_remote_sandbox_is_refused_cleanly_until_hosts_are_wired() {
+async fn a_sandbox_on_an_unregistered_host_is_not_found_and_its_hooks_are_its_own() {
     let (_d, app) = app();
     let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
-    for path in ["/api/sandboxes/buildbox~neos/ports", "/api/sandboxes/buildbox~neos/threads", "/api/sandboxes/buildbox~neos/board"] {
-        let (s, v) = call(ui_router(app.clone()), get(path)).await;
-        assert_eq!(s, StatusCode::NOT_IMPLEMENTED, "{path}");
-        assert_eq!(v["error"], "remote hosts are not wired yet", "{path}");
-    }
+    let (s, v) = call(ui_router(app.clone()), get("/api/sandboxes/buildbox~neos/ports")).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(v["error"].as_str().unwrap().contains("no remote host named 'buildbox'"), "{v}");
     let stop = json_req(post("/api/sandboxes/buildbox~neos/stop", json!({})).header("host", HOST), json!({}));
-    assert_eq!(call(ui_router(app.clone()), stop).await.0, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(call(ui_router(app.clone()), stop).await.0, StatusCode::NOT_FOUND);
     let (s, _) = call(ui_router(app.clone()), get("/api/sandboxes/a~b~c/ports")).await;
-    assert_eq!(s, StatusCode::BAD_REQUEST, "a malformed ref is a bad request, not a missing feature");
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a malformed ref is a bad request");
+    assert!(!app.store.paths.state().join("hosts").exists(), "asking writes nothing");
 
-    // A token on file for a remote sandbox is known, and still refused.
+    // A remote sandbox's hooks come home through its link with its token,
+    // and its sessions are filed under its ref.
     let token = app.store.token(sbxw_core::SandboxRef::parse("buildbox~neos").unwrap()).unwrap();
     let hook = json!({"hook_event_name": "SessionStart", "session_id": "s"});
     let req = json_req(post("/api/hook", hook.clone()).header("authorization", format!("Bearer {token}")), hook);
-    assert_eq!(call(agent_router(app.clone()), req).await.0, StatusCode::NOT_IMPLEMENTED);
-    assert!(app.session_infos().is_empty());
+    assert_eq!(call(agent_router(app.clone()), req).await.0, StatusCode::OK);
+    assert!(app.session_infos().iter().any(|i| i.sandbox == "buildbox~neos"));
 }
 
 #[tokio::test]

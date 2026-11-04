@@ -11,7 +11,7 @@ use crate::app::App;
 use crate::store::write_atomic;
 use anyhow::{anyhow, bail, Context, Result};
 use sbxw_core::my_skills::{self, File, Manifest, Origin, Skill};
-use sbxw_core::SandboxName;
+use sbxw_core::SandboxRef;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -121,13 +121,13 @@ impl App {
     }
 
     /// Run [`my_skills::SANDBOX_SCRIPT`] in `sb`: `mode`, the workspace, then `rest`.
-    async fn skill_script(&self, sb: &SandboxName, mode: &str, rest: &[&str]) -> Result<String> {
+    async fn skill_script(&self, sb: &SandboxRef, mode: &str, rest: &[&str]) -> Result<String> {
         let ws = self.store.workspace(sb).map(|w| w.to_string_lossy().into_owned()).unwrap_or_default();
         // `sbx exec` refuses an empty element: values go in behind `=`.
         let values: Vec<String> = [mode, ws.as_str()].iter().chain(rest).map(|a| format!("={a}")).collect();
         let mut argv = vec!["node", "-"];
         argv.extend(values.iter().map(String::as_str));
-        let out = self.sbx.exec(sb, &argv, Some(my_skills::SANDBOX_SCRIPT.as_bytes().to_vec())).await?;
+        let out = self.sbx_for(sb).await?.exec(&sb.name, &argv, Some(my_skills::SANDBOX_SCRIPT.as_bytes().to_vec())).await?;
         if !out.success() {
             bail!("reading skills in '{sb}' failed: {}", String::from_utf8_lossy(&out.stderr).trim());
         }
@@ -137,7 +137,7 @@ impl App {
     /// The skills a sandbox has that could be kept: its project's
     /// `.claude/skills/*` and its own `~/.claude/skills/*` (unless that is
     /// sbx's store), each marked when one of that name is kept already.
-    pub async fn sandbox_skills(&self, sb: &SandboxName) -> Result<Value> {
+    pub async fn sandbox_skills(&self, sb: &SandboxRef) -> Result<Value> {
         let raw = self.skill_script(sb, "list", &[]).await?;
         let mut v: Value = serde_json::from_str(raw.trim()).context("reading the sandbox's skill list")?;
         let kept: Vec<String> = self.kept_dirs().into_iter().map(|(n, _)| n).collect();
@@ -153,7 +153,7 @@ impl App {
 
     /// Copy one skill out of `sb` and keep it. Replacing a kept skill of the
     /// same name takes `replace`: it changes what every next sandbox gets.
-    pub async fn keep_skill(&self, sb: &SandboxName, origin: Origin, name: &str, replace: bool) -> Result<Vec<String>> {
+    pub async fn keep_skill(&self, sb: &SandboxRef, origin: Origin, name: &str, replace: bool) -> Result<Vec<String>> {
         if !my_skills::valid_name(name) {
             bail!("'{name}' is not a skill name sbxw keeps: lowercase letters, digits, - and _");
         }
@@ -224,7 +224,7 @@ impl App {
 mod tests {
     use crate::testing::{app_with, sbx_answer};
     use sbxw_core::my_skills::Origin;
-    use sbxw_core::SandboxName;
+    use sbxw_core::SandboxRef;
     use sbxw_sbx::runner::Output;
 
     fn export(a: &[String]) -> Output {
@@ -246,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn a_kept_skill_reaches_the_kit_and_leaves_it_when_forgotten() {
         let (_d, app, fake) = app_with(export);
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         assert_eq!(app.my_skills_kit().unwrap(), None, "no kept skill, no kit");
 
         app.keep_skill(&sb, Origin::Workspace, "mine", false).await.unwrap();
@@ -276,7 +276,7 @@ mod tests {
     #[tokio::test]
     async fn a_path_out_of_the_skill_is_refused_and_nothing_is_written() {
         let (_d, app, _) = app_with(export);
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         assert!(app.keep_skill(&sb, Origin::Home, "evil", false).await.is_err());
         assert!(app.keep_skill(&sb, Origin::Home, "../x", false).await.is_err());
         let left: Vec<_> = std::fs::read_dir(app.store.paths.my_skills()).into_iter().flatten().collect();

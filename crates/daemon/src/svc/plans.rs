@@ -4,17 +4,23 @@
 use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::git;
-use crate::host::Host;
 use crate::store::write_atomic;
 use sbxw_core::messages;
 use sbxw_core::plans::{DistillItem, MergeResult, MergeState, Plan, PlanState, PlanThread, ThreadState, Variant};
 use sbxw_sbx::scripts::Team;
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::tooling::Tooling;
-use sbxw_core::{ModelId, SandboxName, ThreadName};
+use sbxw_core::{ModelId, SandboxRef, ThreadName};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
+
+impl App {
+    /// [`App::sbx_for`], its error as the plain text these services return.
+    async fn sbx_of(&self, sb: &SandboxRef) -> Result<sbxw_sbx::Sbx, String> {
+        self.sbx_for(sb).await.map_err(|e| format!("{e:#}"))
+    }
+}
 
 impl App {
     /// Write `sandbox`'s plans (or remove the file when none are left) and
@@ -56,7 +62,7 @@ impl App {
     /// running — the one fact a report cannot carry.
     pub fn plan_view(&self, plan: &Plan) -> serde_json::Value {
         let mut v = serde_json::to_value(plan).unwrap_or_default();
-        if let Ok(sb) = SandboxName::parse(&plan.sandbox) {
+        if let Ok(sb) = SandboxRef::parse(&plan.sandbox) {
             if let Some(threads) = v.get_mut("threads").and_then(|t| t.as_array_mut()) {
                 for (t, pt) in threads.iter_mut().zip(&plan.threads) {
                     let live = ThreadName::parse(&pt.name)
@@ -71,7 +77,7 @@ impl App {
 
     /// Every thread's repo resolvable, without recording anything: a plan
     /// whose threads could not start is refused before anything is started.
-    async fn check_plan_repos(&self, sandbox: &SandboxName, threads: &[PlanThread]) -> Result<(), String> {
+    async fn check_plan_repos(&self, sandbox: &SandboxRef, threads: &[PlanThread]) -> Result<(), String> {
         let Some(ws) = self.store.workspace(sandbox) else {
             return if threads.iter().any(|t| t.repo.is_some()) {
                 Err(format!("sbxw has no workspace recorded for '{sandbox}', so threads cannot name a repo"))
@@ -80,10 +86,11 @@ impl App {
             };
         };
         let rec = self.store.get(sandbox);
+        let host = self.host_for(sandbox).await.map_err(|e| format!("{e:#}"))?;
         for t in threads {
             let name = t.name.trim();
             let recorded = rec.threads.get(name).map(|r| r.repo.as_str());
-            git::choose(&Host::local(), &ws, recorded, name, t.repo.as_deref()).await.map_err(|e| format!("thread {name:?}: {e}"))?;
+            git::choose(&host, &ws, recorded, name, t.repo.as_deref()).await.map_err(|e| format!("thread {name:?}: {e}"))?;
         }
         Ok(())
     }
@@ -91,19 +98,20 @@ impl App {
     /// A shared plan's threads all work in one worktree, so in one repo: the
     /// one they resolve to, and the worktree's path in it. `Ok(None)` when the
     /// sandbox has no workspace recorded (the scripts find the repo there).
-    async fn shared_worktree(&self, sandbox: &SandboxName, threads: &[PlanThread], team: &str) -> Result<Option<String>, String> {
+    async fn shared_worktree(&self, sandbox: &SandboxRef, threads: &[PlanThread], team: &str) -> Result<Option<String>, String> {
         let Some(ws) = self.store.workspace(sandbox) else { return Ok(None) };
         let rec = self.store.get(sandbox);
+        let host = self.host_for(sandbox).await.map_err(|e| format!("{e:#}"))?;
         let mut repos = std::collections::BTreeSet::new();
         for t in threads {
             let name = t.name.trim();
             let recorded = rec.threads.get(name).map(|r| r.repo.as_str());
-            repos.insert(git::choose(&Host::local(), &ws, recorded, name, t.repo.as_deref()).await.map_err(|e| format!("thread {name:?}: {e}"))?);
+            repos.insert(git::choose(&host, &ws, recorded, name, t.repo.as_deref()).await.map_err(|e| format!("thread {name:?}: {e}"))?);
         }
         match repos.len() {
             1 => {
                 let rel = repos.into_iter().next().unwrap_or_default();
-                Ok(git::team_worktree(&Host::local(), &ws, &rel, team).await.map(|p| p.to_string_lossy().into_owned()))
+                Ok(git::team_worktree(&host, &ws, &rel, team).await.map(|p| p.to_string_lossy().into_owned()))
             }
             _ => Err(format!(
                 "a shared plan works in one worktree, so its threads need one repo; these name {}. \
@@ -114,15 +122,15 @@ impl App {
     }
 
     /// The shared plan `thread` works under, as its scripts take it.
-    pub fn team_for(&self, sandbox: &SandboxName, thread: &ThreadName) -> Option<Team> {
+    pub fn team_for(&self, sandbox: &SandboxRef, thread: &ThreadName) -> Option<Team> {
         let plans = self.plans.lock().unwrap();
-        let plan = plans.team_of(sandbox, thread)?;
+        let plan = plans.team_of(&sandbox.to_string(), thread)?;
         Some(Team { plan: plan.id.clone(), worktree: ThreadName::parse(&plan.team_name()).ok()? })
     }
 
     pub async fn plan_propose(
         &self,
-        sandbox: &SandboxName,
+        sandbox: &SandboxRef,
         summary: &str,
         threads: Vec<PlanThread>,
         variant: Variant,
@@ -135,7 +143,7 @@ impl App {
         }
         let plan = self.plans.lock().unwrap().propose(
             sbxw_core::ids::plan_id(),
-            sandbox,
+            &sandbox.to_string(),
             summary,
             threads,
             variant,
@@ -148,9 +156,9 @@ impl App {
     }
 
     /// Park until the plan is settled or the bound passes.
-    pub async fn plan_wait(&self, id: &str, sandbox: &SandboxName, bound: Duration) -> Result<Plan, String> {
+    pub async fn plan_wait(&self, id: &str, sandbox: &SandboxRef, bound: Duration) -> Result<Plan, String> {
         let mut rx = self.bus.subscribe();
-        let mut latest = self.plans.lock().unwrap().owned(id, sandbox)?.clone();
+        let mut latest = self.plans.lock().unwrap().owned(id, &sandbox.to_string())?.clone();
         let deadline = tokio::time::Instant::now() + bound;
         while latest.state == PlanState::Pending {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -160,21 +168,21 @@ impl App {
             match tokio::time::timeout(left, rx.recv()).await {
                 Ok(Ok(Event::Plan(p))) if p.id == id => latest = p,
                 Ok(Ok(_)) => {}
-                Ok(Err(RecvError::Lagged(_))) => latest = self.plans.lock().unwrap().owned(id, sandbox)?.clone(),
+                Ok(Err(RecvError::Lagged(_))) => latest = self.plans.lock().unwrap().owned(id, &sandbox.to_string())?.clone(),
                 Ok(Err(RecvError::Closed)) | Err(_) => break,
             }
         }
         Ok(latest)
     }
 
-    pub fn plan_led(&self, id: &str, sandbox: &SandboxName) -> Result<Plan, String> {
-        self.plans.lock().unwrap().led(id, sandbox).cloned()
+    pub fn plan_led(&self, id: &str, sandbox: &SandboxRef) -> Result<Plan, String> {
+        self.plans.lock().unwrap().led(id, &sandbox.to_string()).cloned()
     }
 
-    pub fn plan_propose_merge(&self, id: &str, sandbox: &SandboxName, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
+    pub fn plan_propose_merge(&self, id: &str, sandbox: &SandboxRef, order: Vec<String>, note: &str, distillate: Vec<DistillItem>) -> Result<Plan, String> {
         let order: Vec<String> = order.iter().map(|t| t.trim().to_string()).collect();
         let note = messages::clip_text(note, sbxw_core::plans::MAX_TEXT);
-        let plan = self.plans.lock().unwrap().propose_merge(id, sandbox, order, &note, distillate, now_ms())?;
+        let plan = self.plans.lock().unwrap().propose_merge(id, &sandbox.to_string(), order, &note, distillate, now_ms())?;
         tracing::info!("plans: '{sandbox}' proposed merging {id}");
         Ok(self.plan_changed(plan))
     }
@@ -182,9 +190,9 @@ impl App {
     /// A thread reports. When the plan has no lead name, blocked and done are
     /// typed into the main session so the lead still hears. Returns the lead's
     /// address for the thread's own `SendMessage`.
-    pub fn plan_report(self: &Arc<Self>, sandbox: &SandboxName, thread: &ThreadName, state: ThreadState, summary: &str) -> Result<Option<String>, String> {
+    pub fn plan_report(self: &Arc<Self>, sandbox: &SandboxRef, thread: &ThreadName, state: ThreadState, summary: &str) -> Result<Option<String>, String> {
         let summary = messages::clip_text(summary, sbxw_core::plans::MAX_TEXT);
-        let plan = self.plans.lock().unwrap().set_thread(sandbox, thread, state, &summary, false, now_ms())?;
+        let plan = self.plans.lock().unwrap().set_thread(&sandbox.to_string(), thread, state, &summary, false, now_ms())?;
         let plan = self.plan_changed(plan);
         if plan.closed {
             return Ok(None);
@@ -205,9 +213,9 @@ impl App {
     /// or a shared plan's threads name more than one repo.
     pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>, variant: Option<Variant>) -> Result<Plan, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
-        let sandbox = SandboxName::parse(&plan.sandbox).map_err(|e| e.to_string())?;
+        let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         let cfg = self.config_for(&sandbox);
-        let open = self.sessions.agents_open(&sandbox);
+        let open = self.sessions.agents_open(&sandbox.to_string());
         let new = threads
             .iter()
             .filter(|t| {
@@ -253,7 +261,7 @@ impl App {
         Ok(plan)
     }
 
-    async fn launch_thread(self: &Arc<Self>, sandbox: &SandboxName, name: &str) {
+    async fn launch_thread(self: &Arc<Self>, sandbox: &SandboxRef, name: &str) {
         let Ok(thread) = ThreadName::parse(name) else { return };
         let key = SessionKey::thread(sandbox, &thread);
         let outcome = match self.open_session(&key).await {
@@ -270,7 +278,7 @@ impl App {
         };
         if let Err(e) = outcome {
             tracing::warn!("plans: thread '{name}' of '{sandbox}' did not start: {e}");
-            if let Ok(p) = self.plans.lock().unwrap().set_thread(sandbox, name, ThreadState::Failed, &e, true, now_ms()) {
+            if let Ok(p) = self.plans.lock().unwrap().set_thread(&sandbox.to_string(), name, ThreadState::Failed, &e, true, now_ms()) {
                 self.send(Event::Plan(p.clone()));
                 self.persist_plans(&p.sandbox);
             }
@@ -291,7 +299,7 @@ impl App {
     pub async fn plan_merge(self: &Arc<Self>, id: &str, close_threads: bool, distillate: Option<Vec<DistillItem>>) -> Result<sbxw_core::plans::Merge, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let merge = plan.merge.clone().ok_or_else(|| format!("plan {id} has no merge proposed"))?;
-        let sandbox = SandboxName::parse(&plan.sandbox).map_err(|e| e.to_string())?;
+        let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
         if plan.variant == Variant::Shared {
             self.refuse_while_claimed(&plan)?;
             return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate).await;
@@ -310,10 +318,11 @@ impl App {
             };
             dirs.push((t.clone(), dir));
         }
+        let host = self.host_for(&sandbox).await.map_err(|e| format!("{e:#}"))?;
         let mut bases: std::collections::BTreeSet<Option<String>> = std::collections::BTreeSet::new();
         for (_, d) in &dirs {
             bases.insert(match d {
-                Ok(dir) if !dir.is_empty() => git::branch_of(&Host::local(), std::path::Path::new(dir)).await,
+                Ok(dir) if !dir.is_empty() => git::branch_of(&host, std::path::Path::new(dir)).await,
                 _ => None,
             });
         }
@@ -328,7 +337,7 @@ impl App {
                 (Err(e), _, _) => Err(format!("the sandbox could not be started: {e}")),
                 (Ok(()), Err(e), _) => Err(e),
                 (Ok(()), Ok(_), Err(e)) => Err(e.to_string()),
-                (Ok(()), Ok(dir), Ok(name)) => self.sbx.thread_merge(&sandbox, &dir, &name).await.map_err(|e| format!("{e:#}")),
+                (Ok(()), Ok(dir), Ok(name)) => self.sbx_of(&sandbox).await?.thread_merge(&sandbox.name, &dir, &name).await.map_err(|e| format!("{e:#}")),
             };
             let ok = outcome.is_ok();
             let result = match outcome {
@@ -382,7 +391,7 @@ impl App {
         ))
     }
 
-    async fn tell_lead_merged(self: &Arc<Self>, sandbox: &SandboxName, id: &str, summary: &str) {
+    async fn tell_lead_merged(self: &Arc<Self>, sandbox: &SandboxRef, id: &str, summary: &str) {
         tracing::info!("plans: {id}: {summary}");
         if self.sessions.is_live(&SessionKey::agent(sandbox)) {
             if let Err(e) = self.push_text(sandbox, SessionKind::Agent, summary).await {
@@ -400,7 +409,7 @@ impl App {
         self: &Arc<Self>,
         plan: Plan,
         merge: sbxw_core::plans::Merge,
-        sandbox: &SandboxName,
+        sandbox: &SandboxRef,
         close_threads: bool,
         distillate: Option<Vec<DistillItem>>,
     ) -> Result<sbxw_core::plans::Merge, String> {
@@ -418,7 +427,7 @@ impl App {
             None => Err(format!("plan {id} has no thread")),
         };
         let base = match &dir {
-            Ok(d) if !d.is_empty() => git::branch_of(&Host::local(), std::path::Path::new(d)).await,
+            Ok(d) if !d.is_empty() => git::branch_of(&self.host_for(sandbox).await.map_err(|e| format!("{e:#}"))?, std::path::Path::new(d)).await,
             _ => None,
         };
         let p = self.plans.lock().unwrap().start_merge(id, base, distillate, now_ms())?;
@@ -427,7 +436,7 @@ impl App {
         let outcome = match (self.ensure_running_for_thread(sandbox).await, dir) {
             (Err(e), _) => Err(format!("the sandbox could not be started: {e:#}")),
             (Ok(()), Err(e)) => Err(e),
-            (Ok(()), Ok(dir)) => self.sbx.thread_merge(sandbox, &dir, &team).await.map(|c| (c, dir)).map_err(|e| format!("{e:#}")),
+            (Ok(()), Ok(dir)) => self.sbx_of(sandbox).await?.thread_merge(&sandbox.name, &dir, &team).await.map(|c| (c, dir)).map_err(|e| format!("{e:#}")),
         };
         let (result, dir) = match outcome {
             Ok((commit, dir)) => (MergeResult { thread: team.to_string(), ok: true, commit: Some(commit).filter(|c| !c.is_empty()), error: None }, Some(dir)),
@@ -457,7 +466,7 @@ impl App {
                         unclosed.push(format!("{t} ({e})"));
                     }
                 }
-                if let Err(e) = self.sbx.thread_close(sandbox, dir, &team, false, true).await {
+                if let Err(e) = self.sbx_of(sandbox).await?.thread_close(&sandbox.name, dir, &team, false, true).await {
                     unclosed.push(format!("its worktree ({e:#})"));
                 }
                 if !unclosed.is_empty() {
@@ -472,10 +481,10 @@ impl App {
 
     /// One memory into the auto memory of the repo under `dir`, inside the
     /// sandbox; where it went.
-    async fn write_memory(&self, sandbox: &SandboxName, dir: &str, file: &str, body: &str, index: &str) -> Result<String, String> {
+    async fn write_memory(&self, sandbox: &SandboxRef, dir: &str, file: &str, body: &str, index: &str) -> Result<String, String> {
         let args = sbxw_sbx::scripts::memory_write_args(dir, file, index);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.sbx.exec(sandbox, &args, Some(body.as_bytes().to_vec())).await.map_err(|e| format!("{e:#}"))?;
+        let out = self.sbx_of(sandbox).await?.exec(&sandbox.name, &args, Some(body.as_bytes().to_vec())).await.map_err(|e| format!("{e:#}"))?;
         let fields = sbxw_sbx::scripts::script_fields(&out.stdout_str())?;
         if !out.success() {
             return Err(format!("the memory script failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
@@ -486,7 +495,7 @@ impl App {
     /// Close a thread: stop what runs in its worktree, remove the worktree,
     /// the branch if asked. Dirty work is refused without `discard` — the
     /// daemon does not trust a click it did not see.
-    pub async fn close_thread(&self, sandbox: &SandboxName, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
+    pub async fn close_thread(&self, sandbox: &SandboxRef, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
         // A session in the main checkout has no worktree to remove, and its
         // folder is the main agent's: nothing there is killed by cwd.
         // A shared plan's thread has no worktree of its own either: it leaves
@@ -496,7 +505,7 @@ impl App {
             tracing::info!("closing session '{thread}' of '{sandbox}', in the main checkout");
         } else if let Some(team) = self.team_for(sandbox, thread) {
             let dir = self.settle_thread_repo(sandbox, thread, None).await.ok();
-            let left = self.plans.lock().unwrap().drop_team_thread(sandbox.as_str(), thread.as_str(), now_ms());
+            let left = self.plans.lock().unwrap().drop_team_thread(&sandbox.to_string(), thread.as_str(), now_ms());
             if let Some(plan) = left {
                 tracing::info!("closing '{thread}' of '{sandbox}': it leaves shared plan {}", plan.id);
                 if plan.state == PlanState::Refused {
@@ -507,8 +516,9 @@ impl App {
         } else {
             match self.settle_thread_repo(sandbox, thread, None).await {
                 Ok(dir) => self
-                    .sbx
-                    .thread_close(sandbox, &dir, thread, discard, delete_branch)
+                    .sbx_of(sandbox)
+                    .await?
+                    .thread_close(&sandbox.name, &dir, thread, discard, delete_branch)
                     .await
                     .map_err(|e| format!("{e:#}"))?,
                 // A chat's workspace is throwaway and may have been swept (or
@@ -525,7 +535,7 @@ impl App {
         if let Some((dir, team)) = team_end {
             self.end_team_worktree(sandbox, &dir, &team).await;
         }
-        let gone = self.agents.lock().unwrap().forget_thread(sandbox.as_str(), thread.as_str(), now_ms());
+        let gone = self.agents.lock().unwrap().forget_thread(&sandbox.to_string(), thread.as_str(), now_ms());
         for info in gone {
             self.send(Event::Session(info));
         }
@@ -540,10 +550,14 @@ impl App {
     /// The shared worktree of a plan whose every thread was closed: removed
     /// with its branch when it holds nothing — no uncommitted file, no commit
     /// its base lacks. Anything in it is work, and is left for a person.
-    async fn end_team_worktree(&self, sandbox: &SandboxName, dir: &str, team: &ThreadName) {
-        match self.sbx.thread_status(sandbox, dir, team).await {
+    async fn end_team_worktree(&self, sandbox: &SandboxRef, dir: &str, team: &ThreadName) {
+        let sbx = match self.sbx_of(sandbox).await {
+            Ok(s) => s,
+            Err(e) => return tracing::warn!("plans: could not read the worktree {team} of '{sandbox}': {e}"),
+        };
+        match sbx.thread_status(&sandbox.name, dir, team).await {
             Ok(st) if st.dirty == 0 && st.ahead == 0 => {
-                if let Err(e) = self.sbx.thread_close(sandbox, dir, team, false, true).await {
+                if let Err(e) = sbx.thread_close(&sandbox.name, dir, team, false, true).await {
                     tracing::warn!("plans: could not remove the empty worktree {team} of '{sandbox}': {e:#}");
                 }
             }
@@ -557,13 +571,13 @@ impl App {
 
     /// ★ Lead: install `/lead` and refresh the relay server (a sandbox from
     /// before plans lacks its tools), type `/lead`, remember *which* session.
-    pub async fn lead(self: &Arc<Self>, sandbox: &SandboxName) -> Result<(), String> {
+    pub async fn lead(self: &Arc<Self>, sandbox: &SandboxRef) -> Result<(), String> {
         let token = self.store.token(sandbox).map_err(|e| format!("{e:#}"))?;
         let batch = Tooling::new()
             .agent_token(&token)
-            .relay(self.cfg.agent_port())
+            .relay(&self.agent_port_for(sandbox).await.map_err(|e| format!("{e:#}"))?)
             .lead_command();
-        let outcome = self.sbx.tooling(sandbox, &batch).await.map_err(|e| format!("{e:#}"))?;
+        let outcome = self.sbx_of(sandbox).await?.tooling(&sandbox.name, &batch).await.map_err(|e| format!("{e:#}"))?;
         if let Some((piece, e)) = outcome.failed.first() {
             return Err(format!("{piece}: {e}"));
         }
@@ -575,9 +589,9 @@ impl App {
         Ok(())
     }
 
-    pub async fn lead_end(self: &Arc<Self>, sandbox: &SandboxName) {
+    pub async fn lead_end(self: &Arc<Self>, sandbox: &SandboxRef) {
         self.leads.lock().unwrap().remove(&sandbox.into());
-        let ended = self.plans.lock().unwrap().end_lead(sandbox, now_ms());
+        let ended = self.plans.lock().unwrap().end_lead(&sandbox.to_string(), now_ms());
         tracing::info!("plans: lead mode ended for '{sandbox}' ({} plan(s) refused or closed)", ended.len());
         for p in ended {
             self.plan_changed(p);
@@ -609,14 +623,14 @@ mod tests {
     use crate::testing::{app, app_with, ls, sbx_answer};
     use sbxw_core::plans::{DistillItem, DistillKind, MergeState, PlanState, PlanThread, ThreadState, Variant};
     use sbxw_sbx::runner::Output;
-    use sbxw_core::SandboxName;
+    use sbxw_core::SandboxRef;
     use std::time::Duration;
 
     #[tokio::test]
     async fn a_chat_session_without_a_repo_still_closes() {
         let (_d, app) = app();
-        let name = SandboxName::parse("ephemeral-chat").unwrap();
-        let ws = app.store.paths.chat_workspace(&name);
+        let name = SandboxRef::parse("ephemeral-chat").unwrap();
+        let ws = app.store.paths.chat_workspace(&name.name);
         std::fs::create_dir_all(&ws).unwrap();
         let thread = sbxw_core::ThreadName::parse("chat-2").unwrap();
         app.store
@@ -628,7 +642,7 @@ mod tests {
         app.close_thread(&name, &thread, true, true).await.unwrap();
         assert!(!app.store.get(&name).threads.contains_key("chat-2"), "the record is forgotten");
 
-        let other = SandboxName::parse("neos").unwrap();
+        let other = SandboxRef::parse("neos").unwrap();
         let dir = tempfile::tempdir().unwrap();
         app.store.update(&other, |r| r.workspace = Some(dir.path().to_path_buf())).unwrap();
         assert!(app.close_thread(&other, &thread, true, true).await.is_err(), "anywhere else it still asks for a repo");
@@ -650,20 +664,20 @@ mod tests {
     #[tokio::test]
     async fn a_proposal_is_persisted_and_survives_a_restart() {
         let (dir, app) = app();
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         let p = app.plan_propose(&sb, "split", vec![t("api")], Variant::Split, "independent", Some("lead")).await.unwrap();
         let file = app.store.paths.plans().join("neos.json");
         assert!(file.exists());
         let again = crate::testing::app_in(dir.path());
         assert_eq!(again.plan(&p.id).unwrap().state, PlanState::Pending);
         // Another sandbox cannot wait on it.
-        assert!(app.plan_wait(&p.id, &SandboxName::parse("other").unwrap(), Duration::from_millis(10)).await.is_err());
+        assert!(app.plan_wait(&p.id, &SandboxRef::parse("other").unwrap(), Duration::from_millis(10)).await.is_err());
     }
 
     #[tokio::test]
     async fn a_refusal_wakes_the_lead() {
         let (_d, app) = app();
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one thread", None).await.unwrap();
         let a = app.clone();
         let (id, s) = (p.id.clone(), sb.clone());
@@ -685,7 +699,7 @@ mod tests {
                 _ => sbx_answer(a),
             }
         });
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         let ws = tempfile::tempdir().unwrap();
         std::fs::create_dir(ws.path().join(".git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
@@ -700,7 +714,7 @@ mod tests {
         let api = sbxw_core::ThreadName::parse("api").unwrap();
         let tm = app.team_for(&sb, &api).unwrap();
         assert_eq!((tm.plan.as_str(), tm.worktree.as_str()), (p.id.as_str(), team.as_str()));
-        let argv = sbxw_sbx::scripts::thread_run_args(&sb, "/w", &api, "", None, Some(&tm));
+        let argv = sbxw_sbx::scripts::thread_run_args(&sb.name, "/w", &api, "", None, Some(&tm));
         assert_eq!(&argv[argv.len() - 2..], [format!("={team}"), format!("={}", p.id)]);
         let listed: Vec<String> = app.threads(&sb).await.threads.iter().map(|v| v["name"].as_str().unwrap().to_string()).collect();
         assert_eq!(listed, ["api", "web"], "its threads are listed though they have no worktree of their own");
@@ -732,7 +746,7 @@ mod tests {
     #[tokio::test]
     async fn a_shared_plan_needs_one_repo_and_a_split_plan_is_as_before() {
         let (_d, app) = app();
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         let ws = tempfile::tempdir().unwrap();
         for r in ["a/.git", "b/.git"] {
             std::fs::create_dir_all(ws.path().join(r)).unwrap();
@@ -762,7 +776,7 @@ mod tests {
                 _ => sbx_answer(a),
             }
         });
-        let sb = SandboxName::parse("neos").unwrap();
+        let sb = SandboxRef::parse("neos").unwrap();
         let ws = tempfile::tempdir().unwrap();
         std::fs::create_dir(ws.path().join(".git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();

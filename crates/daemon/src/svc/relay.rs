@@ -7,7 +7,7 @@ use crate::bus::Event;
 use sbxw_core::messages::{self, Recipient};
 use sbxw_core::relay::{self, RelayKind, RelayRequest, Shot};
 use sbxw_core::session::SessionKind;
-use sbxw_core::{SandboxName, ThreadName};
+use sbxw_core::{SandboxRef, ThreadName};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -30,7 +30,7 @@ impl App {
     }
 
     /// A sandbox opens a request (its identity is verified upstream).
-    pub fn relay_open(&self, from: &SandboxName, thread: Option<&ThreadName>, kind: RelayKind, question: &str) -> Result<RelayRequest, String> {
+    pub fn relay_open(&self, from: &SandboxRef, thread: Option<&ThreadName>, kind: RelayKind, question: &str) -> Result<RelayRequest, String> {
         let question = messages::clip_text(question, relay::MAX_QUESTION);
         if question.is_empty() {
             return Err("empty question".into());
@@ -39,19 +39,19 @@ impl App {
             .relay
             .lock()
             .unwrap()
-            .open(from, thread.map(|t| t.as_str()), kind, &question, now_ms());
+            .open(&from.to_string(), thread.map(|t| t.as_str()), kind, &question, now_ms());
         tracing::info!("relay: '{from}' opened {} ({kind:?})", req.id);
         Ok(self.relay_changed(req))
     }
 
     /// Park until the request settles or the bound passes, then return it as
     /// it stands. Waiting is reading, so only the asker may.
-    pub async fn relay_wait(&self, id: &str, from: &SandboxName, bound: Duration) -> Result<RelayRequest, String> {
+    pub async fn relay_wait(&self, id: &str, from: &SandboxRef, bound: Duration) -> Result<RelayRequest, String> {
         // Subscribe before the first look, or a settlement in between is lost.
         let mut rx = self.bus.subscribe();
         let current = {
             let book = self.relay.lock().unwrap();
-            book.check_asker(id, from)?.clone()
+            book.check_asker(id, &from.to_string())?.clone()
         };
         if current.state.is_final() {
             return Ok(current);
@@ -96,12 +96,12 @@ impl App {
     }
 
     /// The routed-to sandbox files its answer; a human reviews it.
-    pub fn relay_reply(&self, id: &str, from: &SandboxName, answer: &str) -> Result<(), String> {
+    pub fn relay_reply(&self, id: &str, from: &SandboxRef, answer: &str) -> Result<(), String> {
         let answer = messages::clip_text(answer, relay::MAX_ANSWER);
         if answer.is_empty() {
             return Err("empty answer".into());
         }
-        let req = self.relay.lock().unwrap().reply(id, from, &answer, now_ms())?;
+        let req = self.relay.lock().unwrap().reply(id, &from.to_string(), &answer, now_ms())?;
         tracing::info!("relay: '{from}' answered {id}");
         self.relay_changed(req);
         Ok(())
@@ -109,8 +109,8 @@ impl App {
 
     /// A human sends the question to `to`; it is typed into that agent. A
     /// delivery that fails bounces the request back with the reason.
-    pub fn relay_route(self: &Arc<Self>, id: &str, to: &SandboxName) -> Result<(), String> {
-        let req = self.relay.lock().unwrap().route(id, to, now_ms())?;
+    pub fn relay_route(self: &Arc<Self>, id: &str, to: &SandboxRef) -> Result<(), String> {
+        let req = self.relay.lock().unwrap().route(id, &to.to_string(), now_ms())?;
         tracing::info!("relay: {id} routed to '{to}'");
         let req = self.relay_changed(req);
         let app = self.clone();
@@ -162,7 +162,7 @@ impl App {
     /// in is the only way it is ever read — into the thread that asked, while
     /// its session is open.
     fn tell_asker(self: &Arc<Self>, req: &RelayRequest) {
-        let Ok(from) = SandboxName::parse(&req.from) else { return };
+        let Ok(from) = SandboxRef::parse(&req.from) else { return };
         let sessions = self.sessions.clone();
         let (to, text) = messages::relay_delivery(req, |t| {
             ThreadName::parse(t)
@@ -184,11 +184,11 @@ impl App {
 mod tests {
     use crate::testing::app;
     use sbxw_core::relay::{RelayKind, RelayState};
-    use sbxw_core::SandboxName;
+    use sbxw_core::SandboxRef;
     use std::time::Duration;
 
-    fn sb(n: &str) -> SandboxName {
-        SandboxName::parse(n).unwrap()
+    fn sb(n: &str) -> SandboxRef {
+        SandboxRef::parse(n).unwrap()
     }
 
     #[tokio::test]
