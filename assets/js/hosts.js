@@ -66,10 +66,10 @@ function hostLinkLabel(h) {
     return { cls: 'up', text: ms, title: `SSH link up${h.latency_ms != null ? `, last round trip ${h.latency_ms} ms` : ''}` };
   }
   if (h.link === 'down') {
-    return { cls: 'down', text: `down since ${hostClock(h.down_since)}`,
+    return { cls: 'down', text: `down ${hostClock(h.down_since)}`,
       title: `SSH link down since ${hostClock(h.down_since)}; sbxw keeps retrying` };
   }
-  return { cls: 'never', text: 'never connected', title: 'sbxw has not reached this host yet (it connects when the list or an action needs it)' };
+  return { cls: 'never', text: 'never', title: 'Never connected: sbxw has not reached this host yet (it connects when the list or an action needs it)' };
 }
 
 function hostSectionHtml(name, h, list, folded) {
