@@ -21,7 +21,7 @@ name_after() { # the value after --name
 }
 
 case "${1:-}" in
-  version) echo "sbx version 0.48.0" ;;
+  version) echo "sbx version 0.50.0" ;;
   ls)
     if [ "${2:-}" = "--format" ]; then # 0.48: a bare array
       sep=""; printf '['
