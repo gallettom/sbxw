@@ -1264,17 +1264,23 @@
   .host-head:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
   .host-chevron { font-size: 9px; transition: transform .12s; color: var(--c-text-dim); }
   .host-section.folded .host-chevron { transform: rotate(-90deg); }
+  /* Only the name gives way: it truncates first (down to a few letters), the
+     latency, count and ⋯ keep their natural width. If the row still does not
+     fit, hosts.js adds .tight and the link text goes; the dot keeps it in its
+     title. */
   .host-name {
     color: var(--c-text-bright); font-weight: 600; font-size: 11.5px;
-    letter-spacing: .03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 2.5rem;
-    flex-shrink: 0; max-width: 55%;
+    letter-spacing: .03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 0 1 auto; min-width: 2.5rem;
   }
   .dot.host-link.up    { background: var(--c-green); box-shadow: 0 0 5px #3fb95066; }
   .dot.host-link.down  { background: var(--c-red); }
   .dot.host-link.never { background: var(--c-dim); }
-  .host-link-text { font-size: 10.5px; color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .host-link-text { flex: none; font-size: 10.5px; color: var(--c-text-dim); white-space: nowrap; }
+  .host-head.tight .host-link-text { display: none; }
+  .host-chevron, .host-menu-btn { flex: none; }
   .host-count {
-    margin-left: auto; font-size: 10px; color: var(--c-text-dim);
+    margin-left: auto; flex: none; white-space: nowrap; font-size: 10px; color: var(--c-text-dim);
     background: var(--c-elevated); border-radius: var(--r-xs); padding: 0 .3rem;
   }
   .host-menu-btn {

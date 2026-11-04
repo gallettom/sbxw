@@ -131,6 +131,39 @@ if (sidebar.sections.join(',') !== 'local,fake,gone' || !sidebar.fake) {
 if (!sidebar.gone || !sidebar.gone.greyed || !/^unreachable since \d\d:\d\d/.test(sidebar.gone.note) || sidebar.gone.enabled) {
   problems.push(`unreachable sandbox: ${JSON.stringify(sidebar.gone)}, want greyed, "unreachable since HH:MM", no action enabled`);
 }
+// The host headers at the default sidebar width: the name is what truncates.
+// fake's latency is shown whole, and so is gone's short state: "never", and
+// "down HH:MM" put in a copy of its header to try the longest one. A header
+// too narrow for its link text would drop it rather than clip it, the dot
+// keeping it in its title.
+const heads = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll('.host-head')];
+  const gone = document.querySelector('.host-head[data-host-fold="gone"]');
+  let probe = null;
+  if (gone) {
+    probe = gone.cloneNode(true);
+    probe.dataset.hostFold = 'gone (down HH:MM)';
+    probe.querySelector('.host-link-text').textContent = 'down 14:05';
+    probe.classList.remove('tight');
+    gone.after(probe);
+    rows.push(probe);
+  }
+  const out = rows.map(h => {
+  const t = h.querySelector('.host-link-text');
+  return { host: h.dataset.hostFold, overflow: h.scrollWidth > h.clientWidth,
+    shown: t && t.offsetParent !== null, clipped: t && t.scrollWidth > t.clientWidth,
+    dotTitle: h.querySelector('.dot.host-link')?.title || '' };
+  });
+  probe?.remove();
+  return out;
+});
+for (const h of heads) {
+  if (h.overflow || (h.shown && h.clipped)) problems.push(`host header ${h.host} clipped: ${JSON.stringify(h)}`);
+  if (!h.shown && !h.dotTitle) problems.push(`host header ${h.host} dropped its link text with no dot title`);
+}
+for (const host of ['fake', 'gone', 'gone (down HH:MM)']) {
+  if (!heads.find(h => h.host === host)?.shown) problems.push(`${host}: link text not shown at the default sidebar width: ${JSON.stringify(heads)}`);
+}
 await page.screenshot({ path: png.replace(/\.png$/, '-hosts-sidebar.png') });
 await visit('Fold a host', async () => {
   await page.locator('.host-head[data-host-fold="fake"]').click();
