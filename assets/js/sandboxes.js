@@ -333,8 +333,14 @@ function sandboxItemHtml(s, groupColor) {
     ? `<span class="sbx-map-badge" title="Writing the ${codemapWhat(mapRun)} in a background session">`
       + `${isLensRun(mapRun) ? 'lens' : 'map'}…</span>`
     : '';
+  // On a host that cannot be reached: the status is the last one seen, and
+  // every action would only come back 503, so they are off and say why.
+  const down = sandboxUnreachable(s);
   const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`;
-  const actions = isRunning
+  const actions = down
+    ? ['▶', '⇌', '⧉', '✕'].map(icon =>
+        `<button class="icon-btn" disabled title="${escHtml(down)}">${icon}</button>`).join('')
+    : isRunning
     ? `<button class="icon-btn stop-btn" data-action="stop" data-name="${escHtml(s.name)}" title="Stop">■</button>
        <button class="icon-btn restart-btn" data-action="restart" data-name="${escHtml(s.name)}" title="Reload">↺</button>
        <button class="icon-btn ports-btn" data-action="ports" data-name="${escHtml(s.name)}" title="Ports &amp; network policy">⇌</button>
@@ -354,11 +360,16 @@ function sandboxItemHtml(s, groupColor) {
   const ageTag = age
     ? `<span class="sbx-age" title="Created ${escHtml(new Date(s.created_at).toLocaleString())}">${escHtml(age.replace(' ago', ''))}</span>`
     : '';
-  return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(s.name)}</span>${paneTag}${readyDot}${mapBadge}</div>
+  // Under its host's header the `host~` prefix says nothing the header does not.
+  const shown = sidebarByHost() ? sandboxShortName(s.name) : s.name;
+  const status = down
+    ? `<span class="sbx-status sbx-unreachable-note" title="${escHtml(down)}">unreachable since ${escHtml(hostClock(s.unreachable_since))}</span>`
+    : `<span class="sbx-status">${escHtml(s.status)}</span>`;
+  return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}${down ? ' unreachable' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
-      <span class="sbx-status">${escHtml(s.status)}</span>
+      ${status}
       <span class="sbx-agent">${escHtml(s.agent)}</span>
       ${ageTag}
       <div class="sbx-actions">${actions}</div>
@@ -368,6 +379,13 @@ function sandboxItemHtml(s, groupColor) {
 }
 
 function renderSidebar() {
+  // With remote hosts registered the list is one section per host, `local`
+  // first (see /js/hosts.js); without, it is the one list it always was.
+  if (sidebarByHost()) {
+    listEl.innerHTML = renderHostSections();
+    applyAgentStates();
+    return;
+  }
   if (!sandboxes.length) {
     // Nothing in the list *while a bring-up is running* is not the ambiguous
     // case below — it is the expected one, and the corner card already says
@@ -390,15 +408,25 @@ function renderSidebar() {
     return;
   }
 
+  listEl.innerHTML = groupedHtml(sandboxes);
+  // The rows above were just rebuilt from a string and carry no agent classes;
+  // repaint them from the live session state rather than baking it into the
+  // HTML, so an event arriving between two renders still lands.
+  applyAgentStates();
+}
+
+// The workspace and chat cards for `list`: the whole sidebar on one machine,
+// one host's section with remote hosts.
+function groupedHtml(list) {
   // Only sandboxes sharing a group key with at least one other — an identical
   // workspace path, or being a chat sandbox — get grouped. The lone ones on a
   // unique workspace share the dark "Other" card at the bottom.
   const groupCounts = new Map();
-  sandboxes.forEach(s => {
+  list.forEach(s => {
     const k = groupKeyOf(s);
     if (k) groupCounts.set(k, (groupCounts.get(k) || 0) + 1);
   });
-  const ordered = orderForGrouping(sandboxes, groupCounts);
+  const ordered = orderForGrouping(list, groupCounts);
 
   let html = '';
   let openGroup = null;
@@ -426,12 +454,7 @@ function renderSidebar() {
     html += sandboxItemHtml(s, groupKey ? groupColorOf(groupKey) : null);
   });
   if (openGroup !== null) html += '</div>';
-
-  listEl.innerHTML = html;
-  // The rows above were just rebuilt from a string and carry no agent classes;
-  // repaint them from the live session state rather than baking it into the
-  // HTML, so an event arriving between two renders still lands.
-  applyAgentStates();
+  return html;
 }
 
 // Clicking a sandbox item (not a button) connects it to the focused pane.
@@ -448,6 +471,8 @@ listEl.addEventListener('click', e => {
   const name = item.dataset.name;
   // Any interaction with a just-finished sandbox counts as "seen".
   if (readySandboxes.delete(name)) renderSidebar();
+  const down = sandboxUnreachable(sandboxes.find(x => x.name === name));
+  if (down) { showToast(down, 'error'); return; }
   if (btn) {
     e.stopPropagation();
     const action = btn.dataset.action;
@@ -467,8 +492,10 @@ async function loadSandboxes() {
   try {
     const res = await fetch('/api/sandboxes');
     sandboxes = await res.json();
+    // The hosts' headers (link, latency) are read with the list they head.
+    await loadRemoteHosts();
     renderSidebar();
-    sandboxes.filter(s => s.status === 'running').forEach(s => refreshThreadList(s.name));
+    sandboxes.filter(s => s.status === 'running' && !s.unreachable_since).forEach(s => refreshThreadList(s.name));
   } catch (_) {}
 }
 

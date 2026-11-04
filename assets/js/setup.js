@@ -1,4 +1,4 @@
-// ── Setup: Skills, Templates, Kits and MCP as tabs of one dialog ──────────
+// ── Setup: Skills, Templates, Kits, MCP and Hosts as tabs of one dialog ──────────
 //
 // The sidebar used to give each its own button; four rows for what is one
 // question — what does a sandbox start with. They stay four dialogs (each
@@ -13,6 +13,7 @@ const SETUP_TABS = [
   { id: 'templates', label: 'Templates', open: openTemplatesModal, close: closeTemplatesModal },
   { id: 'kits',      label: 'Kits',      open: openKitsModal,      close: closeKitsModal },
   { id: 'mcp',       label: 'MCP',       open: openMcpModal,       close: closeMcpModal },
+  { id: 'hosts',     label: 'Hosts',     open: openHostsModal,     close: closeHostsModal },
 ];
 const SETUP_KEY = 'sbxw.setup-tab';
 

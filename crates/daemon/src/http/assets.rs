@@ -43,6 +43,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("templates.js"),
     js!("kits.js"),
     js!("mcp.js"),
+    js!("hosts.js"),
     js!("setup.js"),
     js!("upload.js"),
     js!("lifecycle.js"),

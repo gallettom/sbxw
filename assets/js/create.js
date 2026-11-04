@@ -11,6 +11,56 @@ const fsFavsEl  = document.getElementById('fs-favs');
 
 let selectedPath = '';
 
+// ── Which host ────────────────────────────────────────────────────────────
+// With remote hosts registered (EXPERIMENTAL) the dialog starts by asking
+// where the sandbox runs, defaulting to the host picked last time in this
+// browser. On a remote host the folder browser lists that host's folders
+// (`/api/fs?host=`), and a git URL can be cloned there instead; what is only
+// this machine's — starred folders, the native picker, kit folders — is hidden.
+const hostField = document.getElementById('host-field');
+const inpHost   = document.getElementById('inp-host');
+const gitRow    = document.getElementById('git-url-row');
+const inpGitUrl = document.getElementById('inp-git-url');
+const CREATE_HOST_KEY = 'sbxw.create-host';
+
+const createHost = () => (hostField.classList.contains('hidden') ? 'local' : inpHost.value || 'local');
+const createRemote = () => createHost() !== 'local';
+// The ref the sandbox will have: `host~name` off this machine.
+const createRef = name => (createRemote() ? `${createHost()}~${name}` : name);
+
+function fillHostField() {
+  hostField.classList.toggle('hidden', !remoteHosts.length);
+  if (!remoteHosts.length) return;
+  let last = 'local';
+  try { last = localStorage.getItem(CREATE_HOST_KEY) || 'local'; } catch (_) {}
+  inpHost.innerHTML = [`<option value="local">local (this machine)</option>`]
+    .concat(remoteHosts.map(h => {
+      const state = h.link === 'up' ? '' : h.link === 'down' ? ' — down' : ' — not connected yet';
+      return `<option value="${escHtml(h.name)}">${escHtml(h.name)} (${escHtml(h.address)}${state})</option>`;
+    })).join('');
+  inpHost.value = remoteHosts.some(h => h.name === last) ? last : 'local';
+}
+
+// Everything that depends on the host, set again when it changes.
+function applyCreateHost() {
+  const remote = createRemote();
+  btnBrowseNative.hidden = remote;
+  document.getElementById('fs-legend-star').hidden = remote;
+  gitRow.classList.toggle('hidden', !remote);
+  inpGitUrl.value = '';
+  if (remote) document.getElementById('km-option').classList.add('hidden');
+  else showKitMounts();
+  repos = [];
+  renderRepos();
+  renderFavourites();
+  browseTo(null);
+}
+
+inpHost.addEventListener('change', () => {
+  try { localStorage.setItem(CREATE_HOST_KEY, inpHost.value); } catch (_) {}
+  applyCreateHost();
+});
+
 // ── Favourite folders ─────────────────────────────────────────────────────
 //
 // Developers keep their projects under one or two roots, so the picker opening
@@ -29,7 +79,8 @@ function isFavourite(path) {
 }
 
 function renderFavourites() {
-  fsFavsEl.hidden = favourites.length === 0;
+  // Starred folders are this machine's.
+  fsFavsEl.hidden = favourites.length === 0 || createRemote();
   fsFavsEl.innerHTML = favourites.map(f => `
     <button type="button" class="fs-fav${f.missing ? ' missing' : ''}"
             data-fav-path="${escHtml(f.path)}"
@@ -247,10 +298,10 @@ function openModal() {
   // Re-read every time the modal opens: another tab (or a hand-edited state
   // file) may have changed the list since this one was last used.
   loadFavourites();
-  browseTo(null);
   showTemplateForce();
-  showKitMounts();
   document.getElementById('rc-box').checked = false;
+  fillHostField();
+  applyCreateHost();
   inpName.focus();
 }
 
@@ -341,6 +392,11 @@ function renderFsList() {
   html += fsListing.entries.map(e => {
     const on = isFavourite(e.path);
     const added = hasRepo(e.path);
+    // Starring is for this machine's folders (the list lives here).
+    const star = createRemote() ? '' : `<button type="button" class="fs-row-star${on ? ' on' : ''}"
+               data-star-path="${escHtml(e.path)}" aria-pressed="${on}"
+               title="${on ? 'Unstar this folder' : 'Star this folder — pins it as a shortcut above'}"
+       >${on ? '★' : '☆'}</button>`;
     return `<div class="fs-item" data-path="${escHtml(e.path)}">
        <span class="fs-icon">📁</span>
        <span class="fs-name">${escHtml(e.name)}</span>
@@ -348,10 +404,7 @@ function renderFsList() {
                data-add-path="${escHtml(e.path)}" aria-pressed="${added}"
                title="${added ? 'Remove from this sandbox' : 'Add to this sandbox’s repos'}"
        >${added ? '✓' : '＋'}</button>
-       <button type="button" class="fs-row-star${on ? ' on' : ''}"
-               data-star-path="${escHtml(e.path)}" aria-pressed="${on}"
-               title="${on ? 'Unstar this folder' : 'Star this folder — pins it as a shortcut above'}"
-       >${on ? '★' : '☆'}</button>
+       ${star}
      </div>`;
   }).join('');
 
@@ -379,7 +432,10 @@ async function browseTo(path) {
   const slow = setTimeout(() => {
     if (seq === browseSeq) fsList.classList.add('loading');
   }, FS_SLOW_MS);
-  const url = path ? `/api/fs?path=${encodeURIComponent(path)}` : '/api/fs';
+  const q = new URLSearchParams();
+  if (path) q.set('path', path);
+  if (createRemote()) q.set('host', createHost());
+  const url = q.toString() ? `/api/fs?${q}` : '/api/fs';
   try {
     const res = await fetch(url);
     const data = await res.json();
@@ -422,10 +478,10 @@ function validateForm() {
   const name = inpName.value.trim();
   // Creating under a taken name would reuse that sandbox, its folders and all
   // — never what this dialog's repos asked for.
-  const taken = sandboxes.some(s => s.name === name);
-  if (taken) showNote(nameErrEl, `“${name}” already exists — pick another name`);
+  const taken = sandboxes.some(s => s.name === createRef(name));
+  if (taken) showNote(nameErrEl, `“${createRef(name)}” already exists — pick another name`);
   const nameOk = !taken && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
-  const pathOk = repos.length > 0 || selectedPath.length > 0;
+  const pathOk = repos.length > 0 || selectedPath.length > 0 || (createRemote() && inpGitUrl.value.trim().length > 0);
   btnCreate.disabled = !(nameOk && pathOk) || !!nestedRepos();
 }
 
@@ -449,6 +505,7 @@ function normalizeNameInput() {
 }
 
 inpName.addEventListener('input', normalizeNameInput);
+inpGitUrl.addEventListener('input', validateForm);
 
 // ── Which kind of sandbox? ────────────────────────────────────────────────
 // The sidebar's ＋ is the single way in: it opens the chooser, and the chooser
@@ -733,18 +790,23 @@ async function askTemplate() {
 // in the background behind a corner card reporting its steps, leaving every
 // other sandbox/pane fully interactive in the meantime.
 document.getElementById('modal-create').addEventListener('click', async () => {
-  const name = inpName.value.trim();
-  if (!name || btnCreate.disabled) { inpName.classList.add('error'); return; }
+  const short = inpName.value.trim();
+  if (!short || btnCreate.disabled) { inpName.classList.add('error'); return; }
+  const host = createHost();
+  const name = createRef(short);
+  const gitUrl = createRemote() ? inpGitUrl.value.trim() : '';
+  try { localStorage.setItem(CREATE_HOST_KEY, host); } catch (_) {}
 
-  const path   = repos.length ? repos[0].path : selectedPath;
+  let path     = repos.length ? repos[0].path : selectedPath;
   const mounts = repos.slice(1).map(r => ({ path: r.path, readonly: r.readonly }));
   const ports  = collectPorts();
-  const kit_mounts = collectKitMounts();
+  const kit_mounts = createRemote() ? {} : collectKitMounts();
   // Asked over the create dialog, which stays open if this one is closed —
-  // unless the person already asked for a rebuild with the box.
+  // unless the person already asked for a rebuild with the box. The
+  // template asked about is this machine's sbx's: not a remote host's.
   const forced = !tplForce.classList.contains('hidden') && tplForceBox.checked;
   const remote_control = document.getElementById('rc-box').checked;
-  const template = forced ? 'rebuild' : await askTemplate();
+  const template = createRemote() ? 'default' : forced ? 'rebuild' : await askTemplate();
   if (template === null) return;
   closeModal();
 
@@ -753,6 +815,12 @@ document.getElementById('modal-create').addEventListener('click', async () => {
     // the sandbox list is for sandboxes that exist, and this one does not yet.
     addPendingSandbox(name);
     try {
+      // A git URL is cloned on the host first; the sandbox gets the clone.
+      if (gitUrl) {
+        const c = await postJson(`/api/remote-hosts/${encodeURIComponent(host)}/clone`, { url: gitUrl });
+        if (!c.ok) { showToast(`Could not clone ${gitUrl} on ${host}: ${c.error || 'unknown error'}`, 'error'); return; }
+        path = c.path;
+      }
       const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control, kit_mounts });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just

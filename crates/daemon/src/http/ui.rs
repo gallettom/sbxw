@@ -94,6 +94,16 @@ pub fn routes() -> Router<Arc<App>> {
             post(upload).layer(DefaultBodyLimit::max(UPLOAD_MAX)),
         )
         .route("/api/hosts", get(hosts))
+        // Remote hosts (EXPERIMENTAL): `~/.sbxw/hosts.toml`. Not `/api/hosts`,
+        // which is the `/etc/hosts` block.
+        .route("/api/remote-hosts", get(remote_hosts))
+        .route("/api/remote-hosts/key", post(remote_host_key))
+        .route("/api/remote-hosts/add", post(remote_host_add))
+        .route("/api/remote-hosts/reload", post(remote_hosts_reload))
+        .route("/api/remote-hosts/:host/edit", post(remote_host_edit))
+        .route("/api/remote-hosts/:host/rm", post(remote_host_rm))
+        .route("/api/remote-hosts/:host/test", post(remote_host_test))
+        .route("/api/remote-hosts/:host/clone", post(remote_host_clone))
         // Threads and lead.
         .route("/api/sandboxes/:name/threads", get(threads))
         .route("/api/sandboxes/:name/repos", get(repos))
@@ -797,6 +807,95 @@ async fn hosts(State(app): S) -> Json<Value> {
     let app2 = app.clone();
     let list = tokio::task::spawn_blocking(move || app2.hosts.read_block()).await.unwrap_or_default();
     Json(json!(list))
+}
+
+// ── Remote hosts ─────────────────────────────────────────────────────────
+
+/// A refusal of a hosts.toml change (a rule broken, a key not confirmed, a
+/// host with sandboxes) is the request's fault: 400. A host that cannot be
+/// reached stays 503, an unknown one 404, as everywhere else.
+fn host_refusal(e: anyhow::Error) -> ApiError {
+    let mapped = ApiError::from(e);
+    if mapped.status == StatusCode::BAD_GATEWAY {
+        ApiError::bad(mapped.message)
+    } else {
+        mapped
+    }
+}
+
+fn host_name(raw: &str) -> Result<names::HostName, ApiError> {
+    let h = names::HostName::parse(raw)?;
+    if h.is_local() {
+        return Err(ApiError::bad("'local' is this machine, not a remote host"));
+    }
+    Ok(h)
+}
+
+async fn remote_hosts(State(app): S) -> ApiResult {
+    let hosts = app.remote_hosts_view()?;
+    // The provision command is run on this machine, by this very binary.
+    let sbxw = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "sbxw".into());
+    Ok(ok_with(json!({ "hosts": hosts, "sbxw": sbxw })))
+}
+
+#[derive(Deserialize)]
+struct HostBody {
+    #[serde(default)]
+    name: String,
+    #[serde(flatten)]
+    form: crate::svc::hosts::HostForm,
+    /// The fingerprints the person confirmed, from `/api/remote-hosts/key`.
+    fingerprints: Option<Vec<String>>,
+}
+
+async fn remote_host_key(State(app): S, Json(b): Json<HostBody>) -> ApiResult {
+    let h = b.form.to_host(b.name.trim()).map_err(host_refusal)?;
+    let key = app.host_key(&h).await.map_err(host_refusal)?;
+    Ok(ok_with(json!(key)))
+}
+
+async fn remote_host_add(State(app): S, Json(b): Json<HostBody>) -> ApiResult {
+    app.host_add(b.name.trim(), &b.form, b.fingerprints.as_deref()).await.map_err(host_refusal)?;
+    Ok(ok())
+}
+
+async fn remote_host_edit(State(app): S, Path(host): Path<String>, Json(b): Json<HostBody>) -> ApiResult {
+    let h = host_name(&host)?;
+    app.host_edit(h.as_str(), &b.form, b.fingerprints.as_deref()).await.map_err(host_refusal)?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct HostRmBody {
+    #[serde(default)]
+    force: bool,
+}
+
+async fn remote_host_rm(State(app): S, Path(host): Path<String>, Json(b): Json<HostRmBody>) -> ApiResult {
+    let h = host_name(&host)?;
+    app.host_rm(h.as_str(), b.force).await.map_err(host_refusal)?;
+    Ok(ok())
+}
+
+async fn remote_host_test(State(app): S, Path(host): Path<String>) -> ApiResult {
+    let t = app.host_test(&host_name(&host)?).await?;
+    Ok(ok_with(json!(t)))
+}
+
+/// hosts.toml edited by hand (or by `sbxw host`): pick it up without a restart.
+async fn remote_hosts_reload(State(app): S) -> ApiResult {
+    app.reload_remotes().map_err(host_refusal)?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct CloneBody {
+    url: String,
+}
+
+async fn remote_host_clone(State(app): S, Path(host): Path<String>, Json(b): Json<CloneBody>) -> ApiResult {
+    let path = app.host_clone(&host_name(&host)?, &b.url).await?;
+    Ok(ok_with(json!({ "path": path })))
 }
 
 // ── Threads, lead ────────────────────────────────────────────────────────

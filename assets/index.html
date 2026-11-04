@@ -265,6 +265,13 @@
              each option a title + one plain line, its control on the right:
              the dialog reads top to bottom as "what you must answer" then
              "what you may change". -->
+        <!-- Only with remote hosts registered (EXPERIMENTAL): where the
+             sandbox runs. Remembers the last one picked, per browser. -->
+        <div class="create-field hidden" id="host-field">
+          <label class="field-label" for="inp-host">Host</label>
+          <select id="inp-host" class="field-input"></select>
+          <span class="create-hint" id="host-hint">Where the sandbox runs. Remote hosts are experimental.</span>
+        </div>
         <div class="create-field">
           <label class="field-label" for="inp-name">Name</label>
           <input id="inp-name" class="field-input" type="text" maxlength="63" placeholder="my-project"
@@ -295,8 +302,15 @@
           <p class="fs-legend">
             <span>Click a name to open it</span>
             <span><span class="fs-legend-key add">＋</span> extra folder</span>
-            <span><span class="fs-legend-key star">☆</span> shortcut</span>
+            <span id="fs-legend-star"><span class="fs-legend-key star">☆</span> shortcut</span>
           </p>
+          <!-- On a remote host: a repo to clone there instead of a folder
+               picked above (into ~/sbxw-repos/<repo> on the host). -->
+          <div class="git-url-row hidden" id="git-url-row">
+            <label class="create-hint" for="inp-git-url">Or clone a git URL on the host, into <code>~/sbxw-repos/</code>:</label>
+            <input id="inp-git-url" class="field-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="https://github.com/you/repo.git">
+          </div>
         </div>
 
         <div class="create-optional" role="group" aria-labelledby="create-optional-title">
@@ -1220,6 +1234,118 @@
       <div class="modal-foot">
         <span class="create-error hidden" id="templates-error"></span>
         <button class="btn-cancel" id="templates-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Setup → Hosts (EXPERIMENTAL) ──
+       The remote hosts of ~/.sbxw/hosts.toml: listed with their link, added,
+       edited and removed. A new address's host key is shown as a fingerprint
+       and trusted only on "Trust and save". Filled by /js/hosts.js. -->
+  <div class="modal-overlay hidden" id="hosts-modal-overlay">
+    <div class="modal setup-modal" data-setup-tab="hosts" role="dialog" aria-modal="true" aria-labelledby="hosts-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="hosts-modal-title">Hosts</span>
+        <button class="modal-close" id="hosts-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-lead">
+          Other machines sbxw runs sandboxes on, over SSH. <strong>Experimental.</strong>
+          Saved in <code>~/.sbxw/hosts.toml</code>, the file <code>sbxw host</code> edits too.
+        </p>
+        <div>
+          <span class="field-label">Registered</span>
+          <div class="tpl-list" id="hosts-list"><p class="repo-note">Loading…</p></div>
+        </div>
+        <div class="hosts-form" id="hosts-form">
+          <span class="field-label" id="hosts-form-title">Add a host</span>
+          <div class="hosts-grid">
+            <label for="hosts-f-name">Name</label>
+            <input id="hosts-f-name" class="field-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="buildbox" aria-describedby="hosts-name-hint">
+            <span class="create-hint hosts-wide" id="hosts-name-hint">Sandboxes there are named <code>name~sandbox</code>.</span>
+            <span>Reach it by</span>
+            <div class="hosts-mode" role="radiogroup" aria-label="Reach it by">
+              <label><input type="radio" name="hosts-mode" id="hosts-f-mode-ssh" checked> an alias from <code>~/.ssh/config</code></label>
+              <label><input type="radio" name="hosts-mode" id="hosts-f-mode-host"> an address</label>
+            </div>
+          </div>
+          <div class="hosts-grid" id="hosts-alias-fields">
+            <label for="hosts-f-ssh">SSH alias</label>
+            <input id="hosts-f-ssh" class="field-input" type="text" spellcheck="false" autocomplete="off" placeholder="buildbox">
+          </div>
+          <div class="hosts-grid" id="hosts-direct-fields" hidden>
+            <label for="hosts-f-host">Address</label>
+            <input id="hosts-f-host" class="field-input" type="text" spellcheck="false" autocomplete="off" placeholder="10.0.0.5">
+            <label for="hosts-f-user">User</label>
+            <input id="hosts-f-user" class="field-input" type="text" spellcheck="false" autocomplete="off" placeholder="ssh's default">
+            <label for="hosts-f-port">Port</label>
+            <input id="hosts-f-port" class="field-input" type="number" min="1" max="65535" placeholder="22">
+            <label for="hosts-f-key">Identity file</label>
+            <input id="hosts-f-key" class="field-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="~/.ssh/id_ed25519 (a path, never the key)">
+          </div>
+          <div class="hosts-grid">
+            <label for="hosts-f-agent-port">Agent port</label>
+            <input id="hosts-f-agent-port" class="field-input" type="number" min="1" max="65535" placeholder="7682">
+            <label for="hosts-f-sbx-path">sbx on the host</label>
+            <input id="hosts-f-sbx-path" class="field-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="found with command -v sbx">
+          </div>
+          <label class="create-opt create-opt-check">
+            <span class="create-opt-text">
+              <span class="create-opt-title">Trust this host with secrets</span>
+              <span class="create-opt-desc hosts-trust-warn" id="hosts-trust-warn">
+                sbxw then sends it your Anthropic token (<code>CLAUDE_CODE_OAUTH_TOKEN</code> or API key),
+                the OAuth kit (your Claude login) and your skills. Anyone with root on the host can
+                read them. Without it, sandboxes there start with no Claude login.</span>
+            </span>
+            <input type="checkbox" id="hosts-f-trust">
+          </label>
+          <div class="hosts-key" id="hosts-key" hidden role="alertdialog" aria-labelledby="hosts-key-title">
+            <span class="create-opt-title" id="hosts-key-title">Host key of <code id="hosts-key-name"></code></span>
+            <pre class="hosts-key-fps" id="hosts-key-fps"></pre>
+            <p class="create-opt-desc">Not in your known_hosts yet. Check it on the host itself
+              (<code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code>) before you trust it.</p>
+            <div class="hosts-key-actions">
+              <button class="btn-cancel" id="hosts-key-cancel" type="button">Do not trust</button>
+              <button class="btn-create" id="hosts-key-trust" type="button">Trust and save</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="hosts-error"></span>
+        <button class="btn-cancel" id="hosts-reload" title="Read hosts.toml again, after editing it by hand or with sbxw host">Reload file</button>
+        <button class="btn-cancel" id="hosts-cancel-edit" hidden>Cancel edit</button>
+        <button class="btn-cancel" id="hosts-modal-close2">Close</button>
+        <button class="btn-create" id="hosts-save">Add host</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Provision a host ──
+       `sbxw host provision` needs sudo on the host, so it runs in a terminal
+       on this machine where the password is typed; the page only hands over
+       the command. Filled by /js/hosts.js. -->
+  <div class="modal-overlay hidden" id="provision-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provision-modal-title" style="width:560px">
+      <div class="modal-head">
+        <span class="modal-title" id="provision-modal-title">Provision <span id="provision-host"></span></span>
+        <button class="modal-close" id="provision-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-lead">Installs Docker's <code>sbx</code> on the host and signs it in. It asks for
+          your sudo password there and for a Docker token, so run it in a terminal on this machine:
+          sbxw never sees either.</p>
+        <div class="provision-cmd-row">
+          <code class="provision-cmd" id="provision-cmd"></code>
+          <button class="btn-add-port" id="provision-copy" type="button">Copy</button>
+        </div>
+        <p class="repo-note">Then come back and use ⋯ → Test on the host.</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-cancel" id="provision-modal-close2">Close</button>
       </div>
     </div>
   </div>

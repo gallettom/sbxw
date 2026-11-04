@@ -9,6 +9,7 @@ Served at <http://sbxw.localhost:7681> by default (`web_addr` in
 
 - [Layout at a glance](#layout-at-a-glance)
 - [Creating sandboxes](#creating-sandboxes)
+- [Remote hosts (experimental)](#remote-hosts-experimental)
 - [The pane bar](#the-pane-bar)
 - [The Project panel: files and code map](#the-project-panel)
 - [Ports and network policy](#ports-and-network-policy)
@@ -21,7 +22,7 @@ Served at <http://sbxw.localhost:7681> by default (`web_addr` in
 | Area | What's there |
 |---|---|
 | **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, for the background, the bar above it and the text (kept in this browser; the defaults come from [`terminal_color`, `terminal_bar_color` and `terminal_text_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
-| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder. Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row |
+| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder (and first by host, when [remote hosts](#remote-hosts-experimental) are registered). Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row |
 | **Panes** | One terminal each. A sandbox's panes sit next to each other in a shared colour |
 | **Bottom right** | Background-job cards (bring-ups, code maps, relay requests) and the [chat dock](chat.md#the-chat-dock) button |
 
@@ -56,6 +57,9 @@ lists the optional settings below: extra folders, ports, Remote control. It goes
   live on the host in `~/.sbxw/state/favourites.json` (hand-editable, up to 12).
   A favourite that is missing right now (an unplugged drive) is shown greyed,
   not dropped.
+
+With remote hosts registered, the dialog starts with a **Host** field (see
+[Remote hosts](#remote-hosts-experimental)).
 
 The **chat sandbox** dialog is the browser version of `sbxw chat`. See
 [Chat](chat.md).
@@ -103,6 +107,59 @@ sbxw  neos                     Creating… 2/5
 - Every way of creating a sandbox reports here: the create and chat dialogs,
   **Duplicate**, and the island's chat.
 - A failed `sbx create` shows sbx's own error, not just "exited with status 1".
+
+## Remote hosts (experimental)
+
+sbxw can run sandboxes on other machines over SSH ([Remote
+hosts](remote-hosts.md)). This part of the UI is **experimental**, like the
+feature. With no host registered, none of it shows.
+
+**The sidebar, by host.** With at least one host in `~/.sbxw/hosts.toml`, the
+sidebar is one section per host: `local` (this machine) first, then each host
+by name, each with its own workspace groups. Click a host's header to fold it;
+the folded ones are remembered in this browser. Rows under a remote host show
+the bare sandbox name; its full ref is `host~name` (hover the name).
+
+Each host's header shows:
+
+| Part | Meaning |
+|---|---|
+| Dot and text | Green with a latency (`12 ms`, the last round trip over the SSH link, timed again every 30 s or so): the link is up. Red, **down since HH:MM**: it was up and dropped; sbxw keeps retrying. Grey, **never connected**: sbxw has not reached it yet |
+| Count | Sandboxes sbxw holds a record of there |
+| **⋯** | **Test** runs `sbx version` over the link and times a round trip. **Provision** shows the command that installs `sbx` on the host, `sbxw host provision <host>`, to copy and run in a terminal on this machine: it asks for your sudo password on the host and for a Docker token, which the page never sees. **Edit** opens **Setup → Hosts** on that host |
+
+**Unreachable sandboxes.** While a host's link is down, its sandboxes stay
+listed, greyed, with **unreachable since HH:MM** (your browser's time) in place
+of their status. Their buttons are disabled, and hovering one says why. They
+come back on their own when the link does.
+
+**Creating on a host.** In the workspace dialog, **Host** picks where the
+sandbox runs (default: the one you picked last, in this browser). On a remote
+host, the folder browser lists that host's folders, and **Or clone a git URL**
+clones a repo there instead, into `~/sbxw-repos/<repo>` on the host (a folder
+already there is used as it is). Favourites, the native **Browse…** picker and
+kit folders are this machine's, so they are hidden. The automatic-template
+question is not asked for a remote host.
+
+**Setup → Hosts** lists the hosts with their link and sandbox count, and edits
+`hosts.toml` (the same file `sbxw host` edits):
+
+- **Add a host**: a name, then an SSH alias from `~/.ssh/config` or an address
+  (with optional user, port and identity file path), the agent port (default
+  7682) and the `sbx` path on the host (default: detected). If the host key is
+  not in `~/.ssh/known_hosts`, its fingerprint is shown first: check it on the
+  host (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), then **Trust and
+  save**. If the key changes between the two steps, nothing is saved.
+- **Trust this host with secrets** (`trust_secrets`): sbxw then sends that
+  host your Anthropic token (`CLAUDE_CODE_OAUTH_TOKEN` or API key), the OAuth
+  kit (your Claude login) and your skills. Anyone with root on the host can
+  read them. Only for a machine you control.
+- **Edit** changes any of these; a new address asks about its key again.
+  **Remove** unregisters a host; one with sandboxes is refused unless you
+  confirm a second time (their records stay on disk). Nothing on the host is
+  touched.
+- **Reload file** re-reads `hosts.toml` after you edit it by hand or with
+  `sbxw host`. A host whose settings changed gets a new SSH link.
 
 ## The pane bar
 
@@ -264,6 +321,7 @@ Both cards close with Escape or a click outside.
 | **Setup → Templates** | Lists the saved templates (`sbx template ls`), marking the one `template` in `sbxw.toml` names (*in use*) and the ones `template = "auto"` keeps (*automatic*). **Remove** deletes one. Pick a sandbox and a tag, then **Save**, to snapshot it as a new template: its agent token and Claude credentials are taken out first and put back after, as with `sbxw template save`. sbx may stop the sandbox for the snapshot; sbxw starts it again |
 | **Setup → Kits** | Edits the `kits` line of an `sbxw.toml` sbxw uses — the daemon's own, or the one a sandbox was created from; no other file. Bundled kits are checkboxes — one listed by its path in an sbxw checkout (`…/assets/codemap`) is shown on its checkbox, read from your working tree rather than the binary, and **Use sbxw: names** switches such paths to the built-in copies; any other reference (a path, a `.zip`, an OCI ref, a git URL) a list with **Add** and **Remove**. Only that line is rewritten: comments, `[[ports]]` and the rest stay as written. A file without the line shows the defaults; **Save** writes them out, **Use defaults** removes it. New sandboxes from this page get the change at once; an existing one at its next `sbxw up` |
 | **Setup → MCP** | The MCP servers registered on this host (`sbx mcp ls`). **Add** registers one: a remote URL with optional headers (a `${key}` in a header is a secret, typed in the dialog and stored as `mcp:<name>:<key>` through `sbx secret set`, never on a command line), or a host command (stdio) with arguments and a working directory. Remote servers are added with `--skip-auth`: authorize an OAuth one with **Sign in**, which runs `sbx mcp auth <name>` on the host: its browser opens, and the token serves every sandbox. **Edit** is a remove then an add, since sbx has no edit — it drops the server's OAuth token, and an empty secret field keeps the stored secret. **Inspect** shows `sbx mcp inspect`; **Remove** unregisters it (sandboxes that loaded it keep it until unloaded). **Load** / **Unload** attach it to or detach it from the running sandbox picked at the top, without restarting its agent; sbx does not say which servers a sandbox has loaded, so both are always offered |
+| **Setup → Hosts** | Remote hosts (experimental): see [Remote hosts](#remote-hosts-experimental) |
 | **Monitor** | Runs `monitor_cmd` (default: `sbx`, its all-sandboxes dashboard) on the host, in a window nearly the size of the screen, over the panes. ✕, a click outside it or the button again closes it; Escape goes to the TUI. `monitor_cmd = []` hides it |
 | **?** (Help) | Fixes for an empty sandbox list (below) |
 | Shortcuts | The [keyboard shortcuts](#keyboard-shortcuts) for this platform |
