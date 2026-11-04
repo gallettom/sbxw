@@ -40,6 +40,7 @@ const SBXW_APP_SCRIPTS = [
   '/js/templates.js',
   '/js/kits.js',
   '/js/mcp.js',
+  '/js/hosts.js',
   // After the four dialogs it joins into one: it calls their open and close.
   '/js/setup.js',
   '/js/upload.js',

@@ -1248,6 +1248,80 @@
     animation: sbx-ready-pulse 1.6s ease-in-out infinite;
   }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
+
+  /* ── Remote hosts (EXPERIMENTAL): one section per host, `local` first ──
+     The header is a row of its own above the host's workspace cards: name,
+     link dot, latency (or since when it is down), count, and the ⋯ menu. A
+     folded section keeps only its header. */
+  .host-section { margin: .25rem 0 .4rem; }
+  .host-head {
+    display: flex; align-items: center; gap: .4rem;
+    margin: 0 .4rem; padding: .3rem .45rem;
+    font-size: 11px; color: var(--c-text-muted);
+    border-radius: var(--r-sm); cursor: pointer; user-select: none;
+  }
+  .host-head:hover { background: var(--c-surface); }
+  .host-head:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  .host-chevron { font-size: 9px; transition: transform .12s; color: var(--c-text-dim); }
+  .host-section.folded .host-chevron { transform: rotate(-90deg); }
+  .host-name {
+    color: var(--c-text-bright); font-weight: 600; font-size: 11.5px;
+    letter-spacing: .03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 2.5rem;
+    flex-shrink: 0; max-width: 55%;
+  }
+  .dot.host-link.up    { background: var(--c-green); box-shadow: 0 0 5px #3fb95066; }
+  .dot.host-link.down  { background: var(--c-red); }
+  .dot.host-link.never { background: var(--c-dim); }
+  .host-link-text { font-size: 10.5px; color: var(--c-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .host-count {
+    margin-left: auto; font-size: 10px; color: var(--c-text-dim);
+    background: var(--c-elevated); border-radius: var(--r-xs); padding: 0 .3rem;
+  }
+  .host-menu-btn {
+    background: none; border: 1px solid transparent; color: var(--c-text-muted);
+    border-radius: var(--r-xs); padding: 0 .35rem; font-size: 13px; line-height: 1.3; cursor: pointer;
+  }
+  .host-menu-btn:hover, .host-menu-btn:focus-visible { border-color: var(--c-border); color: var(--c-text-bright); }
+  .host-empty { margin: .15rem .9rem .3rem; font-size: 11px; color: var(--c-text-dim); }
+  /* A sandbox on a host that cannot be reached: still listed with the state
+     last seen, greyed, its actions off (each says why on hover). */
+  .sbx-item.unreachable { opacity: .55; cursor: not-allowed; }
+  .sbx-item.unreachable .dot { background: var(--c-dim); box-shadow: none; }
+  .sbx-item.unreachable .sbx-actions button:disabled { cursor: not-allowed; opacity: .6; }
+  /* Small enough that "unreachable since HH:MM" fits the narrow sidebar. */
+  .sbx-unreachable-note { color: var(--c-amber); font-size: 10px; letter-spacing: -.02em; }
+  .sbx-item.unreachable .sbx-agent, .sbx-item.unreachable .sbx-age { display: none; }
+
+  /* Setup → Hosts: the form is label/field pairs, two columns. */
+  .hosts-form { display: flex; flex-direction: column; gap: .55rem; }
+  .hosts-grid { display: grid; grid-template-columns: 8.5rem 1fr; gap: .4rem .6rem; align-items: center; font-size: 12px; color: var(--c-text-muted); }
+  .hosts-grid[hidden] { display: none; }
+  .hosts-wide { grid-column: 2; margin-top: -.2rem; }
+  .hosts-mode { display: flex; flex-wrap: wrap; gap: .3rem 1rem; color: var(--c-text); }
+  .hosts-mode label { display: flex; align-items: center; gap: .35rem; cursor: pointer; }
+  .hosts-trust-warn.on { color: var(--c-amber-strong); }
+  .hosts-key {
+    border: 1px solid var(--c-amber); background: var(--c-amber-tint);
+    border-radius: var(--r-sm); padding: .6rem .7rem; display: flex; flex-direction: column; gap: .4rem;
+  }
+  .hosts-key[hidden] { display: none; }
+  .hosts-key-fps {
+    margin: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--c-text-bright);
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .hosts-key-actions { display: flex; gap: .5rem; justify-content: flex-end; }
+  .host-row.editing { background: var(--c-elevated); }
+  .host-row .tpl-meta { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .host-row .tpl-meta + .tpl-rm { margin-left: .25rem; }
+  .provision-cmd-row { display: flex; gap: .5rem; align-items: center; }
+  .provision-cmd {
+    flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; color: var(--c-text-bright);
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    padding: .45rem .6rem; overflow-x: auto; white-space: nowrap; user-select: all;
+  }
+  .git-url-row { display: flex; flex-direction: column; gap: .25rem; margin-top: .4rem; }
+  .git-url-row.hidden, #host-field.hidden, #btn-browse-native[hidden], #hosts-cancel-edit[hidden],
+  .fs-legend [hidden] { display: none; }
   .sbx-agent  { color: var(--c-text-dim); font-size: 10px; }
   /* Bottom right, on the status line; the row's actions take its place when
      they show, and the name line keeps its width for the name. */

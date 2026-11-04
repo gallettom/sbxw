@@ -111,6 +111,94 @@ const retry = await page.evaluate((sbx) => {
 if (retry.pane !== 'Retry merge' || !/^Retry merge/.test(retry.retry || '') || !/conflict/.test(retry.error)) {
   problems.push(`failed merge: ${JSON.stringify(retry)}, want a Retry merge pane button and dialog button, error shown`);
 }
+// Remote hosts (ui-smoke.sh registers `fake`, which answers, and `gone`,
+// which does not): the sidebar is one section per host, local first, and
+// gone's sandbox is greyed with its actions off.
+const sidebar = await page.evaluate(() => {
+  const sections = [...document.querySelectorAll('#sandbox-list .host-section')].map(e => e.dataset.host);
+  const gone = document.querySelector('.sbx-item[data-name="gone~old"]');
+  return {
+    sections,
+    fake: !!document.querySelector('.host-section[data-host="fake"] .sbx-item[data-name="fake~api"]'),
+    fakeLink: document.querySelector('.host-section[data-host="fake"] .host-link-text')?.textContent || '',
+    gone: gone ? { greyed: gone.classList.contains('unreachable'), note: gone.querySelector('.sbx-status')?.textContent || '',
+      enabled: [...gone.querySelectorAll('.sbx-actions button')].filter(b => !b.disabled).length } : null,
+  };
+});
+if (sidebar.sections.join(',') !== 'local,fake,gone' || !sidebar.fake) {
+  problems.push(`grouped sidebar: ${JSON.stringify(sidebar)}, want sections local,fake,gone with fake~api under fake`);
+}
+if (!sidebar.gone || !sidebar.gone.greyed || !/^unreachable since \d\d:\d\d/.test(sidebar.gone.note) || sidebar.gone.enabled) {
+  problems.push(`unreachable sandbox: ${JSON.stringify(sidebar.gone)}, want greyed, "unreachable since HH:MM", no action enabled`);
+}
+await page.screenshot({ path: png.replace(/\.png$/, '-hosts-sidebar.png') });
+await visit('Fold a host', async () => {
+  await page.locator('.host-head[data-host-fold="fake"]').click();
+  await page.waitForTimeout(200);
+  const folded = await page.evaluate(() => ({
+    rows: document.querySelectorAll('.host-section[data-host="fake"] .sbx-item').length,
+    kept: JSON.parse(localStorage.getItem('sbxw.hosts-folded') || '[]'),
+  }));
+  if (folded.rows || !folded.kept.includes('fake')) problems.push(`fold: ${JSON.stringify(folded)}`);
+  await page.locator('.host-head[data-host-fold="fake"]').click();
+});
+await visit('Host menu: Test', async () => {
+  await page.locator('[data-host-menu="fake"]').click();
+  await page.locator('#host-menu [data-host-act="test"]').click();
+  await page.waitForTimeout(2500);
+}, async () => {
+  const toast = await page.locator('#paste-toast').textContent();
+  if (!/^fake: .* · \d+ ms$/.test(toast || '')) problems.push(`host test toast: ${JSON.stringify(toast)}`);
+});
+await visit('Host menu: Provision', async () => {
+  await page.locator('[data-host-menu="fake"]').click();
+  await page.locator('#host-menu [data-host-act="provision"]').click();
+}, async () => {
+  const cmd = await page.locator('#provision-cmd').textContent();
+  if (!/ host provision fake$/.test(cmd || '')) problems.push(`provision command: ${JSON.stringify(cmd)}`);
+  await page.screenshot({ path: png.replace(/\.png$/, '-provision.png') });
+});
+// Setup → Hosts: lists both, and adds a third, confirming its key first.
+await visit('Setup: Hosts', async () => { await button(/^Setup$/).click(); await page.locator('.modal-overlay:not(.hidden) .setup-tab[data-tab="hosts"]').click(); }, async () => {
+  const rows = await page.locator('#hosts-list .host-row .tpl-tag').allTextContents();
+  if (rows.join(',') !== 'fake,gone') problems.push(`hosts tab lists [${rows}], want fake,gone`);
+  await page.locator('#hosts-f-name').fill('newbox');
+  await page.locator('#hosts-f-mode-host').check();
+  await page.locator('#hosts-f-host').fill('newhost');
+  await page.locator('#hosts-f-trust').check();
+  await page.locator('#hosts-save').click();
+  await page.waitForTimeout(1200);
+  const fps = await page.locator('#hosts-key-fps').textContent();
+  if (!/SHA256:/.test(fps || '') || await page.locator('#hosts-key').isHidden()) problems.push(`host key not shown: ${JSON.stringify(fps)}`);
+  await page.screenshot({ path: png.replace(/\.png$/, '-hosts.png') });
+  await page.locator('#hosts-key-trust').click();
+  await page.waitForTimeout(1500);
+  const after = await page.locator('#hosts-list .host-row .tpl-tag').allTextContents();
+  const saved = await page.evaluate(async () => (await (await fetch('/api/remote-hosts')).json()).hosts.find(h => h.name === 'newbox'));
+  if (after.join(',') !== 'fake,gone,newbox' || !saved || saved.host !== 'newhost' || !saved.trust_secrets) {
+    problems.push(`add host: list [${after}], saved ${JSON.stringify(saved)}`);
+  }
+});
+// ＋ on a remote host: the Host field, that host's folders, a git URL field.
+await visit('Create on a remote host', async () => {
+  await page.evaluate(() => { openModal(); });
+  await page.waitForTimeout(500);
+  await page.locator('#inp-host').selectOption('fake');
+  await page.waitForTimeout(1500);
+}, async () => {
+  const c = await page.evaluate(() => ({
+    hostShown: !document.getElementById('host-field').classList.contains('hidden'),
+    git: !document.getElementById('git-url-row').classList.contains('hidden'),
+    folders: [...document.querySelectorAll('#fs-list .fs-name')].map(e => e.textContent),
+  }));
+  if (!c.hostShown || !c.git || !c.folders.includes('srv')) problems.push(`create on fake: ${JSON.stringify(c)}`);
+  await page.screenshot({ path: png.replace(/\.png$/, '-create-remote.png') });
+  await page.locator('#inp-host').selectOption('local');
+  await page.evaluate(() => { try { localStorage.removeItem('sbxw.create-host'); } catch (_) {} });
+});
+// Headless Chromium has been seen to crash at or after the Monitor step: say
+// where things stand first, so a crash there does not hide what came before.
+console.error(JSON.stringify({ before_monitor: { tour, problems } }, null, 2));
 await visit('Monitor', () => button(/^Monitor$/).click());
 await visit('Help', () => button(/^Help$/).click());
 // Setup is one dialog with a tab per part: open it, then walk the tabs.
