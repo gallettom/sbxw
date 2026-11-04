@@ -2,9 +2,10 @@
 
 [← Back to README](../README.md)
 
-> **EXPERIMENTAL.** Remote hosts have been tested against a fake `ssh` and,
-> without sandboxes, against a real Ubuntu host. They have **not** been run on a
-> real KVM host. Expect rough edges, and read [What is not tested](#what-is-not-tested)
+> **EXPERIMENTAL.** Remote hosts have been tested against a fake `ssh` only.
+> `sbxw host check` has never been run on a real host, and nothing has been run
+> on a real KVM host. To check a real host, use `sbxw host check <name>` or
+> `scripts/remote-smoke.sh <name>`. Read [What is not tested](#what-is-not-tested)
 > before relying on it.
 
 sbxw can drive `sbx` on another machine over SSH. Sandboxes on that host show
@@ -23,10 +24,11 @@ On the host:
 
 - Ubuntu 24.04 or newer, with KVM (`/dev/kvm`) and your user in the `kvm` group.
 - `sbx` 0.50 or newer, installed and signed in.
-- The **first-run network policy question answered once**: run `sbx ls` on the
-  host by hand and choose a policy. `sbx` asks it interactively; over a
-  non-interactive SSH connection it cannot, so sbxw gets an error (never a hang)
-  until it has been answered.
+- The **first-run network policy question answered once**: `sbx` asks it on
+  the first `sbx run`. Run `sbx run` (or create any sandbox) by hand on the host
+  and answer it. `sbx ls` does not ask. sbxw closes stdin on remote commands, so
+  an unanswered question should fail rather than wait; this is untested on a
+  real host.
 - `git` (sbxw reads workspaces with it).
 
 On your machine: `ssh`, with a key that works without a passphrase prompt
