@@ -96,7 +96,7 @@ ok "relay: ask parks, a human approves, the asker gets the answer"
 # Terminal: attach over WebSocket, see the fake agent, type, reconnect, replay.
 cat > "$t/ws.mjs" <<'JS'
 const [port, expect, send] = process.argv.slice(2);
-const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?sandbox=neos`);
+const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?sandbox=${process.env.WS_SANDBOX || 'neos'}`);
 ws.binaryType = 'arraybuffer';
 let seen = '';
 const done = (code) => { try { ws.close(); } catch {} ; process.exit(code); };
@@ -204,7 +204,7 @@ ssh-keygen -q -t ed25519 -N '' -f "$t/hostkey" >/dev/null
 mkdir -p "$HOME/.ssh"; echo "fakehost $(cut -d' ' -f1,2 "$t/hostkey.pub")" > "$HOME/.ssh/known_hosts"
 "$bin" host add fake --host fakehost --sbx-path "$t/remote/bin/sbx" --agent-port "$RAGENT" --yes > "$t/host.log" 2>&1 || { cat "$t/host.log"; die "host add"; }
 mkdir -p "$t/remote/srv/neos"
-printf 'network_allow = ["example.org"]\n' > "$t/remote/srv/neos/sbxw.toml"
+printf 'network_allow = ["example.org"]\n\n[env]\nFROM_HOST_TOML = "remote-1"\n' > "$t/remote/srv/neos/sbxw.toml"
 out=$(CLAUDE_CODE_OAUTH_TOKEN=tok-not-for-untrusted "$bin" up fake~neos --path "$t/remote/srv/neos" 2>&1) || { echo "$out"; die "sbxw up on a remote host"; }
 echo "$out" | grep -q "'fake~neos' is up" || { echo "$out"; die "remote up output"; }
 grep -q "^create claude $t/remote/srv/neos --name neos" "$t/rstate/calls.log" || die "created by the host's sbx"
@@ -231,6 +231,12 @@ ui "http://127.0.0.1:$UI/api/sandboxes" | grep -q '"name":"fake~neos"' || die "t
 [ "$(cat "$t/rstate/sandboxes/neos")" = stopped ] || die "stopped on the host"
 "$bin" ls | grep -q "^fake~neos .*○ stopped" || die "listed stopped"
 ok "sbxw ls lists it by ref; stop reaches the host"
+
+# Attaching later takes `[env]` from the host's own sbxw.toml, not this machine's.
+WS_SANDBOX=fake~neos node "$t/ws.mjs" "$UI" "claude (fake) in neos" "" || die "attach to the remote sandbox"
+grep "^run --name neos " "$t/rstate/calls.log" | grep -q -- "-e FROM_HOST_TOML=remote-1" || { grep "^run" "$t/rstate/calls.log"; die "a remote attach uses the host's sbxw.toml env"; }
+! grep -q "FROM_HOST_TOML" "$t/state/calls.log" || die "the remote env reached this machine's sbx"
+ok "a remote attach takes its env from the host's sbxw.toml"
 
 # The host goes away: its link drops (the master is killed) and stays down.
 : > "$FAKE_SSH_DOWN"

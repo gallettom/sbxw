@@ -140,8 +140,24 @@ fn load_plans(dir: &Path) -> Vec<Plan> {
 
 impl App {
     /// The config a sandbox was brought up with, or the daemon's. Read each
-    /// time: an edited `env` reaches the agent on its next attach.
-    pub fn config_for(&self, sb: impl Into<sbxw_core::SandboxRef>) -> Config {
+    /// time: an edited `env` reaches the agent on its next attach. A remote
+    /// sandbox's is the `sbxw.toml` in its workspace on the host; an absent
+    /// file or an unreachable host gives the daemon's (the host's error
+    /// surfaces where the caller reaches for the host).
+    pub async fn config_for(&self, sb: impl Into<sbxw_core::SandboxRef>) -> Config {
+        let sb = sb.into();
+        if !sb.is_local() {
+            let Some(ws) = self.store.workspace(&sb) else { return self.cfg.clone() };
+            let read = async { crate::provision::read_remote_config(&self.host_for(&sb).await?, &ws).await };
+            return match read.await {
+                Ok(Some(c)) => c,
+                Ok(None) => self.cfg.clone(),
+                Err(e) => {
+                    tracing::warn!("{sb}: {e:#} — using the daemon's config");
+                    self.cfg.clone()
+                }
+            };
+        }
         let path = self.store.get(sb).config.filter(|p| p.exists());
         match path {
             Some(p) => Config::load(&p, Path::new("/")).unwrap_or_else(|e| {

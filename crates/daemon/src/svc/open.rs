@@ -97,7 +97,7 @@ impl App {
                 tracing::info!("re-created vanished chat workspace {}", dir.display());
             }
         }
-        let cfg = self.config_for(&sandbox);
+        let cfg = self.config_for(&sandbox).await;
         // The two kinds that start a stopped sandbox: `sbx run` and `sbx exec`
         // (threads release ports in `ensure_running_for_thread`).
         if matches!(key.kind, SessionKind::Agent | SessionKind::Bash) && !sbx.is_running(&sandbox.name).await {
@@ -212,7 +212,7 @@ impl App {
             return Ok(());
         }
         tracing::info!("'{sandbox}' is stopped — starting it for a thread");
-        self.release_busy_ports(sandbox, &self.config_for(sandbox)).await;
+        self.release_busy_ports(sandbox, &self.config_for(sandbox).await).await;
         sbx.start(&sandbox.name).await.with_context(|| format!("starting '{sandbox}' for a thread"))
     }
 
