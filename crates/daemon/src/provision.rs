@@ -948,8 +948,7 @@ impl App {
             return Ok(vec![]);
         }
         let root = r.root().await?;
-        // TODO(kits-tar): mirror_via(&*r.host.fs, Some(&*r.host.exec), ..)
-        let m = crate::host::kits::mirror(&*r.host.fs, &self.store.paths.root, &root, refs, r.cfg.trust_secrets)
+        let m = crate::host::kits::mirror_via(&*r.host.fs, Some(&*r.host.exec), &self.store.paths.root, &root, refs, r.cfg.trust_secrets)
             .await
             .with_context(|| format!("copying kits to host '{}'", r.cfg.name))?;
         for c in &m.copied {
