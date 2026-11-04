@@ -214,7 +214,7 @@ impl App {
     pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>, variant: Option<Variant>) -> Result<Plan, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
-        let cfg = self.config_for(&sandbox);
+        let cfg = self.config_for(&sandbox).await;
         let open = self.sessions.agents_open(&sandbox.to_string());
         let new = threads
             .iter()

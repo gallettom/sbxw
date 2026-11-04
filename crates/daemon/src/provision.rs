@@ -948,8 +948,7 @@ impl App {
             return Ok(vec![]);
         }
         let root = r.root().await?;
-        // TODO(kits-tar): mirror_via(&*r.host.fs, Some(&*r.host.exec), ..)
-        let m = crate::host::kits::mirror(&*r.host.fs, &self.store.paths.root, &root, refs, r.cfg.trust_secrets)
+        let m = crate::host::kits::mirror_via(&*r.host.fs, Some(&*r.host.exec), &self.store.paths.root, &root, refs, r.cfg.trust_secrets)
             .await
             .with_context(|| format!("copying kits to host '{}'", r.cfg.name))?;
         for c in &m.copied {
@@ -1001,9 +1000,14 @@ async fn clone_if_missing(host: &Host, url: &str, dir: &std::path::Path) -> Resu
 /// has none. Relative paths are the host's, against the workspace. Its
 /// `source` stays unset: the file is not on this machine to re-read.
 async fn remote_config(host: &Host, workspace: &std::path::Path) -> Result<Config> {
+    Ok(read_remote_config(host, workspace).await?.unwrap_or_default())
+}
+
+/// As [`remote_config`], but `None` when the workspace has no `sbxw.toml`.
+pub(crate) async fn read_remote_config(host: &Host, workspace: &std::path::Path) -> Result<Option<Config>> {
     let p = workspace.join("sbxw.toml");
     if host.fs.stat(&p).await?.is_none() {
-        return Ok(Config::default());
+        return Ok(None);
     }
     let raw = host.fs.read(&p, 1 << 20).await?;
     let mut cfg = Config::parse(&String::from_utf8_lossy(&raw)).with_context(|| format!("{} on host '{}'", p.display(), host.name))?;
@@ -1013,7 +1017,7 @@ async fn remote_config(host: &Host, workspace: &std::path::Path) -> Result<Confi
         .into_iter()
         .map(|f| if std::path::Path::new(&f).is_absolute() { f } else { workspace.join(f).to_string_lossy().into_owned() })
         .collect();
-    Ok(cfg)
+    Ok(Some(cfg))
 }
 
 #[cfg(test)]

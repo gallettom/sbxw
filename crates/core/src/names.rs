@@ -130,9 +130,6 @@ pub const REF_SEP: char = '~';
 pub const INVALID_HOST_NAME: &str =
     "a host name is 1–63 letters, digits and hyphens, and must not end with a hyphen";
 
-/// Why an operation on a remote sandbox was refused in this phase.
-pub const REMOTE_NOT_WIRED: &str = "remote hosts are not wired yet";
-
 /// A host sandboxes run on, valid by construction: the sandbox-name rule.
 /// `local` is the daemon's own machine.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -209,15 +206,6 @@ impl SandboxRef {
 
     pub fn is_local(&self) -> bool {
         self.host.is_local()
-    }
-
-    /// The sandbox's name, if it is one this phase can act on.
-    pub fn local_name(&self) -> Result<&SandboxName, NameError> {
-        if self.is_local() {
-            Ok(&self.name)
-        } else {
-            Err(NameError(REMOTE_NOT_WIRED))
-        }
     }
 }
 
@@ -571,10 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_local_ref_can_be_acted_on() {
-        assert_eq!(SandboxRef::parse("neos").unwrap().local_name().unwrap().as_str(), "neos");
-        let e = SandboxRef::parse("buildbox~neos").unwrap().local_name().unwrap_err();
-        assert_eq!(e.0, REMOTE_NOT_WIRED);
+    fn local_and_remote_hosts() {
         assert!(HostName::local().is_local());
         assert!(!HostName::parse("buildbox").unwrap().is_local());
     }

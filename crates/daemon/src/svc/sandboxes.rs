@@ -402,7 +402,7 @@ impl App {
         if self.sbx_for(&new).await?.exists(&new.name).await {
             bail!("a sandbox named '{new}' already exists");
         }
-        let cfg = self.config_for(source);
+        let cfg = self.config_for(source).await;
         tracing::info!("duplicating '{source}' as '{new}' (workspace {})", ws.display());
         let req = self.bring_up_request(new, ws, cfg, vec![], false);
         self.provision(req, None).await
@@ -528,7 +528,7 @@ impl App {
                 })
                 .collect(),
             open: self.sessions.agents_open(&sandbox.to_string()),
-            max: self.config_for(sandbox).max_sessions(),
+            max: self.config_for(sandbox).await.max_sessions(),
         }
     }
 
@@ -542,7 +542,7 @@ impl App {
     }
 
     pub async fn policy_panel(&self, sandbox: &SandboxRef) -> PolicyPanel {
-        let cfg = self.config_for(sandbox);
+        let cfg = self.config_for(sandbox).await;
         let sbx = match self.sbx_for(sandbox).await {
             Ok(s) => s,
             Err(e) => {
@@ -615,7 +615,7 @@ impl App {
         let ws = self.store.workspace(name).ok_or_else(|| {
             anyhow!("sbxw doesn't know which workspace '{name}' was created on — bring it up once with sbxw")
         })?;
-        let mut cfg = self.config_for(name);
+        let mut cfg = self.config_for(name).await;
         // sbx knows no `sbxw:` kit: the file names the written-out directory.
         cfg.kits = crate::bundled::resolve(&self.store.paths, &cfg.kits)?;
         let live = self.sbx_for(name).await?.ports(&name.name).await;
