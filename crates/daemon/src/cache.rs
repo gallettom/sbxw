@@ -18,10 +18,11 @@
 //! and a lock older than [`FILL_TIMEOUT`] is a fill that failed.
 
 use crate::bundled;
+use crate::host::{HostFs, Kind};
 use crate::store::Paths;
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LOCK: &str = ".filling";
 const FILL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -118,6 +119,65 @@ pub fn claim(paths: &Paths, ttl: Duration) -> Result<(PathBuf, Mount)> {
     Ok((dir, Mount::Fill))
 }
 
+/// One claim at a time per daemon: [`HostFs`] has no exclusive create, so the
+/// lock file below cannot arbitrate between two bring-ups of the same process
+/// the way `create_new` does locally.
+static CLAIMING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// [`claim`] on a host's filesystem: the cache is `<root>/cache`, `root`
+/// being that host's `~/.sbxw`. Ages come from the host's mtimes judged by
+/// this machine's clock, so a host whose clock is days off misjudges a TTL
+/// of days by that much, no more. Two daemons claiming the same host at the
+/// same instant could both fill: the cost is a duplicate download, not
+/// corruption, as every fill writes only its own files.
+pub async fn claim_on(fs: &dyn HostFs, root: &Path, ttl: Duration) -> Result<(PathBuf, Mount)> {
+    let _one = CLAIMING.lock().await;
+    let dir = root.join("cache");
+    fs.create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
+    let flavours = flavours_on(fs, &dir).await?;
+    let lock_age = age_on(fs, &dir.join(LOCK)).await?;
+    if flavours.iter().any(|f| f.is_some_and(|a| a < ttl)) {
+        return Ok((dir, Mount::ReadOnly));
+    }
+    // Filling: a lock younger than the timeout, and nothing completed since.
+    if lock_age.is_some_and(|l| l < FILL_TIMEOUT && !flavours.iter().any(|f| f.is_some_and(|a| a <= l))) {
+        return Ok((dir, Mount::ReadOnly));
+    }
+    fs.write_atomic(&dir.join(LOCK), b"", 0o644).await?;
+    for e in fs.read_dir(&dir).await? {
+        if e.name != LOCK {
+            fs.remove(&dir.join(&e.name)).await?;
+        }
+    }
+    Ok((dir, Mount::Fill))
+}
+
+/// Per `<arch>-<codename>` directory: the age of its oldest marker once every
+/// caching kit has marked it, else `None`.
+async fn flavours_on(fs: &dyn HostFs, dir: &Path) -> Result<Vec<Option<Duration>>> {
+    let mut out = Vec::new();
+    for e in fs.read_dir(dir).await? {
+        if e.meta.kind != Kind::Dir || e.name.starts_with('.') {
+            continue;
+        }
+        let mut ages = Vec::new();
+        for k in bundled::CACHING {
+            if let Some(a) = age_on(fs, &dir.join(&e.name).join(format!(".filled-{k}"))).await? {
+                ages.push(a);
+            }
+        }
+        out.push((ages.len() == bundled::CACHING.len()).then(|| ages.into_iter().max().unwrap_or_default()));
+    }
+    Ok(out)
+}
+
+async fn age_on(fs: &dyn HostFs, p: &Path) -> Result<Option<Duration>> {
+    let Some(m) = fs.stat(p).await? else { return Ok(None) };
+    // 0 = the host cannot say: as old as can be, so it is refilled, not trusted.
+    let mtime = if m.mtime_secs == 0 { UNIX_EPOCH } else { UNIX_EPOCH + Duration::from_secs(m.mtime_secs) };
+    Ok(Some(SystemTime::now().duration_since(mtime).unwrap_or_default()))
+}
+
 /// Everything under the cache, gone: the next sandbox refills it.
 pub fn clear(paths: &Paths) -> Result<()> {
     if is_filling(paths) {
@@ -197,6 +257,25 @@ mod tests {
         std::fs::remove_file(p.cache().join("arm64-bookworm/.filled-agent-skills")).unwrap();
         assert!(!is_fresh(&p, DAY));
         assert_eq!(flavours(&p)[0].filled, ["md-to-pdf-tools"]);
+    }
+
+    #[tokio::test]
+    async fn claim_on_a_host_behaves_like_claim() {
+        let d = tempfile::tempdir().unwrap();
+        let fs = crate::host::LocalFs;
+        let root = d.path();
+        assert_eq!(claim_on(&fs, root, DAY).await.unwrap().1, Mount::Fill);
+        assert_eq!(claim_on(&fs, root, DAY).await.unwrap().1, Mount::ReadOnly, "one filler at a time");
+        let f = root.join("cache/arm64-bookworm");
+        std::fs::create_dir_all(&f).unwrap();
+        std::fs::write(f.join("blob"), "x").unwrap();
+        for k in bundled::CACHING {
+            std::fs::write(f.join(format!(".filled-{k}")), "").unwrap();
+        }
+        assert_eq!(claim_on(&fs, root, DAY).await.unwrap().1, Mount::ReadOnly, "fresh");
+        assert_eq!(claim_on(&fs, root, Duration::ZERO).await.unwrap().1, Mount::Fill, "expired");
+        assert!(!f.exists(), "nothing old survives a refill");
+        assert!(root.join("cache/.filling").exists());
     }
 
     #[test]

@@ -132,6 +132,12 @@ impl Paths {
         self.state().join("templates.json")
     }
 
+    /// A host's automatic templates: an image lives on the host that built
+    /// it, so each host keeps its own list. For this machine it is
+    /// [`Paths::templates`] itself, so local storage is unchanged.
+    fn templates_of(&self, host: &HostName) -> PathBuf {
+        self.host_state(host).join("templates.json")
+    }
     fn favourites(&self) -> PathBuf {
         self.state().join("favourites.json")
     }
@@ -479,6 +485,15 @@ impl Store {
         write_atomic(&self.paths.templates(), &serde_json::to_vec_pretty(list)?)
     }
 
+    /// [`Store::templates`] of one host; `local` is the same list.
+    pub fn templates_of(&self, host: &HostName) -> Vec<sbxw_core::templates::Record> {
+        read_json(&self.paths.templates_of(host))
+    }
+
+    pub fn set_templates_of(&self, host: &HostName, list: &[sbxw_core::templates::Record]) -> Result<()> {
+        write_atomic(&self.paths.templates_of(host), &serde_json::to_vec_pretty(list)?)
+    }
+
     pub fn favourites(&self) -> Vec<String> {
         read_json(&self.paths.favourites())
     }
@@ -669,6 +684,22 @@ mod tests {
         assert!(s.sandbox_for_token(&t).is_none());
         assert!(s.exists(&local), "forgetting the remote one leaves the local one");
         assert_eq!(s.chat_workspace(&remote), None);
+    }
+
+    #[test]
+    fn templates_are_kept_per_host_and_local_is_unchanged() {
+        use sbxw_core::templates::Record;
+        let (d, s) = store();
+        let rec = |tag: &str| Record { tag: tag.into(), sbx: "1".into(), sbxw: "1".into(), kits: vec![], created_at: 0, content: String::new() };
+        let box_ = HostName::parse("buildbox").unwrap();
+        s.set_templates(&[rec("local")]).unwrap();
+        s.set_templates_of(&box_, &[rec("remote")]).unwrap();
+        assert_eq!(s.templates()[0].tag, "local");
+        assert_eq!(s.templates_of(&HostName::local())[0].tag, "local");
+        assert_eq!(s.templates_of(&box_)[0].tag, "remote");
+        assert!(d.path().join(".sbxw/state/templates.json").exists());
+        assert!(d.path().join(".sbxw/state/hosts/buildbox/templates.json").exists());
+        assert!(s.templates_of(&HostName::parse("other").unwrap()).is_empty());
     }
 
     #[test]
