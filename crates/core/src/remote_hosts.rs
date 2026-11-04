@@ -14,14 +14,12 @@
 //! `key` is a PATH to an identity file; this module never holds a key or a
 //! password.
 
-use crate::names::is_valid_sandbox_name;
+use crate::names::{HostName, LOCAL_HOST};
 use anyhow::{bail, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
 pub const DEFAULT_AGENT_PORT: u16 = 7682;
-/// The host name that always means "this machine".
-pub const LOCAL: &str = "local";
 
 /// How to reach a host.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,7 +37,7 @@ pub enum Target {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteHost {
-    pub name: String,
+    pub name: HostName,
     pub target: Target,
     pub agent_port: u16,
     pub trust_secrets: bool,
@@ -83,14 +81,16 @@ fn check_word(what: &str, v: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn check_name(name: &str) -> Result<()> {
-    if name == LOCAL {
-        bail!("'{LOCAL}' is reserved for this machine");
+/// Validate a host name: `local` is refused (it is this machine), and the rest
+/// must be a valid `HostName` spelled exactly as given (no surrounding spaces).
+pub fn check_name(name: &str) -> Result<HostName> {
+    if name == LOCAL_HOST {
+        bail!("'{LOCAL_HOST}' is reserved for this machine");
     }
-    if !is_valid_sandbox_name(name) {
-        bail!("'{name}' is not a valid host name (letters, digits and '-', not ending in '-')");
+    match HostName::parse(name) {
+        Ok(h) if h.as_str() == name => Ok(h),
+        _ => bail!("'{name}' is not a valid host name (letters, digits and '-', not ending in '-')"),
     }
-    Ok(())
 }
 
 impl RemoteHost {
@@ -106,7 +106,7 @@ impl RemoteHost {
         agent_port: Option<u16>,
         trust_secrets: bool,
     ) -> Result<Self> {
-        check_name(name)?;
+        let name = check_name(name)?;
         let target = match (ssh, host) {
             (Some(_), Some(_)) => bail!("host '{name}': set either ssh or host, not both"),
             (None, None) => bail!("host '{name}': set ssh (an alias) or host"),
@@ -135,7 +135,7 @@ impl RemoteHost {
         if agent_port == 0 {
             bail!("host '{name}': agent_port must be 1 to 65535");
         }
-        Ok(Self { name: name.to_string(), target, agent_port, trust_secrets })
+        Ok(Self { name, target, agent_port, trust_secrets })
     }
 
     /// The name ssh connects to (alias or address), for display and ssh-keyscan.
@@ -329,6 +329,7 @@ ssh = "buildbox"
         let h = RemoteHosts::parse("[hosts.a]\nssh = \"x\"\n").unwrap();
         assert_eq!(h.get("a").unwrap().agent_port, 7682);
         assert!(RemoteHosts::parse("[hosts.local]\nssh = \"x\"\n").is_err());
+        assert!(RemoteHosts::parse("[hosts.\"a b\"]\nssh = \"x\"\n").is_err());
         assert!(RemoteHosts::parse("[hosts.a]\nssh = \"x\"\nhost = \"y\"\n").is_err());
         assert!(RemoteHosts::parse("[hosts.a]\nssh = \"x\"\nuser = \"y\"\n").is_err());
         assert!(RemoteHosts::parse("not toml [").is_err());
