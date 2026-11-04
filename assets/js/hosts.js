@@ -94,7 +94,19 @@ function hostSectionHtml(name, h, list, folded) {
   </div>`;
 }
 
+// A header whose row overflows even with the name cut to its minimum drops
+// its link text (CSS .tight); the dot's title still says it. Measured after
+// the list is drawn, and again when the sidebar changes size.
+function fitHostHeads() {
+  for (const head of listEl.querySelectorAll('.host-head')) {
+    head.classList.remove('tight');
+    if (head.scrollWidth > head.clientWidth) head.classList.add('tight');
+  }
+}
+new ResizeObserver(() => fitHostHeads()).observe(listEl);
+
 function renderHostSections() {
+  requestAnimationFrame(fitHostHeads);
   const folded = foldedHosts();
   const names = ['local', ...remoteHosts.map(h => h.name)];
   // A ref whose host left hosts.toml still shows, under its own header.

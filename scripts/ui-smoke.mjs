@@ -131,6 +131,20 @@ if (sidebar.sections.join(',') !== 'local,fake,gone' || !sidebar.fake) {
 if (!sidebar.gone || !sidebar.gone.greyed || !/^unreachable since \d\d:\d\d/.test(sidebar.gone.note) || sidebar.gone.enabled) {
   problems.push(`unreachable sandbox: ${JSON.stringify(sidebar.gone)}, want greyed, "unreachable since HH:MM", no action enabled`);
 }
+// The host headers at the default sidebar width: the name is what truncates.
+// fake's latency is shown whole; a header too narrow for its link text (gone's
+// "down since HH:MM") drops it rather than clip it, and the dot keeps it.
+const heads = await page.evaluate(() => [...document.querySelectorAll('.host-head')].map(h => {
+  const t = h.querySelector('.host-link-text');
+  return { host: h.dataset.hostFold, overflow: h.scrollWidth > h.clientWidth,
+    shown: t && t.offsetParent !== null, clipped: t && t.scrollWidth > t.clientWidth,
+    dotTitle: h.querySelector('.dot.host-link')?.title || '' };
+}));
+for (const h of heads) {
+  if (h.overflow || (h.shown && h.clipped)) problems.push(`host header ${h.host} clipped: ${JSON.stringify(h)}`);
+  if (!h.shown && !h.dotTitle) problems.push(`host header ${h.host} dropped its link text with no dot title`);
+}
+if (!heads.find(h => h.host === 'fake')?.shown) problems.push(`fake's latency is not shown: ${JSON.stringify(heads)}`);
 await page.screenshot({ path: png.replace(/\.png$/, '-hosts-sidebar.png') });
 await visit('Fold a host', async () => {
   await page.locator('.host-head[data-host-fold="fake"]').click();
