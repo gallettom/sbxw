@@ -71,6 +71,9 @@ pub struct Conn {
     /// Port of the agent on the host (default 7682).
     #[arg(long)]
     agent_port: Option<u16>,
+    /// The `sbx` to run on the host (default: detected with `sh -lc 'command -v sbx'`).
+    #[arg(long)]
+    sbx_path: Option<String>,
 }
 
 pub fn run(cmd: HostCmd) -> Result<()> {
@@ -123,7 +126,7 @@ fn add(name: &str, c: Conn, trust_secrets: bool, yes: bool) -> Result<()> {
     if hosts.get(name).is_some() {
         bail!("host '{name}' already exists; use `sbxw host edit {name}`");
     }
-    let host = RemoteHost::new(name, c.ssh, c.host, c.user, c.port, c.key, c.agent_port, trust_secrets)?;
+    let host = RemoteHost::new(name, c.ssh, c.host, c.user, c.port, c.key, c.agent_port, trust_secrets)?.with_sbx_path(c.sbx_path)?;
     ensure_known(&host, yes)?;
     hosts.hosts.insert(name.to_string(), host);
     save(&hosts)?;
@@ -159,7 +162,8 @@ fn edit(name: &str, c: Conn, trust: Option<bool>, yes: bool) -> Result<()> {
         key,
         Some(c.agent_port.unwrap_or(old.agent_port)),
         trust.unwrap_or(old.trust_secrets),
-    )?;
+    )?
+    .with_sbx_path(c.sbx_path.or(old.sbx_path))?;
     if new.target != old.target {
         ensure_known(&new, yes)?;
     }
@@ -228,7 +232,7 @@ fn test(name: &str) -> Result<()> {
     let out = Command::new("ssh")
         .args(["-o", "ConnectTimeout=10"])
         .args(h.ssh_argv())
-        .args(["sbx", "version"])
+        .args([h.sbx_program(), "version"])
         .stdin(Stdio::null())
         .output()
         .context("could not run ssh")?;

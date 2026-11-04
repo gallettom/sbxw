@@ -15,6 +15,7 @@ pub mod cache;
 pub mod bus;
 pub mod git;
 pub mod http;
+pub mod host;
 pub mod hostsys;
 pub mod provision;
 pub mod pty;

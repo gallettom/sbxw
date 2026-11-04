@@ -57,9 +57,9 @@ The registry of machines sbxw will drive over SSH, kept in `~/.sbxw/hosts.toml`.
 
 | Command | What it does |
 |---|---|
-| `sbxw host add <name> (--ssh <alias> \| --host <h> [--user U] [--port N] [--key PATH])` | Register a host. Flags: `--agent-port N` (default 7682), `--trust-secrets` (allow secrets to be sent there; default off). Fetches the host key with `ssh-keyscan`, shows its SHA256 fingerprint and asks; only on yes is it appended to `~/.ssh/known_hosts` (skipped if already known). `-y/--yes` skips the question for scripts. |
+| `sbxw host add <name> (--ssh <alias> \| --host <h> [--user U] [--port N] [--key PATH])` | Register a host. Flags: `--agent-port N` (default 7682), `--trust-secrets` (allow secrets to be sent there; default off), `--sbx-path PATH` (the `sbx` to run there; by default sbxw finds it with `sh -lc 'command -v sbx'` when it connects, and caches the answer for that connection). Fetches the host key with `ssh-keyscan`, shows its SHA256 fingerprint and asks; only on yes is it appended to `~/.ssh/known_hosts` (skipped if already known). `-y/--yes` skips the question for scripts. |
 | `sbxw host ls` | Table of registered hosts. |
-| `sbxw host test <name>` | Run `ssh … sbx version` on the host (BatchMode, strict host key checking). Prints `OK` and the version, or the ssh error. |
+| `sbxw host test <name>` | Run `ssh … sbx version` on the host (or the `--sbx-path` given) (BatchMode, strict host key checking). Prints `OK` and the version, or the ssh error. |
 | `sbxw host edit <name> [flags]` | Change a host; takes the `add` flags plus `--no-trust-secrets`. Only the flags given change; `--ssh` and `--host` replace each other. A changed address asks about its host key again. |
 | `sbxw host rm <name> [--force]` | Unregister a host. Refuses while `~/.sbxw/state/hosts/<name>/` is non-empty; `--force` unregisters anyway and leaves that state on disk. |
 
