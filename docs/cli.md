@@ -51,6 +51,18 @@ Every command takes `--help`. Commands that read the project config take
 | `sbxw ports-ls [name] [--all]` | Show published port mappings for one or all sandboxes. |
 | `sbxw hosts [show\|sync\|clear]` | Show the `/etc/hosts` block (and anything the daemon parked), re-apply it (the one place `sudo` can ask for a password), or remove it. |
 
+### Remote hosts
+
+The registry of machines sbxw will drive over SSH, kept in `~/.sbxw/hosts.toml`. Not to be confused with `sbxw hosts` above (the `/etc/hosts` block). A host is either an alias from `~/.ssh/config` (`ssh`) or spelled out (`host`, with optional `user`, `port`, `key`). `key` is a path to an identity file, never a key or password. `local` is reserved; other names follow the sandbox name rules.
+
+| Command | What it does |
+|---|---|
+| `sbxw host add <name> (--ssh <alias> \| --host <h> [--user U] [--port N] [--key PATH])` | Register a host. Flags: `--agent-port N` (default 7682), `--trust-secrets` (allow secrets to be sent there; default off). Fetches the host key with `ssh-keyscan`, shows its SHA256 fingerprint and asks; only on yes is it appended to `~/.ssh/known_hosts` (skipped if already known). `-y/--yes` skips the question for scripts. |
+| `sbxw host ls` | Table of registered hosts. |
+| `sbxw host test <name>` | Run `ssh … sbx version` on the host (BatchMode, strict host key checking). Prints `OK` and the version, or the ssh error. |
+| `sbxw host edit <name> [flags]` | Change a host; takes the `add` flags plus `--no-trust-secrets`. Only the flags given change; `--ssh` and `--host` replace each other. A changed address asks about its host key again. |
+| `sbxw host rm <name> [--force]` | Unregister a host. Refuses while `~/.sbxw/state/hosts/<name>/` is non-empty; `--force` unregisters anyway and leaves that state on disk. |
+
 ### Environment files
 
 | Command | What it does |
