@@ -22,7 +22,9 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+use crate::host::{Host, Kind, Meta};
 use sbxw_core::SandboxName;
+use sbxw_sbx::host::HostCmd;
 use sbxw_sbx::{runner::Output, Sbx};
 
 /// Where the agent lives in every sandbox; the explorer's "Home" favourite.
@@ -151,7 +153,7 @@ fn script_error(out: &Output, what: &str) -> anyhow::Error {
 }
 
 /// List `dir` (absolute; empty means the workspace, or home without one).
-pub async fn list(sbx: &Sbx, sandbox: &SandboxName, workspace: Option<&Path>, dir: &str) -> Result<Listing> {
+pub async fn list(sbx: &Sbx, host: &Host, sandbox: &SandboxName, workspace: Option<&Path>, dir: &str) -> Result<Listing> {
     let dir = if dir.trim().is_empty() {
         workspace
             .map(|w| w.to_string_lossy().into_owned())
@@ -176,12 +178,12 @@ pub async fn list(sbx: &Sbx, sandbox: &SandboxName, workspace: Option<&Path>, di
             offline: false,
         });
     }
-    let path = host_path(workspace, &dir)?;
-    let mut entries: Vec<Entry> = std::fs::read_dir(&path)
-        .with_context(|| format!("{}: not readable", path.display()))?
-        .flatten()
-        .map(|e| host_entry(&e))
-        .collect();
+    let path = host_path(host, workspace, &dir).await?;
+    let raw = host.fs.read_dir(&path).await.with_context(|| format!("{}: not readable", path.display()))?;
+    let mut entries = Vec::with_capacity(raw.len());
+    for e in raw {
+        entries.push(host_entry(host, &path, e).await);
+    }
     sort_entries(&mut entries);
     let path = path.to_string_lossy().into_owned();
     // The workspace's own parent is outside what a stopped sandbox can show.
@@ -199,7 +201,7 @@ pub async fn list(sbx: &Sbx, sandbox: &SandboxName, workspace: Option<&Path>, di
 /// Files written lately across `roots` — the workspace, home, `/tmp`, the
 /// read-write mounts: wherever an agent may have put something. Running, one
 /// `find` inside the sandbox; stopped, a walk of the workspace on the host.
-pub async fn recent(sbx: &Sbx, sandbox: &SandboxName, workspace: Option<&Path>, roots: &[String]) -> Result<(Vec<Recent>, bool)> {
+pub async fn recent(sbx: &Sbx, host: &Host, sandbox: &SandboxName, workspace: Option<&Path>, roots: &[String]) -> Result<(Vec<Recent>, bool)> {
     let since = now_secs().saturating_sub(RECENT_DAYS * 86_400);
     if sbx.is_running(sandbox).await {
         let mins = (RECENT_DAYS * 24 * 60).to_string();
@@ -216,9 +218,8 @@ pub async fn recent(sbx: &Sbx, sandbox: &SandboxName, workspace: Option<&Path>, 
     let Some(ws) = workspace else {
         bail!("the sandbox is stopped and has no recorded workspace — start it to see its files");
     };
-    let mut found = Vec::new();
-    walk_recent(ws, since, &mut found, 0);
-    found.sort_by(|a, b| b.modified.cmp(&a.modified));
+    let mut found = walk_recent(host, ws, since).await?;
+    found.sort_by_key(|r| std::cmp::Reverse(r.modified));
     found.truncate(RECENT_MAX);
     Ok((found, true))
 }
@@ -231,31 +232,17 @@ fn now_secs() -> u64 {
 }
 
 /// The host-side scan of a stopped sandbox's workspace: symlinks are not
-/// followed, so it cannot leave the workspace.
-fn walk_recent(dir: &Path, since: u64, out: &mut Vec<Recent>, depth: usize) {
-    if depth > 32 {
-        return;
-    }
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let Ok(t) = e.file_type() else { continue };
-        let path = e.path();
-        if t.is_dir() {
-            if !pruned(&e.file_name()) {
-                walk_recent(&path, since, out, depth + 1);
-            }
-        } else if t.is_file() && !pruned(&e.file_name()) {
-            let Ok(meta) = e.metadata() else { continue };
-            let modified = mtime_secs(&meta);
-            if modified >= since {
-                out.push(Recent {
-                    path: path.to_string_lossy().into_owned(),
-                    size: meta.len(),
-                    modified,
-                });
-            }
-        }
-    }
+/// followed, so it cannot leave the workspace. One walk of the host; the
+/// prune list is applied twice, by exact name to stop the walk descending, and
+/// here for the `sbxw-*` prefix it cannot express.
+async fn walk_recent(host: &Host, dir: &Path, since: u64) -> Result<Vec<Recent>> {
+    let exact: Vec<&str> = RECENT_PRUNE.iter().copied().filter(|p| !p.ends_with('*')).collect();
+    let all = host.fs.walk(dir, 32, &exact).await.with_context(|| format!("{}: not readable", dir.display()))?;
+    Ok(all
+        .into_iter()
+        .filter(|(rel, m)| m.kind == Kind::File && m.mtime_secs >= since && !rel.split('/').any(|c| pruned(std::ffi::OsStr::new(c))))
+        .map(|(rel, m)| Recent { path: dir.join(rel).to_string_lossy().into_owned(), size: m.len, modified: m.mtime_secs })
+        .collect())
 }
 
 /// Read `RECENT_SCRIPT`'s records. Paths may hold tabs, so the path goes last.
@@ -286,6 +273,7 @@ fn dedup_recent(list: Vec<Recent>) -> Vec<Recent> {
 /// `max` bytes come back instead, which is all a preview shows.
 pub async fn read(
     sbx: &Sbx,
+    host: &Host,
     sandbox: &SandboxName,
     workspace: Option<&Path>,
     file: &str,
@@ -305,23 +293,26 @@ pub async fn read(
         }
         return Ok(out.stdout);
     }
-    let path = host_path(workspace, file)?;
-    let meta = std::fs::metadata(&path).with_context(|| format!("{file}: not found"))?;
-    if !meta.is_file() {
+    let path = host_path(host, workspace, file).await?;
+    let meta = host.fs.stat(&path).await?.with_context(|| format!("{file}: not found"))?;
+    if meta.kind != Kind::File {
         bail!("{file}: not a file");
     }
-    if meta.len() > max && !head {
-        bail!("{file}: too large to open here ({} bytes)", meta.len());
+    if meta.len > max && !head {
+        bail!("{file}: too large to open here ({} bytes)", meta.len);
     }
-    let mut data = Vec::new();
-    std::io::Read::read_to_end(
-        &mut std::io::Read::take(
-            std::fs::File::open(&path).with_context(|| format!("{file}: not readable"))?,
-            max,
-        ),
-        &mut data,
-    )?;
-    Ok(data)
+    if meta.len > max {
+        // A preview: the first `max` bytes of a longer file, which `HostFs::read`
+        // refuses by contract, so the host's own `head` cuts it.
+        let limit = max.to_string();
+        let cmd = HostCmd::new("sh", ["-c", HEAD_SCRIPT, "sh", &path.to_string_lossy(), &limit].map(String::from).to_vec());
+        let out = host.exec.exec(cmd).await?;
+        if !out.success() {
+            return Err(script_error(&out, file));
+        }
+        return Ok(out.stdout);
+    }
+    host.fs.read(&path, max).await.with_context(|| format!("{file}: not readable"))
 }
 
 /// Why `path` may not be deleted, if it may not: it is relative, climbs with
@@ -356,6 +347,7 @@ pub fn refuse_delete(path: &str, roots: &[String], protected: &[String]) -> Opti
 /// the workspace only.
 pub async fn delete(
     sbx: &Sbx,
+    host: &Host,
     sandbox: &SandboxName,
     workspace: Option<&Path>,
     path: &str,
@@ -378,28 +370,25 @@ pub async fn delete(
     let Some(ws) = workspace else {
         bail!("the sandbox is stopped and has no recorded workspace — start it to delete files");
     };
-    let target = host_delete_target(ws, path)?;
-    let meta = std::fs::symlink_metadata(&target).with_context(|| format!("{path}: not found"))?;
-    if meta.is_dir() {
-        std::fs::remove_dir_all(&target)
-    } else {
-        std::fs::remove_file(&target)
-    }
-    .with_context(|| format!("{path}: could not delete it"))
+    let target = host_delete_target(host, ws, path).await?;
+    host.fs.lstat(&target).await?.with_context(|| format!("{path}: not found"))?;
+    host.fs.remove(&target).await.with_context(|| format!("{path}: could not delete it"))
 }
 
 /// The host path a stopped sandbox's `path` names, its parent resolved and
 /// checked to be the workspace or inside it; the last component is left alone
 /// so a link is removed rather than what it points to.
-fn host_delete_target(ws: &Path, path: &str) -> Result<PathBuf> {
-    let ws = ws
-        .canonicalize()
+async fn host_delete_target(host: &Host, ws: &Path, path: &str) -> Result<PathBuf> {
+    let ws = host
+        .fs
+        .canonicalize(ws)
+        .await
         .with_context(|| format!("{}: workspace not found on the host", ws.display()))?;
     let p = Path::new(path);
     let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else {
         bail!("{path}: not something to delete");
     };
-    let parent = parent.canonicalize().with_context(|| format!("{path}: not found"))?;
+    let parent = host.fs.canonicalize(parent).await.with_context(|| format!("{path}: not found"))?;
     if !parent.starts_with(&ws) {
         bail!("the sandbox is stopped: only files in its workspace can be deleted — start it to delete {path}");
     }
@@ -408,48 +397,39 @@ fn host_delete_target(ws: &Path, path: &str) -> Result<PathBuf> {
 
 /// `p`, resolved on the host, provided it stays inside the workspace — the one
 /// part of a stopped sandbox the host can answer for.
-fn host_path(workspace: Option<&Path>, p: &str) -> Result<PathBuf> {
+async fn host_path(host: &Host, workspace: Option<&Path>, p: &str) -> Result<PathBuf> {
     let Some(ws) = workspace else {
         bail!("the sandbox is stopped and has no recorded workspace — start it to browse it");
     };
-    let ws = ws
-        .canonicalize()
+    let ws = host
+        .fs
+        .canonicalize(ws)
+        .await
         .with_context(|| format!("{}: workspace not found on the host", ws.display()))?;
-    let resolved = Path::new(p)
-        .canonicalize()
-        .with_context(|| format!("{p}: not found"))?;
+    let resolved = host.fs.canonicalize(Path::new(p)).await.with_context(|| format!("{p}: not found"))?;
     if !resolved.starts_with(&ws) {
         bail!("the sandbox is stopped: only its workspace can be browsed — start it to see {p}");
     }
     Ok(resolved)
 }
 
-fn host_entry(e: &std::fs::DirEntry) -> Entry {
-    let link = e.file_type().map(|t| t.is_symlink()).unwrap_or(false);
-    // `metadata` follows links, like `find -printf %Y`.
-    let meta = std::fs::metadata(e.path()).ok();
-    let kind = match &meta {
-        Some(m) if m.is_dir() => "dir",
-        Some(m) if m.is_file() => "file",
+/// One entry of a stopped sandbox's listing. A link's kind and size are its
+/// target's, like `find -printf %Y`; a dangling one is `other`.
+async fn host_entry(host: &Host, dir: &Path, e: crate::host::DirEntry) -> Entry {
+    let link = e.meta.kind == Kind::Symlink;
+    let meta: Option<Meta> = if link { host.fs.stat(&dir.join(&e.name)).await.ok().flatten() } else { Some(e.meta) };
+    let kind = match meta.map(|m| m.kind) {
+        Some(Kind::Dir) => "dir",
+        Some(Kind::File) => "file",
         _ => "other",
     };
-    let modified = meta.as_ref().map_or(0, mtime_secs);
     Entry {
-        name: e.file_name().to_string_lossy().into_owned(),
+        name: e.name,
         kind,
         link,
-        size: meta.map(|m| m.len()).unwrap_or(0),
-        modified,
+        size: meta.map_or(0, |m| m.len),
+        modified: meta.map_or(0, |m| m.mtime_secs),
     }
-}
-
-/// When a file was last modified, in Unix seconds; 0 when the platform cannot say.
-pub fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 fn parent_of(path: &str) -> Option<String> {
@@ -506,6 +486,7 @@ fn parse_listing(raw: &[u8]) -> (String, Vec<Entry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::hosts;
 
     #[test]
     fn a_listing_reads_path_then_records_with_folders_first() {
@@ -530,23 +511,35 @@ mod tests {
         assert_eq!(list[1].path, "/w/a\tb");
     }
 
+    /// A stopped sandbox: no `sbx exec`, so everything is the host's disk.
+    fn stopped() -> Sbx {
+        Sbx::new(sbxw_sbx::runner::Fake::new(|_| Output::ok("[]")))
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+    }
+
     /// Stopped, the workspace is walked on the host — newest first, pruned
     /// folders skipped, old files left out.
-    #[test]
-    fn a_stopped_sandbox_lists_recent_workspace_files_outside_pruned_folders() {
-        let ws = std::env::temp_dir().join(format!("sbxw-recent-{}", std::process::id()));
-        std::fs::create_dir_all(ws.join("deep/er")).unwrap();
-        std::fs::create_dir_all(ws.join("node_modules/x")).unwrap();
-        std::fs::write(ws.join("deep/er/stray.txt"), b"hi").unwrap();
-        std::fs::write(ws.join("node_modules/x/index.js"), b"").unwrap();
-        let mut found = Vec::new();
-        walk_recent(&ws, now_secs() - 60, &mut found, 0);
-        let names: Vec<String> = found.iter().map(|r| r.path.clone()).collect();
-        assert_eq!(names, [ws.join("deep/er/stray.txt").to_string_lossy().into_owned()]);
-        let mut none = Vec::new();
-        walk_recent(&ws, now_secs() + 3600, &mut none, 0);
-        assert!(none.is_empty());
-        let _ = std::fs::remove_dir_all(&ws);
+    #[tokio::test]
+    async fn a_stopped_sandbox_lists_recent_workspace_files_outside_pruned_folders() {
+        for (n, h) in hosts() {
+            let ws = tempfile::tempdir().unwrap();
+            let ws = ws.path();
+            std::fs::create_dir_all(ws.join("deep/er")).unwrap();
+            std::fs::create_dir_all(ws.join("node_modules/x")).unwrap();
+            std::fs::create_dir_all(ws.join("sbxw-scratch")).unwrap();
+            std::fs::write(ws.join("deep/er/stray.txt"), b"hi").unwrap();
+            std::fs::write(ws.join("node_modules/x/index.js"), b"").unwrap();
+            std::fs::write(ws.join("sbxw-scratch/t"), b"").unwrap();
+            let found = walk_recent(&h, ws, now_secs() - 60).await.unwrap();
+            let names: Vec<String> = found.iter().map(|r| r.path.clone()).collect();
+            assert_eq!(names, [ws.join("deep/er/stray.txt").to_string_lossy().into_owned()], "{n}");
+            assert!(walk_recent(&h, ws, now_secs() + 3600).await.unwrap().is_empty(), "{n}");
+            let (via_api, offline) = recent(&stopped(), &h, &SandboxName::parse("s").unwrap(), Some(ws), &[]).await.unwrap();
+            assert!(offline && via_api.len() == 1, "{n}");
+        }
     }
 
     #[test]
@@ -571,39 +564,63 @@ mod tests {
 
     /// Stopped, a file in the workspace goes, a link goes without its target,
     /// and a path whose parent leaves the workspace is refused.
-    #[test]
-    fn a_stopped_sandbox_deletes_inside_its_workspace_only() {
-        let root = std::env::temp_dir().join(format!("sbxw-del-{}", std::process::id()));
-        let ws = root.join("ws");
-        std::fs::create_dir_all(ws.join("dir/sub")).unwrap();
-        std::fs::write(root.join("outside"), b"x").unwrap();
-        std::fs::write(ws.join("dir/sub/f"), b"x").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(root.join("outside"), ws.join("link")).unwrap();
-        let t = host_delete_target(&ws, ws.join("dir").to_str().unwrap()).unwrap();
-        std::fs::remove_dir_all(&t).unwrap();
-        assert!(!ws.join("dir").exists());
-        #[cfg(unix)]
-        {
-            let l = host_delete_target(&ws, ws.join("link").to_str().unwrap()).unwrap();
-            assert_eq!(l.file_name().unwrap(), "link");
+    #[tokio::test]
+    async fn a_stopped_sandbox_deletes_inside_its_workspace_only() {
+        for (n, h) in hosts() {
+            let root = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(root.path()).unwrap();
+            let ws = root.join("ws");
+            std::fs::create_dir_all(ws.join("dir/sub")).unwrap();
+            std::fs::write(root.join("outside"), b"x").unwrap();
+            std::fs::write(ws.join("dir/sub/f"), b"x").unwrap();
+            std::os::unix::fs::symlink(root.join("outside"), ws.join("link")).unwrap();
+            let sb = SandboxName::parse("s").unwrap();
+            let roots = vec![ws.to_string_lossy().into_owned()];
+            let del = |p: PathBuf| {
+                let (h, sb, roots, ws) = (h.clone(), sb.clone(), roots.clone(), ws.clone());
+                async move { delete(&stopped(), &h, &sb, Some(&ws), p.to_str().unwrap(), &roots, &[]).await }
+            };
+            del(ws.join("dir")).await.unwrap();
+            assert!(!ws.join("dir").exists(), "{n}");
+            del(ws.join("link")).await.unwrap();
+            assert!(!ws.join("link").exists() && root.join("outside").exists(), "{n}: the link goes, not its target");
+            assert!(del(root.join("outside")).await.is_err(), "{n}");
+            assert!(root.join("outside").exists(), "{n}");
+            assert!(del(ws.join("nope")).await.is_err(), "{n}");
         }
-        assert!(host_delete_target(&ws, root.join("outside").to_str().unwrap()).is_err());
-        assert!(root.join("outside").exists());
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Stopped, only the workspace is answered for — and `..` is no way out.
-    #[test]
-    fn a_stopped_sandbox_shows_its_workspace_and_nothing_beside_it() {
-        let root = std::env::temp_dir().join(format!("sbxw-fs-{}", std::process::id()));
-        let ws = root.join("ws");
-        std::fs::create_dir_all(ws.join("src")).unwrap();
-        std::fs::write(root.join("secret"), b"x").unwrap();
-        assert!(host_path(Some(&ws), ws.join("src").to_str().unwrap()).is_ok());
-        let escape = format!("{}/../secret", ws.display());
-        assert!(host_path(Some(&ws), &escape).is_err());
-        assert!(host_path(None, ws.to_str().unwrap()).is_err());
-        let _ = std::fs::remove_dir_all(&root);
+    #[tokio::test]
+    async fn a_stopped_sandbox_shows_its_workspace_and_nothing_beside_it() {
+        for (n, h) in hosts() {
+            let root = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(root.path()).unwrap();
+            let ws = root.join("ws");
+            std::fs::create_dir_all(ws.join("src")).unwrap();
+            std::fs::write(ws.join("src/a.txt"), b"hello world").unwrap();
+            std::fs::write(root.join("secret"), b"x").unwrap();
+            std::os::unix::fs::symlink(ws.join("src"), ws.join("lnk")).unwrap();
+            std::os::unix::fs::symlink(ws.join("gone"), ws.join("dangling")).unwrap();
+            assert!(host_path(&h, Some(&ws), ws.join("src").to_str().unwrap()).await.is_ok(), "{n}");
+            let escape = format!("{}/../secret", ws.display());
+            assert!(host_path(&h, Some(&ws), &escape).await.is_err(), "{n}");
+            assert!(host_path(&h, None, ws.to_str().unwrap()).await.is_err(), "{n}");
+
+            let (sbx, sb) = (stopped(), SandboxName::parse("s").unwrap());
+            let l = list(&sbx, &h, &sb, Some(&ws), "").await.unwrap();
+            assert!(l.offline && l.parent.is_none(), "{n}: the workspace has no parent here");
+            let shown: Vec<(&str, &str, bool)> = l.entries.iter().map(|e| (e.name.as_str(), e.kind, e.link)).collect();
+            assert_eq!(shown, [("lnk", "dir", true), ("src", "dir", false), ("dangling", "other", true)], "{n}");
+            assert!(list(&sbx, &h, &sb, Some(&ws), root.to_str().unwrap()).await.is_err(), "{n}");
+
+            let file = ws.join("src/a.txt");
+            let f = file.to_str().unwrap();
+            assert_eq!(read(&sbx, &h, &sb, Some(&ws), f, 100, false).await.unwrap(), b"hello world", "{n}");
+            assert!(read(&sbx, &h, &sb, Some(&ws), f, 5, false).await.is_err(), "{n}: too large");
+            assert_eq!(read(&sbx, &h, &sb, Some(&ws), f, 5, true).await.unwrap(), b"hello", "{n}: a preview is cut");
+            assert!(read(&sbx, &h, &sb, Some(&ws), ws.join("src").to_str().unwrap(), 5, false).await.is_err(), "{n}");
+            assert!(read(&sbx, &h, &sb, Some(&ws), root.join("secret").to_str().unwrap(), 5, false).await.is_err(), "{n}");
+        }
     }
 }

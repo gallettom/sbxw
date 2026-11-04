@@ -5,6 +5,7 @@
 use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::git;
+use crate::host::Host;
 use crate::pty::{PtySession, Spawn};
 use crate::typing;
 use anyhow::{anyhow, bail, Result, Context};
@@ -93,7 +94,7 @@ impl App {
             }
             SessionKind::ThreadBash(thread) => {
                 self.ensure_running_for_thread(&sandbox).await?;
-                let dir = self.settle_thread_repo(&sandbox, thread, None).map_err(|e| anyhow!(e))?;
+                let dir = self.settle_thread_repo(&sandbox, thread, None).await.map_err(|e| anyhow!(e))?;
                 Spawn::sbx(scripts::thread_bash_args(&sandbox, &dir, thread, self.team_for(&sandbox, thread).as_ref()))
             }
             SessionKind::Thread(thread) => {
@@ -114,7 +115,7 @@ impl App {
                         if open == 1 { "" } else { "s" }
                     );
                 }
-                let dir = self.settle_thread_repo(&sandbox, thread, None).map_err(|e| anyhow!(e))?;
+                let dir = self.settle_thread_repo(&sandbox, thread, None).await.map_err(|e| anyhow!(e))?;
                 let briefing = self
                     .briefings
                     .lock()
@@ -187,7 +188,7 @@ impl App {
     /// Which repo `thread` works in, settled and recorded, as the directory
     /// its scripts start in. Every thread path goes through here (its
     /// session, its Bash, status, close, merge) so they cannot disagree.
-    pub fn settle_thread_repo(&self, sandbox: &SandboxName, thread: &ThreadName, requested: Option<&str>) -> Result<String, String> {
+    pub async fn settle_thread_repo(&self, sandbox: &SandboxName, thread: &ThreadName, requested: Option<&str>) -> Result<String, String> {
         // A session in the main checkout starts where the main agent does.
         if self.is_same_worktree(sandbox, thread) {
             return Ok(self.store.workspace(sandbox).map(|w| w.to_string_lossy().into_owned()).unwrap_or_default());
@@ -199,7 +200,7 @@ impl App {
             };
         };
         let recorded = self.store.get(sandbox).threads.get(thread.as_str()).map(|r| r.repo.clone());
-        let chosen = git::choose(&ws, recorded.as_deref(), thread, requested)?;
+        let chosen = git::choose(&Host::local(), &ws, recorded.as_deref(), thread, requested).await?;
         if recorded.as_deref() != Some(chosen.as_str()) {
             self.store
                 .update(sandbox, |r| r.threads.entry(thread.to_string()).or_default().repo = chosen.clone())
@@ -216,7 +217,7 @@ impl App {
     /// Record that `thread` is a session in the main checkout, on its first
     /// open. A name that already has a worktree is refused: it would start a
     /// second session in a folder the thread's own worktree does not use.
-    pub fn settle_same_worktree(&self, sandbox: &SandboxName, thread: &ThreadName) -> Result<(), String> {
+    pub async fn settle_same_worktree(&self, sandbox: &SandboxName, thread: &ThreadName) -> Result<(), String> {
         let rec = self.store.get(sandbox);
         match rec.threads.get(thread.as_str()) {
             Some(r) if r.same_worktree => return Ok(()),
@@ -224,7 +225,7 @@ impl App {
             None => {}
         }
         if let Some(ws) = &rec.workspace {
-            if git::thread_worktrees(ws, &Default::default()).iter().any(|(t, _)| t == thread.as_str()) {
+            if git::thread_worktrees(&Host::local(), ws, &Default::default()).await.iter().any(|(t, _)| t == thread.as_str()) {
                 return Err(format!("'{thread}' is already a thread with a worktree of its own: pick another name"));
             }
         }

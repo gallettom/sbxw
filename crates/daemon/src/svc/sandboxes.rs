@@ -3,6 +3,7 @@
 
 use crate::app::App;
 use crate::git;
+use crate::host::Host;
 use crate::provision::BringUp;
 use anyhow::{anyhow, bail, Context, Result};
 use sbxw_core::config::Config;
@@ -349,7 +350,7 @@ impl App {
             // A chat's conversations are opened from here; any other thread
             // is opened in sbxw, where its repo and model are chosen.
             if let Some(ws) = self.store.chat_workspace(&name) {
-                git::init_chat_repo(&ws)?;
+                git::init_chat_repo(&Host::local(), &ws).await?;
             } else if !self.sessions.is_live(&SessionKey::thread(&name, &thread)) {
                 return Err(format!("thread '{thread}' of '{name}' is not running — open it in sbxw first"));
             }
@@ -377,7 +378,7 @@ impl App {
         let rec = self.store.get(sandbox);
         let recorded: BTreeMap<String, String> = rec.threads.iter().map(|(k, v)| (k.clone(), v.repo.clone())).collect();
         let found = match &rec.workspace {
-            Some(ws) => git::thread_worktrees(ws, &recorded),
+            Some(ws) => git::thread_worktrees(&Host::local(), ws, &recorded).await,
             None => vec![],
         };
         // A shared plan's worktree is not a thread; its threads have no
@@ -435,8 +436,9 @@ impl App {
         let ws = self.store.workspace(sandbox).ok_or_else(|| format!("sbxw has no workspace recorded for '{sandbox}'"))?;
         let rec = self.store.get(sandbox);
         let recorded: BTreeMap<String, String> = rec.threads.iter().map(|(k, v)| (k.clone(), v.repo.clone())).collect();
-        let threads = git::thread_worktrees(&ws, &recorded);
-        Ok((ws.clone(), git::graph(&ws, &threads).await))
+        let host = Host::local();
+        let threads = git::thread_worktrees(&host, &ws, &recorded).await;
+        Ok((ws.clone(), git::graph(&host, &ws, &threads).await))
     }
 
     pub async fn policy_panel(&self, sandbox: &SandboxName) -> PolicyPanel {

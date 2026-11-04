@@ -3,6 +3,7 @@
 
 use super::error::{ok, ok_with, ApiError, ApiResult};
 use crate::app::App;
+use crate::host::{Host, Kind};
 use crate::provision::BringUp;
 use crate::sandbox_fs;
 use axum::body::{Body, Bytes};
@@ -802,7 +803,7 @@ async fn repos(State(app): S, Path(name): Path<String>) -> ApiResult {
         .store
         .workspace(&sb)
         .ok_or_else(|| ApiError::not_found(format!("sbxw has no workspace recorded for '{sb}'")))?;
-    let repos = crate::git::list(&ws).await;
+    let repos = crate::git::list(&Host::local(), &ws).await;
     Ok(ok_with(json!({ "workspace": ws, "repos": repos })))
 }
 
@@ -813,7 +814,7 @@ async fn worktrees(State(app): S, Path(name): Path<String>) -> ApiResult {
 
 async fn thread_status(State(app): S, Path((name, thread)): Path<(String, String)>) -> ApiResult {
     let (sb, t) = (sandbox(&name)?, ThreadName::parse(&thread)?);
-    let dir = app.settle_thread_repo(&sb, &t, None)?;
+    let dir = app.settle_thread_repo(&sb, &t, None).await?;
     // A session in the main checkout has no worktree or branch to lose:
     // closing it only ends the session.
     if app.is_same_worktree(&sb, &t) {
@@ -999,26 +1000,32 @@ struct PathQuery {
 
 /// Host folders for the create dialog's picker.
 async fn fs_browse(Query(q): Query<PathQuery>) -> Json<Value> {
-    let out = tokio::task::spawn_blocking(move || {
-        let base = q
-            .path
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| "/".into()));
-        let dir = base.canonicalize().unwrap_or(base);
-        let mut entries: Vec<Value> = std::fs::read_dir(&dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-            .map(|e| json!({ "name": e.file_name().to_string_lossy(), "path": e.path() }))
-            .collect();
-        entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-        json!({ "path": dir, "parent": dir.parent(), "entries": entries })
-    })
-    .await
-    .unwrap_or_else(|_| json!({ "path": "", "parent": null, "entries": [] }));
-    Json(out)
+    // This machine for now; the picker is written against `HostFs` so a
+    // remote host's folders can be browsed the same way.
+    let host = Host::local();
+    let base = match q.path {
+        Some(p) => PathBuf::from(p),
+        None => host.exec.home().await.unwrap_or_else(|_| "/".into()),
+    };
+    let dir = host.fs.canonicalize(&base).await.unwrap_or(base);
+    let mut entries: Vec<Value> = Vec::new();
+    for e in host.fs.read_dir(&dir).await.unwrap_or_default() {
+        if e.name.starts_with('.') {
+            continue;
+        }
+        // A link to a folder is a folder here, as it was with `is_dir`.
+        let path = dir.join(&e.name);
+        let is_dir = match e.meta.kind {
+            Kind::Dir => true,
+            Kind::Symlink => host.fs.stat(&path).await.ok().flatten().is_some_and(|m| m.kind == Kind::Dir),
+            _ => false,
+        };
+        if is_dir {
+            entries.push(json!({ "name": e.name, "path": path }));
+        }
+    }
+    entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Json(json!({ "path": dir, "parent": dir.parent(), "entries": entries }))
 }
 
 /// The OS-native folder picker. Dismissing it is not an error, nor a path.
@@ -1164,57 +1171,43 @@ async fn artifacts_list(State(app): S, Path(name): Path<String>) -> ApiResult {
         return Ok(Json(json!({ "dir": "", "entries": [], "codemap": null, "lenses": [], "run": run })));
     };
     let dir = ws.join(artifacts::ARTIFACTS_DIR);
-    let d = dir.clone();
-    let entries = tokio::task::spawn_blocking(move || walk_artifacts(&d)).await.unwrap_or_default();
+    let entries = walk_artifacts(&Host::local(), &dir).await;
     let (entries, codemap, lenses) = artifacts::fold(entries);
     Ok(Json(json!({ "dir": dir, "entries": entries, "codemap": codemap, "lenses": lenses, "run": run })))
 }
 
-fn walk_artifacts(root: &std::path::Path) -> Vec<artifacts::Entry> {
-    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<artifacts::Entry>, depth: u32) {
-        if depth > artifacts::MAX_DEPTH {
-            return;
-        }
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let Ok(ft) = e.file_type() else { continue };
-            if name.starts_with('.') {
-                continue;
-            }
-            if ft.is_dir() {
-                walk(root, &e.path(), out, depth + 1);
-            } else if ft.is_file() && artifacts::has_allowed_extension(&name) {
-                let Ok(meta) = e.metadata() else { continue };
-                out.push(artifacts::Entry {
-                    path: e.path().strip_prefix(root).unwrap_or(&e.path()).to_string_lossy().replace('\\', "/"),
-                    name,
-                    size: meta.len(),
-                    modified: sandbox_fs::mtime_secs(&meta),
-                });
-            }
-        }
+/// The deliverables under `root`: allowed extensions, no hidden file or
+/// folder, links not followed. One walk of the host, filtered here because a
+/// walk prunes by exact name and "hidden" is a prefix.
+async fn walk_artifacts(host: &Host, root: &std::path::Path) -> Vec<artifacts::Entry> {
+    if !host.fs.stat(root).await.ok().flatten().is_some_and(|m| m.kind == Kind::Dir) {
+        return Vec::new();
     }
-    let mut out = Vec::new();
-    if root.is_dir() {
-        walk(root, root, &mut out, 0);
-    }
-    out
+    let all = host.fs.walk(root, artifacts::MAX_DEPTH as usize + 1, &[]).await.unwrap_or_default();
+    all.into_iter()
+        .filter(|(rel, m)| m.kind == Kind::File && !rel.split('/').any(|c| c.starts_with('.')))
+        .filter_map(|(rel, m)| {
+            let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
+            artifacts::has_allowed_extension(&name).then_some(artifacts::Entry { path: rel, name, size: m.len, modified: m.mtime_secs })
+        })
+        .collect()
 }
 
 /// One file of `.sbxw-artifacts`, canonicalised and checked to stay inside.
 async fn artifact_download(State(app): S, Path(name): Path<String>, Query(q): Query<PathQuery>) -> Result<Response, ApiError> {
     let sb = sandbox(&name)?;
     let ws = app.store.workspace(&sb).ok_or_else(|| ApiError::not_found("unknown sandbox"))?;
-    let root = ws.join(artifacts::ARTIFACTS_DIR).canonicalize().map_err(|_| ApiError::not_found("no artifacts directory"))?;
-    let file = root
-        .join(q.path.unwrap_or_default())
-        .canonicalize()
+    let host = Host::local();
+    let root = host.fs.canonicalize(&ws.join(artifacts::ARTIFACTS_DIR)).await.map_err(|_| ApiError::not_found("no artifacts directory"))?;
+    let file = host
+        .fs
+        .canonicalize(&root.join(q.path.unwrap_or_default()))
+        .await
         .map_err(|_| ApiError::not_found("file not found"))?;
-    if !file.starts_with(&root) || !file.is_file() {
+    if !file.starts_with(&root) || !host.fs.stat(&file).await.ok().flatten().is_some_and(|m| m.kind == Kind::File) {
         return Err(ApiError::forbidden("invalid path"));
     }
-    let data = tokio::fs::read(&file).await.map_err(|_| ApiError::not_found("file not found"))?;
+    let data = host.fs.read(&file, sandbox_fs::MAX_FILE).await.map_err(|_| ApiError::not_found("file not found"))?;
     let filename = file.file_name().map(|n| n.to_string_lossy().replace('"', "")).unwrap_or_else(|| "download".into());
     Ok((
         [
@@ -1243,7 +1236,7 @@ struct FsQuery {
 async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Query<FsQuery>) -> ApiResult {
     let sb = sandbox(&name)?;
     let ws = app.store.workspace(&sb);
-    let l = sandbox_fs::list(&app.sbx, &sb, ws.as_deref(), &q.path).await.map_err(|e| ApiError::not_found(format!("{e:#}")))?;
+    let l = sandbox_fs::list(&app.sbx, &Host::local(), &sb, ws.as_deref(), &q.path).await.map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     let ws_s = ws.map(|w| w.to_string_lossy().into_owned());
     let artifacts = ws_s.as_ref().map(|w| format!("{}/{}", w.trim_end_matches('/'), artifacts::ARTIFACTS_DIR));
     let mounts = app.store.get(&sb).mounts;
@@ -1263,21 +1256,16 @@ async fn thread_worktrees(app: &App, sb: &SandboxName) -> Vec<Value> {
     let Some(ws) = app.store.workspace(sb) else { return vec![] };
     let recorded: std::collections::BTreeMap<String, String> =
         app.store.get(sb).threads.iter().map(|(k, v)| (k.clone(), v.repo.clone())).collect();
-    tokio::task::spawn_blocking(move || {
-        crate::git::thread_worktrees(&ws, &recorded)
-            .into_iter()
-            .filter_map(|(thread, repo)| {
-                let dir = crate::git::repo_root(&ws, &repo)?.join(".sbxw-worktrees").join(&thread);
-                let arts = dir.join(artifacts::ARTIFACTS_DIR);
-                Some(json!({
-                    "thread": thread, "repo": repo, "path": dir,
-                    "artifacts": arts.is_dir().then_some(arts),
-                }))
-            })
-            .collect()
-    })
-    .await
-    .unwrap_or_default()
+    let host = Host::local();
+    let mut out = Vec::new();
+    for (thread, repo) in crate::git::thread_worktrees(&host, &ws, &recorded).await {
+        let Some(root) = crate::git::repo_root(&host, &ws, &repo).await else { continue };
+        let dir = root.join(".sbxw-worktrees").join(&thread);
+        let arts = dir.join(artifacts::ARTIFACTS_DIR);
+        let has = host.fs.stat(&arts).await.ok().flatten().is_some_and(|m| m.kind == Kind::Dir);
+        out.push(json!({ "thread": thread, "repo": repo, "path": dir, "artifacts": has.then_some(arts) }));
+    }
+    out
 }
 
 /// What was written lately, wherever: the workspace, the read-write mounts,
@@ -1287,7 +1275,7 @@ async fn sandbox_fs_recent(State(app): S, Path(name): Path<String>) -> ApiResult
     let ws = app.store.workspace(&sb);
     let ws_s = ws.as_ref().map(|w| w.to_string_lossy().into_owned());
     let roots = writable_roots(&app, &sb, ws_s.as_deref());
-    let (files, offline) = sandbox_fs::recent(&app.sbx, &sb, ws.as_deref(), &roots)
+    let (files, offline) = sandbox_fs::recent(&app.sbx, &Host::local(), &sb, ws.as_deref(), &roots)
         .await
         .map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     Ok(ok_with(json!({
@@ -1330,7 +1318,7 @@ async fn sandbox_fs_delete(State(app): S, Path(name): Path<String>, Json(b): Jso
     if let Some(why) = sandbox_fs::refuse_delete(&b.path, &roots, &protected) {
         return Err(ApiError::forbidden(why));
     }
-    sandbox_fs::delete(&app.sbx, &sb, ws.as_deref(), &b.path, &roots, &protected)
+    sandbox_fs::delete(&app.sbx, &Host::local(), &sb, ws.as_deref(), &b.path, &roots, &protected)
         .await
         .map_err(|e| ApiError::bad(format!("{e:#}")))?;
     Ok(ok_with(json!({ "path": b.path })))
@@ -1342,7 +1330,7 @@ async fn sandbox_fs_file(State(app): S, Path(name): Path<String>, Query(q): Quer
     let sb = sandbox(&name)?;
     let ws = app.store.workspace(&sb);
     let max = q.max.unwrap_or(sandbox_fs::MAX_FILE);
-    let data = sandbox_fs::read(&app.sbx, &sb, ws.as_deref(), &q.path, max, q.head.is_some())
+    let data = sandbox_fs::read(&app.sbx, &Host::local(), &sb, ws.as_deref(), &q.path, max, q.head.is_some())
         .await
         .map_err(|e| ApiError::not_found(format!("{e:#}")))?;
     let filename = q.path.rsplit('/').next().unwrap_or("download").replace(['"', '\\', '\r', '\n'], "");
@@ -1433,7 +1421,7 @@ async fn shutdown(State(app): S) -> Json<Value> {
 }
 
 /// The thread a WebSocket asks for may choose its repo and model on first open.
-pub fn settle_ws_thread(
+pub async fn settle_ws_thread(
     app: &App,
     sb: &SandboxName,
     kind: &SessionKind,
@@ -1443,10 +1431,10 @@ pub fn settle_ws_thread(
 ) -> Result<(), String> {
     if let SessionKind::Thread(t) = kind {
         if checkout {
-            app.settle_same_worktree(sb, t)?;
+            app.settle_same_worktree(sb, t).await?;
         }
         if !checkout && (repo.is_some() || model.is_some()) {
-            app.settle_thread_repo(sb, t, repo)?;
+            app.settle_thread_repo(sb, t, repo).await?;
         }
         if let Some(m) = model.filter(|m| !m.is_empty()) {
             let m = ModelId::parse(m).map_err(|e| e.to_string())?;
