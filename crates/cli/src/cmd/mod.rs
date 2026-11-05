@@ -599,7 +599,7 @@ pub fn ls() -> Result<()> {
                 eprintln!("sbxw  {e:#}");
                 for r in known {
                     let last = store.get(&r).last_status.unwrap_or_else(|| "unknown".into());
-                    rows.push(LsRow { name: r.to_string(), agent: "claude".into(), created: String::new(), status: format!("✕ unreachable (last seen {last})") });
+                    rows.push(LsRow { name: r.to_string(), agent: "claude".into(), created: String::new(), status: format!("✕ offline (last seen {last})") });
                 }
             }
             Err(e) => eprintln!("sbxw  warning: host '{}': {e:#}", h.name),

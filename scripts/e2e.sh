@@ -246,7 +246,7 @@ ui "http://127.0.0.1:$UI/api/sandboxes" | grep -q '"name":"fake~neos".*"status":
 code=$(curl -s -o "$t/down.json" -w '%{http_code}' -X POST -H "host: 127.0.0.1:$UI" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$UI/api/sandboxes/fake~neos/stop")
 [ "$code" = 503 ] && grep -q "host 'fake' is unreachable" "$t/down.json" || { cat "$t/down.json"; die "an action on it is 503, naming the host (got $code)"; }
 "$bin" ls > "$t/ls-down.log" 2>&1 || die "sbxw ls with a host down"
-grep -q "^fake~neos .*unreachable (last seen stopped)" "$t/ls-down.log" || { cat "$t/ls-down.log"; die "sbxw ls marks it unreachable"; }
+grep -q "^fake~neos .*offline (last seen stopped)" "$t/ls-down.log" || { cat "$t/ls-down.log"; die "sbxw ls marks it offline"; }
 "$bin" stop fake~neos > "$t/stop-down.log" 2>&1 && die "stop on an unreachable host fails"
 grep -q "host 'fake' is unreachable" "$t/stop-down.log" || { cat "$t/stop-down.log"; die "and says so"; }
 ok "an unreachable host: listed with its last state, actions refused cleanly"

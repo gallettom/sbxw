@@ -158,6 +158,10 @@ number when it is free, else the next free one; `sbxw ports-ls` shows the pair.
 "Host unreachable" is its own state, not "sandbox gone". When the connection
 drops (a laptop that sleeps, a network change, the host rebooting):
 
+- a host that does not answer within **2 seconds** (`ConnectTimeout=2`, on
+  every ssh sbxw runs) is offline: `sbxw ls` answers at once and shows its
+  sandboxes as `✕ offline (last seen <state>)`, instead of waiting a minute
+  for the system's TCP timeout;
 - the host's sandboxes stay listed with their **last known state**;
 - actions on them are refused with a clear message instead of failing oddly;
 - sbxw reconnects in the background with a growing delay, and everything comes
