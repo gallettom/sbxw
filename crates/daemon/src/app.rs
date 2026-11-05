@@ -82,6 +82,8 @@ pub struct App {
     pub mac_boot_wait: Mutex<Duration>,
     /// Where the guest reaches the host, when a test names it.
     pub mac_guest_ip_override: Mutex<Option<String>>,
+    /// Each sandbox's last Remote Control probe (see `svc::remote`).
+    pub(crate) remote_probes: Mutex<HashMap<SandboxRef, crate::svc::remote::ProbeSlot>>,
 }
 
 pub struct AppBuilder {
@@ -128,6 +130,7 @@ impl AppBuilder {
             mac_program_override: Mutex::new(None),
             mac_boot_wait: Mutex::new(crate::svc::mac::BOOT_WAIT),
             mac_guest_ip_override: Mutex::new(None),
+            remote_probes: Mutex::new(HashMap::new()),
         })
     }
 }

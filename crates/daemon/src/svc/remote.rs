@@ -10,6 +10,18 @@ use sbxw_core::remote::{self, Login};
 use sbxw_core::session::SessionKind;
 use sbxw_core::SandboxRef;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// How long a probe answers for. Every open pane of a sandbox asks at the same
+/// moment (the page polls each every 15 s), and each probe is an `sbx ls` and
+/// an `sbx exec node`, seconds apiece: they share one, and a person's press
+/// always reads afresh.
+const PROBE_TTL: Duration = Duration::from_secs(5);
+
+/// A sandbox's last probe: its output or why it failed, and when. The lock
+/// around it is held while probing, so the panes that ask meanwhile wait for
+/// that answer rather than start their own.
+pub(crate) type ProbeSlot = Arc<tokio::sync::Mutex<Option<(Instant, Result<String, String>)>>>;
 
 /// What the button shows: how Claude is signed in, and whether Remote Control
 /// is on in the session asked about.
@@ -20,14 +32,40 @@ pub struct RemoteState {
 }
 
 impl App {
+    /// What the panes poll: a probe at most `PROBE_TTL` old.
+    pub async fn remote_state(&self, sandbox: &SandboxRef, kind: &SessionKind) -> Result<RemoteState> {
+        self.remote_state_read(sandbox, kind, false).await
+    }
+
+    /// The probe's output, shared between the panes of a sandbox. `fresh`
+    /// ignores an earlier answer, for a decision a person just asked for.
+    async fn remote_probe(&self, sandbox: &SandboxRef, fresh: bool) -> Result<String> {
+        let slot = self.remote_probes.lock().unwrap().entry(sandbox.clone()).or_default().clone();
+        let mut held = slot.lock().await;
+        if !fresh {
+            if let Some((at, answer)) = held.as_ref() {
+                if at.elapsed() < PROBE_TTL {
+                    return answer.clone().map_err(anyhow::Error::msg);
+                }
+            }
+        }
+        let answer = self.remote_probe_run(sandbox).await.map_err(|e| format!("{e:#}"));
+        *held = Some((Instant::now(), answer.clone()));
+        answer.map_err(anyhow::Error::msg)
+    }
+
     /// Read inside the sandbox, so only scopes and session flags come out,
     /// never the token.
-    pub async fn remote_state(&self, sandbox: &SandboxRef, kind: &SessionKind) -> Result<RemoteState> {
+    async fn remote_probe_run(&self, sandbox: &SandboxRef) -> Result<String> {
         if !self.sbx_for(sandbox).await?.is_running(&sandbox.name).await {
             bail!("'{sandbox}' is not running — open its Claude pane first");
         }
         let out = self.sbx_for(sandbox).await?.exec(&sandbox.name, &["node", "-e", remote::PROBE_SCRIPT], None).await?;
-        let probe = out.stdout_str();
+        Ok(out.stdout_str().to_string())
+    }
+
+    async fn remote_state_read(&self, sandbox: &SandboxRef, kind: &SessionKind, fresh: bool) -> Result<RemoteState> {
+        let probe = self.remote_probe(sandbox, fresh).await?;
         let active = match self.session_dir(sandbox, kind).await {
             Some(dir) => remote::active_in(&probe, &dir, kind.thread().map(|t| t.as_str())),
             None => false,
@@ -57,7 +95,7 @@ impl App {
     /// dialog — and, with the way out, when the login would make Claude refuse
     /// it: typing it then only leaves an error in the pane.
     pub async fn remote_control(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind) -> Result<()> {
-        let state = self.remote_state(sandbox, &kind).await?;
+        let state = self.remote_state_read(sandbox, &kind, true).await?;
         tracing::info!(
             "web UI: Remote Control in '{sandbox}' ({}) reads {}",
             self.session_dir(sandbox, &kind).await.unwrap_or_default(),
@@ -76,7 +114,14 @@ impl App {
             Login::ApiKeyHelper => bail!("{}", remote::helper_advice(&sandbox.to_string())),
         }
         self.watch_remote(sandbox);
-        self.push_text(sandbox, kind, remote::COMMAND).await.map_err(anyhow::Error::msg)
+        let typed = self.push_text(sandbox, kind, remote::COMMAND).await.map_err(anyhow::Error::msg);
+        // The page looks again in seconds, to see it come on: not at the old answer.
+        if let Some(slot) = self.remote_probes.lock().unwrap().get(sandbox).cloned() {
+            if let Ok(mut held) = slot.try_lock() {
+                *held = None;
+            }
+        }
+        typed
     }
 
     /// Switch a sandbox signed in with the setup token to a claude.ai login:
@@ -87,7 +132,7 @@ impl App {
     /// sbx re-reads a kit from its path on every container swap, so the old
     /// spec would put the token back over the login at the next one.
     pub async fn switch_to_login(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind) -> Result<()> {
-        if self.remote_state(sandbox, &kind).await?.login != Login::TokenOnly {
+        if self.remote_state_read(sandbox, &kind, true).await?.login != Login::TokenOnly {
             bail!("Claude in '{sandbox}' is not signed in with a setup token — nothing to switch");
         }
         tracing::info!("web UI: switching '{sandbox}' to a claude.ai login for Remote Control");
@@ -115,6 +160,45 @@ mod tests {
             Some("exec") if a.iter().any(|x| x == "-e") => Output::ok(probe),
             _ => sbx_answer(a),
         }
+    }
+
+    #[tokio::test]
+    async fn the_panes_of_a_sandbox_share_one_probe_and_a_press_reads_afresh() {
+        let (_d, app, fake) = app_with(signed_in_with(r#"{"present":true,"scopes":["user:profile"],"sessions":[]}"#));
+        let name = SandboxRef::parse("neos").unwrap();
+        let probes = |fake: &sbxw_sbx::runner::Fake| fake.log().iter().filter(|c| c.starts_with("exec")).count();
+        let looks: Vec<_> = (0..4)
+            .map(|_| {
+                let (a, n) = (app.clone(), name.clone());
+                tokio::spawn(async move { a.remote_state(&n, &SessionKind::Agent).await })
+            })
+            .collect();
+        for l in looks {
+            l.await.unwrap().unwrap();
+        }
+        assert_eq!(probes(&fake), 1, "four panes, one probe: {:?}", fake.log());
+        app.remote_state(&name, &SessionKind::Agent).await.unwrap();
+        assert_eq!(probes(&fake), 1, "still fresh");
+        // The press decides on what is true now. Typing needs a live session,
+        // which the fake has none of; the read comes first.
+        let _ = app.remote_control(&name, SessionKind::Agent).await;
+        assert_eq!(probes(&fake), 2, "{:?}", fake.log());
+        app.remote_state(&name, &SessionKind::Agent).await.unwrap();
+        assert_eq!(probes(&fake), 3, "after a press the next look is real");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_sandbox_is_refused_by_the_shared_probe_too() {
+        let (_d, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("neos", "stopped")]),
+            _ => sbx_answer(a),
+        });
+        let name = SandboxRef::parse("neos").unwrap();
+        for _ in 0..3 {
+            let e = app.remote_state(&name, &SessionKind::Agent).await.unwrap_err();
+            assert!(format!("{e:#}").contains("not running"), "{e:#}");
+        }
+        assert_eq!(fake.log().iter().filter(|c| c.starts_with("ls")).count(), 1, "{:?}", fake.log());
     }
 
     #[tokio::test]
