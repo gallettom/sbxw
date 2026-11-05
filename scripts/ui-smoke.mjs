@@ -246,6 +246,13 @@ await visit('Setup: MCP', async () => { await button(/^Setup$/).click(); await t
   await page.waitForTimeout(300);
   await page.screenshot({ path: png.replace(/\.png$/, '-mcp-edit.png') });
 });
+// Setup → Mac: on a host that cannot run terminal-mac it says so; with the
+// fake (SBXW_TERMINAL_MAC) it shows the VM. Either way it must draw.
+await visit('Setup: Mac', async () => { await button(/^Setup$/).click(); await tab(/^Mac$/).click(); }, async () => {
+  const text = await page.locator('#mac-body').innerText();
+  if (/Loading…|Could not read/.test(text)) problems.push('mac panel: ' + text.slice(0, 120));
+  await page.screenshot({ path: png.replace(/\.png$/, '-mac.png') });
+});
 const terminal = await page.evaluate(() => [...document.querySelectorAll('.xterm-rows')].map((e) => e.innerText).join('\n'));
 await page.screenshot({ path: png });
 await browser.close();

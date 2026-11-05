@@ -233,3 +233,15 @@ env_files = []
 # alias = "api.neos.local"
 # sandbox_port = 8000
 # host_port = 8000
+
+# The virtual Mac (the sbxw:terminal-mac kit, Apple silicon hosts only). Read
+# from the daemon's config: one VM per host. Every key is optional. A table,
+# so like [[ports]] it goes after every root key.
+#
+# [mac]
+# vm = "default"
+# idle_release_minutes = 10   # an unused lease lapses
+# pause_after_minutes = 15    # an unheld VM sbxw started is paused
+# stop_after_minutes = 120    # …then shut down normally
+# force_stop_after_minutes = 3  # a shutdown still hanging this long is forced
+# guest_host_ip = ""          # empty: the VM bridge's address (bridge100)

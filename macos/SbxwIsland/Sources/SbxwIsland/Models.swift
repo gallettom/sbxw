@@ -213,6 +213,9 @@ enum RelayKind: String, Codable, Equatable {
     /// A picture of the human's screen. Nobody else can supply it, so there is
     /// nothing to route and nothing to review.
     case screenshot
+    /// A yes or a no on the virtual Mac (a boot, a published port): never
+    /// routed, and approving runs it.
+    case mac
     /// A kind from a newer daemon.
     case unknown
 
@@ -256,6 +259,9 @@ struct RelayRequest: Codable, Equatable, Identifiable {
     /// card can offer, since there is no sandbox to route it to and the image
     /// has to be attached in the browser.
     var isScreenshot: Bool { kind == .screenshot }
+
+    /// A virtual Mac approval: the card offers Approve and Refuse, nothing to route.
+    var isMac: Bool { kind == .mac }
 
     /// Waiting on *you* right now — the only two states worth a card.
     ///

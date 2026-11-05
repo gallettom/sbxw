@@ -49,6 +49,9 @@ pub enum RelayKind {
     #[default]
     Question,
     Screenshot,
+    /// A sandbox asks to boot the virtual Mac or open a port to it: a yes or
+    /// a no from the person, never routed (see `mac`).
+    Mac,
 }
 
 /// One attached image, as the base64 the browser sent. Never decoded here:
@@ -198,12 +201,29 @@ impl RelayBook {
                     "request {id} asks for a screenshot — no other sandbox can see this screen"
                 ));
             }
+            if req.kind == RelayKind::Mac {
+                return Err(format!("request {id} asks you to approve something on the virtual Mac — only you can"));
+            }
             if req.from == to {
                 return Err(format!("'{to}' is the sandbox that asked"));
             }
             req.to = Some(to.to_string());
             req.answer = None;
             req.note = None;
+            req.state = RelayState::Routed;
+            Ok(())
+        })
+    }
+
+    /// A person approved a virtual Mac request and sbxw is carrying it out:
+    /// off every "waiting on you" list (it reads as routed, to sbxw) until
+    /// `approve` settles it with what came of it.
+    pub fn carry(&mut self, id: &str, now: u64) -> Result<RelayRequest, String> {
+        self.mutate(id, now, true, |req| {
+            if req.kind != RelayKind::Mac || req.state != RelayState::Pending {
+                return Err(format!("request {id} is not a virtual Mac request waiting on you"));
+            }
+            req.to = Some("sbxw".to_string());
             req.state = RelayState::Routed;
             Ok(())
         })
@@ -397,6 +417,19 @@ mod tests {
         let wire = serde_json::to_value(&ok).unwrap();
         assert_eq!(wire["shot_count"], 2, "the browser gets a count, not pixels");
         assert_eq!(wire["from_thread"], "t1");
+    }
+
+    #[test]
+    fn a_mac_request_is_carried_once_then_settled() {
+        let mut b = RelayBook::new();
+        let r = b.open("a", None, RelayKind::Mac, "boot?", 1);
+        let carried = b.carry(&r.id, 2).unwrap();
+        assert_eq!((carried.state, carried.to.as_deref()), (RelayState::Routed, Some("sbxw")));
+        assert!(b.carry(&r.id, 3).is_err(), "once");
+        let done = b.approve(&r.id, Some("booted"), vec![], 4).unwrap();
+        assert_eq!(agent_view(&done)["answer"], "booted");
+        let q = b.open("a", None, RelayKind::Question, "q", 5);
+        assert!(b.carry(&q.id, 6).is_err(), "only Mac requests");
     }
 
     #[test]

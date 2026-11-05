@@ -14,6 +14,7 @@ const SETUP_TABS = [
   { id: 'kits',      label: 'Kits',      open: openKitsModal,      close: closeKitsModal },
   { id: 'mcp',       label: 'MCP',       open: openMcpModal,       close: closeMcpModal },
   { id: 'hosts',     label: 'Hosts',     open: openHostsModal,     close: closeHostsModal },
+  { id: 'mac',       label: 'Mac',       open: openMacModal,       close: closeMacModal },
 ];
 const SETUP_KEY = 'sbxw.setup-tab';
 

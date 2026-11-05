@@ -52,6 +52,14 @@ impl Daemon {
             .ok()
     }
 
+    pub fn get(&self, path: &str) -> Result<Value> {
+        ureq::get(&format!("{}{path}", self.base))
+            .call()
+            .map_err(error_of)?
+            .into_json()
+            .context("the daemon's answer was not JSON")
+    }
+
     pub fn post(&self, path: &str, body: Value) -> Result<Value> {
         ureq::post(&format!("{}{path}", self.base))
             .send_json(body)

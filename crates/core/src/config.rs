@@ -94,6 +94,8 @@ pub struct Config {
     pub env: BTreeMap<String, String>,
     /// `--env-file`s, in order.
     pub env_files: Vec<String>,
+    /// The virtual Mac (`sbxw:terminal-mac`): read from the daemon's config.
+    pub mac: crate::mac::MacSettings,
 
     /// The file this was read from, absolute. `None` for built-in defaults.
     #[serde(skip)]
@@ -183,6 +185,7 @@ impl Default for Config {
             terminal_text_color: String::new(),
             env: BTreeMap::new(),
             env_files: vec![],
+            mac: Default::default(),
             source: None,
         }
     }
@@ -268,6 +271,7 @@ impl Config {
     /// Checked at load rather than left to sbx: a value it refuses fails the
     /// sandbox, not the setting, and only when somebody asks for a new one.
     pub fn validate(&self) -> Result<()> {
+        self.mac.validate().map_err(anyhow::Error::msg)?;
         if let Some(mode) = self.skills_mode() {
             if !SKILL_MODES.contains(&mode) {
                 bail!("skills = \"{mode}\" — expected one of {}", SKILL_MODES.join(", "));

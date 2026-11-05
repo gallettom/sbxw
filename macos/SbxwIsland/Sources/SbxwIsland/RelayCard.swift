@@ -57,7 +57,7 @@ struct RelayCard: View {
             }
             switch request.state {
             case .pending:
-                if request.isScreenshot { screenshotSection } else { routingSection }
+                if request.isMac { macSection } else if request.isScreenshot { screenshotSection } else { routingSection }
             case .answered: reviewSection
             default: EmptyView()
             }
@@ -73,12 +73,13 @@ struct RelayCard: View {
     /// What this sandbox wants from you, in five words above its own question.
     private var headline: String {
         if request.state == .answered { return "is waiting on your review" }
+        if request.isMac { return "asks about the virtual Mac" }
         return request.isScreenshot ? "can't see what it changed" : "wants to ask another sandbox"
     }
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: request.isScreenshot ? "camera.viewfinder" : "arrow.left.arrow.right")
+            Image(systemName: request.isMac ? "desktopcomputer" : request.isScreenshot ? "camera.viewfinder" : "arrow.left.arrow.right")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.purple)
             Text(request.from)
@@ -208,6 +209,36 @@ struct RelayCard: View {
             .disabled(busy)
             .keyboardShortcut(.return, modifiers: .command)
         }
+    }
+
+    /// A virtual Mac request: approving runs it (a boot, a published port) and
+    /// the daemon settles it with what came of it. The question already says
+    /// what will happen, in sbxw's words, before the agent's.
+    private var macSection: some View {
+        HStack(spacing: 8) {
+            Button {
+                relay.approve(request)
+                controller.dismissRelay()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark")
+                    Text("Approve")
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .background(Color.green.opacity(0.35))
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+            .disabled(busy)
+            .keyboardShortcut(.return, modifiers: .command)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 2)
     }
 
     // MARK: - Answered: release it or not
@@ -435,6 +466,7 @@ struct RelayBanner: View {
         let n = waiting.count
         guard n == 1 else { return "\(n) sandbox requests need you" }
         let req = waiting[0]
+        if req.isMac { return "\(req.from) asks about the virtual Mac" }
         return req.isScreenshot
             ? "\(req.from) is asking for a screenshot"
             : "\(req.from) is asking another sandbox"

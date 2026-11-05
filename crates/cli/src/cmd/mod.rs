@@ -5,6 +5,7 @@ pub mod env;
 pub mod host;
 pub mod host_check;
 pub mod host_provision;
+pub mod mac;
 pub mod template;
 
 use crate::client::Daemon;
@@ -103,7 +104,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Config::load(path, &std::env::current_dir()?)
 }
 
-fn abs(p: &Path) -> Result<PathBuf> {
+pub(crate) fn abs(p: &Path) -> Result<PathBuf> {
     Ok(if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir()?.join(p) })
 }
 

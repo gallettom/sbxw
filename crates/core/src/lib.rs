@@ -18,6 +18,7 @@ pub mod favourites;
 pub mod hosts;
 pub mod ids;
 pub mod kits;
+pub mod mac;
 pub mod mcp;
 pub mod messages;
 pub mod my_skills;

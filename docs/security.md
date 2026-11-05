@@ -59,6 +59,13 @@ The daemon listens twice, for two audiences:
 - **Screenshots:** nothing leaves until you attach it, to one named sandbox,
   after seeing a preview of every image. sbxw can't capture your screen; the
   browser's own picker asks each time. Refusing discards what was attached.
+- **Virtual Mac** (`sbxw:terminal-mac`, opt-in): booting it and publishing a
+  port to it need your approval; clicks, typing and screenshots of the guest do
+  not. Those screenshots are of a **shared, disposable guest**, never of your
+  screen, and go to the sandbox holding the lease without a preview. Keep every
+  personal and organisation account out of the guest. terminal-mac is a pinned,
+  SHA-256-checked third-party release run on the host; see
+  [its trust notes](../assets/terminal-mac/README.md#trust).
 - **Plans:** nothing starts until you approve. After approval, a lead and its
   threads message each other without clicks, **inside one sandbox only**. See
   [the lead's trust model](threads-and-lead.md#trust).

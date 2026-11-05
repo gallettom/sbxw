@@ -18,6 +18,7 @@ const SPECS: &[(&str, &str)] = &[
     ("k8s-tools", include_str!("../../../assets/k8s-tools/spec.yaml")),
     ("git-identity", include_str!("../../../assets/git-identity/spec.yaml")),
     ("ssh-agent", include_str!("../../../assets/ssh-agent/spec.yaml")),
+    ("terminal-mac", include_str!("../../../assets/terminal-mac/spec.yaml")),
 ];
 
 /// The kits that fill the shared cache, in the order they are applied.

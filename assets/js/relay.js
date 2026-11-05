@@ -130,6 +130,15 @@ function relayIsShot(req) {
   return req.kind === 'screenshot';
 }
 
+/** A virtual Mac request: a yes or a no, never routed (see the Mac panel). */
+function relayIsMac(req) {
+  return req.kind === 'mac';
+}
+
+// Mac requests approved here and still being carried out (a boot takes a
+// minute): the server settles them once it is done.
+const relayMacRunning = new Set();
+
 /**
  * What was asked, always presented as someone else's words rather than as ours.
  *
@@ -138,7 +147,9 @@ function relayIsShot(req) {
  * being asked rather than anyone else.
  */
 function relayQuestionBlock(req) {
-  const why = relayIsShot(req)
+  const why = relayIsMac(req)
+    ? `asks you to approve this on the virtual Mac.`
+    : relayIsShot(req)
     ? `can't see its own screen, and asks — via you — for a look at what it just changed.`
     : `asks — via you — for information it can't see from its own workspace.`;
   return `
@@ -259,7 +270,7 @@ function relayRenderDocks() {
     card.innerHTML = `
       <span class="relay-spinner"></span>
       <div class="relay-dock-text">
-        <div class="relay-dock-title">${relayEsc(req.to)} is answering</div>
+        <div class="relay-dock-title">${relayIsMac(req) ? 'sbxw is carrying it out' : `${relayEsc(req.to)} is answering`}</div>
         <div class="relay-dock-sub">for ${relayEsc(req.from)} · ${relayEsc(relayGist(req.question))}</div>
       </div>`;
   });
@@ -306,14 +317,36 @@ function relayRender() {
   const others = queue.filter(r => r.id !== req.id).length;
   relayQueueEl.hidden = others === 0;
   relayQueueEl.textContent = others === 1 ? '1 more waiting' : `${others} more waiting`;
-  relayTitleEl.textContent = relayIsShot(req) ? 'Screenshot request' : 'Information request';
+  relayTitleEl.textContent = relayIsMac(req) ? 'Virtual Mac request'
+    : relayIsShot(req) ? 'Screenshot request' : 'Information request';
 
   let body = relayQuestionBlock(req);
   let foot = '';
 
   const settled = req.state === 'approved' || req.state === 'denied';
 
-  if (relayIsShot(req) && !settled) {
+  if (relayIsMac(req) && !settled) {
+    // Approving runs it (a boot, a published port); the request settles with
+    // what came of it, which is what the agent reads.
+    if (relayMacRunning.has(req.id) || req.state === 'routed') {
+      body += `<div class="relay-waiting"><span class="relay-spinner"></span>
+        Approved — sbxw is carrying it out. ${relayEsc(req.from)} gets the outcome.</div>`;
+      foot = `<button class="btn-cancel" data-relay-action="dismiss">Close</button>`;
+    } else {
+      body += `<p class="relay-note">The virtual Mac is shared by every sandbox and has no
+        personal or work account in it. Clicks and typing need no approval; this does.</p>`;
+      foot = `
+        <button class="btn-cancel" data-relay-action="dismiss">Later</button>
+        <button class="relay-deny" data-relay-action="deny">Refuse</button>
+        <button class="btn-create" data-relay-action="approve-mac">✓ Approve</button>`;
+    }
+  } else if (relayIsMac(req)) {
+    body += req.state === 'approved'
+      ? `<div class="relay-settled ok">Done. ${relayEsc(req.from)} was told:</div>
+         <pre class="relay-quote">${relayEsc(req.answer || '')}</pre>`
+      : `<div class="relay-settled no">Refused. Nothing was started or published.</div>`;
+    foot = `<button class="btn-cancel" data-relay-action="dismiss">Close</button>`;
+  } else if (relayIsShot(req) && !settled) {
     // `pending` is the only live state a screenshot request has: the server
     // refuses to route one, so there is nothing to wait on and nothing to
     // review — just you, an image, and two buttons.
@@ -695,6 +728,11 @@ relayOverlay.addEventListener('click', async ev => {
       // this popup would find a screenshot from the one you just declined.
       relayShots.delete(req.id);
     }
+  } else if (action === 'approve-mac') {
+    if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, {})) {
+      relayMacRunning.add(req.id);
+      relayRender();
+    }
   } else if (action === 'paste') {
     relayPasteFromClipboard(req.id);
   } else if (action === 'capture') {
@@ -753,6 +791,7 @@ function relayIngest(req, seed = false) {
     // Whatever was attached has either been sent or refused; either way this
     // tab has no further use for a copy of someone's screen.
     relayShots.delete(req.id);
+    relayMacRunning.delete(req.id);
     if (relayCurrentId === req.id) {
       relayRender();
       clearTimeout(relayLingerTimer);

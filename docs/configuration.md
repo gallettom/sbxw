@@ -32,6 +32,7 @@ lists every key with its default.
 | `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
 | `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
+| `[mac]` | see below | The [virtual Mac](../assets/terminal-mac/README.md#configuration): `vm` (`"default"`), `idle_release_minutes` (`10`), `pause_after_minutes` (`15`), `stop_after_minutes` (`120`), `force_stop_after_minutes` (`3`), `guest_host_ip` (`""`, the VM bridge's address). A table: write it after every root key |
 
 ### Sandbox creation
 

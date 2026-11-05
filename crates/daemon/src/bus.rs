@@ -38,6 +38,8 @@ pub enum Event {
     LeadEnd(SandboxRef),
     /// A sandbox's Team-mode board changed.
     Board(SandboxRef),
+    /// The virtual Mac's lease or state changed: re-read `/api/mac`.
+    Mac,
 }
 
 impl Event {
@@ -54,6 +56,7 @@ impl Event {
             Event::Lead(_) => "lead",
             Event::LeadEnd(_) => "lead-end",
             Event::Board(_) => "board",
+            Event::Mac => "mac",
         }
     }
 
@@ -68,6 +71,7 @@ impl Event {
             Event::Codemap(v) => json(v),
             Event::Plan(v) => json(v),
             Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.to_string(),
+            Event::Mac => String::new(),
         }
     }
 }

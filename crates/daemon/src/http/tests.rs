@@ -207,3 +207,29 @@ async fn the_initial_sandbox_may_be_a_remote_ref() {
     assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
     assert_eq!(*app.initial_sandbox.lock().unwrap(), "buildbox~neos");
 }
+
+#[tokio::test]
+async fn the_virtual_mac_is_lent_by_token_and_steered_only_from_the_ui() {
+    let (_d, app) = app();
+    let alpha = app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap();
+    let shot = json!({"action": "screenshot", "args": {}});
+    let no_token = json_req(post("/api/mac/action", shot.clone()), shot.clone());
+    assert_eq!(call(agent_router(app.clone()), no_token).await.0, StatusCode::UNAUTHORIZED);
+    // Without terminal-mac the call fails with what to do, not a crash.
+    let (s, v) = call(
+        agent_router(app.clone()),
+        json_req(post("/api/mac/action", shot.clone()).header("authorization", format!("Bearer {alpha}")), shot),
+    )
+    .await;
+    assert_ne!(s, StatusCode::OK);
+    assert!(v["error"].as_str().unwrap_or("").len() > 10, "{v}");
+    // Booting it, or taking it back, is the person's: not on the agent port.
+    for path in ["/api/mac/up", "/api/mac/install", "/api/mac/take-back", "/api/mac/stop", "/api/mac/force-off"] {
+        let (s, _) = call(
+            agent_router(app.clone()),
+            json_req(post(path, json!({})).header("authorization", format!("Bearer {alpha}")), json!({})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{path}");
+    }
+}
