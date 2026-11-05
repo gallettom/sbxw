@@ -15,6 +15,7 @@
 | [Chat](chat.md) | Chat sandboxes, the chat dock, the browser side panel |
 | [Threads and the lead](threads-and-lead.md) | Several agents per sandbox, worktree graph, plans, one-click merge |
 | [Relay](relay.md) | Questions between sandboxes, screenshot requests |
+| [Virtual Mac](../assets/terminal-mac/README.md) | A macOS guest agents drive: Safari, Mac apps (`sbxw:terminal-mac`) |
 | [Dynamic Island](island.md) | The macOS notch companion, session hooks, usage |
 | [SSH](ssh.md) | `<name>.sbx` hosts, VS Code, Claude Desktop |
 | [Remote hosts](remote-hosts.md) | EXPERIMENTAL: drive `sbx` on another machine, `sbxw host check` |
@@ -39,4 +40,5 @@ Component READMEs: [macOS island](../macos/README.md),
 [agent-skills kit](../assets/agent-skills/README.md),
 [md-to-pdf kit](../assets/md-to-pdf-tools/README.md),
 [retro kit](../assets/retro/README.md),
-[k8s kit](../assets/k8s-tools/README.md).
+[k8s kit](../assets/k8s-tools/README.md),
+[virtual Mac kit](../assets/terminal-mac/README.md).

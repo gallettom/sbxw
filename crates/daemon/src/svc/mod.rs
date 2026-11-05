@@ -6,6 +6,7 @@ pub mod board;
 pub mod codemap;
 pub mod hosts;
 pub mod kits;
+pub mod mac;
 pub mod my_skills;
 pub mod open;
 pub mod plans;

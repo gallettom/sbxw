@@ -177,7 +177,7 @@
            utility button. Help is a "?" keycap: the one glyph nobody has to
            learn. -->
       <div class="footer-row">
-        <button id="btn-setup" class="skills-btn" title="Setup — skills, templates, kits and MCP servers for your sandboxes">Setup</button>
+        <button id="btn-setup" class="skills-btn" title="Setup — skills, templates, kits, MCP servers, hosts and the virtual Mac for your sandboxes">Setup</button>
         <button id="btn-monitor" class="monitor-btn" hidden
                 title="Monitor Sandboxes — every sandbox at once, in a pane of its own">
           Monitor
@@ -1234,6 +1234,23 @@
       <div class="modal-foot">
         <span class="create-error hidden" id="templates-error"></span>
         <button class="btn-cancel" id="templates-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Setup → Mac ──
+       The virtual Mac (terminal-mac) the sbxw:terminal-mac kit lends to
+       sandboxes: install, start, guest setup checklist, lease. (/js/mac.js) -->
+  <div class="modal-overlay hidden" id="mac-modal-overlay">
+    <div class="modal setup-modal" data-setup-tab="mac" role="dialog" aria-modal="true" aria-labelledby="mac-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="mac-modal-title">Virtual Mac</span>
+        <button class="modal-close" id="mac-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="mac-body"><p class="repo-note">Loading…</p></div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="mac-error"></span>
+        <button class="btn-cancel" id="mac-modal-close2">Close</button>
       </div>
     </div>
   </div>

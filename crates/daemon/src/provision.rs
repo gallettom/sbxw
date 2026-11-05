@@ -189,6 +189,22 @@ impl App {
         // Asked first: it decides two of the announced steps.
         let initial = sbx.lookup(n).await;
         let existed = initial.is_some();
+        // An existing sandbox keeps the workspace it was created on: sbx
+        // cannot move its mount. A bring-up from another directory used to
+        // record that directory anyway — and the Project panel, the env and
+        // the config then all pointed at the wrong project. Refuse it here,
+        // before anything is changed.
+        if existed {
+            if let Some(recorded) = self.store.get(name).workspace.clone() {
+                let canon = |p: PathBuf| async { host.fs.canonicalize(&p).await.unwrap_or(p) };
+                if canon(recorded.clone()).await != canon(req.workspace.clone()).await {
+                    bail!(
+                        "'{name}' was created on {}, not {workspace} — run `sbxw up {name}` from {0}, or pass it: `sbxw up {name} {0}`. A sandbox cannot change workspace; for another one, use another name",
+                        recorded.display()
+                    );
+                }
+            }
+        }
         let stopped = initial.as_ref().is_some_and(|i| i.is_stopped());
         let mut running = Some(initial.as_ref().is_some_and(|i| i.is_running()));
         let (template, rebuild) = self.template_for(&req, cfg, existed, &mut run).await;
@@ -1154,6 +1170,42 @@ mod tests {
         assert!(w.iter().any(|w| w.contains("sbxw-auto:gone is no longer in sbx")), "{w:?}");
         assert!(fake.log().iter().any(|c| c.starts_with("create") && !c.contains("--template")), "created from sbx's image");
         assert!(app.store.templates().is_empty(), "the record is dropped");
+    }
+
+    #[tokio::test]
+    async fn an_existing_sandbox_brought_up_from_another_directory_is_refused_and_keeps_its_record() {
+        let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("neos", "running")]),
+            _ => sbx_answer(a),
+        });
+        let (own, other) = (dir.path().join("test"), dir.path().join("sbxw"));
+        for d in [&own, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let neos = SandboxRef::parse("neos").unwrap();
+        app.store.update(&neos, |r| r.workspace = Some(own.clone())).unwrap();
+        let req = |ws: &std::path::Path| BringUp {
+            name: neos.clone(),
+            workspace: ws.to_path_buf(),
+            ro: vec![],
+            rw: vec![],
+            config: Config { kits: vec![], ..Config::default() },
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            oauth_token: None,
+            template: Default::default(),
+            remote_control: false,
+            git: None,
+        };
+        let e = format!("{:#}", app.provision(req(&other), None).await.unwrap_err());
+        assert!(e.contains("was created on") && e.contains(&own.display().to_string()), "{e}");
+        assert_eq!(app.store.workspace(&neos), Some(own.clone()), "the record is left as it was");
+        assert!(fake.log().iter().all(|c| !c.starts_with("kit add") && !c.starts_with("create")), "{:?}", fake.log());
+        // From its own directory, written another way, it goes ahead.
+        let same = own.join("..").join("test");
+        let ok = app.provision(req(&same), None).await;
+        assert!(ok.as_ref().err().is_none_or(|e| !format!("{e:#}").contains("was created on")), "{ok:?}");
     }
 
     #[tokio::test]

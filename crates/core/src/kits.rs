@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
-pub const BUNDLED: [&str; 7] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent"];
+pub const BUNDLED: [&str; 8] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac"];
 
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
 /// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
@@ -33,6 +33,7 @@ pub fn about(name: &str) -> &'static str {
         "k8s-tools" => "kubectl, k3d and skaffold in ~/.local/bin",
         "git-identity" => "your host's Git user.name and user.email in the sandbox",
         "ssh-agent" => "your host's SSH agent, restricted to signing commits and the common Git hosts",
+        "terminal-mac" => "a virtual Mac the agent drives (Safari, Mac apps) through the host's terminal-mac; Apple silicon hosts",
         _ => "",
     }
 }

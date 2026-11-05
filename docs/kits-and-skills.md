@@ -73,6 +73,7 @@ path, since sbx doesn't know `sbxw:` names.
 | `sbxw:k8s-tools` | | `kubectl`, `k3d` and `skaffold` in `~/.local/bin` |
 | `sbxw:git-identity` | | Your host's Git `user.name` and `user.email` in the sandbox |
 | `sbxw:ssh-agent` | | Your host's SSH agent, restricted to signing commits and the common Git hosts |
+| `sbxw:terminal-mac` | | A virtual Mac the agent drives (Safari, Mac apps) through terminal-mac on an Apple silicon host |
 
 The web UI's **Skills** button lists each command and whether it runs on its own
 (*default*) or only when typed (*manual*).
@@ -157,6 +158,16 @@ sandbox something of yours:
 Both are optional capabilities: on a host without a Git identity or a running
 agent, the sandbox is created without them rather than failing. Neither works
 in cloud sandboxes.
+
+### `sbxw:terminal-mac`
+
+A real macOS guest on the host, run by
+[terminal-mac](https://github.com/govijr/terminal-mac), that the agent drives
+with `mac_*` tools: Safari/WebKit, Mac apps, native windows. One VM shared by
+every sandbox, one holder at a time; a boot or a published port needs your
+approval, clicks and typing do not. Opt-in, Apple silicon hosts only; sbxw
+installs a pinned, SHA-256-checked release. See
+[`assets/terminal-mac/README.md`](../assets/terminal-mac/README.md).
 
 ## Kits are checked before anything is created
 

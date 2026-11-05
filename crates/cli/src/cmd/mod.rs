@@ -5,6 +5,7 @@ pub mod env;
 pub mod host;
 pub mod host_check;
 pub mod host_provision;
+pub mod mac;
 pub mod template;
 
 use crate::client::Daemon;
@@ -103,7 +104,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Config::load(path, &std::env::current_dir()?)
 }
 
-fn abs(p: &Path) -> Result<PathBuf> {
+pub(crate) fn abs(p: &Path) -> Result<PathBuf> {
     Ok(if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir()?.join(p) })
 }
 
@@ -599,7 +600,7 @@ pub fn ls() -> Result<()> {
                 eprintln!("sbxw  {e:#}");
                 for r in known {
                     let last = store.get(&r).last_status.unwrap_or_else(|| "unknown".into());
-                    rows.push(LsRow { name: r.to_string(), agent: "claude".into(), created: String::new(), status: format!("✕ unreachable (last seen {last})") });
+                    rows.push(LsRow { name: r.to_string(), agent: "claude".into(), created: String::new(), status: format!("✕ offline (last seen {last})") });
                 }
             }
             Err(e) => eprintln!("sbxw  warning: host '{}': {e:#}", h.name),

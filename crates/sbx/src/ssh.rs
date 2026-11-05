@@ -242,7 +242,7 @@ mod tests {
         assert_eq!(prog, "ssh");
         assert_eq!(
             args,
-            ["-S", "/c/p", "-tt", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "bb.example", "--", "'sbx'", "'run'", "'--name'", "'my box'"]
+            ["-S", "/c/p", "-tt", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=2", "bb.example", "--", "'sbx'", "'run'", "'--name'", "'my box'"]
         );
     }
 }

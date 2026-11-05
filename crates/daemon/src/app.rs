@@ -73,6 +73,17 @@ pub struct App {
     pub(crate) remotes: Mutex<HashMap<sbxw_core::names::HostName, Arc<crate::remotes::Remote>>>,
     /// The `ssh` remote hosts are reached with; tests put scripts/fake-ssh here.
     pub ssh_program: Mutex<std::path::PathBuf>,
+    /// The virtual Mac: its lease, the approvals in flight, what sbxw is
+    /// doing to it (see `svc::mac`).
+    pub(crate) mac: Mutex<crate::svc::mac::MacRuntime>,
+    /// The terminal-mac program, when a test names one.
+    pub mac_program_override: Mutex<Option<std::path::PathBuf>>,
+    /// How long a booted VM has to report `running`; tests shorten it.
+    pub mac_boot_wait: Mutex<Duration>,
+    /// Where the guest reaches the host, when a test names it.
+    pub mac_guest_ip_override: Mutex<Option<String>>,
+    /// Each sandbox's last Remote Control probe (see `svc::remote`).
+    pub(crate) remote_probes: Mutex<HashMap<SandboxRef, crate::svc::remote::ProbeSlot>>,
 }
 
 pub struct AppBuilder {
@@ -115,6 +126,11 @@ impl AppBuilder {
             awake: Mutex::new(Default::default()),
             remotes: Mutex::new(HashMap::new()),
             ssh_program: Mutex::new("ssh".into()),
+            mac: Mutex::new(Default::default()),
+            mac_program_override: Mutex::new(None),
+            mac_boot_wait: Mutex::new(crate::svc::mac::BOOT_WAIT),
+            mac_guest_ip_override: Mutex::new(None),
+            remote_probes: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -197,6 +213,7 @@ impl App {
         }
         self.start_keep_awake();
         self.start_board_listener();
+        self.start_mac_lifecycle();
     }
 
     fn prune(&self) {

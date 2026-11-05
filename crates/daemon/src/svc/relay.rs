@@ -134,6 +134,10 @@ impl App {
     /// and/or images. Whether anyone is parked is read *before*: settling is
     /// what makes every wait return.
     pub fn relay_approve(self: &Arc<Self>, id: &str, answer: Option<&str>, images: &[String]) -> Result<(), String> {
+        // A virtual Mac request is settled by what the yes ran, not by text.
+        if self.relay.lock().unwrap().get(id).is_some_and(|r| r.kind == RelayKind::Mac && r.state == sbxw_core::relay::RelayState::Pending) {
+            return if self.mac_approved(id) { Ok(()) } else { Err(format!("request {id} is already being carried out")) };
+        }
         let edited = answer.map(|a| messages::clip_text(a, relay::MAX_ANSWER)).filter(|a| !a.is_empty());
         let shots: Vec<Shot> = relay::parse_shots(images)?;
         let unattended = self.relay_unattended(id);
@@ -149,6 +153,7 @@ impl App {
     pub fn relay_deny(self: &Arc<Self>, id: &str, note: Option<&str>) -> Result<(), String> {
         let note = note.map(|n| messages::clip_text(n, 500)).filter(|n| !n.is_empty());
         let unattended = self.relay_unattended(id);
+        self.mac_denied(id);
         let req = self.relay.lock().unwrap().deny(id, note.as_deref(), now_ms())?;
         tracing::info!("relay: {id} denied");
         let req = self.relay_changed(req);
@@ -156,6 +161,22 @@ impl App {
             self.tell_asker(&req);
         }
         Ok(())
+    }
+
+    /// A Mac request the person approved, settled with what came of it.
+    pub(crate) fn relay_settle_mac(self: &Arc<Self>, id: &str, outcome: &str) {
+        let unattended = self.relay_unattended(id);
+        let settled = self.relay.lock().unwrap().approve(id, Some(outcome), Vec::new(), now_ms());
+        match settled {
+            Ok(req) => {
+                tracing::info!("relay: {id} (virtual Mac) carried out → '{}'", req.from);
+                let req = self.relay_changed(req);
+                if unattended {
+                    self.tell_asker(&req);
+                }
+            }
+            Err(e) => tracing::warn!("relay: settling {id}: {e}"),
+        }
     }
 
     /// The asker's own call came back empty and moved on: typing the outcome

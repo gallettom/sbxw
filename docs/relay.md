@@ -5,6 +5,7 @@
 - [Why](#why)
 - [Questions between sandboxes](#questions-between-sandboxes)
 - [Screenshot requests](#screenshot-requests)
+- [Virtual Mac requests](#virtual-mac-requests)
 - [What a sandbox cannot do](#what-a-sandbox-cannot-do)
 
 ## Why
@@ -104,6 +105,15 @@ sandbox's own CLI writes the files.
 
 The [browser side panel](chat.md#the-browser-side-panel) can answer a
 screenshot request with a capture of the app's tab.
+
+## Virtual Mac requests
+
+With the [`sbxw:terminal-mac`](../assets/terminal-mac/README.md) kit, a
+sandbox may ask to **boot the virtual Mac** or to **publish a port** to it.
+Each is a relay request of its own kind: never routed, a yes or a no. The
+card says what will happen in sbxw's words, then quotes the agent's reason.
+**Approve** runs it, and the request is settled with what came of it (the URL
+to open, or the error), so the agent reads the outcome rather than "approved".
 
 ## What a sandbox cannot do
 

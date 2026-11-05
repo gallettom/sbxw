@@ -710,6 +710,221 @@ async function callPlanTool(name, args) {
   return null;
 }
 
+// ── The virtual Mac (sbxw:terminal-mac) ──────────────────────────────────
+//
+// A macOS guest on the host, run by terminal-mac and driven through the
+// daemon, which holds the one lease and asks a person before a boot or a
+// published port. The kit drops ~/.sbxw/mac-tools; without it these tools
+// are not listed — a sandbox that never asked for a Mac never sees them.
+
+const MAC = (() => {
+  try {
+    return fs.existsSync(path.join(os.homedir(), ".sbxw", "mac-tools"));
+  } catch (_) {
+    return false;
+  }
+})();
+
+const MAC_SHOT = {
+  type: "boolean",
+  description: "Also return a fresh screenshot of the result, to verify without a second call.",
+};
+const XY = {
+  x: { type: "number", description: "Pixel x in the latest mac_screenshot (top-left origin)." },
+  y: { type: "number", description: "Pixel y in the latest mac_screenshot." },
+};
+
+const MAC_TOOLS = [
+  {
+    name: "mac_start",
+    description:
+      "Take the virtual Mac — a real macOS guest on the host, shared by every sandbox — to see " +
+      "or test what only macOS shows: a page in Safari/WebKit, a Mac app, a native window. Not " +
+      "for what this sandbox's headless Chromium can capture.\n" +
+      "\n" +
+      "Call it first. It gives you the lease (one sandbox at a time; it lapses after a few " +
+      "idle minutes). If the VM is stopped, a person approves the boot first; the call waits " +
+      "~90 s and otherwise gives a request id for `check_sandbox_question`. If another sandbox " +
+      "holds it, it says who: do something else meanwhile. The guest is NOT the user's " +
+      "desktop and has no personal account: never type secrets into it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "One line a person reads: what you need to see on the Mac." },
+      },
+      required: ["reason"],
+    },
+  },
+  {
+    name: "mac_open_port",
+    description:
+      "Make a port of THIS sandbox reachable from the virtual Mac's browser, and get the URL to " +
+      "open inside the guest. A person approves it first. Needs the lease (`mac_start`).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        port: { type: "number", description: "The port your app listens on in this sandbox (1024–65535, on 0.0.0.0)." },
+        reason: { type: "string", description: "One line: what the guest will open." },
+      },
+      required: ["port"],
+    },
+  },
+  {
+    name: "mac_screenshot",
+    description:
+      "See the virtual Mac's screen. Every x/y you pass to the other mac_* tools is a pixel of " +
+      "this image. Look again after each meaningful action.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "mac_click",
+    description: "Click in the guest. clicks: 2 double-clicks; button: \"right\" for a context menu.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...XY,
+        clicks: { type: "number", description: "1 (default) or 2." },
+        button: { type: "string", enum: ["left", "right"] },
+        screenshot: MAC_SHOT,
+      },
+      required: ["x", "y"],
+    },
+  },
+  {
+    name: "mac_move",
+    description: "Move the guest's pointer (hover menus, tooltips).",
+    inputSchema: { type: "object", properties: { ...XY, screenshot: MAC_SHOT }, required: ["x", "y"] },
+  },
+  {
+    name: "mac_drag",
+    description: "Drag in the guest from (x, y) to (x2, y2).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...XY,
+        x2: { type: "number" },
+        y2: { type: "number" },
+        screenshot: MAC_SHOT,
+      },
+      required: ["x", "y", "x2", "y2"],
+    },
+  },
+  {
+    name: "mac_scroll",
+    description: "Scroll in the guest. Negative dy scrolls down. x/y pick what scrolls.",
+    inputSchema: {
+      type: "object",
+      properties: { dy: { type: "number" }, ...XY, screenshot: MAC_SHOT },
+      required: ["dy"],
+    },
+  },
+  {
+    name: "mac_type",
+    description:
+      "Type literal text into the focused field of the guest (Unicode key events, not the clipboard). " +
+      "Only after a screenshot that shows where the keys will go: a display that was asleep wakes " +
+      "on a lock screen, and blind typing lands in its password field. Never type a password or a secret.",
+    inputSchema: {
+      type: "object",
+      properties: { text: { type: "string" }, screenshot: MAC_SHOT },
+      required: ["text"],
+    },
+  },
+  {
+    name: "mac_key",
+    description:
+      "Press a key or chord in the guest: return, tab, escape, cmd+space (Spotlight), cmd+l " +
+      "(Safari's address bar), cmd+r, cmd+w, cmd+q.",
+    inputSchema: {
+      type: "object",
+      properties: { keys: { type: "string" }, screenshot: MAC_SHOT },
+      required: ["keys"],
+    },
+  },
+  {
+    name: "mac_status",
+    description: "Where the virtual Mac stands: installed, running, guest ready, who holds it.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "mac_release",
+    description: "Let go of the virtual Mac so another sandbox can use it. Call it when you are done.",
+    inputSchema: { type: "object", properties: {} },
+  },
+];
+
+if (MAC) TOOLS.push(...MAC_TOOLS);
+
+/// The daemon's answer as a tool result: its text, and the screenshot when
+/// there is one — inline so the agent looks at it, and saved for later turns.
+/// Where a screenshot of the guest is kept: in the workspace's
+/// `.sbxw-artifacts/mac-shots/`, which the person sees in sbxw's Project
+/// panel, so what the agent looked at is one click away for them too. A
+/// thread's worktree (`.sbxw-worktrees/<name>`) saves into the workspace it
+/// sits in. Only the newest MAC_SHOTS_KEPT are kept; ~/.sbxw/shots/ is the
+/// fallback when the workspace cannot be written.
+const MAC_SHOTS_KEPT = 40;
+
+function macShotDir() {
+  const root = repoRoot();
+  const i = root.indexOf(`${path.sep}.sbxw-worktrees${path.sep}`);
+  const ws = i >= 0 ? root.slice(0, i) : root;
+  return path.join(ws, ".sbxw-artifacts", "mac-shots");
+}
+
+function saveMacShot(b64) {
+  const name = `mac-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+  for (const dir of [macShotDir(), path.join(os.homedir(), ".sbxw", "shots")]) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, Buffer.from(b64, "base64"));
+      try {
+        const old = fs.readdirSync(dir).filter(f => /^mac-.*\.png$/.test(f)).sort();
+        for (const f of old.slice(0, Math.max(0, old.length - MAC_SHOTS_KEPT))) fs.unlinkSync(path.join(dir, f));
+      } catch (_) {
+        // Pruning is housekeeping; the new file is what matters.
+      }
+      return file;
+    } catch (_) {
+      // Try the next place.
+    }
+  }
+  return "";
+}
+
+/// The daemon's answer as a tool result: its text, and the screenshot when
+/// there is one — inline so the agent looks at it, and saved where the
+/// person can open it.
+function macResult(res) {
+  const content = [];
+  let saved = "";
+  if (res.image && res.image.b64) {
+    content.push({ type: "image", data: res.image.b64, mimeType: res.image.mime || "image/png" });
+    const file = saveMacShot(res.image.b64);
+    if (file) saved = `\n(Screenshot saved as ${file}; the user sees it in sbxw's Project panel under .sbxw-artifacts/mac-shots/.)`;
+  }
+  content.push({ type: "text", text: String(res.text || "Done.") + saved });
+  return { content, isError: false };
+}
+
+async function callMacTool(name, args) {
+  if (!name.startsWith("mac_")) return null;
+  if (!MAC) return textResult("The virtual Mac is not enabled here: add sbxw:terminal-mac to kits.", true);
+  const verb = name.slice(4);
+  const body = { thread: THREAD, args };
+  if (verb === "start" || verb === "open_port") {
+    body.reason = String(args.reason || "").trim();
+    if (verb === "start" && !body.reason) return textResult("No reason given — say what you need to see.", true);
+    if (verb === "open_port") body.port = Number(args.port);
+    body.timeout = relay.DEFAULT_TIMEOUT;
+  }
+  const route = { start: "start", open_port: "open_port", status: "status", release: "release" }[verb] ? `/api/mac/${verb}` : "/api/mac/action";
+  if (route === "/api/mac/action") body.action = verb;
+  const res = await relay.request(route, body, (relay.DEFAULT_TIMEOUT + 120) * 1000);
+  return macResult(res);
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────
 
 function clampTimeout(v, max) {
@@ -793,6 +1008,9 @@ async function callTool(name, args) {
 
   const board = await callBoardTool(name, args);
   if (board) return board;
+
+  const mac = await callMacTool(name, args);
+  if (mac) return mac;
 
   return textResult(`Unknown tool "${name}".`, true);
 }

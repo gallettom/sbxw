@@ -172,7 +172,7 @@ impl RemoteHost {
     /// `ssh` arguments to reach this host, ending with the destination; append
     /// the remote command after it. Never prompts, never trusts a new key.
     pub fn ssh_argv(&self) -> Vec<String> {
-        let mut a: Vec<String> = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
+        let mut a: Vec<String> = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", CONNECT_TIMEOUT]
             .map(String::from)
             .into();
         match &self.target {
@@ -193,6 +193,13 @@ impl RemoteHost {
         a
     }
 }
+
+/// How long ssh waits to reach a host before giving up. Without it a host
+/// that is switched off costs the OS's TCP timeout — about a minute — on
+/// every `sbxw ls` and every action; past this it is reported offline and
+/// the link retries on its own. On the command line, so it overrides an
+/// `~/.ssh/config` alias's own value.
+pub const CONNECT_TIMEOUT: &str = "ConnectTimeout=2";
 
 impl RemoteHosts {
     pub fn parse(text: &str) -> Result<Self> {
@@ -327,7 +334,7 @@ mod tests {
 
     #[test]
     fn argv_for_alias_and_direct() {
-        let base = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"];
+        let base = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=2"];
         assert_eq!(alias("x", "bb").unwrap().ssh_argv(), [base.as_slice(), &["bb"]].concat());
         let h = RemoteHost::new("x", None, Some("10.0.0.5".into()), Some("tom".into()), Some(2222), Some("~/.ssh/k".into()), None, false).unwrap();
         assert_eq!(

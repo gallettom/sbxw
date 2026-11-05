@@ -63,6 +63,11 @@ pub fn relay_outcome(req: &RelayRequest) -> String {
                  — say plainly what you changed and what it should look like, and let them tell \
                  you if it is wrong. Do not ask for another one."
             ),
+            RelayKind::Mac => format!(
+                "[sbxw relay · request {id}] The human declined your virtual Mac request \
+                 (\"{gist}\"){note}. Nothing was started or published. Carry on without it, and \
+                 do not ask again for the same thing."
+            ),
             RelayKind::Question => format!(
                 "[sbxw relay · request {id}] The human declined the question you asked earlier \
                  (\"{gist}\"){note}. Nothing was shared. Carry on without it, or ask the human \
@@ -103,6 +108,12 @@ pub fn relay_outcome(req: &RelayRequest) -> String {
              --- end ---\n\
              \n\
              That is what you get to go on. Do not ask for the picture again."
+        ),
+        RelayKind::Mac => format!(
+            "[sbxw relay · request {id}] The human approved your virtual Mac request \
+             (\"{gist}\"):\n\
+             \n\
+             {answer}"
         ),
         RelayKind::Question => format!(
             "[sbxw relay · request {id}] The human approved an answer to the question you asked \
