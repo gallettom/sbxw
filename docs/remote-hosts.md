@@ -24,7 +24,7 @@ sbxw up buildbox~neos --path /home/me/code   # --path is a path on the host
 On the host:
 
 - Ubuntu 24.04 or newer, with KVM (`/dev/kvm`) and your user in the `kvm` group.
-- `sbx` 0.50 or newer, installed and signed in (`sbxw host provision` does both).
+- `sbx` 0.51 or newer, installed and signed in (`sbxw host provision` does both).
 - The **first-run network policy question answered once**: `sbx` asks it on
   the first `sbx run`. Run `sbx run` (or create any sandbox) by hand on the host
   and answer it. `sbx ls` does not ask. sbxw closes stdin on remote commands, so
@@ -79,7 +79,7 @@ first `✗` with what to do.
    least; t3a cannot). If only the group is missing it offers
    `sudo usermod -aG kvm <user>`, then asks you to reconnect and run it again,
    because a group change only reaches new logins.
-2. **Install sbx** unless `sbx version` already answers 0.50.0 or newer. The
+2. **Install sbx** unless `sbx version` already answers 0.51.0 or newer. The
    commands are Docker's documented ones, run over `ssh -t`:
    `curl -fsSL https://get.docker.com | sudo REPO_ONLY=1 sh`, then
    `sudo apt install -y docker-sbx`.
@@ -181,7 +181,7 @@ connection, so a running daemon keeps its link. One line per step:
 ```
   ✓ ssh: connects, `--` before the command: echo ok came back
   ✓ ssh: hostile words come back unchanged: 13 words, byte for byte
-  ✓ sbx: version: 0.51.0 (needs 0.50.0 or newer)
+  ✓ sbx: version: 0.51.0 (needs 0.51.0 or newer)
   ✓ link: ControlMaster comes up
   ✓ link: -L forward reaches a service on the host: 127.0.0.1:8123 -> host port 8123
   - link: -R tunnel ...: skipped, bash not found

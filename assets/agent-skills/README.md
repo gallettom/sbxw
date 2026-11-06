@@ -169,13 +169,12 @@ launch — a few milliseconds.
 - `uv` is not installed, so /brag's richer music-cue analysis
   (`analyze_music_cues.py`) is unavailable; it falls back to the bundled presets
   or `npx hyperframes beats`, which its own instructions allow.
-- `spec.yaml` `content` fields reject dollar-brace: the installer is written
-  without it. Keep it that way when editing.
+- The kit's files live under `files/home/agent/` and reach the sandbox as image
+  content (kit spec v3 `build:`), byte for byte: nothing in them is expanded.
 
 ## Manual apply (existing sandbox)
 
 ```sh
-sbx kit validate path/to/sbxw/assets/agent-skills   # sanity check the spec
 ```
 
 `sbx kit add` refuses a kit with startup commands; recreate the sandbox instead.

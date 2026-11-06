@@ -33,27 +33,44 @@ A kit reference is one of:
 - a **directory containing `spec.yaml`** (not a single `.yaml` file);
 - a `.zip`, an OCI ref (`ghcr.io/org/kit:tag`), or a git URL.
 
-Validate one with `sbx kit validate <dir>`.
+**Every kit must be kit spec v3** (`schemaVersion: "3"`). Since sbx 0.51,
+`claude` is the published v3 workload `docker.io/sbx/claude:latest` (Docker
+Hardened Images, Debian 13), and a v1 or v2 kit cannot be combined with it.
+`sbxw up` refuses a local v1/v2 kit before anything is created, naming it; see
+[Writing your own kit](#writing-your-own-kit) to convert one.
+
+### sbxw's base kit
+
+Every sandbox sbxw creates also gets `sbxw:base`, first, whatever `kits` says.
+It installs Node.js (`nodejs-24` from the image's Docker Hardened Images
+repository, else Debian's `nodejs`) in an install hook, once, before the
+agent starts: sbx 0.51's image ships none, and sbxw's relay, session hooks,
+status line and the bundled kits' scripts all run on it. It opens
+`deb.debian.org`, `security.debian.org` and `dhi.io` for that hook only. It is
+never listed in `kits` and the Kits dialog does not offer it.
 
 The web UI's **Kits** button edits the same line without opening the file:
 see [the sidebar footer](web-ui.md#the-sidebar-footer).
 
 ### Kits go in at creation
 
-`sbxw up` passes every kit to `sbx create --kit` (credentials kit first),
-because creation applies a kit in one step, with no container swap.
+`sbxw up` passes every kit to `sbx create --kit` (sbxw's base kit first, then
+the credentials kit), because creation applies a kit in one step, with no
+container swap.
 
 A kit added to `kits` later reaches an existing sandbox on the next `sbxw up`,
 via `sbx kit add`. That recreates the container (state kept), so sbxw skips
 kits it already applied: it records them itself, and also recognises the paths
-`sbx inspect` lists. This includes kits with
-startup commands, like all the bundled ones: their commands run after the add
-and on every later start. If sbx still refuses a kit, sbxw tells you to
-recreate (`sbxw rm <name>`, then `sbxw up <name>`) and changes nothing — it
-never recreates on its own, since anything outside the workspace would be
-lost. To force a re-apply, run `sbx kit add <sandbox> <kit>` yourself.
+`sbx inspect` lists. sbx 0.51 adds a v3 kit's image content, install and
+startup hooks and network allow rules this way, which covers every bundled
+kit. It refuses a kit that declares credentials, published ports, volumes,
+generated lifecycle files or host-level deny rules, and any kit for a sandbox
+created by an sbx older than 0.51. Then sbxw tells you to recreate
+(`sbxw rm <name>`, then `sbxw up <name>`) and changes nothing — it never
+recreates on its own, since anything outside the workspace would be lost. To
+force a re-apply, run `sbx kit add <sandbox> <kit>` yourself.
 
-A kit's `permissions.network.allow` domains join the sandbox policy when it's
+A kit's `network-policy@1` allow rules join the sandbox policy when it's
 applied. The bundled kits declare everything they fetch, so none of them needs
 a `network_allow` entry.
 
@@ -171,13 +188,12 @@ installs a pinned, SHA-256-checked release. See
 
 ## Kits are checked before anything is created
 
-On every `sbxw up`, each of your own local kits (a directory or ZIP, not a
-bundled one, not a registry reference) is checked with
-`sbx kit validate --offline` before the sandbox is created or changed. A
-broken kit fails the bring-up in a second with sbx's message, not after the
-image pull. A v3 kit (`schemaVersion: "3"`) is not checked: sbx 0.50's
-validator refuses every v3 spec, valid or not, so it is left to `sbx create`.
-`sbxw doctor` runs the same check.
+On every `sbxw up`, each of your own local kits (a directory, not a bundled
+one, not a registry reference) has its `schemaVersion` read before the sandbox
+is created or changed: a v1 or v2 kit fails the bring-up in a second, naming
+the kit, not after the image pull. A v3 kit is built and checked by sbx at
+creation (`sbx kit validate` reads only v1/v2 specs). `sbxw doctor` runs the
+same check.
 
 ## Persistent volumes
 
@@ -296,12 +312,49 @@ getting it.
 
 ## Writing your own kit
 
-The bundled kits use **kit spec v2** (`schemaVersion: "2"`), like the OAuth kit
-sbxw generates, except `git-identity` and `ssh-agent`, which use v3
-capabilities: `permissions.network.allow`, `setup.files`, `setup.startup`.
+Every kit sbxw ships or writes is **kit spec v3**
+([specification](https://github.com/docker/sandbox-kit-spec/blob/main/docs/spec/SPEC-v3.md)),
+and yours must be too. The bundled ones share one layout, worth copying:
 
-- The v2 loader rejects v1 field names. If you adapt a v1 kit, rename all three
-  sections.
-- `startup` entries are exec-style arrays: `command: ["bash", "…"]`.
-- `content` fields allow only the `${WORKDIR}` placeholder. Use brace-free
-  `$VAR` for shell variables.
+```
+my-kit/
+├── spec.yaml          # the descriptor
+└── files/home/agent/  # what lands in the agent's home, as image content
+```
+
+```yaml
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: my-kit
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow: [api.example.com]
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      startup:                          # every boot, alongside the agent
+        - command: ["bash", "/home/agent/.local/bin/my-kit-install"]
+```
+
+Converting a v2 kit:
+
+| v2 | v3 |
+|---|---|
+| `name:` | `displayName:` |
+| `permissions.network.allow` | `network-policy@1` → `runtime.allow` (or `install.allow` for install hooks) |
+| `setup.files` | files under `files/`, copied by `build:` (works with `sbx kit add`), or `lifecycle@1` → `files` (creation only) |
+| `setup.startup` | `lifecycle@1` → `startup` |
+| `setup.install` | `lifecycle@1` → `install` (runs once, as root by default) |
+| `${WORKDIR}` in file content | `${{ kit.env.WORKSPACE_DIR }}` in `lifecycle@1` files |
+
+- Image content keeps its bytes as they are: nothing is expanded. In a
+  `lifecycle@1` command or file, sbx expands `${{ … }}`; `$VAR` stays for the
+  shell.
+- An install hook sees only the environment it names in `env:`; a startup
+  hook sees the sandbox's.
+- A kit may use `node`: sbxw's base kit installs it before any startup hook runs.
