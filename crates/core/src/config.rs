@@ -43,6 +43,22 @@ pub struct Config {
     /// 0.50): sandbox target path → host directory, passed as `--mount` at
     /// creation. sbx refuses a target no kit in the set declares.
     pub kit_mounts: BTreeMap<String, String>,
+    /// Where the main agent starts, inside the workspace (`sbx run --workdir`,
+    /// 0.51): relative to the workspace, or absolute. Empty is the workspace.
+    pub workdir: String,
+    /// Other host directories mounted at creation, `PATH[:TARGET][:ro]`
+    /// (0.51): `TARGET` an absolute sandbox path, else the host path again;
+    /// `:ro` read-only. `PATH` is relative to this file, or `~/`.
+    pub workspaces: Vec<String>,
+    /// CPUs and memory at creation (`--cpus`, `--memory`); 0 and empty are
+    /// sbx's defaults.
+    pub cpus: u32,
+    pub memory: String,
+    /// `sandboxOptions` only an environment file carries (`sbxw env
+    /// export`): FUSE for this sandbox, and disk sizes. Unset is sbx's.
+    pub fuse: Option<bool>,
+    pub root_size: String,
+    pub docker_size: String,
     /// Sandbox paths kept on persistent block storage (`volume@1`, sbx 0.50):
     /// package caches and toolchains outside the workspace, which survive
     /// `sbxw rm` and come back with a sandbox recreated under the same name.
@@ -161,6 +177,13 @@ impl Default for Config {
             kits: crate::kits::DEFAULT_KITS.map(String::from).to_vec(),
             kit_mounts: BTreeMap::new(),
             volumes: vec![],
+            workdir: String::new(),
+            workspaces: vec![],
+            cpus: 0,
+            memory: String::new(),
+            fuse: None,
+            root_size: String::new(),
+            docker_size: String::new(),
             cache: true,
             cache_ttl_days: 7,
             claude_model: "claude-sonnet-5-5".into(),
@@ -183,6 +206,60 @@ impl Default for Config {
             source: None,
         }
     }
+}
+
+/// One `workspaces` entry, `PATH[:TARGET][:ro]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Workspace {
+    pub path: String,
+    pub target: Option<String>,
+    pub readonly: bool,
+}
+
+impl Workspace {
+    /// The argument `sbx create` takes for it.
+    pub fn spec(&self) -> String {
+        let mut s = self.path.clone();
+        if let Some(t) = &self.target {
+            s.push(':');
+            s.push_str(t);
+        }
+        if self.readonly {
+            s.push_str(":ro");
+        }
+        s
+    }
+}
+
+/// `PATH[:TARGET][:ro]`. A path holding `:` cannot be told from its target,
+/// so it is refused rather than guessed at.
+pub fn parse_workspace(raw: &str) -> Result<Workspace, String> {
+    let mut parts: Vec<&str> = raw.trim().split(':').collect();
+    let readonly = parts.len() > 1 && parts.last() == Some(&"ro");
+    if readonly {
+        parts.pop();
+    }
+    let (path, target) = match parts.as_slice() {
+        [p] => (p.to_string(), None),
+        [p, t] => (p.to_string(), Some(t.to_string())),
+        _ => return Err("expected PATH[:TARGET][:ro], with no ':' in either path".into()),
+    };
+    if path.is_empty() {
+        return Err("the host path is empty".into());
+    }
+    if let Some(t) = &target {
+        if !t.starts_with('/') {
+            return Err("TARGET must be an absolute path inside the sandbox".into());
+        }
+    }
+    Ok(Workspace { path, target, readonly })
+}
+
+/// `512m`, `8g`, `20G`, `1024`: what sbx reads as a size.
+fn is_size(v: &str) -> bool {
+    let v = v.trim();
+    let digits = v.trim_end_matches(|c: char| "kKmMgGtT".contains(c));
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && v.len() - digits.len() <= 1
 }
 
 pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
@@ -258,6 +335,13 @@ impl Config {
             .into_iter()
             .map(|(target, host)| (target, resolve_host_dir(&dir, &host)))
             .collect();
+        cfg.workspaces = std::mem::take(&mut cfg.workspaces)
+            .into_iter()
+            .map(|w| match parse_workspace(&w) {
+                Ok(ws) => Workspace { path: resolve_host_dir(&dir, &ws.path), ..ws }.spec(),
+                Err(_) => w,
+            })
+            .collect();
         cfg.source = Some(abs);
         Ok(cfg)
     }
@@ -291,6 +375,17 @@ impl Config {
                     bail!("kits: {k:?} — the bundled kits are {}", crate::kits::BUNDLED.map(|b| format!("sbxw:{b}")).join(", "));
                 }
             }
+        }
+        for w in &self.workspaces {
+            parse_workspace(w).map_err(|e| anyhow::anyhow!("workspaces: {w:?} — {e}"))?;
+        }
+        for (key, v) in [("memory", &self.memory), ("root_size", &self.root_size), ("docker_size", &self.docker_size)] {
+            if !v.is_empty() && !is_size(v) {
+                bail!("{key}: {v:?} — a size in binary units, like 512m or 8g");
+            }
+        }
+        if self.workdir.contains('\n') || self.workdir.contains('\0') {
+            bail!("workdir: one path, on one line");
         }
         for (target, host) in &self.kit_mounts {
             if !target.starts_with('/') {
@@ -504,6 +599,21 @@ mod tests {
             cfg.terminal_text_color = good.into();
             assert!(cfg.validate().is_ok(), "{good} was refused as a text colour");
         }
+    }
+
+    #[test]
+    fn workspaces_are_path_target_and_ro() {
+        assert_eq!(parse_workspace("../docs").unwrap(), Workspace { path: "../docs".into(), target: None, readonly: false });
+        let w = parse_workspace("/data:/workspace/data:ro").unwrap();
+        assert_eq!((w.target.as_deref(), w.readonly), (Some("/workspace/data"), true));
+        assert_eq!(w.spec(), "/data:/workspace/data:ro");
+        assert_eq!(parse_workspace("/a:ro").unwrap().spec(), "/a:ro");
+        assert!(parse_workspace("/a:rel").is_err(), "a target is absolute");
+        assert!(parse_workspace("/a:/b:/c").is_err());
+        let bad: Config = toml::from_str("memory = \"lots\"").unwrap();
+        assert!(bad.validate().is_err());
+        let ok: Config = toml::from_str("memory = \"8g\"\ncpus = 4\nworkspaces = [\"/d:/w/d:ro\"]\nworkdir = \"web\"").unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

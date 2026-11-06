@@ -335,6 +335,9 @@ impl App {
                 env_files: cfg.env_files.clone(),
                 rw_mounts,
                 template,
+                workspaces: cfg.workspaces.clone(),
+                cpus: (cfg.cpus > 0).then_some(cfg.cpus),
+                memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
             };
             let applied = opts.kits.clone();
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;

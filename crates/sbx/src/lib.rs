@@ -345,6 +345,11 @@ pub struct CreateOpts {
     /// A saved template (`sbx template save`): a local snapshot needs no
     /// registry round-trip, so creation skips the image pull.
     pub template: Option<String>,
+    /// `PATH[:TARGET][:ro]` workspaces beside the main one (0.51 targets).
+    pub workspaces: Vec<String>,
+    /// `--cpus` and `--memory`; `None` is sbx's default.
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
 }
 
 pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
@@ -354,6 +359,13 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     }
     a.extend(o.rw_mounts.iter().cloned());
     a.extend(o.ro_mounts.iter().map(|m| format!("{m}:ro")));
+    a.extend(o.workspaces.iter().cloned());
+    if let Some(c) = o.cpus {
+        a.extend(["--cpus".into(), c.to_string()]);
+    }
+    if let Some(m) = &o.memory {
+        a.extend(["--memory".into(), m.clone()]);
+    }
     for k in &o.kits {
         a.extend(["--kit".into(), k.clone()]);
     }
@@ -382,8 +394,12 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
 
 /// Re-attach the agent. The env flags apply to the agent session, which is
 /// how an edited `env` reaches a sandbox that already exists.
-pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String]) -> Vec<String> {
+pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String], workdir: &str) -> Vec<String> {
     let mut a = vec!["run".to_string(), "--name".into(), name.to_string()];
+    // This session only, re-attach included (0.51).
+    if !workdir.is_empty() {
+        a.extend(["--workdir".into(), workdir.to_string()]);
+    }
     for f in env_files {
         a.extend(["--env-file".into(), f.clone()]);
     }
@@ -1101,17 +1117,21 @@ mod tests {
                 env_files: vec!["/e".into()],
                 rw_mounts: vec!["/rw".into()],
                 template: Some("me/base:1".into()),
+                workspaces: vec!["/data:/workspace/data:ro".into()],
+                cpus: Some(4),
+                memory: Some("8g".into()),
             },
         );
         assert_eq!(
             a.join(" "),
-            "create claude /w --name neos --template me/base:1 /rw /ro:ro --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
+            "create claude /w --name neos --template me/base:1 /rw /ro:ro /data:/workspace/data:ro --cpus 4 --memory 8g --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
         );
     }
 
     #[test]
     fn small_argvs() {
-        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[]).join(" "), "run --name n -e A=1");
+        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[], "").join(" "), "run --name n -e A=1");
+        assert_eq!(attach_args(&sb("n"), &[], &[], "packages/web").join(" "), "run --name n --workdir packages/web");
         assert_eq!(policy_rule_args("deny", Some(&sb("n")), "x.com", &HttpMatch::default()).join(" "), "policy deny network --sandbox n x.com");
         assert_eq!(policy_rm_args("r-1", None).join(" "), "policy rm network --id r-1 --force");
         assert_eq!(secret_args("anthropic", None).join(" "), "secret set anthropic");

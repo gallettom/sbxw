@@ -43,6 +43,10 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `kits` | the four default kits | See [Kits](kits-and-skills.md) |
 | `kit_mounts` | `{}` | Sandbox path → host directory for kit-declared host mounts (`host-mount@1`, sbx 0.50+), passed as `--mount HOST:TARGET`. The target must be one a kit declares |
 | `volumes` | `[]` | Sandbox paths kept on persistent storage across `sbxw rm` / `sbxw up` of the same name. See [Persistent volumes](kits-and-skills.md#persistent-volumes) |
+| `workspaces` | `[]` | Other host folders mounted at creation, `PATH[:TARGET][:ro]` (sbx 0.51): `TARGET` an absolute path in the sandbox (else the host path), `:ro` read-only. `PATH` relative to this file, or `~/`. Exported as `additionalWorkspaces` |
+| `workdir` | `""` | Where the main agent starts, relative to the workspace or absolute (`sbx run --workdir`, 0.51) — a monorepo's package, say. Every attach, the existing sandbox's too |
+| `cpus`, `memory` | `0`, `""` | At creation (`--cpus`, `--memory 8g`); 0 and empty leave sbx's defaults. Exported as `sandboxOptions` |
+| `fuse`, `root_size`, `docker_size` | unset | Exported as `sandboxOptions` (`fuse`, `rootSize`, `dockerSize`) for `sbx env run` only: `sbx create` has no flag for them. FUSE is otherwise sbx's `sandbox.fuse` setting (on by default) |
 | `cache` | `true` | Mount the [kit cache](kits-and-skills.md#the-kit-cache) |
 | `cache_ttl_days` | `7` | Days before the kit cache is emptied and refilled |
 | `skills` | `""` (sbx decides) | `off`, `readonly` or `readwrite`. See [Shared skills](kits-and-skills.md#shared-skills) |

@@ -187,6 +187,20 @@ env_files = []
 # For caches and toolchains outside the workspace. Read at creation only.
 # volumes = ["/home/agent/.npm", "/home/agent/.cache/pip"]
 
+# Other host folders mounted at creation, PATH[:TARGET][:ro] (sbx 0.51).
+# workspaces = ["../docs:/workspace/docs:ro", "~/datasets"]
+
+# Where the main agent starts, inside the workspace (sbx run --workdir).
+# workdir = "packages/web"
+
+# Size at creation; 0 / "" are sbx's defaults.
+# cpus = 4
+# memory = "8g"
+# Only in `sbxw env export` (sandboxOptions): sbx create has no flag for them.
+# fuse = false
+# root_size = "40g"
+# docker_size = "60g"
+
 # Mount ~/.sbxw/cache into new sandboxes: the bundled kits copy the apt
 # packages, Chromium, skill tarballs and wheels from it instead of downloading
 # them again. The first sandbox fills it (writable for that one only, read-only

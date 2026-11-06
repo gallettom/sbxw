@@ -394,7 +394,7 @@ fn up_here(rt: tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: 
     let name = req.name.clone();
     rt.block_on(app.provision(req, Some(sink)))?;
     eprintln!("sbxw  attaching the agent in this terminal (Ctrl-C to detach)");
-    let args = sbxw_sbx::attach_args(&name.name, &cfg.env_pairs(), &cfg.env_files);
+    let args = sbxw_sbx::attach_args(&name.name, &cfg.env_pairs(), &cfg.env_files, &cfg.workdir);
     // A remote sandbox's agent through this process's link to its host,
     // which stays up (and keeps the hooks' tunnel) while it runs.
     let (program, args) = if name.is_local() {

@@ -104,10 +104,35 @@ pub fn env_file_for(name: &str, cfg: &Config, workspace: &Path, ports: Vec<Port>
             .iter()
             .map(|(target, host)| (target.clone(), path_relative_to(dir, Path::new(host))))
             .collect(),
+        additional: cfg
+            .workspaces
+            .iter()
+            .filter_map(|w| crate::config::parse_workspace(w).ok())
+            .map(|w| (path_relative_to(dir, Path::new(&w.path)), w.target, w.readonly))
+            .collect(),
+        sandbox_options: sandbox_options(cfg),
         env: cfg.effective_env(),
         ports,
         notes: notes(cfg, &aliases),
     }
+}
+
+/// `sandboxOptions` from the config: sizes as sbx reads them, FUSE when the
+/// config says. Sizes are quoted: `512m` is a string, and so is `1024`.
+fn sandbox_options(cfg: &Config) -> Vec<(String, String)> {
+    let mut o = Vec::new();
+    if cfg.cpus > 0 {
+        o.push(("cpus".into(), cfg.cpus.to_string()));
+    }
+    for (key, v) in [("memory", &cfg.memory), ("rootSize", &cfg.root_size), ("dockerSize", &cfg.docker_size)] {
+        if !v.is_empty() {
+            o.push((key.into(), format!("\"{v}\"")));
+        }
+    }
+    if let Some(f) = cfg.fuse {
+        o.push(("fuse".into(), f.to_string()));
+    }
+    o
 }
 
 /// Header comments: every part of sbxw's pipeline the format has no field for.
@@ -267,6 +292,22 @@ pub fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspaces_and_sandbox_options_are_exported() {
+        let cfg = Config {
+            workspaces: vec!["/proj/docs:/workspace/docs:ro".into()],
+            cpus: 4,
+            memory: "8g".into(),
+            fuse: Some(false),
+            root_size: "40g".into(),
+            ..Config::default()
+        };
+        let file = env_file_for("neos", &cfg, Path::new("/proj/neos"), vec![], Path::new("/proj"));
+        let out = file.render("sbxw test");
+        assert!(out.contains("additionalWorkspaces:\n  - path: ./docs\n    target: /workspace/docs\n    readOnly: true\n"), "{out}");
+        assert!(out.contains("sandboxOptions:\n  cpus: 4\n  memory: \"8g\"\n  rootSize: \"40g\"\n  fuse: false\n"), "{out}");
+    }
+
     use super::*;
 
     #[test]
