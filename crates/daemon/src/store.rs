@@ -187,6 +187,10 @@ pub struct SandboxRecord {
     /// bring-up never re-applies one (each `kit add` recreates the container).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kits: Vec<String>,
+    /// The sbx that created it, as `sbx inspect` says (`v0.51.0`); `""` when
+    /// inspect said nothing, i.e. an sbx older than 0.51 made it. Asked once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_sbx: Option<String>,
     /// Created for Remote Control: sbxw never signs its agent in — no OAuth
     /// kit, no auth variables — so it logs in to claude.ai itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -461,6 +465,7 @@ impl Store {
                 .collect(),
             kits: vec![],
             remote_control: false,
+            created_by_sbx: None,
             last_status: None,
         }
     }

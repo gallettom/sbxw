@@ -336,7 +336,9 @@ function sandboxItemHtml(s, groupColor) {
   // On a host that cannot be reached: the status is the last one seen, and
   // every action would only come back 503, so they are off and say why.
   const down = sandboxUnreachable(s);
-  const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`;
+  const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`
+    // Made by an sbx older than 0.51: it runs, but takes no kit until recreated.
+    + (s.old_sbx && !s.chat ? `<button class="icon-btn recreate-btn" data-action="recreate" data-name="${escHtml(s.name)}" title="Recreate with this sbx">⟲</button>` : '');
   const actions = down
     ? ['▶', '⇌', '⧉', '✕'].map(icon =>
         `<button class="icon-btn" disabled title="${escHtml(down)}">${icon}</button>`).join('')
@@ -366,7 +368,7 @@ function sandboxItemHtml(s, groupColor) {
     ? `<span class="sbx-status sbx-unreachable-note" title="${escHtml(down)}">unreachable since ${escHtml(hostClock(s.unreachable_since))}</span>`
     : `<span class="sbx-status">${escHtml(s.status)}</span>`;
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}${down ? ' unreachable' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}</div>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}${s.old_sbx ? '<span class="sbx-old-badge" title="Made by an sbx older than 0.51: it keeps running, but takes no kit until it is recreated (⟲)">old sbx</span>' : ''}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       ${status}
@@ -482,12 +484,31 @@ listEl.addEventListener('click', e => {
     if (action === 'rm')        openRmModal(name);
     if (action === 'ports')     openPortsModal(name);
     if (action === 'duplicate') openDupModal(name);
+    if (action === 'recreate')  recreateSandbox(name);
   } else {
     connectPane(focusedPane, name);
   }
 });
 
 // ── API calls ─────────────────────────────────────────────────────────────
+// Remove a sandbox an older sbx made and create it again from what sbxw
+// recorded. Its workspace is a host folder and survives; nothing else does.
+async function recreateSandbox(name) {
+  if (!confirm(`Recreate “${name}” with this sbx?\n\nIts workspace folder is kept. Everything else in the sandbox — files outside the workspace, installed packages, unpushed commits in other folders, its thread records — is lost.`)) return;
+  addPendingSandbox(name);
+  try {
+    const data = await postJson(`/api/sandboxes/${encodeURIComponent(name)}/recreate`, {});
+    await loadSandboxes();
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    if (data.ok) showToast(warnings.length ? `“${name}” recreated — ⚠ ${warnings[warnings.length - 1]}` : `“${name}” recreated`, warnings.length ? 'error' : 'ok');
+    else showToast(`Could not recreate “${name}”: ${data.error || 'unknown error'}`, 'error');
+  } catch (_) {
+    showToast(`Could not recreate “${name}”: network error`, 'error');
+  } finally {
+    removePendingSandbox(name);
+  }
+}
+
 async function loadSandboxes() {
   try {
     const res = await fetch('/api/sandboxes');

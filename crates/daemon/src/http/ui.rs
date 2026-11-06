@@ -59,6 +59,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/up", post(up))
         .route("/api/sandboxes/:name/detach", post(detach))
         .route("/api/sandboxes/:name/duplicate", post(duplicate))
+        .route("/api/sandboxes/:name/recreate", post(recreate))
         .route("/api/sandboxes/:name/stop", post(stop))
         .route("/api/sandboxes/:name/rm", post(rm))
         .route("/api/sandboxes/:name/ports", get(ports))
@@ -530,6 +531,10 @@ struct DuplicateBody {
 async fn duplicate(State(app): S, Path(name): Path<String>, Json(b): Json<DuplicateBody>) -> ApiResult {
     let (src, new) = (sandbox(&name)?, sandbox(&b.new_name)?);
     Ok(warnings(app.duplicate(&src, new).await?))
+}
+
+async fn recreate(State(app): S, Path(name): Path<String>) -> ApiResult {
+    Ok(warnings(app.recreate(&sandbox(&name)?).await?))
 }
 
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {

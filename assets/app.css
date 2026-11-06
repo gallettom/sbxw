@@ -1291,6 +1291,13 @@
     padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
     animation: sbx-ready-pulse 1.6s ease-in-out infinite;
   }
+  /* Made by an sbx older than 0.51: a fact about the sandbox, not a job, so
+     still amber but not pulsing. */
+  .sbx-old-badge {
+    display: inline-block; font-size: 9px; color: var(--c-amber);
+    border: 1px solid var(--c-amber); border-radius: var(--r-xs);
+    padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
+  }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
 
   /* ── Remote hosts (EXPERIMENTAL): one section per host, `local` first ──

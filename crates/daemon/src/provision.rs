@@ -339,8 +339,13 @@ impl App {
             let applied = opts.kits.clone();
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
             created_with_kits = true;
-            // Created by this sbxw: its kits are known.
-            let _ = self.store.update(name, |r| r.kits = applied);
+            // Created by this sbxw: its kits are known, and on this machine
+            // the sbx that made it too (a remote host's is asked of it).
+            let made_by = name.is_local().then(|| self.versions.sbx.clone().map(|v| format!("v{}", v.trim_start_matches('v')))).flatten();
+            let _ = self.store.update(name, |r| {
+                r.kits = applied;
+                r.created_by_sbx = made_by;
+            });
         }
 
         if cfg.keep_running {

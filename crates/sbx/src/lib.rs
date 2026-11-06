@@ -885,11 +885,17 @@ impl Sbx {
         self.checked(Invocation::new(s(&["kit", "add", name.as_str(), kit]))).await.map(drop)
     }
 
-    /// The kits a sandbox was composed from, as `sbx inspect --format json`
-    /// lists them (paths and references); empty when it does not say.
-    pub async fn inspect_kits(&self, name: &SandboxName) -> Result<Vec<String>> {
+    /// `sbx inspect --format json`, as far as sbxw reads it: an error when
+    /// it fails or prints something else.
+    pub async fn inspect(&self, name: &SandboxName) -> Result<sbxw_core::kits::Inspected> {
         let raw = self.capture(s(&["inspect", name.as_str(), "--format", "json"])).await?;
-        Ok(sbxw_core::kits::applied_kits(&raw).unwrap_or_default())
+        sbxw_core::kits::parse_inspect(&raw).ok_or_else(|| anyhow!("`sbx inspect {name} --format json` printed something other than JSON"))
+    }
+
+    /// The kits a sandbox was composed from (paths and references); empty
+    /// when sbx does not say.
+    pub async fn inspect_kits(&self, name: &SandboxName) -> Result<Vec<String>> {
+        Ok(self.inspect(name).await.map(|i| i.kits).unwrap_or_default())
     }
 
     /// Run `args` in the sandbox; the raw output whatever the status.

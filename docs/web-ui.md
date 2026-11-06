@@ -30,6 +30,13 @@ Each sandbox row has buttons to **stop**, **reload**, open **ports and network**
 (⇌), **duplicate**, and **remove** (✕). Beside the name: its age (hover for the
 creation time).
 
+A sandbox made by an sbx older than 0.51 carries an **old sbx** badge (read
+once from `sbx inspect`, which records the creating version since 0.51). It
+keeps running but takes no kit; **⟲ recreate** removes it and creates it again
+from what sbxw recorded — workspace, config, mounts, Remote Control — after
+asking, since everything outside the workspace folder is lost. A chat is never
+recreated: its workspace goes with it.
+
 **Usage.** The 5-hour and weekly percentages are account-wide, the same numbers
 as Claude Code's `/usage`. They turn amber at 75% and red at 90%. They are
 hidden with API-key auth, which has no subscription windows. How they're

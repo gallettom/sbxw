@@ -280,11 +280,29 @@ pub fn needs_allowlist(kit: &str) -> bool {
     false
 }
 
-/// The kits `sbx inspect --format json` lists, by the path or reference each
-/// was applied from; `None` when `raw` is not that document.
-pub fn applied_kits(raw: &str) -> Option<Vec<String>> {
+/// What sbxw reads of `sbx inspect --format json` (0.51).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inspected {
+    /// The kits, by the path or reference each was applied from.
+    pub kits: Vec<String>,
+    /// The sbx that created it (`v0.51.0`); `None` for a sandbox an sbx
+    /// older than 0.51 created, which did not record it.
+    pub created_version: Option<String>,
+}
+
+/// `None` when `raw` is not that document.
+pub fn parse_inspect(raw: &str) -> Option<Inspected> {
     let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
-    Some(v.get("kits")?.as_array()?.iter().filter_map(|k| k.as_str().map(String::from)).collect())
+    v.as_object()?;
+    let kits = v.get("kits").and_then(|k| k.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(String::from)).collect()).unwrap_or_default();
+    let created_version = v.get("created_version").and_then(|c| c.as_str()).map(str::trim).filter(|c| !c.is_empty()).map(String::from);
+    Some(Inspected { kits, created_version })
+}
+
+/// The kits `sbx inspect --format json` lists; `None` when `raw` is not
+/// that document.
+pub fn applied_kits(raw: &str) -> Option<Vec<String>> {
+    parse_inspect(raw).map(|i| i.kits)
 }
 
 /// Is `kit` already applied to a sandbox? Asked before `sbx kit add`, which
@@ -455,6 +473,9 @@ mod tests {
         assert!(already_applied("/k/agent-skills", &[], &["/k/agent-skills".into()]), "sbxw's own record");
         assert!(!already_applied("/k/ba", &["/z/ba".into()], &[]), "a short name is not enough");
         assert_eq!(applied_kits("Name: x\nKits: a"), None, "only the JSON document");
+        assert_eq!(parse_inspect(raw).unwrap().created_version, None, "an sbx before 0.51 recorded none");
+        let new = parse_inspect(r#"{"name":"n","kits":[],"created_version":"v0.51.0"}"#).unwrap();
+        assert_eq!(new.created_version.as_deref(), Some("v0.51.0"));
     }
 
     #[test]
