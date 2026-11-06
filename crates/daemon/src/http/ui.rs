@@ -72,6 +72,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/github-token", get(github_token).post(github_token_set))
         .route("/api/github-token/rm", post(github_token_rm))
         .route("/api/github-token/gh", post(github_token_gh))
+        .route("/api/secrets", get(secrets_list))
+        .route("/api/secrets/custom", post(custom_secret_set))
+        .route("/api/secrets/rm", post(secret_rm))
         .route("/api/template/status", get(template_status))
         .route("/api/kit-mounts", get(kit_mounts))
         .route("/api/templates", get(templates_list))
@@ -675,6 +678,55 @@ async fn github_token_set(State(app): S, Json(b): Json<TokenBody>) -> ApiResult 
 async fn github_token_rm(State(app): S) -> ApiResult {
     tracing::info!("web UI: removing the global `github` secret");
     app.sbx.secret_rm("github").await?;
+    Ok(ok())
+}
+
+/// sbx's stored secrets, names and scopes only.
+async fn secrets_list(State(app): S) -> ApiResult {
+    Ok(ok_with(json!({ "secrets": app.sbx.secrets().await? })))
+}
+
+#[derive(Deserialize)]
+struct CustomSecretBody {
+    hosts: Vec<String>,
+    env: String,
+    value: String,
+}
+
+async fn custom_secret_set(State(app): S, Json(b): Json<CustomSecretBody>) -> ApiResult {
+    let hosts: Vec<String> = b.hosts.iter().map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect();
+    if hosts.is_empty() {
+        return Err(ApiError::bad("name at least one host the secret is for (api.example.com, *.example.com)"));
+    }
+    if let Some(h) = hosts.iter().find(|h| h.starts_with('-') || h.chars().any(|c| c.is_whitespace() || c == '/' || c == ',')) {
+        return Err(ApiError::bad(format!("{h:?} is not a host: one name or pattern per entry, no scheme or path")));
+    }
+    let env = b.env.trim();
+    let valid = env.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && env.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Err(ApiError::bad("the variable name is letters, digits and _, not starting with a digit"));
+    }
+    if b.value.is_empty() {
+        return Err(ApiError::bad("paste the secret's value"));
+    }
+    tracing::info!("web UI: storing a custom secret for {} as ${env}", hosts.join(", "));
+    app.sbx.secret_set_custom(&hosts, env, &b.value).await?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct SecretRmBody {
+    name: String,
+}
+
+/// Forget a global secret by the name `sbx secret ls` gives it.
+async fn secret_rm(State(app): S, Json(b): Json<SecretRmBody>) -> ApiResult {
+    let name = b.name.trim();
+    if name.is_empty() || name.starts_with('-') || name.chars().any(|c| c.is_whitespace()) {
+        return Err(ApiError::bad("not a secret name"));
+    }
+    tracing::info!("web UI: removing the global secret {name}");
+    app.sbx.secret_rm(name).await?;
     Ok(ok())
 }
 

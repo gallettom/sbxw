@@ -1260,7 +1260,7 @@
   <div class="modal-overlay hidden" id="github-modal-overlay">
     <div class="modal setup-modal" data-setup-tab="github" role="dialog" aria-modal="true" aria-labelledby="github-modal-title">
       <div class="modal-head">
-        <span class="modal-title" id="github-modal-title">GitHub</span>
+        <span class="modal-title" id="github-modal-title">Secrets</span>
         <button class="modal-close" id="github-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1276,6 +1276,20 @@
         <span class="create-hint">Stored by <code>sbx</code> as its global <code>github</code> secret and injected by the proxy
           for every sandbox's git and <code>gh</code> over HTTPS — it never enters a sandbox. A fine-grained token with
           <em>Contents: read and write</em> is enough to push.</span>
+        <div class="kit-head" style="margin-top:1rem">
+          <span class="field-label">Other services</span>
+        </div>
+        <p class="create-hint">A key for a service sbx does not know (sbx 0.51 <code>secret set-custom</code>): the sandbox
+          sees a placeholder in the variable you name, and the proxy puts the real value in requests to the hosts you
+          list — only those.</p>
+        <div class="tpl-list" id="secrets-custom-list"></div>
+        <label class="field-label" for="secret-hosts">Hosts</label>
+        <input id="secret-hosts" class="field-input" spellcheck="false" autocomplete="off" placeholder="api.example.com, *.example.io">
+        <label class="field-label" for="secret-env">Variable in the sandbox</label>
+        <input id="secret-env" class="field-input" spellcheck="false" autocomplete="off" placeholder="EXAMPLE_API_KEY">
+        <label class="field-label" for="secret-value">Value</label>
+        <input id="secret-value" class="field-input" type="password" spellcheck="false" autocomplete="off">
+        <button class="btn-cancel" id="secret-save" style="margin-top:.5rem">Add secret</button>
       </div>
       <div class="modal-foot">
         <span class="create-error hidden" id="github-error"></span>

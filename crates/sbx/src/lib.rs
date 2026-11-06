@@ -225,6 +225,36 @@ pub fn has_global_secret(raw: &str, service: &str) -> bool {
     }
 }
 
+/// One row of `sbx secret ls`: never a value, only where it applies, what
+/// kind it is (`service`, or a custom one) and its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SecretRow {
+    pub scope: String,
+    pub kind: String,
+    pub name: String,
+}
+
+/// `sbx secret ls` by its headers (0.51: `SCOPE TYPE NAME SECRET`). The
+/// `SECRET` column — masked, but still part of a value — is never read.
+pub fn parse_secret_ls(raw: &str) -> Vec<SecretRow> {
+    let t = table::parse(raw);
+    let col = |names: &[&str]| t.columns.iter().position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
+    let (Some(scope), Some(name)) = (col(&["SCOPE"]), col(&["NAME", "SERVICE"])) else {
+        return Vec::new();
+    };
+    let kind = col(&["TYPE"]);
+    t.rows
+        .iter()
+        .filter_map(|r| {
+            Some(SecretRow {
+                scope: r.get(scope)?.trim_matches(|c| c == '(' || c == ')').to_string(),
+                kind: kind.and_then(|k| r.get(k)).cloned().unwrap_or_else(|| "service".into()),
+                name: r.get(name)?.clone(),
+            })
+        })
+        .collect()
+}
+
 /// What `sbx rm` did with one target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RmResult {
@@ -892,6 +922,27 @@ impl Sbx {
         Ok(has_global_secret(&self.capture(s(&["secret", "ls"])).await?, service))
     }
 
+    /// Every stored secret, without its value.
+    pub async fn secrets(&self) -> Result<Vec<SecretRow>> {
+        Ok(parse_secret_ls(&self.capture(s(&["secret", "ls"])).await?))
+    }
+
+    /// A global custom secret (`secret set-custom`, 0.51): the sandbox sees a
+    /// placeholder in `env`, the proxy puts the value in requests to `hosts`.
+    /// The value travels on stdin. sbx 0.51 substitutes nothing for a custom
+    /// secret without a host, so one is required.
+    pub async fn secret_set_custom(&self, hosts: &[String], env: &str, value: &str) -> Result<()> {
+        if hosts.is_empty() {
+            bail!("a custom secret needs at least one destination host");
+        }
+        let mut args = s(&["secret", "set-custom"]);
+        for h in hosts {
+            args.extend(["--host".into(), h.clone()]);
+        }
+        args.extend(["--env".into(), env.into(), "--value-stdin".into()]);
+        self.checked(Invocation { args, stdin: Some(value.as_bytes().to_vec()), on_line: None }).await.map(drop)
+    }
+
     /// Forget the global secret for `service`.
     pub async fn secret_rm(&self, service: &str) -> Result<()> {
         self.checked(Invocation::new(s(&["secret", "rm", service, "--force"]))).await.map(drop)
@@ -1209,6 +1260,18 @@ mod tests {
         Sbx::new(fake.clone()).secret_set_command("github", "'/opt/homebrew/bin/gh' auth token").await.unwrap();
         assert_eq!(fake.calls.lock().unwrap()[1], ["secret", "set", "github", "--command", "'/opt/homebrew/bin/gh' auth token", "--force"]);
         assert!(fake.stdins.lock().unwrap().iter().all(|s| s.is_empty()), "nothing on stdin: there is no value");
+    }
+
+    #[tokio::test]
+    async fn a_custom_secret_names_its_hosts_and_sends_its_value_on_stdin() {
+        let fake = Fake::new(|_| Output::ok(""));
+        let sbx = Sbx::new(fake.clone());
+        sbx.secret_set_custom(&["api.example.com".into(), "*.example.io".into()], "API_KEY", "s3cret").await.unwrap();
+        assert_eq!(fake.log(), ["secret set-custom --host api.example.com --host *.example.io --env API_KEY --value-stdin"]);
+        assert_eq!(fake.stdins.lock().unwrap()[0], b"s3cret");
+        assert!(sbx.secret_set_custom(&[], "API_KEY", "x").await.is_err(), "no host, no secret: 0.51 would substitute nothing");
+        let rows = parse_secret_ls("SCOPE      TYPE      NAME        SECRET\n(global)   service   anthropic   (oauth configured)\n(global)   custom    api-example ****\n");
+        assert_eq!(rows[1], SecretRow { scope: "global".into(), kind: "custom".into(), name: "api-example".into() });
     }
 
     #[test]

@@ -15,7 +15,7 @@ const SETUP_TABS = [
   { id: 'mcp',       label: 'MCP',       open: openMcpModal,       close: closeMcpModal },
   { id: 'hosts',     label: 'Hosts',     open: openHostsModal,     close: closeHostsModal },
   { id: 'mac',       label: 'Mac',       open: openMacModal,       close: closeMacModal },
-  { id: 'github',    label: 'GitHub',    open: openGithubModal,    close: closeGithubModal },
+  { id: 'github',    label: 'Secrets',   open: openGithubModal,    close: closeGithubModal },
 ];
 const SETUP_KEY = 'sbxw.setup-tab';
 
