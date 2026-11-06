@@ -151,8 +151,7 @@ question is not asked for a remote host.
   host (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), then **Trust and
   save**. If the key changes between the two steps, nothing is saved.
 - **Trust this host with secrets** (`trust_secrets`): sbxw then sends that
-  host your Anthropic token (`CLAUDE_CODE_OAUTH_TOKEN` or API key), the OAuth
-  kit (your Claude login) and your skills. Anyone with root on the host can
+  host your Anthropic API key and your kept skills. Anyone with root on the host can
   read them. Only for a machine you control.
 - **Edit** changes any of these; a new address asks about its key again.
   **Remove** unregisters a host; one with sandboxes is refused unless you

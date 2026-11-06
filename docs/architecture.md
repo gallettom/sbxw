@@ -81,6 +81,8 @@ What sbxw assumes, unconditionally:
 | `kit add` of v3 image content and hooks (0.51) | the bundled kits on an existing sandbox |
 | `sbx --version` without the daemon (0.51) | the version check |
 | `settings get clipboard.textCopy` (0.51) | `sbxw doctor` |
+| `inspect --format json` (`kits`, `created_version`) (0.51) | kits already applied, skipped on a bring-up |
+| claude.ai sign-in kept on the host (0.51 `claude` workload) | no token injected; `/login` once |
 | `diagnose --format json` | `sbxw doctor` |
 | `create --mount HOST:TARGET` (0.50) | `kit_mounts`, **Kit folders** in the create dialog |
 | `mounts:` in environment files (0.50) | `sbxw env export` / `env run` |
@@ -158,11 +160,6 @@ Confirmed on a real 0.49.2: `sbx template save` refuses `--description` (and
 `--capture-mode`) without `--cloud`, so sbxw never passes it.
 - **Whether `sbx create` accepts `DIR:ro`** extra workspaces like `sbx run`
   (documented for `run`, assumed for `create`).
-- **`sbx inspect`'s output format.** sbxw only substring-matches it to *skip*
-  already-applied kits, confined to its `Kits:` block (or a `kits` key in JSON),
-  because inspect also lists custom secrets and one could share a kit's name. If
-  neither is found, it searches the whole output; a miss just means a kit is
-  re-applied.
 - **The grammar of an environment file's `args:` block.** sbxw reads
   `NAME: value`, `NAME: {default: value}` and a list of `{name, default}`.
   Anything else stays in the text for sbx to resolve. A `kits:` entry written as

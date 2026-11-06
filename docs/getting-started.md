@@ -121,24 +121,21 @@ Host environment variables do **not** reach sandboxes by themselves. Pick one:
    `ANTHROPIC_API_KEY` and stores it as sbx's global `anthropic` secret
    (`sbx secret set anthropic`, value piped over stdin, never on a command
    line). The agent signs in on its own.
-2. **OAuth token.** Set `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`;
-   `CLAUDE_OAUTH_TOKEN` also works) before `sbxw up`. sbxw writes
-   `~/.claude/.credentials.json` into the sandbox so the agent is signed in from
-   its first launch. Set `claude_subscription` in `sbxw.toml` to your plan so
-   the in-session label is right.
-3. **Interactive.** Run `/login` in the agent's pane.
-4. **Remote Control.** Tick *Remote control* in the create dialog (or
+2. **claude.ai sign-in.** Run `/login` in the agent's pane, once. Since sbx
+   0.51 the sign-in is kept on your machine by sbx, and every sandbox gets
+   placeholder tokens the sandbox proxy swaps for the real ones: no token
+   ever enters a sandbox. sbxw no longer injects `CLAUDE_CODE_OAUTH_TOKEN`
+   (`sbxw up` says so when it is set).
+3. **Remote Control.** Tick *Remote control* in the create dialog (or
    `sbxw up … --remote-control`). Remote Control refuses the setup token and an
-   API key, so sbxw gives this sandbox neither — no OAuth kit, no auth variable
-   from `env` — and allows the login hosts. Run `/login` in its pane once, then
+   API key, so sbxw gives this sandbox neither — no auth variable from `env` —
+   and allows the login hosts. Run `/login` in its pane once, then
    press **⇄ Remote** in the pane bar: sbxw types `/remote-control` and Claude
    prints the claude.ai/code link. The button reads **On** while Remote Control
    is connected in that pane's session (read from Claude Code's session
    registry in the sandbox, every 15 s); it is then only an indicator — turn
-   Remote Control off with `/remote-control` in the session, or from claude.ai. On a sandbox already signed in with the
-   token, Remote offers to switch it: sbxw rewrites its OAuth kit without the
-   token (sbx re-reads the kit on every container swap, so the old one would
-   put the token back), stops injecting it, and types `/login`. A global
+   Remote Control off with `/remote-control` in the session, or from claude.ai. On a sandbox signed in with a setup
+   token (one given in `env`), Remote offers to switch it: sbxw types `/login`. A global
    `anthropic` secret (`--use-api-key`) is sbx's, for every sandbox; remove it
    if the agent signs in with it instead.
 

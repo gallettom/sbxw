@@ -116,9 +116,9 @@ other failure is shown with the command to run by hand), and whether
 By default a host is **not** trusted with secrets. With `--trust-secrets`
 (or `sbxw host edit <host> --trust-secrets`), sbxw may send to that host:
 
-- the Anthropic token (`CLAUDE_CODE_OAUTH_TOKEN` or API key), on stdin of the
-  command that needs it;
-- the OAuth kit (your Claude login) and the `my-skills` kit.
+- the Anthropic API key (`--use-api-key`), on stdin of the command that needs
+  it;
+- the `my-skills` kit.
 
 Without it, none of these are sent, so a remote sandbox there has no Claude
 login until you trust the host or sign in inside it. What is never sent, trusted

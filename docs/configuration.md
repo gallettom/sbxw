@@ -55,7 +55,6 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 |---|---|---|
 | `claude_model` | `claude-sonnet-5-5` | Default model, passed as `ANTHROPIC_DEFAULT_MODEL`. Empty: don't set it. See [below](#the-default-model) |
 | `models` | Sonnet 5.5, Opus 5.5, Haiku 5.5 | `{ id, label }` choices for new threads and a lead's plans |
-| `claude_subscription` | `pro` | Plan written into injected OAuth credentials: `pro`, `max`, `team`, `enterprise` or `free` |
 | `web_shell` | `""` | Empty attaches the Claude agent. Set to e.g. `"bash"` to open a shell in the main pane instead |
 | `keep_running` | `false` | Keep the sandbox up with nobody attached (`sbx run -d`) until `sbxw stop`. Useful for a dev server |
 
