@@ -523,6 +523,12 @@ impl App {
                         let k = kit.clone();
                         let _ = self.store.update(name, |r| r.kits.push(k));
                     }
+                    // sbx asks a person to approve the network rules the kit
+                    // adds, and has no flag to: hand them the command.
+                    Err(e) if kits::add_needs_approval(&format!("{e:#}")) => run.warn(format!(
+                        "kit '{kit}' asks for network access '{name}' was not granted, and sbx wants you to approve it. \
+                         Run in a terminal: `sbx kit add {n} {kit}` — the next `sbxw up` sees it applied.\n{e:#}"
+                    )),
                     Err(e) if kits::add_needs_recreate(&format!("{e:#}")) => run.warn(format!(
                         "`sbx kit add` cannot apply kit '{kit}' to an existing sandbox — '{name}' is \
                          unchanged. Recreate it to pick the kit up: `sbxw rm {name}` then `sbxw up {name}`. \

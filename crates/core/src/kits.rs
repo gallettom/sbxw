@@ -287,6 +287,14 @@ pub fn node_missing(err: &str) -> bool {
     lower.contains("node") && (lower.contains("not found") || lower.contains("exit status 127") || lower.contains("no such file"))
 }
 
+/// Is a failed `sbx kit add` sbx asking a person to approve permissions the
+/// kit adds (0.51: new network rules), which it cannot do without a terminal
+/// and offers no flag for? Then the person runs the command themselves.
+pub fn add_needs_approval(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("stdin is not a terminal") || lower.contains("run this command in a terminal")
+}
+
 /// Does sbx need `kit.allowedSources` before it fetches this reference? Git
 /// URLs and non-Docker-Hub registries are blocked by default.
 pub fn needs_allowlist(kit: &str) -> bool {
@@ -630,6 +638,15 @@ mod tests {
         assert_eq!(v["claudeAiOauth"]["subscriptionType"], "max");
         assert!(!oauth_kit_spec(None).contains("lifecycle@1"));
         assert!(!oauth_kit_spec(Some("{\"a\":\"${{ kit.env.HOME }}\"}")).contains("lifecycle@1"), "never expanded by sbx");
+    }
+
+    #[test]
+    fn a_permission_prompt_with_no_terminal_is_recognised() {
+        // What sbx 0.51 says for a kit adding network rules, stdin not a TTY.
+        let e = "warning: this change requests permissions beyond what this sandbox was granted\n  + network.runtime.allow: pypi.org\n\n  error: stdin is not a terminal; run this command in a terminal to answer the prompt";
+        assert!(add_needs_approval(e));
+        assert!(!add_needs_recreate(e), "not a recreate");
+        assert!(!add_needs_approval("network unreachable"));
     }
 
     #[test]
