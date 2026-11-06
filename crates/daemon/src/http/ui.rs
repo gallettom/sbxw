@@ -68,6 +68,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/policy/rules", post(policy_add))
         .route("/api/sandboxes/:name/policy/rules/rm", post(policy_rm))
         .route("/api/policy/refresh", post(policy_refresh))
+        .route("/api/github-token", get(github_token).post(github_token_set))
+        .route("/api/github-token/rm", post(github_token_rm))
         .route("/api/template/status", get(template_status))
         .route("/api/kit-mounts", get(kit_mounts))
         .route("/api/templates", get(templates_list))
@@ -628,6 +630,33 @@ async fn policy_rm(State(app): S, Path(name): Path<String>, Json(b): Json<RuleRm
     let rule = policy::clean_arg(&b.rule, "rule id")?;
     tracing::info!("web UI: removing policy rule {rule} (from sandbox '{sb}' panel)");
     app.sbx_for(&sb).await?.policy_rm(&rule, Some(&sb.name)).await?;
+    Ok(ok())
+}
+
+/// The GitHub token the sandbox proxy injects into git/gh traffic: sbx's
+/// global `github` secret. Only whether it is set is ever read back.
+async fn github_token(State(app): S) -> ApiResult {
+    Ok(ok_with(json!({ "set": app.sbx.secret_has("github").await? })))
+}
+
+#[derive(Deserialize)]
+struct TokenBody {
+    token: String,
+}
+
+async fn github_token_set(State(app): S, Json(b): Json<TokenBody>) -> ApiResult {
+    let token = b.token.trim();
+    if token.is_empty() || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(ApiError::bad("a GitHub token is one word with no spaces — paste it again"));
+    }
+    tracing::info!("web UI: storing the global `github` secret");
+    app.sbx.secret_set("github", token, None).await?;
+    Ok(ok())
+}
+
+async fn github_token_rm(State(app): S) -> ApiResult {
+    tracing::info!("web UI: removing the global `github` secret");
+    app.sbx.secret_rm("github").await?;
     Ok(ok())
 }
 

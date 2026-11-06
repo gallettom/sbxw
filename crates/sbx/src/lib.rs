@@ -209,6 +209,22 @@ pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
         .collect()
 }
 
+/// Does `sbx secret ls` list a global secret for `service`? Read by its
+/// headers: a scope column (`SCOPE`) saying `(global)`, and the service under
+/// `NAME` (0.51) or `SERVICE` (earlier) — so one scoped to a single sandbox
+/// is not taken for the global one. A listing with no such headers is read
+/// as a whole-word match on any line, the best it can say.
+pub fn has_global_secret(raw: &str, service: &str) -> bool {
+    let t = table::parse(raw);
+    let col = |names: &[&str]| t.columns.iter().position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
+    match (col(&["SCOPE"]), col(&["NAME", "SERVICE"])) {
+        (Some(scope), Some(name)) => t.rows.iter().any(|r| {
+            r.get(name).is_some_and(|n| n == service) && r.get(scope).is_some_and(|sc| sc.trim_matches(|c| c == '(' || c == ')').eq_ignore_ascii_case("global"))
+        }),
+        _ => raw.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_')).any(|w| w == service)),
+    }
+}
+
 /// What `sbx rm` did with one target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RmResult {
@@ -835,6 +851,17 @@ impl Sbx {
         Ok(self.capture(s(&["settings", "get", key])).await?.trim().to_string())
     }
 
+    /// Whether a *global* secret for `service` is stored (`sbx secret ls`,
+    /// which never prints values). See [`has_global_secret`].
+    pub async fn secret_has(&self, service: &str) -> Result<bool> {
+        Ok(has_global_secret(&self.capture(s(&["secret", "ls"])).await?, service))
+    }
+
+    /// Forget the global secret for `service`.
+    pub async fn secret_rm(&self, service: &str) -> Result<()> {
+        self.checked(Invocation::new(s(&["secret", "rm", service, "--force"]))).await.map(drop)
+    }
+
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
         self.checked(Invocation::new(s(&["kit", "add", name.as_str(), kit]))).await.map(drop)
     }
@@ -1113,6 +1140,25 @@ mod tests {
         Sbx::new(fake.clone()).secret_set("anthropic", "sk-123", None).await.unwrap();
         assert_eq!(fake.log(), ["secret set anthropic"]);
         assert_eq!(fake.stdins.lock().unwrap()[0], b"sk-123");
+    }
+
+    #[tokio::test]
+    async fn a_stored_secret_is_found_by_whole_word() {
+        let fake = Fake::new(|_| Output::ok("SERVICE   SCOPE\nanthropic global\ngithub-enterprise global\n"));
+        assert!(!Sbx::new(fake).secret_has("github").await.unwrap());
+        let fake = Fake::new(|_| Output::ok("SERVICE   SCOPE\ngithub    global\n"));
+        assert!(Sbx::new(fake).secret_has("github").await.unwrap());
+    }
+
+    #[test]
+    fn only_a_global_secret_counts() {
+        // What sbx 0.51 prints.
+        let ls = "  SCOPE      TYPE      NAME        SECRET\n  (global)   service   anthropic   (oauth configured)\n  neos       service   github      ghp_ab****...****yz\n";
+        assert!(has_global_secret(ls, "anthropic"));
+        assert!(!has_global_secret(ls, "github"), "scoped to one sandbox is not global");
+        let both = format!("{ls}  (global)   service   github      gho_GC****...****qy\n");
+        assert!(has_global_secret(&both, "github"));
+        assert!(has_global_secret("SCOPE      SERVICE   SECRET\n(global)   github    gho_GCaw4o****\n", "github"), "the documented older layout");
     }
 
     #[tokio::test]

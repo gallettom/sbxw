@@ -1253,6 +1253,34 @@
     </div>
   </div>
 
+  <!-- ── Setup → GitHub ──
+       The token sbx's proxy injects into git and gh traffic from every
+       sandbox (`sbx secret set github`). Write-only: the value is never
+       read back. (/js/github.js) -->
+  <div class="modal-overlay hidden" id="github-modal-overlay">
+    <div class="modal setup-modal" data-setup-tab="github" role="dialog" aria-modal="true" aria-labelledby="github-modal-title">
+      <div class="modal-head">
+        <span class="modal-title" id="github-modal-title">GitHub</span>
+        <button class="modal-close" id="github-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="repo-note" id="github-status">Loading…</p>
+        <label class="field-label" for="github-token">Personal access token</label>
+        <input id="github-token" class="field-input" type="password" spellcheck="false" autocomplete="off"
+               placeholder="ghp_… or github_pat_…">
+        <span class="create-hint">Stored by <code>sbx</code> as its global <code>github</code> secret and injected by the proxy
+          for every sandbox's git and <code>gh</code> over HTTPS — it never enters a sandbox. A fine-grained token with
+          <em>Contents: read and write</em> is enough to push. Or run <code>gh auth token</code> on this Mac and paste the result.</span>
+      </div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="github-error"></span>
+        <button class="btn-cancel" id="github-remove" hidden>Remove token</button>
+        <button class="btn-cancel" id="github-modal-close2">Close</button>
+        <button class="btn-create" id="github-save">Save token</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Setup → Hosts (EXPERIMENTAL) ──
        The remote hosts of ~/.sbxw/hosts.toml: listed with their link, added,
        edited and removed. A new address's host key is shown as a fingerprint
