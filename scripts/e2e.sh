@@ -221,8 +221,8 @@ rtoken=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv
 grep -q "$rtoken" "$t/rstate/tooling-neos.js" || die "the agent token installed on the host, over stdin"
 ! grep -q "$rtoken" "$t/rstate/calls.log" "$t/ssh.log" || die "the token leaked into an argv"
 ! grep -rq "tok-not-for-untrusted" "$t/remote" "$t/rstate" "$t/ssh.log" || die "a secret went to an untrusted host"
-echo "$out" | grep -q "not sent to host 'fake'" || { echo "$out"; die "the bring-up says the token stayed here"; }
-ok "the agent token goes over stdin; the Claude token stays off an untrusted host"
+echo "$out" | grep -q "CLAUDE_CODE_OAUTH_TOKEN is no longer injected" || { echo "$out"; die "the bring-up says the Claude token is not used"; }
+ok "the agent token goes over stdin; the Claude token is never sent (sbx keeps the sign-in)"
 
 "$bin" ls > "$t/ls.log" 2>&1 || { cat "$t/ls.log"; die "sbxw ls"; }
 grep -q "^fake~neos .*● running" "$t/ls.log" || { cat "$t/ls.log"; die "sbxw ls shows the remote sandbox"; }

@@ -339,12 +339,8 @@ impl App {
             let applied = opts.kits.clone();
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
             created_with_kits = true;
-            // Created by this sbxw: its kits are known, and the old UI-port
-            // rule cannot be there.
-            let _ = self.store.update(name, |r| {
-                r.kits = applied;
-                r.ui_rule_checked = true;
-            });
+            // Created by this sbxw: its kits are known.
+            let _ = self.store.update(name, |r| r.kits = applied);
         }
 
         if cfg.keep_running {
@@ -381,8 +377,7 @@ impl App {
         // The proxy sees host.docker.internal as localhost:<port>.
         own_allow.push(format!("localhost:{agent_port}"));
         let allow = [own_allow.as_slice(), cfg.network_allow.as_slice()].concat().join(",");
-        let migrate = up && !cfg.claude_model.is_empty() && !self.store.get(name).model_migrated;
-        let mut batch = Tooling::new()
+        let batch = Tooling::new()
             .agent_token(&token)
             .trust_workspace(&workspace)
             .artifact_hook()
@@ -390,9 +385,6 @@ impl App {
             .usage_statusline(&agent_port)
             .relay(&agent_port)
             .lead_command();
-        if migrate {
-            batch = batch.drop_stale_model(&cfg.claude_model);
-        }
         if up {
             run.step(progress::TOOLING);
         }
@@ -410,9 +402,6 @@ impl App {
                 Ok(outcome) => {
                     for (piece, e) in &outcome.failed {
                         run.warn(format!("{}: {e}", tooling::consequence(piece)));
-                    }
-                    if migrate && outcome.error(tooling::piece::STALE_MODEL).is_none() {
-                        let _ = self.store.update(name, |r| r.model_migrated = true);
                     }
                 }
                 Err(e) if kits::node_missing(&format!("{e:#}")) => run.warn(format!(
@@ -451,10 +440,6 @@ impl App {
                 }
                 Err(e) => return Err(e).context("failed to apply the network denylist"),
             }
-        }
-        if !self.store.get(name).ui_rule_checked {
-            self.revoke_ui_port(name, &mut run).await;
-            let _ = self.store.update(name, |r| r.ui_rule_checked = true);
         }
 
         // ── Kits, for a sandbox that already existed ─────────────────────
@@ -843,28 +828,6 @@ impl App {
             bail!("kit check failed — nothing was created or changed:\n{}", broken.join("\n"));
         }
         Ok(())
-    }
-
-    /// An older sbxw gave sandboxes `localhost:<ui port>`, through which they
-    /// could reach the browser's endpoints. Remove that rule if it is there.
-    async fn revoke_ui_port(&self, sb: &SandboxRef, run: &mut Run<'_>) {
-        let ui = format!("localhost:{}", self.cfg.web_port());
-        let Ok(sbx) = self.sbx_for(sb).await else { return };
-        let name = &sb.name;
-        let view = sbx.policy_ls(name, true).await;
-        let found = sbxw_core::policy::rule_ids_for(&view, &ui, name);
-        for id in found.mine {
-            match sbx.policy_rm(&id, Some(name)).await {
-                Ok(()) => run.info(format!("revoked {ui} (the UI port) from '{name}' — sandboxes reach the agent port only")),
-                Err(e) => run.warn(format!("could not revoke the stale {ui} rule {id}: {e:#}")),
-            }
-        }
-        for id in found.unsure {
-            run.warn(format!(
-                "a rule allows {ui} (the UI port) and the listing does not say whose it is; if it is \
-                 '{name}'s, remove it: `sbx policy rm network --id {id} --sandbox {name} --force`"
-            ));
-        }
     }
 
     /// Wait for `running`, then (re)publish every mapping: they do not survive

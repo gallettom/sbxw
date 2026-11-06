@@ -8,7 +8,7 @@
 //!
 //! Every write goes to a temporary file renamed over the target, so a crash
 //! leaves the previous version; files are `0600` in `0700` directories, since a
-//! record holds the sandbox's agent token and the kits directory an OAuth token.
+//! record holds the sandbox's agent token.
 //!
 //! A record missing from the new layout is rebuilt from the old files on first
 //! read, so sandboxes created by an older sbxw keep their workspace, threads
@@ -183,17 +183,10 @@ pub struct SandboxRecord {
     /// sbx applies them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<MountRecord>,
-    /// The pre-`ANTHROPIC_DEFAULT_MODEL` settings key has been dealt with.
-    #[serde(default)]
-    pub model_migrated: bool,
     /// Kit references sbxw applied — at creation or by `kit add` — so a
     /// bring-up never re-applies one (each `kit add` recreates the container).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kits: Vec<String>,
-    /// The `localhost:<UI port>` rule an older sbxw added has been looked for.
-    /// A sandbox this sbxw created never had it.
-    #[serde(default)]
-    pub ui_rule_checked: bool,
     /// Created for Remote Control: sbxw never signs its agent in — no OAuth
     /// kit, no auth variables — so it logs in to claude.ai itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -466,9 +459,7 @@ impl Store {
                     (k, rec)
                 })
                 .collect(),
-            model_migrated: s.join(format!("{name}.model-migrated")).exists(),
             kits: vec![],
-            ui_rule_checked: false,
             remote_control: false,
             last_status: None,
         }
@@ -606,7 +597,6 @@ mod tests {
         let st = s.paths.state();
         std::fs::create_dir_all(st.join("threads")).unwrap();
         std::fs::write(st.join("neos.workspace"), "/w/neos\n").unwrap();
-        std::fs::write(st.join("neos.model-migrated"), "").unwrap();
         std::fs::write(
             st.join("threads/neos.json"),
             r#"{"api":"backend","ui":{"repo":"","model":"claude-opus-5-5"}}"#,
@@ -614,7 +604,6 @@ mod tests {
         .unwrap();
         let r = s.get(r("neos"));
         assert_eq!(r.workspace.as_deref(), Some(Path::new("/w/neos")));
-        assert!(r.model_migrated);
         assert_eq!(r.threads["api"].repo, "backend");
         assert_eq!(r.threads["ui"].model.as_deref(), Some("claude-opus-5-5"));
     }

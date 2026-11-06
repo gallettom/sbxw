@@ -245,20 +245,6 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
         return Vec::new();
     };
     let mut notes = Vec::new();
-    if before < (0, 50, 0) && now >= (0, 50, 0) {
-        notes.push(
-            "sbx 0.50 rebuilds each local kit once: the next sandbox created with one of your own kits (or sbxw's) \
-             takes the time of a first build.",
-        );
-        notes.push(
-            "Automatic templates were made by the older sbx and are now out of date: the next create asks before \
-             rebuilding (`sbxw up <name> --rebuild-template`).",
-        );
-        notes.push(
-            "Sandboxes created before 0.50 keep their old storage (persistent kit volumes apply to new ones) and \
-             may carry an apiKeyHelper that outranks /login — recreate one to get both.",
-        );
-    }
     if before < (0, 51, 0) && now >= (0, 51, 0) {
         notes.push(
             "sbx 0.51 runs Claude Code from the published kit docker.io/sbx/claude (Debian 13), and v1/v2 kits no \
@@ -266,12 +252,10 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
              earlier keep running but cannot take kits until recreated — save any work outside the workspace, then \
              `sbxw rm <name>` and `sbxw up <name>`.",
         );
-        if before >= (0, 50, 0) {
-            notes.push(
-                "Automatic templates were made by the older sbx and are now out of date: the next create asks before \
-                 rebuilding (`sbxw up <name> --rebuild-template`).",
-            );
-        }
+        notes.push(
+            "Automatic templates were made by the older sbx and are now out of date: the next create asks before \
+             rebuilding (`sbxw up <name> --rebuild-template`).",
+        );
         notes.push(
             "Copying text from a sandbox's terminal to your clipboard now needs `sbx settings set clipboard.textCopy \
              true` (sbxw doctor shows whether it is on).",
@@ -978,10 +962,8 @@ mod tests {
 
     #[test]
     fn crossing_0_50_is_announced_once_and_only_then() {
-        assert_eq!(upgrade_notes("0.49.2", "0.50.0").len(), 3);
-        assert!(upgrade_notes("0.50.0", "0.50.1").is_empty());
         assert_eq!(upgrade_notes("0.50.1", "0.51.0").len(), 3, "kits, templates, clipboard");
-        assert_eq!(upgrade_notes("0.49.2", "0.51.0").len(), 5, "the 0.50 notes already name the templates");
+        assert!(upgrade_notes("0.51.0", "0.51.2").is_empty());
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
     }
 

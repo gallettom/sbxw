@@ -122,44 +122,6 @@ fn scope_rows(rows: Vec<Vec<String>>, roles: &[&str], sandbox: &str) -> (Vec<Vec
     (kept, dropped)
 }
 
-/// Rule ids of `--wide` rows allowing exactly `resource`, split by what the
-/// listing proves about their scope: `mine` are scoped to `sandbox` by name
-/// (safe to remove), `unsure` carry no scope column (a host-wide rule would
-/// look the same, so they are reported, never removed).
-pub struct Found {
-    pub mine: Vec<String>,
-    pub unsure: Vec<String>,
-}
-
-pub fn rule_ids_for(view: &PolicyView, resource: &str, sandbox: &str) -> Found {
-    let col = |role: &str| view.roles.iter().position(|r| *r == role);
-    let mut found = Found { mine: vec![], unsure: vec![] };
-    let (Some(id), Some(host)) = (col("rule_id"), col("host")) else {
-        return found;
-    };
-    let action = col("action");
-    let scope = col("applies").map(|i| (i, false)).or_else(|| col("sandbox").map(|i| (i, true)));
-    for r in &view.rows {
-        let hit = r.get(host).is_some_and(|h| h.split(',').any(|h| h.trim() == resource))
-            && action.is_none_or(|a| r.get(a).is_some_and(|v| v.eq_ignore_ascii_case("allow")));
-        let Some(rule) = r.get(id).filter(|v| !v.is_empty()).cloned() else { continue };
-        if !hit {
-            continue;
-        }
-        match scope {
-            Some((i, bare)) => {
-                let cell = r.get(i).map(|c| c.trim()).unwrap_or("");
-                let named = if bare { cell == sandbox } else { cell == format!("sandbox:{sandbox}") };
-                if named {
-                    found.mine.push(rule);
-                }
-            }
-            None => found.unsure.push(rule),
-        }
-    }
-    found
-}
-
 pub const ARG_LIMIT: usize = 512;
 
 /// One policy argument, or why it cannot be used. sbx gets argv, never a
@@ -441,26 +403,6 @@ mod tests {
     fn rule_id_and_policy_id_are_distinct_roles() {
         let cols: Vec<String> = ["RULE ID", "POLICY", "NAME ID"].map(String::from).to_vec();
         assert_eq!(column_roles(&cols), ["rule_id", "id", "id"]);
-    }
-
-    #[test]
-    fn stale_ui_port_rules_are_found_by_resource() {
-        let wide = "RULE ID   SANDBOX   RESOURCE          ACTION\n\
-                    r-1       neos      localhost:7681    allow\n\
-                    r-2       neos      localhost:7682    allow\n\
-                    r-3       other     localhost:7681    allow\n";
-        let v = PolicyView::build(wide, true, "neos");
-        let f = rule_ids_for(&v, "localhost:7681", "neos");
-        assert_eq!(f.mine, ["r-1"]);
-        assert!(f.unsure.is_empty());
-        let global = "RULE ID   APPLIES TO     RESOURCE          ACTION\n\
-                      r-9       all            localhost:7681    allow\n";
-        let v = PolicyView::build(global, true, "neos");
-        assert!(rule_ids_for(&v, "localhost:7681", "neos").mine.is_empty(), "a host-wide rule is never revoked");
-        let bare = "RULE ID   RESOURCE          ACTION\n\
-                    r-5       localhost:7681    allow\n";
-        let v = PolicyView::build(bare, true, "neos");
-        assert_eq!(rule_ids_for(&v, "localhost:7681", "neos").unsure, ["r-5"]);
     }
 
     #[test]

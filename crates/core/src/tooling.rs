@@ -69,7 +69,6 @@ pub mod piece {
     pub const USAGE_STATUSLINE: &str = "usage-statusline";
     pub const RELAY: &str = "relay";
     pub const LEAD: &str = "lead";
-    pub const STALE_MODEL: &str = "stale-model";
 }
 
 /// What the agent is told about the relay, in its user memory: the *trigger*,
@@ -282,18 +281,6 @@ impl Tooling {
         self.piece(piece::LEAD, body)
     }
 
-    /// Remove a settings `model` key — only when it is still sbxw's own
-    /// leftover, since a settings `model` outranks `ANTHROPIC_DEFAULT_MODEL`
-    /// and a differing one is somebody's deliberate `/model`.
-    pub fn drop_stale_model(self, written_by_sbxw: &str) -> Self {
-        let body = format!(
-            "const d=json({});if(d.model==={}){{delete d.model;}}",
-            js(SETTINGS_PATH),
-            js(written_by_sbxw)
-        );
-        self.piece(piece::STALE_MODEL, body)
-    }
-
     /// The whole batch as one Node script.
     pub fn script(&self) -> String {
         let mut s = String::from(PRELUDE);
@@ -344,7 +331,6 @@ pub fn consequence(piece: &str) -> &'static str {
         piece::USAGE_STATUSLINE => "could not install the usage statusLine",
         piece::RELAY => "could not install the cross-sandbox relay",
         piece::LEAD => "could not install /lead",
-        piece::STALE_MODEL => "could not clear the old settings.json model key",
         _ => "a tooling step failed",
     }
 }
@@ -416,8 +402,7 @@ mod tests {
             .status_hooks("7682")
             .usage_statusline("7682")
             .relay("7682")
-            .lead_command()
-            .drop_stale_model("m1");
+            .lead_command();
         let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
         let read = |p: &str| std::fs::read_to_string(h.join(p)).unwrap();
         let out = run_node(&script).unwrap();
@@ -427,7 +412,7 @@ mod tests {
         assert_eq!(first, (read(".claude/settings.json"), read(".claude.json"), read(".claude/CLAUDE.md")));
 
         let s: serde_json::Value = serde_json::from_str(&first.0).unwrap();
-        assert!(s.get("model").is_none());
+        assert_eq!(s["model"], "m1", "the person's own key is theirs");
         assert_eq!(s["statusLine"]["command"], "mine");
         assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 4, "the user's, artifacts, status, team guard");
         assert_eq!(s["hooks"]["PostToolUse"].as_array().unwrap().len(), 2, "status, team guard");
