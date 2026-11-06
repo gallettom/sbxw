@@ -1,0 +1,31 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: sbxw-base
+description: >
+  What sbxw itself needs in every sandbox it creates: Node.js, which runs the
+  relay MCP server, the session hooks, the status line and the bundled kits'
+  scripts. sbx 0.51's Claude Code image ships none. Installed once, at create,
+  from the image's apt repositories (nodejs-24 from Docker Hardened Images,
+  else Debian's nodejs). Always applied, first; not listed in `kits`.
+
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/
+
+capabilities:
+  # apt during the install hook only: the agent's own steady state is the
+  # workload's and sbxw.toml's business.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      install:
+        allow:
+          - deb.debian.org
+          - security.debian.org
+          - dhi.io
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: ["sh", "/home/agent/.sbxw/base/install-node.sh"]
+          user: "0"
+          description: Install Node.js for sbxw's in-sandbox tooling

@@ -1,6 +1,7 @@
-schemaVersion: "2"
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
 kind: mixin
-name: md-to-pdf-tools
+displayName: md-to-pdf-tools
 description: >
   Ships the /md-to-pdf skill itself (as a user-level Claude Code command) and
   pre-installs the WeasyPrint + poppler-utils + Pillow stack it needs, so
@@ -11,280 +12,28 @@ description: >
 # *.pythonhosted.org are already in sbxw's default network_allow, but the apt
 # mirrors are not — add them to sbxw.toml's network_allow (see this kit's
 # README) or the apt-get step will 403.
-permissions:
-  network:
-    allow:
-      - deb.debian.org
-      - security.debian.org
-      - archive.ubuntu.com
-      - security.ubuntu.com
-      - ports.ubuntu.com
-      - pypi.org
-      - files.pythonhosted.org
 
-setup:
-  files:
-    # User-level command, not project-level: this lands in every sandbox that
-    # applies this kit regardless of which project is mounted as the
-    # workspace, so /md-to-pdf never needs to be committed into target repos.
-    - path: /home/agent/.claude/commands/md-to-pdf.md
-      mode: "0644"
-      content: |
-        Convert a Markdown file to a styled PDF and a stitched full-page PNG, installing any missing dependencies automatically.
+# Everything the kit ships is image content: files/ is copied into the
+# agent's home at build, owned by the agent. sbx builds this directory when
+# the sandbox is created and caches the result while files/ is unchanged.
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/
 
-        You are converting the Markdown file at path: $ARGUMENTS
-
-        Follow these steps exactly. Do not ask the user to install anything or run anything manually — handle it all yourself.
-
-        Note: if the `assets/md-to-pdf-tools` kit (see main README's Kits section) is
-        applied to this sandbox, the dependency checks below will already pass and
-        step 1 becomes a no-op — this only does real work on sandboxes without it.
-
-        ## 0. Resolve input and output paths
-
-        - If `$ARGUMENTS` is empty, ask the user which Markdown file to convert (or stop with a clear error).
-        - Resolve the input path to an absolute path and confirm it exists (`test -f`). If it doesn't, stop and report the error.
-        - Determine the output directory:
-          - If `.sbxw-artifacts/` exists in the current working directory, use it.
-          - Otherwise, use the same directory as the source file.
-        - Base name for outputs = the source file's stem (e.g. `ARCHITECTURE.md` → `ARCHITECTURE`).
-
-        ## 1. Check and install dependencies (only if missing)
-
-        Check each of these before installing anything — do not reinstall what's already present:
-
-        ```bash
-        python3 -c "import weasyprint" 2>/dev/null && echo weasyprint:ok || echo weasyprint:missing
-        python3 -c "import markdown" 2>/dev/null && echo markdown:ok || echo markdown:missing
-        python3 -c "import PIL" 2>/dev/null && echo pillow:ok || echo pillow:missing
-        which pdftoppm >/dev/null 2>&1 && echo poppler:ok || echo poppler:missing
-        ldconfig -p | grep -q libpango-1.0.so && echo pango:ok || echo pango:missing
-        ```
-
-        For anything missing, install silently:
-
-        ```bash
-        sudo apt-get update -qq && sudo apt-get install -y -qq \
-          poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libgobject-2.0-0 libglib2.0-0
-        pip3 install --break-system-packages -q weasyprint markdown pillow
-        ```
-
-        Only run the parts that are actually needed based on the checks above — skip apt/pip entirely if everything is already `ok`.
-
-        ## 2. Convert Markdown to styled HTML
-
-        Write a small Python script (e.g. to the scratchpad dir) that reads the source Markdown, converts it with the `markdown` library using extensions `['extra', 'tables', 'fenced_code', 'toc', 'codehilite']`, and wraps it in a styled HTML document. Use CSS along these lines (GitHub-like, A4-friendly, and note `overflow-x: hidden` — NOT `auto`, because WeasyPrint ignores `auto` and warns):
-
-        ```python
-        import markdown, sys, pathlib
-
-        src = pathlib.Path(sys.argv[1])
-        dst = pathlib.Path(sys.argv[2])
-
-        html_body = markdown.markdown(
-            src.read_text(encoding="utf-8"),
-            extensions=["extra", "tables", "fenced_code", "toc", "codehilite"],
-        )
-
-        CSS = """
-        @page { size: A4; margin: 2cm; }
-        body {
-          font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
-          font-size: 11pt;
-          line-height: 1.55;
-          color: #1f2328;
-          overflow-x: hidden;
-        }
-        h1, h2, h3, h4 { font-weight: 600; margin-top: 1.4em; margin-bottom: 0.6em; }
-        h1 { font-size: 1.9em; border-bottom: 1px solid #d0d7de; padding-bottom: 0.3em; }
-        h2 { font-size: 1.5em; border-bottom: 1px solid #d0d7de; padding-bottom: 0.3em; }
-        code { background: #f6f8fa; padding: 0.15em 0.35em; border-radius: 4px; font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 0.9em; }
-        pre { background: #f6f8fa; padding: 1em; border-radius: 6px; overflow-x: hidden; white-space: pre-wrap; word-wrap: break-word; }
-        pre code { background: none; padding: 0; }
-        table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-        th, td { border: 1px solid #d0d7de; padding: 0.5em 0.8em; }
-        th { background: #f6f8fa; }
-        blockquote { border-left: 4px solid #d0d7de; margin: 1em 0; padding: 0 1em; color: #57606a; }
-        img { max-width: 100%; }
-        a { color: #0969da; text-decoration: none; }
-        """
-
-        dst.write_text(
-            f"<!doctype html><html><head><meta charset='utf-8'><style>{CSS}</style></head>"
-            f"<body>{html_body}</body></html>",
-            encoding="utf-8",
-        )
-        ```
-
-        Run it: `python3 <script>.py <source.md> <scratchpad>/<basename>.html`
-
-        ## 3. Render HTML to PDF
-
-        ```bash
-        weasyprint "<scratchpad>/<basename>.html" "<output_dir>/<basename>.pdf"
-        ```
-
-        ## 4. Rasterize PDF pages to PNG
-
-        ```bash
-        pdftoppm -r 150 -png "<output_dir>/<basename>.pdf" "<scratchpad>/<basename>-page"
-        ```
-
-        This produces one PNG per page (e.g. `<basename>-page-1.png`, `<basename>-page-2.png`, ...).
-
-        ## 5. Stitch pages into a single full-height PNG
-
-        ```bash
-        python3 -c "
-        from PIL import Image
-        import glob
-
-        files = sorted(glob.glob('<scratchpad>/<basename>-page-*.png'))
-        images = [Image.open(f) for f in files]
-        width = max(im.width for im in images)
-        total_height = sum(im.height for im in images)
-        stitched = Image.new('RGB', (width, total_height), 'white')
-        y = 0
-        for im in images:
-            stitched.paste(im, (0, y))
-            y += im.height
-        stitched.save('<output_dir>/<basename>.png')
-        "
-        ```
-
-        ## 6. Report results
-
-        Print the final absolute paths of the generated PDF and stitched PNG, e.g.:
-
-        ```
-        PDF: <output_dir>/<basename>.pdf
-        PNG: <output_dir>/<basename>.png
-        ```
-
-        Clean up intermediate files in the scratchpad (per-page PNGs, the HTML) but leave the PDF/PNG in the output directory. Do not print large amounts of raw command output — just confirm success and show the two final paths.
-    - path: /home/agent/.local/bin/sbxw-install-md-to-pdf
-      mode: "0755"
-      content: |
-        #!/usr/bin/env bash
-        # Idempotent, and never fails the container start: a failed step is
-        # reported and skipped. apt and pip are independent, so they run side
-        # by side; a restart with everything present runs neither.
-        set -uo pipefail
-        info() { echo "  [md-to-pdf-tools] $*"; }
-
-        # ── The sbxw host cache ──────────────────────────────────────────────
-        # sbxw mounts ~/.sbxw/cache into the sandboxes it creates and
-        # names it in SBXW_CACHE: what was downloaded once (apt packages and
-        # lists, the Python wheels) is copied from there instead of fetched again.
-        # Only the sandbox that fills it (the first, or the first after it
-        # expires) sees it writable, with SBXW_CACHE_FILL=1. printenv, not the
-        # variable: set -u, and no dollar-brace defaults in kit content.
-        CACHE=""; FILL=""
-        SBXW_CACHE="$(printenv SBXW_CACHE)"
-        if [ -n "$SBXW_CACHE" ] && [ -d "$SBXW_CACHE" ]; then
-          CACHE="$SBXW_CACHE/$(dpkg --print-architecture 2>/dev/null)-$(. /etc/os-release 2>/dev/null; echo "$VERSION_CODENAME")"
-          if [ "$(printenv SBXW_CACHE_FILL)" = 1 ]; then
-            FILL=1; mkdir -p "$CACHE/apt/partial" "$CACHE/apt-lists" "$CACHE/wheels"
-          fi
-          [ -d "$CACHE" ] || CACHE=""
-        fi
-
-        # apt_install ARGS... — `apt-get install` that refreshes the package
-        # lists only when no kit has done so in the last hour (the stamp is
-        # shared with the other bundled kits), and once more if the install
-        # fails on lists that turned out to be stale.
-        APT_STAMP=/home/agent/.cache/sbxw-apt-updated
-        apt_update() {
-          if [ "$1" != force ] && [ -n "$(find "$APT_STAMP" -mmin -60 2>/dev/null)" ]; then return 0; fi
-          # Lists under a week old from the cache instead of the network.
-          if [ "$1" != force ] && [ -z "$FILL" ] && [ -n "$CACHE" ] && [ -n "$(find "$CACHE/apt-lists/.stamp" -mmin -10080 2>/dev/null)" ] \
-              && sudo cp "$CACHE"/apt-lists/*_* /var/lib/apt/lists/ 2>/dev/null; then
-            mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"; return 0
-          fi
-          sudo apt-get update -qq >/dev/null 2>&1 || return 1
-          mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
-          if [ -n "$FILL" ]; then
-            find /var/lib/apt/lists -maxdepth 1 -type f -name '*_*' -exec cp {} "$CACHE/apt-lists/" \; 2>/dev/null
-            touch "$CACHE/apt-lists/.stamp"
-          fi
-        }
-        # Packages: the filling sandbox downloads into the cache; the others
-        # seed apt's own archive dir from it (apt checks each file's hash
-        # against the lists, and downloads whatever does not match).
-        apt_cache_opt() {
-          if [ -n "$FILL" ]; then echo "-o Dir::Cache::Archives=$CACHE/apt"; return; fi
-          [ -n "$CACHE" ] && sudo cp -n "$CACHE"/apt/*.deb /var/cache/apt/archives/ 2>/dev/null
-          echo ""
-        }
-        apt_install() {
-          apt_update fresh || return 1
-          opt="$(apt_cache_opt)"
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq "$@" && return 0
-          apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq "$@"
-        }
-
-        # ── 1. System libs (WeasyPrint's renderer + poppler's pdftoppm) ──────
-        # Checked by actual .so/binary presence, not package name: on newer
-        # Debian/Ubuntu (the t64 transition), libgobject-2.0-0 and
-        # libglib2.0-0 are virtual packages provided by libglib2.0-0t64, so
-        # `dpkg -s <name>` always reports them missing even when satisfied.
-        NEED_LIBS=0
-        command -v pdftoppm >/dev/null 2>&1 || NEED_LIBS=1
-        # One ldconfig call, matched with `case`: `| grep -q` under pipefail
-        # can fail on SIGPIPE when grep quits at the first match.
-        LDCACHE="$(ldconfig -p 2>/dev/null)"
-        for lib in libpango-1.0.so.0 libpangoft2-1.0.so.0 libgobject-2.0.so.0 libglib-2.0.so.0; do
-          case "$LDCACHE" in *"$lib"*) ;; *) NEED_LIBS=1 ;; esac
-        done
-
-        # ── 2. Python packages (Debian marks system Python externally-managed;
-        #    --break-system-packages confines nothing new since these are
-        #    pure-library installs the agent already runs as root/sudo user) ──
-        # Looked up with find_spec rather than imported: importing weasyprint
-        # alone takes the better part of a second, and finding the package is
-        # all the check needs (pip would not reinstall a broken one either).
-        # Plain space-separated string, not a bash array: kit spec.yaml content
-        # only allows the WORKDIR placeholder (in dollar-brace form), and bash
-        # array expansion syntax also needs dollar-brace, which the kit
-        # validator can't tell apart from a placeholder.
-        NEED_PIP="$(python3 -c '
-        from importlib.util import find_spec
-        print(" ".join(p for m, p in (("weasyprint", "weasyprint"), ("markdown", "markdown"), ("PIL", "pillow")) if find_spec(m) is None))
-        ' 2>/dev/null)" || NEED_PIP="weasyprint markdown pillow"
-
-        PIP_PID=""
-        if [ -z "$NEED_PIP" ]; then
-          info "python packages already installed"
-        else
-          info "pip installing: $NEED_PIP"
-          (
-            if [ -n "$FILL" ]; then
-              pip3 wheel -q -w "$CACHE/wheels" $NEED_PIP >/dev/null 2>&1 || info "could not build wheels into the cache"
-            fi
-            if [ -n "$CACHE" ] && pip3 install --break-system-packages -q --no-index --find-links "$CACHE/wheels" $NEED_PIP 2>/dev/null; then
-              info "python packages installed from the sbxw cache"
-            elif pip3 install --break-system-packages -q $NEED_PIP; then
-              info "python packages installed"
-            else
-              info "pip install failed — skipping (check network_allow for pypi)"
-            fi
-          ) &
-          PIP_PID=$!
-        fi
-
-        if [ "$NEED_LIBS" -eq 0 ]; then
-          info "system libs already installed"
-        else
-          info "installing poppler-utils + pango/glib libs..."
-          if apt_install poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libgobject-2.0-0 libglib2.0-0; then
-            info "system libs installed"
-          else
-            info "apt-get install failed — skipping (check network_allow for apt mirrors)"
-          fi
-        fi
-
-        [ -n "$PIP_PID" ] && wait "$PIP_PID"
-        [ -n "$FILL" ] && touch "$CACHE/.filled-md-to-pdf-tools"
-        info "done."
-  startup:
-    - command: ["bash", "/home/agent/.local/bin/sbxw-install-md-to-pdf"]
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          - deb.debian.org
+          - security.debian.org
+          - archive.ubuntu.com
+          - security.ubuntu.com
+          - ports.ubuntu.com
+          - pypi.org
+          - files.pythonhosted.org
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      # Every boot, alongside the agent: each script is idempotent.
+      startup:
+        - command: ["bash", "/home/agent/.local/bin/sbxw-install-md-to-pdf"]

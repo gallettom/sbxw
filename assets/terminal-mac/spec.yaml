@@ -1,6 +1,7 @@
-schemaVersion: "2"
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
 kind: mixin
-name: terminal-mac
+displayName: terminal-mac
 description: >
   A virtual Mac the agent can drive: Safari, Mac apps, anything headless
   Chromium cannot show. The VM runs on the host under terminal-mac
@@ -13,44 +14,9 @@ description: >
 # No network: the tools speak to the sbxw agent port, which every sandbox
 # already reaches.
 
-setup:
-  files:
-    # relay-mcp.js lists the mac_* tools only when this file exists.
-    - path: /home/agent/.sbxw/mac-tools
-      mode: "0644"
-      content: |
-        terminal-mac
-    - path: /home/agent/.claude/commands/mac.md
-      mode: "0644"
-      content: |
-        Use the virtual Mac to see or test something only macOS can show: a page in Safari, a Mac app, a native window. Not for what headless Chromium in this sandbox can capture.
-
-        Task: $ARGUMENTS
-
-        The virtual Mac is a separate macOS guest on the host, shared by every sandbox and driven
-        through the `mac_*` tools of the `sbxw-relay` MCP server. It is not the user's desktop:
-        nothing you do there touches their Mac, and no personal or organisation account is
-        signed in there. Never type secrets or credentials into it.
-
-        1. **Take it.** `mac_start` with a one-line reason. If the VM is stopped, a person
-           approves the boot first; wait for the answer, do not retry in a loop. If another
-           sandbox holds it, say so and carry on with something else.
-        2. **Show it your app.** A web app in this sandbox is not reachable from the guest
-           until a port is published: `mac_open_port` with the port and a reason. A person
-           approves it, and the tool returns the URL to open *in the guest*.
-        3. **Observe, act, verify.** `mac_screenshot`; every x/y you pass is a pixel of that
-           image, top-left origin. Act with `mac_click`, `mac_type`, `mac_key`, `mac_scroll`,
-           `mac_drag`, `mac_move`; pass `screenshot: true` to get the result in the same call.
-           Look again before each next step. Prefer keyboard shortcuts to small targets:
-           open Safari with `mac_key cmd+space`, `mac_type Safari`, `mac_key return`; go to a
-           URL with `mac_key cmd+l`, `mac_type <url>`, `mac_key return`.
-        4. **Let go.** `mac_release` when done, so the next sandbox can use it. An unused lease
-           lapses on its own after a few minutes anyway.
-
-        **Never type blind.** Before `mac_type`, a screenshot must show which field has the
-        focus. If a call says the display is unavailable, wake it with `mac_key shift` (it types
-        nothing) and look again; do not type until you can see.
-
-        Stop and ask the user when the guest shows a login screen, a permission prompt, a
-        password or a payment. Screenshots are saved in the workspace under
-        .sbxw-artifacts/mac-shots/ (the newest 40), where the user can open them too.
+# Everything the kit ships is image content: files/ is copied into the
+# agent's home at build, owned by the agent. sbx builds this directory when
+# the sandbox is created and caches the result while files/ is unchanged.
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/

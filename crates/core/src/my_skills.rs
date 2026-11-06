@@ -4,7 +4,7 @@
 //! A kept skill is a folder under `~/.sbxw/skills/<name>/` on the host, copied
 //! out of a sandbox on the person's say-so (the web UI's Skills dialog, on the
 //! UI listener only). They reach sandboxes as one generated kit,
-//! [`kit_spec`], which writes each file under `/home/agent/.sbxw/my-skills/`
+//! [`kit_files`], which ships each file under `/home/agent/.sbxw/my-skills/`
 //! and a thin `~/.claude/commands/<name>.md` pointing at its `SKILL.md` — the
 //! arrangement the bundled kits use, because `~/.claude/skills` in a sandbox is
 //! a mount of sbx's shared skill store.
@@ -160,33 +160,42 @@ fn command(name: &str, desc: Option<&str>) -> String {
     )
 }
 
-/// The kit that installs every kept skill. Content is a JSON string, which is
-/// a YAML double-quoted scalar: newlines and quotes survive, nothing folds.
-pub fn kit_spec(skills: &[Skill]) -> String {
+/// One file of the generated kit's directory: its path inside the kit,
+/// whether it is executable, its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KitFile {
+    pub rel: String,
+    pub executable: bool,
+    pub content: String,
+}
+
+/// The kit that installs every kept skill, as the files of its directory: a
+/// kit spec v3 `spec.yaml` whose build copies `files/home/agent/` into the
+/// agent's home, and that tree. The files are image content, so sbx copies
+/// them byte for byte — nothing is a YAML scalar that could fold or expand.
+pub fn kit_files(skills: &[Skill]) -> Vec<KitFile> {
     let mut skills: Vec<&Skill> = skills.iter().collect();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
-    let mut out = format!(
-        "schemaVersion: \"2\"\nkind: mixin\nname: {KIT_NAME}\n\
-         description: Skills you kept from a sandbox with sbxw ({})\n",
-        names.join(", ")
+    let mut spec = format!(
+        "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ndisplayName: {KIT_NAME}\n\
+         description: {}\n",
+        serde_json::to_string(&format!("Skills you kept from a sandbox with sbxw ({})", names.join(", "))).unwrap_or_default()
     );
-    if skills.is_empty() {
-        return out;
+    if !skills.is_empty() {
+        spec.push_str("build: |\n  FROM scratch\n  COPY --chown=1000:1000 files/home/agent/ /home/agent/\n");
     }
-    out.push_str("\nsetup:\n  files:\n");
-    let mut file = |path: &str, mode: &str, content: &str| {
-        let content = serde_json::to_string(content).unwrap_or_default();
-        out.push_str(&format!("    - path: {}\n      mode: \"{mode}\"\n      content: {content}\n", serde_json::to_string(path).unwrap_or_default()));
-    };
+    let mut out = vec![KitFile { rel: "spec.yaml".into(), executable: false, content: spec }];
+    let home = |p: &str| format!("files{p}");
     for s in skills {
         let mut files: Vec<&File> = s.files.iter().collect();
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let desc = files.iter().find(|f| f.path == "SKILL.md").and_then(|f| description(&f.content));
         for f in files {
-            file(&format!("{SANDBOX_ROOT}/{}/{}", s.name, f.path), if f.executable { "0755" } else { "0644" }, &f.content);
+            out.push(KitFile { rel: home(&format!("{SANDBOX_ROOT}/{}/{}", s.name, f.path)), executable: f.executable, content: f.content.clone() });
         }
-        file(&format!("/home/agent/.claude/commands/{}.md", s.name), "0644", &command(&s.name, desc.as_deref()));
+        let cmd = command(&s.name, desc.as_deref());
+        out.push(KitFile { rel: home(&format!("/home/agent/.claude/commands/{}.md", s.name)), executable: false, content: cmd });
     }
     out
 }
@@ -311,16 +320,19 @@ mod tests {
                 files: vec![f("SKILL.md", tricky), File { path: "bin/run.sh".into(), content: "#!/bin/sh\n".into(), executable: true }],
             },
         ];
-        let spec = kit_spec(&skills);
-        let doc: serde_norway::Value = serde_norway::from_str(&spec).unwrap();
-        assert_eq!(doc["name"].as_str(), Some(KIT_NAME));
-        let files = doc["setup"]["files"].as_sequence().unwrap();
-        let get = |p: &str| files.iter().find(|x| x["path"].as_str() == Some(p)).unwrap_or_else(|| panic!("{p}"));
-        assert_eq!(get("/home/agent/.sbxw/my-skills/alpha/SKILL.md")["content"].as_str(), Some(tricky));
-        assert_eq!(get("/home/agent/.sbxw/my-skills/alpha/bin/run.sh")["mode"].as_str(), Some("0755"));
-        let cmd = get("/home/agent/.claude/commands/zeta.md")["content"].as_str().unwrap();
+        let files = kit_files(&skills);
+        let get = |p: &str| files.iter().find(|x| x.rel == p).unwrap_or_else(|| panic!("{p}"));
+        let doc: serde_norway::Value = serde_norway::from_str(&get("spec.yaml").content).unwrap();
+        assert_eq!(doc["schemaVersion"].as_str(), Some("3"));
+        assert_eq!(doc["displayName"].as_str(), Some(KIT_NAME));
+        assert!(doc["build"].as_str().unwrap().contains("COPY --chown=1000:1000 files/home/agent/ /home/agent/"));
+        assert_eq!(get("files/home/agent/.sbxw/my-skills/alpha/SKILL.md").content, tricky);
+        assert!(get("files/home/agent/.sbxw/my-skills/alpha/bin/run.sh").executable);
+        let cmd = &get("files/home/agent/.claude/commands/zeta.md").content;
         assert!(cmd.starts_with("---\ndescription: \"Z skill\"\n---") && cmd.contains("my-skills/zeta/SKILL.md"), "{cmd}");
-        assert_eq!(spec, kit_spec(&[skills[1].clone(), skills[0].clone()]), "same skills, same kit");
-        assert!(!kit_spec(&[]).contains("setup:"));
+        assert_eq!(files, kit_files(&[skills[1].clone(), skills[0].clone()]), "same skills, same kit");
+        let empty = kit_files(&[]);
+        assert_eq!(empty.len(), 1);
+        assert!(!empty[0].content.contains("build:"), "nothing to copy, no build");
     }
 }

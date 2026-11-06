@@ -1,12 +1,16 @@
 //! Kits: sbx's declarative extension point, and the facts sbxw has learnt
 //! about applying them.
 //!
-//! * **Creation is still the cheapest moment to apply a kit.** `sbx kit add` on
-//!   an existing sandbox recreates its container, so every configured kit goes
-//!   to `sbx create --kit`. `kit add` also takes a kit that declares
-//!   startup commands (they run after the add and on every start), so an
-//!   existing sandbox gets every kit; a refusal sbx still gives is a message
-//!   telling the person to recreate, never a recreate sbxw decides on its own.
+//! * **Kit spec v3 only (sbx 0.51).** `claude` now resolves to the published
+//!   v3 workload `docker.io/sbx/claude:latest`, and a v1/v2 kit cannot be
+//!   composed with a v3 one. Every kit sbxw ships or writes is v3; a local v1/v2
+//!   kit in `kits` is refused before anything is created.
+//! * **Creation is the moment to apply a kit.** `sbx kit add` on an existing
+//!   sandbox recreates its container, and refuses kits declaring credentials,
+//!   ports, volumes, generated lifecycle files or host-level denies; image
+//!   content, install/startup hooks and allow rules it takes. A refusal is a
+//!   message telling the person to recreate, never a recreate sbxw decides on
+//!   its own.
 //! * **sbx keeps a kit's path, not a copy.** A container swap re-resolves every
 //!   kit applied before it by its original path; a kit directory that is gone
 //!   fails the swap and names the *wrong* kit. Hence the durable OAuth kit
@@ -16,6 +20,17 @@ use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
 pub const BUNDLED: [&str; 8] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac"];
+
+/// sbxw's own kit, applied to every sandbox before the project's: Node.js,
+/// which sbx 0.51's Claude Code image lacks and every in-sandbox piece of sbxw
+/// runs on. Not one of [`BUNDLED`]: it is not offered, and not listed in `kits`.
+pub const BASE: &str = "base";
+
+/// `kits` as applied: [`BASE`] first, then the project's, without repeating it.
+pub fn with_base(kits: &[String]) -> Vec<String> {
+    let base = format!("sbxw:{BASE}");
+    std::iter::once(base.clone()).chain(kits.iter().filter(|k| **k != base).cloned()).collect()
+}
 
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
 /// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
@@ -169,16 +184,68 @@ pub fn display_name(kit: &str, spec: Option<&str>) -> String {
         .to_string()
 }
 
-/// Does the kit directory hold a v3 spec? sbx 0.50's `kit validate` reads
-/// only v1/v2 specs and refuses every v3 one (`field capabilities not found`),
-/// even the spec project's own examples — so a v3 kit is left to `sbx create`,
+/// The `schemaVersion` of a kit directory's spec, `None` when it has no
+/// readable `spec.yaml` (a ZIP, a registry reference, a companion-pair kit
+/// named after its stem).
+pub fn spec_version(dir: &Path) -> Option<u32> {
+    let raw = std::fs::read_to_string(dir.join("spec.yaml")).ok()?;
+    raw.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim() == "schemaVersion").then(|| v.trim().trim_matches(|c| c == '"' || c == '\'').parse().ok())?
+    })
+}
+
+/// Does the kit directory hold a v3 spec? sbx's `kit validate` reads only
+/// v1/v2 specs and refuses every v3 one (`field capabilities not found`), even
+/// the spec project's own examples — so a v3 kit is left to `sbx create`,
 /// which does read it.
 pub fn is_v3_kit(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join("spec.yaml")).is_ok_and(|raw| {
-        raw.lines().any(|l| {
-            l.split_once(':').is_some_and(|(k, v)| k.trim() == "schemaVersion" && v.trim().trim_matches(|c| c == '"' || c == '\'') == "3")
-        })
-    })
+    spec_version(dir) == Some(3)
+}
+
+/// Why a local kit cannot be applied with sbx 0.51's `claude` workload, if it
+/// cannot: a v1/v2 spec does not compose with a v3 one.
+pub fn incompatible_spec(dir: &Path) -> Option<String> {
+    match spec_version(dir)? {
+        3 => None,
+        v => Some(format!(
+            "kit spec v{v} — sbx 0.51's Claude Code workload is a v3 kit, and v1/v2 kits do not compose with v3 ones. \
+             Convert it (docs/kits-and-skills.md#writing-your-own-kit) or remove it from `kits`"
+        )),
+    }
+}
+
+/// What a local kit *is*, for a fingerprint: its `spec.yaml` and every file
+/// under `files/` (the image content a v3 build copies), path then bytes, in
+/// path order. A reference that is not a local directory is its own text.
+pub fn content_text(kit: &str) -> String {
+    let dir = Path::new(kit);
+    let Ok(spec) = std::fs::read_to_string(dir.join("spec.yaml")) else {
+        return kit.to_string();
+    };
+    let mut files = Vec::new();
+    collect_files(&dir.join("files"), &mut files);
+    files.sort();
+    let mut out = spec;
+    for f in files {
+        let rel = f.strip_prefix(dir).unwrap_or(&f).to_string_lossy().replace('\\', "/");
+        out.push('\u{0}');
+        out.push_str(&rel);
+        out.push('\u{0}');
+        out.push_str(&String::from_utf8_lossy(&std::fs::read(&f).unwrap_or_default()));
+    }
+    out
+}
+
+fn collect_files(dir: &Path, acc: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        match e.file_type() {
+            Ok(t) if t.is_dir() => collect_files(&e.path(), acc),
+            Ok(t) if t.is_file() => acc.push(e.path()),
+            _ => {}
+        }
+    }
 }
 
 /// The sandbox paths a spec declares `host-mount@1` at — what `--mount
@@ -202,10 +269,14 @@ pub fn host_mount_targets(spec: &str) -> Vec<String> {
         .collect()
 }
 
-/// Is a failed `sbx kit add` the "recreate the sandbox instead" refusal?
+/// Is a failed `sbx kit add` the "recreate the sandbox instead" refusal? Since
+/// 0.51 that includes a sandbox created by an earlier sbx from its embedded
+/// Claude spec, and a v3 kit refused for declaring what only creation applies.
 pub fn add_needs_recreate(err: &str) -> bool {
     let lower = err.to_lowercase();
-    lower.contains("does not yet apply") || lower.contains("recreate the sandbox from scratch")
+    ["does not yet apply", "recreate the sandbox", "must be recreated", "requires sandbox creation", "cannot be combined", "can't be combined"]
+        .iter()
+        .any(|s| lower.contains(s))
 }
 
 /// Does sbx need `kit.allowedSources` before it fetches this reference? Git
@@ -350,20 +421,26 @@ pub fn volumes_kit_spec(paths: &[String]) -> String {
     out
 }
 
-/// The OAuth mixin kit, spec v2. Without credentials it is the same kit minus
-/// the file — what restores a dangling reference when no token is at hand.
+/// The OAuth mixin kit, spec v3: the credentials file written at creation
+/// (`lifecycle@1` files — creation only, which is when sbxw applies it).
+/// Without credentials it is the same kit minus the file — what restores a
+/// dangling reference when no token is at hand.
+///
+/// `${{` would be expanded by sbx in a file's content; a token or a JSON
+/// document never holds one, and one that did is refused rather than mangled.
 pub fn oauth_kit_spec(credentials_json: Option<&str>) -> String {
-    let files = credentials_json.map_or_else(String::new, |creds| {
+    let lifecycle = credentials_json.filter(|c| !c.contains("${{")).map_or_else(String::new, |creds| {
         // YAML single-quoted scalar: a quote is doubled, nothing else escapes.
         let quoted = creds.replace('\'', "''");
         format!(
-            "\nsetup:\n  files:\n    - path: /home/agent/.claude/.credentials.json\n      content: '{quoted}'\n      mode: \"0600\"\n"
+            "  - type: com.docker.sandbox/lifecycle@1\n    config:\n      files:\n\
+             \x20       - path: /home/agent/.claude/.credentials.json\n          content: '{quoted}'\n          mode: \"0600\"\n"
         )
     });
     format!(
-        "schemaVersion: \"2\"\nkind: mixin\nname: claude-oauth\n\
-         description: Injects OAuth credentials for Claude Code\n\n\
-         permissions:\n  network:\n    allow:\n      - claude.ai\n{files}"
+        "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ndisplayName: claude-oauth\n\
+         description: Injects OAuth credentials for Claude Code\n\
+         capabilities:\n  - type: com.docker.sandbox/network-policy@1\n    config:\n      runtime:\n        allow:\n          - claude.ai\n{lifecycle}"
     )
 }
 
@@ -480,6 +557,8 @@ mod tests {
     #[test]
     fn startup_and_refusals_are_recognised() {
         assert!(add_needs_recreate("kit declares commands.startup, which the kit-add recreate flow does not yet apply"));
+        assert!(add_needs_recreate("sandbox was created from an embedded agent spec and must be recreated before kit add"));
+        assert!(add_needs_recreate("v2 kits cannot be combined with v3 kits"));
         assert!(!add_needs_recreate("network unreachable"));
     }
 
@@ -528,16 +607,51 @@ mod tests {
     }
 
     #[test]
-    fn the_oauth_kit_is_v2_and_its_content_survives_quotes() {
+    fn the_oauth_kit_is_v3_and_its_content_survives_quotes() {
         let creds = oauth_credentials_json("tok'en", "max");
         let spec = oauth_kit_spec(Some(&creds));
-        assert!(spec.starts_with("schemaVersion: \"2\""));
+        assert!(spec.starts_with("# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\""));
         let doc: serde_norway::Value = serde_norway::from_str(&spec).unwrap();
-        let content = doc["setup"]["files"][0]["content"].as_str().unwrap();
-        let v: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(doc["capabilities"][0]["type"], "com.docker.sandbox/network-policy@1");
+        assert_eq!(doc["capabilities"][0]["config"]["runtime"]["allow"][0], "claude.ai");
+        let file = &doc["capabilities"][1]["config"]["files"][0];
+        assert_eq!(file["path"], "/home/agent/.claude/.credentials.json");
+        assert_eq!(file["mode"], "0600");
+        let v: serde_json::Value = serde_json::from_str(file["content"].as_str().unwrap()).unwrap();
         assert_eq!(v["claudeAiOauth"]["accessToken"], "tok'en");
         assert_eq!(v["claudeAiOauth"]["subscriptionType"], "max");
-        assert!(!oauth_kit_spec(None).contains("setup:"));
+        assert!(!oauth_kit_spec(None).contains("lifecycle@1"));
+        assert!(!oauth_kit_spec(Some("{\"a\":\"${{ kit.env.HOME }}\"}")).contains("lifecycle@1"), "never expanded by sbx");
+    }
+
+    #[test]
+    fn the_base_kit_goes_first_once() {
+        assert_eq!(with_base(&[]), ["sbxw:base"]);
+        assert_eq!(with_base(&["sbxw:codemap".into(), "sbxw:base".into()]), ["sbxw:base", "sbxw:codemap"]);
+    }
+
+    #[test]
+    fn a_v1_or_v2_kit_is_refused_and_a_v3_one_is_not() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(incompatible_spec(d.path()), None, "no spec, nothing to say");
+        std::fs::write(d.path().join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: x\n").unwrap();
+        assert!(incompatible_spec(d.path()).unwrap().contains("kit spec v2"));
+        std::fs::write(d.path().join("spec.yaml"), "# syntax=docker/sandbox-kit:3\nschemaVersion: '3'\nkind: mixin\n").unwrap();
+        assert_eq!(incompatible_spec(d.path()), None);
+        assert_eq!(spec_version(d.path()), Some(3));
+    }
+
+    #[test]
+    fn a_kit_s_content_covers_its_files() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("spec.yaml"), "schemaVersion: \"3\"\n").unwrap();
+        std::fs::create_dir_all(d.path().join("files/home/agent")).unwrap();
+        std::fs::write(d.path().join("files/home/agent/a.md"), "one").unwrap();
+        let k = d.path().to_string_lossy().into_owned();
+        let before = content_text(&k);
+        std::fs::write(d.path().join("files/home/agent/a.md"), "two").unwrap();
+        assert_ne!(before, content_text(&k), "a changed file is a changed kit");
+        assert_eq!(content_text("docker.io/sbx/k:1"), "docker.io/sbx/k:1");
     }
 
     #[test]
