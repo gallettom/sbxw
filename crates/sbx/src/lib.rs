@@ -845,6 +845,25 @@ impl Sbx {
             .map_err(|e| anyhow!("{e:#}\n(retried with --force after: {first:#})"))
     }
 
+    /// A global secret sbx resolves itself by running `command` on the host
+    /// (`secret set SERVICE --command`, refreshed by sbx). sbx runs it once
+    /// to check it; a stored secret it would ask to replace is replaced.
+    pub async fn secret_set_command(&self, service: &str, command: &str) -> Result<()> {
+        let args = s(&["secret", "set", service, "--command", command]);
+        let Err(first) = self.checked(Invocation::new(args.clone())).await else {
+            return Ok(());
+        };
+        if !wants_confirmation(&format!("{first:#}")) {
+            return Err(first);
+        }
+        let mut forced = args;
+        forced.push("--force".into());
+        self.checked(Invocation::new(forced))
+            .await
+            .map(drop)
+            .map_err(|e| anyhow!("{e:#}\n(retried with --force after: {first:#})"))
+    }
+
     /// One sbx setting's value as `sbx settings get` prints it (`true`, a
     /// JSON list…), trimmed.
     pub async fn setting_get(&self, key: &str) -> Result<String> {
@@ -1148,6 +1167,17 @@ mod tests {
         assert!(!Sbx::new(fake).secret_has("github").await.unwrap());
         let fake = Fake::new(|_| Output::ok("SERVICE   SCOPE\ngithub    global\n"));
         assert!(Sbx::new(fake).secret_has("github").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_command_secret_replaces_a_stored_one() {
+        let fake = Fake::new(|a| match a.last().map(String::as_str) {
+            Some("--force") => Output::ok(""),
+            _ => Output::fail(1, "secret exists; confirmation required (stdin is not a terminal) — use --force"),
+        });
+        Sbx::new(fake.clone()).secret_set_command("github", "'/opt/homebrew/bin/gh' auth token").await.unwrap();
+        assert_eq!(fake.calls.lock().unwrap()[1], ["secret", "set", "github", "--command", "'/opt/homebrew/bin/gh' auth token", "--force"]);
+        assert!(fake.stdins.lock().unwrap().iter().all(|s| s.is_empty()), "nothing on stdin: there is no value");
     }
 
     #[test]

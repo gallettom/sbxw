@@ -70,6 +70,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/policy/refresh", post(policy_refresh))
         .route("/api/github-token", get(github_token).post(github_token_set))
         .route("/api/github-token/rm", post(github_token_rm))
+        .route("/api/github-token/gh", post(github_token_gh))
         .route("/api/template/status", get(template_status))
         .route("/api/kit-mounts", get(kit_mounts))
         .route("/api/templates", get(templates_list))
@@ -636,7 +637,19 @@ async fn policy_rm(State(app): S, Path(name): Path<String>, Json(b): Json<RuleRm
 /// The GitHub token the sandbox proxy injects into git/gh traffic: sbx's
 /// global `github` secret. Only whether it is set is ever read back.
 async fn github_token(State(app): S) -> ApiResult {
-    Ok(ok_with(json!({ "set": app.sbx.secret_has("github").await? })))
+    let gh = sbxw_core::sysbin::gh().map(|p| p.to_string_lossy().into_owned());
+    Ok(ok_with(json!({ "set": app.sbx.secret_has("github").await?, "gh": gh })))
+}
+
+/// The global `github` secret as `gh auth token` on this machine, which sbx
+/// runs and refreshes itself: nothing is pasted, nothing goes stale.
+async fn github_token_gh(State(app): S) -> ApiResult {
+    let gh = sbxw_core::sysbin::gh().ok_or_else(|| {
+        ApiError::bad(format!("no GitHub CLI found in {} — install it, run `gh auth login`, then try again", sbxw_core::sysbin::GH_DIRS.join(", ")))
+    })?;
+    tracing::info!("web UI: storing the global `github` secret as `{} auth token`", gh.display());
+    app.sbx.secret_set_command("github", &sbxw_core::sysbin::gh_token_command(&gh)).await?;
+    Ok(ok())
 }
 
 #[derive(Deserialize)]

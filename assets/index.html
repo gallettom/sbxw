@@ -1265,12 +1265,17 @@
       </div>
       <div class="modal-body">
         <p class="repo-note" id="github-status">Loading…</p>
-        <label class="field-label" for="github-token">Personal access token</label>
+        <div class="kit-head">
+          <span class="field-label">From the GitHub CLI</span>
+        </div>
+        <p class="create-hint" id="github-gh-note">Looking for <code>gh</code>…</p>
+        <button class="btn-cancel" id="github-use-gh" hidden>Use my gh login</button>
+        <label class="field-label" for="github-token">Or a personal access token</label>
         <input id="github-token" class="field-input" type="password" spellcheck="false" autocomplete="off"
                placeholder="ghp_… or github_pat_…">
         <span class="create-hint">Stored by <code>sbx</code> as its global <code>github</code> secret and injected by the proxy
           for every sandbox's git and <code>gh</code> over HTTPS — it never enters a sandbox. A fine-grained token with
-          <em>Contents: read and write</em> is enough to push. Or run <code>gh auth token</code> on this Mac and paste the result.</span>
+          <em>Contents: read and write</em> is enough to push.</span>
       </div>
       <div class="modal-foot">
         <span class="create-error hidden" id="github-error"></span>

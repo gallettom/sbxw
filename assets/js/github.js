@@ -10,6 +10,8 @@ const githubToken   = document.getElementById('github-token');
 const githubError   = document.getElementById('github-error');
 const githubSave    = document.getElementById('github-save');
 const githubRemove  = document.getElementById('github-remove');
+const githubUseGh   = document.getElementById('github-use-gh');
+const githubGhNote  = document.getElementById('github-gh-note');
 
 function openGithubModal() {
   showNote(githubError, '');
@@ -37,6 +39,12 @@ async function loadGithub() {
     ? 'A token is set. Saving a new one replaces it.'
     : 'No token set: git push from a sandbox will ask for a username.';
   githubRemove.hidden = !r.set;
+  // sbx runs `gh auth token` itself and refreshes it: nothing pasted, nothing
+  // to rotate by hand.
+  githubUseGh.hidden = !r.gh;
+  githubGhNote.innerHTML = r.gh
+    ? `sbx runs <code>${escHtml(r.gh)} auth token</code> on this machine when it needs the token, and refreshes it — your <code>gh auth login</code>, nothing pasted.`
+    : 'No <code>gh</code> found (Homebrew or /usr/bin). Install it and run <code>gh auth login</code> to use it here, or paste a token below.';
 }
 
 githubSave.addEventListener('click', async () => {
@@ -48,6 +56,14 @@ githubSave.addEventListener('click', async () => {
   githubSave.disabled = false;
   if (!r.ok) { showNote(githubError, r.error || 'Could not store the token.'); return; }
   githubToken.value = '';
+  loadGithub();
+});
+githubUseGh.addEventListener('click', async () => {
+  showNote(githubError, '');
+  githubUseGh.disabled = true;
+  const r = await postJsonOrError('/api/github-token/gh', {});
+  githubUseGh.disabled = false;
+  if (!r.ok) { showNote(githubError, r.error || 'sbx could not read a token from gh — is `gh auth login` done?'); return; }
   loadGithub();
 });
 githubToken.addEventListener('keydown', e => { if (e.key === 'Enter') githubSave.click(); });
