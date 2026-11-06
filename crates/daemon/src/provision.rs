@@ -481,10 +481,19 @@ impl App {
                     }
                     // sbx asks a person to approve the network rules the kit
                     // adds, and has no flag to: hand them the command.
-                    Err(e) if kits::add_needs_approval(&format!("{e:#}")) => run.warn(format!(
-                        "kit '{kit}' asks for network access '{name}' was not granted, and sbx wants you to approve it. \
-                         Run in a terminal: `sbx kit add {n} {kit}` — the next `sbxw up` sees it applied.\n{e:#}"
-                    )),
+                    Err(e) if kits::add_needs_approval(&format!("{e:#}")) => {
+                        {
+                            let mut waiting = self.kit_approvals.lock().unwrap();
+                            let list = waiting.entry(name.clone()).or_default();
+                            if !list.contains(kit) {
+                                list.push(kit.clone());
+                            }
+                        }
+                        run.warn(format!(
+                            "kit '{kit}' asks for network access '{name}' was not granted, and sbx wants you to approve it: \
+                             press ✓ on '{name}' in the sidebar to answer in a pane, or run `sbx kit add {n} {kit}` in a terminal.\n{e:#}"
+                        ))
+                    }
                     Err(e) if kits::add_needs_recreate(&format!("{e:#}")) => run.warn(format!(
                         "`sbx kit add` cannot apply kit '{kit}' to an existing sandbox — '{name}' is \
                          unchanged. Recreate it to pick the kit up: `sbxw rm {name}` then `sbxw up {name}`. \
@@ -1125,6 +1134,40 @@ mod tests {
         let same = own.join("..").join("test");
         let ok = app.provision(req(&same), None).await;
         assert!(ok.as_ref().err().is_none_or(|e| !format!("{e:#}").contains("was created on")), "{ok:?}");
+    }
+
+    #[tokio::test]
+    async fn a_kit_waiting_for_approval_is_recorded_for_a_pane_to_answer() {
+        let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("neos", "running")]),
+            Some("kit") => Output::fail(1, "warning: this change requests permissions beyond what this sandbox was granted\n  + network.runtime.allow: dl.k8s.io\n\n  error: stdin is not a terminal; run this command in a terminal to answer the prompt"),
+            Some("inspect") => Output::ok(r#"{"name":"neos","kits":[],"created_version":"v0.51.0"}"#),
+            _ => sbx_answer(a),
+        });
+        let ws = dir.path().join("neos");
+        std::fs::create_dir_all(&ws).unwrap();
+        let neos = SandboxRef::parse("neos").unwrap();
+        app.store.update(&neos, |r| r.workspace = Some(ws.clone())).unwrap();
+        let req = BringUp {
+            name: neos.clone(),
+            workspace: ws,
+            ro: vec![],
+            rw: vec![],
+            config: Config { kits: vec!["sbxw:k8s-tools".into()], network_allow: vec![], network_deny: vec![], ..Config::default() },
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            template: Default::default(),
+            remote_control: false,
+            git: None,
+        };
+        let w = app.provision(req, None).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("press ✓")), "{w:?}");
+        let waiting = app.kit_approvals.lock().unwrap().get(&neos).cloned().unwrap_or_default();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].ends_with("/kits/k8s-tools"), "{waiting:?}");
+        assert_eq!(app.sandboxes().await.iter().find(|s| s.name == "neos").unwrap().kits_waiting, 1);
+        assert!(fake.log().iter().any(|c| c.starts_with("kit add neos")));
     }
 
     #[tokio::test]

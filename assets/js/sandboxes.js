@@ -338,6 +338,7 @@ function sandboxItemHtml(s, groupColor) {
   const down = sandboxUnreachable(s);
   const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`
     // Made by an sbx older than 0.51: it runs, but takes no kit until recreated.
+    + (s.kits_waiting ? `<button class="icon-btn approve-btn" data-action="kit-add" data-name="${escHtml(s.name)}" title="${s.kits_waiting} kit${s.kits_waiting > 1 ? 's' : ''} waiting for your approval — answer sbx's prompt in a pane">✓</button>` : '')
     + (s.old_sbx && !s.chat ? `<button class="icon-btn recreate-btn" data-action="recreate" data-name="${escHtml(s.name)}" title="Recreate with this sbx">⟲</button>` : '');
   const actions = down
     ? ['▶', '⇌', '⧉', '✕'].map(icon =>
@@ -485,6 +486,8 @@ listEl.addEventListener('click', e => {
     if (action === 'ports')     openPortsModal(name);
     if (action === 'duplicate') openDupModal(name);
     if (action === 'recreate')  recreateSandbox(name);
+    // One kit per pane: sbx asks, the person answers; the next ✓ takes the next.
+    if (action === 'kit-add')   connectPane(focusedPane, name, 'kit-add');
   } else {
     connectPane(focusedPane, name);
   }

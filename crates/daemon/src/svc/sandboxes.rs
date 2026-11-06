@@ -41,6 +41,9 @@ pub struct SandboxItem {
     pub detached: bool,
     /// Created for Remote Control: its agent logs in to claude.ai itself.
     pub remote_control: bool,
+    /// Kits `sbx kit add` left waiting for the person's approval: a ✓ in the
+    /// sidebar opens a pane where they answer sbx's prompt.
+    pub kits_waiting: usize,
     /// Made by an sbx older than 0.51: it keeps running, but takes no kit
     /// until it is recreated (`sbx inspect` records no creator version).
     pub old_sbx: bool,
@@ -108,6 +111,8 @@ impl App {
                 let _ = self.store.update(n, |rec| rec.created_by_sbx = Some(v));
             }
         }
+        let waiting = self.kit_approvals.lock().unwrap().clone();
+        let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
         listed
             .into_iter()
             .map(|s| {
@@ -118,6 +123,7 @@ impl App {
                 (s, rec, chat)
             })
             .map(|(s, rec, chat)| SandboxItem {
+                kits_waiting: waiting_for(&s.name),
                 chat,
                 old_sbx: rec.created_by_sbx.as_deref() == Some(""),
                 remote_control: rec.remote_control,
@@ -171,6 +177,7 @@ impl App {
                             detached: s.detached,
                             remote_control: rec.remote_control,
                             old_sbx: rec.created_by_sbx.as_deref() == Some(""),
+                            kits_waiting: self.kit_approvals.lock().unwrap().get(&sb).map(Vec::len).unwrap_or(0),
                             unreachable_since: None,
                         });
                     }
@@ -189,6 +196,7 @@ impl App {
                             detached: false,
                             remote_control: rec.remote_control,
                             old_sbx: rec.created_by_sbx.as_deref() == Some(""),
+                            kits_waiting: 0,
                             unreachable_since: Some(since),
                         });
                     }

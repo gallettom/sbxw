@@ -881,6 +881,11 @@ impl Sbx {
         self.checked(Invocation::new(s(&["secret", "rm", service, "--force"]))).await.map(drop)
     }
 
+    /// `sbx kit add` as a pane runs it, where a person can answer its prompt.
+    pub fn kit_add_args(name: &SandboxName, kit: &str) -> Vec<String> {
+        s(&["kit", "add", name.as_str(), kit])
+    }
+
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
         self.checked(Invocation::new(s(&["kit", "add", name.as_str(), kit]))).await.map(drop)
     }

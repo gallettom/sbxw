@@ -73,6 +73,11 @@ created by an sbx older than 0.51. Then sbxw tells you to recreate
 recreates on its own, since anything outside the workspace would be lost. To
 force a re-apply, run `sbx kit add <sandbox> <kit>` yourself.
 
+A kit that adds network rules makes sbx ask you to approve them, and sbx has
+no flag for that answer. sbxw then keeps the kit waiting and puts a **✓** on
+the sandbox's row: it opens a pane running `sbx kit add` where you answer
+sbx's prompt, one kit per ✓.
+
 A kit's `network-policy@1` allow rules join the sandbox policy when it's
 applied. The bundled kits declare everything they fetch, so none of them needs
 a `network_allow` entry.
