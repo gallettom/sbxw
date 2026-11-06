@@ -150,29 +150,6 @@ pub fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
     kit
 }
 
-/// The name a kit reference shows up as in `sbx inspect`: the spec's `name:`,
-/// else the reference's last segment without tag or `.zip`. Only used to
-/// *skip* a re-apply, so a miss costs a redundant re-apply, nothing more.
-pub fn display_name(kit: &str, spec: Option<&str>) -> String {
-    if let Some(spec) = spec {
-        for line in spec.lines() {
-            // `name:` (v2) or `displayName:` (v3, which has no identity name).
-            if let Some(rest) = line.strip_prefix("name:").or_else(|| line.strip_prefix("displayName:")) {
-                let n = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-                if !n.is_empty() {
-                    return n.to_string();
-                }
-            }
-        }
-    }
-    let last = kit.rsplit('/').next().unwrap_or(kit);
-    last.split(':')
-        .next()
-        .unwrap_or(last)
-        .trim_end_matches(".zip")
-        .to_string()
-}
-
 /// The `schemaVersion` of a kit directory's spec, `None` when it has no
 /// readable `spec.yaml` (a ZIP, a registry reference, a companion-pair kit
 /// named after its stem).
@@ -303,67 +280,24 @@ pub fn needs_allowlist(kit: &str) -> bool {
     false
 }
 
-/// The part of `sbx inspect` that lists kits, or the whole text when none can
-/// be found. Narrowed because inspect also lists custom secrets, and a secret
-/// containing a kit's name would skip a kit never applied.
-pub fn inspect_kits_section(raw: &str) -> String {
-    json_kits_section(raw)
-        .or_else(|| text_kits_section(raw))
-        .unwrap_or_else(|| raw.to_string())
+/// The kits `sbx inspect --format json` lists, by the path or reference each
+/// was applied from; `None` when `raw` is not that document.
+pub fn applied_kits(raw: &str) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    Some(v.get("kits")?.as_array()?.iter().filter_map(|k| k.as_str().map(String::from)).collect())
 }
 
 /// Is `kit` already applied to a sandbox? Asked before `sbx kit add`, which
 /// recreates the container, so a miss costs a recreate on every bring-up.
 ///
-/// sbxw's own record of what it applied answers first. Then `sbx inspect`,
-/// which lists kits by the *path or reference* they were applied from (0.49:
-/// `Kits: /a/codemap, /b/agent-skills`): the same reference, or the same last
-/// segment — a bundled kit applied from an older path is the same kit — is a
-/// match. The spec's `name:` is only a last resort, matched against those
-/// segments: it need not be the folder's name (`k8s-tools` is `k8s-dev-tools`).
-pub fn already_applied(kit: &str, spec: Option<&str>, inspect_section: &str, recorded: &[String]) -> bool {
-    if recorded.iter().any(|r| r == kit) {
-        return true;
-    }
-    let applied: Vec<&str> = inspect_section
-        .split([',', '\n'])
-        .map(|r| r.trim().trim_start_matches("- ").trim_matches(|c| matches!(c, '"' | '[' | ']' | '\'')).trim())
-        .filter(|r| !r.is_empty())
-        .collect();
-    let segment = display_name(kit, None);
-    let named = display_name(kit, spec);
-    applied.iter().any(|r| {
-        let theirs = display_name(r.trim_end_matches('/'), None);
-        *r == kit || (theirs.len() >= 3 && (theirs == segment || theirs == named))
-    })
-}
-
-fn json_kits_section(raw: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let (_, kits) = value
-        .as_object()?
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("kits") || k.eq_ignore_ascii_case("kit"))?;
-    Some(kits.to_string())
-}
-
-fn text_kits_section(raw: &str) -> Option<String> {
-    let indent = |l: &str| l.len() - l.trim_start().len();
-    let mut lines = raw.lines();
-    let (label_indent, first) = lines.find_map(|line| {
-        let (label, rest) = line.trim_start().split_once(':')?;
-        let label = label.trim_end();
-        (label.eq_ignore_ascii_case("kits") || label.eq_ignore_ascii_case("kit"))
-            .then(|| (indent(line), rest.trim().to_string()))
-    })?;
-    let mut section = vec![first];
-    for line in lines {
-        if !line.trim().is_empty() && indent(line) <= label_indent {
-            break;
-        }
-        section.push(line.trim().to_string());
-    }
-    Some(section.join("\n"))
+/// sbxw's own record of what it applied answers first, then what `sbx
+/// inspect` lists: the same reference, or the same last path segment (a
+/// bundled kit applied from another path is the same kit). A segment under
+/// three characters is never matched on its own.
+pub fn already_applied(kit: &str, applied: &[String], recorded: &[String]) -> bool {
+    let segment = |k: &str| k.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+    let mine = segment(kit);
+    recorded.iter().any(|r| r == kit) || applied.iter().any(|r| r == kit || (mine.len() >= 3 && segment(r) == mine))
 }
 
 /// Is a refused `policy allow|deny` the organisation owning the policy? That is
@@ -460,14 +394,6 @@ mod tests {
     }
 
     #[test]
-    fn display_names_come_from_the_spec_or_the_reference() {
-        assert_eq!(display_name("/x/codemap", Some("schemaVersion: \"2\"\nname: codemap\n")), "codemap");
-        assert_eq!(display_name("/x/git-identity", Some("schemaVersion: \"3\"\ndisplayName: git-identity\n")), "git-identity");
-        assert_eq!(display_name("ghcr.io/o/kit:1.0", None), "kit");
-        assert_eq!(display_name("/x/kit.zip", None), "kit");
-    }
-
-    #[test]
     fn host_mount_targets_are_read_with_their_argument_defaults() {
         // The spec project's own conformance fixture, trimmed.
         let spec = "schemaVersion: \"3\"\nkind: mixin\nargs:\n  mount_path:\n    default: /var/tmp/kit-tck-host\n\
@@ -518,26 +444,17 @@ mod tests {
     }
 
     #[test]
-    fn the_kits_section_is_found_in_text_and_json() {
-        let text = "Name: neos\nKits:\n  - codemap\n  - k8s\nSecrets:\n  - codemap-token\n";
-        let s = inspect_kits_section(text);
-        assert!(s.contains("k8s") && !s.contains("token"));
-        let json = r#"{"name":"neos","kits":["a"],"secrets":["b"]}"#;
-        assert_eq!(inspect_kits_section(json), r#"["a"]"#);
-        assert_eq!(inspect_kits_section("NAME KITS\nneos a"), "NAME KITS\nneos a");
-    }
-
-    #[test]
     fn an_applied_kit_is_found_by_record_path_or_segment() {
-        // What sbx 0.49.2 prints.
-        let raw = "    Name:            sbxw-2\n    Agent:           claude\n    Kits:            /Users/t/.sbxw/state/kits/sbxw-2-oauth, /Users/t/sbxw 2/assets/md-to-pdf-tools, /Users/t/sbxw 2/assets/codemap, /Users/t/.sbxw/kits/k8s-tools\n";
-        let section = inspect_kits_section(raw);
-        assert!(already_applied("/Users/t/sbxw 2/assets/codemap", None, &section, &[]), "same path");
-        assert!(already_applied("/Users/t/.sbxw/kits/md-to-pdf-tools", None, &section, &[]), "a bundled kit from an older path");
-        assert!(already_applied("/Users/t/.sbxw/kits/k8s-tools", Some("name: k8s-dev-tools\n"), &section, &[]), "the folder, not the spec name");
-        assert!(!already_applied("/Users/t/.sbxw/kits/agent-skills", None, &section, &[]), "not listed");
-        assert!(already_applied("/k/agent-skills", None, "", &["/k/agent-skills".into()]), "sbxw's own record");
-        assert!(!already_applied("/k/map", None, &section, &[]), "a short name is not a substring match");
+        // What sbx 0.51 prints.
+        let raw = r#"{"name":"smoke051","kits":["docker.io/sbx/claude@sha256:611f","/Users/t/sbxw/assets/base","/Users/t/sbxw/assets/codemap","/Users/t/.sbxw/kits/k8s-tools"],"state":"running"}"#;
+        let applied = applied_kits(raw).unwrap();
+        assert!(already_applied("/Users/t/sbxw/assets/codemap", &applied, &[]), "same path");
+        assert!(already_applied("/Users/t/.sbxw/kits/codemap/", &applied, &[]), "a bundled kit from another path");
+        assert!(already_applied("/x/k8s-tools", &applied, &[]));
+        assert!(!already_applied("/Users/t/.sbxw/kits/agent-skills", &applied, &[]), "not listed");
+        assert!(already_applied("/k/agent-skills", &[], &["/k/agent-skills".into()]), "sbxw's own record");
+        assert!(!already_applied("/k/ba", &["/z/ba".into()], &[]), "a short name is not enough");
+        assert_eq!(applied_kits("Name: x\nKits: a"), None, "only the JSON document");
     }
 
     #[test]

@@ -57,10 +57,8 @@ apt_install() {
 }
 
 # ── 1. System libs (WeasyPrint's renderer + poppler's pdftoppm) ──────
-# Checked by actual .so/binary presence, not package name: on newer
-# Debian/Ubuntu (the t64 transition), libgobject-2.0-0 and
-# libglib2.0-0 are virtual packages provided by libglib2.0-0t64, so
-# `dpkg -s <name>` always reports them missing even when satisfied.
+# Checked by actual .so/binary presence, not package name: one package
+# (libglib2.0-0t64 on Debian 13) carries several of these libraries.
 NEED_LIBS=0
 command -v pdftoppm >/dev/null 2>&1 || NEED_LIBS=1
 # One ldconfig call, matched with `case`: `| grep -q` under pipefail
@@ -109,7 +107,7 @@ if [ "$NEED_LIBS" -eq 0 ]; then
   info "system libs already installed"
 else
   info "installing poppler-utils + pango/glib libs..."
-  if apt_install poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libgobject-2.0-0 libglib2.0-0; then
+  if apt_install poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libglib2.0-0t64; then
     info "system libs installed"
   else
     info "apt-get install failed — skipping (check network_allow for apt mirrors)"

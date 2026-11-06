@@ -25,14 +25,13 @@ policy so the installers have egress access.
 
 ## Required network allowlist
 
-The apt step will `403` unless the Debian/Ubuntu mirrors are in your
+The apt step will `403` unless the Debian mirrors are in your
 `sbxw.toml` `network_allow` (sbxw applies the policy before the kit runs):
 
 ```toml
 network_allow = [
   # ...defaults... (pypi.org / *.pythonhosted.org are already default)
   "deb.debian.org", "security.debian.org",
-  "archive.ubuntu.com", "security.ubuntu.com", "ports.ubuntu.com",
 ]
 ```
 

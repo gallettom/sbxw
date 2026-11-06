@@ -151,8 +151,7 @@ else
 fi
 
 # Chromium's shared libraries, read off the binary rather than guessed
-# from a distribution's package names, which moved with the t64
-# transition. While the binary is still downloading, the libraries it
+# from package names. While the binary is still downloading, the libraries it
 # is known to link are looked up in the linker cache instead, so the
 # install can share ffmpeg's apt call; the binary is checked again
 # once it lands.
@@ -171,12 +170,13 @@ chrome_libs_missing() {
   done
   return 1
 }
-# Those of Chromium's library packages this distribution has, in one
-# apt-cache call (needs fresh lists: call after apt_update).
+# Chromium's library packages on Debian 13 (sbx 0.51's image), those the
+# repositories carry, in one apt-cache call (needs fresh lists: call after
+# apt_update).
 chrome_lib_pkgs() {
-  apt-cache show libnss3 libnspr4 libatk1.0-0t64 libatk1.0-0 libatk-bridge2.0-0t64 libatk-bridge2.0-0 \
-           libcups2t64 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-           libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libasound2 libxshmfence1 \
+  apt-cache show libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+           libcups2t64 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+           libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 libxshmfence1 \
            fonts-liberation fonts-noto-color-emoji 2>/dev/null \
     | sed -n 's/^Package: //p' | sort -u | tr '\n' ' '
 }

@@ -141,6 +141,6 @@ case "${1:-}" in
     esac ;;
   kit) [ "${2:-}" = validate ] && [ -e "${3:-}" ] || [ "${2:-}" != validate ] ;;
   diagnose) echo '{"checks":[{"name":"mkfs.ext4","status":"ok"},{"name":"global network policy","status":"warning","message":"not initialized"}]}' ;;
-  inspect) echo "Name: $2"; echo "Kits:" ;;
+  inspect) printf '{"name":"%s","kits":[],"state":"running","created_version":"v0.51.0"}\n' "$2" ;;
   *) : ;;
 esac

@@ -8,7 +8,7 @@ description: >
   Markdown -> PDF/PNG conversion is available and works instantly with no
   first-run install step (idempotent, safe to re-run on every container start).
 
-# apt needs the Debian/Ubuntu mirrors; pip needs PyPI. pypi.org and
+# apt needs the Debian mirrors; pip needs PyPI. pypi.org and
 # *.pythonhosted.org are already in sbxw's default network_allow, but the apt
 # mirrors are not — add them to sbxw.toml's network_allow (see this kit's
 # README) or the apt-get step will 403.
@@ -27,9 +27,6 @@ capabilities:
         allow:
           - deb.debian.org
           - security.debian.org
-          - archive.ubuntu.com
-          - security.ubuntu.com
-          - ports.ubuntu.com
           - pypi.org
           - files.pythonhosted.org
   - type: com.docker.sandbox/lifecycle@1

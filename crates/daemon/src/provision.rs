@@ -450,18 +450,17 @@ impl App {
             let pending: Vec<&String> = kits_here.iter().skip(1).filter(|k| !recorded.contains(k)).collect();
             // `sbx inspect` only when sbxw's own record does not settle it.
             let present = match pending.is_empty() {
-                true => String::new(),
-                false => kits::inspect_kits_section(&sbx.inspect(n).await.unwrap_or_default()),
+                true => Vec::new(),
+                false => sbx.inspect_kits(n).await.unwrap_or_default(),
             };
-            for ((kit, local), wanted) in kits_here.iter().zip(&cfg.kits).zip(&req.config.kits) {
+            for (kit, wanted) in kits_here.iter().zip(&req.config.kits) {
                 // sbxw's base kit is a creation-time kit: a sandbox made before
                 // it existed has the Node.js of the image it came from, and one
                 // that lacks it is told so by the tooling step below.
                 if kits::bundled_name(wanted) == Some(kits::BASE) {
                     continue;
                 }
-                let spec = std::fs::read_to_string(std::path::Path::new(local).join("spec.yaml")).ok();
-                if kits::already_applied(kit, spec.as_deref(), &present, &recorded) {
+                if kits::already_applied(kit, &present, &recorded) {
                     run.info(format!("kit '{kit}' already applied — skipping"));
                     if !recorded.contains(kit) {
                         let k = kit.clone();
@@ -469,7 +468,6 @@ impl App {
                     }
                     continue;
                 }
-                // sbx 0.48+ takes kits with startup commands here too.
                 run.info(format!("applying kit {kit} (this recreates the container; state is kept)"));
                 match self.sbx_for(name).await?.kit_add(n, kit).await {
                     Ok(()) => {

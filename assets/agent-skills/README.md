@@ -142,7 +142,6 @@ network_allow = [
   # ...defaults...
   "cdn.playwright.dev", "playwright.download.prss.microsoft.com",   # Chromium
   "deb.debian.org", "security.debian.org",                         # ffmpeg, Chromium's libraries
-  "archive.ubuntu.com", "security.ubuntu.com", "ports.ubuntu.com",
 ]
 ```
 

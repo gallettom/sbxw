@@ -18,7 +18,7 @@ description: >
 # codeload.github.com serves the two pinned tarballs; the Playwright CDN serves
 # Chromium (it has linux-arm64 builds, which Chrome for Testing does not);
 # npm serves the Playwright installer and, at /brag time, `npx hyperframes`;
-# the Ubuntu/Debian mirrors serve ffmpeg and Chromium's shared libraries.
+# the Debian mirrors serve ffmpeg and Chromium's shared libraries.
 # sbx composes this list into the sandbox policy when the kit is applied, so
 # sbxw.toml needs no network_allow entry for it (docs/kits-and-skills.md).
 
@@ -41,9 +41,6 @@ capabilities:
           - playwright.download.prss.microsoft.com
           - deb.debian.org
           - security.debian.org
-          - archive.ubuntu.com
-          - security.ubuntu.com
-          - ports.ubuntu.com
   - type: com.docker.sandbox/lifecycle@1
     config:
       # Every boot, alongside the agent: each script is idempotent.
