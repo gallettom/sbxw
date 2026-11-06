@@ -1,12 +1,14 @@
 //! The only door to the `sbx` CLI. sbxw never calls `docker sandbox`.
 //!
-//! Written for sbx 0.50 and newer, with no fallbacks below it: an
+//! Written for sbx 0.51 and newer, with no fallbacks below it: an
 //! unrecognised command or flag is an *error*, so a command that succeeded
 //! really ran, and a fallback path would be code nobody runs. What sbxw
 //! parses it reads as `--format json`; only `policy ls` and `template ls`
 //! are still read as tables.
 //!
 //! ```text
+//! sbx --version                              (the client's; starts no daemon)
+//! sbx settings get KEY
 //! sbx create claude PATH --name N [PATH:ro]… [--kit K]… [-p SPEC]…
 //!            [--skills=off|readonly|readwrite] [--pull=always|missing|never]
 //!            [--mount HOST:TARGET]…           (only a target a kit declares)
@@ -30,7 +32,6 @@
 //! sbx mcp ls --format json · sbx mcp load|unload SERVER --sandbox N
 //! sbx mcp add NAME --url=U [--header=H]… --skip-auth | --command=C [--args=A,B] [--dir=D]
 //! sbx mcp rm NAME · sbx mcp inspect NAME · sbx mcp auth NAME   (OAuth; opens the host's browser)
-//! sbx kit validate REF --offline              (local dir or ZIP; no daemon, no sign-in)
 //! sbx template save N TAG                    (--description is cloud-only: refused locally)
 //! sbx template ls · sbx template rm TAG · create --template TAG
 //! sbx diagnose --format json · sbx skills import · sbx setup ssh
@@ -65,7 +66,7 @@ use std::time::Duration;
 pub use scripts::ThreadStatus;
 
 /// Oldest sbx sbxw works against, and the one it is written for.
-pub const MIN_VERSION: (u32, u32, u32) = (0, 50, 0);
+pub const MIN_VERSION: (u32, u32, u32) = (0, 51, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
 /// `sbx exec`'s status when it could not run the command at all — no such
@@ -237,8 +238,6 @@ pub fn parse_rm_json(raw: &str) -> Option<Vec<RmResult>> {
     )
 }
 
-/// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
-/// inside a longer token ("sha256") or a four-digit year is not one.
 /// What to tell the person once, on the first run after sbx moved from
 /// `before` to `now`: what the upgrade costs them that sbxw cannot hide.
 pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
@@ -260,9 +259,29 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
              may carry an apiKeyHelper that outranks /login — recreate one to get both.",
         );
     }
+    if before < (0, 51, 0) && now >= (0, 51, 0) {
+        notes.push(
+            "sbx 0.51 runs Claude Code from the published kit docker.io/sbx/claude (Debian 13), and v1/v2 kits no \
+             longer combine with it: sbxw's kits are v3 now, and your own local kits must be too. Sandboxes created \
+             earlier keep running but cannot take kits until recreated — save any work outside the workspace, then \
+             `sbxw rm <name>` and `sbxw up <name>`.",
+        );
+        if before >= (0, 50, 0) {
+            notes.push(
+                "Automatic templates were made by the older sbx and are now out of date: the next create asks before \
+                 rebuilding (`sbxw up <name> --rebuild-template`).",
+            );
+        }
+        notes.push(
+            "Copying text from a sandbox's terminal to your clipboard now needs `sbx settings set clipboard.textCopy \
+             true` (sbxw doctor shows whether it is on).",
+        );
+    }
     notes
 }
 
+/// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
+/// inside a longer token ("sha256") or a four-digit year is not one.
 pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let chars: Vec<char> = raw.chars().collect();
     let mut i = 0;
@@ -486,15 +505,17 @@ impl Sbx {
     }
 
     /// `sbx version`, parsed.
+    /// `sbx --version`: the client's version, without starting the daemon
+    /// (0.51), so a version check costs no daemon start.
     pub async fn version(&self) -> Result<Option<(u32, u32, u32)>> {
-        Ok(parse_version(&self.capture(s(&["version"])).await?))
+        Ok(parse_version(&self.capture(s(&["--version"])).await?))
     }
 
     /// Refuse an sbx older than the floor. An unreadable version is a warning,
     /// never a refusal: sbxw does not get to veto on output format.
     pub async fn check_version(&self, skip: bool) -> Result<Option<String>> {
         let v = self.version().await.map_err(|e| {
-            anyhow!("`sbx version` failed — install the standalone sbx binary and put it on PATH ({e:#})")
+            anyhow!("`sbx --version` failed — install the standalone sbx binary and put it on PATH ({e:#})")
         })?;
         let shown = v.map(|(a, b, c)| format!("{a}.{b}.{c}"));
         if let Some(found) = v {
@@ -755,12 +776,6 @@ impl Sbx {
         self.checked(Invocation::new(s(&["mcp", "unload", server, "--sandbox", sandbox.as_str()]))).await.map(drop)
     }
 
-    /// Check a local kit (directory or ZIP) without the daemon or a sign-in
-    /// (0.49), so a broken kit fails in a second rather than mid-create.
-    pub async fn kit_validate_offline(&self, kit: &str) -> Result<()> {
-        self.checked(Invocation::new(s(&["kit", "validate", kit, "--offline"]))).await.map(drop)
-    }
-
     /// Snapshot a sandbox from the daemon, where no terminal can answer a
     /// prompt: a save refused for want of one (sbx asking to stop the
     /// sandbox first) is retried after stopping it. True when it was stopped.
@@ -828,6 +843,12 @@ impl Sbx {
             .await
             .map(drop)
             .map_err(|e| anyhow!("{e:#}\n(retried with --force after: {first:#})"))
+    }
+
+    /// One sbx setting's value as `sbx settings get` prints it (`true`, a
+    /// JSON list…), trimmed.
+    pub async fn setting_get(&self, key: &str) -> Result<String> {
+        Ok(self.capture(s(&["settings", "get", key])).await?.trim().to_string())
     }
 
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
@@ -959,6 +980,8 @@ mod tests {
     fn crossing_0_50_is_announced_once_and_only_then() {
         assert_eq!(upgrade_notes("0.49.2", "0.50.0").len(), 3);
         assert!(upgrade_notes("0.50.0", "0.50.1").is_empty());
+        assert_eq!(upgrade_notes("0.50.1", "0.51.0").len(), 3, "kits, templates, clipboard");
+        assert_eq!(upgrade_notes("0.49.2", "0.51.0").len(), 5, "the 0.50 notes already name the templates");
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
     }
 
@@ -1123,11 +1146,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_version_floor_is_enforced() {
-        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.49.2")));
+        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.50.1")));
         assert!(old.check_version(false).await.is_err());
         assert!(old.check_version(true).await.is_ok());
-        let new = Sbx::new(Fake::new(|_| Output::ok("sbx 0.50.0")));
-        assert_eq!(new.check_version(false).await.unwrap().as_deref(), Some("0.50.0"));
+        let fake = Fake::new(|_| Output::ok("sbx version 0.51.0"));
+        let new = Sbx::new(fake.clone());
+        assert_eq!(new.check_version(false).await.unwrap().as_deref(), Some("0.51.0"));
+        assert_eq!(fake.log(), ["--version"], "the client's version: no daemon started");
     }
 
     #[tokio::test]

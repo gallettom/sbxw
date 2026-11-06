@@ -447,6 +447,11 @@ impl App {
                         let _ = self.store.update(name, |r| r.model_migrated = true);
                     }
                 }
+                Err(e) if kits::node_missing(&format!("{e:#}")) => run.warn(format!(
+                    "'{name}' has no Node.js, which sbxw's tooling (token, trust, hooks, statusLine, relay) runs on. \
+                     sbxw's base kit installs it at creation: recreate the sandbox (`sbxw rm {name}` then `sbxw up {name}`), \
+                     after saving anything outside the workspace.\n{e:#}"
+                )),
                 Err(e) => run.warn(format!(
                     "could not install the agent tooling (token, trust, hooks, statusLine, relay): {e:#}"
                 )),
@@ -1125,7 +1130,7 @@ mod tests {
         assert!(at("template save") < at("template rm sbxw-auto:old"), "the old one goes once the new one exists");
         let records = app.store.templates();
         assert_eq!(records.len(), 1);
-        assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.50.0"));
+        assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.51.0"));
         assert!(log.iter().any(|c| c == &format!("template save neos {}", records[0].tag)));
     }
 
@@ -1134,7 +1139,7 @@ mod tests {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
         let applied = kits::with_base(&kits);
-        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &applied).unwrap() };
+        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &applied).unwrap() };
         app.store.set_templates(std::slice::from_ref(&fresh)).unwrap();
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let s2 = seen.clone();
@@ -1146,7 +1151,7 @@ mod tests {
         let (dir, app, fake) = app_with(auto_sbx(0));
         app.store.set_templates(&[templates::Record { sbx: "0.47.0".into(), ..fresh }]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
-        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.50.0)")), "{w:?}");
+        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.51.0)")), "{w:?}");
         let log = fake.log();
         assert!(log.iter().any(|c| c.starts_with("create") && !c.contains("--template")));
         assert!(!log.iter().any(|c| c.starts_with("template")), "nothing saved or removed unasked");
@@ -1158,7 +1163,7 @@ mod tests {
         let kits = vec!["sbxw:codemap".to_string()];
         let applied = kits::with_base(&kits);
         let content = crate::bundled::fingerprint(&app.store.paths, &applied).unwrap();
-        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied, created_at: 1, content };
+        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied, created_at: 1, content };
         app.store.set_templates(&[gone]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
         assert!(w.iter().any(|w| w.contains("sbxw-auto:gone is no longer in sbx")), "{w:?}");

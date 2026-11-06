@@ -279,6 +279,14 @@ pub fn add_needs_recreate(err: &str) -> bool {
         .any(|s| lower.contains(s))
 }
 
+/// Did a `sbx exec … node` fail for want of `node` in the sandbox? The shell
+/// says "not found" with status 127; sbx's own exec, "executable file not
+/// found".
+pub fn node_missing(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("node") && (lower.contains("not found") || lower.contains("exit status 127") || lower.contains("no such file"))
+}
+
 /// Does sbx need `kit.allowedSources` before it fetches this reference? Git
 /// URLs and non-Docker-Hub registries are blocked by default.
 pub fn needs_allowlist(kit: &str) -> bool {
@@ -622,6 +630,12 @@ mod tests {
         assert_eq!(v["claudeAiOauth"]["subscriptionType"], "max");
         assert!(!oauth_kit_spec(None).contains("lifecycle@1"));
         assert!(!oauth_kit_spec(Some("{\"a\":\"${{ kit.env.HOME }}\"}")).contains("lifecycle@1"), "never expanded by sbx");
+    }
+
+    #[test]
+    fn a_missing_node_is_recognised() {
+        assert!(node_missing("`sbx exec neos -- node -` exited with exit status 127:\nexec: \"node\": executable file not found in $PATH"));
+        assert!(!node_missing("`sbx exec neos -- node -` exited with exit status 1:\nSyntaxError"));
     }
 
     #[test]

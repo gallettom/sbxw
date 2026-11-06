@@ -22,6 +22,10 @@ pub const CLAUDE_JSON_PATH: &str = "/home/agent/.claude.json";
 pub const ARTIFACT_HOOK_PATH: &str = "/home/agent/.sbxw/enforce-artifacts.js";
 pub const STATUS_HOOK_PATH: &str = "/home/agent/.sbxw/status-hook.js";
 pub const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
+/// The statusLine command sbx's own image installs, which sbxw's chains to.
+pub const SBX_STATUS_HOOK: &str = "sbx-claude-hook";
+/// Where the chained statusLine command is kept.
+pub const USAGE_STATUSLINE_CHAIN_PATH: &str = "/home/agent/.sbxw/usage-statusline.chain";
 pub const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
 pub const RELAY_MCP_PATH: &str = "/home/agent/.sbxw/relay-mcp.js";
 pub const TEAM_GUARD_PATH: &str = "/home/agent/.sbxw/team-guard.js";
@@ -213,15 +217,22 @@ impl Tooling {
         self.piece(piece::STATUS_HOOKS, body)
     }
 
-    /// The usage `statusLine` — the user's own one is kept.
+    /// The usage `statusLine` — the user's own one is kept. sbx's (0.51's
+    /// Claude image sets `sbx-claude-hook claude-status`, which feeds Docker's
+    /// desktop app and prints nothing) is taken over and *chained*: its
+    /// command is recorded beside the script, which hands it the same payload.
     pub fn usage_statusline(self, agent_port: &str) -> Self {
         let body = format!(
             "put({path},{script});const cmd={cmd};const d=json({settings});\
-             if(!d.statusLine||((d.statusLine.command||'').includes('usage-statusline.js'))){{d.statusLine={{type:'command',command:cmd}};}}",
+             const was=(d.statusLine&&d.statusLine.command)||'';\
+             if(was.includes({sbx_hook})){{put({chain},was);}}\
+             if(!d.statusLine||was.includes('usage-statusline.js')||was.includes({sbx_hook})){{d.statusLine={{type:'command',command:cmd}};}}",
             path = js(USAGE_STATUSLINE_PATH),
             script = js(&USAGE_STATUSLINE.replace("__PORT__", agent_port)),
             cmd = js(&format!("node {USAGE_STATUSLINE_PATH}")),
             settings = js(SETTINGS_PATH),
+            sbx_hook = js(SBX_STATUS_HOOK),
+            chain = js(USAGE_STATUSLINE_CHAIN_PATH),
         );
         self.piece(piece::USAGE_STATUSLINE, body)
     }
@@ -355,6 +366,29 @@ mod tests {
         let out = child.wait_with_output().ok()?;
         assert!(out.status.success());
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn sbx_s_own_status_line_is_taken_over_and_chained() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".claude")).unwrap();
+        // What sbx 0.51's Claude Code image writes at install.
+        let sbx = "/usr/local/bin/sbx-claude-hook claude-status";
+        std::fs::write(h.join(".claude/settings.json"), format!(r#"{{"statusLine":{{"type":"command","command":"{sbx}"}}}}"#)).unwrap();
+        let batch = Tooling::new().usage_statusline("7682");
+        let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
+        for _ in 0..2 {
+            let out = run_node(&script).unwrap();
+            assert_eq!(batch.parse_report(&out).unwrap(), ToolingOutcome::default(), "{out}");
+        }
+        let s: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.join(".claude/settings.json")).unwrap()).unwrap();
+        assert!(s["statusLine"]["command"].as_str().unwrap().contains("usage-statusline.js"));
+        assert_eq!(std::fs::read_to_string(h.join(".sbxw/usage-statusline.chain")).unwrap(), sbx, "kept, and still kept on a re-run");
     }
 
     #[test]

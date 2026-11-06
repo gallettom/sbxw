@@ -57,6 +57,17 @@ process.stdin.on("end", () => {
   if (sd !== null) parts.push("7d " + sd + "%");
   process.stdout.write(parts.join("  ·  "));
 
+  // 1b) The statusLine this one replaced (sbx's own, which feeds Docker's
+  // desktop app and prints nothing) gets the same payload. Its output is not
+  // ours to show; its failure is not ours to report.
+  try {
+    const chained = fs.readFileSync(require("path").join(os.homedir(), ".sbxw", "usage-statusline.chain"), "utf8").trim();
+    // Synchronous, bounded: the exits below must not cut its stdin short.
+    if (chained) {
+      require("child_process").spawnSync("sh", ["-c", chained], { input: raw, stdio: ["pipe", "ignore", "ignore"], timeout: 1000 });
+    }
+  } catch (_) {}
+
   // 2) Throttled, fire-and-forget forward to the daemon (no output, never blocks).
   let last = 0;
   try {

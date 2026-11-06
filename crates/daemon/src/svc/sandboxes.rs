@@ -279,7 +279,8 @@ impl App {
             return serde_json::json!({ "auto": false });
         }
         let (sbx, sbxw) = self.template_versions();
-        let kits = self.daemon_config().kits;
+        // As the bring-up applies them, sbxw's base kit first.
+        let kits = sbxw_core::kits::with_base(&self.daemon_config().kits);
         let content = crate::bundled::fingerprint(&self.store.paths, &kits).unwrap_or_default();
         let now = templates::Current { sbx: &sbx, sbxw, content: &content };
         let state = templates::check(&self.store.templates(), &kits, &now);
@@ -616,8 +617,9 @@ impl App {
             anyhow!("sbxw doesn't know which workspace '{name}' was created on — bring it up once with sbxw")
         })?;
         let mut cfg = self.config_for(name).await;
-        // sbx knows no `sbxw:` kit: the file names the written-out directory.
-        cfg.kits = crate::bundled::resolve(&self.store.paths, &cfg.kits)?;
+        // sbx knows no `sbxw:` kit: the file names the written-out directory,
+        // sbxw's base kit first, as the bring-up applies it.
+        cfg.kits = crate::bundled::resolve(&self.store.paths, &sbxw_core::kits::with_base(&cfg.kits))?;
         let live = self.sbx_for(name).await?.ports(&name.name).await;
         let ports: Vec<envfile::Port> = if live.is_empty() {
             envexport::ports_from_config(&cfg)
