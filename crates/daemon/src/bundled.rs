@@ -130,6 +130,15 @@ mod tests {
     }
 
     #[test]
+    fn the_base_kit_carries_the_relay_guidance_the_tooling_writes() {
+        let (_, files) = KITS.iter().find(|(n, _)| *n == sbxw_core::kits::BASE).unwrap();
+        let (_, _, spec) = files.iter().find(|(r, _, _)| *r == "spec.yaml").unwrap();
+        let doc: serde_norway::Value = serde_norway::from_str(std::str::from_utf8(spec).unwrap()).unwrap();
+        let ctx = doc["capabilities"].as_sequence().unwrap().iter().find(|c| c["type"] == "com.docker.sandbox/agent-context@2").expect("agent-context@2");
+        assert_eq!(ctx["config"]["content"].as_str(), Some(sbxw_core::tooling::relay_guidance().as_str()), "edit both, or neither");
+    }
+
+    #[test]
     fn every_bundled_kit_is_embedded_and_v3() {
         for name in sbxw_core::kits::BUNDLED.iter().chain([&sbxw_core::kits::BASE]) {
             let (_, files) = KITS.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("{name}"));

@@ -47,7 +47,10 @@ repository, else Debian's `nodejs`) in an install hook, once, before the
 agent starts: sbx 0.51's image ships none, and sbxw's relay, session hooks,
 status line and the bundled kits' scripts all run on it. It opens
 `deb.debian.org`, `security.debian.org` and `dhi.io` for that hook only. It is
-never listed in `kits` and the Kits dialog does not offer it.
+never listed in `kits` and the Kits dialog does not offer it. It also carries, as `agent-context@2`, the agent's
+instructions for the relay (asking another sandbox, asking you for a
+screenshot): sbx writes them into `~/.claude/CLAUDE.md` before the agent
+starts, and sbxw's tooling writes the same text afterwards only if sbx did not.
 
 The web UI's **Kits** button edits the same line without opening the file:
 see [the sidebar footer](web-ui.md#the-sidebar-footer).

@@ -75,10 +75,22 @@ pub mod piece {
 /// not the manual. Short and unhedged — a brake ("use it sparingly") reads the
 /// same whether or not the case in front of it is the one worth spending on;
 /// restraint lives in the tool descriptions, read while deciding to call.
+/// The section heading [`relay_guidance`] opens with — what tells the batch
+/// that sbx already wrote it into `CLAUDE.md` from sbxw's base kit.
+pub const RELAY_GUIDANCE_HEAD: &str = "## When the answer isn't in this workspace";
+
+/// The fenced copy the tooling batch writes into `~/.claude/CLAUDE.md` when
+/// sbx did not (see [`Tooling::relay`]).
 pub fn relay_doc() -> String {
+    format!("{RELAY_DOC_BEGIN}\n{}{RELAY_DOC_END}\n", relay_guidance())
+}
+
+/// How and when to use the relay, as the agent reads it. sbxw's base kit
+/// carries the same text as its `agent-context@2` body, so sbx writes it
+/// into `CLAUDE.md` before the agent starts (a test keeps the two equal).
+pub fn relay_guidance() -> String {
     format!(
-        "{RELAY_DOC_BEGIN}\n\
-         ## When the answer isn't in this workspace\n\
+        "{RELAY_GUIDANCE_HEAD}\n\
          \n\
          Other sandboxes run on this machine, each with its own agent and its own\n\
          project, and you can ask them — a human routes the question and approves\n\
@@ -121,8 +133,7 @@ pub fn relay_doc() -> String {
          is an ordinary answer, not a setback: carry on, say what you changed\n\
          and what you expect it to look like, and let them correct you. Don't\n\
          ask twice for the same view, and don't ask at all for something you can\n\
-         run and capture yourself.\n\
-         {RELAY_DOC_END}\n"
+         run and capture yourself.\n"
     )
 }
 
@@ -250,7 +261,7 @@ impl Tooling {
              const from=cur.indexOf(begin),to=cur.indexOf(end);\
              let rest=(from>=0&&to>from)?cur.slice(0,from)+cur.slice(to+end.length):cur;\
              rest=rest.replace(/\\n{{3,}}/g,'\\n\\n').trim();\
-             put(p,(rest?rest+'\\n\\n':'')+doc);\
+             put(p,rest.includes({head})?rest+'\\n':(rest?rest+'\\n\\n':'')+doc);\
              const guard={guard_path};put(guard,{guard});const st=json({settings});st.hooks=st.hooks||{{}};\
              for(const [ev,matcher] of [['PreToolUse',{matcher}],['PostToolUse',undefined]]){{\
              st.hooks[ev]=(st.hooks[ev]||[]).filter(e=>!(e.hooks||[]).some(h=>(h.args||[]).includes(guard)));\
@@ -266,6 +277,7 @@ impl Tooling {
             begin = js(RELAY_DOC_BEGIN),
             end = js(RELAY_DOC_END),
             doc = js(&relay_doc()),
+            head = js(RELAY_GUIDANCE_HEAD),
             guard_path = js(TEAM_GUARD_PATH),
             guard = js(TEAM_GUARD),
             settings = js(SETTINGS_PATH),
@@ -352,6 +364,25 @@ mod tests {
         let out = child.wait_with_output().ok()?;
         assert!(out.status.success());
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn the_relay_guidance_sbx_wrote_is_not_written_twice() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".claude")).unwrap();
+        // What sbx materialises from the base kit, around the image's own text.
+        let by_sbx = format!("## Claude Code\n\nimage text\n\n{}", relay_guidance());
+        std::fs::write(h.join(".claude/CLAUDE.md"), format!("{by_sbx}\n{}", relay_doc())).unwrap();
+        let script = Tooling::new().relay("7682").script().replace("/home/agent/", &format!("{}/", h.display()));
+        run_node(&script).unwrap();
+        let md = std::fs::read_to_string(h.join(".claude/CLAUDE.md")).unwrap();
+        assert_eq!(md.matches(RELAY_GUIDANCE_HEAD).count(), 1, "{md}");
+        assert!(!md.contains(RELAY_DOC_BEGIN), "an older run's fenced copy goes too");
     }
 
     #[test]
