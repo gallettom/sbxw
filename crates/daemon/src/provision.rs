@@ -78,10 +78,7 @@ const STARTUP_SETTLE: Duration = if cfg!(test) { Duration::ZERO } else { Duratio
 /// Each resolved kit's `spec.yaml`, else its reference: what a template's
 /// content is judged on.
 fn spec_texts(resolved: &[String]) -> Vec<String> {
-    resolved
-        .iter()
-        .map(|k| std::fs::read_to_string(std::path::Path::new(k).join("spec.yaml")).unwrap_or_else(|_| k.clone()))
-        .collect()
+    resolved.iter().map(|k| kits::content_text(k)).collect()
 }
 
 /// The steps this bring-up will take, announced first. Three are conditional
@@ -99,7 +96,8 @@ pub fn plan(existed: bool, cfg: &Config, template: bool) -> Vec<Step> {
     if !cfg.network_allow.is_empty() || !cfg.network_deny.is_empty() {
         steps.push(Step::new(progress::POLICY, "Applying the network policy"));
     }
-    if existed && !cfg.kits.is_empty() {
+    // Past sbxw's base kit, which only creation applies.
+    if existed && cfg.kits.len() > 1 {
         steps.push(Step::new(progress::KITS, "Applying kits"));
     }
     steps.push(Step::new(progress::PORTS, "Publishing ports and host aliases"));
@@ -168,6 +166,9 @@ impl App {
             // sbxw.toml is the project's, so it is on the host, beside the code.
             req.config = remote_config(&host, &req.workspace).await?;
         }
+        // sbxw's own kit (Node.js) first, on every sandbox: everything sbxw
+        // runs inside one needs it, and sbx 0.51's image has none.
+        req.config.kits = kits::with_base(&req.config.kits);
         // Secrets (the OAuth token, the API key, the kept skills) go only to a
         // host trusted with them.
         let trusted = on_host.as_ref().is_none_or(|r| r.cfg.trust_secrets);
@@ -291,28 +292,15 @@ impl App {
                 }
             }
             if let Some(creds) = &creds {
-                if running == Some(true) {
-                    // `kit add` would recreate the container under live sessions.
-                    match sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await {
-                        Ok(()) => own_allow.push("claude.ai".into()),
-                        Err(e) => run.warn(format!("OAuth credential refresh failed (use /login in-session instead): {e:#}")),
-                    }
-                } else {
-                    let dir = self.store.write_oauth_kit(name, Some(creds))?;
-                    let dir = self.kits_on(on_host.as_deref(), &[dir.to_string_lossy().into_owned()], &mut run).await?.remove(0);
+                // The OAuth kit's file is generated at creation, which `sbx kit
+                // add` refuses (v3 lifecycle files): an existing sandbox takes
+                // the file directly. `exec` starts a stopped one first.
+                if running != Some(true) {
                     running = None;
-                    if let Err(e) = self.kit_add_repairing(name, &dir, Some(creds)).await {
-                        // sbx refuses `kit add` for a kit with `setup.files`
-                        // (the OAuth kit) — after starting the sandbox. Started,
-                        // it takes the file the way a running one does above.
-                        let wrote = sbx.wait_until_running(n, Duration::from_secs(30)).await
-                            && sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await.is_ok();
-                        if wrote {
-                            own_allow.push("claude.ai".into());
-                        } else {
-                            run.warn(format!("OAuth kit add failed (use /login in-session instead): {e:#}"));
-                        }
-                    }
+                }
+                match sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await {
+                    Ok(()) => own_allow.push("claude.ai".into()),
+                    Err(e) => run.warn(format!("OAuth credential refresh failed (use /login in-session instead): {e:#}")),
                 }
             }
         } else {
@@ -497,16 +485,23 @@ impl App {
         }
 
         // ── Kits, for a sandbox that already existed ─────────────────────
-        if !created_with_kits && !cfg.kits.is_empty() {
+        // The first kit is sbxw's base kit, applied at creation only.
+        if !created_with_kits && cfg.kits.len() > 1 {
             run.step(progress::KITS);
             let recorded = self.store.get(name).kits;
-            let pending: Vec<&String> = kits_here.iter().filter(|k| !recorded.contains(k)).collect();
+            let pending: Vec<&String> = kits_here.iter().skip(1).filter(|k| !recorded.contains(k)).collect();
             // `sbx inspect` only when sbxw's own record does not settle it.
             let present = match pending.is_empty() {
                 true => String::new(),
                 false => kits::inspect_kits_section(&sbx.inspect(n).await.unwrap_or_default()),
             };
-            for (kit, local) in kits_here.iter().zip(&cfg.kits) {
+            for ((kit, local), wanted) in kits_here.iter().zip(&cfg.kits).zip(&req.config.kits) {
+                // sbxw's base kit is a creation-time kit: a sandbox made before
+                // it existed has the Node.js of the image it came from, and one
+                // that lacks it is told so by the tooling step below.
+                if kits::bundled_name(wanted) == Some(kits::BASE) {
+                    continue;
+                }
                 let spec = std::fs::read_to_string(std::path::Path::new(local).join("spec.yaml")).ok();
                 if kits::already_applied(kit, spec.as_deref(), &present, &recorded) {
                     run.info(format!("kit '{kit}' already applied — skipping"));
@@ -853,30 +848,20 @@ impl App {
             .map_err(|e| anyhow!("{e:#}\n(create with port mappings had failed with: {first:#})"))
     }
 
-    /// Check the person's own local kits offline before anything is created: a
-    /// broken kit fails here in a second, not after the image pull. Bundled
-    /// kits ship tested; remote references cannot be checked offline, and
-    /// neither can a v3 kit, which `kit validate` cannot read ([`kits::is_v3_kit`]).
+    /// Check the person's own local kits before anything is created. Since sbx
+    /// 0.51 `claude` is a kit spec v3 workload, and a v1/v2 kit does not
+    /// compose with it: refused here in a second, naming the kit, rather than
+    /// after an image pull. (`sbx kit validate` reads only v1/v2 specs, so it
+    /// has nothing left to check.) Bundled kits ship v3; remote references
+    /// are sbx's to resolve.
     async fn validate_kits(&self, kits: &[String]) -> Result<()> {
-        let local: Vec<&String> = kits
+        let broken: Vec<String> = kits
             .iter()
-            .filter(|k| {
-                let path = std::path::Path::new(k.as_str());
-                kits::bundled_name(k).is_none() && path.exists() && !kits::is_v3_kit(path)
-            })
+            .filter(|k| kits::bundled_name(k).is_none())
+            .filter_map(|k| kits::incompatible_spec(std::path::Path::new(k.as_str())).map(|why| format!("{k}: {why}")))
             .collect();
-        // The kits are files here, so this machine's sbx checks them, even
-        // for a sandbox on another host.
-        let checks = local.iter().map(|k| self.sbx.kit_validate_offline(k));
-        let mut broken = Vec::new();
-        for (kit, r) in local.iter().zip(futures_util::future::join_all(checks).await) {
-            match r {
-                Ok(()) => {}
-                Err(e) => broken.push(format!("{kit}: {e:#}")),
-            }
-        }
         if !broken.is_empty() {
-            bail!("kit validation failed — nothing was created or changed:\n{}", broken.join("\n"));
+            bail!("kit check failed — nothing was created or changed:\n{}", broken.join("\n"));
         }
         Ok(())
     }
@@ -1054,7 +1039,10 @@ mod tests {
         let ids = |existed, cfg: &Config| plan(existed, cfg, false).into_iter().map(|s| s.id).collect::<Vec<_>>();
         let bare = Config { network_allow: vec![], network_deny: vec![], kits: vec![], ..Config::default() };
         assert_eq!(ids(false, &bare), ["workspace", "create", "boot", "tooling", "ports"]);
-        let kits = Config { kits: vec!["k".into()], ..bare.clone() };
+        // As the bring-up sees them: sbxw's base kit first.
+        let base_only = Config { kits: vec!["base".into()], ..bare.clone() };
+        assert!(!ids(true, &base_only).contains(&"kits".to_string()), "the base kit is creation-only");
+        let kits = Config { kits: vec!["base".into(), "k".into()], ..bare.clone() };
         assert!(!ids(false, &kits).contains(&"kits".to_string()));
         assert!(ids(true, &kits).contains(&"kits".to_string()));
         assert!(ids(false, &Config::default()).contains(&"policy".to_string()));
@@ -1111,7 +1099,11 @@ mod tests {
     fn kit_with_startup(dir: &std::path::Path) -> String {
         let kit = dir.join("kit");
         std::fs::create_dir_all(&kit).unwrap();
-        std::fs::write(kit.join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: kit\nsetup:\n  startup:\n    - command: [\"bash\", \"/k/install.sh\"]\n").unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: com.docker.sandbox/lifecycle@1\n    config:\n      startup:\n        - command: [\"bash\", \"/k/install.sh\"]\n",
+        )
+        .unwrap();
         kit.to_string_lossy().into_owned()
     }
 
@@ -1119,7 +1111,7 @@ mod tests {
     async fn a_rebuild_waits_for_the_installs_snapshots_without_secrets_and_drops_the_old_template() {
         let (dir, app, fake) = app_with(auto_sbx(3));
         let kits = vec![kit_with_startup(dir.path())];
-        let old = templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), sbxw: "2.1.2".into(), kits: kits.clone(), created_at: 1, content: String::new() };
+        let old = templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), sbxw: "2.1.2".into(), kits: kits::with_base(&kits), created_at: 1, content: String::new() };
         app.store.set_templates(&[old]).unwrap();
 
         let w = app.provision(auto_request(dir.path(), kits.clone(), templates::Choice::Rebuild), None).await.unwrap();
@@ -1141,7 +1133,8 @@ mod tests {
     async fn a_fresh_template_is_used_and_a_stale_one_only_warns() {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
-        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &kits).unwrap() };
+        let applied = kits::with_base(&kits);
+        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &applied).unwrap() };
         app.store.set_templates(std::slice::from_ref(&fresh)).unwrap();
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let s2 = seen.clone();
@@ -1163,8 +1156,9 @@ mod tests {
     async fn a_template_gone_from_sbx_is_forgotten_not_pulled() {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
-        let content = crate::bundled::fingerprint(&app.store.paths, &kits).unwrap();
-        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content };
+        let applied = kits::with_base(&kits);
+        let content = crate::bundled::fingerprint(&app.store.paths, &applied).unwrap();
+        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied, created_at: 1, content };
         app.store.set_templates(&[gone]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
         assert!(w.iter().any(|w| w.contains("sbxw-auto:gone is no longer in sbx")), "{w:?}");
@@ -1209,17 +1203,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_broken_local_kit_stops_the_bring_up_before_create() {
-        let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("kit") if a.iter().any(|x| x.ends_with("broken")) => Output::fail(1, "spec.yaml: unknown field `setpu`"),
-            _ => sbx_answer(a),
-        });
+    async fn a_v2_local_kit_stops_the_bring_up_before_create() {
+        let (dir, app, fake) = app_with(sbx_answer);
         let ws = dir.path().join("neos");
-        let (good, broken) = (dir.path().join("good"), dir.path().join("broken"));
-        for d in [&ws, &good, &broken] {
+        let (good, old) = (dir.path().join("good"), dir.path().join("old"));
+        for d in [&ws, &good, &old] {
             std::fs::create_dir_all(d).unwrap();
         }
-        let kits = vec![good.to_string_lossy().into_owned(), broken.to_string_lossy().into_owned(), "sbxw:codemap".into(), "docker.io/o/k:1".into()];
+        std::fs::write(good.join("spec.yaml"), "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n").unwrap();
+        std::fs::write(old.join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: old\n").unwrap();
+        let kits = vec![good.to_string_lossy().into_owned(), old.to_string_lossy().into_owned(), "sbxw:codemap".into(), "docker.io/o/k:1".into()];
         let req = BringUp {
             name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
@@ -1234,43 +1227,10 @@ mod tests {
             remote_control: false,
             git: None,
         };
-        let e = app.provision(req, None).await.unwrap_err();
-        assert!(format!("{e:#}").contains("unknown field `setpu`"), "{e:#}");
-        let log = fake.log();
-        assert_eq!(log.iter().filter(|c| c.starts_with("kit validate")).count(), 2, "local, non-bundled kits only: {log:?}");
-        assert!(log.iter().all(|c| !c.starts_with("create")), "nothing created: {log:?}");
-    }
-
-    #[tokio::test]
-    async fn a_v3_kit_is_left_to_create() {
-        let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            // What sbx 0.50's `kit validate` says of every v3 spec.
-            Some("kit") => Output::fail(1, "field capabilities not found in type spec.SpecFile"),
-            _ => sbx_answer(a),
-        });
-        let ws = dir.path().join("neos");
-        let kit = dir.path().join("k");
-        std::fs::create_dir_all(&ws).unwrap();
-        std::fs::create_dir_all(&kit).unwrap();
-        std::fs::write(kit.join("spec.yaml"), "schemaVersion: \"3\"\nkind: mixin\n").unwrap();
-        let req = BringUp {
-            name: SandboxRef::parse("neos").unwrap(),
-            workspace: ws,
-            ro: vec![],
-            rw: vec![],
-            config: Config { kits: vec![kit.to_string_lossy().into_owned()], ..Config::default() },
-            extra_ports: vec![],
-            chat: false,
-            api_key: None,
-            oauth_token: None,
-            template: Default::default(),
-            remote_control: false,
-            git: None,
-        };
-        let _ = app.provision(req, None).await;
-        let log = fake.log();
-        assert!(!log.iter().any(|c| c.starts_with("kit validate")), "{log:?}");
-        assert!(log.iter().any(|c| c.starts_with("create")), "{log:?}");
+        let e = format!("{:#}", app.provision(req, None).await.unwrap_err());
+        assert!(e.contains(&format!("{}: kit spec v2", old.display())), "{e}");
+        assert!(!e.contains(&good.display().to_string()), "the v3 kit is not named: {e}");
+        assert!(fake.log().iter().all(|c| !c.starts_with("create") && !c.starts_with("kit")), "nothing created: {:?}", fake.log());
     }
 
     #[tokio::test]

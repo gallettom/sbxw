@@ -185,18 +185,33 @@ pub fn kit_files(skills: &[Skill]) -> Vec<KitFile> {
     if !skills.is_empty() {
         spec.push_str("build: |\n  FROM scratch\n  COPY --chown=1000:1000 files/home/agent/ /home/agent/\n");
     }
-    let mut out = vec![KitFile { rel: "spec.yaml".into(), executable: false, content: spec }];
-    let home = |p: &str| format!("files{p}");
+    let mut out = vec![KitFile { rel: "spec.yaml".into(), executable: false, content: String::new() }];
+    let mut executables: Vec<String> = Vec::new();
     for s in skills {
         let mut files: Vec<&File> = s.files.iter().collect();
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let desc = files.iter().find(|f| f.path == "SKILL.md").and_then(|f| description(&f.content));
         for f in files {
-            out.push(KitFile { rel: home(&format!("{SANDBOX_ROOT}/{}/{}", s.name, f.path)), executable: f.executable, content: f.content.clone() });
+            let path = format!("{SANDBOX_ROOT}/{}/{}", s.name, f.path);
+            // sbx expands `${{` in a hook's argv; such a name is left non-executable.
+            if f.executable && !path.contains("${{") {
+                executables.push(path.clone());
+            }
+            out.push(KitFile { rel: format!("files{path}"), executable: f.executable, content: f.content.clone() });
         }
         let cmd = command(&s.name, desc.as_deref());
-        out.push(KitFile { rel: home(&format!("/home/agent/.claude/commands/{}.md", s.name)), executable: false, content: cmd });
+        out.push(KitFile { rel: format!("files/home/agent/.claude/commands/{}.md", s.name), executable: false, content: cmd });
     }
+    // The host copy is never executable (it is data there); the bit is set in
+    // the sandbox, on every boot, where the skill runs.
+    if !executables.is_empty() {
+        let argv: Vec<String> = ["chmod", "0755"].iter().map(|s| s.to_string()).chain(executables).collect();
+        spec.push_str(&format!(
+            "capabilities:\n  - type: com.docker.sandbox/lifecycle@1\n    config:\n      startup:\n        - command: {}\n          description: Make the kept skills' scripts executable\n",
+            serde_json::to_string(&argv).unwrap_or_default()
+        ));
+    }
+    out[0].content = spec;
     out
 }
 
@@ -328,6 +343,9 @@ mod tests {
         assert!(doc["build"].as_str().unwrap().contains("COPY --chown=1000:1000 files/home/agent/ /home/agent/"));
         assert_eq!(get("files/home/agent/.sbxw/my-skills/alpha/SKILL.md").content, tricky);
         assert!(get("files/home/agent/.sbxw/my-skills/alpha/bin/run.sh").executable);
+        let startup = &doc["capabilities"][0]["config"]["startup"][0]["command"];
+        assert_eq!(startup[0], "chmod");
+        assert_eq!(startup[2], "/home/agent/.sbxw/my-skills/alpha/bin/run.sh", "the bit is set in the sandbox");
         let cmd = &get("files/home/agent/.claude/commands/zeta.md").content;
         assert!(cmd.starts_with("---\ndescription: \"Z skill\"\n---") && cmd.contains("my-skills/zeta/SKILL.md"), "{cmd}");
         assert_eq!(files, kit_files(&[skills[1].clone(), skills[0].clone()]), "same skills, same kit");

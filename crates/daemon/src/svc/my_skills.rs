@@ -16,6 +16,56 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
+/// Write the generated kit's directory: each file only when it changed (an
+/// unchanged tree keeps sbx's build cache), and every file under `files/`
+/// this list no longer names removed — the build copies the whole tree, so a
+/// skill the person removed would otherwise still reach new sandboxes.
+fn write_kit_tree(dir: &Path, files: &[my_skills::KitFile]) -> Result<()> {
+    for f in files {
+        let p = dir.join(&f.rel);
+        if std::fs::read(&p).ok().as_deref() != Some(f.content.as_bytes()) {
+            write_atomic(&p, f.content.as_bytes())?;
+        }
+        // Readable by sbx's builder, executable by nobody on this machine: the
+        // kit's startup hook sets the bit inside the sandbox instead.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644));
+        }
+    }
+    fn prune(at: &Path, dir: &Path, keep: &[my_skills::KitFile]) {
+        let Ok(entries) = std::fs::read_dir(at) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                prune(&p, dir, keep);
+                let _ = std::fs::remove_dir(&p);
+            } else {
+                let rel = p.strip_prefix(dir).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                if !keep.iter().any(|f| f.rel == rel) {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
+    }
+    prune(&dir.join("files"), dir, files);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fn open(d: &Path) {
+            let _ = std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o755));
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    open(&e.path());
+                }
+            }
+        }
+        open(dir);
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct Export {
     ok: bool,
@@ -94,15 +144,11 @@ impl App {
         if skills.is_empty() {
             // Kept for a sandbox that holds the path, emptied: sbx re-reads it.
             if dir.exists() {
-                write_atomic(&dir.join("spec.yaml"), my_skills::kit_spec(&[]).as_bytes())?;
+                write_kit_tree(&dir, &my_skills::kit_files(&[]))?;
             }
             return Ok(None);
         }
-        let spec = my_skills::kit_spec(&skills);
-        let file = dir.join("spec.yaml");
-        if std::fs::read_to_string(&file).ok().as_deref() != Some(spec.as_str()) {
-            write_atomic(&file, spec.as_bytes())?;
-        }
+        write_kit_tree(&dir, &my_skills::kit_files(&skills))?;
         Ok(Some(dir))
     }
 
@@ -260,8 +306,16 @@ mod tests {
             let mode = std::fs::metadata(kept.join("bin/go.sh")).unwrap().permissions().mode();
             assert_eq!(mode & 0o111, 0, "never executable on the host");
         }
-        let spec = std::fs::read_to_string(app.my_skills_kit().unwrap().unwrap().join("spec.yaml")).unwrap();
-        assert!(spec.contains("my-skills/mine/bin/go.sh\"\n      mode: \"0755\""), "{spec}");
+        let kit = app.my_skills_kit().unwrap().unwrap();
+        let spec = std::fs::read_to_string(kit.join("spec.yaml")).unwrap();
+        assert!(spec.contains("\"chmod\",\"0755\",\"/home/agent/.sbxw/my-skills/mine/bin/go.sh\""), "the bit is set in the sandbox: {spec}");
+        let copy = kit.join("files/home/agent/.sbxw/my-skills/mine/bin/go.sh");
+        assert!(copy.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o111, 0, "nor in the kit's copy");
+        }
         assert_eq!(app.my_skills_list()["skills"][0]["description"], "Mine");
 
         let again = app.keep_skill(&sb, Origin::Workspace, "mine", false).await.unwrap_err();
@@ -271,6 +325,7 @@ mod tests {
         app.forget_skill("mine").unwrap();
         assert!(!kept.exists());
         assert_eq!(app.my_skills_kit().unwrap(), None);
+        assert!(!copy.exists(), "a forgotten skill leaves the kit's tree");
     }
 
     #[tokio::test]
