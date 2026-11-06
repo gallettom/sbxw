@@ -1263,39 +1263,48 @@
         <span class="modal-title" id="github-modal-title">Secrets</span>
         <button class="modal-close" id="github-modal-close" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body">
-        <p class="repo-note" id="github-status">Loading…</p>
-        <div class="kit-head">
-          <span class="field-label">From the GitHub CLI</span>
+      <div class="modal-body sec-body">
+        <div class="mac-card">
+          <div class="mac-card-head">
+            <span class="mac-card-title">GitHub</span>
+            <span class="mac-pills" id="github-status"></span>
+          </div>
+          <p class="mac-card-note">The token sbx's proxy presents to github.com and api.github.com for every sandbox's
+            <code>git</code> and <code>gh</code>. It never enters a sandbox.</p>
+          <div class="sec-row">
+            <input id="github-token" class="field-input" type="password" spellcheck="false" autocomplete="off"
+                   aria-label="GitHub token" placeholder="Paste a token — ghp_… or github_pat_…">
+            <button class="btn-create" id="github-save">Save</button>
+          </div>
+          <div class="mac-actions">
+            <button class="mac-btn hidden" id="github-use-gh">Use my gh login</button>
+            <span class="mac-card-note" id="github-gh-note"></span>
+            <span class="mac-actions-end"><button class="mac-btn mac-btn-danger hidden" id="github-remove">Remove</button></span>
+          </div>
         </div>
-        <p class="create-hint" id="github-gh-note">Looking for <code>gh</code>…</p>
-        <button class="btn-cancel" id="github-use-gh" hidden>Use my gh login</button>
-        <label class="field-label" for="github-token">Or a personal access token</label>
-        <input id="github-token" class="field-input" type="password" spellcheck="false" autocomplete="off"
-               placeholder="ghp_… or github_pat_…">
-        <span class="create-hint">Stored by <code>sbx</code> as its global <code>github</code> secret and injected by the proxy
-          for every sandbox's git and <code>gh</code> over HTTPS — it never enters a sandbox. A fine-grained token with
-          <em>Contents: read and write</em> is enough to push.</span>
-        <div class="kit-head" style="margin-top:1rem">
-          <span class="field-label">Other services</span>
+
+        <div class="mac-card">
+          <div class="mac-card-head">
+            <span class="mac-card-title">Other services</span>
+            <span class="mac-pills" id="secrets-count"></span>
+          </div>
+          <p class="mac-card-note">A key for a service sbx does not know: the sandbox sees a placeholder in the variable,
+            the proxy swaps in the value on requests to these hosts only.</p>
+          <div class="sec-list" id="secrets-custom-list"></div>
+          <div class="sec-grid">
+            <label class="sec-field"><span>Hosts</span>
+              <input id="secret-hosts" class="field-input" spellcheck="false" autocomplete="off" placeholder="api.example.com, *.example.io"></label>
+            <label class="sec-field"><span>Variable</span>
+              <input id="secret-env" class="field-input" spellcheck="false" autocomplete="off" placeholder="EXAMPLE_API_KEY"></label>
+            <label class="sec-field"><span>Value</span>
+              <input id="secret-value" class="field-input" type="password" spellcheck="false" autocomplete="off"></label>
+            <button class="mac-btn" id="secret-save">Add</button>
+          </div>
         </div>
-        <p class="create-hint">A key for a service sbx does not know (sbx 0.51 <code>secret set-custom</code>): the sandbox
-          sees a placeholder in the variable you name, and the proxy puts the real value in requests to the hosts you
-          list — only those.</p>
-        <div class="tpl-list" id="secrets-custom-list"></div>
-        <label class="field-label" for="secret-hosts">Hosts</label>
-        <input id="secret-hosts" class="field-input" spellcheck="false" autocomplete="off" placeholder="api.example.com, *.example.io">
-        <label class="field-label" for="secret-env">Variable in the sandbox</label>
-        <input id="secret-env" class="field-input" spellcheck="false" autocomplete="off" placeholder="EXAMPLE_API_KEY">
-        <label class="field-label" for="secret-value">Value</label>
-        <input id="secret-value" class="field-input" type="password" spellcheck="false" autocomplete="off">
-        <button class="btn-cancel" id="secret-save" style="margin-top:.5rem">Add secret</button>
       </div>
       <div class="modal-foot">
         <span class="create-error hidden" id="github-error"></span>
-        <button class="btn-cancel" id="github-remove" hidden>Remove token</button>
         <button class="btn-cancel" id="github-modal-close2">Close</button>
-        <button class="btn-create" id="github-save">Save token</button>
       </div>
     </div>
   </div>

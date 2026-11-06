@@ -425,6 +425,25 @@
   .mac-btn:disabled { opacity: .5; cursor: not-allowed; }
   .mac-btn-danger { color: var(--c-red); background: none; border-color: color-mix(in srgb, var(--c-red) 45%, transparent); }
   .mac-btn-danger:hover:not(:disabled) { background: var(--c-red-tint); border-color: var(--c-red); color: var(--c-red); }
+
+  /* ── Setup → Secrets: two Mac-style cards, each with its own actions ── */
+  .sec-body { display: flex; flex-direction: column; gap: .9rem; }
+  /* Author display beats [hidden]; these toggle a class instead. */
+  .sec-body .mac-btn.hidden { display: none; }
+  .sec-row { display: flex; gap: .5rem; align-items: center; }
+  .sec-row .field-input { flex: 1; min-width: 0; margin: 0; }
+  .sec-list:empty { display: none; }
+  .sec-list { display: flex; flex-direction: column; border: 1px solid var(--c-elevated); border-radius: var(--r-xs); }
+  .sec-item { display: flex; align-items: center; gap: .6rem; padding: .35rem .5rem; }
+  .sec-item + .sec-item { border-top: 1px solid var(--c-elevated); }
+  .sec-name { color: var(--c-text-bright); font-size: 12px; }
+  .sec-scope { font-size: 11px; color: var(--c-text-muted); }
+  .sec-rm { margin-left: auto; padding: .15rem .5rem; font-size: 11px; }
+  .sec-grid { display: grid; grid-template-columns: 2fr 1.4fr 1.4fr auto; gap: .5rem; align-items: end; }
+  .sec-field { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+  .sec-field > span { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-dim); }
+  .sec-field .field-input { margin: 0; min-width: 0; }
+  @media (max-width: 640px) { .sec-grid { grid-template-columns: 1fr; } }
   .mac-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; border-radius: var(--r-sm); font-size: 12px; }
   .mac-banner-busy  { color: var(--c-blue); background: var(--c-blue-tint); }
   .mac-banner-error { color: var(--c-red); background: var(--c-red-tint); border: 1px solid var(--c-red-border); }

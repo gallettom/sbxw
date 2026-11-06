@@ -34,25 +34,29 @@ function closeGithubModal() {
   githubOverlay.classList.add('hidden');
 }
 
+// A pill like the Mac tab's: a dot and a word.
+const secPill = (tone, text) => `<span class="mac-pill mac-pill-${tone}"><span class="mac-dot"></span>${escHtml(text)}</span>`;
+
 async function loadGithub() {
   let r;
   try { r = await (await fetch('/api/github-token')).json(); }
   catch (e) { r = { ok: false, error: e.message }; }
   if (!r.ok) {
-    githubStatus.textContent = `Could not read the token’s state: ${r.error || 'unknown error'}`;
-    githubRemove.hidden = true;
+    githubStatus.innerHTML = secPill('warn', 'unknown');
+    showNote(githubError, `Could not read the token's state: ${r.error || 'unknown error'}`);
+    githubRemove.classList.add('hidden');
     return;
   }
-  githubStatus.textContent = r.set
-    ? 'A token is set. Saving a new one replaces it.'
-    : 'No token set: git push from a sandbox will ask for a username.';
-  githubRemove.hidden = !r.set;
+  githubStatus.innerHTML = r.set ? secPill('ok', 'token set') : secPill('off', 'no token');
+  githubToken.placeholder = r.set ? 'Paste a new token to replace it' : 'Paste a token — ghp_… or github_pat_…';
+  githubRemove.classList.toggle('hidden', !r.set);
   // sbx runs `gh auth token` itself and refreshes it: nothing pasted, nothing
-  // to rotate by hand.
-  githubUseGh.hidden = !r.gh;
+  // to rotate by hand. Offered only when gh is there to run.
+  githubUseGh.classList.toggle('hidden', !r.gh);
+  githubUseGh.title = r.gh ? `sbx runs ${r.gh} auth token when it needs the token, and refreshes it` : '';
   githubGhNote.innerHTML = r.gh
-    ? `sbx runs <code>${escHtml(r.gh)} auth token</code> on this machine when it needs the token, and refreshes it — your <code>gh auth login</code>, nothing pasted.`
-    : 'No <code>gh</code> found (Homebrew or /usr/bin). Install it and run <code>gh auth login</code> to use it here, or paste a token below.';
+    ? 'sbx asks <code>gh</code> for the token and keeps it fresh.'
+    : 'Install <code>gh</code> and run <code>gh auth login</code> to skip pasting.';
 }
 
 githubSave.addEventListener('click', async () => {
@@ -94,12 +98,12 @@ async function loadCustomSecrets() {
   catch (e) { r = { ok: false, error: e.message }; }
   if (!r.ok) { secretList.innerHTML = `<p class="repo-note">${escHtml(r.error || 'Could not list the secrets')}</p>`; return; }
   const custom = (r.secrets || []).filter(x => x.kind !== 'service');
-  secretList.innerHTML = custom.length
-    ? custom.map(x => `<div class="tpl-row">
-        <span class="tpl-tag" title="${escHtml(x.scope)}">${escHtml(x.name)}${x.scope !== 'global' ? ` · ${escHtml(x.scope)}` : ''}</span>
-        ${x.scope === 'global' ? `<button class="tpl-rm" data-secret="${escHtml(x.name)}">Remove</button>` : ''}
-      </div>`).join('')
-    : '<p class="repo-note">None yet.</p>';
+  document.getElementById('secrets-count').innerHTML = custom.length ? secPill('ok', `${custom.length} stored`) : secPill('off', 'none');
+  secretList.innerHTML = custom.map(x => `<div class="sec-item">
+      <code class="sec-name">${escHtml(x.name)}</code>
+      <span class="sec-scope">${x.scope === 'global' ? 'every sandbox' : `only ${escHtml(x.scope)}`}</span>
+      ${x.scope === 'global' ? `<button class="mac-btn mac-btn-danger sec-rm" data-secret="${escHtml(x.name)}">Remove</button>` : ''}
+    </div>`).join('');
 }
 
 document.getElementById('secret-save').addEventListener('click', async () => {
