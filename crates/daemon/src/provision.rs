@@ -54,9 +54,6 @@ pub struct BringUp {
     pub chat: bool,
     /// Store `ANTHROPIC_API_KEY` as the global `anthropic` secret.
     pub api_key: Option<String>,
-    /// `CLAUDE_CODE_OAUTH_TOKEN`, from whoever asked (the CLI's environment,
-    /// not the daemon's, which may be older).
-    pub oauth_token: Option<String>,
     /// What to do about an automatic template (`template = "auto"`).
     pub template: templates::Choice,
     /// Create it for Remote Control: no credentials from sbxw, a claude.ai
@@ -247,18 +244,6 @@ impl App {
                 run.warn(format!("could not create {}", artifacts_dir.display()));
             }
         }
-        if req.oauth_token.is_some() && !remote && !trusted {
-            run.warn(format!(
-                "your Claude token is not sent to host '{}' (trust_secrets = false) — log in with /login in the agent's pane, \
-                 or `sbxw host edit {} --trust-secrets`",
-                name.host, name.host
-            ));
-        }
-        let creds = req
-            .oauth_token
-            .as_deref()
-            .filter(|_| !remote && trusted)
-            .map(|t| kits::oauth_credentials_json(t, &cfg.claude_subscription));
         let wanted = cfg.wanted_ports(&req.extra_ports);
         // Forwarded from the host's 127.0.0.1 over the link: one address per
         // app means nothing there.
@@ -291,27 +276,10 @@ impl App {
                     ));
                 }
             }
-            if let Some(creds) = &creds {
-                // The OAuth kit's file is generated at creation, which `sbx kit
-                // add` refuses (v3 lifecycle files): an existing sandbox takes
-                // the file directly. `exec` starts a stopped one first.
-                if running != Some(true) {
-                    running = None;
-                }
-                match sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await {
-                    Ok(()) => own_allow.push("claude.ai".into()),
-                    Err(e) => run.warn(format!("OAuth credential refresh failed (use /login in-session instead): {e:#}")),
-                }
-            }
         } else {
             run.info(format!("creating sandbox '{name}' on workspace {workspace}"));
             let mut kit_refs: Vec<String> = Vec::new();
             // sbxw's own kits, written here; mirrored together below.
-            let mut own: Vec<String> = Vec::new();
-            if let Some(creds) = &creds {
-                own.push(self.store.write_oauth_kit(name, Some(creds))?.to_string_lossy().into_owned());
-            }
-            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &mut run).await?);
             for k in &cfg.kits {
                 if kits::needs_allowlist(k) {
                     run.warn(format!(
@@ -518,7 +486,7 @@ impl App {
                 }
                 // sbx 0.48+ takes kits with startup commands here too.
                 run.info(format!("applying kit {kit} (this recreates the container; state is kept)"));
-                match self.kit_add_repairing(name, kit, creds.as_deref()).await {
+                match self.sbx_for(name).await?.kit_add(n, kit).await {
                     Ok(()) => {
                         let k = kit.clone();
                         let _ = self.store.update(name, |r| r.kits.push(k));
@@ -877,24 +845,6 @@ impl App {
         Ok(())
     }
 
-    /// `sbx kit add`, repairing once a stale OAuth kit reference an older
-    /// sbxw left in a temp dir (sbx names the *wrong* kit when it fails).
-    async fn kit_add_repairing(&self, sb: &SandboxRef, kit: &str, creds: Option<&str>) -> Result<()> {
-        let sbx = self.sbx_for(sb).await?;
-        let name = &sb.name;
-        let Err(first) = sbx.kit_add(name, kit).await else {
-            return Ok(());
-        };
-        let Some(stale) = kits::stale_oauth_kit_path(&format!("{first:#}")) else {
-            return Err(first);
-        };
-        tracing::warn!("restoring a stale OAuth kit at {} so '{name}' can be recomposed", stale.display());
-        crate::store::write_atomic(&stale.join("spec.yaml"), kits::oauth_kit_spec(creds).as_bytes())?;
-        sbx.kit_add(name, kit)
-            .await
-            .map_err(|e| anyhow!("{e:#}\n(retried after restoring {}; first attempt: {first:#})", stale.display()))
-    }
-
     /// An older sbxw gave sandboxes `localhost:<ui port>`, through which they
     /// could reach the browser's endpoints. Remove that rule if it is there.
     async fn revoke_ui_port(&self, sb: &SandboxRef, run: &mut Run<'_>) {
@@ -1071,7 +1021,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template,
             remote_control: false,
             git: None,
@@ -1198,7 +1147,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template: Default::default(),
             remote_control: false,
             git: None,
@@ -1233,7 +1181,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template: Default::default(),
             remote_control: false,
             git: None,
@@ -1280,7 +1227,6 @@ mod tests {
                     extra_ports: vec![],
                     chat: false,
                     api_key: None,
-                    oauth_token: Some("tok".into()),
                     template: Default::default(),
                     remote_control: false,
                     git: None,
@@ -1292,7 +1238,7 @@ mod tests {
         assert!(warnings.iter().all(|w| !w.contains("tooling")), "{warnings:?}");
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
-        assert!(create.contains("--kit") && create.contains("-oauth") && create.contains("--kit /kits/codemap"));
+        assert!(create.contains("--kit /kits/codemap") && !create.contains("-oauth"), "sbx signs Claude in itself: {create}");
         assert!(create.contains("-p 4200:4200"));
         assert!(create.contains("-e ANTHROPIC_DEFAULT_MODEL=claude-sonnet-5-5"));
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
@@ -1337,7 +1283,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: Some("sk-key".into()),
-            oauth_token: Some("tok".into()),
             template: Default::default(),
             remote_control: true,
             git: None,
@@ -1387,8 +1332,7 @@ mod tests {
                     extra_ports: vec![],
                     chat: false,
                     api_key: None,
-                    oauth_token: None,
-                    template: Default::default(),
+                            template: Default::default(),
                     remote_control: false,
                     git: None,
                 },
@@ -1428,8 +1372,7 @@ mod tests {
                 extra_ports: vec![],
                 chat: false,
                 api_key: None,
-                oauth_token: None,
-                template: Default::default(),
+                    template: Default::default(),
                 remote_control: false,
                 git: None,
             }
@@ -1463,7 +1406,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template: Default::default(),
             remote_control: false,
             git: None,

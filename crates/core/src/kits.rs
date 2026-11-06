@@ -13,8 +13,8 @@
 //!   its own.
 //! * **sbx keeps a kit's path, not a copy.** A container swap re-resolves every
 //!   kit applied before it by its original path; a kit directory that is gone
-//!   fails the swap and names the *wrong* kit. Hence the durable OAuth kit
-//!   directory, and the narrow repair of an old temp-dir reference.
+//!   fails the swap and names the *wrong* kit. Hence the stable directories
+//!   every bundled and generated kit is written to.
 
 use std::path::{Path, PathBuf};
 
@@ -377,44 +377,11 @@ fn text_kits_section(raw: &str) -> Option<String> {
     Some(section.join("\n"))
 }
 
-/// The path of a stale sbxw OAuth kit named in a failed `sbx kit add`, if that
-/// is the failure. Deliberately narrow — the basename must be sbxw's own, the
-/// path absent, its parent present — because the caller writes to a path
-/// parsed out of a subprocess's stderr.
-pub fn stale_oauth_kit_path(err: &str) -> Option<PathBuf> {
-    if !err.contains("does not exist") {
-        return None;
-    }
-    err.split('"').map(PathBuf::from).find(|p| {
-        p.is_absolute()
-            && p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("sbxw-oauth-kit-"))
-            && !p.exists()
-            && p.parent().is_some_and(|parent| parent.is_dir())
-    })
-}
-
 /// Is a refused `policy allow|deny` the organisation owning the policy? That is
 /// a governed host, not a broken one: a warning, never a failed bring-up.
 pub fn policy_is_governed(err: &str) -> bool {
     let lower = err.to_lowercase();
     lower.contains("managed by your organization") || lower.contains("managed by your organisation")
-}
-
-/// `~/.claude/.credentials.json` for an OAuth token. The expiry is 2100; the
-/// refresh token is the access token, so no refresh is attempted.
-pub fn oauth_credentials_json(token: &str, subscription: &str) -> String {
-    serde_json::json!({
-        "claudeAiOauth": {
-            "accessToken": token,
-            "refreshToken": token,
-            "expiresAt": 4_102_444_800_000u64,
-            "scopes": ["user:inference"],
-            "subscriptionType": subscription,
-        }
-    })
-    .to_string()
 }
 
 /// The per-sandbox volumes kit (spec v3): one `volume@1` per path. sbx keeps
@@ -435,29 +402,6 @@ pub fn volumes_kit_spec(paths: &[String]) -> String {
         out.push_str(&format!("  - type: com.docker.sandbox/volume@1\n    config:\n      path: '{}'\n", p.replace('\'', "''")));
     }
     out
-}
-
-/// The OAuth mixin kit, spec v3: the credentials file written at creation
-/// (`lifecycle@1` files — creation only, which is when sbxw applies it).
-/// Without credentials it is the same kit minus the file — what restores a
-/// dangling reference when no token is at hand.
-///
-/// `${{` would be expanded by sbx in a file's content; a token or a JSON
-/// document never holds one, and one that did is refused rather than mangled.
-pub fn oauth_kit_spec(credentials_json: Option<&str>) -> String {
-    let lifecycle = credentials_json.filter(|c| !c.contains("${{")).map_or_else(String::new, |creds| {
-        // YAML single-quoted scalar: a quote is doubled, nothing else escapes.
-        let quoted = creds.replace('\'', "''");
-        format!(
-            "  - type: com.docker.sandbox/lifecycle@1\n    config:\n      files:\n\
-             \x20       - path: /home/agent/.claude/.credentials.json\n          content: '{quoted}'\n          mode: \"0600\"\n"
-        )
-    });
-    format!(
-        "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ndisplayName: claude-oauth\n\
-         description: Injects OAuth credentials for Claude Code\n\
-         capabilities:\n  - type: com.docker.sandbox/network-policy@1\n    config:\n      runtime:\n        allow:\n          - claude.ai\n{lifecycle}"
-    )
 }
 
 #[cfg(test)]
@@ -609,50 +553,6 @@ mod tests {
         assert!(!already_applied("/Users/t/.sbxw/kits/agent-skills", None, &section, &[]), "not listed");
         assert!(already_applied("/k/agent-skills", None, "", &["/k/agent-skills".into()]), "sbxw's own record");
         assert!(!already_applied("/k/map", None, &section, &[]), "a short name is not a substring match");
-    }
-
-    #[test]
-    fn a_stale_oauth_path_is_recognised_narrowly() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("sbxw-oauth-kit-1234");
-        let err = format!("ERROR: re-resolve original kit 0 (\"{}\"): path does not exist", p.display());
-        assert_eq!(stale_oauth_kit_path(&err), Some(p.clone()));
-        let other = dir.path().join("someone-elses");
-        let err = format!("(\"{}\"): path does not exist", other.display());
-        assert_eq!(stale_oauth_kit_path(&err), None);
-    }
-
-    #[test]
-    fn the_oauth_kit_is_v3_and_its_content_survives_quotes() {
-        let creds = oauth_credentials_json("tok'en", "max");
-        let spec = oauth_kit_spec(Some(&creds));
-        assert!(spec.starts_with("# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\""));
-        let doc: serde_norway::Value = serde_norway::from_str(&spec).unwrap();
-        assert_eq!(doc["capabilities"][0]["type"], "com.docker.sandbox/network-policy@1");
-        assert_eq!(doc["capabilities"][0]["config"]["runtime"]["allow"][0], "claude.ai");
-        let file = &doc["capabilities"][1]["config"]["files"][0];
-        assert_eq!(file["path"], "/home/agent/.claude/.credentials.json");
-        assert_eq!(file["mode"], "0600");
-        let v: serde_json::Value = serde_json::from_str(file["content"].as_str().unwrap()).unwrap();
-        assert_eq!(v["claudeAiOauth"]["accessToken"], "tok'en");
-        assert_eq!(v["claudeAiOauth"]["subscriptionType"], "max");
-        assert!(!oauth_kit_spec(None).contains("lifecycle@1"));
-        assert!(!oauth_kit_spec(Some("{\"a\":\"${{ kit.env.HOME }}\"}")).contains("lifecycle@1"), "never expanded by sbx");
-    }
-
-    #[test]
-    fn a_permission_prompt_with_no_terminal_is_recognised() {
-        // What sbx 0.51 says for a kit adding network rules, stdin not a TTY.
-        let e = "warning: this change requests permissions beyond what this sandbox was granted\n  + network.runtime.allow: pypi.org\n\n  error: stdin is not a terminal; run this command in a terminal to answer the prompt";
-        assert!(add_needs_approval(e));
-        assert!(!add_needs_recreate(e), "not a recreate");
-        assert!(!add_needs_approval("network unreachable"));
-    }
-
-    #[test]
-    fn a_missing_node_is_recognised() {
-        assert!(node_missing("`sbx exec neos -- node -` exited with exit status 127:\nexec: \"node\": executable file not found in $PATH"));
-        assert!(!node_missing("`sbx exec neos -- node -` exited with exit status 1:\nSyntaxError"));
     }
 
     #[test]

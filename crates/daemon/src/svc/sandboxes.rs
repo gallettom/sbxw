@@ -367,7 +367,6 @@ impl App {
                 .use_api_key
                 .then(|| std::env::var("ANTHROPIC_API_KEY").ok())
                 .flatten(),
-            oauth_token: oauth_token_from_env(),
             template: Default::default(),
             remote_control: false,
             git: None,

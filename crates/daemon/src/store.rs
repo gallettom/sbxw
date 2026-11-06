@@ -16,7 +16,7 @@
 //!
 //! Everything is keyed by a `SandboxRef`. A local sandbox's files are where
 //! they always were; a remote host's go under `state/hosts/<host>/`, with the
-//! same layout inside (`sandboxes/<name>.json`, `kits/<name>-oauth/`, …).
+//! same layout inside (`sandboxes/<name>.json`, `kits/<name>-volumes/`, …).
 
 use anyhow::{Context, Result};
 use sbxw_core::hosts::HostAlias;
@@ -85,12 +85,6 @@ impl Paths {
     }
     pub fn plans(&self) -> PathBuf {
         self.state().join("plans")
-    }
-    /// `state/kits/<name>-oauth/`: kept as long as the sandbox, because sbx
-    /// re-resolves a kit by its original path on every container swap.
-    pub fn oauth_kit(&self, sb: impl Into<SandboxRef>) -> PathBuf {
-        let sb = sb.into();
-        self.host_state(&sb.host).join("kits").join(format!("{}-oauth", sb.name))
     }
     /// `state/kits/<name>-volumes/`: **not** removed with the sandbox. sbx
     /// keeps volume storage after `rm` and reattaches it to the same name
@@ -411,9 +405,7 @@ impl Store {
         if let Some(t) = self.get(&sb).token {
             self.tokens.lock().unwrap().remove(&t);
         }
-        for dir in [self.paths.oauth_kit(&sb), self.paths.env_dir(&sb)] {
-            let _ = std::fs::remove_dir_all(dir);
-        }
+        let _ = std::fs::remove_dir_all(self.paths.env_dir(&sb));
         let _ = std::fs::remove_file(self.record_path(&sb));
         if sb.is_local() {
             let s = self.paths.state();
@@ -556,13 +548,7 @@ impl Store {
         Ok(dir)
     }
 
-    /// Write the OAuth mixin kit for `name` (0600 spec in a 0700 directory),
-    /// at the stable path sbx will re-resolve.
-    pub fn write_oauth_kit(&self, sb: impl Into<SandboxRef>, credentials_json: Option<&str>) -> Result<PathBuf> {
-        let dir = self.paths.oauth_kit(sb);
-        write_atomic(&dir.join("spec.yaml"), sbxw_core::kits::oauth_kit_spec(credentials_json).as_bytes())?;
-        Ok(dir)
-    }
+
 }
 
 #[cfg(test)]
@@ -605,12 +591,10 @@ mod tests {
     fn forgetting_removes_every_trace() {
         let (_d, s) = store();
         let t = s.token(r("neos")).unwrap();
-        s.write_oauth_kit(r("neos"), Some("{}")).unwrap();
         std::fs::create_dir_all(s.paths.env_dir(r("neos"))).unwrap();
         s.write_volumes_kit(r("neos"), &["/home/agent/.npm".into()]).unwrap();
         s.forget(r("neos"));
         assert!(!s.exists(r("neos")));
-        assert!(!s.paths.oauth_kit(r("neos")).exists());
         assert!(!s.paths.env_dir(r("neos")).exists());
         assert!(s.sandbox_for_token(&t).is_none());
         assert!(s.paths.volumes_kit(r("neos")).join("spec.yaml").exists(), "sbx reattaches the volumes to the same kit");
@@ -678,15 +662,12 @@ mod tests {
         let reopened = Store::open(s.paths.clone());
         assert_eq!(reopened.sandbox_for_token(&t), Some(remote.clone()), "indexed from the host's directory");
 
-        s.write_oauth_kit(&remote, None).unwrap();
         std::fs::create_dir_all(s.paths.env_dir(&remote)).unwrap();
-        assert!(st.join("hosts/buildbox/kits/neos-oauth/spec.yaml").exists());
         assert!(st.join("hosts/buildbox/env/neos").exists());
-        assert_eq!(s.paths.oauth_kit(&local), st.join("kits/neos-oauth"), "local kits unchanged");
 
         s.forget(&remote);
         assert!(!s.exists(&remote));
-        assert!(!st.join("hosts/buildbox/kits/neos-oauth").exists());
+        assert!(!st.join("hosts/buildbox/env/neos").exists());
         assert!(s.sandbox_for_token(&t).is_none());
         assert!(s.exists(&local), "forgetting the remote one leaves the local one");
         assert_eq!(s.chat_workspace(&remote), None);

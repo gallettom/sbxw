@@ -54,8 +54,6 @@ pub struct Config {
     /// After this many days the cache is emptied and the next sandbox refills
     /// it — fresh packages, and a bound on what its filler could have left.
     pub cache_ttl_days: u32,
-    /// `subscriptionType` of injected OAuth credentials.
-    pub claude_subscription: String,
     /// Passed as `ANTHROPIC_DEFAULT_MODEL`: a default, below a saved `/model`.
     pub claude_model: String,
     /// Models a thread may be started on.
@@ -167,7 +165,6 @@ impl Default for Config {
             volumes: vec![],
             cache: true,
             cache_ttl_days: 7,
-            claude_subscription: "pro".into(),
             claude_model: "claude-sonnet-5-5".into(),
             models: default_models(),
             skills: String::new(),

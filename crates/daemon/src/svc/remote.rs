@@ -127,18 +127,11 @@ impl App {
     /// Switch a sandbox signed in with the setup token to a claude.ai login:
     /// sbxw stops injecting the token, and `/login` is typed into the session
     /// for the person to finish.
-    ///
-    /// The OAuth kit is rewritten without its file rather than left alone:
-    /// sbx re-reads a kit from its path on every container swap, so the old
-    /// spec would put the token back over the login at the next one.
     pub async fn switch_to_login(self: &Arc<Self>, sandbox: &SandboxRef, kind: SessionKind) -> Result<()> {
         if self.remote_state_read(sandbox, &kind, true).await?.login != Login::TokenOnly {
             bail!("Claude in '{sandbox}' is not signed in with a setup token — nothing to switch");
         }
         tracing::info!("web UI: switching '{sandbox}' to a claude.ai login for Remote Control");
-        if self.store.paths.oauth_kit(sandbox).exists() {
-            self.store.write_oauth_kit(sandbox, None).context("rewriting the OAuth kit without its token")?;
-        }
         self.store.update(sandbox, |r| r.remote_control = true).context("recording the switch")?;
         if let Err(e) = self.sbx_for(sandbox).await?.policy("allow", Some(&sandbox.name), &remote::LOGIN_HOSTS.join(",")).await {
             tracing::warn!("could not allow the login hosts for '{sandbox}': {e:#}");
@@ -205,15 +198,12 @@ mod tests {
     async fn a_token_sandbox_is_switched_for_good() {
         let (_d, app, fake) = app_with(signed_in_with(r#"{"present":true,"scopes":["user:inference"]}"#));
         let name = SandboxRef::parse("neos").unwrap();
-        app.store.write_oauth_kit(sbxw_core::SandboxRef::parse("neos").unwrap(), Some("{\"claudeAiOauth\":{}}")).unwrap();
         let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("switch"), "{e:#}");
 
         // Typing /login needs a live session, which the fake has none of; what
-        // must already hold by then is that the token cannot come back.
+        // must already hold by then is the record and the login hosts.
         let _ = app.switch_to_login(&name, SessionKind::Agent).await;
-        let spec = std::fs::read_to_string(app.store.paths.oauth_kit(sbxw_core::SandboxRef::parse("neos").unwrap()).join("spec.yaml")).unwrap();
-        assert!(!spec.contains("credentials.json"), "{spec}");
         assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
         assert!(fake.log().iter().any(|c| c.starts_with("policy allow") && c.contains("platform.claude.com")));
     }

@@ -464,8 +464,6 @@ struct UpBody {
     #[serde(default)]
     api_key: Option<String>,
     #[serde(default)]
-    oauth_token: Option<String>,
-    #[serde(default)]
     extra_ports: Vec<WantedPort>,
     #[serde(default)]
     template: sbxw_core::templates::Choice,
@@ -491,7 +489,6 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         extra_ports: b.extra_ports,
         chat: b.chat,
         api_key: b.api_key,
-        oauth_token: b.oauth_token,
         template: b.template,
         remote_control: b.remote_control,
         git: b.git,

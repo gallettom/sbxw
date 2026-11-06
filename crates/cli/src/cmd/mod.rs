@@ -318,7 +318,14 @@ pub fn up(a: UpArgs) -> Result<()> {
     if a.use_api_key && api_key.is_none() {
         eprintln!("sbxw  warning: --use-api-key set but ANTHROPIC_API_KEY is empty or unset");
     }
-    let oauth_token = sbxw_daemon::svc::sandboxes::oauth_token_from_env();
+    // sbx 0.51 signs Claude in on the host (`/login` once, the token kept
+    // there); sbxw no longer writes a token into the sandbox.
+    if sbxw_daemon::svc::sandboxes::oauth_token_from_env().is_some() {
+        eprintln!(
+            "sbxw  note: CLAUDE_CODE_OAUTH_TOKEN is no longer injected — sbx keeps your claude.ai sign-in on the host. \
+             Run /login once in a sandbox's agent pane, or store an API key with --use-api-key."
+        );
+    }
 
     apply_aliases_here(&store, &cfg);
 
@@ -332,7 +339,6 @@ pub fn up(a: UpArgs) -> Result<()> {
             extra_ports: vec![],
             chat: a.chat,
             api_key,
-            oauth_token,
             template: template_choice(a.rebuild_template),
             remote_control: a.remote_control,
             git: a.git.clone(),
@@ -349,7 +355,6 @@ pub fn up(a: UpArgs) -> Result<()> {
             "config": cfg.source,
             "chat": a.chat,
             "api_key": api_key,
-            "oauth_token": oauth_token,
             "template": template_choice(a.rebuild_template),
             "remote_control": a.remote_control,
             "git": a.git,
