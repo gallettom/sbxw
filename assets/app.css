@@ -3197,6 +3197,7 @@
   .fx-fav-icon.mount { color: var(--c-green); }
   .fx-fav-icon.thread { color: var(--c-purple); }
   .fx-fav-icon.starred { color: var(--c-amber); }
+  .fx-fav-icon.logs { color: var(--c-text-soft); }
   .fx-fav.active .fx-fav-icon.workspace,
   .fx-fav.active .fx-fav-icon.home,
   .fx-fav.active .fx-fav-icon.root { color: var(--c-text-bright); }

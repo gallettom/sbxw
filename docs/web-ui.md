@@ -210,6 +210,10 @@ A file browser over the sandbox's **own** filesystem, opening on
 - **Favourites:** `.sbxw-artifacts`, the workspace, the agent's home and `/` are
   built in. ★ pins any other folder (per sandbox, in this browser). Extra repos
   mounted at creation show up here too.
+- **Kit logs** opens `/var/log` on `sbx-kit-startup.log`, the output of every
+  kit's startup commands on every boot; `sbx-kits/<kit>/install-<n>.log` beside
+  it holds each install hook's. When a kit seems to have done nothing, the
+  reason is there.
 - **◷ Recent** lists the files written in the last 7 days across the
   workspace, read-write mounts, home and `/tmp` (minus `.git`, dependency and
   cache folders), newest first, up to the 300 most recent. Each has a **Show in folder** button: an agent's
