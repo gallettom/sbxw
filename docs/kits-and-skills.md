@@ -269,9 +269,8 @@ skills = "off"          # only the skills this sandbox's kits provide
 # skills = "readwrite"  # the agent may add skills every sandbox then sees
 ```
 
-Empty (the default) leaves it to sbx and its host-wide `skills.defaultMode`. The
-old `share_skills = false` still works and means `"off"`. It's read at
-**creation** only.
+Empty (the default) leaves it to sbx and its host-wide `skills.defaultMode`.
+It's read at **creation** only.
 
 **Kit or store?** A kit can install anything (packages, binaries) but applying
 one recreates the container. The store carries only skill files and costs

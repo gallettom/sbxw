@@ -42,7 +42,6 @@ models = [
 #   "readonly"   the store, read-only — sbx's default
 #   "readwrite"  the agent may add skills every other sandbox then mounts
 # Empty leaves it to sbx (and its host-wide `skills.defaultMode`). The older
-# `share_skills = false` still works and means "off".
 # Read at CREATION only — changing it doesn't affect existing sandboxes.
 skills = ""
 

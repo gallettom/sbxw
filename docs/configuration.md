@@ -46,7 +46,6 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `cache` | `true` | Mount the [kit cache](kits-and-skills.md#the-kit-cache) |
 | `cache_ttl_days` | `7` | Days before the kit cache is emptied and refilled |
 | `skills` | `""` (sbx decides) | `off`, `readonly` or `readwrite`. See [Shared skills](kits-and-skills.md#shared-skills) |
-| `share_skills` | `true` | Old spelling: `false` means `skills = "off"` |
 | `pull` | `""` (sbx decides) | Image pull policy: `always`, `missing` or `never` |
 | `template` | `""` (sbx's image) | Template new sandboxes start from, with no registry pull: `"auto"` for one sbxw keeps per kit list and offers to rebuild when sbx or sbxw changes, or a tag saved with `sbxw template save` |
 

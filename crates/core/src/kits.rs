@@ -53,17 +53,6 @@ pub fn about(name: &str) -> &'static str {
     }
 }
 
-/// The bundled kit a local path is a copy of: `…/assets/<name>` in an sbxw
-/// checkout, or `~/.sbxw/kits/<name>` where sbxw writes them out. Configs
-/// written before `sbxw:` names list kits that way; the Kits dialog says so.
-pub fn bundled_by_path(kit: &str) -> Option<&'static str> {
-    let p = Path::new(kit.trim_end_matches('/'));
-    let name = p.file_name()?.to_str()?;
-    let parent = p.parent()?.file_name()?.to_str()?;
-    let found = BUNDLED.iter().find(|b| **b == name)?;
-    (parent == "assets" || parent == "kits").then_some(*found)
-}
-
 /// The root `kits` of `raw` (an sbxw.toml) as written; `None` when there is no
 /// such line, and the defaults apply.
 pub fn read_kits_line(raw: &str) -> anyhow::Result<Option<Vec<String>>> {
@@ -450,11 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_or_written_out_path_is_known_as_its_bundled_kit() {
-        assert_eq!(bundled_by_path("/Users/t/sbxw 2/assets/codemap"), Some("codemap"));
-        assert_eq!(bundled_by_path("/Users/t/.sbxw/kits/retro/"), Some("retro"));
-        assert_eq!(bundled_by_path("/Users/t/my-kits/codemap"), None);
-        assert_eq!(bundled_by_path("/Users/t/sbxw/assets/headroom"), None);
+    fn every_bundled_kit_is_described() {
         for b in BUNDLED {
             assert!(!about(b).is_empty(), "{b}");
         }

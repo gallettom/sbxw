@@ -60,8 +60,6 @@ pub struct Config {
     pub models: Vec<ModelChoice>,
     /// `off` | `readonly` | `readwrite`; empty leaves it to sbx.
     pub skills: String,
-    /// Old spelling: `false` means `skills = "off"`.
-    pub share_skills: bool,
     /// `always` | `missing` | `never`; empty leaves it to sbx.
     pub pull: String,
     /// A saved template (`sbxw template save`) new sandboxes start from,
@@ -168,7 +166,6 @@ impl Default for Config {
             claude_model: "claude-sonnet-5-5".into(),
             models: default_models(),
             skills: String::new(),
-            share_skills: true,
             pull: String::new(),
             template: String::new(),
             keep_running: false,
@@ -337,7 +334,7 @@ impl Config {
 
     pub fn skills_mode(&self) -> Option<&str> {
         match self.skills.trim() {
-            "" => (!self.share_skills).then_some("off"),
+            "" => None,
             mode => Some(mode),
         }
     }
@@ -507,21 +504,6 @@ mod tests {
             cfg.terminal_text_color = good.into();
             assert!(cfg.validate().is_ok(), "{good} was refused as a text colour");
         }
-    }
-
-    #[test]
-    fn the_old_share_skills_switch_means_off() {
-        let cfg = Config {
-            share_skills: false,
-            ..Config::default()
-        };
-        assert_eq!(cfg.skills_mode(), Some("off"));
-        let cfg = Config {
-            share_skills: false,
-            skills: "readwrite".into(),
-            ..Config::default()
-        };
-        assert_eq!(cfg.skills_mode(), Some("readwrite"));
     }
 
     #[test]
