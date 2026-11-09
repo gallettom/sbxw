@@ -366,7 +366,10 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             // Claude Code hands the finished turn's prose to `Stop` itself; the
             // transcript lags and is never read.
             if let Some(text) = body.get("last_assistant_message").and_then(Value::as_str) {
-                let text = clip_lines(text, 12, 700);
+                // Long enough for a /grill-me round, which the voice
+                // concierge reads and answers whole; still bounded, since
+                // every tab and the island receive it on each event.
+                let text = clip_lines(text, 80, 4000);
                 if !text.is_empty() {
                     st.reply = Some(text);
                 }

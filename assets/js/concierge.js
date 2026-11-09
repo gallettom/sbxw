@@ -676,8 +676,19 @@ window.addEventListener('keydown', e => {
 const VC_FOLLOW = 'sbxw-concierge-follow';
 const vcAgents = new Map(); // `${sandbox}::${thread}` → chat-core state
 let vcPending = null;        // what the next words are for (see vcHear)
-let vcFollow = true;
-try { vcFollow = localStorage.getItem(VC_FOLLOW) !== '0'; } catch (_) {}
+// Follow is off by default: on, every turn the agent ends is read aloud,
+// which is too much for ordinary work. A /grill-me is followed regardless.
+let vcFollow = false;
+try { vcFollow = localStorage.getItem(VC_FOLLOW) === '1'; } catch (_) {}
+
+// A grill is what the voice is for: a prompt starting /grill-me (or
+// /grilling), or a reply in its round format, engages the concierge even
+// with Follow off — and opens the panel, since what arrives must be seen.
+const VC_GRILL_PROMPT = /^\s*\/(grill-me|grilling)\b/i;
+const VC_GRILL_REPLY = /❓\s*\*\*Q\d+/;
+function vcEngages(info, reply) {
+  return vcFollow || VC_GRILL_PROMPT.test(info.last_input || '') || VC_GRILL_REPLY.test(reply || '');
+}
 
 // One task for the model, its whole output returned (speech, reply, choose).
 async function vcTask(task, content) {
@@ -847,12 +858,18 @@ async function vcChoose(p, dictated) {
 sbxwStream.addEventListener('session', ev => {
   let info;
   try { info = JSON.parse(ev.data); } catch (_) { return; }
-  if (!vcTarget || info.sandbox !== vcTarget || !chatOwnSession(info)) return;
+  // Every session sbxw drives in that sandbox: its main agent, and the
+  // threads and sessions it named (SBXW_THREAD, which read as `remote`
+  // since they are not the main agent). A client of its own — Claude
+  // Desktop, an ssh shell — has no thread and stays out.
+  if (!vcTarget || info.sandbox !== vcTarget) return;
+  if (info.origin === 'remote' && !info.thread) return;
   const key = `${info.sandbox}::${info.thread || ''}`;
   if (!vcAgents.has(key)) vcAgents.set(key, chatNew());
   const c = vcAgents.get(key);
   const seen = chatIngest(c, info);
-  if (!vcFollow || !seen) return;
+  if (!seen || !vcEngages(info, seen.reply)) return;
+  if (!vcOpen) vcSetOpen(true);
   if (seen.reply) vcAgentMessage(info.sandbox, info.thread || null, seen.reply);
   else if (seen.asked && c.steps?.length && c.answerable) vcAgentQuestion(info.sandbox, info.thread || null, c);
 });
@@ -860,7 +877,9 @@ sbxwStream.addEventListener('session', ev => {
 const vcFollowBtn = vcEl('vc-follow');
 function vcRenderFollow() {
   vcFollowBtn.classList.toggle('on', vcFollow);
-  vcFollowBtn.title = vcFollow ? "Following this sandbox's agent: its messages and questions show here" : "Not following this sandbox's agent";
+  vcFollowBtn.title = vcFollow
+    ? "Following this sandbox's agents: every message and question shows here and is read aloud"
+    : 'Only a /grill-me is followed — click to follow every turn';
   vcFollowBtn.setAttribute('aria-pressed', String(vcFollow));
 }
 vcFollowBtn.addEventListener('click', () => {

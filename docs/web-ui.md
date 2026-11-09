@@ -402,9 +402,11 @@ model writes it — Objectif, Contexte, Contraintes, Questions ouvertes — into
 an editable card. Read it, fix it and press **Send**: it is typed into the
 picked sandbox's agent. Nothing is sent any other way.
 
-With **Follow** on (the default), the picked sandbox's agents are followed.
-When one ends its turn with a message — a `/grill-me` round, a question in
-prose — it shows in the panel and its gist is read aloud; what you say next
+A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
+session sbxw opened there — engages the concierge on its own: the panel
+opens, and each round shows in it with its gist read aloud. **Follow** does
+the same for every turn any of its agents ends (off by default: that is a
+lot of talking for ordinary work). When a message arrives, what you say next
 answers it: the model turns your dictation into the written answer ("Q1 :
 oui, comme recommandé…"), shows it, and asks "J'envoie ?". Say *oui* (or
 click Send) and it is typed into that session; *non* drops it. A
