@@ -1235,17 +1235,29 @@
   /* Pane badges at the right end, as the float had them. */
   .sbx-name > .sbx-pane-badge { order: 1; float: none; }
   .sbx-name-text + .sbx-pane-badge { margin-left: auto; }
-  /* With its sessions unfolded, a row's second line is its actions: the
-     state (dot, ⚑) moves up beside the name instead of being squeezed out. */
+  /* Whenever a row shows its actions — the focused pane's row, the one
+     under the pointer or holding focus, one with its sessions unfolded — its
+     second line is those actions (a running one has five or six, which
+     overflowed the sidebar beside its state): the state (dot, ⚑) moves up
+     beside the name. A touch screen always shows them, so always moves it. */
   .sbx-name-state { display: none; align-items: center; gap: .4rem; margin: 0 auto 0 .5rem; font-weight: 400; }
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-name-state { display: inline-flex; }
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .dot,
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .sbx-status,
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-marks .sbx-flag { display: none; }
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-name-state { display: inline-flex; }
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-meta > .dot,
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-meta > .sbx-status,
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-marks .sbx-flag { display: none; }
   /* …and, nothing left before them, the actions start at the left edge. */
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .sbx-agent,
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-marks { display: none; }
-  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-actions { margin-left: 0; }
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-meta > .sbx-agent,
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-marks { display: none; }
+  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-actions { margin-left: 0; }
+  @media (hover: none) {
+    .sbx-item .sbx-name-state { display: inline-flex; }
+    .sbx-item .sbx-meta > .dot,
+    .sbx-item .sbx-meta > .sbx-status,
+    .sbx-item .sbx-marks .sbx-flag { display: none; }
+    .sbx-item .sbx-meta > .sbx-agent,
+    .sbx-item .sbx-marks { display: none; }
+    .sbx-item .sbx-actions { margin-left: 0; }
+  }
   /* The threads of a sandbox, under its row: the way to any of them from
      anywhere, folded or not. Hung off a hairline so they read as its
      branches; a shown one is in full text, a folded one muted. */
