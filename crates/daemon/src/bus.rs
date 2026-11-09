@@ -64,7 +64,7 @@ impl Event {
     }
 
     /// The SSE `data:` payload: JSON for structures, a ref's text form
-    /// (`neos`, `buildbox~neos`) for sandboxes.
+    /// (`myapp`, `buildbox~myapp`) for sandboxes.
     pub fn data(&self) -> String {
         let json = |v: &dyn erased::Ser| v.to_json();
         match self {

@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 type S = State<Arc<App>>;
 
-/// A sandbox named on the wire, as a ref (`neos`, `buildbox~neos`). Each
+/// A sandbox named on the wire, as a ref (`myapp`, `buildbox~myapp`). Each
 /// service routes it to its host: `App::sbx_for`, `App::host_for`.
 fn sandbox(raw: &str) -> Result<SandboxRef, ApiError> {
     Ok(SandboxRef::parse(raw)?)

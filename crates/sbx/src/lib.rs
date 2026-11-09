@@ -1118,7 +1118,7 @@ mod tests {
 
     #[test]
     fn the_ls_json_is_a_bare_array() {
-        let raw = r#"[{"name":"neos","agent":"claude","status":"running","created_at":"2026-10-20T10:00:00Z","detached":false},
+        let raw = r#"[{"name":"myapp","agent":"claude","status":"running","created_at":"2026-10-20T10:00:00Z","detached":false},
                      {"name":"hung","agent":"claude","status":"running (not responding)"},
                      {"name":"flagged","agent":"claude","status":"running","responsive":false},
                      {"name":"off","agent":"claude","state":"stopped"}]"#;
@@ -1169,7 +1169,7 @@ mod tests {
     #[test]
     fn create_argv_has_every_flag_in_order() {
         let a = create_args(
-            &sb("neos"),
+            &sb("myapp"),
             &CreateOpts {
                 workspace: "/w".into(),
                 ro_mounts: vec!["/ro".into()],
@@ -1189,7 +1189,7 @@ mod tests {
         );
         assert_eq!(
             a.join(" "),
-            "create claude /w --name neos --template me/base:1 /rw /ro:ro /data:/workspace/data:ro --cpus 4 --memory 8g --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
+            "create claude /w --name myapp --template me/base:1 /rw /ro:ro /data:/workspace/data:ro --cpus 4 --memory 8g --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
         );
     }
 
@@ -1291,7 +1291,7 @@ mod tests {
     #[test]
     fn only_a_global_secret_counts() {
         // What sbx 0.51 prints.
-        let ls = "  SCOPE      TYPE      NAME        SECRET\n  (global)   service   anthropic   (oauth configured)\n  neos       service   github      ghp_ab****...****yz\n";
+        let ls = "  SCOPE      TYPE      NAME        SECRET\n  (global)   service   anthropic   (oauth configured)\n  myapp       service   github      ghp_ab****...****yz\n";
         assert!(has_global_secret(ls, "anthropic"));
         assert!(!has_global_secret(ls, "github"), "scoped to one sandbox is not global");
         let both = format!("{ls}  (global)   service   github      gho_GC****...****qy\n");

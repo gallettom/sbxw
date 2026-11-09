@@ -278,7 +278,7 @@ mod tests {
         std::fs::write(&file, "127.0.0.1\tlocalhost\n").unwrap();
         let sys = for_tests(&file);
         let store = Store::open(Paths::under(d.path()));
-        let want = [HostAlias::new("neos.local", "127.0.0.1")];
+        let want = [HostAlias::new("myapp.local", "127.0.0.1")];
         assert!(sys.apply(&store, &want).is_empty());
         let once = std::fs::read_to_string(&file).unwrap();
         assert!(sys.apply(&store, &want).is_empty());

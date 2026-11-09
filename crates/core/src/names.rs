@@ -168,10 +168,10 @@ impl<'de> Deserialize<'de> for HostName {
 
 /// A sandbox, wherever it runs: the key sbxw files everything under.
 ///
-/// Text form: `neos` for a local sandbox — byte-identical to the bare name, so
+/// Text form: `myapp` for a local sandbox — byte-identical to the bare name, so
 /// every key, file and URL a local sandbox had stays what it was — and
-/// `buildbox~neos` for one on host `buildbox`. `local~neos` is accepted and
-/// means `neos`.
+/// `buildbox~myapp` for one on host `buildbox`. `local~myapp` is accepted and
+/// means `myapp`.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SandboxRef {
     pub host: HostName,
@@ -438,11 +438,11 @@ mod tests {
 
     #[test]
     fn sandbox_names_follow_sbx_rule() {
-        assert!(SandboxName::parse("neos").is_ok());
-        assert!(SandboxName::parse("neos-2").is_ok());
-        assert!(SandboxName::parse(" neos ").is_ok(), "trimmed at the door");
+        assert!(SandboxName::parse("myapp").is_ok());
+        assert!(SandboxName::parse("myapp-2").is_ok());
+        assert!(SandboxName::parse(" myapp ").is_ok(), "trimmed at the door");
         assert!(SandboxName::parse("").is_err());
-        assert!(SandboxName::parse("neos-").is_err());
+        assert!(SandboxName::parse("myapp-").is_err());
         assert!(SandboxName::parse("ne os").is_err());
         assert!(SandboxName::parse("ne.os").is_err());
         assert!(SandboxName::parse("__host__").is_err(), "the monitor key cannot collide");
@@ -487,10 +487,10 @@ mod tests {
 
     #[test]
     fn copies_keep_their_suffix_within_the_limit() {
-        let base = sanitize_sandbox_name("neos");
-        assert_eq!(copy_candidate(&base, 0).as_str(), "neos");
-        assert_eq!(copy_candidate(&base, 1).as_str(), "neos-copy");
-        assert_eq!(copy_candidate(&base, 3).as_str(), "neos-copy-2");
+        let base = sanitize_sandbox_name("myapp");
+        assert_eq!(copy_candidate(&base, 0).as_str(), "myapp");
+        assert_eq!(copy_candidate(&base, 1).as_str(), "myapp-copy");
+        assert_eq!(copy_candidate(&base, 3).as_str(), "myapp-copy-2");
         let long = sanitize_sandbox_name(&format!("{}-{}", "a".repeat(57), "bcdef"));
         let c = copy_candidate(&long, 2);
         assert!(c.len() <= MAX_SANDBOX_NAME_LEN && c.ends_with("-copy-1"));
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn ephemeral_chats_are_numbered_by_availability() {
-        assert_eq!(next_ephemeral_chat(["neos"]).as_str(), "ephemeral-chat");
+        assert_eq!(next_ephemeral_chat(["myapp"]).as_str(), "ephemeral-chat");
         assert_eq!(
             next_ephemeral_chat(["ephemeral-chat", "ephemeral-chat-2"]).as_str(),
             "ephemeral-chat-3"
@@ -522,24 +522,24 @@ mod tests {
 
     #[test]
     fn a_ref_parses_local_and_remote_forms() {
-        let l = SandboxRef::parse("neos").unwrap();
+        let l = SandboxRef::parse("myapp").unwrap();
         assert!(l.is_local());
-        assert_eq!(l.name.as_str(), "neos");
-        assert_eq!(l.to_string(), "neos", "local is byte-identical to the bare name");
-        let n = SandboxRef::parse("local~neos").unwrap();
+        assert_eq!(l.name.as_str(), "myapp");
+        assert_eq!(l.to_string(), "myapp", "local is byte-identical to the bare name");
+        let n = SandboxRef::parse("local~myapp").unwrap();
         assert_eq!(n, l, "local~ is normalised");
-        assert_eq!(n.to_string(), "neos");
-        let r = SandboxRef::parse("buildbox~neos").unwrap();
+        assert_eq!(n.to_string(), "myapp");
+        let r = SandboxRef::parse("buildbox~myapp").unwrap();
         assert!(!r.is_local());
         assert_eq!(r.host.as_str(), "buildbox");
-        assert_eq!(r.to_string(), "buildbox~neos");
+        assert_eq!(r.to_string(), "buildbox~myapp");
         assert_ne!(r, l);
-        assert_eq!(SandboxRef::parse(" buildbox~neos ").unwrap(), r, "trimmed at the door");
+        assert_eq!(SandboxRef::parse(" buildbox~myapp ").unwrap(), r, "trimmed at the door");
     }
 
     #[test]
     fn a_ref_round_trips_through_text_and_serde() {
-        for raw in ["neos", "buildbox~neos", "h-1~a-2"] {
+        for raw in ["myapp", "buildbox~myapp", "h-1~a-2"] {
             let r = SandboxRef::parse(raw).unwrap();
             assert_eq!(SandboxRef::parse(&r.to_string()).unwrap(), r);
             let json = serde_json::to_string(&r).unwrap();
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn bad_refs_are_refused() {
-        for bad in ["", "~", "~neos", "box~", "a~b~c", "bad host~neos", "box~ne os", "box-~neos", "box~neos-", "a ~b", "a~ b", "__host__", "box~__host__"] {
+        for bad in ["", "~", "~myapp", "box~", "a~b~c", "bad host~myapp", "box~ne os", "box-~myapp", "box~myapp-", "a ~b", "a~ b", "__host__", "box~__host__"] {
             assert!(SandboxRef::parse(bad).is_err(), "{bad:?}");
         }
         assert!(SandboxRef::parse(&format!("{}~n", "h".repeat(64))).is_err());
@@ -566,10 +566,10 @@ mod tests {
 
     #[test]
     fn a_ref_compares_with_its_text() {
-        let r = SandboxRef::parse("buildbox~neos").unwrap();
-        assert!(r == "buildbox~neos");
-        assert!(SandboxRef::parse("neos").unwrap() == "local~neos");
-        assert!(r != "neos");
+        let r = SandboxRef::parse("buildbox~myapp").unwrap();
+        assert!(r == "buildbox~myapp");
+        assert!(SandboxRef::parse("myapp").unwrap() == "local~myapp");
+        assert!(r != "myapp");
     }
 
     #[test]

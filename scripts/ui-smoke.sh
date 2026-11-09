@@ -8,7 +8,7 @@ bin="${SBXW_BIN:-${CARGO_TARGET_DIR:-$root/target}/debug/sbxw}"
 out="${1:-$(mktemp -d)/ui.png}"
 t="$(mktemp -d)"
 trap '"$bin" down >/dev/null 2>&1 || true; rm -rf "$t"' EXIT
-mkdir -p "$t/fakebin" "$t/home" "$t/ws/neos" "$t/state" "$t/remote/bin" "$t/remote/srv/api" "$t/rstate"
+mkdir -p "$t/fakebin" "$t/home" "$t/ws/myapp" "$t/state" "$t/remote/bin" "$t/remote/srv/api" "$t/rstate"
 cp "$here/fake-sbx" "$t/fakebin/sbx"; chmod +x "$t/fakebin/sbx"
 # Remote hosts, faked as in e2e.sh: `ssh` runs commands in $t/remote, whose
 # `sbx` keeps its sandboxes in $t/rstate. `gonehost` never answers, as a host
@@ -34,7 +34,7 @@ export FAKE_SSH_HOME="$t/remote" FAKE_SSH_LOG="$t/ssh.log"
 printf '127.0.0.1\tlocalhost\n' > "$t/hosts"
 printf 'web_addr = "127.0.0.1:%s"\nagent_addr = "127.0.0.1:%s"\nnetwork_allow = []\nmonitor_cmd = ["sh"]\n' "$UI" "$AGENT" > "$t/ws/sbxw.toml"
 cd "$t/ws"
-"$bin" up neos "$t/ws/neos" >/dev/null 2>&1
+"$bin" up myapp "$t/ws/myapp" >/dev/null 2>&1
 # Two registered hosts: `fake` answers and has a sandbox, `gone` does not
 # answer and holds the record of one, which the sidebar shows greyed.
 RAGENT=$(free_port)
@@ -43,8 +43,8 @@ printf 'fakehost %s\ngonehost %s\n' "$(cut -d' ' -f1,2 "$t/hostkey.pub")" "$(cut
 printf '[hosts.fake]\nhost = "fakehost"\nagent_port = %s\nsbx_path = "%s"\n\n[hosts.gone]\nhost = "gonehost"\n' "$RAGENT" "$t/remote/bin/sbx" > "$HOME/.sbxw/hosts.toml"
 printf '{"workspace":"/srv/old","last_status":"running"}\n' > "$HOME/.sbxw/state/hosts/gone/sandboxes/old.json"
 "$bin" up fake~api --path "$t/remote/srv/api" >/dev/null 2>&1 || { echo "remote up failed"; exit 1; }
-token=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).token)' "$HOME/.sbxw/state/sandboxes/neos.json")
+token=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).token)' "$HOME/.sbxw/state/sandboxes/myapp.json")
 curl -sS -X POST -H "authorization: Bearer $token" -H 'content-type: application/json' \
   -d '{"five_hour_pct":42,"seven_day_pct":17}' "http://127.0.0.1:$AGENT/api/usage" >/dev/null
-node "$here/ui-smoke.mjs" "$UI" neos "$out"
+node "$here/ui-smoke.mjs" "$UI" myapp "$out"
 echo "screenshot: $out"

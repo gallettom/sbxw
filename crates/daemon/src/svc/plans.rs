@@ -644,7 +644,7 @@ mod tests {
         app.close_thread(&name, &thread, true, true).await.unwrap();
         assert!(!app.store.get(&name).threads.contains_key("chat-2"), "the record is forgotten");
 
-        let other = SandboxRef::parse("neos").unwrap();
+        let other = SandboxRef::parse("myapp").unwrap();
         let dir = tempfile::tempdir().unwrap();
         app.store.update(&other, |r| r.workspace = Some(dir.path().to_path_buf())).unwrap();
         assert!(app.close_thread(&other, &thread, true, true).await.is_err(), "anywhere else it still asks for a repo");
@@ -666,9 +666,9 @@ mod tests {
     #[tokio::test]
     async fn a_proposal_is_persisted_and_survives_a_restart() {
         let (dir, app) = app();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         let p = app.plan_propose(&sb, "split", vec![t("api")], Variant::Split, "independent", Some("lead")).await.unwrap();
-        let file = app.store.paths.plans().join("neos.json");
+        let file = app.store.paths.plans().join("myapp.json");
         assert!(file.exists());
         let again = crate::testing::app_in(dir.path());
         assert_eq!(again.plan(&p.id).unwrap().state, PlanState::Pending);
@@ -679,7 +679,7 @@ mod tests {
     #[tokio::test]
     async fn a_refusal_wakes_the_lead() {
         let (_d, app) = app();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         let p = app.plan_propose(&sb, "", vec![t("api")], Variant::Split, "one thread", None).await.unwrap();
         let a = app.clone();
         let (id, s) = (p.id.clone(), sb.clone());
@@ -694,14 +694,14 @@ mod tests {
         let (_d, app, fake) = app_with(|a| {
             let has = |x: &str| a.iter().any(|y| y == x);
             match a.first().map(String::as_str) {
-                Some("ls") => ls(&[("neos", "running")]),
+                Some("ls") => ls(&[("myapp", "running")]),
                 Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
                 Some("exec") if has("sbxw-memory") => Output::ok("path=/home/agent/.claude/projects/-w/memory/team.md\nok=1\n"),
                 Some("exec") if has("sbxw-thread-end") => Output::ok("ok=1\n"),
                 _ => sbx_answer(a),
             }
         });
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         let ws = tempfile::tempdir().unwrap();
         std::fs::create_dir(ws.path().join(".git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
@@ -722,7 +722,7 @@ mod tests {
         assert_eq!(listed, ["api", "web"], "its threads are listed though they have no worktree of their own");
 
         for n in ["api", "web"] {
-            app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
+            app.plans.lock().unwrap().set_thread("myapp", n, ThreadState::Done, "", false, 2).unwrap();
         }
         let d = vec![DistillItem { kind: DistillKind::Decision, text: "prices in cents".into() }];
         app.plan_propose_merge(&p.id, &sb, vec![], "", d).unwrap();
@@ -752,13 +752,13 @@ mod tests {
         let (_d, app, fake) = app_with(move |a| {
             let has = |x: &str| a.iter().any(|y| y == x);
             match a.first().map(String::as_str) {
-                Some("ls") => ls(&[("neos", "running")]),
+                Some("ls") => ls(&[("myapp", "running")]),
                 Some("exec") if has("sbxw-thread-merge") && a.iter().any(|y| y == "=b") && flag.load(std::sync::atomic::Ordering::SeqCst) => Output::ok("error=conflict in x.rs\n"),
                 Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
                 _ => sbx_answer(a),
             }
         });
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         let ws = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(ws.path().join("r/.git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
@@ -766,7 +766,7 @@ mod tests {
         let p = app.plan_propose(&sb, "", vec![on("a"), on("b")], Variant::Split, "independent", Some("lead")).await.unwrap();
         app.plans.lock().unwrap().approve(&p.id, vec![on("a"), on("b")], None, None, 1).unwrap();
         for n in ["a", "b"] {
-            app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
+            app.plans.lock().unwrap().set_thread("myapp", n, ThreadState::Done, "", false, 2).unwrap();
         }
         app.plan_propose_merge(&p.id, &sb, vec!["a".into(), "b".into()], "", vec![]).unwrap();
         let first = app.plan_merge(&p.id, false, None).await.unwrap();
@@ -787,7 +787,7 @@ mod tests {
     #[tokio::test]
     async fn a_shared_plan_needs_one_repo_and_a_split_plan_is_as_before() {
         let (_d, app) = app();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         let ws = tempfile::tempdir().unwrap();
         for r in ["a/.git", "b/.git"] {
             std::fs::create_dir_all(ws.path().join(r)).unwrap();
@@ -810,14 +810,14 @@ mod tests {
         let (_d, app, _fake) = app_with(|a| {
             let has = |x: &str| a.iter().any(|y| y == x);
             match a.first().map(String::as_str) {
-                Some("ls") => ls(&[("neos", "running")]),
+                Some("ls") => ls(&[("myapp", "running")]),
                 Some("exec") if has("sbxw-thread-merge") => Output::ok("base=main\ncommit=abc1234\nok=1\n"),
                 Some("exec") if has("sbxw-memory") => Output::ok("path=/m/team.md\nok=1\n"),
                 Some("exec") if has("sbxw-thread-end") => Output::ok("ok=1\n"),
                 _ => sbx_answer(a),
             }
         });
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         let ws = tempfile::tempdir().unwrap();
         std::fs::create_dir(ws.path().join(".git")).unwrap();
         app.store.update(&sb, |r| r.workspace = Some(ws.path().to_path_buf())).unwrap();
@@ -825,17 +825,17 @@ mod tests {
         let worktree = app.shared_worktree(&sb, &p.threads, &p.team_name()).await.unwrap();
         app.plans.lock().unwrap().approve(&p.id, vec![t("api"), t("web")], None, worktree, 1).unwrap();
         for n in ["api", "web"] {
-            app.plans.lock().unwrap().set_thread("neos", n, ThreadState::Done, "", false, 2).unwrap();
+            app.plans.lock().unwrap().set_thread("myapp", n, ThreadState::Done, "", false, 2).unwrap();
         }
         app.plan_propose_merge(&p.id, &sb, vec![], "", vec![]).unwrap();
 
         let files = vec!["a.rs".to_string()];
-        app.board_claim("neos", Some(&p.id), "api", &files).unwrap();
+        app.board_claim("myapp", Some(&p.id), "api", &files).unwrap();
         let err = app.plan_merge(&p.id, false, None).await.unwrap_err();
         assert!(err.contains("1 file still claimed: a.rs (api)") && err.contains("force_release"), "{err}");
         assert_ne!(app.plan(&p.id).unwrap().merge.unwrap().state, MergeState::Merged, "nothing was merged");
 
-        app.board_release("neos", Some(&p.id), "api", &files).unwrap();
+        app.board_release("myapp", Some(&p.id), "api", &files).unwrap();
         assert_eq!(app.plan_merge(&p.id, false, None).await.unwrap().state, MergeState::Merged);
     }
 }

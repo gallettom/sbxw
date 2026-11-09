@@ -119,7 +119,7 @@ impl SessionKey {
         }
     }
 
-    /// The sandbox's ref in text form (`neos`, `buildbox~neos`), or the
+    /// The sandbox's ref in text form (`myapp`, `buildbox~myapp`), or the
     /// monitor's pseudo-sandbox.
     pub fn sandbox_str(&self) -> String {
         self.sandbox.as_ref().map_or_else(|| MONITOR_SANDBOX.to_string(), |s| s.to_string())
@@ -184,8 +184,8 @@ mod tests {
 
     #[test]
     fn the_wire_modes_are_the_old_ones() {
-        assert_eq!(SessionKey::agent(sb("neos")).to_string(), "neos::claude");
-        assert_eq!(SessionKey::thread(sb("neos"), &th("api")).to_string(), "neos::thread:api");
+        assert_eq!(SessionKey::agent(sb("myapp")).to_string(), "myapp::claude");
+        assert_eq!(SessionKey::thread(sb("myapp"), &th("api")).to_string(), "myapp::thread:api");
         assert_eq!(SessionKey::monitor().to_string(), "__host__::monitor");
         assert_eq!(
             SessionKey::new(sb("n"), SessionKind::ThreadBash(th("a"))).to_string(),
@@ -195,27 +195,27 @@ mod tests {
 
     #[test]
     fn a_remote_key_names_its_host_and_round_trips() {
-        let local = SessionKey::agent(sb("local~neos"));
-        assert_eq!(local.to_string(), "neos::claude", "local is byte-identical to today");
-        let remote = SessionKey::agent(sb("buildbox~neos"));
-        assert_eq!(remote.to_string(), "buildbox~neos::claude");
+        let local = SessionKey::agent(sb("local~myapp"));
+        assert_eq!(local.to_string(), "myapp::claude", "local is byte-identical to today");
+        let remote = SessionKey::agent(sb("buildbox~myapp"));
+        assert_eq!(remote.to_string(), "buildbox~myapp::claude");
         assert_ne!(local, remote);
-        assert!(remote.belongs_to("buildbox~neos") && !remote.belongs_to("neos"));
+        assert!(remote.belongs_to("buildbox~myapp") && !remote.belongs_to("myapp"));
         for key in [
             local,
             remote,
-            SessionKey::thread(sb("buildbox~neos"), &th("api")),
+            SessionKey::thread(sb("buildbox~myapp"), &th("api")),
             SessionKey::new(sb("buildbox~n"), SessionKind::ThreadBash(th("a"))),
             SessionKey::new(sb("n"), SessionKind::Bash),
             SessionKey::monitor(),
         ] {
             assert_eq!(SessionKey::parse(&key.to_string()), Ok(key.clone()), "{key}");
         }
-        assert!(SessionKey::parse("neos").is_err());
-        assert!(SessionKey::parse("neos::weird").is_err());
-        assert!(SessionKey::parse("neos::monitor").is_err());
+        assert!(SessionKey::parse("myapp").is_err());
+        assert!(SessionKey::parse("myapp::weird").is_err());
+        assert!(SessionKey::parse("myapp::monitor").is_err());
         assert!(SessionKey::parse("a~b~c::claude").is_err());
-        assert!(SessionKey::parse("neos::thread:Bad").is_err());
+        assert!(SessionKey::parse("myapp::thread:Bad").is_err());
     }
 
     #[test]

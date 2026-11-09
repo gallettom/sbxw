@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn the_agent_is_told_once_per_step_and_again_after_a_charge() {
         let mut book = NoticeBook::default();
-        let due = |book: &mut NoticeBook, b| book.due("neos", b, 20, 5, KeepAwake::Remote);
+        let due = |book: &mut NoticeBook, b| book.due("myapp", b, 20, 5, KeepAwake::Remote);
         assert!(due(&mut book, bat(30)).is_none());
         assert!(due(&mut book, bat(20)).unwrap().contains("20%"));
         assert!(due(&mut book, bat(17)).is_none());

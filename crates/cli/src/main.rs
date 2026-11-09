@@ -58,8 +58,8 @@ enum Cmd {
     /// Create (if needed) and provision a sandbox, served by the sbxw daemon.
     /// Omit the name to just start the daemon (browse/create from the UI).
     #[command(after_help = "Remote hosts (EXPERIMENTAL, not yet tried on a real KVM host):\n  \
-        sbxw up buildbox~neos --path /srv/neos      a sandbox on host `buildbox` (see `sbxw host add`)\n  \
-        sbxw up buildbox~neos --path /srv/neos --git https://example.org/neos.git\n\n\
+        sbxw up buildbox~myapp --path /srv/myapp      a sandbox on host `buildbox` (see `sbxw host add`)\n  \
+        sbxw up buildbox~myapp --path /srv/myapp --git https://example.org/myapp.git\n\n\
         The path is the host's; its sbxw.toml is read there. Secrets go only to a host added with --trust-secrets.")]
     Up {
         /// A sandbox name, or `<host>~<name>` for one on a remote host (experimental).

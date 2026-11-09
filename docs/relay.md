@@ -52,7 +52,7 @@ asked).
 
 A popup shows the question and one button per running sandbox:
 
-<img src="images/relay.png" alt="An information request from api: the question, buttons for neos and shop, and a box to answer it yourself" width="600">
+<img src="images/relay.png" alt="An information request from api: the question, buttons for myapp and shop, and a box to answer it yourself" width="600">
 
 1. **Route it:** click a sandbox. The question is typed into that agent,
    framed as untrusted data, with the id it must answer with.

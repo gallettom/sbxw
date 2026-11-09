@@ -83,12 +83,12 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 
 ```toml
 [[ports]]
-alias = "neos.local"       # optional /etc/hosts name
+alias = "myapp.local"       # optional /etc/hosts name
 sandbox_port = 4200        # what the dev server listens on, bound to 0.0.0.0
 host_port = 4200
 
 [[ports]]
-alias = "api.neos.local"
+alias = "api.myapp.local"
 sandbox_port = 8000
 host_port = 8000
 ```
@@ -98,7 +98,7 @@ No ports are published by default. `ip_per_app` decides how aliases resolve:
 | `ip_per_app` | How | You browse to |
 |---|---|---|
 | `false` (default) | Every app binds `127.0.0.1` on its own host port; aliases map to `127.0.0.1` | `http://alias:host_port` |
-| `true` | Each app gets its own `127.0.0.X` (added on `lo0` on macOS, with `sudo`) | `http://neos.local:4200`, the app's natural port |
+| `true` | Each app gets its own `127.0.0.X` (added on `lo0` on macOS, with `sudo`) | `http://myapp.local:4200`, the app's natural port |
 
 Writing `/etc/hosts` needs `sudo`. See [what `sbxw up` does](cli.md#what-sbxw-up-does)
 and `sbxw hosts`.
@@ -128,7 +128,7 @@ env_files = [".env.sandbox"]   # a root key: must come before [env]
 
 [env]
 NODE_ENV = "development"
-API_URL  = "http://api.neos.local:8000"
+API_URL  = "http://api.myapp.local:8000"
 ```
 
 Both reach the sandbox twice:

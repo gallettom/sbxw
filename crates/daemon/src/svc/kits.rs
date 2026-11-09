@@ -157,7 +157,7 @@ mod tests {
         let cfg = dir.path().join("proj/sbxw.toml");
         std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
         std::fs::write(&cfg, "# mine\ntemplate = \"auto\"\n\n[[ports]]\nalias = \"a.local\"\nhost_port = 3000\nsandbox_port = 3000\n").unwrap();
-        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.config = Some(cfg.clone())).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("myapp").unwrap(), |r| r.config = Some(cfg.clone())).unwrap();
 
         let other = dir.path().join("elsewhere.toml");
         assert!(app.set_kits(&other, Some(vec!["sbxw:retro".into()])).is_err(), "a path the page names is refused");
@@ -165,7 +165,7 @@ mod tests {
 
         let w = app.set_kits(&cfg, Some(vec!["sbxw:codemap".into(), " sbxw:retro ".into(), "sbxw:codemap".into(), "./missing".into()])).unwrap();
         assert!(w.iter().any(|w| w.starts_with("./missing")), "{w:?}");
-        assert!(w.iter().any(|w| w.starts_with("neos gets the change at its next `sbxw up`")), "{w:?}");
+        assert!(w.iter().any(|w| w.starts_with("myapp gets the change at its next `sbxw up`")), "{w:?}");
         let text = std::fs::read_to_string(&cfg).unwrap();
         assert!(text.starts_with("# mine\ntemplate = \"auto\"\nkits = [\n    \"sbxw:codemap\",\n    \"sbxw:retro\",\n    \"./missing\",\n]\n"), "{text}");
         assert!(text.contains("[[ports]]\nalias = \"a.local\""));
@@ -173,7 +173,7 @@ mod tests {
         let panel = app.kits_panel();
         let file = panel["files"].as_array().unwrap().iter().find(|f| f["path"] == cfg.to_string_lossy().as_ref()).unwrap();
         assert_eq!(file["kits"][1], "sbxw:retro");
-        assert_eq!(file["sandboxes"][0], "neos");
+        assert_eq!(file["sandboxes"][0], "myapp");
 
         app.set_kits(&cfg, None).unwrap();
         assert!(!std::fs::read_to_string(&cfg).unwrap().contains("kits"));

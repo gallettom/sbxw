@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn a_kept_skill_reaches_the_kit_and_leaves_it_when_forgotten() {
         let (_d, app, fake) = app_with(export);
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         assert_eq!(app.my_skills_kit().unwrap(), None, "no kept skill, no kit");
 
         app.keep_skill(&sb, Origin::Workspace, "mine", false).await.unwrap();
@@ -331,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn a_path_out_of_the_skill_is_refused_and_nothing_is_written() {
         let (_d, app, _) = app_with(export);
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         assert!(app.keep_skill(&sb, Origin::Home, "evil", false).await.is_err());
         assert!(app.keep_skill(&sb, Origin::Home, "../x", false).await.is_err());
         let left: Vec<_> = std::fs::read_dir(app.store.paths.my_skills()).into_iter().flatten().collect();

@@ -132,7 +132,7 @@ calls, and every step is safe to run again.
    shared.** The sandbox is a microVM with its own filesystem, network and
    Docker daemon.
 6. **Host aliases.** A marked block in `/etc/hosts` (plus `ifconfig lo0 alias`
-   entries with `ip_per_app` on macOS) so `http://neos.local:4200` works. These
+   entries with `ip_per_app` on macOS) so `http://myapp.local:4200` works. These
    steps need `sudo`, so they run **in your terminal, before the daemon takes
    over**: a background process has nowhere to show a password prompt. Aliases
    are merged into the block, so a second sandbox doesn't evict the first.

@@ -21,7 +21,7 @@ sbxw both **runs** on one and **writes** one.
   `${{ env.fileDir }}` and `${{ env.args.NAME }}` (declared in an `args:` block,
   supplied with `--env-arg NAME=VALUE`). sbxw warns about any `${VAR}` it finds.
 - **Relative paths resolve against the file that declares them.**
-  `workspace: ./neos` means the same thing wherever you run from.
+  `workspace: ./myapp` means the same thing wherever you run from.
 - **No `workspace:` means no mount.** sbxw refuses such a file, since its
   pipeline needs a workspace. Write `workspace: .` to mount the file's folder.
 - **`sbx env create` shows a plan and asks** before changing the host, so
@@ -38,7 +38,7 @@ sbxw both **runs** on one and **writes** one.
 
 ```bash
 sbxw env run                        # sbxenv.yaml in the current directory
-sbxw env run ../neos-env            # ...or in that directory
+sbxw env run ../myapp-env            # ...or in that directory
 sbxw env run base.yaml local.yaml   # merged in order, later files win
 sbxw env run --env-arg port=4300    # a value for ${{ env.args.port }}
 ```
@@ -62,12 +62,12 @@ and rewrites the document once:
 
 ```
 $ sbxw env run
-sbxw  /home/you/dev/neos-env/sbxenv.yaml → sandbox 'neos'
+sbxw  /home/you/dev/myapp-env/sbxenv.yaml → sandbox 'myapp'
   ! host port 4200 (127.0.0.1) is busy — port for sandbox:4200 [4201] ⏎
-sbxw  ports adjusted — running from a rewritten copy at ~/.sbxw/state/env/neos/sbxenv.yaml
+sbxw  ports adjusted — running from a rewritten copy at ~/.sbxw/state/env/myapp/sbxenv.yaml
 sbxw  handing secrets, mcp to sbx — sbxw does not read those
 sbxw  taken from sbxw.toml:
-        · /etc/hosts aliases (neos.local → :4201)
+        · /etc/hosts aliases (myapp.local → :4201)
         · the egress allowlist (15 rules) — an environment file has no field for it
         · claude_model (claude-sonnet-5-5) — passed as ANTHROPIC_DEFAULT_MODEL
 ```
@@ -89,7 +89,7 @@ Field by field, the environment file wins. `sbxw.toml` supplies what the format
 lacks (egress allowlist, aliases, model), and the run prints what it borrowed.
 
 **Aliases survive the merge.** When the file publishes 4200 and `sbxw.toml`
-names 4200 `neos.local`, the alias is kept and pointed at whatever host port the
+names 4200 `myapp.local`, the alias is kept and pointed at whatever host port the
 sandbox actually got (read back from `sbx ports`).
 
 ## `sbxw env export`: write the file
@@ -98,7 +98,7 @@ From the CLI:
 
 ```bash
 sbxw env export                        # writes ../sbxenv.yaml for ./ as the workspace
-sbxw env export -o ~/dev/sbxenv.yaml   # further up: workspace: ./acme/neos
+sbxw env export -o ~/dev/sbxenv.yaml   # further up: workspace: ./acme/myapp
 sbxw env export -o -                   # print it instead
 ```
 
@@ -111,7 +111,7 @@ the UI or moved because a host port was busy.
 people keep their repos:
 
 ```yaml
-workspace: ./neos
+workspace: ./myapp
 skills: 'off'
 kits:
   - ./kits/codemap

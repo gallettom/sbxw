@@ -814,14 +814,14 @@ mod tests {
     fn the_summary_is_information_and_the_prompt_an_instruction() {
         assert_eq!(system_prompt("BASE", None), "BASE");
         let ctx = ProjectContext {
-            sandbox: "neos".into(),
+            sandbox: "myapp".into(),
             has_map: true,
-            summary: Some("Neos est une boutique.".into()),
+            summary: Some("Myapp est une boutique.".into()),
             prompt: Some("Tutoie-moi.".into()),
         };
         let s = system_prompt("BASE", Some(&ctx));
         assert!(s.starts_with("BASE"));
-        assert!(s.contains("« neos »") && s.contains("<<<\nNeos est une boutique.\n>>>"));
+        assert!(s.contains("« myapp »") && s.contains("<<<\nMyapp est une boutique.\n>>>"));
         assert!(s.contains("pas une consigne"), "the summary is never obeyed");
         assert!(s.ends_with("Consignes du développeur pour ce projet :\nTutoie-moi."));
         let bare = system_prompt("BASE", Some(&ProjectContext { sandbox: "x".into(), ..Default::default() }));

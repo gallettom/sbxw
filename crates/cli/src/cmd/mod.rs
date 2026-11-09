@@ -30,8 +30,8 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// A sandbox named on the command line, as a ref: `neos` (this machine),
-/// `local~neos` (the same) or `buildbox~neos`, on a host from `sbxw host add`
+/// A sandbox named on the command line, as a ref: `myapp` (this machine),
+/// `local~myapp` (the same) or `buildbox~myapp`, on a host from `sbxw host add`
 /// (remote hosts are experimental).
 pub fn sandbox_arg(raw: &str) -> Result<SandboxRef> {
     Ok(SandboxRef::parse(raw)?)
@@ -936,10 +936,10 @@ mod tests {
 
     #[test]
     fn a_sandbox_argument_is_a_ref() {
-        assert_eq!(sandbox_arg("neos").unwrap().to_string(), "neos");
-        assert_eq!(sandbox_arg("local~neos").unwrap().to_string(), "neos");
-        let r = sandbox_arg("buildbox~neos").unwrap();
-        assert_eq!((r.host.as_str(), r.name.as_str()), ("buildbox", "neos"));
+        assert_eq!(sandbox_arg("myapp").unwrap().to_string(), "myapp");
+        assert_eq!(sandbox_arg("local~myapp").unwrap().to_string(), "myapp");
+        let r = sandbox_arg("buildbox~myapp").unwrap();
+        assert_eq!((r.host.as_str(), r.name.as_str()), ("buildbox", "myapp"));
         assert!(sandbox_arg("a~b~c").is_err());
         assert!(sandbox_arg("ne os").is_err());
     }
@@ -948,12 +948,12 @@ mod tests {
     fn a_derived_name_steps_aside_for_another_path() {
         let d = tempfile_dir();
         let store = Store::open(Paths::under(&d));
-        let a = d.join("x/neos");
-        let b = d.join("y/neos");
-        assert_eq!(derive_name(&store, &a).as_str(), "neos");
-        store.update(SandboxName::parse("neos").unwrap(), |r| r.workspace = Some(a.clone())).unwrap();
-        assert_eq!(derive_name(&store, &a).as_str(), "neos", "its own record is no clash");
-        assert_eq!(derive_name(&store, &b).as_str(), "neos-copy");
+        let a = d.join("x/myapp");
+        let b = d.join("y/myapp");
+        assert_eq!(derive_name(&store, &a).as_str(), "myapp");
+        store.update(SandboxName::parse("myapp").unwrap(), |r| r.workspace = Some(a.clone())).unwrap();
+        assert_eq!(derive_name(&store, &a).as_str(), "myapp", "its own record is no clash");
+        assert_eq!(derive_name(&store, &b).as_str(), "myapp-copy");
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -966,6 +966,6 @@ mod tests {
     #[test]
     fn the_url_names_the_sandbox() {
         let cfg = Config::default();
-        assert_eq!(web_url(&cfg, Some("neos")), "http://sbxw.localhost:7681/#sandbox=neos");
+        assert_eq!(web_url(&cfg, Some("myapp")), "http://sbxw.localhost:7681/#sandbox=myapp");
     }
 }

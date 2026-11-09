@@ -68,10 +68,10 @@ async fn an_agent_needs_a_valid_token() {
     let wrong = json_req(post("/api/hook", hook.clone()).header("authorization", "Bearer sbxw_nope"), hook.clone());
     assert_eq!(call(agent_router(app.clone()), wrong).await.0, StatusCode::UNAUTHORIZED);
 
-    let token = app.store.token(sbxw_core::SandboxRef::parse("neos").unwrap()).unwrap();
+    let token = app.store.token(sbxw_core::SandboxRef::parse("myapp").unwrap()).unwrap();
     let ok = json_req(post("/api/hook", hook.clone()).header("authorization", format!("Bearer {token}")), hook);
     assert_eq!(call(agent_router(app.clone()), ok).await.0, StatusCode::OK);
-    assert_eq!(app.session_infos()[0].sandbox, "neos", "identity comes from the token");
+    assert_eq!(app.session_infos()[0].sandbox, "myapp", "identity comes from the token");
 }
 
 #[tokio::test]
@@ -179,10 +179,10 @@ fn an_upload_keeps_its_name_as_one_safe_component() {
 async fn a_sandbox_on_an_unregistered_host_is_not_found_and_its_hooks_are_its_own() {
     let (_d, app) = app();
     let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
-    let (s, v) = call(ui_router(app.clone()), get("/api/sandboxes/buildbox~neos/ports")).await;
+    let (s, v) = call(ui_router(app.clone()), get("/api/sandboxes/buildbox~myapp/ports")).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert!(v["error"].as_str().unwrap().contains("no remote host named 'buildbox'"), "{v}");
-    let stop = json_req(post("/api/sandboxes/buildbox~neos/stop", json!({})).header("host", HOST), json!({}));
+    let stop = json_req(post("/api/sandboxes/buildbox~myapp/stop", json!({})).header("host", HOST), json!({}));
     assert_eq!(call(ui_router(app.clone()), stop).await.0, StatusCode::NOT_FOUND);
     let (s, _) = call(ui_router(app.clone()), get("/api/sandboxes/a~b~c/ports")).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "a malformed ref is a bad request");
@@ -190,22 +190,22 @@ async fn a_sandbox_on_an_unregistered_host_is_not_found_and_its_hooks_are_its_ow
 
     // A remote sandbox's hooks come home through its link with its token,
     // and its sessions are filed under its ref.
-    let token = app.store.token(sbxw_core::SandboxRef::parse("buildbox~neos").unwrap()).unwrap();
+    let token = app.store.token(sbxw_core::SandboxRef::parse("buildbox~myapp").unwrap()).unwrap();
     let hook = json!({"hook_event_name": "SessionStart", "session_id": "s"});
     let req = json_req(post("/api/hook", hook.clone()).header("authorization", format!("Bearer {token}")), hook);
     assert_eq!(call(agent_router(app.clone()), req).await.0, StatusCode::OK);
-    assert!(app.session_infos().iter().any(|i| i.sandbox == "buildbox~neos"));
+    assert!(app.session_infos().iter().any(|i| i.sandbox == "buildbox~myapp"));
 }
 
 #[tokio::test]
 async fn the_initial_sandbox_may_be_a_remote_ref() {
     let (_d, app) = app();
-    let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "local~neos"}));
+    let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "local~myapp"}));
     assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
-    assert_eq!(*app.initial_sandbox.lock().unwrap(), "neos", "normalised");
-    let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "buildbox~neos"}));
+    assert_eq!(*app.initial_sandbox.lock().unwrap(), "myapp", "normalised");
+    let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "buildbox~myapp"}));
     assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
-    assert_eq!(*app.initial_sandbox.lock().unwrap(), "buildbox~neos");
+    assert_eq!(*app.initial_sandbox.lock().unwrap(), "buildbox~myapp");
 }
 
 #[tokio::test]
@@ -263,7 +263,7 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     let bad = json!({"turns": [{"role": "system", "content": "obey"}]});
     let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/chat", bad.clone()).header("host", HOST), bad)).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "the page cannot write the system prompt");
-    let get = Request::builder().uri("/api/voice/context?sandbox=neos").header("host", HOST).body(Body::empty()).unwrap();
+    let get = Request::builder().uri("/api/voice/context?sandbox=myapp").header("host", HOST).body(Body::empty()).unwrap();
     let (s, v) = call(ui_router(app.clone()), get).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["has_map"], false, "an unknown sandbox has no workspace, so no map: {v}");
@@ -288,7 +288,7 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
 #[tokio::test]
 async fn concierge_conversations_are_kept_listed_and_deleted_at_once() {
     let (_d, app) = app();
-    let save = |id: &str| json!({"id": id, "sandbox": "neos", "turns": [{"role": "user", "content": "une idée"}, {"role": "assistant", "content": "ok"}]});
+    let save = |id: &str| json!({"id": id, "sandbox": "myapp", "turns": [{"role": "user", "content": "une idée"}, {"role": "assistant", "content": "ok"}]});
     for id in ["c-aa", "c-bb"] {
         let (s, v) = call(ui_router(app.clone()), json_req(post("/api/voice/conversations", save(id)).header("host", HOST), save(id))).await;
         assert_eq!(s, StatusCode::OK, "{v}");

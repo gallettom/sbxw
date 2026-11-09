@@ -22,7 +22,7 @@ releases ([why](architecture.md#the-sbx-version-floor)). To try an older `sbx`
 anyway, for one run:
 
 ```bash
-SBXW_SKIP_SBX_VERSION_CHECK=1 sbxw up neos
+SBXW_SKIP_SBX_VERSION_CHECK=1 sbxw up myapp
 ```
 
 Expect hard failures, not degraded behaviour: since sbx 0.39, an unknown flag
@@ -68,7 +68,7 @@ sudo install -m755 target/release/sbxw /usr/local/bin/sbxw
 From your project's root:
 
 ```bash
-sbxw up neos .        # or: sbxw up neos /path/to/repo
+sbxw up myapp .        # or: sbxw up myapp /path/to/repo
 ```
 
 Then open <http://sbxw.localhost:7681>. The Claude agent is in the pane.
@@ -94,19 +94,19 @@ symfony serve --listen-ip=0.0.0.0 --port=8000   # or php -S 0.0.0.0:8000
 
 ```toml
 [[ports]]
-alias = "neos.local"
+alias = "myapp.local"
 sandbox_port = 4200
 host_port = 4200
 ```
 
-Now `http://neos.local:4200` reaches the dev server. See
+Now `http://myapp.local:4200` reaches the dev server. See
 [Configuration](configuration.md).
 
 **Stopping:**
 
 ```bash
-sbxw stop neos    # stop the sandbox, state kept
-sbxw rm neos      # remove it for good
+sbxw stop myapp    # stop the sandbox, state kept
+sbxw rm myapp      # remove it for good
 sbxw down         # stop the daemon and remove the /etc/hosts block
 ```
 

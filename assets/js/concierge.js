@@ -27,6 +27,7 @@ let vcStatus = null;
 let vcOpen = false;
 let vcRec = null; // { recorder, chunks, stream, started }
 let vcBusy = false;
+let vcStarting = false;
 // The conversation, this tab's own: [{role: 'user'|'assistant', content}].
 // The daemon keeps none of it (lot 3 adds the 7-day history).
 const VC_STORE = 'sbxw-concierge';
@@ -138,18 +139,23 @@ async function vcStart(dest = null) {
     showToast(!window.isSecureContext ? 'The microphone needs sbxw on 127.0.0.1' : `Voice is not installed — run ${vcStatus?.hint || 'sbxw voice install'}`, 'error');
     return;
   }
-  if (vcRec || vcBusy || !vcReady() || !window.isSecureContext) return;
+  if (vcRec || vcBusy || vcStarting || !vcReady() || !window.isSecureContext) return;
   let stream;
+  // The microphone takes a moment to open; a second click meanwhile is not a second start.
+  vcStarting = true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   } catch (e) {
-    vcSay('err', `No microphone: ${e.message || e}`);
+    vcStarting = false;
+    if (dest) showToast(`No microphone: ${e.message || e}`, 'error');
+    else vcSay('err', `No microphone: ${e.message || e}`);
     return;
   }
   const recorder = new MediaRecorder(stream);
   const rec = { recorder, chunks: [], stream, started: performance.now(), dest };
   recorder.ondataavailable = e => { if (e.data.size) rec.chunks.push(e.data); };
   recorder.start();
+  vcStarting = false;
   vcRec = rec;
   vcRender();
 }
@@ -209,15 +215,21 @@ function vcDictate(idx, text) {
 
 function vcDictateKey() { return (vcStatus && vcStatus.dictate_key) || 'F9'; }
 
-document.addEventListener('pointerdown', e => {
+// The pane's button toggles: one click starts listening, the next stops and
+// types — easier than holding a button through a long sentence. F9 stays
+// push-to-talk.
+document.addEventListener('click', e => {
   const b = e.target.closest('.pane-dictate-btn');
   if (!b) return;
   e.preventDefault();
-  b.setPointerCapture?.(e.pointerId);
-  vcStart({ pane: +b.dataset.pane });
+  const pane = +b.dataset.pane;
+  if (vcRec?.dest) {
+    const same = vcRec.dest.pane === pane;
+    vcStop();
+    if (same) return;
+  }
+  if (!vcRec) vcStart({ pane });
 });
-document.addEventListener('pointerup', e => { if (vcRec?.dest && e.target.closest('.pane-dictate-btn')) vcStop(); });
-document.addEventListener('pointercancel', () => { if (vcRec?.dest) vcStop(); });
 window.addEventListener('keydown', e => {
   if (e.code !== vcDictateKey() || e.repeat) return;
   e.preventDefault(); e.stopPropagation();

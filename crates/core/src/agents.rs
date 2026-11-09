@@ -672,14 +672,14 @@ mod tests {
         let start = json!({"hook_event_name": "SessionStart", "session_id": "s1"});
         let prompt = json!({"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "fix it"});
         let stop = json!({"hook_event_name": "Stop", "session_id": "s1", "last_assistant_message": "Done.\nAll good."});
-        book.apply("neos", &ev(&start), SessionOrigin::Tty, true, 1);
-        let out = book.apply("neos", &ev(&prompt), SessionOrigin::Tty, true, 2);
+        book.apply("myapp", &ev(&start), SessionOrigin::Tty, true, 1);
+        let out = book.apply("myapp", &ev(&prompt), SessionOrigin::Tty, true, 2);
         assert_eq!(out[0].state, SessionState::Working);
         assert_eq!(out[0].last_input.as_deref(), Some("fix it"));
-        let out = book.apply("neos", &ev(&stop), SessionOrigin::Tty, true, 3);
+        let out = book.apply("myapp", &ev(&stop), SessionOrigin::Tty, true, 3);
         assert_eq!(out[0].state, SessionState::Idle);
         assert_eq!(out[0].reply.as_deref(), Some("Done.\nAll good."));
-        let out = book.apply("neos", &ev(&prompt), SessionOrigin::Unknown, true, 4);
+        let out = book.apply("myapp", &ev(&prompt), SessionOrigin::Unknown, true, 4);
         assert_eq!(out[0].reply, None, "a new prompt clears the reply");
         assert_eq!(out[0].origin, SessionOrigin::Tty, "unknown never demotes");
     }

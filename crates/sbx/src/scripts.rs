@@ -453,7 +453,7 @@ mod tests {
     use super::*;
 
     fn sb() -> SandboxName {
-        SandboxName::parse("neos").unwrap()
+        SandboxName::parse("myapp").unwrap()
     }
     fn th() -> ThreadName {
         ThreadName::parse("api-auth").unwrap()
@@ -466,7 +466,7 @@ mod tests {
         let script = &args[6];
         assert!(!script.contains("rm -rf") && !script.contains("api-auth") && !script.contains("/w s"));
         assert_eq!(&args[7..], ["sbxw-thread", "=/w s", "=api-auth", "=do it; rm -rf /", "=claude-opus-5-5", "=", "="]);
-        assert_eq!(&args[..3], ["exec", "-it", "neos"]);
+        assert_eq!(&args[..3], ["exec", "-it", "myapp"]);
         let no_model = thread_run_args(&sb(), "", &th(), "", None, None);
         assert_eq!(no_model[11], "=");
     }
@@ -580,7 +580,7 @@ printf '[%s]' "$@""#), "x", "=a", "=", "=b c"])
     #[test]
     fn a_codemap_session_carries_its_url_and_prompt_as_arguments() {
         let a = codemap_run_args(&sb(), "7682", "/codemap-lens a; b");
-        assert_eq!(&a[6..], ["sbxw-codemap", "7682", "neos", "/codemap-lens a; b"]);
-        assert!(!a[5].contains("codemap-lens") && !a[5].contains("neos"));
+        assert_eq!(&a[6..], ["sbxw-codemap", "7682", "myapp", "/codemap-lens a; b"]);
+        assert!(!a[5].contains("codemap-lens") && !a[5].contains("myapp"));
     }
 }

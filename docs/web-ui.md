@@ -105,7 +105,7 @@ bottom-right corner lists every step up front and ticks them off, with `sbx`'s
 own output streaming under the running one:
 
 ```
-sbxw  neos                     Creating… 2/5
+sbxw  myapp                     Creating… 2/5
       ✓ Preparing the workspace
       ● Creating the sandbox
           pulling docker.io/…/sandbox-claude: 214.7MB / 512.3MB
@@ -424,8 +424,9 @@ multiple-choice question is read with its options, and what you say picks
 one, confirmed the same way. **Talk to the concierge** on a message makes
 your next words a turn of your own conversation instead.
 
-**Dictation into a terminal.** Hold **F9** (the pane that has focus) or the
-microphone in a pane's bar, speak, release: the words are typed into that
+**Dictation into a terminal.** Click the microphone in a pane's bar, speak,
+and click it again — or hold **F9** in the pane that has focus and release:
+the words are typed into that
 terminal as if from the keyboard — Claude's prompt, or a shell. No Enter is
 pressed, so you can read and fix them first; end with *entrée* (or
 *envoie*) and Enter is pressed for you. The button shows once the voice

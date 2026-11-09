@@ -16,7 +16,7 @@ command gives an agent a microVM with your project mounted, a restrictive
 network allowlist, your dev server's ports on the host, and a browser terminal.
 sbxw only ever calls `sbx`, never `docker sandbox`.
 
-![The sbxw web UI: three sandboxes in the sidebar, the neos agent in one pane and two of its threads beside it](docs/images/threads.png)
+![The sbxw web UI: three sandboxes in the sidebar, the myapp agent in one pane and two of its threads beside it](docs/images/threads.png)
 
 ## What you get
 

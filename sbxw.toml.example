@@ -1,4 +1,4 @@
-# sbxw.toml — drop this at the root of your project (e.g. the NEOS repo).
+# sbxw.toml — drop this at the root of your project.
 # All fields are optional; the values below are the built-in defaults.
 
 # Host bind address for the browser terminal.
@@ -104,7 +104,7 @@ terminal_bar_color = ""
 terminal_text_color = ""
 
 # One loopback IP per app => clean hostnames on their natural ports
-# (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
+# (http://myapp.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
 # `ifconfig lo0 alias 127.0.0.X` (sudo). When false, everything shares 127.0.0.1.
 ip_per_app = false
 
@@ -225,7 +225,7 @@ env_files = []
 #
 # [env]
 # NODE_ENV = "development"
-# API_URL = "http://api.neos.local:8000"
+# API_URL = "http://api.myapp.local:8000"
 
 # Apps to expose — none by default: a project without [[ports]] publishes
 # nothing and adds no hostname (only sbxw.localhost, the web UI's own name).
@@ -233,12 +233,12 @@ env_files = []
 # remember to bind it to 0.0.0.0 (ng serve --host 0.0.0.0). For example:
 #
 # [[ports]]
-# alias = "neos.local"
+# alias = "myapp.local"
 # sandbox_port = 4200
 # host_port = 4200
 #
 # [[ports]]
-# alias = "api.neos.local"
+# alias = "api.myapp.local"
 # sandbox_port = 8000
 # host_port = 8000
 

@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn specs_carry_an_ip_only_per_app() {
-        let ports = [wp(4200, 4200, "neos.local"), wp(8000, 8000, "")];
+        let ports = [wp(4200, 4200, "myapp.local"), wp(8000, 8000, "")];
         assert_eq!(publish_specs(&ports, false), ["4200:4200", "8000:8000"]);
         assert_eq!(
             publish_specs(&ports, true),

@@ -660,10 +660,10 @@ mod tests {
     #[test]
     fn wanted_aliases_add_the_web_name_on_loopback() {
         let cfg: Config = toml::from_str(
-            "[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\nhost_port = 4200\n",
+            "[[ports]]\nalias = \"myapp.local\"\nsandbox_port = 4200\nhost_port = 4200\n",
         )
         .unwrap();
         let names: Vec<String> = cfg.wanted_aliases(&[]).into_iter().map(|a| a.hostname).collect();
-        assert_eq!(names, ["neos.local", "sbxw.localhost"]);
+        assert_eq!(names, ["myapp.local", "sbxw.localhost"]);
     }
 }
