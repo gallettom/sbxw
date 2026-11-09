@@ -126,6 +126,7 @@ async function vcRefresh() {
 // ── Recording ────────────────────────────────────────────────────────────
 async function vcStart() {
   vcSpeech.stop(); // speaking over the concierge interrupts it
+  vcWarm();
   if (vcRec || vcBusy || !vcReady() || !window.isSecureContext) return;
   let stream;
   try {
@@ -323,6 +324,12 @@ const vcSpeech = (() => {
         say(buf.slice(0, cut));
         buf = buf.slice(cut);
       }
+      // A long sentence is not waited for: past ~70 characters it is cut at
+      // its last comma, semicolon or colon, so the voice starts sooner.
+      if (buf.length > 70) {
+        const at = Math.max(buf.lastIndexOf(', '), buf.lastIndexOf('; '), buf.lastIndexOf(': '));
+        if (at > 30) { say(buf.slice(0, at + 1)); buf = buf.slice(at + 2); }
+      }
     },
     flush() { say(buf); buf = ''; },
     stop() {
@@ -355,8 +362,16 @@ function vcSetOpen(open) {
   vcOpen = open;
   vcPanel.hidden = !open;
   vcLauncher.setAttribute('aria-expanded', String(open));
-  if (open) vcLoad();
-vcRefresh();
+  if (open) { vcRefresh(); vcWarm(); }
+}
+
+// Load the models before they are needed: opening the panel or pressing the
+// key usually comes seconds before the first word, and that is long enough.
+let vcWarmed = 0;
+function vcWarm() {
+  if (!vcReady() || Date.now() - vcWarmed < 60_000) return;
+  vcWarmed = Date.now();
+  fetch('/api/voice/warm', { method: 'POST' }).catch(() => {});
 }
 
 vcLauncher.addEventListener('click', () => vcSetOpen(!vcOpen));
@@ -388,4 +403,5 @@ sbxwStream.addEventListener('voice', ev => {
   vcRender();
 });
 
+vcLoad();
 vcRefresh();

@@ -153,9 +153,8 @@ impl Llm {
         ]);
         let mut out = String::new();
         let mut pending: Vec<u8> = Vec::new();
-        let mut pos = tokens.len() as i32;
         let mut idx = batch.n_tokens() - 1;
-        for _ in 0..MAX_REPLY {
+        for pos in (tokens.len() as i32..).take(MAX_REPLY) {
             let tok = sampler.sample(&ctx, idx);
             sampler.accept(tok);
             if vocab.is_eog(tok) {
@@ -177,7 +176,6 @@ impl Llm {
             }
             batch.clear();
             batch.add(tok, pos, &[0], true).map_err(|e| e.to_string())?;
-            pos += 1;
             idx = 0;
             ctx.decode(&mut batch).map_err(|e| format!("generating: {e}"))?;
         }
@@ -219,7 +217,8 @@ pub const KOKORO_EN: i32 = 3;
 
 pub enum Tts {
     Kokoro { fr: Option<sherpa_rs::tts::KokoroTts>, en: Option<sherpa_rs::tts::KokoroTts>, dir: std::path::PathBuf },
-    Piper(sherpa_rs::tts::VitsTts),
+    /// The voice and which of its speakers.
+    Piper(sherpa_rs::tts::VitsTts, i32),
 }
 
 /// Speech for one sentence or so.
@@ -242,7 +241,7 @@ fn tts_threads() -> i32 {
 }
 
 impl Tts {
-    pub fn load(model_id: &str, dir: &Path) -> Result<Self, String> {
+    pub fn load(model_id: &str, speaker: i32, dir: &Path) -> Result<Self, String> {
         let p = |f: &str| dir.join(f).to_string_lossy().into_owned();
         if model_id.starts_with("kokoro") {
             // Everything sherpa-onnx checks: it exit()s the whole process on
@@ -250,9 +249,16 @@ impl Tts {
             need(dir, &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict", "espeak-ng-data"])?;
             return Ok(Tts::Kokoro { fr: None, en: None, dir: dir.to_path_buf() });
         }
-        need(dir, &["fr_FR-siwis-medium.onnx", "tokens.txt", "espeak-ng-data"])?;
+        // Piper: the repo's one .onnx file, whatever the voice is called.
+        let onnx = std::fs::read_dir(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "onnx"))
+            .ok_or("the voice model has no .onnx file")?;
+        need(dir, &["tokens.txt", "espeak-ng-data"])?;
         let cfg = sherpa_rs::tts::VitsTtsConfig {
-            model: p("fr_FR-siwis-medium.onnx"),
+            model: onnx.to_string_lossy().into_owned(),
             tokens: p("tokens.txt"),
             data_dir: p("espeak-ng-data"),
             length_scale: 1.0,
@@ -261,7 +267,10 @@ impl Tts {
             onnx_config: sherpa_rs::OnnxConfig { provider: "cpu".into(), debug: false, num_threads: tts_threads() },
             ..Default::default()
         };
-        Ok(Tts::Piper(sherpa_rs::tts::VitsTts::new(cfg)))
+        let t = std::time::Instant::now();
+        let v = sherpa_rs::tts::VitsTts::new(cfg);
+        tracing::info!("voice: Piper loaded in {} ms", t.elapsed().as_millis());
+        Ok(Tts::Piper(v, speaker))
     }
 
     fn kokoro(dir: &Path, lang: &str) -> sherpa_rs::tts::KokoroTts {
@@ -293,7 +302,7 @@ impl Tts {
                 let engine = slot.get_or_insert_with(|| Self::kokoro(dir, lang));
                 engine.create(text, sid, speed)
             }
-            Tts::Piper(v) => v.create(text, 0, speed),
+            Tts::Piper(v, sid) => v.create(text, *sid, speed),
         }
         .map_err(|e| format!("speaking: {e}"))?;
         Ok(Speech { samples: audio.samples, sample_rate: audio.sample_rate })

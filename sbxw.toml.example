@@ -259,6 +259,7 @@ env_files = []
 # [voice]
 # stt = "parakeet-tdt-0.6b-v3-int8"
 # llm = ""                     # empty: ministral-3-8b-instruct-q4 on macOS, -3b- elsewhere
-# tts = "kokoro-multi-lang-v1_0"  # or "piper-fr-siwis-medium"
+# tts = "piper-fr-tom-medium"  # male; or piper-fr-upmc-pierre, piper-fr-gilles-low,
+#                              # piper-fr-siwis-medium (female), kokoro-multi-lang-v1_0
 # push_to_talk_key = "F8"      # hold it anywhere on the page to talk
 # retention_days = 7           # conversation text kept at most 7 days; audio never

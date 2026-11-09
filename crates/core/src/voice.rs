@@ -45,6 +45,9 @@ pub struct Model {
     /// Roughly what it weighs, for the confirmation before any listing is
     /// fetched; the plan's own sizes are what is downloaded and checked.
     pub approx_mb: u32,
+    /// For a voice with several speakers, which one (Piper's `upmc`: 1 is
+    /// Pierre). Kokoro picks its speaker by language instead.
+    pub speaker: i32,
 }
 
 /// Every model sbxw knows how to fetch. `[voice]` in sbxw.toml picks among
@@ -59,6 +62,7 @@ pub const CATALOG: &[Model] = &[
         include: &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
         license: "CC-BY-4.0",
         approx_mb: 670,
+        speaker: 0,
     },
     Model {
         id: "ministral-3-8b-instruct-q4",
@@ -69,6 +73,7 @@ pub const CATALOG: &[Model] = &[
         include: &["Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"],
         license: "Apache-2.0",
         approx_mb: 5200,
+        speaker: 0,
     },
     Model {
         id: "ministral-3-3b-instruct-q4",
@@ -79,6 +84,7 @@ pub const CATALOG: &[Model] = &[
         include: &["Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"],
         license: "Apache-2.0",
         approx_mb: 2100,
+        speaker: 0,
     },
     Model {
         id: "kokoro-multi-lang-v1_0",
@@ -92,6 +98,7 @@ pub const CATALOG: &[Model] = &[
         include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict/", "espeak-ng-data/"],
         license: "Apache-2.0",
         approx_mb: 360,
+        speaker: 0,
     },
     Model {
         id: "piper-fr-siwis-medium",
@@ -102,6 +109,42 @@ pub const CATALOG: &[Model] = &[
         include: &["fr_FR-siwis-medium.onnx", "tokens.txt", "espeak-ng-data/"],
         license: "CC-BY-4.0",
         approx_mb: 90,
+        speaker: 0,
+    },
+    // Male French voices (Piper, single language: they read English with a
+    // French accent).
+    Model {
+        id: "piper-fr-tom-medium",
+        role: Role::Tts,
+        label: "Piper fr_FR tom (medium, male)",
+        repo: "csukuangfj/vits-piper-fr_FR-tom-medium",
+        revision: "main",
+        include: &["fr_FR-tom-medium.onnx", "tokens.txt", "espeak-ng-data/"],
+        license: "CC-BY-4.0",
+        approx_mb: 80,
+        speaker: 0,
+    },
+    Model {
+        id: "piper-fr-upmc-pierre",
+        role: Role::Tts,
+        label: "Piper fr_FR upmc, Pierre (medium, male)",
+        repo: "csukuangfj/vits-piper-fr_FR-upmc-medium",
+        revision: "main",
+        include: &["fr_FR-upmc-medium.onnx", "tokens.txt", "espeak-ng-data/"],
+        license: "CC-BY-4.0",
+        approx_mb: 90,
+        speaker: 1,
+    },
+    Model {
+        id: "piper-fr-gilles-low",
+        role: Role::Tts,
+        label: "Piper fr_FR gilles (low, male)",
+        repo: "csukuangfj/vits-piper-fr_FR-gilles-low",
+        revision: "main",
+        include: &["fr_FR-gilles-low.onnx", "tokens.txt", "espeak-ng-data/"],
+        license: "CC-BY-4.0",
+        approx_mb: 70,
+        speaker: 0,
     },
 ];
 
@@ -130,7 +173,9 @@ impl Default for VoiceSettings {
         Self {
             stt: "parakeet-tdt-0.6b-v3-int8".into(),
             llm: String::new(),
-            tts: "kokoro-multi-lang-v1_0".into(),
+            // A male French voice, and Piper's VITS is quicker than Kokoro
+            // on the CPU: the first words are heard sooner.
+            tts: "piper-fr-tom-medium".into(),
             push_to_talk_key: "F8".into(),
             retention_days: MAX_RETENTION_DAYS,
         }

@@ -68,6 +68,9 @@ pub struct VoiceRuntime {
     tts: Option<Arc<std::sync::Mutex<crate::voice_engine::Tts>>>,
     #[cfg(feature = "voice")]
     last_used: Option<Instant>,
+    /// Held while a model loads (see `ensure_*`).
+    #[cfg(feature = "voice")]
+    loading: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl App {
@@ -296,29 +299,117 @@ impl App {
         }
     }
 
-    /// Text for 16 kHz mono samples.
+    /// The installed model for `role`, or why not.
     #[cfg(feature = "voice")]
-    pub async fn voice_transcribe(self: &Arc<Self>, samples: Vec<f32>) -> Result<String, String> {
-        let m = voice::model(&self.cfg.voice.stt).ok_or("no speech-to-text model configured")?;
+    fn ready_model(&self, role: voice::Role) -> Result<(&'static Model, PathBuf), String> {
+        let m = self.cfg.voice.models().into_iter().find(|m| m.role == role).ok_or("no model configured for this role")?;
         let root = self.models_root();
         if !matches!(voice::installed(&root, m), Installed::Ready { .. }) {
             return Err(format!("the voice models are not installed: run `{}`", voice::INSTALL_HINT));
         }
-        let loaded = self.voice.lock().unwrap().stt.as_ref().map(|(_, s)| s.clone());
-        let stt = match loaded {
-            Some(s) => s,
-            None => {
-                let dir = voice::model_dir(&root, m);
-                let s = tokio::task::spawn_blocking(move || crate::voice_engine::Stt::load(&dir))
-                    .await
-                    .map_err(|e| e.to_string())??;
-                let s = Arc::new(std::sync::Mutex::new(s));
-                self.voice.lock().unwrap().stt = Some((Instant::now(), s.clone()));
-                s
-            }
-        };
+        Ok((m, voice::model_dir(&root, m)))
+    }
+
+    /// Mark the models used now and keep them for [`IDLE_UNLOAD`].
+    #[cfg(feature = "voice")]
+    fn voice_touch(self: &Arc<Self>) {
         self.voice.lock().unwrap().last_used = Some(Instant::now());
         self.schedule_unload();
+    }
+
+    // Each `ensure_*` loads its model once: loads are serialised by `loading`,
+    // so a warm-up and a first request never load the same model twice.
+
+    #[cfg(feature = "voice")]
+    async fn ensure_stt(&self) -> Result<Arc<std::sync::Mutex<crate::voice_engine::Stt>>, String> {
+        let lock = self.voice.lock().unwrap().loading.clone();
+        let _g = lock.lock().await;
+        if let Some((_, s)) = self.voice.lock().unwrap().stt.as_ref() {
+            return Ok(s.clone());
+        }
+        let (_, dir) = self.ready_model(voice::Role::Stt)?;
+        let s = tokio::task::spawn_blocking(move || crate::voice_engine::Stt::load(&dir)).await.map_err(|e| e.to_string())??;
+        let s = Arc::new(std::sync::Mutex::new(s));
+        self.voice.lock().unwrap().stt = Some((Instant::now(), s.clone()));
+        Ok(s)
+    }
+
+    #[cfg(feature = "voice")]
+    async fn ensure_llm(&self) -> Result<Arc<std::sync::Mutex<crate::voice_engine::Llm>>, String> {
+        let lock = self.voice.lock().unwrap().loading.clone();
+        let _g = lock.lock().await;
+        if let Some(l) = self.voice.lock().unwrap().llm.as_ref() {
+            return Ok(l.clone());
+        }
+        let (_, dir) = self.ready_model(voice::Role::Llm)?;
+        let gguf = std::fs::read_dir(&dir)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "gguf"))
+            .ok_or("the language model's .gguf file is missing")?;
+        let l = tokio::task::spawn_blocking(move || crate::voice_engine::Llm::load(&gguf)).await.map_err(|e| e.to_string())??;
+        let l = Arc::new(std::sync::Mutex::new(l));
+        self.voice.lock().unwrap().llm = Some(l.clone());
+        Ok(l)
+    }
+
+    #[cfg(feature = "voice")]
+    async fn ensure_tts(&self) -> Result<Arc<std::sync::Mutex<crate::voice_engine::Tts>>, String> {
+        let lock = self.voice.lock().unwrap().loading.clone();
+        let _g = lock.lock().await;
+        if let Some(t) = self.voice.lock().unwrap().tts.as_ref() {
+            return Ok(t.clone());
+        }
+        let (m, dir) = self.ready_model(voice::Role::Tts)?;
+        let (id, speaker) = (m.id, m.speaker);
+        let t = tokio::task::spawn_blocking(move || {
+            let mut t = crate::voice_engine::Tts::load(id, speaker, &dir)?;
+            // One short phrase so the first real sentence does not pay for
+            // the engine's first run (and Kokoro's French engine is built).
+            let _ = t.speak("Bonjour.", "fr", 1.0);
+            Ok::<_, String>(t)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let t = Arc::new(std::sync::Mutex::new(t));
+        self.voice.lock().unwrap().tts = Some(t.clone());
+        Ok(t)
+    }
+
+    /// Load every model in the background, so the first sentence spoken,
+    /// answered and read aloud waits for none of them: the page calls this
+    /// when the panel opens and when the push-to-talk key goes down.
+    #[cfg(feature = "voice")]
+    pub fn voice_warm(self: &Arc<Self>) {
+        if self.ready_model(voice::Role::Stt).is_err() {
+            return;
+        }
+        self.voice_touch();
+        let app = self.clone();
+        tokio::spawn(async move {
+            let t = Instant::now();
+            let r = async {
+                app.ensure_stt().await?;
+                app.ensure_tts().await?;
+                app.ensure_llm().await?;
+                Ok::<_, String>(())
+            };
+            match r.await {
+                Ok(()) => tracing::info!("voice: warm in {} ms", t.elapsed().as_millis()),
+                Err(e) => tracing::warn!("voice: warm-up failed: {e}"),
+            }
+        });
+    }
+
+    #[cfg(not(feature = "voice"))]
+    pub fn voice_warm(self: &Arc<Self>) {}
+
+    /// Text for 16 kHz mono samples.
+    #[cfg(feature = "voice")]
+    pub async fn voice_transcribe(self: &Arc<Self>, samples: Vec<f32>) -> Result<String, String> {
+        let stt = self.ensure_stt().await?;
+        self.voice_touch();
         tokio::task::spawn_blocking(move || stt.lock().unwrap().transcribe(&samples))
             .await
             .map_err(|e| e.to_string())
@@ -330,31 +421,8 @@ impl App {
     #[cfg(feature = "voice")]
     pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
         check_turns(&turns)?;
-        let llm_id = self.cfg.voice.models().into_iter().find(|m| m.role == voice::Role::Llm).ok_or("no language model configured")?;
-        let root = self.models_root();
-        if !matches!(voice::installed(&root, llm_id), Installed::Ready { .. }) {
-            return Err(format!("the voice models are not installed: run `{}`", voice::INSTALL_HINT));
-        }
-        let loaded = self.voice.lock().unwrap().llm.clone();
-        let llm = match loaded {
-            Some(l) => l,
-            None => {
-                let gguf = std::fs::read_dir(voice::model_dir(&root, llm_id))
-                    .map_err(|e| e.to_string())?
-                    .flatten()
-                    .map(|e| e.path())
-                    .find(|p| p.extension().is_some_and(|x| x == "gguf"))
-                    .ok_or("the language model's .gguf file is missing")?;
-                let l = tokio::task::spawn_blocking(move || crate::voice_engine::Llm::load(&gguf))
-                    .await
-                    .map_err(|e| e.to_string())??;
-                let l = Arc::new(std::sync::Mutex::new(l));
-                self.voice.lock().unwrap().llm = Some(l.clone());
-                l
-            }
-        };
-        self.voice.lock().unwrap().last_used = Some(Instant::now());
-        self.schedule_unload();
+        let llm = self.ensure_llm().await?;
+        self.voice_touch();
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         let app = self.clone();
         tokio::task::spawn_blocking(move || {
@@ -376,26 +444,8 @@ impl App {
     #[cfg(feature = "voice")]
     pub async fn voice_speak(self: &Arc<Self>, text: String) -> Result<Vec<u8>, String> {
         check_speech(&text)?;
-        let m = voice::model(&self.cfg.voice.tts).ok_or("no voice model configured")?;
-        let root = self.models_root();
-        if !matches!(voice::installed(&root, m), Installed::Ready { .. }) {
-            return Err(format!("the voice models are not installed: run `{}`", voice::INSTALL_HINT));
-        }
-        let loaded = self.voice.lock().unwrap().tts.clone();
-        let tts = match loaded {
-            Some(t) => t,
-            None => {
-                let (id, dir) = (m.id, voice::model_dir(&root, m));
-                let t = tokio::task::spawn_blocking(move || crate::voice_engine::Tts::load(id, &dir))
-                    .await
-                    .map_err(|e| e.to_string())??;
-                let t = Arc::new(std::sync::Mutex::new(t));
-                self.voice.lock().unwrap().tts = Some(t.clone());
-                t
-            }
-        };
-        self.voice.lock().unwrap().last_used = Some(Instant::now());
-        self.schedule_unload();
+        let tts = self.ensure_tts().await?;
+        self.voice_touch();
         let lang = voice::guess_lang(&text);
         let speech = tokio::task::spawn_blocking(move || tts.lock().unwrap().speak(&text, lang, 1.0))
             .await

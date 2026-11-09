@@ -161,6 +161,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/voice/rm", post(voice_rm))
         .route("/api/voice/chat", post(voice_chat))
         .route("/api/voice/speak", post(voice_speak))
+        .route("/api/voice/warm", post(voice_warm))
         .route(
             "/api/voice/transcribe",
             post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
@@ -1783,4 +1784,10 @@ async fn voice_speak(State(app): S, Json(b): Json<VoiceSpeakBody>) -> ApiResult<
     crate::svc::voice::check_speech(&b.text)?;
     let wav = app.voice_speak(b.text).await.map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
     Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+}
+
+/// Load the models now, in the background: answers at once.
+async fn voice_warm(State(app): S) -> Json<Value> {
+    app.voice_warm();
+    ok()
 }
