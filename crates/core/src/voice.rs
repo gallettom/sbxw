@@ -86,7 +86,10 @@ pub const CATALOG: &[Model] = &[
         label: "Kokoro 82M multilingual (voice ff_siwis)",
         repo: "csukuangfj/kokoro-multi-lang-v1_0",
         revision: "main",
-        include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "espeak-ng-data/"],
+        // A multilingual Kokoro (v1.0) will not start without its English and
+        // Chinese lexicons and jieba's `dict/`, whatever language it speaks —
+        // and sherpa-onnx exits the process over it.
+        include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict/", "espeak-ng-data/"],
         license: "Apache-2.0",
         approx_mb: 360,
     },
@@ -312,7 +315,14 @@ pub fn installed(models_root: &Path, m: &Model) -> Installed {
         .ok()
         .and_then(|t| serde_json::from_str::<Vec<MarkerFile>>(&t).ok());
     if let Some(list) = marker {
+        // The catalog may have grown since this was installed: a marker
+        // without every included file or folder is an install to complete.
+        let covers = m.include.iter().all(|inc| match inc.strip_suffix('/') {
+            Some(d) => list.iter().any(|f| f.path.starts_with(d) && f.path[d.len()..].starts_with('/')),
+            None => list.iter().any(|f| f.path == *inc),
+        });
         let ok = !list.is_empty()
+            && covers
             && list.iter().all(|f| {
                 safe_rel(&f.path) && std::fs::metadata(dir.join(&f.path)).map(|md| md.len() == f.size).unwrap_or(false)
             });
@@ -431,7 +441,7 @@ mod tests {
         let paths: Vec<_> = p.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(
             paths,
-            ["espeak-ng-data/fr_dict", "lexicon-us-en.txt", "model.onnx", "tokens.txt", "voices.bin"]
+            ["espeak-ng-data/fr_dict", "lexicon-us-en.txt", "lexicon-zh.txt", "model.onnx", "tokens.txt", "voices.bin"]
         );
         let m = p.iter().find(|f| f.path == "model.onnx").unwrap();
         assert_eq!(m.size, 330000000, "the LFS size, not the pointer's");
@@ -446,6 +456,7 @@ mod tests {
         assert_eq!(url_path("a/é+b"), "a/%C3%A9%2Bb");
         let tree = r#"[{"type":"file","path":"model.onnx","size":1},{"type":"file","path":"voices.bin","size":1},
           {"type":"file","path":"tokens.txt","size":1},{"type":"file","path":"lexicon-us-en.txt","size":1},
+          {"type":"file","path":"lexicon-zh.txt","size":1},
           {"type":"file","path":"espeak-ng-data/voices/!v/Mr serious","size":1}]"#;
         let p = plan(kokoro(), tree).unwrap();
         let f = p.iter().find(|f| f.path.ends_with("serious")).unwrap();
@@ -504,6 +515,11 @@ mod tests {
             url: String::new(),
         }];
         std::fs::write(dir.join(MARKER), marker_json(&files)).unwrap();
+        assert!(
+            matches!(installed(root.path(), m), Installed::Partial { .. }),
+            "a marker missing files the catalog now includes is not ready"
+        );
+        let m = &Model { include: &["tokens.txt"], ..m.clone() };
         assert_eq!(installed(root.path(), m), Installed::Ready { bytes: 3 });
         std::fs::write(dir.join("tokens.txt"), b"abcd").unwrap();
         assert!(matches!(installed(root.path(), m), Installed::Partial { .. }), "a changed file is not ready");

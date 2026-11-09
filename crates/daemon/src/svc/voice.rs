@@ -162,6 +162,18 @@ impl App {
         }
     }
 
+    /// Drop every loaded model now (the daemon is about to exit).
+    pub fn voice_unload(&self) {
+        #[cfg(feature = "voice")]
+        {
+            let mut rt = self.voice.lock().unwrap();
+            rt.stt = None;
+            rt.tts = None;
+            // A reply being generated holds its own reference; it ends with the process.
+            rt.llm = None;
+        }
+    }
+
     /// Delete every downloaded model (not only the configured ones).
     pub fn voice_remove(&self) -> Result<(), String> {
         {

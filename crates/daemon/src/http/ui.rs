@@ -1683,6 +1683,10 @@ async fn shutdown(State(app): S) -> Json<Value> {
         tracing::info!("shutting down: closing {key}");
         s.kill();
     }
+    // Before exit(): llama.cpp's Metal backend asserts in its static
+    // destructors when a model is still loaded, which turns a clean stop
+    // into a crash report.
+    app.voice_unload();
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         std::process::exit(0);

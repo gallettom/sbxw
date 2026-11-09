@@ -245,7 +245,9 @@ impl Tts {
     pub fn load(model_id: &str, dir: &Path) -> Result<Self, String> {
         let p = |f: &str| dir.join(f).to_string_lossy().into_owned();
         if model_id.starts_with("kokoro") {
-            need(dir, &["model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data"])?;
+            // Everything sherpa-onnx checks: it exit()s the whole process on
+            // a missing one instead of returning an error.
+            need(dir, &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict", "espeak-ng-data"])?;
             return Ok(Tts::Kokoro { fr: None, en: None, dir: dir.to_path_buf() });
         }
         need(dir, &["fr_FR-siwis-medium.onnx", "tokens.txt", "espeak-ng-data"])?;
@@ -270,7 +272,10 @@ impl Tts {
             voices: p("voices.bin"),
             tokens: p("tokens.txt"),
             data_dir: p("espeak-ng-data"),
-            lexicon: if lang == "en" { p("lexicon-us-en.txt") } else { String::new() },
+            // Required together by a multilingual Kokoro; French goes through
+            // espeak-ng (`lang`), the lexicons serve English and Chinese.
+            lexicon: format!("{},{}", p("lexicon-us-en.txt"), p("lexicon-zh.txt")),
+            dict_dir: p("dict"),
             lang: if lang == "en" { "en-us".into() } else { "fr".into() },
             length_scale: 1.0,
             onnx_config: sherpa_rs::OnnxConfig { provider: "cpu".into(), debug: false, num_threads: tts_threads() },
