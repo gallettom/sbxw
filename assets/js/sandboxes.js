@@ -336,7 +336,10 @@ function sandboxItemHtml(s, groupColor) {
   // On a host that cannot be reached: the status is the last one seen, and
   // every action would only come back 503, so they are off and say why.
   const down = sandboxUnreachable(s);
-  const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`;
+  const dupBtn = `<button class="icon-btn dup-btn" data-action="duplicate" data-name="${escHtml(s.name)}" title="Duplicate (new sandbox, same workspace)">⧉</button>`
+    // Made by an sbx older than 0.51: it runs, but takes no kit until recreated.
+    + (s.kits_waiting ? `<button class="icon-btn approve-btn" data-action="kit-add" data-name="${escHtml(s.name)}" title="${s.kits_waiting} kit${s.kits_waiting > 1 ? 's' : ''} waiting for your approval — answer sbx's prompt in a pane">✓</button>` : '')
+    + (s.old_sbx && !s.chat ? `<button class="icon-btn recreate-btn" data-action="recreate" data-name="${escHtml(s.name)}" title="Recreate with this sbx">⟲</button>` : '');
   const actions = down
     ? ['▶', '⇌', '⧉', '✕'].map(icon =>
         `<button class="icon-btn" disabled title="${escHtml(down)}">${icon}</button>`).join('')
@@ -360,18 +363,29 @@ function sandboxItemHtml(s, groupColor) {
   const ageTag = age
     ? `<span class="sbx-age" title="Created ${escHtml(new Date(s.created_at).toLocaleString())}">${escHtml(age.replace(' ago', ''))}</span>`
     : '';
+  // Exceptions, one quiet mark each, beside the age. Only what waits on the
+  // person takes colour: sbx's pending requests. "Made by an older sbx" is a
+  // ring, worded in its tooltip, and gives way to ⟲ among the row's actions.
+  const flagTag = s.approvals
+    ? `<button class="sbx-flag" data-action="approvals" data-name="${escHtml(s.name)}" title="sbx is waiting for you to decide ${s.approvals} request${s.approvals > 1 ? 's' : ''} — a host no rule allows, a kit's port">⚑ ${s.approvals}</button>`
+    : '';
+  const oldTag = s.old_sbx
+    ? '<span class="sbx-old-mark" title="Made by an sbx older than 0.51: it runs, but takes no kit until recreated (⟲ in its actions)" aria-label="made by an older sbx"></span>'
+    : '';
+  // Every built-in sandbox is Claude; the word earns its place only when not.
+  const agentTag = s.agent && s.agent !== 'claude' ? `<span class="sbx-agent">${escHtml(s.agent)}</span>` : '';
   // Under its host's header the `host~` prefix says nothing the header does not.
   const shown = sidebarByHost() ? sandboxShortName(s.name) : s.name;
   const status = down
     ? `<span class="sbx-status sbx-unreachable-note" title="${escHtml(down)}">unreachable since ${escHtml(hostClock(s.unreachable_since))}</span>`
     : `<span class="sbx-status">${escHtml(s.status)}</span>`;
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}${down ? ' unreachable' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}</div>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span><span class="sbx-name-state"><span class="dot ${dotClass(s.status)}" title="${escHtml(s.status)}"></span>${flagTag}</span>${paneTag}${readyDot}${mapBadge}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       ${status}
-      <span class="sbx-agent">${escHtml(s.agent)}</span>
-      ${ageTag}
+      ${agentTag}
+      <span class="sbx-marks">${flagTag}${oldTag}${ageTag}</span>
       <div class="sbx-actions">${actions}</div>
     </div>
     <div class="sbx-sessions" data-sandbox="${escHtml(s.name)}" hidden></div>
@@ -482,12 +496,34 @@ listEl.addEventListener('click', e => {
     if (action === 'rm')        openRmModal(name);
     if (action === 'ports')     openPortsModal(name);
     if (action === 'duplicate') openDupModal(name);
+    if (action === 'recreate')  recreateSandbox(name);
+    if (action === 'approvals') openApprovalsModal(name);
+    // One kit per pane: sbx asks, the person answers; the next ✓ takes the next.
+    if (action === 'kit-add')   connectPane(focusedPane, name, 'kit-add');
   } else {
     connectPane(focusedPane, name);
   }
 });
 
 // ── API calls ─────────────────────────────────────────────────────────────
+// Remove a sandbox an older sbx made and create it again from what sbxw
+// recorded. Its workspace is a host folder and survives; nothing else does.
+async function recreateSandbox(name) {
+  if (!confirm(`Recreate “${name}” with this sbx?\n\nIts workspace folder is kept. Everything else in the sandbox — files outside the workspace, installed packages, unpushed commits in other folders, its thread records — is lost.`)) return;
+  addPendingSandbox(name);
+  try {
+    const data = await postJson(`/api/sandboxes/${encodeURIComponent(name)}/recreate`, {});
+    await loadSandboxes();
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    if (data.ok) showToast(warnings.length ? `“${name}” recreated — ⚠ ${warnings[warnings.length - 1]}` : `“${name}” recreated`, warnings.length ? 'error' : 'ok');
+    else showToast(`Could not recreate “${name}”: ${data.error || 'unknown error'}`, 'error');
+  } catch (_) {
+    showToast(`Could not recreate “${name}”: network error`, 'error');
+  } finally {
+    removePendingSandbox(name);
+  }
+}
+
 async function loadSandboxes() {
   try {
     const res = await fetch('/api/sandboxes');

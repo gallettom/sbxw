@@ -25,25 +25,23 @@ policy so the installers have egress access.
 
 ## Required network allowlist
 
-The apt step will `403` unless the Debian/Ubuntu mirrors are in your
+The apt step will `403` unless the Debian mirrors are in your
 `sbxw.toml` `network_allow` (sbxw applies the policy before the kit runs):
 
 ```toml
 network_allow = [
   # ...defaults... (pypi.org / *.pythonhosted.org are already default)
   "deb.debian.org", "security.debian.org",
-  "archive.ubuntu.com", "security.ubuntu.com", "ports.ubuntu.com",
 ]
 ```
 
-> The kit's own `network.allowedDomains` block is metadata; the effective
-> egress policy comes from sbxw's `network_allow`. Keep the two in sync.
+> The kit's `network-policy@1` allow rules join the sandbox's policy when it is
+> applied, so sbxw.toml needs no `network_allow` entry for them.
 
 ## Manual apply (existing sandbox)
 
 ```sh
 sbx kit add <sandbox> path/to/sbxw/assets/md-to-pdf-tools
-sbx kit validate path/to/sbxw/assets/md-to-pdf-tools   # sanity check the spec
 ```
 
 ## Notes
@@ -60,7 +58,7 @@ sbx kit validate path/to/sbxw/assets/md-to-pdf-tools   # sanity check the spec
   milliseconds. `apt-get update` is skipped when any bundled kit ran it in the
   last hour (`~/.cache/sbxw-apt-updated`), and run once more if the install then
   fails on stale lists.
-- `spec.yaml` `content` fields do **not** allow `${VAR}` placeholders (only
-  `${WORKDIR}`). The install script uses brace-free `$VAR` syntax for that reason.
+- The kit's files live under `files/home/agent/` and reach the sandbox as image
+  content (kit spec v3 `build:`), byte for byte: nothing in them is expanded.
 - `startup` commands are exec-style arrays (`command: ["bash", "..."]`), not
   shell strings.

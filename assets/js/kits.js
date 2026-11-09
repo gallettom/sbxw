@@ -21,23 +21,13 @@ const kitsAddInput = document.getElementById('kits-add-input');
 const kitsSave     = document.getElementById('kits-save');
 const kitsDefaults = document.getElementById('kits-defaults');
 const kitsError    = document.getElementById('kits-error');
-const kitsByName   = document.getElementById('kits-by-name');
 
 let kitsPanel = null;   // { files, bundled, defaults } from the daemon
 let kitsList = [];      // the line being edited, in order
 let kitsExplicit = false;
 let kitsDirty = false;
 
-// The bundled kit a local path is a copy of — `…/assets/<name>` in a checkout,
-// `~/.sbxw/kits/<name>` where sbxw writes them. Same rule as the daemon's
-// `kits::bundled_by_path`: unticking `sbxw:codemap` must drop such a path too.
-function kitsBundledByPath(ref) {
-  const parts = ref.replace(/\/+$/, '').split('/');
-  const name = parts.at(-1), parent = parts.at(-2);
-  if (!['assets', 'kits'].includes(parent)) return null;
-  return kitsPanel.bundled.some(b => b.name === name) ? name : null;
-}
-const kitsIsBundled = (ref, name) => ref === `sbxw:${name}` || kitsBundledByPath(ref) === name;
+const kitsIsBundled = (ref, name) => ref === `sbxw:${name}`;
 
 function kitsCurrentFile() {
   return kitsPanel?.files.find(f => f.path === kitsFile.value) || null;
@@ -72,17 +62,14 @@ function kitsRender() {
   const broken = !!kitsCurrentFile()?.error;
   kitsBundled.innerHTML = (kitsPanel?.bundled || []).map(b => {
     const on = kitsList.some(k => kitsIsBundled(k, b.name));
-    const path = kitsList.find(k => kitsBundledByPath(k) === b.name);
     return `<label class="kit-row">
       <input type="checkbox" data-name="${escHtml(b.name)}" ${on ? 'checked' : ''} ${broken ? 'disabled' : ''}>
       <span class="kit-ref">sbxw:${escHtml(b.name)}</span>
       ${b.default ? '<span class="skills-tag skills-tag-default" title="What a file without a kits line gets">default</span>' : ''}
       <span class="kit-about">${escHtml(b.about)}</span>
-      ${path ? `<span class="kit-via" title="${escHtml(path)}">from …/${escHtml(path.replace(/\/+$/, '').split('/').slice(-2).join('/'))} in your checkout, not the binary</span>` : ''}
     </label>`;
   }).join('');
-  kitsByName.classList.toggle('hidden', broken || !kitsList.some(k => kitsBundledByPath(k)));
-  const others = kitsList.filter(k => !k.startsWith('sbxw:') && !kitsBundledByPath(k));
+  const others = kitsList.filter(k => !k.startsWith('sbxw:'));
   kitsOther.innerHTML = others.length
     ? others.map(k => `<div class="tpl-row">
           <span class="tpl-tag" title="${escHtml(k)}">${escHtml(k)}</span>
@@ -172,19 +159,6 @@ function kitsAdd() {
 }
 document.getElementById('kits-add').addEventListener('click', kitsAdd);
 kitsAddInput.addEventListener('keydown', e => { if (e.key === 'Enter') kitsAdd(); });
-
-// Each checkout path becomes its `sbxw:` name, where it stands in the list.
-kitsByName.addEventListener('click', () => {
-  const next = [];
-  for (const k of kitsList) {
-    const name = kitsBundledByPath(k);
-    const ref = name ? `sbxw:${name}` : k;
-    if (!next.includes(ref)) next.push(ref);
-  }
-  kitsList = next;
-  kitsMarkDirty(true);
-  kitsRender();
-});
 
 kitsSave.addEventListener('click', () => kitsWrite(kitsList));
 kitsDefaults.addEventListener('click', () => {

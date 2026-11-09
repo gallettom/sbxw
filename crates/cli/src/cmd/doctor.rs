@@ -99,14 +99,16 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
         Some(_) => r.line(Level::Ok, "daemon", &format!("answering on {}", cfg.web_addr)),
         None => r.line(Level::Warn, "daemon", &format!("not running on {} — `sbxw up` starts it", cfg.web_addr)),
     }
+    // As the bring-up applies them: sbxw's base kit first.
+    let applied = kits::with_base(&cfg.kits);
     match cfg.template_mode() {
         templates::Mode::Off => {}
         templates::Mode::Tag(t) => r.line(Level::Ok, "template", &format!("new sandboxes start from {t}")),
         templates::Mode::Auto => {
             let store = Store::open(Paths::from_home());
-            let content = sbxw_daemon::bundled::fingerprint(&store.paths, &cfg.kits).unwrap_or_default();
+            let content = sbxw_daemon::bundled::fingerprint(&store.paths, &applied).unwrap_or_default();
             let now = templates::Current { sbx: &sbx_version, sbxw: env!("CARGO_PKG_VERSION"), content: &content };
-            match templates::check(&store.templates(), &cfg.kits, &now) {
+            match templates::check(&store.templates(), &applied, &now) {
                 templates::Freshness::Fresh { record } => r.line(Level::Ok, "template (auto)", &record.tag),
                 templates::Freshness::Stale { record, changed } => r.line(
                     Level::Warn,
@@ -123,23 +125,32 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
         if kits::bundled_name(kit).is_some() {
             continue;
         }
-        if !Path::new(kit).exists() {
+        let path = Path::new(kit);
+        if !path.exists() {
             let remote = kit.contains("://") || kit.contains(':') || kit.starts_with("git@");
             if remote {
-                r.line(Level::Ok, &format!("kit {kit}"), "remote — checked by sbx at creation");
+                r.line(Level::Ok, &format!("kit {kit}"), "remote — resolved by sbx at creation");
             } else {
                 r.line(Level::Fail, &format!("kit {kit}"), "no such file or directory");
             }
             continue;
         }
-        if kits::is_v3_kit(Path::new(kit)) {
-            r.line(Level::Ok, &format!("kit {kit}"), "v3 — `sbx kit validate` cannot read v3 specs; checked by sbx at creation");
-            continue;
+        match (kits::incompatible_spec(path), kits::spec_version(path)) {
+            (Some(why), _) => r.line(Level::Fail, &format!("kit {kit}"), &why),
+            (None, Some(3)) => r.line(Level::Ok, &format!("kit {kit}"), "v3 — built and checked by sbx at creation"),
+            (None, _) => r.line(Level::Warn, &format!("kit {kit}"), "no spec.yaml to read — sbx resolves it at creation"),
         }
-        match rt.block_on(sbx.kit_validate_offline(kit)) {
-            Ok(()) => r.line(Level::Ok, &format!("kit {kit}"), "valid"),
-            Err(e) => r.line(Level::Fail, &format!("kit {kit}"), &format!("{e:#}")),
-        }
+    }
+    // sbx 0.51: a sandbox's terminal copies to the host clipboard (OSC 52, what
+    // the web UI's panes act on) only with this setting on.
+    match rt.block_on(sbx.setting_get("clipboard.textCopy")) {
+        Ok(v) if v.trim() == "true" => r.line(Level::Ok, "clipboard.textCopy", "on — copying from a sandbox's terminal reaches your clipboard"),
+        Ok(_) => r.line(
+            Level::Warn,
+            "clipboard.textCopy",
+            "off — text an agent copies in a sandbox does not reach your clipboard: `sbx settings set clipboard.textCopy true`",
+        ),
+        Err(e) => r.line(Level::Warn, "clipboard.textCopy", &format!("could not read it: {e:#}")),
     }
 
     println!("\nsbx diagnose");

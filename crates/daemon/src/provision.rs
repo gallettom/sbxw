@@ -54,9 +54,6 @@ pub struct BringUp {
     pub chat: bool,
     /// Store `ANTHROPIC_API_KEY` as the global `anthropic` secret.
     pub api_key: Option<String>,
-    /// `CLAUDE_CODE_OAUTH_TOKEN`, from whoever asked (the CLI's environment,
-    /// not the daemon's, which may be older).
-    pub oauth_token: Option<String>,
     /// What to do about an automatic template (`template = "auto"`).
     pub template: templates::Choice,
     /// Create it for Remote Control: no credentials from sbxw, a claude.ai
@@ -78,10 +75,7 @@ const STARTUP_SETTLE: Duration = if cfg!(test) { Duration::ZERO } else { Duratio
 /// Each resolved kit's `spec.yaml`, else its reference: what a template's
 /// content is judged on.
 fn spec_texts(resolved: &[String]) -> Vec<String> {
-    resolved
-        .iter()
-        .map(|k| std::fs::read_to_string(std::path::Path::new(k).join("spec.yaml")).unwrap_or_else(|_| k.clone()))
-        .collect()
+    resolved.iter().map(|k| kits::content_text(k)).collect()
 }
 
 /// The steps this bring-up will take, announced first. Three are conditional
@@ -99,7 +93,8 @@ pub fn plan(existed: bool, cfg: &Config, template: bool) -> Vec<Step> {
     if !cfg.network_allow.is_empty() || !cfg.network_deny.is_empty() {
         steps.push(Step::new(progress::POLICY, "Applying the network policy"));
     }
-    if existed && !cfg.kits.is_empty() {
+    // Past sbxw's base kit, which only creation applies.
+    if existed && cfg.kits.len() > 1 {
         steps.push(Step::new(progress::KITS, "Applying kits"));
     }
     steps.push(Step::new(progress::PORTS, "Publishing ports and host aliases"));
@@ -168,6 +163,9 @@ impl App {
             // sbxw.toml is the project's, so it is on the host, beside the code.
             req.config = remote_config(&host, &req.workspace).await?;
         }
+        // sbxw's own kit (Node.js) first, on every sandbox: everything sbxw
+        // runs inside one needs it, and sbx 0.51's image has none.
+        req.config.kits = kits::with_base(&req.config.kits);
         // Secrets (the OAuth token, the API key, the kept skills) go only to a
         // host trusted with them.
         let trusted = on_host.as_ref().is_none_or(|r| r.cfg.trust_secrets);
@@ -246,18 +244,6 @@ impl App {
                 run.warn(format!("could not create {}", artifacts_dir.display()));
             }
         }
-        if req.oauth_token.is_some() && !remote && !trusted {
-            run.warn(format!(
-                "your Claude token is not sent to host '{}' (trust_secrets = false) — log in with /login in the agent's pane, \
-                 or `sbxw host edit {} --trust-secrets`",
-                name.host, name.host
-            ));
-        }
-        let creds = req
-            .oauth_token
-            .as_deref()
-            .filter(|_| !remote && trusted)
-            .map(|t| kits::oauth_credentials_json(t, &cfg.claude_subscription));
         let wanted = cfg.wanted_ports(&req.extra_ports);
         // Forwarded from the host's 127.0.0.1 over the link: one address per
         // app means nothing there.
@@ -290,40 +276,10 @@ impl App {
                     ));
                 }
             }
-            if let Some(creds) = &creds {
-                if running == Some(true) {
-                    // `kit add` would recreate the container under live sessions.
-                    match sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await {
-                        Ok(()) => own_allow.push("claude.ai".into()),
-                        Err(e) => run.warn(format!("OAuth credential refresh failed (use /login in-session instead): {e:#}")),
-                    }
-                } else {
-                    let dir = self.store.write_oauth_kit(name, Some(creds))?;
-                    let dir = self.kits_on(on_host.as_deref(), &[dir.to_string_lossy().into_owned()], &mut run).await?.remove(0);
-                    running = None;
-                    if let Err(e) = self.kit_add_repairing(name, &dir, Some(creds)).await {
-                        // sbx refuses `kit add` for a kit with `setup.files`
-                        // (the OAuth kit) — after starting the sandbox. Started,
-                        // it takes the file the way a running one does above.
-                        let wrote = sbx.wait_until_running(n, Duration::from_secs(30)).await
-                            && sbx.write_file(n, "/home/agent/.claude/.credentials.json", creds.as_bytes(), true).await.is_ok();
-                        if wrote {
-                            own_allow.push("claude.ai".into());
-                        } else {
-                            run.warn(format!("OAuth kit add failed (use /login in-session instead): {e:#}"));
-                        }
-                    }
-                }
-            }
         } else {
             run.info(format!("creating sandbox '{name}' on workspace {workspace}"));
             let mut kit_refs: Vec<String> = Vec::new();
             // sbxw's own kits, written here; mirrored together below.
-            let mut own: Vec<String> = Vec::new();
-            if let Some(creds) = &creds {
-                own.push(self.store.write_oauth_kit(name, Some(creds))?.to_string_lossy().into_owned());
-            }
-            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &mut run).await?);
             for k in &cfg.kits {
                 if kits::needs_allowlist(k) {
                     run.warn(format!(
@@ -379,15 +335,19 @@ impl App {
                 env_files: cfg.env_files.clone(),
                 rw_mounts,
                 template,
+                workspaces: cfg.workspaces.clone(),
+                cpus: (cfg.cpus > 0).then_some(cfg.cpus),
+                memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
             };
             let applied = opts.kits.clone();
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
             created_with_kits = true;
-            // Created by this sbxw: its kits are known, and the old UI-port
-            // rule cannot be there.
+            // Created by this sbxw: its kits are known, and on this machine
+            // the sbx that made it too (a remote host's is asked of it).
+            let made_by = name.is_local().then(|| self.versions.sbx.clone().map(|v| format!("v{}", v.trim_start_matches('v')))).flatten();
             let _ = self.store.update(name, |r| {
                 r.kits = applied;
-                r.ui_rule_checked = true;
+                r.created_by_sbx = made_by;
             });
         }
 
@@ -425,8 +385,7 @@ impl App {
         // The proxy sees host.docker.internal as localhost:<port>.
         own_allow.push(format!("localhost:{agent_port}"));
         let allow = [own_allow.as_slice(), cfg.network_allow.as_slice()].concat().join(",");
-        let migrate = up && !cfg.claude_model.is_empty() && !self.store.get(name).model_migrated;
-        let mut batch = Tooling::new()
+        let batch = Tooling::new()
             .agent_token(&token)
             .trust_workspace(&workspace)
             .artifact_hook()
@@ -434,9 +393,6 @@ impl App {
             .usage_statusline(&agent_port)
             .relay(&agent_port)
             .lead_command();
-        if migrate {
-            batch = batch.drop_stale_model(&cfg.claude_model);
-        }
         if up {
             run.step(progress::TOOLING);
         }
@@ -455,10 +411,12 @@ impl App {
                     for (piece, e) in &outcome.failed {
                         run.warn(format!("{}: {e}", tooling::consequence(piece)));
                     }
-                    if migrate && outcome.error(tooling::piece::STALE_MODEL).is_none() {
-                        let _ = self.store.update(name, |r| r.model_migrated = true);
-                    }
                 }
+                Err(e) if kits::node_missing(&format!("{e:#}")) => run.warn(format!(
+                    "'{name}' has no Node.js, which sbxw's tooling (token, trust, hooks, statusLine, relay) runs on. \
+                     sbxw's base kit installs it at creation: recreate the sandbox (`sbxw rm {name}` then `sbxw up {name}`), \
+                     after saving anything outside the workspace.\n{e:#}"
+                )),
                 Err(e) => run.warn(format!(
                     "could not install the agent tooling (token, trust, hooks, statusLine, relay): {e:#}"
                 )),
@@ -491,24 +449,26 @@ impl App {
                 Err(e) => return Err(e).context("failed to apply the network denylist"),
             }
         }
-        if !self.store.get(name).ui_rule_checked {
-            self.revoke_ui_port(name, &mut run).await;
-            let _ = self.store.update(name, |r| r.ui_rule_checked = true);
-        }
 
         // ── Kits, for a sandbox that already existed ─────────────────────
-        if !created_with_kits && !cfg.kits.is_empty() {
+        // The first kit is sbxw's base kit, applied at creation only.
+        if !created_with_kits && cfg.kits.len() > 1 {
             run.step(progress::KITS);
             let recorded = self.store.get(name).kits;
-            let pending: Vec<&String> = kits_here.iter().filter(|k| !recorded.contains(k)).collect();
+            let pending: Vec<&String> = kits_here.iter().skip(1).filter(|k| !recorded.contains(k)).collect();
             // `sbx inspect` only when sbxw's own record does not settle it.
             let present = match pending.is_empty() {
-                true => String::new(),
-                false => kits::inspect_kits_section(&sbx.inspect(n).await.unwrap_or_default()),
+                true => Vec::new(),
+                false => sbx.inspect_kits(n).await.unwrap_or_default(),
             };
-            for (kit, local) in kits_here.iter().zip(&cfg.kits) {
-                let spec = std::fs::read_to_string(std::path::Path::new(local).join("spec.yaml")).ok();
-                if kits::already_applied(kit, spec.as_deref(), &present, &recorded) {
+            for (kit, wanted) in kits_here.iter().zip(&req.config.kits) {
+                // sbxw's base kit is a creation-time kit: a sandbox made before
+                // it existed has the Node.js of the image it came from, and one
+                // that lacks it is told so by the tooling step below.
+                if kits::bundled_name(wanted) == Some(kits::BASE) {
+                    continue;
+                }
+                if kits::already_applied(kit, &present, &recorded) {
                     run.info(format!("kit '{kit}' already applied — skipping"));
                     if !recorded.contains(kit) {
                         let k = kit.clone();
@@ -516,12 +476,26 @@ impl App {
                     }
                     continue;
                 }
-                // sbx 0.48+ takes kits with startup commands here too.
                 run.info(format!("applying kit {kit} (this recreates the container; state is kept)"));
-                match self.kit_add_repairing(name, kit, creds.as_deref()).await {
+                match self.sbx_for(name).await?.kit_add(n, kit).await {
                     Ok(()) => {
                         let k = kit.clone();
                         let _ = self.store.update(name, |r| r.kits.push(k));
+                    }
+                    // sbx asks a person to approve the network rules the kit
+                    // adds, and has no flag to: hand them the command.
+                    Err(e) if kits::add_needs_approval(&format!("{e:#}")) => {
+                        {
+                            let mut waiting = self.kit_approvals.lock().unwrap();
+                            let list = waiting.entry(name.clone()).or_default();
+                            if !list.contains(kit) {
+                                list.push(kit.clone());
+                            }
+                        }
+                        run.warn(format!(
+                            "kit '{kit}' asks for network access '{name}' was not granted, and sbx wants you to approve it: \
+                             press ✓ on '{name}' in the sidebar to answer in a pane, or run `sbx kit add {n} {kit}` in a terminal.\n{e:#}"
+                        ))
                     }
                     Err(e) if kits::add_needs_recreate(&format!("{e:#}")) => run.warn(format!(
                         "`sbx kit add` cannot apply kit '{kit}' to an existing sandbox — '{name}' is \
@@ -853,72 +827,22 @@ impl App {
             .map_err(|e| anyhow!("{e:#}\n(create with port mappings had failed with: {first:#})"))
     }
 
-    /// Check the person's own local kits offline before anything is created: a
-    /// broken kit fails here in a second, not after the image pull. Bundled
-    /// kits ship tested; remote references cannot be checked offline, and
-    /// neither can a v3 kit, which `kit validate` cannot read ([`kits::is_v3_kit`]).
+    /// Check the person's own local kits before anything is created. Since sbx
+    /// 0.51 `claude` is a kit spec v3 workload, and a v1/v2 kit does not
+    /// compose with it: refused here in a second, naming the kit, rather than
+    /// after an image pull. (`sbx kit validate` reads only v1/v2 specs, so it
+    /// has nothing left to check.) Bundled kits ship v3; remote references
+    /// are sbx's to resolve.
     async fn validate_kits(&self, kits: &[String]) -> Result<()> {
-        let local: Vec<&String> = kits
+        let broken: Vec<String> = kits
             .iter()
-            .filter(|k| {
-                let path = std::path::Path::new(k.as_str());
-                kits::bundled_name(k).is_none() && path.exists() && !kits::is_v3_kit(path)
-            })
+            .filter(|k| kits::bundled_name(k).is_none())
+            .filter_map(|k| kits::incompatible_spec(std::path::Path::new(k.as_str())).map(|why| format!("{k}: {why}")))
             .collect();
-        // The kits are files here, so this machine's sbx checks them, even
-        // for a sandbox on another host.
-        let checks = local.iter().map(|k| self.sbx.kit_validate_offline(k));
-        let mut broken = Vec::new();
-        for (kit, r) in local.iter().zip(futures_util::future::join_all(checks).await) {
-            match r {
-                Ok(()) => {}
-                Err(e) => broken.push(format!("{kit}: {e:#}")),
-            }
-        }
         if !broken.is_empty() {
-            bail!("kit validation failed — nothing was created or changed:\n{}", broken.join("\n"));
+            bail!("kit check failed — nothing was created or changed:\n{}", broken.join("\n"));
         }
         Ok(())
-    }
-
-    /// `sbx kit add`, repairing once a stale OAuth kit reference an older
-    /// sbxw left in a temp dir (sbx names the *wrong* kit when it fails).
-    async fn kit_add_repairing(&self, sb: &SandboxRef, kit: &str, creds: Option<&str>) -> Result<()> {
-        let sbx = self.sbx_for(sb).await?;
-        let name = &sb.name;
-        let Err(first) = sbx.kit_add(name, kit).await else {
-            return Ok(());
-        };
-        let Some(stale) = kits::stale_oauth_kit_path(&format!("{first:#}")) else {
-            return Err(first);
-        };
-        tracing::warn!("restoring a stale OAuth kit at {} so '{name}' can be recomposed", stale.display());
-        crate::store::write_atomic(&stale.join("spec.yaml"), kits::oauth_kit_spec(creds).as_bytes())?;
-        sbx.kit_add(name, kit)
-            .await
-            .map_err(|e| anyhow!("{e:#}\n(retried after restoring {}; first attempt: {first:#})", stale.display()))
-    }
-
-    /// An older sbxw gave sandboxes `localhost:<ui port>`, through which they
-    /// could reach the browser's endpoints. Remove that rule if it is there.
-    async fn revoke_ui_port(&self, sb: &SandboxRef, run: &mut Run<'_>) {
-        let ui = format!("localhost:{}", self.cfg.web_port());
-        let Ok(sbx) = self.sbx_for(sb).await else { return };
-        let name = &sb.name;
-        let view = sbx.policy_ls(name, true).await;
-        let found = sbxw_core::policy::rule_ids_for(&view, &ui, name);
-        for id in found.mine {
-            match sbx.policy_rm(&id, Some(name)).await {
-                Ok(()) => run.info(format!("revoked {ui} (the UI port) from '{name}' — sandboxes reach the agent port only")),
-                Err(e) => run.warn(format!("could not revoke the stale {ui} rule {id}: {e:#}")),
-            }
-        }
-        for id in found.unsure {
-            run.warn(format!(
-                "a rule allows {ui} (the UI port) and the listing does not say whose it is; if it is \
-                 '{name}'s, remove it: `sbx policy rm network --id {id} --sandbox {name} --force`"
-            ));
-        }
     }
 
     /// Wait for `running`, then (re)publish every mapping: they do not survive
@@ -1054,7 +978,10 @@ mod tests {
         let ids = |existed, cfg: &Config| plan(existed, cfg, false).into_iter().map(|s| s.id).collect::<Vec<_>>();
         let bare = Config { network_allow: vec![], network_deny: vec![], kits: vec![], ..Config::default() };
         assert_eq!(ids(false, &bare), ["workspace", "create", "boot", "tooling", "ports"]);
-        let kits = Config { kits: vec!["k".into()], ..bare.clone() };
+        // As the bring-up sees them: sbxw's base kit first.
+        let base_only = Config { kits: vec!["base".into()], ..bare.clone() };
+        assert!(!ids(true, &base_only).contains(&"kits".to_string()), "the base kit is creation-only");
+        let kits = Config { kits: vec!["base".into(), "k".into()], ..bare.clone() };
         assert!(!ids(false, &kits).contains(&"kits".to_string()));
         assert!(ids(true, &kits).contains(&"kits".to_string()));
         assert!(ids(false, &Config::default()).contains(&"policy".to_string()));
@@ -1072,7 +999,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template,
             remote_control: false,
             git: None,
@@ -1111,7 +1037,11 @@ mod tests {
     fn kit_with_startup(dir: &std::path::Path) -> String {
         let kit = dir.join("kit");
         std::fs::create_dir_all(&kit).unwrap();
-        std::fs::write(kit.join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: kit\nsetup:\n  startup:\n    - command: [\"bash\", \"/k/install.sh\"]\n").unwrap();
+        std::fs::write(
+            kit.join("spec.yaml"),
+            "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\ncapabilities:\n  - type: com.docker.sandbox/lifecycle@1\n    config:\n      startup:\n        - command: [\"bash\", \"/k/install.sh\"]\n",
+        )
+        .unwrap();
         kit.to_string_lossy().into_owned()
     }
 
@@ -1119,7 +1049,7 @@ mod tests {
     async fn a_rebuild_waits_for_the_installs_snapshots_without_secrets_and_drops_the_old_template() {
         let (dir, app, fake) = app_with(auto_sbx(3));
         let kits = vec![kit_with_startup(dir.path())];
-        let old = templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), sbxw: "2.1.2".into(), kits: kits.clone(), created_at: 1, content: String::new() };
+        let old = templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), sbxw: "2.1.2".into(), kits: kits::with_base(&kits), created_at: 1, content: String::new() };
         app.store.set_templates(&[old]).unwrap();
 
         let w = app.provision(auto_request(dir.path(), kits.clone(), templates::Choice::Rebuild), None).await.unwrap();
@@ -1133,7 +1063,7 @@ mod tests {
         assert!(at("template save") < at("template rm sbxw-auto:old"), "the old one goes once the new one exists");
         let records = app.store.templates();
         assert_eq!(records.len(), 1);
-        assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.50.0"));
+        assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.51.0"));
         assert!(log.iter().any(|c| c == &format!("template save neos {}", records[0].tag)));
     }
 
@@ -1141,7 +1071,8 @@ mod tests {
     async fn a_fresh_template_is_used_and_a_stale_one_only_warns() {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
-        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &kits).unwrap() };
+        let applied = kits::with_base(&kits);
+        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &applied).unwrap() };
         app.store.set_templates(std::slice::from_ref(&fresh)).unwrap();
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let s2 = seen.clone();
@@ -1153,7 +1084,7 @@ mod tests {
         let (dir, app, fake) = app_with(auto_sbx(0));
         app.store.set_templates(&[templates::Record { sbx: "0.47.0".into(), ..fresh }]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
-        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.50.0)")), "{w:?}");
+        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.51.0)")), "{w:?}");
         let log = fake.log();
         assert!(log.iter().any(|c| c.starts_with("create") && !c.contains("--template")));
         assert!(!log.iter().any(|c| c.starts_with("template")), "nothing saved or removed unasked");
@@ -1163,8 +1094,9 @@ mod tests {
     async fn a_template_gone_from_sbx_is_forgotten_not_pulled() {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
-        let content = crate::bundled::fingerprint(&app.store.paths, &kits).unwrap();
-        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.50.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: kits.clone(), created_at: 1, content };
+        let applied = kits::with_base(&kits);
+        let content = crate::bundled::fingerprint(&app.store.paths, &applied).unwrap();
+        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied, created_at: 1, content };
         app.store.set_templates(&[gone]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
         assert!(w.iter().any(|w| w.contains("sbxw-auto:gone is no longer in sbx")), "{w:?}");
@@ -1193,7 +1125,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template: Default::default(),
             remote_control: false,
             git: None,
@@ -1209,17 +1140,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_broken_local_kit_stops_the_bring_up_before_create() {
+    async fn a_kit_waiting_for_approval_is_recorded_for_a_pane_to_answer() {
         let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("kit") if a.iter().any(|x| x.ends_with("broken")) => Output::fail(1, "spec.yaml: unknown field `setpu`"),
+            Some("ls") => crate::testing::ls(&[("neos", "running")]),
+            Some("kit") => Output::fail(1, "warning: this change requests permissions beyond what this sandbox was granted\n  + network.runtime.allow: dl.k8s.io\n\n  error: stdin is not a terminal; run this command in a terminal to answer the prompt"),
+            Some("inspect") => Output::ok(r#"{"name":"neos","kits":[],"created_version":"v0.51.0"}"#),
             _ => sbx_answer(a),
         });
         let ws = dir.path().join("neos");
-        let (good, broken) = (dir.path().join("good"), dir.path().join("broken"));
-        for d in [&ws, &good, &broken] {
+        std::fs::create_dir_all(&ws).unwrap();
+        let neos = SandboxRef::parse("neos").unwrap();
+        app.store.update(&neos, |r| r.workspace = Some(ws.clone())).unwrap();
+        let req = BringUp {
+            name: neos.clone(),
+            workspace: ws,
+            ro: vec![],
+            rw: vec![],
+            config: Config { kits: vec!["sbxw:k8s-tools".into()], network_allow: vec![], network_deny: vec![], ..Config::default() },
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            template: Default::default(),
+            remote_control: false,
+            git: None,
+        };
+        let w = app.provision(req, None).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("press ✓")), "{w:?}");
+        let waiting = app.kit_approvals.lock().unwrap().get(&neos).cloned().unwrap_or_default();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].ends_with("/kits/k8s-tools"), "{waiting:?}");
+        assert_eq!(app.sandboxes().await.iter().find(|s| s.name == "neos").unwrap().kits_waiting, 1);
+        assert!(fake.log().iter().any(|c| c.starts_with("kit add neos")));
+    }
+
+    #[tokio::test]
+    async fn a_v2_local_kit_stops_the_bring_up_before_create() {
+        let (dir, app, fake) = app_with(sbx_answer);
+        let ws = dir.path().join("neos");
+        let (good, old) = (dir.path().join("good"), dir.path().join("old"));
+        for d in [&ws, &good, &old] {
             std::fs::create_dir_all(d).unwrap();
         }
-        let kits = vec![good.to_string_lossy().into_owned(), broken.to_string_lossy().into_owned(), "sbxw:codemap".into(), "docker.io/o/k:1".into()];
+        std::fs::write(good.join("spec.yaml"), "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n").unwrap();
+        std::fs::write(old.join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: old\n").unwrap();
+        let kits = vec![good.to_string_lossy().into_owned(), old.to_string_lossy().into_owned(), "sbxw:codemap".into(), "docker.io/o/k:1".into()];
         let req = BringUp {
             name: SandboxRef::parse("neos").unwrap(),
             workspace: ws,
@@ -1229,48 +1193,14 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template: Default::default(),
             remote_control: false,
             git: None,
         };
-        let e = app.provision(req, None).await.unwrap_err();
-        assert!(format!("{e:#}").contains("unknown field `setpu`"), "{e:#}");
-        let log = fake.log();
-        assert_eq!(log.iter().filter(|c| c.starts_with("kit validate")).count(), 2, "local, non-bundled kits only: {log:?}");
-        assert!(log.iter().all(|c| !c.starts_with("create")), "nothing created: {log:?}");
-    }
-
-    #[tokio::test]
-    async fn a_v3_kit_is_left_to_create() {
-        let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            // What sbx 0.50's `kit validate` says of every v3 spec.
-            Some("kit") => Output::fail(1, "field capabilities not found in type spec.SpecFile"),
-            _ => sbx_answer(a),
-        });
-        let ws = dir.path().join("neos");
-        let kit = dir.path().join("k");
-        std::fs::create_dir_all(&ws).unwrap();
-        std::fs::create_dir_all(&kit).unwrap();
-        std::fs::write(kit.join("spec.yaml"), "schemaVersion: \"3\"\nkind: mixin\n").unwrap();
-        let req = BringUp {
-            name: SandboxRef::parse("neos").unwrap(),
-            workspace: ws,
-            ro: vec![],
-            rw: vec![],
-            config: Config { kits: vec![kit.to_string_lossy().into_owned()], ..Config::default() },
-            extra_ports: vec![],
-            chat: false,
-            api_key: None,
-            oauth_token: None,
-            template: Default::default(),
-            remote_control: false,
-            git: None,
-        };
-        let _ = app.provision(req, None).await;
-        let log = fake.log();
-        assert!(!log.iter().any(|c| c.starts_with("kit validate")), "{log:?}");
-        assert!(log.iter().any(|c| c.starts_with("create")), "{log:?}");
+        let e = format!("{:#}", app.provision(req, None).await.unwrap_err());
+        assert!(e.contains(&format!("{}: kit spec v2", old.display())), "{e}");
+        assert!(!e.contains(&good.display().to_string()), "the v3 kit is not named: {e}");
+        assert!(fake.log().iter().all(|c| !c.starts_with("create") && !c.starts_with("kit")), "nothing created: {:?}", fake.log());
     }
 
     #[tokio::test]
@@ -1309,7 +1239,6 @@ mod tests {
                     extra_ports: vec![],
                     chat: false,
                     api_key: None,
-                    oauth_token: Some("tok".into()),
                     template: Default::default(),
                     remote_control: false,
                     git: None,
@@ -1321,7 +1250,7 @@ mod tests {
         assert!(warnings.iter().all(|w| !w.contains("tooling")), "{warnings:?}");
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
-        assert!(create.contains("--kit") && create.contains("-oauth") && create.contains("--kit /kits/codemap"));
+        assert!(create.contains("--kit /kits/codemap") && !create.contains("-oauth"), "sbx signs Claude in itself: {create}");
         assert!(create.contains("-p 4200:4200"));
         assert!(create.contains("-e ANTHROPIC_DEFAULT_MODEL=claude-sonnet-5-5"));
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
@@ -1366,7 +1295,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: Some("sk-key".into()),
-            oauth_token: Some("tok".into()),
             template: Default::default(),
             remote_control: true,
             git: None,
@@ -1416,8 +1344,7 @@ mod tests {
                     extra_ports: vec![],
                     chat: false,
                     api_key: None,
-                    oauth_token: None,
-                    template: Default::default(),
+                            template: Default::default(),
                     remote_control: false,
                     git: None,
                 },
@@ -1457,8 +1384,7 @@ mod tests {
                 extra_ports: vec![],
                 chat: false,
                 api_key: None,
-                oauth_token: None,
-                template: Default::default(),
+                    template: Default::default(),
                 remote_control: false,
                 git: None,
             }
@@ -1492,7 +1418,6 @@ mod tests {
             extra_ports: vec![],
             chat: false,
             api_key: None,
-            oauth_token: None,
             template: Default::default(),
             remote_control: false,
             git: None,

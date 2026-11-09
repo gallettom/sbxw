@@ -22,6 +22,10 @@ pub const CLAUDE_JSON_PATH: &str = "/home/agent/.claude.json";
 pub const ARTIFACT_HOOK_PATH: &str = "/home/agent/.sbxw/enforce-artifacts.js";
 pub const STATUS_HOOK_PATH: &str = "/home/agent/.sbxw/status-hook.js";
 pub const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
+/// The statusLine command sbx's own image installs, which sbxw's chains to.
+pub const SBX_STATUS_HOOK: &str = "sbx-claude-hook";
+/// Where the chained statusLine command is kept.
+pub const USAGE_STATUSLINE_CHAIN_PATH: &str = "/home/agent/.sbxw/usage-statusline.chain";
 pub const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
 pub const RELAY_MCP_PATH: &str = "/home/agent/.sbxw/relay-mcp.js";
 pub const TEAM_GUARD_PATH: &str = "/home/agent/.sbxw/team-guard.js";
@@ -65,17 +69,28 @@ pub mod piece {
     pub const USAGE_STATUSLINE: &str = "usage-statusline";
     pub const RELAY: &str = "relay";
     pub const LEAD: &str = "lead";
-    pub const STALE_MODEL: &str = "stale-model";
 }
 
 /// What the agent is told about the relay, in its user memory: the *trigger*,
 /// not the manual. Short and unhedged — a brake ("use it sparingly") reads the
 /// same whether or not the case in front of it is the one worth spending on;
 /// restraint lives in the tool descriptions, read while deciding to call.
+/// The section heading [`relay_guidance`] opens with — what tells the batch
+/// that sbx already wrote it into `CLAUDE.md` from sbxw's base kit.
+pub const RELAY_GUIDANCE_HEAD: &str = "## When the answer isn't in this workspace";
+
+/// The fenced copy the tooling batch writes into `~/.claude/CLAUDE.md` when
+/// sbx did not (see [`Tooling::relay`]).
 pub fn relay_doc() -> String {
+    format!("{RELAY_DOC_BEGIN}\n{}{RELAY_DOC_END}\n", relay_guidance())
+}
+
+/// How and when to use the relay, as the agent reads it. sbxw's base kit
+/// carries the same text as its `agent-context@2` body, so sbx writes it
+/// into `CLAUDE.md` before the agent starts (a test keeps the two equal).
+pub fn relay_guidance() -> String {
     format!(
-        "{RELAY_DOC_BEGIN}\n\
-         ## When the answer isn't in this workspace\n\
+        "{RELAY_GUIDANCE_HEAD}\n\
          \n\
          Other sandboxes run on this machine, each with its own agent and its own\n\
          project, and you can ask them — a human routes the question and approves\n\
@@ -118,8 +133,7 @@ pub fn relay_doc() -> String {
          is an ordinary answer, not a setback: carry on, say what you changed\n\
          and what you expect it to look like, and let them correct you. Don't\n\
          ask twice for the same view, and don't ask at all for something you can\n\
-         run and capture yourself.\n\
-         {RELAY_DOC_END}\n"
+         run and capture yourself.\n"
     )
 }
 
@@ -213,15 +227,22 @@ impl Tooling {
         self.piece(piece::STATUS_HOOKS, body)
     }
 
-    /// The usage `statusLine` — the user's own one is kept.
+    /// The usage `statusLine` — the user's own one is kept. sbx's (0.51's
+    /// Claude image sets `sbx-claude-hook claude-status`, which feeds Docker's
+    /// desktop app and prints nothing) is taken over and *chained*: its
+    /// command is recorded beside the script, which hands it the same payload.
     pub fn usage_statusline(self, agent_port: &str) -> Self {
         let body = format!(
             "put({path},{script});const cmd={cmd};const d=json({settings});\
-             if(!d.statusLine||((d.statusLine.command||'').includes('usage-statusline.js'))){{d.statusLine={{type:'command',command:cmd}};}}",
+             const was=(d.statusLine&&d.statusLine.command)||'';\
+             if(was.includes({sbx_hook})){{put({chain},was);}}\
+             if(!d.statusLine||was.includes('usage-statusline.js')||was.includes({sbx_hook})){{d.statusLine={{type:'command',command:cmd}};}}",
             path = js(USAGE_STATUSLINE_PATH),
             script = js(&USAGE_STATUSLINE.replace("__PORT__", agent_port)),
             cmd = js(&format!("node {USAGE_STATUSLINE_PATH}")),
             settings = js(SETTINGS_PATH),
+            sbx_hook = js(SBX_STATUS_HOOK),
+            chain = js(USAGE_STATUSLINE_CHAIN_PATH),
         );
         self.piece(piece::USAGE_STATUSLINE, body)
     }
@@ -240,7 +261,7 @@ impl Tooling {
              const from=cur.indexOf(begin),to=cur.indexOf(end);\
              let rest=(from>=0&&to>from)?cur.slice(0,from)+cur.slice(to+end.length):cur;\
              rest=rest.replace(/\\n{{3,}}/g,'\\n\\n').trim();\
-             put(p,(rest?rest+'\\n\\n':'')+doc);\
+             put(p,rest.includes({head})?rest+'\\n':(rest?rest+'\\n\\n':'')+doc);\
              const guard={guard_path};put(guard,{guard});const st=json({settings});st.hooks=st.hooks||{{}};\
              for(const [ev,matcher] of [['PreToolUse',{matcher}],['PostToolUse',undefined]]){{\
              st.hooks[ev]=(st.hooks[ev]||[]).filter(e=>!(e.hooks||[]).some(h=>(h.args||[]).includes(guard)));\
@@ -256,6 +277,7 @@ impl Tooling {
             begin = js(RELAY_DOC_BEGIN),
             end = js(RELAY_DOC_END),
             doc = js(&relay_doc()),
+            head = js(RELAY_GUIDANCE_HEAD),
             guard_path = js(TEAM_GUARD_PATH),
             guard = js(TEAM_GUARD),
             settings = js(SETTINGS_PATH),
@@ -269,18 +291,6 @@ impl Tooling {
     pub fn lead_command(self) -> Self {
         let body = format!("put({},{});", js(LEAD_COMMAND_PATH), js(LEAD_COMMAND));
         self.piece(piece::LEAD, body)
-    }
-
-    /// Remove a settings `model` key — only when it is still sbxw's own
-    /// leftover, since a settings `model` outranks `ANTHROPIC_DEFAULT_MODEL`
-    /// and a differing one is somebody's deliberate `/model`.
-    pub fn drop_stale_model(self, written_by_sbxw: &str) -> Self {
-        let body = format!(
-            "const d=json({});if(d.model==={}){{delete d.model;}}",
-            js(SETTINGS_PATH),
-            js(written_by_sbxw)
-        );
-        self.piece(piece::STALE_MODEL, body)
     }
 
     /// The whole batch as one Node script.
@@ -333,7 +343,6 @@ pub fn consequence(piece: &str) -> &'static str {
         piece::USAGE_STATUSLINE => "could not install the usage statusLine",
         piece::RELAY => "could not install the cross-sandbox relay",
         piece::LEAD => "could not install /lead",
-        piece::STALE_MODEL => "could not clear the old settings.json model key",
         _ => "a tooling step failed",
     }
 }
@@ -355,6 +364,48 @@ mod tests {
         let out = child.wait_with_output().ok()?;
         assert!(out.status.success());
         Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    #[test]
+    fn the_relay_guidance_sbx_wrote_is_not_written_twice() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".claude")).unwrap();
+        // What sbx materialises from the base kit, around the image's own text.
+        let by_sbx = format!("## Claude Code\n\nimage text\n\n{}", relay_guidance());
+        std::fs::write(h.join(".claude/CLAUDE.md"), format!("{by_sbx}\n{}", relay_doc())).unwrap();
+        let script = Tooling::new().relay("7682").script().replace("/home/agent/", &format!("{}/", h.display()));
+        run_node(&script).unwrap();
+        let md = std::fs::read_to_string(h.join(".claude/CLAUDE.md")).unwrap();
+        assert_eq!(md.matches(RELAY_GUIDANCE_HEAD).count(), 1, "{md}");
+        assert!(!md.contains(RELAY_DOC_BEGIN), "an older run's fenced copy goes too");
+    }
+
+    #[test]
+    fn sbx_s_own_status_line_is_taken_over_and_chained() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".claude")).unwrap();
+        // What sbx 0.51's Claude Code image writes at install.
+        let sbx = "/usr/local/bin/sbx-claude-hook claude-status";
+        std::fs::write(h.join(".claude/settings.json"), format!(r#"{{"statusLine":{{"type":"command","command":"{sbx}"}}}}"#)).unwrap();
+        let batch = Tooling::new().usage_statusline("7682");
+        let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
+        for _ in 0..2 {
+            let out = run_node(&script).unwrap();
+            assert_eq!(batch.parse_report(&out).unwrap(), ToolingOutcome::default(), "{out}");
+        }
+        let s: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.join(".claude/settings.json")).unwrap()).unwrap();
+        assert!(s["statusLine"]["command"].as_str().unwrap().contains("usage-statusline.js"));
+        assert_eq!(std::fs::read_to_string(h.join(".sbxw/usage-statusline.chain")).unwrap(), sbx, "kept, and still kept on a re-run");
     }
 
     #[test]
@@ -382,8 +433,7 @@ mod tests {
             .status_hooks("7682")
             .usage_statusline("7682")
             .relay("7682")
-            .lead_command()
-            .drop_stale_model("m1");
+            .lead_command();
         let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
         let read = |p: &str| std::fs::read_to_string(h.join(p)).unwrap();
         let out = run_node(&script).unwrap();
@@ -393,7 +443,7 @@ mod tests {
         assert_eq!(first, (read(".claude/settings.json"), read(".claude.json"), read(".claude/CLAUDE.md")));
 
         let s: serde_json::Value = serde_json::from_str(&first.0).unwrap();
-        assert!(s.get("model").is_none());
+        assert_eq!(s["model"], "m1", "the person's own key is theirs");
         assert_eq!(s["statusLine"]["command"], "mine");
         assert_eq!(s["hooks"]["PreToolUse"].as_array().unwrap().len(), 4, "the user's, artifacts, status, team guard");
         assert_eq!(s["hooks"]["PostToolUse"].as_array().unwrap().len(), 2, "status, team guard");

@@ -322,8 +322,8 @@ failure.
   user's call; the agent should ask rather than assume. The same goes for
   lenses, with one extra thought: a lens goes stale the moment the map moves,
   and a stale business document is read by people who have no way to tell.
-- `spec.yaml` `content` fields reject dollar-brace, so the shipped JavaScript is
-  written without template literals. Keep it that way when editing.
+- The kit's files live under `files/home/agent/` and reach the sandbox as image
+  content (kit spec v3 `build:`), byte for byte: nothing in them is expanded.
 - **The hooks keep one state file**, `~/.sbxw/codemap/state.json`: when the offer
   last fired per repository (written by both the `Stop` hook and the search
   hook), and which sessions have had their search reminder.
@@ -339,5 +339,4 @@ failure.
 
 ```sh
 sbx kit add <sandbox> path/to/sbxw/assets/codemap
-sbx kit validate path/to/sbxw/assets/codemap   # sanity check the spec
 ```

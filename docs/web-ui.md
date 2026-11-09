@@ -30,6 +30,20 @@ Each sandbox row has buttons to **stop**, **reload**, open **ports and network**
 (⇌), **duplicate**, and **remove** (✕). Beside the name: its age (hover for the
 creation time).
 
+A sandbox made by an sbx older than 0.51 carries a small amber ring beside its age (read
+once from `sbx inspect`, which records the creating version since 0.51). It
+keeps running but takes no kit; **⟲ recreate** removes it and creates it again
+from what sbxw recorded — workspace, config, mounts, Remote Control — after
+asking, since everything outside the workspace folder is lost. A chat is never
+recreated: its workspace goes with it.
+
+**⚑ N** beside a row's age means sbx is waiting for you to decide something
+for that sandbox (`sbx policy approval`, 0.51): a host it reached that no
+rule allows, or a kit asking to publish a host port (that one lapses after
+45 s). Click it to see each request with the options sbx offers — **Allow**,
+**Dismiss**… — and answer there; the list refreshes while it is open. sbxw
+never answers on its own.
+
 **Usage.** The 5-hour and weekly percentages are account-wide, the same numbers
 as Claude Code's `/usage`. They turn amber at 75% and red at 90%. They are
 hidden with API-key auth, which has no subscription windows. How they're
@@ -151,8 +165,7 @@ question is not asked for a remote host.
   host (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), then **Trust and
   save**. If the key changes between the two steps, nothing is saved.
 - **Trust this host with secrets** (`trust_secrets`): sbxw then sends that
-  host your Anthropic token (`CLAUDE_CODE_OAUTH_TOKEN` or API key), the OAuth
-  kit (your Claude login) and your skills. Anyone with root on the host can
+  host your Anthropic API key and your kept skills. Anyone with root on the host can
   read them. Only for a machine you control.
 - **Edit** changes any of these; a new address asks about its key again.
   **Remove** unregisters a host; one with sandboxes is refused unless you
@@ -204,6 +217,10 @@ A file browser over the sandbox's **own** filesystem, opening on
 - **Favourites:** `.sbxw-artifacts`, the workspace, the agent's home and `/` are
   built in. ★ pins any other folder (per sandbox, in this browser). Extra repos
   mounted at creation show up here too.
+- **Kit logs** opens `/var/log` on `sbx-kit-startup.log`, the output of every
+  kit's startup commands on every boot; `sbx-kits/<kit>/install-<n>.log` beside
+  it holds each install hook's. When a kit seems to have done nothing, the
+  reason is there.
 - **◷ Recent** lists the files written in the last 7 days across the
   workspace, read-write mounts, home and `/tmp` (minus `.git`, dependency and
   cache folders), newest first, up to the 300 most recent. Each has a **Show in folder** button: an agent's
@@ -319,10 +336,11 @@ Both cards close with Escape or a click outside.
 | **Drop files here** | Drop or pick a file, choose a sandbox, and it is copied in. Its path is typed into that sandbox's Claude prompt, not submitted, so you can say what it's for. Up to 128 MB |
 | **Setup → Skills** | Lists the commands the bundled kits put in every sandbox, which run on their own (*default*) and which only when typed (*manual*); above them, **Your skills** keeps a skill made in a sandbox for every new one ([details](kits-and-skills.md#keeping-a-skill-you-made)) |
 | **Setup → Templates** | Lists the saved templates (`sbx template ls`), marking the one `template` in `sbxw.toml` names (*in use*) and the ones `template = "auto"` keeps (*automatic*). **Remove** deletes one. Pick a sandbox and a tag, then **Save**, to snapshot it as a new template: its agent token and Claude credentials are taken out first and put back after, as with `sbxw template save`. sbx may stop the sandbox for the snapshot; sbxw starts it again |
-| **Setup → Kits** | Edits the `kits` line of an `sbxw.toml` sbxw uses — the daemon's own, or the one a sandbox was created from; no other file. Bundled kits are checkboxes — one listed by its path in an sbxw checkout (`…/assets/codemap`) is shown on its checkbox, read from your working tree rather than the binary, and **Use sbxw: names** switches such paths to the built-in copies; any other reference (a path, a `.zip`, an OCI ref, a git URL) a list with **Add** and **Remove**. Only that line is rewritten: comments, `[[ports]]` and the rest stay as written. A file without the line shows the defaults; **Save** writes them out, **Use defaults** removes it. New sandboxes from this page get the change at once; an existing one at its next `sbxw up` |
+| **Setup → Kits** | Edits the `kits` line of an `sbxw.toml` sbxw uses — the daemon's own, or the one a sandbox was created from; no other file. Bundled kits are checkboxes (`sbxw:<name>`); any other reference (a path, a `.zip`, an OCI ref, a git URL) a list with **Add** and **Remove**. Only that line is rewritten: comments, `[[ports]]` and the rest stay as written. A file without the line shows the defaults; **Save** writes them out, **Use defaults** removes it. New sandboxes from this page get the change at once; an existing one at its next `sbxw up` |
 | **Setup → MCP** | The MCP servers registered on this host (`sbx mcp ls`). **Add** registers one: a remote URL with optional headers (a `${key}` in a header is a secret, typed in the dialog and stored as `mcp:<name>:<key>` through `sbx secret set`, never on a command line), or a host command (stdio) with arguments and a working directory. Remote servers are added with `--skip-auth`: authorize an OAuth one with **Sign in**, which runs `sbx mcp auth <name>` on the host: its browser opens, and the token serves every sandbox. **Edit** is a remove then an add, since sbx has no edit — it drops the server's OAuth token, and an empty secret field keeps the stored secret. **Inspect** shows `sbx mcp inspect`; **Remove** unregisters it (sandboxes that loaded it keep it until unloaded). **Load** / **Unload** attach it to or detach it from the running sandbox picked at the top, without restarting its agent; sbx does not say which servers a sandbox has loaded, so both are always offered |
 | **Setup → Hosts** | Remote hosts (experimental): see [Remote hosts](#remote-hosts-experimental) |
 | **Setup → Mac** | The [virtual Mac](../assets/terminal-mac/README.md): install terminal-mac, start, pause, shut down or open the VM, follow the guest's one-time setup checklist, see who holds the lease and the ports opened for it, and take the lease back |
+| **Setup → Secrets** | The token sbx's proxy presents to GitHub for every sandbox (`git push` over HTTPS, `gh`): sbx's global `github` secret. Write-only — the page says whether one is set, never what it is; the value goes to `sbx secret set github` on stdin and is cleared from the field. **Use my gh login** (shown when `gh` is in Homebrew's or the system's `bin`, never looked up on `PATH`) stores `sbx secret set github --command '<path>/gh auth token'` instead: sbx runs it on this machine and refreshes the token itself. **Other services** stores a key for a service sbx does not know (`sbx secret set-custom --host … --env … --value-stdin`, 0.51): the sandbox sees a placeholder in the variable, the proxy puts the value in requests to the listed hosts only — hosts are required, since 0.51 substitutes nothing without them. The list shows names and scopes, never values. A token scoped to a single sandbox (`--sandbox`) is not counted as set. **Remove** runs `sbx secret rm github` |
 | **Monitor** | Runs `monitor_cmd` (default: `sbx`, its all-sandboxes dashboard) on the host, in a window nearly the size of the screen, over the panes. ✕, a click outside it or the button again closes it; Escape goes to the TUI. `monitor_cmd = []` hides it |
 | **?** (Help) | Fixes for an empty sandbox list (below) |
 | Shortcuts | The [keyboard shortcuts](#keyboard-shortcuts) for this platform |

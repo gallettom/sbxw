@@ -104,8 +104,8 @@ pub fn protocol_is_default(proto: &str, host_ip: &str) -> bool {
 /// Everything `render` needs — already resolved, so this struct has no opinion
 /// about where paths came from.
 ///
-/// No `additionalWorkspaces`: sbxw's extra mounts come from `sbxw up --ro`,
-/// which is argv rather than config, so neither export path has any to write.
+/// `additionalWorkspaces` are the config's `workspaces` (with 0.51's
+/// `target`); `sbxw up --ro` mounts are argv, not config, and stay out.
 /// Reading the key is `Spec::additional`.
 #[derive(Default)]
 pub struct EnvFile {
@@ -119,6 +119,10 @@ pub struct EnvFile {
     /// Kit-declared host mounts: sandbox target → host directory, relative
     /// to the file (sbx 0.50 `mounts`).
     pub mounts: BTreeMap<String, String>,
+    /// `additionalWorkspaces`: path relative to the file, target, read-only.
+    pub additional: Vec<(String, Option<String>, bool)>,
+    /// `sandboxOptions`, each value already a YAML scalar (`4`, `8g`, `false`).
+    pub sandbox_options: Vec<(String, String)>,
     pub env: BTreeMap<String, String>,
     pub ports: Vec<Port>,
     /// Header lines recording what sbxw does that this file cannot express.
@@ -177,6 +181,26 @@ impl EnvFile {
             out.push_str("\nmounts:\n");
             for (target, host) in &self.mounts {
                 let _ = writeln!(out, "  {}: {}", scalar(target), scalar(host));
+            }
+        }
+
+        if !self.additional.is_empty() {
+            out.push_str("\nadditionalWorkspaces:\n");
+            for (path, target, ro) in &self.additional {
+                let _ = writeln!(out, "  - path: {}", scalar(path));
+                if let Some(t) = target {
+                    let _ = writeln!(out, "    target: {}", scalar(t));
+                }
+                if *ro {
+                    out.push_str("    readOnly: true\n");
+                }
+            }
+        }
+
+        if !self.sandbox_options.is_empty() {
+            out.push_str("\nsandboxOptions:\n");
+            for (k, v) in &self.sandbox_options {
+                let _ = writeln!(out, "  {k}: {v}");
             }
         }
 
@@ -1216,6 +1240,8 @@ mod tests {
                 "./kits/headroom".into(),
             ],
             mounts: BTreeMap::from([("/home/agent/history".into(), "./history".into())]),
+            additional: vec![],
+            sandbox_options: vec![],
             env: BTreeMap::from([
                 ("NODE_ENV".into(), "test".into()),
                 // The values that make `scalar`'s quoting load-bearing.

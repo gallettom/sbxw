@@ -21,7 +21,7 @@ name_after() { # the value after --name
 }
 
 case "${1:-}" in
-  version) echo "sbx version 0.50.0" ;;
+  version|--version) echo "sbx version 0.51.0" ;;
   ls)
     if [ "${2:-}" = "--format" ]; then # 0.48: a bare array
       sep=""; printf '['
@@ -39,8 +39,8 @@ case "${1:-}" in
     done ;;
   create)
     n=$(name_after "$@")
-    echo "pulling docker.io/docker/sandbox-templates:claude 10%"
-    echo "pulling docker.io/docker/sandbox-templates:claude 100%"
+    echo "pulling docker.io/sbx/claude:latest 10%"
+    echo "pulling docker.io/sbx/claude:latest 100%"
     echo running > "$S/sandboxes/$n"
     : > "$S/ports/$n"
     prev="" cache="" fill=""
@@ -54,8 +54,8 @@ case "${1:-}" in
     done
     # The caching kits of the filling sandbox: fill, then mark.
     if [ -n "$fill" ] && [ -n "$cache" ]; then
-      mkdir -p "$cache/amd64-bookworm" && echo deb > "$cache/amd64-bookworm/ffmpeg.deb"
-      touch "$cache/amd64-bookworm/.filled-agent-skills" "$cache/amd64-bookworm/.filled-md-to-pdf-tools"
+      mkdir -p "$cache/amd64-trixie" && echo deb > "$cache/amd64-trixie/ffmpeg.deb"
+      touch "$cache/amd64-trixie/.filled-agent-skills" "$cache/amd64-trixie/.filled-md-to-pdf-tools"
     fi ;;
   run)
     if [ "${2:-}" = "-d" ]; then n=$(name_after "$@"); echo running > "$S/sandboxes/$n"; : > "$S/detached-$n"; exit 0; fi
@@ -141,6 +141,6 @@ case "${1:-}" in
     esac ;;
   kit) [ "${2:-}" = validate ] && [ -e "${3:-}" ] || [ "${2:-}" != validate ] ;;
   diagnose) echo '{"checks":[{"name":"mkfs.ext4","status":"ok"},{"name":"global network policy","status":"warning","message":"not initialized"}]}' ;;
-  inspect) echo "Name: $2"; echo "Kits:" ;;
+  inspect) printf '{"name":"%s","kits":[],"state":"running","created_version":"v0.51.0"}\n' "$2" ;;
   *) : ;;
 esac

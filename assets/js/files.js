@@ -116,6 +116,7 @@ const FX_FAV_SVG = {
   thread: '<circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="5.5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 7.1c0 2.6-7 2-7 3.8"/>',
   home: '<path d="M2 7.5L8 2.5l6 5M3.5 6.5V13.5h3.2V10h2.6v3.5h3.2V6.5"/>',
   root: '<rect x="1.5" y="4" width="13" height="8" rx="1.2"/><path d="M4 8h.01M7 8h5"/>',
+  logs: '<path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5M5.5 13h3"/>',
   starred: '<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>',
 };
 const fxFavIcon = (kind) => `<svg class="fx-fav-icon ${kind}" width="16" height="16" viewBox="0 0 16 16"
@@ -148,6 +149,10 @@ function fxBuiltins() {
       thread: w,
     })),
     { path: p.home, label: 'Home', icon: 'home' },
+    // What sbx 0.51 logs of the kits: each startup command's output in
+    // sbx-kit-startup.log (opened on it), each kit's install hooks under
+    // sbx-kits/<kit>/install-<n>.log. Where a kit that "did nothing" says why.
+    { path: '/var/log', label: 'Kit logs', icon: 'logs', select: 'sbx-kit-startup.log' },
     { path: '/', label: 'Root', icon: 'root' },
   ].filter(Boolean);
 }
@@ -164,8 +169,9 @@ function fxRenderFavourites() {
   const here = fx.recent ? FX_RECENT : fx.path;
   const row = (f, removable) => `
     <div class="fx-fav${f.path === here ? ' active' : ''}${f.main ? ' main' : ''}${f.recent ? ' recent' : ''}"
-         data-path="${escHtml(f.path)}"
+         data-path="${escHtml(f.path)}"${f.select ? ` data-select="${escHtml(f.select)}"` : ''}
          title="${escHtml(f.recent ? 'Files written in the last few days — workspace, mounts, home and /tmp'
+           : f.icon === 'logs' ? 'sbx-kit-startup.log (every startup command) and sbx-kits/<kit>/install-<n>.log (install hooks)'
            : f.thread ? `Thread "${f.thread.thread}" — ${f.path}, branch sbxw/${f.thread.thread}`
            : f.path + (f.mode === 'ro' ? ' — read-only: the agent can read it, not change it'
                                   : f.mode === 'rw' ? ' — read-write' : ''))}">
@@ -817,7 +823,7 @@ document.getElementById('fx-favourites').addEventListener('click', (e) => {
   if (rm) { e.stopPropagation(); fxToggleFavourite(rm.dataset.unfav); return; }
   const fav = e.target.closest('.fx-fav');
   if (fav?.dataset.path === FX_RECENT) { if (!fx.recent) fxOpenRecent(); return; }
-  if (fav && (fx.recent || fav.dataset.path !== fx.path)) fxOpen(fav.dataset.path);
+  if (fav && (fx.recent || fav.dataset.path !== fx.path || fav.dataset.select)) fxOpen(fav.dataset.path, { select: fav.dataset.select || null });
 });
 
 fxTbody.addEventListener('click', (e) => {

@@ -421,7 +421,7 @@ mod tests {
         let r = rig();
         let m = run(&r, &["sbxw:codemap".into()], false).await.unwrap();
         let spec = std::fs::read_to_string(PathBuf::from(&m.refs[0]).join("spec.yaml")).unwrap();
-        assert!(spec.contains("name: codemap"));
+        assert!(spec.contains("displayName: codemap"));
         assert!(run(&r, &["sbxw:nope".into()], false).await.is_err());
     }
 

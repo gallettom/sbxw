@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// What a well-behaved sbx answers when the test does not care.
 pub fn sbx_answer(a: &[String]) -> Output {
     match a.first().map(String::as_str) {
-        Some("version") => Output::ok("sbx version 0.50.0\n"),
+        Some("--version") => Output::ok("sbx version 0.51.0\n"),
         Some("ls") => ls(&[]),
         Some("exec") if a.iter().any(|x| x == "node") => Output::ok("SBXW-TOOLING []\n"),
         _ => Output::ok(""),
@@ -36,7 +36,7 @@ fn build(dir: &Path, fake: Arc<Fake>) -> Arc<App> {
         sbx: Sbx::new(fake),
         hosts: hostsys::for_tests(&dir.join("hosts")),
         use_api_key: true,
-        sbx_version: Some("0.50.0".into()),
+        sbx_version: Some("0.51.0".into()),
     }
     .build()
 }

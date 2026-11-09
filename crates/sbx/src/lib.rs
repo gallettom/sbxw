@@ -1,12 +1,14 @@
 //! The only door to the `sbx` CLI. sbxw never calls `docker sandbox`.
 //!
-//! Written for sbx 0.50 and newer, with no fallbacks below it: an
+//! Written for sbx 0.51 and newer, with no fallbacks below it: an
 //! unrecognised command or flag is an *error*, so a command that succeeded
 //! really ran, and a fallback path would be code nobody runs. What sbxw
 //! parses it reads as `--format json`; only `policy ls` and `template ls`
 //! are still read as tables.
 //!
 //! ```text
+//! sbx --version                              (the client's; starts no daemon)
+//! sbx settings get KEY
 //! sbx create claude PATH --name N [PATH:ro]… [--kit K]… [-p SPEC]…
 //!            [--skills=off|readonly|readwrite] [--pull=always|missing|never]
 //!            [--mount HOST:TARGET]…           (only a target a kit declares)
@@ -30,7 +32,6 @@
 //! sbx mcp ls --format json · sbx mcp load|unload SERVER --sandbox N
 //! sbx mcp add NAME --url=U [--header=H]… --skip-auth | --command=C [--args=A,B] [--dir=D]
 //! sbx mcp rm NAME · sbx mcp inspect NAME · sbx mcp auth NAME   (OAuth; opens the host's browser)
-//! sbx kit validate REF --offline              (local dir or ZIP; no daemon, no sign-in)
 //! sbx template save N TAG                    (--description is cloud-only: refused locally)
 //! sbx template ls · sbx template rm TAG · create --template TAG
 //! sbx diagnose --format json · sbx skills import · sbx setup ssh
@@ -65,7 +66,7 @@ use std::time::Duration;
 pub use scripts::ThreadStatus;
 
 /// Oldest sbx sbxw works against, and the one it is written for.
-pub const MIN_VERSION: (u32, u32, u32) = (0, 50, 0);
+pub const MIN_VERSION: (u32, u32, u32) = (0, 51, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
 /// `sbx exec`'s status when it could not run the command at all — no such
@@ -208,6 +209,52 @@ pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
         .collect()
 }
 
+/// Does `sbx secret ls` list a global secret for `service`? Read by its
+/// headers: a scope column (`SCOPE`) saying `(global)`, and the service under
+/// `NAME` (0.51) or `SERVICE` (earlier) — so one scoped to a single sandbox
+/// is not taken for the global one. A listing with no such headers is read
+/// as a whole-word match on any line, the best it can say.
+pub fn has_global_secret(raw: &str, service: &str) -> bool {
+    let t = table::parse(raw);
+    let col = |names: &[&str]| t.columns.iter().position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
+    match (col(&["SCOPE"]), col(&["NAME", "SERVICE"])) {
+        (Some(scope), Some(name)) => t.rows.iter().any(|r| {
+            r.get(name).is_some_and(|n| n == service) && r.get(scope).is_some_and(|sc| sc.trim_matches(|c| c == '(' || c == ')').eq_ignore_ascii_case("global"))
+        }),
+        _ => raw.lines().any(|l| l.split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_')).any(|w| w == service)),
+    }
+}
+
+/// One row of `sbx secret ls`: never a value, only where it applies, what
+/// kind it is (`service`, or a custom one) and its name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SecretRow {
+    pub scope: String,
+    pub kind: String,
+    pub name: String,
+}
+
+/// `sbx secret ls` by its headers (0.51: `SCOPE TYPE NAME SECRET`). The
+/// `SECRET` column — masked, but still part of a value — is never read.
+pub fn parse_secret_ls(raw: &str) -> Vec<SecretRow> {
+    let t = table::parse(raw);
+    let col = |names: &[&str]| t.columns.iter().position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
+    let (Some(scope), Some(name)) = (col(&["SCOPE"]), col(&["NAME", "SERVICE"])) else {
+        return Vec::new();
+    };
+    let kind = col(&["TYPE"]);
+    t.rows
+        .iter()
+        .filter_map(|r| {
+            Some(SecretRow {
+                scope: r.get(scope)?.trim_matches(|c| c == '(' || c == ')').to_string(),
+                kind: kind.and_then(|k| r.get(k)).cloned().unwrap_or_else(|| "service".into()),
+                name: r.get(name)?.clone(),
+            })
+        })
+        .collect()
+}
+
 /// What `sbx rm` did with one target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RmResult {
@@ -237,8 +284,6 @@ pub fn parse_rm_json(raw: &str) -> Option<Vec<RmResult>> {
     )
 }
 
-/// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
-/// inside a longer token ("sha256") or a four-digit year is not one.
 /// What to tell the person once, on the first run after sbx moved from
 /// `before` to `now`: what the upgrade costs them that sbxw cannot hide.
 pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
@@ -246,23 +291,27 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
         return Vec::new();
     };
     let mut notes = Vec::new();
-    if before < (0, 50, 0) && now >= (0, 50, 0) {
+    if before < (0, 51, 0) && now >= (0, 51, 0) {
         notes.push(
-            "sbx 0.50 rebuilds each local kit once: the next sandbox created with one of your own kits (or sbxw's) \
-             takes the time of a first build.",
+            "sbx 0.51 runs Claude Code from the published kit docker.io/sbx/claude (Debian 13), and v1/v2 kits no \
+             longer combine with it: sbxw's kits are v3 now, and your own local kits must be too. Sandboxes created \
+             earlier keep running but cannot take kits until recreated — save any work outside the workspace, then \
+             `sbxw rm <name>` and `sbxw up <name>`.",
         );
         notes.push(
             "Automatic templates were made by the older sbx and are now out of date: the next create asks before \
              rebuilding (`sbxw up <name> --rebuild-template`).",
         );
         notes.push(
-            "Sandboxes created before 0.50 keep their old storage (persistent kit volumes apply to new ones) and \
-             may carry an apiKeyHelper that outranks /login — recreate one to get both.",
+            "Copying text from a sandbox's terminal to your clipboard now needs `sbx settings set clipboard.textCopy \
+             true` (sbxw doctor shows whether it is on).",
         );
     }
     notes
 }
 
+/// The first `MAJOR.MINOR[.PATCH]` in `raw`, however it is framed; a digit run
+/// inside a longer token ("sha256") or a four-digit year is not one.
 pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
     let chars: Vec<char> = raw.chars().collect();
     let mut i = 0;
@@ -326,6 +375,11 @@ pub struct CreateOpts {
     /// A saved template (`sbx template save`): a local snapshot needs no
     /// registry round-trip, so creation skips the image pull.
     pub template: Option<String>,
+    /// `PATH[:TARGET][:ro]` workspaces beside the main one (0.51 targets).
+    pub workspaces: Vec<String>,
+    /// `--cpus` and `--memory`; `None` is sbx's default.
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
 }
 
 pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
@@ -335,6 +389,13 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     }
     a.extend(o.rw_mounts.iter().cloned());
     a.extend(o.ro_mounts.iter().map(|m| format!("{m}:ro")));
+    a.extend(o.workspaces.iter().cloned());
+    if let Some(c) = o.cpus {
+        a.extend(["--cpus".into(), c.to_string()]);
+    }
+    if let Some(m) = &o.memory {
+        a.extend(["--memory".into(), m.clone()]);
+    }
     for k in &o.kits {
         a.extend(["--kit".into(), k.clone()]);
     }
@@ -363,8 +424,12 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
 
 /// Re-attach the agent. The env flags apply to the agent session, which is
 /// how an edited `env` reaches a sandbox that already exists.
-pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String]) -> Vec<String> {
+pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String], workdir: &str) -> Vec<String> {
     let mut a = vec!["run".to_string(), "--name".into(), name.to_string()];
+    // This session only, re-attach included (0.51).
+    if !workdir.is_empty() {
+        a.extend(["--workdir".into(), workdir.to_string()]);
+    }
     for f in env_files {
         a.extend(["--env-file".into(), f.clone()]);
     }
@@ -486,15 +551,17 @@ impl Sbx {
     }
 
     /// `sbx version`, parsed.
+    /// `sbx --version`: the client's version, without starting the daemon
+    /// (0.51), so a version check costs no daemon start.
     pub async fn version(&self) -> Result<Option<(u32, u32, u32)>> {
-        Ok(parse_version(&self.capture(s(&["version"])).await?))
+        Ok(parse_version(&self.capture(s(&["--version"])).await?))
     }
 
     /// Refuse an sbx older than the floor. An unreadable version is a warning,
     /// never a refusal: sbxw does not get to veto on output format.
     pub async fn check_version(&self, skip: bool) -> Result<Option<String>> {
         let v = self.version().await.map_err(|e| {
-            anyhow!("`sbx version` failed — install the standalone sbx binary and put it on PATH ({e:#})")
+            anyhow!("`sbx --version` failed — install the standalone sbx binary and put it on PATH ({e:#})")
         })?;
         let shown = v.map(|(a, b, c)| format!("{a}.{b}.{c}"));
         if let Some(found) = v {
@@ -755,12 +822,6 @@ impl Sbx {
         self.checked(Invocation::new(s(&["mcp", "unload", server, "--sandbox", sandbox.as_str()]))).await.map(drop)
     }
 
-    /// Check a local kit (directory or ZIP) without the daemon or a sign-in
-    /// (0.49), so a broken kit fails in a second rather than mid-create.
-    pub async fn kit_validate_offline(&self, kit: &str) -> Result<()> {
-        self.checked(Invocation::new(s(&["kit", "validate", kit, "--offline"]))).await.map(drop)
-    }
-
     /// Snapshot a sandbox from the daemon, where no terminal can answer a
     /// prompt: a save refused for want of one (sbx asking to stop the
     /// sandbox first) is retried after stopping it. True when it was stopped.
@@ -830,12 +891,97 @@ impl Sbx {
             .map_err(|e| anyhow!("{e:#}\n(retried with --force after: {first:#})"))
     }
 
+    /// A global secret sbx resolves itself by running `command` on the host
+    /// (`secret set SERVICE --command`, refreshed by sbx). sbx runs it once
+    /// to check it; a stored secret it would ask to replace is replaced.
+    pub async fn secret_set_command(&self, service: &str, command: &str) -> Result<()> {
+        let args = s(&["secret", "set", service, "--command", command]);
+        let Err(first) = self.checked(Invocation::new(args.clone())).await else {
+            return Ok(());
+        };
+        if !wants_confirmation(&format!("{first:#}")) {
+            return Err(first);
+        }
+        let mut forced = args;
+        forced.push("--force".into());
+        self.checked(Invocation::new(forced))
+            .await
+            .map(drop)
+            .map_err(|e| anyhow!("{e:#}\n(retried with --force after: {first:#})"))
+    }
+
+    /// One sbx setting's value as `sbx settings get` prints it (`true`, a
+    /// JSON list…), trimmed.
+    pub async fn setting_get(&self, key: &str) -> Result<String> {
+        Ok(self.capture(s(&["settings", "get", key])).await?.trim().to_string())
+    }
+
+    /// Whether a *global* secret for `service` is stored (`sbx secret ls`,
+    /// which never prints values). See [`has_global_secret`].
+    pub async fn secret_has(&self, service: &str) -> Result<bool> {
+        Ok(has_global_secret(&self.capture(s(&["secret", "ls"])).await?, service))
+    }
+
+    /// What sbx waits for a person to decide, every sandbox's.
+    pub async fn approvals(&self) -> Result<Vec<sbxw_core::approvals::Approval>> {
+        let raw = self.capture(s(&["policy", "approval", "ls", "--format", "json"])).await?;
+        sbxw_core::approvals::parse(&raw).ok_or_else(|| anyhow!("`sbx policy approval ls --format json` printed something other than JSON"))
+    }
+
+    /// Answer one with an option it offers (the caller checks it does).
+    pub async fn approval_respond(&self, id: &str, option: &str) -> Result<()> {
+        if id.starts_with('-') || option.starts_with('-') {
+            bail!("not an approval or an option: {id} {option}");
+        }
+        self.checked(Invocation::new(s(&["policy", "approval", "respond", id, "--option", option]))).await.map(drop)
+    }
+
+    /// Every stored secret, without its value.
+    pub async fn secrets(&self) -> Result<Vec<SecretRow>> {
+        Ok(parse_secret_ls(&self.capture(s(&["secret", "ls"])).await?))
+    }
+
+    /// A global custom secret (`secret set-custom`, 0.51): the sandbox sees a
+    /// placeholder in `env`, the proxy puts the value in requests to `hosts`.
+    /// The value travels on stdin. sbx 0.51 substitutes nothing for a custom
+    /// secret without a host, so one is required.
+    pub async fn secret_set_custom(&self, hosts: &[String], env: &str, value: &str) -> Result<()> {
+        if hosts.is_empty() {
+            bail!("a custom secret needs at least one destination host");
+        }
+        let mut args = s(&["secret", "set-custom"]);
+        for h in hosts {
+            args.extend(["--host".into(), h.clone()]);
+        }
+        args.extend(["--env".into(), env.into(), "--value-stdin".into()]);
+        self.checked(Invocation { args, stdin: Some(value.as_bytes().to_vec()), on_line: None }).await.map(drop)
+    }
+
+    /// Forget the global secret for `service`.
+    pub async fn secret_rm(&self, service: &str) -> Result<()> {
+        self.checked(Invocation::new(s(&["secret", "rm", service, "--force"]))).await.map(drop)
+    }
+
+    /// `sbx kit add` as a pane runs it, where a person can answer its prompt.
+    pub fn kit_add_args(name: &SandboxName, kit: &str) -> Vec<String> {
+        s(&["kit", "add", name.as_str(), kit])
+    }
+
     pub async fn kit_add(&self, name: &SandboxName, kit: &str) -> Result<()> {
         self.checked(Invocation::new(s(&["kit", "add", name.as_str(), kit]))).await.map(drop)
     }
 
-    pub async fn inspect(&self, name: &SandboxName) -> Result<String> {
-        self.capture(s(&["inspect", name.as_str()])).await
+    /// `sbx inspect --format json`, as far as sbxw reads it: an error when
+    /// it fails or prints something else.
+    pub async fn inspect(&self, name: &SandboxName) -> Result<sbxw_core::kits::Inspected> {
+        let raw = self.capture(s(&["inspect", name.as_str(), "--format", "json"])).await?;
+        sbxw_core::kits::parse_inspect(&raw).ok_or_else(|| anyhow!("`sbx inspect {name} --format json` printed something other than JSON"))
+    }
+
+    /// The kits a sandbox was composed from (paths and references); empty
+    /// when sbx does not say.
+    pub async fn inspect_kits(&self, name: &SandboxName) -> Result<Vec<String>> {
+        Ok(self.inspect(name).await.map(|i| i.kits).unwrap_or_default())
     }
 
     /// Run `args` in the sandbox; the raw output whatever the status.
@@ -957,8 +1103,8 @@ mod tests {
 
     #[test]
     fn crossing_0_50_is_announced_once_and_only_then() {
-        assert_eq!(upgrade_notes("0.49.2", "0.50.0").len(), 3);
-        assert!(upgrade_notes("0.50.0", "0.50.1").is_empty());
+        assert_eq!(upgrade_notes("0.50.1", "0.51.0").len(), 3, "kits, templates, clipboard");
+        assert!(upgrade_notes("0.51.0", "0.51.2").is_empty());
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
     }
 
@@ -1036,17 +1182,21 @@ mod tests {
                 env_files: vec!["/e".into()],
                 rw_mounts: vec!["/rw".into()],
                 template: Some("me/base:1".into()),
+                workspaces: vec!["/data:/workspace/data:ro".into()],
+                cpus: Some(4),
+                memory: Some("8g".into()),
             },
         );
         assert_eq!(
             a.join(" "),
-            "create claude /w --name neos --template me/base:1 /rw /ro:ro --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
+            "create claude /w --name neos --template me/base:1 /rw /ro:ro /data:/workspace/data:ro --cpus 4 --memory 8g --kit /k -p 4200:4200 --mount /h:/home/agent/data --skills=off --pull=missing --env-file /e -e A=1"
         );
     }
 
     #[test]
     fn small_argvs() {
-        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[]).join(" "), "run --name n -e A=1");
+        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[], "").join(" "), "run --name n -e A=1");
+        assert_eq!(attach_args(&sb("n"), &[], &[], "packages/web").join(" "), "run --name n --workdir packages/web");
         assert_eq!(policy_rule_args("deny", Some(&sb("n")), "x.com", &HttpMatch::default()).join(" "), "policy deny network --sandbox n x.com");
         assert_eq!(policy_rm_args("r-1", None).join(" "), "policy rm network --id r-1 --force");
         assert_eq!(secret_args("anthropic", None).join(" "), "secret set anthropic");
@@ -1108,6 +1258,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stored_secret_is_found_by_whole_word() {
+        let fake = Fake::new(|_| Output::ok("SERVICE   SCOPE\nanthropic global\ngithub-enterprise global\n"));
+        assert!(!Sbx::new(fake).secret_has("github").await.unwrap());
+        let fake = Fake::new(|_| Output::ok("SERVICE   SCOPE\ngithub    global\n"));
+        assert!(Sbx::new(fake).secret_has("github").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_command_secret_replaces_a_stored_one() {
+        let fake = Fake::new(|a| match a.last().map(String::as_str) {
+            Some("--force") => Output::ok(""),
+            _ => Output::fail(1, "secret exists; confirmation required (stdin is not a terminal) — use --force"),
+        });
+        Sbx::new(fake.clone()).secret_set_command("github", "'/opt/homebrew/bin/gh' auth token").await.unwrap();
+        assert_eq!(fake.calls.lock().unwrap()[1], ["secret", "set", "github", "--command", "'/opt/homebrew/bin/gh' auth token", "--force"]);
+        assert!(fake.stdins.lock().unwrap().iter().all(|s| s.is_empty()), "nothing on stdin: there is no value");
+    }
+
+    #[tokio::test]
+    async fn a_custom_secret_names_its_hosts_and_sends_its_value_on_stdin() {
+        let fake = Fake::new(|_| Output::ok(""));
+        let sbx = Sbx::new(fake.clone());
+        sbx.secret_set_custom(&["api.example.com".into(), "*.example.io".into()], "API_KEY", "s3cret").await.unwrap();
+        assert_eq!(fake.log(), ["secret set-custom --host api.example.com --host *.example.io --env API_KEY --value-stdin"]);
+        assert_eq!(fake.stdins.lock().unwrap()[0], b"s3cret");
+        assert!(sbx.secret_set_custom(&[], "API_KEY", "x").await.is_err(), "no host, no secret: 0.51 would substitute nothing");
+        let rows = parse_secret_ls("SCOPE      TYPE      NAME        SECRET\n(global)   service   anthropic   (oauth configured)\n(global)   custom    api-example ****\n");
+        assert_eq!(rows[1], SecretRow { scope: "global".into(), kind: "custom".into(), name: "api-example".into() });
+    }
+
+    #[test]
+    fn only_a_global_secret_counts() {
+        // What sbx 0.51 prints.
+        let ls = "  SCOPE      TYPE      NAME        SECRET\n  (global)   service   anthropic   (oauth configured)\n  neos       service   github      ghp_ab****...****yz\n";
+        assert!(has_global_secret(ls, "anthropic"));
+        assert!(!has_global_secret(ls, "github"), "scoped to one sandbox is not global");
+        let both = format!("{ls}  (global)   service   github      gho_GC****...****qy\n");
+        assert!(has_global_secret(&both, "github"));
+        assert!(has_global_secret("SCOPE      SERVICE   SECRET\n(global)   github    gho_GCaw4o****\n", "github"), "the documented older layout");
+    }
+
+    #[tokio::test]
     async fn a_replaced_secret_is_confirmed_with_force() {
         let fake = Fake::new(|a| {
             if a.contains(&"--force".to_string()) {
@@ -1123,11 +1315,13 @@ mod tests {
 
     #[tokio::test]
     async fn the_version_floor_is_enforced() {
-        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.49.2")));
+        let old = Sbx::new(Fake::new(|_| Output::ok("sbx 0.50.1")));
         assert!(old.check_version(false).await.is_err());
         assert!(old.check_version(true).await.is_ok());
-        let new = Sbx::new(Fake::new(|_| Output::ok("sbx 0.50.0")));
-        assert_eq!(new.check_version(false).await.unwrap().as_deref(), Some("0.50.0"));
+        let fake = Fake::new(|_| Output::ok("sbx version 0.51.0"));
+        let new = Sbx::new(fake.clone());
+        assert_eq!(new.check_version(false).await.unwrap().as_deref(), Some("0.51.0"));
+        assert_eq!(fake.log(), ["--version"], "the client's version: no daemon started");
     }
 
     #[tokio::test]

@@ -66,6 +66,9 @@ pub struct App {
     /// An approved plan's briefing, for a thread whose session has not
     /// started yet — handed to `open_session`, never typed into a boot.
     pub(crate) briefings: Mutex<HashMap<(SandboxRef, String), String>>,
+    /// Kits `sbx kit add` left waiting for a person's approval, per sandbox,
+    /// in the order they came: what a `kit-add` pane runs, first one first.
+    pub(crate) kit_approvals: Mutex<HashMap<SandboxRef, Vec<String>>>,
     /// `caffeinate`, the battery and who is on Remote Control.
     pub(crate) awake: Mutex<crate::svc::awake::Awake>,
     /// Remote hosts acted on so far, each with its link (see `remotes`).
@@ -123,6 +126,7 @@ impl AppBuilder {
             hook_log: Mutex::new(VecDeque::new()),
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
+            kit_approvals: Mutex::new(HashMap::new()),
             awake: Mutex::new(Default::default()),
             remotes: Mutex::new(HashMap::new()),
             ssh_program: Mutex::new("ssh".into()),

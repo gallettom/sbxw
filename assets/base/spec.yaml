@@ -1,0 +1,83 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: sbxw-base
+description: >
+  What sbxw itself needs in every sandbox it creates: Node.js, which runs the
+  relay MCP server, the session hooks, the status line and the bundled kits'
+  scripts. sbx 0.51's Claude Code image ships none. Installed once, at create,
+  from the image's apt repositories (nodejs-24 from Docker Hardened Images,
+  else Debian's nodejs). Always applied, first; not listed in `kits`.
+
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/
+
+capabilities:
+  # apt during the install hook only: the agent's own steady state is the
+  # workload's and sbxw.toml's business.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      install:
+        allow:
+          - deb.debian.org
+          - security.debian.org
+          - dhi.io
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: ["sh", "/home/agent/.sbxw/base/install-node.sh"]
+          user: "0"
+          description: Install Node.js for sbxw's in-sandbox tooling
+  # How to reach other sandboxes and ask for a screenshot, written into the
+  # agent's CLAUDE.md by sbx before it starts. Kept equal to
+  # sbxw_core::tooling::relay_guidance() by a test; the tooling batch writes
+  # the same text only when sbx did not.
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config:
+      content: |
+          ## When the answer isn't in this workspace
+
+          Other sandboxes run on this machine, each with its own agent and its own
+          project, and you can ask them — a human routes the question and approves
+          the answer. Use the **`ask_other_sandbox`** tool (MCP server
+          `sbxw-relay`) for this.
+
+          The moment to reach for it is easy to miss, so name it explicitly: you
+          have searched, and what you need is in a repo, service or project that
+          is not mounted here. **Ask before you tell the user you cannot see it,
+          and before you offer to go looking elsewhere.** Finding the boundary of
+          your workspace is not the answer to a question — it is the point at
+          which to ask one.
+
+          Same thing from a shell, if the tool is unavailable:
+          `node /home/agent/.sbxw/relay.js ask "your question"` (then `wait <id>`).
+
+          The question is read by a human and then by an agent that knows nothing
+          of this conversation, so make it self-contained. Never send secrets or
+          file contents you were not asked to share.
+
+          ## When you can't see what you changed
+
+          You cannot see this project's screen. When the work was visual — a
+          layout, a style, a component, anything whose correctness is a matter of
+          how it looks — **ask to be shown it** with the
+          **`ask_user_for_screenshot`** tool, before you call it done and before
+          a third round of "is it better now?".
+
+          The moment is easy to miss because nothing is failing: the change is
+          made, the diff is right, and it still might look wrong. "The code is
+          correct" and "it looks correct" are different claims, and only one of
+          them is yours to make from here.
+
+          From a shell: `node /home/agent/.sbxw/relay.js shot "what you need to see"`.
+
+          Say which screen, which state, which width — and if one picture will
+          not settle it, name every view you need in the same ask ("at 375px
+          and at 1280px"): they can attach several images to one reply, and
+          that is one interruption instead of three. The user may refuse — that
+          is an ordinary answer, not a setback: carry on, say what you changed
+          and what you expect it to look like, and let them correct you. Don't
+          ask twice for the same view, and don't ask at all for something you can
+          run and capture yourself.

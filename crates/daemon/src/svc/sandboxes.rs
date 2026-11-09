@@ -41,6 +41,15 @@ pub struct SandboxItem {
     pub detached: bool,
     /// Created for Remote Control: its agent logs in to claude.ai itself.
     pub remote_control: bool,
+    /// Requests sbx waits for a person to decide for this sandbox (`sbx policy
+    /// approval`): hosts no rule allows, a kit's host port.
+    pub approvals: usize,
+    /// Kits `sbx kit add` left waiting for the person's approval: a ✓ in the
+    /// sidebar opens a pane where they answer sbx's prompt.
+    pub kits_waiting: usize,
+    /// Made by an sbx older than 0.51: it keeps running, but takes no kit
+    /// until it is recreated (`sbx inspect` records no creator version).
+    pub old_sbx: bool,
     /// On a remote host that cannot be reached since then (unix seconds):
     /// `status` is the last one seen, and actions are refused.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,9 +98,27 @@ pub struct CreateForm {
 
 impl App {
     pub async fn sandboxes(&self) -> Vec<SandboxItem> {
-        self.sbx
-            .ls()
-            .await
+        let listed = self.sbx.ls().await;
+        // Which sbx made each sandbox sbxw knows, asked of `sbx inspect` once
+        // and recorded: it never changes.
+        let unknown: Vec<SandboxRef> = listed
+            .iter()
+            .filter_map(|s| SandboxName::parse(&s.name).ok())
+            .map(SandboxRef::from)
+            .filter(|n| self.store.exists(n) && self.store.get(n).created_by_sbx.is_none())
+            .collect();
+        let asked = futures_util::future::join_all(unknown.iter().map(|n| self.sbx.inspect(&n.name))).await;
+        for (n, r) in unknown.iter().zip(asked) {
+            if let Ok(i) = r {
+                let v = i.created_version.unwrap_or_default();
+                let _ = self.store.update(n, |rec| rec.created_by_sbx = Some(v));
+            }
+        }
+        let waiting = self.kit_approvals.lock().unwrap().clone();
+        let pending = self.sbx.approvals().await.unwrap_or_default();
+        let pending_for = |name: &str| pending.iter().filter(|a| a.sandbox == name).count();
+        let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
+        listed
             .into_iter()
             .map(|s| {
                 // sbx lists this machine's sandboxes; one whose name sbxw would
@@ -101,7 +128,10 @@ impl App {
                 (s, rec, chat)
             })
             .map(|(s, rec, chat)| SandboxItem {
+                approvals: pending_for(&s.name),
+                kits_waiting: waiting_for(&s.name),
                 chat,
+                old_sbx: rec.created_by_sbx.as_deref() == Some(""),
                 remote_control: rec.remote_control,
                 workspace: rec.workspace.map(|w| w.to_string_lossy().into_owned()),
                 name: s.name,
@@ -152,6 +182,9 @@ impl App {
                             created_at: s.created_at,
                             detached: s.detached,
                             remote_control: rec.remote_control,
+                            old_sbx: rec.created_by_sbx.as_deref() == Some(""),
+                            kits_waiting: self.kit_approvals.lock().unwrap().get(&sb).map(Vec::len).unwrap_or(0),
+                            approvals: 0,
                             unreachable_since: None,
                         });
                     }
@@ -169,6 +202,9 @@ impl App {
                             created_at: None,
                             detached: false,
                             remote_control: rec.remote_control,
+                            old_sbx: rec.created_by_sbx.as_deref() == Some(""),
+                            kits_waiting: 0,
+                            approvals: 0,
                             unreachable_since: Some(since),
                         });
                     }
@@ -279,7 +315,8 @@ impl App {
             return serde_json::json!({ "auto": false });
         }
         let (sbx, sbxw) = self.template_versions();
-        let kits = self.daemon_config().kits;
+        // As the bring-up applies them, sbxw's base kit first.
+        let kits = sbxw_core::kits::with_base(&self.daemon_config().kits);
         let content = crate::bundled::fingerprint(&self.store.paths, &kits).unwrap_or_default();
         let now = templates::Current { sbx: &sbx, sbxw, content: &content };
         let state = templates::check(&self.store.templates(), &kits, &now);
@@ -366,7 +403,6 @@ impl App {
                 .use_api_key
                 .then(|| std::env::var("ANTHROPIC_API_KEY").ok())
                 .flatten(),
-            oauth_token: oauth_token_from_env(),
             template: Default::default(),
             remote_control: false,
             git: None,
@@ -405,6 +441,29 @@ impl App {
         let cfg = self.config_for(source).await;
         tracing::info!("duplicating '{source}' as '{new}' (workspace {})", ws.display());
         let req = self.bring_up_request(new, ws, cfg, vec![], false);
+        self.provision(req, None).await
+    }
+
+    /// Remove a sandbox and create it again from what sbxw recorded: its
+    /// workspace, config, mounts and Remote Control choice. For one an older
+    /// sbx made, which takes no kit until then. Anything outside the
+    /// workspace mount is lost — the caller asked the person first. A chat's
+    /// workspace goes with it, so a chat is refused.
+    pub async fn recreate(self: &Arc<Self>, name: &SandboxRef) -> Result<Vec<String>> {
+        let rec = self.store.get(name);
+        if rec.chat {
+            bail!("'{name}' is a chat: removing it deletes its workspace — start a new chat instead");
+        }
+        let ws = rec.workspace.clone().ok_or_else(|| anyhow!("sbxw doesn't know which workspace '{name}' was created on — remove it and create it again by hand"))?;
+        let cfg = self.config_for(name).await;
+        tracing::info!("recreating '{name}' on {}", ws.display());
+        self.remove(std::slice::from_ref(name)).await?;
+        let mut req = self.bring_up_request(name.clone(), ws, cfg, vec![], false);
+        for m in &rec.mounts {
+            let p = m.path.to_string_lossy().into_owned();
+            if m.readonly { req.ro.push(p) } else { req.rw.push(p) }
+        }
+        req.remote_control = rec.remote_control;
         self.provision(req, None).await
     }
 
@@ -616,8 +675,9 @@ impl App {
             anyhow!("sbxw doesn't know which workspace '{name}' was created on — bring it up once with sbxw")
         })?;
         let mut cfg = self.config_for(name).await;
-        // sbx knows no `sbxw:` kit: the file names the written-out directory.
-        cfg.kits = crate::bundled::resolve(&self.store.paths, &cfg.kits)?;
+        // sbx knows no `sbxw:` kit: the file names the written-out directory,
+        // sbxw's base kit first, as the bring-up applies it.
+        cfg.kits = crate::bundled::resolve(&self.store.paths, &sbxw_core::kits::with_base(&cfg.kits))?;
         let live = self.sbx_for(name).await?.ports(&name.name).await;
         let ports: Vec<envfile::Port> = if live.is_empty() {
             envexport::ports_from_config(&cfg)
@@ -698,6 +758,39 @@ mod tests {
     use crate::testing::{app_with, sbx_answer};
     use sbxw_core::SandboxRef;
     use sbxw_sbx::runner::Output;
+
+    #[tokio::test]
+    async fn which_sbx_made_a_sandbox_is_asked_once_and_an_old_one_is_marked() {
+        let (_d, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("old", "running"), ("new", "running"), ("theirs", "running")]),
+            Some("inspect") if a[1] == "new" => Output::ok(r#"{"name":"new","kits":[],"created_version":"v0.51.0"}"#),
+            Some("inspect") => Output::ok(r#"{"name":"old","kits":["/k/codemap"]}"#),
+            _ => sbx_answer(a),
+        });
+        for n in ["old", "new"] {
+            app.store.update(SandboxRef::parse(n).unwrap(), |r| r.workspace = Some("/w".into())).unwrap();
+        }
+        let first = app.sandboxes().await;
+        let old = |items: &[super::SandboxItem], n: &str| items.iter().find(|i| i.name == n).unwrap().old_sbx;
+        assert!(old(&first, "old") && !old(&first, "new"));
+        assert!(!old(&first, "theirs"), "a sandbox sbxw has no record of is not asked");
+        app.sandboxes().await;
+        assert_eq!(fake.log().iter().filter(|c| c.starts_with("inspect")).count(), 2, "once each: {:?}", fake.log());
+    }
+
+    #[tokio::test]
+    async fn a_chat_is_never_recreated() {
+        let (_d, app, fake) = app_with(sbx_answer);
+        let n = SandboxRef::parse("chat-1").unwrap();
+        app.store.update(&n, |r| {
+            r.chat = true;
+            r.workspace = Some("/w/chat-1".into());
+        })
+        .unwrap();
+        let e = app.recreate(&n).await.unwrap_err();
+        assert!(format!("{e:#}").contains("chat"), "{e:#}");
+        assert!(fake.log().iter().all(|c| !c.starts_with("rm")), "nothing removed");
+    }
 
     #[tokio::test]
     async fn the_policy_panel_lists_blocked_hosts_from_the_json_log() {

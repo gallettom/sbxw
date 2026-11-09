@@ -59,6 +59,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/up", post(up))
         .route("/api/sandboxes/:name/detach", post(detach))
         .route("/api/sandboxes/:name/duplicate", post(duplicate))
+        .route("/api/sandboxes/:name/recreate", post(recreate))
         .route("/api/sandboxes/:name/stop", post(stop))
         .route("/api/sandboxes/:name/rm", post(rm))
         .route("/api/sandboxes/:name/ports", get(ports))
@@ -68,6 +69,14 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/policy/rules", post(policy_add))
         .route("/api/sandboxes/:name/policy/rules/rm", post(policy_rm))
         .route("/api/policy/refresh", post(policy_refresh))
+        .route("/api/github-token", get(github_token).post(github_token_set))
+        .route("/api/github-token/rm", post(github_token_rm))
+        .route("/api/github-token/gh", post(github_token_gh))
+        .route("/api/approvals", get(approvals_list))
+        .route("/api/approvals/respond", post(approval_respond))
+        .route("/api/secrets", get(secrets_list))
+        .route("/api/secrets/custom", post(custom_secret_set))
+        .route("/api/secrets/rm", post(secret_rm))
         .route("/api/template/status", get(template_status))
         .route("/api/kit-mounts", get(kit_mounts))
         .route("/api/templates", get(templates_list))
@@ -464,8 +473,6 @@ struct UpBody {
     #[serde(default)]
     api_key: Option<String>,
     #[serde(default)]
-    oauth_token: Option<String>,
-    #[serde(default)]
     extra_ports: Vec<WantedPort>,
     #[serde(default)]
     template: sbxw_core::templates::Choice,
@@ -491,7 +498,6 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         extra_ports: b.extra_ports,
         chat: b.chat,
         api_key: b.api_key,
-        oauth_token: b.oauth_token,
         template: b.template,
         remote_control: b.remote_control,
         git: b.git,
@@ -530,6 +536,10 @@ struct DuplicateBody {
 async fn duplicate(State(app): S, Path(name): Path<String>, Json(b): Json<DuplicateBody>) -> ApiResult {
     let (src, new) = (sandbox(&name)?, sandbox(&b.new_name)?);
     Ok(warnings(app.duplicate(&src, new).await?))
+}
+
+async fn recreate(State(app): S, Path(name): Path<String>) -> ApiResult {
+    Ok(warnings(app.recreate(&sandbox(&name)?).await?))
 }
 
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {
@@ -631,6 +641,120 @@ async fn policy_rm(State(app): S, Path(name): Path<String>, Json(b): Json<RuleRm
     let rule = policy::clean_arg(&b.rule, "rule id")?;
     tracing::info!("web UI: removing policy rule {rule} (from sandbox '{sb}' panel)");
     app.sbx_for(&sb).await?.policy_rm(&rule, Some(&sb.name)).await?;
+    Ok(ok())
+}
+
+/// The GitHub token the sandbox proxy injects into git/gh traffic: sbx's
+/// global `github` secret. Only whether it is set is ever read back.
+async fn github_token(State(app): S) -> ApiResult {
+    let gh = sbxw_core::sysbin::gh().map(|p| p.to_string_lossy().into_owned());
+    Ok(ok_with(json!({ "set": app.sbx.secret_has("github").await?, "gh": gh })))
+}
+
+/// The global `github` secret as `gh auth token` on this machine, which sbx
+/// runs and refreshes itself: nothing is pasted, nothing goes stale.
+async fn github_token_gh(State(app): S) -> ApiResult {
+    let gh = sbxw_core::sysbin::gh().ok_or_else(|| {
+        ApiError::bad(format!("no GitHub CLI found in {} — install it, run `gh auth login`, then try again", sbxw_core::sysbin::GH_DIRS.join(", ")))
+    })?;
+    tracing::info!("web UI: storing the global `github` secret as `{} auth token`", gh.display());
+    app.sbx.secret_set_command("github", &sbxw_core::sysbin::gh_token_command(&gh)).await?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct TokenBody {
+    token: String,
+}
+
+async fn github_token_set(State(app): S, Json(b): Json<TokenBody>) -> ApiResult {
+    let token = b.token.trim();
+    if token.is_empty() || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(ApiError::bad("a GitHub token is one word with no spaces — paste it again"));
+    }
+    tracing::info!("web UI: storing the global `github` secret");
+    app.sbx.secret_set("github", token, None).await?;
+    Ok(ok())
+}
+
+async fn github_token_rm(State(app): S) -> ApiResult {
+    tracing::info!("web UI: removing the global `github` secret");
+    app.sbx.secret_rm("github").await?;
+    Ok(ok())
+}
+
+/// What sbx waits for a person to decide, on this machine.
+async fn approvals_list(State(app): S) -> ApiResult {
+    Ok(ok_with(json!({ "approvals": app.sbx.approvals().await? })))
+}
+
+#[derive(Deserialize)]
+struct ApprovalBody {
+    id: String,
+    option: String,
+}
+
+/// Only an approval sbx still lists, with an option it offers: a stale page
+/// (a port request lapses after 45 s) gets told so rather than sbx's error.
+async fn approval_respond(State(app): S, Json(b): Json<ApprovalBody>) -> ApiResult {
+    let pending = app.sbx.approvals().await?;
+    let Some(a) = pending.iter().find(|a| a.id == b.id) else {
+        return Err(ApiError::bad("this request is no longer pending — it was answered, or it lapsed"));
+    };
+    if !a.offers(&b.option) {
+        return Err(ApiError::bad(format!("“{}” is not one of this request's options", b.option)));
+    }
+    tracing::info!("web UI: approval {} for '{}' ({}) → {}", a.id, a.sandbox, a.title, b.option);
+    app.sbx.approval_respond(&a.id, &b.option).await?;
+    Ok(ok())
+}
+
+/// sbx's stored secrets, names and scopes only.
+async fn secrets_list(State(app): S) -> ApiResult {
+    Ok(ok_with(json!({ "secrets": app.sbx.secrets().await? })))
+}
+
+#[derive(Deserialize)]
+struct CustomSecretBody {
+    hosts: Vec<String>,
+    env: String,
+    value: String,
+}
+
+async fn custom_secret_set(State(app): S, Json(b): Json<CustomSecretBody>) -> ApiResult {
+    let hosts: Vec<String> = b.hosts.iter().map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect();
+    if hosts.is_empty() {
+        return Err(ApiError::bad("name at least one host the secret is for (api.example.com, *.example.com)"));
+    }
+    if let Some(h) = hosts.iter().find(|h| h.starts_with('-') || h.chars().any(|c| c.is_whitespace() || c == '/' || c == ',')) {
+        return Err(ApiError::bad(format!("{h:?} is not a host: one name or pattern per entry, no scheme or path")));
+    }
+    let env = b.env.trim();
+    let valid = env.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && env.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Err(ApiError::bad("the variable name is letters, digits and _, not starting with a digit"));
+    }
+    if b.value.is_empty() {
+        return Err(ApiError::bad("paste the secret's value"));
+    }
+    tracing::info!("web UI: storing a custom secret for {} as ${env}", hosts.join(", "));
+    app.sbx.secret_set_custom(&hosts, env, &b.value).await?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct SecretRmBody {
+    name: String,
+}
+
+/// Forget a global secret by the name `sbx secret ls` gives it.
+async fn secret_rm(State(app): S, Json(b): Json<SecretRmBody>) -> ApiResult {
+    let name = b.name.trim();
+    if name.is_empty() || name.starts_with('-') || name.chars().any(|c| c.is_whitespace()) {
+        return Err(ApiError::bad("not a secret name"));
+    }
+    tracing::info!("web UI: removing the global secret {name}");
+    app.sbx.secret_rm(name).await?;
     Ok(ok())
 }
 

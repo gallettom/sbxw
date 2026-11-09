@@ -1,21 +1,36 @@
 //! Kits: sbx's declarative extension point, and the facts sbxw has learnt
 //! about applying them.
 //!
-//! * **Creation is still the cheapest moment to apply a kit.** `sbx kit add` on
-//!   an existing sandbox recreates its container, so every configured kit goes
-//!   to `sbx create --kit`. `kit add` also takes a kit that declares
-//!   startup commands (they run after the add and on every start), so an
-//!   existing sandbox gets every kit; a refusal sbx still gives is a message
-//!   telling the person to recreate, never a recreate sbxw decides on its own.
+//! * **Kit spec v3 only (sbx 0.51).** `claude` now resolves to the published
+//!   v3 workload `docker.io/sbx/claude:latest`, and a v1/v2 kit cannot be
+//!   composed with a v3 one. Every kit sbxw ships or writes is v3; a local v1/v2
+//!   kit in `kits` is refused before anything is created.
+//! * **Creation is the moment to apply a kit.** `sbx kit add` on an existing
+//!   sandbox recreates its container, and refuses kits declaring credentials,
+//!   ports, volumes, generated lifecycle files or host-level denies; image
+//!   content, install/startup hooks and allow rules it takes. A refusal is a
+//!   message telling the person to recreate, never a recreate sbxw decides on
+//!   its own.
 //! * **sbx keeps a kit's path, not a copy.** A container swap re-resolves every
 //!   kit applied before it by its original path; a kit directory that is gone
-//!   fails the swap and names the *wrong* kit. Hence the durable OAuth kit
-//!   directory, and the narrow repair of an old temp-dir reference.
+//!   fails the swap and names the *wrong* kit. Hence the stable directories
+//!   every bundled and generated kit is written to.
 
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
 pub const BUNDLED: [&str; 8] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac"];
+
+/// sbxw's own kit, applied to every sandbox before the project's: Node.js,
+/// which sbx 0.51's Claude Code image lacks and every in-sandbox piece of sbxw
+/// runs on. Not one of [`BUNDLED`]: it is not offered, and not listed in `kits`.
+pub const BASE: &str = "base";
+
+/// `kits` as applied: [`BASE`] first, then the project's, without repeating it.
+pub fn with_base(kits: &[String]) -> Vec<String> {
+    let base = format!("sbxw:{BASE}");
+    std::iter::once(base.clone()).chain(kits.iter().filter(|k| **k != base).cloned()).collect()
+}
 
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
 /// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
@@ -36,17 +51,6 @@ pub fn about(name: &str) -> &'static str {
         "terminal-mac" => "a virtual Mac the agent drives (Safari, Mac apps) through the host's terminal-mac; Apple silicon hosts",
         _ => "",
     }
-}
-
-/// The bundled kit a local path is a copy of: `…/assets/<name>` in an sbxw
-/// checkout, or `~/.sbxw/kits/<name>` where sbxw writes them out. Configs
-/// written before `sbxw:` names list kits that way; the Kits dialog says so.
-pub fn bundled_by_path(kit: &str) -> Option<&'static str> {
-    let p = Path::new(kit.trim_end_matches('/'));
-    let name = p.file_name()?.to_str()?;
-    let parent = p.parent()?.file_name()?.to_str()?;
-    let found = BUNDLED.iter().find(|b| **b == name)?;
-    (parent == "assets" || parent == "kits").then_some(*found)
 }
 
 /// The root `kits` of `raw` (an sbxw.toml) as written; `None` when there is no
@@ -146,39 +150,68 @@ pub fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
     kit
 }
 
-/// The name a kit reference shows up as in `sbx inspect`: the spec's `name:`,
-/// else the reference's last segment without tag or `.zip`. Only used to
-/// *skip* a re-apply, so a miss costs a redundant re-apply, nothing more.
-pub fn display_name(kit: &str, spec: Option<&str>) -> String {
-    if let Some(spec) = spec {
-        for line in spec.lines() {
-            // `name:` (v2) or `displayName:` (v3, which has no identity name).
-            if let Some(rest) = line.strip_prefix("name:").or_else(|| line.strip_prefix("displayName:")) {
-                let n = rest.trim().trim_matches(|c| c == '"' || c == '\'');
-                if !n.is_empty() {
-                    return n.to_string();
-                }
-            }
-        }
-    }
-    let last = kit.rsplit('/').next().unwrap_or(kit);
-    last.split(':')
-        .next()
-        .unwrap_or(last)
-        .trim_end_matches(".zip")
-        .to_string()
+/// The `schemaVersion` of a kit directory's spec, `None` when it has no
+/// readable `spec.yaml` (a ZIP, a registry reference, a companion-pair kit
+/// named after its stem).
+pub fn spec_version(dir: &Path) -> Option<u32> {
+    let raw = std::fs::read_to_string(dir.join("spec.yaml")).ok()?;
+    raw.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        (k.trim() == "schemaVersion").then(|| v.trim().trim_matches(|c| c == '"' || c == '\'').parse().ok())?
+    })
 }
 
-/// Does the kit directory hold a v3 spec? sbx 0.50's `kit validate` reads
-/// only v1/v2 specs and refuses every v3 one (`field capabilities not found`),
-/// even the spec project's own examples — so a v3 kit is left to `sbx create`,
+/// Does the kit directory hold a v3 spec? sbx's `kit validate` reads only
+/// v1/v2 specs and refuses every v3 one (`field capabilities not found`), even
+/// the spec project's own examples — so a v3 kit is left to `sbx create`,
 /// which does read it.
 pub fn is_v3_kit(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join("spec.yaml")).is_ok_and(|raw| {
-        raw.lines().any(|l| {
-            l.split_once(':').is_some_and(|(k, v)| k.trim() == "schemaVersion" && v.trim().trim_matches(|c| c == '"' || c == '\'') == "3")
-        })
-    })
+    spec_version(dir) == Some(3)
+}
+
+/// Why a local kit cannot be applied with sbx 0.51's `claude` workload, if it
+/// cannot: a v1/v2 spec does not compose with a v3 one.
+pub fn incompatible_spec(dir: &Path) -> Option<String> {
+    match spec_version(dir)? {
+        3 => None,
+        v => Some(format!(
+            "kit spec v{v} — sbx 0.51's Claude Code workload is a v3 kit, and v1/v2 kits do not compose with v3 ones. \
+             Convert it (docs/kits-and-skills.md#writing-your-own-kit) or remove it from `kits`"
+        )),
+    }
+}
+
+/// What a local kit *is*, for a fingerprint: its `spec.yaml` and every file
+/// under `files/` (the image content a v3 build copies), path then bytes, in
+/// path order. A reference that is not a local directory is its own text.
+pub fn content_text(kit: &str) -> String {
+    let dir = Path::new(kit);
+    let Ok(spec) = std::fs::read_to_string(dir.join("spec.yaml")) else {
+        return kit.to_string();
+    };
+    let mut files = Vec::new();
+    collect_files(&dir.join("files"), &mut files);
+    files.sort();
+    let mut out = spec;
+    for f in files {
+        let rel = f.strip_prefix(dir).unwrap_or(&f).to_string_lossy().replace('\\', "/");
+        out.push('\u{0}');
+        out.push_str(&rel);
+        out.push('\u{0}');
+        out.push_str(&String::from_utf8_lossy(&std::fs::read(&f).unwrap_or_default()));
+    }
+    out
+}
+
+fn collect_files(dir: &Path, acc: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        match e.file_type() {
+            Ok(t) if t.is_dir() => collect_files(&e.path(), acc),
+            Ok(t) if t.is_file() => acc.push(e.path()),
+            _ => {}
+        }
+    }
 }
 
 /// The sandbox paths a spec declares `host-mount@1` at — what `--mount
@@ -202,10 +235,30 @@ pub fn host_mount_targets(spec: &str) -> Vec<String> {
         .collect()
 }
 
-/// Is a failed `sbx kit add` the "recreate the sandbox instead" refusal?
+/// Is a failed `sbx kit add` the "recreate the sandbox instead" refusal? Since
+/// 0.51 that includes a sandbox created by an earlier sbx from its embedded
+/// Claude spec, and a v3 kit refused for declaring what only creation applies.
 pub fn add_needs_recreate(err: &str) -> bool {
     let lower = err.to_lowercase();
-    lower.contains("does not yet apply") || lower.contains("recreate the sandbox from scratch")
+    ["does not yet apply", "recreate the sandbox", "must be recreated", "requires sandbox creation", "cannot be combined", "can't be combined"]
+        .iter()
+        .any(|s| lower.contains(s))
+}
+
+/// Did a `sbx exec … node` fail for want of `node` in the sandbox? The shell
+/// says "not found" with status 127; sbx's own exec, "executable file not
+/// found".
+pub fn node_missing(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("node") && (lower.contains("not found") || lower.contains("exit status 127") || lower.contains("no such file"))
+}
+
+/// Is a failed `sbx kit add` sbx asking a person to approve permissions the
+/// kit adds (0.51: new network rules), which it cannot do without a terminal
+/// and offers no flag for? Then the person runs the command themselves.
+pub fn add_needs_approval(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("stdin is not a terminal") || lower.contains("run this command in a terminal")
 }
 
 /// Does sbx need `kit.allowedSources` before it fetches this reference? Git
@@ -227,85 +280,42 @@ pub fn needs_allowlist(kit: &str) -> bool {
     false
 }
 
-/// The part of `sbx inspect` that lists kits, or the whole text when none can
-/// be found. Narrowed because inspect also lists custom secrets, and a secret
-/// containing a kit's name would skip a kit never applied.
-pub fn inspect_kits_section(raw: &str) -> String {
-    json_kits_section(raw)
-        .or_else(|| text_kits_section(raw))
-        .unwrap_or_else(|| raw.to_string())
+/// What sbxw reads of `sbx inspect --format json` (0.51).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inspected {
+    /// The kits, by the path or reference each was applied from.
+    pub kits: Vec<String>,
+    /// The sbx that created it (`v0.51.0`); `None` for a sandbox an sbx
+    /// older than 0.51 created, which did not record it.
+    pub created_version: Option<String>,
+}
+
+/// `None` when `raw` is not that document.
+pub fn parse_inspect(raw: &str) -> Option<Inspected> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    v.as_object()?;
+    let kits = v.get("kits").and_then(|k| k.as_array()).map(|a| a.iter().filter_map(|k| k.as_str().map(String::from)).collect()).unwrap_or_default();
+    let created_version = v.get("created_version").and_then(|c| c.as_str()).map(str::trim).filter(|c| !c.is_empty()).map(String::from);
+    Some(Inspected { kits, created_version })
+}
+
+/// The kits `sbx inspect --format json` lists; `None` when `raw` is not
+/// that document.
+pub fn applied_kits(raw: &str) -> Option<Vec<String>> {
+    parse_inspect(raw).map(|i| i.kits)
 }
 
 /// Is `kit` already applied to a sandbox? Asked before `sbx kit add`, which
 /// recreates the container, so a miss costs a recreate on every bring-up.
 ///
-/// sbxw's own record of what it applied answers first. Then `sbx inspect`,
-/// which lists kits by the *path or reference* they were applied from (0.49:
-/// `Kits: /a/codemap, /b/agent-skills`): the same reference, or the same last
-/// segment — a bundled kit applied from an older path is the same kit — is a
-/// match. The spec's `name:` is only a last resort, matched against those
-/// segments: it need not be the folder's name (`k8s-tools` is `k8s-dev-tools`).
-pub fn already_applied(kit: &str, spec: Option<&str>, inspect_section: &str, recorded: &[String]) -> bool {
-    if recorded.iter().any(|r| r == kit) {
-        return true;
-    }
-    let applied: Vec<&str> = inspect_section
-        .split([',', '\n'])
-        .map(|r| r.trim().trim_start_matches("- ").trim_matches(|c| matches!(c, '"' | '[' | ']' | '\'')).trim())
-        .filter(|r| !r.is_empty())
-        .collect();
-    let segment = display_name(kit, None);
-    let named = display_name(kit, spec);
-    applied.iter().any(|r| {
-        let theirs = display_name(r.trim_end_matches('/'), None);
-        *r == kit || (theirs.len() >= 3 && (theirs == segment || theirs == named))
-    })
-}
-
-fn json_kits_section(raw: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let (_, kits) = value
-        .as_object()?
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("kits") || k.eq_ignore_ascii_case("kit"))?;
-    Some(kits.to_string())
-}
-
-fn text_kits_section(raw: &str) -> Option<String> {
-    let indent = |l: &str| l.len() - l.trim_start().len();
-    let mut lines = raw.lines();
-    let (label_indent, first) = lines.find_map(|line| {
-        let (label, rest) = line.trim_start().split_once(':')?;
-        let label = label.trim_end();
-        (label.eq_ignore_ascii_case("kits") || label.eq_ignore_ascii_case("kit"))
-            .then(|| (indent(line), rest.trim().to_string()))
-    })?;
-    let mut section = vec![first];
-    for line in lines {
-        if !line.trim().is_empty() && indent(line) <= label_indent {
-            break;
-        }
-        section.push(line.trim().to_string());
-    }
-    Some(section.join("\n"))
-}
-
-/// The path of a stale sbxw OAuth kit named in a failed `sbx kit add`, if that
-/// is the failure. Deliberately narrow — the basename must be sbxw's own, the
-/// path absent, its parent present — because the caller writes to a path
-/// parsed out of a subprocess's stderr.
-pub fn stale_oauth_kit_path(err: &str) -> Option<PathBuf> {
-    if !err.contains("does not exist") {
-        return None;
-    }
-    err.split('"').map(PathBuf::from).find(|p| {
-        p.is_absolute()
-            && p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("sbxw-oauth-kit-"))
-            && !p.exists()
-            && p.parent().is_some_and(|parent| parent.is_dir())
-    })
+/// sbxw's own record of what it applied answers first, then what `sbx
+/// inspect` lists: the same reference, or the same last path segment (a
+/// bundled kit applied from another path is the same kit). A segment under
+/// three characters is never matched on its own.
+pub fn already_applied(kit: &str, applied: &[String], recorded: &[String]) -> bool {
+    let segment = |k: &str| k.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
+    let mine = segment(kit);
+    recorded.iter().any(|r| r == kit) || applied.iter().any(|r| r == kit || (mine.len() >= 3 && segment(r) == mine))
 }
 
 /// Is a refused `policy allow|deny` the organisation owning the policy? That is
@@ -313,21 +323,6 @@ pub fn stale_oauth_kit_path(err: &str) -> Option<PathBuf> {
 pub fn policy_is_governed(err: &str) -> bool {
     let lower = err.to_lowercase();
     lower.contains("managed by your organization") || lower.contains("managed by your organisation")
-}
-
-/// `~/.claude/.credentials.json` for an OAuth token. The expiry is 2100; the
-/// refresh token is the access token, so no refresh is attempted.
-pub fn oauth_credentials_json(token: &str, subscription: &str) -> String {
-    serde_json::json!({
-        "claudeAiOauth": {
-            "accessToken": token,
-            "refreshToken": token,
-            "expiresAt": 4_102_444_800_000u64,
-            "scopes": ["user:inference"],
-            "subscriptionType": subscription,
-        }
-    })
-    .to_string()
 }
 
 /// The per-sandbox volumes kit (spec v3): one `volume@1` per path. sbx keeps
@@ -348,23 +343,6 @@ pub fn volumes_kit_spec(paths: &[String]) -> String {
         out.push_str(&format!("  - type: com.docker.sandbox/volume@1\n    config:\n      path: '{}'\n", p.replace('\'', "''")));
     }
     out
-}
-
-/// The OAuth mixin kit, spec v2. Without credentials it is the same kit minus
-/// the file — what restores a dangling reference when no token is at hand.
-pub fn oauth_kit_spec(credentials_json: Option<&str>) -> String {
-    let files = credentials_json.map_or_else(String::new, |creds| {
-        // YAML single-quoted scalar: a quote is doubled, nothing else escapes.
-        let quoted = creds.replace('\'', "''");
-        format!(
-            "\nsetup:\n  files:\n    - path: /home/agent/.claude/.credentials.json\n      content: '{quoted}'\n      mode: \"0600\"\n"
-        )
-    });
-    format!(
-        "schemaVersion: \"2\"\nkind: mixin\nname: claude-oauth\n\
-         description: Injects OAuth credentials for Claude Code\n\n\
-         permissions:\n  network:\n    allow:\n      - claude.ai\n{files}"
-    )
 }
 
 #[cfg(test)]
@@ -413,11 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_or_written_out_path_is_known_as_its_bundled_kit() {
-        assert_eq!(bundled_by_path("/Users/t/sbxw 2/assets/codemap"), Some("codemap"));
-        assert_eq!(bundled_by_path("/Users/t/.sbxw/kits/retro/"), Some("retro"));
-        assert_eq!(bundled_by_path("/Users/t/my-kits/codemap"), None);
-        assert_eq!(bundled_by_path("/Users/t/sbxw/assets/headroom"), None);
+    fn every_bundled_kit_is_described() {
         for b in BUNDLED {
             assert!(!about(b).is_empty(), "{b}");
         }
@@ -435,14 +409,6 @@ mod tests {
         assert!(resolved.ends_with("local/kit") && Path::new(&resolved).is_absolute());
         let missing = resolve_kit_ref(d, "./not-yet".into());
         assert!(missing.ends_with("/not-yet") && !missing.contains("/./"));
-    }
-
-    #[test]
-    fn display_names_come_from_the_spec_or_the_reference() {
-        assert_eq!(display_name("/x/codemap", Some("schemaVersion: \"2\"\nname: codemap\n")), "codemap");
-        assert_eq!(display_name("/x/git-identity", Some("schemaVersion: \"3\"\ndisplayName: git-identity\n")), "git-identity");
-        assert_eq!(display_name("ghcr.io/o/kit:1.0", None), "kit");
-        assert_eq!(display_name("/x/kit.zip", None), "kit");
     }
 
     #[test]
@@ -480,6 +446,8 @@ mod tests {
     #[test]
     fn startup_and_refusals_are_recognised() {
         assert!(add_needs_recreate("kit declares commands.startup, which the kit-add recreate flow does not yet apply"));
+        assert!(add_needs_recreate("sandbox was created from an embedded agent spec and must be recreated before kit add"));
+        assert!(add_needs_recreate("v2 kits cannot be combined with v3 kits"));
         assert!(!add_needs_recreate("network unreachable"));
     }
 
@@ -494,50 +462,50 @@ mod tests {
     }
 
     #[test]
-    fn the_kits_section_is_found_in_text_and_json() {
-        let text = "Name: neos\nKits:\n  - codemap\n  - k8s\nSecrets:\n  - codemap-token\n";
-        let s = inspect_kits_section(text);
-        assert!(s.contains("k8s") && !s.contains("token"));
-        let json = r#"{"name":"neos","kits":["a"],"secrets":["b"]}"#;
-        assert_eq!(inspect_kits_section(json), r#"["a"]"#);
-        assert_eq!(inspect_kits_section("NAME KITS\nneos a"), "NAME KITS\nneos a");
-    }
-
-    #[test]
     fn an_applied_kit_is_found_by_record_path_or_segment() {
-        // What sbx 0.49.2 prints.
-        let raw = "    Name:            sbxw-2\n    Agent:           claude\n    Kits:            /Users/t/.sbxw/state/kits/sbxw-2-oauth, /Users/t/sbxw 2/assets/md-to-pdf-tools, /Users/t/sbxw 2/assets/codemap, /Users/t/.sbxw/kits/k8s-tools\n";
-        let section = inspect_kits_section(raw);
-        assert!(already_applied("/Users/t/sbxw 2/assets/codemap", None, &section, &[]), "same path");
-        assert!(already_applied("/Users/t/.sbxw/kits/md-to-pdf-tools", None, &section, &[]), "a bundled kit from an older path");
-        assert!(already_applied("/Users/t/.sbxw/kits/k8s-tools", Some("name: k8s-dev-tools\n"), &section, &[]), "the folder, not the spec name");
-        assert!(!already_applied("/Users/t/.sbxw/kits/agent-skills", None, &section, &[]), "not listed");
-        assert!(already_applied("/k/agent-skills", None, "", &["/k/agent-skills".into()]), "sbxw's own record");
-        assert!(!already_applied("/k/map", None, &section, &[]), "a short name is not a substring match");
+        // What sbx 0.51 prints.
+        let raw = r#"{"name":"smoke051","kits":["docker.io/sbx/claude@sha256:611f","/Users/t/sbxw/assets/base","/Users/t/sbxw/assets/codemap","/Users/t/.sbxw/kits/k8s-tools"],"state":"running"}"#;
+        let applied = applied_kits(raw).unwrap();
+        assert!(already_applied("/Users/t/sbxw/assets/codemap", &applied, &[]), "same path");
+        assert!(already_applied("/Users/t/.sbxw/kits/codemap/", &applied, &[]), "a bundled kit from another path");
+        assert!(already_applied("/x/k8s-tools", &applied, &[]));
+        assert!(!already_applied("/Users/t/.sbxw/kits/agent-skills", &applied, &[]), "not listed");
+        assert!(already_applied("/k/agent-skills", &[], &["/k/agent-skills".into()]), "sbxw's own record");
+        assert!(!already_applied("/k/ba", &["/z/ba".into()], &[]), "a short name is not enough");
+        assert_eq!(applied_kits("Name: x\nKits: a"), None, "only the JSON document");
+        assert_eq!(parse_inspect(raw).unwrap().created_version, None, "an sbx before 0.51 recorded none");
+        let new = parse_inspect(r#"{"name":"n","kits":[],"created_version":"v0.51.0"}"#).unwrap();
+        assert_eq!(new.created_version.as_deref(), Some("v0.51.0"));
     }
 
     #[test]
-    fn a_stale_oauth_path_is_recognised_narrowly() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("sbxw-oauth-kit-1234");
-        let err = format!("ERROR: re-resolve original kit 0 (\"{}\"): path does not exist", p.display());
-        assert_eq!(stale_oauth_kit_path(&err), Some(p.clone()));
-        let other = dir.path().join("someone-elses");
-        let err = format!("(\"{}\"): path does not exist", other.display());
-        assert_eq!(stale_oauth_kit_path(&err), None);
+    fn the_base_kit_goes_first_once() {
+        assert_eq!(with_base(&[]), ["sbxw:base"]);
+        assert_eq!(with_base(&["sbxw:codemap".into(), "sbxw:base".into()]), ["sbxw:base", "sbxw:codemap"]);
     }
 
     #[test]
-    fn the_oauth_kit_is_v2_and_its_content_survives_quotes() {
-        let creds = oauth_credentials_json("tok'en", "max");
-        let spec = oauth_kit_spec(Some(&creds));
-        assert!(spec.starts_with("schemaVersion: \"2\""));
-        let doc: serde_norway::Value = serde_norway::from_str(&spec).unwrap();
-        let content = doc["setup"]["files"][0]["content"].as_str().unwrap();
-        let v: serde_json::Value = serde_json::from_str(content).unwrap();
-        assert_eq!(v["claudeAiOauth"]["accessToken"], "tok'en");
-        assert_eq!(v["claudeAiOauth"]["subscriptionType"], "max");
-        assert!(!oauth_kit_spec(None).contains("setup:"));
+    fn a_v1_or_v2_kit_is_refused_and_a_v3_one_is_not() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(incompatible_spec(d.path()), None, "no spec, nothing to say");
+        std::fs::write(d.path().join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: x\n").unwrap();
+        assert!(incompatible_spec(d.path()).unwrap().contains("kit spec v2"));
+        std::fs::write(d.path().join("spec.yaml"), "# syntax=docker/sandbox-kit:3\nschemaVersion: '3'\nkind: mixin\n").unwrap();
+        assert_eq!(incompatible_spec(d.path()), None);
+        assert_eq!(spec_version(d.path()), Some(3));
+    }
+
+    #[test]
+    fn a_kit_s_content_covers_its_files() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("spec.yaml"), "schemaVersion: \"3\"\n").unwrap();
+        std::fs::create_dir_all(d.path().join("files/home/agent")).unwrap();
+        std::fs::write(d.path().join("files/home/agent/a.md"), "one").unwrap();
+        let k = d.path().to_string_lossy().into_owned();
+        let before = content_text(&k);
+        std::fs::write(d.path().join("files/home/agent/a.md"), "two").unwrap();
+        assert_ne!(before, content_text(&k), "a changed file is a changed kit");
+        assert_eq!(content_text("docker.io/sbx/k:1"), "docker.io/sbx/k:1");
     }
 
     #[test]

@@ -425,6 +425,25 @@
   .mac-btn:disabled { opacity: .5; cursor: not-allowed; }
   .mac-btn-danger { color: var(--c-red); background: none; border-color: color-mix(in srgb, var(--c-red) 45%, transparent); }
   .mac-btn-danger:hover:not(:disabled) { background: var(--c-red-tint); border-color: var(--c-red); color: var(--c-red); }
+
+  /* ── Setup → Secrets: two Mac-style cards, each with its own actions ── */
+  .sec-body { display: flex; flex-direction: column; gap: .9rem; }
+  /* Author display beats [hidden]; these toggle a class instead. */
+  .sec-body .mac-btn.hidden { display: none; }
+  .sec-row { display: flex; gap: .5rem; align-items: center; }
+  .sec-row .field-input { flex: 1; min-width: 0; margin: 0; }
+  .sec-list:empty { display: none; }
+  .sec-list { display: flex; flex-direction: column; border: 1px solid var(--c-elevated); border-radius: var(--r-xs); }
+  .sec-item { display: flex; align-items: center; gap: .6rem; padding: .35rem .5rem; }
+  .sec-item + .sec-item { border-top: 1px solid var(--c-elevated); }
+  .sec-name { color: var(--c-text-bright); font-size: 12px; }
+  .sec-scope { font-size: 11px; color: var(--c-text-muted); }
+  .sec-rm { margin-left: auto; padding: .15rem .5rem; font-size: 11px; }
+  .sec-grid { display: grid; grid-template-columns: 2fr 1.4fr 1.4fr auto; gap: .5rem; align-items: end; }
+  .sec-field { display: flex; flex-direction: column; gap: .25rem; min-width: 0; }
+  .sec-field > span { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-dim); }
+  .sec-field .field-input { margin: 0; min-width: 0; }
+  @media (max-width: 640px) { .sec-grid { grid-template-columns: 1fr; } }
   .mac-banner { display: flex; align-items: center; gap: .5rem; padding: .5rem .75rem; border-radius: var(--r-sm); font-size: 12px; }
   .mac-banner-busy  { color: var(--c-blue); background: var(--c-blue-tint); }
   .mac-banner-error { color: var(--c-red); background: var(--c-red-tint); border: 1px solid var(--c-red-border); }
@@ -438,7 +457,6 @@
   .kit-ref { font-family: var(--font-mono); font-size: 12px; color: var(--c-text-bright); }
   .kit-row .skills-tag { justify-self: start; }
   .kit-about { grid-column: 2 / -1; font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
-  .kit-via { grid-column: 2 / -1; font-family: var(--font-mono); font-size: 10.5px; color: var(--c-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kit-head { display: flex; align-items: baseline; justify-content: space-between; }
   .kit-link { background: none; border: none; padding: 0; font: inherit; font-size: 11px; color: var(--c-blue); cursor: pointer; }
   .kit-link:hover { text-decoration: underline; }
@@ -1216,6 +1234,17 @@
   /* Pane badges at the right end, as the float had them. */
   .sbx-name > .sbx-pane-badge { order: 1; float: none; }
   .sbx-name-text + .sbx-pane-badge { margin-left: auto; }
+  /* With its sessions unfolded, a row's second line is its actions: the
+     state (dot, ⚑) moves up beside the name instead of being squeezed out. */
+  .sbx-name-state { display: none; align-items: center; gap: .4rem; margin: 0 auto 0 .5rem; font-weight: 400; }
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-name-state { display: inline-flex; }
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .dot,
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .sbx-status,
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-marks .sbx-flag { display: none; }
+  /* …and, nothing left before them, the actions start at the left edge. */
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .sbx-agent,
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-marks { display: none; }
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-actions { margin-left: 0; }
   /* The threads of a sandbox, under its row: the way to any of them from
      anywhere, folded or not. Hung off a hairline so they read as its
      branches; a shown one is in full text, a folded one muted. */
@@ -1423,6 +1452,27 @@
   }
   /* Without hover the actions always show: the age sits just before them. */
   .sbx-age + .sbx-actions { margin-left: 0; }
+
+  /* The status line's right end at rest: what waits on the person (blue, a
+     button), whether an older sbx made it (an amber ring), how old it is. On
+     the row under the pointer the ring and the age give way to the actions,
+     where ⟲ says the same thing as the ring; the flag stays, being a thing to
+     do. */
+  .sbx-marks { display: flex; align-items: center; gap: .4rem; margin-left: auto; flex-shrink: 0; }
+  .sbx-marks:empty { display: none; }
+  .sbx-marks .sbx-age { margin-left: 0; }
+  .sbx-marks + .sbx-actions { margin-left: .35rem; }
+  .sbx-flag {
+    font: inherit; font-size: 10.5px; font-weight: 600; color: var(--c-blue);
+    background: none; border: 0; padding: 0 .15rem; border-radius: var(--r-xs); cursor: pointer; line-height: 1.4;
+  }
+  .sbx-flag:hover, .sbx-flag:focus-visible { background: var(--c-blue-tint); color: var(--c-text-bright); }
+  .sbx-old-mark { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--c-amber); flex-shrink: 0; }
+  @media (hover: hover) {
+    .sbx-item.focused .sbx-old-mark,
+    .sbx-item:hover .sbx-old-mark,
+    .sbx-item:focus-within .sbx-old-mark { display: none; }
+  }
   .ports-section-label {
     color: var(--c-text-muted); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;
@@ -3191,6 +3241,7 @@
   .fx-fav-icon.mount { color: var(--c-green); }
   .fx-fav-icon.thread { color: var(--c-purple); }
   .fx-fav-icon.starred { color: var(--c-amber); }
+  .fx-fav-icon.logs { color: var(--c-text-soft); }
   .fx-fav.active .fx-fav-icon.workspace,
   .fx-fav.active .fx-fav-icon.home,
   .fx-fav.active .fx-fav-icon.root { color: var(--c-text-bright); }

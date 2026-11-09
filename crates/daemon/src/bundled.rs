@@ -1,25 +1,19 @@
 //! The kits that ship inside the binary, and where they are written out.
 //!
-//! A reference `sbxw:<name>` in `kits` is one of these. sbx applies a kit
-//! from a directory and keeps its *path*, re-resolving it on every container
-//! swap, so each is written to a stable `~/.sbxw/kits/<name>/spec.yaml` — and
-//! rewritten only when this build's spec differs, so a path sbx holds never
-//! goes missing under it.
+//! A reference `sbxw:<name>` in `kits` is one of these. Each is a kit spec v3
+//! directory — `spec.yaml` and the `files/` tree its `build:` copies into the
+//! image — embedded by `build.rs`. sbx applies a kit from a directory and
+//! keeps its *path*, so each is written to a stable `~/.sbxw/kits/<name>/`,
+//! and a file is rewritten only when this build's copy differs: a path sbx
+//! holds never goes missing under it, and an unchanged tree keeps sbx's build
+//! cache warm.
 
 use crate::store::{write_atomic, Paths};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use sbxw_core::kits::bundled_name;
+use std::path::Path;
 
-const SPECS: &[(&str, &str)] = &[
-    ("codemap", include_str!("../../../assets/codemap/spec.yaml")),
-    ("agent-skills", include_str!("../../../assets/agent-skills/spec.yaml")),
-    ("md-to-pdf-tools", include_str!("../../../assets/md-to-pdf-tools/spec.yaml")),
-    ("retro", include_str!("../../../assets/retro/spec.yaml")),
-    ("k8s-tools", include_str!("../../../assets/k8s-tools/spec.yaml")),
-    ("git-identity", include_str!("../../../assets/git-identity/spec.yaml")),
-    ("ssh-agent", include_str!("../../../assets/ssh-agent/spec.yaml")),
-    ("terminal-mac", include_str!("../../../assets/terminal-mac/spec.yaml")),
-];
+include!(concat!(env!("OUT_DIR"), "/bundled_kits.rs"));
 
 /// The kits that fill the shared cache, in the order they are applied.
 pub const CACHING: [&str; 2] = ["agent-skills", "md-to-pdf-tools"];
@@ -35,33 +29,65 @@ pub fn resolve(paths: &Paths, kits: &[String]) -> Result<Vec<String>> {
 }
 
 /// [`sbxw_core::templates::fingerprint`] of the kits `kits` resolves to: each
-/// local kit's `spec.yaml`, else the reference itself.
+/// local kit's content, else the reference itself.
 pub fn fingerprint(paths: &Paths, kits: &[String]) -> Result<String> {
-    let specs: Vec<String> = resolve(paths, kits)?
-        .into_iter()
-        .map(|k| std::fs::read_to_string(std::path::Path::new(&k).join("spec.yaml")).unwrap_or(k))
-        .collect();
-    Ok(sbxw_core::templates::fingerprint(&specs))
+    let texts: Vec<String> = resolve(paths, kits)?.iter().map(|k| sbxw_core::kits::content_text(k)).collect();
+    Ok(sbxw_core::templates::fingerprint(&texts))
 }
 
 fn write_out(paths: &Paths, name: &str) -> Result<String> {
-    let (_, spec) = SPECS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .ok_or_else(|| anyhow!("no bundled kit named '{name}'"))?;
+    let (_, files) = KITS.iter().find(|(n, _)| *n == name).ok_or_else(|| anyhow!("no bundled kit named '{name}'"))?;
     let dir = paths.kits().join(name);
-    let file = dir.join("spec.yaml");
-    if std::fs::read_to_string(&file).ok().as_deref() != Some(*spec) {
-        write_atomic(&file, spec.as_bytes())?;
-        // Readable by sbx; the spec holds no secret.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644));
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
+    for (rel, mode, bytes) in *files {
+        let file = dir.join(rel);
+        if std::fs::read(&file).ok().as_deref() != Some(*bytes) {
+            write_atomic(&file, bytes).with_context(|| format!("writing the bundled kit '{name}'"))?;
+        }
+        set_mode(&file, *mode);
+    }
+    prune(&dir.join("files"), &dir, files);
+    // Readable by sbx and its builder; nothing here is a secret.
+    set_tree_mode(&dir);
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+/// Remove what an older sbxw wrote under `files/` and this one no longer
+/// ships: the build copies the whole tree, so a stale file would land in the
+/// sandbox.
+fn prune(at: &Path, root: &Path, keep: &[(&str, u32, &[u8])]) {
+    let Ok(entries) = std::fs::read_dir(at) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            prune(&p, root, keep);
+            let _ = std::fs::remove_dir(&p); // only when empty
+        } else {
+            let rel = p.strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+            if !keep.iter().any(|(k, _, _)| *k == rel) {
+                let _ = std::fs::remove_file(&p);
+            }
         }
     }
-    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[cfg(unix)]
+fn set_mode(p: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) {}
+
+fn set_tree_mode(dir: &Path) {
+    set_mode(dir, 0o755);
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.path().is_dir() {
+                set_tree_mode(&e.path());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -76,7 +102,9 @@ mod tests {
         let r = resolve(&p, &kits).unwrap();
         assert_eq!(r[1], "/abs/other");
         let spec = p.kits().join("codemap/spec.yaml");
-        assert!(std::fs::read_to_string(&spec).unwrap().contains("name: codemap"));
+        assert!(std::fs::read_to_string(&spec).unwrap().contains("displayName: codemap"));
+        let script = p.kits().join("codemap/files/home/agent/.sbxw/codemap/install-hooks.mjs");
+        assert!(script.is_file());
         let before = std::fs::metadata(&spec).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         resolve(&p, &kits).unwrap();
@@ -84,10 +112,45 @@ mod tests {
         assert!(resolve(&p, &["sbxw:nope".into()]).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn every_bundled_name_has_a_spec() {
-        for name in sbxw_core::kits::BUNDLED {
-            assert!(SPECS.iter().any(|(n, _)| *n == name), "{name}");
+    fn scripts_keep_their_mode_and_stale_files_go() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = Paths::under(d.path());
+        let stale = p.kits().join("retro/files/home/agent/.claude/commands/gone.md");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "old").unwrap();
+        resolve(&p, &["sbxw:retro".into()]).unwrap();
+        assert!(!stale.exists(), "a file this build does not ship is removed");
+        let digest = p.kits().join("retro/files/home/agent/.sbxw/retro/digest.mjs");
+        assert_eq!(std::fs::metadata(&digest).unwrap().permissions().mode() & 0o777, 0o755);
+        let cmd = p.kits().join("retro/files/home/agent/.claude/commands/retro.md");
+        assert_eq!(std::fs::metadata(&cmd).unwrap().permissions().mode() & 0o777, 0o644);
+    }
+
+    #[test]
+    fn the_base_kit_carries_the_relay_guidance_the_tooling_writes() {
+        let (_, files) = KITS.iter().find(|(n, _)| *n == sbxw_core::kits::BASE).unwrap();
+        let (_, _, spec) = files.iter().find(|(r, _, _)| *r == "spec.yaml").unwrap();
+        let doc: serde_norway::Value = serde_norway::from_str(std::str::from_utf8(spec).unwrap()).unwrap();
+        let ctx = doc["capabilities"].as_sequence().unwrap().iter().find(|c| c["type"] == "com.docker.sandbox/agent-context@2").expect("agent-context@2");
+        assert_eq!(ctx["config"]["content"].as_str(), Some(sbxw_core::tooling::relay_guidance().as_str()), "edit both, or neither");
+    }
+
+    #[test]
+    fn every_bundled_kit_is_embedded_and_v3() {
+        for name in sbxw_core::kits::BUNDLED.iter().chain([&sbxw_core::kits::BASE]) {
+            let (_, files) = KITS.iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("{name}"));
+            let (_, _, spec) = files.iter().find(|(r, _, _)| *r == "spec.yaml").unwrap();
+            let spec = std::str::from_utf8(spec).unwrap();
+            assert!(spec.starts_with("# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\n"), "{name}: v3 only since sbx 0.51");
+            let doc: serde_norway::Value = serde_norway::from_str(spec).unwrap_or_else(|e| panic!("{name}: {e}"));
+            // What the build copies is what is embedded.
+            if let Some(build) = doc.get("build").and_then(|b| b.as_str()) {
+                assert!(build.contains("COPY --chown=1000:1000 files/home/agent/ /home/agent/"), "{name}");
+                assert!(files.iter().any(|(r, _, _)| r.starts_with("files/home/agent/")), "{name}: a build with nothing to copy");
+            }
         }
     }
 }

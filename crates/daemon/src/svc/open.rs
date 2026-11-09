@@ -105,13 +105,21 @@ impl App {
         }
         Ok(match &key.kind {
             SessionKind::Monitor => unreachable!("the monitor has no sandbox"),
+            // Only a kit the daemon recorded: the pane never names one.
+            SessionKind::KitAdd => {
+                let kit = self.kit_approvals.lock().unwrap().get_mut(&sandbox).filter(|v| !v.is_empty()).map(|v| v.remove(0));
+                let Some(kit) = kit else {
+                    bail!("no kit is waiting for your approval in '{sandbox}' — bring it up again to retry");
+                };
+                Spawn::sbx(sbxw_sbx::Sbx::kit_add_args(&sandbox.name, &kit))
+            }
             SessionKind::Agent if cfg.web_shell.is_empty() => {
                 let env = if self.store.get(&sandbox).remote_control {
                     remote::without_auth_env(cfg.env_pairs())
                 } else {
                     cfg.env_pairs()
                 };
-                Spawn::sbx(sbxw_sbx::attach_args(&sandbox.name, &env, &cfg.env_files))
+                Spawn::sbx(sbxw_sbx::attach_args(&sandbox.name, &env, &cfg.env_files, &cfg.workdir))
             }
             SessionKind::Agent => Spawn::sbx(sbxw_sbx::shell_args(&sandbox.name, &cfg.web_shell)),
             // `sbx exec` starts a stopped sandbox first (0.50).

@@ -48,7 +48,7 @@ loads xterm from jsDelivr, or from `XTERM_VENDOR` offline.
 
 ## The sbx version floor
 
-sbxw requires **sbx 0.50.0+** and has no fallbacks. It used to support 0.37 and
+sbxw requires **sbx 0.51.0+** and has no fallbacks. It used to support 0.37 and
 up behind runtime checks, but each check was a branch plus a fallback at every
 call site, and every fallback was a code path nobody ran.
 
@@ -67,7 +67,7 @@ What sbxw assumes, unconditionally:
 | `policy rm network --id … --force` (0.45) | ✕ on a rule in the network panel |
 | `run -d --name NAME` (0.47) | `keep_running` |
 | `create --pull=always\|missing\|never` | `pull` |
-| Kit spec v2 | the OAuth kit and the bundled kits |
+| Kit spec v3 only (0.51: `claude` is the v3 workload `docker.io/sbx/claude`) | every bundled and generated kit; local v1/v2 kits refused |
 | `secret set --sandbox NAME` | the Anthropic secret |
 | `SANDBOX_NAME` | in-sandbox hooks naming their own sandbox |
 | `create --kit` repeated | every kit applied at creation |
@@ -78,7 +78,11 @@ What sbxw assumes, unconditionally:
 | `git-identity@1`, `ssh-agent@1` kit capabilities (0.48) | `sbxw:git-identity`, `sbxw:ssh-agent` |
 | `template save`, `create --template` | `sbxw template save`, `template` |
 | `policy refresh` (0.49) | **Re-read policy now** |
-| `kit validate --offline` (0.49) | kit checks before create, `sbxw doctor` — v3 kits skipped: 0.50's validator cannot read them |
+| `kit add` of v3 image content and hooks (0.51) | the bundled kits on an existing sandbox |
+| `sbx --version` without the daemon (0.51) | the version check |
+| `settings get clipboard.textCopy` (0.51) | `sbxw doctor` |
+| `inspect --format json` (`kits`, `created_version`) (0.51) | kits already applied, skipped on a bring-up |
+| claude.ai sign-in kept on the host (0.51 `claude` workload) | no token injected; `/login` once |
 | `diagnose --format json` | `sbxw doctor` |
 | `create --mount HOST:TARGET` (0.50) | `kit_mounts`, **Kit folders** in the create dialog |
 | `mounts:` in environment files (0.50) | `sbxw env export` / `env run` |
@@ -96,6 +100,15 @@ hardening: host `git` reads pin off every program a repo's config can name
 `PATH`.
 
 Why each step of the floor moved:
+
+- **0.51:** `claude` resolves to the published kit `docker.io/sbx/claude:latest`,
+  a kit spec v3 workload on Docker Hardened Images (Debian 13), and v1/v2 kits
+  no longer compose with it. Every kit sbxw ships became v3 (files as image
+  content under `files/`, `lifecycle@1` hooks, `network-policy@1`), and the
+  image has no Node.js, so sbxw's own `sbxw:base` kit installs it on every
+  sandbox. The image also sets its own `statusLine` (`sbx-claude-hook`), which
+  sbxw's usage status line now replaces and chains to. Sandboxes made by an
+  older sbx keep running but take no kit until recreated.
 
 - **0.43:** environment files changed shape in 0.42 and 0.43 (file renamed to
   `sbxenv.yaml`, no `${VAR}` expansion, no implicit workspace mount, paths
@@ -147,11 +160,6 @@ Confirmed on a real 0.49.2: `sbx template save` refuses `--description` (and
 `--capture-mode`) without `--cloud`, so sbxw never passes it.
 - **Whether `sbx create` accepts `DIR:ro`** extra workspaces like `sbx run`
   (documented for `run`, assumed for `create`).
-- **`sbx inspect`'s output format.** sbxw only substring-matches it to *skip*
-  already-applied kits, confined to its `Kits:` block (or a `kits` key in JSON),
-  because inspect also lists custom secrets and one could share a kit's name. If
-  neither is found, it searches the whole output; a miss just means a kit is
-  re-applied.
 - **The grammar of an environment file's `args:` block.** sbxw reads
   `NAME: value`, `NAME: {default: value}` and a list of `{name, default}`.
   Anything else stays in the text for sbx to resolve. A `kits:` entry written as

@@ -88,7 +88,7 @@ See [Environment files](environment-files.md).
 
 | Command | What it does |
 |---|---|
-| `sbxw doctor [--json]` | Check sbxw: the sbx version, `sbxw.toml`, the daemon, and every local kit (`sbx kit validate --offline`). Then summarise `sbx diagnose`: CLI and shim processes, the global network policy, the ZFS setting that slows image builds. Exits non-zero when a check fails. `--json` prints sbx's full report. |
+| `sbxw doctor [--json]` | Check sbxw: the sbx version, `sbxw.toml`, the daemon, every local kit (v3 only since sbx 0.51) and `clipboard.textCopy`. Then summarise `sbx diagnose`: CLI and shim processes, the global network policy, the ZFS setting that slows image builds. Exits non-zero when a check fails. `--json` prints sbx's full report. |
 | `sbxw logs [name] [-n N]` | Tail the daemon log (default 40 lines). With a name, only lines about that sandbox. |
 | `sbxw down [name]` | Stop the daemon (closing every terminal it holds) **and** remove the `/etc/hosts` block. With a name, only close that sandbox's terminals. |
 | `sbxw update [--check] [--no-island]` | Install the latest release over this binary. See [Updating](getting-started.md#updating). |

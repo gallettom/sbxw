@@ -24,6 +24,10 @@ pub enum SessionKind {
     ThreadBash(ThreadName),
     /// `monitor_cmd` on the host. Belongs to no sandbox.
     Monitor,
+    /// `sbx kit add` on the host, for a kit sbx wants a person to approve
+    /// (0.51: new network rules) and that the daemon recorded as waiting.
+    /// The person answers sbx's prompt in the pane.
+    KitAdd,
 }
 
 impl SessionKind {
@@ -48,6 +52,7 @@ impl SessionKind {
             SessionKind::Thread(t) => format!("thread:{t}"),
             SessionKind::ThreadBash(t) => format!("thread-bash:{t}"),
             SessionKind::Monitor => "monitor".into(),
+            SessionKind::KitAdd => "kit-add".into(),
         }
     }
 
@@ -68,6 +73,7 @@ impl SessionKind {
                 None => SessionKind::Bash,
             },
             Some("monitor") => SessionKind::Monitor,
+            Some("kit-add") => SessionKind::KitAdd,
             Some("thread") => match named()? {
                 Some(t) => SessionKind::Thread(t),
                 None => return Err(crate::names::INVALID_THREAD_NAME),

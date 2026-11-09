@@ -13,11 +13,6 @@ agent_addr = "127.0.0.1:7682"
 # shell inside the sandbox instead (sbx exec -it … bash).
 web_shell = ""
 
-# Plan written into the injected OAuth credentials (subscriptionType) when
-# CLAUDE_CODE_OAUTH_TOKEN is used. Match your actual tier so the in-session
-# label is correct: "pro", "max", "team", "enterprise", or "free".
-claude_subscription = "pro"
-
 # Model new sessions start on, passed as ANTHROPIC_DEFAULT_MODEL. Full model id
 # ("claude-sonnet-5-5") or alias ("sonnet", "opus"). Empty => don't set it.
 #
@@ -42,7 +37,6 @@ models = [
 #   "readonly"   the store, read-only — sbx's default
 #   "readwrite"  the agent may add skills every other sandbox then mounts
 # Empty leaves it to sbx (and its host-wide `skills.defaultMode`). The older
-# `share_skills = false` still works and means "off".
 # Read at CREATION only — changing it doesn't affect existing sandboxes.
 skills = ""
 
@@ -192,6 +186,20 @@ env_files = []
 # `sbxw rm` and come back when a sandbox of the same name is created again.
 # For caches and toolchains outside the workspace. Read at creation only.
 # volumes = ["/home/agent/.npm", "/home/agent/.cache/pip"]
+
+# Other host folders mounted at creation, PATH[:TARGET][:ro] (sbx 0.51).
+# workspaces = ["../docs:/workspace/docs:ro", "~/datasets"]
+
+# Where the main agent starts, inside the workspace (sbx run --workdir).
+# workdir = "packages/web"
+
+# Size at creation; 0 / "" are sbx's defaults.
+# cpus = 4
+# memory = "8g"
+# Only in `sbxw env export` (sandboxOptions): sbx create has no flag for them.
+# fuse = false
+# root_size = "40g"
+# docker_size = "60g"
 
 # Mount ~/.sbxw/cache into new sandboxes: the bundled kits copy the apt
 # packages, Chromium, skill tarballs and wheels from it instead of downloading

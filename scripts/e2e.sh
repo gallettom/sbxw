@@ -54,8 +54,8 @@ grep -q "policy allow network --sandbox neos localhost:$AGENT,registry.npmjs.org
 ok "created with ports; egress allows the agent port, never the UI port"
 
 c="$HOME/.sbxw/cache"
-grep "create claude $t/ws/neos" "$t/state/calls.log" | grep -q -- " $c --kit $HOME/.sbxw/kits/codemap .*-e SBXW_CACHE=$c -e SBXW_CACHE_FILL=1" || die "the first sandbox fills the cache"
-"$bin" cache | grep -q "amd64-bookworm .*filled, expires" || die "sbxw cache shows the filled flavour"
+grep "create claude $t/ws/neos" "$t/state/calls.log" | grep -q -- " $c --kit $HOME/.sbxw/kits/base --kit $HOME/.sbxw/kits/codemap .*-e SBXW_CACHE=$c -e SBXW_CACHE_FILL=1" || die "the first sandbox fills the cache, sbxw's base kit first"
+"$bin" cache | grep -q "amd64-trixie .*filled, expires" || die "sbxw cache shows the filled flavour"
 ok "bundled kits resolved; the first sandbox fills the kit cache"
 
 grep -q "neos.local" "$t/hosts" && grep -q "sbxw.localhost" "$t/hosts" || die "hosts block"
@@ -221,8 +221,8 @@ rtoken=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv
 grep -q "$rtoken" "$t/rstate/tooling-neos.js" || die "the agent token installed on the host, over stdin"
 ! grep -q "$rtoken" "$t/rstate/calls.log" "$t/ssh.log" || die "the token leaked into an argv"
 ! grep -rq "tok-not-for-untrusted" "$t/remote" "$t/rstate" "$t/ssh.log" || die "a secret went to an untrusted host"
-echo "$out" | grep -q "not sent to host 'fake'" || { echo "$out"; die "the bring-up says the token stayed here"; }
-ok "the agent token goes over stdin; the Claude token stays off an untrusted host"
+echo "$out" | grep -q "CLAUDE_CODE_OAUTH_TOKEN is no longer injected" || { echo "$out"; die "the bring-up says the Claude token is not used"; }
+ok "the agent token goes over stdin; the Claude token is never sent (sbx keeps the sign-in)"
 
 "$bin" ls > "$t/ls.log" 2>&1 || { cat "$t/ls.log"; die "sbxw ls"; }
 grep -q "^fake~neos .*● running" "$t/ls.log" || { cat "$t/ls.log"; die "sbxw ls shows the remote sandbox"; }

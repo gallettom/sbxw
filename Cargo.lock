@@ -963,6 +963,7 @@ dependencies = [
  "sbxw-sbx",
  "serde",
  "serde_json",
+ "serde_norway",
  "tempfile",
  "thiserror",
  "tokio",

@@ -587,6 +587,8 @@ function paneModeFor(name, requested, current) {
 // a slot of its own beside the agent.
 function sessionIdentity(sandbox, mode, thread) {
   if (!sandbox) return null;
+  // `sbx kit add` waiting for an answer: a slot of its own beside the agent.
+  if (mode === 'kit-add') return `${sandbox}::kit-add`;
   return thread ? `${sandbox}::thread:${thread}` : `${sandbox}::main`;
 }
 
