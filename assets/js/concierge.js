@@ -27,6 +27,11 @@ let vcStatus = null;
 let vcOpen = false;
 let vcRec = null; // { recorder, chunks, stream, started }
 let vcBusy = false;
+// The conversation, this tab's own: [{role: 'user'|'assistant', content}].
+// The daemon keeps none of it (lot 3 adds the 7-day history).
+const VC_STORE = 'sbxw-concierge';
+let vcTurns = [];
+let vcReplying = null; // AbortController of the reply being generated
 
 function vcMb(n) { return `${Math.round(n / 1e6)} MB`; }
 function vcGb(mb) { return `${(mb / 1000).toFixed(1)} GB`; }
@@ -100,7 +105,7 @@ function vcRender() {
 function vcSay(who, text, meta) {
   const row = document.createElement('div');
   row.className = `vc-msg vc-${who}`;
-  row.textContent = text;
+  row.append(document.createTextNode(text));
   if (meta) {
     const m = document.createElement('span');
     m.className = 'vc-meta'; m.textContent = meta;
@@ -108,6 +113,7 @@ function vcSay(who, text, meta) {
   }
   vcLog.append(row);
   vcLog.scrollTop = vcLog.scrollHeight;
+  return row;
 }
 
 async function vcRefresh() {
@@ -151,7 +157,10 @@ async function vcStop() {
     }).then(r => r.json());
     if (!r.ok) vcSay('err', r.error);
     else if (!r.text) vcSay('dim', '(nothing heard)');
-    else vcSay('me', r.text, `${r.audio_s.toFixed(1)} s · ${r.ms} ms`);
+    else {
+      vcSay('me', r.text, `${r.audio_s.toFixed(1)} s · ${r.ms} ms`);
+      vcAsk(r.text);
+    }
   } catch (e) {
     vcSay('err', `Could not transcribe: ${e.message || e}`);
   } finally {
@@ -174,12 +183,96 @@ async function vcToPcm(blob) {
   return (await off.startRendering()).getChannelData(0);
 }
 
+// ── The conversation ─────────────────────────────────────────────────────
+function vcSave() {
+  try { sessionStorage.setItem(VC_STORE, JSON.stringify(vcTurns.slice(-80))); } catch (_) {}
+}
+function vcLoad() {
+  try { vcTurns = JSON.parse(sessionStorage.getItem(VC_STORE) || '[]'); } catch (_) { vcTurns = []; }
+  for (const t of vcTurns) vcSay(t.role === 'user' ? 'me' : 'ai', t.content);
+}
+
+// What the person said goes to the local model; its reply is written into
+// the log as it is generated (NDJSON from /api/voice/chat).
+async function vcAsk(text) {
+  if (vcReplying) vcReplying.abort();
+  // A reply that failed left the user's turn unanswered: fold into it.
+  if (vcTurns.length && vcTurns[vcTurns.length - 1].role === 'user') vcTurns[vcTurns.length - 1].content += `\n${text}`;
+  else vcTurns.push({ role: 'user', content: text });
+  vcSave();
+  const ctl = new AbortController();
+  vcReplying = ctl;
+  const row = vcSay('ai', '');
+  row.classList.add('pending');
+  let reply = '';
+  try {
+    const res = await fetch('/api/voice/chat', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ turns: vcTurns }), signal: ctl.signal,
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const ev = JSON.parse(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (ev.kind === 'delta') { reply += ev.text; row.firstChild.textContent = reply; vcLog.scrollTop = vcLog.scrollHeight; }
+        else if (ev.kind === 'error') throw new Error(ev.error);
+        else if (ev.kind === 'done') vcMeta(row, `${(ev.ms / 1000).toFixed(1)} s`);
+      }
+    }
+    row.classList.remove('pending');
+    if (reply.trim()) { vcTurns.push({ role: 'assistant', content: reply.trim() }); vcSave(); }
+    else row.remove();
+  } catch (e) {
+    row.remove();
+    if (e.name !== 'AbortError') vcSay('err', `The concierge could not answer: ${e.message || e}`);
+  } finally {
+    if (vcReplying === ctl) vcReplying = null;
+  }
+}
+
+function vcMeta(row, text) {
+  const m = document.createElement('span');
+  m.className = 'vc-meta'; m.textContent = text;
+  row.append(m);
+}
+
+function vcReset() {
+  if (vcReplying) vcReplying.abort();
+  vcTurns = [];
+  vcSave();
+  vcLog.replaceChildren();
+}
+
+// Typing is the same conversation, for when speaking is not an option.
+vcEl('vc-type').addEventListener('submit', e => {
+  e.preventDefault();
+  const input = vcEl('vc-type-input');
+  const text = input.value.trim();
+  if (!text || !vcReady()) return;
+  input.value = '';
+  vcSay('me', text);
+  vcAsk(text);
+});
+vcEl('vc-new').addEventListener('click', vcReset);
+
 // ── Wiring ───────────────────────────────────────────────────────────────
 function vcSetOpen(open) {
   vcOpen = open;
   vcPanel.hidden = !open;
   vcLauncher.setAttribute('aria-expanded', String(open));
-  if (open) vcRefresh();
+  if (open) vcLoad();
+vcRefresh();
 }
 
 vcLauncher.addEventListener('click', () => vcSetOpen(!vcOpen));

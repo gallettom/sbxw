@@ -25,13 +25,16 @@ async-trait.workspace = true
 # is built from the sources the crate ships — cmake and a C++ toolchain.
 [target.'cfg(target_os = "macos")'.dependencies]
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries", "static"], optional = true }
+llama-cpp-2 = { version = "0.1.161", default-features = false, features = ["metal"], optional = true }
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["static"], optional = true }
+llama-cpp-2 = { version = "0.1.161", default-features = false, optional = true }
 
 [features]
-# The voice concierge's native engines (sherpa-onnx; llama.cpp in lot 2).
+# The voice concierge's native engines: sherpa-onnx and llama.cpp (both
+# built with cmake; Metal on macOS).
 # Release builds enable it; plain `cargo build` stays fast without.
-voice = ["dep:sherpa-rs"]
+voice = ["dep:sherpa-rs", "dep:llama-cpp-2"]
 
 [dev-dependencies]
 tempfile.workspace = true

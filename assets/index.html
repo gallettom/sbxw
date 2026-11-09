@@ -1596,12 +1596,14 @@
   <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Concierge" hidden>
     <div class="cd-head">
       <span class="vc-title">Concierge</span>
+      <button type="button" class="cd-close" id="vc-new" title="New conversation">New</button>
       <button type="button" class="cd-close" id="vc-close" title="Close (Esc)" aria-label="Close">✕</button>
     </div>
     <div class="vc-setup" id="vc-setup"></div>
     <div class="cd-log vc-log" id="vc-log" aria-live="polite"></div>
     <div class="vc-foot">
       <button type="button" class="vc-talk" id="vc-talk" disabled>Hold to talk (F8)</button>
+      <form class="vc-type" id="vc-type"><input id="vc-type-input" type="text" placeholder="…or type" aria-label="Message" autocomplete="off"></form>
       <span class="cd-hint" id="vc-hint"></span>
     </div>
   </div>

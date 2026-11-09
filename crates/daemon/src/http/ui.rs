@@ -159,6 +159,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/voice/install", post(voice_install))
         .route("/api/voice/cancel", post(voice_cancel))
         .route("/api/voice/rm", post(voice_rm))
+        .route("/api/voice/chat", post(voice_chat))
         .route(
             "/api/voice/transcribe",
             post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
@@ -1745,4 +1746,25 @@ async fn voice_transcribe(State(app): S, body: Bytes) -> ApiResult {
         .await
         .map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
     Ok(ok_with(json!({ "text": text.trim(), "audio_s": secs, "ms": t.elapsed().as_millis() as u64 })))
+}
+
+#[derive(Deserialize)]
+struct VoiceChatBody {
+    turns: Vec<crate::svc::voice::Turn>,
+}
+
+/// The reply as NDJSON, one `ChatEvent` a line, written as it is generated:
+/// the page shows (and, later, speaks) the first words before the last exist.
+async fn voice_chat(State(app): S, Json(b): Json<VoiceChatBody>) -> ApiResult<Response> {
+    use futures_util::StreamExt;
+    let rx = app
+        .voice_chat(b.turns)
+        .await
+        .map_err(|e| if e.contains("turn") || e.contains("conversation") { ApiError::bad(e) } else { ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e) })?;
+    let lines = tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| {
+        let mut line = serde_json::to_string(&ev).unwrap_or_default();
+        line.push('\n');
+        Ok::<_, std::convert::Infallible>(Bytes::from(line))
+    });
+    Ok(([(header::CONTENT_TYPE, "application/x-ndjson")], Body::from_stream(lines)).into_response())
 }

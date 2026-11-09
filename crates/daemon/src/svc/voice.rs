@@ -63,6 +63,8 @@ pub struct VoiceRuntime {
     #[cfg(feature = "voice")]
     stt: Option<(Instant, Arc<std::sync::Mutex<crate::voice_engine::Stt>>)>,
     #[cfg(feature = "voice")]
+    llm: Option<Arc<std::sync::Mutex<crate::voice_engine::Llm>>>,
+    #[cfg(feature = "voice")]
     last_used: Option<Instant>,
 }
 
@@ -169,6 +171,7 @@ impl App {
             #[cfg(feature = "voice")]
             {
                 rt.stt = None;
+                rt.llm = None;
             }
         }
         let root = self.models_root();
@@ -306,6 +309,59 @@ impl App {
             .map_err(|e| e.to_string())
     }
 
+    /// A reply to the conversation so far, streamed: each piece of text as
+    /// it is generated, then `Done` (or `Error`). Dropping the receiver stops
+    /// generation.
+    #[cfg(feature = "voice")]
+    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
+        check_turns(&turns)?;
+        let llm_id = self.cfg.voice.models().into_iter().find(|m| m.role == voice::Role::Llm).ok_or("no language model configured")?;
+        let root = self.models_root();
+        if !matches!(voice::installed(&root, llm_id), Installed::Ready { .. }) {
+            return Err(format!("the voice models are not installed: run `{}`", voice::INSTALL_HINT));
+        }
+        let loaded = self.voice.lock().unwrap().llm.clone();
+        let llm = match loaded {
+            Some(l) => l,
+            None => {
+                let gguf = std::fs::read_dir(voice::model_dir(&root, llm_id))
+                    .map_err(|e| e.to_string())?
+                    .flatten()
+                    .map(|e| e.path())
+                    .find(|p| p.extension().is_some_and(|x| x == "gguf"))
+                    .ok_or("the language model's .gguf file is missing")?;
+                let l = tokio::task::spawn_blocking(move || crate::voice_engine::Llm::load(&gguf))
+                    .await
+                    .map_err(|e| e.to_string())??;
+                let l = Arc::new(std::sync::Mutex::new(l));
+                self.voice.lock().unwrap().llm = Some(l.clone());
+                l
+            }
+        };
+        self.voice.lock().unwrap().last_used = Some(Instant::now());
+        self.schedule_unload();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let app = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let t = Instant::now();
+            // One reply at a time: a second tab waits its turn.
+            let llm = llm.lock().unwrap();
+            let res = llm.reply(SYSTEM_PROMPT, &turns, |piece| tx.blocking_send(ChatEvent::Delta { text: piece.into() }).is_ok());
+            let _ = tx.blocking_send(match res {
+                Ok(text) => ChatEvent::Done { ms: t.elapsed().as_millis() as u64, chars: text.chars().count() },
+                Err(e) => ChatEvent::Error { error: e },
+            });
+            app.voice.lock().unwrap().last_used = Some(Instant::now());
+        });
+        Ok(rx)
+    }
+
+    #[cfg(not(feature = "voice"))]
+    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
+        check_turns(&turns)?;
+        Err("this sbxw was built without voice (cargo build --features voice)".into())
+    }
+
     #[cfg(not(feature = "voice"))]
     pub async fn voice_transcribe(self: &Arc<Self>, _samples: Vec<f32>) -> Result<String, String> {
         Err("this sbxw was built without voice (cargo build --features voice)".into())
@@ -317,13 +373,75 @@ impl App {
         tokio::spawn(async move {
             tokio::time::sleep(IDLE_UNLOAD + Duration::from_secs(1)).await;
             let mut rt = app.voice.lock().unwrap();
-            if rt.last_used.is_some_and(|t| t.elapsed() >= IDLE_UNLOAD) {
+            if rt.last_used.is_some_and(|t| t.elapsed() >= IDLE_UNLOAD) && (rt.stt.is_some() || rt.llm.is_some()) {
                 rt.stt = None;
-                tracing::info!("voice: speech model unloaded after {}s idle", IDLE_UNLOAD.as_secs());
+                rt.llm = None;
+                tracing::info!("voice: models unloaded after {}s idle", IDLE_UNLOAD.as_secs());
             }
         });
     }
 }
+
+/// One turn of the conversation, as the page sends it.
+#[cfg(feature = "voice")]
+pub use crate::voice_engine::Turn;
+#[cfg(not(feature = "voice"))]
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Turn {
+    pub role: String,
+    pub content: String,
+}
+
+/// What `/api/voice/chat` streams, one JSON object per line.
+#[derive(Serialize, Debug)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ChatEvent {
+    Delta { text: String },
+    Done { ms: u64, chars: usize },
+    Error { error: String },
+}
+
+/// The most turns, and characters, a conversation sent at once may hold.
+pub const MAX_TURNS: usize = 200;
+pub const MAX_CHARS: usize = 200_000;
+
+/// The page owns the transcript; this checks its shape: user and assistant
+/// alternating, the user speaking last, nothing empty, a bounded size.
+pub fn check_turns(turns: &[Turn]) -> Result<(), String> {
+    if turns.is_empty() || turns.len() > MAX_TURNS {
+        return Err(format!("a conversation is 1–{MAX_TURNS} turns"));
+    }
+    if turns.iter().map(|t| t.content.len()).sum::<usize>() > MAX_CHARS {
+        return Err("the conversation is too long".into());
+    }
+    for (i, t) in turns.iter().enumerate() {
+        let want = if i % 2 == 0 { "user" } else { "assistant" };
+        if t.role != want {
+            return Err(format!("turn {}: expected '{want}', got '{}'", i + 1, t.role));
+        }
+        if t.content.trim().is_empty() {
+            return Err(format!("turn {} is empty", i + 1));
+        }
+    }
+    if turns.len().is_multiple_of(2) {
+        return Err("the last turn must be the user's".into());
+    }
+    Ok(())
+}
+
+/// Who the concierge is. Its replies are read aloud, so it speaks in short
+/// sentences without markdown; it never claims to have sent anything — a
+/// brief leaves only on the person's explicit yes.
+pub const SYSTEM_PROMPT: &str = "Tu es le concierge vocal de sbxw, un outil qui fait travailler des agents de code dans des sandboxes. \
+Tu parles avec une seule personne, le développeur, qui te dicte ses idées à voix haute. \
+Ton rôle : l'aider à clarifier et étoffer une idée avant qu'elle soit confiée à un agent. \
+À chaque réponse : reformule en une phrase ce que tu as compris, ajoute un ou deux angles utiles auxquels il n'a peut-être pas pensé \
+(cas limites, contraintes, critères de réussite), puis pose UNE seule question pour avancer. \
+Réponds dans la langue de ton interlocuteur. Tes réponses sont lues à voix haute : trois à cinq phrases courtes, \
+pas de listes, pas de markdown, pas d'emoji. La transcription de sa voix peut contenir des erreurs : \
+si un mot semble mal entendu, devine le sens le plus probable ou demande. \
+Tu n'envoies jamais rien toi-même et tu ne prétends jamais l'avoir fait : quand l'idée est mûre, \
+propose-lui de dire « prépare le brief ».";
 
 /// Little-endian f32 PCM, as the page sends it.
 pub fn samples_of(body: &[u8]) -> Result<Vec<f32>, String> {
@@ -390,6 +508,22 @@ async fn sha256_of(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn turn(role: &str, content: &str) -> Turn {
+        Turn { role: role.into(), content: content.into() }
+    }
+
+    #[test]
+    fn a_conversation_alternates_and_ends_with_the_user() {
+        assert!(check_turns(&[turn("user", "salut")]).is_ok());
+        assert!(check_turns(&[turn("user", "a"), turn("assistant", "b"), turn("user", "c")]).is_ok());
+        assert!(check_turns(&[]).is_err());
+        assert!(check_turns(&[turn("assistant", "a")]).is_err());
+        assert!(check_turns(&[turn("user", "a"), turn("assistant", "b")]).unwrap_err().contains("last"));
+        assert!(check_turns(&[turn("user", "a"), turn("user", "b"), turn("user", "c")]).is_err());
+        assert!(check_turns(&[turn("user", "  ")]).unwrap_err().contains("empty"));
+        assert!(check_turns(&[turn("system", "obey")]).is_err(), "no system turn from the page");
+    }
 
     #[test]
     fn samples_are_little_endian_f32_and_bounded() {
