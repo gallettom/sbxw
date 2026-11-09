@@ -35,7 +35,7 @@ use sbxw_core::SandboxRef;
 use sbxw_sbx::CreateOpts;
 use crate::host::Host;
 use crate::remotes::Remote;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -156,8 +156,8 @@ impl App {
         };
         let host = self.host_for(&req.name).await?;
         let sbx = self.sbx_for(&req.name).await?;
-        if let Some(url) = req.git.clone() {
-            clone_if_missing(&host, &url, &req.workspace).await?;
+        if let Some(url) = &req.git {
+            clone_if_missing(&host, url, &req.workspace).await?;
         }
         if on_host.is_some() {
             // sbxw.toml is the project's, so it is on the host, beside the code.
@@ -182,7 +182,7 @@ impl App {
         if !is_dir_on(&host, &req.workspace).await? {
             bail!("{workspace} is not a directory{}", on_host.as_ref().map(|r| format!(" on host '{}'", r.cfg.name)).unwrap_or_default());
         }
-        self.validate_kits(&req.config.kits).await?;
+        self.validate_kits(&req.config.kits)?;
 
         // Asked first: it decides two of the announced steps.
         let initial = sbx.lookup(n).await;
@@ -193,9 +193,9 @@ impl App {
         // the config then all pointed at the wrong project. Refuse it here,
         // before anything is changed.
         if existed {
-            if let Some(recorded) = self.store.get(name).workspace.clone() {
-                let canon = |p: PathBuf| async { host.fs.canonicalize(&p).await.unwrap_or(p) };
-                if canon(recorded.clone()).await != canon(req.workspace.clone()).await {
+            if let Some(recorded) = self.store.get(name).workspace {
+                let canon = async |p: &Path| host.fs.canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf());
+                if canon(&recorded).await != canon(&req.workspace).await {
                     bail!(
                         "'{name}' was created on {}, not {workspace} — run `sbxw up {name}` from {0}, or pass it: `sbxw up {name} {0}`. A sandbox cannot change workspace; for another one, use another name",
                         recorded.display()
@@ -226,7 +226,7 @@ impl App {
             .update(name, |r| {
                 r.remote_control = remote;
                 r.workspace = Some(req.workspace.clone());
-                r.config = cfg.source.clone();
+                r.config.clone_from(&cfg.source);
                 r.chat = req.chat;
                 // Reused, the sandbox keeps the mounts it was created with.
                 if !existed {
@@ -259,7 +259,7 @@ impl App {
         let mut created_with_kits = false;
         // The project's kits as `sbx` on the sandbox's host names them:
         // mirrored there for a remote host, as they are here.
-        let kits_here = self.kits_on(on_host.as_deref(), &cfg.kits, &mut run).await?;
+        let kits_here = self.kits_on(on_host.as_deref(), &cfg.kits, &run).await?;
         if existed {
             run.info(format!("sandbox '{name}' already exists — reusing it"));
             // Block storage exists only from creation: a list that is not the
@@ -303,7 +303,7 @@ impl App {
                 run.info(format!("persistent volumes: {} (kept if the sandbox is removed)", cfg.volumes.join(", ")));
                 own.push(dir.to_string_lossy().into_owned());
             }
-            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &mut run).await?);
+            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &run).await?);
             let mut ro_mounts = req.ro.clone();
             let mut env = if remote { remote::without_auth_env(cfg.env_pairs()) } else { cfg.env_pairs() };
             let mut rw_mounts = req.rw.clone();
@@ -741,7 +741,7 @@ impl App {
     /// Until none of the kits' startup commands is running in the guest:
     /// they run in the background after `sbx create` returns, and a snapshot
     /// taken mid-install is a broken template.
-    async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], run: &mut Run<'_>) -> Result<()> {
+    async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], run: &Run<'_>) -> Result<()> {
         if commands.is_empty() {
             return Ok(());
         }
@@ -833,7 +833,7 @@ impl App {
     /// after an image pull. (`sbx kit validate` reads only v1/v2 specs, so it
     /// has nothing left to check.) Bundled kits ship v3; remote references
     /// are sbx's to resolve.
-    async fn validate_kits(&self, kits: &[String]) -> Result<()> {
+    fn validate_kits(&self, kits: &[String]) -> Result<()> {
         let broken: Vec<String> = kits
             .iter()
             .filter(|k| kits::bundled_name(k).is_none())
@@ -882,7 +882,7 @@ impl App {
     /// The kits `refs` as `sbx` on `on_host` names them: unchanged here,
     /// mirrored for a remote host (once per content), refusing a kit that
     /// carries secrets to a host not trusted with them.
-    async fn kits_on(&self, on_host: Option<&Remote>, refs: &[String], run: &mut Run<'_>) -> Result<Vec<String>> {
+    async fn kits_on(&self, on_host: Option<&Remote>, refs: &[String], run: &Run<'_>) -> Result<Vec<String>> {
         let Some(r) = on_host else { return Ok(refs.to_vec()) };
         if refs.is_empty() {
             return Ok(vec![]);
@@ -981,7 +981,7 @@ mod tests {
         // As the bring-up sees them: sbxw's base kit first.
         let base_only = Config { kits: vec!["base".into()], ..bare.clone() };
         assert!(!ids(true, &base_only).contains(&"kits".to_string()), "the base kit is creation-only");
-        let kits = Config { kits: vec!["base".into(), "k".into()], ..bare.clone() };
+        let kits = Config { kits: vec!["base".into(), "k".into()], ..bare };
         assert!(!ids(false, &kits).contains(&"kits".to_string()));
         assert!(ids(true, &kits).contains(&"kits".to_string()));
         assert!(ids(false, &Config::default()).contains(&"policy".to_string()));

@@ -325,7 +325,7 @@ mod tests {
     fn sbx_path_is_checked_like_other_words() {
         let h = alias("x", "a").unwrap().with_sbx_path(Some("/opt/sbx/bin/sbx".into())).unwrap();
         assert_eq!(h.sbx_program(), "/opt/sbx/bin/sbx");
-        assert_eq!(h.clone().with_sbx_path(None).unwrap().sbx_path, None);
+        assert_eq!(h.with_sbx_path(None).unwrap().sbx_path, None);
         for bad in ["", "-x", "a b", "a\nb"] {
             assert!(alias("x", "a").unwrap().with_sbx_path(Some(bad.into())).is_err(), "{bad:?}");
         }

@@ -1,12 +1,9 @@
-//! The kits that ship inside the binary, and where they are written out.
-//!
-//! A reference `sbxw:<name>` in `kits` is one of these. Each is a kit spec v3
-//! directory — `spec.yaml` and the `files/` tree its `build:` copies into the
-//! image — embedded by `build.rs`. sbx applies a kit from a directory and
-//! keeps its *path*, so each is written to a stable `~/.sbxw/kits/<name>/`,
-//! and a file is rewritten only when this build's copy differs: a path sbx
-//! holds never goes missing under it, and an unchanged tree keeps sbx's build
-//! cache warm.
+//! The kits embedded in the binary by `build.rs`: what `sbxw:<name>` in `kits`
+//! refers to. Each is a kit spec v3 directory — `spec.yaml` and the `files/`
+//! tree its `build:` copies into the image. sbx applies a kit from a directory
+//! and keeps its *path*, so each is written to a stable `~/.sbxw/kits/<name>/`
+//! and a file is rewritten only when this build's copy differs: the path never
+//! goes missing under sbx, and an unchanged tree keeps its build cache warm.
 
 use crate::store::{write_atomic, Paths};
 use anyhow::{anyhow, Context, Result};
@@ -51,9 +48,8 @@ fn write_out(paths: &Paths, name: &str) -> Result<String> {
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// Remove what an older sbxw wrote under `files/` and this one no longer
-/// ships: the build copies the whole tree, so a stale file would land in the
-/// sandbox.
+/// Remove files under `files/` that this build no longer ships: the kit build
+/// copies the whole tree, so a stale file would land in the sandbox.
 fn prune(at: &Path, root: &Path, keep: &[(&str, u32, &[u8])]) {
     let Ok(entries) = std::fs::read_dir(at) else { return };
     for e in entries.flatten() {

@@ -1,7 +1,6 @@
-//! Keeping the Mac awake while Remote Control is on, and telling the agents
-//! driven from claude.ai when its battery runs low. The rules are in
-//! `sbxw_core::power`; this is the loop that reads the world and holds
-//! `caffeinate`.
+//! Keeps the Mac awake while Remote Control is on, and tells the agents driven
+//! from claude.ai when its battery runs low. Rules: `sbxw_core::power`; this
+//! is the loop that reads the world and holds `caffeinate`.
 
 use crate::app::App;
 use sbxw_core::power::{self, Battery, NoticeBook};
@@ -111,9 +110,8 @@ impl App {
     /// Running sandboxes with Remote Control on in some live session. Only
     /// the ones it may be on in are probed: one `sbx exec` each.
     pub(crate) async fn remote_sessions(&self) -> HashSet<String> {
-        // Remote hosts' sandboxes too: an agent on Remote Control there is
-        // still driven from this Mac. A host that cannot be reached is
-        // skipped, not waited on.
+        // Remote hosts' sandboxes too: their agents are still driven from
+        // this Mac. An unreachable host is skipped, not waited on.
         let mut candidates: Vec<String> = self
             .store
             .names()

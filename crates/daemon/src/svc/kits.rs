@@ -3,9 +3,8 @@
 //!
 //! Only a file sbxw already uses can be written — the daemon's own config, or
 //! the one a sandbox was created from — never a path the page names, so the
-//! dialog edits configuration and nothing else on the host. The line is
-//! rewritten in place ([`kits::set_kits_line`]): the file is the person's,
-//! kept by hand, comments and all.
+//! dialog edits nothing else on the host. The line is rewritten in place
+//! ([`kits::set_kits_line`]): the file is hand-kept, comments and all.
 
 use crate::app::App;
 use anyhow::{bail, Context, Result};
@@ -84,8 +83,8 @@ impl App {
     }
 
     /// Rewrite the `kits` line of `path`, one of [`App::kit_files`]; `None`
-    /// removes it. What comes back is worth saying: a local kit that is not
-    /// there, and the sandboxes that get the change only at their next `up`.
+    /// removes it. Returns warnings: a local kit that is not there, the
+    /// sandboxes that get the change only at their next `up`.
     pub fn set_kits(&self, path: &Path, list: Option<Vec<String>>) -> Result<Vec<String>> {
         let files = self.kit_files();
         let Some(users) = files.get(path) else {

@@ -4,7 +4,7 @@
 //! and Ctrl-C here leaves the download to the daemon, where `sbxw voice
 //! cancel` or the UI stops it.
 
-use super::{abs, load_config};
+use super::{config_path, load_config};
 use crate::client::Daemon;
 use anyhow::{bail, Result};
 use clap::Subcommand;
@@ -33,7 +33,7 @@ pub enum VoiceCmd {
 pub fn run(cmd: VoiceCmd, config: &Path) -> Result<()> {
     let cfg = load_config(config)?;
     let daemon = Daemon::new(&cfg.web_addr);
-    daemon.ensure(&sbxw_daemon::store::Paths::from_home(), &cfg.source.clone().map_or_else(|| abs(config), Ok)?, false)?;
+    daemon.ensure(&sbxw_daemon::store::Paths::from_home(), &config_path(&cfg, config)?, false)?;
     match cmd {
         VoiceCmd::Status => print_status(&daemon.get("/api/voice")?),
         VoiceCmd::Install { yes } => {

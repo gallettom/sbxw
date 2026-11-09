@@ -48,7 +48,6 @@ pub fn allowed_hosts(web_addr: &str) -> Option<Vec<String>> {
     Some(hosts)
 }
 
-/// May a request with these headers reach the UI?
 pub fn ui_allows(allowed: Option<&[String]>, host: Option<&str>, origin: Option<&str>) -> Result<(), &'static str> {
     let host = host.unwrap_or("").to_ascii_lowercase();
     if let Some(list) = allowed {
@@ -84,8 +83,7 @@ pub async fn ui_guard(State(app): State<Arc<App>>, req: Request, next: Next) -> 
 
 /// The sandbox an agent call comes from, proven by its token: the
 /// `Authorization: Bearer` header, or `?token=` (the code map kit's bare
-/// `curl "$SBXW_CODEMAP_DONE"`). Only a local sandbox's tooling can call in
-/// for now: a remote one's is refused with `remote hosts are not wired yet`.
+/// `curl "$SBXW_CODEMAP_DONE"`).
 pub struct Agent(pub SandboxRef);
 
 #[axum::async_trait]

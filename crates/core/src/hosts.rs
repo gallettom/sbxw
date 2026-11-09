@@ -1,15 +1,14 @@
 //! The text of sbxw's `/etc/hosts` block, and the rules for changing it.
 //!
-//! Everything sbxw writes to `/etc/hosts` sits between two marker lines, so it
-//! is trivial to inspect and remove. This module is the *text*: parsing the
-//! block out of a file, merging aliases into it, rendering the file back. The
-//! privileged write itself (sudo, the macOS authentication panel) belongs to
-//! the daemon's host layer, which is the only code that runs anything.
+//! Everything sbxw writes to `/etc/hosts` sits between two marker lines, easy
+//! to inspect and remove. This module is the *text*: parsing the block, merging
+//! aliases into it, rendering the file back. The privileged write (sudo, the
+//! macOS authentication panel) belongs to the daemon's host layer.
 //!
 //! The rule that shapes the merge: **the steady state needs no privilege.**
 //! Provisioning a second sandbox must neither evict the first one's alias nor
-//! rewrite a block that already says what it should, because every write is a
-//! `sudo` — and the daemon has no terminal to answer a password prompt on.
+//! rewrite a block that already says what it should: every write is a `sudo`,
+//! and the daemon has no terminal to answer a password prompt on.
 
 use serde::{Deserialize, Serialize};
 

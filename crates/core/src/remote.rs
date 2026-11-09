@@ -90,26 +90,22 @@ console.log(JSON.stringify({ present: !!c.accessToken, scopes: Array.isArray(c.s
 pub fn active_in(probe: &str, cwd: &str, thread: Option<&str>) -> bool {
     let want = cwd.trim_end_matches('/');
     let name = thread.unwrap_or("");
+    sessions_any(probe, |s| {
+        s["rc"] == true
+            && s["cwd"].as_str().is_some_and(|c| c.trim_end_matches('/') == want)
+            && s["thread"].as_str().is_none_or(|t| t == name)
+    })
+}
+
+/// Whether any session of the probe's `sessions` array satisfies `pred`.
+fn sessions_any(probe: &str, pred: impl Fn(&serde_json::Value) -> bool) -> bool {
     serde_json::from_str::<serde_json::Value>(probe.trim())
-        .ok()
-        .and_then(|v| v["sessions"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .any(|s| {
-            s["rc"] == true
-                && s["cwd"].as_str().is_some_and(|c| c.trim_end_matches('/') == want)
-                && s["thread"].as_str().is_none_or(|t| t == name)
-        })
+        .is_ok_and(|v| v["sessions"].as_array().is_some_and(|s| s.iter().any(pred)))
 }
 
 /// Whether Remote Control is on in any live session the probe saw.
 pub fn any_active(probe: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(probe.trim())
-        .ok()
-        .and_then(|v| v["sessions"].as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .any(|s| s["rc"] == true)
+    sessions_any(probe, |s| s["rc"] == true)
 }
 
 /// How the sandbox's Claude is signed in, as far as Remote Control cares.

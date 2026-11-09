@@ -105,6 +105,12 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Config::load(path, &std::env::current_dir()?)
 }
 
+/// The config file the daemon should be started with: the one `cfg` was
+/// loaded from, else `given` made absolute.
+pub(crate) fn config_path(cfg: &Config, given: &Path) -> Result<PathBuf> {
+    cfg.source.clone().map_or_else(|| abs(given), Ok)
+}
+
 pub(crate) fn abs(p: &Path) -> Result<PathBuf> {
     Ok(if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir()?.join(p) })
 }
@@ -260,7 +266,7 @@ fn template_choice(rebuild: bool) -> sbxw_core::templates::Choice {
 
 pub fn up(a: UpArgs) -> Result<()> {
     let cfg = load_config(&a.config)?;
-    let config_abs = cfg.source.clone().map_or_else(|| abs(&a.config), Ok)?;
+    let config_abs = config_path(&cfg, &a.config)?;
     let paths = Paths::from_home();
     let store = Store::open(paths.clone());
     let daemon = Daemon::new(&cfg.web_addr);
@@ -331,7 +337,7 @@ pub fn up(a: UpArgs) -> Result<()> {
     apply_aliases_here(&store, &cfg);
 
     if a.no_web {
-        return up_here(rt, paths, cfg, sbx_version, BringUp {
+        return up_here(&rt, paths, cfg, sbx_version, BringUp {
             name,
             workspace,
             ro,
@@ -378,23 +384,23 @@ pub fn up(a: UpArgs) -> Result<()> {
 
 /// `--no-web`: the same pipeline in this process, then the agent on this
 /// terminal. The daemon-owned port publisher runs as long as the agent does.
-fn up_here(rt: tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: Option<String>, req: BringUp) -> Result<()> {
+fn up_here(rt: &tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: Option<String>, req: BringUp) -> Result<()> {
     init_tracing();
     let app = AppBuilder {
         paths,
-        cfg: cfg.clone(),
+        cfg,
         sbx: Sbx::process(),
         hosts: HostSys::system(Elevation::Interactive),
         use_api_key: req.api_key.is_some(),
         sbx_version,
     }
     .build();
-    let r = Arc::new(Mutex::new(Renderer::new()));
-    let r2 = r.clone();
-    let sink: Sink = Arc::new(move |p| r2.lock().unwrap().show(&p));
+    let r = Mutex::new(Renderer::new());
+    let sink: Sink = Arc::new(move |p| r.lock().unwrap().show(&p));
     let name = req.name.clone();
     rt.block_on(app.provision(req, Some(sink)))?;
     eprintln!("sbxw  attaching the agent in this terminal (Ctrl-C to detach)");
+    let cfg = &app.cfg;
     let args = sbxw_sbx::attach_args(&name.name, &cfg.env_pairs(), &cfg.env_files, &cfg.workdir);
     // A remote sandbox's agent through this process's link to its host,
     // which stays up (and keeps the hooks' tunnel) while it runs.
@@ -461,7 +467,7 @@ pub fn web(name: &str, config: &Path) -> Result<()> {
     let name = sandbox_arg(name)?;
     let cfg = load_config(config)?;
     let daemon = Daemon::new(&cfg.web_addr);
-    daemon.ensure(&Paths::from_home(), &cfg.source.clone().map_or_else(|| abs(config), Ok)?, false)?;
+    daemon.ensure(&Paths::from_home(), &config_path(&cfg, config)?, false)?;
     daemon.post("/api/initial", json!({ "sandbox": name }))?;
     eprintln!("sbxw  → {}", web_url(&cfg, Some(&name.to_string())));
     Ok(())

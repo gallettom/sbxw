@@ -22,11 +22,10 @@ use tokio::sync::OnceCell;
 /// A remote command that itself exits 255 reads the same; nothing in sbxw does.
 pub const SSH_UNREACHABLE: i32 = 255;
 
-/// One word for a POSIX shell, single-quoted. sshd joins the words of the
-/// command with spaces and hands the line to the user's shell, so every word
-/// must survive that shell unchanged: inside single quotes nothing is special
-/// except `'` itself, written as `'\''`. Always quoted, even when it would not
-/// need it, so there is one rule to get right.
+/// One word, single-quoted for a POSIX shell: sshd joins the command's words
+/// with spaces and hands the line to the user's shell, so each must survive it
+/// unchanged. Inside single quotes only `'` is special, written `'\''`.
+/// Always quoted, needed or not, so there is one rule to get right.
 pub fn quote(word: &str) -> String {
     let mut q = String::with_capacity(word.len() + 2);
     q.push('\'');
@@ -96,8 +95,7 @@ impl SshExec {
         self.ssh.to_string_lossy().into_owned()
     }
 
-    /// `-S <ControlPath> <ssh_argv()>`: the options and destination every
-    /// call shares.
+    /// `-S <ControlPath> <ssh_argv()>`: options and destination every call shares.
     fn base_args(&self) -> Vec<String> {
         let mut a = vec!["-S".to_string(), self.control_path.to_string_lossy().into_owned()];
         a.extend(self.host.ssh_argv());
@@ -142,9 +140,9 @@ impl HostExec for SshExec {
         let mut args = self.base_args();
         args.push("--".into());
         args.extend(remote_words(&cmd.program, &cmd.args, cmd.cwd.as_deref()));
-        // The local ssh is run like any local command. Its stdin is closed
-        // when the command has none, so a remote prompt (sbx's first-run
-        // network policy question) sees EOF and fails instead of hanging.
+        // ssh's stdin is closed when the command has none, so a remote prompt
+        // (sbx's first-run network policy question) sees EOF and fails
+        // instead of hanging.
         let local = HostCmd { program: self.ssh_str(), args, cwd: None, stdin: cmd.stdin, on_line: cmd.on_line, timeout: cmd.timeout };
         let out = LocalExec.exec(local).await.map_err(|e| self.unreachable(format!("{e:#}")))?;
         if out.code == Some(SSH_UNREACHABLE) {

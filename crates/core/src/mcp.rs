@@ -198,7 +198,7 @@ mod tests {
         assert!(McpSpec { headers: vec!["NoColon".into()], ..ok.clone() }.add_args().is_err());
         assert!(McpSpec { headers: vec!["A: 1".into(), "a: 2".into()], ..ok.clone() }.add_args().is_err());
         assert!(McpSpec { url: "https://x\n--force".into(), ..ok.clone() }.add_args().is_err());
-        assert!(McpSpec { kind: "other".into(), ..ok.clone() }.add_args().is_err());
+        assert!(McpSpec { kind: "other".into(), ..ok }.add_args().is_err());
         let stdio = McpSpec { name: "s".into(), kind: "stdio".into(), command: "node".into(), args: vec!["a,b".into()], ..Default::default() };
         assert!(stdio.add_args().is_err());
     }

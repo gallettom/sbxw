@@ -1,10 +1,10 @@
 //! Running a command on a host: this machine, or (see [`crate::ssh`]) one
 //! reached over SSH. The contract every host-side caller is written against.
 //!
-//! * [`HostExec`] runs one command and says what came back. A non-zero exit
-//!   is an ordinary `Ok(Output)`; only "the host could not be reached" is an
-//!   error, and that error is always a [`HostUnreachable`], so callers can
-//!   tell a dead link from a failed command with `err.downcast_ref()`.
+//! * [`HostExec`] runs one command. A non-zero exit is an ordinary
+//!   `Ok(Output)`; only "the host could not be reached" is an error, always a
+//!   [`HostUnreachable`], so callers can tell a dead link from a failed
+//!   command with `err.downcast_ref()`.
 //! * [`LocalExec`] is this machine. [`OnHost`] turns any `HostExec` plus a
 //!   program into a [`Runner`], so the typed `sbx` client runs on a host
 //!   unchanged. [`FakeExec`] is the scripted host for tests in every crate.
@@ -22,7 +22,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
-/// One command to run on a host.
 #[derive(Clone, Default)]
 pub struct HostCmd {
     pub program: String,
@@ -67,7 +66,7 @@ impl fmt::Debug for HostCmd {
 #[async_trait]
 #[allow(clippy::double_must_use)]
 pub trait HostExec: Send + Sync {
-    /// Ok(Output) whenever the command ran, whatever its exit code. Err only when the host
+    /// `Ok(Output)` whenever the command ran, whatever its exit code. `Err` only when the host
     /// could not be reached; that error must be a `HostUnreachable` (downcastable via anyhow).
     async fn exec(&self, cmd: HostCmd) -> Result<Output>;
     /// argv for a local PTY to run `program args` on the host (local: as is).

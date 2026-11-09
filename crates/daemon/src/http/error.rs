@@ -1,8 +1,7 @@
 //! Errors with a status code and the body the UI already reads.
 //!
-//! The old daemon answered every failure `200 {ok:false, error}`. The body is
-//! kept — the page branches on `ok` — and the status now says what happened,
-//! so the island, a proxy or `curl -f` can tell without parsing.
+//! The `{ok:false, error}` body is what the page branches on; the status says
+//! what happened, so the island, a proxy or `curl -f` can tell without parsing.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -43,10 +42,8 @@ impl IntoResponse for ApiError {
 }
 
 /// A failure from below (sbx, the filesystem): the whole context chain, since
-/// sbx's own words are what the person can act on.
-///
-/// A remote host that cannot be reached is 503: the request was fine, the
-/// host is down, and asking again later may work.
+/// sbx's own words are what the person can act on. An unreachable remote host
+/// is 503: the request was fine and asking again later may work.
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
         if e.chain().any(|c| c.is::<crate::remotes::UnknownHost>()) {
@@ -66,7 +63,6 @@ impl From<String> for ApiError {
     }
 }
 
-/// A name refused.
 impl From<sbxw_core::names::NameError> for ApiError {
     fn from(e: sbxw_core::names::NameError) -> Self {
         Self::bad(e.0)
@@ -82,8 +78,8 @@ pub fn ok() -> Json<Value> {
 /// `{ok: true, …fields}`.
 pub fn ok_with(fields: Value) -> Json<Value> {
     let mut body = json!({ "ok": true });
-    if let (Some(obj), Some(extra)) = (body.as_object_mut(), fields.as_object()) {
-        obj.extend(extra.clone());
+    if let (Some(obj), Value::Object(extra)) = (body.as_object_mut(), fields) {
+        obj.extend(extra);
     }
     Json(body)
 }

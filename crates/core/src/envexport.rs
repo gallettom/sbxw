@@ -255,7 +255,7 @@ pub fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<S
         }
     }
     if !spec.kits.is_empty() {
-        cfg.kits = spec.kits.clone();
+        cfg.kits.clone_from(&spec.kits);
     } else if !cfg.kits.is_empty() {
         report.push(format!("kits ({})", cfg.kits.join(", ")));
     }

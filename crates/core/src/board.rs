@@ -1,20 +1,19 @@
 //! The board: what the threads of a shared Team-mode plan know of each other.
 //!
 //! In the shared variant every thread edits one worktree, so a merge conflict
-//! becomes a live file conflict. The board prevents it with **claims**: a
-//! thread claims the files it will change, holds each on a 20-minute lease
-//! renewed by every edit, and nobody else may write them meanwhile (the hook
-//! in the sandbox asks [`Board::check`] before an Edit, Write or writing Bash
-//! command). A lease runs out on its own, is released by the thread, by a
-//! commit of the file, by the thread finishing, or by the lead.
+//! becomes a live file conflict. **Claims** prevent it: a thread claims the
+//! files it will change, each on a 20-minute lease renewed by every edit, and
+//! nobody else may write them meanwhile (the sandbox hook asks
+//! [`Board::check`] before an Edit, Write or writing Bash command). A lease
+//! ends by running out, by the thread releasing it, committing the file or
+//! finishing, or by the lead.
 //!
-//! Beside the claims runs the **feed**: what sbxw saw (claims, releases,
-//! commits, refused conflicts) and what agents posted (decisions, questions,
-//! handoffs, warnings). Each session reads it as a filtered delta after each
-//! tool call, so a decision taken in one thread reaches the others without
-//! anyone re-reading everything.
+//! The **feed** holds what sbxw saw (claims, releases, commits, refused
+//! conflicts) and what agents posted (decisions, questions, handoffs,
+//! warnings). Each session reads it as a filtered delta after each tool call,
+//! so a decision taken in one thread reaches the others.
 //!
-//! One board per sandbox. The book is pure: the daemon persists it and serves
+//! One board per sandbox. The book is pure: the daemon persists and serves
 //! it; time is passed in.
 
 use serde::{Deserialize, Serialize};

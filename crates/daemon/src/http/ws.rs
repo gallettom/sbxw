@@ -89,7 +89,7 @@ async fn bridge(
     if !replay.is_empty() {
         tx.send(Message::Binary(replay)).await.ok();
     }
-    let sandbox = key.sandbox_str().to_string();
+    let sandbox = key.sandbox_str();
     let pump = tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
         loop {

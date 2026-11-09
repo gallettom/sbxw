@@ -253,10 +253,9 @@ impl App {
                 .unwrap()
                 .insert(((&sandbox).into(), name.to_string()), messages::thread_briefing(&plan, t));
         }
-        for t in plan.threads.clone() {
-            let app = self.clone();
-            let sandbox = sandbox.clone();
-            tokio::spawn(async move { app.launch_thread(&sandbox, &t.name).await });
+        for t in &plan.threads {
+            let (app, sandbox, name) = (self.clone(), sandbox.clone(), t.name.clone());
+            tokio::spawn(async move { app.launch_thread(&sandbox, &name).await });
         }
         Ok(plan)
     }

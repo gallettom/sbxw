@@ -1,6 +1,6 @@
 //! A virtual Mac for sandboxes: terminal-mac, driven by the daemon on the host.
 //!
-//! A sandbox is a Linux container, so it cannot run macOS. terminal-mac
+//! A sandbox is a Linux container and cannot run macOS. terminal-mac
 //! (github.com/govijr/terminal-mac) runs a macOS guest under Apple
 //! Virtualization on an Apple silicon host, with a helper *inside the guest*
 //! that captures its screen and posts its input. The daemon runs it, and the
@@ -10,18 +10,16 @@
 //! * **One VM, one holder at a time.** A guest takes gigabytes of RAM and a
 //!   disk that grows to 64 GiB, so every sandbox shares one, and a sandbox
 //!   holds a *lease* while it drives it. The lease lapses after
-//!   `idle_release_minutes` without a call, so a session that wandered off
-//!   does not keep the screen from the next one.
-//! * **A person approves what costs or exposes something**: a sandbox asking
-//!   to boot the VM, and a sandbox asking to publish a port for the guest's
-//!   browser. Clicks and keys need no approval: the guest is disposable, with
-//!   no personal or organisation account in it.
+//!   `idle_release_minutes` without a call.
+//! * **A person approves what costs or exposes something**: booting the VM,
+//!   and publishing a port for the guest's browser. Clicks and keys need no
+//!   approval: the guest is disposable, with no personal or organisation
+//!   account in it.
 //! * **Shut down normally first, force as a last resort.** terminal-mac
-//!   0.2.0-6's normal stop was seen to leave the guest in `stopping` for good
-//!   (twice: at the login screen, and with a session open), keeping its RAM.
-//!   So a stop sbxw asked for that is still `stopping` after
-//!   `force_stop_after_minutes` is forced. The guest is disposable; what is
-//!   lost is only what was unsaved in it.
+//!   0.2.0-6's normal stop was seen to leave the guest `stopping` for good
+//!   (at the login screen, and with a session open), keeping its RAM. So a
+//!   stop sbxw asked for that is still `stopping` after
+//!   `force_stop_after_minutes` is forced; only unsaved guest work is lost.
 //! * **The release is pinned.** sbxw installs one terminal-mac archive whose
 //!   SHA-256 is compiled in here, never `latest`. Moving the pin is an sbxw
 //!   release.
@@ -247,19 +245,22 @@ impl MacBook {
     /// Take the lease, or refresh it for its holder. A lease past its idle
     /// bound is free for anyone.
     pub fn acquire(&mut self, who: &str, now: u64, idle_ms: u64) -> Acquire {
-        if let Some(l) = &mut self.lease {
-            if l.holder == who {
-                l.last_ms = now;
-                return Acquire::Granted;
-            }
-            if now.saturating_sub(l.last_ms) < idle_ms {
-                return Acquire::Busy(l.clone());
-            }
+        if let Some(l) = self.held_by_other(who, now, idle_ms) {
+            return Acquire::Busy(l.clone());
+        }
+        if let Some(l) = self.lease.as_mut().filter(|l| l.holder == who) {
+            l.last_ms = now;
+            return Acquire::Granted;
         }
         self.lease = Some(Lease { holder: who.to_string(), since_ms: now, last_ms: now });
         self.idle_since_ms = None;
         self.managed = true;
         Acquire::Granted
+    }
+
+    /// The live lease that would refuse `who`, without taking anything.
+    pub fn held_by_other(&self, who: &str, now: u64, idle_ms: u64) -> Option<&Lease> {
+        self.lease.as_ref().filter(|l| l.holder != who && now.saturating_sub(l.last_ms) < idle_ms)
     }
 
     pub fn holder(&self) -> Option<&str> {

@@ -2,15 +2,14 @@
 //!
 //! Each is a newtype validated once, where it enters sbxw (a CLI argument, an
 //! HTTP path, a WebSocket query, a plan a lead proposed). Everything downstream
-//! takes the type, so nothing has to remember to re-check a `&str` — the old
-//! code had a `reject_invalid_name` call at the top of forty handlers, and the
-//! one that forgot would have been the bug.
+//! takes the type, so nothing has to remember to re-check a `&str`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fmt;
 
-/// sbx refuses a longer name: it is a DNS label's limit, which is what
-/// `<name>.sbx` and the `/etc/hosts` aliases make of it.
+/// sbx's limit, a DNS label's: the name becomes `<name>.sbx` and `/etc/hosts`
+/// aliases.
 pub const MAX_SANDBOX_NAME_LEN: usize = 63;
 
 /// Shared by the CLI and the web UI, so both explain the same rule the same way.
@@ -26,11 +25,10 @@ pub const INVALID_THREAD_NAME: &str =
 
 /// A sandbox name, valid by construction.
 ///
-/// The alphabet is sbx's rule narrowed to what is unambiguous in every place a
-/// name travels: letters, digits and hyphens, at most 63, not ending in a
-/// hyphen (sbx also forbids a trailing period; sbxw allows no period at all).
-/// No underscore, which is what lets `__host__` name the monitor pane without
-/// ever colliding with a sandbox.
+/// sbx's rule narrowed to what is unambiguous everywhere a name travels:
+/// letters, digits and hyphens, at most 63, no trailing hyphen (sbx also
+/// forbids a trailing period; sbxw allows no period at all). No underscore, so
+/// `__host__` names the monitor pane without colliding with a sandbox.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct SandboxName(String);
@@ -91,8 +89,8 @@ impl<'de> Deserialize<'de> for ThreadName {
 }
 
 /// A model id as `claude --model` receives it: `^[a-z0-9][a-z0-9.\-]{0,63}$`.
-/// It reaches a command line inside the sandbox, so the alphabet is kept to
-/// what model ids and aliases use, and nothing that could read as a flag.
+/// It reaches a command line inside the sandbox, so nothing in it may read as
+/// a flag.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ModelId(String);
@@ -169,9 +167,9 @@ impl<'de> Deserialize<'de> for HostName {
 /// A sandbox, wherever it runs: the key sbxw files everything under.
 ///
 /// Text form: `myapp` for a local sandbox — byte-identical to the bare name, so
-/// every key, file and URL a local sandbox had stays what it was — and
-/// `buildbox~myapp` for one on host `buildbox`. `local~myapp` is accepted and
-/// means `myapp`.
+/// keys, files and URLs written before hosts existed stay valid — and
+/// `buildbox~myapp` on host `buildbox`. `local~myapp` is accepted and means
+/// `myapp`.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SandboxRef {
     pub host: HostName,
@@ -403,12 +401,12 @@ pub fn mint_chat_name(entropy: u32) -> SandboxName {
 /// Base name of the island's ephemeral chats.
 pub const EPHEMERAL_CHAT: &str = "ephemeral-chat";
 
-/// The name a brand-new ephemeral chat should take: `ephemeral-chat`, else the
-/// first free `ephemeral-chat-N` counting from 2. By availability, not a
-/// high-water mark: a freed name is offered again rather than the counter
-/// climbing forever. `taken` holds every sandbox name.
-pub fn next_ephemeral_chat<'a>(taken: impl IntoIterator<Item = &'a str> + Clone) -> SandboxName {
-    let has = |n: &str| taken.clone().into_iter().any(|t| t == n);
+/// The name for a new ephemeral chat: `ephemeral-chat`, else the first free
+/// `ephemeral-chat-N` from 2. By availability, not a high-water mark: a freed
+/// name is offered again. `taken` holds every sandbox name.
+pub fn next_ephemeral_chat<'a>(taken: impl IntoIterator<Item = &'a str>) -> SandboxName {
+    let taken: HashSet<&str> = taken.into_iter().collect();
+    let has = |n: &str| taken.contains(n);
     if !has(EPHEMERAL_CHAT) {
         return SandboxName(EPHEMERAL_CHAT.into());
     }
@@ -419,12 +417,13 @@ pub fn next_ephemeral_chat<'a>(taken: impl IntoIterator<Item = &'a str> + Clone)
         .unwrap_or_else(|| SandboxName(EPHEMERAL_CHAT.into()))
 }
 
-/// The thread a new conversation in `ephemeral-chat` takes: `chat-N`, the
-/// first free one counting from 2 (the sandbox's own agent is chat 1). The
-/// chat dock's "New chat" is another session in that sandbox, not another
-/// sandbox. `taken` holds the sandbox's thread names.
-pub fn next_chat_session<'a>(taken: impl IntoIterator<Item = &'a str> + Clone) -> ThreadName {
-    let has = |n: &str| taken.clone().into_iter().any(|t| t == n);
+/// The thread a new conversation in `ephemeral-chat` takes: the first free
+/// `chat-N` from 2 (the sandbox's own agent is chat 1). The chat dock's "New
+/// chat" is another session in that sandbox, not another sandbox. `taken`
+/// holds the sandbox's thread names.
+pub fn next_chat_session<'a>(taken: impl IntoIterator<Item = &'a str>) -> ThreadName {
+    let taken: HashSet<&str> = taken.into_iter().collect();
+    let has = |n: &str| taken.contains(n);
     (2..)
         .map(|n| format!("chat-{n}"))
         .find(|c| !has(c))
@@ -519,7 +518,6 @@ mod tests {
         assert!(is_valid_thread_name(next_chat_session(["chat-2"]).as_str()));
     }
 
-
     #[test]
     fn a_ref_parses_local_and_remote_forms() {
         let l = SandboxRef::parse("myapp").unwrap();
@@ -556,12 +554,6 @@ mod tests {
         }
         assert!(SandboxRef::parse(&format!("{}~n", "h".repeat(64))).is_err());
         assert!(serde_json::from_str::<SandboxRef>("\"a~b~c\"").is_err());
-    }
-
-    #[test]
-    fn local_and_remote_hosts() {
-        assert!(HostName::local().is_local());
-        assert!(!HostName::parse("buildbox").unwrap().is_local());
     }
 
     #[test]

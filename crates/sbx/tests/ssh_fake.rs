@@ -9,9 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// One fake host: a home, a log and a down-switch of its own, behind a
-/// wrapper `ssh` that sets them, so tests running in parallel never share
-/// process environment.
+/// One fake host: its own home, log and down-switch, set by a wrapper `ssh`,
+/// so parallel tests never share process environment.
 struct World {
     dir: PathBuf,
     home: PathBuf,
@@ -58,9 +57,9 @@ impl Drop for World {
     }
 }
 
-/// Written by a child `sh`, not by this process: a test on another thread may
+/// Written by a child `sh`, not this process: a test on another thread may
 /// fork while we hold the file open for writing, and its child keeps that fd
-/// until it execs, which makes running the script fail with ETXTBSY.
+/// until it execs, so running the script fails with ETXTBSY.
 fn write_exe(p: &Path, body: &str) {
     use std::io::Write;
     let mut c = std::process::Command::new("sh")
@@ -147,9 +146,9 @@ async fn exit_codes_cwd_and_home() {
 async fn sbx_is_detected_with_a_login_shell_once() {
     let w = World::new();
     let program = install_sbx(&w);
-    // The host's `sh`, first on its PATH: a real login shell would read
-    // /etc/profile and ~/.profile, which belong to whatever machine runs the
-    // tests. This one answers `-lc` like a login shell that found sbx.
+    // A stand-in `sh`, first on the host's PATH, answering `-lc` like a login
+    // shell that found sbx: a real one would read the test machine's
+    // /etc/profile and ~/.profile.
     write_exe(&w.home.join("bin/sh"), "#!/bin/sh\n[ \"$1\" = -lc ] && shift && exec /bin/sh -c \"$@\"\nexec /bin/sh \"$@\"\n");
     let x = w.exec(host());
     assert_eq!(x.sbx_program().await.unwrap(), program);

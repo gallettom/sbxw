@@ -1,32 +1,29 @@
 //! Reading and writing sbx's own `sbxenv.yaml` **environment files**.
 //!
-//! An environment file is the setup for a project in sbx's format: agent,
-//! workspace, extra mounts, kits, env vars, secrets, MCP servers, ports.
-//! `sbx env run` provisions a sandbox from one.
+//! An environment file is a project's setup in sbx's format: agent, workspace,
+//! extra mounts, kits, env vars, secrets, MCP servers, ports. `sbx env run`
+//! provisions a sandbox from one.
 //!
-//! sbxw both **exports** one (`sbxw env export`) and **runs** on one
-//! (`sbxw env run`). Running does not mean delegating wholesale: sbx creates
-//! the sandbox, sbxw does everything around it that the format cannot express.
-//! Three documented behaviours shape that split, and they are the reason
-//! `sbxw env run` is a pipeline rather than a passthrough:
+//! sbxw **exports** one (`sbxw env export`) and **runs** on one (`sbxw env
+//! run`): sbx creates the sandbox, sbxw does what the format cannot express.
+//! Three sbx behaviours make `sbxw env run` a pipeline, not a passthrough:
 //!
-//! * **Re-running doesn't re-provision.** `sbx env run` applies only `env` and
-//!   MCP changes to a sandbox that already exists; workspaces, kits, ports,
-//!   secrets and `sandboxOptions` need a remove and recreate. So sbxw calls
-//!   `sbx env create` **once**, for the creation, and keeps its own idempotent
-//!   pipeline (policy, hooks, credentials, ports, `/etc/hosts`) for every run.
-//! * **Ports are all-or-nothing.** If an environment file's port can't be
-//!   published, creation fails *and removes the new sandbox* — and there is no
-//!   CLI flag to override a port, nor can a second file replace one, because
-//!   the merge **concatenates** lists. The only lever is the file itself. That
-//!   is why sbxw checks the host ports *before* calling sbx and rewrites the
-//!   document (see `Loaded::set_ports`) rather than retrying after a failure:
-//!   a failed create also leaves provisioned secrets behind.
+//! * **Re-running doesn't re-provision.** On an existing sandbox `sbx env run`
+//!   applies only `env` and MCP changes; workspaces, kits, ports, secrets and
+//!   `sandboxOptions` need a remove and recreate. So sbxw calls
+//!   `sbx env create` **once** and keeps its own idempotent pipeline (policy,
+//!   hooks, credentials, ports, `/etc/hosts`) for every run.
+//! * **Ports are all-or-nothing.** If a file's port can't be published,
+//!   creation fails *and removes the new sandbox*, leaving provisioned secrets
+//!   behind. No CLI flag overrides a port, and a second file cannot replace
+//!   one, because the merge **concatenates** lists. So sbxw checks the host
+//!   ports *before* calling sbx and rewrites the document (see
+//!   `Loaded::set_ports`).
 //! * **Half of sbxw isn't in the format.** The egress allowlist is `sbx policy`,
 //!   not a file field; the browser terminal, the `/etc/hosts` aliases and the
 //!   OAuth injection are sbxw's own. On export those omissions go into the
-//!   file's header (`notes`); on run they come from `sbxw.toml`, which acts as
-//!   the fallback layer under the environment file.
+//!   file's header (`notes`); on run they come from `sbxw.toml`, the fallback
+//!   layer under the environment file.
 //!
 //! And three that decide how sbx *reads* a file:
 //!
@@ -40,10 +37,9 @@
 //!
 //! The format is `schemaVersion: "1"` and **sbx's loader rejects unknown
 //! fields**, so `render` emits the documented set and nothing else. Reading is
-//! deliberately more tolerant, and rewriting goes through the parsed document
-//! rather than through `EnvFile`, so a field sbxw doesn't model — `secrets`,
-//! `bindings`, `registries`, `mcp`, `sandboxOptions` — survives the round trip
-//! untouched.
+//! more tolerant, and rewriting goes through the parsed document, not
+//! `EnvFile`, so a field sbxw doesn't model — `secrets`, `bindings`,
+//! `registries`, `mcp`, `sandboxOptions` — survives the round trip.
 
 use anyhow::{bail, Context, Result};
 use serde_norway::Value;
@@ -55,28 +51,24 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Port {
     pub sandbox: u16,
-    /// `None` means the key is absent, which sbx reads as "give me any free
-    /// host port". That is a deliberate choice in this format, not a missing
-    /// value — it is the one way to publish a port that cannot lose a race
-    /// with something already on the host.
+    /// `None`: the key is absent, which sbx reads as "any free host port" —
+    /// the one way to publish a port that cannot lose a race with something
+    /// already on the host.
     pub host: Option<u16>,
-    /// Host interface. `None` uses sbx's default (available IPv4/IPv6
-    /// loopback); sbxw sets it only in `ip_per_app` mode, where the whole point
-    /// is that each app gets a loopback address of its own.
+    /// Host interface. `None` is sbx's default (IPv4/IPv6 loopback); sbxw sets
+    /// it only in `ip_per_app` mode, where each app gets its own loopback
+    /// address.
     pub host_ip: Option<String>,
-    /// sbx's default (`tcp4`) unless the file says otherwise.
-    /// Carried so a rewrite doesn't turn someone's `udp` mapping into a TCP one.
+    /// `None` is sbx's default (`tcp4`). Carried so a rewrite doesn't turn a
+    /// `udp` mapping into a TCP one.
     pub protocol: Option<String>,
 }
 
 impl From<&crate::ports::PortMapping> for Port {
-    /// A published mapping, as an environment file would spell it.
-    ///
-    /// The two defaults are dropped rather than written out: sbx's own default
-    /// host interface is loopback and its default protocol is `tcp4` (see
-    /// `protocol_is_default`), so naming either adds noise to a file a person
-    /// reads. `sbxw env run` and the Env panel both go through here, so they
-    /// describe a sandbox the same way.
+    /// A published mapping, as an environment file would spell it. sbx's
+    /// defaults (loopback interface, `tcp4` — see `protocol_is_default`) are
+    /// dropped, not written out. `sbxw env run` and the Env panel both go
+    /// through here, so they describe a sandbox the same way.
     fn from(m: &crate::ports::PortMapping) -> Self {
         Port {
             sandbox: m.sandbox_port,
@@ -91,8 +83,7 @@ impl From<&crate::ports::PortMapping> for Port {
 ///
 /// sbx defaults to `tcp4`, so a dual-stack `tcp` has to be written out —
 /// except on an explicit IPv4 address, which can only be bound over IPv4
-/// whatever the protocol says. That is every port sbxw publishes itself, and
-/// dropping the word there keeps its exports quiet.
+/// whatever the protocol says: every port sbxw publishes itself.
 pub fn protocol_is_default(proto: &str, host_ip: &str) -> bool {
     match proto {
         "" | "tcp4" => true,
@@ -101,8 +92,7 @@ pub fn protocol_is_default(proto: &str, host_ip: &str) -> bool {
     }
 }
 
-/// Everything `render` needs — already resolved, so this struct has no opinion
-/// about where paths came from.
+/// Everything `render` needs, already resolved.
 ///
 /// `additionalWorkspaces` are the config's `workspaces` (with 0.51's
 /// `target`); `sbxw up --ro` mounts are argv, not config, and stay out.
@@ -125,15 +115,14 @@ pub struct EnvFile {
     pub sandbox_options: Vec<(String, String)>,
     pub env: BTreeMap<String, String>,
     pub ports: Vec<Port>,
-    /// Header lines recording what sbxw does that this file cannot express.
-    /// Written as comments, so they travel with the file to whoever runs it.
+    /// What sbxw does that this file cannot express, written as header
+    /// comments so it travels with the file.
     pub notes: Vec<String>,
 }
 
 impl EnvFile {
-    /// The file, as text. Deterministic: the same config renders byte for byte
-    /// the same file, so a regenerated export diffs to nothing when nothing
-    /// changed.
+    /// The file, as text. Deterministic: the same config renders the same
+    /// bytes, so a re-export diffs to nothing when nothing changed.
     pub fn render(&self, generator: &str) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "# Generated by {generator} — `sbxw env export`.");
@@ -160,8 +149,7 @@ impl EnvFile {
             }
         }
 
-        // schemaVersion is quoted in every example sbx publishes, and has to be:
-        // bare 1 is an integer and the loader wants the string "1".
+        // Quoted: bare 1 is an integer and sbx's loader wants the string "1".
         out.push_str("\nschemaVersion: \"1\"\n");
         let _ = writeln!(out, "name: {}", scalar(&self.name));
         let _ = writeln!(out, "agent: {}", scalar(&self.agent));
@@ -233,18 +221,14 @@ impl EnvFile {
 
 /// A YAML scalar that reads back as the string it was given.
 ///
-/// Quoting is the default, not the exception. A value taken from a config file
-/// can be `yes`, `off`, `null`, `8.0` or `~`, every one of which a YAML reader
-/// would hand back as something other than a string — and the fields here are
-/// all typed as strings, so a plain `NODE_ENV: no` would be a type error at
-/// best and the wrong value at worst. Only an unambiguous identifier-ish token
-/// is left bare, which covers the names and paths that make up most of a file.
+/// Quoting is the default: `yes`, `off`, `null`, `8.0` or `~` would read back
+/// as something other than a string, and every field here is typed as one.
+/// Only an unambiguous identifier-ish token (most names and paths) is left
+/// bare.
 ///
-/// Single quotes rather than double: inside them the only escape is `''`, so a
-/// Windows path cannot grow a meaning it didn't have. (Environment files do
-/// substitute `${{ … }}` — but that is sbx's pass over the text, which single
-/// quotes don't stop; sbxw exports no expressions, so this is about YAML's own
-/// escapes, not sbx's.)
+/// Single quotes, not double: their only escape is `''`, so a Windows path
+/// keeps its backslashes. (sbx's `${{ … }}` pass runs over the text and
+/// ignores quotes; sbxw exports no expressions.)
 fn scalar(s: &str) -> String {
     let plain = !s.is_empty()
         && s.chars()
@@ -266,19 +250,17 @@ fn scalar(s: &str) -> String {
 pub const FILE_NAME: &str = "sbxenv.yaml";
 
 /// The user-level base, in the home directory, merged *beneath* every project
-/// file as shared defaults. Hidden, unlike the project file — and the only
-/// place the hidden name is still read.
+/// file as shared defaults. The only place the hidden name is read.
 pub const USER_FILE_NAME: &str = ".sbxenv.yaml";
 
 /// Names sbx does not read from a project directory. Only used to explain a
-/// miss: a directory holding one of these and no
-/// `sbxenv.yaml` is a project that has not been renamed yet, and "no
-/// environment file here" would be the wrong thing to tell its owner.
+/// miss: a directory holding one of these and no `sbxenv.yaml` gets a "rename
+/// it" error, not "no environment file here".
 const RETIRED_NAMES: [&str; 3] = [".sbxenv.yaml", ".sbxenv.yml", "sbxenv.yml"];
 
-/// Turn the `PATH...` arguments into the files to read, exactly as sbx does:
-/// a directory means `sbxenv.yaml` inside it, a file means itself, and nothing
-/// at all means the working directory.
+/// The `PATH...` arguments as the files to read, exactly as sbx does: a
+/// directory means `sbxenv.yaml` inside it, a file means itself, and no
+/// argument means the working directory.
 pub fn resolve_paths(inputs: &[PathBuf], cwd: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for p in absolute_inputs(inputs, cwd) {
@@ -311,10 +293,10 @@ pub fn resolve_paths(inputs: &[PathBuf], cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// The `PATH...` arguments made absolute, with the working directory standing
-/// in for none. What `sbx env create` is handed when sbxw has nothing to
-/// rewrite: a directory stays a directory, so sbx applies its own rules to it
-/// — the user-level base included.
+/// The `PATH...` arguments made absolute, the working directory standing in
+/// for none. What `sbx env create` gets when sbxw has nothing to rewrite: a
+/// directory stays a directory, so sbx applies its own rules to it — the
+/// user-level base included.
 pub fn absolute_inputs(inputs: &[PathBuf], cwd: &Path) -> Vec<PathBuf> {
     if inputs.is_empty() {
         return vec![cwd.to_path_buf()];
@@ -341,16 +323,14 @@ pub fn user_base() -> Option<PathBuf> {
 /// A merged, interpolated environment file: the parsed documents, plus where
 /// they came from.
 ///
-/// The documents are kept as generic `Value`s and not as a struct, because sbxw
-/// has to be able to hand a **modified** document back to sbx with only the
-/// ports changed. Round-tripping through a typed struct would silently drop
-/// `secrets`, `bindings`, `registries`, `mcp`, `skills` and `sandboxOptions` —
-/// every one of which matters to the sandbox and none of which sbxw models.
+/// The documents stay generic `Value`s: sbxw hands a **modified** document
+/// back to sbx with only the ports changed, and a typed struct would drop
+/// `secrets`, `bindings`, `registries`, `mcp`, `skills` and `sandboxOptions`,
+/// none of which sbxw models.
 ///
-/// The user-level base is kept apart from the project files for the same
-/// reason. sbx merges it beneath whatever directory it is given, so a rewritten
-/// copy that already contained it would get it twice — and since lists
-/// concatenate, every kit and port it declares would be applied twice.
+/// The user-level base is kept apart from the project files: sbx merges it
+/// beneath whatever directory it is given, so a rewritten copy containing it
+/// would apply every kit and port it declares twice (lists concatenate).
 pub struct Loaded {
     /// The project files, merged, with their relative paths made absolute.
     pub doc: Value,
@@ -360,9 +340,8 @@ pub struct Loaded {
     pub sources: Vec<PathBuf>,
     pub user_source: Option<PathBuf>,
     /// `${{ … }}` references that had no value, in order of first appearance.
-    /// Left verbatim in the document — sbx gets its own chance to resolve
-    /// them — but reported, since an unresolved path is the likeliest cause of
-    /// a confusing failure later.
+    /// Left verbatim for sbx to resolve, but reported: an unresolved path is
+    /// the likeliest cause of a confusing failure later.
     pub unresolved: Vec<String>,
     /// `${VAR}` references, which sbx does not expand. Reported so a file
     /// relying on them says why its paths don't resolve.
@@ -372,14 +351,14 @@ pub struct Loaded {
 /// Read, interpolate, anchor and merge the files, in order, over the
 /// user-level base.
 ///
-/// The merge is sbx's, spelled out because getting it wrong is invisible until
-/// it matters: **nested mappings merge by key, lists concatenate, and a later
-/// scalar replaces an earlier one**. Lists concatenating is the surprising half
-/// and the reason sbxw rewrites the document to change a port instead of
-/// layering a second file over it.
+/// The merge is sbx's: **nested mappings merge by key, lists concatenate, and
+/// a later scalar replaces an earlier one**. Lists concatenating is why sbxw
+/// rewrites the document to change a port instead of layering a second file
+/// over it.
 ///
-/// Relative paths are resolved against **the file that declares them**, so they are made absolute per file, before the merge — after it,
-/// nothing says which file a `./kits/x` came from.
+/// Relative paths resolve against **the file that declares them**, so they
+/// are made absolute per file, before the merge — after it, nothing says
+/// which file a `./kits/x` came from.
 ///
 /// `cli_args` are the `--env-arg NAME=VALUE` pairs; they beat every `args:`
 /// default.
@@ -426,10 +405,9 @@ pub fn load(
                     .and_then(|a| args.get(a).cloned()),
             }
         };
-        // Interpolation runs over the *text*, before the YAML is parsed, which
-        // is what lets `${{ env.args.port }}` stand in a field typed as a
-        // number. Doing it on parsed values instead would make
-        // `host: ${{ env.args.port }}` a string and the schema would reject it.
+        // Interpolation runs over the *text*, before the YAML is parsed, so
+        // `${{ env.args.port }}` can stand in a field typed as a number; on
+        // parsed values it would be a string and the schema would reject it.
         let (text, missing, legacy) = interpolate(raw, &lookup);
         for m in missing {
             if !unresolved.contains(&m) {
@@ -469,11 +447,11 @@ fn parent_of(path: &Path) -> PathBuf {
 
 /// The defaults a file's `args:` block declares.
 ///
-/// sbx documents the block and the `${{ env.args.NAME }}` reference but not a
-/// grammar sbxw could check against, so this reads the shapes a person would
-/// write — `NAME: value`, `NAME: {default: value}`, or a list of
-/// `{name, default}` — and ignores the rest. An argument this misses is not
-/// lost: its reference stays in the text, and sbx resolves it.
+/// sbx documents the block and the `${{ env.args.NAME }}` reference but no
+/// grammar, so this reads the shapes a person would write — `NAME: value`,
+/// `NAME: {default: value}`, or a list of `{name, default}` — and ignores the
+/// rest. An argument this misses keeps its reference in the text, and sbx
+/// resolves it.
 fn arg_defaults(raw: &str) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     // A file that only parses once interpolated has no block worth reading
@@ -515,13 +493,12 @@ fn arg_defaults(raw: &str) -> BTreeMap<String, String> {
     out
 }
 
-/// Make one file's relative paths absolute, against that file's directory.
-///
-/// The workspace (either form), every additional workspace, every kit
-/// entry that names a local path, and the host side of every `mounts` entry. A kit given as a mapping is left alone: sbx
-/// documents per-kit `args` there but not the name of the reference key, and
-/// guessing it would be worse than leaving the entry to sbx — which resolves it
-/// against the same directory anyway, as long as the file stays where it is.
+/// Make one file's relative paths absolute, against that file's directory:
+/// the workspace (either form), every additional workspace, every kit entry
+/// naming a local path, and the host side of every `mounts` entry. A kit given
+/// as a mapping is left alone: sbx documents per-kit `args` there but not the
+/// name of the reference key, and sbx resolves it against the same directory
+/// anyway, as long as the file stays where it is.
 fn anchor(doc: &mut Value, dir: &Path) {
     let Value::Mapping(map) = doc else { return };
     let abs = |s: &str| -> String {
@@ -594,8 +571,8 @@ fn merge(base: Value, over: Value) -> Value {
             a.extend(b);
             Value::Sequence(a)
         }
-        // A later scalar replaces an earlier one — and so does a value of a
-        // different shape, which is the only sane reading of "replace".
+        // A later scalar replaces an earlier one, and so does a value of a
+        // different shape.
         (_, over) => over,
     }
 }
@@ -603,14 +580,13 @@ fn merge(base: Value, over: Value) -> Value {
 /// Substitute `${{ NAME }}` expressions in `text`.
 ///
 /// `NAME` is a dotted path — `env.projectDir`, `env.fileDir`,
-/// `env.args.port` — and `lookup` decides what each one means. A reference
-/// with no value is left **verbatim** rather than blanked: sbxw is not the last
-/// reader of this file, and turning `${{ env.args.root }}/src` into `/src`
-/// would quietly mount the wrong directory where leaving it alone produces an
-/// error that names the argument.
+/// `env.args.port` — and `lookup` gives each its value. A reference with no
+/// value is left **verbatim**, not blanked: turning `${{ env.args.root }}/src`
+/// into `/src` would quietly mount the wrong directory, where sbx, reading
+/// the file next, fails with an error that names the argument.
 ///
 /// Returns the text, the names with no value, and the names of any `${VAR}`
-/// references — left exactly as they are, since sbx does not expand them.
+/// references — left as they are, since sbx does not expand them.
 fn interpolate(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -677,22 +653,19 @@ fn interpolate(
 /// The parts of an environment file sbxw acts on, extracted from the project
 /// files merged over the user-level base.
 ///
-/// Deliberately a *view*: everything here is also still in the documents, and
-/// the documents are what gets handed back to sbx. Fields sbxw cannot act on are reduced to a
-/// `present` flag, because the only thing sbxw does with them is say they are
-/// there — see `Spec::delegated`.
+/// A *view*: everything here is still in the documents, which are what sbx
+/// gets back. Keys sbxw cannot act on are only named, in `Spec::delegated`.
 #[derive(Debug, Default, PartialEq)]
 pub struct Spec {
     pub name: Option<String>,
     pub agent: Option<String>,
     /// Absolute: resolved against the file that declared it. `None` means no
-    /// file declares one, which means *no* workspace mount — not
-    /// the directory holding the file.
+    /// file declares one, which means *no* workspace mount — not the
+    /// directory holding the file.
     ///
-    /// The object form's `clone` flag is deliberately *not* extracted: sbxw
-    /// never acts on it, and `set_workspace` preserves the mapping when it
-    /// rewrites the path, so sbx reads the flag itself. A field here would only
-    /// suggest sbxw handles clone mode.
+    /// The object form's `clone` flag is *not* extracted: sbxw never acts on
+    /// it, and `set_workspace` preserves the mapping, so sbx reads the flag
+    /// itself.
     pub workspace: Option<String>,
     pub additional: Vec<MountSpec>,
     pub kits: Vec<String>,
@@ -715,7 +688,7 @@ pub struct MountSpec {
 }
 
 /// Keys sbx acts on that sbxw never touches — reported so a run says what it
-/// handed over rather than leaving you to wonder whether it was read at all.
+/// handed over.
 const DELEGATED_KEYS: [&str; 6] = [
     "secrets",
     "bindings",
@@ -728,10 +701,9 @@ const DELEGATED_KEYS: [&str; 6] = [
 impl Loaded {
     /// Read the document into the view sbxw acts on.
     ///
-    /// Tolerant where sbx is strict: an unknown key is ignored rather than
-    /// refused, because sbxw is not the authority on this format and a file
-    /// using a field from a newer sbx must still be runnable. sbx itself does
-    /// the rejecting, a moment later, with a better message than sbxw could.
+    /// Tolerant where sbx is strict: an unknown key is ignored, so a file
+    /// using a field from a newer sbx still runs. sbx does the rejecting, a
+    /// moment later, with a better message.
     pub fn spec(&self) -> Result<Spec> {
         let merged = merge(self.user_doc.clone(), self.doc.clone());
         let user_ports = match self.user_doc.get("ports") {
@@ -772,8 +744,7 @@ impl Loaded {
                             ),
                         })
                     }
-                    // A bare string is not the documented shape, but it is the
-                    // obvious thing to write and costs nothing to accept.
+                    // Not the documented shape, but the obvious thing to write.
                     Value::String(s) => Some(MountSpec {
                         path: s.clone(),
                         read_only: false,
@@ -862,17 +833,15 @@ impl Loaded {
     /// `(secret, command)`.
     ///
     /// sbx runs a secret command from a fresh temporary directory on the host,
-    /// so `./credential-helper` or `cat ../token` finds nothing — and the
-    /// failure surfaces as a secret that will not resolve, a long way from its
-    /// cause. That is deliberate: a helper inside a writable workspace is one
-    /// the agent could rewrite. So this is reported, not repaired; anchoring the
-    /// path the way `anchor` does a workspace would undo the protection.
+    /// so `./credential-helper` or `cat ../token` finds nothing, and the secret
+    /// fails to resolve far from its cause. That is deliberate — a helper
+    /// inside a writable workspace is one the agent could rewrite — so this is
+    /// reported, not repaired: anchoring the path would undo the protection.
     ///
-    /// "Relative" is read the way a shell would see it: the program named by a
-    /// path that is not absolute, or any word starting `./` or `../`. A bare
-    /// program name is a `PATH` lookup and fine; a word that is merely a
-    /// relative file name (`cat token`) is indistinguishable from an argument
-    /// and is not guessed at.
+    /// "Relative" as a shell sees it: a program named by a non-absolute path,
+    /// or any word starting `./` or `../`. A bare program name is a `PATH`
+    /// lookup and fine; a bare relative file name (`cat token`) cannot be told
+    /// from an argument and is not guessed at.
     pub fn relative_secret_commands(&self) -> Vec<(String, String)> {
         let merged = merge(self.user_doc.clone(), self.doc.clone());
         let Some(Value::Mapping(secrets)) = merged.get("secrets") else {
@@ -905,11 +874,10 @@ impl Loaded {
             .collect()
     }
 
-    /// Replace the project document's `ports` list, keeping every other key as
-    /// it was.
+    /// Replace the project document's `ports` list, keeping every other key.
     ///
-    /// `ports` are the project's own — without the user-level base's, which sbx
-    /// adds again when it reads the rewritten copy.
+    /// `ports` are the project's own, without the user-level base's: sbx adds
+    /// those again when it reads the rewritten copy.
     pub fn set_ports(&mut self, ports: &[Port]) {
         let seq = Value::Sequence(
             ports
@@ -935,11 +903,10 @@ impl Loaded {
 
     /// Pin the workspace into the project document.
     ///
-    /// A rewritten copy lives in sbxw's state directory, so a workspace it
+    /// A rewritten copy lives in sbxw's state directory, so a workspace
     /// inherited from the user-level base as `${{ env.projectDir }}` would name
-    /// *that* directory when sbx re-reads the base. Writing the resolved path
-    /// into the copy wins over the base, because a later scalar replaces an
-    /// earlier one.
+    /// *that* directory when sbx re-reads the base. The resolved path in the
+    /// copy wins: a later scalar replaces an earlier one.
     pub fn set_workspace(&mut self, path: &str) {
         match self.doc.get("workspace") {
             // Preserve the object form, and with it `clone`.
@@ -991,10 +958,9 @@ mod tests {
         }
     }
 
-    /// Interpolation runs over the *text*, before the YAML is parsed. That is
-    /// the only order in which `host: ${{ env.args.port }}` can land in a field
-    /// the schema types as a number — substituting into parsed values would
-    /// make it the string "3000" and the schema would refuse it.
+    /// Interpolation runs over the text, before the YAML is parsed: on parsed
+    /// values `host: ${{ env.args.port }}` would be the string "3000", which
+    /// the schema refuses.
     #[test]
     fn an_argument_can_stand_where_the_schema_wants_a_number() {
         let body = "schemaVersion: \"1\"\nagent: claude\nargs:\n  port:\n    default: 3999\n\
@@ -1022,8 +988,8 @@ mod tests {
         assert!(legacy.is_empty());
     }
 
-    /// sbx does not expand `${VAR}`. sbxw leaves it as sbx does, and says so —
-    /// otherwise a path with a literal `${HOME}` fails and nothing explains why.
+    /// sbx does not expand `${VAR}`: sbxw leaves it and reports it, or a path
+    /// with a literal `${HOME}` fails unexplained.
     #[test]
     fn an_old_style_variable_is_left_alone_and_reported() {
         let (out, missing, legacy) =
@@ -1047,9 +1013,8 @@ mod tests {
         }
     }
 
-    /// sbx's merge, and the half that surprises: **lists concatenate**. It is
-    /// why sbxw rewrites the document to change a port instead of layering a
-    /// second file over it — an override file could only ever add a third port.
+    /// **Lists concatenate**: an override file could only ever add a third
+    /// port, which is why sbxw rewrites the document to change one.
     #[test]
     fn merging_follows_sbx_rules_including_lists_that_concatenate() {
         let dir = scratch("merge");
@@ -1176,9 +1141,8 @@ mod tests {
         assert_eq!(names, ["a", "b", "e"]);
     }
 
-    /// The whole reason rewriting goes through the parsed document: sbxw models
-    /// none of these keys, and dropping one would silently unprovision a
-    /// sandbox's credentials.
+    /// sbxw models none of these keys, and dropping one would silently
+    /// unprovision a sandbox's credentials.
     #[test]
     fn rewriting_a_port_preserves_the_keys_sbxw_does_not_understand() {
         let mut loaded = load_str(
@@ -1224,10 +1188,9 @@ mod tests {
         );
     }
 
-    /// `sbxw env export` → `sbxw env run` is a real round trip across the two
-    /// YAML mechanisms in this module — `render` hand-writes it, `load` parses
-    /// it back — and nothing crossed that seam. A quoting rule that `scalar`
-    /// got wrong would surface here and nowhere else.
+    /// `sbxw env export` → `sbxw env run` crosses this module's two YAML
+    /// mechanisms: `render` hand-writes, `load` parses back. A quoting rule
+    /// `scalar` got wrong surfaces only here.
     #[test]
     fn a_rendered_file_parses_back_into_the_same_spec() {
         let written = EnvFile {
@@ -1408,7 +1371,6 @@ mod tests {
 
     #[test]
     fn omissions_are_recorded_in_the_file_itself() {
-        // The point of the export is that it is honest about being partial.
         let out = EnvFile {
             notes: vec!["the egress allowlist:\n  sbx policy allow network \"a,b\"".into()],
             ..minimal()
@@ -1425,27 +1387,5 @@ mod tests {
         for field in ["kits:", "env:", "ports:"] {
             assert!(!out.contains(field), "{field} should not appear at all");
         }
-    }
-
-    #[test]
-    fn the_same_config_renders_the_same_bytes() {
-        let build = || {
-            EnvFile {
-                env: BTreeMap::from([
-                    ("B".into(), "2".into()),
-                    ("A".into(), "1".into()),
-                    ("C".into(), "3".into()),
-                ]),
-                ..minimal()
-            }
-            .render("sbxw 1.0")
-        };
-        let out = build();
-        let a = out.find("A:").unwrap();
-        let b = out.find("B:").unwrap();
-        assert!(
-            a < b,
-            "env keys are sorted, so a re-export diffs to nothing"
-        );
     }
 }

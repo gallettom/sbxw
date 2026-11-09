@@ -1,21 +1,21 @@
 //! The shared kit cache: what the heavy bundled kits download once.
 //!
-//! agent-skills and md-to-pdf-tools spend their startup fetching — apt
-//! packages, a Chromium build, skill tarballs, Python wheels. With `cache` on,
+//! agent-skills and md-to-pdf-tools spend their startup fetching apt packages,
+//! a Chromium build, skill tarballs and Python wheels. With `cache` on,
 //! `~/.sbxw/cache` is mounted into every new sandbox and the kits copy from it
 //! (`SBXW_CACHE`), falling back to the network for anything missing.
 //!
-//! **The first sandbox fills it.** When the cache is empty or expired, the
-//! sandbox being created gets it *writable* with `SBXW_CACHE_FILL=1`; its kits
+//! The first sandbox fills it: when the cache is empty or expired, the sandbox
+//! being created gets it *writable* with `SBXW_CACHE_FILL=1`; its kits
 //! download into it and drop `.filled-<kit>` under their `<arch>-<codename>`
-//! directory. Every other sandbox gets it read-only. The filler stays able to
-//! write it for its whole life — the price of not running a separate warmer —
-//! so the cache expires after `cache_ttl_days` and is refilled from scratch,
-//! which bounds how long anything it wrote survives.
+//! directory. Every other sandbox gets it read-only. There is no separate
+//! warmer, so the filler can write it for its whole life: the cache expires
+//! after `cache_ttl_days` and is refilled from scratch, which bounds how long
+//! anything it wrote survives.
 //!
-//! One filler at a time: a lock file taken at creation. It is never released,
-//! only outlived — the fill is done once every marker is newer than the lock,
-//! and a lock older than [`FILL_TIMEOUT`] is a fill that failed.
+//! One filler at a time: a lock file taken at creation, never released, only
+//! outlived — the fill is done once every marker is newer than the lock, and
+//! a lock older than [`FILL_TIMEOUT`] is a fill that failed.
 
 use crate::bundled;
 use crate::host::{HostFs, Kind};
@@ -91,8 +91,8 @@ pub fn wanted_by(kits: &[String]) -> bool {
         .any(|n| bundled::CACHING.contains(&n))
 }
 
-/// Decide how the sandbox being created mounts the cache — and when it is the
-/// filler, take the lock and drop the expired content first.
+/// How the sandbox being created mounts the cache. The filler takes the lock
+/// and drops the expired content first.
 pub fn claim(paths: &Paths, ttl: Duration) -> Result<(PathBuf, Mount)> {
     let dir = paths.cache();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -120,15 +120,13 @@ pub fn claim(paths: &Paths, ttl: Duration) -> Result<(PathBuf, Mount)> {
 }
 
 /// One claim at a time per daemon: [`HostFs`] has no exclusive create, so the
-/// lock file below cannot arbitrate between two bring-ups of the same process
-/// the way `create_new` does locally.
+/// lock file cannot arbitrate between two bring-ups as `create_new` does locally.
 static CLAIMING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// [`claim`] on a host's filesystem: the cache is `<root>/cache`, `root`
-/// being that host's `~/.sbxw`. Ages come from the host's mtimes judged by
-/// this machine's clock, so a host whose clock is days off misjudges a TTL
-/// of days by that much, no more. Two daemons claiming the same host at the
-/// same instant could both fill: the cost is a duplicate download, not
+/// being that host's `~/.sbxw`. Ages are the host's mtimes judged by this
+/// machine's clock, so a TTL is off by the clock skew, no more. Two daemons
+/// claiming the same host at once could both fill: a duplicate download, not
 /// corruption, as every fill writes only its own files.
 pub async fn claim_on(fs: &dyn HostFs, root: &Path, ttl: Duration) -> Result<(PathBuf, Mount)> {
     let _one = CLAIMING.lock().await;

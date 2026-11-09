@@ -5,10 +5,9 @@
 //! A [`Link`] owns a supervisor task that runs the master
 //! (`ssh -M -N -S <ControlPath> -R 127.0.0.1:<agent_port>:<agent_addr> …`),
 //! says when it is up (`ssh -O check` answers), and restarts it with backoff
-//! when it dies: a laptop that sleeps or changes network gets its link back
-//! without anyone asking. Commands do not wait for it: the [`SshExec`] from
-//! [`Link::exec`] rides the master when there is one and connects on its own
-//! when there is not.
+//! when it dies (a laptop that slept or changed network). Commands do not wait
+//! for it: the [`SshExec`] from [`Link::exec`] rides the master when there is
+//! one and connects on its own when there is not.
 //!
 //! `-L` forwards are added to the running master with `ssh -O forward`, and
 //! remembered, so a restarted master gets them back on the same local ports.
@@ -74,9 +73,9 @@ struct Shared {
     state: watch::Sender<LinkState>,
     /// local port → remote port, for `-O cancel` and for replay on restart.
     forwards: Mutex<BTreeMap<u16, u16>>,
-    /// Masters started so far that have ended (or never came up). A caller
-    /// that finds the link Down tells "still connecting" from "tried and
-    /// failed" by this, without waiting out a whole connect timeout.
+    /// Masters that have ended or never came up. Tells "still connecting"
+    /// from "tried and failed" on a Down link without waiting out a connect
+    /// timeout.
     tried: AtomicU32,
 }
 
@@ -109,9 +108,8 @@ impl Link {
         self.shared.state.subscribe()
     }
 
-    /// The state once the first connection attempt has had its chance: Up as
-    /// soon as it is, Down as soon as one attempt has failed, or whatever it
-    /// is when `timeout` runs out.
+    /// The state once the first attempt has had its chance: Up as soon as it
+    /// is, Down once one attempt has failed, else whatever it is at `timeout`.
     pub async fn settle(&self, timeout: Duration) -> LinkState {
         let mut rx = self.state();
         let deadline = tokio::time::Instant::now() + timeout;
@@ -126,7 +124,6 @@ impl Link {
         }
     }
 
-    /// The host this link reaches.
     pub fn host(&self) -> &RemoteHost {
         &self.shared.cfg.host
     }

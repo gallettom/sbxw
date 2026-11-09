@@ -1,16 +1,12 @@
 //! `sbxw.toml`.
 //!
-//! The schema, defaults and compatibility aliases are the old ones, field for
-//! field, so an existing project file means what it meant. Two things are new:
-//!
-//! * `agent_addr` — the daemon's second listener, the only one sandboxes can
+//! * `agent_addr` is the daemon's second listener, the only one sandboxes can
 //!   reach (see the daemon's `http` module for why there are two).
-//! * a loaded config remembers **where it came from** (`source`), because the
-//!   daemon now keeps one per sandbox: a sandbox created from project A is
-//!   attached with A's `env` even when the daemon was started from project B.
-//!
-//! Relative paths (`kits`, `env_files`) are resolved against the file's own
-//! directory at load time, so nothing downstream has to know where it was.
+//! * A loaded config remembers **where it came from** (`source`): the daemon
+//!   keeps one per sandbox, so a sandbox created from project A is attached
+//!   with A's `env` even when the daemon was started from project B.
+//! * Relative paths (`kits`, `env_files`, `kit_mounts`, `workspaces`) are
+//!   resolved against the file's own directory at load time.
 
 use crate::hosts::HostAlias;
 use crate::kits::resolve_kit_ref;

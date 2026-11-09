@@ -104,11 +104,11 @@ impl Llm {
     /// `emit` returning false (the page went away) stops generation.
     pub fn reply(&self, system: &str, turns: &[Turn], max_reply: usize, temp: f32, mut emit: impl FnMut(&str) -> bool) -> Result<String, String> {
         let vocab = self.model.vocab();
-        let mut turns = turns.to_vec();
+        let mut turns = turns;
         // Oldest exchanges go first when the conversation outgrows the
         // context (the rolling summary replaces this in a later lot).
         let tokens = loop {
-            let text = self.prompt(system, &turns);
+            let text = self.prompt(system, turns);
             let mut toks = vocab.tokenize(text.as_bytes(), false, true);
             if toks.first() != Some(&vocab.bos()) {
                 toks.insert(0, vocab.bos());
@@ -116,7 +116,7 @@ impl Llm {
             if toks.len() + max_reply < N_CTX as usize || turns.len() <= 1 {
                 break toks;
             }
-            turns.drain(..turns.len().min(2));
+            turns = &turns[turns.len().min(2)..];
         };
         if tokens.len() + max_reply >= N_CTX as usize {
             return Err("that message is too long for the conversation's context".into());
