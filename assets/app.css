@@ -3943,3 +3943,9 @@
   .vc-history-open:hover { background: var(--c-elevated); }
   .vc-history-row.current .vc-history-open { border-color: var(--c-border); }
   .vc-history-open .vc-meta { display: inline; margin-left: .5rem; }
+  .vc-grill-intro summary { cursor: pointer; color: var(--c-text-muted); font: 11px var(--font-mono); }
+  .vc-grill-now { font: 13px/1.5 var(--font-prose); color: var(--c-text-bright); }
+  .vc-grill-now p { margin: 0 0 .35rem; }
+  .vc-grill-rec { color: var(--c-green); }
+  .vc-grill-answers { margin: 0; padding-left: 1.2rem; color: var(--c-text-muted); font: 12px/1.45 var(--font-prose); }
+  .vc-grill-answers:empty { display: none; }

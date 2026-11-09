@@ -162,7 +162,8 @@ async function vcStop() {
     if (!r.ok) vcSay('err', r.error);
     else if (!r.text) vcSay('dim', '(nothing heard)');
     else {
-      vcSay('me', r.text, `${r.audio_s.toFixed(1)} s · ${r.ms} ms`);
+      // A grill answer shows in its card's list, not as a line of its own.
+      if (vcPending?.kind !== 'grill') vcSay('me', r.text, `${r.audio_s.toFixed(1)} s · ${r.ms} ms`);
       vcHear(r.text);
     }
   } catch (e) {
@@ -532,7 +533,7 @@ vcEl('vc-type').addEventListener('submit', e => {
   const text = input.value.trim();
   if (!text || !vcReady()) return;
   input.value = '';
-  vcSay('me', text);
+  if (vcPending?.kind !== 'grill') vcSay('me', text);
   vcHear(text);
 });
 vcEl('vc-brief').addEventListener('click', () => { if (vcReady()) vcBrief(''); });
@@ -736,6 +737,8 @@ function vcSpeak(text) { vcSpeech.stop(); vcSpeech.feed(text); vcSpeech.flush();
 
 // An agent's message: shown, its gist read aloud, the next words answer it.
 async function vcAgentMessage(sandbox, thread, text) {
+  const grill = vcParseGrill(text);
+  if (grill.questions.length) return vcGrill(sandbox, thread, text, grill);
   const { card, foot } = vcCard('vc-msg-agent', `${vcWho(sandbox, thread)} says`);
   const body = document.createElement('div');
   body.className = 'vc-agent-body';
@@ -753,6 +756,133 @@ async function vcAgentMessage(sandbox, thread, text) {
   vcArm({ kind: 'reply', sandbox, thread, text, card });
   vcLog.scrollTop = vcLog.scrollHeight;
   if (!vcSpeech.muted) vcReadAgent(text);
+}
+
+// ── A grill round, one question at a time ───────────────────────────────
+// /grill-me writes its round as `❓ **Q1 - Title** : body` then `➡️ the
+// recommendation`, questions separated by `---`. The round is cut there —
+// no model involved, so no question is lost or invented — and asked one
+// question at a time: shown, read aloud, answered; then the next. Once every
+// one is answered (or skipped), the dictated answers are written up as one
+// message ("Q1 : …"), shown, confirmed, and typed into the session at once.
+function vcParseGrill(text) {
+  const parts = text.split(/^\s*❓\s*/m);
+  const intro = parts.shift().trim();
+  const questions = [];
+  for (const raw of parts) {
+    const block = raw.replace(/\n\s*---+\s*$/s, '').trim();
+    const [ask, ...rec] = block.split(/^\s*➡️\s*/m);
+    const head = ask.match(/^\**\s*(Q\d+)\**\s*[-–—:]?\s*\**\s*([^*\n:]*)\**\s*:?\s*/);
+    const id = head ? head[1] : `Q${questions.length + 1}`;
+    const title = head ? head[2].trim() : '';
+    questions.push({ id, title, ask: ask.trim(), body: head ? ask.slice(head[0].length).trim() : ask.trim(), rec: rec.join(' ').replace(/\n\s*---+[\s\S]*$/, '').trim(), answer: null });
+  }
+  return { intro, questions };
+}
+
+// Markdown to something a voice can say.
+function vcPlain(md) {
+  return md
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_#>|]+/g, '')
+    .replace(/^\s*[-•]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const VC_REPEAT = /^\s*(r[ée]p[èe]te|encore|repeat|again)\b/i;
+const VC_SKIP = /^\s*(passe|suivante|skip|next|je ne sais pas)\b/i;
+const VC_BACK = /^\s*(pr[ée]c[ée]dente|reviens|back|previous)\b/i;
+
+function vcGrill(sandbox, thread, text, grill) {
+  const n = grill.questions.length;
+  const { card, head, foot } = vcCard('vc-msg-agent vc-grill', `${vcWho(sandbox, thread)} · ${n} question${n > 1 ? 's' : ''}`);
+  if (grill.intro) {
+    const ctx = document.createElement('details');
+    ctx.className = 'vc-grill-intro';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Context';
+    const b = document.createElement('div');
+    b.className = 'vc-agent-body';
+    b.innerHTML = chatMarkdown(grill.intro);
+    ctx.append(sum, b);
+    card.insertBefore(ctx, foot);
+  }
+  const now = document.createElement('div');
+  now.className = 'vc-grill-now';
+  const answers = document.createElement('ol');
+  answers.className = 'vc-grill-answers';
+  card.insertBefore(now, foot);
+  card.insertBefore(answers, foot);
+  const st = { sandbox, thread, text, grill, i: 0, card, head };
+
+  const show = () => {
+    const q = grill.questions[st.i];
+    head.textContent = `${vcWho(sandbox, thread)} · ${q.id} (${st.i + 1}/${n})${q.title ? ' — ' + q.title : ''}`;
+    now.innerHTML = chatMarkdown(q.body || q.ask) + (q.rec ? `<p class="vc-grill-rec">➡️ ${chatInline(q.rec)}</p>` : '');
+    answers.replaceChildren(...grill.questions.slice(0, st.i).map(x => {
+      const li = document.createElement('li');
+      li.textContent = `${x.id}${x.title ? ' — ' + x.title : ''} : ${x.answer ?? '(skipped)'}`;
+      return li;
+    }));
+    vcArm({ kind: 'grill', st, card });
+    vcLog.scrollTop = vcLog.scrollHeight;
+    if (!vcSpeech.muted) {
+      const said = `${q.id}${q.title ? ', ' + vcPlain(q.title) : ''}. ${vcPlain(q.body)}${q.rec ? ' Recommandation : ' + vcPlain(q.rec) : ''}`;
+      vcSpeak(said);
+    }
+  };
+  st.show = show;
+  st.next = () => { st.i += 1; st.i < n ? show() : vcGrillDone(st); };
+  foot.append(
+    vcButton('Repeat', () => show()),
+    vcButton('Skip', () => { grill.questions[st.i].answer = null; st.next(); }),
+    vcButton('Talk to the concierge', () => vcDisarm()),
+  );
+  show();
+}
+
+// One answer heard for the current question (or a command about it).
+function vcGrillHear(st, said) {
+  if (st.i >= st.grill.questions.length) return false;
+  if (VC_REPEAT.test(said)) { st.show(); return true; }
+  if (VC_BACK.test(said)) { st.i = Math.max(0, st.i - 1); st.show(); return true; }
+  const q = st.grill.questions[st.i];
+  q.answer = VC_SKIP.test(said) ? null : said;
+  st.next();
+  return true;
+}
+
+// Every question answered: one message, confirmed, sent at once.
+async function vcGrillDone(st) {
+  const { card, grill, sandbox, thread } = st;
+  card.querySelector('.vc-grill-now').replaceChildren();
+  st.head.textContent = `${vcWho(sandbox, thread)} · ${grill.questions.length} answered`;
+  vcDisarm();
+  const answered = grill.questions.filter(q => q.answer);
+  if (!answered.length) { vcSay('dim', 'No question answered: nothing to send.'); return; }
+  const dictated = grill.questions.map(q => `${q.id}${q.title ? ' (' + q.title + ')' : ''} : ${q.answer ?? '(pas de réponse)'}`).join('\n');
+  let answer;
+  try {
+    answer = await vcTask('reply', `Message de l'agent :\n<<<\n${st.text}\n>>>\n\nRéponse dictée par le développeur, question par question :\n${dictated}`);
+  } catch (e) { vcSay('err', `Could not write the answer: ${e.message || e}`); }
+  if (!answer) answer = grill.questions.filter(q => q.answer).map(q => `${q.id} : ${q.answer}`).join('\n');
+  const area = document.createElement('textarea');
+  area.className = 'vc-brief-text';
+  area.value = answer;
+  area.rows = Math.min(12, answer.split('\n').length + 1);
+  area.setAttribute('aria-label', 'Answer');
+  card.append(area);
+  vcConfirm(card, `Send these answers to ${vcWho(sandbox, thread)}?`, async () => {
+    const r = await postJsonOrError('/api/chat/push', { text: area.value.trim(), name: sandbox, thread: thread || undefined });
+    if (!r.ok) { vcSay('err', `Not sent: ${r.error}`); return; }
+    area.readOnly = true;
+    card.classList.add('done');
+    vcSay('dim', `Answers typed into ${vcWho(sandbox, thread)}.`);
+  });
+  if (!vcSpeech.muted) vcSpeak("J'ai toutes tes réponses. Relis-les. J'envoie ?");
 }
 
 async function vcReadAgent(text) {
@@ -808,6 +938,7 @@ async function vcHear(text) {
     if (VC_YES.test(text)) return p.yes();
     if (VC_NO.test(text)) return p.no();
   }
+  if (p?.kind === 'grill' && vcGrillHear(p.st, text)) return;
   if (p?.kind === 'reply') return vcAnswerAgent(p, text);
   if (p?.kind === 'choose') return vcChoose(p, text);
   vcRoute(text);

@@ -406,7 +406,12 @@ A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
 session sbxw opened there — engages the concierge on its own: the panel
 opens, and each round shows in it with its gist read aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
-lot of talking for ordinary work). When a message arrives, what you say next
+lot of talking for ordinary work). A grill round is taken **one question at a time**: the panel shows and
+reads Q1 with the agent's recommendation, waits for your answer, then
+moves to Q2 (*répète* reads it again, *passe* skips it, *précédente* goes
+back). Once every question is answered, the answers are written up as one
+message ("Q1 : oui, comme recommandé…"), shown, and sent at once on your
+*oui*. Any other message that arrives what you say next
 answers it: the model turns your dictation into the written answer ("Q1 :
 oui, comme recommandé…"), shows it, and asks "J'envoie ?". Say *oui* (or
 click Send) and it is typed into that session; *non* drops it. A
