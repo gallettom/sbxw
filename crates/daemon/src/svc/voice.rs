@@ -103,6 +103,7 @@ impl App {
             "job": rt.job,
             "hint": voice::INSTALL_HINT,
             "push_to_talk_key": self.cfg.voice.push_to_talk_key,
+            "dictate_key": self.cfg.voice.dictate_key,
             "dir": root,
         })
     }

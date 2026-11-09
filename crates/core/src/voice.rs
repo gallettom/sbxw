@@ -164,6 +164,8 @@ pub struct VoiceSettings {
     pub tts: String,
     /// The push-to-talk key, as a `KeyboardEvent.code`.
     pub push_to_talk_key: String,
+    /// Held, it dictates into the focused terminal instead.
+    pub dictate_key: String,
     /// Conversations are kept this many days at most (never more than 7).
     pub retention_days: u32,
 }
@@ -177,6 +179,7 @@ impl Default for VoiceSettings {
             // on the CPU: the first words are heard sooner.
             tts: "piper-fr-tom-medium".into(),
             push_to_talk_key: "F8".into(),
+            dictate_key: "F9".into(),
             retention_days: MAX_RETENTION_DAYS,
         }
     }
@@ -210,8 +213,11 @@ impl VoiceSettings {
         if self.retention_days == 0 || self.retention_days > MAX_RETENTION_DAYS {
             return Err(format!("[voice] retention_days must be 1–{MAX_RETENTION_DAYS}"));
         }
-        if self.push_to_talk_key.trim().is_empty() {
-            return Err("[voice] push_to_talk_key is empty".into());
+        if self.push_to_talk_key.trim().is_empty() || self.dictate_key.trim().is_empty() {
+            return Err("[voice] push_to_talk_key and dictate_key must be set".into());
+        }
+        if self.push_to_talk_key == self.dictate_key {
+            return Err("[voice] push_to_talk_key and dictate_key must differ".into());
         }
         Ok(())
     }

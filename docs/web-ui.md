@@ -419,6 +419,13 @@ multiple-choice question is read with its options, and what you say picks
 one, confirmed the same way. **Talk to the concierge** on a message makes
 your next words a turn of your own conversation instead.
 
+**Dictation into a terminal.** Hold **F9** (the pane that has focus) or the
+microphone in a pane's bar, speak, release: the words are typed into that
+terminal as if from the keyboard — Claude's prompt, or a shell. No Enter is
+pressed, so you can read and fix them first; end with *entrée* (or
+*envoie*) and Enter is pressed for you. The button shows once the voice
+models are installed.
+
 Conversations are kept as text for 7 days at most (`[voice]
 retention_days`), never the audio. **History** reopens one; **Delete all**
 removes every one in a click.
@@ -430,6 +437,7 @@ removes every one in a click.
 | New sandbox | ⌃⌥N | Alt+N |
 | Toggle the chat dock | ⌃⌥M | Alt+M |
 | Talk to the Concierge (hold) | F8 | F8 |
+| Dictate into the focused terminal (hold) | F9 | F9 |
 | Write the lens (in its dialog) | ⌘↩ | Ctrl+Enter |
 
 On a Mac, Option alone types characters (⌥N is the `~` dead key), so the app

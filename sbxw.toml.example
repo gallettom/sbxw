@@ -262,4 +262,5 @@ env_files = []
 # tts = "piper-fr-tom-medium"  # male; or piper-fr-upmc-pierre, piper-fr-gilles-low,
 #                              # piper-fr-siwis-medium (female), kokoro-multi-lang-v1_0
 # push_to_talk_key = "F8"      # hold it anywhere on the page to talk
+# dictate_key = "F9"          # hold it to dictate into the focused terminal
 # retention_days = 7           # conversation text kept at most 7 days; audio never

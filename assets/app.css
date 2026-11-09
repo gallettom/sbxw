@@ -3949,3 +3949,7 @@
   .vc-grill-rec { color: var(--c-green); }
   .vc-grill-answers { margin: 0; padding-left: 1.2rem; color: var(--c-text-muted); font: 12px/1.45 var(--font-prose); }
   .vc-grill-answers:empty { display: none; }
+  .pane-dictate-btn { display: none; touch-action: none; }
+  body.voice-ready .pane-dictate-btn { display: inline-flex; align-items: center; }
+  .pane-dictate-btn.recording { color: var(--c-red); border-color: var(--c-red); background: var(--c-red-tint); }
+  .pane-dictate-btn.busy { opacity: .6; }

@@ -100,7 +100,13 @@ function vcRender() {
   vcTalk.textContent = vcRec ? '● Listening… release to send' : vcBusy ? 'Transcribing…' : `Hold to talk (${vcKey()})`;
   vcHint.textContent = ready ? 'Speech is turned into text locally; the audio is never kept.' : '';
   vcLauncher.classList.toggle('ready', vcReady());
-  vcLauncher.classList.toggle('listening', !!vcRec);
+  vcLauncher.classList.toggle('listening', !!vcRec && !vcRec.dest);
+  document.querySelectorAll('.pane-dictate-btn').forEach(b => {
+    b.classList.toggle('recording', !!vcRec?.dest && vcRec.dest.pane === +b.dataset.pane);
+    b.classList.toggle('busy', vcBusy && !vcRec);
+  });
+  // On <body>, so a pane opened later shows its button too.
+  document.body.classList.toggle('voice-ready', vcReady());
   vcLauncher.querySelector('kbd').textContent = vcKey();
 }
 
@@ -124,9 +130,14 @@ async function vcRefresh() {
 }
 
 // ── Recording ────────────────────────────────────────────────────────────
-async function vcStart() {
+// `dest`: null for the concierge, `{ pane }` to dictate into a terminal.
+async function vcStart(dest = null) {
   vcSpeech.stop(); // speaking over the concierge interrupts it
   vcWarm();
+  if (dest && (!vcReady() || !window.isSecureContext)) {
+    showToast(!window.isSecureContext ? 'The microphone needs sbxw on 127.0.0.1' : `Voice is not installed — run ${vcStatus?.hint || 'sbxw voice install'}`, 'error');
+    return;
+  }
   if (vcRec || vcBusy || !vcReady() || !window.isSecureContext) return;
   let stream;
   try {
@@ -136,7 +147,7 @@ async function vcStart() {
     return;
   }
   const recorder = new MediaRecorder(stream);
-  const rec = { recorder, chunks: [], stream, started: performance.now() };
+  const rec = { recorder, chunks: [], stream, started: performance.now(), dest };
   recorder.ondataavailable = e => { if (e.data.size) rec.chunks.push(e.data); };
   recorder.start();
   vcRec = rec;
@@ -159,7 +170,10 @@ async function vcStop() {
     const r = await fetch('/api/voice/transcribe', {
       method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: pcm.buffer,
     }).then(r => r.json());
-    if (!r.ok) vcSay('err', r.error);
+    if (rec.dest) {
+      if (!r.ok) showToast(`Dictation: ${r.error}`, 'error');
+      else if (r.text) vcDictate(rec.dest.pane, r.text);
+    } else if (!r.ok) vcSay('err', r.error);
     else if (!r.text) vcSay('dim', '(nothing heard)');
     else {
       // A grill answer shows in its card's list, not as a line of its own.
@@ -167,12 +181,53 @@ async function vcStop() {
       vcHear(r.text);
     }
   } catch (e) {
-    vcSay('err', `Could not transcribe: ${e.message || e}`);
+    if (rec.dest) showToast(`Dictation failed: ${e.message || e}`, 'error');
+    else vcSay('err', `Could not transcribe: ${e.message || e}`);
   } finally {
     vcBusy = false;
     vcRender();
   }
 }
+
+// ── Dictation into a terminal ────────────────────────────────────────────
+// What is said is typed into the pane's terminal, as the keyboard would:
+// into Claude's prompt, or a shell. No Enter, so it can be read and fixed
+// first — unless the dictation ends with "entrée" (or "envoie", "enter"),
+// which is dropped and pressed as Return, its own keystroke once the text
+// has landed (a Return inside the burst would be pasted as a newline).
+const VC_ENTER = /[\s,.;:!?]*\b(entr[ée]e?|entrer|envoie|envoyer|enter|send)[\s.!]*$/i;
+function vcDictate(idx, text) {
+  const pane = panes[idx];
+  if (!pane?.ws || pane.ws.readyState !== WebSocket.OPEN) { showToast('That terminal is not connected', 'error'); return; }
+  let enter = false;
+  if (VC_ENTER.test(text)) { enter = true; text = text.replace(VC_ENTER, ''); }
+  text = text.trim();
+  if (text) pane.ws.send(new TextEncoder().encode(text));
+  if (enter) setTimeout(() => { if (pane.ws?.readyState === WebSocket.OPEN) pane.ws.send(new TextEncoder().encode('\r')); }, 400);
+  pane.term?.focus();
+}
+
+function vcDictateKey() { return (vcStatus && vcStatus.dictate_key) || 'F9'; }
+
+document.addEventListener('pointerdown', e => {
+  const b = e.target.closest('.pane-dictate-btn');
+  if (!b) return;
+  e.preventDefault();
+  b.setPointerCapture?.(e.pointerId);
+  vcStart({ pane: +b.dataset.pane });
+});
+document.addEventListener('pointerup', e => { if (vcRec?.dest && e.target.closest('.pane-dictate-btn')) vcStop(); });
+document.addEventListener('pointercancel', () => { if (vcRec?.dest) vcStop(); });
+window.addEventListener('keydown', e => {
+  if (e.code !== vcDictateKey() || e.repeat) return;
+  e.preventDefault(); e.stopPropagation();
+  if (typeof focusedPane === 'number') vcStart({ pane: focusedPane });
+}, true);
+window.addEventListener('keyup', e => {
+  if (e.code !== vcDictateKey()) return;
+  e.preventDefault(); e.stopPropagation();
+  if (vcRec?.dest) vcStop();
+}, true);
 
 // Whatever the recorder produced, as 16 kHz mono f32.
 async function vcToPcm(blob) {
@@ -645,8 +700,8 @@ vcLauncher.addEventListener('click', () => vcSetOpen(!vcOpen));
 vcEl('vc-close').addEventListener('click', () => vcSetOpen(false));
 
 vcTalk.addEventListener('pointerdown', e => { e.preventDefault(); vcTalk.setPointerCapture(e.pointerId); vcStart(); });
-vcTalk.addEventListener('pointerup', () => vcStop());
-vcTalk.addEventListener('pointercancel', () => vcStop());
+vcTalk.addEventListener('pointerup', () => { if (vcRec && !vcRec.dest) vcStop(); });
+vcTalk.addEventListener('pointercancel', () => { if (vcRec && !vcRec.dest) vcStop(); });
 
 // The key works from anywhere on the page, terminals included: captured
 // before xterm sees it. Holding it opens the panel, so the text lands in view.
@@ -659,7 +714,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => {
   if (e.code !== vcKey()) return;
   e.preventDefault(); e.stopPropagation();
-  vcStop();
+  if (vcRec && !vcRec.dest) vcStop();
 }, true);
 window.addEventListener('keydown', e => {
   if (e.key === 'Escape' && vcOpen && !vcRec) vcSetOpen(false);
