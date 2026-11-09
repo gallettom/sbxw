@@ -37,6 +37,13 @@ from what sbxw recorded — workspace, config, mounts, Remote Control — after
 asking, since everything outside the workspace folder is lost. A chat is never
 recreated: its workspace goes with it.
 
+**N to approve** on a row means sbx is waiting for you to decide something
+for that sandbox (`sbx policy approval`, 0.51): a host it reached that no
+rule allows, or a kit asking to publish a host port (that one lapses after
+45 s). Click it to see each request with the options sbx offers — **Allow**,
+**Dismiss**… — and answer there; the list refreshes while it is open. sbxw
+never answers on its own.
+
 **Usage.** The 5-hour and weekly percentages are account-wide, the same numbers
 as Claude Code's `/usage`. They turn amber at 75% and red at 90%. They are
 hidden with API-key auth, which has no subscription windows. How they're

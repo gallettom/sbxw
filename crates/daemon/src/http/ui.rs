@@ -72,6 +72,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/github-token", get(github_token).post(github_token_set))
         .route("/api/github-token/rm", post(github_token_rm))
         .route("/api/github-token/gh", post(github_token_gh))
+        .route("/api/approvals", get(approvals_list))
+        .route("/api/approvals/respond", post(approval_respond))
         .route("/api/secrets", get(secrets_list))
         .route("/api/secrets/custom", post(custom_secret_set))
         .route("/api/secrets/rm", post(secret_rm))
@@ -678,6 +680,32 @@ async fn github_token_set(State(app): S, Json(b): Json<TokenBody>) -> ApiResult 
 async fn github_token_rm(State(app): S) -> ApiResult {
     tracing::info!("web UI: removing the global `github` secret");
     app.sbx.secret_rm("github").await?;
+    Ok(ok())
+}
+
+/// What sbx waits for a person to decide, on this machine.
+async fn approvals_list(State(app): S) -> ApiResult {
+    Ok(ok_with(json!({ "approvals": app.sbx.approvals().await? })))
+}
+
+#[derive(Deserialize)]
+struct ApprovalBody {
+    id: String,
+    option: String,
+}
+
+/// Only an approval sbx still lists, with an option it offers: a stale page
+/// (a port request lapses after 45 s) gets told so rather than sbx's error.
+async fn approval_respond(State(app): S, Json(b): Json<ApprovalBody>) -> ApiResult {
+    let pending = app.sbx.approvals().await?;
+    let Some(a) = pending.iter().find(|a| a.id == b.id) else {
+        return Err(ApiError::bad("this request is no longer pending — it was answered, or it lapsed"));
+    };
+    if !a.offers(&b.option) {
+        return Err(ApiError::bad(format!("“{}” is not one of this request's options", b.option)));
+    }
+    tracing::info!("web UI: approval {} for '{}' ({}) → {}", a.id, a.sandbox, a.title, b.option);
+    app.sbx.approval_respond(&a.id, &b.option).await?;
     Ok(ok())
 }
 

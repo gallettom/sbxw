@@ -1317,6 +1317,13 @@
     border: 1px solid var(--c-amber); border-radius: var(--r-xs);
     padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
   }
+  /* sbx waits for a person: on the name line, not among the hover actions. */
+  .sbx-approval-badge {
+    display: inline-block; font: inherit; font-size: 9px; color: var(--c-blue); cursor: pointer;
+    background: var(--c-blue-tint); border: 1px solid var(--c-blue); border-radius: var(--r-xs);
+    padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
+  }
+  .sbx-approval-badge:hover { color: var(--c-text-bright); }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
 
   /* ── Remote hosts (EXPERIMENTAL): one section per host, `local` first ──

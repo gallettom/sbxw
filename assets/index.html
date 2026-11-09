@@ -665,6 +665,24 @@
   </div>
 
   <!-- ── Duplicate sandbox wizard ── -->
+  <!-- ── Approvals ──
+       What sbx waits for a person to decide for one sandbox (`sbx policy
+       approval`): a host no rule allows, a kit's host port (45 s). Each
+       request offers its own options. Filled by /js/approvals.js. -->
+  <div class="modal-overlay hidden" id="approvals-modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="approvals-modal-title" style="width:560px">
+      <div class="modal-head">
+        <span class="modal-title" id="approvals-modal-title">Waiting for you</span>
+        <button class="modal-close" id="approvals-modal-close" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body sec-body" id="approvals-body"><p class="repo-note">Loading…</p></div>
+      <div class="modal-foot">
+        <span class="create-error hidden" id="approvals-error"></span>
+        <button class="btn-cancel" id="approvals-modal-close2">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="dup-modal-overlay">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dup-modal-title" style="width:360px">
       <div class="modal-head">

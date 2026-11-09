@@ -922,6 +922,20 @@ impl Sbx {
         Ok(has_global_secret(&self.capture(s(&["secret", "ls"])).await?, service))
     }
 
+    /// What sbx waits for a person to decide, every sandbox's.
+    pub async fn approvals(&self) -> Result<Vec<sbxw_core::approvals::Approval>> {
+        let raw = self.capture(s(&["policy", "approval", "ls", "--format", "json"])).await?;
+        sbxw_core::approvals::parse(&raw).ok_or_else(|| anyhow!("`sbx policy approval ls --format json` printed something other than JSON"))
+    }
+
+    /// Answer one with an option it offers (the caller checks it does).
+    pub async fn approval_respond(&self, id: &str, option: &str) -> Result<()> {
+        if id.starts_with('-') || option.starts_with('-') {
+            bail!("not an approval or an option: {id} {option}");
+        }
+        self.checked(Invocation::new(s(&["policy", "approval", "respond", id, "--option", option]))).await.map(drop)
+    }
+
     /// Every stored secret, without its value.
     pub async fn secrets(&self) -> Result<Vec<SecretRow>> {
         Ok(parse_secret_ls(&self.capture(s(&["secret", "ls"])).await?))

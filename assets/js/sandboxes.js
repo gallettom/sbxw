@@ -369,7 +369,7 @@ function sandboxItemHtml(s, groupColor) {
     ? `<span class="sbx-status sbx-unreachable-note" title="${escHtml(down)}">unreachable since ${escHtml(hostClock(s.unreachable_since))}</span>`
     : `<span class="sbx-status">${escHtml(s.status)}</span>`;
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}${down ? ' unreachable' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}${s.old_sbx ? '<span class="sbx-old-badge" title="Made by an sbx older than 0.51: it keeps running, but takes no kit until it is recreated (⟲)">old sbx</span>' : ''}</div>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}${s.approvals ? `<button class="sbx-approval-badge" data-action="approvals" data-name="${escHtml(s.name)}" title="sbx is waiting for you to decide ${s.approvals} request${s.approvals > 1 ? 's' : ''} (a host no rule allows, a kit's port)">${s.approvals} to approve</button>` : ''}${s.old_sbx ? '<span class="sbx-old-badge" title="Made by an sbx older than 0.51: it keeps running, but takes no kit until it is recreated (⟲)">old sbx</span>' : ''}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       ${status}
@@ -486,6 +486,7 @@ listEl.addEventListener('click', e => {
     if (action === 'ports')     openPortsModal(name);
     if (action === 'duplicate') openDupModal(name);
     if (action === 'recreate')  recreateSandbox(name);
+    if (action === 'approvals') openApprovalsModal(name);
     // One kit per pane: sbx asks, the person answers; the next ✓ takes the next.
     if (action === 'kit-add')   connectPane(focusedPane, name, 'kit-add');
   } else {

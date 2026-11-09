@@ -41,6 +41,9 @@ pub struct SandboxItem {
     pub detached: bool,
     /// Created for Remote Control: its agent logs in to claude.ai itself.
     pub remote_control: bool,
+    /// Requests sbx waits for a person to decide for this sandbox (`sbx policy
+    /// approval`): hosts no rule allows, a kit's host port.
+    pub approvals: usize,
     /// Kits `sbx kit add` left waiting for the person's approval: a ✓ in the
     /// sidebar opens a pane where they answer sbx's prompt.
     pub kits_waiting: usize,
@@ -112,6 +115,8 @@ impl App {
             }
         }
         let waiting = self.kit_approvals.lock().unwrap().clone();
+        let pending = self.sbx.approvals().await.unwrap_or_default();
+        let pending_for = |name: &str| pending.iter().filter(|a| a.sandbox == name).count();
         let waiting_for = |name: &str| SandboxRef::parse(name).ok().and_then(|r| waiting.get(&r).map(Vec::len)).unwrap_or(0);
         listed
             .into_iter()
@@ -123,6 +128,7 @@ impl App {
                 (s, rec, chat)
             })
             .map(|(s, rec, chat)| SandboxItem {
+                approvals: pending_for(&s.name),
                 kits_waiting: waiting_for(&s.name),
                 chat,
                 old_sbx: rec.created_by_sbx.as_deref() == Some(""),
@@ -178,6 +184,7 @@ impl App {
                             remote_control: rec.remote_control,
                             old_sbx: rec.created_by_sbx.as_deref() == Some(""),
                             kits_waiting: self.kit_approvals.lock().unwrap().get(&sb).map(Vec::len).unwrap_or(0),
+                            approvals: 0,
                             unreachable_since: None,
                         });
                     }
@@ -197,6 +204,7 @@ impl App {
                             remote_control: rec.remote_control,
                             old_sbx: rec.created_by_sbx.as_deref() == Some(""),
                             kits_waiting: 0,
+                            approvals: 0,
                             unreachable_since: Some(since),
                         });
                     }
