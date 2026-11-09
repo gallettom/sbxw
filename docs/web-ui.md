@@ -383,9 +383,17 @@ where it stopped. A build without `--features voice` says so.
 The browser lends the microphone only to a page on `127.0.0.1` (or HTTPS):
 with `web_addr` on a LAN address, the panel says why it cannot listen.
 
-Next: a conversation with a local Mistral model that rephrases and expands
-what you say, a voice that answers, a brief sent to a sandbox only on your
-say-so, and a sandbox's pending questions answered out loud.
+What you say goes to a local Mistral model (Ministral 3), which rephrases
+it, adds an angle or two and asks one question; the reply is written as it
+is generated and read aloud sentence by sentence (🔊 mutes it; talking again
+stops it). You can also type.
+
+When the idea is ready, say **"prépare le brief"** (or press **Brief**): the
+model writes it — Objectif, Contexte, Contraintes, Questions ouvertes — into
+an editable card. Read it, fix it, pick a running sandbox and press **Send**:
+it is typed into that sandbox's agent. Nothing is sent any other way.
+
+Next: a sandbox's pending questions answered out loud.
 
 ## Keyboard shortcuts
 

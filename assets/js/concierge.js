@@ -163,7 +163,7 @@ async function vcStop() {
     else if (!r.text) vcSay('dim', '(nothing heard)');
     else {
       vcSay('me', r.text, `${r.audio_s.toFixed(1)} s · ${r.ms} ms`);
-      vcAsk(r.text);
+      vcRoute(r.text);
     }
   } catch (e) {
     vcSay('err', `Could not transcribe: ${e.message || e}`);
@@ -196,51 +196,176 @@ function vcLoad() {
   for (const t of vcTurns) vcSay(t.role === 'user' ? 'me' : 'ai', t.content);
 }
 
-// What the person said goes to the local model; its reply is written into
-// the log as it is generated (NDJSON from /api/voice/chat).
-async function vcAsk(text) {
-  if (vcReplying) vcReplying.abort();
-  vcSpeech.stop();
-  // A reply that failed left the user's turn unanswered: fold into it.
+// One generation from /api/voice/chat, read as it streams (NDJSON): each
+// piece of text to `onDelta`, then the `done` event returned.
+async function vcStream(body, signal, onDelta) {
+  const res = await fetch('/api/voice/chat', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.error || `HTTP ${res.status}`);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let last = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return last;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const ev = JSON.parse(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+      if (ev.kind === 'delta') onDelta(ev.text);
+      else if (ev.kind === 'error') throw new Error(ev.error);
+      else if (ev.kind === 'done') last = ev;
+    }
+  }
+}
+
+// The person's words join the conversation: appended to an unanswered turn
+// (a reply that failed), else as a new one — user and assistant alternate.
+function vcAddUser(text) {
   if (vcTurns.length && vcTurns[vcTurns.length - 1].role === 'user') vcTurns[vcTurns.length - 1].content += `\n${text}`;
   else vcTurns.push({ role: 'user', content: text });
   vcSave();
+}
+
+// "Prépare le brief", spoken or typed, writes the brief instead of a reply.
+const VC_BRIEF_RE = /\bbrief\b/i;
+const VC_BRIEF_VERB = /(pr[ée]pare|r[ée]dige|[ée]cri[st]|fais|g[ée]n[èe]re|draft|write|prepare)/i;
+function vcRoute(text) {
+  if (VC_BRIEF_RE.test(text) && VC_BRIEF_VERB.test(text)) vcBrief(text);
+  else vcAsk(text);
+}
+
+// What the person said goes to the local model; its reply is written into
+// the log as it is generated, and spoken sentence by sentence.
+async function vcAsk(text) {
+  if (vcReplying) vcReplying.abort();
+  vcSpeech.stop();
+  vcAddUser(text);
   const ctl = new AbortController();
   vcReplying = ctl;
   const row = vcSay('ai', '');
   row.classList.add('pending');
   let reply = '';
   try {
-    const res = await fetch('/api/voice/chat', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ turns: vcTurns }), signal: ctl.signal,
+    const done = await vcStream({ turns: vcTurns }, ctl.signal, piece => {
+      reply += piece;
+      row.firstChild.textContent = reply;
+      vcLog.scrollTop = vcLog.scrollHeight;
+      vcSpeech.feed(piece);
     });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      throw new Error(e.error || `HTTP ${res.status}`);
-    }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf('\n')) >= 0) {
-        const ev = JSON.parse(buf.slice(0, nl));
-        buf = buf.slice(nl + 1);
-        if (ev.kind === 'delta') { reply += ev.text; row.firstChild.textContent = reply; vcLog.scrollTop = vcLog.scrollHeight; vcSpeech.feed(ev.text); }
-        else if (ev.kind === 'error') throw new Error(ev.error);
-        else if (ev.kind === 'done') { vcMeta(row, `${(ev.ms / 1000).toFixed(1)} s`); vcSpeech.flush(); }
-      }
-    }
+    vcSpeech.flush();
+    if (done) vcMeta(row, `${(done.ms / 1000).toFixed(1)} s`);
     row.classList.remove('pending');
     if (reply.trim()) { vcTurns.push({ role: 'assistant', content: reply.trim() }); vcSave(); }
     else row.remove();
   } catch (e) {
     row.remove();
     if (e.name !== 'AbortError') vcSay('err', `The concierge could not answer: ${e.message || e}`);
+  } finally {
+    if (vcReplying === ctl) vcReplying = null;
+  }
+}
+
+// ── The brief ────────────────────────────────────────────────────────────
+// The model writes it (Objectif / Contexte / Contraintes / Questions
+// ouvertes) into an editable card; the person reads it, fixes it, picks the
+// sandbox and presses Send. Nothing reaches a sandbox any other way: the
+// click is the yes (rule 1 of the spec, the relay's own rule).
+const VC_TARGET = 'sbxw-concierge-target';
+
+function vcTargets() {
+  const live = (typeof sandboxes !== 'undefined' ? sandboxes : [])
+    .filter(s => s.status === 'running' && !s.unreachable_since)
+    .map(s => s.name);
+  return [...new Set(live)].sort();
+}
+
+async function vcBrief(text) {
+  if (!vcTurns.some(t => t.role === 'user') && !text) { vcSay('err', 'Talk the idea through first: the brief is written from the conversation.'); return; }
+  if (vcReplying) vcReplying.abort();
+  vcSpeech.stop();
+  vcAddUser(text || 'Prépare le brief.');
+  const ctl = new AbortController();
+  vcReplying = ctl;
+
+  const card = document.createElement('div');
+  card.className = 'vc-brief';
+  const head = document.createElement('div');
+  head.className = 'vc-brief-head';
+  head.textContent = 'Brief';
+  const area = document.createElement('textarea');
+  area.className = 'vc-brief-text';
+  area.readOnly = true;
+  area.rows = 12;
+  area.setAttribute('aria-label', 'Brief');
+  const row = document.createElement('div');
+  row.className = 'vc-brief-row';
+  const pick = document.createElement('select');
+  pick.setAttribute('aria-label', 'Sandbox');
+  const targets = vcTargets();
+  let remembered = null;
+  try { remembered = localStorage.getItem(VC_TARGET); } catch (_) {}
+  for (const name of targets) {
+    const o = document.createElement('option');
+    o.value = o.textContent = name;
+    if (name === remembered) o.selected = true;
+    pick.append(o);
+  }
+  if (!targets.length) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = 'no running sandbox';
+    pick.append(o);
+  }
+  const send = document.createElement('button');
+  send.type = 'button'; send.className = 'vc-btn vc-primary'; send.textContent = 'Send'; send.disabled = true;
+  const drop = document.createElement('button');
+  drop.type = 'button'; drop.className = 'vc-btn'; drop.textContent = 'Discard';
+  row.append(pick, send, drop);
+  card.append(head, area, row);
+  vcLog.append(card);
+  vcLog.scrollTop = vcLog.scrollHeight;
+
+  drop.onclick = () => { ctl.abort(); card.remove(); };
+  send.onclick = async () => {
+    const name = pick.value;
+    const brief = area.value.trim();
+    if (!name || !brief) return;
+    send.disabled = true; drop.disabled = true; area.readOnly = true; pick.disabled = true;
+    const r = await postJsonOrError('/api/chat/push', { text: brief, name });
+    if (!r.ok) {
+      vcSay('err', `Could not send the brief to ${name}: ${r.error}`);
+      send.disabled = false; drop.disabled = false; area.readOnly = false; pick.disabled = false;
+      return;
+    }
+    try { localStorage.setItem(VC_TARGET, name); } catch (_) {}
+    card.classList.add('sent');
+    head.textContent = `Brief — sent to ${name}`;
+    vcSay('dim', `Brief typed into ${name}'s agent.`);
+  };
+
+  try {
+    let text = '';
+    await vcStream({ turns: vcTurns, brief: true }, ctl.signal, piece => {
+      text += piece;
+      area.value = text;
+      area.scrollTop = area.scrollHeight;
+    });
+    area.value = text.trim();
+    area.readOnly = false;
+    send.disabled = !targets.length || !area.value;
+    vcTurns.push({ role: 'assistant', content: "J'ai préparé le brief ; il attend ta relecture et ton envoi." });
+    vcSave();
+    vcSpeech.feed('Le brief est prêt. Relis-le, choisis le sandbox, puis envoie-le.');
+    vcSpeech.flush();
+  } catch (e) {
+    card.remove();
+    if (e.name !== 'AbortError') vcSay('err', `Could not write the brief: ${e.message || e}`);
   } finally {
     if (vcReplying === ctl) vcReplying = null;
   }
@@ -268,8 +393,9 @@ vcEl('vc-type').addEventListener('submit', e => {
   if (!text || !vcReady()) return;
   input.value = '';
   vcSay('me', text);
-  vcAsk(text);
+  vcRoute(text);
 });
+vcEl('vc-brief').addEventListener('click', () => { if (vcReady()) vcBrief(''); });
 vcEl('vc-new').addEventListener('click', vcReset);
 
 // ── The voice ────────────────────────────────────────────────────────────

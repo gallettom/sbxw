@@ -75,8 +75,9 @@ pub struct Llm {
 
 /// Context the model reads and writes in (Q24: 16k, ~1 GB more on an 8B).
 pub const N_CTX: u32 = 16_384;
-/// The longest reply, in tokens: a spoken answer, not an essay.
+/// The longest spoken reply, and the longest brief, in tokens.
 pub const MAX_REPLY: usize = 700;
+pub const MAX_BRIEF: usize = 1_400;
 
 impl Llm {
     pub fn load(gguf: &Path) -> Result<Self, String> {
@@ -104,7 +105,7 @@ impl Llm {
 
     /// Generate a reply, handing each piece of text to `emit` as it comes;
     /// `emit` returning false (the page went away) stops generation.
-    pub fn reply(&self, system: &str, turns: &[Turn], mut emit: impl FnMut(&str) -> bool) -> Result<String, String> {
+    pub fn reply(&self, system: &str, turns: &[Turn], max_reply: usize, mut emit: impl FnMut(&str) -> bool) -> Result<String, String> {
         let vocab = self.model.vocab();
         let mut turns = turns.to_vec();
         // Oldest exchanges go first when the conversation outgrows the
@@ -115,12 +116,12 @@ impl Llm {
             if toks.first() != Some(&vocab.bos()) {
                 toks.insert(0, vocab.bos());
             }
-            if toks.len() + MAX_REPLY < N_CTX as usize || turns.len() <= 1 {
+            if toks.len() + max_reply < N_CTX as usize || turns.len() <= 1 {
                 break toks;
             }
             turns.drain(..turns.len().min(2));
         };
-        if tokens.len() + MAX_REPLY >= N_CTX as usize {
+        if tokens.len() + max_reply >= N_CTX as usize {
             return Err("that message is too long for the conversation's context".into());
         }
         let threads = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(4);
@@ -154,7 +155,7 @@ impl Llm {
         let mut out = String::new();
         let mut pending: Vec<u8> = Vec::new();
         let mut idx = batch.n_tokens() - 1;
-        for pos in (tokens.len() as i32..).take(MAX_REPLY) {
+        for pos in (tokens.len() as i32..).take(max_reply) {
             let tok = sampler.sample(&ctx, idx);
             sampler.accept(tok);
             if vocab.is_eog(tok) {

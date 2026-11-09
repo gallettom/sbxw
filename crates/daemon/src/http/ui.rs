@@ -1757,6 +1757,9 @@ async fn voice_transcribe(State(app): S, body: Bytes) -> ApiResult {
 #[derive(Deserialize)]
 struct VoiceChatBody {
     turns: Vec<crate::svc::voice::Turn>,
+    /// Write the brief (Q16's format) instead of answering.
+    #[serde(default)]
+    brief: bool,
 }
 
 /// The reply as NDJSON, one `ChatEvent` a line, written as it is generated:
@@ -1764,7 +1767,7 @@ struct VoiceChatBody {
 async fn voice_chat(State(app): S, Json(b): Json<VoiceChatBody>) -> ApiResult<Response> {
     use futures_util::StreamExt;
     let rx = app
-        .voice_chat(b.turns)
+        .voice_chat(b.turns, b.brief)
         .await
         .map_err(|e| if e.contains("turn") || e.contains("conversation") { ApiError::bad(e) } else { ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e) })?;
     let lines = tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| {

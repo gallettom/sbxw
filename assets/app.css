@@ -3873,3 +3873,22 @@
     color: var(--c-text); font: 12.5px var(--font-prose);
   }
   .vc-type input:focus { outline: none; border-color: var(--c-blue); }
+  .vc-brief {
+    display: grid; gap: .4rem; padding: .5rem; border-radius: var(--r-md);
+    border: 1px solid var(--c-blue); background: var(--c-bg);
+  }
+  .vc-brief.sent { border-color: var(--c-green); opacity: .85; }
+  .vc-brief-head { color: var(--c-text-bright); font: 600 12px var(--font-mono); }
+  .vc-brief-text {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 9rem;
+    padding: .4rem .5rem; border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    background: var(--c-surface); color: var(--c-text); font: 12.5px/1.5 var(--font-mono);
+  }
+  .vc-brief-text:focus { outline: none; border-color: var(--c-blue); }
+  .vc-brief-row { display: flex; gap: .4rem; align-items: center; }
+  .vc-brief-row select {
+    flex: 1; min-width: 0; height: 28px; padding: 0 .4rem;
+    background: var(--c-surface); color: var(--c-text); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    font: 12px var(--font-mono);
+  }
+  .vc-brief-row .vc-btn { margin: 0; }

@@ -419,7 +419,7 @@ impl App {
     /// it is generated, then `Done` (or `Error`). Dropping the receiver stops
     /// generation.
     #[cfg(feature = "voice")]
-    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
+    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>, brief: bool) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
         check_turns(&turns)?;
         let llm = self.ensure_llm().await?;
         self.voice_touch();
@@ -429,7 +429,8 @@ impl App {
             let t = Instant::now();
             // One reply at a time: a second tab waits its turn.
             let llm = llm.lock().unwrap();
-            let res = llm.reply(SYSTEM_PROMPT, &turns, |piece| tx.blocking_send(ChatEvent::Delta { text: piece.into() }).is_ok());
+            let (system, max) = if brief { (BRIEF_PROMPT, crate::voice_engine::MAX_BRIEF) } else { (SYSTEM_PROMPT, crate::voice_engine::MAX_REPLY) };
+            let res = llm.reply(system, &turns, max, |piece| tx.blocking_send(ChatEvent::Delta { text: piece.into() }).is_ok());
             let _ = tx.blocking_send(match res {
                 Ok(text) => ChatEvent::Done { ms: t.elapsed().as_millis() as u64, chars: text.chars().count() },
                 Err(e) => ChatEvent::Error { error: e },
@@ -460,7 +461,7 @@ impl App {
     }
 
     #[cfg(not(feature = "voice"))]
-    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
+    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>, _brief: bool) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
         check_turns(&turns)?;
         Err("this sbxw was built without voice (cargo build --features voice)".into())
     }
@@ -559,6 +560,19 @@ pas de listes, pas de markdown, pas d'emoji. La transcription de sa voix peut co
 si un mot semble mal entendu, devine le sens le plus probable ou demande. \
 Tu n'envoies jamais rien toi-même et tu ne prétends jamais l'avoir fait : quand l'idée est mûre, \
 propose-lui de dire « prépare le brief ».";
+
+/// Turns the conversation into the brief an agent will read: the format the
+/// grill settled (Q16). The person edits it, picks the sandbox and sends it;
+/// the model only writes it.
+pub const BRIEF_PROMPT: &str = "Tu rédiges un brief pour un agent de code (Claude Code) à partir de la conversation qui précède \
+entre un développeur et toi. Écris en français, en markdown, avec exactement ces quatre sections et rien avant ni après :\n\n\
+## Objectif\n(une ou deux phrases : ce qui doit exister à la fin)\n\n\
+## Contexte\n(ce que le développeur a dit, reformulé clairement et fidèlement)\n\n\
+## Contraintes\n(liste à puces : exigences, limites, critères de réussite évoqués)\n\n\
+## Questions ouvertes\n(liste à puces : ce qui n'a pas été tranché et que l'agent devra clarifier ou décider)\n\n\
+N'invente rien qui n'a pas été dit ou clairement sous-entendu : un point incertain va dans Questions ouvertes. \
+La transcription vocale peut contenir des erreurs : corrige les mots manifestement mal entendus. \
+Ne t'adresse pas au développeur, ne conclus pas, n'ajoute pas de formule de politesse.";
 
 /// Little-endian f32 PCM, as the page sends it.
 pub fn samples_of(body: &[u8]) -> Result<Vec<f32>, String> {
