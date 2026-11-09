@@ -82,6 +82,7 @@ See [Environment files](environment-files.md).
 | `sbxw cache [show\|clear]` | Show or empty the bundled kits' download cache. See [The kit cache](kits-and-skills.md#the-kit-cache). |
 | `sbxw template save <name> <tag>` | Snapshot a sandbox that is already set up as a local template. Its agent token and Claude credentials are taken out first and put back afterwards. Set `template = "<tag>"` in `sbxw.toml` and new sandboxes start from it, with no registry pull and no kit reinstall. sbx may ask to stop the sandbox first. |
 | `sbxw template ls` | List saved templates (`sbx template ls`). |
+| `sbxw voice [status\|install\|cancel\|rm]` | The voice concierge's local models (`[voice]`): show which are downloaded, download them (~3–6 GB, asks first unless `-y`; resumable; sizes and sha256 from Hugging Face's listing) into `~/.sbxw/models`, stop a running download, or delete them. The daemon downloads, so the web UI's Concierge panel shows the same progress. Using them needs a build with `--features voice`. |
 | `sbxw mac install\|up\|status\|pause\|stop\|force-off\|show\|release` | The [virtual Mac](../assets/terminal-mac/README.md): install the pinned terminal-mac (SHA-256 checked), start the VM (created and installing first if needed), show where it stands, pause it, shut it down normally (forced if it hangs), power it off at once (`force-off`), open its window, or take the lease back from a sandbox. |
 
 ### The daemon and sbxw itself

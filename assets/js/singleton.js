@@ -64,6 +64,8 @@ const SBXW_APP_SCRIPTS = [
   '/js/worktrees.js',
   // Same reason: the chat dock follows chats on that stream.
   '/js/chat-dock.js',
+  // Its own stream listener (`voice`); nothing depends on it.
+  '/js/concierge.js',
 ];
 
 function sbxwLoadScript(src) {

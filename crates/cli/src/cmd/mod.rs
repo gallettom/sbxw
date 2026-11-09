@@ -7,6 +7,7 @@ pub mod host_check;
 pub mod host_provision;
 pub mod mac;
 pub mod template;
+pub mod voice;
 
 use crate::client::Daemon;
 use crate::render::Renderer;

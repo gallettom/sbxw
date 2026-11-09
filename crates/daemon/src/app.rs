@@ -87,6 +87,8 @@ pub struct App {
     pub mac_guest_ip_override: Mutex<Option<String>>,
     /// Each sandbox's last Remote Control probe (see `svc::remote`).
     pub(crate) remote_probes: Mutex<HashMap<SandboxRef, crate::svc::remote::ProbeSlot>>,
+    /// The voice models' install job and the loaded recogniser (see `svc::voice`).
+    pub(crate) voice: Mutex<crate::svc::voice::VoiceRuntime>,
 }
 
 pub struct AppBuilder {
@@ -135,6 +137,7 @@ impl AppBuilder {
             mac_boot_wait: Mutex::new(crate::svc::mac::BOOT_WAIT),
             mac_guest_ip_override: Mutex::new(None),
             remote_probes: Mutex::new(HashMap::new()),
+            voice: Mutex::new(Default::default()),
         })
     }
 }

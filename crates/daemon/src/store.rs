@@ -102,6 +102,10 @@ impl Paths {
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }
+    /// The voice concierge's models, one folder each (see `svc::voice`).
+    pub fn models(&self) -> PathBuf {
+        self.root.join("models")
+    }
     /// The skills the person kept from a sandbox, one folder each: data on
     /// the host, installed in new sandboxes by the kit below.
     pub fn my_skills(&self) -> PathBuf {

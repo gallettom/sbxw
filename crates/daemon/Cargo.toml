@@ -20,6 +20,19 @@ futures-util.workspace = true
 portable-pty.workspace = true
 async-trait.workspace = true
 
+# sherpa-onnx, linked statically. macOS: its prebuilt universal2 libraries.
+# Linux: its prebuilt "static" archives hold no libraries (only tools), so it
+# is built from the sources the crate ships — cmake and a C++ toolchain.
+[target.'cfg(target_os = "macos")'.dependencies]
+sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries", "static"], optional = true }
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sherpa-rs = { version = "0.6.8", default-features = false, features = ["static"], optional = true }
+
+[features]
+# The voice concierge's native engines (sherpa-onnx; llama.cpp in lot 2).
+# Release builds enable it; plain `cargo build` stays fast without.
+voice = ["dep:sherpa-rs"]
+
 [dev-dependencies]
 tempfile.workspace = true
 serde_norway.workspace = true

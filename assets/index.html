@@ -1589,6 +1589,25 @@
   </button>
 </div>
 
+<!-- ── Voice concierge ──
+     Push-to-talk to a local model, beside the chat dock and apart from it.
+     See /js/concierge.js. -->
+<div class="vc-dock" id="vc-dock">
+  <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Concierge" hidden>
+    <div class="cd-head">
+      <span class="vc-title">Concierge</span>
+      <button type="button" class="cd-close" id="vc-close" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="vc-setup" id="vc-setup"></div>
+    <div class="cd-log vc-log" id="vc-log" aria-live="polite"></div>
+    <div class="vc-foot">
+      <button type="button" class="vc-talk" id="vc-talk" disabled>Hold to talk (F8)</button>
+      <span class="cd-hint" id="vc-hint"></span>
+    </div>
+  </div>
+  <button type="button" class="cd-launcher vc-launcher" id="vc-launcher" aria-expanded="false" aria-controls="vc-panel" title="Concierge — hold F8 to talk" aria-label="Concierge"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+</div>
+
 <script>
 const INITIAL_SANDBOX = "__SANDBOX__";
 // The host monitor is one fixed command from sbxw.toml (`monitor_cmd`); with

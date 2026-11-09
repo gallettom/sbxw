@@ -367,12 +367,33 @@ host-side fixes, each with a copy button:
 
 Run them in a terminal on the host, not in a sandbox pane.
 
+## The voice concierge
+
+The microphone button beside the chat launcher opens the **Concierge**, a
+local voice partner apart from the chat dock. Hold its talk button, or hold
+**F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
+changes it), speak, and release: the speech is turned into text on this
+machine. The audio is never kept.
+
+Until the models are downloaded the panel shows the command that downloads
+them, `sbxw voice install`, and an **Install voice** button that asks first,
+then shows the download's progress, with Cancel. A cancelled download picks up
+where it stopped. A build without `--features voice` says so.
+
+The browser lends the microphone only to a page on `127.0.0.1` (or HTTPS):
+with `web_addr` on a LAN address, the panel says why it cannot listen.
+
+Next: a conversation with a local Mistral model that rephrases and expands
+what you say, a voice that answers, a brief sent to a sandbox only on your
+say-so, and a sandbox's pending questions answered out loud.
+
 ## Keyboard shortcuts
 
 | Action | macOS | Windows / Linux |
 |---|---|---|
 | New sandbox | ⌃⌥N | Alt+N |
 | Toggle the chat dock | ⌃⌥M | Alt+M |
+| Talk to the Concierge (hold) | F8 | F8 |
 | Write the lens (in its dialog) | ⌘↩ | Ctrl+Enter |
 
 On a Mac, Option alone types characters (⌥N is the `~` dead key), so the app

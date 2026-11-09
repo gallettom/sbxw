@@ -14,3 +14,4 @@ pub mod relay;
 pub mod remote;
 pub mod sandboxes;
 pub mod usage;
+pub mod voice;

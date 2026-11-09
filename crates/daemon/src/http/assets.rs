@@ -57,6 +57,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("worktrees.js"),
     js!("board.js"),
     js!("chat-dock.js"),
+    js!("concierge.js"),
     js!("sidepanel.js"),
 ];
 

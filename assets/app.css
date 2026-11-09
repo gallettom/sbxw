@@ -3790,3 +3790,60 @@
   .merge-dist-kind[data-kind="warning"] { color: var(--c-amber); }
   .merge-dist-text { grid-column: 1 / -1; width: 100%; resize: vertical; font-family: var(--font-prose); font-size: 13px; line-height: 1.5; }
   .merge-dist.dropped .merge-dist-text { opacity: .5; text-decoration: line-through; }
+
+  /* ── Voice concierge (see js/concierge.js) ── */
+  /* Beside the chat launcher, one launcher-width and a gap to its left, on
+     the same layer: a glance-at panel, never over a dialog. */
+  .vc-dock {
+    position: fixed; right: calc(1rem + 48px + .6rem); bottom: 1rem; z-index: 150;
+    display: flex; flex-direction: column; align-items: flex-end; gap: .6rem;
+    pointer-events: none;
+  }
+  .vc-dock > * { pointer-events: auto; }
+  .vc-dock [hidden] { display: none !important; }
+  .vc-launcher { color: var(--c-text-muted); }
+  .vc-launcher.ready { color: var(--c-text-bright); }
+  .vc-panel {
+    width: 380px; max-width: calc(100vw - 2rem - 48px);
+    height: 440px; max-height: calc(100vh - 48px - 6rem);
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px;
+    box-shadow: 0 16px 44px rgba(var(--c-shadow-rgb), .7);
+    transform-origin: bottom right; animation: cd-rise .14s ease-out;
+  }
+  .vc-title { flex: 1; color: var(--c-text-bright); font: 600 12px var(--font-mono); padding-left: .3rem; }
+  .vc-setup { padding: 0 .75rem; font: 12.5px/1.5 var(--font-prose); color: var(--c-text); }
+  .vc-setup:empty { display: none; }
+  .vc-setup p { margin: .5rem 0 .25rem; }
+  .vc-setup code {
+    display: block; padding: .3rem .5rem; border-radius: var(--r-sm);
+    background: var(--c-elevated); color: var(--c-text-bright); font: 12px var(--font-mono);
+    user-select: all;
+  }
+  .vc-models { margin: .25rem 0 .5rem; padding-left: 1.1rem; color: var(--c-text-muted); font-size: 12px; }
+  .vc-warn { color: var(--c-amber); }
+  .vc-dim { color: var(--c-text-muted); }
+  .vc-progress { display: grid; gap: .3rem; margin: .5rem 0; }
+  .vc-progress progress { width: 100%; accent-color: var(--c-blue); }
+  .vc-btn {
+    padding: .3rem .7rem; margin: .25rem 0 .5rem; cursor: pointer;
+    background: var(--c-elevated); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    color: var(--c-text); font: 12px var(--font-mono);
+  }
+  .vc-btn:hover { border-color: var(--c-dim); }
+  .vc-primary { border-color: var(--c-blue); color: var(--c-text-bright); }
+  .vc-log { flex: 1; overflow-y: auto; padding: .5rem .75rem; display: flex; flex-direction: column; gap: .4rem; }
+  .vc-msg { font: 13px/1.5 var(--font-prose); color: var(--c-text); white-space: pre-wrap; }
+  .vc-msg.vc-me { align-self: flex-end; max-width: 85%; padding: .35rem .6rem; border-radius: var(--r-md); background: var(--c-elevated); }
+  .vc-msg.vc-err { color: var(--c-amber); }
+  .vc-msg.vc-dim { color: var(--c-text-muted); font-style: italic; }
+  .vc-meta { display: block; margin-top: .15rem; color: var(--c-dim); font: 10.5px var(--font-mono); }
+  .vc-foot { display: grid; gap: .3rem; padding: .5rem .75rem .6rem; border-top: 1px solid var(--c-elevated); }
+  .vc-talk {
+    padding: .55rem; cursor: pointer; user-select: none; touch-action: none;
+    background: var(--c-elevated); border: 1px solid var(--c-border); border-radius: var(--r-md);
+    color: var(--c-text-bright); font: 600 13px var(--font-mono);
+  }
+  .vc-talk:disabled { cursor: default; opacity: .5; }
+  .vc-talk.recording { border-color: var(--c-red, #f85149); color: var(--c-red, #f85149); }
+  .vc-talk:focus-visible, .vc-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

@@ -233,3 +233,30 @@ async fn the_virtual_mac_is_lent_by_token_and_steered_only_from_the_ui() {
         assert_eq!(s, StatusCode::NOT_FOUND, "{path}");
     }
 }
+
+#[tokio::test]
+async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
+    let (_d, app) = app();
+    let get = Request::builder().uri("/api/voice").header("host", HOST).body(Body::empty()).unwrap();
+    let (s, v) = call(ui_router(app.clone()), get).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["ready"], false, "nothing is downloaded on its own");
+    assert_eq!(v["compiled"], cfg!(feature = "voice"));
+    assert_eq!(v["models"].as_array().unwrap().len(), 3, "speech, conversation, voice");
+    assert_eq!(v["hint"], "sbxw voice install");
+
+    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/cancel", json!({})).header("host", HOST), json!({}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "nothing to cancel");
+
+    let pcm: Vec<u8> = [0.0f32; 1600].iter().flat_map(|f| f.to_le_bytes()).collect();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/voice/transcribe")
+        .header("host", HOST)
+        .header("content-type", "application/octet-stream")
+        .body(Body::from(pcm))
+        .unwrap();
+    let (s, v) = call(ui_router(app.clone()), req).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "no build or no models: {v}");
+    assert!(v["error"].as_str().unwrap().contains("voice"));
+}

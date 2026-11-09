@@ -196,6 +196,13 @@ enum Cmd {
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
     },
+    /// The voice concierge's local models: status, install, cancel, rm.
+    Voice {
+        #[command(subcommand)]
+        cmd: Option<cmd::voice::VoiceCmd>,
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+    },
     /// The shared download cache of the bundled kits: show or clear it.
     Cache {
         #[command(subcommand)]
@@ -358,6 +365,7 @@ fn main() -> Result<()> {
         Cmd::Template { cmd: TemplateCmd::Save { name, tag } } => cmd::template::save(&name, &tag),
         Cmd::Template { cmd: TemplateCmd::Ls } => cmd::template::ls(),
         Cmd::Mac { cmd, config } => cmd::mac::run(cmd, &config),
+        Cmd::Voice { cmd, config } => cmd::voice::run(cmd.unwrap_or_default(), &config),
         Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
         Cmd::Update { check, no_island } => update::run(check, no_island),

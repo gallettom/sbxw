@@ -253,3 +253,12 @@ env_files = []
 # stop_after_minutes = 120    # …then shut down normally
 # force_stop_after_minutes = 3  # a shutdown still hanging this long is forced
 # guest_host_ip = ""          # empty: the VM bridge's address (bridge100)
+
+# The voice concierge (web UI → Concierge; `sbxw voice install` fetches the
+# models). Read from the daemon's config. Needs a build with --features voice.
+# [voice]
+# stt = "parakeet-tdt-0.6b-v3-int8"
+# llm = ""                     # empty: ministral-3-8b-instruct-q4 on macOS, -3b- elsewhere
+# tts = "kokoro-multi-lang-v1_0"  # or "piper-fr-siwis-medium"
+# push_to_talk_key = "F8"      # hold it anywhere on the page to talk
+# retention_days = 7           # conversation text kept at most 7 days; audio never

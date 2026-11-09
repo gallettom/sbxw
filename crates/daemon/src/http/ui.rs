@@ -154,6 +154,15 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/codemap/lens", post(codemap_lens))
         .route("/api/codemap", get(codemap_runs))
         .merge(super::board::ui_routes())
+        // The voice concierge.
+        .route("/api/voice", get(voice_status))
+        .route("/api/voice/install", post(voice_install))
+        .route("/api/voice/cancel", post(voice_cancel))
+        .route("/api/voice/rm", post(voice_rm))
+        .route(
+            "/api/voice/transcribe",
+            post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
+        )
         // The daemon itself.
         .route("/api/health", get(health))
         .route("/api/state", get(state))
@@ -1702,4 +1711,38 @@ pub async fn settle_ws_thread(
     }
     let _ = SessionKey::new(sb.clone(), kind.clone());
     Ok(())
+}
+
+// ── Voice ────────────────────────────────────────────────────────────────
+
+async fn voice_status(State(app): S) -> Json<Value> {
+    ok_with(app.voice_status())
+}
+
+async fn voice_install(State(app): S) -> ApiResult {
+    app.voice_install().map_err(ApiError::conflict)?;
+    Ok(ok_with(app.voice_status()))
+}
+
+async fn voice_cancel(State(app): S) -> ApiResult {
+    app.voice_cancel().map_err(ApiError::conflict)?;
+    Ok(ok())
+}
+
+async fn voice_rm(State(app): S) -> ApiResult {
+    app.voice_remove().map_err(ApiError::conflict)?;
+    Ok(ok_with(app.voice_status()))
+}
+
+/// The body is 16 kHz mono little-endian f32 PCM — the page resamples, so
+/// no audio container is parsed here.
+async fn voice_transcribe(State(app): S, body: Bytes) -> ApiResult {
+    let samples = crate::svc::voice::samples_of(&body)?;
+    let secs = samples.len() as f32 / crate::svc::voice::SAMPLE_RATE as f32;
+    let t = std::time::Instant::now();
+    let text = app
+        .voice_transcribe(samples)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(ok_with(json!({ "text": text.trim(), "audio_s": secs, "ms": t.elapsed().as_millis() as u64 })))
 }
