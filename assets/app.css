@@ -1310,20 +1310,6 @@
     padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
     animation: sbx-ready-pulse 1.6s ease-in-out infinite;
   }
-  /* Made by an sbx older than 0.51: a fact about the sandbox, not a job, so
-     still amber but not pulsing. */
-  .sbx-old-badge {
-    display: inline-block; font-size: 9px; color: var(--c-amber);
-    border: 1px solid var(--c-amber); border-radius: var(--r-xs);
-    padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
-  }
-  /* sbx waits for a person: on the name line, not among the hover actions. */
-  .sbx-approval-badge {
-    display: inline-block; font: inherit; font-size: 9px; color: var(--c-blue); cursor: pointer;
-    background: var(--c-blue-tint); border: 1px solid var(--c-blue); border-radius: var(--r-xs);
-    padding: .1rem .25rem; margin-left: .35rem; vertical-align: middle;
-  }
-  .sbx-approval-badge:hover { color: var(--c-text-bright); }
   .sbx-status { color: var(--c-text-muted); font-size: 11px; }
 
   /* ── Remote hosts (EXPERIMENTAL): one section per host, `local` first ──
@@ -1455,6 +1441,27 @@
   }
   /* Without hover the actions always show: the age sits just before them. */
   .sbx-age + .sbx-actions { margin-left: 0; }
+
+  /* The status line's right end at rest: what waits on the person (blue, a
+     button), whether an older sbx made it (an amber ring), how old it is. On
+     the row under the pointer the ring and the age give way to the actions,
+     where ⟲ says the same thing as the ring; the flag stays, being a thing to
+     do. */
+  .sbx-marks { display: flex; align-items: center; gap: .4rem; margin-left: auto; flex-shrink: 0; }
+  .sbx-marks:empty { display: none; }
+  .sbx-marks .sbx-age { margin-left: 0; }
+  .sbx-marks + .sbx-actions { margin-left: .35rem; }
+  .sbx-flag {
+    font: inherit; font-size: 10.5px; font-weight: 600; color: var(--c-blue);
+    background: none; border: 0; padding: 0 .15rem; border-radius: var(--r-xs); cursor: pointer; line-height: 1.4;
+  }
+  .sbx-flag:hover, .sbx-flag:focus-visible { background: var(--c-blue-tint); color: var(--c-text-bright); }
+  .sbx-old-mark { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--c-amber); flex-shrink: 0; }
+  @media (hover: hover) {
+    .sbx-item.focused .sbx-old-mark,
+    .sbx-item:hover .sbx-old-mark,
+    .sbx-item:focus-within .sbx-old-mark { display: none; }
+  }
   .ports-section-label {
     color: var(--c-text-muted); font-size: 11px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .05em; margin-bottom: .35rem;

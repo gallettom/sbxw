@@ -30,14 +30,14 @@ Each sandbox row has buttons to **stop**, **reload**, open **ports and network**
 (⇌), **duplicate**, and **remove** (✕). Beside the name: its age (hover for the
 creation time).
 
-A sandbox made by an sbx older than 0.51 carries an **old sbx** badge (read
+A sandbox made by an sbx older than 0.51 carries a small amber ring beside its age (read
 once from `sbx inspect`, which records the creating version since 0.51). It
 keeps running but takes no kit; **⟲ recreate** removes it and creates it again
 from what sbxw recorded — workspace, config, mounts, Remote Control — after
 asking, since everything outside the workspace folder is lost. A chat is never
 recreated: its workspace goes with it.
 
-**N to approve** on a row means sbx is waiting for you to decide something
+**⚑ N** beside a row's age means sbx is waiting for you to decide something
 for that sandbox (`sbx policy approval`, 0.51): a host it reached that no
 rule allows, or a kit asking to publish a host port (that one lapses after
 45 s). Click it to see each request with the options sbx offers — **Allow**,

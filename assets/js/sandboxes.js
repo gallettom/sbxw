@@ -363,18 +363,29 @@ function sandboxItemHtml(s, groupColor) {
   const ageTag = age
     ? `<span class="sbx-age" title="Created ${escHtml(new Date(s.created_at).toLocaleString())}">${escHtml(age.replace(' ago', ''))}</span>`
     : '';
+  // Exceptions, one quiet mark each, beside the age. Only what waits on the
+  // person takes colour: sbx's pending requests. "Made by an older sbx" is a
+  // ring, worded in its tooltip, and gives way to ⟲ among the row's actions.
+  const flagTag = s.approvals
+    ? `<button class="sbx-flag" data-action="approvals" data-name="${escHtml(s.name)}" title="sbx is waiting for you to decide ${s.approvals} request${s.approvals > 1 ? 's' : ''} — a host no rule allows, a kit's port">⚑ ${s.approvals}</button>`
+    : '';
+  const oldTag = s.old_sbx
+    ? '<span class="sbx-old-mark" title="Made by an sbx older than 0.51: it runs, but takes no kit until recreated (⟲ in its actions)" aria-label="made by an older sbx"></span>'
+    : '';
+  // Every built-in sandbox is Claude; the word earns its place only when not.
+  const agentTag = s.agent && s.agent !== 'claude' ? `<span class="sbx-agent">${escHtml(s.agent)}</span>` : '';
   // Under its host's header the `host~` prefix says nothing the header does not.
   const shown = sidebarByHost() ? sandboxShortName(s.name) : s.name;
   const status = down
     ? `<span class="sbx-status sbx-unreachable-note" title="${escHtml(down)}">unreachable since ${escHtml(hostClock(s.unreachable_since))}</span>`
     : `<span class="sbx-status">${escHtml(s.status)}</span>`;
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}${down ? ' unreachable' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}${s.approvals ? `<button class="sbx-approval-badge" data-action="approvals" data-name="${escHtml(s.name)}" title="sbx is waiting for you to decide ${s.approvals} request${s.approvals > 1 ? 's' : ''} (a host no rule allows, a kit's port)">${s.approvals} to approve</button>` : ''}${s.old_sbx ? '<span class="sbx-old-badge" title="Made by an sbx older than 0.51: it keeps running, but takes no kit until it is recreated (⟲)">old sbx</span>' : ''}</div>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span>${paneTag}${readyDot}${mapBadge}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       ${status}
-      <span class="sbx-agent">${escHtml(s.agent)}</span>
-      ${ageTag}
+      ${agentTag}
+      <span class="sbx-marks">${flagTag}${oldTag}${ageTag}</span>
       <div class="sbx-actions">${actions}</div>
     </div>
     <div class="sbx-sessions" data-sandbox="${escHtml(s.name)}" hidden></div>
