@@ -74,7 +74,7 @@ mod tests {
     fn what_sbx_0_51_lists_is_read() {
         // Trimmed from a real `sbx policy approval ls --format json`.
         let raw = r#"[{"created_at":"2026-11-06T15:08:54.850902+01:00","detail":"Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)","id":"network:85TMuE6","options":[{"id":"allow","label":"Allow"},{"id":"dismiss","label":"Dismiss"}],"sandbox_name":"sbxw","title":"cli.github.com:443"},
-                      {"id":"port:x","sandbox_name":"neos","title":"5173","options":[]}]"#;
+                      {"id":"port:x","sandbox_name":"myapp","title":"5173","options":[]}]"#;
         let a = parse(raw).unwrap();
         assert_eq!(a.len(), 1, "nothing to answer on, nothing listed");
         assert_eq!((a[0].kind.as_str(), a[0].sandbox.as_str(), a[0].title.as_str()), ("network", "sbxw", "cli.github.com:443"));

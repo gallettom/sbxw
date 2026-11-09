@@ -968,7 +968,7 @@ mod tests {
 
     fn with_port() -> Config {
         Config {
-            ports: vec![sbxw_core::config::PortMap { alias: "neos.local".into(), sandbox_port: 4200, host_port: 4200 }],
+            ports: vec![sbxw_core::config::PortMap { alias: "myapp.local".into(), sandbox_port: 4200, host_port: 4200 }],
             ..Config::default()
         }
     }
@@ -988,10 +988,10 @@ mod tests {
     }
 
     fn auto_request(dir: &std::path::Path, kits: Vec<String>, template: templates::Choice) -> BringUp {
-        let ws = dir.join("neos");
+        let ws = dir.join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
         BringUp {
-            name: SandboxRef::parse("neos").unwrap(),
+            name: SandboxRef::parse("myapp").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1014,7 +1014,7 @@ mod tests {
             let joined = a.join(" ");
             match a.first().map(String::as_str) {
                 Some("ls") if created.load(std::sync::atomic::Ordering::SeqCst) => {
-                    Output::ok(r#"[{"name":"neos","agent":"claude","status":"running"}]"#)
+                    Output::ok(r#"[{"name":"myapp","agent":"claude","status":"running"}]"#)
                 }
                 Some("create") => {
                     created.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1058,13 +1058,13 @@ mod tests {
         let at = |p: &str| log.iter().position(|c| c.starts_with(p)).unwrap_or_else(|| panic!("no `{p}` in {log:?}"));
         assert!(!log[at("create")].contains("--template"), "rebuilt from sbx's image");
         assert_eq!(log.iter().filter(|c| c.contains("/proc/")).count(), 5, "three busy polls, then two quiet ones");
-        assert!(at("exec neos -- rm -f /home/agent/.sbxw/token") < at("template save neos sbxw-auto:"), "secrets out before the save");
-        assert!(at("template save") < at("exec -i neos -- sh -c"), "and back after it");
+        assert!(at("exec myapp -- rm -f /home/agent/.sbxw/token") < at("template save myapp sbxw-auto:"), "secrets out before the save");
+        assert!(at("template save") < at("exec -i myapp -- sh -c"), "and back after it");
         assert!(at("template save") < at("template rm sbxw-auto:old"), "the old one goes once the new one exists");
         let records = app.store.templates();
         assert_eq!(records.len(), 1);
         assert_eq!((records[0].sbxw.as_str(), records[0].sbx.as_str()), (env!("CARGO_PKG_VERSION"), "0.51.0"));
-        assert!(log.iter().any(|c| c == &format!("template save neos {}", records[0].tag)));
+        assert!(log.iter().any(|c| c == &format!("template save myapp {}", records[0].tag)));
     }
 
     #[tokio::test]
@@ -1107,17 +1107,17 @@ mod tests {
     #[tokio::test]
     async fn an_existing_sandbox_brought_up_from_another_directory_is_refused_and_keeps_its_record() {
         let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => crate::testing::ls(&[("neos", "running")]),
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
             _ => sbx_answer(a),
         });
         let (own, other) = (dir.path().join("test"), dir.path().join("sbxw"));
         for d in [&own, &other] {
             std::fs::create_dir_all(d).unwrap();
         }
-        let neos = SandboxRef::parse("neos").unwrap();
-        app.store.update(&neos, |r| r.workspace = Some(own.clone())).unwrap();
+        let myapp = SandboxRef::parse("myapp").unwrap();
+        app.store.update(&myapp, |r| r.workspace = Some(own.clone())).unwrap();
         let req = |ws: &std::path::Path| BringUp {
-            name: neos.clone(),
+            name: myapp.clone(),
             workspace: ws.to_path_buf(),
             ro: vec![],
             rw: vec![],
@@ -1131,7 +1131,7 @@ mod tests {
         };
         let e = format!("{:#}", app.provision(req(&other), None).await.unwrap_err());
         assert!(e.contains("was created on") && e.contains(&own.display().to_string()), "{e}");
-        assert_eq!(app.store.workspace(&neos), Some(own.clone()), "the record is left as it was");
+        assert_eq!(app.store.workspace(&myapp), Some(own.clone()), "the record is left as it was");
         assert!(fake.log().iter().all(|c| !c.starts_with("kit add") && !c.starts_with("create")), "{:?}", fake.log());
         // From its own directory, written another way, it goes ahead.
         let same = own.join("..").join("test");
@@ -1142,17 +1142,17 @@ mod tests {
     #[tokio::test]
     async fn a_kit_waiting_for_approval_is_recorded_for_a_pane_to_answer() {
         let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => crate::testing::ls(&[("neos", "running")]),
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
             Some("kit") => Output::fail(1, "warning: this change requests permissions beyond what this sandbox was granted\n  + network.runtime.allow: dl.k8s.io\n\n  error: stdin is not a terminal; run this command in a terminal to answer the prompt"),
-            Some("inspect") => Output::ok(r#"{"name":"neos","kits":[],"created_version":"v0.51.0"}"#),
+            Some("inspect") => Output::ok(r#"{"name":"myapp","kits":[],"created_version":"v0.51.0"}"#),
             _ => sbx_answer(a),
         });
-        let ws = dir.path().join("neos");
+        let ws = dir.path().join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
-        let neos = SandboxRef::parse("neos").unwrap();
-        app.store.update(&neos, |r| r.workspace = Some(ws.clone())).unwrap();
+        let myapp = SandboxRef::parse("myapp").unwrap();
+        app.store.update(&myapp, |r| r.workspace = Some(ws.clone())).unwrap();
         let req = BringUp {
-            name: neos.clone(),
+            name: myapp.clone(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1166,17 +1166,17 @@ mod tests {
         };
         let w = app.provision(req, None).await.unwrap();
         assert!(w.iter().any(|w| w.contains("press ✓")), "{w:?}");
-        let waiting = app.kit_approvals.lock().unwrap().get(&neos).cloned().unwrap_or_default();
+        let waiting = app.kit_approvals.lock().unwrap().get(&myapp).cloned().unwrap_or_default();
         assert_eq!(waiting.len(), 1);
         assert!(waiting[0].ends_with("/kits/k8s-tools"), "{waiting:?}");
-        assert_eq!(app.sandboxes().await.iter().find(|s| s.name == "neos").unwrap().kits_waiting, 1);
-        assert!(fake.log().iter().any(|c| c.starts_with("kit add neos")));
+        assert_eq!(app.sandboxes().await.iter().find(|s| s.name == "myapp").unwrap().kits_waiting, 1);
+        assert!(fake.log().iter().any(|c| c.starts_with("kit add myapp")));
     }
 
     #[tokio::test]
     async fn a_v2_local_kit_stops_the_bring_up_before_create() {
         let (dir, app, fake) = app_with(sbx_answer);
-        let ws = dir.path().join("neos");
+        let ws = dir.path().join("myapp");
         let (good, old) = (dir.path().join("good"), dir.path().join("old"));
         for d in [&ws, &good, &old] {
             std::fs::create_dir_all(d).unwrap();
@@ -1185,7 +1185,7 @@ mod tests {
         std::fs::write(old.join("spec.yaml"), "schemaVersion: \"2\"\nkind: mixin\nname: old\n").unwrap();
         let kits = vec![good.to_string_lossy().into_owned(), old.to_string_lossy().into_owned(), "sbxw:codemap".into(), "docker.io/o/k:1".into()];
         let req = BringUp {
-            name: SandboxRef::parse("neos").unwrap(),
+            name: SandboxRef::parse("myapp").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1211,7 +1211,7 @@ mod tests {
             let joined = a.join(" ");
             match a.first().map(String::as_str) {
                 Some("ls") if c.load(std::sync::atomic::Ordering::SeqCst) => {
-                    crate::testing::ls(&[("neos", "running")])
+                    crate::testing::ls(&[("myapp", "running")])
                 }
                 Some("ls") => crate::testing::ls(&[]),
                 Some("create") => {
@@ -1222,7 +1222,7 @@ mod tests {
                 _ => sbx_answer(a),
             }
         });
-        let ws = dir.path().join("neos");
+        let ws = dir.path().join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
         let cfg = Config { kits: vec!["/kits/codemap".into()], ..with_port() };
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
@@ -1231,7 +1231,7 @@ mod tests {
         let warnings = app
             .provision(
                 BringUp {
-                    name: SandboxRef::parse("neos").unwrap(),
+                    name: SandboxRef::parse("myapp").unwrap(),
                     workspace: ws.clone(),
                     ro: vec![],
                     rw: vec![],
@@ -1256,7 +1256,7 @@ mod tests {
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
         assert!(allow.contains("localhost:7682") && !allow.contains("localhost:7681"), "{allow}");
         assert!(ws.join(".sbxw-artifacts/README.md").exists());
-        let rec = app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap());
+        let rec = app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap());
         assert!(rec.token.is_some() && rec.workspace.as_deref() == Some(ws.as_path()));
         let events = seen.lock().unwrap().join("\n");
         assert!(events.contains("\"kind\":\"plan\"") && events.contains("pulling image") && events.contains("\"kind\":\"done\""));
@@ -1272,7 +1272,7 @@ mod tests {
         let c = created.clone();
         let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
             Some("ls") if c.load(std::sync::atomic::Ordering::SeqCst) => {
-                crate::testing::ls(&[("neos", "running")])
+                crate::testing::ls(&[("myapp", "running")])
             }
             Some("ls") => crate::testing::ls(&[]),
             Some("create") => {
@@ -1282,12 +1282,12 @@ mod tests {
             Some("exec") if a.join(" ").contains("node -") => Output::ok("SBXW-TOOLING []\n"),
             _ => sbx_answer(a),
         });
-        let ws = dir.path().join("neos");
+        let ws = dir.path().join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
         let mut cfg = Config::default();
         cfg.env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), "from-config".into());
         let req = BringUp {
-            name: SandboxRef::parse("neos").unwrap(),
+            name: SandboxRef::parse("myapp").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1307,12 +1307,12 @@ mod tests {
         assert!(log.iter().all(|c| !c.contains(".credentials.json")), "{log:?}");
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
         assert!(allow.contains("claude.ai") && allow.contains("platform.claude.com"), "{allow}");
-        assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
+        assert!(app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap()).remote_control);
 
         // Brought up again without asking, it still gets no token.
         app.provision(BringUp { remote_control: false, ..req }, None).await.unwrap();
         assert!(fake.log().iter().all(|c| !c.contains(".credentials.json") && !c.contains("kit add")));
-        assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
+        assert!(app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap()).remote_control);
     }
 
     #[tokio::test]
@@ -1407,10 +1407,10 @@ mod tests {
     #[tokio::test]
     async fn volumes_are_a_kit_given_at_creation() {
         let (dir, app, fake) = app_with(sbx_answer);
-        let ws = dir.path().join("neos");
+        let ws = dir.path().join("myapp");
         std::fs::create_dir_all(&ws).unwrap();
         let req = BringUp {
-            name: SandboxRef::parse("neos").unwrap(),
+            name: SandboxRef::parse("myapp").unwrap(),
             workspace: ws,
             ro: vec![],
             rw: vec![],
@@ -1423,7 +1423,7 @@ mod tests {
             git: None,
         };
         app.provision(req, None).await.unwrap();
-        let kit = app.store.paths.volumes_kit(sbxw_core::SandboxRef::parse("neos").unwrap());
+        let kit = app.store.paths.volumes_kit(sbxw_core::SandboxRef::parse("myapp").unwrap());
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.contains(&format!("--kit {}", kit.display())), "{create}");

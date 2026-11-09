@@ -388,12 +388,12 @@ mod tests {
 
     const LS: &str = "POLICY          SOURCE   APPLIES TO        SUMMARY\n\
                       local-default   local    all               12 rules\n\
-                      p-neos          local    sandbox:neos      2 rules\n\
+                      p-myapp          local    sandbox:myapp      2 rules\n\
                       p-other         local    sandbox:other     1 rule\n";
 
     #[test]
     fn rows_of_other_sandboxes_are_dropped_and_counted() {
-        let v = PolicyView::build(LS, true, "neos");
+        let v = PolicyView::build(LS, true, "myapp");
         assert_eq!(v.rows.len(), 2);
         assert_eq!(v.other_sandboxes, 1);
         assert_eq!(v.roles, ["id", "source", "applies", "summary"]);

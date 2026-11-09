@@ -417,8 +417,8 @@ final class SessionStore: ObservableObject {
         var out: [SessionInfo] = []
         // By *pane*, not by session id: a sandbox with any live agent needs no
         // idle placeholder, and matching on the full id would let a session
-        // carrying one (`neos::claude::5f2c`) sit beside a phantom idle row for
-        // the same sandbox (`neos::claude::`).
+        // carrying one (`myapp::claude::5f2c`) sit beside a phantom idle row for
+        // the same sandbox (`myapp::claude::`).
         var seen = Set<String>()
         for (_, info) in live {
             out.append(info)

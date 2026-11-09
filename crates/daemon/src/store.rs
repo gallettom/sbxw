@@ -102,6 +102,10 @@ impl Paths {
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }
+    /// The voice concierge's models, one folder each (see `svc::voice`).
+    pub fn models(&self) -> PathBuf {
+        self.root.join("models")
+    }
     /// The skills the person kept from a sandbox, one folder each: data on
     /// the host, installed in new sandboxes by the kit below.
     pub fn my_skills(&self) -> PathBuf {
@@ -564,36 +568,36 @@ mod tests {
     #[test]
     fn a_record_round_trips_and_indexes_its_token() {
         let (_d, s) = store();
-        s.update(r("neos"), |r| r.workspace = Some("/w".into())).unwrap();
-        let t = s.token(r("neos")).unwrap();
-        assert_eq!(s.token(r("neos")).unwrap(), t, "minted once");
-        assert_eq!(s.sandbox_for_token(&t).unwrap(), r("neos"));
+        s.update(r("myapp"), |r| r.workspace = Some("/w".into())).unwrap();
+        let t = s.token(r("myapp")).unwrap();
+        assert_eq!(s.token(r("myapp")).unwrap(), t, "minted once");
+        assert_eq!(s.sandbox_for_token(&t).unwrap(), r("myapp"));
         assert!(s.sandbox_for_token("sbxw_nope").is_none());
         let reopened = Store::open(s.paths.clone());
-        assert_eq!(reopened.sandbox_for_token(&t).unwrap(), r("neos"));
+        assert_eq!(reopened.sandbox_for_token(&t).unwrap(), r("myapp"));
     }
 
     #[test]
     fn a_token_another_process_minted_or_forgot_is_seen() {
         let (_d, daemon) = store();
         let cli = Store::open(daemon.paths.clone());
-        let t = cli.token(r("neos")).unwrap();
-        assert_eq!(daemon.sandbox_for_token(&t).unwrap(), r("neos"), "minted elsewhere");
-        cli.forget(r("neos"));
+        let t = cli.token(r("myapp")).unwrap();
+        assert_eq!(daemon.sandbox_for_token(&t).unwrap(), r("myapp"), "minted elsewhere");
+        cli.forget(r("myapp"));
         assert!(daemon.sandbox_for_token(&t).is_none(), "forgotten elsewhere");
     }
 
     #[test]
     fn forgetting_removes_every_trace() {
         let (_d, s) = store();
-        let t = s.token(r("neos")).unwrap();
-        std::fs::create_dir_all(s.paths.env_dir(r("neos"))).unwrap();
-        s.write_volumes_kit(r("neos"), &["/home/agent/.npm".into()]).unwrap();
-        s.forget(r("neos"));
-        assert!(!s.exists(r("neos")));
-        assert!(!s.paths.env_dir(r("neos")).exists());
+        let t = s.token(r("myapp")).unwrap();
+        std::fs::create_dir_all(s.paths.env_dir(r("myapp"))).unwrap();
+        s.write_volumes_kit(r("myapp"), &["/home/agent/.npm".into()]).unwrap();
+        s.forget(r("myapp"));
+        assert!(!s.exists(r("myapp")));
+        assert!(!s.paths.env_dir(r("myapp")).exists());
         assert!(s.sandbox_for_token(&t).is_none());
-        assert!(s.paths.volumes_kit(r("neos")).join("spec.yaml").exists(), "sbx reattaches the volumes to the same kit");
+        assert!(s.paths.volumes_kit(r("myapp")).join("spec.yaml").exists(), "sbx reattaches the volumes to the same kit");
     }
 
     #[test]
@@ -601,14 +605,14 @@ mod tests {
         let (_d, s) = store();
         let st = s.paths.state();
         std::fs::create_dir_all(st.join("threads")).unwrap();
-        std::fs::write(st.join("neos.workspace"), "/w/neos\n").unwrap();
+        std::fs::write(st.join("myapp.workspace"), "/w/myapp\n").unwrap();
         std::fs::write(
-            st.join("threads/neos.json"),
+            st.join("threads/myapp.json"),
             r#"{"api":"backend","ui":{"repo":"","model":"claude-opus-5-5"}}"#,
         )
         .unwrap();
-        let r = s.get(r("neos"));
-        assert_eq!(r.workspace.as_deref(), Some(Path::new("/w/neos")));
+        let r = s.get(r("myapp"));
+        assert_eq!(r.workspace.as_deref(), Some(Path::new("/w/myapp")));
         assert_eq!(r.threads["api"].repo, "backend");
         assert_eq!(r.threads["ui"].model.as_deref(), Some("claude-opus-5-5"));
     }
@@ -616,11 +620,11 @@ mod tests {
     #[test]
     fn files_are_private() {
         let (_d, s) = store();
-        s.token(r("neos")).unwrap();
+        s.token(r("myapp")).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let f = s.record_path(&r("neos"));
+            let f = s.record_path(&r("myapp"));
             assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
             let d = f.parent().unwrap();
             assert_eq!(std::fs::metadata(d).unwrap().permissions().mode() & 0o777, 0o700);
@@ -640,13 +644,13 @@ mod tests {
     #[test]
     fn a_remote_sandbox_is_filed_under_its_host() {
         let (_d, s) = store();
-        let local = r("neos");
-        let remote = r("buildbox~neos");
+        let local = r("myapp");
+        let remote = r("buildbox~myapp");
         s.update(&local, |r| r.workspace = Some("/w/local".into())).unwrap();
         s.update(&remote, |r| r.workspace = Some("/w/remote".into())).unwrap();
         let st = s.paths.state();
-        assert!(st.join("sandboxes/neos.json").exists(), "local layout unchanged");
-        assert!(st.join("hosts/buildbox/sandboxes/neos.json").exists());
+        assert!(st.join("sandboxes/myapp.json").exists(), "local layout unchanged");
+        assert!(st.join("hosts/buildbox/sandboxes/myapp.json").exists());
         assert_eq!(s.workspace(&local).as_deref(), Some(Path::new("/w/local")));
         assert_eq!(s.workspace(&remote).as_deref(), Some(Path::new("/w/remote")), "same name, separate record");
         assert_eq!(s.names(), vec![local.clone(), remote.clone()], "local first, then each host");
@@ -657,11 +661,11 @@ mod tests {
         assert_eq!(reopened.sandbox_for_token(&t), Some(remote.clone()), "indexed from the host's directory");
 
         std::fs::create_dir_all(s.paths.env_dir(&remote)).unwrap();
-        assert!(st.join("hosts/buildbox/env/neos").exists());
+        assert!(st.join("hosts/buildbox/env/myapp").exists());
 
         s.forget(&remote);
         assert!(!s.exists(&remote));
-        assert!(!st.join("hosts/buildbox/env/neos").exists());
+        assert!(!st.join("hosts/buildbox/env/myapp").exists());
         assert!(s.sandbox_for_token(&t).is_none());
         assert!(s.exists(&local), "forgetting the remote one leaves the local one");
         assert_eq!(s.chat_workspace(&remote), None);
@@ -686,9 +690,9 @@ mod tests {
     #[test]
     fn local_tilde_is_the_local_record() {
         let (_d, s) = store();
-        s.update(r("local~neos"), |r| r.chat = true).unwrap();
-        assert!(s.paths.state().join("sandboxes/neos.json").exists());
-        assert!(s.get(r("neos")).chat);
+        s.update(r("local~myapp"), |r| r.chat = true).unwrap();
+        assert!(s.paths.state().join("sandboxes/myapp.json").exists());
+        assert!(s.get(r("myapp")).chat);
     }
 
     #[test]

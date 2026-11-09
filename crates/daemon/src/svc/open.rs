@@ -393,14 +393,14 @@ mod tests {
         let busy = held.local_addr().unwrap().port();
         let rows = format!(r#"[{{"host_ip":"127.0.0.1","host_port":{busy},"sandbox_port":8000,"protocol":"tcp"}}]"#);
         let (_d, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => crate::testing::ls(&[("neos", "stopped")]),
+            Some("ls") => crate::testing::ls(&[("myapp", "stopped")]),
             Some("ports") if a.get(2).map(String::as_str) == Some("--format") => Output::ok(&rows),
             _ => sbx_answer(a),
         });
-        app.ensure_running_for_thread(&SandboxRef::parse("neos").unwrap()).await.unwrap();
+        app.ensure_running_for_thread(&SandboxRef::parse("myapp").unwrap()).await.unwrap();
         let log = fake.log();
         let at = |p: &str| log.iter().position(|c| c.starts_with(p)).unwrap_or_else(|| panic!("no `{p}` in {log:?}"));
-        assert!(at("ports neos --unpublish") < at("exec neos -- true"), "{log:?}");
+        assert!(at("ports myapp --unpublish") < at("exec myapp -- true"), "{log:?}");
         assert!(!log.iter().any(|c| c.starts_with("run ")), "no main session opened for it: {log:?}");
     }
 

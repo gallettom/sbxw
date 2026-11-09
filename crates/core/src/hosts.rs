@@ -204,8 +204,8 @@ mod tests {
 
     #[test]
     fn merging_keeps_what_other_sandboxes_put_there() {
-        let m = merged(vec![a("neos.local", "127.0.0.1"), a("x", "127.0.0.1")], &[a("y", "127.0.0.1")]);
-        assert_eq!(m, [a("neos.local", "127.0.0.1"), a("x", "127.0.0.1"), a("y", "127.0.0.1")]);
+        let m = merged(vec![a("myapp.local", "127.0.0.1"), a("x", "127.0.0.1")], &[a("y", "127.0.0.1")]);
+        assert_eq!(m, [a("myapp.local", "127.0.0.1"), a("x", "127.0.0.1"), a("y", "127.0.0.1")]);
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn hostnames_are_one_dns_name() {
-        assert!(is_hostname("api.neos.local"));
+        assert!(is_hostname("api.myapp.local"));
         for bad in ["", "a b", "a\tb", "#x", "-a.local", "a..b"] {
             assert!(!is_hostname(bad), "{bad:?}");
         }

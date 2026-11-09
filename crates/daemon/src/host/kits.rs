@@ -379,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn secret_kits_need_trust_and_keep_0600() {
         let r = rig();
-        let oauth = kit(&r.local, "state/kits/neos-oauth", &[("spec.yaml", "setup: {}\n", 0o600)]);
+        let oauth = kit(&r.local, "state/kits/myapp-oauth", &[("spec.yaml", "setup: {}\n", 0o600)]);
         let skills = kit(&r.local, "state/kits/sbxw-my-skills", &[("spec.yaml", "name: s\n", 0o644)]);
         // Renamed, but still writes the credentials file.
         let renamed = kit(&r.local, "state/kits/other", &[("spec.yaml", "path: /home/agent/.claude/.credentials.json", 0o644)]);

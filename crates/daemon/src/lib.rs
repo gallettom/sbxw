@@ -26,6 +26,8 @@ pub mod sessions;
 pub mod store;
 pub mod svc;
 pub mod typing;
+#[cfg(feature = "voice")]
+pub mod voice_engine;
 
 #[cfg(test)]
 pub(crate) mod testing;

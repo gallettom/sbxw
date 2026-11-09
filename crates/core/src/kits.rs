@@ -351,10 +351,10 @@ mod tests {
 
     #[test]
     fn the_kits_line_is_rewritten_and_the_rest_of_the_file_kept() {
-        let raw = "# top\ntemplate = \"auto\"\n\n# which kits\nkits = [\n  \"sbxw:codemap\", # inline\n]\n\n# Apps\n[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\n";
+        let raw = "# top\ntemplate = \"auto\"\n\n# which kits\nkits = [\n  \"sbxw:codemap\", # inline\n]\n\n# Apps\n[[ports]]\nalias = \"myapp.local\"\nsandbox_port = 4200\n";
         let out = set_kits_line(raw, Some(&["sbxw:codemap".into(), "/a b/assets/retro".into()])).unwrap();
         assert!(out.starts_with("# top\ntemplate = \"auto\"\n\n# which kits\nkits = [\n    \"sbxw:codemap\",\n    \"/a b/assets/retro\",\n# inline\n]\n"), "{out}");
-        assert!(out.ends_with("# Apps\n[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\n"), "{out}");
+        assert!(out.ends_with("# Apps\n[[ports]]\nalias = \"myapp.local\"\nsandbox_port = 4200\n"), "{out}");
         let back: toml::Value = toml::from_str(&out).unwrap();
         assert_eq!(back["kits"].as_array().unwrap().len(), 2);
         assert!(back.get("ports").is_some());

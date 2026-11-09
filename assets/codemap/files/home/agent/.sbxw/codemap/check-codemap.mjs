@@ -36,6 +36,10 @@ const SYMBOL_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rs",
 const SKIP = new Set([".git", "node_modules", "target", "dist", "build", ".next", ".venv",
   "vendor", "__pycache__", ".cache"]);
 const LEAD_MAX = 250;
+// summary.md: the project told in one breath, for someone who has to talk
+// about it (sbxw's voice concierge reads it as its context).
+const SUMMARY = "summary";
+const SUMMARY_MAX_WORDS = 300;
 // The map's Archify diagram lives here (FORMAT.md, The diagram): JSON and
 // HTML rather than markdown, so it is checked by its own rule below, not read
 // as a section file.
@@ -244,6 +248,31 @@ for (const dir of dirs) {
     if (!expected.has(l) && !byStem.has(l) && l !== dirName)
       fail(MAP + "/" + index.rel, 'the index lists "' + l + '", which no longer exists',
         "drop the stale entry");
+}
+
+/* ─── rule: a summary at the root, prose, 300 words at most ─────────────── */
+
+// Only for an sbxw code map: a lat.md vault keeps its own conventions.
+if (MAP_NAME === "codemap") {
+  const s = files.get(SUMMARY);
+  if (!s) {
+    fail(MAP + "/" + SUMMARY + ".md", "the map has no summary",
+      "write " + MAP + "/" + SUMMARY + ".md: one to three paragraphs, at most " + SUMMARY_MAX_WORDS +
+      " words, no headings — what the project does, for whom, its stack, its main parts and where it stands." +
+      " List it in the index:  - [[" + SUMMARY + "]] — the project in " + SUMMARY_MAX_WORDS + " words");
+  } else {
+    const body = maskFences(s.text.replace(/^---\n[\s\S]*?\n---\n/, ""));
+    if (body.some((l) => /^#{1,6}\s/.test(l)))
+      fail(MAP + "/" + s.rel, "the summary has headings",
+        "keep it plain prose: it is read whole, as one piece of context");
+    const words = withoutLinks(body.join(" ")).split(/\s+/).filter(Boolean).length;
+    if (words > SUMMARY_MAX_WORDS)
+      fail(MAP + "/" + s.rel, "the summary is " + words + " words (max " + SUMMARY_MAX_WORDS + ")",
+        "cut detail that belongs in the sections; keep what someone needs to talk about the project");
+    if (words < 40)
+      warn(MAP + "/" + s.rel, "the summary is only " + words + " words",
+        "say what the project does, for whom, its stack and its main parts");
+  }
 }
 
 /* ─── source symbols (heuristic) ────────────────────────────────────────── */

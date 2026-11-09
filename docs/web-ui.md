@@ -105,7 +105,7 @@ bottom-right corner lists every step up front and ticks them off, with `sbx`'s
 own output streaming under the running one:
 
 ```
-sbxw  neos                     Creating… 2/5
+sbxw  myapp                     Creating… 2/5
       ✓ Preparing the workspace
       ● Creating the sandbox
           pulling docker.io/…/sandbox-claude: 214.7MB / 512.3MB
@@ -367,12 +367,83 @@ host-side fixes, each with a copy button:
 
 Run them in a terminal on the host, not in a sandbox pane.
 
+## The voice concierge
+
+The **Concierge** button in the middle of the top bar opens a panel under it, a
+local voice partner apart from the chat dock. Hold its talk button, or hold
+**F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
+changes it), speak, and release: the speech is turned into text on this
+machine. The audio is never kept.
+
+Until the models are downloaded the panel shows the command that downloads
+them, `sbxw voice install`, and an **Install voice** button that asks first,
+then shows the download's progress, with Cancel. A cancelled download picks up
+where it stopped. A build without `--features voice` says so.
+
+The browser lends the microphone only to a page on `127.0.0.1` (or HTTPS):
+with `web_addr` on a LAN address, the panel says why it cannot listen.
+
+What you say goes to a local Mistral model (Ministral 3), which rephrases
+it, adds an angle or two and asks one question; the reply is written as it
+is generated and read aloud sentence by sentence (🔊 mutes it; talking again
+stops it). You can also type.
+
+Pick the sandbox the conversation is about at the top of the panel. The
+concierge is then told that project's code-map summary
+(`.sbxw-artifacts/codemap/summary.md`, 300 words, written by `/codemap`) and
+your own instructions for it, if you write any, in
+`.sbxw-artifacts/concierge/prompt.md` (for example "Vue 3 project; keep it
+short"). The line beside the picker says what it has; a project without a
+summary gets a **Map this project** button, which types `/codemap` into its
+agent — never while that agent is busy. A remote sandbox gives no context.
+
+When the idea is ready, say **"prépare le brief"** (or press **Brief**): the
+model writes it — Objectif, Contexte, Contraintes, Questions ouvertes — into
+an editable card. Read it, fix it and press **Send**: it is typed into the
+picked sandbox's agent. Nothing is sent any other way.
+
+A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
+session sbxw opened there — engages the concierge on its own: the panel
+opens, and each round shows in it with its gist read aloud. **Follow** does
+the same for every turn any of its agents ends (off by default: that is a
+lot of talking for ordinary work). When the agent asks with the relay's `ask_user_questions` tool (what
+`/grill-me` does in sbxw), the round comes to the Concierge from any
+sandbox, and the answers go back as that tool's result — nothing is typed
+into a terminal. A round the agent only wrote out in its terminal is
+answered by typing into its session instead. Either way, a grill round is
+taken **one question at a time**: the panel shows and
+reads Q1 with the agent's recommendation, waits for your answer, then
+moves to Q2 (*répète* reads it again, *passe* skips it, *précédente* goes
+back). Once every question is answered, the answers are written up as one
+message ("Q1 : oui, comme recommandé…"), shown, and sent at once on your
+*oui*. Any other message that arrives what you say next
+answers it: the model turns your dictation into the written answer ("Q1 :
+oui, comme recommandé…"), shows it, and asks "J'envoie ?". Say *oui* (or
+click Send) and it is typed into that session; *non* drops it. A
+multiple-choice question is read with its options, and what you say picks
+one, confirmed the same way. **Talk to the concierge** on a message makes
+your next words a turn of your own conversation instead.
+
+**Dictation into a terminal.** Click the microphone in a pane's bar, speak,
+and click it again — or hold **F9** in the pane that has focus and release:
+the words are typed into that
+terminal as if from the keyboard — Claude's prompt, or a shell. No Enter is
+pressed, so you can read and fix them first; end with *entrée* (or
+*envoie*) and Enter is pressed for you. The button shows once the voice
+models are installed.
+
+Conversations are kept as text for 7 days at most (`[voice]
+retention_days`), never the audio. **History** reopens one; **Delete all**
+removes every one in a click.
+
 ## Keyboard shortcuts
 
 | Action | macOS | Windows / Linux |
 |---|---|---|
 | New sandbox | ⌃⌥N | Alt+N |
 | Toggle the chat dock | ⌃⌥M | Alt+M |
+| Talk to the Concierge (hold) | F8 | F8 |
+| Dictate into the focused terminal (hold) | F9 | F9 |
 | Write the lens (in its dialog) | ⌘↩ | Ctrl+Enter |
 
 On a Mac, Option alone types characters (⌥N is the `~` dead key), so the app

@@ -175,14 +175,14 @@ mod tests {
     #[tokio::test]
     async fn only_sandboxes_with_remote_control_on_are_found() {
         let (_d, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => crate::testing::ls(&[("neos", "running"), ("plain", "running")]),
+            Some("ls") => crate::testing::ls(&[("myapp", "running"), ("plain", "running")]),
             Some("exec") if a.iter().any(|x| x == "-e") => Output::ok(r#"{"sessions":[{"cwd":"/w","rc":true}]}"#),
             _ => sbx_answer(a),
         });
-        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.remote_control = true).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("myapp").unwrap(), |r| r.remote_control = true).unwrap();
         app.store.update(sbxw_core::SandboxRef::parse("plain").unwrap(), |r| r.workspace = Some("/w".into())).unwrap();
         let on = app.remote_sessions().await;
-        assert_eq!(on.into_iter().collect::<Vec<_>>(), ["neos"]);
+        assert_eq!(on.into_iter().collect::<Vec<_>>(), ["myapp"]);
         // `plain` was never probed: Remote Control was not turned on there.
         assert!(!fake.log().iter().any(|c| c.starts_with("exec") && c.contains("plain")));
 
@@ -193,29 +193,29 @@ mod tests {
     #[tokio::test]
     async fn the_low_battery_note_goes_to_remote_sessions_once() {
         let (_d, app, _fake) = app_with(sbx_answer);
-        let neos = SandboxRef::parse("neos").unwrap();
+        let myapp = SandboxRef::parse("myapp").unwrap();
         {
             let mut a = app.awake.lock().unwrap();
             a.battery = Some(Battery { percent: 12, on_battery: true });
-            a.remote.insert("neos".into());
+            a.remote.insert("myapp".into());
         }
-        assert!(app.battery_notice(&neos).unwrap().contains("12%"));
-        assert!(app.battery_notice(&neos).is_none());
+        assert!(app.battery_notice(&myapp).unwrap().contains("12%"));
+        assert!(app.battery_notice(&myapp).is_none());
         assert!(app.battery_notice(&SandboxRef::parse("other").unwrap()).is_none());
     }
 
     #[tokio::test]
     async fn a_removed_or_stopped_sandbox_is_off_remote_control_at_once() {
         let (_d, app, _fake) = app_with(sbx_answer);
-        let neos = SandboxRef::parse("neos").unwrap();
-        app.watch_remote(&neos);
+        let myapp = SandboxRef::parse("myapp").unwrap();
+        app.watch_remote(&myapp);
         {
             let mut a = app.awake.lock().unwrap();
-            a.remote.extend(["neos".to_string(), "other".to_string()]);
+            a.remote.extend(["myapp".to_string(), "other".to_string()]);
         }
-        app.keep_remote_running(&["neos".into()]);
+        app.keep_remote_running(&["myapp".into()]);
         assert_eq!(app.awake.lock().unwrap().remote.len(), 1);
-        app.forget_remote(&[&neos]);
+        app.forget_remote(&[&myapp]);
         let a = app.awake.lock().unwrap();
         assert!(a.remote.is_empty() && a.watched.is_empty());
     }

@@ -149,7 +149,7 @@ mod tests {
 
     fn signed_in_with(probe: &'static str) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
         move |a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => crate::testing::ls(&[("neos", "running")]),
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
             Some("exec") if a.iter().any(|x| x == "-e") => Output::ok(probe),
             _ => sbx_answer(a),
         }
@@ -158,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn the_panes_of_a_sandbox_share_one_probe_and_a_press_reads_afresh() {
         let (_d, app, fake) = app_with(signed_in_with(r#"{"present":true,"scopes":["user:profile"],"sessions":[]}"#));
-        let name = SandboxRef::parse("neos").unwrap();
+        let name = SandboxRef::parse("myapp").unwrap();
         let probes = |fake: &sbxw_sbx::runner::Fake| fake.log().iter().filter(|c| c.starts_with("exec")).count();
         let looks: Vec<_> = (0..4)
             .map(|_| {
@@ -183,10 +183,10 @@ mod tests {
     #[tokio::test]
     async fn a_stopped_sandbox_is_refused_by_the_shared_probe_too() {
         let (_d, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
-            Some("ls") => crate::testing::ls(&[("neos", "stopped")]),
+            Some("ls") => crate::testing::ls(&[("myapp", "stopped")]),
             _ => sbx_answer(a),
         });
-        let name = SandboxRef::parse("neos").unwrap();
+        let name = SandboxRef::parse("myapp").unwrap();
         for _ in 0..3 {
             let e = app.remote_state(&name, &SessionKind::Agent).await.unwrap_err();
             assert!(format!("{e:#}").contains("not running"), "{e:#}");
@@ -197,39 +197,39 @@ mod tests {
     #[tokio::test]
     async fn a_token_sandbox_is_switched_for_good() {
         let (_d, app, fake) = app_with(signed_in_with(r#"{"present":true,"scopes":["user:inference"]}"#));
-        let name = SandboxRef::parse("neos").unwrap();
+        let name = SandboxRef::parse("myapp").unwrap();
         let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("switch"), "{e:#}");
 
         // Typing /login needs a live session, which the fake has none of; what
         // must already hold by then is the record and the login hosts.
         let _ = app.switch_to_login(&name, SessionKind::Agent).await;
-        assert!(app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
+        assert!(app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap()).remote_control);
         assert!(fake.log().iter().any(|c| c.starts_with("policy allow") && c.contains("platform.claude.com")));
     }
 
     #[tokio::test]
     async fn the_state_is_the_session_of_this_pane() {
         let (_d, app, _fake) = app_with(signed_in_with(
-            r#"{"present":true,"scopes":["user:profile"],"sessions":[{"cwd":"/w/neos","rc":true}]}"#,
+            r#"{"present":true,"scopes":["user:profile"],"sessions":[{"cwd":"/w/myapp","rc":true}]}"#,
         ));
-        let name = SandboxRef::parse("neos").unwrap();
-        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.workspace = Some("/w/neos".into())).unwrap();
+        let name = SandboxRef::parse("myapp").unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("myapp").unwrap(), |r| r.workspace = Some("/w/myapp".into())).unwrap();
         let state = app.remote_state(&name, &SessionKind::Agent).await.unwrap();
         assert!(state.active && state.login == sbxw_core::remote::Login::Full);
         // On already, the button is an indicator: nothing is typed.
         let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("already on"), "{e:#}");
-        app.store.update(sbxw_core::SandboxRef::parse("neos").unwrap(), |r| r.workspace = Some("/w/other".into())).unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("myapp").unwrap(), |r| r.workspace = Some("/w/other".into())).unwrap();
         assert!(!app.remote_state(&name, &SessionKind::Agent).await.unwrap().active);
     }
 
     #[tokio::test]
     async fn only_a_token_login_is_switched() {
         let (_d, app, _fake) = app_with(signed_in_with(r#"{"present":false,"scopes":[]}"#));
-        let name = SandboxRef::parse("neos").unwrap();
+        let name = SandboxRef::parse("myapp").unwrap();
         let e = app.switch_to_login(&name, SessionKind::Agent).await.unwrap_err();
         assert!(format!("{e:#}").contains("nothing to switch"));
-        assert!(!app.store.get(sbxw_core::SandboxRef::parse("neos").unwrap()).remote_control);
+        assert!(!app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap()).remote_control);
     }
 }

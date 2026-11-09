@@ -22,7 +22,7 @@ pub fn export_dir_for(workspace: &Path, explicit: Option<&Path>) -> PathBuf {
     workspace.parent().map(Path::to_path_buf).unwrap_or_else(|| workspace.to_path_buf())
 }
 
-/// `path` as a file in `dir` should spell it: relative (`./neos`,
+/// `path` as a file in `dir` should spell it: relative (`./myapp`,
 /// `../kits/x`), or absolute when the two share nothing but the root.
 pub fn path_relative_to(dir: &Path, path: &Path) -> String {
     let d: Vec<Component> = dir.components().collect();
@@ -302,7 +302,7 @@ mod tests {
             root_size: "40g".into(),
             ..Config::default()
         };
-        let file = env_file_for("neos", &cfg, Path::new("/proj/neos"), vec![], Path::new("/proj"));
+        let file = env_file_for("myapp", &cfg, Path::new("/proj/myapp"), vec![], Path::new("/proj"));
         let out = file.render("sbxw test");
         assert!(out.contains("additionalWorkspaces:\n  - path: ./docs\n    target: /workspace/docs\n    readOnly: true\n"), "{out}");
         assert!(out.contains("sandboxOptions:\n  cpus: 4\n  memory: \"8g\"\n  rootSize: \"40g\"\n  fuse: false\n"), "{out}");
@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn exports_land_outside_the_workspace() {
-        let ws = Path::new("/home/u/dev/neos");
+        let ws = Path::new("/home/u/dev/myapp");
         assert_eq!(export_dir_for(ws, None), Path::new("/home/u/dev"));
         assert_eq!(export_dir_for(ws, Some(Path::new("/home/u"))), Path::new("/home/u"));
         assert_eq!(export_dir_for(ws, Some(ws)), Path::new("/home/u/dev"), "never inside");
@@ -322,27 +322,27 @@ mod tests {
     #[test]
     fn paths_are_relative_to_the_file_unless_only_root_is_shared() {
         let d = Path::new("/home/u/dev");
-        assert_eq!(path_relative_to(d, Path::new("/home/u/dev/neos")), "./neos");
+        assert_eq!(path_relative_to(d, Path::new("/home/u/dev/myapp")), "./myapp");
         assert_eq!(path_relative_to(d, Path::new("/home/u/kits/x")), "../kits/x");
         assert_eq!(path_relative_to(d, d), ".");
         assert_eq!(path_relative_to(d, Path::new("/opt/kit")), "/opt/kit");
     }
 
-    fn neos() -> Config {
+    fn myapp() -> Config {
         Config {
-            ports: vec![PortMap { alias: "neos.local".into(), sandbox_port: 4200, host_port: 4200 }],
+            ports: vec![PortMap { alias: "myapp.local".into(), sandbox_port: 4200, host_port: 4200 }],
             ..Config::default()
         }
     }
 
     #[test]
     fn a_rendered_export_carries_its_omissions() {
-        let cfg = neos();
-        let f = env_file_for("neos", &cfg, Path::new("/d/neos"), ports_from_config(&cfg), Path::new("/d"));
+        let cfg = myapp();
+        let f = env_file_for("myapp", &cfg, Path::new("/d/myapp"), ports_from_config(&cfg), Path::new("/d"));
         let yaml = f.render("sbxw test");
-        assert!(yaml.contains("workspace: ./neos"));
+        assert!(yaml.contains("workspace: ./myapp"));
         assert!(yaml.contains("sbx policy allow network"));
-        assert!(yaml.contains("neos.local:4200"));
+        assert!(yaml.contains("myapp.local:4200"));
     }
 
     #[test]
@@ -351,10 +351,10 @@ mod tests {
             ports: vec![Port { sandbox: 4200, host: Some(4300), host_ip: None, protocol: None }],
             ..Default::default()
         };
-        let (cfg, report) = config_from_spec(&spec, neos());
+        let (cfg, report) = config_from_spec(&spec, myapp());
         assert_eq!(cfg.ports[0].host_port, 4300);
-        assert_eq!(cfg.ports[0].alias, "neos.local", "the alias survives the merge");
-        assert!(report.iter().any(|r| r.contains("neos.local → :4300")));
+        assert_eq!(cfg.ports[0].alias, "myapp.local", "the alias survives the merge");
+        assert!(report.iter().any(|r| r.contains("myapp.local → :4300")));
         assert!(report.iter().any(|r| r.contains("egress allowlist")));
     }
 }

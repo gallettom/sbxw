@@ -10,7 +10,7 @@
 //
 // The panel is a preview before it is a writer. The one value worth choosing is
 // the folder the file goes in: sbx (0.43+) resolves the file's paths against
-// the file itself, so the workspace is written as `./neos` relative to that
+// the file itself, so the workspace is written as `./myapp` relative to that
 // folder, and the file works on any machine with the same layout below it.
 // Making the folder editable *here*, with the resulting `workspace:` line
 // visible below it, is the difference between a setting you can check and one

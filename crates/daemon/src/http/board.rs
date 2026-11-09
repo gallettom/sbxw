@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn a_claimed_path_is_refused_to_another_thread_and_the_ui_sees_it() {
         let (_d, app) = app();
-        let token = app.store.token(sbxw_core::SandboxRef::parse("neos").unwrap()).unwrap();
+        let token = app.store.token(sbxw_core::SandboxRef::parse("myapp").unwrap()).unwrap();
         let agent = |path: &str, body: Value| {
             Request::builder()
                 .method("POST")
@@ -211,7 +211,7 @@ mod tests {
         let force = json!({"thread": "front", "files": ["src/cart.ts"]});
         assert_eq!(call(agent_router(app.clone()), agent("/api/board/force_release", force)).await.0, StatusCode::FORBIDDEN);
 
-        let get = Request::builder().uri("/api/sandboxes/neos/board").header("host", "127.0.0.1:7681").body(Body::empty()).unwrap();
+        let get = Request::builder().uri("/api/sandboxes/myapp/board").header("host", "127.0.0.1:7681").body(Body::empty()).unwrap();
         let (s, v) = call(ui_router(app.clone()), get).await;
         assert_eq!(s, StatusCode::OK);
         assert!(v["plan"].is_null(), "the UI gets the shared plan at work in full, and p-1 is in no plan book: {v}");

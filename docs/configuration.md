@@ -32,6 +32,7 @@ lists every key with its default.
 | `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
 | `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
+| `[voice]` | see below | The voice concierge's local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `llm` (`""`: Ministral 3 8B on macOS, 3B elsewhere), `tts` (`"piper-fr-tom-medium"`, a male French voice; also `"piper-fr-upmc-pierre"`, `"piper-fr-gilles-low"`, `"piper-fr-siwis-medium"` (female) and `"kokoro-multi-lang-v1_0"` (female in French, English voice for English replies)), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal), `retention_days` (`7`, at most 7). Read from the daemon's config. A table: write it after every root key |
 | `[mac]` | see below | The [virtual Mac](../assets/terminal-mac/README.md#configuration): `vm` (`"default"`), `idle_release_minutes` (`10`), `pause_after_minutes` (`15`), `stop_after_minutes` (`120`), `force_stop_after_minutes` (`3`), `guest_host_ip` (`""`, the VM bridge's address). A table: write it after every root key |
 
 ### Sandbox creation
@@ -82,12 +83,12 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 
 ```toml
 [[ports]]
-alias = "neos.local"       # optional /etc/hosts name
+alias = "myapp.local"       # optional /etc/hosts name
 sandbox_port = 4200        # what the dev server listens on, bound to 0.0.0.0
 host_port = 4200
 
 [[ports]]
-alias = "api.neos.local"
+alias = "api.myapp.local"
 sandbox_port = 8000
 host_port = 8000
 ```
@@ -97,7 +98,7 @@ No ports are published by default. `ip_per_app` decides how aliases resolve:
 | `ip_per_app` | How | You browse to |
 |---|---|---|
 | `false` (default) | Every app binds `127.0.0.1` on its own host port; aliases map to `127.0.0.1` | `http://alias:host_port` |
-| `true` | Each app gets its own `127.0.0.X` (added on `lo0` on macOS, with `sudo`) | `http://neos.local:4200`, the app's natural port |
+| `true` | Each app gets its own `127.0.0.X` (added on `lo0` on macOS, with `sudo`) | `http://myapp.local:4200`, the app's natural port |
 
 Writing `/etc/hosts` needs `sudo`. See [what `sbxw up` does](cli.md#what-sbxw-up-does)
 and `sbxw hosts`.
@@ -127,7 +128,7 @@ env_files = [".env.sandbox"]   # a root key: must come before [env]
 
 [env]
 NODE_ENV = "development"
-API_URL  = "http://api.neos.local:8000"
+API_URL  = "http://api.myapp.local:8000"
 ```
 
 Both reach the sandbox twice:

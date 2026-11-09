@@ -109,6 +109,21 @@ Short paragraph saying what this part of the map covers.
 - [[api]] — HTTP surface, versioning and error contracts
 ```
 
+## The summary
+
+`.sbxw-artifacts/codemap/summary.md` is the project told in one breath: **one
+to three paragraphs of plain prose, at most 300 words, no headings**. Write it
+for someone who has to *talk* about the project without reading the code —
+what it does and for whom, its stack, its main parts and how they fit, and
+where it stands (what works, what is in progress). Link sections with
+`[[wiki links]]` where it helps; the links do not count as words.
+
+It is listed in the index like any file (`- [[summary]] — the project in 300
+words`) and refreshed with the map. sbxw's voice concierge reads it, as is, as
+its picture of the project, so a stale summary is a concierge that talks about
+the wrong project. The checker fails a map without one, and one that is too
+long or has headings.
+
 ## Test specs
 
 A file whose frontmatter sets `require-code-mention: true` becomes a contract:

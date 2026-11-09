@@ -170,6 +170,10 @@ function createPane(index) {
            since it switches back to main as readily as the other way round. -->
       <button class="pane-btn pane-main-action pane-sessions-btn" id="psessions-${index}" hidden aria-haspopup="menu" aria-expanded="false" title="Sessions — every Claude session in this sandbox, in the main checkout or a worktree of its own; open a new one, or pick one to show it in this pane">⑂<span class="mode-word"> Sessions</span><span class="session-count" hidden></span></button>
       <span class="spacer"></span>
+      <!-- Dictation: hold it (or F9 in the focused pane) and speak; the words
+           are typed into this terminal as if from the keyboard. See
+           concierge.js, Dictation. -->
+      <button class="pane-btn pane-dictate-btn" id="pdictate-${index}" data-pane="${index}" title="Click to dictate into this terminal, click again to type it (or hold F9 in the focused pane); end with “entrée” to press Enter" aria-label="Dictate"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
       <!-- Remote control, SSH, Env and Reconnect behind one ⋯: each is done now
            and then, and their words were what a narrow pane ran out of room for
            first. The menu itself is one element for every pane (see

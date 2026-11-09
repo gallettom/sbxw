@@ -753,12 +753,12 @@ mod tests {
     #[test]
     fn a_plan_starts_nothing_until_approved_and_one_pends_per_sandbox() {
         let mut b = PlanBook::new();
-        let p = proposed(&mut b, "neos", &["api"]);
+        let p = proposed(&mut b, "myapp", &["api"]);
         assert_eq!(p.state, PlanState::Pending);
-        assert!(b.propose("p-2".into(), "neos", "s", vec![t("x")], Variant::Split, "why", None, 2).is_err());
-        assert!(b.set_thread("neos", "api", ThreadState::Working, "", false, 3).is_err());
+        assert!(b.propose("p-2".into(), "myapp", "s", vec![t("x")], Variant::Split, "why", None, 2).is_err());
+        assert!(b.set_thread("myapp", "api", ThreadState::Working, "", false, 3).is_err());
         b.approve(&p.id, vec![t("api")], None, None, 4).unwrap();
-        b.set_thread("neos", "api", ThreadState::Working, "on it", false, 5).unwrap();
+        b.set_thread("myapp", "api", ThreadState::Working, "on it", false, 5).unwrap();
         assert!(b.approve(&p.id, vec![t("api")], None, None, 6).is_err(), "settled once");
     }
 
@@ -819,8 +819,8 @@ mod tests {
     #[test]
     fn plans_are_scoped_to_their_sandbox() {
         let mut b = PlanBook::new();
-        let p = proposed(&mut b, "neos", &["api"]);
-        assert!(b.owned(&p.id, "neos").is_ok());
+        let p = proposed(&mut b, "myapp", &["api"]);
+        assert!(b.owned(&p.id, "myapp").is_ok());
         assert!(b.owned(&p.id, "other").is_err());
     }
 

@@ -557,11 +557,11 @@ mod tests {
         let (_d, app) = app();
         trust(&app, "10.0.0.5");
         app.host_add("lab", &direct("10.0.0.5"), None).await.unwrap();
-        let sb = sbxw_core::SandboxRef::parse("lab~neos").unwrap();
-        app.store.update(&sb, |r| r.workspace = Some("/srv/neos".into())).unwrap();
+        let sb = sbxw_core::SandboxRef::parse("lab~myapp").unwrap();
+        app.store.update(&sb, |r| r.workspace = Some("/srv/myapp".into())).unwrap();
         assert_eq!(app.remote_hosts_view().unwrap()[0].sandboxes, 1);
         let e = app.host_rm("lab", false).await.unwrap_err();
-        assert!(e.to_string().contains("lab~neos"), "{e:#}");
+        assert!(e.to_string().contains("lab~myapp"), "{e:#}");
         app.host_rm("lab", true).await.unwrap();
         assert!(crate::remotes::load_hosts(&app.store.paths).unwrap().hosts.is_empty());
     }

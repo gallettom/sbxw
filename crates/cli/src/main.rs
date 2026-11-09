@@ -58,8 +58,8 @@ enum Cmd {
     /// Create (if needed) and provision a sandbox, served by the sbxw daemon.
     /// Omit the name to just start the daemon (browse/create from the UI).
     #[command(after_help = "Remote hosts (EXPERIMENTAL, not yet tried on a real KVM host):\n  \
-        sbxw up buildbox~neos --path /srv/neos      a sandbox on host `buildbox` (see `sbxw host add`)\n  \
-        sbxw up buildbox~neos --path /srv/neos --git https://example.org/neos.git\n\n\
+        sbxw up buildbox~myapp --path /srv/myapp      a sandbox on host `buildbox` (see `sbxw host add`)\n  \
+        sbxw up buildbox~myapp --path /srv/myapp --git https://example.org/myapp.git\n\n\
         The path is the host's; its sbxw.toml is read there. Secrets go only to a host added with --trust-secrets.")]
     Up {
         /// A sandbox name, or `<host>~<name>` for one on a remote host (experimental).
@@ -193,6 +193,13 @@ enum Cmd {
     Mac {
         #[command(subcommand)]
         cmd: cmd::mac::MacCmd,
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+    },
+    /// The voice concierge's local models: status, install, cancel, rm.
+    Voice {
+        #[command(subcommand)]
+        cmd: Option<cmd::voice::VoiceCmd>,
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
     },
@@ -358,6 +365,7 @@ fn main() -> Result<()> {
         Cmd::Template { cmd: TemplateCmd::Save { name, tag } } => cmd::template::save(&name, &tag),
         Cmd::Template { cmd: TemplateCmd::Ls } => cmd::template::ls(),
         Cmd::Mac { cmd, config } => cmd::mac::run(cmd, &config),
+        Cmd::Voice { cmd, config } => cmd::voice::run(cmd.unwrap_or_default(), &config),
         Cmd::Cache { action, config } => cmd::cache(action.unwrap_or_default(), &config),
         Cmd::Down { name } => cmd::down(name),
         Cmd::Update { check, no_island } => update::run(check, no_island),

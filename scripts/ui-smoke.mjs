@@ -68,6 +68,19 @@ await visit('New session on the main checkout', async () => {
 });
 await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first().click(),
   () => page.screenshot({ path: png.replace(/\.png$/, '-sidebar.png') }));
+// The voice concierge: nothing installed in the throwaway home, so its panel
+// says which command installs the models and offers the button — and the
+// talk button stays off.
+await visit('Concierge', () => page.locator('#vc-launcher').click(), async () => {
+  await page.screenshot({ path: png.replace(/\.png$/, '-concierge.png') });
+  const vc = await page.evaluate(() => ({
+    setup: document.getElementById('vc-setup').innerText,
+    talk: document.getElementById('vc-talk').disabled,
+  }));
+  if (!vc.setup.includes('sbxw voice install') || !/Install voice/.test(vc.setup) || !vc.talk) {
+    problems.push(`concierge: ${JSON.stringify(vc)}, want the install command, the install button and a disabled talk button`);
+  }
+});
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
 // A reconnect (the pane's ↻) forces one full TUI repaint: a resize to one column

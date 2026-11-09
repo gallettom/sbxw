@@ -234,20 +234,20 @@ mod tests {
     #[tokio::test]
     async fn a_board_is_persisted_and_survives_a_restart() {
         let (dir, app) = app();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         app.board_claim(&sb.to_string(), Some("p-1"), "api", &["src/a.ts".into()]).unwrap();
-        assert!(app.store.paths.state().join("boards/neos.json").exists());
+        assert!(app.store.paths.state().join("boards/myapp.json").exists());
         let again = crate::testing::app_in(dir.path());
         let taken = again.board_check(&sb, None, "front", &["src/a.ts".into()]).unwrap();
         assert_eq!(taken[0].owner, "api");
-        assert_eq!(again.board_view("neos")["plan"], "p-1");
+        assert_eq!(again.board_view("myapp")["plan"], "p-1");
     }
 
     #[tokio::test]
     async fn a_thread_reporting_done_releases_its_claims() {
         let (_d, app) = app();
         app.start_board_listener();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         // The book directly: a shared plan's worktree needs a repository this
         // test does not have, and the board only cares about thread states.
         let threads = || vec![t("api"), t("front")];
@@ -263,12 +263,12 @@ mod tests {
 
         app.plan_report(&sb, &sbxw_core::ThreadName::parse("api").unwrap(), ThreadState::Done, "ok").unwrap();
         for _ in 0..100 {
-            if app.board_view("neos")["claims"].as_array().unwrap().len() == 1 {
+            if app.board_view("myapp")["claims"].as_array().unwrap().len() == 1 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let v = app.board_view("neos");
+        let v = app.board_view("myapp");
         let claims = v["claims"].as_array().unwrap();
         assert_eq!(claims.len(), 1, "{v}");
         assert_eq!(claims[0]["owner"], "front");
@@ -279,7 +279,7 @@ mod tests {
     #[tokio::test]
     async fn the_ui_reads_the_shared_plan_at_work_even_before_any_claim() {
         let (_d, app) = app();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         assert!(app.board_ui_view(&sb)["plan"].is_null(), "no shared plan: the UI draws the graph");
         let threads = || vec![t("api"), t("front")];
         let p = app
@@ -298,7 +298,7 @@ mod tests {
     #[tokio::test]
     async fn after_a_tool_call_a_commit_releases_and_news_arrives() {
         let (_d, app) = app();
-        let sb = SandboxRef::parse("neos").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
         app.board_claim(&sb.to_string(), None, "api", &["a".into(), "b".into()]).unwrap();
         app.board_note(&sb.to_string(), None, "front", sbxw_core::board::Kind::Decision, "cents", None, &[]).unwrap();
         let files = vec!["a".to_string()];

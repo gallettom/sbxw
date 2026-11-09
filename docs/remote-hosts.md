@@ -11,12 +11,12 @@
 
 sbxw can drive `sbx` on another machine over SSH. Sandboxes on that host show
 up beside your local ones, and you work with them the same way. A remote sandbox
-is named `<host>~<name>`, for example `buildbox~neos`; a bare `neos` stays local.
+is named `<host>~<name>`, for example `buildbox~myapp`; a bare `myapp` stays local.
 
 ```bash
 sbxw host add buildbox --ssh buildbox        # once, confirms the host key
 sbxw host check buildbox                     # no sandbox needed
-sbxw up buildbox~neos --path /home/me/code   # --path is a path on the host
+sbxw up buildbox~myapp --path /home/me/code   # --path is a path on the host
 ```
 
 ## Requirements
@@ -132,9 +132,9 @@ what a sandbox there holds.
 ## Start a sandbox
 
 ```bash
-sbxw up buildbox~neos --path /home/me/code
+sbxw up buildbox~myapp --path /home/me/code
 sbxw ls
-sbxw logs buildbox~neos      # as far as remote sandboxes are wired in this build
+sbxw logs buildbox~myapp      # as far as remote sandboxes are wired in this build
 ```
 
 The path is on the host. sbxw keeps one SSH connection per host

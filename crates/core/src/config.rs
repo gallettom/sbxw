@@ -108,6 +108,8 @@ pub struct Config {
     pub env_files: Vec<String>,
     /// The virtual Mac (`sbxw:terminal-mac`): read from the daemon's config.
     pub mac: crate::mac::MacSettings,
+    /// The voice concierge (`[voice]`): read from the daemon's config.
+    pub voice: crate::voice::VoiceSettings,
 
     /// The file this was read from, absolute. `None` for built-in defaults.
     #[serde(skip)]
@@ -203,6 +205,7 @@ impl Default for Config {
             env: BTreeMap::new(),
             env_files: vec![],
             mac: Default::default(),
+            voice: Default::default(),
             source: None,
         }
     }
@@ -350,6 +353,7 @@ impl Config {
     /// sandbox, not the setting, and only when somebody asks for a new one.
     pub fn validate(&self) -> Result<()> {
         self.mac.validate().map_err(anyhow::Error::msg)?;
+        self.voice.validate().map_err(anyhow::Error::msg)?;
         if let Some(mode) = self.skills_mode() {
             if !SKILL_MODES.contains(&mode) {
                 bail!("skills = \"{mode}\" — expected one of {}", SKILL_MODES.join(", "));
@@ -656,10 +660,10 @@ mod tests {
     #[test]
     fn wanted_aliases_add_the_web_name_on_loopback() {
         let cfg: Config = toml::from_str(
-            "[[ports]]\nalias = \"neos.local\"\nsandbox_port = 4200\nhost_port = 4200\n",
+            "[[ports]]\nalias = \"myapp.local\"\nsandbox_port = 4200\nhost_port = 4200\n",
         )
         .unwrap();
         let names: Vec<String> = cfg.wanted_aliases(&[]).into_iter().map(|a| a.hostname).collect();
-        assert_eq!(names, ["neos.local", "sbxw.localhost"]);
+        assert_eq!(names, ["myapp.local", "sbxw.localhost"]);
     }
 }

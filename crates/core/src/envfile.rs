@@ -1027,8 +1027,8 @@ mod tests {
     #[test]
     fn an_old_style_variable_is_left_alone_and_reported() {
         let (out, missing, legacy) =
-            interpolate("workspace: ${HOME}/neos\nx: ${ROOT:-/p}", &lookup_of(&[]));
-        assert_eq!(out, "workspace: ${HOME}/neos\nx: ${ROOT:-/p}");
+            interpolate("workspace: ${HOME}/myapp\nx: ${ROOT:-/p}", &lookup_of(&[]));
+        assert_eq!(out, "workspace: ${HOME}/myapp\nx: ${ROOT:-/p}");
         assert!(missing.is_empty());
         assert_eq!(legacy, vec!["HOME", "ROOT"]);
     }
@@ -1128,22 +1128,22 @@ mod tests {
     #[test]
     fn the_workspace_object_form_yields_its_path_and_keeps_clone_for_sbx() {
         let mut loaded = load_str(
-            "agent: claude\nworkspace:\n  path: ./neos\n  clone: true\n",
+            "agent: claude\nworkspace:\n  path: ./myapp\n  clone: true\n",
             "clone",
         );
-        let expected = parent_of(&loaded.sources[0]).join("neos");
+        let expected = parent_of(&loaded.sources[0]).join("myapp");
         assert_eq!(
             loaded.spec().unwrap().workspace.as_deref(),
             Some(&*expected.to_string_lossy())
         );
 
-        loaded.set_workspace("/abs/neos");
+        loaded.set_workspace("/abs/myapp");
         let out = loaded.to_yaml().unwrap();
         assert!(
             out.contains("clone: true"),
             "clone survived rewrite:\n{out}"
         );
-        assert!(out.contains("/abs/neos"), "{out}");
+        assert!(out.contains("/abs/myapp"), "{out}");
     }
 
     /// No `workspace:` is no mount, not "the file's directory".
@@ -1182,7 +1182,7 @@ mod tests {
     #[test]
     fn rewriting_a_port_preserves_the_keys_sbxw_does_not_understand() {
         let mut loaded = load_str(
-            "schemaVersion: \"1\"\nagent: claude\nworkspace: ./neos\n\
+            "schemaVersion: \"1\"\nagent: claude\nworkspace: ./myapp\n\
              secrets:\n  anthropic:\n    command: 'op read x'\n\
              mcp:\n  servers:\n    - name: docs\n      url: 'https://example'\n\
              skills: 'off'\n\
@@ -1231,9 +1231,9 @@ mod tests {
     #[test]
     fn a_rendered_file_parses_back_into_the_same_spec() {
         let written = EnvFile {
-            name: "neos".into(),
+            name: "myapp".into(),
             agent: "claude".into(),
-            workspace: "./neos".into(),
+            workspace: "./myapp".into(),
             skills: Some("off".into()),
             kits: vec![
                 "docker.io/sbx/playwright-kit:latest".into(),
@@ -1277,11 +1277,11 @@ mod tests {
             .spec()
             .unwrap();
 
-        assert_eq!(spec.name.as_deref(), Some("neos"));
+        assert_eq!(spec.name.as_deref(), Some("myapp"));
         assert_eq!(spec.agent.as_deref(), Some("claude"));
         assert_eq!(
             spec.workspace.as_deref(),
-            Some(&*dir.join("neos").to_string_lossy())
+            Some(&*dir.join("myapp").to_string_lossy())
         );
         assert_eq!(spec.kits[1], dir.join("kits/headroom").to_string_lossy());
         // A registry reference is not a path and comes back verbatim.
@@ -1330,9 +1330,9 @@ mod tests {
 
     fn minimal() -> EnvFile {
         EnvFile {
-            name: "neos".into(),
+            name: "myapp".into(),
             agent: "claude".into(),
-            workspace: "./neos".into(),
+            workspace: "./myapp".into(),
             ..Default::default()
         }
     }
@@ -1367,9 +1367,9 @@ mod tests {
     #[test]
     fn plain_scalars_survive_for_the_tokens_that_make_up_most_of_a_file() {
         assert_eq!(scalar("claude"), "claude");
-        assert_eq!(scalar("./neos"), "./neos");
+        assert_eq!(scalar("./myapp"), "./myapp");
         assert_eq!(scalar("NODE_ENV"), "NODE_ENV");
-        assert_eq!(scalar("api.neos.local"), "api.neos.local");
+        assert_eq!(scalar("api.myapp.local"), "api.myapp.local");
         assert_eq!(scalar("/home/you/kits/headroom"), "/home/you/kits/headroom");
     }
 

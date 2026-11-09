@@ -110,6 +110,9 @@
        whether you start something long. The versions used to share this
        corner and no longer do — they never change, and a number that never
        changes should not sit beside the one you check. -->
+  <!-- The voice concierge's launcher, centred in the bar: its panel drops
+       down under it. See /js/concierge.js. -->
+  <button type="button" class="vc-launcher" id="vc-launcher" aria-expanded="false" aria-controls="vc-panel" title="Concierge — hold F8 anywhere to talk"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Concierge</span><kbd>F8</kbd></button>
   <div class="usage" id="usage" hidden title="Claude subscription usage, account-wide">
     <span class="usage-title">Usage</span>
     <span class="usage-win" id="usage-5h" hidden>
@@ -1587,6 +1590,37 @@
     <span class="cd-glyph" id="cd-glyph" aria-hidden="true"></span>
     <span class="cd-badge" id="cd-badge" hidden></span>
   </button>
+</div>
+
+<!-- ── Voice concierge ──
+     Push-to-talk to a local model, apart from the chat dock: the panel drops
+     down from its launcher in the middle of the top bar.
+     See /js/concierge.js. -->
+<div class="vc-dock" id="vc-dock">
+  <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Concierge" hidden>
+    <div class="cd-head">
+      <span class="vc-title">Concierge</span>
+      <button type="button" class="cd-close" id="vc-mute" aria-pressed="false">🔊</button>
+      <button type="button" class="cd-close" id="vc-brief" title="Write the brief from this conversation (or say “prépare le brief”)">Brief</button>
+      <button type="button" class="cd-close" id="vc-history-btn" title="This week's conversations">History</button>
+      <button type="button" class="cd-close" id="vc-new" title="New conversation">New</button>
+      <button type="button" class="cd-close" id="vc-close" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div class="vc-ctx">
+      <select id="vc-target" aria-label="The sandbox this conversation is about"></select>
+      <span class="vc-ctx-info" id="vc-ctx-info"></span>
+      <button type="button" class="vc-btn" id="vc-map" hidden>Map this project</button>
+      <button type="button" class="vc-btn vc-follow" id="vc-follow" aria-pressed="false">Follow</button>
+    </div>
+    <div class="vc-history" id="vc-history" hidden></div>
+    <div class="vc-setup" id="vc-setup"></div>
+    <div class="cd-log vc-log" id="vc-log" aria-live="polite"></div>
+    <div class="vc-foot">
+      <button type="button" class="vc-talk" id="vc-talk" disabled>Hold to talk (F8)</button>
+      <form class="vc-type" id="vc-type"><input id="vc-type-input" type="text" placeholder="…or type" aria-label="Message" autocomplete="off"></form>
+      <span class="cd-hint" id="vc-hint"></span>
+    </div>
+  </div>
 </div>
 
 <script>

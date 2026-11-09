@@ -39,5 +39,6 @@ pub mod templates;
 pub mod terminal;
 pub mod tooling;
 pub mod usage;
+pub mod voice;
 
 pub use names::{HostName, ModelId, SandboxName, SandboxRef, ThreadName};

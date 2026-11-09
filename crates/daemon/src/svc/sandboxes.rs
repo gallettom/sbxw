@@ -802,7 +802,7 @@ mod tests {
             }
             sbx_answer(a)
         });
-        let p = app.policy_panel(&SandboxRef::parse("neos").unwrap()).await;
+        let p = app.policy_panel(&SandboxRef::parse("myapp").unwrap()).await;
         assert_eq!(p.blocked.len(), 1);
         assert_eq!(p.blocked[0].resource, "registry.npmjs.org");
         assert_eq!(p.log.rows.len(), 1, "the log view is built from the same document");

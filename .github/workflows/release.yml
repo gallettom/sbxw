@@ -20,11 +20,15 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: sbxw-macos-arm64
+            # The voice concierge: sherpa-onnx's prebuilt universal2 libraries.
+            features: --features voice
 
           # ── macOS Intel (cross-arch on arm64 runner; Clang handles this) ──
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: sbxw-macos-x86_64
+            # The voice concierge: sherpa-onnx's prebuilt universal2 libraries.
+            features: --features voice
 
           # ── Linux x86_64 (native) ─────────────────────────────────────────
           - os: ubuntu-22.04
@@ -60,7 +64,7 @@ jobs:
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
           fi
 
       - name: Collect binary

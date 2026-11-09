@@ -1,4 +1,4 @@
-# sbxw.toml — drop this at the root of your project (e.g. the NEOS repo).
+# sbxw.toml — drop this at the root of your project.
 # All fields are optional; the values below are the built-in defaults.
 
 # Host bind address for the browser terminal.
@@ -104,7 +104,7 @@ terminal_bar_color = ""
 terminal_text_color = ""
 
 # One loopback IP per app => clean hostnames on their natural ports
-# (http://neos.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
+# (http://myapp.local:4200 actually binds 127.0.0.3:4200). On macOS this adds
 # `ifconfig lo0 alias 127.0.0.X` (sudo). When false, everything shares 127.0.0.1.
 ip_per_app = false
 
@@ -225,7 +225,7 @@ env_files = []
 #
 # [env]
 # NODE_ENV = "development"
-# API_URL = "http://api.neos.local:8000"
+# API_URL = "http://api.myapp.local:8000"
 
 # Apps to expose — none by default: a project without [[ports]] publishes
 # nothing and adds no hostname (only sbxw.localhost, the web UI's own name).
@@ -233,12 +233,12 @@ env_files = []
 # remember to bind it to 0.0.0.0 (ng serve --host 0.0.0.0). For example:
 #
 # [[ports]]
-# alias = "neos.local"
+# alias = "myapp.local"
 # sandbox_port = 4200
 # host_port = 4200
 #
 # [[ports]]
-# alias = "api.neos.local"
+# alias = "api.myapp.local"
 # sandbox_port = 8000
 # host_port = 8000
 
@@ -253,3 +253,14 @@ env_files = []
 # stop_after_minutes = 120    # …then shut down normally
 # force_stop_after_minutes = 3  # a shutdown still hanging this long is forced
 # guest_host_ip = ""          # empty: the VM bridge's address (bridge100)
+
+# The voice concierge (web UI → Concierge; `sbxw voice install` fetches the
+# models). Read from the daemon's config. Needs a build with --features voice.
+# [voice]
+# stt = "parakeet-tdt-0.6b-v3-int8"
+# llm = ""                     # empty: ministral-3-8b-instruct-q4 on macOS, -3b- elsewhere
+# tts = "piper-fr-tom-medium"  # male; or piper-fr-upmc-pierre, piper-fr-gilles-low,
+#                              # piper-fr-siwis-medium (female), kokoro-multi-lang-v1_0
+# push_to_talk_key = "F8"      # hold it anywhere on the page to talk
+# dictate_key = "F9"          # hold it to dictate into the focused terminal
+# retention_days = 7           # conversation text kept at most 7 days; audio never

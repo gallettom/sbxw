@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 type S = State<Arc<App>>;
 
-/// A sandbox named on the wire, as a ref (`neos`, `buildbox~neos`). Each
+/// A sandbox named on the wire, as a ref (`myapp`, `buildbox~myapp`). Each
 /// service routes it to its host: `App::sbx_for`, `App::host_for`.
 fn sandbox(raw: &str) -> Result<SandboxRef, ApiError> {
     Ok(SandboxRef::parse(raw)?)
@@ -154,6 +154,23 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/codemap/lens", post(codemap_lens))
         .route("/api/codemap", get(codemap_runs))
         .merge(super::board::ui_routes())
+        // The voice concierge.
+        .route("/api/voice", get(voice_status))
+        .route("/api/voice/install", post(voice_install))
+        .route("/api/voice/cancel", post(voice_cancel))
+        .route("/api/voice/rm", post(voice_rm))
+        .route("/api/voice/chat", post(voice_chat))
+        .route("/api/voice/speak", post(voice_speak))
+        .route("/api/voice/warm", post(voice_warm))
+        .route("/api/voice/context", get(voice_context))
+        .route("/api/voice/map", post(voice_map))
+        .route("/api/voice/conversations", get(conversations_list).post(conversation_save))
+        .route("/api/voice/conversations/:id", get(conversation_get))
+        .route("/api/voice/conversations/rm", post(conversation_rm))
+        .route(
+            "/api/voice/transcribe",
+            post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
+        )
         // The daemon itself.
         .route("/api/health", get(health))
         .route("/api/state", get(state))
@@ -1672,6 +1689,10 @@ async fn shutdown(State(app): S) -> Json<Value> {
         tracing::info!("shutting down: closing {key}");
         s.kill();
     }
+    // Before exit(): llama.cpp's Metal backend asserts in its static
+    // destructors when a model is still loaded, which turns a clean stop
+    // into a crash report.
+    app.voice_unload();
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         std::process::exit(0);
@@ -1702,4 +1723,155 @@ pub async fn settle_ws_thread(
     }
     let _ = SessionKey::new(sb.clone(), kind.clone());
     Ok(())
+}
+
+// ── Voice ────────────────────────────────────────────────────────────────
+
+async fn voice_status(State(app): S) -> Json<Value> {
+    ok_with(app.voice_status())
+}
+
+async fn voice_install(State(app): S) -> ApiResult {
+    app.voice_install().map_err(ApiError::conflict)?;
+    Ok(ok_with(app.voice_status()))
+}
+
+async fn voice_cancel(State(app): S) -> ApiResult {
+    app.voice_cancel().map_err(ApiError::conflict)?;
+    Ok(ok())
+}
+
+async fn voice_rm(State(app): S) -> ApiResult {
+    app.voice_remove().map_err(ApiError::conflict)?;
+    Ok(ok_with(app.voice_status()))
+}
+
+/// The body is 16 kHz mono little-endian f32 PCM — the page resamples, so
+/// no audio container is parsed here.
+async fn voice_transcribe(State(app): S, body: Bytes) -> ApiResult {
+    let samples = crate::svc::voice::samples_of(&body)?;
+    let secs = samples.len() as f32 / crate::svc::voice::SAMPLE_RATE as f32;
+    let t = std::time::Instant::now();
+    let text = app
+        .voice_transcribe(samples)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(ok_with(json!({ "text": text.trim(), "audio_s": secs, "ms": t.elapsed().as_millis() as u64 })))
+}
+
+#[derive(Deserialize)]
+struct VoiceChatBody {
+    turns: Vec<crate::svc::voice::Turn>,
+    /// Write the brief (Q16's format) instead of answering; `task` says so too.
+    #[serde(default)]
+    brief: bool,
+    /// What to do with the conversation: chat (default), brief, speech,
+    /// reply, choose.
+    #[serde(default)]
+    task: crate::svc::voice::Task,
+    /// The sandbox the conversation is about: its project summary and the
+    /// developer's instructions for it join the model's.
+    #[serde(default)]
+    sandbox: Option<String>,
+}
+
+/// The reply as NDJSON, one `ChatEvent` a line, written as it is generated:
+/// the page shows (and, later, speaks) the first words before the last exist.
+async fn voice_chat(State(app): S, Json(b): Json<VoiceChatBody>) -> ApiResult<Response> {
+    use futures_util::StreamExt;
+    let ctx = non_blank(b.sandbox).map(|n| sandbox(&n)).transpose()?.map(|sb| app.voice_context(&sb));
+    let rx = app
+        .voice_chat(b.turns, if b.brief { crate::svc::voice::Task::Brief } else { b.task }, ctx)
+        .await
+        .map_err(|e| if e.contains("turn") || e.contains("conversation") { ApiError::bad(e) } else { ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e) })?;
+    let lines = tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| {
+        let mut line = serde_json::to_string(&ev).unwrap_or_default();
+        line.push('\n');
+        Ok::<_, std::convert::Infallible>(Bytes::from(line))
+    });
+    Ok(([(header::CONTENT_TYPE, "application/x-ndjson")], Body::from_stream(lines)).into_response())
+}
+
+#[derive(Deserialize)]
+struct VoiceSpeakBody {
+    text: String,
+}
+
+async fn voice_speak(State(app): S, Json(b): Json<VoiceSpeakBody>) -> ApiResult<Response> {
+    crate::svc::voice::check_speech(&b.text)?;
+    let wav = app.voice_speak(b.text).await.map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
+}
+
+/// Load the models now, in the background: answers at once.
+async fn voice_warm(State(app): S) -> Json<Value> {
+    app.voice_warm();
+    ok()
+}
+
+#[derive(Deserialize)]
+struct VoiceSandbox {
+    sandbox: String,
+}
+
+/// What the concierge would know of a sandbox's project, for the panel.
+async fn voice_context(State(app): S, Query(q): Query<VoiceSandbox>) -> ApiResult {
+    let sb = sandbox(&q.sandbox)?;
+    let ctx = app.voice_context(&sb);
+    Ok(ok_with(json!({
+        "sandbox": ctx.sandbox,
+        "local": sb.is_local(),
+        "has_map": ctx.has_map,
+        "summary_words": ctx.summary.as_deref().map(|s| s.split_whitespace().count()),
+        "has_prompt": ctx.prompt.is_some(),
+        "busy": app.voice_agent_busy(&sb),
+    })))
+}
+
+/// The person asked for the project to be mapped: `/codemap` into its agent.
+async fn voice_map(State(app): S, Json(b): Json<VoiceSandbox>) -> ApiResult {
+    let sb = sandbox(&b.sandbox)?;
+    app.voice_map(sb).await.map_err(ApiError::conflict)?;
+    Ok(ok())
+}
+
+async fn conversations_list(State(app): S) -> Json<Value> {
+    ok_with(json!({ "conversations": app.conversations(), "retention_days": app.cfg.voice.retention_days }))
+}
+
+async fn conversation_get(State(app): S, Path(id): Path<String>) -> ApiResult {
+    let c = app.conversation(&id).map_err(ApiError::not_found)?;
+    Ok(ok_with(json!({ "conversation": c })))
+}
+
+#[derive(Deserialize)]
+struct ConversationSave {
+    id: String,
+    #[serde(default)]
+    sandbox: Option<String>,
+    turns: Vec<crate::svc::voice::Turn>,
+}
+
+async fn conversation_save(State(app): S, Json(b): Json<ConversationSave>) -> ApiResult {
+    let sandbox = non_blank(b.sandbox);
+    app.conversation_save(&b.id, sandbox, &b.turns)?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct ConversationRm {
+    #[serde(default)]
+    id: Option<String>,
+    /// Every conversation at once: the panel's one-click delete.
+    #[serde(default)]
+    all: bool,
+}
+
+async fn conversation_rm(State(app): S, Json(b): Json<ConversationRm>) -> ApiResult {
+    let n = match (b.all, b.id.as_deref()) {
+        (true, _) => app.conversation_remove(None)?,
+        (false, Some(id)) => app.conversation_remove(Some(id))?,
+        (false, None) => return Err(ApiError::bad("name a conversation, or all")),
+    };
+    Ok(ok_with(json!({ "deleted": n })))
 }

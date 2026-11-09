@@ -44,6 +44,10 @@ question is the one worth the map.
 - **One file per domain or subsystem, never one per source file.** A first pass
   is usually 4–8 files. A map nobody can hold in their head is a second codebase.
 - `codemap.md` is the index: one bullet per file, `- [[name]] — one sentence`.
+- `summary.md` is always there: the project in at most 300 words of plain
+  prose, no headings (see FORMAT.md, The summary). Write it last, once the
+  sections exist, so it summarises what you found rather than what you
+  expected; list it in the index.
 - Add subdirectories only when a topic grows past three files; each subdirectory
   gets its own index, **named after the directory** (`api/api.md`).
 - Name files after concepts (`auth.md`, `scheduling.md`), not after paths.
@@ -217,6 +221,8 @@ which knows whether the process ended and nothing whatsoever about the map.
 - Read the index and the affected files first; edit in place, keep the sections
   that are still true, and delete what has become false. Do not append a second
   account of the same thing.
+- Re-read `summary.md` and bring it up to date: it is what sbxw's voice
+  concierge knows of the project. A map that has none gets one now.
 - When code moved, fix the links rather than dropping them — a broken link is a
   signal the checker will surface; a deleted one is silence.
 - After changing behaviour, architecture or tests in a mapped repo, update the

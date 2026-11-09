@@ -52,6 +52,10 @@ pub enum RelayKind {
     /// A sandbox asks to boot the virtual Mac or open a port to it: a yes or
     /// a no from the person, never routed (see `mac`).
     Mac,
+    /// Questions for the person themselves — a /grill-me round — answered
+    /// through the voice concierge (or typed), never routed. The answers come
+    /// back as the asking tool's result: nothing is typed into a terminal.
+    Ask,
 }
 
 /// One attached image, as the base64 the browser sent. Never decoded here:
@@ -203,6 +207,9 @@ impl RelayBook {
             }
             if req.kind == RelayKind::Mac {
                 return Err(format!("request {id} asks you to approve something on the virtual Mac — only you can"));
+            }
+            if req.kind == RelayKind::Ask {
+                return Err(format!("request {id} asks you, not another sandbox — answer it in the Concierge"));
             }
             if req.from == to {
                 return Err(format!("'{to}' is the sandbox that asked"));
@@ -422,6 +429,9 @@ mod tests {
     #[test]
     fn a_mac_request_is_carried_once_then_settled() {
         let mut b = RelayBook::new();
+        let ask = b.open("a", None, RelayKind::Ask, "Q1?", 1);
+        assert!(b.route(&ask.id, "b", 2).unwrap_err().contains("asks you"), "a question for the person is never routed");
+        assert_eq!(b.approve(&ask.id, Some("Q1 : oui"), vec![], 3).unwrap().state, RelayState::Approved);
         let r = b.open("a", None, RelayKind::Mac, "boot?", 1);
         let carried = b.carry(&r.id, 2).unwrap();
         assert_eq!((carried.state, carried.to.as_deref()), (RelayState::Routed, Some("sbxw")));

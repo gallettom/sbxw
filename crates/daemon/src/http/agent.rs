@@ -28,6 +28,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/usage", post(usage))
         .route("/api/relay/ask", post(ask))
         .route("/api/relay/shot", post(shot))
+        .route("/api/relay/questions", post(questions))
         .route("/api/relay/wait", post(wait))
         .route("/api/relay/reply", post(reply))
         .route("/api/plans/propose", post(propose))
@@ -85,6 +86,11 @@ async fn ask(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiResu
 
 async fn shot(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiResult {
     open_and_park(app, me, b, RelayKind::Screenshot).await
+}
+
+/// Questions for the person (a /grill-me round), answered in the Concierge.
+async fn questions(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiResult {
+    open_and_park(app, me, b, RelayKind::Ask).await
 }
 
 #[derive(Deserialize)]

@@ -274,14 +274,14 @@ mod tests {
 
     #[test]
     fn an_alias_in_ip_per_app_mode_finds_its_sandbox_by_ip() {
-        let origin = parse_origin("https://neos.local/login").unwrap();
-        let aliases = [alias("neos.local", "127.0.0.2"), alias("shop.local", "127.0.0.3")];
+        let origin = parse_origin("https://myapp.local/login").unwrap();
+        let aliases = [alias("myapp.local", "127.0.0.2"), alias("shop.local", "127.0.0.3")];
         let ports = [
-            ("neos".to_string(), mapping("127.0.0.2", 443)),
+            ("myapp".to_string(), mapping("127.0.0.2", 443)),
             ("shop".to_string(), mapping("127.0.0.3", 443)),
         ];
-        let r = resolve(&origin, &BTreeMap::new(), &aliases, &ports, &names(&["neos", "shop"]));
-        assert_eq!(r.sandbox.as_deref(), Some("neos"));
+        let r = resolve(&origin, &BTreeMap::new(), &aliases, &ports, &names(&["myapp", "shop"]));
+        assert_eq!(r.sandbox.as_deref(), Some("myapp"));
         assert_eq!(r.via, Some(Via::Port));
     }
 
@@ -332,18 +332,18 @@ mod tests {
     #[test]
     fn a_name_sbxw_does_not_route_has_no_answer() {
         let origin = parse_origin("https://app.company.dev").unwrap();
-        let ports = [("neos".to_string(), mapping("127.0.0.1", 443))];
-        let r = resolve(&origin, &BTreeMap::new(), &[], &ports, &names(&["neos"]));
+        let ports = [("myapp".to_string(), mapping("127.0.0.1", 443))];
+        let r = resolve(&origin, &BTreeMap::new(), &[], &ports, &names(&["myapp"]));
         assert_eq!(r, Resolution { sandbox: None, via: None, candidates: vec![], stale_pairing: None });
     }
 
     #[test]
     fn pairings_are_set_and_forgotten() {
         let mut p = BTreeMap::new();
-        set_pairing(&mut p, " App.Test ", Some("neos")).unwrap();
-        assert_eq!(p.get("app.test").map(String::as_str), Some("neos"));
+        set_pairing(&mut p, " App.Test ", Some("myapp")).unwrap();
+        assert_eq!(p.get("app.test").map(String::as_str), Some("myapp"));
         assert!(set_pairing(&mut p, "app.test", Some("Not A Name!")).is_err());
-        assert!(set_pairing(&mut p, "app test/../x", Some("neos")).is_err());
+        assert!(set_pairing(&mut p, "app test/../x", Some("myapp")).is_err());
         set_pairing(&mut p, "app.test", None).unwrap();
         assert!(p.is_empty());
     }

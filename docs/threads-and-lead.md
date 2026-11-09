@@ -13,7 +13,7 @@ Claude already splits work inside a session, with subagents, but you can't
 watch or steer them. A **thread** is the visible version: another Claude
 session in the same sandbox, in its own pane, working on one thing.
 
-![The neos agent's pane with two threads, api-auth and login-form, beside it](images/threads.png)
+![The myapp agent's pane with two threads, api-auth and login-form, beside it](images/threads.png)
 
 Two agents editing one checkout overwrite each other's files. So each thread
 gets its own **git worktree** and **branch**:
@@ -134,7 +134,7 @@ plan's threads work in one repo; a proposal naming two is refused.
 
 ### 1. You approve the plan
 
-![A plan from the lead of neos: three threads, each with a goal, the files it owns and a model, and Refuse, Later, Approve and start](images/plan.png)
+![A plan from the lead of myapp: three threads, each with a goal, the files it owns and a model, and Refuse, Later, Approve and start](images/plan.png)
 
 Nothing starts without you. Edit any thread's name, goal, scope, repo or model;
 remove or add threads; check the variant against the lead's justification; then **Approve and start**, **Refuse** (final), or

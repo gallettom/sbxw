@@ -7,8 +7,8 @@ answers at `<name>.sbx`:
 
 ```bash
 sbxw ssh --setup              # once (wraps `sbx setup ssh`)
-sbxw ssh neos                 # interactive shell
-sbxw ssh neos -- git status   # one command
+sbxw ssh myapp                 # interactive shell
+sbxw ssh myapp -- git status   # one command
 ```
 
 `--setup` writes a managed, sbx-owned `Host *.sbx` block into your SSH config.
@@ -28,12 +28,12 @@ your SSH config alone; `SBXW_SETUP_SSH=1` configures it without asking.
   Cursor, Claude Desktop.
 
 ```bash
-code --remote ssh-remote+neos.sbx /workspace
+code --remote ssh-remote+myapp.sbx /workspace
 ```
 
-<img src="images/ssh.png" alt="The SSH card in the web UI: Name, SSH Host neos.sbx, SSH Port and Identity File marked leave empty, and the ssh command" width="600">
+<img src="images/ssh.png" alt="The SSH card in the web UI: Name, SSH Host myapp.sbx, SSH Port and Identity File marked leave empty, and the ssh command" width="600">
 
-**Claude Desktop:** *Add SSH connection* → put `neos.sbx` in **SSH Host** and
+**Claude Desktop:** *Add SSH connection* → put `myapp.sbx` in **SSH Host** and
 leave **SSH Port** and **Identity File** empty. The managed block supplies the
 user, key and a ProxyCommand; sandboxes don't listen on TCP 22, so filling
 those fields breaks the connection. The web UI's **SSH** button gives each field
