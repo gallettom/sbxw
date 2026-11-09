@@ -284,3 +284,32 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", said.clone()).header("host", HOST), said)).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+#[tokio::test]
+async fn concierge_conversations_are_kept_listed_and_deleted_at_once() {
+    let (_d, app) = app();
+    let save = |id: &str| json!({"id": id, "sandbox": "neos", "turns": [{"role": "user", "content": "une idée"}, {"role": "assistant", "content": "ok"}]});
+    for id in ["c-aa", "c-bb"] {
+        let (s, v) = call(ui_router(app.clone()), json_req(post("/api/voice/conversations", save(id)).header("host", HOST), save(id))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+    }
+    let bad = save("../etc");
+    assert_eq!(call(ui_router(app.clone()), json_req(post("/api/voice/conversations", bad.clone()).header("host", HOST), bad)).await.0, StatusCode::BAD_REQUEST);
+
+    let list = || Request::builder().uri("/api/voice/conversations").header("host", HOST).body(Body::empty()).unwrap();
+    let (_, v) = call(ui_router(app.clone()), list()).await;
+    assert_eq!(v["conversations"].as_array().unwrap().len(), 2);
+    assert_eq!(v["conversations"][0]["title"], "une idée");
+    assert_eq!(v["retention_days"], 7);
+
+    let one = Request::builder().uri("/api/voice/conversations/c-aa").header("host", HOST).body(Body::empty()).unwrap();
+    let (s, v) = call(ui_router(app.clone()), one).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["conversation"]["turns"][1]["content"], "ok");
+
+    let all = json!({"all": true});
+    let (_, v) = call(ui_router(app.clone()), json_req(post("/api/voice/conversations/rm", all.clone()).header("host", HOST), all)).await;
+    assert_eq!(v["deleted"], 2, "one click deletes every one");
+    let (_, v) = call(ui_router(app.clone()), list()).await;
+    assert!(v["conversations"].as_array().unwrap().is_empty());
+}

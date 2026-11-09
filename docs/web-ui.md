@@ -402,7 +402,19 @@ model writes it — Objectif, Contexte, Contraintes, Questions ouvertes — into
 an editable card. Read it, fix it and press **Send**: it is typed into the
 picked sandbox's agent. Nothing is sent any other way.
 
-Next: a sandbox's pending questions answered out loud.
+With **Follow** on (the default), the picked sandbox's agents are followed.
+When one ends its turn with a message — a `/grill-me` round, a question in
+prose — it shows in the panel and its gist is read aloud; what you say next
+answers it: the model turns your dictation into the written answer ("Q1 :
+oui, comme recommandé…"), shows it, and asks "J'envoie ?". Say *oui* (or
+click Send) and it is typed into that session; *non* drops it. A
+multiple-choice question is read with its options, and what you say picks
+one, confirmed the same way. **Talk to the concierge** on a message makes
+your next words a turn of your own conversation instead.
+
+Conversations are kept as text for 7 days at most (`[voice]
+retention_days`), never the audio. **History** reopens one; **Delete all**
+removes every one in a click.
 
 ## Keyboard shortcuts
 

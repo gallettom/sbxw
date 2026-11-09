@@ -456,7 +456,7 @@ impl App {
     /// it is generated, then `Done` (or `Error`). Dropping the receiver stops
     /// generation.
     #[cfg(feature = "voice")]
-    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>, brief: bool, ctx: Option<ProjectContext>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
+    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>, task: Task, ctx: Option<ProjectContext>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
         check_turns(&turns)?;
         let llm = self.ensure_llm().await?;
         self.voice_touch();
@@ -467,7 +467,7 @@ impl App {
             // One reply at a time: a second tab waits its turn.
             let llm = llm.lock().unwrap();
             // A brief is a record, not a conversation: colder, so it adds less.
-            let (base, max, temp) = if brief { (BRIEF_PROMPT, crate::voice_engine::MAX_BRIEF, 0.3) } else { (SYSTEM_PROMPT, crate::voice_engine::MAX_REPLY, 0.6) };
+            let (base, max, temp) = task.settings();
             let system = system_prompt(base, ctx.as_ref());
             let res = llm.reply(&system, &turns, max, temp, |piece| tx.blocking_send(ChatEvent::Delta { text: piece.into() }).is_ok());
             let _ = tx.blocking_send(match res {
@@ -500,7 +500,7 @@ impl App {
     }
 
     #[cfg(not(feature = "voice"))]
-    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>, _brief: bool, _ctx: Option<ProjectContext>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
+    pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>, _task: Task, _ctx: Option<ProjectContext>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
         check_turns(&turns)?;
         Err("this sbxw was built without voice (cargo build --features voice)".into())
     }
@@ -624,6 +624,69 @@ Le développeur veut un bouton d'export sur la page des commandes ; les filtres 
 - Faut-il limiter le nombre de lignes exportées ?\n\
 - Le séparateur doit-il être la virgule ou le point-virgule ?";
 
+/// What the model is asked to do with the conversation it is given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Task {
+    /// Talk the idea through (spoken replies).
+    #[default]
+    Chat,
+    /// Write the brief.
+    Brief,
+    /// Condense an agent's message to be read aloud.
+    Speech,
+    /// Turn the developer's dictated answer to an agent into the text sent.
+    Reply,
+    /// Say which option of a multiple-choice question the developer picked.
+    Choose,
+}
+
+impl Task {
+    /// Instructions, token budget and temperature. Everything but the chat is
+    /// a transcription job, so it runs cold.
+    pub fn settings(self) -> (&'static str, usize, f32) {
+        match self {
+            Task::Chat => (SYSTEM_PROMPT, MAX_REPLY, 0.6),
+            Task::Brief => (BRIEF_PROMPT, MAX_BRIEF, 0.3),
+            Task::Speech => (SPEECH_PROMPT, 260, 0.2),
+            Task::Reply => (REPLY_PROMPT, MAX_BRIEF, 0.2),
+            Task::Choose => (CHOOSE_PROMPT, 6, 0.0),
+        }
+    }
+}
+
+/// The longest spoken reply, and the longest brief, in tokens.
+pub const MAX_REPLY: usize = 700;
+pub const MAX_BRIEF: usize = 900;
+
+/// An agent's message, made fit to be heard: the voice grill's first half.
+pub const SPEECH_PROMPT: &str = "Tu prépares la lecture à voix haute d'un message qu'un agent de code vient d'écrire au développeur. \
+Le message est fourni dans le tour de l'utilisateur. Résume-le en 90 mots au plus, en phrases simples et courtes, \
+sans markdown, sans code, sans liste, sans emoji. S'il pose des questions numérotées (Q1, Q2…), \
+énonce chacune en une phrase avec la recommandation de l'agent (« Q1, le format du brief : il recommande… »). \
+S'il attend une décision ou une confirmation, termine par elle. N'ajoute rien qui n'est pas dans le message. \
+Écris uniquement le texte à lire.";
+
+/// The developer's spoken answer, made fit to send: the voice grill's second half.
+pub const REPLY_PROMPT: &str = "Le développeur répond à voix haute au message d'un agent de code ; le tour de l'utilisateur contient \
+le message de l'agent puis la réponse dictée. Transforme la réponse dictée en la réponse écrite qui sera envoyée telle quelle à l'agent : \
+fidèle, concise, dans la langue du développeur. Si l'agent a posé des questions numérotées, réponds question par question \
+(« Q1 : … »), avec uniquement ce que le développeur a dit ; une question qu'il n'a pas abordée n'apparaît pas. \
+Un « oui » à une question veut dire qu'il accepte la recommandation de l'agent : écris-le ainsi (« Q2 : oui, comme recommandé »). \
+Corrige les mots manifestement mal entendus. Pas de politesse, pas de commentaire, pas de markdown superflu. \
+Écris uniquement la réponse.";
+
+/// A spoken choice, as an option number.
+pub const CHOOSE_PROMPT: &str = "Le développeur répond à voix haute à une question à choix ; le tour de l'utilisateur contient la question, \
+les options numérotées et sa réponse dictée. Réponds UNIQUEMENT par le numéro de l'option qu'il choisit (1, 2, 3…), \
+ou par 0 si sa réponse ne correspond clairement à aucune option. Aucun autre mot.";
+
+/// The option a `Choose` answer names: 1-based, `None` for 0, junk or out of range.
+pub fn chosen_option(text: &str, options: usize) -> Option<usize> {
+    let n: usize = text.trim().chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()?;
+    (1..=options).contains(&n).then_some(n)
+}
+
 /// See [`App::voice_context`].
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ProjectContext {
@@ -734,6 +797,16 @@ mod tests {
 
     fn turn(role: &str, content: &str) -> Turn {
         Turn { role: role.into(), content: content.into() }
+    }
+
+    #[test]
+    fn a_spoken_choice_is_an_option_in_range() {
+        assert_eq!(chosen_option("2", 3), Some(2));
+        assert_eq!(chosen_option(" 3\n", 3), Some(3));
+        assert_eq!(chosen_option("0", 3), None);
+        assert_eq!(chosen_option("4", 3), None);
+        assert_eq!(chosen_option("la deux", 3), None);
+        assert_eq!(Task::Choose.settings().1, 6, "a number, not an essay");
     }
 
     #[test]

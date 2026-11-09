@@ -164,6 +164,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/voice/warm", post(voice_warm))
         .route("/api/voice/context", get(voice_context))
         .route("/api/voice/map", post(voice_map))
+        .route("/api/voice/conversations", get(conversations_list).post(conversation_save))
+        .route("/api/voice/conversations/:id", get(conversation_get))
+        .route("/api/voice/conversations/rm", post(conversation_rm))
         .route(
             "/api/voice/transcribe",
             post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
@@ -1759,9 +1762,13 @@ async fn voice_transcribe(State(app): S, body: Bytes) -> ApiResult {
 #[derive(Deserialize)]
 struct VoiceChatBody {
     turns: Vec<crate::svc::voice::Turn>,
-    /// Write the brief (Q16's format) instead of answering.
+    /// Write the brief (Q16's format) instead of answering; `task` says so too.
     #[serde(default)]
     brief: bool,
+    /// What to do with the conversation: chat (default), brief, speech,
+    /// reply, choose.
+    #[serde(default)]
+    task: crate::svc::voice::Task,
     /// The sandbox the conversation is about: its project summary and the
     /// developer's instructions for it join the model's.
     #[serde(default)]
@@ -1774,7 +1781,7 @@ async fn voice_chat(State(app): S, Json(b): Json<VoiceChatBody>) -> ApiResult<Re
     use futures_util::StreamExt;
     let ctx = non_blank(b.sandbox).map(|n| sandbox(&n)).transpose()?.map(|sb| app.voice_context(&sb));
     let rx = app
-        .voice_chat(b.turns, b.brief, ctx)
+        .voice_chat(b.turns, if b.brief { crate::svc::voice::Task::Brief } else { b.task }, ctx)
         .await
         .map_err(|e| if e.contains("turn") || e.contains("conversation") { ApiError::bad(e) } else { ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e) })?;
     let lines = tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| {
@@ -1826,4 +1833,45 @@ async fn voice_map(State(app): S, Json(b): Json<VoiceSandbox>) -> ApiResult {
     let sb = sandbox(&b.sandbox)?;
     app.voice_map(sb).await.map_err(ApiError::conflict)?;
     Ok(ok())
+}
+
+async fn conversations_list(State(app): S) -> Json<Value> {
+    ok_with(json!({ "conversations": app.conversations(), "retention_days": app.cfg.voice.retention_days }))
+}
+
+async fn conversation_get(State(app): S, Path(id): Path<String>) -> ApiResult {
+    let c = app.conversation(&id).map_err(ApiError::not_found)?;
+    Ok(ok_with(json!({ "conversation": c })))
+}
+
+#[derive(Deserialize)]
+struct ConversationSave {
+    id: String,
+    #[serde(default)]
+    sandbox: Option<String>,
+    turns: Vec<crate::svc::voice::Turn>,
+}
+
+async fn conversation_save(State(app): S, Json(b): Json<ConversationSave>) -> ApiResult {
+    let sandbox = non_blank(b.sandbox);
+    app.conversation_save(&b.id, sandbox, &b.turns)?;
+    Ok(ok())
+}
+
+#[derive(Deserialize)]
+struct ConversationRm {
+    #[serde(default)]
+    id: Option<String>,
+    /// Every conversation at once: the panel's one-click delete.
+    #[serde(default)]
+    all: bool,
+}
+
+async fn conversation_rm(State(app): S, Json(b): Json<ConversationRm>) -> ApiResult {
+    let n = match (b.all, b.id.as_deref()) {
+        (true, _) => app.conversation_remove(None)?,
+        (false, Some(id)) => app.conversation_remove(Some(id))?,
+        (false, None) => return Err(ApiError::bad("name a conversation, or all")),
+    };
+    Ok(ok_with(json!({ "deleted": n })))
 }

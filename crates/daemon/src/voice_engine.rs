@@ -75,9 +75,6 @@ pub struct Llm {
 
 /// Context the model reads and writes in (Q24: 16k, ~1 GB more on an 8B).
 pub const N_CTX: u32 = 16_384;
-/// The longest spoken reply, and the longest brief, in tokens.
-pub const MAX_REPLY: usize = 700;
-pub const MAX_BRIEF: usize = 900;
 
 impl Llm {
     pub fn load(gguf: &Path) -> Result<Self, String> {
