@@ -1241,6 +1241,10 @@
   .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .dot,
   .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .sbx-status,
   .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-marks .sbx-flag { display: none; }
+  /* …and, nothing left before them, the actions start at the left edge. */
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-meta > .sbx-agent,
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-marks { display: none; }
+  .sbx-item:has(> .sbx-sessions:not([hidden])) .sbx-actions { margin-left: 0; }
   /* The threads of a sandbox, under its row: the way to any of them from
      anywhere, folded or not. Hung off a hairline so they read as its
      branches; a shown one is in full text, a folded one muted. */
