@@ -449,7 +449,8 @@ for (const file of files.values()) {
       const chain = file.root.children.length === 1 ? node.chain.slice(1) : node.chain;
       const short = [file.key.split("/").pop()].concat(chain).join("#");
       fail(at(file, node), 'spec "' + name + '" is not referenced by any code',
-        "add next to the covering test:  // @lat: [[" + short + "]]");
+        // Split, so a scan of this file does not read the hint as a reference.
+        "add next to the covering test:  // @" + "lat: [[" + short + "]]");
     } else if (hits.length > 1) {
       warn(at(file, node), 'spec "' + name + '" is referenced ' + hits.length + " times",
         "one reference per spec: " + hits.join(", "));
