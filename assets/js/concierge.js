@@ -279,10 +279,15 @@ async function vcAsk(text) {
 // click is the yes (rule 1 of the spec, the relay's own rule).
 const VC_TARGET = 'sbxw-concierge-target';
 
-function vcTargets() {
-  const live = (typeof sandboxes !== 'undefined' ? sandboxes : [])
-    .filter(s => s.status === 'running' && !s.unreachable_since)
-    .map(s => s.name);
+// Asked of the daemon each time: the page's own list is the one it loaded
+// with, and misses a sandbox started since (it took a reload to appear).
+async function vcTargets() {
+  let list = typeof sandboxes !== 'undefined' ? sandboxes : [];
+  try {
+    const fresh = await fetch('/api/sandboxes').then(r => r.json());
+    if (Array.isArray(fresh)) list = fresh;
+  } catch (_) {}
+  const live = list.filter(s => s.status === 'running' && !s.unreachable_since).map(s => s.name);
   return [...new Set(live)].sort();
 }
 
@@ -308,7 +313,7 @@ async function vcBrief(text) {
   row.className = 'vc-brief-row';
   const pick = document.createElement('select');
   pick.setAttribute('aria-label', 'Sandbox');
-  const targets = vcTargets();
+  const targets = await vcTargets();
   let remembered = null;
   try { remembered = localStorage.getItem(VC_TARGET); } catch (_) {}
   for (const name of targets) {

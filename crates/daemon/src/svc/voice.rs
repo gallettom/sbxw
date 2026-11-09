@@ -429,8 +429,9 @@ impl App {
             let t = Instant::now();
             // One reply at a time: a second tab waits its turn.
             let llm = llm.lock().unwrap();
-            let (system, max) = if brief { (BRIEF_PROMPT, crate::voice_engine::MAX_BRIEF) } else { (SYSTEM_PROMPT, crate::voice_engine::MAX_REPLY) };
-            let res = llm.reply(system, &turns, max, |piece| tx.blocking_send(ChatEvent::Delta { text: piece.into() }).is_ok());
+            // A brief is a record, not a conversation: colder, so it adds less.
+            let (system, max, temp) = if brief { (BRIEF_PROMPT, crate::voice_engine::MAX_BRIEF, 0.3) } else { (SYSTEM_PROMPT, crate::voice_engine::MAX_REPLY, 0.6) };
+            let res = llm.reply(system, &turns, max, temp, |piece| tx.blocking_send(ChatEvent::Delta { text: piece.into() }).is_ok());
             let _ = tx.blocking_send(match res {
                 Ok(text) => ChatEvent::Done { ms: t.elapsed().as_millis() as u64, chars: text.chars().count() },
                 Err(e) => ChatEvent::Error { error: e },
@@ -564,15 +565,26 @@ propose-lui de dire « prépare le brief ».";
 /// Turns the conversation into the brief an agent will read: the format the
 /// grill settled (Q16). The person edits it, picks the sandbox and sends it;
 /// the model only writes it.
-pub const BRIEF_PROMPT: &str = "Tu rédiges un brief pour un agent de code (Claude Code) à partir de la conversation qui précède \
-entre un développeur et toi. Écris en français, en markdown, avec exactement ces quatre sections et rien avant ni après :\n\n\
-## Objectif\n(une ou deux phrases : ce qui doit exister à la fin)\n\n\
-## Contexte\n(ce que le développeur a dit, reformulé clairement et fidèlement)\n\n\
-## Contraintes\n(liste à puces : exigences, limites, critères de réussite évoqués)\n\n\
-## Questions ouvertes\n(liste à puces : ce qui n'a pas été tranché et que l'agent devra clarifier ou décider)\n\n\
-N'invente rien qui n'a pas été dit ou clairement sous-entendu : un point incertain va dans Questions ouvertes. \
-La transcription vocale peut contenir des erreurs : corrige les mots manifestement mal entendus. \
-Ne t'adresse pas au développeur, ne conclus pas, n'ajoute pas de formule de politesse.";
+pub const BRIEF_PROMPT: &str = "Tu rédiges un brief pour un agent de code (Claude Code) qui travaille dans le dépôt du développeur, \
+à partir de la conversation qui précède entre le développeur et toi (le concierge).\n\n\
+Règles :\n\
+1. Seul compte ce que le DÉVELOPPEUR a dit ou a explicitement accepté. Tes propres suggestions qu'il n'a pas confirmées \
+ne sont pas des exigences : mets-les dans Questions ouvertes, ou laisse-les de côté.\n\
+2. Ne propose aucune solution technique : pas d'API, de bibliothèque, de plateforme, de valeur chiffrée ni de nom de fichier \
+que le développeur n'a pas cités. L'agent connaît le code et décidera du comment.\n\
+3. Court : 200 mots au plus. Pas de gras, pas de séparateur, pas de sous-liste.\n\
+4. La transcription vocale peut contenir des erreurs : corrige les mots manifestement mal entendus.\n\
+5. Écris en français, exactement ces quatre sections, rien avant ni après.\n\n\
+Exemple de forme (pour une autre idée) :\n\
+## Objectif\n\
+Permettre d'exporter la liste des commandes en CSV.\n\
+## Contexte\n\
+Le développeur veut un bouton d'export sur la page des commandes ; les filtres affichés doivent s'appliquer à l'export.\n\
+## Contraintes\n\
+- L'export reprend les colonnes visibles.\n\
+## Questions ouvertes\n\
+- Faut-il limiter le nombre de lignes exportées ?\n\
+- Le séparateur doit-il être la virgule ou le point-virgule ?";
 
 /// Little-endian f32 PCM, as the page sends it.
 pub fn samples_of(body: &[u8]) -> Result<Vec<f32>, String> {

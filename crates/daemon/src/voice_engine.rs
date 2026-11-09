@@ -77,7 +77,7 @@ pub struct Llm {
 pub const N_CTX: u32 = 16_384;
 /// The longest spoken reply, and the longest brief, in tokens.
 pub const MAX_REPLY: usize = 700;
-pub const MAX_BRIEF: usize = 1_400;
+pub const MAX_BRIEF: usize = 900;
 
 impl Llm {
     pub fn load(gguf: &Path) -> Result<Self, String> {
@@ -105,7 +105,7 @@ impl Llm {
 
     /// Generate a reply, handing each piece of text to `emit` as it comes;
     /// `emit` returning false (the page went away) stops generation.
-    pub fn reply(&self, system: &str, turns: &[Turn], max_reply: usize, mut emit: impl FnMut(&str) -> bool) -> Result<String, String> {
+    pub fn reply(&self, system: &str, turns: &[Turn], max_reply: usize, temp: f32, mut emit: impl FnMut(&str) -> bool) -> Result<String, String> {
         let vocab = self.model.vocab();
         let mut turns = turns.to_vec();
         // Oldest exchanges go first when the conversation outgrows the
@@ -149,7 +149,7 @@ impl Llm {
             LlamaSampler::top_k(40),
             LlamaSampler::top_p(0.95, 1),
             LlamaSampler::min_p(0.05, 1),
-            LlamaSampler::temp(0.6),
+            LlamaSampler::temp(temp),
             LlamaSampler::dist(rand_seed()),
         ]);
         let mut out = String::new();
