@@ -3,14 +3,14 @@
 //! flags), paths passed as arguments rather than spliced into the script, and
 //! file contents on stdin.
 //!
-//! This is the code path SSH uses, and it is tested without SSH: the same
-//! contract tests run it over `LocalExec`, beside `LocalFs`.
+//! SSH uses this path; the contract tests run it over `LocalExec`, beside
+//! `LocalFs`, so it is tested without SSH.
 //!
-//! Metadata comes from `stat`, which is the one thing POSIX does not
-//! specify: GNU (`-c`) and BSD/macOS (`-f`) spell it differently, so a script
-//! picks its format once ([`PRELUDE`]). Both print the raw mode in hex, so the
-//! file type is read here rather than from a locale-dependent word. A name that
-//! holds a newline cannot be told apart from two records and is skipped.
+//! Metadata comes from `stat`, which POSIX does not specify: GNU (`-c`) and
+//! BSD/macOS (`-f`) differ, so a script picks its format once ([`PRELUDE`]).
+//! Both print the raw mode in hex, so the file type is read here rather than
+//! from a locale-dependent word. A name holding a newline cannot be told apart
+//! from two records and is skipped.
 
 use super::{DirEntry, HostFs, Kind, Meta};
 use anyhow::{anyhow, bail, Result};
@@ -235,7 +235,6 @@ impl HostFs for ExecFs {
 
 impl ExecFs {
     async fn stat_with(&self, p: &Path, follow: bool) -> Result<Option<Meta>> {
-        // The script is the same either way; `$2` says whether to follow.
         let out = self.sh(STAT_SCRIPT, &[&s(p), if follow { "F" } else { "L" }], None, Some(QUICK)).await?;
         match out.code {
             Some(10) => Ok(None),

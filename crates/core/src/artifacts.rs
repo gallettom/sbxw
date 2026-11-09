@@ -1,10 +1,9 @@
 //! `.sbxw-artifacts/`: where non-code deliverables live, by convention.
 //!
-//! sbxw lists and serves what it finds there (a hook in the sandbox nudges the
-//! agent to put new deliverables there). A code map and its lenses are
-//! *directories* of linked markdown, so they are folded out of the file list
-//! into summaries the map viewer reads — listing a map file by file buried the
-//! deliverables beside it.
+//! sbxw lists and serves what it finds there (a sandbox hook nudges the agent
+//! to put deliverables there). A code map and its lenses are *directories* of
+//! linked markdown, folded out of the file list into summaries the map viewer
+//! reads — listed file by file they would bury the deliverables beside them.
 
 use crate::codemap::{CODEMAP_DIR, LENS_DIR};
 use serde::Serialize;

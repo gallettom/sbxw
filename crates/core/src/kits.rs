@@ -1,7 +1,7 @@
 //! Kits: sbx's declarative extension point, and the facts sbxw has learnt
 //! about applying them.
 //!
-//! * **Kit spec v3 only (sbx 0.51).** `claude` now resolves to the published
+//! * **Kit spec v3 only (sbx 0.51).** `claude` resolves to the published
 //!   v3 workload `docker.io/sbx/claude:latest`, and a v1/v2 kit cannot be
 //!   composed with a v3 one. Every kit sbxw ships or writes is v3; a local v1/v2
 //!   kit in `kits` is refused before anything is created.
@@ -34,8 +34,8 @@ pub fn with_base(kits: &[String]) -> Vec<String> {
 
 /// What a project without a `kits` list gets. k8s-tools is opt-in: only
 /// Kubernetes projects need kubectl, k3d and skaffold. So are git-identity and
-/// ssh-agent (v3 capability kits): each hands the sandbox something
-/// of the person's — their name and email, their SSH keys' signatures.
+/// ssh-agent (v3 capability kits): each hands the sandbox something of the
+/// person's — their name and email, their SSH keys' signatures.
 pub const DEFAULT_KITS: [&str; 4] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:md-to-pdf-tools", "sbxw:retro"];
 
 /// One line per bundled kit, for the web UI's Kits dialog.
@@ -62,9 +62,9 @@ pub fn read_kits_line(raw: &str) -> anyhow::Result<Option<Vec<String>>> {
 
 /// `raw` (an sbxw.toml) with its root `kits` replaced by `kits`, one entry
 /// per line, or removed when `None` (the defaults then apply). Everything
-/// else — comments, order, the `[[ports]]` tables — is left as written: this
-/// is a file the person keeps by hand. A root key goes before the first
-/// table, where TOML needs it; `toml_edit` places it there.
+/// else — comments, order, the `[[ports]]` tables — is left as written: the
+/// person keeps this file by hand. `toml_edit` puts a root key before the
+/// first table, where TOML needs it.
 pub fn set_kits_line(raw: &str, kits: Option<&[String]>) -> anyhow::Result<String> {
     let mut doc: toml_edit::DocumentMut = raw.parse()?;
     match kits {

@@ -2,9 +2,8 @@
 //!
 //! Written for sbx 0.51 and newer, with no fallbacks below it: an
 //! unrecognised command or flag is an *error*, so a command that succeeded
-//! really ran, and a fallback path would be code nobody runs. What sbxw
-//! parses it reads as `--format json`; only `policy ls` and `template ls`
-//! are still read as tables.
+//! really ran. What sbxw parses it reads as `--format json`; only
+//! `policy ls` and `template ls` are still read as tables.
 //!
 //! ```text
 //! sbx --version                              (the client's; starts no daemon)
@@ -39,8 +38,8 @@
 //!
 //! Facts the methods below are built on:
 //! * every removal asks for confirmation since 0.45, and a prompt with no
-//!   terminal is a refusal (even a piped `y`) — sbxw passes
-//!   `--force` and does its own asking;
+//!   terminal is a refusal (even a piped `y`) — sbxw passes `--force` and
+//!   does its own asking;
 //! * a sandbox made with `sbx create` stops by itself once idle;
 //! * a sandbox whose guest stopped responding is not running;
 //! * `policy allow|deny` refused with "managed by your organization" is a
@@ -69,19 +68,19 @@ pub use scripts::ThreadStatus;
 pub const MIN_VERSION: (u32, u32, u32) = (0, 51, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
-/// `sbx exec`'s status when it could not run the command at all — no such
-/// sandbox, for one. (A stopped sandbox is not that: `exec` starts it first,
-/// which is why callers that must not wake one ask `is_running` before.)
+/// `sbx exec`'s status when it could not run the command at all (no such
+/// sandbox, say). A stopped sandbox is not that: `exec` starts it first, so
+/// callers that must not wake one ask `is_running` before.
 pub const EXEC_NOT_RUN: i32 = 125;
 
 /// Longest tail of a failing command's stderr folded into the error: sbx's
 /// policy denials carry a multi-line explanation and an org support message.
 const STDERR_TAIL_LIMIT: usize = 2000;
 
-/// A failed invocation as an error carrying *what sbx said* (its tail: sbx
-/// prints context first and the reason last).
+/// A failed invocation as an error carrying the tail of what sbx said: it
+/// prints context first and the reason last.
 pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
-    let shown = args.iter().take(4).cloned().collect::<Vec<_>>().join(" ");
+    let shown = args[..args.len().min(4)].join(" ");
     let status = out.code.map_or_else(|| "a signal".to_string(), |c| format!("exit status {c}"));
     let msg = String::from_utf8_lossy(&out.stderr);
     let msg = msg.trim();
@@ -175,7 +174,7 @@ pub struct TemplateInfo {
 /// on: every shape it might take is read, and anything else lists nothing.
 pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
-        let rows = v.as_array().or_else(|| v.get("templates").and_then(|t| t.as_array())).cloned().unwrap_or_default();
+        let rows: &[serde_json::Value] = v.as_array().or_else(|| v.get("templates").and_then(|t| t.as_array())).map_or(&[], Vec::as_slice);
         let text = |v: &serde_json::Value, keys: &[&str]| keys.iter().find_map(|k| v.get(*k).and_then(|x| x.as_str())).filter(|s| !s.is_empty()).map(String::from);
         return rows
             .iter()
@@ -195,7 +194,7 @@ pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
     let Some(tag) = tag.or(repo) else {
         return Vec::new();
     };
-    let cell = |row: &Vec<String>, i: Option<usize>| i.and_then(|i| row.get(i)).filter(|c| !c.is_empty()).cloned();
+    let cell = |row: &[String], i: Option<usize>| i.and_then(|i| row.get(i)).filter(|c| !c.is_empty()).cloned();
     t.rows
         .iter()
         .filter_map(|row| {
@@ -209,11 +208,10 @@ pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
         .collect()
 }
 
-/// Does `sbx secret ls` list a global secret for `service`? Read by its
-/// headers: a scope column (`SCOPE`) saying `(global)`, and the service under
-/// `NAME` (0.51) or `SERVICE` (earlier) — so one scoped to a single sandbox
-/// is not taken for the global one. A listing with no such headers is read
-/// as a whole-word match on any line, the best it can say.
+/// Does `sbx secret ls` list a *global* secret for `service`? By headers:
+/// `SCOPE` saying `(global)` and the service under `NAME` (0.51) or `SERVICE`
+/// (earlier), so a sandbox-scoped one does not count. Without those headers:
+/// a whole-word match on any line.
 pub fn has_global_secret(raw: &str, service: &str) -> bool {
     let t = table::parse(raw);
     let col = |names: &[&str]| t.columns.iter().position(|h| names.iter().any(|n| h.eq_ignore_ascii_case(n)));
@@ -285,7 +283,7 @@ pub fn parse_rm_json(raw: &str) -> Option<Vec<RmResult>> {
 }
 
 /// What to tell the person once, on the first run after sbx moved from
-/// `before` to `now`: what the upgrade costs them that sbxw cannot hide.
+/// `before` to `now`: the upgrade's costs that sbxw cannot hide.
 pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
     let (Some(before), Some(now)) = (parse_version(before), parse_version(now)) else {
         return Vec::new();
@@ -422,8 +420,8 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     a
 }
 
-/// Re-attach the agent. The env flags apply to the agent session, which is
-/// how an edited `env` reaches a sandbox that already exists.
+/// Re-attach the agent. The env flags apply to the agent session: how an
+/// edited `env` reaches a sandbox that already exists.
 pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String], workdir: &str) -> Vec<String> {
     let mut a = vec!["run".to_string(), "--name".into(), name.to_string()];
     // This session only, re-attach included (0.51).
@@ -507,7 +505,6 @@ pub fn wants_confirmation(err: &str) -> bool {
     e.contains("--force") || e.contains("confirm") || e.contains("not a terminal") || e.contains("non-interactive")
 }
 
-/// The typed client.
 #[derive(Clone)]
 pub struct Sbx {
     runner: Arc<dyn Runner>,
@@ -536,8 +533,8 @@ impl Sbx {
         Ok(out)
     }
 
-    /// Run and capture. Some commands write to stderr off a TTY, so an empty
-    /// stdout falls back to stderr.
+    /// Some commands write to stderr off a TTY, so an empty stdout falls back
+    /// to stderr.
     async fn capture(&self, args: Vec<String>) -> Result<String> {
         let out = self.checked(Invocation::new(args)).await?;
         if !out.stdout.is_empty() {
@@ -550,9 +547,7 @@ impl Sbx {
         self.runner.run(inv).await
     }
 
-    /// `sbx version`, parsed.
-    /// `sbx --version`: the client's version, without starting the daemon
-    /// (0.51), so a version check costs no daemon start.
+    /// `sbx --version`, parsed: the client's version, which starts no daemon (0.51).
     pub async fn version(&self) -> Result<Option<(u32, u32, u32)>> {
         Ok(parse_version(&self.capture(s(&["--version"])).await?))
     }
@@ -647,7 +642,7 @@ impl Sbx {
             })
             .await?;
         if !out.success() {
-            let said = tail.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
+            let said = Vec::from(std::mem::take(&mut *tail.lock().unwrap())).join("\n");
             let out = Output { stderr: said.into_bytes(), ..out };
             return Err(command_error(&args, &out));
         }
@@ -822,9 +817,9 @@ impl Sbx {
         self.checked(Invocation::new(s(&["mcp", "unload", server, "--sandbox", sandbox.as_str()]))).await.map(drop)
     }
 
-    /// Snapshot a sandbox from the daemon, where no terminal can answer a
-    /// prompt: a save refused for want of one (sbx asking to stop the
-    /// sandbox first) is retried after stopping it. True when it was stopped.
+    /// Snapshot a sandbox with no terminal to answer a prompt: a save refused
+    /// for want of one (sbx asking to stop the sandbox first) is retried
+    /// after stopping it. True when it was stopped.
     pub async fn template_save(&self, name: &SandboxName, tag: &str) -> Result<bool> {
         let args = template_save_args(name, tag);
         let Err(first) = self.checked(Invocation::new(args.clone())).await else {
@@ -868,9 +863,9 @@ impl Sbx {
         self.capture(s(&["diagnose", "--format", "json"])).await
     }
 
-    /// A secret by stdin, never argv. Replacing one may ask to confirm, and
-    /// with no terminal that is a refusal: that refusal is retried with
-    /// `--force` — the caller asked to store this value.
+    /// A secret by stdin, never argv. Replacing one may ask to confirm, which
+    /// with no terminal is a refusal: retried with `--force`, since the
+    /// caller asked to store this value.
     pub async fn secret_set(&self, service: &str, value: &str, sandbox: Option<&SandboxName>) -> Result<()> {
         let inv = |args: Vec<String>| Invocation {
             args,
@@ -1003,8 +998,8 @@ impl Sbx {
     }
 
     /// Start a stopped sandbox without attaching anything: `sbx exec` starts
-    /// one before running its command, and `true` is the command that does
-    /// nothing else. A running sandbox costs one round trip.
+    /// one before running its command, and `true` does nothing else. A
+    /// running sandbox costs one round trip.
     pub async fn start(&self, name: &SandboxName) -> Result<()> {
         let out = self.exec(name, &["true"], None).await?;
         if !out.success() {
@@ -1087,7 +1082,7 @@ pub fn interactive(args: &[String]) -> Result<()> {
         .status()
         .map_err(|e| anyhow!("failed to spawn `sbx` — is it on your PATH? ({e})"))?;
     if !status.success() {
-        bail!("`sbx {}` exited with {status}", args.iter().take(3).cloned().collect::<Vec<_>>().join(" "));
+        bail!("`sbx {}` exited with {status}", args[..args.len().min(3)].join(" "));
     }
     Ok(())
 }

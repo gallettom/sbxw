@@ -525,20 +525,22 @@ impl AgentBook {
         if running.is_empty() {
             return Vec::new();
         }
-        let gone: Vec<AgentKey> = self
-            .statuses
-            .keys()
-            .filter(|k| !running.contains(&k.sandbox))
-            .cloned()
-            .collect();
-        gone.into_iter()
-            .filter_map(|k| {
-                let st = self.statuses.remove(&k)?;
-                let mut info = build(&k, &st, false, now);
+        self.evict(now, |k, _| !running.contains(&k.sandbox))
+    }
+
+    /// Drop the sessions `gone` picks; their `Exited` payloads, in key order.
+    fn evict(&mut self, now: u64, gone: impl Fn(&AgentKey, &Status) -> bool) -> Vec<SessionInfo> {
+        let mut out = Vec::new();
+        self.statuses.retain(|k, st| {
+            let go = gone(k, st);
+            if go {
+                let mut info = build(k, st, false, now);
                 info.state = SessionState::Exited;
-                Some(info)
-            })
-            .collect()
+                out.push(info);
+            }
+            !go
+        });
+        out
     }
 
     /// Drop the sessions of `sandbox` running in thread `thread`'s worktree.
@@ -546,26 +548,13 @@ impl AgentBook {
     /// their `Exited` payloads.
     pub fn forget_thread(&mut self, sandbox: &str, thread: &str, now: u64) -> Vec<SessionInfo> {
         let tail = format!("/.sbxw-worktrees/{thread}");
-        let gone: Vec<AgentKey> = self
-            .statuses
-            .iter()
-            .filter(|(k, st)| {
-                k.sandbox == sandbox
-                    && match st.thread.as_deref() {
-                        Some(t) => t == thread,
-                        None => st.cwd.as_deref().is_some_and(|c| c.trim_end_matches('/').ends_with(&tail)),
-                    }
-            })
-            .map(|(k, _)| k.clone())
-            .collect();
-        gone.into_iter()
-            .filter_map(|k| {
-                let st = self.statuses.remove(&k)?;
-                let mut info = build(&k, &st, false, now);
-                info.state = SessionState::Exited;
-                Some(info)
-            })
-            .collect()
+        self.evict(now, |k, st| {
+            k.sandbox == sandbox
+                && match st.thread.as_deref() {
+                    Some(t) => t == thread,
+                    None => st.cwd.as_deref().is_some_and(|c| c.trim_end_matches('/').ends_with(&tail)),
+                }
+        })
     }
 
     fn infos_for(&self, sandbox: &str, has_pty: bool, now: u64) -> Vec<SessionInfo> {

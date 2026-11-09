@@ -1,11 +1,11 @@
-//! A host the daemon acts on: this machine or a remote one. A [`Host`] is
-//! a name, a way to run commands there ([`HostExec`]) and a way to touch
-//! its files ([`HostFs`]). Everything that reads or writes a sandbox's
-//! workspace, git checkout or kit goes through these, so the same code
-//! serves `local` and a host over SSH.
+//! A host the daemon acts on, this machine or a remote one: a name, a way to
+//! run commands there ([`HostExec`]) and a way to touch its files
+//! ([`HostFs`]). Everything that reads or writes a sandbox's workspace, git
+//! checkout or kit goes through these, so the same code serves `local` and a
+//! host over SSH.
 //!
 //! * [`LocalFs`] is `std::fs`, inside `spawn_blocking`;
-//! * `exec_fs` will be `HostFs` over any `HostExec` (POSIX sh on the host);
+//! * `exec_fs` is `HostFs` over any `HostExec` (POSIX sh on the host);
 //! * `kits` mirrors kits to a host; `link` holds one SSH connection per host.
 //!
 //! Paths are host paths: absolute, as the host spells them.
@@ -57,12 +57,10 @@ pub trait HostFs: Send + Sync {
     async fn lstat(&self, p: &Path) -> Result<Option<Meta>>;
     /// Entries sorted by name, without `.` and `..`, each with its `lstat`.
     async fn read_dir(&self, p: &Path) -> Result<Vec<DirEntry>>;
-    /// The whole file; an error if it is longer than `max` bytes (never a
-    /// silent truncation).
+    /// The whole file; an error past `max` bytes, never a truncation.
     async fn read(&self, p: &Path, max: u64) -> Result<Vec<u8>>;
-    /// Write to a temporary file beside `p`, set `mode`, rename over `p`:
-    /// a reader sees the old file or the new one, never half of one. The
-    /// parent must exist.
+    /// Temporary file beside `p`, `mode` set, renamed over `p`: a reader sees
+    /// the old file or the new one, never half. The parent must exist.
     async fn write_atomic(&self, p: &Path, data: &[u8], mode: u32) -> Result<()>;
     async fn create_dir_all(&self, p: &Path) -> Result<()>;
     /// Like `rm -rf`: a file, a symlink (not its target) or a whole tree.
@@ -76,7 +74,6 @@ pub trait HostFs: Send + Sync {
     async fn walk(&self, root: &Path, depth: usize, skip: &[&str]) -> Result<Vec<(String, Meta)>>;
 }
 
-/// This machine's filesystem.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LocalFs;
 
@@ -237,7 +234,6 @@ impl HostFs for LocalFs {
     }
 }
 
-/// A host: its name and how to run commands and touch files there.
 #[derive(Clone)]
 pub struct Host {
     pub name: HostName,
@@ -246,7 +242,6 @@ pub struct Host {
 }
 
 impl Host {
-    /// This machine.
     pub fn local() -> Self {
         Self { name: HostName::local(), exec: Arc::new(LocalExec), fs: Arc::new(LocalFs) }
     }

@@ -2,10 +2,10 @@
 //! (`~/.sbxw/kits/<hash>/` on the host), so a sandbox there is created from
 //! the same bytes as locally and an unchanged kit is never sent twice.
 //!
-//! sbx re-resolves a kit by its path on every container swap, so a kit a
-//! sandbox uses must stay where it is for that sandbox's whole life. Hence
-//! the path carries the content: a changed kit lands in a new directory and
-//! the old one is never deleted (a sandbox may still point at it).
+//! sbx re-resolves a kit by its path on every container swap, so a kit must
+//! stay put for the whole life of a sandbox using it. Hence the path carries
+//! the content: a changed kit lands in a new directory and the old one is
+//! never deleted (a sandbox may still point at it).
 //!
 //! Only kits under the local `~/.sbxw` are mirrored. Any other reference (a
 //! path or URL on the host itself, since sbxw.toml lives there) is passed
@@ -13,9 +13,9 @@
 //! only to a host that is trusted with them (`trust_secrets`).
 //!
 //! A kit is sent as one in-memory ustar archive extracted by a single exec
-//! call ([`mirror_via`]), because a per-file copy costs one SSH round trip per
-//! file and agent-skills has many. Without `tar` on the host, or without an
-//! exec to run it, the per-file copy through [`HostFs`] is the fallback.
+//! call ([`mirror_via`]): a per-file copy costs one SSH round trip per file,
+//! and agent-skills has many. Without `tar` on the host, or without an exec,
+//! the per-file copy through [`HostFs`] is the fallback.
 
 use super::HostFs;
 use crate::bundled;
@@ -25,7 +25,6 @@ use anyhow::{bail, Context, Result};
 use sbxw_core::kits::bundled_name;
 use std::path::{Path, PathBuf};
 
-/// What [`mirror`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Mirrored {
     /// What to pass to `sbx create --kit` on the host, in the order asked.
@@ -135,12 +134,12 @@ async fn copy_files(fs: &dyn HostFs, read: &[Entry], dest: &Path, done: &Path) -
 /// Exit code of [`EXTRACT_SCRIPT`] when the host has no `tar`.
 const NO_TAR: i32 = 42;
 
-/// `$1` = the kits directory, `$2` = the hash; the archive is on stdin. It is
-/// unpacked beside the target and renamed into place, and the marker comes
-/// last (itself written then renamed), so a copy cut anywhere leaves no
-/// marker. `-p` keeps the archive's modes whatever the umask; the root is
-/// made 0755 because the archive has no entry for it. A directory left by an
-/// earlier cut-short copy has no marker, so nothing uses it and it is replaced.
+/// `$1` = the kits directory, `$2` = the hash, archive on stdin. Unpacked
+/// beside the target and renamed into place; the marker comes last (written
+/// then renamed), so a copy cut anywhere leaves no marker. `-p` keeps the
+/// archive's modes whatever the umask; the root is made 0755 because the
+/// archive has no entry for it. A directory left by a cut-short copy has no
+/// marker, so nothing uses it and it is replaced.
 const EXTRACT_SCRIPT: &str = r#"command -v tar >/dev/null 2>&1 || exit 42
 k=$1; h=$2
 tmp="$k/.$h.tmp-$$"

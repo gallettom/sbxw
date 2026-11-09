@@ -9,8 +9,8 @@ use sbxw_core::SandboxRef;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Generous: a large repository's map legitimately takes tens of minutes. It
-/// bounds a session that stopped making progress, nothing else.
+/// Generous: a large repository's map takes tens of minutes. Only bounds a
+/// session that stopped making progress.
 const CODEMAP_MAX: Duration = Duration::from_secs(45 * 60);
 const NOTE_LINES: usize = 3;
 

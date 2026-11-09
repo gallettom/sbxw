@@ -145,9 +145,8 @@ impl App {
         Ok(taken)
     }
 
-    /// After a tool call: record what the session read and wrote and what it
-    /// committed, and answer with the writes outside its claims and the
-    /// board's news for it.
+    /// After a tool call: record the session's reads, writes and commit, and
+    /// answer with an [`AfterCall`].
     pub fn board_after(
         &self,
         sandbox: &str,

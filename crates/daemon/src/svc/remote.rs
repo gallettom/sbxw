@@ -12,15 +12,13 @@ use sbxw_core::SandboxRef;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// How long a probe answers for. Every open pane of a sandbox asks at the same
-/// moment (the page polls each every 15 s), and each probe is an `sbx ls` and
-/// an `sbx exec node`, seconds apiece: they share one, and a person's press
-/// always reads afresh.
+/// How long a probe answers for. Every open pane of a sandbox asks at once
+/// (the page polls each every 15 s) and a probe is an `sbx ls` plus an
+/// `sbx exec node`, seconds apiece: they share one; a press reads afresh.
 const PROBE_TTL: Duration = Duration::from_secs(5);
 
-/// A sandbox's last probe: its output or why it failed, and when. The lock
-/// around it is held while probing, so the panes that ask meanwhile wait for
-/// that answer rather than start their own.
+/// A sandbox's last probe: its output or why it failed, and when. The lock is
+/// held while probing, so panes asking meanwhile wait for that answer.
 pub(crate) type ProbeSlot = Arc<tokio::sync::Mutex<Option<(Instant, Result<String, String>)>>>;
 
 /// What the button shows: how Claude is signed in, and whether Remote Control
@@ -61,7 +59,7 @@ impl App {
             bail!("'{sandbox}' is not running — open its Claude pane first");
         }
         let out = self.sbx_for(sandbox).await?.exec(&sandbox.name, &["node", "-e", remote::PROBE_SCRIPT], None).await?;
-        Ok(out.stdout_str().to_string())
+        Ok(out.stdout_str())
     }
 
     async fn remote_state_read(&self, sandbox: &SandboxRef, kind: &SessionKind, fresh: bool) -> Result<RemoteState> {

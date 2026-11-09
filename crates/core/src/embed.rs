@@ -1,26 +1,22 @@
-//! Which sandbox serves the page in a browser tab — the question the browser
-//! side panel asks before it can chat with anyone.
-//!
-//! The panel sits beside the app being tested, in its own top-level tab, so it
-//! knows the tab's URL and nothing else. Two answers, in order:
+//! Which sandbox serves the page in a browser tab — what the browser side
+//! panel asks before it can chat. The panel sits in its own top-level tab, so
+//! it knows the tab's URL and nothing else. Two answers, in order:
 //!
 //!   * a **pairing** the developer chose by hand, keyed by the URL's `host`
-//!     (`app.test`, `localhost:4200`) and kept host-side under
-//!     `~/.sbxw/state/embed-pairings.json` (the daemon's store). It wins because it is the one
-//!     answer a person gave on purpose, and it is the only one for an app sbxw
-//!     did not route itself (company DNS, a hand-written `/etc/hosts` line, a
-//!     reverse proxy on the host);
+//!     (`app.test`, `localhost:4200`), kept host-side in
+//!     `~/.sbxw/state/embed-pairings.json` (the daemon's store). It wins as the
+//!     one deliberate answer, and is the only one for an app sbxw did not route
+//!     (company DNS, a hand-written `/etc/hosts` line, a host reverse proxy);
 //!   * the **published ports**: the hostname becomes an IP through sbxw's own
-//!     `/etc/hosts` block (or is one already), and the sandbox that publishes
-//!     that IP and port is the one serving the page. In ip-per-app mode the IP
-//!     tells the apps apart; on the shared loopback the port does.
+//!     `/etc/hosts` block (or is one already), and the sandbox publishing that
+//!     IP and port serves the page. In ip-per-app mode the IP tells the apps
+//!     apart; on the shared loopback the port does.
 //!
-//! Anything else is no answer, and the panel asks the developer to choose —
-//! once, since the choice becomes a pairing.
+//! Otherwise the panel asks the developer to choose — once, since the choice
+//! becomes a pairing.
 //!
-//! Everything here is pure over its inputs (`sbx ls`, `sbx ports`, the hosts
-//! block and the pairing file are read by the caller), so the rules can be
-//! tested without a daemon or a sandbox.
+//! Pure over its inputs: the caller reads `sbx ls`, `sbx ports`, the hosts
+//! block and the pairing file.
 
 use crate::hosts::HostAlias;
 use crate::ports::PortMapping;
@@ -39,11 +35,10 @@ pub struct Origin {
 }
 
 /// Parse an `http(s)://` URL down to its `Origin`. Anything else — `chrome://`,
-/// `file://`, a new tab — is `None`: there is no app behind it to chat about.
+/// `file://`, a new tab — is `None`: no app behind it to chat about.
 ///
-/// Hand-rolled because the daemon has no URL crate and needs only this much:
-/// scheme, then the authority up to the first `/`, `?` or `#`, minus any
-/// `user:password@`.
+/// Hand-rolled (the daemon has no URL crate): scheme, then the authority up to
+/// the first `/`, `?` or `#`, minus any `user:password@`.
 pub fn parse_origin(url: &str) -> Option<Origin> {
     let (scheme, rest) = url.trim().split_once("://")?;
     let default_port = match scheme.to_ascii_lowercase().as_str() {
@@ -77,8 +72,8 @@ pub fn parse_origin(url: &str) -> Option<Origin> {
     Some(Origin { host, hostname, port })
 }
 
-/// Is `host` something a pairing may be keyed by? A browser's `URL.host`
-/// alphabet, bounded: the key ends up in a JSON file and in the web UI.
+/// May a pairing be keyed by `host`? A browser's `URL.host` alphabet, bounded:
+/// the key ends up in a JSON file and in the web UI.
 pub fn valid_host(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 255
@@ -103,7 +98,6 @@ impl Via {
     }
 }
 
-/// The answer for one tab.
 #[derive(Debug, PartialEq)]
 pub struct Resolution {
     /// The sandbox to chat with, when exactly one qualifies.
@@ -117,8 +111,6 @@ pub struct Resolution {
     pub stale_pairing: Option<String>,
 }
 
-/// Find the sandbox serving `origin`.
-///
 /// `sandboxes` is `sbx ls`; an empty list means it could not be read, and a
 /// pairing is then trusted rather than declared stale on no evidence.
 /// `ports` is every sandbox's `sbx ports`, as `(sandbox, mapping)`.

@@ -84,8 +84,8 @@ pub struct HostForm {
     pub sbx_path: Option<String>,
 }
 
-fn blank_to_none(v: Option<String>) -> Option<String> {
-    v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+fn blank_to_none(v: &Option<String>) -> Option<String> {
+    v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
 }
 
 impl HostForm {
@@ -93,15 +93,15 @@ impl HostForm {
     pub fn to_host(&self, name: &str) -> Result<RemoteHost> {
         RemoteHost::new(
             name,
-            blank_to_none(self.ssh.clone()),
-            blank_to_none(self.host.clone()),
-            blank_to_none(self.user.clone()),
+            blank_to_none(&self.ssh),
+            blank_to_none(&self.host),
+            blank_to_none(&self.user),
             self.port,
-            blank_to_none(self.key.clone()),
+            blank_to_none(&self.key),
             self.agent_port,
             self.trust_secrets,
         )?
-        .with_sbx_path(blank_to_none(self.sbx_path.clone()))
+        .with_sbx_path(blank_to_none(&self.sbx_path))
     }
 
     fn of(h: &RemoteHost) -> Self {

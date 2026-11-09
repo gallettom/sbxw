@@ -1,9 +1,7 @@
-//! The daemon's state, all of it, in one value.
-//!
-//! No globals: everything a request can touch hangs off `App`, built from a
-//! `Paths` and a `Config`, and shared by `Arc`. The services are `impl App`
-//! blocks in `svc/`, one file per concern, so a handler is a call and a test
-//! builds an `App` on a temp dir with a fake `sbx`.
+//! The daemon's state in one value, no globals: everything a request can
+//! touch hangs off `App`, built from a `Paths` and a `Config` and shared by
+//! `Arc`. The services are `impl App` blocks in `svc/`, one file per concern;
+//! a test builds an `App` on a temp dir with a fake `sbx`.
 
 use crate::bus::{Bus, Event};
 use crate::hostsys::HostSys;
@@ -40,8 +38,8 @@ pub struct App {
     pub bus: Bus,
     pub sessions: Arc<Sessions>,
     pub hosts: HostSys,
-    /// The config the daemon was started with: its listeners, the monitor,
-    /// the models offered, and the defaults for sandboxes without their own.
+    /// The daemon's startup config; also the defaults for sandboxes without
+    /// their own.
     pub cfg: Config,
     pub versions: Versions,
     pub use_api_key: bool,
@@ -242,8 +240,8 @@ impl App {
         let mut running: Vec<String> = self.sbx.ls().await.into_iter().filter(|s| s.is_running()).map(|s| s.name).collect();
         // Remote hosts already in use: what runs there, by ref. One that
         // cannot be asked keeps its sessions — unreachable is not stopped.
-        // An empty local list is a failed `sbx ls`, never "all gone", so
-        // nothing is reconciled then, as before remote hosts.
+        // An empty local list is a failed `sbx ls`, never "all gone":
+        // nothing is reconciled then.
         if !running.is_empty() {
             for r in self.started_remotes() {
                 let host = r.cfg.name.clone();

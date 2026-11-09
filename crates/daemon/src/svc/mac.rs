@@ -134,13 +134,13 @@ impl App {
         self.mac_changed();
     }
 
-    async fn mac_run(&self, args: &[String], timeout: Duration) -> Result<Reply> {
+    async fn mac_run<S: AsRef<str> + Sync>(&self, args: &[S], timeout: Duration) -> Result<Reply> {
         let program = self.mac_program().ok_or_else(|| anyhow!("terminal-mac is not installed — install it from sbxw's Mac panel or with `sbxw mac install`"))?;
         let mut cmd = tokio::process::Command::new(&program);
-        cmd.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        cmd.args(args.iter().map(AsRef::as_ref)).stdin(std::process::Stdio::null()).kill_on_drop(true);
         let out = tokio::time::timeout(timeout, cmd.output())
             .await
-            .map_err(|_| anyhow!("terminal-mac {} did not answer within {}s", args.first().map(String::as_str).unwrap_or(""), timeout.as_secs()))?
+            .map_err(|_| anyhow!("terminal-mac {} did not answer within {}s", args.first().map_or("", AsRef::as_ref), timeout.as_secs()))?
             .with_context(|| format!("running {}", program.display()))?;
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -151,8 +151,8 @@ impl App {
 
     /// The VM's state; `Missing` when terminal-mac does not know it.
     async fn mac_state(&self) -> VmState {
-        let vm = self.mac_settings().vm.clone();
-        match self.mac_run(&["status".into(), vm], CALL_TIMEOUT).await {
+        let vm = self.mac_settings().vm.as_str();
+        match self.mac_run(&["status", vm], CALL_TIMEOUT).await {
             Ok(r) if r.ok => mac::parse_vm_state(&r.json),
             Ok(r) if r.text.to_ascii_lowercase().contains("not found") || r.text.to_ascii_lowercase().contains("no such") || r.text.to_ascii_lowercase().contains("does not exist") => VmState::Missing,
             _ => VmState::Unknown,
@@ -160,8 +160,8 @@ impl App {
     }
 
     async fn mac_guest(&self) -> (bool, Value) {
-        let vm = self.mac_settings().vm.clone();
-        match self.mac_run(&["action".into(), vm, "status".into()], CALL_TIMEOUT).await {
+        let vm = self.mac_settings().vm.as_str();
+        match self.mac_run(&["action", vm, "status"], CALL_TIMEOUT).await {
             Ok(r) if r.ok => (mac::guest_ready(&r.json), r.json),
             Ok(r) => (false, json!({ "error": r.text })),
             Err(e) => (false, json!({ "error": e.to_string() })),
@@ -251,7 +251,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         if let Some(b) = self.mac.lock().unwrap().busy.clone() {
             bail!("already {b}");
         }
-        let vm = self.mac_settings().vm.clone();
+        let vm = self.mac_settings().vm.as_str();
         let state = self.mac_state().await;
         let (verb, busy, timeout): (&[&str], &str, Duration) = match state {
             VmState::Running => return Ok(format!("the virtual Mac '{vm}' is running")),
@@ -263,8 +263,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             VmState::Stopped | VmState::Unknown => (&["start"], "starting the VM", BOOT_TIMEOUT),
             VmState::Missing => (&["up", "--detach"], "creating the VM (downloading macOS)", CREATE_TIMEOUT),
         };
-        let mut args: Vec<String> = vec![verb[0].into(), vm.clone()];
-        args.extend(verb[1..].iter().map(|s| s.to_string()));
+        let args: Vec<&str> = [verb[0], vm].into_iter().chain(verb[1..].iter().copied()).collect();
         self.mac_set_busy(Some(busy));
         let r = self.mac_run(&args, timeout).await;
         let r = match r {
@@ -321,12 +320,12 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     /// A normal shutdown request. It is forced later, by the lifecycle loop,
     /// only if it hangs (see `mac::force_due`).
     pub async fn mac_stop(&self) -> Result<String> {
-        let vm = self.mac_settings().vm.clone();
+        let vm = self.mac_settings().vm.as_str();
         // A normal shutdown is asked of macOS inside the guest, and a paused
         // guest runs nothing: resume it first, or the request goes nowhere —
         // which is how an idle VM got paused and then never stopped.
         if self.mac_state().await == VmState::Paused {
-            let r = self.mac_run(&["resume".into(), vm.clone()], BOOT_TIMEOUT).await?;
+            let r = self.mac_run(&["resume", vm], BOOT_TIMEOUT).await?;
             if !r.ok {
                 bail!("terminal-mac resume (before stopping): {}", r.text);
             }
@@ -336,7 +335,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
                 bail!("the virtual Mac '{vm}' did not resume before its shutdown (it is {now:?})");
             }
         }
-        let r = self.mac_run(&["stop".into(), vm.clone()], BOOT_TIMEOUT).await?;
+        let r = self.mac_run(&["stop", vm], BOOT_TIMEOUT).await?;
         if !r.ok {
             bail!("terminal-mac stop: {}", r.text);
         }
@@ -354,8 +353,8 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     /// whatever was unsaved in it is lost. A person's button, or the
     /// lifecycle loop for a shutdown of sbxw's that hung.
     pub async fn mac_force_off(&self) -> Result<String> {
-        let vm = self.mac_settings().vm.clone();
-        let r = self.mac_run(&["stop".into(), vm.clone(), "--force".into()], CALL_TIMEOUT).await?;
+        let vm = self.mac_settings().vm.as_str();
+        let r = self.mac_run(&["stop", vm, "--force"], CALL_TIMEOUT).await?;
         if !r.ok {
             bail!("terminal-mac stop --force: {}", r.text);
         }
@@ -371,8 +370,8 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     }
 
     pub async fn mac_pause(&self) -> Result<String> {
-        let vm = self.mac_settings().vm.clone();
-        let r = self.mac_run(&["pause".into(), vm.clone()], CALL_TIMEOUT).await?;
+        let vm = self.mac_settings().vm.as_str();
+        let r = self.mac_run(&["pause", vm], CALL_TIMEOUT).await?;
         if !r.ok {
             bail!("terminal-mac pause: {}", r.text);
         }
@@ -382,8 +381,8 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
 
     /// The VM's own window, for the one-time guest setup.
     pub async fn mac_show(&self) -> Result<String> {
-        let vm = self.mac_settings().vm.clone();
-        let r = self.mac_run(&["show".into(), vm.clone()], CALL_TIMEOUT).await?;
+        let vm = self.mac_settings().vm.as_str();
+        let r = self.mac_run(&["show", vm], CALL_TIMEOUT).await?;
         if !r.ok {
             bail!("terminal-mac show: {}", r.text);
         }
@@ -416,7 +415,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     pub async fn mac_start_for(self: &Arc<Self>, me: &SandboxRef, thread: Option<&ThreadName>, reason: &str, wait: Duration) -> Result<String, String> {
         self.mac_ready_to_lend()?;
         let idle = self.mac_settings().idle_release_ms();
-        if let Acquire::Busy(l) = self.mac.lock().unwrap().book.clone().acquire(&me.to_string(), now_ms(), idle) {
+        if let Some(l) = self.mac.lock().unwrap().book.held_by_other(&me.to_string(), now_ms(), idle) {
             return Ok(format!("The virtual Mac is in use by sandbox '{}'. Do something else meanwhile and try later; do not loop on it.", l.holder));
         }
         let state = self.mac_state().await;
@@ -636,9 +635,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     /// returns the screen as it now is.
     pub async fn mac_action_for(&self, me: &SandboxRef, action: &str, args: &Value) -> Result<Value, String> {
         self.mac_check_lease(me).await?;
-        let vm = self.mac_settings().vm.clone();
+        let vm = self.mac_settings().vm.as_str();
         let shot = self.mac_shot_path();
-        let argv = mac::action_args(&vm, action, args, &shot.to_string_lossy())?;
+        let argv = mac::action_args(vm, action, args, &shot.to_string_lossy())?;
         let r = self.mac_run(&argv, CALL_TIMEOUT).await.map_err(|e| e.to_string())?;
         if !r.ok {
             return Err(format!("{action}: {}{}", r.text, mac_hint(&r.text)));
@@ -648,7 +647,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             return Ok(json!({ "text": r.text }));
         }
         if action != "screenshot" {
-            let argv = mac::action_args(&vm, "screenshot", &Value::Null, &shot.to_string_lossy())?;
+            let argv = mac::action_args(vm, "screenshot", &Value::Null, &shot.to_string_lossy())?;
             let s = self.mac_run(&argv, CALL_TIMEOUT).await.map_err(|e| e.to_string())?;
             if !s.ok {
                 return Ok(json!({ "text": format!("{}\n(The screenshot after it failed: {}{})", r.text, s.text, mac_hint(&s.text)) }));
@@ -719,7 +718,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         if self.mac_program().is_none() {
             return;
         }
-        let s = self.mac_settings().clone();
+        let s = self.mac_settings();
         let now = now_ms();
         let lapsed = self.mac.lock().unwrap().book.expire(now, s.idle_release_ms());
         if let Some(who) = lapsed {
@@ -730,7 +729,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         let requested = self.mac.lock().unwrap().stop_requested_ms;
         if let Some(requested) = requested {
             let state = self.mac_state().await;
-            if mac::force_due(Some(requested), state, now, &s) {
+            if mac::force_due(Some(requested), state, now, s) {
                 match self.mac_force_off().await {
                     Ok(m) => tracing::warn!("mac: a shutdown hung in `stopping` for {} min — {m}", s.force_stop_after_minutes),
                     Err(e) => tracing::warn!("mac: forcing a hung shutdown failed: {e:#}"),
@@ -755,7 +754,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             self.mac_changed();
             return;
         }
-        let due = self.mac.lock().unwrap().book.due(state, now, &s);
+        let due = self.mac.lock().unwrap().book.due(state, now, s);
         let res = match due {
             Some(Lifecycle::Pause) if self.mac_guest().await.0 => self.mac_pause().await,
             Some(Lifecycle::Stop) => self.mac_stop().await,

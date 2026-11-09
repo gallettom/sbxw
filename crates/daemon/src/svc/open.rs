@@ -181,10 +181,9 @@ impl App {
 
     /// A stopped sandbox keeps the mappings it was created with (`-p`), and
     /// sbx refuses to start it while any of their host ports is taken. A port
-    /// is a convenience, never a reason not to start: each busy one is
-    /// unpublished first, and said. sbx's own list is the truth; the config's
-    /// specs back it up in case that list is empty while stopped, and an
-    /// unpublish of something not published is a harmless failure.
+    /// is never a reason not to start: each busy one is unpublished first, and
+    /// said. sbx's own list is the truth; the config's specs back it up in
+    /// case it is empty while stopped (a needless unpublish fails harmlessly).
     async fn release_busy_ports(&self, sandbox: &SandboxRef, cfg: &Config) {
         let Ok(sbx) = self.sbx_for(sandbox).await else { return };
         let mut candidates: Vec<(String, u16, String)> =
@@ -210,10 +209,9 @@ impl App {
     }
 
     /// A thread runs through `sbx exec`, which starts a stopped sandbox
-    /// itself (0.50) — no main session to open and wait for. Started here,
-    /// rather than by the thread's own exec, so busy host ports are released
-    /// first (sbx refuses to start while one is taken) and a failure is an
-    /// error, not a pane that dies.
+    /// itself (0.50) — no main session to open. Started here rather than by
+    /// the thread's own exec, so busy host ports are released first and a
+    /// failure is an error, not a pane that dies.
     pub async fn ensure_running_for_thread(self: &Arc<Self>, sandbox: &SandboxRef) -> Result<()> {
         let sbx = self.sbx_for(sandbox).await?;
         if sbx.is_running(&sandbox.name).await {
@@ -308,12 +306,12 @@ impl App {
         })
     }
 
-    /// The agent of a stopped sandbox: `sbx run` starts the container and goes
-    /// quiet for as long as that takes, before Claude Code even boots — a
-    /// silence typing would read as a drawn prompt, and the message would be
-    /// lost. Claude Code's own `SessionStart` hook says when it is up; its
-    /// first frame is then let settle. The output is watched from the start,
-    /// so a frame drawn before the hook arrives is not waited for again.
+    /// The agent of a stopped sandbox: `sbx run` goes quiet while the
+    /// container starts, before Claude Code boots — a silence typing would
+    /// read as a drawn prompt, losing the message. Claude Code's
+    /// `SessionStart` hook says when it is up; its first frame is then let
+    /// settle. The output is watched from the start, so a frame drawn before
+    /// the hook arrives is not waited for again.
     async fn await_cold_agent(&self, sandbox: &SandboxRef, session: &Arc<PtySession>, events: &mut tokio::sync::broadcast::Receiver<Event>) {
         let mut output = session.subscribe();
         tracing::info!("'{sandbox}' is stopped — waiting for its agent to start before typing");

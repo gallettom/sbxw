@@ -1,10 +1,9 @@
 //! The concierge's conversations, kept as text for a week at most (Q19).
 //!
 //! One JSON file per conversation under `~/.sbxw/state/concierge/`, written by
-//! the page after each turn. Audio never reaches here. Anything not updated
-//! within `[voice] retention_days` (at most 7) is deleted whenever the list is
-//! read or a conversation saved — no timer, no background task — and every
-//! conversation can be deleted at once from the panel.
+//! the page after each turn; audio never reaches here. One not updated within
+//! `[voice] retention_days` (at most 7) is deleted whenever the list is read
+//! or a conversation saved — no timer, no background task.
 
 use crate::app::{now_ms, App};
 use crate::svc::voice::Turn;

@@ -49,7 +49,7 @@ impl Renderer {
     pub fn show(&mut self, p: &Progress) {
         match p {
             Progress::Plan { steps } => {
-                self.steps = steps.clone();
+                self.steps.clone_from(steps);
                 let n = steps.len();
                 eprintln!("sbxw  {n} step{}", if n == 1 { "" } else { "s" });
             }

@@ -16,7 +16,7 @@ pub struct ApprovalOption {
 pub struct Approval {
     /// `<kind>:<opaque>` — `network:…` for a refused host.
     pub id: String,
-    /// What the id's prefix says it is: `network`, `port`…
+    /// The id's prefix: `network`, `port`…
     pub kind: String,
     pub sandbox: String,
     /// The thing asked about: `api.github.com:443`.

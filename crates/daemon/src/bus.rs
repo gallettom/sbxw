@@ -1,9 +1,6 @@
-//! One event bus for everything a client may want to hear about.
-//!
-//! The old daemon had nine broadcast channels and a hand-written multiplexer
-//! listing them. Here every change is one `Event`, published once; each SSE
-//! endpoint is a filter over the same stream, and adding a kind of event means
-//! adding a variant — the multiplexer does not change.
+//! One event bus for everything a client may want to hear about: every change
+//! is one `Event`, published once, and each SSE endpoint is a filter over the
+//! same stream. A new kind of event is a new variant, nothing else.
 
 use sbxw_core::agents::SessionInfo;
 use sbxw_core::codemap::Run;
@@ -123,8 +120,8 @@ impl Bus {
         self.tx.subscribe()
     }
 
-    /// How many are listening for a given kind right now — what `/api/focus`
-    /// answers so the island knows whether a tab is open.
+    /// Subscribers right now: what `/api/focus` answers so the island knows
+    /// whether a tab is open.
     pub fn listeners(&self) -> usize {
         self.tx.receiver_count()
     }

@@ -1,15 +1,14 @@
 //! The two privileged things sbxw does on the host: its `/etc/hosts` block
 //! and, in `ip_per_app` mode on macOS, loopback aliases on `lo0`.
 //!
-//! Who may be asked for a password is an *argument* here ([`Elevation`]), not
-//! a probe of stdin: the CLI runs in a terminal where `sudo` can prompt, the
+//! Who may be asked for a password is an *argument* ([`Elevation`]), not a
+//! probe of stdin: the CLI runs in a terminal where `sudo` can prompt, the
 //! daemon never does. Off a terminal `sudo -n` fails fast, and on macOS the
-//! system's own authentication panel is the one prompt a process without a
-//! terminal can still put in front of the user. Whatever cannot be written is
-//! parked for `sbxw hosts sync` — never fatal.
+//! system's authentication panel is the one prompt left. Whatever cannot be
+//! written is parked for `sbxw hosts sync` — never fatal.
 //!
-//! The steady state needs no privilege at all: a write is skipped when the
-//! block already says what it should (see `sbxw_core::hosts::merge_into`).
+//! The steady state needs no privilege: a write is skipped when the block
+//! already says what it should (see `sbxw_core::hosts::merge_into`).
 
 use crate::store::Store;
 use anyhow::{bail, Context, Result};
@@ -33,9 +32,8 @@ pub struct HostSys {
 }
 
 impl HostSys {
-    /// The real `/etc/hosts` — or, when `SBXW_HOSTS_FILE` names another file,
-    /// that one, written directly (the end-to-end tests, and anyone who keeps
-    /// a hosts file they own).
+    /// The real `/etc/hosts` — or the file `SBXW_HOSTS_FILE` names, written
+    /// without privilege (end-to-end tests, or a hosts file the user owns).
     pub fn system(elevation: Elevation) -> Self {
         if let Some(file) = std::env::var_os("SBXW_HOSTS_FILE").filter(|f| !f.is_empty()) {
             return Self {

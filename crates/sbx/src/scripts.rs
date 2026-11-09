@@ -30,9 +30,8 @@ fn pos(value: &str) -> String {
 
 /// Shell function `sbxw_no_repo`: why the current directory cannot hold a
 /// thread, with the repos found under it — a workspace is often a folder of
-/// repos (`backend/`, `frontend/`), and the fix is to pick one of them
-/// (`repo=` on the thread's socket). One line, no colour:
-/// each script frames it its own way.
+/// repos (`backend/`, `frontend/`), and the fix is to pick one (`repo=` on the
+/// thread's socket). One line, no colour: each script frames it its own way.
 macro_rules! no_repo_fn {
     () => {
         r#"
@@ -48,63 +47,47 @@ macro_rules! no_repo_fn {
     };
 }
 
-/// Argv for a *thread*: a second Claude session in `name`, working in a git
-/// worktree of its own, `<repo>/.sbxw-worktrees/<thread>` on branch
-/// `sbxw/<thread>`.
+/// Argv for a *thread*: a second Claude session in `name`, in its own git
+/// worktree `<repo>/.sbxw-worktrees/<thread>` on branch `sbxw/<thread>` — two
+/// agents in one working tree overwrite each other's files and mix their
+/// changes into one unreviewable diff. The worktree outlives the session
+/// (reopening lands back in it, on its branch, uncommitted work included);
+/// removing it is left to a person, since it can hold uncommitted work.
 ///
-/// Two agents editing one working tree overwrite each other's files and mix
-/// their changes into one diff nobody can review, so each thread gets a
-/// checkout of its own. The worktree outlives the session: reopening the
-/// thread lands back in it, on its branch, with its uncommitted work. Removing
-/// one is left to a person — it can hold work nobody has committed.
-///
-/// `.sbxw-worktrees/` goes in the repository's `info/exclude`, not its
-/// `.gitignore`: hiding sbxw's own bookkeeping from `git status` is not a
-/// change to the project that anyone should have to commit.
-///
-/// `sbx exec` rather than `sbx run`: `run` attaches *the* agent, and a second
-/// one would be that same session again. The permission flag is the one sbx
-/// gives the agent it starts, so a thread is no more and no less trusted than
-/// the pane beside it. `bash -lc` is a login shell, for `claude` on PATH (see
-/// `codemap_run_args`).
-///
-/// A thread reopened without a prompt resumes its last conversation
-/// (`claude --continue`) when it has one: its pane after the daemon or the
-/// sandbox restarted, which ends every session sbxw held.
-///
-/// `SBXW_THREAD` names the thread to everything the session starts — the relay
-/// MCP server reads it to know it serves a thread (and not the main session,
-/// which is the one that can lead). `prompt`, when given, is the session's first
-/// message — an approved plan's briefing.
-///
-/// `--name` makes the thread's name its address for Claude Code's own messaging
-/// between sessions on one machine: the lead writes to `api-auth` with
-/// `SendMessage`, and sbxw is not on that path. Without it the session is
-/// listed under a name derived from its folder (`api-auth-5e`) or a title
-/// Claude Code makes up from its first prompt, neither of which a lead can
-/// predict.
-///
-/// The worktree is marked trusted in `.claude.json` before `claude` starts, as
-/// `Tooling::trust_workspace` does for the workspace: Claude Code does not
-/// extend a folder's trust to the folders under it, so every new worktree
-/// would otherwise open on the trust dialog instead of on its briefing.
-///
-/// `model`, when given, is passed as `claude --model`, on a fresh start and on
-/// `--continue` alike; empty leaves the sandbox's default
-/// (`ANTHROPIC_DEFAULT_MODEL`) in charge.
-///
-/// `team`, for a thread of a shared plan (Team mode), is that plan: the
-/// session opens in the plan's one worktree, `.sbxw-worktrees/team-<plan>` on
-/// branch `sbxw/team-<plan>`, made by whichever thread starts first (under a
-/// lock: they all start at once), with `SBXW_TEAM=shared` and
-/// `SBXW_TEAM_PLAN=<plan>` set. Such a thread never `--continue`s: every
-/// thread shares the cwd its transcripts are filed under, so "its last
-/// conversation" could be another thread's.
-///
-/// Workspace, thread name, prompt, model and plan are positional (`$1`–`$6`),
-/// never script text: the thread name comes from a WebSocket query parameter.
-/// It is a `ThreadName`, and that is exactly why the
-/// property is easy to lose — nothing downstream would notice.
+/// * `.sbxw-worktrees/` goes in the repo's `info/exclude`, not `.gitignore`:
+///   hiding sbxw's bookkeeping must not be a change someone has to commit.
+/// * `sbx exec`, not `sbx run`: `run` attaches *the* agent, so a second one
+///   would be that same session. The permission flag is the one sbx gives the
+///   agent it starts: a thread is exactly as trusted as the pane beside it.
+///   `bash -lc` is a login shell, for `claude` on PATH (see `codemap_run_args`).
+/// * Reopened without a prompt, a thread that has a conversation resumes it
+///   (`claude --continue`): its pane after the daemon or the sandbox
+///   restarted, which ends every session sbxw held.
+/// * `SBXW_THREAD` names the thread to everything the session starts; the
+///   relay MCP server reads it to know it serves a thread, not the main
+///   session (the one that can lead). `prompt`, when given, is the session's
+///   first message — an approved plan's briefing.
+/// * `--name` makes the thread's name its address for Claude Code's own
+///   messaging between sessions on one machine (the lead's `SendMessage` to
+///   `api-auth`; sbxw is not on that path). Without it the session is listed
+///   under a name derived from its folder (`api-auth-5e`) or a title made up
+///   from its first prompt, neither of which a lead can predict.
+/// * The worktree is marked trusted in `.claude.json` before `claude` starts,
+///   as `Tooling::trust_workspace` does for the workspace: Claude Code does
+///   not extend a folder's trust to the folders under it, so a new worktree
+///   would open on the trust dialog instead of on its briefing.
+/// * `model`, when given, is passed as `claude --model`, on a fresh start and
+///   on `--continue` alike; empty leaves the sandbox's default
+///   (`ANTHROPIC_DEFAULT_MODEL`) in charge.
+/// * `team`, for a thread of a shared plan (Team mode), is that plan: the
+///   session opens in the plan's one worktree, `.sbxw-worktrees/team-<plan>`
+///   on branch `sbxw/team-<plan>`, made under a lock by whichever thread
+///   starts first (they all start at once), with `SBXW_TEAM=shared` and
+///   `SBXW_TEAM_PLAN=<plan>` set. Such a thread never `--continue`s: all
+///   share the cwd transcripts are filed under, so "its last conversation"
+///   could be another thread's.
+/// * Workspace, thread name, prompt, model and plan are positional (`$1`–`$6`),
+///   never script text: the thread name comes from a WebSocket query parameter.
 pub fn thread_run_args(
     name: &SandboxName,
     workspace: &str,
@@ -180,17 +163,15 @@ pub fn thread_run_args(
 }
 
 /// Argv for a session in the main checkout: another Claude beside the main
-/// agent, in the workspace itself — no worktree, no branch, the same files.
-/// Two agents in one checkout can overwrite each other's edits; that is what
-/// the person chose it for (a second conversation about the same code), and
-/// the menu that offers it says so.
+/// agent, in the workspace itself — no worktree, no branch. Two agents can
+/// then overwrite each other's edits; the person chose that (a second
+/// conversation about the same code), and the menu that offers it says so.
 ///
-/// Like a thread, it runs through `sbx exec` under `SBXW_THREAD` and
-/// `--name`, which is how its hooks are filed under its name and not read as
-/// the main agent's. It never `--continue`s: it shares the main agent's cwd,
-/// so "its last conversation" would be the main agent's.
-///
-/// Workspace, name and model are positional, as in `thread_run_args`.
+/// Like a thread, it runs through `sbx exec` under `SBXW_THREAD` and `--name`,
+/// so its hooks are filed under its name, not read as the main agent's. It
+/// never `--continue`s: it shares the main agent's cwd, so "its last
+/// conversation" would be the main agent's. Workspace, name and model are
+/// positional, as in `thread_run_args`.
 pub fn same_worktree_run_args(name: &SandboxName, workspace: &str, thread: &ThreadName, model: Option<&ModelId>) -> Vec<String> {
     const SCRIPT: &str = concat!(unwrap_args!(), r#"
         [ -n "$1" ] && cd "$1" 2>/dev/null
@@ -213,8 +194,7 @@ pub struct Team {
     pub worktree: ThreadName,
 }
 
-/// Where a thread stands, read before closing it: what closing would throw
-/// away.
+/// Where a thread stands, read before closing it: what closing would lose.
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct ThreadStatus {
     /// Its worktree, as the sandbox sees it.
@@ -223,7 +203,6 @@ pub struct ThreadStatus {
     pub branch: String,
     /// The branch the main checkout is on — what "merged" is measured against.
     pub base: String,
-    /// Does the branch exist at all?
     pub has_branch: bool,
     /// Files changed in the worktree and not committed: lost on close.
     pub dirty: u32,
@@ -239,10 +218,8 @@ pub struct ThreadStatus {
 /// Closing stops every process working in the worktree (found by its cwd: the
 /// thread's `claude`, its shells, a dev server it started), then removes the
 /// worktree, then the branch if asked. Uncommitted work is refused unless
-/// `discard` says otherwise — the browser has asked by then, but the daemon
-/// does not trust a click it did not see.
-///
-/// Everything variable is positional, as in `thread_run_args`.
+/// `discard` is set: the browser has asked by then, but the daemon does not
+/// trust a click it did not see. Positional arguments, as in `thread_run_args`.
 pub const THREAD_END_SCRIPT: &str = concat!(unwrap_args!(), no_repo_fn!(), r#"
     [ -n "$1" ] && cd "$1" 2>/dev/null
     if ! common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
@@ -328,11 +305,11 @@ pub fn thread_end_args(
 /// under `$1` is on — what a lead's proposed merge runs, one thread at a time
 /// (the daemon's plan merge).
 ///
-/// Refuses a main checkout with uncommitted changes to tracked files: a merge
+/// Refuses a main checkout with uncommitted changes to tracked files: merging
 /// into one mixes the person's unfinished work into the merge commit, or fails
 /// halfway. Untracked files are left to git, which refuses only if the merge
-/// would overwrite one. On a failed merge it runs `git merge --abort`, so the
-/// checkout is as it was, and names the conflicting files.
+/// would overwrite one. A failed merge is aborted (`git merge --abort`), so
+/// the checkout is as it was, and the conflicting files are named.
 ///
 /// Prints `key=value` lines like `THREAD_END_SCRIPT`: `commit=` on success,
 /// `error=` otherwise. Everything variable is positional.
@@ -378,12 +355,12 @@ pub fn thread_merge_args(name: &SandboxName, workspace: &str, thread: &ThreadNam
 impl ThreadStatus {
     /// From the `key=value` lines `THREAD_END_SCRIPT status` prints.
     pub fn from_fields(f: &std::collections::HashMap<String, String>) -> Self {
-        let get = |k: &str| f.get(k).cloned().unwrap_or_default();
+        let get = |k: &str| f.get(k).map_or("", String::as_str);
         let num = |k: &str| get(k).parse().unwrap_or(0);
         ThreadStatus {
-            worktree: get("worktree"),
-            branch: get("branch"),
-            base: get("base"),
+            worktree: get("worktree").into(),
+            branch: get("branch").into(),
+            base: get("base").into(),
             has_branch: get("has_branch") == "1",
             dirty: num("dirty"),
             ahead: num("ahead"),
@@ -497,8 +474,8 @@ mod tests {
     #[test]
     fn a_shared_plan_worktree_is_made_once_and_carries_the_env() {
         // The script itself, against a real repo: two threads land in one
-        // worktree on one branch, with the team's env. `claude` and `node` are
-        // stubbed by functions; `exec claude` becomes a printout.
+        // worktree on one branch, with the team's env. `exec claude` becomes a
+        // printout and `node -e` a no-op.
         let ok = |c: &mut std::process::Command| c.output().map(|o| o.status.success()).unwrap_or(false);
         if !ok(std::process::Command::new("git").arg("--version")) {
             return;

@@ -20,7 +20,7 @@ use sbxw_core::plans::{DistillItem, PlanThread, Variant};
 use sbxw_core::policy;
 use sbxw_core::ports::WantedPort;
 use sbxw_core::progress::Progress;
-use sbxw_core::session::{SessionKey, SessionKind};
+use sbxw_core::session::SessionKind;
 use sbxw_core::{names, ModelId, SandboxName, SandboxRef, ThreadName};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -1276,7 +1276,7 @@ async fn fs_browse(State(app): S, Query(q): Query<PathQuery>) -> ApiResult {
         if e.name.starts_with('.') {
             continue;
         }
-        // A link to a folder is a folder here, as it was with `is_dir`.
+        // A link to a folder counts as a folder.
         let path = dir.join(&e.name);
         let is_dir = match e.meta.kind {
             Kind::Dir => true,
@@ -1521,10 +1521,11 @@ async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Quer
     })))
 }
 
-/// Each thread's worktree, and its `.sbxw-artifacts` when it has one: what a
-/// thread delivers sits on its branch, under `.sbxw-worktrees/<thread>`, until
-/// it is merged — a dot-folder nobody finds by browsing. Paths are the same in
-/// the sandbox and on the host (the workspace is mounted at its own path).
+/// Each thread's worktree, and its `.sbxw-artifacts` when it has one: until
+/// merged, a thread's deliverables sit on its branch under
+/// `.sbxw-worktrees/<thread>`, a dot-folder nobody finds by browsing. Paths are
+/// the same in the sandbox and on the host (the workspace is mounted at its
+/// own path).
 async fn thread_worktrees(app: &App, sb: &SandboxRef) -> Vec<Value> {
     let Some(ws) = app.store.workspace(sb) else { return vec![] };
     let recorded: std::collections::BTreeMap<String, String> =
@@ -1690,8 +1691,8 @@ async fn shutdown(State(app): S) -> Json<Value> {
         s.kill();
     }
     // Before exit(): llama.cpp's Metal backend asserts in its static
-    // destructors when a model is still loaded, which turns a clean stop
-    // into a crash report.
+    // destructors when a model is still loaded, turning a clean stop into a
+    // crash report.
     app.voice_unload();
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1721,7 +1722,7 @@ pub async fn settle_ws_thread(
             app.settle_thread_model(sb, t, &m, false)?;
         }
     }
-    let _ = SessionKey::new(sb.clone(), kind.clone());
+    debug_assert!(*kind != SessionKind::Monitor);
     Ok(())
 }
 

@@ -340,7 +340,7 @@ impl Store {
                 idx.remove(&old);
             }
             if let Some(new) = &rec.token {
-                idx.insert(new.clone(), sb.clone());
+                idx.insert(new.clone(), sb);
             }
         }
         Ok(out)
@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(s.token(r("myapp")).unwrap(), t, "minted once");
         assert_eq!(s.sandbox_for_token(&t).unwrap(), r("myapp"));
         assert!(s.sandbox_for_token("sbxw_nope").is_none());
-        let reopened = Store::open(s.paths.clone());
+        let reopened = Store::open(s.paths);
         assert_eq!(reopened.sandbox_for_token(&t).unwrap(), r("myapp"));
     }
 

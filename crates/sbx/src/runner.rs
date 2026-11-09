@@ -9,7 +9,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// Where streamed output lines go.
 pub type LineSink = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// One invocation.
 #[derive(Clone, Default)]
 pub struct Invocation {
     pub args: Vec<String>,
@@ -29,7 +28,6 @@ impl Invocation {
     }
 }
 
-/// What came back.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Output {
     pub code: Option<i32>,
@@ -60,8 +58,8 @@ impl Output {
     }
 }
 
-/// `async_trait` rather than native `async fn`: the runner is a trait
-/// object (`Arc<dyn Runner>`), which native async traits cannot be.
+/// `async_trait`, not native `async fn`: the runner is a trait object
+/// (`Arc<dyn Runner>`), which native async traits cannot be.
 #[async_trait]
 #[allow(clippy::double_must_use)]
 pub trait Runner: Send + Sync {

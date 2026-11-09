@@ -279,7 +279,7 @@ impl App {
             }
             self.voice_job(|j| {
                 j.state = JobState::Running;
-                j.file = f.path.clone();
+                j.file.clone_from(&f.path);
                 j.done = done;
                 j.total = total;
             });
