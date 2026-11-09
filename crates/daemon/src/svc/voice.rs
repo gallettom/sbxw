@@ -65,6 +65,8 @@ pub struct VoiceRuntime {
     #[cfg(feature = "voice")]
     llm: Option<Arc<std::sync::Mutex<crate::voice_engine::Llm>>>,
     #[cfg(feature = "voice")]
+    tts: Option<Arc<std::sync::Mutex<crate::voice_engine::Tts>>>,
+    #[cfg(feature = "voice")]
     last_used: Option<Instant>,
 }
 
@@ -172,6 +174,7 @@ impl App {
             {
                 rt.stt = None;
                 rt.llm = None;
+                rt.tts = None;
             }
         }
         let root = self.models_root();
@@ -356,6 +359,44 @@ impl App {
         Ok(rx)
     }
 
+    /// `text` read aloud, as a WAV file. The page sends a reply sentence by
+    /// sentence, so the first one plays while the model writes the next.
+    #[cfg(feature = "voice")]
+    pub async fn voice_speak(self: &Arc<Self>, text: String) -> Result<Vec<u8>, String> {
+        check_speech(&text)?;
+        let m = voice::model(&self.cfg.voice.tts).ok_or("no voice model configured")?;
+        let root = self.models_root();
+        if !matches!(voice::installed(&root, m), Installed::Ready { .. }) {
+            return Err(format!("the voice models are not installed: run `{}`", voice::INSTALL_HINT));
+        }
+        let loaded = self.voice.lock().unwrap().tts.clone();
+        let tts = match loaded {
+            Some(t) => t,
+            None => {
+                let (id, dir) = (m.id, voice::model_dir(&root, m));
+                let t = tokio::task::spawn_blocking(move || crate::voice_engine::Tts::load(id, &dir))
+                    .await
+                    .map_err(|e| e.to_string())??;
+                let t = Arc::new(std::sync::Mutex::new(t));
+                self.voice.lock().unwrap().tts = Some(t.clone());
+                t
+            }
+        };
+        self.voice.lock().unwrap().last_used = Some(Instant::now());
+        self.schedule_unload();
+        let lang = voice::guess_lang(&text);
+        let speech = tokio::task::spawn_blocking(move || tts.lock().unwrap().speak(&text, lang, 1.0))
+            .await
+            .map_err(|e| e.to_string())??;
+        Ok(voice::wav(&speech.samples, speech.sample_rate))
+    }
+
+    #[cfg(not(feature = "voice"))]
+    pub async fn voice_speak(self: &Arc<Self>, text: String) -> Result<Vec<u8>, String> {
+        check_speech(&text)?;
+        Err("this sbxw was built without voice (cargo build --features voice)".into())
+    }
+
     #[cfg(not(feature = "voice"))]
     pub async fn voice_chat(self: &Arc<Self>, turns: Vec<Turn>) -> Result<tokio::sync::mpsc::Receiver<ChatEvent>, String> {
         check_turns(&turns)?;
@@ -373,9 +414,10 @@ impl App {
         tokio::spawn(async move {
             tokio::time::sleep(IDLE_UNLOAD + Duration::from_secs(1)).await;
             let mut rt = app.voice.lock().unwrap();
-            if rt.last_used.is_some_and(|t| t.elapsed() >= IDLE_UNLOAD) && (rt.stt.is_some() || rt.llm.is_some()) {
+            if rt.last_used.is_some_and(|t| t.elapsed() >= IDLE_UNLOAD) && (rt.stt.is_some() || rt.llm.is_some() || rt.tts.is_some()) {
                 rt.stt = None;
                 rt.llm = None;
+                rt.tts = None;
                 tracing::info!("voice: models unloaded after {}s idle", IDLE_UNLOAD.as_secs());
             }
         });
@@ -399,6 +441,19 @@ pub enum ChatEvent {
     Delta { text: String },
     Done { ms: u64, chars: usize },
     Error { error: String },
+}
+
+/// One sentence or so: the page splits a reply before asking for speech.
+pub const MAX_SPEECH_CHARS: usize = 1_000;
+
+pub fn check_speech(text: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("nothing to say".into());
+    }
+    if text.chars().count() > MAX_SPEECH_CHARS {
+        return Err(format!("speak at most {MAX_SPEECH_CHARS} characters at a time"));
+    }
+    Ok(())
 }
 
 /// The most turns, and characters, a conversation sent at once may hold.

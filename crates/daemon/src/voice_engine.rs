@@ -206,3 +206,91 @@ fn rand_seed() -> u32 {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0)
 }
+
+// ── The voice: sherpa-onnx TTS ───────────────────────────────────────────
+//
+// Kokoro (multilingual: a French and an English speaker, one engine per
+// language since espeak's language is fixed at creation) or Piper's French
+// siwis voice (one speaker, whatever the language).
+
+/// Kokoro multi-lang v1.0 speaker ids: `ff_siwis`, `af_heart`.
+pub const KOKORO_FR: i32 = 30;
+pub const KOKORO_EN: i32 = 3;
+
+pub enum Tts {
+    Kokoro { fr: Option<sherpa_rs::tts::KokoroTts>, en: Option<sherpa_rs::tts::KokoroTts>, dir: std::path::PathBuf },
+    Piper(sherpa_rs::tts::VitsTts),
+}
+
+/// Speech for one sentence or so.
+pub struct Speech {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+}
+
+fn need(dir: &Path, files: &[&str]) -> Result<(), String> {
+    for f in files {
+        if !dir.join(f).exists() {
+            return Err(format!("the voice model is missing {f}"));
+        }
+    }
+    Ok(())
+}
+
+fn tts_threads() -> i32 {
+    std::thread::available_parallelism().map(|n| n.get().min(4)).unwrap_or(2) as i32
+}
+
+impl Tts {
+    pub fn load(model_id: &str, dir: &Path) -> Result<Self, String> {
+        let p = |f: &str| dir.join(f).to_string_lossy().into_owned();
+        if model_id.starts_with("kokoro") {
+            need(dir, &["model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data"])?;
+            return Ok(Tts::Kokoro { fr: None, en: None, dir: dir.to_path_buf() });
+        }
+        need(dir, &["fr_FR-siwis-medium.onnx", "tokens.txt", "espeak-ng-data"])?;
+        let cfg = sherpa_rs::tts::VitsTtsConfig {
+            model: p("fr_FR-siwis-medium.onnx"),
+            tokens: p("tokens.txt"),
+            data_dir: p("espeak-ng-data"),
+            length_scale: 1.0,
+            noise_scale: 0.667,
+            noise_scale_w: 0.8,
+            onnx_config: sherpa_rs::OnnxConfig { provider: "cpu".into(), debug: false, num_threads: tts_threads() },
+            ..Default::default()
+        };
+        Ok(Tts::Piper(sherpa_rs::tts::VitsTts::new(cfg)))
+    }
+
+    fn kokoro(dir: &Path, lang: &str) -> sherpa_rs::tts::KokoroTts {
+        let p = |f: &str| dir.join(f).to_string_lossy().into_owned();
+        let t = std::time::Instant::now();
+        let k = sherpa_rs::tts::KokoroTts::new(sherpa_rs::tts::KokoroTtsConfig {
+            model: p("model.onnx"),
+            voices: p("voices.bin"),
+            tokens: p("tokens.txt"),
+            data_dir: p("espeak-ng-data"),
+            lexicon: if lang == "en" { p("lexicon-us-en.txt") } else { String::new() },
+            lang: if lang == "en" { "en-us".into() } else { "fr".into() },
+            length_scale: 1.0,
+            onnx_config: sherpa_rs::OnnxConfig { provider: "cpu".into(), debug: false, num_threads: tts_threads() },
+            ..Default::default()
+        });
+        tracing::info!("voice: Kokoro ({lang}) loaded in {} ms", t.elapsed().as_millis());
+        k
+    }
+
+    /// `lang` is `fr` or `en`; Piper speaks French either way.
+    pub fn speak(&mut self, text: &str, lang: &str, speed: f32) -> Result<Speech, String> {
+        let audio = match self {
+            Tts::Kokoro { fr, en, dir } => {
+                let (slot, sid) = if lang == "en" { (en, KOKORO_EN) } else { (fr, KOKORO_FR) };
+                let engine = slot.get_or_insert_with(|| Self::kokoro(dir, lang));
+                engine.create(text, sid, speed)
+            }
+            Tts::Piper(v) => v.create(text, 0, speed),
+        }
+        .map_err(|e| format!("speaking: {e}"))?;
+        Ok(Speech { samples: audio.samples, sample_rate: audio.sample_rate })
+    }
+}

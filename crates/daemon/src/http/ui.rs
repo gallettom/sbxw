@@ -160,6 +160,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/voice/cancel", post(voice_cancel))
         .route("/api/voice/rm", post(voice_rm))
         .route("/api/voice/chat", post(voice_chat))
+        .route("/api/voice/speak", post(voice_speak))
         .route(
             "/api/voice/transcribe",
             post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
@@ -1767,4 +1768,15 @@ async fn voice_chat(State(app): S, Json(b): Json<VoiceChatBody>) -> ApiResult<Re
         Ok::<_, std::convert::Infallible>(Bytes::from(line))
     });
     Ok(([(header::CONTENT_TYPE, "application/x-ndjson")], Body::from_stream(lines)).into_response())
+}
+
+#[derive(Deserialize)]
+struct VoiceSpeakBody {
+    text: String,
+}
+
+async fn voice_speak(State(app): S, Json(b): Json<VoiceSpeakBody>) -> ApiResult<Response> {
+    crate::svc::voice::check_speech(&b.text)?;
+    let wav = app.voice_speak(b.text).await.map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(([(header::CONTENT_TYPE, "audio/wav")], wav).into_response())
 }

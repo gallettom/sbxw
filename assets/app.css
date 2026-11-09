@@ -76,6 +76,7 @@
 
   /* ── Header ── */
   header {
+    position: relative;
     display: flex; align-items: center; gap: 1.8rem;
     padding-left: 0.25rem;
     padding-right: 1.1rem;
@@ -3792,25 +3793,42 @@
   .merge-dist.dropped .merge-dist-text { opacity: .5; text-decoration: line-through; }
 
   /* ── Voice concierge (see js/concierge.js) ── */
-  /* Beside the chat launcher, one launcher-width and a gap to its left, on
-     the same layer: a glance-at panel, never over a dialog. */
+  /* Under the top bar's centred launcher, on the chat dock's layer: a
+     glance-at panel, never over a dialog. */
   .vc-dock {
-    position: fixed; right: calc(1rem + 48px + .6rem); bottom: 1rem; z-index: 150;
-    display: flex; flex-direction: column; align-items: flex-end; gap: .6rem;
+    position: fixed; top: calc(6px + 48px + 8px); left: 50%; transform: translateX(-50%); z-index: 150;
+    display: flex; flex-direction: column; align-items: center;
     pointer-events: none;
   }
   .vc-dock > * { pointer-events: auto; }
   .vc-dock [hidden] { display: none !important; }
-  .vc-launcher { color: var(--c-text-muted); }
+  .vc-launcher {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: inline-flex; align-items: center; gap: .45rem;
+    height: 28px; padding: 0 .55rem 0 .7rem; cursor: pointer;
+    background: var(--c-bg); color: var(--c-text-muted);
+    border: 1px solid var(--c-border); border-radius: 14px;
+    font: 12px var(--font-mono);
+    transition: background .1s, border-color .1s, color .1s;
+  }
   .vc-launcher.ready { color: var(--c-text-bright); }
+  .vc-launcher:hover { background: var(--c-border); border-color: var(--c-dim); }
+  .vc-launcher[aria-expanded="true"] { border-color: var(--c-blue); }
+  .vc-launcher.listening { border-color: var(--c-red); color: var(--c-red); }
+  .vc-launcher:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+  .vc-launcher kbd {
+    padding: 0 .3rem; border: 1px solid var(--c-border); border-radius: 4px;
+    color: var(--c-text-muted); font: 10.5px var(--font-mono); line-height: 16px;
+  }
   .vc-panel {
-    width: 380px; max-width: calc(100vw - 2rem - 48px);
-    height: 440px; max-height: calc(100vh - 48px - 6rem);
+    width: 420px; max-width: calc(100vw - 2rem);
+    height: 480px; max-height: calc(100vh - 48px - 2rem);
     display: flex; flex-direction: column; overflow: hidden;
     background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px;
     box-shadow: 0 16px 44px rgba(var(--c-shadow-rgb), .7);
-    transform-origin: bottom right; animation: cd-rise .14s ease-out;
+    transform-origin: top center; animation: vc-drop .14s ease-out;
   }
+  @keyframes vc-drop { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
   .vc-title { flex: 1; color: var(--c-text-bright); font: 600 12px var(--font-mono); padding-left: .3rem; }
   .vc-setup { padding: 0 .75rem; font: 12.5px/1.5 var(--font-prose); color: var(--c-text); }
   .vc-setup:empty { display: none; }

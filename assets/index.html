@@ -110,6 +110,9 @@
        whether you start something long. The versions used to share this
        corner and no longer do — they never change, and a number that never
        changes should not sit beside the one you check. -->
+  <!-- The voice concierge's launcher, centred in the bar: its panel drops
+       down under it. See /js/concierge.js. -->
+  <button type="button" class="vc-launcher" id="vc-launcher" aria-expanded="false" aria-controls="vc-panel" title="Concierge — hold F8 anywhere to talk"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Concierge</span><kbd>F8</kbd></button>
   <div class="usage" id="usage" hidden title="Claude subscription usage, account-wide">
     <span class="usage-title">Usage</span>
     <span class="usage-win" id="usage-5h" hidden>
@@ -1590,12 +1593,14 @@
 </div>
 
 <!-- ── Voice concierge ──
-     Push-to-talk to a local model, beside the chat dock and apart from it.
+     Push-to-talk to a local model, apart from the chat dock: the panel drops
+     down from its launcher in the middle of the top bar.
      See /js/concierge.js. -->
 <div class="vc-dock" id="vc-dock">
   <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Concierge" hidden>
     <div class="cd-head">
       <span class="vc-title">Concierge</span>
+      <button type="button" class="cd-close" id="vc-mute" aria-pressed="false">🔊</button>
       <button type="button" class="cd-close" id="vc-new" title="New conversation">New</button>
       <button type="button" class="cd-close" id="vc-close" title="Close (Esc)" aria-label="Close">✕</button>
     </div>
@@ -1607,7 +1612,6 @@
       <span class="cd-hint" id="vc-hint"></span>
     </div>
   </div>
-  <button type="button" class="cd-launcher vc-launcher" id="vc-launcher" aria-expanded="false" aria-controls="vc-panel" title="Concierge — hold F8 to talk" aria-label="Concierge"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
 </div>
 
 <script>

@@ -369,7 +369,7 @@ Run them in a terminal on the host, not in a sandbox pane.
 
 ## The voice concierge
 
-The microphone button beside the chat launcher opens the **Concierge**, a
+The **Concierge** button in the middle of the top bar opens a panel under it, a
 local voice partner apart from the chat dock. Hold its talk button, or hold
 **F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
 changes it), speak, and release: the speech is turned into text on this

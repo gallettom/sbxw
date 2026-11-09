@@ -266,4 +266,11 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     let good = json!({"turns": [{"role": "user", "content": "une idée"}]});
     let (s, v) = call(ui_router(app.clone()), json_req(post("/api/voice/chat", good.clone()).header("host", HOST), good)).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "no build or no models: {v}");
+
+    let empty = json!({"text": "  "});
+    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", empty.clone()).header("host", HOST), empty)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let said = json!({"text": "Bonjour."});
+    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", said.clone()).header("host", HOST), said)).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
 }

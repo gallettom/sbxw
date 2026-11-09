@@ -359,6 +359,49 @@ fn dir_bytes(dir: &Path) -> u64 {
         .sum()
 }
 
+/// `fr` or `en`, for choosing a voice: French unless the text reads as
+/// English (no French accents, more English function words than French).
+pub fn guess_lang(text: &str) -> &'static str {
+    if text.chars().any(|c| "éèêàâçùûôîïëœÉÈÀÇ".contains(c)) {
+        return "fr";
+    }
+    const FR: &[&str] = &["le", "la", "les", "un", "une", "des", "est", "et", "je", "tu", "vous", "pour", "que", "qui", "pas", "de", "du", "ton", "ta"];
+    const EN: &[&str] = &["the", "a", "an", "is", "are", "and", "you", "i", "to", "of", "for", "that", "it", "your", "what", "with"];
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphabetic() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_lowercase())
+        .collect();
+    let count = |list: &[&str]| words.iter().filter(|w| list.contains(&w.as_str())).count();
+    if count(EN) > count(FR) {
+        "en"
+    } else {
+        "fr"
+    }
+}
+
+/// Mono f32 samples as a 16-bit PCM WAV file, which every browser decodes.
+pub fn wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data_len as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+    out
+}
+
 /// What the CLI and the UI say when the voice is not installed.
 pub const INSTALL_HINT: &str = "sbxw voice install";
 
@@ -408,6 +451,24 @@ mod tests {
         let f = p.iter().find(|f| f.path.ends_with("serious")).unwrap();
         assert!(f.url.ends_with("/resolve/main/espeak-ng-data/voices/%21v/Mr%20serious"), "{}", f.url);
         assert_eq!(f.path, "espeak-ng-data/voices/!v/Mr serious", "on disk under its real name");
+    }
+
+    #[test]
+    fn the_voice_follows_the_language() {
+        assert_eq!(guess_lang("Tu veux donc un mode clair pour ton site."), "fr");
+        assert_eq!(guess_lang("Je veux un mode clair"), "fr");
+        assert_eq!(guess_lang("So you want a light mode for your site?"), "en");
+        assert_eq!(guess_lang("OK"), "fr", "French by default");
+    }
+
+    #[test]
+    fn wav_has_a_header_and_two_bytes_a_sample() {
+        let w = wav(&[0.0, 1.0, -1.0], 24_000);
+        assert_eq!(&w[..4], b"RIFF");
+        assert_eq!(&w[8..12], b"WAVE");
+        assert_eq!(w.len(), 44 + 6);
+        assert_eq!(u32::from_le_bytes(w[24..28].try_into().unwrap()), 24_000);
+        assert_eq!(i16::from_le_bytes([w[46], w[47]]), 32767);
     }
 
     #[test]

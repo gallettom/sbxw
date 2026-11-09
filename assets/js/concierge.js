@@ -100,6 +100,8 @@ function vcRender() {
   vcTalk.textContent = vcRec ? '● Listening… release to send' : vcBusy ? 'Transcribing…' : `Hold to talk (${vcKey()})`;
   vcHint.textContent = ready ? 'Speech is turned into text locally; the audio is never kept.' : '';
   vcLauncher.classList.toggle('ready', vcReady());
+  vcLauncher.classList.toggle('listening', !!vcRec);
+  vcLauncher.querySelector('kbd').textContent = vcKey();
 }
 
 function vcSay(who, text, meta) {
@@ -123,6 +125,7 @@ async function vcRefresh() {
 
 // ── Recording ────────────────────────────────────────────────────────────
 async function vcStart() {
+  vcSpeech.stop(); // speaking over the concierge interrupts it
   if (vcRec || vcBusy || !vcReady() || !window.isSecureContext) return;
   let stream;
   try {
@@ -196,6 +199,7 @@ function vcLoad() {
 // the log as it is generated (NDJSON from /api/voice/chat).
 async function vcAsk(text) {
   if (vcReplying) vcReplying.abort();
+  vcSpeech.stop();
   // A reply that failed left the user's turn unanswered: fold into it.
   if (vcTurns.length && vcTurns[vcTurns.length - 1].role === 'user') vcTurns[vcTurns.length - 1].content += `\n${text}`;
   else vcTurns.push({ role: 'user', content: text });
@@ -225,9 +229,9 @@ async function vcAsk(text) {
       while ((nl = buf.indexOf('\n')) >= 0) {
         const ev = JSON.parse(buf.slice(0, nl));
         buf = buf.slice(nl + 1);
-        if (ev.kind === 'delta') { reply += ev.text; row.firstChild.textContent = reply; vcLog.scrollTop = vcLog.scrollHeight; }
+        if (ev.kind === 'delta') { reply += ev.text; row.firstChild.textContent = reply; vcLog.scrollTop = vcLog.scrollHeight; vcSpeech.feed(ev.text); }
         else if (ev.kind === 'error') throw new Error(ev.error);
-        else if (ev.kind === 'done') vcMeta(row, `${(ev.ms / 1000).toFixed(1)} s`);
+        else if (ev.kind === 'done') { vcMeta(row, `${(ev.ms / 1000).toFixed(1)} s`); vcSpeech.flush(); }
       }
     }
     row.classList.remove('pending');
@@ -249,6 +253,7 @@ function vcMeta(row, text) {
 
 function vcReset() {
   if (vcReplying) vcReplying.abort();
+  vcSpeech.stop();
   vcTurns = [];
   vcSave();
   vcLog.replaceChildren();
@@ -265,6 +270,85 @@ vcEl('vc-type').addEventListener('submit', e => {
   vcAsk(text);
 });
 vcEl('vc-new').addEventListener('click', vcReset);
+
+// ── The voice ────────────────────────────────────────────────────────────
+// The reply is spoken sentence by sentence as it streams: a sentence is sent
+// to /api/voice/speak as soon as it ends, the next one is synthesised while
+// this one plays, and they play in order. Muting (🔇, remembered per browser)
+// keeps the text and skips the sound; talking again stops the voice at once.
+const VC_MUTE = 'sbxw-concierge-mute';
+const vcSpeech = (() => {
+  let buf = '';
+  let gen = 0;            // bumped by stop(): late audio of an old reply is dropped
+  let chain = Promise.resolve();
+  let ctx = null;
+  let playing = null;     // the AudioBufferSourceNode playing now
+  let muted = false;
+  try { muted = localStorage.getItem(VC_MUTE) === '1'; } catch (_) {}
+
+  // A sentence ends at . ! ? … or a line break, followed by space or the end
+  // (so "3.5" and "e.g." mid-word do not cut).
+  const END = /[.!?…\n]+["»)\]]?(\s|$)/;
+  function say(text) {
+    text = text.replace(/[*_#`>]/g, '').trim();
+    if (!text || muted || !vcReady()) return;
+    const my = gen;
+    const audio = fetch('/api/voice/speak', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
+    }).then(r => r.ok ? r.arrayBuffer() : r.json().then(e => { throw new Error(e.error || r.status); }));
+    chain = chain.then(async () => {
+      let bytes;
+      try { bytes = await audio; } catch (e) { if (my === gen) vcSay('err', `Could not speak: ${e.message || e}`); return; }
+      if (my !== gen) return;
+      ctx = ctx || new AudioContext();
+      const decoded = await ctx.decodeAudioData(bytes);
+      if (my !== gen) return;
+      await new Promise(done => {
+        const src = ctx.createBufferSource();
+        src.buffer = decoded;
+        src.connect(ctx.destination);
+        src.onended = done;
+        playing = src;
+        src.start();
+      });
+      playing = null;
+    });
+  }
+  return {
+    feed(piece) {
+      buf += piece;
+      let m;
+      while ((m = END.exec(buf))) {
+        const cut = m.index + m[0].length;
+        say(buf.slice(0, cut));
+        buf = buf.slice(cut);
+      }
+    },
+    flush() { say(buf); buf = ''; },
+    stop() {
+      gen++;
+      buf = '';
+      chain = Promise.resolve();
+      if (playing) { try { playing.stop(); } catch (_) {} playing = null; }
+    },
+    get muted() { return muted; },
+    toggle() {
+      muted = !muted;
+      try { localStorage.setItem(VC_MUTE, muted ? '1' : '0'); } catch (_) {}
+      if (muted) this.stop();
+      return muted;
+    },
+  };
+})();
+
+const vcMuteBtn = vcEl('vc-mute');
+function vcRenderMute() {
+  vcMuteBtn.textContent = vcSpeech.muted ? '🔇' : '🔊';
+  vcMuteBtn.title = vcSpeech.muted ? 'Voice off — click to hear replies' : 'Voice on — click to mute';
+  vcMuteBtn.setAttribute('aria-pressed', String(vcSpeech.muted));
+}
+vcMuteBtn.addEventListener('click', () => { vcSpeech.toggle(); vcRenderMute(); });
+vcRenderMute();
 
 // ── Wiring ───────────────────────────────────────────────────────────────
 function vcSetOpen(open) {
