@@ -162,6 +162,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/voice/chat", post(voice_chat))
         .route("/api/voice/speak", post(voice_speak))
         .route("/api/voice/warm", post(voice_warm))
+        .route("/api/voice/context", get(voice_context))
+        .route("/api/voice/map", post(voice_map))
         .route(
             "/api/voice/transcribe",
             post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
@@ -1760,14 +1762,19 @@ struct VoiceChatBody {
     /// Write the brief (Q16's format) instead of answering.
     #[serde(default)]
     brief: bool,
+    /// The sandbox the conversation is about: its project summary and the
+    /// developer's instructions for it join the model's.
+    #[serde(default)]
+    sandbox: Option<String>,
 }
 
 /// The reply as NDJSON, one `ChatEvent` a line, written as it is generated:
 /// the page shows (and, later, speaks) the first words before the last exist.
 async fn voice_chat(State(app): S, Json(b): Json<VoiceChatBody>) -> ApiResult<Response> {
     use futures_util::StreamExt;
+    let ctx = non_blank(b.sandbox).map(|n| sandbox(&n)).transpose()?.map(|sb| app.voice_context(&sb));
     let rx = app
-        .voice_chat(b.turns, b.brief)
+        .voice_chat(b.turns, b.brief, ctx)
         .await
         .map_err(|e| if e.contains("turn") || e.contains("conversation") { ApiError::bad(e) } else { ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e) })?;
     let lines = tokio_stream::wrappers::ReceiverStream::new(rx).map(|ev| {
@@ -1793,4 +1800,30 @@ async fn voice_speak(State(app): S, Json(b): Json<VoiceSpeakBody>) -> ApiResult<
 async fn voice_warm(State(app): S) -> Json<Value> {
     app.voice_warm();
     ok()
+}
+
+#[derive(Deserialize)]
+struct VoiceSandbox {
+    sandbox: String,
+}
+
+/// What the concierge would know of a sandbox's project, for the panel.
+async fn voice_context(State(app): S, Query(q): Query<VoiceSandbox>) -> ApiResult {
+    let sb = sandbox(&q.sandbox)?;
+    let ctx = app.voice_context(&sb);
+    Ok(ok_with(json!({
+        "sandbox": ctx.sandbox,
+        "local": sb.is_local(),
+        "has_map": ctx.has_map,
+        "summary_words": ctx.summary.as_deref().map(|s| s.split_whitespace().count()),
+        "has_prompt": ctx.prompt.is_some(),
+        "busy": app.voice_agent_busy(&sb),
+    })))
+}
+
+/// The person asked for the project to be mapped: `/codemap` into its agent.
+async fn voice_map(State(app): S, Json(b): Json<VoiceSandbox>) -> ApiResult {
+    let sb = sandbox(&b.sandbox)?;
+    app.voice_map(sb).await.map_err(ApiError::conflict)?;
+    Ok(ok())
 }

@@ -388,10 +388,19 @@ it, adds an angle or two and asks one question; the reply is written as it
 is generated and read aloud sentence by sentence (🔊 mutes it; talking again
 stops it). You can also type.
 
+Pick the sandbox the conversation is about at the top of the panel. The
+concierge is then told that project's code-map summary
+(`.sbxw-artifacts/codemap/summary.md`, 300 words, written by `/codemap`) and
+your own instructions for it, if you write any, in
+`.sbxw-artifacts/concierge/prompt.md` (for example "Vue 3 project; keep it
+short"). The line beside the picker says what it has; a project without a
+summary gets a **Map this project** button, which types `/codemap` into its
+agent — never while that agent is busy. A remote sandbox gives no context.
+
 When the idea is ready, say **"prépare le brief"** (or press **Brief**): the
 model writes it — Objectif, Contexte, Contraintes, Questions ouvertes — into
-an editable card. Read it, fix it, pick a running sandbox and press **Send**:
-it is typed into that sandbox's agent. Nothing is sent any other way.
+an editable card. Read it, fix it and press **Send**: it is typed into the
+picked sandbox's agent. Nothing is sent any other way.
 
 Next: a sandbox's pending questions answered out loud.
 

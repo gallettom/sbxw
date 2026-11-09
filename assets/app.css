@@ -3886,9 +3886,16 @@
   }
   .vc-brief-text:focus { outline: none; border-color: var(--c-blue); }
   .vc-brief-row { display: flex; gap: .4rem; align-items: center; }
-  .vc-brief-row select {
-    flex: 1; min-width: 0; height: 28px; padding: 0 .4rem;
-    background: var(--c-surface); color: var(--c-text); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  .vc-brief-to { flex: 1; min-width: 0; color: var(--c-text-muted); font: 12px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vc-brief-row .vc-btn { margin: 0; }
+  .vc-ctx {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    padding: .4rem .75rem; border-bottom: 1px solid var(--c-elevated);
+  }
+  .vc-ctx select {
+    max-width: 55%; height: 26px; padding: 0 .4rem;
+    background: var(--c-bg); color: var(--c-text-bright); border: 1px solid var(--c-border); border-radius: var(--r-sm);
     font: 12px var(--font-mono);
   }
-  .vc-brief-row .vc-btn { margin: 0; }
+  .vc-ctx-info { flex: 1; min-width: 0; color: var(--c-text-muted); font: 11px var(--font-mono); }
+  .vc-ctx .vc-btn { margin: 0; padding: .15rem .5rem; }

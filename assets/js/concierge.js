@@ -253,7 +253,7 @@ async function vcAsk(text) {
   row.classList.add('pending');
   let reply = '';
   try {
-    const done = await vcStream({ turns: vcTurns }, ctl.signal, piece => {
+    const done = await vcStream({ turns: vcTurns, sandbox: vcTarget || undefined }, ctl.signal, piece => {
       reply += piece;
       row.firstChild.textContent = reply;
       vcLog.scrollTop = vcLog.scrollHeight;
@@ -291,6 +291,66 @@ async function vcTargets() {
   return [...new Set(live)].sort();
 }
 
+// ── The project: which sandbox the conversation is about ────────────────
+// Picked at the top, remembered per browser. Its code map's summary.md and
+// its .sbxw-artifacts/concierge/prompt.md are what the model is told (the
+// daemon reads them; the page only names the sandbox), and the brief goes
+// to it.
+const vcPick = vcEl('vc-target');
+const vcCtxInfo = vcEl('vc-ctx-info');
+const vcMapBtn = vcEl('vc-map');
+let vcTarget = null;
+try { vcTarget = localStorage.getItem(VC_TARGET) || null; } catch (_) {}
+
+async function vcFillTargets() {
+  const targets = await vcTargets();
+  if (vcTarget && !targets.includes(vcTarget)) targets.unshift(vcTarget); // stopped, but still the choice
+  vcPick.replaceChildren();
+  const none = document.createElement('option');
+  none.value = ''; none.textContent = targets.length ? '— no project —' : 'no running sandbox';
+  vcPick.append(none);
+  for (const name of targets) {
+    const o = document.createElement('option');
+    o.value = o.textContent = name;
+    vcPick.append(o);
+  }
+  vcPick.value = vcTarget || '';
+  vcLoadContext();
+}
+
+async function vcLoadContext() {
+  vcMapBtn.hidden = true;
+  if (!vcTarget) { vcCtxInfo.textContent = 'no project context'; return; }
+  let c;
+  try { c = await fetch(`/api/voice/context?sandbox=${encodeURIComponent(vcTarget)}`).then(r => r.json()); } catch (_) { c = null; }
+  if (!c || !c.ok) { vcCtxInfo.textContent = 'context unavailable'; return; }
+  const parts = [];
+  if (c.summary_words) parts.push(`summary, ${c.summary_words} words`);
+  else if (!c.local) parts.push('remote: no context');
+  else parts.push(c.has_map ? 'map has no summary' : 'no code map');
+  if (c.has_prompt) parts.push('your prompt');
+  vcCtxInfo.textContent = parts.join(' · ');
+  if (c.local && !c.summary_words) {
+    vcMapBtn.hidden = false;
+    vcMapBtn.textContent = c.has_map ? 'Refresh the map' : 'Map this project';
+    vcMapBtn.disabled = !!c.busy;
+    vcMapBtn.title = c.busy ? 'Its agent is busy: it is never interrupted' : `Types /codemap into ${vcTarget}'s agent`;
+  }
+}
+
+vcPick.addEventListener('change', () => {
+  vcTarget = vcPick.value || null;
+  try { vcTarget ? localStorage.setItem(VC_TARGET, vcTarget) : localStorage.removeItem(VC_TARGET); } catch (_) {}
+  vcLoadContext();
+});
+vcMapBtn.addEventListener('click', async () => {
+  if (!vcTarget) return;
+  vcMapBtn.disabled = true;
+  const r = await postJsonOrError('/api/voice/map', { sandbox: vcTarget });
+  if (!r.ok) { vcSay('err', r.error); vcMapBtn.disabled = false; return; }
+  vcSay('dim', `/codemap typed into ${vcTarget}'s agent. The summary is used as soon as the map is written.`);
+});
+
 async function vcBrief(text) {
   if (!vcTurns.some(t => t.role === 'user') && !text) { vcSay('err', 'Talk the idea through first: the brief is written from the conversation.'); return; }
   if (vcReplying) vcReplying.abort();
@@ -311,22 +371,11 @@ async function vcBrief(text) {
   area.setAttribute('aria-label', 'Brief');
   const row = document.createElement('div');
   row.className = 'vc-brief-row';
-  const pick = document.createElement('select');
-  pick.setAttribute('aria-label', 'Sandbox');
-  const targets = await vcTargets();
-  let remembered = null;
-  try { remembered = localStorage.getItem(VC_TARGET); } catch (_) {}
-  for (const name of targets) {
-    const o = document.createElement('option');
-    o.value = o.textContent = name;
-    if (name === remembered) o.selected = true;
-    pick.append(o);
-  }
-  if (!targets.length) {
-    const o = document.createElement('option');
-    o.value = ''; o.textContent = 'no running sandbox';
-    pick.append(o);
-  }
+  // The sandbox the conversation is about (picked at the top) receives it.
+  const target = vcTarget;
+  const pick = document.createElement('span');
+  pick.className = 'vc-brief-to';
+  pick.textContent = target ? `to ${target}` : 'pick a sandbox at the top first';
   const send = document.createElement('button');
   send.type = 'button'; send.className = 'vc-btn vc-primary'; send.textContent = 'Send'; send.disabled = true;
   const drop = document.createElement('button');
@@ -338,17 +387,16 @@ async function vcBrief(text) {
 
   drop.onclick = () => { ctl.abort(); card.remove(); };
   send.onclick = async () => {
-    const name = pick.value;
+    const name = target;
     const brief = area.value.trim();
     if (!name || !brief) return;
-    send.disabled = true; drop.disabled = true; area.readOnly = true; pick.disabled = true;
+    send.disabled = true; drop.disabled = true; area.readOnly = true;
     const r = await postJsonOrError('/api/chat/push', { text: brief, name });
     if (!r.ok) {
       vcSay('err', `Could not send the brief to ${name}: ${r.error}`);
-      send.disabled = false; drop.disabled = false; area.readOnly = false; pick.disabled = false;
+      send.disabled = false; drop.disabled = false; area.readOnly = false;
       return;
     }
-    try { localStorage.setItem(VC_TARGET, name); } catch (_) {}
     card.classList.add('sent');
     head.textContent = `Brief — sent to ${name}`;
     vcSay('dim', `Brief typed into ${name}'s agent.`);
@@ -356,14 +404,14 @@ async function vcBrief(text) {
 
   try {
     let text = '';
-    await vcStream({ turns: vcTurns, brief: true }, ctl.signal, piece => {
+    await vcStream({ turns: vcTurns, brief: true, sandbox: vcTarget || undefined }, ctl.signal, piece => {
       text += piece;
       area.value = text;
       area.scrollTop = area.scrollHeight;
     });
     area.value = text.trim();
     area.readOnly = false;
-    send.disabled = !targets.length || !area.value;
+    send.disabled = !target || !area.value;
     vcTurns.push({ role: 'assistant', content: "J'ai préparé le brief ; il attend ta relecture et ton envoi." });
     vcSave();
     vcSpeech.feed('Le brief est prêt. Relis-le, choisis le sandbox, puis envoie-le.');
@@ -493,7 +541,7 @@ function vcSetOpen(open) {
   vcOpen = open;
   vcPanel.hidden = !open;
   vcLauncher.setAttribute('aria-expanded', String(open));
-  if (open) { vcRefresh(); vcWarm(); }
+  if (open) { vcRefresh(); vcWarm(); vcFillTargets(); }
 }
 
 // Load the models before they are needed: opening the panel or pressing the
