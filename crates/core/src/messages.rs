@@ -68,6 +68,10 @@ pub fn relay_outcome(req: &RelayRequest) -> String {
                  (\"{gist}\"){note}. Nothing was started or published. Carry on without it, and \
                  do not ask again for the same thing."
             ),
+            RelayKind::Ask => format!(
+                "[sbxw relay · request {id}] The human set aside the questions you asked them \
+                 (\"{gist}\"){note}. Ask them again in the conversation if you still need the answers."
+            ),
             RelayKind::Question => format!(
                 "[sbxw relay · request {id}] The human declined the question you asked earlier \
                  (\"{gist}\"){note}. Nothing was shared. Carry on without it, or ask the human \
@@ -114,6 +118,14 @@ pub fn relay_outcome(req: &RelayRequest) -> String {
              (\"{gist}\"):\n\
              \n\
              {answer}"
+        ),
+        RelayKind::Ask => format!(
+            "[sbxw relay · request {id}] The human answered the questions you asked them \
+             (\"{gist}\"):\n\
+             \n\
+             --- answers ---\n\
+             {answer}\n\
+             --- end ---"
         ),
         RelayKind::Question => format!(
             "[sbxw relay · request {id}] The human approved an answer to the question you asked \

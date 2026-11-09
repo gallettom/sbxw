@@ -144,9 +144,61 @@ const TOOLS = [
     },
   },
   {
+    name: "ask_user_questions",
+    description:
+      "Put a set of questions to the PERSON you are working with — a /grill-me round, or any " +
+      "batch of decisions that are theirs to make — and get every answer back as this tool's " +
+      "result.\n" +
+      "\n" +
+      "Reach for this whenever you would otherwise write your questions out and end your turn " +
+      "waiting for a reply: in sbxw the person may be answering by voice, and the Concierge " +
+      "takes your questions one at a time — shows each, reads it aloud with your " +
+      "recommendation, waits for the answer — then hands them all back to you at once, after " +
+      "the person confirms. Nothing is typed into your terminal, so nothing can be garbled or " +
+      "half-pasted on the way.\n" +
+      "\n" +
+      "Give each question a short title, the question itself (self-contained, with the choices " +
+      "if there are some), and your recommended answer. Word each so that \"yes\" accepts your " +
+      "recommendation. Ask only what is truly the person's to decide; facts you can find " +
+      "yourself are not questions. The answers come back as text, one line per question " +
+      "(\"Q1 : …\"); a question the person skipped is absent.\n" +
+      "\n" +
+      "Waits up to 10 minutes by default. If the person has not answered by then it returns a " +
+      "request id — call `check_sandbox_question` with it to keep waiting; do not ask again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        intro: {
+          type: "string",
+          description: "Optional context shown before the questions (what you found, what the round is about). Kept short.",
+        },
+        questions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 12,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Its label, e.g. \"Q3\". Defaults to Q1, Q2… in order." },
+              title: { type: "string", description: "A few words: what the question decides." },
+              question: { type: "string", description: "The question, with its options if any." },
+              recommendation: { type: "string", description: "Your recommended answer, which \"yes\" accepts." },
+            },
+            required: ["question"],
+          },
+        },
+        timeout_seconds: {
+          type: "number",
+          description: "How long to wait before returning a request id. Default 600, max 600.",
+        },
+      },
+      required: ["questions"],
+    },
+  },
+  {
     name: "check_sandbox_question",
     description:
-      "Pick up a request you opened earlier with `ask_other_sandbox` or `ask_user_for_screenshot` " +
+      "Pick up a request you opened earlier with `ask_other_sandbox`, `ask_user_for_screenshot` or `ask_user_questions` " +
       "that had not been settled when the call returned. Returns the approved answer, the " +
       "screenshots, the refusal, or that it is still waiting. Use it when you reach the point " +
       "where you actually need that answer — not in a loop.",
@@ -949,6 +1001,23 @@ function textResult(text, isError) {
 /// sent a before and an after. The prose follows, and says where the same
 /// images were saved so a later turn can re-read them without interrupting
 /// anyone again.
+/// The questions as one round, in /grill-me's own format — what the
+/// Concierge cuts into steps, and what a person reads in any other view.
+function askRound(intro, questions) {
+  const blocks = [];
+  questions.forEach((q, i) => {
+    const text = String((q && q.question) || "").trim();
+    if (!text) return;
+    const id = String((q && q.id) || "Q" + (i + 1)).trim().replace(/\s+/g, "");
+    // Always titled: the Concierge reads the title out before the question.
+    const title = String((q && q.title) || "").trim().replace(/[*\n:]/g, " ") || "Question";
+    const rec = String((q && q.recommendation) || "").trim();
+    blocks.push("❓ **" + id + (title ? " - " + title : "") + "** : " + text + (rec ? "\n\n➡️ " + rec : ""));
+  });
+  if (!blocks.length) return "";
+  return (intro.trim() ? intro.trim() + "\n\n" : "") + blocks.join("\n\n---\n\n");
+}
+
 function outcomeResult(res) {
   const { text } = relay.collect(res, HOW_TO_WAIT(res.id));
   const content = [];
@@ -986,6 +1055,19 @@ async function callTool(name, args) {
     const res = await relay.request(
       "/api/relay/shot",
       { from: relay.me, thread: THREAD, question: reason, timeout },
+      (timeout + 10) * 1000,
+    );
+    return outcomeResult(res);
+  }
+
+  if (name === "ask_user_questions") {
+    const qs = Array.isArray(args.questions) ? args.questions : [];
+    const round = askRound(String(args.intro || ""), qs);
+    if (!round) return textResult("No questions given.", true);
+    const timeout = clampTimeout(args.timeout_seconds == null ? relay.MAX_TIMEOUT : args.timeout_seconds, relay.MAX_TIMEOUT);
+    const res = await relay.request(
+      "/api/relay/questions",
+      { from: relay.me, thread: THREAD, question: round, timeout },
       (timeout + 10) * 1000,
     );
     return outcomeResult(res);

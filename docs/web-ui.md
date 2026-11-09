@@ -406,7 +406,12 @@ A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
 session sbxw opened there — engages the concierge on its own: the panel
 opens, and each round shows in it with its gist read aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
-lot of talking for ordinary work). A grill round is taken **one question at a time**: the panel shows and
+lot of talking for ordinary work). When the agent asks with the relay's `ask_user_questions` tool (what
+`/grill-me` does in sbxw), the round comes to the Concierge from any
+sandbox, and the answers go back as that tool's result — nothing is typed
+into a terminal. A round the agent only wrote out in its terminal is
+answered by typing into its session instead. Either way, a grill round is
+taken **one question at a time**: the panel shows and
 reads Q1 with the agent's recommendation, waits for your answer, then
 moves to Q2 (*répète* reads it again, *passe* skips it, *précédente* goes
 back). Once every question is answered, the answers are written up as one

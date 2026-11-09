@@ -29,7 +29,7 @@ the asker without someone clicking.
 ### The agent's side
 
 Every sandbox gets an MCP server, `sbxw-relay`, with three tools:
-`ask_other_sandbox`, `ask_user_for_screenshot` and `check_sandbox_question`.
+`ask_other_sandbox`, `ask_user_for_screenshot`, `ask_user_questions` and `check_sandbox_question`.
 The same is available as a CLI:
 
 ```bash
@@ -114,6 +114,18 @@ Each is a relay request of its own kind: never routed, a yes or a no. The
 card says what will happen in sbxw's words, then quotes the agent's reason.
 **Approve** runs it, and the request is settled with what came of it (the URL
 to open, or the error), so the agent reads the outcome rather than "approved".
+
+## Questions for you
+
+`ask_user_questions` puts a set of questions to **you** — a `/grill-me`
+round, or any batch of decisions that are yours — and blocks until you have
+answered (10 minutes, then a request id for `check_sandbox_question`). Each
+question carries a title, the question and the agent's recommendation. It is
+never routed and never shown in this popup: the [Concierge](web-ui.md#the-voice-concierge)
+takes it, opens, and asks the questions one at a time, read aloud; your
+answers are written up, shown, and on your *oui* go back to the agent as the
+tool's result. Nothing is typed into its terminal. **Decline** sets the round
+aside and tells the agent so. `/grill-me` asks its rounds this way in sbxw.
 
 ## What a sandbox cannot do
 

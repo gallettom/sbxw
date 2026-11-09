@@ -783,6 +783,9 @@ const RELAY_LINGER_MS = 2200;
 
 function relayIngest(req, seed = false) {
   if (!req || !req.id) return;
+  // Questions for the person themselves (`ask_user_questions`) are the
+  // Concierge's: it asks them one at a time, by voice (see concierge.js).
+  if (req.kind === 'ask') return;
   const prev = relayRequests.get(req.id);
   relayRequests.set(req.id, req);
 

@@ -851,7 +851,9 @@ const VC_REPEAT = /^\s*(r[ée]p[èe]te|encore|repeat|again)\b/i;
 const VC_SKIP = /^\s*(passe|suivante|skip|next|je ne sais pas)\b/i;
 const VC_BACK = /^\s*(pr[ée]c[ée]dente|reviens|back|previous)\b/i;
 
-function vcGrill(sandbox, thread, text, grill) {
+// `relay`: the request id when the round came through `ask_user_questions`
+// — the answers then go back as that tool's result, not into a terminal.
+function vcGrill(sandbox, thread, text, grill, relay = null) {
   const n = grill.questions.length;
   const { card, head, foot } = vcCard('vc-msg-agent vc-grill', `${vcWho(sandbox, thread)} · ${n} question${n > 1 ? 's' : ''}`);
   if (grill.intro) {
@@ -871,7 +873,7 @@ function vcGrill(sandbox, thread, text, grill) {
   answers.className = 'vc-grill-answers';
   card.insertBefore(now, foot);
   card.insertBefore(answers, foot);
-  const st = { sandbox, thread, text, grill, i: 0, card, head };
+  const st = { sandbox, thread, text, grill, i: 0, card, head, relay };
 
   const show = () => {
     const q = grill.questions[st.i];
@@ -896,6 +898,14 @@ function vcGrill(sandbox, thread, text, grill) {
     vcButton('Skip', () => { grill.questions[st.i].answer = null; st.next(); }),
     vcButton('Talk to the concierge', () => vcDisarm()),
   );
+  if (relay) {
+    // The agent is blocked on its tool call: setting the round aside tells it.
+    foot.append(vcButton('Decline', async () => {
+      await postJsonOrError(`/api/relay/${encodeURIComponent(relay)}/deny`, { note: 'set aside in the Concierge' });
+      vcDisarm(); card.classList.add('done');
+      vcSay('dim', `${vcWho(sandbox, thread)} was told you set its questions aside.`);
+    }));
+  }
   show();
 }
 
@@ -931,7 +941,11 @@ async function vcGrillDone(st) {
   area.setAttribute('aria-label', 'Answer');
   card.append(area);
   vcConfirm(card, `Send these answers to ${vcWho(sandbox, thread)}?`, async () => {
-    const r = await postJsonOrError('/api/chat/push', { text: area.value.trim(), name: sandbox, thread: thread || undefined });
+    // Through the relay when the agent asked with its tool: the answers are
+    // that call's result. Otherwise typed into its session.
+    const r = st.relay
+      ? await postJsonOrError(`/api/relay/${encodeURIComponent(st.relay)}/approve`, { answer: area.value.trim() })
+      : await postJsonOrError('/api/chat/push', { text: area.value.trim(), name: sandbox, thread: thread || undefined });
     if (!r.ok) { vcSay('err', `Not sent: ${r.error}`); return; }
     area.readOnly = true;
     card.classList.add('done');
@@ -1040,6 +1054,32 @@ async function vcChoose(p, dictated) {
   vcConfirm(p.card, `Answer “${label}”?`, async () => { btn?.click(); });
   if (!vcSpeech.muted) vcSpeak(`J'envoie : ${label} ?`);
 }
+
+// ── Questions asked through the relay (`ask_user_questions`) ────────────
+// Any sandbox may ask: these are put to the person, whichever project the
+// panel is on. Each round opens the panel and is asked step by step.
+const vcAsks = new Map(); // relay id → its card
+function vcAskRelay(req) {
+  if (req.kind !== 'ask') return;
+  if (req.state === 'approved' || req.state === 'denied') {
+    const card = vcAsks.get(req.id);
+    if (card && !card.classList.contains('done')) {
+      card.classList.add('done');
+      if (vcPending?.card === card) vcDisarm();
+    }
+    return;
+  }
+  if (req.state !== 'pending' || vcAsks.has(req.id)) return;
+  const grill = vcParseGrill(req.question);
+  if (!grill.questions.length) grill.questions.push({ id: 'Q1', title: '', ask: req.question, body: req.question, rec: '', answer: null });
+  if (!vcOpen) vcSetOpen(true);
+  vcGrill(req.from, req.from_thread || null, req.question, grill, req.id);
+  vcAsks.set(req.id, vcPending?.card || vcLog.lastElementChild);
+}
+sbxwStream.addEventListener('relay', ev => {
+  try { vcAskRelay(JSON.parse(ev.data)); } catch (_) {}
+});
+fetch('/api/relay').then(r => r.json()).then(d => (d.requests || []).forEach(vcAskRelay)).catch(() => {});
 
 sbxwStream.addEventListener('session', ev => {
   let info;
