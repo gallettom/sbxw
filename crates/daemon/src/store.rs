@@ -150,6 +150,23 @@ impl Paths {
     fn pending_hosts(&self) -> PathBuf {
         self.state().join("pending-hosts")
     }
+    /// The host-access grants a person approved, per config file (see
+    /// `sbxw_core::consent`). Under the state directory, never in a
+    /// workspace: the agent must not be able to approve for the person.
+    pub fn approved_grants(&self) -> PathBuf {
+        self.state().join("approved-grants.json")
+    }
+}
+
+/// The key a config file's approvals are filed under: its canonical absolute
+/// path, so `./sbxw.toml` and the same file named another way share one.
+pub fn grant_key(path: &Path) -> String {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().into_owned()
+}
+
+/// The refusal [`Store::check_grants`] returns, if `e` is one.
+pub fn needs_approval(e: &anyhow::Error) -> Option<&sbxw_core::consent::NeedsApproval> {
+    e.chain().find_map(|c| c.downcast_ref())
 }
 
 /// Which repo a thread works in, and the model it was first opened on.
@@ -560,7 +577,53 @@ impl Store {
         Ok(dir)
     }
 
+    /// Every config file's approved grant lines.
+    pub fn all_approved_grants(&self) -> BTreeMap<String, Vec<String>> {
+        read_json(&self.paths.approved_grants())
+    }
 
+    /// Whether the person approved every line of `checked` for the config
+    /// filed under `key`, counting `approved_now` (the lines they just said
+    /// yes to). If so, the approvals are recorded: the new lines are added and
+    /// any line no longer in `all` (the file's whole grant list) is dropped, so
+    /// a grant removed and later put back is asked about again. If not, the
+    /// error is a [`NeedsApproval`](sbxw_core::consent::NeedsApproval) with the
+    /// lines still to approve.
+    pub fn check_grants(&self, key: &str, all: &[String], checked: &[String], approved_now: &[String]) -> Result<()> {
+        use sbxw_core::consent::{new_grants, NeedsApproval};
+        let _guard = self.lock.lock().unwrap();
+        let mut book = self.all_approved_grants();
+        let before = book.get(key).cloned().unwrap_or_default();
+        let new = new_grants(checked, &before);
+        let missing = new_grants(&new, approved_now);
+        if !missing.is_empty() {
+            return Err(NeedsApproval { config: key.to_string(), grants: new }.into());
+        }
+        let mut after: Vec<String> = before.iter().filter(|g| all.contains(g)).cloned().chain(new).collect();
+        after.sort();
+        after.dedup();
+        if after == before {
+            return Ok(());
+        }
+        if after.is_empty() {
+            book.remove(key);
+        } else {
+            book.insert(key.to_string(), after);
+        }
+        write_atomic(&self.paths.approved_grants(), &serde_json::to_vec_pretty(&book)?)
+    }
+
+    /// Forget what was approved for `key`: its next bring-up asks again.
+    /// Whether there was anything to forget.
+    pub fn revoke_grants(&self, key: &str) -> Result<bool> {
+        let _guard = self.lock.lock().unwrap();
+        let mut book = self.all_approved_grants();
+        if book.remove(key).is_none() {
+            return Ok(false);
+        }
+        write_atomic(&self.paths.approved_grants(), &serde_json::to_vec_pretty(&book)?)?;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -575,6 +638,64 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let s = Store::open(Paths::under(d.path()));
         (d, s)
+    }
+
+    fn v(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn a_new_grant_is_refused_then_approved_once() {
+        let (d, s) = store();
+        let key = "/p/sbxw.toml";
+        let mount = v(&["mount (read-write): /data"]);
+        let e = s.check_grants(key, &mount, &mount, &[]).unwrap_err();
+        assert_eq!(needs_approval(&e).unwrap().grants, mount);
+        // Approving another line than the one shown approves nothing.
+        let e = s.check_grants(key, &mount, &mount, &v(&["mount (read-write): /other"])).unwrap_err();
+        assert_eq!(needs_approval(&e).unwrap().grants, mount);
+        assert!(s.all_approved_grants().is_empty());
+        s.check_grants(key, &mount, &mount, &mount).unwrap();
+        s.check_grants(key, &mount, &mount, &[]).unwrap();
+        // A second grant asks for that one only; dropping one asks nothing.
+        let two = v(&["mount (read-write): /data", "network: x.com"]);
+        let e = s.check_grants(key, &two, &two, &[]).unwrap_err();
+        assert_eq!(needs_approval(&e).unwrap().grants, v(&["network: x.com"]));
+        s.check_grants(key, &[], &[], &[]).unwrap();
+        // …and the dropped one is forgotten, so putting it back asks again.
+        assert!(s.check_grants(key, &mount, &mount, &[]).is_err());
+        // The file is private, under the state directory.
+        let f = s.paths.approved_grants();
+        assert!(f.starts_with(d.path().join(".sbxw/state")));
+        s.check_grants(key, &mount, &mount, &mount).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert_eq!(s.all_approved_grants()[key], mount);
+    }
+
+    #[test]
+    fn a_partial_check_keeps_the_other_lines_and_revoke_forgets() {
+        let (_d, s) = store();
+        let key = "/p/sbxw.toml";
+        let all = v(&["listener: web_addr = 0.0.0.0:7681", "network: x.com"]);
+        s.check_grants(key, &all, &all, &all).unwrap();
+        // The CLI checks only the daemon's keys, against the whole list.
+        s.check_grants(key, &all, &all[..1], &[]).unwrap();
+        assert_eq!(s.all_approved_grants()[key], all);
+        assert!(s.revoke_grants(key).unwrap());
+        assert!(!s.revoke_grants(key).unwrap());
+        assert!(s.check_grants(key, &all, &all, &[]).is_err());
+    }
+
+    #[test]
+    fn a_grant_key_is_the_canonical_path() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("sbxw.toml"), "").unwrap();
+        let canon = std::fs::canonicalize(d.path().join("sbxw.toml")).unwrap();
+        assert_eq!(grant_key(&d.path().join("./sbxw.toml")), canon.to_string_lossy());
     }
 
     #[test]

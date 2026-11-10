@@ -21,6 +21,7 @@ Every command takes `--help`. Commands that read the project config take
 | `sbxw stop <names…> [--all]` | Stop sandboxes. State is kept; `sbxw up` restarts them. |
 | `sbxw rm <names…> [--all]` | Remove sandboxes for good, and everything sbxw keeps about them. Passes `--force`, so it works even with a session attached. If one fails, the others are still removed and forgotten, and the failure is named. |
 | `sbxw prune [--since D] [--dry-run] [-y]` | Remove every **stopped** sandbox, after listing them and asking. A running sandbox is never a candidate. `--since 168h` (alias `--until`) keeps anything stopped more recently. |
+| `sbxw config grants [--config F] [--revoke]` | Show the host access approved for an `sbxw.toml`, and what it asks for that is not approved yet. `--revoke` forgets the approvals, so the next bring-up asks again. See [Approving host access](configuration.md#approving-host-access). |
 
 `sbxw up` flags:
 
@@ -29,6 +30,7 @@ Every command takes `--help`. Commands that read the project config take
 | `--ro DIR` | Mount an extra directory read-only (repeatable). |
 | `--add-sandbox` | With no name, derive one from the workspace folder's name (`-copy`, `-copy-1`… on a clash with another path). |
 | `--use-api-key` | Store `ANTHROPIC_API_KEY` as the global `anthropic` secret. See [Authentication](getting-started.md#authentication). |
+| `--allow-host-access` | Approve the host access the config asks for (mounts, env files, kits, network hosts, ports, the Monitor pane's command, the listeners) as shown, without asking. For scripts: off a terminal, `sbxw up` otherwise fails with the list. See [Approving host access](configuration.md#approving-host-access). |
 | `--no-web` | Run the pipeline in this process and attach the agent in this terminal. No daemon. |
 | `--tail` | Follow the daemon log afterwards. |
 | `--rebuild-template` | With `template = "auto"`: once this new sandbox is up and its kits have finished installing, save it as the template for its kits and remove the previous one. Without it, an out-of-date template is only reported. On a sandbox that already exists it does nothing and says so: a template is only taken from a sandbox nobody has worked in yet. |
@@ -242,6 +244,12 @@ reinstall with `install.sh` from `main`.
 
 `sbxw up <name> [path]` runs this pipeline. Each step is one or more `sbx`
 calls, and every step is safe to run again.
+
+First, before the daemon is started and before any step, the host access
+`sbxw.toml` asks for is checked against what you approved for that file. New
+lines are printed and sbxw asks `Allow? [y/N]`; a no stops here with nothing
+changed. The daemon checks again, so a file edited in between is asked about
+too. See [Approving host access](configuration.md#approving-host-access).
 
 1. **Create.** If the sandbox doesn't exist:
    `sbx create claude <path> --name <name>`, with `--ro` mounts appended as

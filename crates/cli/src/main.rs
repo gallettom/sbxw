@@ -94,6 +94,10 @@ enum Cmd {
         /// from sbxw; run /login in its agent to sign in to claude.ai.
         #[arg(long)]
         remote_control: bool,
+        /// Approve the host access the config asks for (mounts, host files,
+        /// kits, network, host command, listeners) as shown, without asking.
+        #[arg(long)]
+        allow_host_access: bool,
     },
     /// A throwaway chat sandbox: an agent on an empty workspace.
     #[command(after_help = "Examples:\n  sbxw chat\n  sbxw chat brainstorm\n  sbxw rm brainstorm")]
@@ -107,6 +111,15 @@ enum Cmd {
         use_api_key: bool,
         #[arg(long)]
         tail: bool,
+        /// Approve the host access the config asks for (mounts, host files,
+        /// kits, network, host command, listeners) as shown, without asking.
+        #[arg(long)]
+        allow_host_access: bool,
+    },
+    /// What a person approved of an sbxw.toml's host access, and revoking it.
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
     },
     /// Tail the daemon's log.
     Logs {
@@ -126,6 +139,10 @@ enum Cmd {
         name: String,
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
+        /// Approve the host access the config asks for (mounts, host files,
+        /// kits, network, host command, listeners) as shown, without asking.
+        #[arg(long)]
+        allow_host_access: bool,
     },
     /// An interactive bash shell in a running sandbox.
     Bash { name: String },
@@ -271,6 +288,10 @@ enum EnvCmd {
         tail: bool,
         #[arg(long = "env-arg", value_name = "NAME=VALUE")]
         env_args: Vec<String>,
+        /// Approve the host access the merged config asks for as shown,
+        /// without asking.
+        #[arg(long)]
+        allow_host_access: bool,
     },
     /// Write an `sbxenv.yaml` beside the workspace, from sbxw.toml.
     Export {
@@ -308,6 +329,19 @@ enum TemplateCmd {
     Ls,
 }
 
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// The host-access grants approved for a config file, and those it asks
+    /// for that are not approved yet.
+    Grants {
+        #[arg(long, default_value = "sbxw.toml")]
+        config: PathBuf,
+        /// Forget what was approved: the next bring-up asks again.
+        #[arg(long)]
+        revoke: bool,
+    },
+}
+
 #[derive(Subcommand, Clone, Copy, Default)]
 pub enum HostsAction {
     #[default]
@@ -327,13 +361,15 @@ pub enum CacheAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Up { name, path, path_flag, git, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control } => {
-            cmd::up(cmd::UpArgs { name, path: path.or(path_flag), git, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control })
-        }
-        Cmd::Chat { name, config, no_web, use_api_key, tail } => cmd::chat(name, config, no_web, use_api_key, tail),
+        Cmd::Up { name, path, path_flag, git, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control, allow_host_access } => cmd::up_with(
+            cmd::UpArgs { name, path: path.or(path_flag), git, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control },
+            allow_host_access,
+        ),
+        Cmd::Chat { name, config, no_web, use_api_key, tail, allow_host_access } => cmd::chat(name, config, no_web, use_api_key, tail, allow_host_access),
+        Cmd::Config { cmd: ConfigCmd::Grants { config, revoke } } => cmd::config_grants(&config, revoke),
         Cmd::Logs { name, lines } => cmd::logs(name, lines),
         Cmd::Ports { name, config } => cmd::ports(&name, &config),
-        Cmd::Web { name, config } => cmd::web(&name, &config),
+        Cmd::Web { name, config, allow_host_access } => cmd::web(&name, &config, allow_host_access),
         Cmd::Bash { name } => cmd::bash(&name),
         Cmd::Ssh { name, setup, command } => cmd::ssh(name, setup, &command),
         Cmd::Skills { cmd: SkillsCmd::Import { dry_run, force } } => {
@@ -351,8 +387,8 @@ fn main() -> Result<()> {
         Cmd::Stop { names, all } => cmd::stop(names, all),
         Cmd::Rm { names, all } => cmd::rm(names, all),
         Cmd::Prune { since, dry_run, yes } => cmd::prune(since.as_deref(), dry_run, yes),
-        Cmd::Env { cmd: EnvCmd::Run { paths, config, no_web, yes, use_api_key, tail, env_args } } => {
-            cmd::env::run(paths, config, no_web, yes, use_api_key, tail, env_args)
+        Cmd::Env { cmd: EnvCmd::Run { paths, config, no_web, yes, use_api_key, tail, env_args, allow_host_access } } => {
+            cmd::env::run(paths, config, no_web, yes, use_api_key, tail, env_args, allow_host_access)
         }
         Cmd::Env { cmd: EnvCmd::Export { path, name, config, out, force } } => cmd::env::export(path, name, config, out, force),
         Cmd::Hosts { action, config } => cmd::hosts(action.unwrap_or_default(), &config),

@@ -11,6 +11,7 @@ lists every key with its default.
 - [The default model](#the-default-model)
 - [Environment variables](#environment-variables)
 - [Which config a sandbox uses](#which-config-a-sandbox-uses)
+- [Approving host access](#approving-host-access)
 
 > **TOML trap:** `[env]` and `[[ports]]` are tables. Every root key must come
 > **before** the first of them. A key written after `[[ports]]` belongs to that
@@ -22,7 +23,7 @@ lists every key with its default.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `web_addr` | `127.0.0.1:7681` | The **UI listener**: browser, island, extension |
+| `web_addr` | `127.0.0.1:7681` | The **UI listener**: browser, island, extension and the `sbxw` CLI. Every client needs the UI token ([why](security.md#two-listeners)) |
 | `agent_addr` | `127.0.0.1:7682` | The **agent listener**, the only address sandboxes reach. Must differ from `web_addr` ([why](security.md#two-listeners)) |
 | `monitor_cmd` | `["sbx"]` | argv of the **Monitor Sandboxes** window, run on the host. `[]` hides the button |
 | `terminal_color` | `""` | Terminal background in the web UI, `#rrggbb`. Empty is the built-in `#0d1117`. The header's colour picker overrides it per browser |
@@ -154,4 +155,32 @@ process list) and in a file most projects commit. Use `sbx secret set`, or an
   ports and policy), whoever started the daemon.
 
 `sbxw.toml` usually sits inside the workspace, where the agent can edit it. See
+[Security](security.md#the-agent-can-edit-sbxwtoml).
+
+## Approving host access
+
+Settings that reach the host or widen the sandbox (mounts, `env_files`,
+extra kits, extra `network_allow` hosts, ports and aliases, `monitor_cmd`,
+the listeners, and a few more) take effect only once you have approved them
+for that file. The first bring-up after you add one lists it and asks:
+
+```
+sbxw  /Users/me/myapp/sbxw.toml asks for host access you have not approved yet:
+    env file: /Users/me/myapp/.env.sandbox
+    mount (read-only): /Users/me/docs at /workspace/docs
+    network: api.example.com
+Only approve what you expect: this file can be edited from inside the sandbox.
+Allow? [y/N]
+```
+
+Later bring-ups with the same lines ask nothing. In a script, pass
+`--allow-host-access` to `sbxw up`, `sbxw chat` or `sbxw web`; without it, a
+command run off a terminal fails with the list. The web UI asks with a dialog.
+
+```sh
+sbxw config grants            # what is approved for ./sbxw.toml, and what is not yet
+sbxw config grants --revoke   # forget it; the next bring-up asks again
+```
+
+The full list of what is asked, and where approvals are kept, is in
 [Security](security.md#the-agent-can-edit-sbxwtoml).

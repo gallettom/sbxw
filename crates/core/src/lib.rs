@@ -13,6 +13,7 @@ pub mod board;
 pub mod artifacts;
 pub mod codemap;
 pub mod config;
+pub mod consent;
 pub mod embed;
 pub mod envexport;
 pub mod envfile;

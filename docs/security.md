@@ -128,32 +128,74 @@ Both addresses must be `IP:PORT` literals; a host name is refused.
 
 ### The agent can edit `sbxw.toml`
 
-`sbxw.toml` usually sits in the workspace, so the agent can edit it, including
-`network_allow`, `env`, `env_files`, `kits` and `monitor_cmd`. That's a change
-the agent can **propose but not perform**:
+`sbxw.toml` usually sits in the workspace, so the agent can edit it, and so
+can a repository you have just cloned. The part of it that reaches the host
+or widens the sandbox takes effect only after you have seen it and said yes,
+as with `direnv allow`:
 
-- **A sandbox's `sbxw.toml`** is read when a person brings the sandbox up
-  (`sbxw up`, or Up in the web UI). The daemon records the parsed config in the
-  sandbox's record under `~/.sbxw/state`, and every later terminal attach,
-  thread, port release and panel uses that record, never the file. So every
-  key, including `env`, `env_files`, `workdir`, `web_shell`, `network_allow`
-  and `kits`, takes effect only at the next `sbxw up`. A sandbox recorded by
-  an sbxw older than this has no recorded config and runs with the daemon's.
+- **What is asked.** Each such setting becomes one line: a mount
+  (`workspaces`, `kit_mounts`), an env file, a kit beyond the default ones
+  (local path, registry or git), a `network_allow` host beyond the default
+  list, a published port, a `/etc/hosts` alias, `ip_per_app`, a
+  `monitor_cmd` (it runs **on the host**), a moved `web_addr` or
+  `agent_addr`, `skills = "readwrite"`, a named `template`, a longer
+  `cache_ttl_days`, and the virtual Mac's `vm` and `guest_host_ip`. A value
+  equal to the built-in default is not a line, so a file that only changes
+  the model, the colours, `env` or the sizes asks nothing. (`env` stays
+  inside the sandbox; `[env]` is still not for secrets.)
+- **When.** At a bring-up from that file: `sbxw up`, `sbxw chat`, and Create
+  or Chat in the web UI (which use the daemon's own config). Only lines not
+  approved before are asked about; removing a setting asks nothing. The CLI
+  also checks `web_addr`, `agent_addr`, `monitor_cmd` and `[mac]` before it
+  starts the daemon with the file (`sbxw up`, `sbxw web`). The first
+  `sbxw up` after upgrading asks once for whatever the file grants beyond
+  the defaults.
+- **How.** In a terminal, the lines are printed and sbxw asks
+  `Allow? [y/N]`. Off a terminal the command fails with the lines;
+  `--allow-host-access` approves what is shown without asking, for scripts.
+  In the web UI a dialog lists the lines as text, with Allow and Cancel.
+  The approval names the exact lines shown, so a file edited between
+  showing and approving is asked about again.
+- **Enforced by the daemon**, so the CLI and the web UI cannot skip it. A
+  remote host's `sbxw.toml` is checked the same way, filed under the host's
+  name and path.
+- **Where approvals live.** `~/.sbxw/state/approved-grants.json` (mode
+  `0600`), keyed by the config file's absolute path, never in the
+  workspace. A line no longer in the file is dropped, so a setting removed
+  and later put back is asked about again.
+- **Revoking.** `sbxw config grants` shows what is approved for a file and
+  what it asks for beyond that; `sbxw config grants --revoke` forgets the
+  approvals, so the next bring-up asks again.
+
+What is not asked about:
+
+- **Duplicate and Recreate** reuse the sandbox's recorded config, which was
+  approved when the sandbox was brought up. A sandbox recorded by an older
+  sbxw has no recorded config and runs with the daemon's.
+- **Folders and ports you pick in the create dialog** are your own choice.
+- **Everything else the file sets** still takes effect at the next bring-up,
+  as before: the daemon records the parsed config in the sandbox's record
+  under `~/.sbxw/state`, and every later terminal attach, thread, port
+  release and panel uses that record, never the file.
+
+Other safeguards:
+
 - **The daemon's own config** is read when the daemon starts. Its `kits`
-  change only through the web UI's Kits dialog, so a kit added to that file by
-  hand (or by an agent) reaches new sandboxes only after a daemon restart.
+  change only through the web UI's Kits dialog, so a kit added to that file
+  by hand (or by an agent) reaches new sandboxes only after a daemon
+  restart, and is then asked about.
 - `monitor_cmd` and the terminal colours are placed in the web UI as escaped
   string literals, so a value cannot run script in the UI.
 - The Kits dialog refuses to write an `sbxw.toml` that is a symlink, and its
   temporary file is created under a random name that is never opened if it
   already exists.
+- `network_allow` entries are checked at load: wildcards, malformed entries
+  and the UI port are refused. `sbx policy ls <name>` shows what a sandbox
+  really has.
 
-The agent can still propose any single named host in `network_allow`; the
-load-time checks refuse only wildcards, malformed entries and the UI port.
-Read a changed `network_allow` before you run `sbxw up`. `sbx policy ls <name>`
-shows what a sandbox really has. To keep the config out
-of reach, store it outside the workspace and use `--config`. (`sbxw env export`
-writes beside the workspace for the same reason.)
+To keep the config out of the agent's reach entirely, store it outside the
+workspace and use `--config`. (`sbxw env export` writes beside the
+workspace for the same reason.)
 
 ### The kit cache filler
 
