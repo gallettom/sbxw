@@ -11,7 +11,7 @@ const mySkillsBox    = document.getElementById('my-skills-sandbox');
 const mySkillsFound  = document.getElementById('my-skills-found');
 const mySkillsError  = document.getElementById('my-skills-error');
 
-const kb = n => (n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`);
+const kb = v => { const n = Number(v) || 0; return n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`; };
 
 async function mySkillsLoad() {
   let r;
@@ -23,7 +23,7 @@ async function mySkillsLoad() {
           <div>
             <code>/${escHtml(s.name)}</code>
             ${s.description ? `<div class="my-skill-about">${escHtml(s.description)}</div>` : ''}
-            <div class="my-skill-from" title="${escHtml(s.path)}">from ${escHtml(s.sandbox || '?')}${s.saved ? `, ${new Date(s.saved * 1000).toLocaleDateString()}` : ''}</div>
+            <div class="my-skill-from" title="${escHtml(s.path)}">from ${escHtml(s.sandbox || '?')}${s.saved ? `, ${escHtml(new Date(Number(s.saved) * 1000).toLocaleDateString())}` : ''}</div>
           </div>
           <button class="tpl-rm" data-forget="${escHtml(s.name)}" title="New sandboxes stop getting it">Remove</button>
         </div>`).join('')
@@ -54,7 +54,7 @@ async function mySkillsLook() {
           <div>
             <code>/${escHtml(s.name)}</code>
             ${s.description ? `<div class="my-skill-about">${escHtml(s.description)}</div>` : ''}
-            <div class="my-skill-from" title="${escHtml(s.path)}">${escHtml(s.path)} · ${s.files} files, ${kb(s.bytes)}</div>
+            <div class="my-skill-from" title="${escHtml(s.path)}">${escHtml(s.path)} · ${Number(s.files) || 0} files, ${kb(s.bytes)}</div>
           </div>
           ${s.keepable
             ? `<button class="btn-cancel" data-keep="${escHtml(s.name)}" data-origin="${escHtml(s.origin)}" data-kept="${s.kept ? 1 : ''}"
