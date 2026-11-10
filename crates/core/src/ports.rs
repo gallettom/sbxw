@@ -45,19 +45,16 @@ pub fn host_ip_for(ip_per_app: bool, index: usize) -> String {
     }
 }
 
-/// `sbx create -p` spec per mapping. Order matters: it decides each app's
+/// `sbx create -p` spec per mapping, always `IP:HOST:SANDBOX` on loopback.
+/// Order matters: it decides each app's
 /// loopback IP in `ip_per_app` mode, so callers must keep it.
 pub fn publish_specs(ports: &[WantedPort], ip_per_app: bool) -> Vec<String> {
     ports
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            if ip_per_app {
-                format!("{}:{}:{}", host_ip_for(true, i), p.host_port, p.sandbox_port)
-            } else {
-                format!("{}:{}", p.host_port, p.sandbox_port)
-            }
-        })
+        // Always with a host IP: a bare `HOST:SANDBOX` binds every interface,
+        // putting a sandbox's dev server on the LAN.
+        .map(|(i, p)| format!("{}:{}:{}", host_ip_for(ip_per_app, i), p.host_port, p.sandbox_port))
         .collect()
 }
 
@@ -140,9 +137,9 @@ mod tests {
     }
 
     #[test]
-    fn specs_carry_an_ip_only_per_app() {
+    fn specs_always_carry_a_loopback_ip() {
         let ports = [wp(4200, 4200, "myapp.local"), wp(8000, 8000, "")];
-        assert_eq!(publish_specs(&ports, false), ["4200:4200", "8000:8000"]);
+        assert_eq!(publish_specs(&ports, false), ["127.0.0.1:4200:4200", "127.0.0.1:8000:8000"]);
         assert_eq!(
             publish_specs(&ports, true),
             ["127.0.0.2:4200:4200", "127.0.0.3:8000:8000"]
