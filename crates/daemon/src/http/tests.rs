@@ -262,6 +262,24 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "no build or no models: {v}");
     assert!(v["error"].as_str().unwrap().contains("voice"));
 
+    // Anonymisation: shapes without a file, names with one, nothing through a broken one.
+    let hide = |text: &str| json_req(post("/api/voice/anonymise", json!({})).header("host", HOST), json!({ "text": text }));
+    let (s, v) = call(ui_router(app.clone()), hide("Jeanne Martin, a@b.ch")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((v["text"].as_str().unwrap(), v["masked"].as_u64().unwrap()), ("Jeanne Martin, [email]", 1));
+    let file = app.store.paths.anonymise();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "[replace]\n\"Jeanne Martin\" = \"Personne A\"\n").unwrap();
+    let (_, v) = call(ui_router(app.clone()), hide("jeanne martin, a@b.ch")).await;
+    assert_eq!(v["text"], "Personne A, [email]", "the file is read at once, no restart");
+    let (_, v) = call(ui_router(app.clone()), Request::builder().uri("/api/voice").header("host", HOST).body(Body::empty()).unwrap()).await;
+    assert_eq!(v["anonymise"]["terms"], 1);
+    std::fs::write(&file, "[remplace]\n").unwrap();
+    let (s, v) = call(ui_router(app.clone()), hide("jeanne martin")).await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "a typo in the file must not let words through: {v}");
+    assert!(v["error"].as_str().unwrap().contains("anonymise.toml"));
+    std::fs::remove_file(&file).unwrap();
+
     for gone in ["/api/voice/chat", "/api/voice/conversations"] {
         let (s, _) = call(ui_router(app.clone()), json_req(post(gone, json!({})).header("host", HOST), json!({}))).await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{gone}: no language model, nothing kept");

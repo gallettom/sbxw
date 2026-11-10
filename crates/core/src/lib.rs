@@ -7,6 +7,7 @@
 //! bring the world; this crate says what to do with it.
 
 pub mod agents;
+pub mod anonymise;
 pub mod approvals;
 pub mod board;
 pub mod artifacts;

@@ -106,6 +106,11 @@ impl Paths {
     pub fn models(&self) -> PathBuf {
         self.root.join("models")
     }
+    /// The names to hide in what is dictated (see `sbxw_core::anonymise`):
+    /// the person's own file, read each time, absent until they write it.
+    pub fn anonymise(&self) -> PathBuf {
+        self.root.join("anonymise.toml")
+    }
     /// The skills the person kept from a sandbox, one folder each: data on
     /// the host, installed in new sandboxes by the kit below.
     pub fn my_skills(&self) -> PathBuf {

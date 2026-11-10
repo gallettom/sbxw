@@ -132,6 +132,15 @@ fn print_status(s: &Value) {
         let state = if speech["runtime_ready"].as_bool().unwrap_or(false) { "installed" } else { "missing" };
         println!("{:<4} {:<44} {:>9}  {:<10} {}", "run", speech["runtime"].as_str().unwrap_or(""), "", "uvx", state);
     }
+    let hide = &s["anonymise"];
+    let file = hide["file"].as_str().unwrap_or("");
+    match hide["error"].as_str() {
+        Some(e) => println!("\nanonymisation: broken, nothing dictated is sent until it is fixed ({e})"),
+        None => {
+            let shapes: Vec<&str> = hide["patterns"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).collect();
+            println!("\nanonymisation: {} name(s) from {file}, and every {}", hide["terms"].as_u64().unwrap_or(0), shapes.join(", "));
+        }
+    }
     if !s["ready"].as_bool().unwrap_or(false) {
         println!("\nnot installed — run `{}`", s["hint"].as_str().unwrap_or("sbxw voice install"));
     }

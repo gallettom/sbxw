@@ -248,6 +248,11 @@ impl App {
                 "runtime_ready": runtime,
                 "voice": self.cfg.voice.tts_voice,
             },
+            // What is masked in dictated words: see `anonymise_rules`.
+            "anonymise": match self.anonymise_rules() {
+                Ok(rules) => json!({ "file": self.store.paths.anonymise(), "terms": rules.terms(), "patterns": rules.patterns() }),
+                Err(e) => json!({ "file": self.store.paths.anonymise(), "error": e }),
+            },
             "job": rt.job,
             "hint": voice::INSTALL_HINT,
             "push_to_talk_key": self.cfg.voice.push_to_talk_key,
@@ -583,8 +588,8 @@ impl App {
             .map_err(|e| e.to_string())
     }
 
-    /// `text` read aloud, as a WAV file. The page sends a message sentence by
-    /// sentence, so the first one plays while the next is synthesised.
+    /// `text` read aloud, the sound coming back as it is made. The page sends
+    /// a message a few sentences at a time.
     pub async fn voice_speak(self: &Arc<Self>, text: String) -> Result<SpeechStream, String> {
         check_speech(&text)?;
         let (server, dir) = self.ensure_speech().await?;
@@ -595,6 +600,25 @@ impl App {
         speech._server = Some(server);
         self.speech_used();
         Ok(speech)
+    }
+
+    /// The person's rules for what is masked, read from `anonymise.toml` each
+    /// time, so a name added is hidden from the next sentence on. No file:
+    /// the shapes alone. A file that does not parse is an error, never
+    /// "nothing to hide": words must not leave unmasked because of a typo.
+    pub fn anonymise_rules(&self) -> Result<sbxw_core::anonymise::Rules, String> {
+        let path = self.store.paths.anonymise();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => sbxw_core::anonymise::Rules::parse(&text).map_err(|e| format!("{}: {e}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+            Err(e) => Err(format!("{}: {e}", path.display())),
+        }
+    }
+
+    /// `text` as it may leave the machine: every dictated word goes through
+    /// here, and so does a message on its way to an agent.
+    pub fn anonymise(&self, text: &str) -> Result<sbxw_core::anonymise::Masked, String> {
+        Ok(sbxw_core::anonymise::mask(text, &self.anonymise_rules()?))
     }
 
     /// The voice is in use: the idle clock starts again.

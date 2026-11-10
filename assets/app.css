@@ -1300,6 +1300,17 @@
   .sbx-sstate[data-state="blocked"] { color: var(--c-amber-strong); font-weight: 600; }
   .sbx-sstate[data-state="done"] { color: var(--c-green); }
   .sbx-sstate[data-state="failed"] { color: var(--c-red); }
+  /* A row in no pane: + at its top right opens it in a spare pane. */
+  .sbx-name > .sbx-pane-add {
+    order: 2; margin-left: auto; width: 18px; height: 18px; padding: 0; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: none; color: var(--c-text-muted);
+    border: 1px solid var(--c-border); border-radius: var(--r-xs);
+    font: 13px/1 var(--font-mono);
+    transition: color .1s, border-color .1s, background .1s;
+  }
+  .sbx-name > .sbx-pane-add:hover { color: var(--c-blue); border-color: var(--c-blue); background: var(--c-blue-tint); }
+  .sbx-name > .sbx-pane-add:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .sbx-thread .sbx-pane-badge { margin-left: auto; padding: .1rem .3rem; float: none; }
   .sbx-thread .sbx-sstate + .sbx-pane-badge { margin-left: .35rem; }
   .sbx-pane-badge {
@@ -3816,18 +3827,54 @@
   .vc-dock [hidden] { display: none !important; }
   .vc-launcher {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    display: inline-flex; align-items: center; gap: .45rem;
-    height: 28px; padding: 0 .55rem 0 .7rem; cursor: pointer;
+    display: inline-flex; align-items: center; gap: .15rem;
+    height: 28px; padding: 0 .3rem;
     background: var(--c-bg); color: var(--c-text-muted);
     border: 1px solid var(--c-border); border-radius: 14px;
     font: 12px var(--font-mono);
-    transition: background .1s, border-color .1s, color .1s;
+    transition: border-color .15s;
   }
-  .vc-launcher.ready { color: var(--c-text-bright); }
-  .vc-launcher:hover { background: var(--c-border); border-color: var(--c-dim); }
-  .vc-launcher[aria-expanded="true"] { border-color: var(--c-blue); }
-  .vc-launcher.listening { border-color: var(--c-red); color: var(--c-red); }
-  .vc-launcher:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+  .vc-launcher.open { border-color: var(--c-blue); }
+  .vc-launcher.speaking { border-color: var(--c-blue); }
+  .vc-launcher.listening { border-color: var(--c-red); }
+  /* Someone is talking: rings leave the border, blue for the voice, red
+     for the microphone. */
+  .vc-launcher::before, .vc-launcher::after {
+    content: ''; position: absolute; inset: -1px; border-radius: 999px;
+    border: 1px solid var(--vc-wave, transparent); opacity: 0; pointer-events: none;
+  }
+  .vc-launcher.speaking { --vc-wave: var(--c-blue); }
+  .vc-launcher.listening { --vc-wave: var(--c-red); }
+  .vc-launcher.speaking::before, .vc-launcher.listening::before { animation: vc-wave 1.6s ease-out infinite; }
+  .vc-launcher.speaking::after, .vc-launcher.listening::after { animation: vc-wave 1.6s ease-out .8s infinite; }
+  @keyframes vc-wave { from { inset: -1px; opacity: .8; } to { inset: -11px; opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .vc-launcher.speaking::before, .vc-launcher.listening::before { animation: none; inset: -4px; opacity: .5; }
+    .vc-launcher.speaking::after, .vc-launcher.listening::after { animation: none; }
+  }
+  .vc-l-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    height: 22px; min-width: 22px; padding: 0 .25rem; cursor: pointer;
+    background: none; border: 0; border-radius: 11px; color: var(--c-text-muted);
+    transition: background .1s, color .1s;
+  }
+  .vc-l-btn:hover:not(:disabled) { background: var(--c-border); }
+  .vc-l-btn:disabled { opacity: .35; cursor: default; }
+  .vc-l-btn:focus-visible, .vc-l-target:focus-within { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .vc-launcher.ready .vc-l-mic { color: var(--c-green); }
+  .vc-launcher.listening .vc-l-mic { color: var(--c-red); }
+  .vc-launcher.busy .vc-l-mic { color: var(--c-text-muted); }
+  .vc-l-stop:not(:disabled) { color: var(--c-blue); }
+  .vc-l-target {
+    position: relative; display: inline-flex; align-items: center;
+    height: 22px; max-width: 14rem; padding: 0 .4rem; border-radius: 11px;
+    color: var(--c-blue); cursor: pointer;
+  }
+  .vc-l-target:hover { background: var(--c-border); }
+  .vc-l-target.none { color: var(--c-text-muted); }
+  .vc-l-target span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The real menu, invisible over the name: a click opens the browser's own list. */
+  .vc-l-target select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; font: inherit; }
   .vc-launcher kbd {
     padding: 0 .3rem; border: 1px solid var(--c-border); border-radius: 4px;
     color: var(--c-text-muted); font: 10.5px var(--font-mono); line-height: 16px;

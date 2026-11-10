@@ -71,6 +71,10 @@ pub const DICT: &[(&str, &str, &str)] = &[
     ("]", "", ""),
 ];
 
+/// Word, French, English: names a voice cannot read, spelt letter by
+/// letter instead. Matched as a whole word, whatever its case.
+pub const WORDS: &[(&str, &str, &str)] = &[("sbxw", "esse bé ixe double vé", "S B X W")];
+
 /// Unit, French, English, in the plural. Said in full after a number only
 /// (`0,43 s`, `8 Go`), longer units first.
 pub const UNITS: &[(&str, &str, &str)] = &[
@@ -173,6 +177,17 @@ pub fn speakable(text: &str, lang: Lang) -> String {
                 let one = c[end - 1] == '1' && !end.checked_sub(2).is_some_and(|k| c[k].is_ascii_digit() || matches!(c[k], '.' | ','));
                 say(&mut out, if one { said.strip_suffix('s').unwrap_or(said) } else { said });
                 i += sym.chars().count();
+                continue;
+            }
+        }
+        if !word(prev) {
+            let spelt = WORDS.iter().find(|(w, ..)| {
+                let n = w.chars().count();
+                !word(at(i + n)) && w.chars().enumerate().all(|(k, x)| at(i + k).is_some_and(|y| y.to_ascii_lowercase() == x))
+            });
+            if let Some((w, fr, en)) = spelt {
+                say(&mut out, if lang == Lang::Fr { fr } else { en });
+                i += w.chars().count();
                 continue;
             }
         }
@@ -281,8 +296,8 @@ mod tests {
     #[test]
     fn names_and_paths_are_said_in_words() {
         assert_eq!(fr("voice_warm"), "voice warm");
-        assert_eq!(fr("dans sbxw.toml."), "dans sbxw point toml.");
-        assert_eq!(fr("~/.sbxw/run/server.err.log"), "tilde slash point sbxw slash run slash server point err point log");
+        assert_eq!(fr("dans sbxw.toml."), "dans esse bé ixe double vé point toml.");
+        assert_eq!(fr("~/.sbxw/run/server.err.log"), "tilde slash point esse bé ixe double vé slash run slash server point err point log");
         assert_eq!(fr("C:\\Users\\test"), "C deux-points backslash Users backslash test");
         assert_eq!(fr("svc::voice"), "svc voice");
         assert_eq!(fr("ensure_speech() renvoie Ok(())"), "ensure speech renvoie Ok");
@@ -309,6 +324,14 @@ mod tests {
         assert_eq!(fr("100 % en 0,43 s pour $15."), "100 pour cent en 0,43 secondes pour 15 dollars.");
         assert_eq!(fr("le ticket #42, la PR n° 7, le §3"), "le ticket numéro 42, la PR numéro 7, le paragraphe 3");
         assert_eq!(fr("à 9:05 sur le port 127.0.0.1:80"), "à 9:05 sur le port 127 point 0 point 0 point 1 deux-points 80");
+    }
+
+    #[test]
+    fn a_name_no_voice_can_read_is_spelt() {
+        assert_eq!(fr("Lance sbxw, puis SBXW down."), "Lance esse bé ixe double vé, puis esse bé ixe double vé down.");
+        assert_eq!(fr("dans sbxw.toml"), "dans esse bé ixe double vé point toml");
+        assert_eq!(fr("sbxwd et xsbxw"), "sbxwd et xsbxw");
+        assert_eq!(speakable("run sbxw", Lang::En), "run S B X W");
     }
 
     #[test]

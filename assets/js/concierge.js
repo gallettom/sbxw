@@ -19,6 +19,9 @@
 
 const vcEl = id => document.getElementById(id);
 const vcLauncher = vcEl('vc-launcher');
+const vcMic = vcEl('vc-l-mic');
+const vcStopBtn = vcEl('vc-l-stop');
+const vcOpenBtn = vcEl('vc-l-open');
 const vcPanel = vcEl('vc-panel');
 const vcLog = vcEl('vc-log');
 const vcSetup = vcEl('vc-setup');
@@ -104,8 +107,13 @@ function vcRender() {
   vcHint.textContent = !ready ? '' : vcStatus.speech?.supported
     ? 'Speech is turned into text locally; the audio is never kept.'
     : 'Speech is turned into text locally. Reading aloud needs a Mac with Apple Silicon.';
-  vcLauncher.classList.toggle('ready', vcReady());
+  vcLauncher.classList.toggle('ready', ready);
   vcLauncher.classList.toggle('listening', !!vcRec && !vcRec.dest);
+  vcLauncher.classList.toggle('busy', vcBusy && !vcRec);
+  vcMic.setAttribute('aria-pressed', String(!!vcRec && !vcRec.dest));
+  vcMic.title = !ready ? 'Voice is not set up: click to see why'
+    : vcRec ? 'Listening: click to send'
+      : vcBusy ? 'Transcribing…' : `Click to talk, click again to send (or hold ${vcKey()})`;
   document.querySelectorAll('.pane-dictate-btn').forEach(b => {
     b.classList.toggle('recording', !!vcRec?.dest && vcRec.dest.pane === +b.dataset.pane);
     b.classList.toggle('busy', vcBusy && !vcRec);
@@ -116,6 +124,8 @@ function vcRender() {
 }
 
 function vcSay(who, text, meta) {
+  // An error is not left in a closed panel.
+  if (who === 'err' && !vcOpen) vcSetOpen(true);
   const row = document.createElement('div');
   row.className = `vc-msg vc-${who}`;
   row.append(document.createTextNode(text));
@@ -182,11 +192,12 @@ async function vcStop() {
     }).then(r => r.json());
     if (rec.dest) {
       if (!r.ok) showToast(`Dictation: ${r.error}`, 'error');
-      else if (r.text) vcDictate(rec.dest.pane, r.text);
+      else if (r.text) { vcDictate(rec.dest.pane, r.text); if (r.masked) showToast(vcMaskedNote(r.masked)); }
     } else if (!r.ok) vcSay('err', r.error);
     else if (!r.text) vcSay('dim', '(nothing heard)');
     else {
       vcHear(r.text);
+      if (r.masked) vcSay('dim', vcMaskedNote(r.masked));
     }
   } catch (e) {
     if (rec.dest) showToast(`Dictation failed: ${e.message || e}`, 'error');
@@ -195,6 +206,21 @@ async function vcStop() {
     vcBusy = false;
     vcRender();
   }
+}
+
+// ── Anonymisation ────────────────────────────────────────────────────────
+// What is dictated comes back from the daemon already masked: the names the
+// person listed in ~/.sbxw/anonymise.toml, and what looks like an e-mail, a
+// phone number, an IBAN or a key. A message can be typed or edited here too,
+// so it is masked once more just before it is sent: the text area then shows
+// what really left. A rules file that does not parse sends nothing.
+function vcMaskedNote(n) { return `${n} thing${n > 1 ? 's' : ''} masked before sending`; }
+async function vcMask(area) {
+  const r = await postJsonOrError('/api/voice/anonymise', { text: area.value.trim() });
+  if (!r.ok) { vcSay('err', `Not sent, the anonymisation failed: ${r.error}`); return null; }
+  area.value = r.text;
+  if (r.masked) vcSay('dim', vcMaskedNote(r.masked));
+  return r.text;
 }
 
 // ── Dictation into a terminal ────────────────────────────────────────────
@@ -274,6 +300,8 @@ async function vcTargets() {
 // Picked at the top, remembered per browser: the sandbox whose agents are
 // followed, and where a message said with nothing to answer goes.
 const vcPick = vcEl('vc-target');
+const vcBarPick = vcEl('vc-l-pick');
+const vcBarName = vcEl('vc-l-name');
 let vcTarget = null;
 try { vcTarget = localStorage.getItem(VC_TARGET) || null; } catch (_) {}
 
@@ -290,20 +318,48 @@ async function vcFillTargets() {
     vcPick.append(o);
   }
   vcPick.value = vcTarget || '';
+  // The same list under the name in the bar.
+  vcBarPick.replaceChildren(...[...vcPick.options].map(o => o.cloneNode(true)));
+  vcBarPick.value = vcTarget || '';
+  vcRenderTarget();
 }
-
-vcPick.addEventListener('change', () => {
-  vcTarget = vcPick.value || null;
+function vcRenderTarget() {
+  vcBarName.textContent = vcTarget || 'pick a sandbox';
+  vcBarName.parentElement.classList.toggle('none', !vcTarget);
+}
+function vcSetTarget(name) {
+  vcTarget = name || null;
   try { vcTarget ? localStorage.setItem(VC_TARGET, vcTarget) : localStorage.removeItem(VC_TARGET); } catch (_) {}
-});
+  vcPick.value = vcBarPick.value = vcTarget || '';
+  vcRenderTarget();
+}
+vcPick.addEventListener('change', () => vcSetTarget(vcPick.value));
+vcBarPick.addEventListener('change', () => vcSetTarget(vcBarPick.value));
+// The list is fresh by the time the name is clicked.
+vcLauncher.addEventListener('pointerenter', vcFillTargets);
+vcBarPick.addEventListener('focus', vcFillTargets);
+vcFillTargets();
 
 // ── A message to the sandbox ─────────────────────────────────────────────
 // Words said (or typed) with nothing to answer are a message for the picked
-// sandbox's agent: shown in an editable card, as they were said. More words
-// add to it; "oui" or Send types it into the agent, "non" or Discard drops
-// it. Nothing reaches a sandbox any other way: the yes is the person's
-// (rule 1 of the spec, the relay's own rule).
-function vcDraft(text) {
+// sandbox's agent: masked, then typed into it at once, with no card to
+// confirm. What left is shown when the masking changed it.
+async function vcDraft(text) {
+  const name = vcTarget;
+  if (!name) return vcDraftCard(text);
+  const safe = await postJsonOrError('/api/voice/anonymise', { text: text.trim() });
+  if (!safe.ok) { vcSay('err', `Not sent, the anonymisation failed: ${safe.error}`); return; }
+  const r = await postJsonOrError('/api/chat/push', { text: safe.text, name });
+  // Not lost: the words wait in a card, to send again or drop.
+  if (!r.ok) { vcSay('err', `Not sent to ${name}: ${r.error}`); return vcDraftCard(safe.text); }
+  vcSay('dim', safe.masked ? `Sent to ${name}, ${vcMaskedNote(safe.masked).replace(' before sending', '')}: ${safe.text}` : `Sent to ${name}.`);
+  if (!vcSpeech.muted) vcSpeak('Envoyé.');
+}
+
+// With no sandbox picked, or when sending failed, the words are kept in an
+// editable card: more words add to it; "oui" or Send types it into the
+// agent, "non" or Discard drops it.
+function vcDraftCard(text) {
   const target = vcTarget;
   const { card, head, foot } = vcCard('vc-draft', target ? `To ${target}` : 'Pick a sandbox at the top first');
   const area = document.createElement('textarea');
@@ -320,7 +376,9 @@ function vcDraft(text) {
     if (!name) { vcSay('err', 'Pick a sandbox at the top first.'); return; }
     if (!body) return;
     send.disabled = true;
-    const r = await postJsonOrError('/api/chat/push', { text: body, name });
+    const safe = await vcMask(area);
+    if (safe === null) { send.disabled = false; return; }
+    const r = await postJsonOrError('/api/chat/push', { text: safe, name });
     if (!r.ok) { send.disabled = false; vcSay('err', `Not sent to ${name}: ${r.error}`); return; }
     head.textContent = `Sent to ${name}`;
     done(`Typed into ${name}'s agent.`);
@@ -389,6 +447,12 @@ const vcSpeech = (() => {
   let fetching = false;   // one batch is made at a time, in order
   let abort = null;       // cancels the request in flight on stop()
   let wait = 0;
+  // Told to the bar: something is being made or played.
+  let was = false;
+  function tell() {
+    const on = fetching || queue.length > 0 || pending.length > 0 || live.size > 0;
+    if (on !== was) { was = on; vcSpeaking(on); }
+  }
   function say(text) {
     text = text.trim();
     if (!text || muted || !vcReady() || !vcStatus.speech?.supported) return;
@@ -400,6 +464,7 @@ const vcSpeech = (() => {
     clearTimeout(timer);
     if (pending.length >= VC_BATCH) batch();
     else timer = setTimeout(batch, 100);
+    tell();
   }
   function batch() {
     clearTimeout(timer);
@@ -423,7 +488,7 @@ const vcSpeech = (() => {
     const src = ctx.createBufferSource();
     src.buffer = audio;
     src.connect(ctx.destination);
-    src.onended = () => live.delete(src);
+    src.onended = () => { live.delete(src); tell(); };
     live.add(src);
     // The voice caught up with what is made (or is starting): it waits for a
     // little sound to be ready, longer each time, so that a slow moment is
@@ -475,7 +540,7 @@ const vcSpeech = (() => {
       // One failure ends the reading: the rest would fail the same way.
       if (my === gen) { drop(); vcSay('err', `Could not speak: ${e.message || e}`); }
     } finally {
-      if (my === gen) { fetching = false; pump(); }
+      if (my === gen) { fetching = false; pump(); tell(); }
     }
   }
   return {
@@ -510,6 +575,7 @@ const vcSpeech = (() => {
       if (abort) { abort.abort(); abort = null; }
       for (const src of live) { src.onended = null; try { src.stop(); } catch (_) {} }
       live.clear();
+      tell();
       nextAt = 0;
       lead = VC_LEAD;
       gaps = 0;
@@ -537,7 +603,8 @@ vcRenderMute();
 function vcSetOpen(open) {
   vcOpen = open;
   vcPanel.hidden = !open;
-  vcLauncher.setAttribute('aria-expanded', String(open));
+  vcOpenBtn.setAttribute('aria-expanded', String(open));
+  vcLauncher.classList.toggle('open', open);
   if (open) { vcRefresh(); vcWarm(!vcSpeech.muted); vcFillTargets(); }
 }
 
@@ -552,7 +619,21 @@ function vcWarm(speech) {
   fetch('/api/voice/warm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ speech }) }).catch(() => {});
 }
 
-vcLauncher.addEventListener('click', () => vcSetOpen(!vcOpen));
+vcOpenBtn.addEventListener('click', () => vcSetOpen(!vcOpen));
+// The microphone in the bar: a click starts listening, the next one sends.
+// Not set up yet: the panel says what is missing.
+vcMic.addEventListener('click', () => {
+  if (!(vcReady() && window.isSecureContext)) return vcSetOpen(true);
+  if (vcRec && !vcRec.dest) vcStop();
+  else if (!vcRec && !vcBusy) vcStart();
+});
+// The speaker in the bar: lit while something is read aloud, a click stops it.
+vcStopBtn.addEventListener('click', () => vcSpeech.stop());
+function vcSpeaking(on) {
+  vcLauncher.classList.toggle('speaking', on);
+  vcStopBtn.disabled = !on;
+  vcStopBtn.title = on ? 'Stop reading aloud' : 'Nothing is being read aloud';
+}
 vcEl('vc-close').addEventListener('click', () => vcSetOpen(false));
 
 vcTalk.addEventListener('pointerdown', e => { e.preventDefault(); vcTalk.setPointerCapture(e.pointerId); vcStart(); });
@@ -791,9 +872,11 @@ async function vcGrillDone(st) {
   vcConfirm(card, `Send these answers to ${vcWho(sandbox, thread)}?`, async () => {
     // Through the relay when the agent asked with its tool: the answers are
     // that call's result. Otherwise typed into its session.
+    const safe = await vcMask(area);
+    if (safe === null) return;
     const r = st.relay
-      ? await postJsonOrError(`/api/relay/${encodeURIComponent(st.relay)}/approve`, { answer: area.value.trim() })
-      : await postJsonOrError('/api/chat/push', { text: area.value.trim(), name: sandbox, thread: thread || undefined });
+      ? await postJsonOrError(`/api/relay/${encodeURIComponent(st.relay)}/approve`, { answer: safe })
+      : await postJsonOrError('/api/chat/push', { text: safe, name: sandbox, thread: thread || undefined });
     if (!r.ok) { vcSay('err', `Not sent: ${r.error}`); return; }
     area.readOnly = true;
     card.classList.add('done');
@@ -863,23 +946,29 @@ function vcHear(text) {
   vcDraft(text);
 }
 
-// The words said are the answer: shown, editable, sent on a yes.
-function vcAnswerAgent(p, dictated) {
+// The words said are the answer: masked, sent at once, and shown as they left.
+async function vcAnswerAgent(p, dictated) {
   const { card } = p;
+  vcDisarm();
   const area = document.createElement('textarea');
   area.className = 'vc-brief-text';
   area.value = dictated;
   area.rows = Math.min(10, dictated.split('\n').length + 1);
+  area.readOnly = true;
   area.setAttribute('aria-label', 'Answer');
   card.append(area);
-  vcConfirm(card, `Send this to ${vcWho(p.sandbox, p.thread)}?`, async () => {
-    const r = await postJsonOrError('/api/chat/push', { text: area.value.trim(), name: p.sandbox, thread: p.thread || undefined });
-    if (!r.ok) { vcSay('err', `Not sent: ${r.error}`); return; }
-    area.readOnly = true;
-    card.classList.add('done');
-    vcSay('dim', `Answer typed into ${vcWho(p.sandbox, p.thread)}.`);
-  });
-  if (!vcSpeech.muted) vcSpeak("Voici ta réponse. J'envoie ?");
+  const safe = await vcMask(area);
+  const r = safe === null ? null : await postJsonOrError('/api/chat/push', { text: safe, name: p.sandbox, thread: p.thread || undefined });
+  if (!r?.ok) {
+    // The question stays open: say the answer again.
+    if (r) vcSay('err', `Not sent: ${r.error}`);
+    area.remove();
+    vcArm(p);
+    return;
+  }
+  card.classList.add('done');
+  vcSay('dim', `Answer typed into ${vcWho(p.sandbox, p.thread)}.`);
+  if (!vcSpeech.muted) vcSpeak('Envoyé.');
 }
 
 // Which option the words name, 1-based, or 0: a number ("la deux", "option

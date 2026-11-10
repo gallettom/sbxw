@@ -161,6 +161,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/voice/rm", post(voice_rm))
         .route("/api/voice/speak", post(voice_speak))
         .route("/api/voice/warm", post(voice_warm))
+        .route("/api/voice/anonymise", post(voice_anonymise))
         .route(
             "/api/voice/transcribe",
             post(voice_transcribe).layer(DefaultBodyLimit::max(crate::svc::voice::MAX_SAMPLES * 4 + 1024)),
@@ -1749,7 +1750,17 @@ async fn voice_transcribe(State(app): S, body: Bytes) -> ApiResult {
         .voice_transcribe(samples)
         .await
         .map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
-    Ok(ok_with(json!({ "text": text.trim(), "audio_s": secs, "ms": t.elapsed().as_millis() as u64 })))
+    // Masked before it leaves the daemon: the page, a terminal and an agent
+    // only ever see this text.
+    let safe = app.anonymise(text.trim()).map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(ok_with(json!({ "text": safe.text, "masked": safe.count, "audio_s": secs, "ms": t.elapsed().as_millis() as u64 })))
+}
+
+/// A message typed or edited in the concierge, masked like dictated words:
+/// the page asks just before it sends.
+async fn voice_anonymise(State(app): S, Json(b): Json<VoiceSpeakBody>) -> ApiResult {
+    let safe = app.anonymise(&b.text).map_err(|e| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    Ok(ok_with(json!({ "text": safe.text, "masked": safe.count })))
 }
 
 #[derive(Deserialize)]

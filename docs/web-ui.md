@@ -22,7 +22,7 @@ Served at <http://sbxw.localhost:7681> by default (`web_addr` in
 | Area | What's there |
 |---|---|
 | **Header** | The terminal-count switch (1 to several panes), the terminal colour picker, for the background, the bar above it and the text (kept in this browser; the defaults come from [`terminal_color`, `terminal_bar_color` and `terminal_text_color`](configuration.md)), the relay badge when an agent's question waits for you, and your **Claude subscription usage** |
-| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder (and first by host, when [remote hosts](#remote-hosts-experimental) are registered). Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row |
+| **Sidebar** | Every sandbox `sbx ls` reports, grouped by workspace folder (and first by host, when [remote hosts](#remote-hosts-experimental) are registered). Chat sandboxes go under **💬 Chats**. In each group, and among the sandboxes outside any group, the ones on screen come first, in pane order. A sandbox's [threads](threads-and-lead.md) are listed under its row. Clicking a row opens it in the focused pane; a row that is in no pane has a **+** at its top right, which opens it in the first empty pane, or adds a pane for it |
 | **Panes** | One terminal each. A sandbox's panes sit next to each other in a shared colour |
 | **Bottom right** | Background-job cards (bring-ups, code maps, relay requests) and the [chat dock](chat.md#the-chat-dock) button |
 
@@ -369,8 +369,20 @@ Run them in a terminal on the host, not in a sandbox pane.
 
 ## The voice concierge
 
-The **Concierge** button in the middle of the top bar opens a panel under it,
-the voice side of sbxw, apart from the chat dock. Hold its talk button, or hold
+The concierge sits in the middle of the top bar, the voice side of sbxw,
+apart from the chat dock. From left to right:
+
+| Part | What it does |
+|---|---|
+| Microphone, green when voice is set up | Click to talk, click again to send. Red while it listens |
+| Sandbox name, in blue | Where your words go. Click it to pick another running sandbox |
+| Speaker | Lit while something is read aloud: click to stop the reading |
+| **F8** | Opens the panel under the bar: what was sent, agents' messages, errors |
+
+Rings leave the border while someone talks: blue when the voice reads, red
+when the microphone listens. An error opens the panel by itself.
+
+In the panel, hold the talk button, or hold
 **F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
 changes it), speak, and release: the speech is turned into text on this
 machine. The audio is never kept, and neither is the text.
@@ -398,11 +410,34 @@ and in English for the others. 🔊 mutes it; talking
 again stops it. The voice is `[voice]
 tts_voice`.
 
+What you dictate is masked before it goes anywhere: an e-mail address, a
+phone number, an IBAN or a key becomes `[email]`, `[phone]`, `[iban]` or
+`[secret]`, and the names you list in `~/.sbxw/anonymise.toml` become the
+aliases you chose. A card edited by hand is masked again as it is sent, and
+then shows what left.
+
+```toml
+patterns = ["email", "phone", "iban", "secret"]   # optional: the default
+
+[replace]
+"Jeanne Martin" = "Personne A"
+"Projet Atlas" = "Projet X"
+```
+
+Case, accents and hyphens are ignored, and a name only matches as a whole
+word. The file is read each time, so a name added is hidden from the next
+sentence on; a file that does not parse sends nothing until it is fixed.
+A name you did not list goes through, and a recogniser may spell a name
+another way; a message is sent as soon as it is said, so the list is the
+only guard. What you type straight into a
+terminal is not filtered. `sbxw voice status` shows what is in force.
+
 Pick a sandbox at the top of the panel. What you say with nothing to answer
-becomes a message for its agent: it shows in an editable card as you said
-it, more words add to it, and *oui* (or **Send**) types it into the agent;
-*non* (or **Discard**) drops it. Nothing is sent any other way. You can
-also type.
+becomes a message for its agent: it is masked and typed into the agent at
+once, with nothing to confirm; the panel shows what left when the masking
+changed it. The same goes for your answer to an agent's question. With no
+sandbox picked, or if sending fails, the words wait in an editable card
+(**Send** or *oui*, **Discard** or *non*). You can also type.
 
 A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
 session sbxw opened there — engages the concierge on its own: the panel
