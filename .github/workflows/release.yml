@@ -5,13 +5,19 @@ on:
     tags:
       - 'v[0-9]*'
 
-permissions:
-  contents: write
+# Nothing by default: each job asks for what it needs, and only the job that
+# publishes the release can write to the repository.
+permissions: {}
+
+# Third-party actions are pinned to full commit SHAs (the version in the
+# trailing comment), so a moved tag cannot change what runs here.
 
 jobs:
   build:
     name: ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -42,35 +48,37 @@ jobs:
             use_cross: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: dtolnay/rust-toolchain@stable
+      # dtolnay/rust-toolchain has no version tags: this is the head of its
+      # `stable` branch, which installs the stable toolchain.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
       # Cache Cargo registry + build artefacts to speed up subsequent runs.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
 
       - name: Install cross
         if: matrix.use_cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cross
+          tool: cross@0.2.5
 
       - name: Build
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --locked --release --target ${{ matrix.target }}
           else
-            cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+            cargo build --locked --release --target ${{ matrix.target }} ${{ matrix.features }}
           fi
 
       - name: Collect binary
         run: cp target/${{ matrix.target }}/release/sbxw ${{ matrix.artifact }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -79,15 +87,17 @@ jobs:
   island:
     name: SbxwIsland-macos
     runs-on: macos-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The island carries its own version (ISLAND_VERSION in build-app.sh), not
       # the release tag — it ships on the CLI's release train but versions apart.
       - name: Build .app bundle
         run: macos/build-app.sh dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: SbxwIsland-macos
           path: |
@@ -99,17 +109,28 @@ jobs:
     name: GitHub Release
     needs: [build, island]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the only job that may: it creates the release
     steps:
       # The web UI and the bundled kits are embedded in the binary: only the
       # binaries and the island ship.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           merge-multiple: true
 
+      # One line per file that install.sh and `sbxw update` download, named
+      # explicitly: both refuse to install a file with no line here, so a
+      # missing artifact must fail the release rather than ship unverifiable.
       - name: Generate checksums
-        run: sha256sum sbxw-macos-* sbxw-linux-* SbxwIsland-macos.zip > sha256sums.txt
+        run: |
+          set -eu
+          sha256sum \
+            sbxw-macos-arm64 sbxw-macos-x86_64 \
+            sbxw-linux-x86_64 sbxw-linux-arm64 \
+            SbxwIsland-macos.zip > sha256sums.txt
+          cat sha256sums.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             sbxw-macos-*
