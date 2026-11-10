@@ -10,7 +10,7 @@
 //! **export**: `sbxw.toml` as the file sbx reads, written beside the workspace,
 //! never inside it.
 
-use super::{load_config, up, UpArgs};
+use super::{load_config, up_with, UpArgs};
 use anyhow::{bail, Context, Result};
 use sbxw_core::envexport;
 use sbxw_core::envfile::{self, Port};
@@ -76,7 +76,7 @@ fn negotiate(ports: &[Port], interactive: bool) -> Result<(Vec<Port>, bool)> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_api_key: bool, tail: bool, env_args: Vec<String>) -> Result<()> {
+pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_api_key: bool, tail: bool, env_args: Vec<String>, allow_host_access: bool) -> Result<()> {
     let rt = super::runtime();
     super::check_sbx(&rt)?;
     let cli_args: Vec<(String, String)> = env_args
@@ -163,7 +163,7 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
     // Written to disk: the daemon reads the sandbox's config from a file.
     let merged = store.paths.env_dir(&name).join("sbxw.toml");
     write_atomic(&merged, cfg.to_toml()?.as_bytes())?;
-    up(UpArgs {
+    up_with(UpArgs {
         name: Some(name.to_string()),
         path: Some(workspace),
         git: None,
@@ -176,7 +176,7 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
         chat: false,
         rebuild_template: false,
         remote_control: false,
-    })
+    }, allow_host_access)
 }
 
 pub fn export(path: Option<PathBuf>, name: Option<String>, config: PathBuf, out: Option<PathBuf>, force: bool) -> Result<()> {

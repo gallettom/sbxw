@@ -323,12 +323,8 @@ pub(crate) fn approve_here(store: &Store, cfg: &Config, scope: Scope, allow: boo
     }
 }
 
-pub fn up(a: UpArgs) -> Result<()> {
-    up_with(a, false)
-}
-
-/// [`up`], with `--allow-host-access`: the config's new grants are approved
-/// as shown, without asking.
+/// `sbxw up`. With `allow_host_access` (`--allow-host-access`), the
+/// config's new grants are approved as shown, without asking.
 pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
     let cfg = load_config(&a.config)?;
     let config_abs = config_path(&cfg, &a.config)?;

@@ -288,6 +288,10 @@ enum EnvCmd {
         tail: bool,
         #[arg(long = "env-arg", value_name = "NAME=VALUE")]
         env_args: Vec<String>,
+        /// Approve the host access the merged config asks for as shown,
+        /// without asking.
+        #[arg(long)]
+        allow_host_access: bool,
     },
     /// Write an `sbxenv.yaml` beside the workspace, from sbxw.toml.
     Export {
@@ -383,8 +387,8 @@ fn main() -> Result<()> {
         Cmd::Stop { names, all } => cmd::stop(names, all),
         Cmd::Rm { names, all } => cmd::rm(names, all),
         Cmd::Prune { since, dry_run, yes } => cmd::prune(since.as_deref(), dry_run, yes),
-        Cmd::Env { cmd: EnvCmd::Run { paths, config, no_web, yes, use_api_key, tail, env_args } } => {
-            cmd::env::run(paths, config, no_web, yes, use_api_key, tail, env_args)
+        Cmd::Env { cmd: EnvCmd::Run { paths, config, no_web, yes, use_api_key, tail, env_args, allow_host_access } } => {
+            cmd::env::run(paths, config, no_web, yes, use_api_key, tail, env_args, allow_host_access)
         }
         Cmd::Env { cmd: EnvCmd::Export { path, name, config, out, force } } => cmd::env::export(path, name, config, out, force),
         Cmd::Hosts { action, config } => cmd::hosts(action.unwrap_or_default(), &config),
