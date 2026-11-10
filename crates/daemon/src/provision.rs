@@ -1248,7 +1248,8 @@ mod tests {
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.contains("--kit /kits/codemap") && !create.contains("-oauth"), "sbx signs Claude in itself: {create}");
-        assert!(create.contains("-p 4200:4200"));
+        // `4200:4200`, with or without a host IP in front.
+        assert!(create.contains("4200:4200 ") || create.ends_with("4200:4200"), "{create}");
         assert!(create.contains("-e ANTHROPIC_DEFAULT_MODEL=claude-sonnet-5-5"));
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
         assert!(allow.contains("localhost:7682") && !allow.contains("localhost:7681"), "{allow}");
