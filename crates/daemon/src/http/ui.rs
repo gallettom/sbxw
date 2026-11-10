@@ -1449,8 +1449,8 @@ async fn artifacts_list(State(app): S, Path(name): Path<String>) -> ApiResult {
 }
 
 /// The deliverables under `root`: allowed extensions, no hidden file or
-/// folder, links not followed. One walk of the host, filtered here because a
-/// walk prunes by exact name and "hidden" is a prefix.
+/// folder, links not followed. One host walk, filtered here because a walk
+/// prunes by exact name and "hidden" is a prefix.
 async fn walk_artifacts(host: &Host, root: &std::path::Path) -> Vec<artifacts::Entry> {
     if !host.fs.stat(root).await.ok().flatten().is_some_and(|m| m.kind == Kind::Dir) {
         return Vec::new();
@@ -1521,11 +1521,10 @@ async fn sandbox_fs_list(State(app): S, Path(name): Path<String>, Query(q): Quer
     })))
 }
 
-/// Each thread's worktree, and its `.sbxw-artifacts` when it has one: until
-/// merged, a thread's deliverables sit on its branch under
-/// `.sbxw-worktrees/<thread>`, a dot-folder nobody finds by browsing. Paths are
-/// the same in the sandbox and on the host (the workspace is mounted at its
-/// own path).
+/// Each thread's worktree, and its `.sbxw-artifacts` if any: until merged,
+/// deliverables sit on the thread's branch under `.sbxw-worktrees/<thread>`, a
+/// dot-folder nobody finds by browsing. Paths match in the sandbox and on the
+/// host (the workspace is mounted at its own path).
 async fn thread_worktrees(app: &App, sb: &SandboxRef) -> Vec<Value> {
     let Some(ws) = app.store.workspace(sb) else { return vec![] };
     let recorded: std::collections::BTreeMap<String, String> =

@@ -8,14 +8,14 @@
 //! The first sandbox fills it: when the cache is empty or expired, the sandbox
 //! being created gets it *writable* with `SBXW_CACHE_FILL=1`; its kits
 //! download into it and drop `.filled-<kit>` under their `<arch>-<codename>`
-//! directory. Every other sandbox gets it read-only. There is no separate
-//! warmer, so the filler can write it for its whole life: the cache expires
-//! after `cache_ttl_days` and is refilled from scratch, which bounds how long
-//! anything it wrote survives.
+//! directory. Every other sandbox gets it read-only. No separate warmer exists,
+//! so the filler writes for its whole life; the cache expires after
+//! `cache_ttl_days` and is refilled from scratch, bounding how long anything
+//! it wrote survives.
 //!
 //! One filler at a time: a lock file taken at creation, never released, only
 //! outlived — the fill is done once every marker is newer than the lock, and
-//! a lock older than [`FILL_TIMEOUT`] is a fill that failed.
+//! a lock older than `FILL_TIMEOUT` is a fill that failed.
 
 use crate::bundled;
 use crate::host::{HostFs, Kind};

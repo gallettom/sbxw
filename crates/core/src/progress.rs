@@ -1,8 +1,8 @@
-//! A bring-up's running commentary: the steps it will take, announced before
-//! the first, then which one is running and what `sbx` printed under it.
+//! A bring-up's commentary: its steps, announced before the first, then the
+//! running one and what `sbx` printed under it.
 //!
-//! Plain data. Whoever runs a bring-up passes a sink; the daemon forwards it to
-//! every browser tab and to the terminal that typed `sbxw up`.
+//! Plain data. The caller passes a sink; the daemon forwards it to every
+//! browser tab and to the terminal that ran `sbxw up`.
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -40,15 +40,14 @@ pub enum Progress {
     Plan { steps: Vec<Step> },
     Started { id: String },
     Detail { text: String },
-    /// Also says what is left to do by hand (a `/etc/hosts` alias nobody could
-    /// authorise), without failing the bring-up.
+    /// A manual step left undone (a `/etc/hosts` alias nobody could authorise),
+    /// without failing the bring-up.
     Warning { text: String },
     Done { error: Option<String> },
 }
 
 pub type Sink = Arc<dyn Fn(Progress) + Send + Sync>;
 
-/// A sink that drops everything.
 pub fn silent() -> Sink {
     Arc::new(|_| {})
 }

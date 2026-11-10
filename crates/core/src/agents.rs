@@ -120,11 +120,11 @@ pub struct OriginEvidence<'a> {
     pub thread: Option<&'a str>,
 }
 
-/// Is this session the one sbxw attached? Any marker of a client is enough —
-/// a client process in the ancestry (`server` is Claude Desktop's in-container
-/// half, `sshd` a plain `ssh <name>.sbx`), sshd's environment — and the working
-/// directory settles the rest. Silence is never evidence: a hook that reported
-/// nothing leaves `Unknown`, not `Tty`.
+/// Is this the session sbxw attached? Any client marker is enough: a client in
+/// the ancestry (`server` is Claude Desktop's in-container half, `sshd` a plain
+/// `ssh <name>.sbx`) or sshd's environment. The working directory settles the
+/// rest. Silence is never evidence: a hook that reported nothing leaves
+/// `Unknown`, not `Tty`.
 pub fn classify_origin(ev: &OriginEvidence<'_>) -> SessionOrigin {
     let client = ev.ancestry.iter().any(|name| {
         let n = name.trim().to_ascii_lowercase();
@@ -145,10 +145,9 @@ pub fn classify_origin(ev: &OriginEvidence<'_>) -> SessionOrigin {
 }
 
 /// The agent sbxw attaches starts in the recorded workspace; a client lands
-/// wherever it chose. Weaker than sshd's environment and kept behind it: an
-/// SSH session that `cd`s into the workspace reads as the tty's too — and
-/// that misreading is the safe one, since two `Tty` sessions make a sandbox
-/// read-only rather than typed into.
+/// wherever it chose. Weaker than sshd's environment, so checked after it. An
+/// SSH session that `cd`s into the workspace reads as the tty's too: the safe
+/// misreading, since two `Tty` sessions make a sandbox read-only, not typed into.
 fn classify_by_cwd(cwd: Option<&str>, workspace: Option<&str>) -> SessionOrigin {
     match (cwd, workspace) {
         (Some(c), Some(w)) if !c.is_empty() && !w.is_empty() => {
@@ -340,12 +339,11 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             }
             st.state = SessionState::Working;
         }
-        // Claude Code also notifies a minute into an idle prompt ("waiting for
-        // your input"). It is not a summons — after a `Stop` it only repeats
-        // what is already known — but it is the one word that a turn cut short
-        // with Esc ever gets: an interrupt fires no `Stop`, and without this
-        // the session would read as working (or, after a rejected permission
-        // prompt, as wanting you) until the next prompt.
+        // Claude Code's idle reminder (a minute into an idle prompt) is not a
+        // summons: after a `Stop` it repeats what is known. But a turn cut short
+        // with Esc fires no `Stop`, so this is the only word that settles it;
+        // without it the session reads as working (or, after a rejected
+        // permission prompt, as wanting you) until the next prompt.
         "Notification" if event.str("notification_type") == "idle_prompt" => {
             st.state = SessionState::Idle;
             st.prompt.clear();
@@ -366,9 +364,8 @@ fn apply(event: &HookEvent<'_>, st: &mut Status, now: u64) -> bool {
             // Claude Code hands the finished turn's prose to `Stop` itself; the
             // transcript lags and is never read.
             if let Some(text) = body.get("last_assistant_message").and_then(Value::as_str) {
-                // Long enough for a /grill-me round, which the voice
-                // concierge reads and answers whole; still bounded, since
-                // every tab and the island receive it on each event.
+                // Long enough for a /grill-me round (the voice concierge reads
+                // it whole); bounded, since every tab gets it on each event.
                 let text = clip_lines(text, 80, 4000);
                 if !text.is_empty() {
                     st.reply = Some(text);

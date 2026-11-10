@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 // ── Self-update ──────────────────────────────────────────────────────────
-// Mirrors install.sh's own download/OS-arch/sudo-fallback logic so
-// `sbxw update` behaves exactly like re-running the installer against the
-// latest release, without requiring curl to be piped through a shell script.
+// Mirrors install.sh's download, OS/arch and sudo-fallback logic, so
+// `sbxw update` acts like re-running the installer on the latest release,
+// without piping curl through a shell script.
 const REPO: &str = "gallettom/sbxw";
 
 /// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
@@ -21,8 +21,8 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     let latest = latest_tag.trim_start_matches('v');
     let base = format!("https://github.com/{REPO}/releases/download/{latest_tag}");
 
-    // The island versions apart from the CLI, so it can be stale even when the
-    // binary isn't — check it on both paths.
+    // The island is versioned apart from the CLI, so it can be stale when the
+    // binary is not: check it on both paths.
     let island = |check: bool| {
         if no_island {
             return;
@@ -84,8 +84,8 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     })?;
     ui.ok("downloaded", &artifact);
 
-    // Best-effort checksum verification against the release's sha256sums.txt
-    // (published alongside every release by .github/workflows/release.yml).
+    // Best-effort checksum check against the release's sha256sums.txt
+    // (published by .github/workflows/release.yml).
     let tmp_sums = tmp_dir.join("sha256sums.txt");
     if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
         verify_checksum(&tmp_bin, &artifact, &tmp_sums)
@@ -127,8 +127,8 @@ fn daemon_running() -> bool {
     crate::client::Daemon::new(&cfg.web_addr).health().is_some()
 }
 
-/// Rewrites the browser extension's folder from the binary at `exe` — after an
-/// update that is the new one, whose extension this process does not carry.
+/// Rewrites the browser extension folder from the binary at `exe`: after an
+/// update, that is the new binary, which this process does not carry.
 fn refresh_extension(ui: &Ui, exe: &std::path::Path) {
     let ok = std::process::Command::new(exe)
         .args(["extension", "--refresh"])
@@ -171,9 +171,9 @@ impl PlanItem {
 }
 
 // ── Terminal output ──────────────────────────────────────────────────────
-// The same look as a bring-up (render.rs): one ✓ line per step, a spinner on
-// the step that is running, colours from the banner. Plain text when stdout
-// isn't a terminal or NO_COLOR is set.
+// Same look as a bring-up (render.rs): one ✓ line per step, a spinner on the
+// running step, colours from the banner. Plain text when stdout is not a
+// terminal or NO_COLOR is set.
 const BLUE: &str = "\x1b[1;38;5;75m";
 const GREEN: &str = "\x1b[1;38;5;77m";
 const YELLOW: &str = "\x1b[38;5;221m";
@@ -240,8 +240,8 @@ impl Ui {
         println!("  {} {}", self.paint(YELLOW, "!"), self.paint(YELLOW, &text.replace('\n', "\n    ")));
     }
 
-    /// Runs `work` with a spinner on `label…` — erased when it ends, so the
-    /// caller follows with its own ✓ line; a ✕ replaces it on failure.
+    /// Runs `work` with a spinner on `label…`, erased when it ends (the caller
+    /// follows with its own ✓); a ✕ replaces it on failure.
     fn spin<T>(&self, label: &str, work: impl FnOnce() -> Result<T>) -> Result<T> {
         use std::io::Write;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -273,20 +273,19 @@ impl Ui {
 }
 
 // ── macOS companion app (sbxw Island) ────────────────────────────────────
-// The bundle installed by install.sh lives outside the binary, so `sbxw update`
-// refreshes it in place — but only if the user already has it: updating must
-// never install something they declined.
+// The install.sh bundle lives outside the binary: `sbxw update` refreshes it in
+// place, only if already installed (it never installs what the user declined).
 const ISLAND_APP: &str = "SbxwIsland.app";
 /// Bundle executable name, i.e. what the running process is called.
 const ISLAND_PROC: &str = "SbxwIsland";
 
-/// Refreshes an installed `SbxwIsland.app` when the release ships a newer build
-/// of it. macOS-only, and a no-op when the app isn't installed. With
-/// `check_only` it reports what it would do without touching anything.
+/// Refreshes an installed `SbxwIsland.app` when the release ships a newer build.
+/// macOS only; a no-op when the app is not installed. With `check_only` it only
+/// reports.
 ///
 /// The app's version is independent of the release tag, so the release
-/// publishes `island-version.txt` next to the zip (see macos/build-app.sh) —
-/// that's what tells us the bundle is stale without downloading it first.
+/// publishes `island-version.txt` beside the zip (see macos/build-app.sh): that
+/// tells us the bundle is stale without downloading it.
 fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     if std::env::consts::OS != "macos" {
         return Ok(());

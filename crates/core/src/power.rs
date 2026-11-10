@@ -17,7 +17,6 @@ use std::collections::HashMap;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeepAwake {
-    /// Never hold the Mac awake.
     Off,
     /// While Remote Control is on in at least one session.
     #[default]
@@ -37,7 +36,6 @@ pub fn caffeinate_args(daemon_pid: u32) -> Vec<String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Battery {
     pub percent: u8,
-    /// Drawing from the battery rather than a charger.
     pub on_battery: bool,
 }
 
@@ -70,9 +68,9 @@ pub fn hold(mode: KeepAwake, remote_on: bool, battery: Option<Battery>, min_batt
 /// A fresh note is due only after this many more percent are lost.
 pub const NOTICE_STEP: u8 = 5;
 
-/// When each sandbox's agent was last told about the battery, as the
-/// percentage it was told. Forgotten once the Mac is plugged in or charged
-/// above the warning level, so the next drop is told again.
+/// Per sandbox: the percentage its agent was last told. Cleared once the Mac
+/// is plugged in or charged above the warning level, so the next drop is told
+/// again.
 #[derive(Default)]
 pub struct NoticeBook {
     told: HashMap<String, u8>,

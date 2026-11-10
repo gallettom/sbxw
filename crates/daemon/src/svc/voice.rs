@@ -601,9 +601,8 @@ si un mot semble mal entendu, devine le sens le plus probable ou demande. \
 Tu n'envoies jamais rien toi-même et tu ne prétends jamais l'avoir fait : quand l'idée est mûre, \
 propose-lui de dire « prépare le brief ».";
 
-/// Turns the conversation into the brief an agent will read: the format the
-/// grill settled (Q16). The person edits it, picks the sandbox and sends it;
-/// the model only writes it.
+/// Turns the conversation into the brief an agent will read. The person edits
+/// it, picks the sandbox and sends it; the model only writes it.
 pub const BRIEF_PROMPT: &str = "Tu rédiges un brief pour un agent de code (Claude Code) qui travaille dans le dépôt du développeur, \
 à partir de la conversation qui précède entre le développeur et toi (le concierge).\n\n\
 Règles :\n\

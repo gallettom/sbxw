@@ -138,9 +138,9 @@ impl HostSys {
         }
     }
 
-    /// Stage in a private file (opened `O_EXCL`: a planted path fails rather
-    /// than being followed), then have root `cp` it in place, which keeps the
-    /// target's own owner and mode.
+    /// Stage in a private file (`O_EXCL`: a planted path fails rather than
+    /// being followed), then have root `cp` it in place, keeping the target's
+    /// owner and mode.
     fn write_as_admin(&self, path: &str, content: &str) -> Result<()> {
         use std::io::Write;
         #[cfg(unix)]

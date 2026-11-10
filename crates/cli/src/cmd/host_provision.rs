@@ -108,8 +108,7 @@ impl Term for StdTerm {
         }
         print!("{question} ");
         std::io::stdout().flush()?;
-        // No new dependency: stty switches the echo off, and is switched back
-        // on whatever happens while reading.
+        // No new dependency: `stty` turns echo off, and back on whatever happens.
         let off = std::process::Command::new("stty").arg("-echo").status().context("could not run stty")?;
         if !off.success() {
             bail!("could not turn the terminal echo off; not asking for a token");
@@ -433,9 +432,9 @@ pub async fn provision(exec: &Arc<dyn HostExec>, host: &RemoteHost, o: &Opts, t:
         }
     }
 
-    // 4. The first-run network policy question, answered up front so a later
-    // `sbx run` over ssh never meets it. `sbx policy init` is documented as
-    // the non-interactive way; `--no-input` makes it fail rather than ask.
+    // 4. Answer sbx's first-run network policy question up front, so a later
+    // `sbx run` over ssh never meets it. `sbx policy init` is the documented
+    // non-interactive way; `--no-input` makes it fail rather than ask.
     const T_POL: &str = "network policy: global default";
     let choice = if o.dry_run || o.yes {
         "balanced".to_string()

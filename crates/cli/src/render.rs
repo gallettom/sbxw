@@ -1,6 +1,6 @@
-//! A bring-up's progress, in the terminal: the same steps the browser's
-//! corner card shows, ticked off as they complete, with `sbx`'s own output
-//! (the image pull, mostly) on one line under the step that is running.
+//! Bring-up progress in the terminal: the browser card's steps, ticked off as
+//! they complete, with `sbx`'s output (mostly the image pull) on one line under
+//! the running step.
 
 use sbxw_core::progress::{Progress, Step};
 use std::io::{IsTerminal, Write};

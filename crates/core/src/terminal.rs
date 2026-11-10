@@ -3,11 +3,11 @@
 //! Two jobs, both about not lying to a terminal emulator:
 //!
 //! * a **replay** (the last 256 KB repainted into a fresh xterm on reconnect)
-//!   must not contain the sequences that *ask* or *act* — answered again by the
-//!   new parser, they land as `37;3R…` on a bash command line;
+//!   must not contain sequences that *ask* or *act*: answered again by the new
+//!   parser, they land as `37;3R…` on a bash command line;
 //! * **typing** into an agent must deliver a block of text as one paste, with
 //!   Return as its own keystroke after it, or Claude Code inserts the newline
-//!   into the message instead of sending it.
+//!   instead of sending the message.
 
 /// Output bytes kept per session for replay.
 pub const REPLAY_BYTES: usize = 256 * 1024;
@@ -15,19 +15,18 @@ pub const REPLAY_BYTES: usize = 256 * 1024;
 /// Remove the sequences that *act* rather than paint from a byte stream.
 ///
 /// The replay ring holds raw PTY output, questions included: a shell prompt
-/// asks where the cursor is (`CSI 6n`) on nearly every redraw, a TUI asks what
-/// the terminal is (`CSI c`) when it starts. Replayed into a fresh xterm, those
-/// bytes are not history — the parser sees live requests and answers every one
-/// of them back down the WebSocket, into the PTY, onto the shell's stdin. With
-/// an agent's TUI in front, it eats them; at a bash prompt they land on the
-/// command line as `37;3R37;3R…`, one per query in 256 KB of scrollback.
+/// asks the cursor position (`CSI 6n`) on nearly every redraw, a TUI asks the
+/// terminal type (`CSI c`) on start. Replayed into a fresh xterm, the parser
+/// answers each one back down the WebSocket into the PTY, onto the shell's
+/// stdin. An agent's TUI eats them; at a bash prompt they land on the command
+/// line as `37;3R37;3R…`, one per query in 256 KB of scrollback.
 ///
-/// A clipboard write (OSC 52) is the same problem without a question mark: it
-/// is an action the sequence performs, so replaying one silently re-copies a
-/// word selected an hour ago over whatever the user is carrying now.
+/// A clipboard write (OSC 52) is the same problem without a question mark:
+/// replaying it silently re-copies a word selected an hour ago over whatever
+/// the user carries now.
 ///
-/// Repainting the screen needs none of it, so the replay drops them and the
-/// live stream (where the answer, or the copy, is genuinely wanted) keeps them.
+/// Repainting needs none of these, so the replay drops them; the live stream
+/// keeps them, where the answer or copy is wanted.
 pub fn strip_replay_side_effects(input: &[u8]) -> Vec<u8> {
     const ESC: u8 = 0x1b;
     const BEL: u8 = 0x07;
@@ -89,7 +88,7 @@ pub fn strip_replay_side_effects(input: &[u8]) -> Vec<u8> {
                 let acts = if kind == b']' {
                     // A colour/clipboard read is the field `?` on its own.
                     payload.rsplit(|&b| b == b';').next() == Some(b"?")
-                        // OSC 52 the other way round: a clipboard write.
+                        // OSC 52: a clipboard write.
                         || payload.starts_with(b"52;")
                 } else {
                     // XTGETTCAP (`+q`) and DECRQSS (`$q`).
@@ -121,8 +120,8 @@ fn is_csi_query(params: &[u8], intermediates: &[u8], final_byte: u8) -> bool {
             .and_then(|p| p.parse::<u16>().ok())
     };
     match final_byte {
-        // Device Status Report (`5n`, `6n`, `?6n`) — the cursor-position one is
-        // what floods a bash prompt. Every DSR variant is a question.
+        // DSR (`5n`, `6n`, `?6n`); the cursor-position one floods a bash prompt.
+        // Every variant is a question.
         b'n' => true,
         // Device Attributes (`c`, `>c`, `=c`).
         b'c' => true,
@@ -141,27 +140,26 @@ fn is_csi_query(params: &[u8], intermediates: &[u8], final_byte: u8) -> bool {
 ///
 /// `?2004h` / `?2004l` is the *app* telling the terminal "wrap pastes for me";
 /// `200~` / `201~` is the terminal doing so. sbxw writes into the PTY master, so
-/// it is playing the terminal here: when the app has asked, sending the markers
-/// is exactly what a real one does when you hit ⌘V.
+/// it plays the terminal: when the app has asked, the markers are what a real
+/// one sends on ⌘V.
 ///
-/// This matters because the alternative is a guess. Without markers Claude Code
-/// infers a paste from arrival timing, and the Return meant to submit the
-/// message can land inside that window and be swallowed into it — which is how a
-/// relayed question ended up sitting in the prompt as `[Pasted text #1 +18
-/// lines]`, typed but never sent. `201~` ends the paste on a byte rather than on
-/// a stopwatch, so the Return after it can only be a Return.
+/// The alternative is a guess. Without markers Claude Code infers a paste from
+/// arrival timing, and the Return meant to submit can land inside that window
+/// and be swallowed: a relayed question then sat in the prompt as
+/// `[Pasted text #1 +18 lines]`, typed but never sent. `201~` ends the paste on
+/// a byte, not a stopwatch, so the Return after it can only be a Return.
 ///
 /// Never sent blind: an app that has *not* enabled the mode would take the
 /// markers as literal input, so `bracketed_paste_enabled` reads the answer off
-/// what the app itself printed.
+/// what the app printed.
 pub const BRACKETED_PASTE_ON: &[u8] = b"\x1b[?2004h";
 pub const BRACKETED_PASTE_OFF: &[u8] = b"\x1b[?2004l";
 pub const PASTE_START: &[u8] = b"\x1b[200~";
 pub const PASTE_END: &[u8] = b"\x1b[201~";
 
-/// Above this, a single-line message is still delivered as a burst and read as a
-/// paste. Well under the terminal's own line buffer, and far above anything a
-/// person types into the island's composer.
+/// Above this, even a single-line message is sent as a burst and read as a
+/// paste. Well under the terminal's line buffer, far above anything typed into
+/// the island's composer.
 pub const BULK_TEXT_BYTES: usize = 200;
 
 /// Index of the last occurrence of `needle` in `hay`.
@@ -174,9 +172,9 @@ pub fn last_index_of(hay: &[u8], needle: &[u8]) -> Option<usize> {
         .find(|&i| &hay[i..i + needle.len()] == needle)
 }
 
-/// Has the app on the other end asked for bracketed paste? Read off its own
-/// output (`replay`): the *last* of on/off wins, since an app turns the mode
-/// off for a full-screen view and back on for its prompt.
+/// Has the app asked for bracketed paste? Read from its output (`replay`): the
+/// *last* of on/off wins, as apps turn it off for full-screen views and back on
+/// for the prompt.
 pub fn bracketed_paste_enabled(replay: &[u8]) -> bool {
     match (
         last_index_of(replay, BRACKETED_PASTE_ON),
@@ -207,8 +205,8 @@ mod tests {
         );
     }
 
-    /// Everything that paints has to come through untouched — a replay whose
-    /// colours, cursor moves or title are missing is worse than the flood.
+    /// Everything that paints must come through untouched: a replay missing
+    /// colours, cursor moves or title is worse than the flood.
     #[test]
     fn a_replay_keeps_everything_that_paints() {
         for painting in [
@@ -231,10 +229,10 @@ mod tests {
         }
     }
 
-    /// A clipboard write is not history: the pane the user reconnects would
-    /// re-copy whatever the agent last selected, over whatever they are
-    /// carrying now. The live stream still delivers it — that is the copy the
-    /// browser is meant to make (see the OSC 52 handler in `panes.js`).
+    /// A clipboard write is not history: a reconnect would re-copy what the agent
+    /// last selected over what the user carries now. The live stream still
+    /// delivers it, which is the copy the browser should make (OSC 52 handler in
+    /// `panes.js`).
     #[test]
     fn a_replay_does_not_touch_the_clipboard() {
         let history = b"out\x1b]52;c;aGVsbG8=\x07put\x1b]52;c;aGk=\x1b\\ ";
@@ -248,15 +246,15 @@ mod tests {
 
     #[test]
     fn the_other_question_shapes_go_too() {
-        // DECRQM, XTVERSION, a window-size report, an OSC colour read, and
-        // XTGETTCAP — each answered by xterm.js, each pointless on a repaint.
+        // DECRQM, XTVERSION, window-size report, OSC colour read, XTGETTCAP:
+        // each answered by xterm.js, pointless on a repaint.
         let asks = b"a\x1b[?2026$pb\x1b[>0qc\x1b[18td\x1b]11;?\x1b\\e\x1bP+q544e\x1b\\f";
         assert_eq!(strip_replay_side_effects(asks), b"abcdef".to_vec());
     }
 
-    /// The ring buffer cuts at 256 KB wherever that lands, so both ends of a
-    /// replay can hold half a sequence. Half of something is not a question,
-    /// and dropping bytes we cannot classify would corrupt the repaint.
+    /// The ring cuts at 256 KB wherever it lands, so either end can hold half a
+    /// sequence. Half of something is not a question, and dropping unclassifiable
+    /// bytes would corrupt the repaint.
     #[test]
     fn a_sequence_cut_by_the_ring_is_left_alone() {
         assert_eq!(

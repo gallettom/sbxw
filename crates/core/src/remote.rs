@@ -2,11 +2,10 @@
 //! the Claude app.
 //!
 //! Remote Control refuses the long-lived token `claude setup-token` makes
-//! (`CLAUDE_CODE_OAUTH_TOKEN`, scope `user:inference` only) and an API key: it
-//! needs a claude.ai login made with `/login`, whose scopes include the
-//! profile and sessions. So a sandbox created for it gets no credentials from
-//! sbxw — no OAuth kit, no auth variable in its environment — and its agent
-//! asks for a login on first launch, the way Claude Code does anywhere.
+//! (`CLAUDE_CODE_OAUTH_TOKEN`, scope `user:inference` only) and API keys: it
+//! needs a claude.ai login from `/login`, whose scopes include profile and
+//! sessions. So a sandbox created for it gets no credentials from sbxw (no
+//! OAuth kit, no auth variable) and its agent asks for a login on first launch.
 //!
 //! A sandbox created without the option can be switched over later, but only
 //! by rewriting its credentials kit without the file: sbx re-reads the kit
@@ -97,13 +96,11 @@ pub fn active_in(probe: &str, cwd: &str, thread: Option<&str>) -> bool {
     })
 }
 
-/// Whether any session of the probe's `sessions` array satisfies `pred`.
 fn sessions_any(probe: &str, pred: impl Fn(&serde_json::Value) -> bool) -> bool {
     serde_json::from_str::<serde_json::Value>(probe.trim())
         .is_ok_and(|v| v["sessions"].as_array().is_some_and(|s| s.iter().any(pred)))
 }
 
-/// Whether Remote Control is on in any live session the probe saw.
 pub fn any_active(probe: &str) -> bool {
     sessions_any(probe, |s| s["rc"] == true)
 }

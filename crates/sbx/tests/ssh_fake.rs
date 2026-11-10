@@ -146,9 +146,9 @@ async fn exit_codes_cwd_and_home() {
 async fn sbx_is_detected_with_a_login_shell_once() {
     let w = World::new();
     let program = install_sbx(&w);
-    // A stand-in `sh`, first on the host's PATH, answering `-lc` like a login
-    // shell that found sbx: a real one would read the test machine's
-    // /etc/profile and ~/.profile.
+    // A stand-in `sh` on the host's PATH, answering `-lc` as a login shell that
+    // found sbx: a real one would read the test machine's /etc/profile and
+    // ~/.profile.
     write_exe(&w.home.join("bin/sh"), "#!/bin/sh\n[ \"$1\" = -lc ] && shift && exec /bin/sh -c \"$@\"\nexec /bin/sh \"$@\"\n");
     let x = w.exec(host());
     assert_eq!(x.sbx_program().await.unwrap(), program);

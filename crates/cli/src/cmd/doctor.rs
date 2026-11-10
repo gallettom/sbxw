@@ -1,10 +1,9 @@
 //! `sbxw doctor`: sbxw's own checks, then what `sbx diagnose` reports.
 //!
 //! sbxw's checks are the ones only it can make (its config, its daemon, the
-//! kits it will hand to `sbx create`); everything about sbx itself — running
-//! CLI and shim processes, the global network policy, the ZFS setting that
-//! slows image builds — is `sbx diagnose`'s, read as JSON and
-//! summarised without pinning its shape.
+//! kits it hands to `sbx create`). sbx's own state (processes, global network
+//! policy, ZFS sync) is from `sbx diagnose`'s JSON, summarised without
+//! pinning its shape.
 
 use super::{check_sbx, load_config, runtime};
 use crate::client::Daemon;
@@ -49,7 +48,7 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
     let rt = runtime();
     let sbx = Sbx::process();
     if json {
-        // The raw document, for a bug report: sbx's own words, unedited.
+        // Raw document for a bug report: sbx's own words.
         println!("{}", rt.block_on(sbx.diagnose())?.trim_end());
         return Ok(());
     }
@@ -81,9 +80,9 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
             Default::default()
         }
     };
-    // sbx 0.50 warns about these on macOS and Windows, where sbx otherwise
-    // uses the system trust store: a replaced store breaks HTTPS verification
-    // (the proxy, kit pulls, sign-in) in ways that look like network faults.
+    // sbx 0.50 warns on macOS/Windows, where it otherwise uses the system
+    // trust store: a replaced store breaks HTTPS (proxy, kit pulls, sign-in)
+    // like a network fault.
     if cfg!(any(target_os = "macos", target_os = "windows")) {
         for var in ["SSL_CERT_FILE", "SSL_CERT_DIR"] {
             if let Some(v) = std::env::var_os(var).filter(|v| !v.is_empty()) {
@@ -99,7 +98,7 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
         Some(_) => r.line(Level::Ok, "daemon", &format!("answering on {}", cfg.web_addr)),
         None => r.line(Level::Warn, "daemon", &format!("not running on {} — `sbxw up` starts it", cfg.web_addr)),
     }
-    // As the bring-up applies them: sbxw's base kit first.
+    // As bring-up applies them: sbxw's base kit first.
     let applied = kits::with_base(&cfg.kits);
     match cfg.template_mode() {
         templates::Mode::Off => {}
@@ -141,8 +140,8 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
             (None, _) => r.line(Level::Warn, &format!("kit {kit}"), "no spec.yaml to read — sbx resolves it at creation"),
         }
     }
-    // sbx 0.51: a sandbox's terminal copies to the host clipboard (OSC 52, what
-    // the web UI's panes act on) only with this setting on.
+    // sbx 0.51: terminal copies reach the host clipboard (OSC 52, read by the
+    // web UI panes) only with this setting on.
     match rt.block_on(sbx.setting_get("clipboard.textCopy")) {
         Ok(v) if v.trim() == "true" => r.line(Level::Ok, "clipboard.textCopy", "on — copying from a sandbox's terminal reaches your clipboard"),
         Ok(_) => r.line(
@@ -176,9 +175,8 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Every object in the report that names a check and gives it a status, as
-/// lines. Schema-less on purpose: a field sbx renames costs a line, not the
-/// command.
+/// Each object naming a check and giving it a status, as lines. Schema-less:
+/// a field sbx renames costs a line, not the command.
 fn summarise(v: &Value) -> Vec<(Level, String, String)> {
     let mut out = Vec::new();
     walk(v, &mut out);

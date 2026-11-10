@@ -1,7 +1,7 @@
-//! Embeds the bundled kits: every file under `assets/<kit>/` that sbx reads
+//! Embeds the bundled kits: each file under `assets/<kit>/` that sbx reads
 //! (`spec.yaml` and the `files/` tree its `build:` copies), with its mode, as
-//! `KITS` in `$OUT_DIR/bundled_kits.rs`. A kit is a directory now (kit spec
-//! v3: image content beside the descriptor), not one spec string.
+//! `KITS` in `$OUT_DIR/bundled_kits.rs`. A kit is a directory (kit spec v3:
+//! image content beside the descriptor), not one spec string.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

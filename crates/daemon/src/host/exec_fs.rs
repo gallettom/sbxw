@@ -1,16 +1,15 @@
 //! [`HostFs`](super::HostFs) over any [`HostExec`](sbxw_sbx::host::HostExec):
 //! each method is one POSIX `sh` script run on the host (no bash, no GNU-only
-//! flags), paths passed as arguments rather than spliced into the script, and
-//! file contents on stdin.
+//! flags), paths passed as arguments, file contents on stdin.
 //!
 //! SSH uses this path; the contract tests run it over `LocalExec`, beside
 //! `LocalFs`, so it is tested without SSH.
 //!
 //! Metadata comes from `stat`, which POSIX does not specify: GNU (`-c`) and
 //! BSD/macOS (`-f`) differ, so a script picks its format once ([`PRELUDE`]).
-//! Both print the raw mode in hex, so the file type is read here rather than
-//! from a locale-dependent word. A name holding a newline cannot be told apart
-//! from two records and is skipped.
+//! Both print the raw mode in hex, so the file type is read here, not from a
+//! locale-dependent word. A name with a newline cannot be told from two records
+//! and is skipped.
 
 use super::{DirEntry, HostFs, Kind, Meta};
 use anyhow::{anyhow, bail, Result};
@@ -20,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// A metadata call is a few stats; a host that takes longer is not answering.
-/// Reads and writes move file contents, so they are not bounded by time.
+/// Metadata calls are a few stats: a host slower than this is not answering.
+/// Reads and writes move contents, so they are untimed.
 const QUICK: Duration = Duration::from_secs(60);
 
 /// Sets `$F`, `stat`'s arguments printing `mode(hex)|size|mtime|name`.

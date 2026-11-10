@@ -9,8 +9,8 @@ use sbxw_core::SandboxRef;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Generous: a large repository's map takes tens of minutes. Only bounds a
-/// session that stopped making progress.
+/// Generous: a large repo's map takes tens of minutes. Bounds only a session
+/// that stopped making progress.
 const CODEMAP_MAX: Duration = Duration::from_secs(45 * 60);
 const NOTE_LINES: usize = 3;
 
@@ -23,9 +23,9 @@ impl App {
         self.codemap.lock().unwrap().get(sandbox).cloned()
     }
 
-    /// Write the map (`lens: None`) or retell it for a reader. The three
-    /// refusals a run would otherwise discover minutes later come first: a
-    /// stopped sandbox, no command (the kit is not applied), already writing.
+    /// Write the map (`lens: None`) or retell it for a reader. Refuses up front
+    /// what would otherwise fail minutes later: a stopped sandbox, no command
+    /// (kit not applied), already writing.
     pub async fn codemap_start(self: &Arc<Self>, sandbox: &SandboxRef, lens: Option<&str>) -> Result<(Run, &'static str), String> {
         let (kind, prompt, command, path, dir) = match lens {
             None => (Kind::Map, "/codemap".to_string(), "/codemap", CODEMAP_COMMAND_PATH, codemap::CODEMAP_DIR),

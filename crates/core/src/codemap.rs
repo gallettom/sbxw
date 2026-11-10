@@ -1,8 +1,8 @@
 //! Background code map runs: which sandbox is writing its map (or a lens), and
 //! how the last run of each ended.
 //!
-//! One slot per sandbox, map or lens alike — a lens is written *from* the map
-//! and must not read one moving under it. A run ends from whichever side
+//! One slot per sandbox, map or lens alike: a lens is written *from* the map
+//! and must not read it moving. A run ends from whichever side
 //! reports first: the agent (`$SBXW_CODEMAP_DONE`, earlier and better
 //! informed) or the session's exit (the backstop). The second report is ignored.
 
@@ -140,8 +140,8 @@ impl RunBook {
     }
 }
 
-/// The last `n` non-blank lines of a session's output, as one line — what a
-/// headless agent prints last is its own account of what it did.
+/// The last `n` non-blank lines of a session's output, as one line: a headless
+/// agent's last printed lines are its own account of what it did.
 pub fn output_tail(raw: &[u8], n: usize) -> String {
     let text = String::from_utf8_lossy(raw);
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();

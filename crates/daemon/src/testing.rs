@@ -54,9 +54,9 @@ pub fn app_with(answer: impl Fn(&[String]) -> Output + Send + Sync + 'static) ->
     (d, a, fake)
 }
 
-/// The two ways the daemon can reach a disk: this machine's own filesystem,
-/// and `ExecFs` over `LocalExec`, which is exactly what a host over SSH uses
-/// with the transport taken out. Tests of anything that reads a host loop over both.
+/// The two ways the daemon reaches a disk: this machine's filesystem, and
+/// `ExecFs` over `LocalExec` (what an SSH host uses, minus the transport).
+/// Tests of anything reading a host loop over both.
 pub fn hosts() -> Vec<(&'static str, crate::host::Host)> {
     use crate::host::{exec_fs::ExecFs, Host};
     let exec: Arc<dyn sbxw_sbx::host::HostExec> = Arc::new(sbxw_sbx::host::LocalExec);

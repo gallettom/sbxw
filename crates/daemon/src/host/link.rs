@@ -73,9 +73,8 @@ struct Shared {
     state: watch::Sender<LinkState>,
     /// local port → remote port, for `-O cancel` and for replay on restart.
     forwards: Mutex<BTreeMap<u16, u16>>,
-    /// Masters that have ended or never came up. Tells "still connecting"
-    /// from "tried and failed" on a Down link without waiting out a connect
-    /// timeout.
+    /// Masters that ended or never came up: tells "still connecting" from
+    /// "failed" on a Down link without waiting out the connect timeout.
     tried: AtomicU32,
 }
 
@@ -250,9 +249,9 @@ async fn run_master(shared: &Shared) -> Option<Duration> {
             return None;
         }
     }
-    // A master left by an earlier daemon would keep its own -R; replace it.
-    // A socket with nobody behind it (a master killed hard) would make the
-    // new `ssh -M` give up multiplexing, so it goes too.
+    // A master left by an earlier daemon keeps its own -R: replace it. A socket
+    // with nobody behind it (a master killed hard) makes the new `ssh -M` give
+    // up multiplexing, so it goes too.
     if master_answers(shared).await {
         let _ = control(shared, "exit", &[]).await;
     }

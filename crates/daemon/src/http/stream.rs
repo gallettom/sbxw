@@ -1,8 +1,8 @@
 //! Server-sent events: one bus, filtered per endpoint.
 //!
-//! `/api/stream` is the browser's single connection, every event named (plain
-//! HTTP has no multiplexing and browsers cap connections per origin at six).
-//! The island keeps its older single-kind feeds, each a filter of the same bus.
+//! `/api/stream` is the browser's one connection, every event named (plain HTTP
+//! has no multiplexing and browsers cap connections per origin at six). The
+//! island's single-kind feeds are filters of the same bus.
 
 use crate::app::App;
 use crate::bus::Event;

@@ -1,8 +1,7 @@
 //! The terminal WebSocket: a persistent PTY bridged to the browser.
 //!
-//! Reconnecting replays the last 256 KB — repainted, never re-asked: the
-//! sequences that query the terminal are stripped from the replay, or a fresh
-//! xterm answers each one back into the shell.
+//! Reconnect replays the last 256 KB, repainted, with terminal queries stripped
+//! (or a fresh xterm answers each one back into the shell).
 
 use super::ui::settle_ws_thread;
 use crate::app::App;
@@ -42,8 +41,8 @@ pub async fn handler(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(app):
             Err(e) => return (StatusCode::BAD_REQUEST, e.0).into_response(),
         }
     };
-    // Only a thread's own session chooses its repo, its model, and whether it
-    // shares the main checkout.
+    // Only a thread session chooses its repo, model and whether it shares the
+    // main checkout.
     let (repo, model, checkout) = match key.kind {
         SessionKind::Thread(_) => (q.repo, q.model.filter(|m| !m.is_empty()), q.checkout.as_deref() == Some("1")),
         _ => (None, None, false),
@@ -77,7 +76,7 @@ async fn bridge(
     let session = match opened {
         Ok((s, _)) => s,
         Err(e) => {
-            // Said in the pane, where the person who asked is looking.
+            // Shown in the pane, where the requester is looking.
             let _ = tx.send(Message::Text(format!("\r\n\x1b[31m[sbxw] {e:#}\x1b[0m\r\n"))).await;
             return Err(e);
         }

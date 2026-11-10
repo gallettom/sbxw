@@ -1,11 +1,11 @@
-//! `sbxw template`: snapshot a sandbox that is already set up, so new ones
-//! start from it (`template = "<tag>"` in sbxw.toml) instead of re-running
-//! every kit install. A local snapshot needs no registry request (sbx 0.48).
+//! `sbxw template`: snapshot a set-up sandbox so new ones start from it
+//! (`template = "<tag>"` in sbxw.toml) instead of re-running every kit install.
+//! A local snapshot needs no registry request (sbx 0.48).
 //!
-//! A snapshot holds the sandbox's files outside the workspace, which includes
-//! two secrets sbxw put there: the sandbox's agent token and its Claude OAuth
-//! credentials. Both are removed before the save — a sandbox made from the
-//! template gets its own on its first `sbxw up` — and put back afterwards.
+//! A snapshot holds the sandbox's files outside the workspace, including two
+//! secrets sbxw put there: the agent token and Claude OAuth credentials. Both
+//! are removed before the save (a sandbox made from the template gets its own
+//! on its first `sbxw up`) and put back afterwards.
 
 use super::runtime;
 use anyhow::{bail, Context, Result};

@@ -1,8 +1,8 @@
 //! Names that reach shell commands, file names, hostnames and git refs.
 //!
-//! Each is a newtype validated once, where it enters sbxw (a CLI argument, an
-//! HTTP path, a WebSocket query, a plan a lead proposed). Everything downstream
-//! takes the type, so nothing has to remember to re-check a `&str`.
+//! Each is a newtype validated once, where it enters sbxw (CLI argument, HTTP
+//! path, WebSocket query, lead's plan). Downstream code takes the type, so no
+//! `&str` is re-checked.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -12,7 +12,7 @@ use std::fmt;
 /// aliases.
 pub const MAX_SANDBOX_NAME_LEN: usize = 63;
 
-/// Shared by the CLI and the web UI, so both explain the same rule the same way.
+/// Shared by the CLI and web UI so both phrase the rule identically.
 pub const INVALID_SANDBOX_NAME: &str =
     "name must be 1–63 letters, digits and hyphens, and must not end with a hyphen";
 
@@ -23,12 +23,10 @@ pub const MAX_THREAD_NAME_LEN: usize = 40;
 pub const INVALID_THREAD_NAME: &str =
     "a thread name is 1–40 lower-case letters, digits and inner hyphens";
 
-/// A sandbox name, valid by construction.
-///
-/// sbx's rule narrowed to what is unambiguous everywhere a name travels:
-/// letters, digits and hyphens, at most 63, no trailing hyphen (sbx also
-/// forbids a trailing period; sbxw allows no period at all). No underscore, so
-/// `__host__` names the monitor pane without colliding with a sandbox.
+/// sbx's rule, narrowed to what is unambiguous everywhere a name travels:
+/// letters, digits, hyphens; at most 63; no trailing hyphen. No period at all
+/// (sbx forbids a trailing one) and no underscore, so `__host__` names the
+/// monitor pane without colliding with a sandbox.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct SandboxName(String);
@@ -55,8 +53,8 @@ impl<'de> Deserialize<'de> for SandboxName {
     }
 }
 
-/// A thread's name, valid by construction: lower-case only, since a branch
-/// `Fix` and a branch `fix` are one directory on a case-insensitive Mac.
+/// Lower-case only: branches `Fix` and `fix` share one directory on a
+/// case-insensitive Mac.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct ThreadName(String);
@@ -75,7 +73,6 @@ impl ThreadName {
         &self.0
     }
 
-    /// The branch a thread works on.
     pub fn branch(&self) -> String {
         format!("sbxw/{}", self.0)
     }
@@ -88,9 +85,8 @@ impl<'de> Deserialize<'de> for ThreadName {
     }
 }
 
-/// A model id as `claude --model` receives it: `^[a-z0-9][a-z0-9.\-]{0,63}$`.
-/// It reaches a command line inside the sandbox, so nothing in it may read as
-/// a flag.
+/// A model id as `claude --model` takes it: `^[a-z0-9][a-z0-9.\-]{0,63}$`.
+/// It reaches a sandbox command line, so nothing in it may read as a flag.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ModelId(String);
@@ -120,16 +116,14 @@ impl<'de> Deserialize<'de> for ModelId {
 /// The host the daemon runs on. Reserved: no remote host may take this name.
 pub const LOCAL_HOST: &str = "local";
 
-/// What separates a host from a sandbox in a ref. URL-safe (unreserved in
-/// RFC 3986, left alone by `encodeURIComponent`) and outside the name
-/// alphabet, so a ref splits in exactly one place.
+/// Separates host from sandbox in a ref. URL-safe (RFC 3986 unreserved, kept by
+/// `encodeURIComponent`) and outside the name alphabet, so a ref splits in one place.
 pub const REF_SEP: char = '~';
 
 pub const INVALID_HOST_NAME: &str =
     "a host name is 1–63 letters, digits and hyphens, and must not end with a hyphen";
 
-/// A host sandboxes run on, valid by construction: the sandbox-name rule.
-/// `local` is the daemon's own machine.
+/// A host sandboxes run on: the sandbox-name rule. `local` is the daemon's own machine.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct HostName(String);
@@ -166,10 +160,8 @@ impl<'de> Deserialize<'de> for HostName {
 
 /// A sandbox, wherever it runs: the key sbxw files everything under.
 ///
-/// Text form: `myapp` for a local sandbox — byte-identical to the bare name, so
-/// keys, files and URLs written before hosts existed stay valid — and
-/// `buildbox~myapp` on host `buildbox`. `local~myapp` is accepted and means
-/// `myapp`.
+/// Text form: `myapp` if local (byte-identical to the bare name, so older keys,
+/// files and URLs stay valid), else `buildbox~myapp`. `local~myapp` parses as `myapp`.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SandboxRef {
     pub host: HostName,
@@ -359,8 +351,8 @@ pub fn is_valid_model_id(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'-')
 }
 
-/// Anything outside the sandbox-name alphabet becomes `-`, cut to sbx's length
-/// with no trailing hyphen — a derived name is always valid.
+/// Non-alphabet chars become `-`; cut to sbx's length, no trailing hyphen, so a
+/// derived name is always valid.
 pub fn sanitize_sandbox_name(s: &str) -> SandboxName {
     let cleaned: String = s
         .chars()
@@ -375,10 +367,9 @@ pub fn sanitize_sandbox_name(s: &str) -> SandboxName {
     })
 }
 
-/// The `n`th candidate for a name derived from a workspace whose plain name is
-/// taken by a different path: `<base>-copy`, `<base>-copy-1`, … The base gives
-/// way so the suffix survives sbx's length limit, and never leaves a hyphen
-/// where the two meet.
+/// The `clashes`th candidate when a workspace's plain name is taken by another
+/// path: `<base>-copy`, `<base>-copy-1`, … The base
+/// is cut so the suffix fits sbx's limit, with no hyphen where they meet.
 pub fn copy_candidate(base: &SandboxName, clashes: u32) -> SandboxName {
     if clashes == 0 {
         return base.clone();
@@ -401,9 +392,8 @@ pub fn mint_chat_name(entropy: u32) -> SandboxName {
 /// Base name of the island's ephemeral chats.
 pub const EPHEMERAL_CHAT: &str = "ephemeral-chat";
 
-/// The name for a new ephemeral chat: `ephemeral-chat`, else the first free
-/// `ephemeral-chat-N` from 2. By availability, not a high-water mark: a freed
-/// name is offered again. `taken` holds every sandbox name.
+/// `ephemeral-chat`, else the first free `ephemeral-chat-N` from 2: by
+/// availability, so a freed name is reused. `taken` is every sandbox name.
 pub fn next_ephemeral_chat<'a>(taken: impl IntoIterator<Item = &'a str>) -> SandboxName {
     let taken: HashSet<&str> = taken.into_iter().collect();
     let has = |n: &str| taken.contains(n);
@@ -417,10 +407,9 @@ pub fn next_ephemeral_chat<'a>(taken: impl IntoIterator<Item = &'a str>) -> Sand
         .unwrap_or_else(|| SandboxName(EPHEMERAL_CHAT.into()))
 }
 
-/// The thread a new conversation in `ephemeral-chat` takes: the first free
-/// `chat-N` from 2 (the sandbox's own agent is chat 1). The chat dock's "New
-/// chat" is another session in that sandbox, not another sandbox. `taken`
-/// holds the sandbox's thread names.
+/// First free `chat-N` from 2 (the sandbox's own agent is chat 1). The chat
+/// dock's "New chat" is another session in the same sandbox. `taken` holds the
+/// sandbox's thread names.
 pub fn next_chat_session<'a>(taken: impl IntoIterator<Item = &'a str>) -> ThreadName {
     let taken: HashSet<&str> = taken.into_iter().collect();
     let has = |n: &str| taken.contains(n);

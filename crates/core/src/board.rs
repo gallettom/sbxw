@@ -2,16 +2,15 @@
 //!
 //! In the shared variant every thread edits one worktree, so a merge conflict
 //! becomes a live file conflict. **Claims** prevent it: a thread claims the
-//! files it will change, each on a 20-minute lease renewed by every edit, and
-//! nobody else may write them meanwhile (the sandbox hook asks
-//! [`Board::check`] before an Edit, Write or writing Bash command). A lease
-//! ends by running out, by the thread releasing it, committing the file or
-//! finishing, or by the lead.
+//! files it will change on a 20-minute lease, renewed by each edit, and nobody
+//! else may write them meanwhile (the sandbox hook asks [`Board::check`] before
+//! an Edit, Write or writing Bash command). A lease ends when it runs out, when
+//! the thread releases it, commits the file or finishes, or when the lead does.
 //!
 //! The **feed** holds what sbxw saw (claims, releases, commits, refused
 //! conflicts) and what agents posted (decisions, questions, handoffs,
 //! warnings). Each session reads it as a filtered delta after each tool call,
-//! so a decision taken in one thread reaches the others.
+//! so a decision in one thread reaches the others.
 //!
 //! One board per sandbox. The book is pure: the daemon persists and serves
 //! it; time is passed in.
@@ -20,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// How long a claim lasts without an edit, and what one extension adds.
+/// A claim's lease without an edit; one extension adds as much.
 pub const LEASE_MS: u64 = 20 * 60 * 1000;
 /// Past this much held in total, an extension needs the lead's approval.
 pub const MAX_HELD_MS: u64 = 2 * 3600 * 1000;
@@ -114,8 +113,8 @@ fn clip(s: &str) -> String {
 }
 
 /// A file as the board names it: relative to the repository root, `/`
-/// separated, no `.` or `..` components. The hook and the MCP server resolve
-/// paths to that form; anything still absolute or escaping is refused.
+/// separated, no `.` or `..`. The hook and the MCP server resolve paths to
+/// this form; absolute or escaping names are refused.
 pub fn normalize_file(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     if raw.is_empty() {

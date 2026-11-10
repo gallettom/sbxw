@@ -16,10 +16,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// Write the generated kit's directory: each file only when it changed (an
-/// unchanged tree keeps sbx's build cache), and every file under `files/`
-/// this list no longer names removed — the build copies the whole tree, so a
-/// skill the person removed would otherwise still reach new sandboxes.
+/// Writes the kit's directory. Files are rewritten only when changed (an
+/// unchanged tree keeps sbx's build cache). Files under `files/` the list no
+/// longer names are removed: the build copies the whole tree, so a removed
+/// skill would still reach new sandboxes.
 fn write_kit_tree(dir: &Path, files: &[my_skills::KitFile]) -> Result<()> {
     for f in files {
         let p = dir.join(&f.rel);

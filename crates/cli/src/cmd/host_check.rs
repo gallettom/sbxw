@@ -1,13 +1,13 @@
 //! `sbxw host check <name>`: exercises the remote-host transport against a
-//! real machine without creating a sandbox. There is no KVM host to test
-//! on, but everything below the sandbox (ssh quoting, sbx detection, the
-//! ControlMaster link, `-L`/`-R`, the host's disk, kit copies, git) needs only
-//! ssh and a shell, so a plain Ubuntu box with `sbx` installed can check it.
+//! real machine without creating a sandbox. Everything below the sandbox (ssh
+//! quoting, sbx detection, the ControlMaster link, `-L`/`-R`, the host's disk,
+//! kit copies, git) needs only ssh and a shell, so a plain Ubuntu box with
+//! `sbx` installed can check it.
 //!
-//! One line per step, `✓`, `-` (skipped, with the reason) or `✗`. The check
+//! One line per step: `✓`, `-` (skipped, with the reason) or `✗`. The check
 //! never touches a sandbox, the host's `~/.sbxw` or the daemon's own link: it
-//! works in a `mktemp -d` directory on the host and uses its own ControlPath,
-//! so a running daemon keeps its connection.
+//! works in a `mktemp -d` directory and uses its own ControlPath, so a running
+//! daemon keeps its connection.
 
 use anyhow::{Context, Result};
 use sbxw_core::remote_hosts::RemoteHost;
@@ -172,7 +172,6 @@ cat "$d/port""#;
 const CLIENT_SH: &str = r#"command -v bash >/dev/null 2>&1 || { echo "bash not found" >&2; exit 127; }
 exec bash -c 'exec 3<>/dev/tcp/127.0.0.1/$1 && read -r -t 10 l <&3 && printf %s "$l"' bash "$1""#;
 
-/// Connect to a local port and return the first line it sends.
 async fn banner_from(port: u16) -> Result<String> {
     let work = async {
         let s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
@@ -607,7 +606,6 @@ async fn fs_steps(host: &RemoteHost, opts: &Opts, link: &Link, r: &mut Rec<'_>) 
 pub const NOT_COVERED: &str = "Not covered (needs a host with KVM): creating a sandbox, `ssh -tt <host> sbx run`, \
 and the sandbox -> host -> this machine leg of the -R tunnel.";
 
-/// The command: run the steps, print them as they come, then the verdict.
 pub fn run(name: &str, hosts: &sbxw_core::remote_hosts::RemoteHosts, keep: bool) -> Result<()> {
     let host = hosts.get(name).with_context(|| format!("no host '{name}'"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).context("HOME is not set")?;

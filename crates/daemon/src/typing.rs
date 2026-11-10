@@ -2,18 +2,18 @@
 //!
 //! Three details are easy to get wrong, and each one cost a bug:
 //!
-//! * **Wait for the TUI to go quiet before typing** — Claude Code redraws its
+//! * **Wait for the TUI to go quiet before typing**: Claude Code redraws its
 //!   whole frame at start-up and drops keystrokes into a half-painted screen.
-//!   Quiet is measured on the output *stream*, not the replay ring: once full,
-//!   the ring's length stops changing and silence looks like a flood.
+//!   Quiet is measured on the output *stream*: the replay ring's length stops
+//!   changing once full, so silence would look like a flood.
 //! * **Return is its own keystroke, after the paste is closed.** Claude Code
-//!   reads a burst of bytes as a paste and inserts a newline arriving inside it
-//!   into the message. Bracketed paste markers end the paste on a byte when
-//!   the app has asked for them; otherwise the echo has to go quiet first.
+//!   reads a burst of bytes as a paste and folds a newline arriving inside it
+//!   into the message. Bracketed paste markers end the paste when the app has
+//!   asked for them; otherwise the echo has to go quiet first.
 //! * **A warm session is not charged for a cold start**: an attached, drawn
-//!   session waits ~180 ms, not the 900 ms a first frame needs — but only after
-//!   the echo has *started*, or a PTY that has not turned the write around yet
-//!   reads as quiet and Return joins the paste.
+//!   session waits ~180 ms, not the 900 ms a first frame needs, but only after
+//!   the echo has *started*: a PTY that has not turned the write around yet
+//!   reads as quiet, and Return would join the paste.
 
 use crate::pty::PtySession;
 use sbxw_core::terminal::{self, PASTE_END, PASTE_START};

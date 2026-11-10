@@ -1,9 +1,9 @@
 //! The virtual Mac's two halves: what a sandbox may call (agent listener),
 //! and what the person drives from the UI and the CLI (UI listener).
 //!
-//! Installing and booting take minutes — a first boot downloads macOS — so
-//! the UI's calls start them and return; the panel follows `busy` in
-//! `GET /api/mac` and the `mac` event.
+//! Install and boot take minutes (a first boot downloads macOS), so the UI's
+//! calls start them and return; the panel follows `busy` in `GET /api/mac` and
+//! the `mac` event.
 
 use super::error::{ok_with, ApiError, ApiResult};
 use super::guard::Agent;

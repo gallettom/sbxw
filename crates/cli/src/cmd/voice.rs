@@ -1,8 +1,7 @@
-//! `sbxw voice`: the voice concierge's models, from a terminal. The daemon
-//! downloads (see its `svc::voice`); this starts the job and follows
-//! `GET /api/voice`, so the terminal shows what the web UI's panel shows —
-//! and Ctrl-C here leaves the download to the daemon, where `sbxw voice
-//! cancel` or the UI stops it.
+//! `sbxw voice`: the voice concierge's models from a terminal. The daemon does
+//! the download (see its `svc::voice`); this starts it and follows
+//! `GET /api/voice`, as the web UI's panel does. Ctrl-C here leaves the download
+//! to the daemon, where `sbxw voice cancel` or the UI stops it.
 
 use super::{config_path, load_config};
 use crate::client::Daemon;
