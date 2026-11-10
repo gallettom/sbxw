@@ -4,7 +4,7 @@
 use crate::app::App;
 use crate::git;
 use crate::host::Host;
-use crate::provision::BringUp;
+use crate::provision::{BringUp, Consent};
 use anyhow::{anyhow, bail, Context, Result};
 use sbxw_core::config::Config;
 use sbxw_core::envexport;
@@ -94,6 +94,8 @@ pub struct CreateForm {
     pub remote_control: bool,
     /// Host folders for kit-declared host mounts, over `kit_mounts`.
     pub kit_mounts: std::collections::BTreeMap<String, String>,
+    /// The host-access grant lines the person has just approved.
+    pub approved: Vec<String>,
 }
 
 impl App {
@@ -259,7 +261,7 @@ impl App {
     /// A bring-up from the browser: the daemon's config, the dialog's ports,
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
     pub async fn create(self: &Arc<Self>, name: SandboxRef, path: &str, form: CreateForm, sink: Option<Sink>) -> Result<Vec<String>> {
-        let CreateForm { mounts, ports: extra, template, remote_control, kit_mounts } = form;
+        let CreateForm { mounts, ports: extra, template, remote_control, kit_mounts, approved } = form;
         let path = PathBuf::from(path.trim());
         // The folders are the sandbox's host's, checked there.
         let host = self.host_for(&name).await?;
@@ -280,9 +282,12 @@ impl App {
             extra.len()
         );
         let mut cfg = self.daemon_config();
+        // The file's grants, before the folders the person picked in the
+        // dialog join them: those need no second yes.
+        self.check_consent(&cfg, None, &approved)?;
         cfg.kit_mounts.extend(kit_mounts.into_iter().filter(|(_, host)| !host.trim().is_empty()));
         cfg.validate()?;
-        let mut req = self.bring_up_request(name, path, cfg, extra, false);
+        let mut req = self.bring_up_request(name, path, cfg, extra, false, Consent::Checked(approved));
         req.ro = ro;
         req.rw = rw;
         req.template = template;
@@ -390,7 +395,7 @@ impl App {
 
     /// What a bring-up asked from inside the daemon carries: its credentials
     /// come from the daemon's own environment.
-    pub fn bring_up_request(&self, name: SandboxRef, workspace: PathBuf, config: Config, extra_ports: Vec<WantedPort>, chat: bool) -> BringUp {
+    pub fn bring_up_request(&self, name: SandboxRef, workspace: PathBuf, config: Config, extra_ports: Vec<WantedPort>, chat: bool, consent: Consent) -> BringUp {
         BringUp {
             name,
             workspace,
@@ -406,6 +411,7 @@ impl App {
             template: Default::default(),
             remote_control: false,
             git: None,
+            consent,
         }
     }
 
@@ -419,10 +425,12 @@ impl App {
         Ok(dir)
     }
 
-    pub async fn create_chat(self: &Arc<Self>, name: SandboxRef) -> Result<Vec<String>> {
+    /// A chat on the daemon's config, whose grants are checked like any
+    /// file's, counting the lines in `approved`.
+    pub async fn create_chat(self: &Arc<Self>, name: SandboxRef, approved: Vec<String>) -> Result<Vec<String>> {
         let ws = self.prepare_chat_workspace(&name)?;
         tracing::info!("provisioning chat sandbox '{name}' at {}", ws.display());
-        let req = self.bring_up_request(name, ws, self.daemon_config(), vec![], true);
+        let req = self.bring_up_request(name, ws, self.daemon_config(), vec![], true, Consent::Check(approved));
         self.provision(req, None).await
     }
 
@@ -440,7 +448,8 @@ impl App {
         }
         let cfg = self.config_for(source).await;
         tracing::info!("duplicating '{source}' as '{new}' (workspace {})", ws.display());
-        let req = self.bring_up_request(new, ws, cfg, vec![], false);
+        // The source's recorded config, approved when it was brought up.
+        let req = self.bring_up_request(new, ws, cfg, vec![], false, Consent::Checked(vec![]));
         self.provision(req, None).await
     }
 
@@ -458,7 +467,7 @@ impl App {
         let cfg = self.config_for(name).await;
         tracing::info!("recreating '{name}' on {}", ws.display());
         self.remove(std::slice::from_ref(name)).await?;
-        let mut req = self.bring_up_request(name.clone(), ws, cfg, vec![], false);
+        let mut req = self.bring_up_request(name.clone(), ws, cfg, vec![], false, Consent::Checked(vec![]));
         for m in &rec.mounts {
             let p = m.path.to_string_lossy().into_owned();
             if m.readonly { req.ro.push(p) } else { req.rw.push(p) }
@@ -480,7 +489,7 @@ impl App {
             let name = SandboxRef::local(SandboxName::parse(names::EPHEMERAL_CHAT).expect("valid"));
             if !self.sessions.is_live(&SessionKey::agent(&name)) && !self.sbx.exists(&name.name).await {
                 // No chat sandbox yet: its own agent is the first conversation.
-                self.create_chat(name.clone()).await.map_err(|e| format!("{e:#}"))?;
+                self.create_chat(name.clone(), vec![]).await.map_err(|e| format!("{e:#}"))?;
                 self.push_text(&name, SessionKind::Agent, text).await?;
                 return Ok((name, true, None));
             }
@@ -524,7 +533,7 @@ impl App {
             if !may_create {
                 return Err(format!("no sandbox named '{name}' — it may have been removed"));
             }
-            self.create_chat(name.clone()).await.map_err(|e| format!("{e:#}"))?;
+            self.create_chat(name.clone(), vec![]).await.map_err(|e| format!("{e:#}"))?;
         }
         self.push_text(&name, SessionKind::Agent, text).await?;
         Ok((name, !exists, None))

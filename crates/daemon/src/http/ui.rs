@@ -4,7 +4,7 @@
 use super::error::{ok, ok_with, ApiError, ApiResult};
 use crate::app::App;
 use crate::host::{Host, Kind};
-use crate::provision::BringUp;
+use crate::provision::{BringUp, Consent};
 use crate::sandbox_fs;
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
@@ -334,9 +334,36 @@ struct CreateBody {
     /// Sandbox target → host folder, for the kits' declared host mounts.
     #[serde(default)]
     kit_mounts: std::collections::BTreeMap<String, String>,
+    /// The host-access grant lines the person approved in the page's dialog.
+    #[serde(default)]
+    approved: Vec<String>,
 }
 
-async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
+/// The `consent` field a refused bring-up answers with: the config file and
+/// the grant lines to show, which the page sends back as `approved`.
+fn consent_json(e: &anyhow::Error) -> Option<Value> {
+    crate::store::needs_approval(e).map(|n| json!({ "config": n.config, "grants": n.grants }))
+}
+
+/// A bring-up's answer: its warnings, or a refusal for want of the person's
+/// approval as 409 with `consent`, or the error.
+fn bring_up_answer(out: anyhow::Result<Vec<String>>, extra: Value) -> Result<Response, ApiError> {
+    match out {
+        Ok(w) => {
+            let mut body = warnings(w);
+            if let (Some(obj), Value::Object(more)) = (body.0.as_object_mut(), extra) {
+                obj.extend(more);
+            }
+            Ok(body.into_response())
+        }
+        Err(e) => match consent_json(&e) {
+            Some(c) => Ok((StatusCode::CONFLICT, Json(json!({ "ok": false, "error": format!("{e:#}"), "consent": c }))).into_response()),
+            None => Err(e.into()),
+        },
+    }
+}
+
+async fn create(State(app): S, Json(b): Json<CreateBody>) -> Result<Response, ApiError> {
     let name = sandbox(&b.name)?;
     let form = crate::svc::sandboxes::CreateForm {
         ports: b.ports.into_iter().map(PortEntry::wanted).collect::<Result<Vec<_>, _>>()?,
@@ -344,8 +371,9 @@ async fn create(State(app): S, Json(b): Json<CreateBody>) -> ApiResult {
         template: b.template,
         remote_control: b.remote_control,
         kit_mounts: b.kit_mounts,
+        approved: b.approved,
     };
-    Ok(warnings(app.create(name, &b.path, form, None).await?))
+    bring_up_answer(app.create(name, &b.path, form, None).await, json!({}))
 }
 
 async fn kit_mounts(State(app): S) -> Json<Value> {
@@ -438,15 +466,18 @@ async fn keep_skill(State(app): S, Path(name): Path<String>, Json(b): Json<KeepS
 struct ChatBody {
     #[serde(default)]
     name: Option<String>,
+    /// As for create.
+    #[serde(default)]
+    approved: Vec<String>,
 }
 
-async fn chat(State(app): S, Json(b): Json<ChatBody>) -> ApiResult {
+async fn chat(State(app): S, Json(b): Json<ChatBody>) -> Result<Response, ApiError> {
     let name = match non_blank(b.name) {
         Some(n) => sandbox(&n)?,
         None => names::mint_chat_name(u32::from_str_radix(&sbxw_core::ids::random_hex(4), 16).unwrap_or(0)).into(),
     };
-    let w = app.create_chat(name.clone()).await?;
-    Ok(ok_with(json!({ "name": name, "warnings": w })))
+    let out = app.create_chat(name.clone(), b.approved).await;
+    bring_up_answer(out, json!({ "name": name }))
 }
 
 #[derive(Deserialize)]
@@ -493,6 +524,9 @@ struct UpBody {
     /// Clone this into `path` first when it does not exist yet.
     #[serde(default)]
     git: Option<String>,
+    /// The host-access grant lines the person approved at the CLI's prompt.
+    #[serde(default)]
+    approved: Vec<String>,
 }
 
 async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> Result<Response, ApiError> {
@@ -513,6 +547,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         template: b.template,
         remote_control: b.remote_control,
         git: b.git,
+        consent: Consent::Check(b.approved),
     };
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let line = |v: Value| format!("{v}\n");
@@ -524,7 +559,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         let out = app.provision(req, Some(sink)).await;
         let last = match out {
             Ok(w) => json!({ "done": true, "ok": true, "warnings": w }),
-            Err(e) => json!({ "done": true, "ok": false, "error": format!("{e:#}") }),
+            Err(e) => json!({ "done": true, "ok": false, "error": format!("{e:#}"), "consent": consent_json(&e) }),
         };
         let _ = tx.send(line(last));
     });
@@ -1793,4 +1828,23 @@ struct VoiceWarmBody {
 async fn voice_warm(State(app): S, body: Option<Json<VoiceWarmBody>>) -> Json<Value> {
     app.voice_warm(body.map(|b| b.0.speech).unwrap_or(false));
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_refusal_for_consent_is_409_with_the_lines() {
+        let e: anyhow::Error = sbxw_core::consent::NeedsApproval { config: "/p/sbxw.toml".into(), grants: vec!["network: x.com".into()] }.into();
+        let r = bring_up_answer(Err(e.context("bringing up 'myapp'")), json!({})).unwrap();
+        assert_eq!(r.status(), StatusCode::CONFLICT);
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["consent"], json!({ "config": "/p/sbxw.toml", "grants": ["network: x.com"] }));
+        let r = bring_up_answer(Ok(vec![]), json!({ "name": "chat-1" })).unwrap();
+        let body: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(body, json!({ "ok": true, "name": "chat-1" }));
+        assert!(bring_up_answer(Err(anyhow::anyhow!("sbx failed")), json!({})).is_err());
+    }
 }

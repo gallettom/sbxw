@@ -62,6 +62,23 @@ pub struct BringUp {
     /// Clone this into `workspace` first, on the sandbox's host, when
     /// `workspace` does not exist yet (`sbxw up --git <url>`).
     pub git: Option<String>,
+    /// Whether the config's host-access grants are checked here.
+    pub consent: Consent,
+}
+
+/// How a bring-up's config was reached, which decides whether its
+/// host-access grants (`sbxw_core::consent`) are checked against what the
+/// person approved for that file. Either way, the lines carried are the ones
+/// the person has just said yes to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Consent {
+    /// Read from its file for this bring-up (`sbxw up`, a chat): checked here.
+    Check(Vec<String>),
+    /// Checked by the caller already (the create dialog checks the daemon's
+    /// config before adding the folders the person picked), or the recorded
+    /// config of an earlier bring-up (Duplicate, Recreate). A remote host's
+    /// `sbxw.toml`, which the bring-up reads itself, is still checked.
+    Checked(Vec<String>),
 }
 
 /// Kit startup: the timeout before an automatic template is given up on, the
@@ -145,6 +162,22 @@ impl App {
         out
     }
 
+    /// Refuse `cfg` while it grants host access the person has not approved
+    /// for its file, counting the lines in `approved_now`, which are then
+    /// recorded. `key` names the file when it is not `cfg.source` (a remote
+    /// host's). The refusal is a [`NeedsApproval`](sbxw_core::consent::NeedsApproval).
+    pub fn check_consent(&self, cfg: &Config, key: Option<String>, approved_now: &[String]) -> Result<()> {
+        let all = sbxw_core::consent::grants(cfg);
+        let key = key.unwrap_or_else(|| match &cfg.source {
+            Some(p) => crate::store::grant_key(p),
+            None => "(built-in defaults)".into(),
+        });
+        if all.is_empty() && self.store.all_approved_grants().get(&key).is_none() {
+            return Ok(());
+        }
+        self.store.check_grants(&key, &all, &all, approved_now)
+    }
+
     async fn bring_up(self: &Arc<Self>, mut req: BringUp, sink: &Sink) -> Result<Vec<String>> {
         // A remote host: its link first. The -R tunnel the hooks call home
         // through must be up before they are installed.
@@ -160,6 +193,14 @@ impl App {
         if on_host.is_some() {
             // sbxw.toml is the project's, so it is on the host, beside the code.
             req.config = remote_config(&host, &req.workspace).await?;
+        }
+        match (&on_host, &req.consent) {
+            (Some(_), Consent::Check(ok) | Consent::Checked(ok)) => {
+                let key = format!("{}:{}", req.name.host, req.workspace.join("sbxw.toml").display());
+                self.check_consent(&req.config, Some(key), ok)?;
+            }
+            (None, Consent::Check(ok)) => self.check_consent(&req.config, None, ok)?,
+            (None, Consent::Checked(_)) => {}
         }
         // What later attaches run with, as the project wrote it (no base kit,
         // no resolved paths): the file is not read again before the next `up`.
@@ -999,6 +1040,7 @@ mod tests {
             template,
             remote_control: false,
             git: None,
+            consent: Consent::Checked(vec![]),
         }
     }
 
@@ -1125,6 +1167,7 @@ mod tests {
             template: Default::default(),
             remote_control: false,
             git: None,
+            consent: Consent::Checked(vec![]),
         };
         let e = format!("{:#}", app.provision(req(&other), None).await.unwrap_err());
         assert!(e.contains("was created on") && e.contains(&own.display().to_string()), "{e}");
@@ -1134,6 +1177,49 @@ mod tests {
         let same = own.join("..").join("test");
         let ok = app.provision(req(&same), None).await;
         assert!(ok.as_ref().err().is_none_or(|e| !format!("{e:#}").contains("was created on")), "{ok:?}");
+    }
+
+    /// `sbxw up` with a file that mounts a host folder: refused with the line,
+    /// accepted with exactly that line, then not asked again. A different
+    /// line approves nothing; removing the mount asks nothing.
+    #[tokio::test]
+    async fn a_new_mount_needs_the_persons_yes_once() {
+        let (dir, app, fake) = app_with(sbx_answer);
+        let ws = dir.path().join("myapp");
+        std::fs::create_dir_all(&ws).unwrap();
+        let file = ws.join("sbxw.toml");
+        let write = |body: &str| std::fs::write(&file, body).unwrap();
+        let req = |approved: Vec<String>| BringUp {
+            name: SandboxRef::parse("myapp").unwrap(),
+            workspace: ws.clone(),
+            ro: vec![],
+            rw: vec![],
+            config: Config::load(&file, &ws).unwrap(),
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            template: Default::default(),
+            remote_control: false,
+            git: None,
+            consent: Consent::Check(approved),
+        };
+        write("workspaces = [\"/Users/me/data\"]\n");
+        let line = "mount (read-write): /Users/me/data".to_string();
+        let e = app.provision(req(vec![]), None).await.unwrap_err();
+        let n = crate::store::needs_approval(&e).unwrap();
+        assert_eq!((n.config.as_str(), n.grants.clone()), (crate::store::grant_key(&file).as_str(), vec![line.clone()]));
+        assert!(!fake.log().iter().any(|c| c.starts_with("create")), "nothing ran before the yes");
+        let e = app.provision(req(vec!["mount (read-write): /Users/me/other".into()]), None).await.unwrap_err();
+        assert!(crate::store::needs_approval(&e).is_some());
+        app.provision(req(vec![line.clone()]), None).await.unwrap();
+        app.provision(req(vec![]), None).await.unwrap();
+        // An edit after the yes is a new line, asked about.
+        write("workspaces = [\"/Users/me/data\", \"/Users/me/.ssh\"]\n");
+        let e = app.provision(req(vec![]), None).await.unwrap_err();
+        assert_eq!(crate::store::needs_approval(&e).unwrap().grants, ["mount (read-write): /Users/me/.ssh"]);
+        write("");
+        app.provision(req(vec![]), None).await.unwrap();
+        assert!(!app.store.paths.approved_grants().starts_with(&ws), "approvals live outside the workspace");
     }
 
     #[tokio::test]
@@ -1160,6 +1246,7 @@ mod tests {
             template: Default::default(),
             remote_control: false,
             git: None,
+            consent: Consent::Checked(vec![]),
         };
         let w = app.provision(req, None).await.unwrap();
         assert!(w.iter().any(|w| w.contains("press ✓")), "{w:?}");
@@ -1193,6 +1280,7 @@ mod tests {
             template: Default::default(),
             remote_control: false,
             git: None,
+            consent: Consent::Checked(vec![]),
         };
         let e = format!("{:#}", app.provision(req, None).await.unwrap_err());
         assert!(e.contains(&format!("{}: kit spec v2", old.display())), "{e}");
@@ -1239,6 +1327,7 @@ mod tests {
                     template: Default::default(),
                     remote_control: false,
                     git: None,
+                    consent: Consent::Checked(vec![]),
                 },
                 Some(sink),
             )
@@ -1300,6 +1389,7 @@ mod tests {
             template: Default::default(),
             remote_control: true,
             git: None,
+            consent: Consent::Checked(vec![]),
         };
         app.provision(req.clone(), None).await.unwrap();
         let log = fake.log();
@@ -1349,6 +1439,7 @@ mod tests {
                             template: Default::default(),
                     remote_control: false,
                     git: None,
+                    consent: Consent::Checked(vec![]),
                 },
                 None,
             )
@@ -1389,6 +1480,7 @@ mod tests {
                     template: Default::default(),
                 remote_control: false,
                 git: None,
+                consent: Consent::Checked(vec![]),
             }
         };
         app.provision(up("a"), None).await.unwrap();
@@ -1423,6 +1515,7 @@ mod tests {
             template: Default::default(),
             remote_control: false,
             git: None,
+            consent: Consent::Checked(vec![]),
         };
         app.provision(req, None).await.unwrap();
         let kit = app.store.paths.volumes_kit(sbxw_core::SandboxRef::parse("myapp").unwrap());
@@ -1454,7 +1547,14 @@ mod tests {
         assert_eq!(offered.len(), 1);
         assert_eq!(offered[0]["target"], "/home/agent/history");
 
-        let form = CreateForm { kit_mounts: [("/home/agent/history".to_string(), "/h/hist".to_string())].into(), ..Default::default() };
+        // The daemon config's local kit is a grant, asked about once; the
+        // folder picked in the dialog is the person's own choice, not asked.
+        let picked = || [("/home/agent/history".to_string(), "/h/hist".to_string())].into();
+        let form = CreateForm { kit_mounts: picked(), ..Default::default() };
+        let e = app.create(SandboxRef::parse("km").unwrap(), &ws.to_string_lossy(), form, None).await.unwrap_err();
+        let asked = crate::store::needs_approval(&e).unwrap().grants.clone();
+        assert_eq!(asked, [format!("local kit: {}", kit.display())]);
+        let form = CreateForm { kit_mounts: picked(), approved: asked, ..Default::default() };
         app.create(SandboxRef::parse("km").unwrap(), &ws.to_string_lossy(), form, None).await.unwrap();
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
