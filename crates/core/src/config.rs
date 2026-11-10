@@ -270,6 +270,23 @@ fn is_listen_addr(s: &str) -> bool {
         && (s.starts_with('[') || crate::hosts::is_ipv4_literal(ports::ip_of(s)))
 }
 
+/// Why one `network_allow` / `network_deny` entry is refused, if it is: each
+/// is joined with `,` into one `sbx policy` argument, so a comma, a space or a
+/// leading `-` would change what sbx is told.
+fn network_rule_error(rule: &str) -> Option<&'static str> {
+    if rule.is_empty() {
+        Some("an empty rule")
+    } else if rule == "*" || rule == "**" {
+        Some("a wildcard that matches every host; name the hosts instead")
+    } else if rule.starts_with('-') {
+        Some("a rule may not start with '-' (sbx would read it as an option)")
+    } else if rule.chars().any(|c| c.is_whitespace() || c.is_control() || c == ',') {
+        Some("a rule may not hold whitespace, a comma or a control character")
+    } else {
+        None
+    }
+}
+
 /// `#rrggbb` only: the value is templated into the page as a JS string, so
 /// nothing else may pass.
 fn is_hex_color(s: &str) -> bool {
@@ -379,6 +396,25 @@ impl Config {
                  listener and nothing else, so they need two ports",
                 self.web_addr
             );
+        }
+        for (key, rules) in [("network_allow", &self.network_allow), ("network_deny", &self.network_deny)] {
+            for r in rules {
+                if let Some(why) = network_rule_error(r) {
+                    bail!("{key}: {r:?} — {why}");
+                }
+            }
+        }
+        let web_port = self.web_port();
+        for r in &self.network_allow {
+            let opens_ui = ["localhost", "127.0.0.1", "host.docker.internal", "[::1]"]
+                .iter()
+                .any(|host| r.eq_ignore_ascii_case(&format!("{host}:{web_port}")));
+            if opens_ui {
+                bail!(
+                    "network_allow: {r:?} — that is the UI listener (web_addr), which no sandbox may \
+                     reach: it approves and releases everything. Sandboxes talk to agent_addr"
+                );
+            }
         }
         for k in &self.kits {
             if let Some(name) = crate::kits::bundled_name(k) {
@@ -606,6 +642,23 @@ mod tests {
         }
         assert!(!bad("web_addr = \"[::1]:7681\""));
         assert!(!bad("web_addr = \"192.168.1.2:7681\"\nagent_addr = \"127.0.0.1:7690\""));
+    }
+
+    #[test]
+    fn network_rules_are_single_hosts_and_never_the_ui_port() {
+        Config::default().validate().unwrap();
+        let err = |s: &str| toml::from_str::<Config>(s).unwrap().validate().err().map(|e| e.to_string());
+        for rule in ["*", "**", "-x", "a b", "a,b", "a\\nb", "a\\u001bb", ""] {
+            assert!(err(&format!("network_allow = [\"{rule}\"]")).is_some(), "allow {rule:?}");
+            assert!(err(&format!("network_deny = [\"{rule}\"]")).is_some(), "deny {rule:?}");
+        }
+        for ui in ["localhost:7681", "127.0.0.1:7681", "host.docker.internal:7681", "[::1]:7681", "LOCALHOST:7681"] {
+            let e = err(&format!("network_allow = [\"{ui}\"]")).expect(ui);
+            assert!(e.contains("UI listener"), "{e}");
+        }
+        assert!(err("network_allow = [\"localhost:7682\", \"*.npmjs.org\"]").is_none());
+        assert!(err("web_addr = \"127.0.0.1:9000\"\nnetwork_allow = [\"localhost:9000\"]").is_some());
+        assert!(err("network_deny = [\"localhost:7681\"]").is_none());
     }
 
     #[test]
