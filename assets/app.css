@@ -3860,21 +3860,43 @@
   }
   .vc-l-btn:hover:not(:disabled) { background: var(--c-border); }
   .vc-l-btn:disabled { opacity: .35; cursor: default; }
-  .vc-l-btn:focus-visible, .vc-l-target:focus-within { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .vc-l-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .vc-launcher.ready .vc-l-mic { color: var(--c-green); }
   .vc-launcher.listening .vc-l-mic { color: var(--c-red); }
   .vc-launcher.busy .vc-l-mic { color: var(--c-text-muted); }
   .vc-l-stop:not(:disabled) { color: var(--c-blue); }
   .vc-l-target {
-    position: relative; display: inline-flex; align-items: center;
-    height: 22px; max-width: 14rem; padding: 0 .4rem; border-radius: 11px;
-    color: var(--c-blue); cursor: pointer;
+    display: inline-flex; align-items: center;
+    height: 22px; max-width: 14rem; padding: 0 .4rem; cursor: pointer;
+    background: none; border: 0; border-radius: 11px;
+    color: var(--c-blue); font: inherit;
+    transition: background .1s;
   }
-  .vc-l-target:hover { background: var(--c-border); }
+  .vc-l-target:hover, .vc-l-target[aria-expanded="true"] { background: var(--c-border); }
+  .vc-l-target:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
   .vc-l-target.none { color: var(--c-text-muted); }
   .vc-l-target span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* The real menu, invisible over the name: a click opens the browser's own list. */
-  .vc-l-target select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; font: inherit; }
+  /* Its menu: the pane menu's shell, one row per sandbox. */
+  .vc-target-menu { width: 220px; max-height: 60vh; overflow-y: auto; font-family: var(--font-mono); }
+  .vc-target-menu button { flex-direction: row; align-items: center; gap: .4rem; padding: .35rem .5rem; }
+  .vc-target-menu button[aria-checked="true"] .vc-tm-name { color: var(--c-blue); }
+  .vc-tm-tick { flex: none; width: .9rem; color: var(--c-blue); }
+  .vc-tm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-bright); }
+  .vc-tm-name.vc-tm-none { color: var(--c-text-muted); }
+  .vc-target-menu button:has(.vc-tm-none) { border-top: 1px solid var(--c-border); border-radius: 0 0 var(--r-sm) var(--r-sm); margin-top: .2rem; padding-top: .45rem; }
+  .vc-tm-empty { padding: .4rem .5rem; color: var(--c-text-muted); }
+  .vc-l-mic { gap: .3rem; }
+  /* Open, for the panel; a dot on it when something new is in there. */
+  .vc-l-open {
+    position: relative; margin-left: .15rem; padding: 0 .45rem;
+    border-left: 1px solid var(--c-border); border-radius: 0 11px 11px 0;
+    font: 11px var(--font-mono); color: var(--c-text-muted);
+  }
+  .vc-l-open:hover, .vc-l-open[aria-expanded="true"] { color: var(--c-text-bright); }
+  .vc-launcher.news .vc-l-open::after {
+    content: ''; position: absolute; top: 2px; right: 2px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--c-blue); box-shadow: 0 0 0 2px var(--c-bg);
+  }
   .vc-launcher kbd {
     padding: 0 .3rem; border: 1px solid var(--c-border); border-radius: 4px;
     color: var(--c-text-muted); font: 10.5px var(--font-mono); line-height: 16px;

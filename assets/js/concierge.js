@@ -123,9 +123,19 @@ function vcRender() {
   vcLauncher.querySelector('kbd').textContent = vcKey();
 }
 
+// Something was added to a closed panel: a dot on the bar's Open says so
+// until the panel is opened.
+function vcNews() {
+  if (vcOpen) return;
+  vcLauncher.classList.add('news');
+  vcOpenBtn.title = 'Open the Concierge panel: something new is in it';
+}
+
 function vcSay(who, text, meta) {
-  // An error is not left in a closed panel.
-  if (who === 'err' && !vcOpen) vcSetOpen(true);
+  // The panel stays closed: an error is a toast, and Open in the bar shows
+  // that something new is in there.
+  if (who === 'err' && !vcOpen) showToast(text, 'error');
+  vcNews();
   const row = document.createElement('div');
   row.className = `vc-msg vc-${who}`;
   row.append(document.createTextNode(text));
@@ -300,7 +310,7 @@ async function vcTargets() {
 // Picked at the top, remembered per browser: the sandbox whose agents are
 // followed, and where a message said with nothing to answer goes.
 const vcPick = vcEl('vc-target');
-const vcBarPick = vcEl('vc-l-pick');
+const vcBarTarget = vcEl('vc-l-target');
 const vcBarName = vcEl('vc-l-name');
 let vcTarget = null;
 try { vcTarget = localStorage.getItem(VC_TARGET) || null; } catch (_) {}
@@ -318,27 +328,93 @@ async function vcFillTargets() {
     vcPick.append(o);
   }
   vcPick.value = vcTarget || '';
-  // The same list under the name in the bar.
-  vcBarPick.replaceChildren(...[...vcPick.options].map(o => o.cloneNode(true)));
-  vcBarPick.value = vcTarget || '';
   vcRenderTarget();
 }
 function vcRenderTarget() {
   vcBarName.textContent = vcTarget || 'pick a sandbox';
-  vcBarName.parentElement.classList.toggle('none', !vcTarget);
+  vcBarTarget.classList.toggle('none', !vcTarget);
 }
 function vcSetTarget(name) {
   vcTarget = name || null;
   try { vcTarget ? localStorage.setItem(VC_TARGET, vcTarget) : localStorage.removeItem(VC_TARGET); } catch (_) {}
-  vcPick.value = vcBarPick.value = vcTarget || '';
+  if (![...vcPick.options].some(o => o.value === (vcTarget || ''))) vcFillTargets();
+  vcPick.value = vcTarget || '';
   vcRenderTarget();
 }
 vcPick.addEventListener('change', () => vcSetTarget(vcPick.value));
-vcBarPick.addEventListener('change', () => vcSetTarget(vcBarPick.value));
-// The list is fresh by the time the name is clicked.
-vcLauncher.addEventListener('pointerenter', vcFillTargets);
-vcBarPick.addEventListener('focus', vcFillTargets);
 vcFillTargets();
+
+// The name in the bar opens a menu of the running sandboxes, the app's own
+// (the pane menu's shell): one row each, the current one ticked, and a last
+// row for none. Arrows move, Enter picks, Escape or a click elsewhere closes.
+let vcMenu = null;
+function vcCloseMenu(refocus) {
+  if (!vcMenu || vcMenu.hidden) return;
+  vcMenu.hidden = true;
+  vcBarTarget.setAttribute('aria-expanded', 'false');
+  if (refocus) vcBarTarget.focus();
+}
+async function vcOpenMenu() {
+  if (!vcMenu) {
+    vcMenu = document.createElement('div');
+    vcMenu.className = 'pane-menu vc-target-menu';
+    vcMenu.setAttribute('role', 'menu');
+    vcMenu.setAttribute('aria-label', 'The sandbox your words go to');
+    vcMenu.hidden = true;
+    vcMenu.addEventListener('click', e => {
+      const row = e.target.closest('button[data-name]');
+      if (!row) return;
+      vcSetTarget(row.dataset.name);
+      vcCloseMenu(true);
+    });
+    vcMenu.addEventListener('keydown', e => {
+      const rows = [...vcMenu.querySelectorAll('button')];
+      const at = rows.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); vcCloseMenu(true); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); rows[(at + 1) % rows.length]?.focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); rows[(at - 1 + rows.length) % rows.length]?.focus(); }
+      else if (e.key === 'Tab') vcCloseMenu(false);
+    });
+    document.addEventListener('pointerdown', e => {
+      if (!vcMenu.contains(e.target) && !vcBarTarget.contains(e.target)) vcCloseMenu(false);
+    });
+    document.body.appendChild(vcMenu);
+  }
+  const targets = await vcTargets();
+  if (vcTarget && !targets.includes(vcTarget)) targets.unshift(vcTarget); // stopped, but still the choice
+  const row = (name, label, cls) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.name = name;
+    b.setAttribute('role', 'menuitemradio');
+    b.setAttribute('aria-checked', String((vcTarget || '') === name));
+    const tick = document.createElement('span');
+    tick.className = 'vc-tm-tick';
+    tick.textContent = (vcTarget || '') === name ? '✓' : '';
+    const text = document.createElement('span');
+    text.className = `vc-tm-name ${cls || ''}`;
+    text.textContent = label;
+    b.append(tick, text);
+    return b;
+  };
+  vcMenu.replaceChildren();
+  if (!targets.length) {
+    const none = document.createElement('div');
+    none.className = 'vc-tm-empty';
+    none.textContent = 'No running sandbox';
+    vcMenu.append(none);
+  }
+  for (const name of targets) vcMenu.append(row(name, name));
+  if (vcTarget || targets.length) vcMenu.append(row('', 'No sandbox', 'vc-tm-none'));
+  vcMenu.hidden = false;
+  vcBarTarget.setAttribute('aria-expanded', 'true');
+  const r = vcBarTarget.getBoundingClientRect();
+  const w = vcMenu.offsetWidth;
+  vcMenu.style.top = `${r.bottom + 8}px`;
+  vcMenu.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8))}px`;
+  (vcMenu.querySelector('[aria-checked="true"]') || vcMenu.querySelector('button'))?.focus();
+}
+vcBarTarget.addEventListener('click', () => (vcMenu && !vcMenu.hidden ? vcCloseMenu(true) : vcOpenMenu()));
 
 // ── A message to the sandbox ─────────────────────────────────────────────
 // Words said (or typed) with nothing to answer are a message for the picked
@@ -605,6 +681,10 @@ function vcSetOpen(open) {
   vcPanel.hidden = !open;
   vcOpenBtn.setAttribute('aria-expanded', String(open));
   vcLauncher.classList.toggle('open', open);
+  if (open) { vcLauncher.classList.remove('news'); vcLog.scrollTop = vcLog.scrollHeight; }
+  vcOpenBtn.title = open ? 'Close the Concierge panel' : 'Open the Concierge panel';
+  vcOpenBtn.setAttribute('aria-label', vcOpenBtn.title);
+  vcEl('vc-l-open-label').textContent = open ? 'Close' : 'Open';
   if (open) { vcRefresh(); vcWarm(!vcSpeech.muted); vcFillTargets(); }
 }
 
@@ -641,11 +721,11 @@ vcTalk.addEventListener('pointerup', () => { if (vcRec && !vcRec.dest) vcStop();
 vcTalk.addEventListener('pointercancel', () => { if (vcRec && !vcRec.dest) vcStop(); });
 
 // The key works from anywhere on the page, terminals included: captured
-// before xterm sees it. Holding it opens the panel, so the text lands in view.
+// before xterm sees it. The panel stays as it is: the bar shows the listening.
 window.addEventListener('keydown', e => {
   if (e.code !== vcKey() || e.repeat) return;
   e.preventDefault(); e.stopPropagation();
-  if (!vcOpen) vcSetOpen(true);
+  vcWarm(!vcSpeech.muted);
   vcStart();
 }, true);
 window.addEventListener('keyup', e => {
@@ -708,6 +788,7 @@ function vcCard(cls, title) {
   card.append(head, foot);
   vcLog.append(card);
   vcLog.scrollTop = vcLog.scrollHeight;
+  vcNews();
   return { card, head, foot };
 }
 function vcButton(label, onClick, primary) {
@@ -1032,7 +1113,8 @@ function vcAskRelay(req) {
   if (req.state !== 'pending' || vcAsks.has(req.id)) return;
   const grill = vcParseGrill(req.question);
   if (!grill.questions.length) grill.questions.push({ id: 'Q1', title: '', ask: req.question, body: req.question, rec: '', answer: null });
-  if (!vcOpen) vcSetOpen(true);
+  // Read aloud with the panel closed: it is opened by hand when needed.
+  vcWarm(!vcSpeech.muted);
   vcGrill(req.from, req.from_thread || null, req.question, grill, req.id);
   vcAsks.set(req.id, vcPending?.card || vcLog.lastElementChild);
 }
@@ -1055,7 +1137,7 @@ sbxwStream.addEventListener('session', ev => {
   const c = vcAgents.get(key);
   const seen = chatIngest(c, info);
   if (!seen || !vcEngages(info, seen.reply)) return;
-  if (!vcOpen) vcSetOpen(true);
+  vcWarm(!vcSpeech.muted);
   if (seen.reply) vcAgentMessage(info.sandbox, info.thread || null, seen.reply);
   else if (seen.asked && c.steps?.length && c.answerable) vcAgentQuestion(info.sandbox, info.thread || null, c);
 });

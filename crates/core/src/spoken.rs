@@ -73,7 +73,7 @@ pub const DICT: &[(&str, &str, &str)] = &[
 
 /// Word, French, English: names a voice cannot read, spelt letter by
 /// letter instead. Matched as a whole word, whatever its case.
-pub const WORDS: &[(&str, &str, &str)] = &[("sbxw", "esse bé ixe double vé", "S B X W")];
+pub const WORDS: &[(&str, &str, &str)] = &[("sbxw", "ece bé ixe double vé", "S B X W")];
 
 /// Unit, French, English, in the plural. Said in full after a number only
 /// (`0,43 s`, `8 Go`), longer units first.
@@ -296,8 +296,8 @@ mod tests {
     #[test]
     fn names_and_paths_are_said_in_words() {
         assert_eq!(fr("voice_warm"), "voice warm");
-        assert_eq!(fr("dans sbxw.toml."), "dans esse bé ixe double vé point toml.");
-        assert_eq!(fr("~/.sbxw/run/server.err.log"), "tilde slash point esse bé ixe double vé slash run slash server point err point log");
+        assert_eq!(fr("dans sbxw.toml."), "dans ece bé ixe double vé point toml.");
+        assert_eq!(fr("~/.sbxw/run/server.err.log"), "tilde slash point ece bé ixe double vé slash run slash server point err point log");
         assert_eq!(fr("C:\\Users\\test"), "C deux-points backslash Users backslash test");
         assert_eq!(fr("svc::voice"), "svc voice");
         assert_eq!(fr("ensure_speech() renvoie Ok(())"), "ensure speech renvoie Ok");
@@ -328,8 +328,8 @@ mod tests {
 
     #[test]
     fn a_name_no_voice_can_read_is_spelt() {
-        assert_eq!(fr("Lance sbxw, puis SBXW down."), "Lance esse bé ixe double vé, puis esse bé ixe double vé down.");
-        assert_eq!(fr("dans sbxw.toml"), "dans esse bé ixe double vé point toml");
+        assert_eq!(fr("Lance sbxw, puis SBXW down."), "Lance ece bé ixe double vé, puis esse bé ixe double vé down.");
+        assert_eq!(fr("dans sbxw.toml"), "dans ece bé ixe double vé point toml");
         assert_eq!(fr("sbxwd et xsbxw"), "sbxwd et xsbxw");
         assert_eq!(speakable("run sbxw", Lang::En), "run S B X W");
     }

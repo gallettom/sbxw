@@ -374,13 +374,15 @@ apart from the chat dock. From left to right:
 
 | Part | What it does |
 |---|---|
-| Microphone, green when voice is set up | Click to talk, click again to send. Red while it listens |
+| Microphone, green when voice is set up | Click to talk, click again to send; **F8**, held, does the same from the keyboard. Red while it listens |
 | Sandbox name, in blue | Where your words go. Click it to pick another running sandbox |
 | Speaker | Lit while something is read aloud: click to stop the reading |
-| **F8** | Opens the panel under the bar: what was sent, agents' messages, errors |
+| **Open** | Opens the panel under the bar (**Close** closes it): what was sent, agents' messages, errors |
 
 Rings leave the border while someone talks: blue when the voice reads, red
-when the microphone listens. An error opens the panel by itself.
+when the microphone listens. The panel never opens by itself: a message
+read aloud, a question or an error leaves a blue dot on **Open** (an error is
+also a toast), and you open the panel when you want to see it.
 
 In the panel, hold the talk button, or hold
 **F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
@@ -441,7 +443,7 @@ sandbox picked, or if sending fails, the words wait in an editable card
 
 A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
 session sbxw opened there — engages the concierge on its own: the panel
-opens, and each round shows in it and is read aloud. **Follow** does
+gets each round, and reads it aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
 lot of talking for ordinary work). When the agent asks with the relay's `ask_user_questions` tool (what
 `/grill-me` does in sbxw), the round comes to the Concierge from any
