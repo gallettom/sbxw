@@ -131,7 +131,7 @@ jobs:
           cat sha256sums.txt
 
       # Signs sha256sums.txt with the RELEASE_SIGNING_KEY secret (an
-      # unencrypted Ed25519 key in OpenSSH format; see docs/releasing.md), so
+      # unencrypted Ed25519 key in OpenSSH format; see docs/cli.md#release-signatures), so
       # installers that carry the public key can tell a real release from one
       # replaced by someone without the key. No secret: no signature, and the
       # release still publishes. The key only ever exists in a 0600 file in
@@ -142,7 +142,7 @@ jobs:
         run: |
           set -eu
           if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
-            echo "::notice title=Release not signed::RELEASE_SIGNING_KEY is not set, so no sha256sums.txt.sig was made. See docs/releasing.md."
+            echo "::notice title=Release not signed::RELEASE_SIGNING_KEY is not set, so no sha256sums.txt.sig was made. See docs/cli.md#release-signatures."
             exit 0
           fi
           umask 077

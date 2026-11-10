@@ -14,7 +14,7 @@ const REPO: &str = "gallettom/sbxw";
 /// `ssh-ed25519 AAAA... sbxw-release`. Empty means release signatures are not
 /// enabled in this build: only the sha256 checks run. Must equal
 /// `RELEASE_PUBLIC_KEY` in install.sh (a test checks it). How to set it:
-/// docs/releasing.md.
+/// docs/cli.md#release-signatures.
 const RELEASE_PUBLIC_KEY: &str = "";
 /// The signer identity and the `ssh-keygen -Y` namespace of a release
 /// signature, so a signature made with the same key for anything else does
@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn the_installer_and_the_updater_carry_the_same_release_key() {
         let script = include_str!("../../../install.sh");
-        assert_eq!(install_sh_public_key(script), RELEASE_PUBLIC_KEY, "set the same key line in both: docs/releasing.md");
+        assert_eq!(install_sh_public_key(script), RELEASE_PUBLIC_KEY, "set the same key line in both: docs/cli.md#release-signatures");
         assert_eq!(install_sh_public_key("RELEASE_PUBLIC_KEY=\"ssh-ed25519 AAAA c\"\n"), "ssh-ed25519 AAAA c");
     }
 

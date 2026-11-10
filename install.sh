@@ -13,7 +13,7 @@ INSTALL_DIR="${SBXW_INSTALL_DIR:-/usr/local/bin}"
 # "ssh-ed25519 AAAA... sbxw-release". Empty means release signatures are not
 # enabled in this build: only the sha256 checks run. Must match
 # RELEASE_PUBLIC_KEY in crates/cli/src/update.rs (a test checks it).
-# How to set it: docs/releasing.md.
+# How to set it: docs/cli.md#release-signatures.
 RELEASE_PUBLIC_KEY=""
 
 # ── Colours (disabled when not a tty) ────────────────────────────────────────

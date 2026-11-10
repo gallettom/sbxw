@@ -33,6 +33,7 @@
 | Guide | What's in it |
 |---|---|
 | [Security](security.md) | Trust boundaries, listeners, tokens, what a sandbox cannot do |
+| [Release signatures](cli.md#release-signatures) | Turning them on, what they cover, key rotation |
 | [Architecture](architecture.md) | Crates, tests, `sbx` version floor, open questions |
 
 Component READMEs: [macOS island](../macos/README.md),
