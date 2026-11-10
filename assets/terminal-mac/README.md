@@ -80,15 +80,18 @@ checks), `crates/daemon/src/svc/mac.rs` (running terminal-mac, approvals),
 
 | Tool | What it does |
 |---|---|
-| `mac_start` | Takes the lease. A stopped VM needs your approval first; a paused one resumes without asking. |
+| `mac_start` | Takes the lease. Starting, creating or resuming the VM needs your approval first, and so does lending a running VM that sbxw did not start or resume itself. Later leases on a VM sbxw brought up need none. |
 | `mac_open_port` | Publishes one of the sandbox's ports where the guest can reach it, after your approval, and returns the URL to open **in the guest**. |
 | `mac_screenshot` | The guest's screen, inline in the tool result and saved in the workspace as `.sbxw-artifacts/mac-shots/mac-*.png` (the newest 40), which the Project panel opens on. `~/.sbxw/shots/` if the workspace cannot be written. |
 | `mac_click`, `mac_move`, `mac_drag`, `mac_scroll`, `mac_type`, `mac_key` | Input in the guest. `screenshot: true` returns the result in the same call. |
 | `mac_status`, `mac_release` | Where it stands; let go. |
 
-A call from a sandbox that does not hold the lease takes it if it is free, and
-is refused if another sandbox holds it. A lease nobody uses lapses after
-`idle_release_minutes`.
+A call from a sandbox that does not hold the lease takes it if it is free and
+sbxw brought the VM up (or you approved lending it), and is refused if another
+sandbox holds it. A lease nobody uses lapses after `idle_release_minutes`. One
+sandbox holds it for 60 minutes at most in one go: after that, another sandbox
+that asks takes it over. Releasing and taking it again at once does not reset
+those 60 minutes.
 
 The daemon never writes into a sandbox: the screenshot travels in the reply
 and the sandbox's MCP server writes the file, as with
@@ -96,7 +99,8 @@ and the sandbox's MCP server writes the file, as with
 
 ## Your side
 
-- **Approval cards.** A sandbox asking to boot the VM, or to publish a port,
+- **Approval cards.** A sandbox asking to boot, create or resume the VM, to
+  be lent a VM you started yourself, or to publish a port,
   opens a *Virtual Mac request* in the browser popup and the Island. The card
   says what will happen first, then quotes the agent's reason. **Approve** runs
   it, and the agent is told what came of it (the URL, or the error). **Refuse**

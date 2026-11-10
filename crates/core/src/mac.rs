@@ -11,10 +11,13 @@
 //!   disk that grows to 64 GiB, so every sandbox shares one, and a sandbox
 //!   holds a *lease* while it drives it. The lease lapses after
 //!   `idle_release_minutes` without a call.
-//! * **A person approves what costs or exposes something**: booting the VM,
-//!   and publishing a port for the guest's browser. Clicks and keys need no
-//!   approval: the guest is disposable, with no personal or organisation
-//!   account in it.
+//! * **A person approves what costs or exposes something**: booting or
+//!   resuming the VM, lending a VM sbxw did not bring up itself (the person
+//!   may be signed in to it), and publishing a port for the guest's browser.
+//!   Clicks and keys on a VM sbxw brought up need no approval: the guest is
+//!   disposable, with no personal or organisation account in it.
+//! * **No sandbox keeps it for good.** After `MAX_HOLD_MINUTES` of one
+//!   sandbox holding it, another that asks takes it over.
 //! * **Shut down normally first, force as a last resort.** terminal-mac
 //!   0.2.0-6's normal stop was seen to leave the guest `stopping` for good
 //!   (at the login screen, and with a session open), keeping its RAM. So a
@@ -26,6 +29,12 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// How long one sandbox may hold the VM in one go. Past it, the lease is
+/// still its own until another sandbox asks, which then takes it over. Next
+/// to `MacSettings::idle_release_minutes`, which ends a lease nobody uses.
+pub const MAX_HOLD_MINUTES: u64 = 60;
+pub const MAX_HOLD_MS: u64 = MAX_HOLD_MINUTES * 60_000;
 
 pub struct Release {
     pub version: &'static str,
@@ -238,6 +247,13 @@ pub struct MacBook {
     /// may manage its lifecycle. A VM the person started themselves is
     /// theirs until a sandbox has used it.
     pub managed: bool,
+    /// This daemon booted or resumed the VM, or a person approved lending
+    /// the one that was already running. Until then no lease is granted
+    /// without a card: a VM the person started may hold their session.
+    pub ours: bool,
+    /// The last lease released, so a holder cannot reset its hold time by
+    /// releasing and taking the VM again at once.
+    pub last_released: Option<Lease>,
     /// Sandboxes whose lease ended (released, lapsed, taken over, taken
     /// back, or the VM stopped) since the daemon last looked. Whatever they
     /// published for the guest must go with the lease, or the next holder
@@ -260,15 +276,29 @@ impl MacBook {
         if let Some(old) = self.lease.take() {
             self.ended.push(old.holder);
         }
-        self.lease = Some(Lease { holder: who.to_string(), since_ms: now, last_ms: now });
+        // Taken again straight after letting go: the same hold goes on.
+        let since_ms = match &self.last_released {
+            Some(r) if r.holder == who && now.saturating_sub(r.last_ms) < idle_ms => r.since_ms,
+            _ => now,
+        };
+        self.lease = Some(Lease { holder: who.to_string(), since_ms, last_ms: now });
         self.idle_since_ms = None;
         self.managed = true;
         Acquire::Granted
     }
 
-    /// The live lease that would refuse `who`, without taking anything.
+    /// The live lease that would refuse `who`, without taking anything. A
+    /// lease idle for `idle_ms`, or held for `MAX_HOLD_MS`, refuses nobody.
     pub fn held_by_other(&self, who: &str, now: u64, idle_ms: u64) -> Option<&Lease> {
-        self.lease.as_ref().filter(|l| l.holder != who && now.saturating_sub(l.last_ms) < idle_ms)
+        self.lease
+            .as_ref()
+            .filter(|l| l.holder != who && now.saturating_sub(l.last_ms) < idle_ms && now.saturating_sub(l.since_ms) < MAX_HOLD_MS)
+    }
+
+    /// When a lease that refuses others now will stop refusing them, at the
+    /// latest (its hold bound; idling ends it sooner).
+    pub fn free_by(l: &Lease) -> u64 {
+        l.since_ms.saturating_add(MAX_HOLD_MS)
     }
 
     pub fn holder(&self) -> Option<&str> {
@@ -280,8 +310,10 @@ impl MacBook {
         if self.holder() != Some(who) {
             return false;
         }
-        if let Some(l) = self.lease.take() {
-            self.ended.push(l.holder);
+        if let Some(mut l) = self.lease.take() {
+            self.ended.push(l.holder.clone());
+            l.last_ms = now;
+            self.last_released = Some(l);
         }
         self.idle_since_ms = Some(now);
         true
@@ -308,9 +340,11 @@ impl MacBook {
         Some(l.holder)
     }
 
-    /// sbxw just booted the VM: it is managed, idle from now.
+    /// sbxw just booted or resumed the VM, or a person approved lending it:
+    /// it is managed and lent without a card, idle from now.
     pub fn booted(&mut self, now: u64) {
         self.managed = true;
+        self.ours = true;
         if self.lease.is_none() {
             self.idle_since_ms = Some(now);
         }
@@ -323,6 +357,8 @@ impl MacBook {
         }
         self.idle_since_ms = None;
         self.managed = false;
+        self.ours = false;
+        self.last_released = None;
     }
 
     /// The sandboxes whose lease ended since the last call, each once.
@@ -330,6 +366,20 @@ impl MacBook {
         let mut v = std::mem::take(&mut self.ended);
         v.dedup();
         v
+    }
+
+    /// The card a sandbox's `mac_start` must open before it gets the VM in
+    /// `state`, if one; `None` when it can be lent now. Starting, stopping
+    /// and unknown states are the caller's to answer.
+    pub fn approval_needed(&self, state: VmState) -> Option<Ask> {
+        match state {
+            VmState::Running if self.ours => None,
+            VmState::Running => Some(Ask::Lend),
+            VmState::Paused => Some(Ask::Resume),
+            VmState::Missing => Some(Ask::Create),
+            VmState::Stopped | VmState::Unknown => Some(Ask::Boot),
+            VmState::Starting | VmState::Stopping => None,
+        }
     }
 
     /// What the lifecycle rules want done to a VM in `state`, now.
@@ -490,6 +540,9 @@ pub fn check_guest_port(port: u64) -> Result<u16, String> {
 pub fn approval_text(what: &Ask, reason: &str) -> String {
     let head = match what {
         Ask::Boot => "Start the virtual Mac (terminal-mac). It reserves several GB of RAM until it is paused or stopped.".to_string(),
+        Ask::Create => "Create a new virtual Mac (terminal-mac): macOS is downloaded from Apple (several GB) and installed, then it reserves several GB of RAM until it is paused or stopped. You finish its setup once, in its window.".to_string(),
+        Ask::Resume => "Resume the paused virtual Mac (terminal-mac) and lend it to this sandbox, which can then click, type and take screenshots in it.".to_string(),
+        Ask::Lend => "Lend the running virtual Mac to this sandbox. sbxw did not start it, so whatever is open or signed in there becomes visible to the sandbox, which can click, type and take screenshots in it.".to_string(),
         Ask::Port(p) => format!("Publish this sandbox's port {p} on the host's VM bridge, so the virtual Mac's browser can open it."),
     };
     let reason = reason.trim();
@@ -502,8 +555,23 @@ pub fn approval_text(what: &Ask, reason: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
+    /// Start a stopped VM.
     Boot,
+    /// No VM yet: create one, downloading macOS.
+    Create,
+    /// Resume a paused VM.
+    Resume,
+    /// Lend a running VM this daemon did not bring up.
+    Lend,
     Port(u16),
+}
+
+impl Ask {
+    /// The asks that bring the VM to a sandbox share one card slot per
+    /// sandbox; a port has its own.
+    pub fn brings_the_vm(&self) -> bool {
+        !matches!(self, Ask::Port(_))
+    }
 }
 
 /// Standard base64 with padding: a screenshot travels to the sandbox as the
@@ -638,6 +706,54 @@ mod tests {
 
         assert!(!b.release("c", 48 * MIN));
         assert!(b.take_ended().is_empty(), "a release of nothing ends nothing");
+    }
+
+    #[test]
+    fn no_sandbox_keeps_the_vm_past_its_hold_when_another_asks() {
+        let mut b = MacBook::default();
+        let idle = 10 * MIN;
+        // a keeps busy: never idle, a call every few minutes.
+        for t in (0..MAX_HOLD_MINUTES).step_by(5) {
+            assert_eq!(b.acquire("a", t * MIN, idle), Acquire::Granted);
+            if t + 5 < MAX_HOLD_MINUTES {
+                assert!(matches!(b.acquire("b", t * MIN + 1, idle), Acquire::Busy(_)));
+            }
+        }
+        assert_eq!(b.acquire("a", MAX_HOLD_MINUTES * MIN, idle), Acquire::Granted, "nobody else asked: still a's");
+        assert_eq!(b.acquire("b", MAX_HOLD_MINUTES * MIN + 1, idle), Acquire::Granted, "b waited: past a's hold, b takes it");
+        assert_eq!(b.take_ended(), ["a"]);
+        assert!(matches!(b.acquire("a", MAX_HOLD_MINUTES * MIN + 2, idle), Acquire::Busy(_)), "b's own hold starts now");
+    }
+
+    #[test]
+    fn releasing_and_taking_it_again_does_not_reset_the_hold() {
+        let mut b = MacBook::default();
+        b.acquire("a", 0, 10 * MIN);
+        b.acquire("a", 55 * MIN, 10 * MIN);
+        b.release("a", 55 * MIN);
+        b.acquire("a", 56 * MIN, 10 * MIN);
+        assert_eq!(b.lease.as_ref().unwrap().since_ms, 0);
+        assert_eq!(b.acquire("b", 61 * MIN, 10 * MIN), Acquire::Granted);
+        // Back after a real break: a fresh hold.
+        b.release("b", 62 * MIN);
+        b.acquire("b", 80 * MIN, 10 * MIN);
+        assert_eq!(b.lease.as_ref().unwrap().since_ms, 80 * MIN);
+    }
+
+    #[test]
+    fn only_a_running_vm_sbxw_brought_up_is_lent_without_a_card() {
+        let mut b = MacBook::default();
+        assert_eq!(b.approval_needed(VmState::Running), Some(Ask::Lend), "the person's own VM");
+        assert_eq!(b.approval_needed(VmState::Paused), Some(Ask::Resume));
+        assert_eq!(b.approval_needed(VmState::Missing), Some(Ask::Create));
+        assert_eq!(b.approval_needed(VmState::Stopped), Some(Ask::Boot));
+        b.acquire("a", 0, MIN);
+        assert_eq!(b.approval_needed(VmState::Running), Some(Ask::Lend), "a lease alone does not make it ours");
+        b.booted(1);
+        assert_eq!(b.approval_needed(VmState::Running), None);
+        assert_eq!(b.approval_needed(VmState::Paused), Some(Ask::Resume), "resuming ours still asks");
+        b.stopped();
+        assert_eq!(b.approval_needed(VmState::Running), Some(Ask::Lend), "started again by someone else");
     }
 
     #[test]

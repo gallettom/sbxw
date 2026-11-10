@@ -152,11 +152,17 @@ impl App {
     /// The VM's state; `Missing` when terminal-mac does not know it.
     async fn mac_state(&self) -> VmState {
         let vm = self.mac_settings().vm.as_str();
-        match self.mac_run(&["status", vm], CALL_TIMEOUT).await {
+        let state = match self.mac_run(&["status", vm], CALL_TIMEOUT).await {
             Ok(r) if r.ok => mac::parse_vm_state(&r.json),
             Ok(r) if r.text.to_ascii_lowercase().contains("not found") || r.text.to_ascii_lowercase().contains("no such") || r.text.to_ascii_lowercase().contains("does not exist") => VmState::Missing,
             _ => VmState::Unknown,
+        };
+        // Seen down: whoever starts it next, it is not the one sbxw brought
+        // up, and lending it asks again.
+        if matches!(state, VmState::Stopped | VmState::Missing) {
+            self.mac.lock().unwrap().book.ours = false;
         }
+        state
     }
 
     async fn mac_guest(&self) -> (bool, Value) {
@@ -454,29 +460,33 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         Ok(())
     }
 
-    /// Take the lease, booting the VM first when a person approves it.
+    /// Take the lease. A person approves first whatever brings the VM to a
+    /// sandbox that sbxw has not already brought up itself: a boot, a
+    /// resume, or lending a VM they started (see `MacBook::approval_needed`).
     pub async fn mac_start_for(self: &Arc<Self>, me: &SandboxRef, thread: Option<&ThreadName>, reason: &str, wait: Duration) -> Result<String, String> {
         self.mac_ready_to_lend()?;
         let idle = self.mac_settings().idle_release_ms();
         if let Some(l) = self.mac.lock().unwrap().book.held_by_other(&me.to_string(), now_ms(), idle) {
-            return Ok(format!("The virtual Mac is in use by sandbox '{}'. Do something else meanwhile and try later; do not loop on it.", l.holder));
+            let mins = mac::MacBook::free_by(l).saturating_sub(now_ms()).div_ceil(60_000);
+            return Ok(format!(
+                "The virtual Mac is in use by sandbox '{}'. It can be taken over in {mins} minutes at the latest. Do something else meanwhile and try later; do not loop on it.",
+                l.holder
+            ));
         }
         let state = self.mac_state().await;
         match state {
-            VmState::Running => {}
-            // Resuming costs nothing new: the RAM is reserved already.
-            VmState::Paused => {
-                self.mac_boot().await.map_err(|e| e.to_string())?;
-                return self.mac_lease(me, true).await;
-            }
             VmState::Starting => return Ok("The virtual Mac is starting. Call mac_start again in a minute.".into()),
             VmState::Stopping => return Ok("The virtual Mac is shutting down. Call mac_start again in a minute or two; if it stays like this, tell the user it seems stuck.".into()),
-            _ => {
-                let id = self.mac_ask(me, thread, Ask::Boot, reason)?;
-                return self.mac_await(&id, me, wait).await;
+            _ => {}
+        }
+        let needed = self.mac.lock().unwrap().book.approval_needed(state);
+        match needed {
+            None => self.mac_lease(me, false).await,
+            Some(ask) => {
+                let id = self.mac_ask(me, thread, ask, reason)?;
+                self.mac_await(&id, me, wait).await
             }
         }
-        self.mac_lease(me, false).await
     }
 
     /// Poll the guest helper until it can act, or `bound` passes.
@@ -505,9 +515,10 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         match got {
             Acquire::Granted => {
                 let held = format!(
-                    "You hold the virtual Mac '{}'. It lapses after {} idle minutes; call mac_release when done.",
+                    "You hold the virtual Mac '{}'. It lapses after {} idle minutes, and after {} minutes in all another sandbox can take it over; call mac_release when done.",
                     self.mac_settings().vm,
-                    self.mac_settings().idle_release_minutes
+                    self.mac_settings().idle_release_minutes,
+                    mac::MAX_HOLD_MINUTES
                 );
                 // A guest with no helper cannot act: say so now, not on the
                 // first screenshot.
@@ -585,12 +596,27 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         let id = id.to_string();
         tokio::spawn(async move {
             let text = match &p.ask {
-                Ask::Boot => match app.mac_boot().await {
-                    Ok(done) => match app.mac_lease(&p.sandbox, true).await {
-                        Ok(lease) => format!("The user approved: {done}. {lease}"),
-                        Err(e) => format!("The user approved: {done}, but {e}"),
-                    },
+                Ask::Boot | Ask::Create | Ask::Resume => match app.mac_boot().await {
+                    Ok(done) => {
+                        // The person said yes to this sandbox having it, even
+                        // if somebody brought it up meanwhile.
+                        app.mac.lock().unwrap().book.booted(now_ms());
+                        match app.mac_lease(&p.sandbox, true).await {
+                            Ok(lease) => format!("The user approved: {done}. {lease}"),
+                            Err(e) => format!("The user approved: {done}, but {e}"),
+                        }
+                    }
                     Err(e) => format!("The user approved, but the boot failed: {e:#}"),
+                },
+                Ask::Lend => match app.mac_state().await {
+                    VmState::Running => {
+                        app.mac.lock().unwrap().book.booted(now_ms());
+                        match app.mac_lease(&p.sandbox, false).await {
+                            Ok(lease) => format!("The user approved. {lease}"),
+                            Err(e) => format!("The user approved, but {e}"),
+                        }
+                    }
+                    other => format!("The user approved, but the virtual Mac is no longer running (it is {other:?}). Call mac_start again."),
                 },
                 Ask::Port(port) => match app.mac_publish(&p.sandbox, *port).await {
                     Ok(url) => format!("The user approved. In the guest, open {url} (in Safari: mac_key cmd+l, mac_type the URL, mac_key return). Your app must listen on 0.0.0.0:{port} in this sandbox."),
@@ -616,6 +642,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         if state != VmState::Running {
             let word = serde_json::to_value(state).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
             return Err(format!("the virtual Mac is {word}, not running — call mac_start first (a person approves the boot)"));
+        }
+        if !self.mac.lock().unwrap().book.ours {
+            return Err("sbxw did not start this virtual Mac: call mac_start first, and a person approves lending it".into());
         }
         let idle = self.mac_settings().idle_release_ms();
         let got = self.mac.lock().unwrap().book.acquire(&me.to_string(), now_ms(), idle);
@@ -947,6 +976,7 @@ esac
     async fn a_running_vm_is_lent_to_one_sandbox_at_a_time() {
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         let got = app.mac_start_for(&sb("alpha"), None, "Safari check", Duration::from_secs(1)).await.unwrap();
         assert!(got.contains("You hold"), "{got}");
         let busy = app.mac_start_for(&sb("beta"), None, "me too", Duration::from_secs(1)).await.unwrap();
@@ -960,6 +990,7 @@ esac
     async fn a_screenshot_comes_back_as_base64_and_leaves_no_file() {
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         let v = app.mac_action_for(&sb("alpha"), "screenshot", &json!({})).await.unwrap();
         assert_eq!(v["image"]["b64"], sbxw_core::mac::base64(b"PNGDATA"));
         let after = app.mac_action_for(&sb("alpha"), "click", &json!({"x":1,"y":2,"screenshot":true})).await.unwrap();
@@ -1002,19 +1033,60 @@ esac
     }
 
     #[tokio::test]
-    async fn a_paused_vm_resumes_without_asking() {
+    async fn a_paused_vm_resumes_only_after_a_yes() {
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "paused"));
-        let got = app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
+        // Even one sbxw paused itself.
+        app.mac.lock().unwrap().book.booted(0);
+        let a = app.clone();
+        let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(5)).await });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!calls(d.path()).contains("resume"), "nothing resumes before the yes");
+        let req = app.relay_list().pop().expect("a card");
+        assert!(req.question.starts_with("Resume the paused virtual Mac"), "{}", req.question);
+        app.relay_approve(&req.id, None, &[]).unwrap();
+        let got = asker.await.unwrap().unwrap();
         assert!(got.contains("You hold"), "{got}");
         assert!(calls(d.path()).contains("resume default"));
-        assert!(app.relay_list().is_empty());
+        assert!(app.mac_action_for(&sb("alpha"), "key", &json!({"keys":"return"})).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_running_vm_sbxw_did_not_start_is_lent_only_after_a_yes() {
+        let (d, app) = app();
+        *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        // No mac_start: a click alone takes nothing.
+        let e = app.mac_action_for(&sb("alpha"), "screenshot", &json!({})).await.unwrap_err();
+        assert!(e.contains("mac_start") && e.contains("approves"), "{e}");
+        assert!(!calls(d.path()).contains("screenshot"));
+        let a = app.clone();
+        let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(5)).await });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(app.mac.lock().unwrap().book.holder(), None);
+        let req = app.relay_list().pop().expect("a card");
+        assert!(req.question.contains("sbxw did not start it"), "{}", req.question);
+        app.relay_approve(&req.id, None, &[]).unwrap();
+        let got = asker.await.unwrap().unwrap();
+        assert!(got.contains("You hold"), "{got}");
+        // Once lent with a yes, later leases need none, as for a VM sbxw booted.
+        app.mac_release_for(&sb("alpha")).await;
+        let got = app.mac_start_for(&sb("beta"), None, "x", Duration::from_secs(1)).await.unwrap();
+        assert!(got.contains("You hold"), "{got}");
+        assert_eq!(app.relay_list().len(), 1);
+        // Seen stopped: it is no longer the one sbxw was lent.
+        app.mac_release_for(&sb("beta")).await;
+        std::fs::write(d.path().join("vm-state"), "stopped").unwrap();
+        app.mac_status().await;
+        std::fs::write(d.path().join("vm-state"), "running").unwrap();
+        let pending = app.mac_start_for(&sb("beta"), None, "x", Duration::from_millis(50)).await.unwrap();
+        assert!(pending.contains("Waiting on the user"), "{pending}");
     }
 
     #[tokio::test]
     async fn a_port_needs_the_lease_then_a_yes() {
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
         assert!(app.mac_open_port_for(&sb("beta"), None, 3000, "x", Duration::from_secs(1)).await.is_err(), "beta holds nothing");
         assert!(app.mac_open_port_for(&sb("alpha"), None, 22, "x", Duration::from_secs(1)).await.is_err());
@@ -1069,6 +1141,7 @@ esac
         );
         std::fs::write(&script, body).unwrap();
         *app.mac_program_override.lock().unwrap() = Some(script);
+        app.mac.lock().unwrap().book.booted(0);
         let got = app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
         assert!(got.contains("login screen") && got.contains("cannot act yet"), "{got}");
     }
@@ -1080,6 +1153,7 @@ esac
             _ => crate::testing::sbx_answer(a),
         });
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         *app.mac_guest_ip_override.lock().unwrap() = Some("192.168.64.1".into());
         app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
         let got = app.mac_open_port_for(&sb("alpha"), None, 5173, "x", Duration::from_secs(1)).await.unwrap();
@@ -1100,6 +1174,7 @@ esac
             _ => crate::testing::sbx_answer(a),
         });
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         *app.mac_guest_ip_override.lock().unwrap() = Some("192.168.64.1".into());
         app.mac.lock().unwrap().book.booted(0);
         app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
@@ -1202,6 +1277,7 @@ esac
     async fn one_port_card_at_a_time_per_sandbox() {
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         *app.mac_guest_ip_override.lock().unwrap() = Some("192.168.64.1".into());
         app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
         let short = Duration::from_millis(50);
@@ -1236,7 +1312,12 @@ esac
         std::fs::write(&script, body).unwrap();
         *app.mac_program_override.lock().unwrap() = Some(script);
         *app.mac_boot_wait.lock().unwrap() = Duration::from_secs(10);
-        let got = app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
+        let a = app.clone();
+        let asker = tokio::spawn(async move { a.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(20)).await });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let req = app.relay_list().pop().expect("a resume card");
+        app.relay_approve(&req.id, None, &[]).unwrap();
+        let got = asker.await.unwrap().unwrap();
         assert!(got.contains("Start with mac_screenshot"), "{got}");
         assert!(std::fs::read_to_string(&looks).unwrap().lines().count() >= 3);
     }
@@ -1252,6 +1333,7 @@ esac
     async fn an_idle_managed_vm_is_paused_then_stopped() {
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        app.mac.lock().unwrap().book.booted(0);
         app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
         app.mac_release_for(&sb("alpha")).await;
         app.mac_tick().await;

@@ -65,7 +65,8 @@ function renderMac() {
   const lead = `<p class="help-lead">A real macOS guest, run on this Mac by
     <a href="https://github.com/govijr/terminal-mac" target="_blank" rel="noopener">terminal-mac</a>,
     that sandboxes with the <code>sbxw:terminal-mac</code> kit can drive: Safari, Mac apps, native windows.
-    One sandbox at a time. A boot or a published port needs your yes; clicks and typing do not.</p>`;
+    One sandbox at a time, for an hour at most when another asks. Starting, resuming,
+    lending a VM sbxw did not start, and publishing a port need your yes; clicks and typing do not.</p>`;
   if (!m.supported) {
     macBody.innerHTML = `<div class="mac-card">${macPill('off', 'not available')}
       <p class="mac-card-note">The virtual Mac needs an Apple silicon Mac (macOS 14 or later). This host is not one, so the <code>mac_*</code> tools say so and do nothing.</p></div>`;
