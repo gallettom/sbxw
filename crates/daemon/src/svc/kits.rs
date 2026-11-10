@@ -118,6 +118,17 @@ impl App {
             write_in_place(path, &next)?;
             tracing::info!("web UI: kits of {} set to {:?}", path.display(), list);
         }
+        // A kit the person has just added here is their decision, made on
+        // the spot: its grant line is recorded as approved, so the next
+        // bring-up does not ask again. Only the lines this write adds: a kit
+        // that was already in the file (an agent may have put it there) is
+        // still asked about.
+        let before = Config::parse(&raw).map(|c| c.kits).unwrap_or_else(|_| Config::default().kits);
+        let added = sbxw_core::consent::new_grants(&kit_lines(dir, parsed.kits.clone()), &kit_lines(dir, before));
+        if !added.is_empty() {
+            let all = sbxw_core::consent::grants(&Config::load(path, Path::new("/"))?);
+            self.store.check_grants(&crate::store::grant_key(path), &all, &added, &added)?;
+        }
         if users.daemon {
             // As `Config::load` resolves them, from what was just written.
             *self.daemon_kits.lock().unwrap() = parsed.kits.into_iter().map(|k| kits::resolve_kit_ref(dir, k)).collect();
@@ -132,6 +143,13 @@ impl App {
         }
         Ok(warnings)
     }
+}
+
+/// The grant lines of a kits list alone, resolved against `dir` as
+/// `Config::load` resolves them.
+fn kit_lines(dir: &Path, list: Vec<String>) -> Vec<String> {
+    let kits = list.into_iter().map(|k| kits::resolve_kit_ref(dir, k)).collect();
+    sbxw_core::consent::grants(&Config { kits, ..Config::default() })
 }
 
 /// Replace a file the person owns: written beside it and renamed over it, so a
@@ -235,6 +253,23 @@ mod tests {
         app.set_kits(&file, Some(vec!["sbxw:retro".into(), "./mine".into()])).unwrap();
         let mine = d.path().join("mine").to_string_lossy().into_owned();
         assert_eq!(app.daemon_config().kits, vec!["sbxw:retro".to_string(), mine]);
+    }
+
+    /// The kit the person adds in the dialog is approved; one already in
+    /// the file, which the dialog did not add, is still asked about.
+    #[test]
+    fn a_kit_added_in_the_dialog_is_approved_and_no_other() {
+        let (dir, app, _) = app_with(sbx_answer);
+        let file = dir.path().join("proj/sbxw.toml");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "kits = [\"sbxw:codemap\", \"/planted/kit\"]\nnetwork_allow = [\"x.com\"]\n").unwrap();
+        app.store.update(sbxw_core::SandboxRef::parse("myapp").unwrap(), |r| r.config = Some(file.clone())).unwrap();
+        app.set_kits(&file, Some(vec!["sbxw:codemap".into(), "/planted/kit".into(), "sbxw:k8s-tools".into()])).unwrap();
+        let key = crate::store::grant_key(&file);
+        assert_eq!(app.store.all_approved_grants()[&key], ["kit: sbxw:k8s-tools"]);
+        let cfg = Config::load(&file, Path::new("/")).unwrap();
+        let e = app.check_consent(&cfg, None, &[]).unwrap_err();
+        assert_eq!(crate::store::needs_approval(&e).unwrap().grants, ["local kit: /planted/kit", "network: x.com"]);
     }
 
     #[cfg(unix)]
