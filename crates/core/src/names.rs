@@ -325,8 +325,10 @@ impl fmt::Display for NameError {
 
 impl std::error::Error for NameError {}
 
+/// Starts with an ASCII letter or digit: a leading `-` would be read as an
+/// option by sbx, git or ssh.
 pub fn is_valid_sandbox_name(name: &str) -> bool {
-    !name.is_empty()
+    name.starts_with(|c: char| c.is_ascii_alphanumeric())
         && name.len() <= MAX_SANDBOX_NAME_LEN
         && !name.ends_with('-')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
@@ -351,14 +353,14 @@ pub fn is_valid_model_id(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'.' || *c == b'-')
 }
 
-/// Non-alphabet chars become `-`; cut to sbx's length, no trailing hyphen, so a
-/// derived name is always valid.
+/// Non-alphabet chars become `-`; cut to sbx's length, no leading or trailing
+/// hyphen, so a derived name is always valid.
 pub fn sanitize_sandbox_name(s: &str) -> SandboxName {
-    let cleaned: String = s
+    let mapped: String = s
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
-        .take(MAX_SANDBOX_NAME_LEN)
         .collect();
+    let cleaned: String = mapped.trim_start_matches('-').chars().take(MAX_SANDBOX_NAME_LEN).collect();
     let cleaned = cleaned.trim_end_matches('-');
     SandboxName(if cleaned.is_empty() {
         "sandbox".to_string()
@@ -471,6 +473,20 @@ mod tests {
         assert_eq!(sanitize_sandbox_name("___").as_str(), "sandbox");
         let long = sanitize_sandbox_name(&"x".repeat(100));
         assert_eq!(long.len(), MAX_SANDBOX_NAME_LEN);
+        assert_eq!(sanitize_sandbox_name(".dotfiles").as_str(), "dotfiles");
+        assert_eq!(sanitize_sandbox_name("--rm").as_str(), "rm");
+        let padded = sanitize_sandbox_name(&format!("{}{}", "-".repeat(10), "y".repeat(100)));
+        assert_eq!(padded.len(), MAX_SANDBOX_NAME_LEN);
+    }
+
+    #[test]
+    fn a_name_never_starts_with_a_hyphen() {
+        for bad in ["-x", "--help", "-", "-1"] {
+            assert!(!is_valid_sandbox_name(bad), "{bad}");
+            assert!(serde_json::from_str::<SandboxName>(&format!("\"{bad}\"")).is_err(), "{bad}");
+        }
+        assert!(is_valid_sandbox_name("1x"));
+        assert!(is_valid_sandbox_name("a-b"));
     }
 
     #[test]
