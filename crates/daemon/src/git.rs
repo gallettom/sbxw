@@ -102,16 +102,30 @@ pub async fn init_chat_repo(host: &Host, dir: &Path) -> Result<(), String> {
     // Chat workspaces live under /tmp, which macOS sweeps; `git -C` into a
     // vanished one fails before the sandbox starts.
     host.fs.create_dir_all(dir).await.map_err(|e| format!("could not re-create chat workspace {}: {e:#}", dir.display()))?;
-    for args in [&["init", "-q"][..], &["commit", "-q", "--allow-empty", "-m", "sbxw chat"][..]] {
-        let argv = ["-C", &dir.to_string_lossy(), "-c", "user.email=sbxw@localhost", "-c", "user.name=sbxw", "-c", "init.defaultBranch=main"]
+    for args in [CHAT_INIT, CHAT_COMMIT] {
+        chat_git(host, dir, args).await?;
+    }
+    Ok(())
+}
+
+const CHAT_INIT: &[&str] = &["init", "-q"];
+/// `--no-verify`: the directory is the sandbox's to write, so a hook planted
+/// between `init` and `commit` must not run (hooksPath is pinned off too).
+const CHAT_COMMIT: &[&str] = &["commit", "-q", "--no-verify", "--allow-empty", "-m", "sbxw chat"];
+
+/// One git call of [`init_chat_repo`], with [`NO_PROGRAMS`] pinned like every
+/// other host git call.
+async fn chat_git(host: &Host, dir: &Path, args: &[&str]) -> Result<(), String> {
+    let mut argv: Vec<String> = NO_PROGRAMS.iter().flat_map(|kv| ["-c".to_string(), kv.to_string()]).collect();
+    argv.extend(
+        ["-C", &dir.to_string_lossy(), "-c", "user.email=sbxw@localhost", "-c", "user.name=sbxw", "-c", "init.defaultBranch=main"]
             .into_iter()
             .chain(args.iter().copied())
-            .map(String::from)
-            .collect();
-        let out = host.exec.exec(HostCmd { timeout: Some(GIT_TIMEOUT * 6), ..HostCmd::new("git", argv) }).await.map_err(|e| format!("could not run git: {e:#}"))?;
-        if !out.success() {
-            return Err(format!("git {} in {} failed: {}", args[0], dir.display(), String::from_utf8_lossy(&out.stderr).trim()));
-        }
+            .map(String::from),
+    );
+    let out = host.exec.exec(HostCmd { timeout: Some(GIT_TIMEOUT * 6), ..HostCmd::new("git", argv) }).await.map_err(|e| format!("could not run git: {e:#}"))?;
+    if !out.success() {
+        return Err(format!("git {} in {} failed: {}", args[0], dir.display(), String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(())
 }
@@ -597,6 +611,36 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// What a sandbox could plant between `git init` and `git commit` in its
+    /// chat workspace: a pre-commit hook, a hooksPath, an fsmonitor.
+    #[tokio::test]
+    async fn the_chat_commit_runs_no_program_the_sandbox_planted() {
+        use std::os::unix::fs::PermissionsExt;
+        if !git_ok() {
+            return;
+        }
+        for (n, h) in hosts() {
+            let d = tempfile::tempdir().unwrap();
+            let r = d.path().join("chat");
+            std::fs::create_dir(&r).unwrap();
+            chat_git(&h, &r, CHAT_INIT).await.unwrap();
+            let marker = d.path().join("ran");
+            let evil = d.path().join("evil.sh");
+            std::fs::write(&evil, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+            std::fs::set_permissions(&evil, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let hooks = d.path().join("hooks");
+            std::fs::create_dir(&hooks).unwrap();
+            for dir in [&hooks, &r.join(".git/hooks")] {
+                std::fs::copy(&evil, dir.join("pre-commit")).unwrap();
+            }
+            run(&r, &["config", "core.hooksPath", hooks.to_str().unwrap()]);
+            run(&r, &["config", "core.fsmonitor", evil.to_str().unwrap()]);
+            chat_git(&h, &r, CHAT_COMMIT).await.unwrap();
+            assert!(!marker.exists(), "{n}: a planted program ran on the host");
+            assert_eq!(scan(&h, &r).await, [""], "{n}");
+        }
+    }
+
     #[tokio::test]
     async fn a_read_runs_no_program_the_repo_config_names() {
         use std::os::unix::fs::PermissionsExt;
