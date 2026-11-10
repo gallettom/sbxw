@@ -37,8 +37,10 @@ The daemon listens twice, for two audiences:
 | **UI** (`web_addr`) | `127.0.0.1:7681` | Browser, island, extension | Everything, including every decision that moves information between sandboxes or starts work: routing a question, releasing an answer, approving or merging a plan, pairing a host, opening a terminal |
 | **Agent** (`agent_addr`) | `127.0.0.1:7682` | Sandboxes | Hooks, usage, relay requests, plan proposals and reports. Nothing that approves anything |
 
-- A sandbox's network policy allows **only the agent port**. `sbxw up` revokes a
-  UI-port rule an older sbxw added.
+- sbxw's own network rule for a sandbox allows **only the agent port**. It
+  does not remove a UI-port rule an older sbxw may have added, and a
+  `network_allow` entry you write is applied as written: check
+  `sbx policy ls <name>` if in doubt.
 - **Every agent call carries the sandbox's token**: 256 bits, minted at
   bring-up, installed over stdin into `~/.sbxw/token` (mode `0600`), never on a
   command line. The daemon derives *which* sandbox is calling from it, so a
@@ -73,11 +75,10 @@ The daemon listens twice, for two audiences:
 ## Secrets
 
 - Secrets travel over **stdin**, never argv, so they don't show in `ps`.
-- **The OAuth token is on disk** at `~/.sbxw/state/kits/<name>-oauth/spec.yaml`
-  (`0600`, in a `0700` directory) for as long as the sandbox exists, because sbx
-  re-resolves that path on each container swap. `sbxw rm` removes it. Prefer
-  `--use-api-key` to keep the credential only in sbx's secret store. The same
-  token is in the sandbox at `~/.claude/.credentials.json` either way.
+- sbxw writes **no OAuth token**: sbx keeps the claude.ai sign-in on the host
+  itself. A Remote Control sandbox gets no auth variables at all.
+- `--use-api-key` stores the key as sbx's global `anthropic` secret, over
+  stdin. It is not sent to a remote host whose `trust_secrets` is false.
 - `[env]` is **not** for secrets: it lands in argv and usually in a committed
   file.
 
@@ -97,11 +98,28 @@ The daemon listens twice, for two audiences:
 ### The agent can edit `sbxw.toml`
 
 `sbxw.toml` usually sits in the workspace, so the agent can edit it, including
-`network_allow`. That's a widening the agent can **propose but not perform**: it
-takes effect only when you next run `sbxw up`, and `sbx policy ls <name>` shows
-what a sandbox really has. To keep it out of reach, store the config outside
-the workspace and use `--config`. (`sbxw env export` writes beside the
-workspace for the same reason.)
+`network_allow`, `env`, `env_files`, `kits` and `monitor_cmd`. That's a change
+the agent can **propose but not perform**:
+
+- **A sandbox's `sbxw.toml`** is read when a person brings the sandbox up
+  (`sbxw up`, or Up in the web UI). The daemon records the parsed config in the
+  sandbox's record under `~/.sbxw/state`, and every later terminal attach,
+  thread, port release and panel uses that record, never the file. So every
+  key, including `env`, `env_files`, `workdir`, `web_shell`, `network_allow`
+  and `kits`, takes effect only at the next `sbxw up`. A sandbox recorded by
+  an sbxw older than this has no recorded config and runs with the daemon's.
+- **The daemon's own config** is read when the daemon starts. Its `kits`
+  change only through the web UI's Kits dialog, so a kit added to that file by
+  hand (or by an agent) reaches new sandboxes only after a daemon restart.
+- `monitor_cmd` and the terminal colours are placed in the web UI as escaped
+  string literals, so a value cannot run script in the UI.
+- The Kits dialog refuses to write an `sbxw.toml` that is a symlink, and its
+  temporary file is created under a random name that is never opened if it
+  already exists.
+
+`sbx policy ls <name>` shows what a sandbox really has. To keep the config out
+of reach, store it outside the workspace and use `--config`. (`sbxw env export`
+writes beside the workspace for the same reason.)
 
 ### The kit cache filler
 
