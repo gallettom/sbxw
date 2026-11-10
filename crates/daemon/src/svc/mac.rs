@@ -13,7 +13,7 @@
 
 use crate::app::{now_ms, App};
 use crate::bus::Event;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use sbxw_core::mac::{self, Acquire, Ask, Lifecycle, MacSettings, VmState};
 use sbxw_core::relay::{RelayKind, RelayState};
 use sbxw_core::sysbin::sys_bin;
@@ -155,7 +155,12 @@ impl App {
         let out = tokio::time::timeout(timeout, cmd.output())
             .await
             .map_err(|_| anyhow!("terminal-mac {} did not answer within {}s", args.first().map_or("", AsRef::as_ref), timeout.as_secs()))?
-            .with_context(|| format!("running {}", program.display()))?;
+            .map_err(|e| {
+                // The program's path is under the host's home: the log has it,
+                // the error (which may reach a sandbox) does not.
+                tracing::warn!("mac: running {}: {e}", program.display());
+                anyhow!("terminal-mac could not be run on the host ({}); sbxw's log has the detail", e.kind())
+            })?;
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         let json = serde_json::from_str(&stdout).unwrap_or(Value::Null);
@@ -764,23 +769,26 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         let vm = self.mac_settings().vm.as_str();
         let shot = self.mac_shot_path();
         let argv = mac::action_args(vm, action, args, &shot.to_string_lossy())?;
+        let shot_s = shot.to_string_lossy().into_owned();
+        // terminal-mac may name the screenshot's host path in what it says.
+        let hide = |t: &str| t.replace(&shot_s, "<the screenshot file>");
         let r = self.mac_run(&argv, CALL_TIMEOUT).await.map_err(|e| e.to_string())?;
         if !r.ok {
-            return Err(format!("{action}: {}{}", r.text, mac_hint(&r.text)));
+            return Err(format!("{action}: {}{}", hide(&r.text), mac_hint(&r.text)));
         }
         let wants_shot = action == "screenshot" || args.get("screenshot").and_then(Value::as_bool).unwrap_or(false);
         if !wants_shot {
-            return Ok(json!({ "text": r.text }));
+            return Ok(json!({ "text": hide(&r.text) }));
         }
         if action != "screenshot" {
             let argv = mac::action_args(vm, "screenshot", &Value::Null, &shot.to_string_lossy())?;
             let s = self.mac_run(&argv, CALL_TIMEOUT).await.map_err(|e| e.to_string())?;
             if !s.ok {
-                return Ok(json!({ "text": format!("{}\n(The screenshot after it failed: {}{})", r.text, s.text, mac_hint(&s.text)) }));
+                return Ok(json!({ "text": format!("{}\n(The screenshot after it failed: {}{})", hide(&r.text), hide(&s.text), mac_hint(&s.text)) }));
             }
         }
-        let image = read_shot(&shot).map_err(|e| format!("reading the screenshot: {e:#}"))?;
-        let text = if action == "screenshot" { "The virtual Mac's screen. Coordinates are pixels of this image.".to_string() } else { r.text };
+        let image = read_shot(&shot)?;
+        let text = if action == "screenshot" { "The virtual Mac's screen. Coordinates are pixels of this image.".to_string() } else { hide(&r.text) };
         Ok(json!({ "text": text, "image": { "mime": "image/png", "b64": image } }))
     }
 
@@ -930,13 +938,26 @@ fn mac_hint(text: &str) -> &'static str {
     }
 }
 
-fn read_shot(p: &std::path::Path) -> Result<String> {
-    let len = std::fs::metadata(p).with_context(|| format!("{} was not written", p.display()))?.len();
+/// The screenshot terminal-mac wrote, as base64. The error goes to the
+/// sandbox, so it never names the file: it is under the host's home. The
+/// detail is logged.
+fn read_shot(p: &std::path::Path) -> Result<String, String> {
+    const UNREAD: &str = "the screenshot could not be read on the host (sbxw's log has the detail). Try mac_screenshot again; if it keeps failing, tell the user.";
+    let len = match std::fs::metadata(p) {
+        Ok(m) => m.len(),
+        Err(e) => {
+            tracing::warn!("mac: reading the screenshot: {} was not written: {e}", p.display());
+            return Err(UNREAD.into());
+        }
+    };
     if len > MAX_SHOT_BYTES {
         let _ = std::fs::remove_file(p);
-        bail!("the screenshot is {} MB, too large to send", len / 1_000_000);
+        return Err(format!("the screenshot is {} MB, too large to send", len / 1_000_000));
     }
-    let bytes = std::fs::read(p)?;
+    let bytes = std::fs::read(p).map_err(|e| {
+        tracing::warn!("mac: reading the screenshot {}: {e}", p.display());
+        UNREAD.to_string()
+    })?;
     let _ = std::fs::remove_file(p);
     Ok(mac::base64(&bytes))
 }
@@ -1334,6 +1355,40 @@ esac
         let e = app.mac_open_port_for(&sb("alpha"), None, 4000, "x", short).await.unwrap_err();
         assert!(e.contains("already waiting"), "{e}");
         assert_eq!(app.relay_list().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_screenshot_names_no_host_path_to_the_sandbox() {
+        let (d, app) = app();
+        let script = fake(d.path(), "running");
+        // terminal-mac says ok but writes nothing; or fails naming the file.
+        let body = std::fs::read_to_string(&script).unwrap().replace(
+            r#"screenshot) printf 'PNGDATA' > "$5"; printf '{"path":"%s"}\n' "$5" ;;"#,
+            r#"screenshot) if [ -e "{dir}/fail" ]; then echo "cannot write $5" >&2; exit 1; fi; echo '{"ok":true}' ;;"#,
+        ).replace("{dir}", &d.path().display().to_string());
+        assert!(body.contains("cannot write"), "the fake was rewritten");
+        std::fs::write(&script, body).unwrap();
+        *app.mac_program_override.lock().unwrap() = Some(script);
+        app.mac.lock().unwrap().book.booted(0);
+        let root = app.store.paths.root.display().to_string();
+        let e = app.mac_action_for(&sb("alpha"), "screenshot", &json!({})).await.unwrap_err();
+        assert!(e.contains("could not be read on the host"), "{e}");
+        assert!(!e.contains(&root) && !e.contains(".png"), "{e}");
+        std::fs::write(d.path().join("fail"), "").unwrap();
+        let e = app.mac_action_for(&sb("alpha"), "screenshot", &json!({})).await.unwrap_err();
+        assert!(e.contains("cannot write <the screenshot file>") && !e.contains(&root), "{e}");
+        let v = app.mac_action_for(&sb("alpha"), "click", &json!({"x":1,"y":2,"screenshot":true})).await.unwrap();
+        assert!(!v["text"].as_str().unwrap().contains(&root), "{v}");
+    }
+
+    #[tokio::test]
+    async fn a_terminal_mac_that_cannot_run_names_no_host_path() {
+        let (d, app) = app();
+        *app.mac_program_override.lock().unwrap() = Some(d.path().join("no-such-terminal-mac"));
+        app.mac.lock().unwrap().book.booted(0);
+        let e = format!("{:#}", app.mac_run(&["action", "default", "status"], Duration::from_secs(5)).await.err().unwrap());
+        assert!(e.contains("could not be run on the host"), "{e}");
+        assert!(!e.contains(&d.path().display().to_string()), "{e}");
     }
 
     #[test]
