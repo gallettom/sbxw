@@ -19,6 +19,7 @@ axum.workspace = true
 futures-util.workspace = true
 portable-pty.workspace = true
 async-trait.workspace = true
+sha2.workspace = true
 
 # sherpa-onnx, linked statically. macOS: its prebuilt universal2 libraries.
 # Linux: its prebuilt "static" archives hold no libraries (only tools), so it

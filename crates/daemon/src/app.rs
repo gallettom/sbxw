@@ -43,6 +43,8 @@ pub struct App {
     pub cfg: Config,
     pub versions: Versions,
     pub use_api_key: bool,
+    /// What every UI request must carry (see `http::token`): new at each start.
+    pub ui_token: String,
     /// The sandbox the page opens on (`sbxw web <name>`).
     pub initial_sandbox: Mutex<String>,
 
@@ -120,6 +122,7 @@ impl AppBuilder {
                 sbx: self.sbx_version,
             },
             use_api_key: self.use_api_key,
+            ui_token: crate::http::token::mint(),
             initial_sandbox: Mutex::new(String::new()),
             agents: Mutex::new(AgentBook::new()),
             relay: Mutex::new(RelayBook::new()),

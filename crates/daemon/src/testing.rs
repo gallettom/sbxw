@@ -63,3 +63,14 @@ pub fn hosts() -> Vec<(&'static str, crate::host::Host)> {
     let via_exec = Host { name: sbxw_core::names::HostName::local(), exec: exec.clone(), fs: Arc::new(ExecFs::new(exec)) };
     vec![("local", Host::local()), ("exec", via_exec)]
 }
+
+/// The UI router as a signed-in client calls it: every request carries the
+/// UI token unless it already says something else.
+pub fn signed_in(app: Arc<App>) -> axum::Router {
+    use axum::http::{header, HeaderValue};
+    let bearer = HeaderValue::from_str(&format!("Bearer {}", app.ui_token)).unwrap();
+    crate::http::ui_router(app).layer(tower::util::MapRequestLayer::new(move |mut req: axum::http::Request<axum::body::Body>| {
+        req.headers_mut().entry(header::AUTHORIZATION).or_insert(bearer.clone());
+        req
+    }))
+}
