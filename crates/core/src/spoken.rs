@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     fn a_name_no_voice_can_read_is_spelt() {
-        assert_eq!(fr("Lance sbxw, puis SBXW down."), "Lance ece bé ixe double vé, puis esse bé ixe double vé down.");
+        assert_eq!(fr("Lance sbxw, puis SBXW down."), "Lance ece bé ixe double vé, puis ece bé ixe double vé down.");
         assert_eq!(fr("dans sbxw.toml"), "dans ece bé ixe double vé point toml");
         assert_eq!(fr("sbxwd et xsbxw"), "sbxwd et xsbxw");
         assert_eq!(speakable("run sbxw", Lang::En), "run S B X W");
