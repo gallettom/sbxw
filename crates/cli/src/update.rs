@@ -10,6 +10,17 @@ use std::path::PathBuf;
 // without piping curl through a shell script.
 const REPO: &str = "gallettom/sbxw";
 
+/// The public key that signs each release's sha256sums.txt, as one line:
+/// `ssh-ed25519 AAAA... sbxw-release`. Empty means release signatures are not
+/// enabled in this build: only the sha256 checks run. Must equal
+/// `RELEASE_PUBLIC_KEY` in install.sh (a test checks it). How to set it:
+/// docs/releasing.md.
+const RELEASE_PUBLIC_KEY: &str = "";
+/// The signer identity and the `ssh-keygen -Y` namespace of a release
+/// signature, so a signature made with the same key for anything else does
+/// not pass for one.
+const SIG_NAMESPACE: &str = "sbxw-release";
+
 /// Checks GitHub for a newer sbxw release and, unless `check_only`, downloads
 /// and installs it in place of the currently running binary.
 pub fn run(check_only: bool, no_island: bool) -> Result<()> {
@@ -87,9 +98,10 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
 
     // Fail closed: no sums file, or no line for the artifact, aborts the
     // update (release.yml publishes one line per binary and the island zip).
-    fetch_and_verify(&base, tmp_dir, &tmp_bin, &artifact)
-        .context("checksum verification failed — aborting update, nothing was installed")
-        .inspect_err(|_| ui.fail("checksum"))?;
+    let signed = fetch_and_verify(&base, tmp_dir, &tmp_bin, &artifact)
+        .context("verification failed — aborting update, nothing was installed")
+        .inspect_err(|_| ui.fail("verify"))?;
+    ui.ok("signature", signed.note());
     ui.ok("checksum", "sha256 verified");
 
     set_executable(&tmp_bin)?;
@@ -324,7 +336,7 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     })?;
 
     fetch_and_verify(base, tmp_dir, &tmp_zip, artifact)
-        .context("checksum verification failed — leaving the installed app alone")?;
+        .context("verification failed — leaving the installed app alone")?;
 
     // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
     let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
@@ -524,20 +536,98 @@ fn curl_download(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Downloads the release's sha256sums.txt into `dir` and verifies `file`
-/// against its line for `artifact_name`. Every failure is an error: a sums
-/// file that cannot be fetched is not a reason to install unchecked.
+/// Whether the sums a download was checked against were signed.
+#[derive(Debug, PartialEq)]
+enum Signature {
+    /// `RELEASE_PUBLIC_KEY` is empty: checksums only, as before signing.
+    NotEnabled,
+    Verified,
+}
+
+impl Signature {
+    fn note(&self) -> &'static str {
+        match self {
+            Self::NotEnabled => "release signatures are not enabled in this build",
+            Self::Verified => "sha256sums.txt signed by the release key",
+        }
+    }
+}
+
+/// Downloads the release's sha256sums.txt into `dir`, checks its signature
+/// when this build carries a release key, then verifies `file` against its
+/// line for `artifact_name`. Every failure is an error: a sums file or a
+/// signature that cannot be fetched is not a reason to install unchecked.
 fn fetch_and_verify(
     base: &str,
     dir: &std::path::Path,
     file: &std::path::Path,
     artifact_name: &str,
-) -> Result<()> {
+) -> Result<Signature> {
     let sums_path = dir.join("sha256sums.txt");
     curl_download(&format!("{base}/sha256sums.txt"), &sums_path)
         .context("could not download sha256sums.txt from the release")?;
+    // The signature first: until it checks out, the sums prove nothing.
+    let signed = if RELEASE_PUBLIC_KEY.is_empty() {
+        Signature::NotEnabled
+    } else {
+        let sig_path = dir.join("sha256sums.txt.sig");
+        curl_download(&format!("{base}/sha256sums.txt.sig"), &sig_path)
+            .context("the release has no sha256sums.txt.sig: refusing an unsigned release")?;
+        verify_sums_signature(RELEASE_PUBLIC_KEY, dir, &sums_path, &sig_path)?;
+        Signature::Verified
+    };
     let sums = std::fs::read_to_string(&sums_path).context("could not read sha256sums.txt")?;
-    verify_checksum(file, artifact_name, &sums)
+    verify_checksum(file, artifact_name, &sums)?;
+    Ok(signed)
+}
+
+/// The allowed-signers line `ssh-keygen -Y verify` reads for `public_key`
+/// (`<type> <base64> [comment]`): `sbxw-release <type> <base64>`.
+fn allowed_signers_line(public_key: &str) -> Result<String> {
+    let mut parts = public_key.split_whitespace();
+    match (parts.next(), parts.next()) {
+        (Some(kind), Some(key)) if kind.starts_with("ssh-") || kind.starts_with("ecdsa-") || kind.starts_with("sk-") => {
+            Ok(format!("{SIG_NAMESPACE} {kind} {key}\n"))
+        }
+        _ => anyhow::bail!("RELEASE_PUBLIC_KEY in this build is not a public key line"),
+    }
+}
+
+/// Checks that `sig_path` is an OpenSSH signature of `sums_path` by
+/// `public_key` in the `sbxw-release` namespace. The allowed-signers file is
+/// written in `dir`, which must be private (a [`PrivateDir`]). `ssh-keygen`
+/// comes from the system's own directories, never `PATH`.
+fn verify_sums_signature(
+    public_key: &str,
+    dir: &std::path::Path,
+    sums_path: &std::path::Path,
+    sig_path: &std::path::Path,
+) -> Result<()> {
+    let allowed = dir.join("allowed_signers");
+    std::fs::write(&allowed, allowed_signers_line(public_key)?).context("could not write allowed_signers")?;
+    if !sig_path.is_file() {
+        anyhow::bail!("sha256sums.txt.sig is missing: the release is not signed");
+    }
+    let keygen = sbxw_core::sysbin::sys_bin("ssh-keygen");
+    if !keygen.is_file() {
+        anyhow::bail!("ssh-keygen is not installed (looked for {}): cannot check the release signature", keygen.display());
+    }
+    let sums = std::fs::File::open(sums_path).context("could not read sha256sums.txt")?;
+    let out = std::process::Command::new(&keygen)
+        .args(["-Y", "verify", "-f"])
+        .arg(&allowed)
+        .args(["-I", SIG_NAMESPACE, "-n", SIG_NAMESPACE, "-s"])
+        .arg(sig_path)
+        .stdin(sums)
+        .output()
+        .context("failed to run ssh-keygen")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "the signature on sha256sums.txt did not verify against this build's release key: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 /// The expected hash for `artifact_name` in a sha256sums.txt (lines look like
@@ -750,5 +840,125 @@ mod tests {
         let path = a.path().to_path_buf();
         drop(a);
         assert!(!path.exists());
+    }
+
+    // ── Release signatures ───────────────────────────────────────────────
+
+    /// The value assigned to `RELEASE_PUBLIC_KEY=` in install.sh.
+    fn install_sh_public_key(script: &str) -> String {
+        let line = script
+            .lines()
+            .find(|l| l.starts_with("RELEASE_PUBLIC_KEY="))
+            .expect("install.sh assigns RELEASE_PUBLIC_KEY at the start of a line");
+        let v = line["RELEASE_PUBLIC_KEY=".len()..].trim();
+        v.trim_matches(|c| c == '"' || c == '\'').to_string()
+    }
+
+    #[test]
+    fn the_installer_and_the_updater_carry_the_same_release_key() {
+        let script = include_str!("../../../install.sh");
+        assert_eq!(install_sh_public_key(script), RELEASE_PUBLIC_KEY, "set the same key line in both: docs/releasing.md");
+        assert_eq!(install_sh_public_key("RELEASE_PUBLIC_KEY=\"ssh-ed25519 AAAA c\"\n"), "ssh-ed25519 AAAA c");
+    }
+
+    #[test]
+    fn the_allowed_signers_line_drops_the_comment() {
+        assert_eq!(
+            allowed_signers_line("ssh-ed25519 AAAAC3Nz sbxw-release").unwrap(),
+            "sbxw-release ssh-ed25519 AAAAC3Nz\n"
+        );
+        assert!(allowed_signers_line("").is_err());
+        assert!(allowed_signers_line("AAAAC3Nz").is_err());
+        assert!(allowed_signers_line("garbage AAAAC3Nz").is_err());
+    }
+
+    /// A throwaway signer: two Ed25519 keys (`release`, `other`), a sums
+    /// file, and its signature by `release`.
+    struct Signed {
+        dir: PrivateDir,
+        key: String,
+        sums: PathBuf,
+        sig: PathBuf,
+    }
+
+    fn keygen(args: &[&str], dir: &std::path::Path) -> std::process::Output {
+        std::process::Command::new(sbxw_core::sysbin::sys_bin("ssh-keygen"))
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    }
+
+    /// `None` (and a note on stderr) where ssh-keygen is missing.
+    fn signed_fixture() -> Option<Signed> {
+        if !sbxw_core::sysbin::sys_bin("ssh-keygen").is_file() {
+            eprintln!("skipped: no ssh-keygen in the system directories");
+            return None;
+        }
+        let dir = PrivateDir::new("sbxw-sig-test").unwrap();
+        let d = dir.path();
+        for name in ["release", "other"] {
+            let o = keygen(&["-q", "-t", "ed25519", "-N", "", "-C", "sbxw-release", "-f", name], d);
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        }
+        let sums = d.join("sha256sums.txt");
+        std::fs::write(&sums, format!("{HASH}  sbxw-linux-x86_64\n")).unwrap();
+        let o = keygen(&["-Y", "sign", "-f", "release", "-n", SIG_NAMESPACE, "sha256sums.txt"], d);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let key = std::fs::read_to_string(d.join("release.pub")).unwrap().trim().to_string();
+        let sig = d.join("sha256sums.txt.sig");
+        Some(Signed { dir, key, sums, sig })
+    }
+
+    /// The same four cases, through `check(key, dir, sums, sig) -> passed`.
+    fn signature_cases(check: impl Fn(&str, &std::path::Path, &std::path::Path, &std::path::Path) -> bool) {
+        let Some(f) = signed_fixture() else { return };
+        let d = f.dir.path();
+        let work = PrivateDir::new_in(d, "work").unwrap();
+        assert!(check(&f.key, work.path(), &f.sums, &f.sig), "a good signature passes");
+
+        // A sums file changed after signing.
+        let tampered = d.join("tampered.txt");
+        std::fs::write(&tampered, format!("{}  sbxw-linux-x86_64\n", "0".repeat(64))).unwrap();
+        assert!(!check(&f.key, work.path(), &tampered, &f.sig), "a modified sums file fails");
+
+        // Signed by a key other than the one the build carries.
+        // Same bytes, so only the key differs.
+        std::fs::copy(&f.sums, d.join("copy.txt")).unwrap();
+        let o = keygen(&["-Y", "sign", "-f", "other", "-n", SIG_NAMESPACE, "copy.txt"], d);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        assert!(!check(&f.key, work.path(), &f.sums, &d.join("copy.txt.sig")), "another key's signature fails");
+
+        // No signature at all.
+        assert!(!check(&f.key, work.path(), &f.sums, &d.join("missing.sig")), "a missing signature fails");
+    }
+
+    #[test]
+    fn the_updater_checks_the_release_signature() {
+        signature_cases(|key, dir, sums, sig| verify_sums_signature(key, dir, sums, sig).is_ok());
+    }
+
+    #[test]
+    fn the_installer_checks_the_release_signature() {
+        // verify_sums_sig, cut out of install.sh and run on its own by sh.
+        let script = include_str!("../../../install.sh");
+        let start = script.find("verify_sums_sig() {").expect("install.sh defines verify_sums_sig");
+        let end = script[start..].find("\n}\n").expect("verify_sums_sig ends") + start + 3;
+        let func = &script[start..end];
+        signature_cases(|key, dir, sums, sig| {
+            let body = format!(
+                "set -eu\nerr() {{ printf '%s\\n' \"$*\" >&2; }}\nRELEASE_PUBLIC_KEY='{key}'\n{func}\nverify_sums_sig \"$1\" \"$2\" \"$3\"\n"
+            );
+            std::process::Command::new(sbxw_core::sysbin::sys_bin("sh"))
+                .args(["-c", &body, "sh"])
+                .arg(sums)
+                .arg(sig)
+                .arg(dir)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        });
     }
 }
