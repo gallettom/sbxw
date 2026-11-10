@@ -260,7 +260,76 @@ fn template_choice(rebuild: bool) -> sbxw_core::templates::Choice {
     }
 }
 
+/// Which of a config's grants a command checks before it goes on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// What the daemon reads when it starts (`sbxw_core::consent::daemon_grants`).
+    Daemon,
+    /// Everything: a bring-up on this file.
+    All,
+}
+
+/// Show the host-access lines `config` asks for and get the person's yes:
+/// `allow` (`--allow-host-access`) gives it unasked; off a terminal the
+/// answer is an error naming the lines and the flag. The lines approved.
+fn ask_host_access<R: std::io::BufRead>(config: &str, grants: &[String], allow: bool, terminal: bool, input: R) -> Result<Vec<String>> {
+    let list: String = grants.iter().map(|g| format!("    {g}\n")).collect();
+    if allow {
+        eprintln!("sbxw  {config} asks for host access, approved with --allow-host-access:\n{list}");
+        return Ok(grants.to_vec());
+    }
+    if !terminal {
+        bail!(
+            "{config} asks for host access you have not approved yet:\n{list}\
+             Run the command in a terminal to be asked, or add --allow-host-access to approve exactly these lines."
+        );
+    }
+    eprintln!("\nsbxw  {config} asks for host access you have not approved yet:\n{list}");
+    eprintln!("Only approve what you expect: this file can be edited from inside the sandbox.");
+    eprint!("Allow? [y/N] ");
+    let mut answer = String::new();
+    let mut input = input;
+    input.read_line(&mut answer)?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        bail!("not approved: nothing was changed. `sbxw config grants` shows what is approved");
+    }
+    Ok(grants.to_vec())
+}
+
+/// Ask on this process's terminal, if it has one.
+fn ask_here(config: &str, grants: &[String], allow: bool) -> Result<Vec<String>> {
+    ask_host_access(config, grants, allow, std::io::stdin().is_terminal() && std::io::stderr().is_terminal(), std::io::stdin().lock())
+}
+
+/// Check `cfg`'s grants in `scope` against what the person approved for its
+/// file, asking for the new ones, before the daemon is started with it or a
+/// bring-up is sent. The daemon checks again; this is where the person can
+/// be asked. A config with no file grants nothing.
+fn approve_here(store: &Store, cfg: &Config, scope: Scope, allow: bool) -> Result<()> {
+    let Some(src) = &cfg.source else { return Ok(()) };
+    let key = sbxw_daemon::store::grant_key(src);
+    let all = sbxw_core::consent::grants(cfg);
+    let checked = match scope {
+        Scope::Daemon => sbxw_core::consent::daemon_grants(cfg),
+        Scope::All => all.clone(),
+    };
+    match store.check_grants(&key, &all, &checked, &[]) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let Some(n) = sbxw_daemon::store::needs_approval(&e) else { return Err(e) };
+            let ok = ask_here(&n.config, &n.grants, allow)?;
+            store.check_grants(&key, &all, &checked, &ok)
+        }
+    }
+}
+
 pub fn up(a: UpArgs) -> Result<()> {
+    up_with(a, false)
+}
+
+/// [`up`], with `--allow-host-access`: the config's new grants are approved
+/// as shown, without asking.
+pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
     let cfg = load_config(&a.config)?;
     let config_abs = config_path(&cfg, &a.config)?;
     let paths = Paths::from_home();
@@ -287,6 +356,7 @@ pub fn up(a: UpArgs) -> Result<()> {
         if a.no_web {
             bail!("--no-web needs a sandbox name to attach to");
         }
+        approve_here(&store, &cfg, Scope::Daemon, allow_host_access)?;
         apply_aliases_here(&store, &cfg);
         daemon.ensure(&paths, &config_abs, a.use_api_key)?;
         eprintln!("sbxw  daemon ready → {}", web_url(&cfg, None));
@@ -330,10 +400,14 @@ pub fn up(a: UpArgs) -> Result<()> {
         );
     }
 
+    // A local sandbox's file is the one loaded here: everything it grants is
+    // asked about at once. A remote host's file is read by the bring-up,
+    // which refuses it until the lines it names are approved below.
+    approve_here(&store, &cfg, if name.is_local() { Scope::All } else { Scope::Daemon }, allow_host_access)?;
     apply_aliases_here(&store, &cfg);
 
     if a.no_web {
-        return up_here(&rt, paths, cfg, sbx_version, BringUp {
+        return up_here(&rt, paths, cfg, sbx_version, allow_host_access, BringUp {
             name,
             workspace,
             ro,
@@ -345,29 +419,40 @@ pub fn up(a: UpArgs) -> Result<()> {
             template: template_choice(a.rebuild_template),
             remote_control: a.remote_control,
             git: a.git.clone(),
+            consent: sbxw_daemon::provision::Consent::Check(vec![]),
         });
     }
 
     daemon.ensure(&paths, &config_abs, a.use_api_key)?;
     let mut r = Renderer::new();
-    let last = daemon.stream(
-        &format!("/api/sandboxes/{name}/up"),
-        json!({
-            "path": workspace,
-            "ro": ro,
-            "config": cfg.source,
-            "chat": a.chat,
-            "api_key": api_key,
-            "template": template_choice(a.rebuild_template),
-            "remote_control": a.remote_control,
-            "git": a.git,
-        }),
-        |v| {
-            if let Some(p) = v.get("progress").and_then(|p| serde_json::from_value::<Progress>(p.clone()).ok()) {
-                r.show(&p);
-            }
-        },
-    )?;
+    let mut approved: Vec<String> = vec![];
+    let last = loop {
+        let last = daemon.stream(
+            &format!("/api/sandboxes/{name}/up"),
+            json!({
+                "path": workspace,
+                "ro": ro,
+                "config": cfg.source,
+                "chat": a.chat,
+                "api_key": api_key,
+                "template": template_choice(a.rebuild_template),
+                "remote_control": a.remote_control,
+                "git": a.git,
+                "approved": approved,
+            }),
+            |v| {
+                if let Some(p) = v.get("progress").and_then(|p| serde_json::from_value::<Progress>(p.clone()).ok()) {
+                    r.show(&p);
+                }
+            },
+        )?;
+        // Refused for want of a yes: the file changed since it was read here,
+        // or it is a remote host's. Asked, then sent again with the lines.
+        match consent_of(&last) {
+            Some((config, grants)) if grants != approved => approved = ask_here(&config, &grants, allow_host_access)?,
+            _ => break last,
+        }
+    };
     if last["ok"] != true {
         bail!("{}", last["error"].as_str().unwrap_or("the bring-up failed"));
     }
@@ -380,7 +465,7 @@ pub fn up(a: UpArgs) -> Result<()> {
 
 /// `--no-web`: the same pipeline in this process, then the agent on this
 /// terminal. The daemon-owned port publisher runs as long as the agent does.
-fn up_here(rt: &tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: Option<String>, req: BringUp) -> Result<()> {
+fn up_here(rt: &tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version: Option<String>, allow_host_access: bool, req: BringUp) -> Result<()> {
     init_tracing();
     let app = AppBuilder {
         paths,
@@ -394,7 +479,17 @@ fn up_here(rt: &tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version:
     let r = Mutex::new(Renderer::new());
     let sink: Sink = Arc::new(move |p| r.lock().unwrap().show(&p));
     let name = req.name.clone();
-    rt.block_on(app.provision(req, Some(sink)))?;
+    let mut approved: Vec<String> = vec![];
+    loop {
+        let req = BringUp { consent: sbxw_daemon::provision::Consent::Check(approved.clone()), ..req.clone() };
+        match rt.block_on(app.provision(req, Some(sink.clone()))) {
+            Ok(_) => break,
+            Err(e) => match sbxw_daemon::store::needs_approval(&e) {
+                Some(n) if n.grants != approved => approved = ask_here(&n.config, &n.grants, allow_host_access)?,
+                _ => return Err(e),
+            },
+        }
+    }
     eprintln!("sbxw  attaching the agent in this terminal (Ctrl-C to detach)");
     let cfg = &app.cfg;
     let args = sbxw_sbx::attach_args(&name.name, &cfg.env_pairs(), &cfg.env_files, &cfg.workdir);
@@ -428,7 +523,7 @@ fn up_here(rt: &tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version:
     out?
 }
 
-pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bool, tail: bool) -> Result<()> {
+pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bool, tail: bool, allow_host_access: bool) -> Result<()> {
     let name = match name {
         Some(n) => {
             let r = sandbox_arg(&n)?;
@@ -443,7 +538,7 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
     let ws = paths.chat_workspace(&name);
     std::fs::create_dir_all(&ws).with_context(|| format!("could not create {}", ws.display()))?;
     eprintln!("chat sandbox '{name}' → empty workspace {}", ws.display());
-    up(UpArgs {
+    up_with(UpArgs {
         name: Some(name.to_string()),
         path: Some(ws),
         git: None,
@@ -456,12 +551,53 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
         chat: true,
         rebuild_template: false,
         remote_control: false,
-    })
+    }, allow_host_access)
 }
 
-pub fn web(name: &str, config: &Path) -> Result<()> {
+/// `sbxw config grants`: what is approved for `config`, what it asks for
+/// beyond that, and `--revoke` to forget the approvals.
+pub fn config_grants(config: &Path, revoke: bool) -> Result<()> {
+    let cfg = load_config(config)?;
+    let key = sbxw_daemon::store::grant_key(&config_path(&cfg, config)?);
+    let store = Store::open(Paths::from_home());
+    if revoke {
+        match store.revoke_grants(&key)? {
+            true => println!("revoked: the next bring-up with {key} asks again"),
+            false => println!("nothing was approved for {key}"),
+        }
+        return Ok(());
+    }
+    let approved = store.all_approved_grants().remove(&key).unwrap_or_default();
+    let new = sbxw_core::consent::new_grants(&sbxw_core::consent::grants(&cfg), &approved);
+    println!("{key}");
+    print_lines("approved", &approved);
+    print_lines("asked for, not approved yet", &new);
+    Ok(())
+}
+
+fn print_lines(heading: &str, lines: &[String]) {
+    if lines.is_empty() {
+        println!("  {heading}: nothing");
+        return;
+    }
+    println!("  {heading}:");
+    for l in lines {
+        println!("    {l}");
+    }
+}
+
+/// The `consent` of a refused bring-up's last line: the file, and the lines
+/// to approve.
+fn consent_of(last: &serde_json::Value) -> Option<(String, Vec<String>)> {
+    let c = last.get("consent")?;
+    let grants = serde_json::from_value(c.get("grants")?.clone()).ok()?;
+    Some((c["config"].as_str().unwrap_or("sbxw.toml").to_string(), grants))
+}
+
+pub fn web(name: &str, config: &Path, allow_host_access: bool) -> Result<()> {
     let name = sandbox_arg(name)?;
     let cfg = load_config(config)?;
+    approve_here(&Store::open(Paths::from_home()), &cfg, Scope::Daemon, allow_host_access)?;
     let daemon = Daemon::new(&cfg.web_addr);
     daemon.ensure(&Paths::from_home(), &config_path(&cfg, config)?, false)?;
     daemon.post("/api/initial", json!({ "sandbox": name }))?;
@@ -969,5 +1105,52 @@ mod tests {
     fn the_url_names_the_sandbox() {
         let cfg = Config::default();
         assert_eq!(web_url(&cfg, Some("myapp")), "http://sbxw.localhost:7681/#sandbox=myapp");
+    }
+
+    #[test]
+    fn off_a_terminal_the_grants_are_listed_with_the_flag() {
+        let g = vec!["mount (read-write): /Users/me/data".to_string()];
+        let e = ask_host_access("/p/sbxw.toml", &g, false, false, std::io::empty()).unwrap_err().to_string();
+        assert!(e.contains("/p/sbxw.toml") && e.contains("    mount (read-write): /Users/me/data") && e.contains("--allow-host-access"), "{e}");
+        assert_eq!(ask_host_access("/p/sbxw.toml", &g, true, false, std::io::empty()).unwrap(), g);
+    }
+
+    #[test]
+    fn at_a_terminal_only_yes_approves() {
+        let g = vec!["network: x.com".to_string()];
+        for yes in ["y\n", "YES\n"] {
+            assert_eq!(ask_host_access("f", &g, false, true, yes.as_bytes()).unwrap(), g);
+        }
+        for no in ["\n", "n\n", "sure\n", ""] {
+            assert!(ask_host_access("f", &g, false, true, no.as_bytes()).is_err(), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn the_cli_checks_the_daemon_keys_before_a_daemon_starts() {
+        let d = tempfile_dir().join("grants");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let store = Store::open(Paths::under(&d));
+        let file = d.join("sbxw.toml");
+        std::fs::write(&file, "monitor_cmd = [\"sh\", \"-c\", \"x\"]\nnetwork_allow = [\"x.com\"]\n").unwrap();
+        let cfg = Config::load(&file, &d).unwrap();
+        // The test runs off a terminal: refused, with the line.
+        let e = approve_here(&store, &cfg, Scope::Daemon, false).unwrap_err().to_string();
+        assert!(e.contains("host command (Monitor pane): sh -c x") && !e.contains("network: x.com"), "{e}");
+        approve_here(&store, &cfg, Scope::Daemon, true).unwrap();
+        approve_here(&store, &cfg, Scope::Daemon, false).unwrap();
+        // The bring-up's own lines are still to approve.
+        assert!(approve_here(&store, &cfg, Scope::All, false).unwrap_err().to_string().contains("network: x.com"));
+        // No file, no grants.
+        approve_here(&store, &Config::default(), Scope::All, false).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_refused_stream_names_its_lines() {
+        let last = json!({ "done": true, "ok": false, "consent": { "config": "/p/sbxw.toml", "grants": ["network: x.com"] } });
+        assert_eq!(consent_of(&last), Some(("/p/sbxw.toml".into(), vec!["network: x.com".into()])));
+        assert_eq!(consent_of(&json!({ "done": true, "ok": false, "consent": null })), None);
     }
 }
