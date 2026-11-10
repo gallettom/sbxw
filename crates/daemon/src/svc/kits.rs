@@ -22,15 +22,13 @@ struct Users {
 }
 
 impl App {
-    /// The config the daemon started with, `kits` read again from the file: the
-    /// Kits dialog may have rewritten them, and a sandbox the web UI creates
-    /// must get what the dialog shows. Only `kits`; the rest (listeners, models)
-    /// is what the daemon runs with.
+    /// The config the daemon started with, `kits` as the Kits dialog last
+    /// set them: a sandbox the web UI creates gets what the dialog shows. Never
+    /// read again from the file, which an agent may be able to write; the rest
+    /// (listeners, models) is what the daemon runs with.
     pub fn daemon_config(&self) -> Config {
         let mut cfg = self.cfg.clone();
-        if let Some(fresh) = cfg.source.as_deref().and_then(|p| Config::load(p, Path::new("/")).ok()) {
-            cfg.kits = fresh.kits;
-        }
+        cfg.kits = self.daemon_kits.lock().unwrap().clone();
         cfg
     }
 
@@ -105,7 +103,7 @@ impl App {
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
         let next = kits::set_kits_line(&raw, list.as_deref()).with_context(|| format!("{} is not valid TOML", path.display()))?;
-        Config::parse(&next).context("the new kits line")?;
+        let parsed = Config::parse(&next).context("the new kits line")?;
 
         let mut warnings = Vec::new();
         let dir = path.parent().unwrap_or(Path::new("/"));
@@ -119,6 +117,10 @@ impl App {
         if next != raw {
             write_in_place(path, &next)?;
             tracing::info!("web UI: kits of {} set to {:?}", path.display(), list);
+        }
+        if users.daemon {
+            // As `Config::load` resolves them, from what was just written.
+            *self.daemon_kits.lock().unwrap() = parsed.kits.into_iter().map(|k| kits::resolve_kit_ref(dir, k)).collect();
         }
         if !users.sandboxes.is_empty() {
             warnings.push(format!(
@@ -176,5 +178,36 @@ mod tests {
 
         app.set_kits(&cfg, None).unwrap();
         assert!(!std::fs::read_to_string(&cfg).unwrap().contains("kits"));
+    }
+
+    use sbxw_core::config::Config;
+    use std::path::Path;
+
+    #[test]
+    fn the_daemons_kits_change_only_through_the_dialog() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("sbxw.toml");
+        std::fs::write(&file, "kits = [\"sbxw:codemap\"]\n").unwrap();
+        let mut cfg = Config::load(&file, Path::new("/")).unwrap();
+        cfg.source = Some(file.clone());
+        let app = crate::app::AppBuilder {
+            paths: crate::store::Paths::under(d.path()),
+            cfg,
+            sbx: sbxw_sbx::Sbx::new(sbxw_sbx::runner::Fake::new(sbx_answer)),
+            hosts: crate::hostsys::for_tests(&d.path().join("hosts")),
+            use_api_key: true,
+            sbx_version: Some("0.51.0".into()),
+        }
+        .build();
+        assert_eq!(app.daemon_config().kits, vec!["sbxw:codemap".to_string()]);
+
+        // An agent edits the file: the next web UI sandbox does not see it.
+        std::fs::write(&file, "kits = [\"./planted\"]\n").unwrap();
+        assert_eq!(app.daemon_config().kits, vec!["sbxw:codemap".to_string()]);
+
+        // The dialog's write is the one way in, resolved as a load would.
+        app.set_kits(&file, Some(vec!["sbxw:retro".into(), "./mine".into()])).unwrap();
+        let mine = d.path().join("mine").to_string_lossy().into_owned();
+        assert_eq!(app.daemon_config().kits, vec!["sbxw:retro".to_string(), mine]);
     }
 }

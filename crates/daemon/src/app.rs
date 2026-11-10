@@ -67,6 +67,11 @@ pub struct App {
     /// Kits `sbx kit add` left waiting for a person's approval, per sandbox,
     /// in the order they came: what a `kit-add` pane runs, first one first.
     pub(crate) kit_approvals: Mutex<HashMap<SandboxRef, Vec<String>>>,
+    /// The daemon config's `kits`, read once at start and changed only by
+    /// the Kits dialog's own write: the file usually sits in a workspace an
+    /// agent can write, and a kit planted there must not reach the next
+    /// sandbox the web UI creates.
+    pub(crate) daemon_kits: Mutex<Vec<String>>,
     /// `caffeinate`, the battery and who is on Remote Control.
     pub(crate) awake: Mutex<crate::svc::awake::Awake>,
     /// Remote hosts acted on so far, each with its link (see `remotes`).
@@ -102,6 +107,7 @@ impl AppBuilder {
     pub fn build(self) -> Arc<App> {
         let store = Store::open(self.paths);
         let plans = load_plans(&store.paths.plans());
+        let daemon_kits = Mutex::new(self.cfg.kits.clone());
         Arc::new(App {
             store,
             sbx: self.sbx,
@@ -127,6 +133,7 @@ impl AppBuilder {
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
             kit_approvals: Mutex::new(HashMap::new()),
+            daemon_kits,
             awake: Mutex::new(Default::default()),
             remotes: Mutex::new(HashMap::new()),
             ssh_program: Mutex::new("ssh".into()),

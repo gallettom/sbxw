@@ -1446,6 +1446,8 @@ mod tests {
         .unwrap();
         let mut app = Arc::try_unwrap(app).ok().unwrap();
         app.cfg.kits = vec![kit.to_string_lossy().into_owned()];
+        // The daemon's kits as read at start (see `App::daemon_kits`).
+        *app.daemon_kits.get_mut().unwrap() = app.cfg.kits.clone();
         let app = Arc::new(app);
         let offered = app.declared_host_mounts();
         assert_eq!(offered.len(), 1);
