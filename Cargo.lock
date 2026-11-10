@@ -1288,7 +1288,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sbxw"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1306,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "sbxw-core"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "getrandom 0.2.17",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "sbxw-daemon"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "sbxw-sbx"
-version = "3.3.0"
+version = "3.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
