@@ -21,9 +21,9 @@
 // pulls in xterm, unless the user explicitly chooses to.
 
 const SBXW_APP_SCRIPTS = [
-  'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js',
-  'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js',
-  'https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js',
+  '/vendor/xterm.js',
+  '/vendor/addon-fit.js',
+  '/vendor/addon-canvas.js',
   '/js/util.js',
   '/js/term-color.js',
   '/js/panes.js',

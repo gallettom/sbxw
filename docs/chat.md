@@ -89,8 +89,9 @@ Click the sbxw icon in the toolbar (**Alt+Shift+S**) on your app's tab.
   (`~/.sbxw/state/embed-pairings.json`).
 - Sends messages to that sandbox's main agent, or one of its threads, prefixed
   with the page's URL.
-- When the agent calls `ask_user_for_screenshot`, the panel can answer with a
-  capture of the tab, so the agent sees its own change.
+- When the agent calls `ask_user_for_screenshot`, the panel shows a one-click
+  **Send a screenshot of this tab** button, or answers on its own if you
+  turned that on in its menu, so the agent sees its own change.
 
 The extension is a thin shell around the daemon's `/sidepanel` page, so most
 changes ship inside sbxw. The install script and `sbxw update` keep the folder

@@ -16,8 +16,9 @@
 //     through `POST /api/chat/push`, prefixed with the page's URL;
 //   * `/api/events` (the island's feed, which does not count as a tab of the
 //     web UI) says what the agent is doing, and the turn's reply;
-//   * when that agent calls `ask_user_for_screenshot`, the panel answers the
-//     request itself with a capture of the tab (see "Screenshots Claude asks
+//   * when that agent calls `ask_user_for_screenshot`, the panel shows the
+//     request with a one-click "send a screenshot of this tab", or answers it
+//     itself once the person has turned that on (see "Screenshots Claude asks
 //     for" below), so the agent can look at its own change.
 //
 // The transcript is chat-core.js's, on the chat dock's styles. Opened outside
@@ -35,6 +36,9 @@ const SP_SHOT_MAX_B64 = 6 * 1024 * 1024;
 // A request older than this was opened before anyone could have meant this
 // tab; it is left to the popup in sbxw.
 const SP_SHOT_FRESH_MS = 30 * 60 * 1000;
+// With automatic answers on, at most one per sandbox in this window; the
+// requests after it wait for a click like any other.
+const SP_AUTOSHOT_GAP_MS = 10 * 1000;
 const spFramed = window.parent !== window;
 
 // Line icons, drawn in the text colour so hover and disabled states follow it.
@@ -59,7 +63,7 @@ document.body.insertAdjacentHTML('afterbegin', `
   <details class="sp-menu" id="sp-menu">
     <summary class="sp-icon" title="More" aria-label="More">${SP_ICON.more}</summary>
     <div class="sp-menu-body">
-      <label class="sp-check"><input type="checkbox" id="sp-autoshot"><span>Let Claude take screenshots of this tab</span></label>
+      <label class="sp-check"><input type="checkbox" id="sp-autoshot"><span>Send the screenshots Claude asks for without asking me (one per 10 seconds at most)</span></label>
       <label class="sp-check"><input type="checkbox" id="sp-autoreload"><span>Reload the tab after each reply</span></label>
       <hr>
       <button type="button" id="sp-open">Open the full session in sbxw</button>
@@ -70,6 +74,7 @@ document.body.insertAdjacentHTML('afterbegin', `
 <div class="sp-notice" id="sp-notice" hidden></div>
 <div class="sp-chat" id="sp-chat" hidden>
   <div class="cd-log sp-log" id="sp-log" aria-live="polite"></div>
+  <div class="sp-notice sp-asks" id="sp-asks" aria-live="polite" hidden></div>
   <p class="sp-hint" id="sp-hint" hidden></p>
   <form class="sp-composer" id="sp-composer">
     <div class="sp-shot" id="sp-shot" hidden>
@@ -106,6 +111,8 @@ let spCaptureSeq = 0;
 const spCaptureWaits = new Map();
 const spChats = new Map(); // "<sandbox>::<thread or ''>" → chat-core chat
 const spShotsAnswered = new Set(); // relay request ids this panel has taken on
+const spShotsWaiting = new Map();  // relay id → screenshot request waiting for a click
+const spAutoShotLast = new Map();  // sandbox → when this panel last answered one on its own
 
 const spKey = () => `${spSandbox}::${spThread || ''}`;
 const spMode = () => (spThread ? `thread:${spThread}` : 'claude');
@@ -152,9 +159,10 @@ function spAutoReload() {
   try { return localStorage.getItem(SP_AUTORELOAD) === '1'; } catch (_) { return false; }
 }
 
-// On unless turned off: it is what this panel is for.
+// Off until the person turns it on in this browser: a capture of their real
+// tab leaves without a click only once they have said it may.
 function spAutoShot() {
-  try { return localStorage.getItem(SP_AUTOSHOT) !== '0'; } catch (_) { return true; }
+  try { return localStorage.getItem(SP_AUTOSHOT) === '1'; } catch (_) { return false; }
 }
 
 // What Claude saw, as the transcript shows it: a line and a thumbnail of the
@@ -455,8 +463,10 @@ function spEmpty() {
     : `Tell ${spSandbox} what you see on this page.`;
   const more = document.createElement('p');
   more.textContent = spFramed && spAutoShot()
-    ? 'The page address goes with every message, and Claude can take a screenshot of this tab whenever it needs to look.'
-    : 'The page address goes with every message. The camera attaches a screenshot.';
+    ? 'The page address goes with every message, and the screenshots Claude asks for are sent without asking you, one per 10 seconds at most.'
+    : spFramed
+      ? 'The page address goes with every message. The camera attaches a screenshot. When Claude asks to see the page, you send it with one click.'
+      : 'The page address goes with every message.';
   box.append(lead, more);
   return box;
 }
@@ -478,6 +488,7 @@ function spRenderLog() {
   if (tail) spLog.appendChild(tail);
   spLog.scrollTop = spLog.scrollHeight;
   spRenderShot();
+  spRenderAsks();
 }
 
 function spRenderShot() {
@@ -513,7 +524,9 @@ async function spOpenInSbxw() {
 // told only a URL replies "I can't see your screen" before it thinks of
 // asking, and the developer reads that while the panel stands ready to show it.
 function spCompose(text, url, shotPath) {
-  const sight = spFramed && spAutoShot() ? ' · you can see this tab: ask_user_for_screenshot captures it instantly' : '';
+  const sight = !spFramed ? ''
+    : spAutoShot() ? ' · you can see this tab: ask_user_for_screenshot captures it (one per 10 seconds; more wait for the person)'
+    : ' · ask_user_for_screenshot shows the person a button that sends this tab';
   let message = `[sbxw side panel · ${url}${sight}]\n${text}`;
   if (shotPath) message += `\n\nScreenshot of the page: ${shotPath}`;
   return message;
@@ -577,46 +590,112 @@ async function spSend(text) {
 // ── Screenshots Claude asks for ───────────────────────────────────────────
 // `ask_user_for_screenshot` opens a screenshot request on the daemon's relay
 // and waits for a person to answer it in sbxw's popup. When this panel sits
-// beside the app of the sandbox that asked, it answers instead: a capture of
-// the tab, released with `POST /api/relay/:id/approve`, as the popup would.
+// beside the app of the sandbox that asked, it can answer instead: a capture
+// of the tab, released with `POST /api/relay/:id/approve`, as the popup would.
 //
-// The consent the relay asks of a person per request is given here once, by
-// the "Claude screenshots" box — on by default, since an agent able to look
-// at its own change is why this panel exists. It stays narrow: screenshot
+// By default the request waits in the panel with a "Send a screenshot of this
+// tab" button: one click captures the tab and sends it. The person may turn
+// on automatic answers in the menu (stored in this browser only); even then
+// the panel answers at most one request per sandbox every 10 seconds, and the
+// ones after that wait for the click. It stays narrow either way: screenshot
 // requests only, from this panel's sandbox only, of the tab the developer put
 // beside the panel, and every one is written into the transcript. A capture
-// that fails leaves the request open for the popup; nothing is ever refused
-// on the developer's behalf.
-async function spAnswerShot(req) {
-  if (!req || req.kind !== 'screenshot' || req.state !== 'pending') return;
-  if (!spFramed || !spAutoShot() || !spSandbox || req.from !== spSandbox) return;
-  if (spShotsAnswered.has(req.id) || Date.now() - (req.created_ms || 0) > SP_SHOT_FRESH_MS) return;
+// that fails leaves the request open, here and in the popup; nothing is ever
+// refused on the developer's behalf.
+function spShotFor(req) {
+  return !!req && req.kind === 'screenshot' && req.state === 'pending'
+    && spFramed && !!spSandbox && req.from === spSandbox
+    && !spShotsAnswered.has(req.id) && Date.now() - (req.created_ms || 0) <= SP_SHOT_FRESH_MS;
+}
+
+function spTakeShot(req) {
+  if (!req) return;
+  if (req.state !== 'pending' && spShotsWaiting.delete(req.id)) spRenderAsks();
+  if (!spShotFor(req)) return;
+  const last = spAutoShotLast.get(req.from) || 0;
+  if (spAutoShot() && Date.now() - last >= SP_AUTOSHOT_GAP_MS) {
+    spAutoShotLast.set(req.from, Date.now());
+    spSendShot(req, false);
+  } else if (!spShotsWaiting.has(req.id)) {
+    spShotsWaiting.set(req.id, req);
+    spRenderAsks();
+  }
+}
+
+// Capture the tab and release the request with it. `clicked`: the person
+// pressed the button just now, which is what the agent is told.
+async function spSendShot(req, clicked) {
   spShotsAnswered.add(req.id);
+  spShotsWaiting.delete(req.id);
+  spRenderAsks();
   const c = spChat(`${req.from}::${req.from_thread || ''}`);
   const url = spUrl;
   const r = await spCapture();
+  let sent = false;
   if (!r.dataUrl) {
-    c.log.push({ who: 'err', text: `Claude asked to see the page, and no screenshot could be taken: ${r.error}. Its request waits in sbxw.` });
+    c.log.push({ who: 'err', text: `Claude asked to see the page, and no screenshot could be taken: ${r.error}. Its request still waits.` });
   } else {
     const image = await spShrink(r.dataUrl);
+    const how = clicked
+      ? 'after the person clicked "Send a screenshot of this tab"'
+      : 'without asking the person, who allowed automatic screenshots in this panel';
     const res = await spJson(`/api/relay/${encodeURIComponent(req.id)}/approve`, {
-      answer: `Captured by the sbxw side panel from the browser tab beside it, ${url}, without asking the person: the page exactly as it was on screen, not resized, scrolled or navigated. If you need another state, say in your reply what to bring on screen.`,
+      answer: `Captured by the sbxw side panel from the browser tab beside it, ${url}, ${how}: the page exactly as it was on screen, not resized, scrolled or navigated. If you need another state, say in your reply what to bring on screen.`,
       images: [image],
     });
+    sent = !!res.ok;
     c.log.push(res.ok
-      ? { who: 'note', text: 'Claude took a screenshot of this tab', title: req.question, thumb: await spThumb(image) }
+      ? { who: 'note', text: clicked ? 'You sent Claude a screenshot of this tab' : 'Claude took a screenshot of this tab', title: req.question, thumb: await spThumb(image) }
       : { who: 'err', text: `Screenshot not sent to Claude: ${res.error || 'no answer from sbxw'}` });
+  }
+  // Not sent: the request is still open, so the button comes back.
+  if (!sent) {
+    spShotsAnswered.delete(req.id);
+    if (spShotFor(req)) spShotsWaiting.set(req.id, req);
   }
   spSave();
   spRender();
 }
 
+// The requests waiting for a click, above the composer.
+function spRenderAsks() {
+  const box = spEl('sp-asks');
+  const waiting = [...spShotsWaiting.values()].filter(spShotFor);
+  box.replaceChildren();
+  box.hidden = !waiting.length;
+  waiting.forEach(req => {
+    const lead = document.createElement('p');
+    lead.textContent = req.from_thread
+      ? `The ${req.from_thread} thread of ${req.from} asks to see this page.`
+      : `${req.from} asks to see this page.`;
+    box.appendChild(lead);
+    if (req.question) {
+      const q = document.createElement('p');
+      q.className = 'sp-dim';
+      q.textContent = req.question;
+      box.appendChild(q);
+    }
+    const row = document.createElement('div');
+    row.className = 'sp-choices';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sp-likely';
+    b.textContent = 'Send a screenshot of this tab';
+    const hint = document.createElement('small');
+    hint.textContent = 'captures the tab beside this panel now';
+    b.appendChild(hint);
+    b.addEventListener('click', () => spSendShot(req, true));
+    row.appendChild(b);
+    box.appendChild(row);
+  });
+}
+
 function spAnswerPendingShots() {
-  spJson('/api/relay').then(r => (r.requests || []).forEach(spAnswerShot));
+  spJson('/api/relay').then(r => (r.requests || []).forEach(spTakeShot));
 }
 
 new EventSource('/api/relay/events').onmessage = ev => {
-  try { spAnswerShot(JSON.parse(ev.data)); } catch (_) {}
+  try { spTakeShot(JSON.parse(ev.data)); } catch (_) {}
 };
 
 // ── Session events ────────────────────────────────────────────────────────
