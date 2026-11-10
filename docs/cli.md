@@ -98,6 +98,146 @@ See [Environment files](environment-files.md).
 
 The daemon's pid and log live in `~/.sbxw/run/`.
 
+## Release signatures
+
+A release is made by pushing a tag like `v3.4.0`. `.github/workflows/release.yml`
+builds the binaries and the island, writes `sha256sums.txt` with one line per
+file, and publishes them as a GitHub release. `install.sh` and `sbxw update`
+download `sha256sums.txt` and refuse to install a file whose SHA-256 does not
+match its line.
+
+### What the checksums do not cover
+
+The sums come from the same release as the files. Anyone who can replace a
+release asset can replace `sha256sums.txt` to match. A signature over
+`sha256sums.txt`, made with a key that never leaves the maintainer's control
+and checked against a public key carried by the installer and the updater,
+closes that gap.
+
+### How signing works
+
+- Scheme: OpenSSH signatures (`ssh-keygen -Y sign` and `ssh-keygen -Y verify`),
+  Ed25519 key, namespace `sbxw-release`. `ssh-keygen` ships with macOS and
+  with every Linux sbxw supports, so nothing new has to be installed.
+- The release workflow signs `sha256sums.txt` into `sha256sums.txt.sig` when
+  the repository secret `RELEASE_SIGNING_KEY` is set. Without it, the release
+  still publishes, unsigned, and the run shows a notice.
+- `install.sh` and `sbxw update` each carry the public key in a constant named
+  `RELEASE_PUBLIC_KEY`. While it is empty they check sha256 only and print
+  that release signatures are not enabled in this build. Once it is set, they
+  download `sha256sums.txt.sig` and verify it before trusting any sum. A
+  missing signature, a missing `ssh-keygen`, or a signature that does not
+  verify stops the install or update before anything is written.
+- `ssh-keygen -Y verify` needs OpenSSH 8.1 or newer (released in 2019). macOS 12
+  and later, Ubuntu 20.04 and later, and Debian 11 and later all ship a newer
+  version. Check with `ssh -V`.
+
+Signing is off today: no key has been created, and both constants are empty.
+
+### Turn signing on
+
+Run these on your own machine, not in a sandbox: the private key must never
+be on a machine an agent can read.
+
+1. Generate the key pair (no passphrase, since the workflow must use it
+   unattended):
+
+   ```sh
+   ssh-keygen -t ed25519 -N '' -C sbxw-release -f sbxw-release
+   ```
+
+   This writes `sbxw-release` (private) and `sbxw-release.pub` (public).
+
+2. Store the private key as the repository secret `RELEASE_SIGNING_KEY`:
+
+   ```sh
+   gh secret set RELEASE_SIGNING_KEY --repo gallettom/sbxw < sbxw-release
+   ```
+
+   Or paste the whole file, including the `BEGIN` and `END` lines, under
+   Settings, Secrets and variables, Actions.
+
+3. Keep an offline copy of `sbxw-release` (for example on an encrypted USB key
+   or in a password manager), then delete it from the disk:
+
+   ```sh
+   rm sbxw-release
+   ```
+
+4. Paste the single line from `sbxw-release.pub` (it looks like
+   `ssh-ed25519 AAAAC3Nza... sbxw-release`) into both constants, exactly the
+   same:
+
+   - `install.sh`: `RELEASE_PUBLIC_KEY="ssh-ed25519 AAAAC3Nza... sbxw-release"`
+   - `crates/cli/src/update.rs`: `const RELEASE_PUBLIC_KEY: &str = "ssh-ed25519 AAAAC3Nza... sbxw-release";`
+
+   `cargo test -p sbxw` fails if the two differ.
+
+5. Commit, merge to `main`, and release as usual (push a `v*` tag). In the
+   run, the "Sign checksums" step prints `Signed with:` followed by the public
+   key: it must match the line you pasted. The release then carries
+   `sha256sums.txt.sig`.
+
+Check a release by hand:
+
+```sh
+printf 'sbxw-release %s\n' "$(cut -d' ' -f1,2 sbxw-release.pub)" > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I sbxw-release -n sbxw-release \
+  -s sha256sums.txt.sig < sha256sums.txt
+```
+
+### Who verifies, and from when
+
+- `install.sh` is fetched from `main`, so every install verifies from the
+  moment the key is on `main` and the latest release is signed. Set the
+  secret before you merge the key, and release right after: until a signed
+  release exists, an installer with a key refuses the latest (unsigned) one.
+- `sbxw update` verifies only in builds that carry the key. Installs made from
+  a build with the empty constant keep checking sha256 only, until they update
+  once to a build that has the key. Their next update after that is verified.
+
+### What it protects against, and what it does not
+
+It protects against a release, or one of its assets, being replaced by
+someone who does not have the signing key: for example a GitHub account or
+token that can edit releases, or a swapped download along the way.
+
+It does not protect against:
+
+- a compromise of the repository's secrets or of the release workflow, since
+  whoever can run the workflow with the secret can sign anything;
+- a compromise of the build itself (the source, a dependency, or the runner),
+  since the signature only says the release workflow produced the sums;
+- a change to `install.sh` on `main`, since the installer carries the key and
+  is fetched from there. Protect `main` with branch rules and reviews.
+
+### Rotate the key
+
+To replace a key that is still safe:
+
+1. Generate a new key pair as above.
+2. Put the new public key line in both constants, and release that version
+   while `RELEASE_SIGNING_KEY` still holds the old key. Updaters with the old
+   key accept it, and from it they carry the new key.
+3. Then set `RELEASE_SIGNING_KEY` to the new private key for every later
+   release.
+
+`sbxw update` always goes to the latest release. An install that skips the
+transition release (step 2) has the old key and refuses releases signed with
+the new one. It fails closed with a message, and re-running `install.sh`
+fixes it. Leave time between steps 2 and 3 so most installs update through
+the transition release.
+
+There is a cost on the other side: between steps 2 and 3, `install.sh` on
+`main` already carries the new key while the latest release is signed with
+the old one, so fresh installs fail until the first release signed with the
+new key. Pick the length of that window knowing both effects, and say it in
+the release notes.
+
+If the old key leaked, rotating this way is not enough, because whoever holds
+it can also sign. Replace the secret, ship the new key, and tell users to
+reinstall with `install.sh` from `main`.
+
 ## What `sbxw up` does
 
 `sbxw up <name> [path]` runs this pipeline. Each step is one or more `sbx`

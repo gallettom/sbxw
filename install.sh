@@ -9,6 +9,13 @@ REPO="gallettom/sbxw"
 BINARY="sbxw"
 INSTALL_DIR="${SBXW_INSTALL_DIR:-/usr/local/bin}"
 
+# The public key that signs sha256sums.txt, as one line:
+# "ssh-ed25519 AAAA... sbxw-release". Empty means release signatures are not
+# enabled in this build: only the sha256 checks run. Must match
+# RELEASE_PUBLIC_KEY in crates/cli/src/update.rs (a test checks it).
+# How to set it: docs/cli.md#release-signatures.
+RELEASE_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID07mlyWquuz1Yo1dBe23Y9DXiGmnRmeztqzOW0nuHqo sbxw-release"
+
 # ── Colours (disabled when not a tty) ────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
@@ -77,6 +84,44 @@ verify_sum() {
     return 1
   fi
 }
+
+# ── Release signature ────────────────────────────────────────────────────────
+# With RELEASE_PUBLIC_KEY set, sha256sums.txt must carry an OpenSSH signature
+# (sha256sums.txt.sig, namespace sbxw-release) by that key before any sum in it
+# is trusted. That is what catches a release whose files and sums were both
+# replaced by someone without the signing key.
+
+# verify_sums_sig <sha256sums.txt> <sha256sums.txt.sig> <private dir>
+# Fails (with a message saying which check failed) unless the signature is
+# present and made by RELEASE_PUBLIC_KEY.
+verify_sums_sig() {
+  if [ -x /usr/bin/ssh-keygen ]; then
+    keygen=/usr/bin/ssh-keygen
+  elif keygen="$(command -v ssh-keygen 2>/dev/null)" && [ -n "$keygen" ]; then
+    :
+  else
+    err "ssh-keygen is not installed: cannot check the release signature."
+    return 1
+  fi
+  if [ ! -s "$2" ]; then
+    err "sha256sums.txt.sig is missing: the release is not signed."
+    return 1
+  fi
+  key_type="${RELEASE_PUBLIC_KEY%% *}"
+  key_rest="${RELEASE_PUBLIC_KEY#* }"
+  key_data="${key_rest%% *}"
+  if [ -z "$key_type" ] || [ -z "$key_data" ] || [ "$key_type" = "$RELEASE_PUBLIC_KEY" ]; then
+    err "RELEASE_PUBLIC_KEY in this installer is not a public key line."
+    return 1
+  fi
+  printf 'sbxw-release %s %s\n' "$key_type" "$key_data" > "$3/allowed_signers"
+  if ! "$keygen" -Y verify -f "$3/allowed_signers" -I sbxw-release -n sbxw-release \
+      -s "$2" < "$1" >/dev/null 2>&1; then
+    err "The signature on sha256sums.txt did not verify against this installer's key."
+    return 1
+  fi
+}
+# (end of verify_sums_sig)
 
 # Adds a single `source <(sbxw completion <shell>)` line (or fish's pipe
 # equivalent) to the shell's rc file, once. Regenerated fresh on every new
@@ -226,6 +271,16 @@ SUMS="${TMP_DIR}/sha256sums.txt"
 fetch --progress-bar "$URL" -o "$TMP" || die "Download failed. Check that ${VERSION} has a release at https://github.com/${REPO}/releases"
 fetch "${RELEASE_URL}/sha256sums.txt" -o "$SUMS" \
   || die "Could not download sha256sums.txt from ${VERSION}: refusing to install an unverified binary."
+# The signature first: until it checks out, the sums prove nothing.
+if [ -z "$RELEASE_PUBLIC_KEY" ]; then
+  printf "  Release signatures are not enabled in this build: checking sha256 only.\n"
+else
+  fetch "${RELEASE_URL}/sha256sums.txt.sig" -o "${SUMS}.sig" \
+    || die "Could not download sha256sums.txt.sig from ${VERSION}: refusing to install an unsigned release."
+  verify_sums_sig "$SUMS" "${SUMS}.sig" "$TMP_DIR" \
+    || die "The release signature did not verify: nothing was installed."
+  info "release signature verified"
+fi
 verify_sum "$TMP" "$ARTIFACT" "$SUMS" \
   || die "The downloaded ${ARTIFACT} did not verify: nothing was installed."
 info "sha256 verified"
