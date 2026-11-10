@@ -352,6 +352,33 @@ enum Config {
         URL(string: apiBaseURL + path)
     }
 
+    /// The daemon's UI token (`~/.sbxw/run/ui-token`, what the Rust side's
+    /// `Paths::from_home` names: `$HOME/.sbxw`). Read afresh for every
+    /// request: the daemon mints a new one each time it starts, so a token
+    /// kept from an earlier read would turn every call into a 401 after a
+    /// restart.
+    static var uiToken: String? {
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        let path = (home as NSString).appendingPathComponent(".sbxw/run/ui-token")
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
+    /// Every request to the daemon carries the UI token, or it gets a 401.
+    static func authorize(_ req: inout URLRequest) {
+        if let token = uiToken {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
+    /// A GET to the daemon, with the token.
+    static func request(_ url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        authorize(&req)
+        return req
+    }
+
     /// A JSON POST to the daemon, built the one way the island builds them.
     /// Returned as a `let` on purpose: a `Task` closure is `@Sendable`, and
     /// capturing a mutable local in one is an error, so every caller would
@@ -367,14 +394,17 @@ enum Config {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = timeout
+        authorize(&req)
         return req
     }
 
     /// Deep-link that focuses `sandbox` in the browser UI (see the
-    /// `#sandbox=` handler in `assets/index.html`).
+    /// `#sandbox=` handler in `assets/index.html`). It signs the browser in
+    /// (`?t=`, which the daemon turns into a cookie and drops from the address).
     static func deepLink(sandbox: String) -> URL? {
         let escaped = sandbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sandbox
-        return URL(string: baseURL + "/#sandbox=" + escaped)
+        let signIn = uiToken.map { "/?t=" + $0 } ?? "/"
+        return URL(string: baseURL + signIn + "#sandbox=" + escaped)
     }
 }
 

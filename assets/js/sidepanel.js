@@ -136,6 +136,8 @@ async function spJson(url, body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    // The daemon restarted (new UI token): the reloaded page says how to sign in again.
+    if (res.status === 401) location.reload();
     return await res.json();
   } catch (e) {
     return { ok: false, error: `sbxw did not answer (${e.message})` };

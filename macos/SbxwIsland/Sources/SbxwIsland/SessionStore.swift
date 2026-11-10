@@ -493,7 +493,7 @@ final class SessionStore: ObservableObject {
     private func fetchOK(_ path: String) async -> Data? {
         guard let url = Config.url(path) else { return nil }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: Config.request(url))
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 Log.log("\(path): HTTP \(http.statusCode) — skipping")
                 return nil

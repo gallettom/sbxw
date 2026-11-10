@@ -157,12 +157,20 @@ pub fn cmd(web_addr: &str, daemon: Option<String>, refresh: bool) -> Result<()> 
         println!("sbxw browser extension refreshed → {}", dir.display());
         return Ok(());
     }
+    // The panel frames `<daemon>/sidepanel`, which needs this browser signed
+    // in at that address: a cookie for `sbxw.localhost` is not one for
+    // `127.0.0.1`.
+    let sign_in = crate::client::Daemon::new(web_addr).sign_in_url(&daemon);
     println!("sbxw browser extension → {}", dir.display());
     println!("  talks to the daemon at {daemon}\n");
     println!("First time, in Chrome or Edge:");
     println!("  1. open chrome://extensions (edge://extensions)");
     println!("  2. turn on Developer mode");
     println!("  3. Load unpacked → choose the folder above\n");
+    match sign_in {
+        Some(url) => println!("Sign this browser in for the panel (once per daemon start), open:\n  {url}\n"),
+        None => println!("Start sbxw (`sbxw up`), then run `sbxw extension` again for the panel's sign-in address.\n"),
+    }
     println!("Then click the sbxw icon in the toolbar (Alt+Shift+S) on your app's tab.");
     println!("`sbxw update` keeps it current; the panel reloads the extension when it must.");
     Ok(())

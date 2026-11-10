@@ -268,7 +268,7 @@ final class RelayStore: ObservableObject {
     private func loadSnapshot() async {
         guard let url = Config.url("/api/relay") else { return }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (data, response) = try await URLSession.shared.data(for: Config.request(url))
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 // A daemon predating the relay simply has no such route. Not an
                 // error worth retrying loudly: the island keeps working, it just
