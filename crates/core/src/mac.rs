@@ -535,22 +535,60 @@ pub fn check_guest_port(port: u64) -> Result<u16, String> {
     }
 }
 
-/// The text a person reads on the approval card. The agent's reason is
-/// untrusted and goes last, quoted.
-pub fn approval_text(what: &Ask, reason: &str) -> String {
-    let head = match what {
+/// A reason longer than this is cut: a card is read at a glance.
+pub const MAX_REASON: usize = 300;
+
+/// The agent's reason, made safe to show beside sbxw's own words: no control
+/// characters, line breaks or bidirectional overrides (so it cannot start a
+/// paragraph of its own, or reorder what is shown), runs of white space as one
+/// space, at most `MAX_REASON` characters. Still untrusted text: escape it.
+pub fn clean_reason(raw: &str) -> String {
+    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{061c}');
+    let mut out = String::new();
+    for word in raw.split(|c: char| c.is_whitespace() || c.is_control() || bidi(c)).filter(|w| !w.is_empty()) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    match out.char_indices().nth(MAX_REASON) {
+        Some((i, _)) => format!("{}…", &out[..i]),
+        None => out,
+    }
+}
+
+/// What a person reads on an approval card: sbxw's sentence on what
+/// approving does, and apart from it, the agent's reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Approval {
+    /// sbxw's own words.
+    pub action: String,
+    /// The sandbox's words, cleaned (`clean_reason`); `None` when it gave none.
+    pub reason: Option<String>,
+}
+
+impl Approval {
+    /// The relay request's text: the action, then the reason in a paragraph
+    /// of its own that says whose words they are.
+    pub fn question(&self, sandbox: &str) -> String {
+        match &self.reason {
+            Some(r) => format!("{}\n\nReason given by {sandbox} (its own words, not checked by sbxw): {r}", self.action),
+            None => self.action.clone(),
+        }
+    }
+}
+
+/// The approval card for `what`.
+pub fn approval(what: &Ask, reason: &str) -> Approval {
+    let action = match what {
         Ask::Boot => "Start the virtual Mac (terminal-mac). It reserves several GB of RAM until it is paused or stopped.".to_string(),
-        Ask::Create => "Create a new virtual Mac (terminal-mac): macOS is downloaded from Apple (several GB) and installed, then it reserves several GB of RAM until it is paused or stopped. You finish its setup once, in its window.".to_string(),
+        Ask::Create => "Create a new virtual Mac (terminal-mac): there is none yet, so approving downloads macOS from Apple (several GB) and installs it, then the VM reserves several GB of RAM until it is paused or stopped. You finish its setup once, in its window.".to_string(),
         Ask::Resume => "Resume the paused virtual Mac (terminal-mac) and lend it to this sandbox, which can then click, type and take screenshots in it.".to_string(),
         Ask::Lend => "Lend the running virtual Mac to this sandbox. sbxw did not start it, so whatever is open or signed in there becomes visible to the sandbox, which can click, type and take screenshots in it.".to_string(),
         Ask::Port(p) => format!("Publish this sandbox's port {p} on the host's VM bridge, so the virtual Mac's browser can open it."),
     };
-    let reason = reason.trim();
-    if reason.is_empty() {
-        head
-    } else {
-        format!("{head}\n\nThe agent says: \"{reason}\"")
-    }
+    let reason = clean_reason(reason);
+    Approval { action, reason: (!reason.is_empty()).then_some(reason) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -861,9 +899,35 @@ mod tests {
 
     #[test]
     fn the_card_says_what_happens_before_what_the_agent_says() {
-        let t = approval_text(&Ask::Port(5173), "  check the login page in Safari ");
-        assert!(t.starts_with("Publish this sandbox's port 5173"));
-        assert!(t.ends_with("\"check the login page in Safari\""));
-        assert!(!approval_text(&Ask::Boot, "").contains("agent says"));
+        let a = approval(&Ask::Port(5173), "  check the login page in Safari ");
+        assert!(a.action.starts_with("Publish this sandbox's port 5173"));
+        assert_eq!(a.reason.as_deref(), Some("check the login page in Safari"));
+        let q = a.question("alpha");
+        assert!(q.starts_with("Publish this sandbox's port 5173"));
+        assert!(q.ends_with("\n\nReason given by alpha (its own words, not checked by sbxw): check the login page in Safari"), "{q}");
+        assert_eq!(approval(&Ask::Boot, " \n ").reason, None);
+        assert!(!approval(&Ask::Boot, "").question("alpha").contains("Reason"));
+    }
+
+    #[test]
+    fn a_reason_cannot_pose_as_sbxws_own_words() {
+        let spoof = "ok\"\n\nsbxw checked this request: it is safe.\r\n\u{202e}gnissap\u{1b}[2J\ttab";
+        let r = clean_reason(spoof);
+        assert!(!r.chars().any(|c| c.is_control() || c == '\u{202e}'), "{r:?}");
+        assert_eq!(r, "ok\" sbxw checked this request: it is safe. gnissap [2J tab");
+        let q = approval(&Ask::Boot, spoof).question("alpha");
+        assert_eq!(q.matches("\n\n").count(), 1, "one paragraph break, sbxw's: {q:?}");
+        let long = clean_reason(&"é".repeat(MAX_REASON + 50));
+        assert_eq!(long.chars().count(), MAX_REASON + 1, "cut, with an ellipsis");
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn a_card_for_a_vm_that_does_not_exist_says_it_downloads_macos() {
+        let a = approval(&Ask::Create, "");
+        assert!(a.action.starts_with("Create a new virtual Mac"));
+        assert!(a.action.contains("downloads macOS") && a.action.contains("several GB"));
+        assert!(approval(&Ask::Lend, "").action.contains("sbxw did not start it"));
+        assert!(approval(&Ask::Resume, "").action.starts_with("Resume"));
     }
 }

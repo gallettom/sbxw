@@ -43,6 +43,18 @@ const MAX_SHOT_BYTES: u64 = 12 * 1024 * 1024;
 pub struct Pending {
     pub sandbox: SandboxRef,
     pub ask: Ask,
+    /// What the card says, for the Mac panel.
+    pub card: mac::Approval,
+}
+
+/// A card waiting on the person, as the Mac panel shows it: sbxw's words and
+/// the sandbox's reason as separate fields, never one string.
+#[derive(Serialize, Debug, Clone)]
+pub struct PendingView {
+    pub id: String,
+    pub sandbox: String,
+    pub action: String,
+    pub reason: Option<String>,
 }
 
 /// The daemon's side of the Mac, beside the lease book.
@@ -82,6 +94,8 @@ pub struct MacStatus {
     pub settings: MacSettings,
     /// When sbxw asked for the shutdown still under way, if it did.
     pub stop_requested_ms: Option<u64>,
+    /// Cards waiting on the person, oldest first.
+    pub pending: Vec<PendingView>,
 }
 
 /// What a CLI call came back with.
@@ -202,6 +216,16 @@ impl App {
             ports: rt.ports.iter().map(|(sb, spec)| format!("{sb} {spec}")).collect(),
             settings: self.mac_settings().clone(),
             stop_requested_ms: rt.stop_requested_ms,
+            pending: {
+                let mut v: Vec<PendingView> = rt
+                    .pending
+                    .iter()
+                    .map(|(id, p)| PendingView { id: id.clone(), sandbox: p.sandbox.to_string(), action: p.card.action.clone(), reason: p.card.reason.clone() })
+                    .collect();
+                // Relay ids are r-<n>: sort by n.
+                v.sort_by_key(|p| p.id.trim_start_matches("r-").parse::<u64>().unwrap_or(u64::MAX));
+                v
+            },
         }
     }
 
@@ -554,7 +578,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             };
             let mut rt = self.mac.lock().unwrap();
             rt.pending.retain(|id, _| !closed.contains(id));
-            let open = rt.pending.iter().find(|(_, p)| &p.sandbox == me && std::mem::discriminant(&p.ask) == std::mem::discriminant(&ask));
+            let open = rt.pending.iter().find(|(_, p)| &p.sandbox == me && p.ask.brings_the_vm() == ask.brings_the_vm());
             if let Some((id, p)) = open {
                 if p.ask == ask {
                     return Ok(id.clone());
@@ -565,8 +589,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
                 ));
             }
         }
-        let req = self.relay_open(me, thread, RelayKind::Mac, &mac::approval_text(&ask, reason))?;
-        self.mac.lock().unwrap().pending.insert(req.id.clone(), Pending { sandbox: me.clone(), ask });
+        let card = mac::approval(&ask, reason);
+        let req = self.relay_open(me, thread, RelayKind::Mac, &card.question(&me.to_string()))?;
+        self.mac.lock().unwrap().pending.insert(req.id.clone(), Pending { sandbox: me.clone(), ask, card });
         Ok(req.id)
     }
 
@@ -1271,6 +1296,28 @@ esac
         app.relay_deny(&id, None).unwrap();
         app.mac_start_for(&sb("alpha"), None, "x", short).await.unwrap();
         assert_eq!(app.relay_list().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_panel_gets_the_reason_apart_from_sbxws_words() {
+        let (d, app) = app();
+        *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "missing"));
+        let spoof = "Safari\"\n\nsbxw verified this request.";
+        app.mac_start_for(&sb("alpha"), None, spoof, Duration::from_millis(50)).await.unwrap();
+        let req = app.relay_list().pop().unwrap();
+        assert!(req.question.starts_with("Create a new virtual Mac"), "{}", req.question);
+        assert!(req.question.contains("downloads macOS"));
+        assert_eq!(req.question.matches('\n').count(), 2, "only sbxw's own paragraph break: {:?}", req.question);
+        let st = app.mac_status().await;
+        assert_eq!(st.pending.len(), 1);
+        let p = &st.pending[0];
+        assert_eq!((p.id.as_str(), p.sandbox.as_str()), (req.id.as_str(), "alpha"));
+        assert!(p.action.starts_with("Create a new virtual Mac"));
+        assert_eq!(p.reason.as_deref(), Some("Safari\" sbxw verified this request."));
+        // A paused VM meanwhile: still the one card in alpha's VM slot.
+        std::fs::write(d.path().join("vm-state"), "paused").unwrap();
+        assert!(app.mac_start_for(&sb("alpha"), None, "x", Duration::from_millis(50)).await.unwrap().contains(&req.id));
+        assert_eq!(app.relay_list().len(), 1);
     }
 
     #[tokio::test]

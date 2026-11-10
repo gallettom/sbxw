@@ -102,7 +102,12 @@ and the sandbox's MCP server writes the file, as with
 - **Approval cards.** A sandbox asking to boot, create or resume the VM, to
   be lent a VM you started yourself, or to publish a port,
   opens a *Virtual Mac request* in the browser popup and the Island. The card
-  says what will happen first, then quotes the agent's reason. **Approve** runs
+  says what will happen first (for a VM that does not exist yet: that macOS is
+  downloaded, several GB). Then, in a paragraph of its own headed *Reason given
+  by* the sandbox, comes the agent's reason, with its line breaks and control
+  characters removed and cut at 300 characters, so it cannot pass for sbxw's
+  words. **Setup → Mac** lists the same cards with the reason in its own
+  block. **Approve** runs
   it, and the agent is told what came of it (the URL, or the error). **Refuse**
   starts nothing.
 - **No approval for clicks and typing.** The guest is disposable and shared;
