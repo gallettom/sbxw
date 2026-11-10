@@ -40,6 +40,44 @@ bullet() {
 }
 die()   { err "$*"; exit 1; }
 
+# Every download: HTTPS only, also across redirects, and TLS 1.2 or newer.
+fetch() { curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL "$@"; }
+
+# ── Checksums ────────────────────────────────────────────────────────────────
+# Each download is checked against sha256sums.txt from the same release before
+# it is made executable, moved, run or un-quarantined. The sums come from the
+# same place as the files, so this catches a corrupted or swapped download,
+# not a compromised release: whoever can publish the release can publish
+# matching sums.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# verify_sum <file> <name in sha256sums.txt> <sha256sums.txt>
+# Fails (with a message saying what was missing or wrong) unless the file's
+# sha256 matches its line.
+verify_sum() {
+  expected="$(awk -v n="$2" '$2 == n || $2 == "*" n { print $1; exit }' "$3")"
+  if [ -z "$expected" ]; then
+    err "sha256sums.txt in ${VERSION} has no line for $2."
+    return 1
+  fi
+  if ! actual="$(sha256_of "$1")" || [ -z "$actual" ]; then
+    err "Neither sha256sum nor shasum is installed: cannot verify $2."
+    return 1
+  fi
+  if [ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" != "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]; then
+    err "Checksum mismatch for $2: expected ${expected}, got ${actual}."
+    return 1
+  fi
+}
+
 # Adds a single `source <(sbxw completion <shell>)` line (or fish's pipe
 # equivalent) to the shell's rc file, once. Regenerated fresh on every new
 # shell from whatever sbxw is currently installed, so — unlike a completion
@@ -67,10 +105,15 @@ install_completions() {
 # ~/Applications. The bundle is ad-hoc-signed (not notarised), so we strip the
 # download quarantine to let Gatekeeper run it.
 install_island() {
-  url="$1"; app_dir="$2"
+  url="$1"; app_dir="$2"; sums="$3"
   tmp="$(mktemp -d)"
-  if ! curl -fsSL "$url" -o "$tmp/island.zip" 2>/dev/null; then
+  if ! fetch "$url" -o "$tmp/island.zip" 2>/dev/null; then
     warn "No island build in ${VERSION} (skipping)."
+    rm -rf "$tmp"; return 0
+  fi
+  # Fail closed: an unverified bundle is never extracted, moved or opened.
+  if ! verify_sum "$tmp/island.zip" "SbxwIsland-macos.zip" "$sums"; then
+    err "The island download did not verify, so it was not installed."
     rm -rf "$tmp"; return 0
   fi
   if command -v ditto >/dev/null 2>&1; then
@@ -151,7 +194,7 @@ esac
 step "Resolving version…"
 VERSION="${1:-}"
 if [ -z "$VERSION" ]; then
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  VERSION="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
 fi
 [ -n "$VERSION" ] || die "Could not determine latest version. Pass a version as the first argument, e.g.: sh -s v1.0.0"
@@ -171,13 +214,21 @@ if [ "$OS" = "macos" ]; then
 fi
 
 ARTIFACT="${BINARY}-${OS}-${ARCH}"
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARTIFACT}"
+RELEASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+URL="${RELEASE_URL}/${ARTIFACT}"
 
 istep "$C_BIN" "sbxw ${VERSION}" "downloading the ${OS}/${ARCH} build…"
-TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+TMP="${TMP_DIR}/${ARTIFACT}"
+SUMS="${TMP_DIR}/sha256sums.txt"
 
-curl -fsSL --progress-bar "$URL" -o "$TMP" || die "Download failed. Check that ${VERSION} has a release at https://github.com/${REPO}/releases"
+fetch --progress-bar "$URL" -o "$TMP" || die "Download failed. Check that ${VERSION} has a release at https://github.com/${REPO}/releases"
+fetch "${RELEASE_URL}/sha256sums.txt" -o "$SUMS" \
+  || die "Could not download sha256sums.txt from ${VERSION}: refusing to install an unverified binary."
+verify_sum "$TMP" "$ARTIFACT" "$SUMS" \
+  || die "The downloaded ${ARTIFACT} did not verify: nothing was installed."
+info "sha256 verified"
 chmod +x "$TMP"
 
 # ── Install binary ─────────────────────────────────────────────────────────────
@@ -299,7 +350,7 @@ if [ "$OS" = "macos" ]; then
     printf "Install the sbxw Island menu-bar app (live session state in the notch)? [y/N] " > /dev/tty
     read -r REPLY < /dev/tty || REPLY=""
     case "$REPLY" in
-      [yY]*) install_island "$ISLAND_URL" "$ISLAND_APP_DIR" ;;
+      [yY]*) install_island "$ISLAND_URL" "$ISLAND_APP_DIR" "$SUMS" ;;
       *)     info "Skipped. Grab it any time from the releases page." ;;
     esac
   fi
@@ -332,7 +383,7 @@ fi
 
 printf "\n${BOLD}2. Project config${RESET}\n"
 printf "   Copy the example config into your project root:\n"
-printf "     curl -fsSL https://raw.githubusercontent.com/%s/main/sbxw.toml.example -o sbxw.toml\n" "$REPO"
+printf "     curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/%s/main/sbxw.toml.example -o sbxw.toml\n" "$REPO"
 printf "   Optional: no ports are published until you add [[ports]].\n"
 
 printf "\n${BOLD}3. Launch${RESET}\n"

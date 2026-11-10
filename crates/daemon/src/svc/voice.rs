@@ -481,7 +481,8 @@ impl App {
     /// when `cancel` is raised.
     async fn curl_file(&self, url: &str, part: &Path, before: u64, cancel: &AtomicBool) -> Result<(), String> {
         let mut child = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-            .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
+            // HTTPS only, also across Hugging Face's redirect to its CDN.
+            .args(["--proto", "=https", "--proto-redir", "=https", "-fsSL", "--retry", "3", "-C", "-", "-o"])
             .arg(part)
             .arg(url)
             .kill_on_drop(true)
@@ -662,11 +663,28 @@ fn speech_command(uvx: &Path) -> tokio::process::Command {
     c
 }
 
+/// Creates `dir` (and its parents) and makes it this user's only, mode 0700
+/// on unix: the speech logs hold what was read aloud. A directory left by an
+/// older build with default permissions is tightened too.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        builder.mode(0o700);
+        builder.create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    builder.create(dir)
+}
+
 /// Start the server on a free local port and wait until it answers.
 async fn start_speech_server(uvx: &Path, run_dir: &Path) -> Result<SpeechServer, String> {
     let port = std::net::TcpListener::bind(("127.0.0.1", 0)).and_then(|l| l.local_addr()).map_err(|e| format!("no free port: {e}"))?.port();
     let logs = run_dir.join("speech-logs");
-    std::fs::create_dir_all(&logs).map_err(|e| format!("{}: {e}", logs.display()))?;
+    private_dir(&logs).map_err(|e| format!("{}: {e}", logs.display()))?;
     let mut cmd = speech_command(uvx);
     cmd.args(["--host", "127.0.0.1", "--port", &port.to_string()])
         // Only this machine's pages, not any site the browser has open.
@@ -766,7 +784,7 @@ fn sbxw_daemon_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 async fn curl_text(url: &str) -> Result<String, String> {
     let out = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-        .args(["-fsSL", "--retry", "2", url])
+        .args(["--proto", "=https", "--proto-redir", "=https", "-fsSL", "--retry", "2", url])
         .output()
         .await
         .map_err(|e| format!("could not run curl: {e}"))?;
@@ -799,6 +817,24 @@ async fn sha256_of(path: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn speech_log_dir_is_private_even_if_it_existed() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("sbxw-speech-logs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let fresh = root.join("run").join("speech-logs");
+        super::private_dir(&fresh).unwrap();
+        assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777, 0o700);
+
+        let old = root.join("old");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+        super::private_dir(&old).unwrap();
+        assert_eq!(std::fs::metadata(&old).unwrap().permissions().mode() & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
 
     #[test]

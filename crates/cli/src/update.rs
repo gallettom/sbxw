@@ -74,8 +74,9 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     let (os, arch) = target_os_arch()?;
     let artifact = format!("sbxw-{os}-{arch}");
 
-    let tmp_dir = std::env::temp_dir().join(format!("sbxw-update-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)?;
+    // Removed when it goes out of scope, on every exit path.
+    let tmp = PrivateDir::new("sbxw-update")?;
+    let tmp_dir = tmp.path();
     let tmp_bin = tmp_dir.join(&artifact);
 
     ui.spin(&format!("downloading {artifact}"), || {
@@ -84,22 +85,17 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     })?;
     ui.ok("downloaded", &artifact);
 
-    // Best-effort checksum check against the release's sha256sums.txt
-    // (published by .github/workflows/release.yml).
-    let tmp_sums = tmp_dir.join("sha256sums.txt");
-    if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
-        verify_checksum(&tmp_bin, &artifact, &tmp_sums)
-            .context("checksum verification failed — aborting update")
-            .inspect_err(|_| ui.fail("checksum"))?;
-        ui.ok("checksum", "sha256 verified");
-    } else {
-        ui.warn("could not fetch sha256sums.txt — skipping checksum verification");
-    }
+    // Fail closed: no sums file, or no line for the artifact, aborts the
+    // update (release.yml publishes one line per binary and the island zip).
+    fetch_and_verify(&base, tmp_dir, &tmp_bin, &artifact)
+        .context("checksum verification failed — aborting update, nothing was installed")
+        .inspect_err(|_| ui.fail("checksum"))?;
+    ui.ok("checksum", "sha256 verified");
 
     set_executable(&tmp_bin)?;
 
     install_binary(&ui, &tmp_bin, &exe)?;
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    drop(tmp);
     ui.ok("installed", &exe.display().to_string());
 
     refresh_extension(&ui, &exe);
@@ -294,17 +290,14 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
         return Ok(()); // not installed — nothing to refresh
     };
 
-    let tmp_dir = std::env::temp_dir().join(format!("sbxw-island-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)?;
-    let cleanup = |dir: &std::path::Path| {
-        let _ = std::fs::remove_dir_all(dir);
-    };
+    // Removed when it goes out of scope, on every exit path.
+    let tmp = PrivateDir::new("sbxw-island")?;
+    let tmp_dir = tmp.path();
 
     let tmp_ver = tmp_dir.join("island-version.txt");
     if curl_download(&format!("{base}/island-version.txt"), &tmp_ver).is_err() {
         // Releases before the island got its own version don't publish it.
         // Leaving the app alone beats bouncing it on every update.
-        cleanup(&tmp_dir);
         ui.ok("island", "no version marker in this release — left as is");
         return Ok(());
     }
@@ -312,7 +305,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     let installed = island_bundle_version(&app);
 
     if parse_version(&latest) <= parse_version(&installed) {
-        cleanup(&tmp_dir);
         ui.ok("island", &format!("v{installed} is up to date"));
         return Ok(());
     }
@@ -321,7 +313,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
             "island",
             &format!("v{latest} available  (you have v{installed})"),
         );
-        cleanup(&tmp_dir);
         return Ok(());
     }
 
@@ -332,24 +323,18 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
             .with_context(|| format!("failed to download {artifact}"))
     })?;
 
-    let tmp_sums = tmp_dir.join("sha256sums.txt");
-    if curl_download(&format!("{base}/sha256sums.txt"), &tmp_sums).is_ok() {
-        verify_checksum(&tmp_zip, artifact, &tmp_sums)
-            .context("checksum verification failed — leaving the installed app alone")?;
-    } else {
-        ui.warn("could not fetch sha256sums.txt — skipping checksum verification");
-    }
+    fetch_and_verify(base, tmp_dir, &tmp_zip, artifact)
+        .context("checksum verification failed — leaving the installed app alone")?;
 
     // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
     let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
         .args(["-x", "-k"])
         .arg(&tmp_zip)
-        .arg(&tmp_dir)
+        .arg(tmp_dir)
         .status()
         .context("failed to run ditto")?;
     let staged = tmp_dir.join(ISLAND_APP);
     if !status.success() || !staged.is_dir() {
-        cleanup(&tmp_dir);
         anyhow::bail!("downloaded archive did not contain {ISLAND_APP}");
     }
 
@@ -366,7 +351,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     // Past the quit, a failure must not leave the user without their island:
     // whatever bundle survives at `app` gets relaunched before we bail.
     if let Err(e) = swap_bundle(&staged, &app) {
-        cleanup(&tmp_dir);
         if was_running && app.is_dir() {
             let _ = open_island(&app);
         }
@@ -377,7 +361,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
         .args(["-dr", "com.apple.quarantine"])
         .arg(&app)
         .status();
-    cleanup(&tmp_dir);
 
     let relaunched = was_running && open_island(&app).is_ok_and(|s| s.success());
     ui.ok(
@@ -481,7 +464,7 @@ fn island_gone_within(tries: u32) -> bool {
 fn latest_release_tag() -> Result<String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let out = std::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-        .args(["-fsSL", &url])
+        .args(["--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fsSL", &url])
         .output()
         .context("failed to run curl — is it installed?")?;
     if !out.status.success() {
@@ -531,7 +514,7 @@ fn target_os_arch() -> Result<(&'static str, &'static str)> {
 
 fn curl_download(url: &str, dest: &std::path::Path) -> Result<()> {
     let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-        .args(["-fsSL", url, "-o"])
+        .args(["--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fsSL", url, "-o"])
         .arg(dest)
         .status()
         .context("failed to run curl — is it installed?")?;
@@ -541,24 +524,40 @@ fn curl_download(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Verifies `bin_path`'s sha256 against the entry for `artifact_name` in a
-/// downloaded sha256sums.txt (lines look like "<hash>  <filename>").
-fn verify_checksum(
-    bin_path: &std::path::Path,
+/// Downloads the release's sha256sums.txt into `dir` and verifies `file`
+/// against its line for `artifact_name`. Every failure is an error: a sums
+/// file that cannot be fetched is not a reason to install unchecked.
+fn fetch_and_verify(
+    base: &str,
+    dir: &std::path::Path,
+    file: &std::path::Path,
     artifact_name: &str,
-    sums_path: &std::path::Path,
 ) -> Result<()> {
-    let sums = std::fs::read_to_string(sums_path)?;
-    let expected = sums
-        .lines()
+    let sums_path = dir.join("sha256sums.txt");
+    curl_download(&format!("{base}/sha256sums.txt"), &sums_path)
+        .context("could not download sha256sums.txt from the release")?;
+    let sums = std::fs::read_to_string(&sums_path).context("could not read sha256sums.txt")?;
+    verify_checksum(file, artifact_name, &sums)
+}
+
+/// The expected hash for `artifact_name` in a sha256sums.txt (lines look like
+/// "<hash>  <filename>", or "<hash> *<filename>" in binary mode).
+fn expected_checksum(sums: &str, artifact_name: &str) -> Result<String> {
+    sums.lines()
         .find_map(|line| {
             let mut parts = line.split_whitespace();
             let hash = parts.next()?;
             let name = parts.next()?.trim_start_matches('*');
             (name == artifact_name).then(|| hash.to_string())
         })
-        .with_context(|| format!("no checksum entry for {artifact_name}"))?;
+        .filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .with_context(|| format!("sha256sums.txt has no valid line for {artifact_name}"))
+}
 
+/// Verifies `bin_path`'s sha256 against the entry for `artifact_name` in the
+/// text of a sha256sums.txt.
+fn verify_checksum(bin_path: &std::path::Path, artifact_name: &str, sums: &str) -> Result<()> {
+    let expected = expected_checksum(sums, artifact_name)?;
     let actual = sha256_hex(bin_path)?;
     if !actual.eq_ignore_ascii_case(&expected) {
         anyhow::bail!("checksum mismatch: expected {expected}, got {actual}");
@@ -590,6 +589,64 @@ fn sha256_hex(path: &std::path::Path) -> Result<String> {
         .next()
         .map(str::to_string)
         .context("unexpected checksum tool output")
+}
+
+/// A temp directory only this user can enter: a random name created with
+/// `create_dir` (which fails if something already sits there, so nobody can
+/// pre-create it), mode 0700 on unix, removed with everything in it on drop.
+/// A predictable `sbxw-update-<pid>` let another local user plant the
+/// directory and swap the download between the checksum and the move.
+struct PrivateDir(PathBuf);
+
+impl PrivateDir {
+    fn new(prefix: &str) -> Result<Self> {
+        Self::new_in(&std::env::temp_dir(), prefix)
+    }
+
+    fn new_in(parent: &std::path::Path, prefix: &str) -> Result<Self> {
+        let mut last_err = None;
+        for _ in 0..16 {
+            let dir = parent.join(format!("{prefix}-{:016x}", random_u64()));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last_err = Some(e),
+                Err(e) => {
+                    return Err(e).with_context(|| format!("could not create {}", dir.display()))
+                }
+            }
+        }
+        Err(last_err.expect("loop ran"))
+            .with_context(|| format!("could not create a private directory in {}", parent.display()))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// 64 unpredictable bits from std alone: `RandomState` is seeded from the
+/// OS's random source, mixed with the time and pid. Unpredictability is a
+/// bonus here; `create_dir`'s exclusivity is what makes the directory safe.
+fn random_u64() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(std::process::id());
+    if let Ok(t) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        h.write_u128(t.as_nanos());
+    }
+    h.finish()
 }
 
 fn set_executable(path: &std::path::Path) -> Result<()> {
@@ -634,4 +691,64 @@ fn install_binary(ui: &Ui, src: &std::path::Path, dest: &std::path::Path) -> Res
         anyhow::bail!("`mv` failed both with and without sudo (exit {status})");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn expected_checksum_finds_the_artifact_line() {
+        let sums = format!("{}  sbxw-linux-arm64\n{HASH}  sbxw-linux-x86_64\n", "0".repeat(64));
+        assert_eq!(expected_checksum(&sums, "sbxw-linux-x86_64").unwrap(), HASH);
+        // Binary-mode marker.
+        let sums = format!("{HASH} *SbxwIsland-macos.zip\n");
+        assert_eq!(expected_checksum(&sums, "SbxwIsland-macos.zip").unwrap(), HASH);
+    }
+
+    #[test]
+    fn expected_checksum_fails_closed_without_a_line() {
+        let sums = format!("{HASH}  sbxw-linux-x86_64\n");
+        let err = expected_checksum(&sums, "sbxw-macos-arm64").unwrap_err();
+        assert!(err.to_string().contains("sbxw-macos-arm64"), "{err}");
+        assert!(expected_checksum("", "sbxw-macos-arm64").is_err());
+        // A prefix of the name is not the name.
+        assert!(expected_checksum(&format!("{HASH}  sbxw-macos-arm64.old\n"), "sbxw-macos-arm64").is_err());
+    }
+
+    #[test]
+    fn expected_checksum_rejects_a_malformed_hash() {
+        assert!(expected_checksum("deadbeef  sbxw-linux-x86_64\n", "sbxw-linux-x86_64").is_err());
+    }
+
+    #[test]
+    fn verify_checksum_compares_the_file() {
+        let tmp = PrivateDir::new("sbxw-update-test").unwrap();
+        let file = tmp.path().join("empty");
+        std::fs::write(&file, b"").unwrap();
+        // HASH is the sha256 of the empty string.
+        assert!(verify_checksum(&file, "a", &format!("{HASH}  a\n")).is_ok());
+        let wrong = "1".repeat(64);
+        assert!(verify_checksum(&file, "a", &format!("{wrong}  a\n")).is_err());
+    }
+
+    #[test]
+    fn private_dir_is_fresh_private_and_removed_on_drop() {
+        let parent = PrivateDir::new("sbxw-update-test").unwrap();
+        let a = PrivateDir::new_in(parent.path(), "x").unwrap();
+        let b = PrivateDir::new_in(parent.path(), "x").unwrap();
+        assert_ne!(a.path(), b.path(), "names must not repeat");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::write(a.path().join("f"), b"x").unwrap();
+        let path = a.path().to_path_buf();
+        drop(a);
+        assert!(!path.exists());
+    }
 }
