@@ -85,7 +85,7 @@ async fn status(State(app): S, Agent(me): Agent) -> ApiResult {
 }
 
 async fn release(State(app): S, Agent(me): Agent) -> ApiResult {
-    text(app.mac_release_for(&me))
+    text(app.mac_release_for(&me).await)
 }
 
 // ── The person's half ─────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ async fn show(State(app): S) -> ApiResult {
 }
 
 async fn take_back(State(app): S) -> ApiResult {
-    let who = app.mac_force_release();
+    let who = app.mac_force_release().await;
     text(match who {
         Some(w) => format!("taken back from '{w}'"),
         None => "nobody held it".into(),

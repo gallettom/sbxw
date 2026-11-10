@@ -238,6 +238,11 @@ pub struct MacBook {
     /// may manage its lifecycle. A VM the person started themselves is
     /// theirs until a sandbox has used it.
     pub managed: bool,
+    /// Sandboxes whose lease ended (released, lapsed, taken over, taken
+    /// back, or the VM stopped) since the daemon last looked. Whatever they
+    /// published for the guest must go with the lease, or the next holder
+    /// could open their app in the guest's browser.
+    pub ended: Vec<String>,
 }
 
 impl MacBook {
@@ -250,6 +255,10 @@ impl MacBook {
         if let Some(l) = self.lease.as_mut().filter(|l| l.holder == who) {
             l.last_ms = now;
             return Acquire::Granted;
+        }
+        // A lapsed lease of someone else's ends here, taken over.
+        if let Some(old) = self.lease.take() {
+            self.ended.push(old.holder);
         }
         self.lease = Some(Lease { holder: who.to_string(), since_ms: now, last_ms: now });
         self.idle_since_ms = None;
@@ -271,7 +280,9 @@ impl MacBook {
         if self.holder() != Some(who) {
             return false;
         }
-        self.lease = None;
+        if let Some(l) = self.lease.take() {
+            self.ended.push(l.holder);
+        }
         self.idle_since_ms = Some(now);
         true
     }
@@ -280,6 +291,7 @@ impl MacBook {
     pub fn force_release(&mut self, now: u64) -> Option<String> {
         let l = self.lease.take()?;
         self.idle_since_ms = Some(now);
+        self.ended.push(l.holder.clone());
         Some(l.holder)
     }
 
@@ -292,6 +304,7 @@ impl MacBook {
         let l = self.lease.take()?;
         // Idle since the last call, not since the expiry noticed it.
         self.idle_since_ms = Some(l.last_ms);
+        self.ended.push(l.holder.clone());
         Some(l.holder)
     }
 
@@ -305,9 +318,18 @@ impl MacBook {
 
     /// The VM went away (stopped, by sbxw or anyone): nobody holds it.
     pub fn stopped(&mut self) {
-        self.lease = None;
+        if let Some(l) = self.lease.take() {
+            self.ended.push(l.holder);
+        }
         self.idle_since_ms = None;
         self.managed = false;
+    }
+
+    /// The sandboxes whose lease ended since the last call, each once.
+    pub fn take_ended(&mut self) -> Vec<String> {
+        let mut v = std::mem::take(&mut self.ended);
+        v.dedup();
+        v
     }
 
     /// What the lifecycle rules want done to a VM in `state`, now.
@@ -587,6 +609,35 @@ mod tests {
         assert_eq!(b.expire(9 * MIN, 10 * MIN), None);
         assert_eq!(b.expire(12 * MIN, 10 * MIN).as_deref(), Some("a"));
         assert_eq!(b.idle_since_ms, Some(0));
+    }
+
+    #[test]
+    fn every_way_a_lease_ends_names_its_holder_once() {
+        let mut b = MacBook::default();
+        b.acquire("a", 0, 10 * MIN);
+        b.acquire("a", MIN, 10 * MIN);
+        assert!(b.take_ended().is_empty(), "a refresh ends nothing");
+        assert!(b.release("a", 2 * MIN));
+        assert_eq!(b.take_ended(), ["a"], "released");
+        assert!(b.take_ended().is_empty(), "drained");
+
+        b.acquire("a", 3 * MIN, 10 * MIN);
+        b.expire(20 * MIN, 10 * MIN);
+        assert_eq!(b.take_ended(), ["a"], "lapsed");
+
+        b.acquire("a", 30 * MIN, 10 * MIN);
+        assert_eq!(b.acquire("b", 45 * MIN, 10 * MIN), Acquire::Granted);
+        assert_eq!(b.take_ended(), ["a"], "lapsed, then taken over before the tick noticed");
+
+        b.force_release(46 * MIN);
+        assert_eq!(b.take_ended(), ["b"], "taken back by a person");
+
+        b.acquire("c", 47 * MIN, 10 * MIN);
+        b.stopped();
+        assert_eq!(b.take_ended(), ["c"], "the VM went away");
+
+        assert!(!b.release("c", 48 * MIN));
+        assert!(b.take_ended().is_empty(), "a release of nothing ends nothing");
     }
 
     #[test]

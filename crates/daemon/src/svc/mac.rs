@@ -342,6 +342,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         {
             let mut rt = self.mac.lock().unwrap();
             rt.book.stopped();
+            rt.book.take_ended();
             rt.stop_requested_ms = Some(now_ms());
         }
         self.mac_changed();
@@ -361,6 +362,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         {
             let mut rt = self.mac.lock().unwrap();
             rt.book.stopped();
+            rt.book.take_ended();
             rt.stop_requested_ms = None;
         }
         self.mac_changed();
@@ -389,13 +391,55 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     }
 
     /// A person takes the VM back from whoever holds it.
-    pub fn mac_force_release(&self) -> Option<String> {
+    pub async fn mac_force_release(&self) -> Option<String> {
         let who = self.mac.lock().unwrap().book.force_release(now_ms());
         if let Some(w) = &who {
             tracing::info!("mac: lease taken back from '{w}'");
         }
+        self.mac_settle_ended().await;
         self.mac_changed();
         who
+    }
+
+    /// Unpublish what every sandbox whose lease just ended had published for
+    /// the guest. Called after anything that can end a lease: the ports a
+    /// sandbox opened are its own, never the next holder's.
+    async fn mac_settle_ended(&self) {
+        let gone: Vec<(SandboxRef, String)> = {
+            let mut rt = self.mac.lock().unwrap();
+            let ended = rt.book.take_ended();
+            if ended.is_empty() {
+                return;
+            }
+            let (gone, kept) = std::mem::take(&mut rt.ports).into_iter().partition(|(sb, _)| ended.contains(&sb.to_string()));
+            rt.ports = kept;
+            gone
+        };
+        for (sb, spec) in &gone {
+            match self.sbx.unpublish(&sb.name, spec).await {
+                Ok(()) => tracing::info!("mac: '{sb}' no longer holds the Mac: unpublished {spec}"),
+                Err(e) => tracing::warn!("mac: unpublishing {spec} for '{sb}': {e:#}"),
+            }
+        }
+        if !gone.is_empty() {
+            self.mac_changed();
+        }
+    }
+
+    /// A sandbox was stopped or removed: its lease, if it holds one, ends now,
+    /// and so does every port it published for the guest.
+    pub async fn mac_sandbox_gone(&self, sb: &SandboxRef) {
+        let me = sb.to_string();
+        {
+            let mut rt = self.mac.lock().unwrap();
+            if !rt.book.release(&me, now_ms()) {
+                // Not the holder, but ports of its own are still its own.
+                rt.book.ended.push(me.clone());
+            }
+            rt.pending.retain(|_, p| &p.sandbox != sb);
+        }
+        self.mac_settle_ended().await;
+        self.mac_changed();
     }
 
     // ── What a sandbox calls ──────────────────────────────────────────────
@@ -456,6 +500,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     async fn mac_lease(&self, me: &SandboxRef, fresh: bool) -> Result<String, String> {
         let idle = self.mac_settings().idle_release_ms();
         let got = self.mac.lock().unwrap().book.acquire(&me.to_string(), now_ms(), idle);
+        self.mac_settle_ended().await;
         self.mac_changed();
         match got {
             Acquire::Granted => {
@@ -550,8 +595,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             return Err(format!("the virtual Mac is {word}, not running — call mac_start first (a person approves the boot)"));
         }
         let idle = self.mac_settings().idle_release_ms();
-        let mut rt = self.mac.lock().unwrap();
-        match rt.book.acquire(&me.to_string(), now_ms(), idle) {
+        let got = self.mac.lock().unwrap().book.acquire(&me.to_string(), now_ms(), idle);
+        self.mac_settle_ended().await;
+        match got {
             Acquire::Granted => Ok(()),
             Acquire::Busy(l) => Err(format!("the virtual Mac is in use by sandbox '{}' — call mac_start later", l.holder)),
         }
@@ -608,6 +654,10 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     }
 
     async fn mac_publish(&self, sb: &SandboxRef, port: u16) -> Result<String> {
+        // Approved while it held the Mac, but the lease may have ended since.
+        if self.mac.lock().unwrap().book.holder() != Some(sb.to_string().as_str()) {
+            bail!("'{sb}' no longer holds the virtual Mac: call mac_start, then ask for the port again");
+        }
         if let Some(url) = self.mac_port_already(sb, port).await {
             return Ok(url);
         }
@@ -663,8 +713,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         dir.join(format!("shot-{}-{}.png", std::process::id(), now_ms()))
     }
 
-    pub fn mac_release_for(&self, me: &SandboxRef) -> String {
+    pub async fn mac_release_for(&self, me: &SandboxRef) -> String {
         let done = self.mac.lock().unwrap().book.release(&me.to_string(), now_ms());
+        self.mac_settle_ended().await;
         self.mac_changed();
         if done {
             "Released. Another sandbox can use the virtual Mac now.".into()
@@ -713,6 +764,22 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         });
     }
 
+    /// A holder that sbx lists as stopped, or no longer lists, lets go.
+    /// An empty listing is sbx failing, not every sandbox gone.
+    async fn mac_drop_absent_holder(&self) {
+        let holder = self.mac.lock().unwrap().book.holder().and_then(|h| SandboxRef::parse(h).ok());
+        let Some(sb) = holder.filter(SandboxRef::is_local) else { return };
+        let all = self.sbx.ls().await;
+        if all.is_empty() {
+            return;
+        }
+        let gone = all.iter().find(|i| i.name == sb.name.as_str()).is_none_or(|i| i.is_stopped());
+        if gone {
+            tracing::info!("mac: '{sb}' is stopped or gone: its lease ends");
+            self.mac_sandbox_gone(&sb).await;
+        }
+    }
+
     pub async fn mac_tick(&self) {
         if self.mac_program().is_none() {
             return;
@@ -724,6 +791,8 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             tracing::info!("mac: '{who}' let its lease lapse");
             self.mac_changed();
         }
+        self.mac_settle_ended().await;
+        self.mac_drop_absent_holder().await;
         // A shutdown of ours under way: done, hung (forced), or overtaken.
         let requested = self.mac.lock().unwrap().stop_requested_ms;
         if let Some(requested) = requested {
@@ -748,7 +817,11 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         }
         let state = self.mac_state().await;
         if state == VmState::Stopped || state == VmState::Missing {
-            self.mac.lock().unwrap().book.stopped();
+            {
+                let mut rt = self.mac.lock().unwrap();
+                rt.book.stopped();
+                rt.book.take_ended();
+            }
             self.mac_unpublish_all().await;
             self.mac_changed();
             return;
@@ -856,7 +929,7 @@ esac
         let busy = app.mac_start_for(&sb("beta"), None, "me too", Duration::from_secs(1)).await.unwrap();
         assert!(busy.contains("in use by sandbox 'alpha'"), "{busy}");
         assert!(app.mac_action_for(&sb("beta"), "key", &json!({"keys":"return"})).await.is_err());
-        assert!(app.mac_release_for(&sb("alpha")).starts_with("Released"));
+        assert!(app.mac_release_for(&sb("alpha")).await.starts_with("Released"));
         assert!(app.mac_action_for(&sb("beta"), "key", &json!({"keys":"return"})).await.is_ok(), "free again: taken on use");
     }
 
@@ -993,6 +1066,96 @@ esac
         assert_eq!(app.mac.lock().unwrap().ports.len(), 1, "recorded, so it goes with the VM");
     }
 
+    /// An app whose fake sbx lists `ls` (shared, so a test can change it)
+    /// and logs every call, with alpha holding a running VM and port 3000
+    /// published for the guest.
+    async fn alpha_with_a_port(
+        ls: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, &'static str)>>>,
+    ) -> (tempfile::TempDir, std::sync::Arc<crate::app::App>, std::sync::Arc<sbxw_sbx::runner::Fake>) {
+        let (d, app, fake_sbx) = crate::testing::app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&ls.lock().unwrap()),
+            _ => crate::testing::sbx_answer(a),
+        });
+        *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        *app.mac_guest_ip_override.lock().unwrap() = Some("192.168.64.1".into());
+        app.mac.lock().unwrap().book.booted(0);
+        app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
+        app.mac_publish(&sb("alpha"), 3000).await.unwrap();
+        assert!(fake_sbx.log().iter().any(|c| c.contains("--publish 192.168.64.1:3000:3000")), "{:?}", fake_sbx.log());
+        (d, app, fake_sbx)
+    }
+
+    fn unpublished(fake_sbx: &sbxw_sbx::runner::Fake) -> bool {
+        fake_sbx.log().iter().any(|c| c == "ports alpha --unpublish 192.168.64.1:3000:3000")
+    }
+
+    fn shared_ls(rows: &[(&'static str, &'static str)]) -> std::sync::Arc<std::sync::Mutex<Vec<(&'static str, &'static str)>>> {
+        std::sync::Arc::new(std::sync::Mutex::new(rows.to_vec()))
+    }
+
+    #[tokio::test]
+    async fn a_released_lease_takes_its_ports_with_it() {
+        let (_d, app, fake_sbx) = alpha_with_a_port(shared_ls(&[("alpha", "running")])).await;
+        app.mac_release_for(&sb("alpha")).await;
+        assert!(unpublished(&fake_sbx), "{:?}", fake_sbx.log());
+        assert!(app.mac.lock().unwrap().ports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lapsed_lease_takes_its_ports_with_it() {
+        let (_d, app, fake_sbx) = alpha_with_a_port(shared_ls(&[("alpha", "running")])).await;
+        app.mac_tick().await;
+        assert!(!unpublished(&fake_sbx), "still held");
+        app.mac.lock().unwrap().book.lease.as_mut().unwrap().last_ms = crate::app::now_ms() - 11 * 60_000;
+        app.mac_tick().await;
+        assert!(unpublished(&fake_sbx), "{:?}", fake_sbx.log());
+        assert!(app.mac.lock().unwrap().ports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lease_taken_over_takes_its_ports_with_it() {
+        let (_d, app, fake_sbx) = alpha_with_a_port(shared_ls(&[("alpha", "running"), ("beta", "running")])).await;
+        // Lapsed, and beta's call gets there before the tick does.
+        app.mac.lock().unwrap().book.lease.as_mut().unwrap().last_ms = crate::app::now_ms() - 11 * 60_000;
+        app.mac_action_for(&sb("beta"), "key", &json!({"keys":"return"})).await.unwrap();
+        assert_eq!(app.mac.lock().unwrap().book.holder(), Some("beta"));
+        assert!(unpublished(&fake_sbx), "beta must not see alpha's app: {:?}", fake_sbx.log());
+        assert!(app.mac.lock().unwrap().ports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lease_taken_back_by_a_person_takes_its_ports_with_it() {
+        let (_d, app, fake_sbx) = alpha_with_a_port(shared_ls(&[("alpha", "running")])).await;
+        assert_eq!(app.mac_force_release().await.as_deref(), Some("alpha"));
+        assert!(unpublished(&fake_sbx), "{:?}", fake_sbx.log());
+    }
+
+    #[tokio::test]
+    async fn a_stopped_or_removed_holder_loses_the_lease_and_its_ports() {
+        let ls = shared_ls(&[("alpha", "running")]);
+        let (_d, app, fake_sbx) = alpha_with_a_port(ls.clone()).await;
+        *ls.lock().unwrap() = vec![];
+        app.mac_tick().await;
+        assert_eq!(app.mac.lock().unwrap().book.holder(), Some("alpha"), "an empty `sbx ls` is sbx failing, not alpha gone");
+        *ls.lock().unwrap() = vec![("alpha", "stopped")];
+        app.mac_tick().await;
+        assert_eq!(app.mac.lock().unwrap().book.holder(), None);
+        assert!(unpublished(&fake_sbx), "{:?}", fake_sbx.log());
+
+        let (_d, app, fake_sbx) = alpha_with_a_port(shared_ls(&[("alpha", "running")])).await;
+        app.mac_sandbox_gone(&sb("alpha")).await;
+        assert_eq!(app.mac.lock().unwrap().book.holder(), None, "removed: told at once");
+        assert!(unpublished(&fake_sbx));
+    }
+
+    #[tokio::test]
+    async fn a_port_approved_after_the_lease_ended_is_not_published() {
+        let (_d, app, fake_sbx) = alpha_with_a_port(shared_ls(&[("alpha", "running")])).await;
+        app.mac_release_for(&sb("alpha")).await;
+        assert!(app.mac_publish(&sb("alpha"), 4000).await.is_err());
+        assert!(!fake_sbx.log().iter().any(|c| c.contains(":4000:4000")));
+    }
+
     #[test]
     fn a_sleeping_display_is_explained_not_reported_raw() {
         assert!(super::mac_hint("No guest display is available").contains("Do not type"));
@@ -1033,7 +1196,7 @@ esac
         let (d, app) = app();
         *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
         app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
-        app.mac_release_for(&sb("alpha"));
+        app.mac_release_for(&sb("alpha")).await;
         app.mac_tick().await;
         assert!(!calls(d.path()).contains("pause"), "not idle long enough");
         let long_ago = crate::app::now_ms() - 16 * 60_000;
