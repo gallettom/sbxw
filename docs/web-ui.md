@@ -369,11 +369,15 @@ Run them in a terminal on the host, not in a sandbox pane.
 
 ## The voice concierge
 
-The **Concierge** button in the middle of the top bar opens a panel under it, a
-local voice partner apart from the chat dock. Hold its talk button, or hold
+The **Concierge** button in the middle of the top bar opens a panel under it,
+the voice side of sbxw, apart from the chat dock. Hold its talk button, or hold
 **F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
 changes it), speak, and release: the speech is turned into text on this
-machine. The audio is never kept.
+machine. The audio is never kept, and neither is the text.
+
+Two local models do the work, and no language model sits between you and
+the agent: Parakeet turns speech into text, and Voxtral TTS reads an agent's
+message aloud as it was written. Nothing is reworded in either direction.
 
 Until the models are downloaded the panel shows the command that downloads
 them, `sbxw voice install`, and an **Install voice** button that asks first,
@@ -383,28 +387,26 @@ where it stopped. A build without `--features voice` says so.
 The browser lends the microphone only to a page on `127.0.0.1` (or HTTPS):
 with `web_addr` on a LAN address, the panel says why it cannot listen.
 
-What you say goes to a local Mistral model (Ministral 3), which rephrases
-it, adds an angle or two and asks one question; the reply is written as it
-is generated and read aloud sentence by sentence (🔊 mutes it; talking again
-stops it). You can also type.
+Reading aloud runs in a local server the daemon starts on the first
+sentence and stops after five idle minutes (`mlx-audio`, fetched by `uvx`
+during the install). It needs a Mac with Apple Silicon and
+[uv](https://docs.astral.sh/uv/); elsewhere the panel listens and types but
+stays silent. A message is read a few sentences at a time, and the sound
+plays as it is made rather than once a batch is finished. Symbols are said
+in words (`>=`, `@`, `/`, a file name's dot…), in French for a French voice
+and in English for the others. 🔊 mutes it; talking
+again stops it. The voice is `[voice]
+tts_voice`.
 
-Pick the sandbox the conversation is about at the top of the panel. The
-concierge is then told that project's code-map summary
-(`.sbxw-artifacts/codemap/summary.md`, 300 words, written by `/codemap`) and
-your own instructions for it, if you write any, in
-`.sbxw-artifacts/concierge/prompt.md` (for example "Vue 3 project; keep it
-short"). The line beside the picker says what it has; a project without a
-summary gets a **Map this project** button, which types `/codemap` into its
-agent — never while that agent is busy. A remote sandbox gives no context.
-
-When the idea is ready, say **"prépare le brief"** (or press **Brief**): the
-model writes it — Objectif, Contexte, Contraintes, Questions ouvertes — into
-an editable card. Read it, fix it and press **Send**: it is typed into the
-picked sandbox's agent. Nothing is sent any other way.
+Pick a sandbox at the top of the panel. What you say with nothing to answer
+becomes a message for its agent: it shows in an editable card as you said
+it, more words add to it, and *oui* (or **Send**) types it into the agent;
+*non* (or **Discard**) drops it. Nothing is sent any other way. You can
+also type.
 
 A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
 session sbxw opened there — engages the concierge on its own: the panel
-opens, and each round shows in it with its gist read aloud. **Follow** does
+opens, and each round shows in it and is read aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
 lot of talking for ordinary work). When the agent asks with the relay's `ask_user_questions` tool (what
 `/grill-me` does in sbxw), the round comes to the Concierge from any
@@ -414,15 +416,16 @@ answered by typing into its session instead. Either way, a grill round is
 taken **one question at a time**: the panel shows and
 reads Q1 with the agent's recommendation, waits for your answer, then
 moves to Q2 (*répète* reads it again, *passe* skips it, *précédente* goes
-back). Once every question is answered, the answers are written up as one
-message ("Q1 : oui, comme recommandé…"), shown, and sent at once on your
-*oui*. Any other message that arrives what you say next
-answers it: the model turns your dictation into the written answer ("Q1 :
-oui, comme recommandé…"), shows it, and asks "J'envoie ?". Say *oui* (or
-click Send) and it is typed into that session; *non* drops it. A
-multiple-choice question is read with its options, and what you say picks
-one, confirmed the same way. **Talk to the concierge** on a message makes
-your next words a turn of your own conversation instead.
+back). Once every question is answered, the answers are listed as one
+message ("Q1 : …", as you said them), shown, and sent at once on your
+*oui*. Any other message that arrives is read aloud as written (code blocks
+left out), and what you say next answers it: your words are shown,
+editable, and the panel asks "J'envoie ?". Say *oui* (or click Send) and
+they are typed into that session; *non* drops them. A multiple-choice
+question is read with its options, and what you say picks one — its number
+("la deux"), its rank ("la dernière") or its words — confirmed the same
+way. **Not an answer** on a message makes your next words a message of your
+own instead.
 
 **Dictation into a terminal.** Click the microphone in a pane's bar, speak,
 and click it again — or hold **F9** in the pane that has focus and release:
@@ -432,9 +435,8 @@ pressed, so you can read and fix them first; end with *entrée* (or
 *envoie*) and Enter is pressed for you. The button shows once the voice
 models are installed.
 
-Conversations are kept as text for 7 days at most (`[voice]
-retention_days`), never the audio. **History** reopens one; **Delete all**
-removes every one in a click.
+Nothing said is kept: not the audio, not the text. **Clear** empties the
+panel.
 
 ## Keyboard shortcuts
 

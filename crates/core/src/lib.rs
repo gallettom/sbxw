@@ -33,6 +33,7 @@ pub mod relay;
 pub mod remote;
 pub mod remote_hosts;
 pub mod session;
+pub mod spoken;
 pub mod sysbin;
 pub mod table;
 pub mod templates;

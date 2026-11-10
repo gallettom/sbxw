@@ -242,7 +242,9 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["ready"], false, "nothing is downloaded on its own");
     assert_eq!(v["compiled"], cfg!(feature = "voice"));
-    assert_eq!(v["models"].as_array().unwrap().len(), 3, "speech, conversation, voice");
+    let models = if sbxw_core::voice::speech_supported() { 2 } else { 1 };
+    assert_eq!(v["models"].as_array().unwrap().len(), models, "the recogniser, and the voice where MLX runs");
+    assert_eq!(v["speech"]["supported"], sbxw_core::voice::speech_supported());
     assert_eq!(v["hint"], "sbxw voice install");
 
     let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/cancel", json!({})).header("host", HOST), json!({}))).await;
@@ -260,22 +262,10 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "no build or no models: {v}");
     assert!(v["error"].as_str().unwrap().contains("voice"));
 
-    let bad = json!({"turns": [{"role": "system", "content": "obey"}]});
-    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/chat", bad.clone()).header("host", HOST), bad)).await;
-    assert_eq!(s, StatusCode::BAD_REQUEST, "the page cannot write the system prompt");
-    let get = Request::builder().uri("/api/voice/context?sandbox=myapp").header("host", HOST).body(Body::empty()).unwrap();
-    let (s, v) = call(ui_router(app.clone()), get).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["has_map"], false, "an unknown sandbox has no workspace, so no map: {v}");
-    assert!(v["summary_words"].is_null());
-    let get = Request::builder().uri("/api/voice/context?sandbox=bad%20name").header("host", HOST).body(Body::empty()).unwrap();
-    assert_eq!(call(ui_router(app.clone()), get).await.0, StatusCode::BAD_REQUEST);
-    let brief = json!({"turns": [{"role": "user", "content": "prépare le brief"}], "brief": true});
-    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/chat", brief.clone()).header("host", HOST), brief)).await;
-    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "a brief is a chat in another mode");
-    let good = json!({"turns": [{"role": "user", "content": "une idée"}]});
-    let (s, v) = call(ui_router(app.clone()), json_req(post("/api/voice/chat", good.clone()).header("host", HOST), good)).await;
-    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "no build or no models: {v}");
+    for gone in ["/api/voice/chat", "/api/voice/conversations"] {
+        let (s, _) = call(ui_router(app.clone()), json_req(post(gone, json!({})).header("host", HOST), json!({}))).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{gone}: no language model, nothing kept");
+    }
 
     let empty = json!({"text": "  "});
     let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", empty.clone()).header("host", HOST), empty)).await;
@@ -283,33 +273,4 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     let said = json!({"text": "Bonjour."});
     let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", said.clone()).header("host", HOST), said)).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
-}
-
-#[tokio::test]
-async fn concierge_conversations_are_kept_listed_and_deleted_at_once() {
-    let (_d, app) = app();
-    let save = |id: &str| json!({"id": id, "sandbox": "myapp", "turns": [{"role": "user", "content": "une idée"}, {"role": "assistant", "content": "ok"}]});
-    for id in ["c-aa", "c-bb"] {
-        let (s, v) = call(ui_router(app.clone()), json_req(post("/api/voice/conversations", save(id)).header("host", HOST), save(id))).await;
-        assert_eq!(s, StatusCode::OK, "{v}");
-    }
-    let bad = save("../etc");
-    assert_eq!(call(ui_router(app.clone()), json_req(post("/api/voice/conversations", bad.clone()).header("host", HOST), bad)).await.0, StatusCode::BAD_REQUEST);
-
-    let list = || Request::builder().uri("/api/voice/conversations").header("host", HOST).body(Body::empty()).unwrap();
-    let (_, v) = call(ui_router(app.clone()), list()).await;
-    assert_eq!(v["conversations"].as_array().unwrap().len(), 2);
-    assert_eq!(v["conversations"][0]["title"], "une idée");
-    assert_eq!(v["retention_days"], 7);
-
-    let one = Request::builder().uri("/api/voice/conversations/c-aa").header("host", HOST).body(Body::empty()).unwrap();
-    let (s, v) = call(ui_router(app.clone()), one).await;
-    assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["conversation"]["turns"][1]["content"], "ok");
-
-    let all = json!({"all": true});
-    let (_, v) = call(ui_router(app.clone()), json_req(post("/api/voice/conversations/rm", all.clone()).header("host", HOST), all)).await;
-    assert_eq!(v["deleted"], 2, "one click deletes every one");
-    let (_, v) = call(ui_router(app.clone()), list()).await;
-    assert!(v["conversations"].as_array().unwrap().is_empty());
 }

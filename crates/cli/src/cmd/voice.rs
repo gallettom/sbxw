@@ -17,7 +17,7 @@ pub enum VoiceCmd {
     /// Which models the concierge uses and whether they are downloaded.
     #[default]
     Status,
-    /// Download the models `[voice]` names (~6 GB, resumable, checksums from Hugging Face) into ~/.sbxw/models.
+    /// Download the models `[voice]` names (~4 GB, resumable, checksums from Hugging Face) into ~/.sbxw/models, and the speech runtime.
     Install {
         /// Do not ask before downloading.
         #[arg(long, short)]
@@ -107,7 +107,11 @@ fn follow(daemon: &Daemon) -> Result<Value> {
 
 fn print_status(s: &Value) {
     if !s["compiled"].as_bool().unwrap_or(false) {
-        println!("note: this sbxw was built without voice; the models can be downloaded, but not used");
+        println!("note: this sbxw was built without voice; the models can be downloaded, but dictation is off");
+    }
+    let speech = &s["speech"];
+    if !speech["supported"].as_bool().unwrap_or(false) {
+        println!("note: reading aloud needs a Mac with Apple Silicon; this machine listens only");
     }
     for m in s["models"].as_array().into_iter().flatten() {
         let state = match m["installed"]["state"].as_str() {
@@ -123,6 +127,10 @@ fn print_status(s: &Value) {
             m["license"].as_str().unwrap_or(""),
             state
         );
+    }
+    if speech["supported"].as_bool().unwrap_or(false) {
+        let state = if speech["runtime_ready"].as_bool().unwrap_or(false) { "installed" } else { "missing" };
+        println!("{:<4} {:<44} {:>9}  {:<10} {}", "run", speech["runtime"].as_str().unwrap_or(""), "", "uvx", state);
     }
     if !s["ready"].as_bool().unwrap_or(false) {
         println!("\nnot installed — run `{}`", s["hint"].as_str().unwrap_or("sbxw voice install"));

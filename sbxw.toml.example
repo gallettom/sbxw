@@ -255,12 +255,11 @@ env_files = []
 # guest_host_ip = ""          # empty: the VM bridge's address (bridge100)
 
 # The voice concierge (web UI → Concierge; `sbxw voice install` fetches the
-# models). Read from the daemon's config. Needs a build with --features voice.
+# models). Read from the daemon's config. Dictation needs a build with
+# --features voice; reading aloud needs Apple Silicon and uv (`brew install uv`).
 # [voice]
 # stt = "parakeet-tdt-0.6b-v3-int8"
-# llm = ""                     # empty: ministral-3-8b-instruct-q4 on macOS, -3b- elsewhere
-# tts = "piper-fr-tom-medium"  # male; or piper-fr-upmc-pierre, piper-fr-gilles-low,
-#                              # piper-fr-siwis-medium (female), kokoro-multi-lang-v1_0
+# tts = "voxtral-tts-6bit"     # 3.5 GB; or voxtral-tts-4bit (2.5 GB), voxtral-tts-bf16 (8 GB)
+# tts_voice = "fr_male"        # or fr_female, casual_male, neutral_female… (Voxtral's 20 voices)
 # push_to_talk_key = "F8"      # hold it anywhere on the page to talk
 # dictate_key = "F9"          # hold it to dictate into the focused terminal
-# retention_days = 7           # conversation text kept at most 7 days; audio never

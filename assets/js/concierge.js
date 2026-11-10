@@ -1,9 +1,12 @@
 // ── Voice concierge ───────────────────────────────────────────────────────
-// A local voice partner, apart from the chat dock (which talks to the
+// The voice side of sbxw, apart from the chat dock (which talks to the
 // `ephemeral-chat` sandboxes): a 🎙 button beside it opens its own panel.
-// Lot 1 of `.sbxw-artifacts/specs/concierge-vocal.md` — speech becomes text
-// here; the conversation, the voice and the brief come next.
+// See `.sbxw-artifacts/specs/concierge-vocal.md`.
 //
+// * **No language model.** What is said becomes text (Parakeet, in the
+//   daemon) and goes to an agent as it was said, once read and confirmed;
+//   what an agent writes is read aloud as it was written (Voxtral TTS, a
+//   local server the daemon starts). Nothing is reworded on the way.
 // * **Push-to-talk only**: hold the button, or the key `[voice]` names (F8 by
 //   default — no terminal binds it). Nothing listens while nothing is held.
 // * **The page resamples**: MediaRecorder's own container (webm, mp4) is
@@ -28,12 +31,6 @@ let vcOpen = false;
 let vcRec = null; // { recorder, chunks, stream, started }
 let vcBusy = false;
 let vcStarting = false;
-// The conversation, this tab's own: [{role: 'user'|'assistant', content}].
-// The daemon keeps none of it (lot 3 adds the 7-day history).
-const VC_STORE = 'sbxw-concierge';
-let vcTurns = [];
-let vcReplying = null; // AbortController of the reply being generated
-
 function vcMb(n) { return `${Math.round(n / 1e6)} MB`; }
 function vcGb(mb) { return `${(mb / 1000).toFixed(1)} GB`; }
 
@@ -78,6 +75,11 @@ function vcRenderSetup() {
       li.textContent = `${m.role.toUpperCase()} · ${m.label} (${m.license}) — ${st}`;
       list.append(li);
     }
+    if (s.speech?.supported) {
+      const li = document.createElement('li');
+      li.textContent = `RUNTIME · ${s.speech.runtime}, fetched by uvx — ${s.speech.runtime_ready ? '✓' : 'needs uv installed'}`;
+      list.append(li);
+    }
     vcSetup.append(p('vc-text', `Voice needs local models, about ${vcGb(s.approx_mb)}. Install them from a terminal:`), code(s.hint || 'sbxw voice install'), p('vc-dim', 'or here:'), list);
     if (job && job.state === 'failed') vcSetup.append(p('vc-warn', `Last download failed: ${job.error || 'unknown error'}`));
     if (job && job.state === 'cancelled') vcSetup.append(p('vc-dim', 'Download cancelled — installing resumes where it stopped.'));
@@ -99,7 +101,9 @@ function vcRender() {
   vcTalk.disabled = !ready || vcBusy;
   vcTalk.classList.toggle('recording', !!vcRec);
   vcTalk.textContent = vcRec ? '● Listening… release to send' : vcBusy ? 'Transcribing…' : `Hold to talk (${vcKey()})`;
-  vcHint.textContent = ready ? 'Speech is turned into text locally; the audio is never kept.' : '';
+  vcHint.textContent = !ready ? '' : vcStatus.speech?.supported
+    ? 'Speech is turned into text locally; the audio is never kept.'
+    : 'Speech is turned into text locally. Reading aloud needs a Mac with Apple Silicon.';
   vcLauncher.classList.toggle('ready', vcReady());
   vcLauncher.classList.toggle('listening', !!vcRec && !vcRec.dest);
   document.querySelectorAll('.pane-dictate-btn').forEach(b => {
@@ -133,8 +137,8 @@ async function vcRefresh() {
 // ── Recording ────────────────────────────────────────────────────────────
 // `dest`: null for the concierge, `{ pane }` to dictate into a terminal.
 async function vcStart(dest = null) {
-  vcSpeech.stop(); // speaking over the concierge interrupts it
-  vcWarm();
+  vcSpeech.stop(); // speaking over the voice interrupts it
+  vcWarm(false);
   if (dest && (!vcReady() || !window.isSecureContext)) {
     showToast(!window.isSecureContext ? 'The microphone needs sbxw on 127.0.0.1' : `Voice is not installed — run ${vcStatus?.hint || 'sbxw voice install'}`, 'error');
     return;
@@ -182,8 +186,6 @@ async function vcStop() {
     } else if (!r.ok) vcSay('err', r.error);
     else if (!r.text) vcSay('dim', '(nothing heard)');
     else {
-      // A grill answer shows in its card's list, not as a line of its own.
-      if (vcPending?.kind !== 'grill') vcSay('me', r.text, `${r.audio_s.toFixed(1)} s · ${r.ms} ms`);
       vcHear(r.text);
     }
   } catch (e) {
@@ -255,124 +257,10 @@ async function vcToPcm(blob) {
   return (await off.startRendering()).getChannelData(0);
 }
 
-// ── The conversation ─────────────────────────────────────────────────────
-// The tab keeps the conversation (sessionStorage, for a reload) and the
-// daemon keeps its text for at most a week (`/api/voice/conversations`),
-// saved a moment after each change. The audio is never kept anywhere.
-let vcConvId = null;
-let vcPersistTimer = null;
-function vcNewId() {
-  const b = new Uint8Array(8);
-  crypto.getRandomValues(b);
-  return 'c-' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
-}
-function vcSave() {
-  if (!vcConvId) vcConvId = vcNewId();
-  try { sessionStorage.setItem(VC_STORE, JSON.stringify({ id: vcConvId, turns: vcTurns.slice(-80) })); } catch (_) {}
-  clearTimeout(vcPersistTimer);
-  if (!vcTurns.length) return;
-  const body = { id: vcConvId, sandbox: vcTarget || undefined, turns: vcTurns.slice(-200) };
-  vcPersistTimer = setTimeout(() => postJsonOrError('/api/voice/conversations', body), 800);
-}
-function vcShow(turns) {
-  vcLog.replaceChildren();
-  for (const t of turns) vcSay(t.role === 'user' ? 'me' : 'ai', t.content);
-}
-function vcLoad() {
-  try {
-    const s = JSON.parse(sessionStorage.getItem(VC_STORE) || 'null');
-    // Before conversations had ids the store held the bare list.
-    if (Array.isArray(s)) vcTurns = s;
-    else if (s) { vcConvId = s.id || null; vcTurns = s.turns || []; }
-  } catch (_) { vcTurns = []; }
-  vcShow(vcTurns);
-}
-
-// One generation from /api/voice/chat, read as it streams (NDJSON): each
-// piece of text to `onDelta`, then the `done` event returned.
-async function vcStream(body, signal, onDelta) {
-  const res = await fetch('/api/voice/chat', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal,
-  });
-  if (!res.ok) {
-    const e = await res.json().catch(() => ({}));
-    throw new Error(e.error || `HTTP ${res.status}`);
-  }
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  let last = null;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return last;
-    buf += dec.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const ev = JSON.parse(buf.slice(0, nl));
-      buf = buf.slice(nl + 1);
-      if (ev.kind === 'delta') onDelta(ev.text);
-      else if (ev.kind === 'error') throw new Error(ev.error);
-      else if (ev.kind === 'done') last = ev;
-    }
-  }
-}
-
-// The person's words join the conversation: appended to an unanswered turn
-// (a reply that failed), else as a new one — user and assistant alternate.
-function vcAddUser(text) {
-  if (vcTurns.length && vcTurns[vcTurns.length - 1].role === 'user') vcTurns[vcTurns.length - 1].content += `\n${text}`;
-  else vcTurns.push({ role: 'user', content: text });
-  vcSave();
-}
-
-// "Prépare le brief", spoken or typed, writes the brief instead of a reply.
-const VC_BRIEF_RE = /\bbrief\b/i;
-const VC_BRIEF_VERB = /(pr[ée]pare|r[ée]dige|[ée]cri[st]|fais|g[ée]n[èe]re|draft|write|prepare)/i;
-function vcRoute(text) {
-  if (VC_BRIEF_RE.test(text) && VC_BRIEF_VERB.test(text)) vcBrief(text);
-  else vcAsk(text);
-}
-
-// What the person said goes to the local model; its reply is written into
-// the log as it is generated, and spoken sentence by sentence.
-async function vcAsk(text) {
-  if (vcReplying) vcReplying.abort();
-  vcSpeech.stop();
-  vcAddUser(text);
-  const ctl = new AbortController();
-  vcReplying = ctl;
-  const row = vcSay('ai', '');
-  row.classList.add('pending');
-  let reply = '';
-  try {
-    const done = await vcStream({ turns: vcTurns, sandbox: vcTarget || undefined }, ctl.signal, piece => {
-      reply += piece;
-      row.firstChild.textContent = reply;
-      vcLog.scrollTop = vcLog.scrollHeight;
-      vcSpeech.feed(piece);
-    });
-    vcSpeech.flush();
-    if (done) vcMeta(row, `${(done.ms / 1000).toFixed(1)} s`);
-    row.classList.remove('pending');
-    if (reply.trim()) { vcTurns.push({ role: 'assistant', content: reply.trim() }); vcSave(); }
-    else row.remove();
-  } catch (e) {
-    row.remove();
-    if (e.name !== 'AbortError') vcSay('err', `The concierge could not answer: ${e.message || e}`);
-  } finally {
-    if (vcReplying === ctl) vcReplying = null;
-  }
-}
-
-// ── The brief ────────────────────────────────────────────────────────────
-// The model writes it (Objectif / Contexte / Contraintes / Questions
-// ouvertes) into an editable card; the person reads it, fixes it, picks the
-// sandbox and presses Send. Nothing reaches a sandbox any other way: the
-// click is the yes (rule 1 of the spec, the relay's own rule).
-const VC_TARGET = 'sbxw-concierge-target';
-
+// ── The sandbox ──────────────────────────────────────────────────────────
 // Asked of the daemon each time: the page's own list is the one it loaded
 // with, and misses a sandbox started since (it took a reload to appear).
+const VC_TARGET = 'sbxw-concierge-target';
 async function vcTargets() {
   let list = typeof sandboxes !== 'undefined' ? sandboxes : [];
   try {
@@ -383,14 +271,9 @@ async function vcTargets() {
   return [...new Set(live)].sort();
 }
 
-// ── The project: which sandbox the conversation is about ────────────────
-// Picked at the top, remembered per browser. Its code map's summary.md and
-// its .sbxw-artifacts/concierge/prompt.md are what the model is told (the
-// daemon reads them; the page only names the sandbox), and the brief goes
-// to it.
+// Picked at the top, remembered per browser: the sandbox whose agents are
+// followed, and where a message said with nothing to answer goes.
 const vcPick = vcEl('vc-target');
-const vcCtxInfo = vcEl('vc-ctx-info');
-const vcMapBtn = vcEl('vc-map');
 let vcTarget = null;
 try { vcTarget = localStorage.getItem(VC_TARGET) || null; } catch (_) {}
 
@@ -407,247 +290,193 @@ async function vcFillTargets() {
     vcPick.append(o);
   }
   vcPick.value = vcTarget || '';
-  vcLoadContext();
-}
-
-async function vcLoadContext() {
-  vcMapBtn.hidden = true;
-  if (!vcTarget) { vcCtxInfo.textContent = 'no project context'; return; }
-  let c;
-  try { c = await fetch(`/api/voice/context?sandbox=${encodeURIComponent(vcTarget)}`).then(r => r.json()); } catch (_) { c = null; }
-  if (!c || !c.ok) { vcCtxInfo.textContent = 'context unavailable'; return; }
-  const parts = [];
-  if (c.summary_words) parts.push(`summary, ${c.summary_words} words`);
-  else if (!c.local) parts.push('remote: no context');
-  else parts.push(c.has_map ? 'map has no summary' : 'no code map');
-  if (c.has_prompt) parts.push('your prompt');
-  vcCtxInfo.textContent = parts.join(' · ');
-  if (c.local && !c.summary_words) {
-    vcMapBtn.hidden = false;
-    vcMapBtn.textContent = c.has_map ? 'Refresh the map' : 'Map this project';
-    vcMapBtn.disabled = !!c.busy;
-    vcMapBtn.title = c.busy ? 'Its agent is busy: it is never interrupted' : `Types /codemap into ${vcTarget}'s agent`;
-  }
 }
 
 vcPick.addEventListener('change', () => {
   vcTarget = vcPick.value || null;
   try { vcTarget ? localStorage.setItem(VC_TARGET, vcTarget) : localStorage.removeItem(VC_TARGET); } catch (_) {}
-  vcLoadContext();
-});
-vcMapBtn.addEventListener('click', async () => {
-  if (!vcTarget) return;
-  vcMapBtn.disabled = true;
-  const r = await postJsonOrError('/api/voice/map', { sandbox: vcTarget });
-  if (!r.ok) { vcSay('err', r.error); vcMapBtn.disabled = false; return; }
-  vcSay('dim', `/codemap typed into ${vcTarget}'s agent. The summary is used as soon as the map is written.`);
 });
 
-async function vcBrief(text) {
-  if (!vcTurns.some(t => t.role === 'user') && !text) { vcSay('err', 'Talk the idea through first: the brief is written from the conversation.'); return; }
-  if (vcReplying) vcReplying.abort();
-  vcSpeech.stop();
-  vcAddUser(text || 'Prépare le brief.');
-  const ctl = new AbortController();
-  vcReplying = ctl;
-
-  const card = document.createElement('div');
-  card.className = 'vc-brief';
-  const head = document.createElement('div');
-  head.className = 'vc-brief-head';
-  head.textContent = 'Brief';
+// ── A message to the sandbox ─────────────────────────────────────────────
+// Words said (or typed) with nothing to answer are a message for the picked
+// sandbox's agent: shown in an editable card, as they were said. More words
+// add to it; "oui" or Send types it into the agent, "non" or Discard drops
+// it. Nothing reaches a sandbox any other way: the yes is the person's
+// (rule 1 of the spec, the relay's own rule).
+function vcDraft(text) {
+  const target = vcTarget;
+  const { card, head, foot } = vcCard('vc-draft', target ? `To ${target}` : 'Pick a sandbox at the top first');
   const area = document.createElement('textarea');
   area.className = 'vc-brief-text';
-  area.readOnly = true;
-  area.rows = 12;
-  area.setAttribute('aria-label', 'Brief');
-  const row = document.createElement('div');
-  row.className = 'vc-brief-row';
-  // The sandbox the conversation is about (picked at the top) receives it.
-  const target = vcTarget;
-  const pick = document.createElement('span');
-  pick.className = 'vc-brief-to';
-  pick.textContent = target ? `to ${target}` : 'pick a sandbox at the top first';
-  const send = document.createElement('button');
-  send.type = 'button'; send.className = 'vc-btn vc-primary'; send.textContent = 'Send'; send.disabled = true;
-  const drop = document.createElement('button');
-  drop.type = 'button'; drop.className = 'vc-btn'; drop.textContent = 'Discard';
-  row.append(pick, send, drop);
-  card.append(head, area, row);
-  vcLog.append(card);
-  vcLog.scrollTop = vcLog.scrollHeight;
-
-  drop.onclick = () => { ctl.abort(); card.remove(); };
-  send.onclick = async () => {
-    const name = target;
-    const brief = area.value.trim();
-    if (!name || !brief) return;
-    send.disabled = true; drop.disabled = true; area.readOnly = true;
-    const r = await postJsonOrError('/api/chat/push', { text: brief, name });
-    if (!r.ok) {
-      vcSay('err', `Could not send the brief to ${name}: ${r.error}`);
-      send.disabled = false; drop.disabled = false; area.readOnly = false;
-      return;
-    }
-    card.classList.add('sent');
-    head.textContent = `Brief — sent to ${name}`;
-    vcSay('dim', `Brief typed into ${name}'s agent.`);
-  };
-
-  try {
-    let text = '';
-    await vcStream({ turns: vcTurns, brief: true, sandbox: vcTarget || undefined }, ctl.signal, piece => {
-      text += piece;
-      area.value = text;
-      area.scrollTop = area.scrollHeight;
-    });
-    area.value = text.trim();
-    area.readOnly = false;
-    send.disabled = !target || !area.value;
-    vcTurns.push({ role: 'assistant', content: "J'ai préparé le brief ; il attend ta relecture et ton envoi." });
-    vcSave();
-    vcSpeech.feed('Le brief est prêt. Relis-le, choisis le sandbox, puis envoie-le.');
-    vcSpeech.flush();
-  } catch (e) {
-    card.remove();
-    if (e.name !== 'AbortError') vcSay('err', `Could not write the brief: ${e.message || e}`);
-  } finally {
-    if (vcReplying === ctl) vcReplying = null;
-  }
+  area.value = text;
+  area.setAttribute('aria-label', 'Message');
+  const fit = () => { area.rows = Math.min(12, Math.max(2, area.value.split('\n').length + 1)); };
+  fit();
+  card.insertBefore(area, foot);
+  const done = note => { vcDisarm(); card.classList.add('done'); area.readOnly = true; foot.replaceChildren(); if (note) vcSay('dim', note); };
+  const send = vcButton('Send', async () => {
+    const name = vcTarget || target;
+    const body = area.value.trim();
+    if (!name) { vcSay('err', 'Pick a sandbox at the top first.'); return; }
+    if (!body) return;
+    send.disabled = true;
+    const r = await postJsonOrError('/api/chat/push', { text: body, name });
+    if (!r.ok) { send.disabled = false; vcSay('err', `Not sent to ${name}: ${r.error}`); return; }
+    head.textContent = `Sent to ${name}`;
+    done(`Typed into ${name}'s agent.`);
+  }, true);
+  const drop = vcButton('Discard', () => { card.remove(); vcDisarm(); });
+  const hint = document.createElement('span');
+  hint.className = 'vc-armed-hint';
+  hint.textContent = 'Keep talking to add to it; say “oui” to send.';
+  foot.append(send, drop, hint);
+  vcArm({
+    kind: 'draft', card,
+    add: more => { area.value = `${area.value.trimEnd()} ${more}`.trim(); fit(); vcLog.scrollTop = vcLog.scrollHeight; },
+    yes: () => send.click(), no: () => drop.click(),
+  });
+  if (!vcSpeech.muted) vcSpeak(target ? "C'est noté. J'envoie ?" : 'Choisis un sandbox en haut.');
 }
 
-function vcMeta(row, text) {
-  const m = document.createElement('span');
-  m.className = 'vc-meta'; m.textContent = text;
-  row.append(m);
-}
-
+// Start over: the log emptied, nothing armed, the voice quiet.
 function vcReset() {
-  if (vcReplying) vcReplying.abort();
   vcDisarm();
   vcSpeech.stop();
-  vcTurns = [];
-  vcConvId = null;
-  vcSave();
   vcLog.replaceChildren();
 }
 
-// ── History: the week's conversations, reopened or deleted ──────────────
-const vcHistory = vcEl('vc-history');
-async function vcOpenHistory() {
-  if (!vcHistory.hidden) { vcHistory.hidden = true; return; }
-  const r = await fetch('/api/voice/conversations').then(r => r.json()).catch(() => null);
-  vcHistory.replaceChildren();
-  const head = document.createElement('div');
-  head.className = 'vc-history-head';
-  const t = document.createElement('span');
-  t.textContent = `Kept ${r?.retention_days ?? 7} days at most, text only`;
-  const all = vcButton('Delete all', async () => {
-    const d = await postJsonOrError('/api/voice/conversations/rm', { all: true });
-    vcHistory.hidden = true;
-    vcReset();
-    try { sessionStorage.removeItem(VC_STORE); } catch (_) {}
-    vcSay('dim', d.ok ? `${d.deleted} conversation(s) deleted.` : `Not deleted: ${d.error}`);
-  });
-  head.append(t, all);
-  vcHistory.append(head);
-  const list = r?.conversations || [];
-  if (!list.length) {
-    const e = document.createElement('p');
-    e.className = 'vc-dim'; e.textContent = 'No conversation kept.';
-    vcHistory.append(e);
-  }
-  for (const c of list) {
-    const row = document.createElement('div');
-    row.className = 'vc-history-row' + (c.id === vcConvId ? ' current' : '');
-    const open = document.createElement('button');
-    open.type = 'button'; open.className = 'vc-history-open';
-    const when = new Date(c.updated_ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-    open.textContent = `${c.title || '(empty)'}`;
-    open.title = `${when}${c.sandbox ? ' · ' + c.sandbox : ''} · ${c.turns} turns`;
-    open.addEventListener('click', async () => {
-      const g = await fetch(`/api/voice/conversations/${encodeURIComponent(c.id)}`).then(r => r.json()).catch(() => null);
-      if (!g?.ok) { vcSay('err', g?.error || 'Could not open it'); return; }
-      if (vcReplying) vcReplying.abort();
-      vcSpeech.stop(); vcDisarm();
-      vcConvId = g.conversation.id;
-      vcTurns = g.conversation.turns.map(t => ({ role: t.role, content: t.content }));
-      try { sessionStorage.setItem(VC_STORE, JSON.stringify({ id: vcConvId, turns: vcTurns })); } catch (_) {}
-      vcShow(vcTurns);
-      vcHistory.hidden = true;
-    });
-    const meta = document.createElement('span');
-    meta.className = 'vc-meta'; meta.textContent = `${when}${c.sandbox ? ' · ' + c.sandbox : ''}`;
-    const rm = document.createElement('button');
-    rm.type = 'button'; rm.className = 'cd-close'; rm.textContent = '✕'; rm.title = 'Delete';
-    rm.addEventListener('click', async () => {
-      await postJsonOrError('/api/voice/conversations/rm', { id: c.id });
-      if (c.id === vcConvId) vcReset();
-      row.remove();
-    });
-    open.append(meta);
-    row.append(open, rm);
-    vcHistory.append(row);
-  }
-  vcHistory.hidden = false;
-}
-vcEl('vc-history-btn').addEventListener('click', vcOpenHistory);
-
-// Typing is the same conversation, for when speaking is not an option.
+// Typing does what speaking does, for when speaking is not an option.
 vcEl('vc-type').addEventListener('submit', e => {
   e.preventDefault();
   const input = vcEl('vc-type-input');
   const text = input.value.trim();
   if (!text || !vcReady()) return;
   input.value = '';
-  if (vcPending?.kind !== 'grill') vcSay('me', text);
   vcHear(text);
 });
-vcEl('vc-brief').addEventListener('click', () => { if (vcReady()) vcBrief(''); });
 vcEl('vc-new').addEventListener('click', vcReset);
 
 // ── The voice ────────────────────────────────────────────────────────────
-// The reply is spoken sentence by sentence as it streams: a sentence is sent
-// to /api/voice/speak as soon as it ends, the next one is synthesised while
-// this one plays, and they play in order. Muting (🔇, remembered per browser)
-// keeps the text and skips the sound; talking again stops the voice at once.
+// A message is cut into sentences, grouped into batches, and each batch is
+// one request to /api/voice/speak. The answer is raw sound that arrives as it
+// is made (16-bit mono PCM): each piece is scheduled right behind the last
+// one, so the voice starts before the batch is finished and batches follow
+// each other without a gap. Muting (🔇, remembered per browser) keeps the
+// text and skips the sound; talking again stops the voice at once.
 const VC_MUTE = 'sbxw-concierge-mute';
 const vcSpeech = (() => {
   let buf = '';
   let gen = 0;            // bumped by stop(): late audio of an old reply is dropped
-  let chain = Promise.resolve();
   let ctx = null;
-  let playing = null;     // the AudioBufferSourceNode playing now
+  let nextAt = 0;         // when, on ctx's clock, the next piece of sound starts
+  const live = new Set(); // sources scheduled or playing, for stop()
+  const VC_LEAD = 0.4;    // seconds of sound kept ready before the voice starts
+  let lead = VC_LEAD;
+  let gaps = 0;           // times the voice caught up, for the console
   let muted = false;
   try { muted = localStorage.getItem(VC_MUTE) === '1'; } catch (_) {}
 
   // A sentence ends at . ! ? … or a line break, followed by space or the end
   // (so "3.5" and "e.g." mid-word do not cut).
   const END = /[.!?…\n]+["»)\]]?(\s|$)/;
+  const VC_BATCH = 5;         // sentences per request, at most
+  const VC_BATCH_CHARS = 900; // the daemon refuses more than 1000
+  const VC_AHEAD = 30;        // seconds of sound made ahead of the voice, at most
+  let pending = [];       // sentences of the batch being gathered
+  let pendingChars = 0;
+  let timer = 0;
+  let queue = [];         // batches not yet sent
+  let fetching = false;   // one batch is made at a time, in order
+  let abort = null;       // cancels the request in flight on stop()
+  let wait = 0;
   function say(text) {
-    text = text.replace(/[*_#`>]/g, '').trim();
-    if (!text || muted || !vcReady()) return;
+    text = text.trim();
+    if (!text || muted || !vcReady() || !vcStatus.speech?.supported) return;
+    // Sentences are grouped: a batch leaves 100 ms after its last sentence,
+    // or at once when it holds VC_BATCH of them or nears the request limit.
+    if (pending.length && pendingChars + text.length + 1 > VC_BATCH_CHARS) batch();
+    pending.push(text);
+    pendingChars += text.length + 1;
+    clearTimeout(timer);
+    if (pending.length >= VC_BATCH) batch();
+    else timer = setTimeout(batch, 100);
+  }
+  function batch() {
+    clearTimeout(timer);
+    if (!pending.length) return;
+    queue.push(pending.join(' '));
+    pending = [];
+    pendingChars = 0;
+    pump();
+  }
+  function drop() { clearTimeout(timer); clearTimeout(wait); pending = []; pendingChars = 0; queue = []; }
+  // Schedule one piece of PCM right behind what is already scheduled.
+  function play(samples, rate) {
+    if (!ctx || ctx.sampleRate !== rate) {
+      // The context runs at the voice's own rate: pieces join without resampling.
+      try { ctx = new AudioContext({ sampleRate: rate }); } catch (_) { ctx = ctx || new AudioContext(); }
+      nextAt = 0;
+    }
+    const audio = ctx.createBuffer(1, samples.length, rate);
+    const out = audio.getChannelData(0);
+    for (let i = 0; i < samples.length; i++) out[i] = samples[i] / 32768;
+    const src = ctx.createBufferSource();
+    src.buffer = audio;
+    src.connect(ctx.destination);
+    src.onended = () => live.delete(src);
+    live.add(src);
+    // The voice caught up with what is made (or is starting): it waits for a
+    // little sound to be ready, longer each time, so that a slow moment is
+    // one pause and not a stutter.
+    if (nextAt < ctx.currentTime + 0.02) {
+      if (nextAt) { gaps++; lead = Math.min(lead * 2, 3); }
+      nextAt = ctx.currentTime + lead;
+    }
+    src.start(nextAt);
+    nextAt += audio.duration;
+  }
+  async function pump() {
+    if (fetching || !queue.length) return;
+    // Enough is ready: wait for the voice to catch up before making more.
+    const lead = ctx ? nextAt - ctx.currentTime : 0;
+    if (lead > VC_AHEAD) { clearTimeout(wait); wait = setTimeout(pump, (lead - VC_AHEAD + 1) * 1000); return; }
     const my = gen;
-    const audio = fetch('/api/voice/speak', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
-    }).then(r => r.ok ? r.arrayBuffer() : r.json().then(e => { throw new Error(e.error || r.status); }));
-    chain = chain.then(async () => {
-      let bytes;
-      try { bytes = await audio; } catch (e) { if (my === gen) vcSay('err', `Could not speak: ${e.message || e}`); return; }
-      if (my !== gen) return;
-      ctx = ctx || new AudioContext();
-      const decoded = await ctx.decodeAudioData(bytes);
-      if (my !== gen) return;
-      await new Promise(done => {
-        const src = ctx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(ctx.destination);
-        src.onended = done;
-        playing = src;
-        src.start();
+    const text = queue.shift();
+    const sent = performance.now();
+    fetching = true;
+    abort = new AbortController();
+    try {
+      const r = await fetch('/api/voice/speak', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }), signal: abort.signal,
       });
-      playing = null;
-    });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+      const rate = Number(r.headers.get('x-sample-rate')) || 24000;
+      const reader = r.body.getReader();
+      let odd = null;       // the first half of a sample cut between two pieces
+      let seconds = 0;
+      let firstAfter = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (my !== gen) { reader.cancel().catch(() => {}); return; }
+        if (done) break;
+        let bytes = value;
+        if (odd !== null) { bytes = new Uint8Array(value.length + 1); bytes[0] = odd; bytes.set(value, 1); odd = null; }
+        if (bytes.length % 2) { odd = bytes[bytes.length - 1]; bytes = bytes.subarray(0, bytes.length - 1); }
+        if (!bytes.length) continue;
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+        const samples = new Int16Array(bytes.length / 2);
+        for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true);
+        if (!firstAfter) firstAfter = (performance.now() - sent) / 1000;
+        seconds += samples.length / rate;
+        play(samples, rate);
+      }
+      console.debug(`voice: ${seconds.toFixed(1)} s of audio for ${text.length} characters, first sound after ${firstAfter.toFixed(1)} s, all of it after ${((performance.now() - sent) / 1000).toFixed(1)} s, ${gaps} pause(s) so far`);
+    } catch (e) {
+      // One failure ends the reading: the rest would fail the same way.
+      if (my === gen) { drop(); vcSay('err', `Could not speak: ${e.message || e}`); }
+    } finally {
+      if (my === gen) { fetching = false; pump(); }
+    }
   }
   return {
     feed(piece) {
@@ -664,13 +493,26 @@ const vcSpeech = (() => {
         const at = Math.max(buf.lastIndexOf(', '), buf.lastIndexOf('; '), buf.lastIndexOf(': '));
         if (at > 30) { say(buf.slice(0, at + 1)); buf = buf.slice(at + 2); }
       }
+      // Text with no punctuation at all (a pasted log) is cut at a space
+      // before it outgrows what one request may carry.
+      while (buf.length > 400) {
+        const at = buf.lastIndexOf(' ', 400);
+        const cut = at > 100 ? at : 400;
+        say(buf.slice(0, cut)); buf = buf.slice(cut);
+      }
     },
     flush() { say(buf); buf = ''; },
     stop() {
       gen++;
       buf = '';
-      chain = Promise.resolve();
-      if (playing) { try { playing.stop(); } catch (_) {} playing = null; }
+      drop();
+      fetching = false;
+      if (abort) { abort.abort(); abort = null; }
+      for (const src of live) { src.onended = null; try { src.stop(); } catch (_) {} }
+      live.clear();
+      nextAt = 0;
+      lead = VC_LEAD;
+      gaps = 0;
     },
     get muted() { return muted; },
     toggle() {
@@ -696,16 +538,18 @@ function vcSetOpen(open) {
   vcOpen = open;
   vcPanel.hidden = !open;
   vcLauncher.setAttribute('aria-expanded', String(open));
-  if (open) { vcRefresh(); vcWarm(); vcFillTargets(); }
+  if (open) { vcRefresh(); vcWarm(!vcSpeech.muted); vcFillTargets(); }
 }
 
-// Load the models before they are needed: opening the panel or pressing the
+// Load the models before they are needed: opening the panel or pressing a
 // key usually comes seconds before the first word, and that is long enough.
-let vcWarmed = 0;
-function vcWarm() {
-  if (!vcReady() || Date.now() - vcWarmed < 60_000) return;
-  vcWarmed = Date.now();
-  fetch('/api/voice/warm', { method: 'POST' }).catch(() => {});
+// `speech` loads the voice too: not for a dictation, which reads nothing.
+const vcWarmed = { false: 0, true: 0 };
+function vcWarm(speech) {
+  speech = !!speech && !!vcStatus?.speech?.supported;
+  if (!vcReady() || Date.now() - vcWarmed[speech] < 60_000) return;
+  vcWarmed[speech] = Date.now();
+  fetch('/api/voice/warm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ speech }) }).catch(() => {});
 }
 
 vcLauncher.addEventListener('click', () => vcSetOpen(!vcOpen));
@@ -735,12 +579,12 @@ window.addEventListener('keydown', e => {
 // ── Following the sandbox's agent: the grill by voice ───────────────────
 // The picked sandbox's agents are followed on the session stream (the chat
 // dock's own reader, chat-core.js). When one ends its turn with a message —
-// a /grill-me round, a question in prose — it shows here, its gist is read
-// aloud, and the next thing said answers it: the model turns the dictation
-// into the written answer, which is shown and confirmed before it is typed
-// into that session. A multiple-choice question (AskUserQuestion) is read
-// with its options; what is said picks one, confirmed the same way. Nothing
-// reaches an agent without a yes, spoken or clicked.
+// a /grill-me round, a question in prose — it shows here and is read aloud
+// as written (markdown and code blocks left out), and the next thing said
+// answers it: the words are shown, editable, and confirmed before they are
+// typed into that session. A multiple-choice question (AskUserQuestion) is
+// read with its options; what is said picks one, confirmed the same way.
+// Nothing reaches an agent without a yes, spoken or clicked.
 const VC_FOLLOW = 'sbxw-concierge-follow';
 const vcAgents = new Map(); // `${sandbox}::${thread}` → chat-core state
 let vcPending = null;        // what the next words are for (see vcHear)
@@ -756,13 +600,6 @@ const VC_GRILL_PROMPT = /^\s*\/(grill-me|grilling)\b/i;
 const VC_GRILL_REPLY = /❓\s*\*\*Q\d+/;
 function vcEngages(info, reply) {
   return vcFollow || VC_GRILL_PROMPT.test(info.last_input || '') || VC_GRILL_REPLY.test(reply || '');
-}
-
-// One task for the model, its whole output returned (speech, reply, choose).
-async function vcTask(task, content) {
-  let out = '';
-  await vcStream({ turns: [{ role: 'user', content }], task, sandbox: vcTarget || undefined }, undefined, p => { out += p; });
-  return out.trim();
 }
 
 function vcModeOf(thread) { return thread ? `thread:${thread}` : 'claude'; }
@@ -799,10 +636,10 @@ function vcButton(label, onClick, primary) {
   return b;
 }
 
-// Speak `text` at once (a short line of the concierge's own).
+// Speak `text` at once, in place of whatever was being read.
 function vcSpeak(text) { vcSpeech.stop(); vcSpeech.feed(text); vcSpeech.flush(); }
 
-// An agent's message: shown, its gist read aloud, the next words answer it.
+// An agent's message: shown, read aloud, the next words answer it.
 async function vcAgentMessage(sandbox, thread, text) {
   const grill = vcParseGrill(text);
   if (grill.questions.length) return vcGrill(sandbox, thread, text, grill);
@@ -817,7 +654,7 @@ async function vcAgentMessage(sandbox, thread, text) {
   foot.append(
     vcButton('Read aloud', () => vcReadAgent(text)),
     vcButton('Answer it', () => vcArm({ kind: 'reply', sandbox, thread, text, card })),
-    vcButton('Talk to the concierge', () => vcDisarm()),
+    vcButton('Not an answer', () => vcDisarm()),
     hint,
   );
   vcArm({ kind: 'reply', sandbox, thread, text, card });
@@ -827,11 +664,12 @@ async function vcAgentMessage(sandbox, thread, text) {
 
 // ── A grill round, one question at a time ───────────────────────────────
 // /grill-me writes its round as `❓ **Q1 - Title** : body` then `➡️ the
-// recommendation`, questions separated by `---`. The round is cut there —
-// no model involved, so no question is lost or invented — and asked one
+// recommendation`, questions separated by `---`. The round is cut there, so
+// no question is lost or invented, and asked one
 // question at a time: shown, read aloud, answered; then the next. Once every
-// one is answered (or skipped), the dictated answers are written up as one
-// message ("Q1 : …"), shown, confirmed, and typed into the session at once.
+// one is answered (or skipped), the answers are listed as one message
+// ("Q1 : …", as they were said), shown, confirmed, and typed into the
+// session at once.
 function vcParseGrill(text) {
   const parts = text.split(/^\s*❓\s*/m);
   const intro = parts.shift().trim();
@@ -847,14 +685,17 @@ function vcParseGrill(text) {
   return { intro, questions };
 }
 
-// Markdown to something a voice can say.
+// Markdown without its structure. The symbols left (`_`, `/`, `>=`…) are
+// turned into words by the daemon, which holds the dictionary.
 function vcPlain(md) {
   return md
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`([^`]*)`/g, '$1')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[*_#>|]+/g, '')
-    .replace(/^\s*[-•]\s+/gm, '')
+    .replace(/^\s*\|?[-:| ]+\|\s*$/gm, ' ')   // a table's rule line
+    .replace(/^\s*(#+|>|[-•])\s+/gm, '')
+    .replace(/^\s*\||\|\s*$/gm, '')          // a table row's outer bars
+    .replace(/\*+(?=\S)|(?<=\S)\*+/g, '')    // emphasis; `3 * 4` keeps its star
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -908,7 +749,7 @@ function vcGrill(sandbox, thread, text, grill, relay = null) {
   foot.append(
     vcButton('Repeat', () => show()),
     vcButton('Skip', () => { grill.questions[st.i].answer = null; st.next(); }),
-    vcButton('Talk to the concierge', () => vcDisarm()),
+    vcButton('Not an answer', () => vcDisarm()),
   );
   if (relay) {
     // The agent is blocked on its tool call: setting the round aside tells it.
@@ -940,12 +781,7 @@ async function vcGrillDone(st) {
   vcDisarm();
   const answered = grill.questions.filter(q => q.answer);
   if (!answered.length) { vcSay('dim', 'No question answered: nothing to send.'); return; }
-  const dictated = grill.questions.map(q => `${q.id}${q.title ? ' (' + q.title + ')' : ''} : ${q.answer ?? '(pas de réponse)'}`).join('\n');
-  let answer;
-  try {
-    answer = await vcTask('reply', `Message de l'agent :\n<<<\n${st.text}\n>>>\n\nRéponse dictée par le développeur, question par question :\n${dictated}`);
-  } catch (e) { vcSay('err', `Could not write the answer: ${e.message || e}`); }
-  if (!answer) answer = grill.questions.filter(q => q.answer).map(q => `${q.id} : ${q.answer}`).join('\n');
+  const answer = answered.map(q => `${q.id} : ${q.answer}`).join('\n');
   const area = document.createElement('textarea');
   area.className = 'vc-brief-text';
   area.value = answer;
@@ -966,9 +802,9 @@ async function vcGrillDone(st) {
   if (!vcSpeech.muted) vcSpeak("J'ai toutes tes réponses. Relis-les. J'envoie ?");
 }
 
-async function vcReadAgent(text) {
-  try { vcSpeak(await vcTask('speech', text)); } catch (e) { vcSay('err', `Could not read it: ${e.message || e}`); }
-}
+// Read an agent's message as it was written: no summary, so nothing is
+// added or lost; code blocks and markdown signs are left out.
+function vcReadAgent(text) { vcSpeak(vcPlain(text)); }
 
 // A multiple-choice question: chat-core's buttons, read aloud, answerable by voice.
 function vcAgentQuestion(sandbox, thread, c) {
@@ -1012,30 +848,28 @@ const VC_YES = /^\s*(oui|ouais|ok|okay|d'accord|vas-y|envoie|confirme|yes|send|g
 const VC_NO = /^\s*(non|annule|stop|laisse|no|cancel)\b/i;
 
 // Everything heard or typed comes here first: an armed card takes it,
-// otherwise it is a turn of the conversation (or the brief).
-async function vcHear(text) {
+// otherwise it starts a message to the picked sandbox.
+function vcHear(text) {
   const p = vcPending;
-  if (p?.kind === 'confirm') {
+  if (p?.kind === 'confirm' || p?.kind === 'draft') {
     if (VC_YES.test(text)) return p.yes();
     if (VC_NO.test(text)) return p.no();
   }
   if (p?.kind === 'grill' && vcGrillHear(p.st, text)) return;
+  if (p?.kind !== 'grill') vcSay('me', text);
+  if (p?.kind === 'draft') return p.add(text);
   if (p?.kind === 'reply') return vcAnswerAgent(p, text);
   if (p?.kind === 'choose') return vcChoose(p, text);
-  vcRoute(text);
+  vcDraft(text);
 }
 
-async function vcAnswerAgent(p, dictated) {
+// The words said are the answer: shown, editable, sent on a yes.
+function vcAnswerAgent(p, dictated) {
   const { card } = p;
-  let answer;
-  try {
-    answer = await vcTask('reply', `Message de l'agent :\n<<<\n${p.text}\n>>>\n\nRéponse dictée par le développeur :\n${dictated}`);
-  } catch (e) { vcSay('err', `Could not write the answer: ${e.message || e}`); return; }
-  if (!answer) answer = dictated;
   const area = document.createElement('textarea');
   area.className = 'vc-brief-text';
-  area.value = answer;
-  area.rows = Math.min(10, answer.split('\n').length + 1);
+  area.value = dictated;
+  area.rows = Math.min(10, dictated.split('\n').length + 1);
   area.setAttribute('aria-label', 'Answer');
   card.append(area);
   vcConfirm(card, `Send this to ${vcWho(p.sandbox, p.thread)}?`, async () => {
@@ -1048,16 +882,41 @@ async function vcAnswerAgent(p, dictated) {
   if (!vcSpeech.muted) vcSpeak("Voici ta réponse. J'envoie ?");
 }
 
-async function vcChoose(p, dictated) {
+// Which option the words name, 1-based, or 0: a number ("la deux", "option
+// 3", "2"), a rank ("la première", "the last one"), or the one option whose
+// label shares the most of its words with what was said. No model: a wrong guess
+// is still shown and confirmed before anything is sent.
+const VC_NUMBERS = [
+  ['1', 'un', 'une', 'one', 'premier', 'premiere', 'first'], ['2', 'deux', 'two', 'deuxieme', 'second', 'seconde'],
+  ['3', 'trois', 'three', 'troisieme', 'third'], ['4', 'quatre', 'four', 'quatrieme', 'fourth'],
+  ['5', 'cinq', 'five', 'cinquieme', 'fifth'], ['6', 'six', 'sixieme', 'sixth'],
+];
+function vcWords(text) {
+  return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+}
+function vcPickOption(said, options) {
+  const words = vcWords(said);
+  if (!words.length) return 0;
+  if (words.includes('derniere') || words.includes('dernier') || words.includes('last')) return options.length;
+  // A label wins over a number when it is all there ("deux colonnes").
+  const scores = options.map(o => {
+    const label = vcWords(o).filter(w => w.length > 2); // not "a", "de", "to"
+    return label.length ? label.filter(w => words.includes(w)).length / label.length : 0;
+  });
+  const best = Math.max(...scores);
+  if (best === 1 && scores.filter(x => x === 1).length === 1) return scores.indexOf(1) + 1;
+  const n = VC_NUMBERS.findIndex(names => words.some(w => names.includes(w))) + 1;
+  if (n >= 1 && n <= options.length) return n;
+  if (best > 0 && scores.filter(x => x === best).length === 1) return scores.indexOf(best) + 1;
+  return 0;
+}
+
+function vcChoose(p, dictated) {
   const { step } = p;
-  let n = 0;
-  try {
-    const out = await vcTask('choose', `Question : ${step.text}\nOptions :\n${step.options.map((o, i) => `${i + 1}. ${o}`).join('\n')}\n\nRéponse dictée : ${dictated}`);
-    n = parseInt(out, 10) || 0;
-  } catch (e) { vcSay('err', `Could not understand the choice: ${e.message || e}`); return; }
-  if (n < 1 || n > step.options.length) {
-    vcSay('dim', `“${dictated}” matches no option — say one of them, or click it.`);
-    if (!vcSpeech.muted) vcSpeak("Je n'ai pas reconnu l'option. Redis-la, ou clique dessus.");
+  const n = vcPickOption(dictated, step.options);
+  if (!n) {
+    vcSay('dim', `“${dictated}” matches no option — say its number, or click it.`);
+    if (!vcSpeech.muted) vcSpeak("Je n'ai pas reconnu l'option. Dis son numéro, ou clique dessus.");
     return;
   }
   const label = step.options[n - 1];
@@ -1133,5 +992,4 @@ sbxwStream.addEventListener('voice', ev => {
   vcRender();
 });
 
-vcLoad();
 vcRefresh();
