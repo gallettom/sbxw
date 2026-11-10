@@ -262,6 +262,14 @@ fn is_size(v: &str) -> bool {
 pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
 pub const PULL_POLICIES: [&str; 3] = ["always", "missing", "never"];
 
+/// `<IPv4>:<port>` or `[<IPv6>]:<port>`, numeric, nothing else: the IP ends up
+/// in `/etc/hosts` and in sbx network rules.
+fn is_listen_addr(s: &str) -> bool {
+    !s.chars().any(|c| c.is_whitespace() || c.is_control())
+        && s.parse::<std::net::SocketAddr>().is_ok()
+        && (s.starts_with('[') || crate::hosts::is_ipv4_literal(ports::ip_of(s)))
+}
+
 /// `#rrggbb` only: the value is templated into the page as a JS string, so
 /// nothing else may pass.
 fn is_hex_color(s: &str) -> bool {
@@ -356,6 +364,11 @@ impl Config {
         if let Some(p) = self.pull_policy() {
             if !PULL_POLICIES.contains(&p) {
                 bail!("pull = \"{p}\" — expected one of {}", PULL_POLICIES.join(", "));
+            }
+        }
+        for (key, v) in [("web_addr", &self.web_addr), ("agent_addr", &self.agent_addr)] {
+            if !is_listen_addr(v) {
+                bail!("{key} = {v:?} — expected IP:PORT, such as 127.0.0.1:7681 or [::1]:7681");
             }
         }
         if ports::port_of(&self.web_addr) == ports::port_of(&self.agent_addr)
@@ -574,6 +587,25 @@ mod tests {
         assert!(bad("agent_addr = \"127.0.0.1:7681\""));
         assert!(bad("models = [{ id = \"Bad Id\", label = \"x\" }]"));
         assert!(!bad("skills = \"off\""));
+    }
+
+    #[test]
+    fn listen_addresses_are_an_ip_and_a_port() {
+        let bad = |s: &str| toml::from_str::<Config>(s).unwrap().validate().is_err();
+        for addr in [
+            "127.0.0.1\\n93.184.216.34 github.com:7681",
+            "127.0.0.1 x:7681",
+            "localhost:7681",
+            "127.0.0.1",
+            "127.0.0.1:http",
+            "::1:7681",
+            "",
+        ] {
+            assert!(bad(&format!("web_addr = \"{addr}\"")), "web_addr {addr:?}");
+            assert!(bad(&format!("agent_addr = \"{addr}\"")), "agent_addr {addr:?}");
+        }
+        assert!(!bad("web_addr = \"[::1]:7681\""));
+        assert!(!bad("web_addr = \"192.168.1.2:7681\"\nagent_addr = \"127.0.0.1:7690\""));
     }
 
     #[test]

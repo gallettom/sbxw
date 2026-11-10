@@ -77,7 +77,15 @@ pub fn strip_block(content: &str) -> String {
     out
 }
 
-/// `content` with its block replaced by exactly `aliases`.
+/// Fit to be one `/etc/hosts` line: no whitespace or control character in the
+/// IP or the hostname, which could end the line and start a root-written one.
+pub fn is_safe_alias(a: &HostAlias) -> bool {
+    let clean = |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control());
+    clean(&a.ip) && clean(&a.hostname)
+}
+
+/// `content` with its block replaced by exactly `aliases`. An alias that is
+/// not [`is_safe_alias`] is never written; [`merge_into`] refuses it first.
 pub fn with_block(content: &str, aliases: &[HostAlias]) -> String {
     let mut next = strip_block(content);
     if !next.is_empty() && !next.ends_with('\n') {
@@ -85,7 +93,7 @@ pub fn with_block(content: &str, aliases: &[HostAlias]) -> String {
     }
     next.push_str(BEGIN);
     next.push('\n');
-    for a in aliases {
+    for a in aliases.iter().filter(|a| is_safe_alias(a)) {
         next.push_str(&format!("{}\t{}\n", a.ip, a.hostname));
     }
     next.push_str(END);
@@ -105,10 +113,14 @@ pub fn merged(stored: Vec<HostAlias>, wanted: &[HostAlias]) -> Vec<HostAlias> {
 }
 
 /// What `content` would become with `wanted` merged into its block, or `None`
-/// when it already says that — the case that must cost no privilege.
-pub fn merge_into(content: &str, wanted: &[HostAlias]) -> Option<String> {
+/// when it already says that — the case that must cost no privilege. Refused
+/// when an alias holds whitespace or a control character.
+pub fn merge_into(content: &str, wanted: &[HostAlias]) -> Result<Option<String>, String> {
+    if let Some(bad) = wanted.iter().find(|a| !is_safe_alias(a)) {
+        return Err(format!("refusing hosts entry {:?} → {:?}: whitespace or control character", bad.hostname, bad.ip));
+    }
     let next = with_block(content, &merged(parse_block(content), wanted));
-    (next != content).then_some(next)
+    Ok((next != content).then_some(next))
 }
 
 /// The hostnames of `wanted` the block does not hold under the wanted IP.
@@ -215,10 +227,26 @@ mod tests {
     #[test]
     fn re_stating_the_block_needs_no_write() {
         let base = "127.0.0.1\tlocalhost\n";
-        let once = merge_into(base, &[a("sbxw.localhost", "127.0.0.1")]).unwrap();
-        assert_eq!(merge_into(&once, &[a("sbxw.localhost", "127.0.0.1")]), None);
+        let once = merge_into(base, &[a("sbxw.localhost", "127.0.0.1")]).unwrap().unwrap();
+        assert_eq!(merge_into(&once, &[a("sbxw.localhost", "127.0.0.1")]), Ok(None));
         assert!(once.starts_with(base));
         assert_eq!(parse_block(&once), [a("sbxw.localhost", "127.0.0.1")]);
+    }
+
+    #[test]
+    fn an_alias_that_could_start_a_second_line_is_refused() {
+        let base = "127.0.0.1\tlocalhost\n";
+        for bad in [
+            a("sbxw.localhost", "127.0.0.1\n93.184.216.34 github.com"),
+            a("x\ny", "127.0.0.1"),
+            a("x y", "127.0.0.1"),
+            a("x", "127.0.0.1\r"),
+            a("x\u{85}", "127.0.0.1"),
+        ] {
+            assert!(merge_into(base, std::slice::from_ref(&bad)).is_err(), "{bad:?}");
+            assert!(!with_block(base, std::slice::from_ref(&bad)).contains("github.com"), "{bad:?}");
+            assert_eq!(parse_block(&with_block(base, &[bad])), []);
+        }
     }
 
     #[test]

@@ -94,7 +94,9 @@ pub const WEB_HOSTNAME: &str = "sbxw.localhost";
 
 pub fn web_alias(web_addr: &str) -> Option<HostAlias> {
     let ip = ip_of(web_addr);
-    ip.starts_with("127.").then(|| HostAlias {
+    // A strict dotted quad: this IP is written to /etc/hosts as root, so a
+    // "127." prefix followed by anything (a newline, a second entry) is not one.
+    (crate::hosts::is_ipv4_literal(ip) && ip.starts_with("127.")).then(|| HostAlias {
         hostname: WEB_HOSTNAME.into(),
         ip: ip.to_string(),
     })
@@ -173,6 +175,14 @@ mod tests {
         assert!(web_alias("127.0.0.1:7681").is_some());
         assert!(web_alias("[::1]:7681").is_none());
         assert!(web_alias("192.168.1.2:7681").is_none());
+    }
+
+    #[test]
+    fn a_web_addr_with_a_smuggled_line_earns_no_alias() {
+        assert!(web_alias("127.0.0.1\n93.184.216.34 github.com:7681").is_none());
+        assert!(web_alias("127.0.0.1 evil:7681").is_none());
+        assert!(web_alias("127.evil:7681").is_none());
+        assert_eq!(web_alias("127.0.0.5:7681").unwrap().ip, "127.0.0.5");
     }
 
     #[test]
