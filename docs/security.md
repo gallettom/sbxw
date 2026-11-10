@@ -17,13 +17,19 @@ safety boundary. This page lists what that boundary is and where it has edges.
 - **Files:** only the workspace folder (and any extra mounts you add). Use
   `--ro` or a **RO** repo for anything the agent should not modify. The sandbox
   is a microVM with its own filesystem, network and Docker daemon.
-- **Network:** an explicit allowlist (`network_allow`), never `**`. Audit live
-  egress with `sbx policy log` or the [network panel](web-ui.md#ports-and-network-policy).
+- **Network:** an explicit allowlist (`network_allow`), never `**`. Entries of
+  `network_allow` and `network_deny` are checked when the config is loaded:
+  `*`, `**`, an entry starting with `-`, and one containing whitespace or a
+  comma are refused, and so is a `network_allow` entry naming the UI
+  listener's port on `localhost`, `127.0.0.1`, `host.docker.internal` or
+  `[::1]`. Audit live egress with `sbx policy log` or the [network panel](web-ui.md#ports-and-network-policy).
 - **Behind a corporate proxy**, a blocked download is often not sbxw's
   allowlist. `DOCKER_SANDBOXES_PROXY=system` routes sandbox egress through the
   host OS proxy settings (macOS/Windows, PAC included); try it before widening
   `network_allow`. In `sbx policy log`, `origin: corporate policy` means
   `sbx policy allow` won't help.
+- **Published ports bind `127.0.0.1`** on the host, not every interface, so
+  a sandbox's apps are not reachable from your network.
 - **sbx's own errors reach you.** When an `sbx` call fails, sbxw shows what sbx
   said (including `Blocked by network policy` details and an organisation's
   support message) in the CLI and web UI.
@@ -37,9 +43,12 @@ The daemon listens twice, for two audiences:
 | **UI** (`web_addr`) | `127.0.0.1:7681` | Browser, island, extension | Everything, including every decision that moves information between sandboxes or starts work: routing a question, releasing an answer, approving or merging a plan, pairing a host, opening a terminal |
 | **Agent** (`agent_addr`) | `127.0.0.1:7682` | Sandboxes | Hooks, usage, relay requests, plan proposals and reports. Nothing that approves anything |
 
+Both addresses must be `IP:PORT` literals; a host name is refused.
+
 - sbxw's own network rule for a sandbox allows **only the agent port**. It
   does not remove a UI-port rule an older sbxw may have added, and a
-  `network_allow` entry you write is applied as written: check
+  `network_allow` entry that passes the load-time checks is applied as
+  written: check
   `sbx policy ls <name>` if in doubt.
 - **Every agent call carries the sandbox's token**: 256 bits, minted at
   bring-up, installed over stdin into `~/.sbxw/token` (mode `0600`), never on a
@@ -58,6 +67,10 @@ The daemon listens twice, for two audiences:
   are editable before release. A question is another agent's text arriving in
   your agent's prompt, so it's delivered quoted and labelled untrusted. Read it
   before routing. See [Relay](relay.md).
+- **Text typed into a terminal:** when one agent's text is typed into another
+  agent's terminal, control characters (ESC, CR, the other C0 and C1
+  characters) and bidi and zero-width format characters are removed first. The
+  text cannot end the paste and type keystrokes of its own.
 - **Screenshots:** nothing leaves until you attach it, to one named sandbox,
   after seeing a preview of every image. sbxw can't capture your screen; the
   browser's own picker asks each time. Refusing discards what was attached.
@@ -89,9 +102,11 @@ The daemon listens twice, for two audiences:
   privileged write is one you authorised, in a terminal or the macOS admin
   prompt. Off a terminal, `sudo` runs with `-n` and fails fast with the command
   to run instead.
-- The new `/etc/hosts` content is staged in a `0600` file under `~/.sbxw/state`
-  (opened `O_EXCL`, so a planted path fails) and copied in with `/bin/cp`, which
-  keeps `/etc/hosts` root-owned `644`.
+- The new `/etc/hosts` content is staged in a `0600` file in the system temp
+  directory (`sbxw-hosts-staged.<pid>`). Any file already at that path is
+  removed first and the new one is created `O_EXCL`, so a symlink planted there
+  is not followed. It is copied in with `/bin/cp`, which keeps `/etc/hosts`
+  root-owned `644`, and removed afterwards.
 
 ## Known edges
 
@@ -117,7 +132,10 @@ the agent can **propose but not perform**:
   temporary file is created under a random name that is never opened if it
   already exists.
 
-`sbx policy ls <name>` shows what a sandbox really has. To keep the config out
+The agent can still propose any single named host in `network_allow`; the
+load-time checks refuse only wildcards, malformed entries and the UI port.
+Read a changed `network_allow` before you run `sbxw up`. `sbx policy ls <name>`
+shows what a sandbox really has. To keep the config out
 of reach, store it outside the workspace and use `--config`. (`sbxw env export`
 writes beside the workspace for the same reason.)
 
