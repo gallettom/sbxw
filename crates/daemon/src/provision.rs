@@ -172,7 +172,7 @@ impl App {
             Some(p) => crate::store::grant_key(p),
             None => "(built-in defaults)".into(),
         });
-        if all.is_empty() && self.store.all_approved_grants().get(&key).is_none() {
+        if all.is_empty() && !self.store.all_approved_grants().contains_key(&key) {
             return Ok(());
         }
         self.store.check_grants(&key, &all, &all, approved_now)
