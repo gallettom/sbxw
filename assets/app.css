@@ -3864,7 +3864,10 @@
   .vc-launcher.ready .vc-l-mic { color: var(--c-green); }
   .vc-launcher.listening .vc-l-mic { color: var(--c-red); }
   .vc-launcher.busy .vc-l-mic { color: var(--c-text-muted); }
-  .vc-l-stop:not(:disabled) { color: var(--c-blue); }
+  /* The voice switch: blue while it reads, crossed out and dimmed when off. */
+  .vc-l-stop.vc-voice-reading { color: var(--c-blue); }
+  .vc-l-stop.vc-voice-off { opacity: .6; }
+  #vc-mute svg { display: block; }
   .vc-l-target {
     display: inline-flex; align-items: center;
     height: 22px; max-width: 14rem; padding: 0 .4rem; cursor: pointer;

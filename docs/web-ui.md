@@ -376,7 +376,7 @@ apart from the chat dock. From left to right:
 |---|---|
 | Microphone, green when voice is set up | Click to talk, click again to send; **F8**, held, does the same from the keyboard. Red while it listens |
 | Sandbox name, in blue | Where your words go. Click it to pick another running sandbox |
-| Speaker | Lit while something is read aloud: click to stop the reading |
+| Speaker | Turns the voice on and off. Blue while a message is read; crossed out when the voice is off. Click to stop the reading and mute; click again to hear the next messages (what was missed is not replayed) |
 | **Open** | Opens the panel under the bar (**Close** closes it): what was sent, agents' messages, errors |
 
 Rings leave the border while someone talks: blue when the voice reads, red
@@ -408,8 +408,10 @@ during the install). It needs a Mac with Apple Silicon and
 stays silent. A message is read a few sentences at a time, and the sound
 plays as it is made rather than once a batch is finished. Symbols are said
 in words (`>=`, `@`, `/`, a file name's dot…), in French for a French voice
-and in English for the others. 🔊 mutes it; talking
-again stops it. The voice is `[voice]
+and in English for the others. The speaker in the bar, or the same one in the
+panel's header, switches the voice off: nothing is read, the Concierge's own
+prompts included, until you switch it back on, and the choice is remembered
+in this browser. Talking stops the current reading without muting. The voice is `[voice]
 tts_voice`.
 
 What you dictate is masked before it goes anywhere: an e-mail address, a
