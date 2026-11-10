@@ -186,6 +186,28 @@ pub fn bracketed_paste_enabled(replay: &[u8]) -> bool {
     }
 }
 
+/// Would `c` act as more than text in a terminal, or hide what it says?
+/// C0 controls but `\n` and `\t` (ESC can close a bracketed paste and turn
+/// the rest into keystrokes, CR is Return), DEL, C1 controls (U+0080..U+009F,
+/// U+009B is a one-byte CSI), the Unicode line and paragraph separators, and
+/// the bidi and zero-width format characters that make text read differently
+/// from what it is.
+pub fn is_unsafe_typed_char(c: char) -> bool {
+    match c {
+        '\n' | '\t' => false,
+        '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' => true,
+        '\u{2028}' | '\u{2029}' | '\u{feff}' => true,
+        '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => true,
+        _ => false,
+    }
+}
+
+/// `text` without the characters of [`is_unsafe_typed_char`]: what may be
+/// typed into an agent's terminal, inside or outside paste markers.
+pub fn sanitize_typed(text: &str) -> String {
+    text.chars().filter(|c| !is_unsafe_typed_char(*c)).collect()
+}
+
 /// Is `text` a paste rather than typing? A newline, or a burst long enough
 /// that Claude Code coalesces it anyway.
 pub fn is_bulky(text: &str) -> bool {
@@ -270,6 +292,20 @@ mod tests {
         assert_eq!(strip_replay_side_effects(b"6n\x1b[6n"), b"6n".to_vec());
     }
 
+
+    #[test]
+    fn typed_text_loses_every_control_but_newline_and_tab() {
+        assert_eq!(sanitize_typed("ok\x1b[201~\r!id"), "ok[201~!id");
+        assert_eq!(sanitize_typed("a\tb\nc\r\n"), "a\tb\nc\n");
+        assert_eq!(sanitize_typed("\u{9b}201~\u{7f}\u{0}"), "201~");
+        assert_eq!(sanitize_typed("x\u{2028}y\u{2029}z\u{feff}"), "xyz");
+        assert_eq!(sanitize_typed("a\u{202e}b\u{2066}c\u{200b}d\u{200f}e"), "abcde");
+        let fr = "Déjà vu, garçon : « œuvre » à l'Hôtel, 1 000 € 👋🏽 🇫🇷 ❤️ 🚀";
+        assert_eq!(sanitize_typed(fr), fr);
+        // U+200D (zero-width joiner) is in the dropped range: a joined emoji
+        // falls apart into its parts, still readable.
+        assert_eq!(sanitize_typed("👩\u{200d}💻"), "👩💻");
+    }
 
     #[test]
     fn bracketed_paste_is_read_from_the_last_thing_the_app_said() {

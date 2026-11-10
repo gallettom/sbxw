@@ -77,6 +77,10 @@ pub async fn type_and_submit(session: &Arc<PtySession>, text: &str, fresh: bool)
     if !session.alive() {
         return Err("its Claude Code process is not running".into());
     }
+    // Text from another agent: an ESC could close the paste and turn the
+    // rest into keystrokes (a Return, a `!command`), so no control survives.
+    let text = terminal::sanitize_typed(text);
+    let text = text.as_str();
     let bulky = terminal::is_bulky(text);
     let bracketed = bulky && terminal::bracketed_paste_enabled(&session.replay());
     if bracketed {
@@ -127,6 +131,35 @@ mod tests {
             }
         }
         assert!(seen.contains("SUBMITTED[hello there]"), "{seen:?}");
+    }
+
+    /// What reaches the PTY: the fake TUI asks for bracketed paste, then
+    /// records every byte it reads, raw, into a file.
+    #[tokio::test]
+    async fn no_control_character_reaches_the_terminal() {
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("got");
+        let script = format!(
+            "stty raw -echo; printf '\\033[?2004hready> '; timeout --foreground 10 dd bs=1 of={} 2>/dev/null",
+            out.display()
+        );
+        let s = PtySession::spawn(Spawn { program: "sh".into(), args: vec!["-c".into(), script], env: vec![] }, 0, || {}).unwrap();
+        let text = format!("{}\x1b[201~\r!id\nDéjà vu 👋🏽", "x".repeat(250));
+        type_and_submit(&s, &text, true).await.unwrap();
+        let mut got = Vec::new();
+        for _ in 0..50 {
+            got = std::fs::read(&out).unwrap_or_default();
+            if got.ends_with(b"\r") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let body = &got[PASTE_START.len()..got.len() - PASTE_END.len() - 1];
+        assert!(got.starts_with(PASTE_START), "{:?}", String::from_utf8_lossy(&got));
+        assert!(got.ends_with(&[PASTE_END, b"\r"].concat()), "{:?}", String::from_utf8_lossy(&got));
+        assert!(!body.contains(&0x1b), "ESC inside the paste: {:?}", String::from_utf8_lossy(body));
+        assert!(!body.contains(&b'\r'), "CR inside the paste: {:?}", String::from_utf8_lossy(body));
+        assert!(String::from_utf8_lossy(body).ends_with("[201~!id\nDéjà vu 👋🏽"));
     }
 
     #[tokio::test]

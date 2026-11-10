@@ -9,8 +9,12 @@ use crate::plans::{Merge, Plan, PlanThread, ThreadState, Variant};
 use crate::relay::{RelayKind, RelayRequest, RelayState};
 
 /// Trim and cap text from an agent, keeping every line, and say so when cut.
+/// Controls and invisible format characters are dropped first
+/// ([`crate::terminal::sanitize_typed`]), so what a human reviews is exactly
+/// what is later typed.
 pub fn clip_text(text: &str, max: usize) -> String {
-    let trimmed = text.trim();
+    let clean = crate::terminal::sanitize_typed(text);
+    let trimmed = clean.trim();
     match trimmed.char_indices().nth(max) {
         None => trimmed.to_string(),
         Some((cut, _)) => format!("{}\n…[truncated by sbxw]", &trimmed[..cut]),
@@ -388,5 +392,12 @@ mod tests {
     fn agent_text_is_capped_without_splitting_a_character() {
         assert_eq!(clip_text("  é  ", 10), "é");
         assert_eq!(clip_text("ééé", 2), "éé\n…[truncated by sbxw]");
+    }
+
+    #[test]
+    fn agent_text_is_reviewed_as_it_will_be_typed() {
+        assert_eq!(clip_text("ok\x1b[201~\r!id", 100), "ok[201~!id");
+        assert_eq!(clip_text("a\u{202e}b\u{2028}c\tд", 100), "abc\tд");
+        assert_eq!(clip_text("Ça marche ✅", 100), "Ça marche ✅");
     }
 }
