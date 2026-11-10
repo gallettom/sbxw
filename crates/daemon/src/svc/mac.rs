@@ -530,7 +530,30 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         }
     }
 
+    /// One card per sandbox and kind of request: asking again while one is
+    /// open returns that one's id, so a sandbox cannot flood the person.
     fn mac_ask(&self, me: &SandboxRef, thread: Option<&ThreadName>, ask: Ask, reason: &str) -> Result<String, String> {
+        {
+            // A card that expired or was settled elsewhere is no longer open.
+            // Never both locks at once.
+            let ids: Vec<String> = self.mac.lock().unwrap().pending.keys().cloned().collect();
+            let closed: Vec<String> = {
+                let relay = self.relay.lock().unwrap();
+                ids.into_iter().filter(|id| !relay.get(id).is_some_and(|r| r.state == RelayState::Pending)).collect()
+            };
+            let mut rt = self.mac.lock().unwrap();
+            rt.pending.retain(|id, _| !closed.contains(id));
+            let open = rt.pending.iter().find(|(_, p)| &p.sandbox == me && std::mem::discriminant(&p.ask) == std::mem::discriminant(&ask));
+            if let Some((id, p)) = open {
+                if p.ask == ask {
+                    return Ok(id.clone());
+                }
+                let Ask::Port(other) = p.ask else { return Ok(id.clone()) };
+                return Err(format!(
+                    "port {other} is already waiting on the user (request {id}); one port request at a time. Pick up its outcome with check_sandbox_question, request_id \"{id}\", then ask again."
+                ));
+            }
+        }
         let req = self.relay_open(me, thread, RelayKind::Mac, &mac::approval_text(&ask, reason))?;
         self.mac.lock().unwrap().pending.insert(req.id.clone(), Pending { sandbox: me.clone(), ask });
         Ok(req.id)
@@ -1154,6 +1177,40 @@ esac
         app.mac_release_for(&sb("alpha")).await;
         assert!(app.mac_publish(&sb("alpha"), 4000).await.is_err());
         assert!(!fake_sbx.log().iter().any(|c| c.contains(":4000:4000")));
+    }
+
+    #[tokio::test]
+    async fn asking_again_while_a_card_is_open_opens_no_second_one() {
+        let (d, app) = app();
+        *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "stopped"));
+        let short = Duration::from_millis(50);
+        let first = app.mac_start_for(&sb("alpha"), None, "x", short).await.unwrap();
+        for _ in 0..5 {
+            assert_eq!(app.mac_start_for(&sb("alpha"), None, "again", short).await.unwrap(), first);
+        }
+        assert_eq!(app.relay_list().len(), 1, "one boot card for alpha");
+        app.mac_start_for(&sb("beta"), None, "x", short).await.unwrap();
+        assert_eq!(app.relay_list().len(), 2, "beta has its own");
+        // Refused: the next ask is a new card, not the settled one.
+        let id = app.relay_list().into_iter().find(|r| r.from == "alpha").unwrap().id;
+        app.relay_deny(&id, None).unwrap();
+        app.mac_start_for(&sb("alpha"), None, "x", short).await.unwrap();
+        assert_eq!(app.relay_list().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn one_port_card_at_a_time_per_sandbox() {
+        let (d, app) = app();
+        *app.mac_program_override.lock().unwrap() = Some(fake(d.path(), "running"));
+        *app.mac_guest_ip_override.lock().unwrap() = Some("192.168.64.1".into());
+        app.mac_start_for(&sb("alpha"), None, "x", Duration::from_secs(1)).await.unwrap();
+        let short = Duration::from_millis(50);
+        let a = app.mac_open_port_for(&sb("alpha"), None, 3000, "x", short).await.unwrap();
+        let b = app.mac_open_port_for(&sb("alpha"), None, 3000, "x", short).await.unwrap();
+        assert_eq!(a, b);
+        let e = app.mac_open_port_for(&sb("alpha"), None, 4000, "x", short).await.unwrap_err();
+        assert!(e.contains("already waiting"), "{e}");
+        assert_eq!(app.relay_list().len(), 1);
     }
 
     #[test]
