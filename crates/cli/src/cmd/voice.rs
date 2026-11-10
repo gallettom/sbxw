@@ -32,7 +32,11 @@ pub enum VoiceCmd {
 pub fn run(cmd: VoiceCmd, config: &Path) -> Result<()> {
     let cfg = load_config(config)?;
     let daemon = Daemon::new(&cfg.web_addr);
-    daemon.ensure(&sbxw_daemon::store::Paths::from_home(), &config_path(&cfg, config)?, false)?;
+    // The daemon may start with this file: its listeners and host command
+    // need the person's yes first, as for `sbxw up`.
+    let paths = sbxw_daemon::store::Paths::from_home();
+    super::approve_here(&sbxw_daemon::store::Store::open(paths.clone()), &cfg, super::Scope::Daemon, false)?;
+    daemon.ensure(&paths, &config_path(&cfg, config)?, false)?;
     match cmd {
         VoiceCmd::Status => print_status(&daemon.get("/api/voice")?),
         VoiceCmd::Install { yes } => {

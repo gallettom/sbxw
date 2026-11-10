@@ -262,7 +262,7 @@ fn template_choice(rebuild: bool) -> sbxw_core::templates::Choice {
 
 /// Which of a config's grants a command checks before it goes on.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Scope {
+pub(crate) enum Scope {
     /// What the daemon reads when it starts (`sbxw_core::consent::daemon_grants`).
     Daemon,
     /// Everything: a bring-up on this file.
@@ -305,7 +305,7 @@ fn ask_here(config: &str, grants: &[String], allow: bool) -> Result<Vec<String>>
 /// file, asking for the new ones, before the daemon is started with it or a
 /// bring-up is sent. The daemon checks again; this is where the person can
 /// be asked. A config with no file grants nothing.
-fn approve_here(store: &Store, cfg: &Config, scope: Scope, allow: bool) -> Result<()> {
+pub(crate) fn approve_here(store: &Store, cfg: &Config, scope: Scope, allow: bool) -> Result<()> {
     let Some(src) = &cfg.source else { return Ok(()) };
     let key = sbxw_daemon::store::grant_key(src);
     let all = sbxw_core::consent::grants(cfg);
