@@ -161,6 +161,9 @@ impl App {
             // sbxw.toml is the project's, so it is on the host, beside the code.
             req.config = remote_config(&host, &req.workspace).await?;
         }
+        // What later attaches run with, as the project wrote it (no base kit,
+        // no resolved paths): the file is not read again before the next `up`.
+        let snapshot = Box::new(req.config.clone());
         // sbxw's own kit (Node.js) first, on every sandbox: everything sbxw
         // runs inside one needs it, and sbx 0.51's image has none.
         req.config.kits = kits::with_base(&req.config.kits);
@@ -223,6 +226,7 @@ impl App {
                 r.remote_control = remote;
                 r.workspace = Some(req.workspace.clone());
                 r.config.clone_from(&cfg.source);
+                r.config_snapshot = Some(snapshot);
                 r.chat = req.chat;
                 // Reused, the sandbox keeps the mounts it was created with.
                 if !existed {
@@ -1244,13 +1248,18 @@ mod tests {
         let log = fake.log();
         let create = log.iter().find(|c| c.starts_with("create")).unwrap();
         assert!(create.contains("--kit /kits/codemap") && !create.contains("-oauth"), "sbx signs Claude in itself: {create}");
-        assert!(create.contains("-p 4200:4200"));
+        // `4200:4200`, with or without a host IP in front.
+        assert!(create.contains("4200:4200 ") || create.ends_with("4200:4200"), "{create}");
         assert!(create.contains("-e ANTHROPIC_DEFAULT_MODEL=claude-sonnet-5-5"));
         let allow = log.iter().find(|c| c.starts_with("policy allow")).unwrap();
         assert!(allow.contains("localhost:7682") && !allow.contains("localhost:7681"), "{allow}");
         assert!(ws.join(".sbxw-artifacts/README.md").exists());
         let rec = app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap());
         assert!(rec.token.is_some() && rec.workspace.as_deref() == Some(ws.as_path()));
+        // What later attaches run with, as the bring-up was given it.
+        let snap = rec.config_snapshot.as_deref().expect("a snapshot of the config");
+        assert_eq!(snap.kits, vec!["/kits/codemap".to_string()]);
+        assert_eq!(snap.ports, with_port().ports);
         let events = seen.lock().unwrap().join("\n");
         assert!(events.contains("\"kind\":\"plan\"") && events.contains("pulling image") && events.contains("\"kind\":\"done\""));
         // The token went into the sandbox on stdin, never on a command line.
@@ -1438,6 +1447,8 @@ mod tests {
         .unwrap();
         let mut app = Arc::try_unwrap(app).ok().unwrap();
         app.cfg.kits = vec![kit.to_string_lossy().into_owned()];
+        // The daemon's kits as read at start (see `App::daemon_kits`).
+        *app.daemon_kits.get_mut().unwrap() = app.cfg.kits.clone();
         let app = Arc::new(app);
         let offered = app.declared_host_mounts();
         assert_eq!(offered.len(), 1);

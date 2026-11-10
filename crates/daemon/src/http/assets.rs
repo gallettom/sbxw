@@ -85,21 +85,66 @@ pub fn routes() -> Router<Arc<App>> {
     r
 }
 
-/// The shell with its templated values baked in. Quotes are stripped from the
-/// monitor command rather than escaped: it lands in a JS string.
+/// The shell with its templated values baked in. Each placeholder in the
+/// inline config script stands for a whole JavaScript value, so it gets a
+/// complete string literal (see [`js_string`]): `monitor_cmd` and the colours
+/// come from an `sbxw.toml` an agent can write, and this page can open a
+/// terminal on the host.
 async fn index(State(app): State<Arc<App>>) -> impl IntoResponse {
-    let monitor = app.cfg.monitor_cmd.join(" ").replace(['"', '\\'], "");
     let initial = app.initial_sandbox.lock().unwrap().clone();
-    Html(
-        INDEX
-            .replace("__SANDBOX__", &initial)
-            .replace("__MONITOR__", &monitor)
-            .replace("__TERM_COLOR__", &app.cfg.terminal_color)
-            .replace("__TERM_BAR_COLOR__", &app.cfg.terminal_bar_color)
-            .replace("__TERM_TEXT_COLOR__", &app.cfg.terminal_text_color)
-            .replace("__SBXW_VERSION__", &app.versions.sbxw)
-            .replace("__SBX_VERSION__", app.versions.sbx.as_deref().unwrap_or("")),
+    Html(render_index(&app.cfg, &initial, &app.versions.sbxw, app.versions.sbx.as_deref().unwrap_or("")))
+}
+
+fn render_index(cfg: &sbxw_core::config::Config, initial: &str, sbxw: &str, sbx: &str) -> String {
+    let monitor = cfg.monitor_cmd.join(" ");
+    fill(
+        INDEX,
+        &[
+            ("__SANDBOX__", initial),
+            ("__MONITOR__", &monitor),
+            ("__TERM_COLOR__", &cfg.terminal_color),
+            ("__TERM_BAR_COLOR__", &cfg.terminal_bar_color),
+            ("__TERM_TEXT_COLOR__", &cfg.terminal_text_color),
+            ("__SBXW_VERSION__", sbxw),
+            ("__SBX_VERSION__", sbx),
+        ],
     )
+}
+
+/// One pass over the template, so a value that happens to contain another
+/// placeholder's name is never substituted a second time.
+fn fill(template: &str, vars: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    'outer: while let Some(i) = rest.find("__") {
+        for (name, value) in vars {
+            if rest[i..].starts_with(name) {
+                out.push_str(&rest[..i]);
+                out.push_str(&js_string(value));
+                rest = &rest[i + name.len()..];
+                continue 'outer;
+            }
+        }
+        out.push_str(&rest[..i + 2]);
+        rest = &rest[i + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A JavaScript string literal safe inside an HTML `<script>` element: JSON
+/// escaping, plus `<`, `>` and `&` (no `</script>` or `<!--`) and U+2028/U+2029
+/// (line terminators in older JS) as `\uXXXX`.
+fn js_string(s: &str) -> String {
+    let json = serde_json::to_string(s).expect("a string always serializes");
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        match c {
+            '<' | '>' | '&' | '\u{2028}' | '\u{2029}' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Framed by the extension beside the app being tested; only it (or sbxw)
@@ -115,6 +160,31 @@ async fn sidepanel() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_block(page: &str) -> &str {
+        let start = page.find("const INITIAL_SANDBOX").unwrap();
+        let end = start + page[start..].find("</script>").unwrap();
+        &page[start..end]
+    }
+
+    #[test]
+    fn a_hostile_monitor_cmd_stays_inside_its_string() {
+        let cfg = sbxw_core::config::Config {
+            monitor_cmd: vec!["x</script><script>alert(1)".into(), "\"\n\u{2028}&".into()],
+            terminal_color: "\";</script><script>alert(2)//".into(),
+            ..Default::default()
+        };
+        let page = render_index(&cfg, "__MONITOR__", "1.0", "");
+        let block = config_block(&page);
+        assert!(!block.contains("<script"), "{block}");
+        assert!(!block.contains('\u{2028}'));
+        assert!(block.contains(r#"const MONITOR_CMD = "x\u003c/script\u003e\u003cscript\u003ealert(1) \"\n\u2028\u0026";"#), "{block}");
+        // A value naming another placeholder is not substituted again.
+        assert!(block.contains(r#"const INITIAL_SANDBOX = "__MONITOR__";"#), "{block}");
+        assert!(block.contains(r#"const SBX_VERSION  = "";"#), "{block}");
+        assert!(!page.contains("__SANDBOX__") && !page.contains("__TERM_COLOR__"));
+        assert!(page.contains("const MONITOR_SANDBOX = '__host__';"));
+    }
 
     #[test]
     fn the_shell_loads_every_script_it_names() {

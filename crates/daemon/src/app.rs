@@ -67,6 +67,11 @@ pub struct App {
     /// Kits `sbx kit add` left waiting for a person's approval, per sandbox,
     /// in the order they came: what a `kit-add` pane runs, first one first.
     pub(crate) kit_approvals: Mutex<HashMap<SandboxRef, Vec<String>>>,
+    /// The daemon config's `kits`, read once at start and changed only by
+    /// the Kits dialog's own write: the file usually sits in a workspace an
+    /// agent can write, and a kit planted there must not reach the next
+    /// sandbox the web UI creates.
+    pub(crate) daemon_kits: Mutex<Vec<String>>,
     /// `caffeinate`, the battery and who is on Remote Control.
     pub(crate) awake: Mutex<crate::svc::awake::Awake>,
     /// Remote hosts acted on so far, each with its link (see `remotes`).
@@ -102,6 +107,7 @@ impl AppBuilder {
     pub fn build(self) -> Arc<App> {
         let store = Store::open(self.paths);
         let plans = load_plans(&store.paths.plans());
+        let daemon_kits = Mutex::new(self.cfg.kits.clone());
         Arc::new(App {
             store,
             sbx: self.sbx,
@@ -127,6 +133,7 @@ impl AppBuilder {
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
             kit_approvals: Mutex::new(HashMap::new()),
+            daemon_kits,
             awake: Mutex::new(Default::default()),
             remotes: Mutex::new(HashMap::new()),
             ssh_program: Mutex::new("ssh".into()),
@@ -160,31 +167,15 @@ fn load_plans(dir: &Path) -> Vec<Plan> {
 }
 
 impl App {
-    /// The config a sandbox was brought up with, or the daemon's. Read each
-    /// time: an edited `env` reaches the agent on its next attach. A remote
-    /// sandbox's is the `sbxw.toml` in its workspace on the host; an absent
-    /// file or an unreachable host gives the daemon's (the host's error
-    /// surfaces where the caller reaches for the host).
+    /// The config a sandbox was brought up with: the snapshot its last
+    /// bring-up recorded, never a fresh read of its `sbxw.toml`. The agent
+    /// can edit that file; an edit takes effect only when a person next runs
+    /// `sbxw up`. A record from before snapshots, or none at all, gets the
+    /// daemon's own config. Local and remote sandboxes alike.
     pub async fn config_for(&self, sb: impl Into<sbxw_core::SandboxRef>) -> Config {
-        let sb = sb.into();
-        if !sb.is_local() {
-            let Some(ws) = self.store.workspace(&sb) else { return self.cfg.clone() };
-            let read = async { crate::provision::read_remote_config(&self.host_for(&sb).await?, &ws).await };
-            return match read.await {
-                Ok(Some(c)) => c,
-                Ok(None) => self.cfg.clone(),
-                Err(e) => {
-                    tracing::warn!("{sb}: {e:#} — using the daemon's config");
-                    self.cfg.clone()
-                }
-            };
-        }
-        let path = self.store.get(sb).config.filter(|p| p.exists());
-        match path {
-            Some(p) => Config::load(&p, Path::new("/")).unwrap_or_else(|e| {
-                tracing::warn!("{}: {e:#} — using the daemon's config", p.display());
-                self.cfg.clone()
-            }),
+        let rec = self.store.get(sb.into());
+        match rec.config_snapshot {
+            Some(c) => Config { source: rec.config, ..*c },
             None => self.cfg.clone(),
         }
     }

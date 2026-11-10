@@ -22,15 +22,13 @@ struct Users {
 }
 
 impl App {
-    /// The config the daemon started with, `kits` read again from the file: the
-    /// Kits dialog may have rewritten them, and a sandbox the web UI creates
-    /// must get what the dialog shows. Only `kits`; the rest (listeners, models)
-    /// is what the daemon runs with.
+    /// The config the daemon started with, `kits` as the Kits dialog last
+    /// set them: a sandbox the web UI creates gets what the dialog shows. Never
+    /// read again from the file, which an agent may be able to write; the rest
+    /// (listeners, models) is what the daemon runs with.
     pub fn daemon_config(&self) -> Config {
         let mut cfg = self.cfg.clone();
-        if let Some(fresh) = cfg.source.as_deref().and_then(|p| Config::load(p, Path::new("/")).ok()) {
-            cfg.kits = fresh.kits;
-        }
+        cfg.kits = self.daemon_kits.lock().unwrap().clone();
         cfg
     }
 
@@ -105,7 +103,7 @@ impl App {
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
         let next = kits::set_kits_line(&raw, list.as_deref()).with_context(|| format!("{} is not valid TOML", path.display()))?;
-        Config::parse(&next).context("the new kits line")?;
+        let parsed = Config::parse(&next).context("the new kits line")?;
 
         let mut warnings = Vec::new();
         let dir = path.parent().unwrap_or(Path::new("/"));
@@ -119,6 +117,10 @@ impl App {
         if next != raw {
             write_in_place(path, &next)?;
             tracing::info!("web UI: kits of {} set to {:?}", path.display(), list);
+        }
+        if users.daemon {
+            // As `Config::load` resolves them, from what was just written.
+            *self.daemon_kits.lock().unwrap() = parsed.kits.into_iter().map(|k| kits::resolve_kit_ref(dir, k)).collect();
         }
         if !users.sandboxes.is_empty() {
             warnings.push(format!(
@@ -136,13 +138,39 @@ impl App {
 /// crash never leaves half a config, with its permissions kept. Not
 /// [`crate::store::write_atomic`], which closes the directory to 0700 — right
 /// for sbxw's state, wrong for a project folder.
+///
+/// The directory is the agent's to write, so nothing in it is trusted: a
+/// destination that is a symlink is refused, and the temporary file has a
+/// random name and is created with `create_new`, which never opens an existing
+/// file and never follows a symlink planted under that name (`O_CREAT|O_EXCL`
+/// fails on one, POSIX).
 fn write_in_place(path: &Path, text: &str) -> Result<()> {
-    let tmp = path.with_file_name(format!(".{}.sbxw-tmp", path.file_name().and_then(|n| n.to_str()).unwrap_or("sbxw.toml")));
-    std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    use std::io::Write;
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!("{} is a symlink: sbxw does not write through it", path.display());
     }
-    std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("sbxw.toml");
+    let tmp = path.with_file_name(format!(".{name}.{}.sbxw-tmp", sbxw_core::ids::random_hex(8)));
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut open, 0o600);
+    let mut file = open.open(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+    let written = (|| -> Result<()> {
+        file.write_all(text.as_bytes())?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()?;
+        Ok(())
+    })()
+    .with_context(|| format!("writing {}", tmp.display()));
+    drop(file);
+    let done = written.and_then(|()| std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display())));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
 }
 
 #[cfg(test)]
@@ -176,5 +204,59 @@ mod tests {
 
         app.set_kits(&cfg, None).unwrap();
         assert!(!std::fs::read_to_string(&cfg).unwrap().contains("kits"));
+    }
+
+    use sbxw_core::config::Config;
+    use std::path::Path;
+
+    #[test]
+    fn the_daemons_kits_change_only_through_the_dialog() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("sbxw.toml");
+        std::fs::write(&file, "kits = [\"sbxw:codemap\"]\n").unwrap();
+        let mut cfg = Config::load(&file, Path::new("/")).unwrap();
+        cfg.source = Some(file.clone());
+        let app = crate::app::AppBuilder {
+            paths: crate::store::Paths::under(d.path()),
+            cfg,
+            sbx: sbxw_sbx::Sbx::new(sbxw_sbx::runner::Fake::new(sbx_answer)),
+            hosts: crate::hostsys::for_tests(&d.path().join("hosts")),
+            use_api_key: true,
+            sbx_version: Some("0.51.0".into()),
+        }
+        .build();
+        assert_eq!(app.daemon_config().kits, vec!["sbxw:codemap".to_string()]);
+
+        // An agent edits the file: the next web UI sandbox does not see it.
+        std::fs::write(&file, "kits = [\"./planted\"]\n").unwrap();
+        assert_eq!(app.daemon_config().kits, vec!["sbxw:codemap".to_string()]);
+
+        // The dialog's write is the one way in, resolved as a load would.
+        app.set_kits(&file, Some(vec!["sbxw:retro".into(), "./mine".into()])).unwrap();
+        let mine = d.path().join("mine").to_string_lossy().into_owned();
+        assert_eq!(app.daemon_config().kits, vec!["sbxw:retro".to_string(), mine]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_config_is_refused_and_its_target_untouched() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("victim");
+        std::fs::write(&target, "precious").unwrap();
+        let link = d.path().join("sbxw.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(super::write_in_place(&link, "kits = []\n").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious");
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+
+        // The old fixed temp name, planted as a symlink, is not followed.
+        let real = d.path().join("real.toml");
+        std::fs::write(&real, "old\n").unwrap();
+        std::os::unix::fs::symlink(&target, d.path().join(".real.toml.sbxw-tmp")).unwrap();
+        super::write_in_place(&real, "new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new\n");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious");
+        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 4, "no temporary file left behind: {left:?}");
     }
 }

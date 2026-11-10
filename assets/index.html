@@ -1626,10 +1626,10 @@
 </div>
 
 <script>
-const INITIAL_SANDBOX = "__SANDBOX__";
+const INITIAL_SANDBOX = __SANDBOX__;
 // The host monitor is one fixed command from sbxw.toml (`monitor_cmd`); with
 // none configured there is nothing to open, so the button never appears.
-const MONITOR_CMD = "__MONITOR__";
+const MONITOR_CMD = __MONITOR__;
 // Pseudo-sandbox the monitor session is filed under, host-side. Underscores
 // can't occur in a real sandbox name, so it can never shadow one.
 const MONITOR_SANDBOX = '__host__';
@@ -1638,14 +1638,14 @@ const MONITOR_SANDBOX = '__host__';
 // into the page it serves is the whole truth for as long as the tab lives.
 // `SBX_VERSION` is empty when `sbx version` printed something no version could
 // be read out of — a display is not worth guessing over (see sbx::version).
-const SBXW_VERSION = "__SBXW_VERSION__";
-const SBX_VERSION  = "__SBX_VERSION__";
+const SBXW_VERSION = __SBXW_VERSION__;
+const SBX_VERSION  = __SBX_VERSION__;
 // `terminal_color`, `terminal_bar_color` and `terminal_text_color` from
 // sbxw.toml, `#rrggbb` (text also `auto`; checked at load) or empty for the
 // built-in ones. The header's picker overrides them per browser.
-const TERM_COLOR_CONFIG = "__TERM_COLOR__";
-const TERM_BAR_COLOR_CONFIG = "__TERM_BAR_COLOR__";
-const TERM_TEXT_COLOR_CONFIG = "__TERM_TEXT_COLOR__";
+const TERM_COLOR_CONFIG = __TERM_COLOR__;
+const TERM_BAR_COLOR_CONFIG = __TERM_BAR_COLOR__;
+const TERM_TEXT_COLOR_CONFIG = __TERM_TEXT_COLOR__;
 </script>
 <!-- Every other script — xterm.js and the app itself — is loaded by
      singleton.js, and only once it decides this tab should actually boot

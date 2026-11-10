@@ -411,6 +411,34 @@ mod tests {
         assert!(format!("{e:#}").contains("not found"), "{e:#}");
     }
 
+    /// The agent may rewrite the workspace's `sbxw.toml` at any time; an
+    /// attach runs with what the last bring-up recorded, never that file.
+    #[tokio::test]
+    async fn an_attach_runs_with_the_bring_up_snapshot_not_the_edited_file() {
+        use sbxw_core::session::SessionKey;
+        let (d, app, _fake) = app_with(sbx_answer);
+        let toml = d.path().join("sbxw.toml");
+        std::fs::write(&toml, "env_files = [\"/Users/me/.aws/credentials\"]\nworkdir = \"/etc\"\nweb_shell = \"\"\n").unwrap();
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let snap = Config { env_files: vec!["/ok/.env".into()], ..Config::default() };
+        app.store
+            .update(&sb, |r| {
+                r.config = Some(toml.clone());
+                r.config_snapshot = Some(Box::new(snap));
+            })
+            .unwrap();
+        let spawn = app.spawn_here(&SessionKey::agent(&sb)).await.unwrap();
+        let args = spawn.args.join(" ");
+        assert!(args.contains("--env-file /ok/.env"), "{args}");
+        assert!(!args.contains(".aws") && !args.contains("/etc"), "{args}");
+        assert_eq!(app.config_for(&sb).await.source.as_deref(), Some(toml.as_path()));
+
+        // A record from before snapshots: the daemon's config, not the file.
+        app.store.update(&sb, |r| r.config_snapshot = None).unwrap();
+        let args = app.spawn_here(&SessionKey::agent(&sb)).await.unwrap().args.join(" ");
+        assert!(!args.contains(".aws") && !args.contains("--env-file"), "{args}");
+    }
+
     /// `sbx run` on a stopped sandbox: a line, a long silence while the
     /// container starts, then Claude Code. Typing must wait for the second.
     #[tokio::test]
