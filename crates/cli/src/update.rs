@@ -464,7 +464,7 @@ fn island_gone_within(tries: u32) -> bool {
 fn latest_release_tag() -> Result<String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
     let out = std::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-        .args(["-fsSL", &url])
+        .args(["--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fsSL", &url])
         .output()
         .context("failed to run curl — is it installed?")?;
     if !out.status.success() {
@@ -514,7 +514,7 @@ fn target_os_arch() -> Result<(&'static str, &'static str)> {
 
 fn curl_download(url: &str, dest: &std::path::Path) -> Result<()> {
     let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-        .args(["-fsSL", url, "-o"])
+        .args(["--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fsSL", url, "-o"])
         .arg(dest)
         .status()
         .context("failed to run curl — is it installed?")?;
