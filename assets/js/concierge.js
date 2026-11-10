@@ -495,7 +495,7 @@ vcEl('vc-new').addEventListener('click', vcReset);
 // one request to /api/voice/speak. The answer is raw sound that arrives as it
 // is made (16-bit mono PCM): each piece is scheduled right behind the last
 // one, so the voice starts before the batch is finished and batches follow
-// each other without a gap. Muting (🔇, remembered per browser) keeps the
+// each other without a gap. Muting (the speaker, remembered per browser) keeps the
 // text and skips the sound; talking again stops the voice at once.
 const VC_MUTE = 'sbxw-concierge-mute';
 const vcSpeech = (() => {
@@ -666,14 +666,39 @@ const vcSpeech = (() => {
   };
 })();
 
+// The voice switch: the speaker in the bar and the one in the panel are two
+// controls for one state (`vcSpeech.muted`, remembered per browser), drawn
+// by one function. Off: nothing is read until it is switched back on, and
+// what was missed meanwhile is not replayed. On: the next message is read.
 const vcMuteBtn = vcEl('vc-mute');
-function vcRenderMute() {
-  vcMuteBtn.textContent = vcSpeech.muted ? '🔇' : '🔊';
-  vcMuteBtn.title = vcSpeech.muted ? 'Voice off — click to hear replies' : 'Voice on — click to mute';
-  vcMuteBtn.setAttribute('aria-pressed', String(vcSpeech.muted));
+const VC_SVG = inner => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/>${inner}</svg>`;
+const VC_ICON_ON = VC_SVG('<path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>');
+const VC_ICON_OFF = VC_SVG('<path d="m16 9 6 6M22 9l-6 6"/>');
+function vcRenderVoice() {
+  const off = vcSpeech.muted;
+  const reading = !off && vcLauncher.classList.contains('speaking');
+  const label = off ? 'Voice off: click to hear replies'
+    : reading ? 'Reading aloud: click to stop and mute'
+    : 'Voice on: click to mute';
+  for (const b of [vcStopBtn, vcMuteBtn]) {
+    const icon = off ? 'off' : 'on';
+    if (b.dataset.icon !== icon) { b.innerHTML = off ? VC_ICON_OFF : VC_ICON_ON; b.dataset.icon = icon; }
+    b.classList.toggle('vc-voice-off', off);
+    b.classList.toggle('vc-voice-reading', reading);
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.setAttribute('aria-pressed', String(!off));
+  }
 }
-vcMuteBtn.addEventListener('click', () => { vcSpeech.toggle(); vcRenderMute(); });
-vcRenderMute();
+function vcToggleVoice() {
+  // Muting stops the reading (toggle calls stop); unmuting loads the voice,
+  // as opening the panel does, so the next message starts sooner.
+  if (!vcSpeech.toggle()) vcWarm(true);
+  vcRenderVoice();
+}
+vcMuteBtn.addEventListener('click', vcToggleVoice);
+vcStopBtn.addEventListener('click', vcToggleVoice);
+vcRenderVoice();
 
 // ── Wiring ───────────────────────────────────────────────────────────────
 function vcSetOpen(open) {
@@ -707,12 +732,10 @@ vcMic.addEventListener('click', () => {
   if (vcRec && !vcRec.dest) vcStop();
   else if (!vcRec && !vcBusy) vcStart();
 });
-// The speaker in the bar: lit while something is read aloud, a click stops it.
-vcStopBtn.addEventListener('click', () => vcSpeech.stop());
+// Something is read aloud: rings on the bar, the speaker lit.
 function vcSpeaking(on) {
   vcLauncher.classList.toggle('speaking', on);
-  vcStopBtn.disabled = !on;
-  vcStopBtn.title = on ? 'Stop reading aloud' : 'Nothing is being read aloud';
+  vcRenderVoice();
 }
 vcEl('vc-close').addEventListener('click', () => vcSetOpen(false));
 
