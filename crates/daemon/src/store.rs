@@ -180,6 +180,12 @@ pub struct SandboxRecord {
     /// The `sbxw.toml` it was brought up with — its `env`, model and policy.
     #[serde(default)]
     pub config: Option<PathBuf>,
+    /// That config as it was parsed at the last bring-up: what every later
+    /// attach, thread and panel runs with. The file itself is the agent's to
+    /// edit, so it is never read again until a person runs `sbxw up`. `None`
+    /// for a record older than this field: the daemon's config stands in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_snapshot: Option<Box<sbxw_core::config::Config>>,
     /// A throwaway chat sandbox: its workspace is deleted with it.
     #[serde(default)]
     pub chat: bool,
@@ -459,6 +465,7 @@ impl Store {
         SandboxRecord {
             workspace,
             config: None,
+            config_snapshot: None,
             chat,
             token: None,
             mounts: vec![],
