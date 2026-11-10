@@ -80,15 +80,18 @@ checks), `crates/daemon/src/svc/mac.rs` (running terminal-mac, approvals),
 
 | Tool | What it does |
 |---|---|
-| `mac_start` | Takes the lease. A stopped VM needs your approval first; a paused one resumes without asking. |
+| `mac_start` | Takes the lease. Starting, creating or resuming the VM needs your approval first, and so does lending a running VM that sbxw did not start or resume itself. Later leases on a VM sbxw brought up need none. |
 | `mac_open_port` | Publishes one of the sandbox's ports where the guest can reach it, after your approval, and returns the URL to open **in the guest**. |
 | `mac_screenshot` | The guest's screen, inline in the tool result and saved in the workspace as `.sbxw-artifacts/mac-shots/mac-*.png` (the newest 40), which the Project panel opens on. `~/.sbxw/shots/` if the workspace cannot be written. |
 | `mac_click`, `mac_move`, `mac_drag`, `mac_scroll`, `mac_type`, `mac_key` | Input in the guest. `screenshot: true` returns the result in the same call. |
 | `mac_status`, `mac_release` | Where it stands; let go. |
 
-A call from a sandbox that does not hold the lease takes it if it is free, and
-is refused if another sandbox holds it. A lease nobody uses lapses after
-`idle_release_minutes`.
+A call from a sandbox that does not hold the lease takes it if it is free and
+sbxw brought the VM up (or you approved lending it), and is refused if another
+sandbox holds it. A lease nobody uses lapses after `idle_release_minutes`. One
+sandbox holds it for 60 minutes at most in one go: after that, another sandbox
+that asks takes it over. Releasing and taking it again at once does not reset
+those 60 minutes.
 
 The daemon never writes into a sandbox: the screenshot travels in the reply
 and the sandbox's MCP server writes the file, as with
@@ -96,9 +99,15 @@ and the sandbox's MCP server writes the file, as with
 
 ## Your side
 
-- **Approval cards.** A sandbox asking to boot the VM, or to publish a port,
+- **Approval cards.** A sandbox asking to boot, create or resume the VM, to
+  be lent a VM you started yourself, or to publish a port,
   opens a *Virtual Mac request* in the browser popup and the Island. The card
-  says what will happen first, then quotes the agent's reason. **Approve** runs
+  says what will happen first (for a VM that does not exist yet: that macOS is
+  downloaded, several GB). Then, in a paragraph of its own headed *Reason given
+  by* the sandbox, comes the agent's reason, with its line breaks and control
+  characters removed and cut at 300 characters, so it cannot pass for sbxw's
+  words. **Setup → Mac** lists the same cards with the reason in its own
+  block. **Approve** runs
   it, and the agent is told what came of it (the URL, or the error). **Refuse**
   starts nothing.
 - **No approval for clicks and typing.** The guest is disposable and shared;
@@ -162,8 +171,20 @@ terminal-mac (your own install, or a fake in tests).
   work, and follow your organisation's software approval process.
 - **The guest is shared** by every sandbox that has the kit. Never sign it in
   to a personal or organisation account, and never put secrets in it.
+- **The guest has its own internet access**, through the VM's NAT on the
+  host. The sandbox's network allowlist does not govern it. A sandbox holding
+  the Mac can open any site in the guest's browser and read the pages back
+  through screenshots, including sites its own allowlist blocks. Enable the
+  kit only where that is acceptable.
 - **A published port is reachable on the VM bridge** (`192.168.64.x`), not on
-  your LAN.
+  your LAN. It is removed when the lease of the sandbox that asked for it ends
+  (released, lapsed, taken over, taken back, or the sandbox stopped or
+  removed), and with the VM when it stops. The next sandbox to hold the Mac
+  cannot open it.
+- **A VM you started yourself is not lent without asking.** The first lease
+  on a running VM that sbxw did not start or resume needs your approval, and
+  so does resuming a paused VM. Sign out of anything personal before you
+  approve.
 
 ## Acceptance checklist
 
@@ -194,3 +215,12 @@ item has to pass before the feature is called done.
    `sbx ports`. A shutdown still in `stopping` 3 minutes later is forced.
 9. The Island shows the card with **Approve** and **Refuse** (its Swift
    changes were not compiled in the sandbox that wrote them).
+10. After item 6, `mac_release`: port 5173 disappears from `sbx ports` at
+    once. Publish it again and stop the sandbox instead: within a minute the
+    lease is free and the port is gone.
+11. With the VM paused, `mac_start` opens a *Resume* card. Start the VM
+    yourself (`terminal-mac start default`) and restart the daemon:
+    `mac_start` opens a card saying sbxw did not start it, and a click before
+    that is refused.
+12. A card whose reason holds line breaks shows it on one line under
+    *Reason given by*, in the Island, the popup and **Setup → Mac**.

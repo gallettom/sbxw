@@ -65,7 +65,8 @@ function renderMac() {
   const lead = `<p class="help-lead">A real macOS guest, run on this Mac by
     <a href="https://github.com/govijr/terminal-mac" target="_blank" rel="noopener">terminal-mac</a>,
     that sandboxes with the <code>sbxw:terminal-mac</code> kit can drive: Safari, Mac apps, native windows.
-    One sandbox at a time. A boot or a published port needs your yes; clicks and typing do not.</p>`;
+    One sandbox at a time, for an hour at most when another asks. Starting, resuming,
+    lending a VM sbxw did not start, and publishing a port need your yes; clicks and typing do not.</p>`;
   if (!m.supported) {
     macBody.innerHTML = `<div class="mac-card">${macPill('off', 'not available')}
       <p class="mac-card-note">The virtual Mac needs an Apple silicon Mac (macOS 14 or later). This host is not one, so the <code>mac_*</code> tools say so and do nothing.</p></div>`;
@@ -119,6 +120,19 @@ function renderMac() {
     <div class="mac-actions">${acts.join('')}<span class="mac-actions-end">${end.join('')}</span></div>
   </div>`);
 
+  // Cards waiting on you. sbxw's sentence and the sandbox's reason arrive as
+  // separate fields and are shown apart, so a reason cannot pass for sbxw's words.
+  if (m.pending?.length) {
+    rows.push(`<div class="mac-card mac-card-warn">
+      <div class="mac-card-head"><span class="mac-card-title">Waiting on you</span></div>
+      ${m.pending.map(p => `
+        <p class="mac-card-note"><strong>${escHtml(p.action)}</strong></p>
+        ${p.reason
+          ? `<div class="relay-section-label">Reason given by ${escHtml(p.sandbox)} (its own words, not checked by sbxw)</div>
+             <pre class="relay-quote">${escHtml(p.reason)}</pre>`
+          : `<p class="mac-card-note">${escHtml(p.sandbox)} gave no reason.</p>`}`).join('')}
+      <p class="mac-card-note">Approve or refuse each on its <em>Virtual Mac request</em> card.</p></div>`);
+  }
   if (m.state === 'missing') {
     rows.push(`<p class="repo-note">Starting creates the VM: macOS is downloaded from Apple (several GB) and installed, then you finish its setup once.</p>`);
   }

@@ -11,10 +11,13 @@
 //!   disk that grows to 64 GiB, so every sandbox shares one, and a sandbox
 //!   holds a *lease* while it drives it. The lease lapses after
 //!   `idle_release_minutes` without a call.
-//! * **A person approves what costs or exposes something**: booting the VM,
-//!   and publishing a port for the guest's browser. Clicks and keys need no
-//!   approval: the guest is disposable, with no personal or organisation
-//!   account in it.
+//! * **A person approves what costs or exposes something**: booting or
+//!   resuming the VM, lending a VM sbxw did not bring up itself (the person
+//!   may be signed in to it), and publishing a port for the guest's browser.
+//!   Clicks and keys on a VM sbxw brought up need no approval: the guest is
+//!   disposable, with no personal or organisation account in it.
+//! * **No sandbox keeps it for good.** After `MAX_HOLD_MINUTES` of one
+//!   sandbox holding it, another that asks takes it over.
 //! * **Shut down normally first, force as a last resort.** terminal-mac
 //!   0.2.0-6's normal stop was seen to leave the guest `stopping` for good
 //!   (at the login screen, and with a session open), keeping its RAM. So a
@@ -26,6 +29,12 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// How long one sandbox may hold the VM in one go. Past it, the lease is
+/// still its own until another sandbox asks, which then takes it over. Next
+/// to `MacSettings::idle_release_minutes`, which ends a lease nobody uses.
+pub const MAX_HOLD_MINUTES: u64 = 60;
+pub const MAX_HOLD_MS: u64 = MAX_HOLD_MINUTES * 60_000;
 
 pub struct Release {
     pub version: &'static str,
@@ -238,6 +247,18 @@ pub struct MacBook {
     /// may manage its lifecycle. A VM the person started themselves is
     /// theirs until a sandbox has used it.
     pub managed: bool,
+    /// This daemon booted or resumed the VM, or a person approved lending
+    /// the one that was already running. Until then no lease is granted
+    /// without a card: a VM the person started may hold their session.
+    pub ours: bool,
+    /// The last lease released, so a holder cannot reset its hold time by
+    /// releasing and taking the VM again at once.
+    pub last_released: Option<Lease>,
+    /// Sandboxes whose lease ended (released, lapsed, taken over, taken
+    /// back, or the VM stopped) since the daemon last looked. Whatever they
+    /// published for the guest must go with the lease, or the next holder
+    /// could open their app in the guest's browser.
+    pub ended: Vec<String>,
 }
 
 impl MacBook {
@@ -251,15 +272,33 @@ impl MacBook {
             l.last_ms = now;
             return Acquire::Granted;
         }
-        self.lease = Some(Lease { holder: who.to_string(), since_ms: now, last_ms: now });
+        // A lapsed lease of someone else's ends here, taken over.
+        if let Some(old) = self.lease.take() {
+            self.ended.push(old.holder);
+        }
+        // Taken again straight after letting go: the same hold goes on.
+        let since_ms = match &self.last_released {
+            Some(r) if r.holder == who && now.saturating_sub(r.last_ms) < idle_ms => r.since_ms,
+            _ => now,
+        };
+        self.lease = Some(Lease { holder: who.to_string(), since_ms, last_ms: now });
         self.idle_since_ms = None;
         self.managed = true;
         Acquire::Granted
     }
 
-    /// The live lease that would refuse `who`, without taking anything.
+    /// The live lease that would refuse `who`, without taking anything. A
+    /// lease idle for `idle_ms`, or held for `MAX_HOLD_MS`, refuses nobody.
     pub fn held_by_other(&self, who: &str, now: u64, idle_ms: u64) -> Option<&Lease> {
-        self.lease.as_ref().filter(|l| l.holder != who && now.saturating_sub(l.last_ms) < idle_ms)
+        self.lease
+            .as_ref()
+            .filter(|l| l.holder != who && now.saturating_sub(l.last_ms) < idle_ms && now.saturating_sub(l.since_ms) < MAX_HOLD_MS)
+    }
+
+    /// When a lease that refuses others now will stop refusing them, at the
+    /// latest (its hold bound; idling ends it sooner).
+    pub fn free_by(l: &Lease) -> u64 {
+        l.since_ms.saturating_add(MAX_HOLD_MS)
     }
 
     pub fn holder(&self) -> Option<&str> {
@@ -271,7 +310,11 @@ impl MacBook {
         if self.holder() != Some(who) {
             return false;
         }
-        self.lease = None;
+        if let Some(mut l) = self.lease.take() {
+            self.ended.push(l.holder.clone());
+            l.last_ms = now;
+            self.last_released = Some(l);
+        }
         self.idle_since_ms = Some(now);
         true
     }
@@ -280,6 +323,7 @@ impl MacBook {
     pub fn force_release(&mut self, now: u64) -> Option<String> {
         let l = self.lease.take()?;
         self.idle_since_ms = Some(now);
+        self.ended.push(l.holder.clone());
         Some(l.holder)
     }
 
@@ -292,12 +336,15 @@ impl MacBook {
         let l = self.lease.take()?;
         // Idle since the last call, not since the expiry noticed it.
         self.idle_since_ms = Some(l.last_ms);
+        self.ended.push(l.holder.clone());
         Some(l.holder)
     }
 
-    /// sbxw just booted the VM: it is managed, idle from now.
+    /// sbxw just booted or resumed the VM, or a person approved lending it:
+    /// it is managed and lent without a card, idle from now.
     pub fn booted(&mut self, now: u64) {
         self.managed = true;
+        self.ours = true;
         if self.lease.is_none() {
             self.idle_since_ms = Some(now);
         }
@@ -305,9 +352,34 @@ impl MacBook {
 
     /// The VM went away (stopped, by sbxw or anyone): nobody holds it.
     pub fn stopped(&mut self) {
-        self.lease = None;
+        if let Some(l) = self.lease.take() {
+            self.ended.push(l.holder);
+        }
         self.idle_since_ms = None;
         self.managed = false;
+        self.ours = false;
+        self.last_released = None;
+    }
+
+    /// The sandboxes whose lease ended since the last call, each once.
+    pub fn take_ended(&mut self) -> Vec<String> {
+        let mut v = std::mem::take(&mut self.ended);
+        v.dedup();
+        v
+    }
+
+    /// The card a sandbox's `mac_start` must open before it gets the VM in
+    /// `state`, if one; `None` when it can be lent now. Starting, stopping
+    /// and unknown states are the caller's to answer.
+    pub fn approval_needed(&self, state: VmState) -> Option<Ask> {
+        match state {
+            VmState::Running if self.ours => None,
+            VmState::Running => Some(Ask::Lend),
+            VmState::Paused => Some(Ask::Resume),
+            VmState::Missing => Some(Ask::Create),
+            VmState::Stopped | VmState::Unknown => Some(Ask::Boot),
+            VmState::Starting | VmState::Stopping => None,
+        }
     }
 
     /// What the lifecycle rules want done to a VM in `state`, now.
@@ -463,25 +535,81 @@ pub fn check_guest_port(port: u64) -> Result<u16, String> {
     }
 }
 
-/// The text a person reads on the approval card. The agent's reason is
-/// untrusted and goes last, quoted.
-pub fn approval_text(what: &Ask, reason: &str) -> String {
-    let head = match what {
+/// A reason longer than this is cut: a card is read at a glance.
+pub const MAX_REASON: usize = 300;
+
+/// The agent's reason, made safe to show beside sbxw's own words: no control
+/// characters, line breaks or bidirectional overrides (so it cannot start a
+/// paragraph of its own, or reorder what is shown), runs of white space as one
+/// space, at most `MAX_REASON` characters. Still untrusted text: escape it.
+pub fn clean_reason(raw: &str) -> String {
+    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{061c}');
+    let mut out = String::new();
+    for word in raw.split(|c: char| c.is_whitespace() || c.is_control() || bidi(c)).filter(|w| !w.is_empty()) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    match out.char_indices().nth(MAX_REASON) {
+        Some((i, _)) => format!("{}…", &out[..i]),
+        None => out,
+    }
+}
+
+/// What a person reads on an approval card: sbxw's sentence on what
+/// approving does, and apart from it, the agent's reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Approval {
+    /// sbxw's own words.
+    pub action: String,
+    /// The sandbox's words, cleaned (`clean_reason`); `None` when it gave none.
+    pub reason: Option<String>,
+}
+
+impl Approval {
+    /// The relay request's text: the action, then the reason in a paragraph
+    /// of its own that says whose words they are.
+    pub fn question(&self, sandbox: &str) -> String {
+        match &self.reason {
+            Some(r) => format!("{}\n\nReason given by {sandbox} (its own words, not checked by sbxw): {r}", self.action),
+            None => self.action.clone(),
+        }
+    }
+}
+
+/// The approval card for `what`.
+pub fn approval(what: &Ask, reason: &str) -> Approval {
+    let action = match what {
         Ask::Boot => "Start the virtual Mac (terminal-mac). It reserves several GB of RAM until it is paused or stopped.".to_string(),
+        Ask::Create => "Create a new virtual Mac (terminal-mac): there is none yet, so approving downloads macOS from Apple (several GB) and installs it, then the VM reserves several GB of RAM until it is paused or stopped. You finish its setup once, in its window.".to_string(),
+        Ask::Resume => "Resume the paused virtual Mac (terminal-mac) and lend it to this sandbox, which can then click, type and take screenshots in it.".to_string(),
+        Ask::Lend => "Lend the running virtual Mac to this sandbox. sbxw did not start it, so whatever is open or signed in there becomes visible to the sandbox, which can click, type and take screenshots in it.".to_string(),
         Ask::Port(p) => format!("Publish this sandbox's port {p} on the host's VM bridge, so the virtual Mac's browser can open it."),
     };
-    let reason = reason.trim();
-    if reason.is_empty() {
-        head
-    } else {
-        format!("{head}\n\nThe agent says: \"{reason}\"")
-    }
+    let reason = clean_reason(reason);
+    Approval { action, reason: (!reason.is_empty()).then_some(reason) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
+    /// Start a stopped VM.
     Boot,
+    /// No VM yet: create one, downloading macOS.
+    Create,
+    /// Resume a paused VM.
+    Resume,
+    /// Lend a running VM this daemon did not bring up.
+    Lend,
     Port(u16),
+}
+
+impl Ask {
+    /// The asks that bring the VM to a sandbox share one card slot per
+    /// sandbox; a port has its own.
+    pub fn brings_the_vm(&self) -> bool {
+        !matches!(self, Ask::Port(_))
+    }
 }
 
 /// Standard base64 with padding: a screenshot travels to the sandbox as the
@@ -590,6 +718,83 @@ mod tests {
     }
 
     #[test]
+    fn every_way_a_lease_ends_names_its_holder_once() {
+        let mut b = MacBook::default();
+        b.acquire("a", 0, 10 * MIN);
+        b.acquire("a", MIN, 10 * MIN);
+        assert!(b.take_ended().is_empty(), "a refresh ends nothing");
+        assert!(b.release("a", 2 * MIN));
+        assert_eq!(b.take_ended(), ["a"], "released");
+        assert!(b.take_ended().is_empty(), "drained");
+
+        b.acquire("a", 3 * MIN, 10 * MIN);
+        b.expire(20 * MIN, 10 * MIN);
+        assert_eq!(b.take_ended(), ["a"], "lapsed");
+
+        b.acquire("a", 30 * MIN, 10 * MIN);
+        assert_eq!(b.acquire("b", 45 * MIN, 10 * MIN), Acquire::Granted);
+        assert_eq!(b.take_ended(), ["a"], "lapsed, then taken over before the tick noticed");
+
+        b.force_release(46 * MIN);
+        assert_eq!(b.take_ended(), ["b"], "taken back by a person");
+
+        b.acquire("c", 47 * MIN, 10 * MIN);
+        b.stopped();
+        assert_eq!(b.take_ended(), ["c"], "the VM went away");
+
+        assert!(!b.release("c", 48 * MIN));
+        assert!(b.take_ended().is_empty(), "a release of nothing ends nothing");
+    }
+
+    #[test]
+    fn no_sandbox_keeps_the_vm_past_its_hold_when_another_asks() {
+        let mut b = MacBook::default();
+        let idle = 10 * MIN;
+        // a keeps busy: never idle, a call every few minutes.
+        for t in (0..MAX_HOLD_MINUTES).step_by(5) {
+            assert_eq!(b.acquire("a", t * MIN, idle), Acquire::Granted);
+            if t + 5 < MAX_HOLD_MINUTES {
+                assert!(matches!(b.acquire("b", t * MIN + 1, idle), Acquire::Busy(_)));
+            }
+        }
+        assert_eq!(b.acquire("a", MAX_HOLD_MINUTES * MIN, idle), Acquire::Granted, "nobody else asked: still a's");
+        assert_eq!(b.acquire("b", MAX_HOLD_MINUTES * MIN + 1, idle), Acquire::Granted, "b waited: past a's hold, b takes it");
+        assert_eq!(b.take_ended(), ["a"]);
+        assert!(matches!(b.acquire("a", MAX_HOLD_MINUTES * MIN + 2, idle), Acquire::Busy(_)), "b's own hold starts now");
+    }
+
+    #[test]
+    fn releasing_and_taking_it_again_does_not_reset_the_hold() {
+        let mut b = MacBook::default();
+        b.acquire("a", 0, 10 * MIN);
+        b.acquire("a", 55 * MIN, 10 * MIN);
+        b.release("a", 55 * MIN);
+        b.acquire("a", 56 * MIN, 10 * MIN);
+        assert_eq!(b.lease.as_ref().unwrap().since_ms, 0);
+        assert_eq!(b.acquire("b", 61 * MIN, 10 * MIN), Acquire::Granted);
+        // Back after a real break: a fresh hold.
+        b.release("b", 62 * MIN);
+        b.acquire("b", 80 * MIN, 10 * MIN);
+        assert_eq!(b.lease.as_ref().unwrap().since_ms, 80 * MIN);
+    }
+
+    #[test]
+    fn only_a_running_vm_sbxw_brought_up_is_lent_without_a_card() {
+        let mut b = MacBook::default();
+        assert_eq!(b.approval_needed(VmState::Running), Some(Ask::Lend), "the person's own VM");
+        assert_eq!(b.approval_needed(VmState::Paused), Some(Ask::Resume));
+        assert_eq!(b.approval_needed(VmState::Missing), Some(Ask::Create));
+        assert_eq!(b.approval_needed(VmState::Stopped), Some(Ask::Boot));
+        b.acquire("a", 0, MIN);
+        assert_eq!(b.approval_needed(VmState::Running), Some(Ask::Lend), "a lease alone does not make it ours");
+        b.booted(1);
+        assert_eq!(b.approval_needed(VmState::Running), None);
+        assert_eq!(b.approval_needed(VmState::Paused), Some(Ask::Resume), "resuming ours still asks");
+        b.stopped();
+        assert_eq!(b.approval_needed(VmState::Running), Some(Ask::Lend), "started again by someone else");
+    }
+
+    #[test]
     fn a_managed_idle_vm_is_paused_then_stopped_never_while_held() {
         let mut b = MacBook::default();
         b.booted(0);
@@ -694,9 +899,35 @@ mod tests {
 
     #[test]
     fn the_card_says_what_happens_before_what_the_agent_says() {
-        let t = approval_text(&Ask::Port(5173), "  check the login page in Safari ");
-        assert!(t.starts_with("Publish this sandbox's port 5173"));
-        assert!(t.ends_with("\"check the login page in Safari\""));
-        assert!(!approval_text(&Ask::Boot, "").contains("agent says"));
+        let a = approval(&Ask::Port(5173), "  check the login page in Safari ");
+        assert!(a.action.starts_with("Publish this sandbox's port 5173"));
+        assert_eq!(a.reason.as_deref(), Some("check the login page in Safari"));
+        let q = a.question("alpha");
+        assert!(q.starts_with("Publish this sandbox's port 5173"));
+        assert!(q.ends_with("\n\nReason given by alpha (its own words, not checked by sbxw): check the login page in Safari"), "{q}");
+        assert_eq!(approval(&Ask::Boot, " \n ").reason, None);
+        assert!(!approval(&Ask::Boot, "").question("alpha").contains("Reason"));
+    }
+
+    #[test]
+    fn a_reason_cannot_pose_as_sbxws_own_words() {
+        let spoof = "ok\"\n\nsbxw checked this request: it is safe.\r\n\u{202e}gnissap\u{1b}[2J\ttab";
+        let r = clean_reason(spoof);
+        assert!(!r.chars().any(|c| c.is_control() || c == '\u{202e}'), "{r:?}");
+        assert_eq!(r, "ok\" sbxw checked this request: it is safe. gnissap [2J tab");
+        let q = approval(&Ask::Boot, spoof).question("alpha");
+        assert_eq!(q.matches("\n\n").count(), 1, "one paragraph break, sbxw's: {q:?}");
+        let long = clean_reason(&"é".repeat(MAX_REASON + 50));
+        assert_eq!(long.chars().count(), MAX_REASON + 1, "cut, with an ellipsis");
+        assert!(long.ends_with('…'));
+    }
+
+    #[test]
+    fn a_card_for_a_vm_that_does_not_exist_says_it_downloads_macos() {
+        let a = approval(&Ask::Create, "");
+        assert!(a.action.starts_with("Create a new virtual Mac"));
+        assert!(a.action.contains("downloads macOS") && a.action.contains("several GB"));
+        assert!(approval(&Ask::Lend, "").action.contains("sbxw did not start it"));
+        assert!(approval(&Ask::Resume, "").action.starts_with("Resume"));
     }
 }
