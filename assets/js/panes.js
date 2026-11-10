@@ -259,6 +259,79 @@ function createPane(index) {
 
 let oscCopyFailed = false;
 
+// ── An OSC 52 copy, offered rather than done ─────────────────────────────
+// What a sandbox prints is the agent's, so it does not write the host
+// clipboard on its own: a toast names the sandbox and the size, shows the
+// start of the text with its control characters made visible, and copies
+// only when Copy is clicked. One offer at a time; a newer one replaces it.
+const OSC_COPY_MAX = 100 * 1024;
+const OSC_PREVIEW_CHARS = 80;
+let oscOffer = null;
+
+const oscSize = n => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(1)} KB`);
+
+// Newlines, tabs, C0/C1 controls, DEL and the bidi and zero-width marks are
+// shown as visible marks, so the preview is what will be pasted.
+function oscPreview(text) {
+  const shown = [...text.slice(0, OSC_PREVIEW_CHARS * 2)].slice(0, OSC_PREVIEW_CHARS).map(c => {
+    const n = c.codePointAt(0);
+    if (c === '\n') return '↵';
+    if (c === '\r') return '␍';
+    if (c === '\t') return '⇥';
+    if (n < 0x20) return String.fromCodePoint(0x2400 + n);
+    if (n === 0x7f) return '␡';
+    if ((n >= 0x80 && n <= 0x9f) || (n >= 0x200b && n <= 0x200f) || (n >= 0x202a && n <= 0x202e)
+        || (n >= 0x2066 && n <= 0x2069) || n === 0xfeff) return '�';
+    return c;
+  }).join('');
+  return [...text].length > OSC_PREVIEW_CHARS ? shown + '…' : shown;
+}
+
+function offerOscCopy(sandbox, text) {
+  if (oscOffer) oscOffer.remove();
+  const bytes = new TextEncoder().encode(text).length;
+  const box = document.createElement('div');
+  box.className = 'paste-toast show';
+  box.setAttribute('role', 'alertdialog');
+  // .paste-toast is a passive one-liner; this one takes clicks and wraps.
+  Object.assign(box.style, {
+    bottom: '120px', pointerEvents: 'auto', whiteSpace: 'normal',
+    flexDirection: 'column', alignItems: 'stretch', maxWidth: 'min(520px, 90vw)',
+  });
+  const head = document.createElement('div');
+  head.textContent = `${sandbox || 'A sandbox'} wants to copy ${oscSize(bytes)} to your clipboard:`;
+  const preview = document.createElement('code');
+  preview.textContent = oscPreview(text);
+  Object.assign(preview.style, { whiteSpace: 'pre-wrap', wordBreak: 'break-all', opacity: '.85' });
+  const row = document.createElement('div');
+  Object.assign(row.style, { display: 'flex', gap: '.45rem', justifyContent: 'flex-end' });
+  const no = document.createElement('button');
+  no.className = 'btn-cancel';
+  no.textContent = 'Dismiss';
+  const yes = document.createElement('button');
+  yes.className = 'btn-cancel';
+  yes.textContent = 'Copy';
+  row.append(no, yes);
+  box.append(head, preview, row);
+
+  const close = () => { clearTimeout(timer); box.remove(); if (oscOffer === box) oscOffer = null; };
+  const timer = setTimeout(close, 30000);
+  no.addEventListener('click', close);
+  yes.addEventListener('click', () => {
+    close();
+    copyQuiet(text).then(ok => {
+      if (ok) { showToast(`Copied ${oscSize(bytes)} from ${sandbox || 'the sandbox'}`, 'ok'); return; }
+      // Once per tab: the reason is the address the page was opened on or the
+      // browser's rules, and neither changes between one copy and the next.
+      if (oscCopyFailed) return;
+      oscCopyFailed = true;
+      showToast('The browser refused a clipboard copy from the sandbox', 'error');
+    });
+  });
+  document.body.append(box);
+  oscOffer = box;
+}
+
 // Builds a fresh xterm Terminal (+ addons) into `pane.termEl` and points
 // pane.term/pane.fit at it. Called once from createPane, and again from
 // recreatePaneTerminal() on an existing pane — so every wire-up here must
@@ -272,6 +345,14 @@ function setupTerminal(pane) {
     // it, so the terminal and its tile stay one colour, not two.
     theme: termTheme(),
     scrollback: 10000,
+    // OSC 8 hyperlinks are the sandbox's: only web links open, in a tab
+    // that cannot reach back to this page.
+    linkHandler: {
+      allowNonHttpProtocols: false,
+      activate: (_e, uri) => {
+        if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer');
+      },
+    },
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -297,6 +378,9 @@ function setupTerminal(pane) {
   // Writes only. The read form (`52;c;?`) replies down the PTY, handing
   // whatever the user is carrying — a password out of a manager, say — to any
   // program that asks for it, or to any file that happens to be `cat`ed.
+  //
+  // And a write is only offered: the agent prints it, the person clicks Copy
+  // (`offerOscCopy`). Silently, any `cat`ed file could fill the clipboard.
   // ── A repaint must not take the selection away ──────────────────────────
   // xterm clears the selection every time the program re-declares its mouse
   // mode: `CoreMouseService`'s `activeProtocol` setter fires `onProtocolChange`
@@ -328,6 +412,11 @@ function setupTerminal(pane) {
   term.parser.registerOscHandler(52, payload => {
     const b64 = payload.slice(payload.indexOf(';') + 1);
     if (!b64 || b64 === '?') return true;
+    // Measured before decoding: base64 is 4 characters per 3 bytes.
+    if (b64.length > Math.ceil(OSC_COPY_MAX / 3) * 4) {
+      showToast(`${pane.sandbox || 'A sandbox'} tried to copy ${oscSize(Math.floor(b64.length * 3 / 4))} to the clipboard: more than ${oscSize(OSC_COPY_MAX)}, dropped`, 'error');
+      return true;
+    }
     let text = '';
     try {
       // base64 → bytes → UTF-8. `atob` alone stops at Latin-1 and would turn
@@ -336,13 +425,9 @@ function setupTerminal(pane) {
     } catch (_) {
       return true; // Malformed payload: handled, and nothing to copy.
     }
-    if (text) copyQuiet(text).then(ok => {
-      // Once per tab: the reason is the address the page was opened on or the
-      // browser's rules, and neither changes between one copy and the next.
-      if (ok || oscCopyFailed) return;
-      oscCopyFailed = true;
-      showToast('The browser refused a clipboard copy from the sandbox', 'error');
-    });
+    // The text is the sandbox's: it reaches the clipboard only on the
+    // person's click, never by the sandbox printing it.
+    if (text) offerOscCopy(pane.sandbox, text);
     return true;
   });
   term.onData(data => {
