@@ -206,21 +206,12 @@ fn derive_name(store: &Store, workspace: &Path) -> SandboxName {
 /// The address to open sbxw at: its sign-in form (`/?t=<token>`) once the
 /// daemon proved it knows the token, the bare page otherwise.
 fn web_url(daemon: &Daemon, cfg: &Config, sandbox: Option<&str>) -> String {
-    let port = cfg.web_port();
-    let host = if ports_is_loopback(&cfg.web_addr) {
-        format!("http://sbxw.localhost:{port}")
-    } else {
-        crate::client::base_url(&cfg.web_addr)
-    };
+    let host = crate::client::browser_url(&cfg.web_addr);
     let page = match sandbox {
         Some(s) => format!("{host}/#sandbox={s}"),
         None => host,
     };
     daemon.sign_in_url(&page).unwrap_or(page)
-}
-
-fn ports_is_loopback(addr: &str) -> bool {
-    sbxw_core::ports::ip_of(addr).starts_with("127.")
 }
 
 /// The aliases a bring-up wants, written here — in the terminal, the one

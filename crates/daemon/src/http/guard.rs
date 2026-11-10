@@ -87,12 +87,23 @@ pub async fn ui_guard(State(app): State<Arc<App>>, req: Request, next: Next) -> 
         return ApiError::forbidden(why).into_response();
     }
     let ours = |t: &str| sbxw_core::ids::same_secret(t, &app.ui_token);
-    let signed_in = presented_token(h).is_some_and(|t| ours(&t));
+    // On loopback the cookie lives at `sbxw.localhost:<port>` only: a cookie
+    // is scoped to a host name, not a port, and sandbox apps are published
+    // on `127.0.0.1` and `localhost`, where a dev server would read it.
+    let host = host.unwrap_or("").to_ascii_lowercase();
+    let cookie_host = cookie_host(&app.cfg.web_addr);
+    let cookie_here = cookie_host.as_deref().is_none_or(|c| c == host);
+    let signed_in = presented_token(h, cookie_here).is_some_and(|t| ours(&t));
     let get = req.method() == Method::GET;
     let path = req.uri().path();
     if get && path == "/" {
         if let Some(t) = query_value(req.uri().query(), "t") {
             let fresh = ours(t);
+            if fresh && !cookie_here {
+                // Same sign-in, at the one name the cookie may be set for.
+                let to = format!("http://{}/?{}", cookie_host.unwrap_or_default(), req.uri().query().unwrap_or(""));
+                return (StatusCode::SEE_OTHER, [(header::LOCATION, to), (header::CACHE_CONTROL, "no-store".into())]).into_response();
+            }
             if fresh || signed_in {
                 return sign_in(fresh.then_some(app.ui_token.as_str()), req.uri().query());
             }
@@ -128,14 +139,28 @@ pub async fn ui_guard(State(app): State<Arc<App>>, req: Request, next: Next) -> 
     }
 }
 
-/// The token a request presents: `Authorization: Bearer`, or the cookie.
-fn presented_token(h: &HeaderMap) -> Option<String> {
+/// The only `Host` a browser signs in at, when the daemon is on loopback
+/// (`127.*`): `sbxw.localhost:<port>`. `None` for any other bind (a LAN
+/// address, every interface): the cookie is then set for whatever name the
+/// browser used, as there is no name of sbxw's own to give it.
+pub fn cookie_host(web_addr: &str) -> Option<String> {
+    ports::ip_of(web_addr)
+        .starts_with("127.")
+        .then(|| format!("{}:{}", ports::WEB_HOSTNAME, ports::port_of(web_addr)))
+}
+
+/// The token a request presents: `Authorization: Bearer`, or the cookie when
+/// `cookie` (it arrived at the host it may be set for).
+fn presented_token(h: &HeaderMap, cookie: bool) -> Option<String> {
     let bearer = h
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::trim);
     let cookie = || {
+        if !cookie {
+            return None;
+        }
         h.get_all(header::COOKIE)
             .iter()
             .filter_map(|v| v.to_str().ok())
@@ -171,8 +196,8 @@ const SIGN_IN_PAGE: &str = r#"<!doctype html>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:34em;margin:4em auto;padding:0 1em}code{background:#8882;padding:.1em .3em;border-radius:3px}</style></head>
 <body>
 <h1>Open sbxw from a terminal</h1>
-<p>Run <code>sbxw web</code> (or <code>sbxw web &lt;sandbox&gt;</code>). It opens this page signed in.</p>
-<p>The sign-in address changes each time the sbxw daemon starts, so a tab left open from before needs it again.</p>
+<p>Run <code>sbxw web</code> (or <code>sbxw web &lt;sandbox&gt;</code>). It prints a sign-in address: open it in this browser.</p>
+<p>The address changes each time the sbxw daemon starts, so a tab left open from before needs the new one.</p>
 </body>
 </html>
 "#;

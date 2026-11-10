@@ -30,9 +30,18 @@ pub fn app_in(dir: &Path) -> Arc<App> {
 }
 
 fn build(dir: &Path, fake: Arc<Fake>) -> Arc<App> {
+    build_with(dir, fake, Config::default())
+}
+
+/// An `App` on `dir` with its own daemon config.
+pub fn app_with_config(dir: &Path, cfg: Config) -> Arc<App> {
+    build_with(dir, Fake::new(sbx_answer), cfg)
+}
+
+fn build_with(dir: &Path, fake: Arc<Fake>, cfg: Config) -> Arc<App> {
     AppBuilder {
         paths: Paths::under(dir),
-        cfg: Config::default(),
+        cfg,
         sbx: Sbx::new(fake),
         hosts: hostsys::for_tests(&dir.join("hosts")),
         use_api_key: true,

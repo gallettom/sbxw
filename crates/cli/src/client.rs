@@ -47,6 +47,20 @@ pub fn base_url(web_addr: &str) -> String {
     format!("http://{host}:{}", ports::port_of(web_addr))
 }
 
+/// The address a *browser* uses for the daemon. On loopback, and on a bind to
+/// every interface, it is `http://sbxw.localhost:<port>`: the browser keeps the
+/// UI cookie for a host name, not a port, and sandbox apps are published on
+/// `127.0.0.1` and `localhost`, where their dev server would receive it. A
+/// daemon on another address is reached there.
+pub fn browser_url(web_addr: &str) -> String {
+    let ip = ports::ip_of(web_addr);
+    if ip.is_empty() || ip.starts_with("127.") || ip == "0.0.0.0" || ip == "::" {
+        format!("http://{}:{}", ports::WEB_HOSTNAME, ports::port_of(web_addr))
+    } else {
+        base_url(web_addr)
+    }
+}
+
 /// `page` with `?t=<token>` before its fragment.
 fn with_token(page: &str, t: &str) -> String {
     let (before, fragment) = page.split_once('#').map_or((page, None), |(b, f)| (b, Some(f)));
@@ -320,6 +334,14 @@ mod tests {
         assert!(seen[0].starts_with("GET /api/health?nonce=") && !seen[0].contains("sbxw_ui_secret"), "{seen:?}");
         assert!(seen[1].starts_with("GET /api/state") && seen[1].to_ascii_lowercase().contains("authorization: bearer sbxw_ui_secret"), "{seen:?}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_browser_uses_sbxw_localhost_unless_the_daemon_is_elsewhere() {
+        assert_eq!(browser_url("127.0.0.1:7681"), "http://sbxw.localhost:7681");
+        assert_eq!(browser_url("0.0.0.0:7700"), "http://sbxw.localhost:7700");
+        assert_eq!(browser_url("192.168.1.9:7681"), "http://192.168.1.9:7681");
+        assert_eq!(browser_url("[::1]:7681"), "http://[::1]:7681");
     }
 
     #[test]

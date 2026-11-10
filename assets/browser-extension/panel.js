@@ -34,7 +34,7 @@ async function start() {
     const { daemon: saved } = await chrome.storage.local.get('daemon');
     if (saved) daemon = saved;
   } catch (_) {}
-  daemonOrigin = new URL(daemon).origin;
+  daemonOrigin = signedInOrigin(daemon);
   frameReady = false;
   // An opaque answer is enough to know sbxw is listening; an unreachable
   // daemon would otherwise be a blank iframe with no explanation.
@@ -47,6 +47,18 @@ async function start() {
   down.hidden = true;
   frame.hidden = false;
   frame.src = `${daemonOrigin}/sidepanel`;
+}
+
+// The daemon's UI cookie is set for `sbxw.localhost` only (a cookie follows
+// a host name, not a port, and sandbox apps are published on 127.0.0.1 and
+// localhost). An address saved before that, on either name, is reached at
+// sbxw.localhost on the same port, or the panel would never be signed in.
+function signedInOrigin(address) {
+  const u = new URL(address);
+  if (u.protocol === 'http:' && (u.hostname === '127.0.0.1' || u.hostname === 'localhost')) {
+    u.hostname = 'sbxw.localhost';
+  }
+  return u.origin;
 }
 
 function showDown() {

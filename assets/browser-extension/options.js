@@ -18,7 +18,7 @@ document.getElementById('form').addEventListener('submit', async e => {
     if (!/^https?:$/.test(u.protocol)) throw new Error();
     origin = u.origin;
   } catch (_) {
-    note.textContent = 'An address like http://127.0.0.1:7681';
+    note.textContent = 'An address like http://sbxw.localhost:7681';
     return;
   }
   // The default is stored as "nothing", so a later `sbxw extension` with a new

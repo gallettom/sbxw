@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const HOST: &str = "127.0.0.1:7681";
+/// The one name a browser signs in at, on a loopback daemon.
+const SIGN_IN_HOST: &str = "sbxw.localhost:7681";
 
 async fn call(router: axum::Router, req: Request<Body>) -> (StatusCode, Value) {
     let res = router.oneshot(req).await.unwrap();
@@ -343,7 +345,7 @@ async fn without_the_ui_token_nothing_but_the_sign_in_answers() {
 #[tokio::test]
 async fn the_bearer_or_the_cookie_passes_a_wrong_token_does_not() {
     let (_d, app) = app();
-    let with = |name: &str, value: String| Request::builder().uri("/api/state").header("host", HOST).header(name, value).body(Body::empty()).unwrap();
+    let with = |name: &str, value: String| Request::builder().uri("/api/state").header("host", SIGN_IN_HOST).header(name, value).body(Body::empty()).unwrap();
     let t = app.ui_token.clone();
     assert_eq!(call(ui_router(app.clone()), with("authorization", format!("Bearer {t}"))).await.0, StatusCode::OK);
     assert_eq!(call(ui_router(app.clone()), with("cookie", format!("theme=dark; sbxw_ui={t}"))).await.0, StatusCode::OK);
@@ -355,15 +357,21 @@ async fn the_bearer_or_the_cookie_passes_a_wrong_token_does_not() {
     assert_eq!(call(ui_router(app.clone()), with("authorization", format!("Bearer {}", app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap()))).await.0, StatusCode::UNAUTHORIZED, "an agent token is not a UI token");
     // The WebSocket with the cookie gets past the guard (the upgrade itself
     // needs a real connection, which a oneshot is not).
-    let ws = ws_upgrade(Request::builder().header("cookie", format!("sbxw_ui={t}")));
+    let ws = ws_upgrade(Request::builder().header("cookie", format!("sbxw_ui={t}")).header("host", SIGN_IN_HOST));
     assert_ne!(call(ui_router(app.clone()), ws).await.0, StatusCode::UNAUTHORIZED);
+    // The cookie counts only at the name it is set for: one that reached a
+    // `127.0.0.1` or `localhost` address was not set by sbxw.
+    for host in [HOST, "localhost:7681"] {
+        let req = Request::builder().uri("/api/state").header("host", host).header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
+        assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::UNAUTHORIZED, "{host}");
+    }
 }
 
 #[tokio::test]
 async fn the_sign_in_address_sets_the_cookie_and_drops_the_token() {
     let (_d, app) = app();
     let t = app.ui_token.clone();
-    let get = |uri: String| Request::builder().uri(uri).header("host", HOST).body(Body::empty()).unwrap();
+    let get = |uri: String| Request::builder().uri(uri).header("host", SIGN_IN_HOST).body(Body::empty()).unwrap();
     let res = ui_router(app.clone()).oneshot(get(format!("/?t={t}"))).await.unwrap();
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let h = res.headers();
@@ -378,8 +386,19 @@ async fn the_sign_in_address_sets_the_cookie_and_drops_the_token() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     assert!(res.headers().get("set-cookie").is_none());
 
+    // At 127.0.0.1 or localhost, where sandbox apps are published: no
+    // cookie, only the same sign-in at sbxw.localhost.
+    for host in [HOST, "localhost:7681"] {
+        let req = Request::builder().uri(format!("/?t={t}&a=1")).header("host", host).body(Body::empty()).unwrap();
+        let res = ui_router(app.clone()).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "{host}");
+        assert!(res.headers().get("set-cookie").is_none(), "{host}");
+        assert_eq!(res.headers()["location"].to_str().unwrap(), format!("http://sbxw.localhost:7681/?t={t}&a=1"));
+        assert_eq!(res.headers()["cache-control"], "no-store");
+    }
+
     // Signed in, the page itself.
-    let page = Request::builder().uri("/").header("host", HOST).header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
+    let page = Request::builder().uri("/").header("host", SIGN_IN_HOST).header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
     let res = ui_router(app.clone()).oneshot(page).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = String::from_utf8(axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap().to_vec()).unwrap();
@@ -401,4 +420,27 @@ async fn health_proves_the_daemon_knows_the_token_without_showing_it() {
     // Signed in, the full answer.
     let (_, v) = call(signed_in(app.clone()), get(format!("/api/health?nonce={nonce}"))).await;
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn off_loopback_the_cookie_is_set_for_the_name_the_browser_used() {
+    let d = tempfile::tempdir().unwrap();
+    let cfg = sbxw_core::config::Config { web_addr: "0.0.0.0:7681".into(), ..Default::default() };
+    let app = crate::testing::app_with_config(d.path(), cfg);
+    let t = app.ui_token.clone();
+    let req = Request::builder().uri(format!("/?t={t}")).header("host", "192.168.1.9:7681").body(Body::empty()).unwrap();
+    let res = ui_router(app.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(res.headers()["set-cookie"].to_str().unwrap().starts_with("sbxw_ui="));
+    let req = Request::builder().uri("/api/state").header("host", "192.168.1.9:7681").header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
+    assert_eq!(call(ui_router(app), req).await.0, StatusCode::OK);
+}
+
+#[test]
+fn the_cookie_name_is_sbxw_localhost_on_loopback_only() {
+    use super::guard::cookie_host;
+    assert_eq!(cookie_host("127.0.0.1:7681").as_deref(), Some("sbxw.localhost:7681"));
+    assert_eq!(cookie_host("127.0.0.1:7700").as_deref(), Some("sbxw.localhost:7700"));
+    assert_eq!(cookie_host("0.0.0.0:7681"), None);
+    assert_eq!(cookie_host("192.168.1.9:7681"), None);
 }
