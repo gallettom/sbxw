@@ -38,6 +38,10 @@
   const slug = (parts) => parts.join('--').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'section';
 
+  // A heading's element id: prefixed, so a map's heading cannot take the id
+  // of one of the page's own elements. Section ids stay unprefixed.
+  const headingId = (id) => `cm-${id}`;
+
   // Blank out fenced blocks only. Inline code is left in place: a heading may
   // legitimately contain a `code span`, and blanking it renames the section —
   // along with every link that addresses it.
@@ -247,7 +251,11 @@
   function renderSpans(text, ctx) {
     let s = escapeHtml(text);
     s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,
-      (_, label, href) => `<a class="cm-ext" href="${href}" target="_blank" rel="noreferrer">${label}</a>`);
+      // Only web links are clickable: `javascript:` or a custom protocol
+      // handler in a map the agent wrote stays text.
+      (m, label, href) => /^https?:\/\//i.test(href)
+        ? `<a class="cm-ext" href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
+        : m);
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     return s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
   }
@@ -279,7 +287,7 @@
         chain.length = Math.max(0, level - 1);
         chain[level - 1] = title;
         const id = slug(chain.slice(0, level).filter(Boolean));
-        out.push(`<h${level} id="${id}" class="cm-h">${renderInline(title, ctx)}</h${level}>`);
+        out.push(`<h${level} id="${headingId(id)}" class="cm-h">${renderInline(title, ctx)}</h${level}>`);
         i++;
         continue;
       }
@@ -744,7 +752,7 @@
     renderSide(doc);
     renderFileList();
     if (anchor) {
-      const el = $('codemap-doc').querySelector(`[id="${CSS.escape(anchor)}"]`);
+      const el = $('codemap-doc').querySelector(`[id="${CSS.escape(headingId(anchor))}"]`);
       if (el) el.scrollIntoView({ block: 'start' });
     }
   }
@@ -1061,7 +1069,7 @@
       }
       const outline = e.target.closest('.cm-outline[data-anchor]');
       if (outline) {
-        const el = $('codemap-doc').querySelector(`[id="${CSS.escape(outline.dataset.anchor)}"]`);
+        const el = $('codemap-doc').querySelector(`[id="${CSS.escape(headingId(outline.dataset.anchor))}"]`);
         if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
         return;
       }

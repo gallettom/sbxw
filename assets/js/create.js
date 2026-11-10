@@ -229,10 +229,10 @@ function addPortRow(sandboxPort = '', hostPort = '', alias = '') {
   row.className = 'port-row';
   row.dataset.id = id;
   row.innerHTML =
-    `<input class="port-input" type="number" min="1" max="65535" placeholder="3000" value="${sandboxPort}" data-field="sbx">` +
+    `<input class="port-input" type="number" min="1" max="65535" placeholder="3000" value="${escHtml(sandboxPort)}" data-field="sbx">` +
     `<span class="port-arrow">→</span>` +
-    `<input class="port-input" type="number" min="1" max="65535" placeholder="same" value="${hostPort}" data-field="host">` +
-    `<input class="port-input" type="text" placeholder="app.local" value="${alias}" data-field="alias">` +
+    `<input class="port-input" type="number" min="1" max="65535" placeholder="same" value="${escHtml(hostPort)}" data-field="host">` +
+    `<input class="port-input" type="text" placeholder="app.local" value="${escHtml(alias)}" data-field="alias">` +
     `<button class="btn-rm-port" type="button" title="Remove">✕</button>`;
   row.querySelector('.btn-rm-port').addEventListener('click', () => row.remove());
   const sbxInput  = row.querySelector('[data-field="sbx"]');

@@ -79,6 +79,47 @@ struct Export {
     skipped: Vec<String>,
 }
 
+/// One skill as the sandbox's listing names it. Anything else in an entry
+/// is ignored; an entry that does not fit is dropped.
+#[derive(Deserialize)]
+struct Listed {
+    name: String,
+    origin: Origin,
+    path: String,
+    #[serde(default)]
+    description: Option<String>,
+    files: u64,
+    bytes: u64,
+}
+
+/// At most this many skills are shown from one sandbox.
+const MAX_LISTED: usize = 500;
+const MAX_NAME: usize = 128;
+const MAX_DESCRIPTION: usize = 1024;
+const MAX_PATH: usize = 4096;
+
+/// The sandbox's `list` output, kept to entries that fit [`Listed`] and the
+/// length caps, at most [`MAX_LISTED`] of them.
+fn parse_listing(raw: &str) -> Result<Vec<Listed>> {
+    #[derive(Deserialize)]
+    struct Listing {
+        #[serde(default)]
+        skills: Vec<Value>,
+    }
+    let l: Listing = serde_json::from_str(raw.trim()).context("reading the sandbox's skill list")?;
+    Ok(l.skills
+        .into_iter()
+        .filter_map(|v| serde_json::from_value::<Listed>(v).ok())
+        .filter(|s| {
+            !s.name.is_empty()
+                && s.name.chars().count() <= MAX_NAME
+                && s.path.chars().count() <= MAX_PATH
+                && s.description.as_deref().map_or(0, |d| d.chars().count()) <= MAX_DESCRIPTION
+        })
+        .take(MAX_LISTED)
+        .collect())
+}
+
 /// Every file under `dir`, relative to it, the manifest left out.
 fn read_files(dir: &Path, executable: &[String]) -> Result<Vec<File>> {
     fn walk(root: &Path, dir: &Path, executable: &[String], out: &mut Vec<File>) -> Result<()> {
@@ -183,18 +224,29 @@ impl App {
     /// The skills a sandbox has that could be kept: its project's
     /// `.claude/skills/*` and its own `~/.claude/skills/*` (unless that is
     /// sbx's store), each marked when one of that name is kept already.
+    ///
+    /// The list is printed by a script inside the sandbox, so the sandbox
+    /// writes it: only the fields the script emits, typed, reach the page.
     pub async fn sandbox_skills(&self, sb: &SandboxRef) -> Result<Value> {
         let raw = self.skill_script(sb, "list", &[]).await?;
-        let mut v: Value = serde_json::from_str(raw.trim()).context("reading the sandbox's skill list")?;
+        let listed = parse_listing(&raw)?;
         let kept: Vec<String> = self.kept_dirs().into_iter().map(|(n, _)| n).collect();
-        if let Some(list) = v["skills"].as_array_mut() {
-            for s in list {
-                let name = s["name"].as_str().unwrap_or_default().to_string();
-                s["kept"] = json!(kept.contains(&name));
-                s["keepable"] = json!(my_skills::valid_name(&name));
-            }
-        }
-        Ok(json!({ "skills": v["skills"] }))
+        let skills: Vec<Value> = listed
+            .into_iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "origin": s.origin.as_str(),
+                    "path": s.path,
+                    "description": s.description,
+                    "files": s.files,
+                    "bytes": s.bytes,
+                    "kept": kept.contains(&s.name),
+                    "keepable": my_skills::valid_name(&s.name),
+                })
+            })
+            .collect();
+        Ok(json!({ "skills": skills }))
     }
 
     /// Copy one skill out of `sb` and keep it. Replacing a kept skill of the
@@ -326,6 +378,54 @@ mod tests {
         assert!(!kept.exists());
         assert_eq!(app.my_skills_kit().unwrap(), None);
         assert!(!copy.exists(), "a forgotten skill leaves the kit's tree");
+    }
+
+    #[test]
+    fn a_hostile_listing_reaches_the_page_typed_or_not_at_all() {
+        let many: Vec<_> = (0..600)
+            .map(|i| serde_json::json!({ "name": format!("s{i}"), "origin": "home", "path": "/p", "description": "", "files": 1, "bytes": 2 }))
+            .collect();
+        let raw = serde_json::json!({ "ok": true, "skills": [
+            { "name": "good", "origin": "workspace", "path": "/w/.claude/skills/good", "description": "Fine", "files": 3, "bytes": 2048, "extra": "<b>" },
+            { "name": "x1", "origin": "home", "path": "/p", "description": "", "files": "<img src=x onerror=alert(1)>", "bytes": 1 },
+            { "name": "x2", "origin": "home", "path": "/p", "description": "", "files": 1, "bytes": "<script>" },
+            { "name": "x3", "origin": "<svg onload=1>", "path": "/p", "description": "", "files": 1, "bytes": 1 },
+            { "name": "x4", "origin": "home", "path": "/p", "description": "", "files": -1, "bytes": 1 },
+            { "name": "x5", "origin": "home", "path": "/p", "description": "x".repeat(5000), "files": 1, "bytes": 1 },
+            { "name": "x6", "origin": "home", "path": "/p", "description": "", "files": 1.5, "bytes": 1 },
+            { "name": { "a": 1 }, "origin": "home", "path": "/p", "files": 1, "bytes": 1 },
+            "not an object",
+        ] })
+        .to_string();
+        let got = super::parse_listing(&raw).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].name.as_str(), got[0].files, got[0].bytes), ("good", 3, 2048));
+
+        let raw = serde_json::json!({ "ok": true, "skills": many }).to_string();
+        assert_eq!(super::parse_listing(&raw).unwrap().len(), super::MAX_LISTED);
+        assert!(super::parse_listing("<html>").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_sandbox_listing_is_rebuilt_from_typed_values() {
+        let (_d, app, _) = app_with(|a: &[String]| {
+            if a.iter().any(|x| x == "=list") {
+                return Output::ok(
+                    &serde_json::json!({ "ok": true, "skills": [
+                        { "name": "ok", "origin": "home", "path": "/p", "description": "d", "files": 2, "bytes": 9, "onclick": "x" },
+                        { "name": "bad", "origin": "home", "path": "/p", "description": "d", "files": "<img src=x onerror=alert(1)>", "bytes": 9 },
+                    ] })
+                    .to_string(),
+                );
+            }
+            sbx_answer(a)
+        });
+        let v = app.sandbox_skills(&SandboxRef::parse("myapp").unwrap()).await.unwrap();
+        let list = v["skills"].as_array().unwrap();
+        assert_eq!(list.len(), 1, "{v}");
+        assert_eq!(list[0]["files"], 2);
+        assert_eq!(list[0]["keepable"], true);
+        assert!(list[0].get("onclick").is_none());
     }
 
     #[tokio::test]
