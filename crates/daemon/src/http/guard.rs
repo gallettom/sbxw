@@ -212,7 +212,7 @@ const SIDE_PANEL_SIGN_IN: &str = r#"<!doctype html>
 <style>body{font:14px/1.5 system-ui,sans-serif;margin:1.5em 1em}code{background:#8882;padding:.1em .3em;border-radius:3px}</style></head>
 <body>
 <p><b>This browser is not signed in to sbxw.</b></p>
-<p>In a terminal, run <code>sbxw extension</code> and open the sign-in address it prints, in this browser. Then <a href="/sidepanel">reload the panel</a>.</p>
+<p>In a terminal, run <code>sbxw web</code> (or <code>sbxw extension</code>) and open the sign-in address it prints, in this browser. Then <a href="/sidepanel">reload the panel</a>.</p>
 <p>Needed again each time the sbxw daemon starts.</p>
 </body>
 </html>

@@ -7,6 +7,33 @@ function escHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ── Signed out ────────────────────────────────────────────────────────────
+// The daemon mints a new UI token each time it starts, so after a restart
+// this tab's cookie is stale and every call answers 401. Reload, and the
+// daemon serves the page that says how to sign in again (it has no script,
+// so it cannot loop). A sessionStorage flag allows one such reload until a
+// call succeeds again. Loaded first among the app's scripts, so it sees
+// every same-origin fetch they make.
+{
+  const plainFetch = window.fetch.bind(window);
+  const RELOADED = 'sbxw-signed-out-reload';
+  window.fetch = async (input, init) => {
+    const res = await plainFetch(input, init);
+    try {
+      const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+      if (url.origin === location.origin) {
+        if (res.status === 401 && !sessionStorage.getItem(RELOADED)) {
+          sessionStorage.setItem(RELOADED, '1');
+          location.reload();
+        } else if (res.ok) {
+          sessionStorage.removeItem(RELOADED);
+        }
+      }
+    } catch (_) {}
+    return res;
+  };
+}
+
 // The app's global shortcuts (⌥N new sandbox, ⌥M chat). On a Mac, Option
 // alone is how characters are typed — ⌥N is the tilde dead key on French and
 // US layouts alike, ⌥M is "µ" — so taking it breaks typing `~` in a

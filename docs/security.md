@@ -79,6 +79,22 @@ Every request must pass two checks, in this order.
      token (`Cache-Control: no-store`), so the token stays out of the address
      bar and the history. The page, its scripts, `/api/events` and the
      terminal WebSocket all ride on that cookie.
+   - **The cookie is set for `sbxw.localhost` only**, when the daemon is on
+     loopback (`127.*`, the default). A browser keeps a cookie per host name,
+     not per port, and sandbox apps are published on `127.0.0.1` and
+     `localhost`: a cookie there would go to every dev server on those names,
+     and an agent could read the token from its own server's request headers.
+     So a sign-in at `127.0.0.1` or `localhost` sets nothing and redirects to
+     the same sign-in at `sbxw.localhost`, and a cookie arriving at any other
+     name is ignored. **Residual:** a server on another port of
+     `sbxw.localhost` would still receive the cookie, so do not open sandbox
+     apps under that name.
+   - With `web_addr` deliberately off loopback (a LAN address, or `0.0.0.0`
+     for every interface), there is no name of sbxw's own to pin the cookie
+     to: it is set for whatever name the browser used. The `sbxw` CLI and the
+     extension still use `sbxw.localhost` for a `0.0.0.0` bind, but a browser
+     signed in at the machine's IP shares that cookie with any app published
+     on the same IP.
 
    Without a valid token the daemon answers `401`, with three exceptions that
    reveal nothing: `/` shows a page saying to run `sbxw web`; `/sidepanel`
@@ -107,13 +123,13 @@ can read the token file (and your browser's cookies) and act as you. The
 token also appears in the terminal where `sbxw web` printed the sign-in
 address.
 
-**The extension's side panel** frames `http://127.0.0.1:<port>/sidepanel`.
-A cookie set at `sbxw.localhost` is not sent to `127.0.0.1`, so the panel
-needs its own sign-in: `sbxw extension` prints the address. Whether Chrome
-sends a `SameSite=Strict` cookie to a frame inside an extension page depends
-on its rules for extensions with host permissions and on third-party cookie
-settings; when it does not, the panel shows the sign-in page instead of the
-chat.
+**The extension's side panel** frames `http://sbxw.localhost:<port>/sidepanel`
+(an address saved on `127.0.0.1` or `localhost` is moved to that name), so it
+uses the same sign-in as the web UI; `sbxw extension` also prints the address.
+Whether Chrome sends a `SameSite=Strict` cookie to a frame inside an extension
+page depends on its rules for extensions with host permissions and on
+third-party cookie settings; when it does not, the panel shows the sign-in
+page instead of the chat.
 
 ## Human decisions
 

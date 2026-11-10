@@ -136,8 +136,16 @@ async function spJson(url, body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    // The daemon restarted (new UI token): the reloaded page says how to sign in again.
-    if (res.status === 401) location.reload();
+    // The daemon restarted (new UI token): the reloaded page says how to
+    // sign in again. Once, until a call succeeds (as in util.js).
+    try {
+      if (res.status === 401 && !sessionStorage.getItem('sbxw-signed-out-reload')) {
+        sessionStorage.setItem('sbxw-signed-out-reload', '1');
+        location.reload();
+      } else if (res.ok) {
+        sessionStorage.removeItem('sbxw-signed-out-reload');
+      }
+    } catch (_) {}
     return await res.json();
   } catch (e) {
     return { ok: false, error: `sbxw did not answer (${e.message})` };
