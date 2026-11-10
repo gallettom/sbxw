@@ -171,8 +171,20 @@ terminal-mac (your own install, or a fake in tests).
   work, and follow your organisation's software approval process.
 - **The guest is shared** by every sandbox that has the kit. Never sign it in
   to a personal or organisation account, and never put secrets in it.
+- **The guest has its own internet access**, through the VM's NAT on the
+  host. The sandbox's network allowlist does not govern it. A sandbox holding
+  the Mac can open any site in the guest's browser and read the pages back
+  through screenshots, including sites its own allowlist blocks. Enable the
+  kit only where that is acceptable.
 - **A published port is reachable on the VM bridge** (`192.168.64.x`), not on
-  your LAN.
+  your LAN. It is removed when the lease of the sandbox that asked for it ends
+  (released, lapsed, taken over, taken back, or the sandbox stopped or
+  removed), and with the VM when it stops. The next sandbox to hold the Mac
+  cannot open it.
+- **A VM you started yourself is not lent without asking.** The first lease
+  on a running VM that sbxw did not start or resume needs your approval, and
+  so does resuming a paused VM. Sign out of anything personal before you
+  approve.
 
 ## Acceptance checklist
 
@@ -203,3 +215,12 @@ item has to pass before the feature is called done.
    `sbx ports`. A shutdown still in `stopping` 3 minutes later is forced.
 9. The Island shows the card with **Approve** and **Refuse** (its Swift
    changes were not compiled in the sandbox that wrote them).
+10. After item 6, `mac_release`: port 5173 disappears from `sbx ports` at
+    once. Publish it again and stop the sandbox instead: within a minute the
+    lease is free and the port is gone.
+11. With the VM paused, `mac_start` opens a *Resume* card. Start the VM
+    yourself (`terminal-mac start default`) and restart the daemon:
+    `mac_start` opens a card saying sbxw did not start it, and a click before
+    that is refused.
+12. A card whose reason holds line breaks shows it on one line under
+    *Reason given by*, in the Island, the popup and **Setup → Mac**.
