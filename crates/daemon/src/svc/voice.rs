@@ -481,7 +481,8 @@ impl App {
     /// when `cancel` is raised.
     async fn curl_file(&self, url: &str, part: &Path, before: u64, cancel: &AtomicBool) -> Result<(), String> {
         let mut child = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-            .args(["-fsSL", "--retry", "3", "-C", "-", "-o"])
+            // HTTPS only, also across Hugging Face's redirect to its CDN.
+            .args(["--proto", "=https", "--proto-redir", "=https", "-fsSL", "--retry", "3", "-C", "-", "-o"])
             .arg(part)
             .arg(url)
             .kill_on_drop(true)
@@ -766,7 +767,7 @@ fn sbxw_daemon_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 async fn curl_text(url: &str) -> Result<String, String> {
     let out = tokio::process::Command::new(sbxw_core::sysbin::sys_bin("curl"))
-        .args(["-fsSL", "--retry", "2", url])
+        .args(["--proto", "=https", "--proto-redir", "=https", "-fsSL", "--retry", "2", url])
         .output()
         .await
         .map_err(|e| format!("could not run curl: {e}"))?;

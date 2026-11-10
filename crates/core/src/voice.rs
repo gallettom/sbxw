@@ -10,9 +10,10 @@
 //!
 //! * **Nothing is downloaded on its own.** Several GB is a decision: `sbxw
 //!   voice install` or the UI's button, never a first use.
-//! * **Checksums are the host's.** A model is a Hugging Face repo at a revision;
-//!   its tree listing carries each LFS file's sha256, so a re-uploaded file needs
-//!   no re-pin. Only the revision is pinned; `main` is followed until then.
+//! * **A model is a Hugging Face repo at a pinned commit.** Each `revision` is
+//!   a full commit SHA, so a push to the repo's `main` changes nothing here
+//!   until the catalog is re-pinned. The per-file sha256 values come from the
+//!   tree listing at that commit, fetched at download time.
 //! * **A model is installed when every file of its plan is present at its
 //!   size** and the marker the installer writes after verifying is there.
 //!   Half a download is never "installed".
@@ -38,6 +39,7 @@ pub struct Model {
     pub role: Role,
     pub label: &'static str,
     pub repo: &'static str,
+    /// A full commit SHA, never a branch: see the module doc.
     pub revision: &'static str,
     /// Paths (or path prefixes ending in `/`) to keep from the repo tree.
     /// Empty keeps everything except the repo's own docs.
@@ -57,7 +59,8 @@ pub const CATALOG: &[Model] = &[
         role: Role::Stt,
         label: "Parakeet TDT 0.6B v3 (int8)",
         repo: "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        revision: "main",
+        // The repo's `sha` from huggingface.co/api/models/<repo>, 2026-11-10.
+        revision: "ed5d745623472f97cfc2e6c2916ee248798fc5a8",
         include: &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
         license: "CC-BY-4.0",
         approx_mb: 670,
@@ -70,7 +73,8 @@ pub const CATALOG: &[Model] = &[
         role: Role::Tts,
         label: "Voxtral TTS 4B (MLX, 4-bit)",
         repo: "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit",
-        revision: "main",
+        // The repo's `sha` from huggingface.co/api/models/<repo>, 2026-11-10.
+        revision: "f98fc91b9cb5adc7dab56102c690458276c14c6a",
         include: &[],
         license: "CC-BY-NC-4.0",
         approx_mb: 2550,
@@ -80,7 +84,8 @@ pub const CATALOG: &[Model] = &[
         role: Role::Tts,
         label: "Voxtral TTS 4B (MLX, 6-bit)",
         repo: "mlx-community/Voxtral-4B-TTS-2603-mlx-6bit",
-        revision: "main",
+        // The repo's `sha` from huggingface.co/api/models/<repo>, 2026-11-10.
+        revision: "11682c79d1bdda7a500fa146276459e3c6e253ad",
         include: &[],
         license: "CC-BY-NC-4.0",
         approx_mb: 3500,
@@ -90,7 +95,8 @@ pub const CATALOG: &[Model] = &[
         role: Role::Tts,
         label: "Voxtral TTS 4B (MLX, full precision)",
         repo: "mlx-community/Voxtral-4B-TTS-2603-mlx-bf16",
-        revision: "main",
+        // The repo's `sha` from huggingface.co/api/models/<repo>, 2026-11-10.
+        revision: "dd85c02adbae551f5bb29ded35ee60ccdfb90927",
         include: &[],
         license: "CC-BY-NC-4.0",
         approx_mb: 8040,
@@ -434,7 +440,7 @@ mod tests {
             role: Role::Tts,
             label: "test",
             repo: "someone/listed",
-            revision: "main",
+            revision: "0123456789abcdef0123456789abcdef01234567",
             include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict/", "espeak-ng-data/"],
             license: "Apache-2.0",
             approx_mb: 360,
@@ -455,6 +461,19 @@ mod tests {
     ]"#;
 
     #[test]
+    fn every_catalog_model_is_pinned_to_a_commit() {
+        for m in CATALOG {
+            assert!(
+                m.revision.len() == 40 && m.revision.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{} must be pinned to a full commit SHA, not '{}'",
+                m.id,
+                m.revision
+            );
+            assert!(tree_url(m).contains(m.revision), "{}", tree_url(m));
+        }
+    }
+
+    #[test]
     fn plan_keeps_included_files_and_lfs_checksums() {
         let p = plan(listed(), TREE).unwrap();
         let paths: Vec<_> = p.iter().map(|f| f.path.as_str()).collect();
@@ -466,7 +485,7 @@ mod tests {
         assert_eq!(m.size, 330000000, "the LFS size, not the pointer's");
         assert_eq!(m.sha256.as_deref(), Some("abcdef"));
         assert_eq!(p.iter().find(|f| f.path == "tokens.txt").unwrap().sha256, None);
-        assert!(m.url.ends_with("/someone/listed/resolve/main/model.onnx"));
+        assert!(m.url.ends_with("/someone/listed/resolve/0123456789abcdef0123456789abcdef01234567/model.onnx"));
     }
 
     #[test]
@@ -480,7 +499,7 @@ mod tests {
           {"type":"file","path":"espeak-ng-data/voices/!v/Mr serious","size":1}]"#;
         let p = plan(listed(), tree).unwrap();
         let f = p.iter().find(|f| f.path.ends_with("serious")).unwrap();
-        assert!(f.url.ends_with("/resolve/main/espeak-ng-data/voices/%21v/Mr%20serious"), "{}", f.url);
+        assert!(f.url.ends_with("/resolve/0123456789abcdef0123456789abcdef01234567/espeak-ng-data/voices/%21v/Mr%20serious"), "{}", f.url);
         assert_eq!(f.path, "espeak-ng-data/voices/!v/Mr serious", "on disk under its real name");
     }
 
