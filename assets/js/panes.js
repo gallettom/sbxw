@@ -259,11 +259,20 @@ function createPane(index) {
 
 let oscCopyFailed = false;
 
-// ── An OSC 52 copy, offered rather than done ─────────────────────────────
-// What a sandbox prints is the agent's, so it does not write the host
-// clipboard on its own: a toast names the sandbox and the size, shows the
-// start of the text with its control characters made visible, and copies
-// only when Copy is clicked. One offer at a time; a newer one replaces it.
+// ── An OSC 52 copy: done, offered or dropped, by size ────────────────────
+// What a sandbox prints is the agent's, but the person here is a developer
+// who copies out of the agent's terminal all day (Claude Code's own copy is
+// OSC 52), so a click on every copy would be too much. Three tiers, by
+// decoded size:
+// - up to OSC_COPY_QUIET_MAX: copied at once, with a one-line "Copied" toast
+//   so a copy nobody asked for is still noticed. A short text is read
+//   before it is run.
+// - up to OSC_COPY_MAX: offered. A card names the sandbox and the size,
+//   shows the start of the text with its control characters made visible,
+//   and copies only when Copy is clicked: a long text is not read whole,
+//   so it is shown first. One offer at a time; a newer one replaces it.
+// - above: dropped, with a notice.
+const OSC_COPY_QUIET_MAX = 4 * 1024;
 const OSC_COPY_MAX = 100 * 1024;
 const OSC_PREVIEW_CHARS = 80;
 let oscOffer = null;
@@ -287,9 +296,19 @@ function oscPreview(text) {
   return [...text].length > OSC_PREVIEW_CHARS ? shown + '…' : shown;
 }
 
-function offerOscCopy(sandbox, text) {
+function oscCopy(sandbox, text, bytes) {
+  copyQuiet(text).then(ok => {
+    if (ok) { showToast(`Copied ${oscSize(bytes)} from ${sandbox || 'the sandbox'}`, 'ok'); return; }
+    // Once per tab: the reason is the address the page was opened on or the
+    // browser's rules, and neither changes between one copy and the next.
+    if (oscCopyFailed) return;
+    oscCopyFailed = true;
+    showToast('The browser refused a clipboard copy from the sandbox', 'error');
+  });
+}
+
+function offerOscCopy(sandbox, text, bytes) {
   if (oscOffer) oscOffer.remove();
-  const bytes = new TextEncoder().encode(text).length;
   const box = document.createElement('div');
   box.className = 'paste-toast show';
   box.setAttribute('role', 'alertdialog');
@@ -317,17 +336,7 @@ function offerOscCopy(sandbox, text) {
   const close = () => { clearTimeout(timer); box.remove(); if (oscOffer === box) oscOffer = null; };
   const timer = setTimeout(close, 30000);
   no.addEventListener('click', close);
-  yes.addEventListener('click', () => {
-    close();
-    copyQuiet(text).then(ok => {
-      if (ok) { showToast(`Copied ${oscSize(bytes)} from ${sandbox || 'the sandbox'}`, 'ok'); return; }
-      // Once per tab: the reason is the address the page was opened on or the
-      // browser's rules, and neither changes between one copy and the next.
-      if (oscCopyFailed) return;
-      oscCopyFailed = true;
-      showToast('The browser refused a clipboard copy from the sandbox', 'error');
-    });
-  });
+  yes.addEventListener('click', () => { close(); oscCopy(sandbox, text, bytes); });
   document.body.append(box);
   oscOffer = box;
 }
@@ -379,8 +388,9 @@ function setupTerminal(pane) {
   // whatever the user is carrying — a password out of a manager, say — to any
   // program that asks for it, or to any file that happens to be `cat`ed.
   //
-  // And a write is only offered: the agent prints it, the person clicks Copy
-  // (`offerOscCopy`). Silently, any `cat`ed file could fill the clipboard.
+  // And only a short write is done at once, with a toast saying so; a longer
+  // one is offered first (`offerOscCopy`), so a `cat`ed file cannot quietly
+  // fill the clipboard with more than the person could have read.
   // ── A repaint must not take the selection away ──────────────────────────
   // xterm clears the selection every time the program re-declares its mouse
   // mode: `CoreMouseService`'s `activeProtocol` setter fires `onProtocolChange`
@@ -425,9 +435,12 @@ function setupTerminal(pane) {
     } catch (_) {
       return true; // Malformed payload: handled, and nothing to copy.
     }
-    // The text is the sandbox's: it reaches the clipboard only on the
-    // person's click, never by the sandbox printing it.
-    if (text) offerOscCopy(pane.sandbox, text);
+    if (!text) return true;
+    // Short: copied, and said so. Longer: offered, copied on a click.
+    const bytes = new TextEncoder().encode(text).length;
+    if (bytes <= OSC_COPY_QUIET_MAX) oscCopy(pane.sandbox, text, bytes);
+    else if (bytes <= OSC_COPY_MAX) offerOscCopy(pane.sandbox, text, bytes);
+    else showToast(`${pane.sandbox || 'A sandbox'} tried to copy ${oscSize(bytes)} to the clipboard: more than ${oscSize(OSC_COPY_MAX)}, dropped`, 'error');
     return true;
   });
   term.onData(data => {
