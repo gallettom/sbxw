@@ -1124,7 +1124,8 @@ mod tests {
 
     #[test]
     fn the_cli_checks_the_daemon_keys_before_a_daemon_starts() {
-        let d = tempfile_dir().join("grants");
+        // Its own folder: another test removes `tempfile_dir()` when it ends.
+        let d = std::env::temp_dir().join(format!("sbxw-cli-grants-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let store = Store::open(Paths::under(&d));
