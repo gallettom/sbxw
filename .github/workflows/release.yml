@@ -130,6 +130,36 @@ jobs:
             SbxwIsland-macos.zip > sha256sums.txt
           cat sha256sums.txt
 
+      # Signs sha256sums.txt with the RELEASE_SIGNING_KEY secret (an
+      # unencrypted Ed25519 key in OpenSSH format; see docs/releasing.md), so
+      # installers that carry the public key can tell a real release from one
+      # replaced by someone without the key. No secret: no signature, and the
+      # release still publishes. The key only ever exists in a 0600 file in
+      # the runner's temp directory, removed when the step ends.
+      - name: Sign checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -eu
+          if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+            echo "::notice title=Release not signed::RELEASE_SIGNING_KEY is not set, so no sha256sums.txt.sig was made. See docs/releasing.md."
+            exit 0
+          fi
+          umask 077
+          key="$(mktemp "${RUNNER_TEMP}/release-key.XXXXXX")"
+          trap 'rm -f "$key" "${key}.signers"' EXIT
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          chmod 600 "$key"
+          ssh-keygen -q -Y sign -f "$key" -n sbxw-release sha256sums.txt
+          # Check the signature the way install.sh and `sbxw update` will,
+          # and print the public key (public) to compare with RELEASE_PUBLIC_KEY.
+          pub="$(ssh-keygen -y -f "$key")"
+          rm -f "$key"
+          echo "Signed with: $pub"
+          printf 'sbxw-release %s\n' "$(printf '%s' "$pub" | cut -d' ' -f1,2)" > "${key}.signers"
+          ssh-keygen -Y verify -f "${key}.signers" -I sbxw-release -n sbxw-release \
+            -s sha256sums.txt.sig < sha256sums.txt
+
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
@@ -138,4 +168,5 @@ jobs:
             SbxwIsland-macos.zip
             island-version.txt
             sha256sums.txt
+            sha256sums.txt.sig
           generate_release_notes: true
