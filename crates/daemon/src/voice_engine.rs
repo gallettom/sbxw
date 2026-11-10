@@ -1,8 +1,8 @@
 //! The native engines behind `svc::voice`, compiled only with the `voice`
 //! feature: sherpa-onnx (statically linked through `sherpa-rs`) for speech.
 //!
-//! Parakeet TDT is a NeMo transducer: sherpa-onnx reads it with
-//! `model_type = "nemo_transducer"`, and it detects the language itself.
+//! Parakeet TDT is a NeMo transducer (`model_type = "nemo_transducer"`); it
+//! detects the language itself.
 
 use std::path::Path;
 
@@ -37,9 +37,9 @@ impl Stt {
 
 // ── The conversation: llama.cpp ──────────────────────────────────────────
 //
-// One model in memory, a fresh context per reply: the whole conversation is
-// re-read each turn (prompt processing is fast on Metal), which keeps no KV
-// state to go stale between turns and lets the page own the transcript.
+// One model in memory, a fresh context per reply. The whole conversation is
+// re-read each turn (fast on Metal): no KV state can go stale between turns,
+// and the page owns the transcript.
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -86,8 +86,7 @@ impl Llm {
         Ok(Llm { model })
     }
 
-    /// The prompt for `turns`: the model's own chat template, or Mistral's
-    /// v7 format when llama.cpp does not recognise the template.
+    /// The prompt for `turns`: the model's chat template, or Mistral v7 if llama.cpp does not know it.
     fn prompt(&self, system: &str, turns: &[Turn]) -> String {
         let mut chat = vec![LlamaChatMessage::new("system".into(), system.into())];
         chat.extend(turns.iter().map(|t| LlamaChatMessage::new(t.role.clone(), t.content.replace('\0', ""))));

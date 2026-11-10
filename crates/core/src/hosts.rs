@@ -93,9 +93,8 @@ pub fn with_block(content: &str, aliases: &[HostAlias]) -> String {
     next
 }
 
-/// `stored` with `wanted` folded in: order kept, no hostname twice, and a
-/// hostname in both takes `wanted`'s IP — an alias that moved is updated in
-/// place, not listed twice.
+/// `stored` with `wanted` folded in: order kept, no hostname twice. A hostname
+/// in both takes `wanted`'s IP, updated in place.
 pub fn merged(stored: Vec<HostAlias>, wanted: &[HostAlias]) -> Vec<HostAlias> {
     let mut out: Vec<HostAlias> = stored
         .into_iter()

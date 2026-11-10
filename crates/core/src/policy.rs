@@ -1,17 +1,16 @@
-//! The network policy panel: three `sbx` listings turned into one honest view.
+//! The network policy panel: three `sbx` listings turned into one view.
 //!
 //! No single sbx command answers "what can this sandbox reach?": `policy ls
 //! <sb>` says which policies govern it, `--wide` names the resources, `policy
-//! log` says what was actually allowed or blocked. Each is parsed
-//! schema-less — sbx's columns are not pinned — and labelled by *role* so the
-//! UI lays it out by meaning. A listing that is not a table is shown raw rather
-//! than as "no rules", which would be the dangerous lie.
+//! log` says what was allowed or blocked. Each is parsed schema-less (sbx's
+//! columns are not pinned) and labelled by *role*. A listing that is not a
+//! table is shown raw, never as "no rules": that would be the dangerous lie.
 
 use crate::table;
 use serde::Serialize;
 
-/// What a column holds, for the ones the UI knows how to present; `""` for
-/// anything else, so a column sbx adds shows up instead of vanishing.
+/// What a column holds, for the ones the UI presents; `""` otherwise, so a
+/// column sbx adds still shows.
 pub fn column_roles(columns: &[String]) -> Vec<&'static str> {
     columns
         .iter()
@@ -124,8 +123,8 @@ fn scope_rows(rows: Vec<Vec<String>>, roles: &[&str], sandbox: &str) -> (Vec<Vec
 
 pub const ARG_LIMIT: usize = 512;
 
-/// One policy argument, or why it cannot be used. sbx gets argv, never a
-/// shell, so the danger is a value read as a flag.
+/// One policy argument, or why it is unusable. sbx gets argv, not a shell, so
+/// the danger is a value read as a flag.
 pub fn clean_arg(value: &str, what: &str) -> Result<String, String> {
     let v = value.trim();
     if v.is_empty() {
@@ -270,8 +269,7 @@ impl EgressLog {
         out
     }
 
-    /// The log as a table view, so the panel's "Recent egress" renders it the
-    /// way it renders a parsed table.
+    /// The log as a table view, so "Recent egress" renders it like any table.
     pub fn view(&self) -> PolicyView {
         let columns: Vec<String> = ["HOST", "ACTION", "RULE", "REASON", "COUNT", "LAST SEEN"].map(String::from).to_vec();
         let mut rows: Vec<(String, Vec<String>)> = self

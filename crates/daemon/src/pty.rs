@@ -1,11 +1,10 @@
 //! One persistent terminal session: a PTY running a command, its output
 //! broadcast to every WebSocket attached, and the last 256 KB kept for replay.
 //!
-//! A session outlives its WebSockets (a reload replays and resumes), and it
-//! outlives its *process* only until the reader sees EOF, when it calls
-//! `on_exit` — which the registry uses to forget it. "There is a session" and
-//! "there is something to type into" are still different questions, so
-//! `alive` asks the process.
+//! A session outlives its WebSockets (a reload replays and resumes), and its
+//! *process* only until the reader sees EOF, when it calls `on_exit`, which the
+//! registry uses to forget it. "There is a session" and "there is something to
+//! type into" differ, so `alive` asks the process.
 
 use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};

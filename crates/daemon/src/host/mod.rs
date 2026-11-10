@@ -1,8 +1,7 @@
 //! A host the daemon acts on, this machine or a remote one: a name, a way to
 //! run commands there ([`HostExec`]) and a way to touch its files
-//! ([`HostFs`]). Everything that reads or writes a sandbox's workspace, git
-//! checkout or kit goes through these, so the same code serves `local` and a
-//! host over SSH.
+//! ([`HostFs`]). Everything that touches a sandbox's workspace, git checkout or
+//! kit goes through these, so one code path serves `local` and SSH hosts.
 //!
 //! * [`LocalFs`] is `std::fs`, inside `spawn_blocking`;
 //! * `exec_fs` is `HostFs` over any `HostExec` (POSIX sh on the host);

@@ -1,9 +1,8 @@
 //! Port mappings and the host addresses they live on.
 //!
-//! Two vocabularies meet here. sbxw's own — a sandbox port, a host port, an
-//! optional `/etc/hosts` alias, and the `ip_per_app` choice of one loopback
-//! address per app — and sbx's, a publish spec
-//! `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]` and the rows `sbx ports` prints.
+//! Two vocabularies meet here: sbxw's (sandbox port, host port, optional
+//! `/etc/hosts` alias, `ip_per_app`: one loopback address per app) and sbx's
+//! (publish spec `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]`, rows of `sbx ports`).
 
 use crate::hosts::HostAlias;
 use serde::{Deserialize, Serialize};
@@ -29,8 +28,8 @@ pub struct PortMapping {
 }
 
 impl PortMapping {
-    /// The unpublish spec for exactly this binding: the host IP is included so
-    /// unpublishing one alias (127.0.0.2) leaves another on the same port pair.
+    /// Unpublish spec for exactly this binding. The host IP keeps one alias
+    /// (127.0.0.2) from removing another on the same port pair.
     pub fn spec(&self) -> String {
         format!("{}:{}:{}", self.host_ip, self.host_port, self.sandbox_port)
     }
@@ -46,9 +45,8 @@ pub fn host_ip_for(ip_per_app: bool, index: usize) -> String {
     }
 }
 
-/// `sbx ports --publish` / `sbx create -p` spec for each mapping. The order is
-/// the order of `ports`, which decides each app's loopback IP in `ip_per_app`
-/// mode — callers must keep it.
+/// `sbx create -p` spec per mapping. Order matters: it decides each app's
+/// loopback IP in `ip_per_app` mode, so callers must keep it.
 pub fn publish_specs(ports: &[WantedPort], ip_per_app: bool) -> Vec<String> {
     ports
         .iter()
@@ -82,7 +80,7 @@ pub fn port_of(addr: &str) -> &str {
     addr.rsplit(':').next().unwrap_or("")
 }
 
-/// Host half of an address, brackets off ("[::1]:7681" → "::1").
+/// Host half of an address, brackets off (`[::1]:7681` → `::1`).
 pub fn ip_of(addr: &str) -> &str {
     match addr.rsplit_once(':') {
         Some((host, _)) => host.trim_start_matches('[').trim_end_matches(']'),
@@ -90,9 +88,8 @@ pub fn ip_of(addr: &str) -> &str {
     }
 }
 
-/// The loopback name of the web UI. Only an address on 127.0.0.0/8 earns it:
-/// `sbxw.localhost` pointing at a LAN IP would be a claim about another
-/// machine.
+/// Loopback name of the web UI, earned only by a 127.0.0.0/8 address:
+/// `sbxw.localhost` on a LAN IP would claim another machine.
 pub const WEB_HOSTNAME: &str = "sbxw.localhost";
 
 pub fn web_alias(web_addr: &str) -> Option<HostAlias> {
@@ -103,10 +100,9 @@ pub fn web_alias(web_addr: &str) -> Option<HostAlias> {
     })
 }
 
-/// `sbx ports N --format json`: rows of `host_ip`, `host_port`,
-/// `sandbox_port`, `protocol`; `None` when `raw` is not that. The IPv6
-/// mirror sbx adds for each IPv4 publish is dropped; every distinct IPv4
-/// binding is kept — including the extra loopbacks of `ip_per_app`.
+/// `sbx ports N --format json` rows; `None` when `raw` is not that. Drops the
+/// IPv6 mirror sbx adds per IPv4 publish; keeps every distinct IPv4 binding,
+/// including `ip_per_app` loopbacks.
 pub fn parse_ports_json(raw: &str) -> Option<Vec<PortMapping>> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
     let port = |v: &serde_json::Value, k: &str| {

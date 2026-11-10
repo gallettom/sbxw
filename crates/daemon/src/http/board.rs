@@ -1,9 +1,9 @@
 //! The Team-mode board: the threads' and the lead's calls on the agent
 //! listener, the UI's read on the UI listener.
 //!
-//! A caller names itself by `thread` (its `SBXW_THREAD`); none is the lead,
-//! the sandbox's main session. The sandbox itself is proven by its token, so
-//! a thread can only ever reach its own sandbox's board.
+//! A caller names itself by `thread` (its `SBXW_THREAD`); none means the lead,
+//! the sandbox's main session. The token proves the sandbox, so a thread only
+//! reaches its own sandbox's board.
 
 use super::error::{ok_with, ApiError, ApiResult};
 use super::guard::Agent;

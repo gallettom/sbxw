@@ -1,6 +1,6 @@
-//! Keeps the Mac awake while Remote Control is on, and tells the agents driven
-//! from claude.ai when its battery runs low. Rules: `sbxw_core::power`; this
-//! is the loop that reads the world and holds `caffeinate`.
+//! Keeps the Mac awake while Remote Control is on, and warns claude.ai-driven
+//! agents when its battery runs low. Rules: `sbxw_core::power`; this loop reads
+//! the world and holds `caffeinate`.
 
 use crate::app::App;
 use sbxw_core::power::{self, Battery, NoticeBook};

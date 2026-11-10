@@ -27,7 +27,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The terminal-mac release sbxw installs.
 pub struct Release {
     pub version: &'static str,
     /// The archive's base name, also the directory it unpacks to.
@@ -479,7 +478,6 @@ pub fn approval_text(what: &Ask, reason: &str) -> String {
     }
 }
 
-/// What a sandbox asks a person to approve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
     Boot,

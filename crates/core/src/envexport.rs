@@ -2,11 +2,11 @@
 //! back onto the config when running from it.
 //!
 //! Export rules: the file lands *outside* the workspace (the agent can rewrite
-//! anything inside it, and this file decides the next sandbox), every path is
-//! relative to the file (sbx resolves them that way, so the file travels), and
-//! everything the format cannot express is written in its header with the
-//! command that reproduces it — an export that silently dropped the allowlist
-//! would describe a sandbox with *broader* egress than sbxw builds.
+//! anything inside it, and this file decides the next sandbox); paths are
+//! relative to the file (sbx resolves them that way, so it travels); anything
+//! the format cannot express goes in its header with the command that
+//! reproduces it, since a silently dropped allowlist means broader egress than
+//! sbxw builds.
 
 use crate::config::{Config, PortMap};
 use crate::envfile::{self, EnvFile, Port};
@@ -203,9 +203,9 @@ pub fn notes(cfg: &Config, aliases: &[(u16, String)]) -> Vec<String> {
 }
 
 /// Fold an environment file's spec onto `sbxw.toml`: **the file wins, the
-/// config is the fallback**, field by field, and the report says what was
-/// borrowed — two files describing one sandbox is exactly where somebody edits
-/// the wrong one.
+/// config is the fallback**, field by field. The report lists what was
+/// borrowed: two files describing one sandbox is where somebody edits the
+/// wrong one.
 pub fn config_from_spec(spec: &envfile::Spec, mut cfg: Config) -> (Config, Vec<String>) {
     let mut report = Vec::new();
     if spec.ports.is_empty() {

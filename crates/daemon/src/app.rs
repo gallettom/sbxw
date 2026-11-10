@@ -1,7 +1,7 @@
-//! The daemon's state in one value, no globals: everything a request can
-//! touch hangs off `App`, built from a `Paths` and a `Config` and shared by
-//! `Arc`. The services are `impl App` blocks in `svc/`, one file per concern;
-//! a test builds an `App` on a temp dir with a fake `sbx`.
+//! The daemon's state in one value, no globals: everything a request touches
+//! hangs off `App`, built from a `Paths` and a `Config` and shared by `Arc`.
+//! Services are `impl App` blocks in `svc/`, one file per concern; a test
+//! builds an `App` on a temp dir with a fake `sbx`.
 
 use crate::bus::{Bus, Event};
 use crate::hostsys::HostSys;
@@ -193,8 +193,6 @@ impl App {
         self.bus.send(ev);
     }
 
-    /// Spawn the slow loops: relay/plan pruning, session reconciliation, the
-    /// usage poller, keep-awake.
     pub fn start_background(self: &Arc<Self>) {
         let app = self.clone();
         tokio::spawn(async move {

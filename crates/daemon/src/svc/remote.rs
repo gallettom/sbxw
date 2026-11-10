@@ -1,8 +1,8 @@
-//! The Remote Control button: show whether Remote Control is on in a Claude
-//! session, and turn it on once the login is one Remote Control accepts —
-//! switching a sandbox sbxw signed in with a token over to a claude.ai login
-//! first. Turning it off is left to the session or claude.ai: on, the button
-//! is only an indicator.
+//! The Remote Control button: shows whether Remote Control is on in a Claude
+//! session, and turns it on once the login is one Remote Control accepts (a
+//! sandbox signed in with a token is switched to a claude.ai login first).
+//! Turning it off is left to the session or claude.ai: the button is then only
+//! an indicator.
 
 use crate::app::App;
 use anyhow::{bail, Context, Result};
@@ -13,16 +13,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long a probe answers for. Every open pane of a sandbox asks at once
-/// (the page polls each every 15 s) and a probe is an `sbx ls` plus an
-/// `sbx exec node`, seconds apiece: they share one; a press reads afresh.
+/// (each polls every 15 s), and a probe is an `sbx ls` plus an `sbx exec node`,
+/// seconds apiece: they share one; a press reads afresh.
 const PROBE_TTL: Duration = Duration::from_secs(5);
 
 /// A sandbox's last probe: its output or why it failed, and when. The lock is
 /// held while probing, so panes asking meanwhile wait for that answer.
 pub(crate) type ProbeSlot = Arc<tokio::sync::Mutex<Option<(Instant, Result<String, String>)>>>;
 
-/// What the button shows: how Claude is signed in, and whether Remote Control
-/// is on in the session asked about.
+/// What the button shows: how Claude is signed in, and whether Remote Control is
+/// on in the session asked about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemoteState {
     pub login: Login,
@@ -73,7 +73,7 @@ impl App {
 
     /// The directory Claude Code was started in for `kind`: the workspace (sbx
     /// mounts it at the same path) for the main agent and a session in its
-    /// checkout, else the thread's worktree — its own, or its shared plan's.
+    /// checkout, else the thread's worktree (its own, or its shared plan's).
     async fn session_dir(&self, sandbox: &SandboxRef, kind: &SessionKind) -> Option<String> {
         match kind {
             SessionKind::Thread(t) if self.is_same_worktree(sandbox, t) => {

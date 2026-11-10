@@ -5,10 +5,9 @@
 //!
 //! * **Nothing is downloaded on its own.** About 6 GB is a decision: `sbxw
 //!   voice install` or the UI's button, never a first use.
-//! * **Checksums are the host's, not ours.** A model is a Hugging Face repo at
-//!   a revision; its tree listing carries each LFS file's sha256, so nothing
-//!   here has to be re-pinned when a file is re-uploaded upstream — only the
-//!   revision does, and `main` is followed until a model is pinned.
+//! * **Checksums are the host's.** A model is a Hugging Face repo at a revision;
+//!   its tree listing carries each LFS file's sha256, so a re-uploaded file needs
+//!   no re-pin. Only the revision is pinned; `main` is followed until then.
 //! * **A model is installed when every file of its plan is present at its
 //!   size** and the marker the installer writes after verifying is there.
 //!   Half a download is never "installed".
@@ -92,9 +91,9 @@ pub const CATALOG: &[Model] = &[
         label: "Kokoro 82M multilingual (voice ff_siwis)",
         repo: "csukuangfj/kokoro-multi-lang-v1_0",
         revision: "main",
-        // A multilingual Kokoro (v1.0) will not start without its English and
-        // Chinese lexicons and jieba's `dict/`, whatever language it speaks —
-        // and sherpa-onnx exits the process over it.
+        // A multilingual Kokoro (v1.0) won't start without its English and
+        // Chinese lexicons and jieba's `dict/`, whatever the language; sherpa-onnx
+        // exits the process over it.
         include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict/", "espeak-ng-data/"],
         license: "Apache-2.0",
         approx_mb: 360,
@@ -111,8 +110,8 @@ pub const CATALOG: &[Model] = &[
         approx_mb: 90,
         speaker: 0,
     },
-    // Male French voices (Piper, single language: they read English with a
-    // French accent).
+    // Male French voices (Piper, single language: English read with a French
+    // accent).
     Model {
         id: "piper-fr-tom-medium",
         role: Role::Tts,
@@ -152,14 +151,14 @@ pub fn model(id: &str) -> Option<&'static Model> {
     CATALOG.iter().find(|m| m.id == id)
 }
 
-/// `[voice]` in sbxw.toml. Read from the daemon's own config: one concierge
-/// per host, not one per project.
+/// `[voice]` in sbxw.toml, read from the daemon's config: one concierge per
+/// host, not per project.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct VoiceSettings {
     pub stt: String,
-    /// Empty: the platform's default (8B on macOS, 3B elsewhere — no Metal,
-    /// so a CPU-sized model).
+    /// Empty: the platform default (8B on macOS, 3B elsewhere: no Metal, so a
+    /// CPU-sized model).
     pub llm: String,
     pub tts: String,
     /// The push-to-talk key, as a `KeyboardEvent.code`.
@@ -278,9 +277,9 @@ fn wanted(m: &Model, path: &str) -> bool {
     })
 }
 
-/// A repo path as a URL path: each segment percent-encoded except RFC 3986's
-/// unreserved characters, `/` kept. espeak-ng's data has names like
-/// `voices/!v/Mr serious`, which curl refuses raw.
+/// A repo path as a URL path: percent-encode everything but RFC 3986 unreserved
+/// characters and `/`. espeak-ng data has names like `voices/!v/Mr serious`,
+/// which curl refuses raw.
 fn url_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for b in path.bytes() {
@@ -301,9 +300,9 @@ fn safe_rel(path: &str) -> bool {
         && path.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
-/// The files to fetch for `m`, from the tree listing's JSON. Every file an
-/// exact `include` names must be listed: a renamed upstream file is an error
-/// here, not a model that fails to load later.
+/// Files to fetch for `m`, from the tree JSON. Every exact `include` must be
+/// listed: a renamed upstream file is an error here, not a model that fails to
+/// load later.
 pub fn plan(m: &Model, tree_json: &str) -> Result<Vec<PlannedFile>, String> {
     let entries: Vec<TreeEntry> =
         serde_json::from_str(tree_json).map_err(|e| format!("{}: unreadable file listing: {e}", m.repo))?;
@@ -366,8 +365,8 @@ pub fn installed(models_root: &Path, m: &Model) -> Installed {
         .ok()
         .and_then(|t| serde_json::from_str::<Vec<MarkerFile>>(&t).ok());
     if let Some(list) = marker {
-        // The catalog may have grown since this was installed: a marker
-        // without every included file or folder is an install to complete.
+        // The catalog may have grown since install: a marker missing an included
+        // file or folder is an install to complete.
         let covers = m.include.iter().all(|inc| match inc.strip_suffix('/') {
             Some(d) => list.iter().any(|f| f.path.starts_with(d) && f.path[d.len()..].starts_with('/')),
             None => list.iter().any(|f| f.path == *inc),

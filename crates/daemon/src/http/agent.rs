@@ -1,8 +1,8 @@
 //! The agent listener: what a sandbox may call, and nothing else.
 //!
-//! Every handler takes [`Agent`], the sandbox proven by its token. A `from`
-//! in a body (older relay tools still send one) is ignored: identity is never
-//! a field a caller fills in.
+//! Every handler takes [`Agent`]: the sandbox proven by its token. A `from` in
+//! a body (older relay tools still send one) is ignored; identity is never a
+//! caller-filled field.
 
 use super::error::{ok, ok_with, ApiError, ApiResult};
 use super::guard::Agent;

@@ -1,16 +1,14 @@
 //! The web UI's remote hosts (EXPERIMENTAL): `~/.sbxw/hosts.toml` listed with
-//! each host's link, and edited — add, edit, remove, test — the way
-//! `sbxw host` does it (crates/cli/src/cmd/host.rs), reimplemented here
-//! because the CLI asks its questions on a terminal and this asks them in a
-//! dialog.
+//! each host's link, and edited (add, edit, remove, test) the way `sbxw host`
+//! does (crates/cli/src/cmd/host.rs). Reimplemented because the CLI asks on a
+//! terminal and this asks in a dialog.
 //!
 //! Host keys are checked strictly and trusted once, on a fingerprint the
 //! person has seen: adding a host is two calls. [`App::host_key`] fetches the
 //! key (`ssh-keyscan`) and shows its fingerprint (`ssh-keygen -lf`); the add
-//! (or an edit that changes where the host is) then passes that fingerprint
-//! back, the key is fetched again, and it is written to known_hosts only if
-//! it is still the one shown. Nothing is kept between the two calls: a key
-//! that changed in between is refused, not trusted.
+//! (or an edit changing the address) passes that fingerprint back, the key is
+//! fetched again, and it is written to known_hosts only if it still matches.
+//! Nothing is kept between the calls: a key that changed is refused.
 //!
 //! Every write goes through `sbxw_core::remote_hosts` (rules and rendering)
 //! and is followed by [`App::reload_remotes`], so a changed host's link is
@@ -62,8 +60,8 @@ pub struct HostView {
     pub sandboxes: usize,
 }
 
-/// A host's settings as the dialog sends them: all of them, every time (an
-/// edit is the whole form, not the CLI's "only the flags given").
+/// A host's settings as the dialog sends them: all of them every time (an
+/// edit is the whole form, unlike the CLI's flags-only edit).
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostForm {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,9 +162,9 @@ impl App {
         self.home_dir().join(".ssh").join("known_hosts")
     }
 
-    /// Every registered host with its link. Hosts not started yet are not
-    /// started here (the sandbox list does that); a stale latency is timed
-    /// again in the background, so the answer never waits on ssh.
+    /// Every registered host with its link. Hosts not started are not started
+    /// here (the sandbox list does that); a stale latency is re-timed in the
+    /// background, so the answer never waits on ssh.
     pub fn remote_hosts_view(&self) -> Result<Vec<HostView>> {
         let hosts = crate::remotes::load_hosts(&self.store.paths)?;
         let started = self.started_remotes();
@@ -398,10 +396,9 @@ impl App {
         Ok(HostTest { version: out.stdout_str().trim().to_string(), latency_ms: duration_ms(latency) })
     }
 
-    /// Clone `url` on the host, under `~/sbxw-repos/<repo>`, for a sandbox to
-    /// be created there: the create dialog's "git URL". A folder already
-    /// there is used as it is (cloned before, most likely), not cloned over.
-    /// Returns the path on the host.
+    /// Clone `url` on the host under `~/sbxw-repos/<repo>`, for a sandbox created
+    /// there (the create dialog's "git URL"). An existing folder is used as is,
+    /// not cloned over. Returns its path on the host.
     pub async fn host_clone(&self, name: &HostName, url: &str) -> Result<String> {
         let url = url.trim();
         let repo = repo_folder(url)?;
@@ -452,8 +449,8 @@ fn plural(n: usize) -> String {
 }
 
 /// The folder a clone of `url` goes in: its last path part without `.git`.
-/// The URL itself reaches git as one argument after `--`; it still may not
-/// look like an option or hold spaces, as nothing a person types should.
+/// The URL reaches git after `--`, but still may not look like an option or
+/// hold spaces.
 fn repo_folder(url: &str) -> Result<String> {
     if url.is_empty() || url.starts_with('-') || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         bail!("'{url}' is not a git URL");

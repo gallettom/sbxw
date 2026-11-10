@@ -1,8 +1,7 @@
 //! The registry of remote hosts: `~/.sbxw/hosts.toml`.
 //!
-//! (Not `hosts.rs`, which is the `/etc/hosts` block.) Pure: it parses,
-//! validates and renders the file and builds the ssh argv for a host. Running
-//! ssh and touching the disk is the CLI's job.
+//! (Not `hosts.rs`, the `/etc/hosts` block.) Pure: parses, validates and
+//! renders the file, and builds ssh argv. The CLI runs ssh and touches disk.
 //!
 //! ```toml
 //! [hosts.buildbox]
@@ -12,8 +11,7 @@
 //! sbx_path = "/opt/sbx/bin/sbx"   # default: found with `sh -lc 'command -v sbx'`
 //! ```
 //!
-//! `key` is a PATH to an identity file; this module never holds a key or a
-//! password.
+//! `key` is a path to an identity file; no key or password is held here.
 
 use crate::names::{HostName, LOCAL_HOST};
 use anyhow::{bail, Result};
@@ -42,10 +40,9 @@ pub struct RemoteHost {
     pub target: Target,
     pub agent_port: u16,
     pub trust_secrets: bool,
-    /// The `sbx` to run there. `None` = detect it: when the SSH link to the
-    /// host connects, the transport runs `sh -lc 'command -v sbx'` (a login
-    /// shell, since a non-interactive ssh PATH often lacks it) and caches the
-    /// answer for that link. Set it when detection finds the wrong one.
+    /// The `sbx` to run there. `None` detects it: on connect, the transport runs
+    /// `sh -lc 'command -v sbx'` (a login shell, as a non-interactive ssh PATH
+    /// often lacks sbx) and caches it per link. Set it when detection is wrong.
     pub sbx_path: Option<String>,
 }
 
@@ -88,8 +85,8 @@ fn check_word(what: &str, v: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate a host name: `local` is refused (it is this machine), and the rest
-/// must be a valid `HostName` spelled exactly as given (no surrounding spaces).
+/// Validate a host name: `local` is refused (it is this machine); the rest must
+/// be a valid `HostName`, spelled exactly as given.
 pub fn check_name(name: &str) -> Result<HostName> {
     if name == LOCAL_HOST {
         bail!("'{LOCAL_HOST}' is reserved for this machine");
@@ -145,8 +142,7 @@ impl RemoteHost {
         Ok(Self { name, target, agent_port, trust_secrets, sbx_path: None })
     }
 
-    /// Set (or clear) the `sbx` to run on the host, checked like the other
-    /// words that reach ssh's command line.
+    /// Set or clear the host's `sbx`, checked like other words on ssh's command line.
     pub fn with_sbx_path(mut self, sbx_path: Option<String>) -> Result<Self> {
         if let Some(p) = &sbx_path {
             check_word("sbx_path", p).map_err(|e| anyhow::anyhow!("host '{}': {e}", self.name))?;
@@ -155,8 +151,8 @@ impl RemoteHost {
         Ok(self)
     }
 
-    /// The program to run for `sbx` on this host: `sbx_path`, or a bare `sbx`
-    /// when unset (the SSH transport replaces that with what it detects).
+    /// Program to run as `sbx` here: `sbx_path`, else bare `sbx` (the SSH
+    /// transport substitutes what it detects).
     pub fn sbx_program(&self) -> &str {
         self.sbx_path.as_deref().unwrap_or("sbx")
     }
@@ -194,11 +190,10 @@ impl RemoteHost {
     }
 }
 
-/// How long ssh waits to reach a host before giving up. Without it a host
-/// that is switched off costs the OS's TCP timeout — about a minute — on
-/// every `sbxw ls` and every action; past this it is reported offline and
-/// the link retries on its own. On the command line, so it overrides an
-/// `~/.ssh/config` alias's own value.
+/// How long ssh waits before giving up. Without it, a host that is off costs
+/// the OS TCP timeout (about a minute) on every `sbxw ls` and action; past this
+/// it is reported offline and the link retries. On the command line, so it
+/// overrides an `~/.ssh/config` alias's value.
 pub const CONNECT_TIMEOUT: &str = "ConnectTimeout=2";
 
 impl RemoteHosts {

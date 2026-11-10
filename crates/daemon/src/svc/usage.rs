@@ -1,7 +1,6 @@
 //! Subscription usage: what sandboxes report, and what the daemon asks for
-//! itself — through a sandbox, whose proxy authenticates the request with the
-//! account's own credentials (on a Mac there is reliably no host token with
-//! the scope it needs).
+//! through a sandbox, whose proxy adds the account's credentials (a Mac reliably
+//! has no host token with the needed scope).
 
 use crate::app::{now_ms, App};
 use sbxw_core::usage::{self, Reading, Usage};

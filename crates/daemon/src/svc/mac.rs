@@ -6,10 +6,10 @@
 //! terminal-mac` (sbxw's own install), or `SBXW_TERMINAL_MAC` — the tests'
 //! fake, or a copy the person installed themselves.
 //!
-//! What a sandbox asks for that costs or exposes something — a boot, a port —
-//! is a relay request of kind `Mac`: the person's yes runs it, and the
-//! request is settled with what came of it, so the agent reads the outcome
-//! rather than "approved".
+//! What a sandbox asks for that costs or exposes something (a boot, a port) is a
+//! relay request of kind `Mac`: the person's yes runs it, and the request is
+//! settled with what came of it, so the agent reads the outcome rather than
+//! "approved".
 
 use crate::app::{now_ms, App};
 use crate::bus::Event;
@@ -322,8 +322,7 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
     pub async fn mac_stop(&self) -> Result<String> {
         let vm = self.mac_settings().vm.as_str();
         // A normal shutdown is asked of macOS inside the guest, and a paused
-        // guest runs nothing: resume it first, or the request goes nowhere —
-        // which is how an idle VM got paused and then never stopped.
+        // guest runs nothing: resume it first, or the request goes nowhere.
         if self.mac_state().await == VmState::Paused {
             let r = self.mac_run(&["resume", vm], BOOT_TIMEOUT).await?;
             if !r.ok {
@@ -349,9 +348,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
         Ok(format!("the virtual Mac '{vm}' was asked to shut down"))
     }
 
-    /// `terminal-mac stop --force`: the guest is powered off at once, and
-    /// whatever was unsaved in it is lost. A person's button, or the
-    /// lifecycle loop for a shutdown of sbxw's that hung.
+    /// `terminal-mac stop --force`: the guest is powered off at once, and unsaved
+    /// guest work is lost. A person's button, or the lifecycle loop for a
+    /// shutdown of sbxw's that hung.
     pub async fn mac_force_off(&self) -> Result<String> {
         let vm = self.mac_settings().vm.as_str();
         let r = self.mac_run(&["stop", vm, "--force"], CALL_TIMEOUT).await?;
@@ -564,9 +563,9 @@ bash "$work/u/$TM_ARCHIVE/install.sh" --prefix "$TM_PREFIX"
             return Err("this sandbox runs on another host: its ports cannot reach this host's virtual Mac".into());
         }
         self.mac_check_lease(me).await?;
-        // Approved once already (sbx still has it, even if this daemon was
-        // restarted since): hand the URL back rather than ask again — a
-        // second publish of the same spec is refused.
+        // Already approved (sbx still has it, even after a daemon restart): hand
+        // the URL back rather than ask again, since a second publish of the same
+        // spec is refused.
         if let Some(url) = self.mac_port_already(me, port).await {
             return Ok(format!(
                 "Port {port} is already published for the virtual Mac. In the guest, open {url} (in Safari: mac_key cmd+l, mac_type the URL, mac_key return)."

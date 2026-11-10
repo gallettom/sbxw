@@ -29,9 +29,9 @@ fn pos(value: &str) -> String {
 }
 
 /// Shell function `sbxw_no_repo`: why the current directory cannot hold a
-/// thread, with the repos found under it — a workspace is often a folder of
-/// repos (`backend/`, `frontend/`), and the fix is to pick one (`repo=` on the
-/// thread's socket). One line, no colour: each script frames it its own way.
+/// thread, and the repos under it (a workspace is often a folder of repos; the
+/// fix is to pick one, `repo=` on the thread's socket). One line, no colour:
+/// each script frames it its own way.
 macro_rules! no_repo_fn {
     () => {
         r#"
@@ -67,11 +67,10 @@ macro_rules! no_repo_fn {
 ///   relay MCP server reads it to know it serves a thread, not the main
 ///   session (the one that can lead). `prompt`, when given, is the session's
 ///   first message — an approved plan's briefing.
-/// * `--name` makes the thread's name its address for Claude Code's own
-///   messaging between sessions on one machine (the lead's `SendMessage` to
-///   `api-auth`; sbxw is not on that path). Without it the session is listed
-///   under a name derived from its folder (`api-auth-5e`) or a title made up
-///   from its first prompt, neither of which a lead can predict.
+/// * `--name` makes the thread's name its address in Claude Code's own
+///   messaging between sessions (the lead's `SendMessage` to `api-auth`; sbxw
+///   is not on that path). Without it the session gets a name derived from its
+///   folder (`api-auth-5e`) or from its first prompt, which a lead cannot predict.
 /// * The worktree is marked trusted in `.claude.json` before `claude` starts,
 ///   as `Tooling::trust_workspace` does for the workspace: Claude Code does
 ///   not extend a folder's trust to the folders under it, so a new worktree

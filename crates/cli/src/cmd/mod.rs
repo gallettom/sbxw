@@ -1,5 +1,3 @@
-//! The commands.
-
 pub mod doctor;
 pub mod env;
 pub mod host;
@@ -30,16 +28,15 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// A sandbox named on the command line, as a ref: `myapp` (this machine),
-/// `local~myapp` (the same) or `buildbox~myapp`, on a host from `sbxw host add`
-/// (remote hosts are experimental).
+/// A sandbox named on the command line, as a ref: `myapp` or `local~myapp`
+/// (this machine), `buildbox~myapp` (a host from `sbxw host add`; remote hosts
+/// are experimental).
 pub fn sandbox_arg(raw: &str) -> Result<SandboxRef> {
     Ok(SandboxRef::parse(raw)?)
 }
 
-/// A remote host from `~/.sbxw/hosts.toml`, reached through `ssh` on the
-/// same ControlPath as the daemon's link: its master when it holds one,
-/// a connection of its own when not.
+/// A remote host from `~/.sbxw/hosts.toml`, over `ssh` on the daemon link's
+/// ControlPath: its master if it holds one, else a connection of its own.
 fn remote_exec(host: &HostName) -> Result<Arc<SshExec>> {
     let paths = Paths::from_home();
     let hosts = sbxw_daemon::remotes::load_hosts(&paths)?;
@@ -105,8 +102,8 @@ pub fn load_config(path: &Path) -> Result<Config> {
     Config::load(path, &std::env::current_dir()?)
 }
 
-/// The config file the daemon should be started with: the one `cfg` was
-/// loaded from, else `given` made absolute.
+/// The config the daemon starts with: the file `cfg` was loaded from, else
+/// `given` made absolute.
 pub(crate) fn config_path(cfg: &Config, given: &Path) -> Result<PathBuf> {
     cfg.source.clone().map_or_else(|| abs(given), Ok)
 }
@@ -116,8 +113,8 @@ pub(crate) fn abs(p: &Path) -> Result<PathBuf> {
 }
 
 /// Log lines held while the agent owns the terminal (`--no-web`): in raw mode
-/// a bare `\n` steps each line diagonally across a full-screen TUI. They are
-/// printed once the agent exits.
+/// a bare `\n` staircases each line across a full-screen TUI. Printed once the
+/// agent exits.
 static PARKED: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
 struct Terminal;
@@ -158,10 +155,9 @@ fn init_tracing() {
         .try_init();
 }
 
-/// The sbx version, checked against the floor. Cached per sbx binary (its
-/// path, size and modification time), so a `sbxw` command spawns `sbx version`
-/// only after sbx was installed or upgraded. Only a version that passed the
-/// floor is cached.
+/// The sbx version, checked against the floor. Cached per sbx binary (path,
+/// size, mtime): `sbx version` runs only after sbx is installed or upgraded.
+/// Only a version that passed the floor is cached.
 pub(crate) fn check_sbx(rt: &tokio::runtime::Runtime) -> Result<Option<String>> {
     let skip = std::env::var_os(sbxw_sbx::SKIP_VERSION_CHECK_ENV).is_some();
     let cache = Paths::from_home().run().join("sbx-version");
@@ -174,7 +170,7 @@ pub(crate) fn check_sbx(rt: &tokio::runtime::Runtime) -> Result<Option<String>> 
         }
     }
     let v = rt.block_on(Sbx::process().check_version(skip))?;
-    // The cache still holds the sbx it was written for: a new one is an upgrade.
+    // The cache holds the sbx it was written for: a different one is an upgrade.
     let before = std::fs::read_to_string(&cache).ok().and_then(|s| s.lines().nth(1).map(str::to_string)).unwrap_or_default();
     for note in sbxw_sbx::upgrade_notes(&before, v.as_deref().unwrap_or_default()) {
         eprintln!("sbxw  note: {note}");
@@ -325,8 +321,8 @@ pub fn up(a: UpArgs) -> Result<()> {
     if a.use_api_key && api_key.is_none() {
         eprintln!("sbxw  warning: --use-api-key set but ANTHROPIC_API_KEY is empty or unset");
     }
-    // sbx 0.51 signs Claude in on the host (`/login` once, the token kept
-    // there); sbxw no longer writes a token into the sandbox.
+    // sbx 0.51 signs Claude in on the host (`/login` once, token kept there),
+    // so sbxw writes no token into the sandbox.
     if sbxw_daemon::svc::sandboxes::oauth_token_from_env().is_some() {
         eprintln!(
             "sbxw  note: CLAUDE_CODE_OAUTH_TOKEN is no longer injected — sbx keeps your claude.ai sign-in on the host. \
@@ -721,7 +717,7 @@ pub fn rm(names: Vec<String>, all: bool) -> Result<()> {
     let (mut failed, mut total) = (0, 0);
     for (host, list) in by_host {
         let sbx = per_host.get(&host)?;
-        // Named, even for --all: the list is already known, and sbx then answers per name.
+        // Named, even for --all, so sbx answers per name.
         let results = rt.block_on(sbx.rm(&list))?;
         total += results.len();
         let gone: Vec<SandboxRef> = list
@@ -787,8 +783,8 @@ pub fn cache(action: crate::CacheAction, config: &Path) -> Result<()> {
     }
 }
 
-/// `sbx prune`, shown first and asked, then the same cleanup `rm` does for
-/// whatever disappeared — a name-set difference, robust to prune's output.
+/// `sbx prune`, previewed and confirmed, then the cleanup `rm` does for
+/// whatever disappeared: a name-set difference, robust to prune's output.
 pub fn prune(since: Option<&str>, dry_run: bool, yes: bool) -> Result<()> {
     let rt = runtime();
     check_sbx(&rt)?;

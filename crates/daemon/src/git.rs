@@ -1,14 +1,14 @@
 //! The git repositories under a workspace, read with git on the **host**.
 //!
 //! The workspace is mounted at the same path in the sandbox, so a path found
-//! here is the one the in-sandbox scripts `cd` into — and every read works on a
+//! here is the one the in-sandbox scripts `cd` into, and every read works on a
 //! stopped sandbox. Every call passes `--no-optional-locks`, so a read never
-//! holds the index lock a thread needs to commit, and is bounded by a timeout
-//! (`kill_on_drop` makes the timeout real).
+//! holds the index lock a commit needs, and is bounded by a timeout
+//! (`kill_on_drop` makes it real).
 //!
-//! A workspace is often a folder of repos (`~/dev/shop/{backend,frontend}`),
-//! so a thread is opened *in a repo*, named relative to the workspace (`''` is
-//! the workspace itself), and that choice is kept in the sandbox's record.
+//! A workspace is often a folder of repos (`~/dev/shop/{backend,frontend}`), so
+//! a thread opens *in a repo*, named relative to the workspace (`''` is the
+//! workspace itself), and that choice is kept in the sandbox's record.
 
 use crate::host::{Host, Kind};
 use sbxw_sbx::host::HostCmd;
@@ -20,17 +20,16 @@ use std::time::Duration;
 const MAX_DEPTH: usize = 3;
 const SKIPPED: &[&str] = &["node_modules", "target", "vendor", ".sbxw-worktrees"];
 const GIT_TIMEOUT: Duration = Duration::from_secs(5);
-/// `.git` as a file, and `HEAD`, are a line long; this only bounds a hostile one.
+/// A `.git` file and `HEAD` are one line; this caps a hostile one.
 const GIT_FILE_MAX: u64 = 64 * 1024;
 const BASE_LOG: usize = 60;
 const THREAD_LOG: usize = 20;
 const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%ct%x1f%s";
 
-/// Settings that make git start a program, pinned off for every host read.
-/// The repo's `.git` is writable from inside the sandbox, so its config is the
-/// sandbox's word: a `core.fsmonitor` set there would run on the host at the
-/// next `git status` (sbx 0.50 closed the same door for its own git calls).
-/// Command-line `-c` outranks every config file.
+/// Settings that make git run a program, pinned off for every host read. The
+/// repo's `.git` is writable from the sandbox, so a `core.fsmonitor` set there
+/// would run on the host at the next `git status` (sbx 0.50 closed the same
+/// door for its own calls). `-c` on the command line outranks every config file.
 const NO_PROGRAMS: &[&str] = &[
     "core.fsmonitor=false",
     "core.hooksPath=/dev/null",
@@ -41,9 +40,9 @@ const NO_PROGRAMS: &[&str] = &[
     "credential.helper=",
 ];
 
-/// Clean/smudge filters are named by the repo, so they are found first —
-/// `git config` reads without running anything — then blanked: git runs no
-/// filter whose command is empty. `status` is the read that would run one.
+/// Clean/smudge filters are named by the repo: find them first (`git config`
+/// runs nothing), then blank them, since git runs no filter with an empty
+/// command. `status` is the read that would run one.
 async fn filter_overrides(host: &Host, dir: &Path) -> Vec<String> {
     let Some(out) = run_git(host, dir, &[], &["config", "--includes", "--name-only", "--get-regexp", r"^filter\..*\.(clean|smudge|process)$"]).await
     else {
@@ -60,8 +59,8 @@ async fn run_git(host: &Host, dir: &Path, overrides: &[String], args: &[&str]) -
     argv.extend(overrides.iter().cloned());
     argv.extend(["-C".to_string(), dir.to_string_lossy().into_owned()]);
     argv.extend(args.iter().map(|a| a.to_string()));
-    // No stdin (git must never wait for input) and a timeout, which the host
-    // enforces by killing the command. An unreachable host reads as a failed git.
+    // No stdin (git must never wait for input); the host enforces the timeout
+    // by killing the command. An unreachable host reads as a failed git.
     let cmd = HostCmd { timeout: Some(GIT_TIMEOUT), ..HostCmd::new("git", argv) };
     let out = host.exec.exec(cmd).await.ok()?;
     // Lossy: a commit subject is whatever bytes its author typed.
@@ -93,16 +92,15 @@ pub async fn enclosing_repo(host: &Host, workspace: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Make a chat workspace a repo with one empty commit, so its extra
-/// conversations can be threads: a thread is a worktree, and a worktree needs
-/// a commit to branch from. Nothing is ever committed after that. A no-op on
-/// a workspace already in a repo.
+/// Make a chat workspace a repo with one empty commit: a thread is a worktree,
+/// and a worktree needs a commit to branch from. Nothing is committed after
+/// that. A no-op inside a repo already.
 pub async fn init_chat_repo(host: &Host, dir: &Path) -> Result<(), String> {
     if has_git(host, dir).await {
         return Ok(());
     }
-    // A chat workspace lives under /tmp, which macOS sweeps; `git -C` into a
-    // vanished one fails before the sandbox is even started.
+    // Chat workspaces live under /tmp, which macOS sweeps; `git -C` into a
+    // vanished one fails before the sandbox starts.
     host.fs.create_dir_all(dir).await.map_err(|e| format!("could not re-create chat workspace {}: {e:#}", dir.display()))?;
     for args in [&["init", "-q"][..], &["commit", "-q", "--allow-empty", "-m", "sbxw chat"][..]] {
         let argv = ["-C", &dir.to_string_lossy(), "-c", "user.email=sbxw@localhost", "-c", "user.name=sbxw", "-c", "init.defaultBranch=main"]
@@ -125,9 +123,9 @@ pub async fn scan(host: &Host, workspace: &Path) -> Vec<String> {
         return vec![String::new()];
     }
     // One walk, four levels deep: a repo at depth 3 shows its `.git` at 4.
-    // The walk cannot prune "hidden", only named folders, so hidden ones are
-    // dropped below; a repo is not descended into, so a repo inside one is not
-    // a repo of the workspace.
+    // The walk prunes only named folders, so hidden ones are dropped below. A
+    // repo is not descended into, so a repo inside one is not a repo of the
+    // workspace.
     let Ok(all) = host.fs.walk(workspace, MAX_DEPTH + 1, SKIPPED).await else { return Vec::new() };
     let repos: BTreeSet<&str> = all
         .iter()
@@ -204,8 +202,8 @@ fn shown(rel: &str) -> String {
 
 /// Which repo a thread works in: the one asked for, else where it already
 /// has a worktree, else its record, else the workspace's only repo. A thread
-/// with a worktree cannot move to another repo — its branch, uncommitted work
-/// and conversation are in the old one.
+/// with a worktree cannot move: its branch, uncommitted work and conversation
+/// are in the old repo.
 pub async fn choose(host: &Host, workspace: &Path, recorded: Option<&str>, thread: &str, requested: Option<&str>) -> Result<String, String> {
     let has_worktree = |rel: String| async move {
         match repo_root(host, workspace, &rel).await {
@@ -411,8 +409,8 @@ async fn count_status(host: &Host, dir: &Path) -> Option<u32> {
     git(host, dir, &["status", "--porcelain"]).await.map(|r| r.lines().filter(|l| !l.is_empty()).count() as u32)
 }
 
-/// Each thread's branch against the branch its repo's main checkout is on —
-/// the lead's, and the one a merge lands in.
+/// Each thread's branch against the branch checked out in its repo's main
+/// checkout, where a merge lands.
 pub async fn graph(host: &Host, workspace: &Path, threads: &[(String, String)]) -> Vec<RepoBranches> {
     let mut by_repo: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (t, repo) in threads {

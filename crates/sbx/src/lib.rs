@@ -1,9 +1,8 @@
 //! The only door to the `sbx` CLI. sbxw never calls `docker sandbox`.
 //!
-//! Written for sbx 0.51 and newer, with no fallbacks below it: an
-//! unrecognised command or flag is an *error*, so a command that succeeded
-//! really ran. What sbxw parses it reads as `--format json`; only
-//! `policy ls` and `template ls` are still read as tables.
+//! Written for sbx 0.51 and newer, with no fallbacks: an unrecognised command
+//! or flag is an *error*, so success means the command really ran. Parsed output
+//! is `--format json`, except `policy ls` and `template ls` (tables).
 //!
 //! ```text
 //! sbx --version                              (the client's; starts no daemon)
@@ -68,17 +67,17 @@ pub use scripts::ThreadStatus;
 pub const MIN_VERSION: (u32, u32, u32) = (0, 51, 0);
 pub const SKIP_VERSION_CHECK_ENV: &str = "SBXW_SKIP_SBX_VERSION_CHECK";
 
-/// `sbx exec`'s status when it could not run the command at all (no such
-/// sandbox, say). A stopped sandbox is not that: `exec` starts it first, so
-/// callers that must not wake one ask `is_running` before.
+/// `sbx exec`'s status when it could not run the command (no such sandbox).
+/// A stopped sandbox is not that: `exec` starts it first, so callers that must
+/// not wake one check `is_running` first.
 pub const EXEC_NOT_RUN: i32 = 125;
 
 /// Longest tail of a failing command's stderr folded into the error: sbx's
 /// policy denials carry a multi-line explanation and an org support message.
 const STDERR_TAIL_LIMIT: usize = 2000;
 
-/// A failed invocation as an error carrying the tail of what sbx said: it
-/// prints context first and the reason last.
+/// A failed invocation as an error with the tail of sbx's stderr: sbx prints
+/// context first, the reason last.
 pub fn command_error(args: &[String], out: &Output) -> anyhow::Error {
     let shown = args[..args.len().min(4)].join(" ");
     let status = out.code.map_or_else(|| "a signal".to_string(), |c| format!("exit status {c}"));
@@ -168,10 +167,10 @@ pub struct TemplateInfo {
     pub created: Option<String>,
 }
 
-/// `sbx template ls`, as JSON (an array, bare or under `templates`) or by its
-/// headers: a tag column (`TAG`, `NAME`, `TEMPLATE`, `REFERENCE`), or
-/// `REPOSITORY` + `TAG` joined as docker does. Not sbx's own format to rely
-/// on: every shape it might take is read, and anything else lists nothing.
+/// `sbx template ls` as JSON (bare array, or under `templates`) or by headers: a
+/// tag column (`TAG`, `NAME`, `TEMPLATE`, `REFERENCE`), or `REPOSITORY` + `TAG`
+/// joined as docker does. Not sbx's format to rely on: every shape is read,
+/// anything else lists nothing.
 pub fn parse_template_ls(raw: &str) -> Vec<TemplateInfo> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
         let rows: &[serde_json::Value] = v.as_array().or_else(|| v.get("templates").and_then(|t| t.as_array())).map_or(&[], Vec::as_slice);
@@ -409,8 +408,8 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
     if let Some(p) = &o.pull {
         a.push(format!("--pull={p}"));
     }
-    // Files first, then -e: sbx's precedence is -e over any file whatever the
-    // order, and a log line then reads the way the rule does.
+    // Files first, then -e (sbx gives -e precedence over files whatever the
+    // order), so a log line reads the way the rule does.
     for f in &o.env_files {
         a.extend(["--env-file".into(), f.clone()]);
     }
@@ -937,9 +936,9 @@ impl Sbx {
     }
 
     /// A global custom secret (`secret set-custom`, 0.51): the sandbox sees a
-    /// placeholder in `env`, the proxy puts the value in requests to `hosts`.
-    /// The value travels on stdin. sbx 0.51 substitutes nothing for a custom
-    /// secret without a host, so one is required.
+    /// placeholder in `env`, and the proxy puts the value in requests to `hosts`,
+    /// which must be given (0.51 substitutes nothing without one). The value
+    /// travels on stdin.
     pub async fn secret_set_custom(&self, hosts: &[String], env: &str, value: &str) -> Result<()> {
         if hosts.is_empty() {
             bail!("a custom secret needs at least one destination host");

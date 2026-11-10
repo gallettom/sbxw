@@ -1,8 +1,8 @@
 //! Talking to the daemon — and starting it when nobody has.
 //!
-//! There is one daemon per machine (per `web_addr`). The CLI never becomes a
-//! second one: it asks `/api/health`, starts `sbxw daemon` detached when
-//! nothing answers, and waits for it to.
+//! One daemon per machine (per `web_addr`). The CLI never starts a second one:
+//! it asks `/api/health`, starts `sbxw daemon` detached when nothing answers,
+//! and waits.
 
 use anyhow::{anyhow, bail, Context, Result};
 use sbxw_core::ports;
@@ -16,8 +16,7 @@ pub struct Daemon {
     pub base: String,
 }
 
-/// The URL a client reaches the daemon at: an address bound on every
-/// interface is reached on the loopback.
+/// URL a client uses for the daemon; a wildcard bind is reached on loopback.
 pub fn base_url(web_addr: &str) -> String {
     let ip = ports::ip_of(web_addr);
     let host = match ip {
@@ -68,7 +67,7 @@ impl Daemon {
             .context("the daemon's answer was not JSON")
     }
 
-    /// POST and read an NDJSON answer line by line; returns the last line.
+    /// POST, read the NDJSON answer line by line, return the last line.
     pub fn stream(&self, path: &str, body: Value, mut each: impl FnMut(&Value)) -> Result<Value> {
         let resp = ureq::post(&format!("{}{path}", self.base)).send_json(body).map_err(error_of)?;
         let mut last = Value::Null;
@@ -84,7 +83,7 @@ impl Daemon {
         Ok(last)
     }
 
-    /// The daemon, running: started detached when nothing answers.
+    /// Ensures the daemon runs, starting it detached if nothing answers.
     pub fn ensure(&self, paths: &Paths, config: &Path, use_api_key: bool) -> Result<()> {
         if let Some(h) = self.health() {
             let theirs = h["version"].as_str().unwrap_or("?");

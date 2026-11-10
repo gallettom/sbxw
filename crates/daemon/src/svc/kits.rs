@@ -22,10 +22,10 @@ struct Users {
 }
 
 impl App {
-    /// The config the daemon was started with, its `kits` read again from the
-    /// file: the Kits dialog may have rewritten them since, and a sandbox the
-    /// web UI creates must get what the dialog shows. Only `kits` — the rest
-    /// (listeners, models) is what the daemon is running with.
+    /// The config the daemon started with, `kits` read again from the file: the
+    /// Kits dialog may have rewritten them, and a sandbox the web UI creates
+    /// must get what the dialog shows. Only `kits`; the rest (listeners, models)
+    /// is what the daemon runs with.
     pub fn daemon_config(&self) -> Config {
         let mut cfg = self.cfg.clone();
         if let Some(fresh) = cfg.source.as_deref().and_then(|p| Config::load(p, Path::new("/")).ok()) {

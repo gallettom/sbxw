@@ -1,12 +1,12 @@
 //! `sbxw.toml`.
 //!
-//! * `agent_addr` is the daemon's second listener, the only one sandboxes can
-//!   reach (see the daemon's `http` module for why there are two).
+//! * `agent_addr` is the daemon's second listener, the only one sandboxes
+//!   reach (why two: see the daemon's `http` module).
 //! * A loaded config remembers **where it came from** (`source`): the daemon
-//!   keeps one per sandbox, so a sandbox created from project A is attached
-//!   with A's `env` even when the daemon was started from project B.
-//! * Relative paths (`kits`, `env_files`, `kit_mounts`, `workspaces`) are
-//!   resolved against the file's own directory at load time.
+//!   keeps one per sandbox, so a sandbox from project A keeps A's `env` even
+//!   if the daemon started in project B.
+//! * Relative paths (`kits`, `env_files`, `kit_mounts`, `workspaces`) resolve
+//!   against the file's directory at load.
 
 use crate::hosts::HostAlias;
 use crate::kits::resolve_kit_ref;
@@ -35,36 +35,34 @@ pub struct Config {
     pub ports: Vec<PortMap>,
     /// Kit references, applied at creation (`sbx create --kit`).
     pub kits: Vec<String>,
-    /// Host directories for kit-declared host mounts (`host-mount@1`, sbx
-    /// 0.50): sandbox target path → host directory, passed as `--mount` at
-    /// creation. sbx refuses a target no kit in the set declares.
+    /// Host dirs for kit-declared mounts (`host-mount@1`, sbx 0.50): sandbox
+    /// target → host dir, passed as `--mount` at creation. sbx refuses a
+    /// target no kit declares.
     pub kit_mounts: BTreeMap<String, String>,
     /// Where the main agent starts, inside the workspace (`sbx run --workdir`,
     /// 0.51): relative to the workspace, or absolute. Empty is the workspace.
     pub workdir: String,
-    /// Other host directories mounted at creation, `PATH[:TARGET][:ro]`
-    /// (0.51): `TARGET` an absolute sandbox path, else the host path again;
-    /// `:ro` read-only. `PATH` is relative to this file, or `~/`.
+    /// Extra host dirs mounted at creation, `PATH[:TARGET][:ro]` (0.51):
+    /// `TARGET` absolute in the sandbox, else the host path; `:ro` read-only.
+    /// `PATH` is relative to this file, or `~/`.
     pub workspaces: Vec<String>,
     /// CPUs and memory at creation (`--cpus`, `--memory`); 0 and empty are
     /// sbx's defaults.
     pub cpus: u32,
     pub memory: String,
-    /// `sandboxOptions` only an environment file carries (`sbxw env
-    /// export`): FUSE for this sandbox, and disk sizes. Unset is sbx's.
+    /// Only in an environment file (`sbxw env export`): `sandboxOptions` for
+    /// FUSE and disk sizes. Unset is sbx's.
     pub fuse: Option<bool>,
     pub root_size: String,
     pub docker_size: String,
-    /// Sandbox paths kept on persistent block storage (`volume@1`, sbx 0.50):
-    /// package caches and toolchains outside the workspace, which survive
-    /// `sbxw rm` and come back with a sandbox recreated under the same name.
-    /// Applied at creation only.
+    /// Sandbox paths on persistent block storage (`volume@1`, sbx 0.50): caches
+    /// and toolchains outside the workspace. They survive `sbxw rm` and
+    /// reattach when a sandbox of the same name is recreated. Creation only.
     pub volumes: Vec<String>,
-    /// Mount `~/.sbxw/cache` into new sandboxes, so the bundled kits copy what
-    /// was downloaded once instead of fetching it again.
+    /// Mount `~/.sbxw/cache` into new sandboxes, so bundled kits download once.
     pub cache: bool,
-    /// After this many days the cache is emptied and the next sandbox refills
-    /// it — fresh packages, and a bound on what its filler could have left.
+    /// The cache is emptied after this many days, so the next sandbox refills
+    /// it with fresh packages and a bound on what a previous filler left.
     pub cache_ttl_days: u32,
     /// Passed as `ANTHROPIC_DEFAULT_MODEL`: a default, below a saved `/model`.
     pub claude_model: String,
@@ -168,9 +166,9 @@ impl Default for Config {
             .to_vec(),
             network_deny: vec![],
             ip_per_app: false,
-            // None: a project publishes what its own sbxw.toml names. A
-            // default here would hand every sandbox without a config one
-            // project's ports and hostnames (and a sudo prompt for them).
+            // Empty: a project publishes only what its own sbxw.toml names; a
+            // default would hand every sandbox another project's ports and
+            // hostnames (and a sudo prompt).
             ports: vec![],
             kits: crate::kits::DEFAULT_KITS.map(String::from).to_vec(),
             kit_mounts: BTreeMap::new(),
@@ -264,15 +262,15 @@ fn is_size(v: &str) -> bool {
 pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
 pub const PULL_POLICIES: [&str; 3] = ["always", "missing", "never"];
 
-/// `#rrggbb` and nothing else: the value is templated into the page as a JS
-/// string, so this is also what keeps it from carrying anything but a colour.
+/// `#rrggbb` only: the value is templated into the page as a JS string, so
+/// nothing else may pass.
 fn is_hex_color(s: &str) -> bool {
     s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 const MODEL_VAR: &str = "ANTHROPIC_DEFAULT_MODEL";
 
-/// A host directory from the config: `~/` is the home, anything relative is
-/// against the config's own directory.
+/// Host dir from config: `~/` is home; relative paths are against the config's
+/// directory.
 fn resolve_host_dir(dir: &Path, host: &str) -> String {
     if let Some(rest) = host.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -292,8 +290,8 @@ impl Config {
         self.kit_mounts.iter().map(|(target, host)| format!("{host}:{target}")).collect()
     }
 
-    /// `raw` read and validated as an sbxw.toml, nothing resolved: what a
-    /// rewritten file must pass before it replaces the one on disk.
+    /// Parses and validates `raw` without resolving paths; a rewritten file
+    /// must pass this before it replaces the one on disk.
     pub fn parse(raw: &str) -> Result<Self> {
         let cfg: Config = toml::from_str(raw)?;
         cfg.validate()?;
@@ -345,8 +343,8 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Checked at load rather than left to sbx: a value it refuses fails the
-    /// sandbox, not the setting, and only when somebody asks for a new one.
+    /// Checked here, not left to sbx: sbx would fail the sandbox, not the
+    /// setting, and only when a new one is created.
     pub fn validate(&self) -> Result<()> {
         self.mac.validate().map_err(anyhow::Error::msg)?;
         self.voice.validate().map_err(anyhow::Error::msg)?;

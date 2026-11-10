@@ -1,6 +1,6 @@
-//! `sbxw mac`: the virtual Mac, from a terminal. The daemon does the work
-//! (see its `svc::mac`); this starts it and follows `GET /api/mac` until
-//! the job is done, so the terminal shows what the web UI's Mac panel shows.
+//! `sbxw mac`: the virtual Mac from a terminal. The daemon does the work (see
+//! `svc::mac`); this starts it and follows `GET /api/mac` until the job ends, so
+//! the terminal shows what the web UI's Mac panel shows.
 
 use super::{config_path, load_config};
 use crate::client::Daemon;
