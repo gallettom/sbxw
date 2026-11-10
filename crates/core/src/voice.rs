@@ -1,14 +1,18 @@
 //! The voice concierge's models: which ones, where they come from, and whether
 //! they are on disk. Plain data and pure functions — the daemon downloads.
 //!
+//! Two local models, no language model: speech becomes text (Parakeet, in the
+//! daemon through sherpa-onnx) and an agent's text becomes speech (Voxtral
+//! TTS, in a local `mlx-audio` server the daemon starts on Apple Silicon).
+//! What is said goes to an agent as it was said, once the person has read it.
+//!
 //! Three rules shape it (see `.sbxw-artifacts/specs/concierge-vocal.md`):
 //!
-//! * **Nothing is downloaded on its own.** About 6 GB is a decision: `sbxw
+//! * **Nothing is downloaded on its own.** Several GB is a decision: `sbxw
 //!   voice install` or the UI's button, never a first use.
-//! * **Checksums are the host's, not ours.** A model is a Hugging Face repo at
-//!   a revision; its tree listing carries each LFS file's sha256, so nothing
-//!   here has to be re-pinned when a file is re-uploaded upstream — only the
-//!   revision does, and `main` is followed until a model is pinned.
+//! * **Checksums are the host's.** A model is a Hugging Face repo at a revision;
+//!   its tree listing carries each LFS file's sha256, so a re-uploaded file needs
+//!   no re-pin. Only the revision is pinned; `main` is followed until then.
 //! * **A model is installed when every file of its plan is present at its
 //!   size** and the marker the installer writes after verifying is there.
 //!   Half a download is never "installed".
@@ -22,8 +26,6 @@ use std::path::{Path, PathBuf};
 pub enum Role {
     /// Speech to text.
     Stt,
-    /// The conversation.
-    Llm,
     /// Text to speech.
     Tts,
 }
@@ -45,9 +47,6 @@ pub struct Model {
     /// Roughly what it weighs, for the confirmation before any listing is
     /// fetched; the plan's own sizes are what is downloaded and checked.
     pub approx_mb: u32,
-    /// For a voice with several speakers, which one (Piper's `upmc`: 1 is
-    /// Pierre). Kokoro picks its speaker by language instead.
-    pub speaker: i32,
 }
 
 /// Every model sbxw knows how to fetch. `[voice]` in sbxw.toml picks among
@@ -62,89 +61,39 @@ pub const CATALOG: &[Model] = &[
         include: &["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
         license: "CC-BY-4.0",
         approx_mb: 670,
-        speaker: 0,
     },
+    // Voxtral TTS (Mistral, 4B), converted for MLX: one model, three sizes.
+    // French and English in the same sentence, which a French-only voice
+    // reads badly. Non-commercial licence: personal use.
     Model {
-        id: "ministral-3-8b-instruct-q4",
-        role: Role::Llm,
-        label: "Ministral 3 8B Instruct (Q4_K_M)",
-        repo: "mistralai/Ministral-3-8B-Instruct-2512-GGUF",
-        revision: "main",
-        include: &["Ministral-3-8B-Instruct-2512-Q4_K_M.gguf"],
-        license: "Apache-2.0",
-        approx_mb: 5200,
-        speaker: 0,
-    },
-    Model {
-        id: "ministral-3-3b-instruct-q4",
-        role: Role::Llm,
-        label: "Ministral 3 3B Instruct (Q4_K_M)",
-        repo: "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
-        revision: "main",
-        include: &["Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"],
-        license: "Apache-2.0",
-        approx_mb: 2100,
-        speaker: 0,
-    },
-    Model {
-        id: "kokoro-multi-lang-v1_0",
+        id: "voxtral-tts-4bit",
         role: Role::Tts,
-        label: "Kokoro 82M multilingual (voice ff_siwis)",
-        repo: "csukuangfj/kokoro-multi-lang-v1_0",
+        label: "Voxtral TTS 4B (MLX, 4-bit)",
+        repo: "mlx-community/Voxtral-4B-TTS-2603-mlx-4bit",
         revision: "main",
-        // A multilingual Kokoro (v1.0) will not start without its English and
-        // Chinese lexicons and jieba's `dict/`, whatever language it speaks —
-        // and sherpa-onnx exits the process over it.
-        include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict/", "espeak-ng-data/"],
-        license: "Apache-2.0",
-        approx_mb: 360,
-        speaker: 0,
+        include: &[],
+        license: "CC-BY-NC-4.0",
+        approx_mb: 2550,
     },
     Model {
-        id: "piper-fr-siwis-medium",
+        id: "voxtral-tts-6bit",
         role: Role::Tts,
-        label: "Piper fr_FR siwis (medium)",
-        repo: "csukuangfj/vits-piper-fr_FR-siwis-medium",
+        label: "Voxtral TTS 4B (MLX, 6-bit)",
+        repo: "mlx-community/Voxtral-4B-TTS-2603-mlx-6bit",
         revision: "main",
-        include: &["fr_FR-siwis-medium.onnx", "tokens.txt", "espeak-ng-data/"],
-        license: "CC-BY-4.0",
-        approx_mb: 90,
-        speaker: 0,
-    },
-    // Male French voices (Piper, single language: they read English with a
-    // French accent).
-    Model {
-        id: "piper-fr-tom-medium",
-        role: Role::Tts,
-        label: "Piper fr_FR tom (medium, male)",
-        repo: "csukuangfj/vits-piper-fr_FR-tom-medium",
-        revision: "main",
-        include: &["fr_FR-tom-medium.onnx", "tokens.txt", "espeak-ng-data/"],
-        license: "CC-BY-4.0",
-        approx_mb: 80,
-        speaker: 0,
+        include: &[],
+        license: "CC-BY-NC-4.0",
+        approx_mb: 3500,
     },
     Model {
-        id: "piper-fr-upmc-pierre",
+        id: "voxtral-tts-bf16",
         role: Role::Tts,
-        label: "Piper fr_FR upmc, Pierre (medium, male)",
-        repo: "csukuangfj/vits-piper-fr_FR-upmc-medium",
+        label: "Voxtral TTS 4B (MLX, full precision)",
+        repo: "mlx-community/Voxtral-4B-TTS-2603-mlx-bf16",
         revision: "main",
-        include: &["fr_FR-upmc-medium.onnx", "tokens.txt", "espeak-ng-data/"],
-        license: "CC-BY-4.0",
-        approx_mb: 90,
-        speaker: 1,
-    },
-    Model {
-        id: "piper-fr-gilles-low",
-        role: Role::Tts,
-        label: "Piper fr_FR gilles (low, male)",
-        repo: "csukuangfj/vits-piper-fr_FR-gilles-low",
-        revision: "main",
-        include: &["fr_FR-gilles-low.onnx", "tokens.txt", "espeak-ng-data/"],
-        license: "CC-BY-4.0",
-        approx_mb: 70,
-        speaker: 0,
+        include: &[],
+        license: "CC-BY-NC-4.0",
+        approx_mb: 8040,
     },
 ];
 
@@ -152,55 +101,45 @@ pub fn model(id: &str) -> Option<&'static Model> {
     CATALOG.iter().find(|m| m.id == id)
 }
 
-/// `[voice]` in sbxw.toml. Read from the daemon's own config: one concierge
-/// per host, not one per project.
+/// The voices Voxtral TTS ships (`voice_embedding/<name>.safetensors`).
+pub const VOICES: &[&str] = &[
+    "fr_male", "fr_female", "casual_male", "casual_female", "cheerful_female", "neutral_male", "neutral_female",
+    "es_male", "es_female", "de_male", "de_female", "it_male", "it_female", "pt_male", "pt_female",
+    "nl_male", "nl_female", "ar_male", "hi_male", "hi_female",
+];
+
+/// `[voice]` in sbxw.toml, read from the daemon's config: one concierge per
+/// host, not per project. Keys of an older sbxw (`llm`, `retention_days`) are
+/// ignored.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct VoiceSettings {
     pub stt: String,
-    /// Empty: the platform's default (8B on macOS, 3B elsewhere — no Metal,
-    /// so a CPU-sized model).
-    pub llm: String,
     pub tts: String,
+    /// Which of [`VOICES`] reads aloud.
+    pub tts_voice: String,
     /// The push-to-talk key, as a `KeyboardEvent.code`.
     pub push_to_talk_key: String,
     /// Held, it dictates into the focused terminal instead.
     pub dictate_key: String,
-    /// Conversations are kept this many days at most (never more than 7).
-    pub retention_days: u32,
 }
 
 impl Default for VoiceSettings {
     fn default() -> Self {
         Self {
             stt: "parakeet-tdt-0.6b-v3-int8".into(),
-            llm: String::new(),
-            // A male French voice, and Piper's VITS is quicker than Kokoro
-            // on the CPU: the first words are heard sooner.
-            tts: "piper-fr-tom-medium".into(),
+            // The middle size: 3.5 GB in memory while it speaks.
+            tts: "voxtral-tts-6bit".into(),
+            tts_voice: "fr_male".into(),
             push_to_talk_key: "F8".into(),
             dictate_key: "F9".into(),
-            retention_days: MAX_RETENTION_DAYS,
         }
-    }
-}
-
-pub const MAX_RETENTION_DAYS: u32 = 7;
-
-pub fn default_llm() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "ministral-3-8b-instruct-q4"
-    } else {
-        "ministral-3-3b-instruct-q4"
     }
 }
 
 impl VoiceSettings {
     pub fn validate(&self) -> Result<(), String> {
-        for (role, id) in [(Role::Stt, &self.stt), (Role::Llm, &self.llm), (Role::Tts, &self.tts)] {
-            if id.is_empty() && role == Role::Llm {
-                continue;
-            }
+        for (role, id) in [(Role::Stt, &self.stt), (Role::Tts, &self.tts)] {
             match model(id) {
                 Some(m) if m.role == role => {}
                 Some(_) => return Err(format!("[voice] '{id}' is not a {role:?} model")),
@@ -210,8 +149,8 @@ impl VoiceSettings {
                 }
             }
         }
-        if self.retention_days == 0 || self.retention_days > MAX_RETENTION_DAYS {
-            return Err(format!("[voice] retention_days must be 1–{MAX_RETENTION_DAYS}"));
+        if !VOICES.contains(&self.tts_voice.as_str()) {
+            return Err(format!("[voice] unknown tts_voice '{}' (known: {})", self.tts_voice, VOICES.join(", ")));
         }
         if self.push_to_talk_key.trim().is_empty() || self.dictate_key.trim().is_empty() {
             return Err("[voice] push_to_talk_key and dictate_key must be set".into());
@@ -224,8 +163,60 @@ impl VoiceSettings {
 
     /// The models this configuration needs, in pipeline order.
     pub fn models(&self) -> Vec<&'static Model> {
-        let llm = if self.llm.is_empty() { default_llm() } else { &self.llm };
-        [self.stt.as_str(), llm, self.tts.as_str()].into_iter().filter_map(model).collect()
+        [self.stt.as_str(), self.tts.as_str()].into_iter().filter_map(model).collect()
+    }
+}
+
+// ── The speech server ─────────────────────────────────────────────────────
+
+/// What runs Voxtral: `mlx-audio`'s OpenAI-compatible server, fetched and
+/// run by `uvx` at this version (MLX: Apple Silicon only). `tts` brings
+/// `mistral-common`, which Voxtral's tokenizer needs: without it the server
+/// starts and then fails to load the model.
+pub const SPEECH_RUNTIME: &str = "mlx-audio[server,tts]==0.6.5";
+
+/// Whether this machine can run [`SPEECH_RUNTIME`].
+pub fn speech_supported() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+}
+
+/// What Voxtral speaks at: its sound is 16-bit mono PCM at this rate.
+pub const SPEECH_RATE: u32 = 24_000;
+
+/// Seconds of sound per piece of a streamed answer: the first one is heard
+/// after about this much has been made.
+pub const SPEECH_PIECE_SECS: f32 = 1.0;
+
+/// The body of `POST /v1/audio/speech` for `text`: `model` is the installed
+/// model's directory, the answer raw PCM ([`SPEECH_RATE`]) sent as it is made.
+pub fn speech_request(model: &Path, voice: &str, text: &str) -> String {
+    serde_json::json!({
+        "model": model.to_string_lossy(),
+        "input": text,
+        "voice": voice,
+        "response_format": "pcm",
+        "stream": true,
+        "streaming_interval": SPEECH_PIECE_SECS,
+        // In 80 ms frames: 200 s, above what the longest batch needs once
+        // its symbols are said in words. The server stops at 96 s otherwise.
+        "max_tokens": 2500,
+    })
+    .to_string()
+}
+
+/// Where the body of an HTTP response starts in `buf` (headers included, as
+/// `curl -i` prints them) and its status, once the headers are whole. A
+/// `100 Continue` block before the real one is skipped.
+pub fn response_head(buf: &[u8]) -> Option<(u16, usize)> {
+    let mut at = 0;
+    loop {
+        let end = at + buf[at..].windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+        let head = String::from_utf8_lossy(&buf[at..end]);
+        let status: u16 = head.split_whitespace().nth(1)?.parse().ok()?;
+        if status >= 200 {
+            return Some((status, end));
+        }
+        at = end;
     }
 }
 
@@ -278,14 +269,23 @@ fn wanted(m: &Model, path: &str) -> bool {
     })
 }
 
-/// A repo path as a URL path: each segment percent-encoded except RFC 3986's
-/// unreserved characters, `/` kept. espeak-ng's data has names like
-/// `voices/!v/Mr serious`, which curl refuses raw.
+/// A repo path as a URL path: percent-encode everything but RFC 3986 unreserved
+/// characters and `/`. A name with a space or a `!` is refused raw by curl.
 fn url_path(path: &str) -> String {
+    url_encode(path, true)
+}
+
+/// A value for a URL's query string: `/` is encoded too.
+pub fn url_component(value: &str) -> String {
+    url_encode(value, false)
+}
+
+fn url_encode(path: &str, keep_slash: bool) -> String {
     let mut out = String::with_capacity(path.len());
     for b in path.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => out.push(b as char),
+            b'/' if keep_slash => out.push('/'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -301,9 +301,9 @@ fn safe_rel(path: &str) -> bool {
         && path.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
-/// The files to fetch for `m`, from the tree listing's JSON. Every file an
-/// exact `include` names must be listed: a renamed upstream file is an error
-/// here, not a model that fails to load later.
+/// Files to fetch for `m`, from the tree JSON. Every exact `include` must be
+/// listed: a renamed upstream file is an error here, not a model that fails to
+/// load later.
 pub fn plan(m: &Model, tree_json: &str) -> Result<Vec<PlannedFile>, String> {
     let entries: Vec<TreeEntry> =
         serde_json::from_str(tree_json).map_err(|e| format!("{}: unreadable file listing: {e}", m.repo))?;
@@ -366,8 +366,8 @@ pub fn installed(models_root: &Path, m: &Model) -> Installed {
         .ok()
         .and_then(|t| serde_json::from_str::<Vec<MarkerFile>>(&t).ok());
     if let Some(list) = marker {
-        // The catalog may have grown since this was installed: a marker
-        // without every included file or folder is an install to complete.
+        // The catalog may have grown since install: a marker missing an included
+        // file or folder is an install to complete.
         let covers = m.include.iter().all(|inc| match inc.strip_suffix('/') {
             Some(d) => list.iter().any(|f| f.path.starts_with(d) && f.path[d.len()..].starts_with('/')),
             None => list.iter().any(|f| f.path == *inc),
@@ -420,49 +420,6 @@ fn dir_bytes(dir: &Path) -> u64 {
         .sum()
 }
 
-/// `fr` or `en`, for choosing a voice: French unless the text reads as
-/// English (no French accents, more English function words than French).
-pub fn guess_lang(text: &str) -> &'static str {
-    if text.chars().any(|c| "éèêàâçùûôîïëœÉÈÀÇ".contains(c)) {
-        return "fr";
-    }
-    const FR: &[&str] = &["le", "la", "les", "un", "une", "des", "est", "et", "je", "tu", "vous", "pour", "que", "qui", "pas", "de", "du", "ton", "ta"];
-    const EN: &[&str] = &["the", "a", "an", "is", "are", "and", "you", "i", "to", "of", "for", "that", "it", "your", "what", "with"];
-    let words: Vec<String> = text
-        .split(|c: char| !c.is_alphabetic() && c != '\'')
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_lowercase())
-        .collect();
-    let count = |list: &[&str]| words.iter().filter(|w| list.contains(&w.as_str())).count();
-    if count(EN) > count(FR) {
-        "en"
-    } else {
-        "fr"
-    }
-}
-
-/// Mono f32 samples as a 16-bit PCM WAV file, which every browser decodes.
-pub fn wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
-    let data_len = (samples.len() * 2) as u32;
-    let mut out = Vec::with_capacity(44 + data_len as usize);
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&(36 + data_len).to_le_bytes());
-    out.extend_from_slice(b"WAVEfmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
-    out.extend_from_slice(&sample_rate.to_le_bytes());
-    out.extend_from_slice(&(sample_rate * 2).to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&data_len.to_le_bytes());
-    for s in samples {
-        out.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
-    }
-    out
-}
-
 /// What the CLI and the UI say when the voice is not installed.
 pub const INSTALL_HINT: &str = "sbxw voice install";
 
@@ -470,8 +427,19 @@ pub const INSTALL_HINT: &str = "sbxw voice install";
 mod tests {
     use super::*;
 
-    fn kokoro() -> &'static Model {
-        model("kokoro-multi-lang-v1_0").unwrap()
+    /// A model that keeps named files and folders of its repo.
+    fn listed() -> &'static Model {
+        static M: Model = Model {
+            id: "listed",
+            role: Role::Tts,
+            label: "test",
+            repo: "someone/listed",
+            revision: "main",
+            include: &["model.onnx", "voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt", "dict/", "espeak-ng-data/"],
+            license: "Apache-2.0",
+            approx_mb: 360,
+        };
+        &M
     }
 
     const TREE: &str = r#"[
@@ -488,7 +456,7 @@ mod tests {
 
     #[test]
     fn plan_keeps_included_files_and_lfs_checksums() {
-        let p = plan(kokoro(), TREE).unwrap();
+        let p = plan(listed(), TREE).unwrap();
         let paths: Vec<_> = p.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(
             paths,
@@ -498,45 +466,62 @@ mod tests {
         assert_eq!(m.size, 330000000, "the LFS size, not the pointer's");
         assert_eq!(m.sha256.as_deref(), Some("abcdef"));
         assert_eq!(p.iter().find(|f| f.path == "tokens.txt").unwrap().sha256, None);
-        assert!(m.url.ends_with("/csukuangfj/kokoro-multi-lang-v1_0/resolve/main/model.onnx"));
+        assert!(m.url.ends_with("/someone/listed/resolve/main/model.onnx"));
     }
 
     #[test]
     fn urls_encode_spaces_and_punctuation_but_keep_slashes() {
         assert_eq!(url_path("espeak-ng-data/voices/!v/Mr serious"), "espeak-ng-data/voices/%21v/Mr%20serious");
         assert_eq!(url_path("a/é+b"), "a/%C3%A9%2Bb");
+        assert_eq!(url_component("/Users/a b/m"), "%2FUsers%2Fa%20b%2Fm");
         let tree = r#"[{"type":"file","path":"model.onnx","size":1},{"type":"file","path":"voices.bin","size":1},
           {"type":"file","path":"tokens.txt","size":1},{"type":"file","path":"lexicon-us-en.txt","size":1},
           {"type":"file","path":"lexicon-zh.txt","size":1},
           {"type":"file","path":"espeak-ng-data/voices/!v/Mr serious","size":1}]"#;
-        let p = plan(kokoro(), tree).unwrap();
+        let p = plan(listed(), tree).unwrap();
         let f = p.iter().find(|f| f.path.ends_with("serious")).unwrap();
         assert!(f.url.ends_with("/resolve/main/espeak-ng-data/voices/%21v/Mr%20serious"), "{}", f.url);
         assert_eq!(f.path, "espeak-ng-data/voices/!v/Mr serious", "on disk under its real name");
     }
 
     #[test]
-    fn the_voice_follows_the_language() {
-        assert_eq!(guess_lang("Tu veux donc un mode clair pour ton site."), "fr");
-        assert_eq!(guess_lang("Je veux un mode clair"), "fr");
-        assert_eq!(guess_lang("So you want a light mode for your site?"), "en");
-        assert_eq!(guess_lang("OK"), "fr", "French by default");
+    fn a_whole_repo_is_fetched_without_its_docs() {
+        let m = model("voxtral-tts-6bit").unwrap();
+        let tree = r#"[{"type":"file","path":"README.md","size":9},{"type":"file","path":".gitattributes","size":9},
+          {"type":"file","path":"config.json","size":4140},
+          {"type":"file","path":"model.safetensors","size":134,"lfs":{"oid":"AB","size":3400000000}},
+          {"type":"file","path":"voice_embedding/fr_male.safetensors","size":596056}]"#;
+        let paths: Vec<_> = plan(m, tree).unwrap().into_iter().map(|f| f.path).collect();
+        assert_eq!(paths, ["config.json", "model.safetensors", "voice_embedding/fr_male.safetensors"]);
     }
 
     #[test]
-    fn wav_has_a_header_and_two_bytes_a_sample() {
-        let w = wav(&[0.0, 1.0, -1.0], 24_000);
-        assert_eq!(&w[..4], b"RIFF");
-        assert_eq!(&w[8..12], b"WAVE");
-        assert_eq!(w.len(), 44 + 6);
-        assert_eq!(u32::from_le_bytes(w[24..28].try_into().unwrap()), 24_000);
-        assert_eq!(i16::from_le_bytes([w[46], w[47]]), 32767);
+    fn a_speech_request_names_the_local_model_and_asks_for_a_stream() {
+        let v: serde_json::Value = serde_json::from_str(&speech_request(Path::new("/m/voxtral"), "fr_male", "Salut \"toi\".")).unwrap();
+        assert_eq!(v["model"], "/m/voxtral");
+        assert_eq!(v["input"], "Salut \"toi\".");
+        assert_eq!(v["voice"], "fr_male");
+        assert_eq!(v["response_format"], "pcm");
+        assert_eq!(v["stream"], true);
+        assert!(SPEECH_RUNTIME.contains("=="), "the runtime is pinned");
+        assert!(SPEECH_RUNTIME.contains("tts"), "with Voxtral's own dependencies");
+    }
+
+    #[test]
+    fn a_response_head_gives_the_status_and_where_the_body_starts() {
+        let ok = b"HTTP/1.1 200 OK\r\ncontent-type: audio/pcm\r\n\r\n\x01\x02";
+        assert_eq!(response_head(ok), Some((200, ok.len() - 2)));
+        assert_eq!(response_head(&ok[..20]), None, "headers not whole yet");
+        let continued = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 500 Internal Server Error\r\n\r\nboom";
+        assert_eq!(response_head(continued), Some((500, continued.len() - 4)));
+        assert_eq!(response_head(b"HTTP/1.1 100 Continue\r\n\r\n"), None);
+        assert_eq!(response_head(b"not http\r\n\r\n"), None);
     }
 
     #[test]
     fn a_missing_exact_file_is_an_error() {
         let tree = r#"[{"type":"file","path":"model.onnx","size":1}]"#;
-        let e = plan(kokoro(), tree).unwrap_err();
+        let e = plan(listed(), tree).unwrap_err();
         assert!(e.contains("voices.bin"), "{e}");
     }
 
@@ -544,7 +529,7 @@ mod tests {
     fn unsafe_paths_are_refused() {
         let m = Model {
             include: &[],
-            ..kokoro().clone()
+            ..listed().clone()
         };
         let tree = r#"[{"type":"file","path":"a/../evil","size":1}]"#;
         assert!(plan(&m, tree).unwrap_err().contains("refusing"));
@@ -553,7 +538,7 @@ mod tests {
     #[test]
     fn installed_needs_the_marker_and_every_size() {
         let root = tempfile::tempdir().unwrap();
-        let m = kokoro();
+        let m = listed();
         assert_eq!(installed(root.path(), m), Installed::Missing);
         let dir = model_dir(root.path(), m);
         std::fs::create_dir_all(&dir).unwrap();
@@ -577,18 +562,26 @@ mod tests {
     }
 
     #[test]
-    fn settings_validate_roles_and_retention() {
+    fn settings_validate_roles_and_the_voice() {
         assert!(VoiceSettings::default().validate().is_ok());
         let bad_role = VoiceSettings {
-            stt: "kokoro-multi-lang-v1_0".into(),
+            stt: "voxtral-tts-4bit".into(),
             ..Default::default()
         };
         assert!(bad_role.validate().unwrap_err().contains("not a Stt"));
-        let long = VoiceSettings {
-            retention_days: 30,
+        let gone = VoiceSettings {
+            tts: "some-older-voice".into(),
             ..Default::default()
         };
-        assert!(long.validate().is_err());
-        assert_eq!(VoiceSettings::default().models().len(), 3);
+        assert!(gone.validate().unwrap_err().contains("voxtral-tts-6bit"), "the error lists what exists");
+        let voice = VoiceSettings {
+            tts_voice: "pierre".into(),
+            ..Default::default()
+        };
+        assert!(voice.validate().unwrap_err().contains("fr_male"));
+        assert_eq!(VoiceSettings::default().models().len(), 2);
+        let old: VoiceSettings = toml::from_str("llm = \"x\"\nretention_days = 7\ndictate_key = \"F10\"").unwrap();
+        assert_eq!(old.dictate_key, "F10", "keys of the LLM era are ignored");
     }
+
 }

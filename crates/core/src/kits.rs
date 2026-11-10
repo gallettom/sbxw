@@ -1,20 +1,19 @@
 //! Kits: sbx's declarative extension point, and the facts sbxw has learnt
 //! about applying them.
 //!
-//! * **Kit spec v3 only (sbx 0.51).** `claude` resolves to the published
-//!   v3 workload `docker.io/sbx/claude:latest`, and a v1/v2 kit cannot be
-//!   composed with a v3 one. Every kit sbxw ships or writes is v3; a local v1/v2
-//!   kit in `kits` is refused before anything is created.
+//! * **Kit spec v3 only (sbx 0.51).** `claude` resolves to the published v3
+//!   workload `docker.io/sbx/claude:latest`, and a v1/v2 kit cannot be composed
+//!   with a v3 one. sbxw ships and writes only v3 kits, and refuses a local
+//!   v1/v2 kit in `kits` before creating anything.
 //! * **Creation is the moment to apply a kit.** `sbx kit add` on an existing
 //!   sandbox recreates its container, and refuses kits declaring credentials,
-//!   ports, volumes, generated lifecycle files or host-level denies; image
-//!   content, install/startup hooks and allow rules it takes. A refusal is a
-//!   message telling the person to recreate, never a recreate sbxw decides on
-//!   its own.
-//! * **sbx keeps a kit's path, not a copy.** A container swap re-resolves every
-//!   kit applied before it by its original path; a kit directory that is gone
-//!   fails the swap and names the *wrong* kit. Hence the stable directories
-//!   every bundled and generated kit is written to.
+//!   ports, volumes, generated lifecycle files or host-level denies (image
+//!   content, install/startup hooks and allow rules it takes). A refusal tells
+//!   the person to recreate; sbxw never recreates on its own.
+//! * **sbx keeps a kit's path, not a copy.** A container swap re-resolves each
+//!   kit by its original path; a missing directory fails the swap and names the
+//!   *wrong* kit. Hence the stable directories bundled and generated kits are
+//!   written to.
 
 use std::path::{Path, PathBuf};
 
@@ -72,10 +71,10 @@ pub fn set_kits_line(raw: &str, kits: Option<&[String]>) -> anyhow::Result<Strin
             doc.remove("kits");
         }
         Some(kits) => {
-            // Comments inside the list — often kits commented out for later —
-            // belong to the slot they sit in: an entry kept keeps its own, one
-            // replaced in place (a path turned into its `sbxw:` name) hands
-            // them to its replacement, and one removed to the next entry kept.
+            // Comments inside the list (often kits commented out for later)
+            // stay with their slot: a kept entry keeps its own; one replaced in
+            // place (a path turned into its `sbxw:` name) hands them over; one
+            // removed passes them to the next kept entry.
             let old = doc.get("kits").and_then(|k| k.as_array()).cloned().unwrap_or_default();
             let olds: Vec<Option<&str>> = old.iter().map(|v| v.as_str()).collect();
             let comment = |v: &toml_edit::Value| {
@@ -128,13 +127,11 @@ pub fn bundled_name(kit: &str) -> Option<&str> {
     kit.strip_prefix("sbxw:")
 }
 
-/// One `kits = [...]` entry resolved against the config's directory — when, and
-/// only when, it is a local path.
-///
-/// A reference is a directory, a ZIP, an OCI ref or a git URL. Joining an OCI
-/// ref onto the project turns `docker.io/sbx/k:1` into a missing directory.
-/// So: absolute and URL-shaped references pass through; `./x`, `../x` always
-/// resolve; a bare `x/y` resolves only if it exists on disk.
+/// One `kits = [...]` entry resolved against the config's directory, only when
+/// it is a local path. Joining an OCI ref onto the project would turn
+/// `docker.io/sbx/k:1` into a missing directory: absolute and URL-shaped
+/// references pass through, `./x` and `../x` always resolve, a bare `x/y` only
+/// if it exists on disk.
 pub fn resolve_kit_ref(config_dir: &Path, kit: String) -> String {
     let p = Path::new(&kit);
     if p.is_absolute() || kit.contains("://") {
@@ -161,10 +158,9 @@ pub fn spec_version(dir: &Path) -> Option<u32> {
     })
 }
 
-/// Does the kit directory hold a v3 spec? sbx's `kit validate` reads only
-/// v1/v2 specs and refuses every v3 one (`field capabilities not found`), even
-/// the spec project's own examples — so a v3 kit is left to `sbx create`,
-/// which does read it.
+/// Does the kit directory hold a v3 spec? sbx's `kit validate` reads only v1/v2
+/// and refuses every v3 one (`field capabilities not found`), even the spec
+/// project's own examples; a v3 kit is left to `sbx create`, which reads it.
 pub fn is_v3_kit(dir: &Path) -> bool {
     spec_version(dir) == Some(3)
 }

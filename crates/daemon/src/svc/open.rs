@@ -22,10 +22,9 @@ use std::time::Duration;
 /// A stopped sandbox starts its container, then boots Claude Code.
 const COLD_START_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Is a host port held by someone else? Something answering on it is
-/// enough; a failed bind catches a listener that does not answer. Both,
-/// because std binds with `SO_REUSEADDR`, which on macOS lets a wildcard bind
-/// succeed beside a listener on one address.
+/// Is a host port held by someone else? Either a connect answers or a bind
+/// fails. Both are needed: std binds with `SO_REUSEADDR`, which on macOS lets a
+/// wildcard bind succeed beside a listener on one address.
 fn host_port_busy(ip: &str, port: u16) -> bool {
     let ip: std::net::IpAddr = ip.parse().unwrap_or(std::net::Ipv4Addr::LOCALHOST.into());
     let probe = if ip.is_unspecified() { std::net::Ipv4Addr::LOCALHOST.into() } else { ip };
@@ -135,9 +134,9 @@ impl App {
                 Spawn::sbx(scripts::thread_bash_args(&sandbox.name, &dir, thread, self.team_for(&sandbox, thread).as_ref()))
             }
             SessionKind::Thread(thread) => {
-                // A shared plan's worktree is named like a thread but is none:
+                // A shared plan's worktree is named like a thread but is not one:
                 // a session opened under its name would find no briefing and
-                // resume whichever thread's conversation that folder holds.
+                // resume whichever conversation that folder holds.
                 if self.plans.lock().unwrap().of(&sandbox.to_string()).iter().any(|p| p.team_name() == thread.as_str()) {
                     bail!("'{thread}' is the worktree a shared plan's threads share, not a thread: open one of its threads instead");
                 }
@@ -208,10 +207,10 @@ impl App {
         }
     }
 
-    /// A thread runs through `sbx exec`, which starts a stopped sandbox
-    /// itself (0.50) — no main session to open. Started here rather than by
-    /// the thread's own exec, so busy host ports are released first and a
-    /// failure is an error, not a pane that dies.
+    /// A thread runs through `sbx exec`, which starts a stopped sandbox itself
+    /// (0.50), so there is no main session to open. It is started here rather
+    /// than by the thread's own exec, so busy host ports are released first and
+    /// a failure is an error, not a pane that dies.
     pub async fn ensure_running_for_thread(self: &Arc<Self>, sandbox: &SandboxRef) -> Result<()> {
         let sbx = self.sbx_for(sandbox).await?;
         if sbx.is_running(&sandbox.name).await {

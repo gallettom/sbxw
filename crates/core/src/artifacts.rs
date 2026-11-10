@@ -2,8 +2,8 @@
 //!
 //! sbxw lists and serves what it finds there (a sandbox hook nudges the agent
 //! to put deliverables there). A code map and its lenses are *directories* of
-//! linked markdown, folded out of the file list into summaries the map viewer
-//! reads — listed file by file they would bury the deliverables beside them.
+//! linked markdown, folded into summaries for the map viewer: listed file by
+//! file, they would bury the deliverables beside them.
 
 use crate::codemap::{CODEMAP_DIR, LENS_DIR};
 use serde::Serialize;

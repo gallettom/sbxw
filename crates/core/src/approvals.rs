@@ -1,8 +1,6 @@
-//! sbx's pending approvals (`sbx policy approval`, 0.51): what sbx waits for a
-//! person to decide — a host the sandbox reached that no rule allows, a kit's
-//! request for a host port (which lapses after 45 s). sbx keeps one list, each
-//! entry offering its own options; sbxw shows it and passes the answer back,
-//! never choosing one itself.
+//! sbx's pending approvals (`sbx policy approval`, 0.51): a host the sandbox
+//! reached that no rule allows, or a kit's request for a host port (lapses after
+//! 45 s). sbxw shows them and passes the answer back, never choosing one.
 
 use serde::Serialize;
 
@@ -19,7 +17,7 @@ pub struct Approval {
     /// The id's prefix: `network`, `port`…
     pub kind: String,
     pub sandbox: String,
-    /// The thing asked about: `api.github.com:443`.
+    /// What is asked about: `api.github.com:443`.
     pub title: String,
     pub detail: String,
     /// RFC 3339.
@@ -33,9 +31,8 @@ impl Approval {
     }
 }
 
-/// `sbx policy approval ls --format json`: a bare array. `None` when `raw` is
-/// not that; an entry missing its id or options is skipped, since nothing
-/// could be answered on it.
+/// `sbx policy approval ls --format json`, a bare array. `None` when `raw` is
+/// not one; entries without an id or options are skipped (nothing to answer).
 pub fn parse(raw: &str) -> Option<Vec<Approval>> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
     let text = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();

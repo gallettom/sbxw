@@ -3,18 +3,18 @@
 //!
 //! sbx has no `mcp edit`: an edit is `mcp rm` then `mcp add` under the same
 //! name, so the spec is checked whole *before* anything is removed. Every
-//! value goes to sbx in `--flag=value` form, so none can be read as a flag of
-//! its own. A remote server is always added with `--skip-auth`: an OAuth
-//! dance started from the daemon would wait on a browser nobody is watching,
-//! so authorizing stays `sbx mcp auth <name>` in a terminal.
+//! value goes to sbx in `--flag=value` form, so none can be read as a flag.
+//! A remote server is always added with `--skip-auth`: an OAuth flow started
+//! from the daemon would wait on a browser nobody watches, so authorizing stays
+//! `sbx mcp auth <name>` in a terminal.
 
 use serde::{Deserialize, Serialize};
 
 const ARG_LIMIT: usize = 2048;
 
-/// One server in `sbx mcp ls --format json` (0.48+: a bare array). `detail`
-/// is the whole row: its fields beyond `name` and `type` are not documented,
-/// so the UI reads what it recognises (a URL, a command) to prefill an edit.
+/// One row of `sbx mcp ls --format json` (0.48+: a bare array). `detail` is
+/// the whole row: fields beyond `name` and `type` are undocumented, so the UI
+/// reads what it recognises (a URL, a command) to prefill an edit.
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServer {
     pub name: String,
@@ -56,8 +56,8 @@ pub struct McpSpec {
     pub dir: String,
 }
 
-/// A server name: it also names the server's secrets (`mcp:<name>:<key>`),
-/// so it keeps to the characters a secret service name can carry.
+/// Also names the server's secrets (`mcp:<name>:<key>`): only characters a
+/// secret service name can carry.
 pub fn check_name(name: &str) -> Result<String, String> {
     let n = name.trim();
     if n.is_empty() || n.len() > 64 {

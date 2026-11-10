@@ -1,22 +1,22 @@
 //! The Project panel's file explorer: a sandbox's own filesystem, read-only.
 //!
-//! The artifacts listing reads `.sbxw-artifacts` from the
-//! host, through the workspace mount, which is all a list of deliverables needs.
-//! An explorer needs the rest — `/home/agent`, `/etc`, a tool's cache — and those
-//! exist only inside the container. So a **running** sandbox is read through
-//! `sbx exec`: one `find` per directory, one `cat` per file.
+//! The artifacts listing reads `.sbxw-artifacts` from the host, through the
+//! workspace mount, which is all a list of deliverables needs. An explorer needs
+//! the rest (`/home/agent`, `/etc`, a tool's cache), which exist only inside the
+//! container. So a **running** sandbox is read through `sbx exec`: one `find`
+//! per directory, one `cat` per file.
 //!
 //! A **stopped** sandbox cannot be exec'd into, and starting one to show a
 //! directory listing is not a call a file browser gets to make. What is still
-//! readable then is the workspace, from the host: in direct mode it is mounted
-//! at the same absolute path, so the paths the panel shows stay the ones the
-//! agent sees. The listing says which of the two it is (`offline`), and
-//! anything outside the workspace is refused rather than read off the host's own
-//! disk under a sandbox's name.
+//! readable is the workspace, from the host: in direct mode it is mounted at the
+//! same absolute path, so the panel's paths are the ones the agent sees. The
+//! listing says which of the two it is (`offline`), and anything outside the
+//! workspace is refused rather than read off the host's disk under a sandbox's
+//! name.
 //!
 //! It reads, with one exception: `delete`, for the file an agent left where it
-//! should not have. Only under the places an agent writes to — the workspace,
-//! the read-write mounts, home and `/tmp` — and never one of those itself.
+//! should not have. Only under the places an agent writes to (the workspace, the
+//! read-write mounts, home and `/tmp`), and never one of those itself.
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -79,10 +79,10 @@ exec head -c "$2" -- "$1""#;
 
 
 /// Folders a scan for recent files does not descend into: version control,
-/// dependencies, build output, tool caches — and the agent's own transcripts,
-/// which change on every turn. What is left is what someone, usually the agent,
+/// dependencies, build output, tool caches, and the agent's own transcripts,
+/// which change every turn. What is left is what someone, usually the agent,
 /// chose to write. Names, matched as `find -name` does; a trailing `*` is the
-/// only wildcard used, and the only one the host-side walk understands.
+/// only wildcard, and the only one the host-side walk understands.
 pub const RECENT_PRUNE: &[&str] = &[
     ".git", "node_modules", "target", ".cache", ".npm", ".cargo", ".rustup", ".nvm",
     ".local", ".claude", ".sbxw", "__pycache__", ".venv", "venv", ".gradle", ".m2",
@@ -122,10 +122,10 @@ for r in "$@"; do [ -d "$r" ] && find "$r" -xdev \( ${p% -o} \) -prune -o -type 
   sort -z -rn | head -z -n "$max"
 exit 0"#;
 
-/// Remove `$1` — a file, a link or a whole folder — provided it lies strictly
-/// inside one of the roots (`$2`…). The check is made on the resolved parent,
-/// so a symlinked folder is no way out; the last component is not followed,
-/// so deleting a link removes the link.
+/// Remove `$1` (a file, a link or a whole folder) if it lies strictly inside one
+/// of the roots (`$2`…). The check is made on the resolved parent, so a
+/// symlinked folder is no way out; the last component is not followed, so
+/// deleting a link removes the link.
 const DELETE_SCRIPT: &str = r#"f=$1; shift
 d=$(cd -P -- "$(dirname -- "$f")" 2>/dev/null && pwd) || { echo "no such folder" >&2; exit 3; }
 b=$(basename -- "$f")
@@ -198,8 +198,8 @@ pub async fn list(sbx: &Sbx, host: &Host, sandbox: &SandboxName, workspace: Opti
     })
 }
 
-/// Files written lately across `roots` — the workspace, home, `/tmp`, the
-/// read-write mounts: wherever an agent may have put something. Running, one
+/// Files written lately across `roots` (the workspace, home, `/tmp`, the
+/// read-write mounts: wherever an agent may have put something). Running, one
 /// `find` inside the sandbox; stopped, a walk of the workspace on the host.
 pub async fn recent(sbx: &Sbx, host: &Host, sandbox: &SandboxName, workspace: Option<&Path>, roots: &[String]) -> Result<(Vec<Recent>, bool)> {
     let since = now_secs().saturating_sub(RECENT_DAYS * 86_400);
@@ -231,10 +231,10 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// The host-side scan of a stopped sandbox's workspace: symlinks are not
-/// followed, so it cannot leave the workspace. One walk of the host; the
-/// prune list is applied twice, by exact name to stop the walk descending, and
-/// here for the `sbxw-*` prefix it cannot express.
+/// The host-side scan of a stopped sandbox's workspace. Symlinks are not
+/// followed, so it cannot leave the workspace. The prune list is applied twice:
+/// by exact name, to stop the walk descending, and here for the `sbxw-*` prefix
+/// the walk cannot express.
 async fn walk_recent(host: &Host, dir: &Path, since: u64) -> Result<Vec<Recent>> {
     let exact: Vec<&str> = RECENT_PRUNE.iter().copied().filter(|p| !p.ends_with('*')).collect();
     let all = host.fs.walk(dir, 32, &exact).await.with_context(|| format!("{}: not readable", dir.display()))?;
@@ -316,8 +316,8 @@ pub async fn read(
 }
 
 /// Why `path` may not be deleted, if it may not: it is relative, climbs with
-/// `..`, is not inside one of `roots`, or is one of `protected` — a root
-/// itself, the deliverables folder, the repository's history.
+/// `..`, is not inside one of `roots`, or is one of `protected` (a root itself,
+/// the deliverables folder, the repository's history).
 pub fn refuse_delete(path: &str, roots: &[String], protected: &[String]) -> Option<String> {
     if !path.starts_with('/') {
         return Some(format!("{path}: give an absolute path"));
@@ -341,7 +341,7 @@ pub fn refuse_delete(path: &str, roots: &[String], protected: &[String]) -> Opti
     None
 }
 
-/// Delete `path` — file, link or folder with everything in it — once
+/// Delete `path` (file, link or folder with everything in it) once
 /// `refuse_delete` has nothing against it. Running, inside the sandbox, where
 /// the script checks again on the resolved path; stopped, on the host, inside
 /// the workspace only.
@@ -376,8 +376,8 @@ pub async fn delete(
 }
 
 /// The host path a stopped sandbox's `path` names, its parent resolved and
-/// checked to be the workspace or inside it; the last component is left alone
-/// so a link is removed rather than what it points to.
+/// checked to be the workspace or inside it. The last component is left alone,
+/// so a link is removed rather than its target.
 async fn host_delete_target(host: &Host, ws: &Path, path: &str) -> Result<PathBuf> {
     let ws = host
         .fs
@@ -395,7 +395,7 @@ async fn host_delete_target(host: &Host, ws: &Path, path: &str) -> Result<PathBu
     Ok(parent.join(name))
 }
 
-/// `p`, resolved on the host, provided it stays inside the workspace — the one
+/// `p`, resolved on the host, provided it stays inside the workspace: the one
 /// part of a stopped sandbox the host can answer for.
 async fn host_path(host: &Host, workspace: Option<&Path>, p: &str) -> Result<PathBuf> {
     let Some(ws) = workspace else {
@@ -438,7 +438,7 @@ fn parent_of(path: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Folders first, then by name, case-insensitively — how every file manager
+/// Folders first, then by name, case-insensitively: how every file manager
 /// orders a directory.
 fn sort_entries(entries: &mut [Entry]) {
     entries.sort_by(|a, b| {
@@ -520,7 +520,7 @@ mod tests {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
     }
 
-    /// Stopped, the workspace is walked on the host — newest first, pruned
+    /// Stopped, the workspace is walked on the host: newest first, pruned
     /// folders skipped, old files left out.
     #[tokio::test]
     async fn a_stopped_sandbox_lists_recent_workspace_files_outside_pruned_folders() {

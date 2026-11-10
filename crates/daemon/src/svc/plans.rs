@@ -24,8 +24,8 @@ impl App {
 
 impl App {
     /// Write `sandbox`'s plans (or remove the file when none are left) and
-    /// broadcast. Every change comes through here. The directory is 0700: a
-    /// plan id is a capability.
+    /// broadcast. Every change comes through here. A plan id is a capability,
+    /// hence the 0700 directory.
     fn plan_changed(&self, plan: Plan) -> Plan {
         self.persist_plans(&plan.sandbox);
         self.send(Event::Plan(plan.clone()));
@@ -207,10 +207,10 @@ impl App {
 
     /// A person approves (maybe after editing, maybe changing the variant):
     /// the daemon records each thread's repo and model, then opens one session
-    /// per thread with its briefing as its start prompt — in its own worktree,
-    /// or all in the plan's one worktree when it is shared. Refused, before
-    /// anything is recorded, when the threads would not fit under the ceiling
-    /// or a shared plan's threads name more than one repo.
+    /// per thread with its briefing as start prompt, in its own worktree or all
+    /// in the plan's one worktree when shared. Refused before anything is
+    /// recorded when the threads would not fit under the ceiling, or a shared
+    /// plan's threads name more than one repo.
     pub async fn plan_approve(self: &Arc<Self>, id: &str, threads: Vec<PlanThread>, variant: Option<Variant>) -> Result<Plan, String> {
         let plan = self.plan(id).ok_or_else(|| format!("no plan '{id}'"))?;
         let sandbox = SandboxRef::parse(&plan.sandbox).map_err(|e| e.to_string())?;
@@ -303,9 +303,8 @@ impl App {
             self.refuse_while_claimed(&plan)?;
             return self.plan_merge_shared(plan, merge, &sandbox, close_threads, distillate).await;
         }
-        // Where each thread merges — read first, so the base is known from the
-        // first broadcast on.
-        // A retry skips the threads that already merged.
+        // Where each thread merges, read first so the base is known from the
+        // first broadcast. A retry skips the threads already merged.
         let done: std::collections::HashSet<&str> = merge.results.iter().filter(|r| r.ok).map(|r| r.thread.as_str()).collect();
         let mut dirs: Vec<(String, Result<String, String>)> = Vec::new();
         for t in merge.order.iter().filter(|t| !done.contains(t.as_str())) {
@@ -497,10 +496,10 @@ impl App {
     /// the branch if asked. Dirty work is refused without `discard` — the
     /// daemon does not trust a click it did not see.
     pub async fn close_thread(&self, sandbox: &SandboxRef, thread: &ThreadName, discard: bool, delete_branch: bool) -> Result<(), String> {
-        // A session in the main checkout has no worktree to remove, and its
-        // folder is the main agent's: nothing there is killed by cwd.
-        // A shared plan's thread has no worktree of its own either: it leaves
-        // its plan, and the plan's worktree goes with the last of them.
+        // A session in the main checkout has no worktree to remove (its folder
+        // is the main agent's, so nothing there is killed by cwd). A shared
+        // thread has no worktree of its own: it leaves its plan, and the plan's
+        // worktree goes with the last one.
         let mut team_end = None;
         if self.is_same_worktree(sandbox, thread) {
             tracing::info!("closing session '{thread}' of '{sandbox}', in the main checkout");

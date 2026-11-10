@@ -1,17 +1,17 @@
 //! Bringing a sandbox up: one pipeline for every way in — `sbxw up`, the
 //! create and chat dialogs, Duplicate, the island's ephemeral chat.
 //!
-//! The steps are announced before the first one runs (a slow image pull must
-//! not look like a wedged bring-up), each is reported as it starts, and
-//! `sbx`'s own output streams underneath as detail lines. The sink is an
-//! argument, not a thread-local: whoever asked decides where it goes — every
-//! browser tab, the terminal that typed `sbxw up`, or nowhere.
+//! Steps are announced before the first one runs (a slow image pull must not
+//! look wedged), each reported as it starts; `sbx`'s output streams underneath
+//! as detail lines. The sink is an argument, not a thread-local: the caller
+//! decides where it goes (every browser tab, the terminal that typed
+//! `sbxw up`, or nowhere).
 //!
 //! What must hold, in order, and why:
 //! 1. creation carries every kit (`--kit`, credentials first) and the ports
-//!    (`-p`), because creation is the only moment kits apply whole; a busy
-//!    host port 409s the create, so it is retried without them;
-//! 2. the in-sandbox tooling — token, trust, hooks, statusLine, relay — is one
+//!    (`-p`): creation is the only moment kits apply whole. A busy host port
+//!    409s the create, so it is retried without them;
+//! 2. the in-sandbox tooling (token, trust, hooks, statusLine, relay) is one
 //!    `sbx exec`, merged and idempotent;
 //! 3. the egress policy goes in before any `kit add`, whose startup commands
 //!    need it; sbxw's own rule is the **agent** port, never the UI port;
@@ -39,7 +39,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// One bring-up, as asked.
 #[derive(Clone, Debug)]
 pub struct BringUp {
     pub name: SandboxRef,
@@ -47,8 +46,8 @@ pub struct BringUp {
     pub ro: Vec<String>,
     /// Extra directories mounted writable beside the workspace.
     pub rw: Vec<String>,
-    /// The project config — remembered for the sandbox, so its later attaches
-    /// use the same `env`.
+    /// The project config, remembered for the sandbox so later attaches use the
+    /// same `env`.
     pub config: Config,
     pub extra_ports: Vec<WantedPort>,
     pub chat: bool,
@@ -58,16 +57,15 @@ pub struct BringUp {
     pub template: templates::Choice,
     /// Create it for Remote Control: no credentials from sbxw, a claude.ai
     /// login inside instead (`sbxw_core::remote`). Only a new sandbox takes
-    /// it; one already recorded with it keeps it.
+    /// it; a recorded one keeps its choice.
     pub remote_control: bool,
     /// Clone this into `workspace` first, on the sandbox's host, when
     /// `workspace` does not exist yet (`sbxw up --git <url>`).
     pub git: Option<String>,
 }
 
-/// How long a kit's startup commands may run before an automatic template is
-/// given up on, how often the guest is looked at, and how long it is left to
-/// start them at all.
+/// Kit startup: the timeout before an automatic template is given up on, the
+/// poll interval, and how long the guest is left to start the commands.
 const STARTUP_TIMEOUT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(20 * 60) };
 const STARTUP_POLL: Duration = if cfg!(test) { Duration::from_millis(10) } else { Duration::from_secs(2) };
 const STARTUP_SETTLE: Duration = if cfg!(test) { Duration::ZERO } else { Duration::from_secs(15) };
@@ -78,8 +76,8 @@ fn spec_texts(resolved: &[String]) -> Vec<String> {
     resolved.iter().map(|k| kits::content_text(k)).collect()
 }
 
-/// The steps this bring-up will take, announced first. Three are conditional
-/// in exactly the way the body is.
+/// The steps this bring-up takes, announced first; the conditional ones match
+/// the body's conditions.
 pub fn plan(existed: bool, cfg: &Config, template: bool) -> Vec<Step> {
     let mut steps = vec![
         Step::new(progress::WORKSPACE, "Preparing the workspace"),
@@ -187,11 +185,9 @@ impl App {
         // Asked first: it decides two of the announced steps.
         let initial = sbx.lookup(n).await;
         let existed = initial.is_some();
-        // An existing sandbox keeps the workspace it was created on: sbx
-        // cannot move its mount. A bring-up from another directory used to
-        // record that directory anyway — and the Project panel, the env and
-        // the config then all pointed at the wrong project. Refuse it here,
-        // before anything is changed.
+        // An existing sandbox keeps its creation workspace: sbx cannot move its
+        // mount. Recording another directory would point the Project panel, env
+        // and config at the wrong project, so refuse it before anything changes.
         if existed {
             if let Some(recorded) = self.store.get(name).workspace {
                 let canon = async |p: &Path| host.fs.canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf());
@@ -206,8 +202,8 @@ impl App {
         let stopped = initial.as_ref().is_some_and(|i| i.is_stopped());
         let mut running = Some(initial.as_ref().is_some_and(|i| i.is_running()));
         let (template, rebuild) = self.template_for(&req, cfg, existed, &mut run).await;
-        // A template holds the kits' installs: its kits find everything in
-        // place and would never fill the cache this sandbox claimed.
+        // A template holds the kits' installs, so its kits would never fill the
+        // cache this sandbox claimed.
         wants_cache &= template.is_none();
         sink(Progress::Plan { steps: plan(existed, cfg, rebuild) });
 
@@ -262,8 +258,8 @@ impl App {
         let kits_here = self.kits_on(on_host.as_deref(), &cfg.kits, &run).await?;
         if existed {
             run.info(format!("sandbox '{name}' already exists — reusing it"));
-            // Block storage exists only from creation: a list that is not the
-            // one this sandbox was created with is a recreate, never applied.
+            // Block storage exists only at creation: a changed list is a recreate,
+            // never applied.
             if !cfg.volumes.is_empty() {
                 let wanted = kits::volumes_kit_spec(&cfg.volumes);
                 let had = std::fs::read_to_string(self.store.paths.volumes_kit(name).join("spec.yaml")).ok();
@@ -290,8 +286,8 @@ impl App {
             }
             kit_refs.extend(kits_here.iter().cloned());
             let mut own: Vec<String> = Vec::new();
-            // The skills the person kept from a sandbox: every new one gets
-            // them, whatever its `kits` say — they are the person's, not the project's.
+            // Kept skills go to every new sandbox, whatever its `kits` say: they
+            // are the person's, not the project's.
             match self.my_skills_kit() {
                 Ok(Some(_)) if !trusted => run.info(format!("your kept skills stay here: host '{}' is not trusted with secrets", name.host)),
                 Ok(Some(dir)) => own.push(dir.to_string_lossy().into_owned()),
@@ -376,11 +372,10 @@ impl App {
         };
 
         // ── Tooling and policy ───────────────────────────────────────────
-        // Independent of each other — one is a script in the guest, the other
-        // a host-side rule — so they run side by side and are reported in order.
-        // The daemon's agent port, whatever the project file says (the hooks
-        // must reach the process that listens); on a remote host, the far
-        // end of the link's -R tunnel.
+        // Independent (one a guest script, one a host-side rule), so they run
+        // side by side and report in order. The daemon's agent port, whatever
+        // the project file says (the hooks must reach the listener); on a remote
+        // host, the far end of the link's -R tunnel.
         let agent_port = self.agent_port_for(name).await?;
         // The proxy sees host.docker.internal as localhost:<port>.
         own_allow.push(format!("localhost:{agent_port}"));
@@ -462,9 +457,9 @@ impl App {
                 false => sbx.inspect_kits(n).await.unwrap_or_default(),
             };
             for (kit, wanted) in kits_here.iter().zip(&req.config.kits) {
-                // sbxw's base kit is a creation-time kit: a sandbox made before
-                // it existed has the Node.js of the image it came from, and one
-                // that lacks it is told so by the tooling step below.
+                // sbxw's base kit is creation-time only: a sandbox made before it
+                // has its image's Node.js, and one lacking it is told so by the
+                // tooling step.
                 if kits::bundled_name(wanted) == Some(kits::BASE) {
                     continue;
                 }
@@ -616,10 +611,9 @@ impl App {
     }
 
     /// Whether sbx still has template `tag`. A record outlives a template
-    /// removed with `sbx template rm` or a Docker prune, and `create
-    /// --template` with a tag sbx lacks goes looking for it in a registry and
-    /// fails there (403), which no retry mends. A listing sbx refuses proves
-    /// nothing, so it counts as present.
+    /// removed by `sbx template rm` or a Docker prune, and `create --template`
+    /// with a missing tag goes to a registry and fails (403), which no retry
+    /// mends. A listing sbx refuses proves nothing, so it counts as present.
     async fn template_present(&self, sb: &SandboxRef, tag: &str) -> bool {
         let Ok(sbx) = self.sbx_for(sb).await else { return true };
         match sbx.template_ls().await {
@@ -690,10 +684,10 @@ impl App {
         Ok(())
     }
 
-    /// Save a running sandbox as template `tag` without its secrets: they are
-    /// taken out, the snapshot taken, and they are put back whatever it did.
-    /// A save that had to stop the sandbox leaves it running again, unless
-    /// `keep_running` is off. The warnings are about putting things back.
+    /// Save a running sandbox as template `tag` without its secrets: taken out,
+    /// snapshot taken, put back whatever happened. A save that stopped the
+    /// sandbox restarts it, unless `keep_running` is off. Warnings concern
+    /// putting things back.
     pub async fn snapshot(&self, sb: &SandboxRef, tag: &str, keep_running: bool) -> (Result<()>, Vec<String>) {
         let mut warnings = Vec::new();
         let sbx = match self.sbx_for(sb).await {
@@ -738,9 +732,9 @@ impl App {
         (saved.map(drop), warnings)
     }
 
-    /// Until none of the kits' startup commands is running in the guest:
-    /// they run in the background after `sbx create` returns, and a snapshot
-    /// taken mid-install is a broken template.
+    /// Until none of the kits' startup commands runs in the guest: they start
+    /// in the background after `sbx create` returns, and a snapshot taken
+    /// mid-install is broken.
     async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], run: &Run<'_>) -> Result<()> {
         if commands.is_empty() {
             return Ok(());
@@ -828,11 +822,10 @@ impl App {
     }
 
     /// Check the person's own local kits before anything is created. Since sbx
-    /// 0.51 `claude` is a kit spec v3 workload, and a v1/v2 kit does not
-    /// compose with it: refused here in a second, naming the kit, rather than
-    /// after an image pull. (`sbx kit validate` reads only v1/v2 specs, so it
-    /// has nothing left to check.) Bundled kits ship v3; remote references
-    /// are sbx's to resolve.
+    /// 0.51 `claude` is a kit spec v3 workload and a v1/v2 kit does not compose
+    /// with it: refuse here, naming the kit, instead of after an image pull.
+    /// (`sbx kit validate` reads only v1/v2, so it cannot check this.) Bundled
+    /// kits ship v3; remote references are sbx's to resolve.
     fn validate_kits(&self, kits: &[String]) -> Result<()> {
         let broken: Vec<String> = kits
             .iter()
@@ -847,7 +840,7 @@ impl App {
 
     /// Wait for `running`, then (re)publish every mapping: they do not survive
     /// a stop. A busy host port costs that port, reported, never the rest. A
-    /// task of the daemon, so it outlives the request that started it.
+    /// task of the daemon, so it outlives the request.
     fn republish_ports(self: &Arc<Self>, name: SandboxRef, specs: Vec<String>, up: bool) {
         if specs.is_empty() {
             return;

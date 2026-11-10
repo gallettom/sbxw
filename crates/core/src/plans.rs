@@ -1,17 +1,15 @@
 //! Plans: a lead session splits work into threads, and a person approves the
 //! split before anything starts.
 //!
-//! The lead is the sandbox's main agent after `/lead`. It proposes threads —
-//! name, goal, scope, optionally repo and model — and the plan waits here,
-//! `Pending`, until someone approves (maybe after editing) or refuses it in the
-//! web UI. Only an approved plan starts anything. Threads then report working,
-//! blocked or done; once they are done the lead may propose a merge, which a
-//! person clicks.
+//! The lead (the sandbox's main agent after `/lead`) proposes threads: name,
+//! goal, scope, optionally repo and model. The plan waits here as `Pending`
+//! until someone approves (maybe after editing) or refuses it in the web UI.
+//! Only an approved plan starts anything. Threads report working, blocked or
+//! done; once all are done the lead may propose a merge, which a person clicks.
 //!
-//! The conversation between the lead and its threads is Claude Code's own
-//! `SendMessage`, by session name, inside one sandbox; nothing here reaches
-//! another sandbox. The book is pure: the daemon persists it, broadcasts it,
-//! and launches the sessions.
+//! Lead-to-thread talk is Claude Code's `SendMessage`, by session name, within
+//! one sandbox. The book is pure: the daemon persists it, broadcasts it, and
+//! launches the sessions.
 
 use crate::names::{is_valid_model_id, is_valid_thread_name, normalize_repo_path};
 use serde::{Deserialize, Serialize};
@@ -19,11 +17,10 @@ use std::collections::{HashMap, HashSet};
 
 pub const MAX_THREADS: usize = 8;
 pub const MAX_TEXT: usize = 4000;
-/// A thread's goal and scope are a brief (rules, done criteria), not a note:
-/// over this a proposal is refused rather than cut, since a goal cut
-/// mid-sentence reaches the thread as if it were whole.
+/// Goal and scope are a brief, not a note: over this a proposal is refused,
+/// not cut, since a cut goal reaches the thread looking whole.
 pub const MAX_BRIEF: usize = 16000;
-/// Settled plans whose threads all finished are dropped this long after their
+/// Settled plans with all threads finished are dropped this long after their
 /// last change.
 pub const PRUNE_AFTER_MS: u64 = 24 * 3600 * 1000;
 
@@ -35,8 +32,8 @@ pub enum PlanState {
     Refused,
 }
 
-/// How a plan's threads share the code (Team mode). Chosen when the plan is
-/// proposed, maybe changed in the approval dialog, fixed once approved.
+/// How threads share code (Team mode). Set at proposal, editable in the
+/// approval dialog, fixed once approved.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Variant {
@@ -53,8 +50,8 @@ impl Variant {
     }
 }
 
-/// What the lead proposes to keep once a shared plan is merged: what still
-/// holds, written to the sandbox's Claude Code auto memory.
+/// Kept once a shared plan merges: what still holds, written to the sandbox's
+/// Claude Code auto memory.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum DistillKind {
@@ -187,18 +184,17 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// A shared plan's worktree folder under `.sbxw-worktrees/`, and its
-    /// branch after `sbxw/`: `team-<plan id>`, a valid thread name, so the
-    /// thread scripts handle it as one.
+    /// A shared plan's worktree under `.sbxw-worktrees/`, branch
+    /// `sbxw/team-<plan id>`: a valid thread name, so thread scripts treat it
+    /// as one.
     pub fn team_name(&self) -> String {
         team_name(&self.id)
     }
 }
 
 impl Plan {
-    /// The approved distillate as one Claude Code auto memory: its file name,
-    /// its contents, and its line for the `MEMORY.md` index. `None` when
-    /// nothing was kept.
+    /// The distillate as one auto memory: file name, contents, and `MEMORY.md`
+    /// index line. `None` when nothing was kept.
     pub fn distillate_memory(&self) -> Option<(String, String, String)> {
         let items = &self.merge.as_ref()?.distillate;
         if items.is_empty() {
@@ -447,11 +443,10 @@ impl PlanBook {
         })
     }
 
-    /// The threads a person approved, as left in the dialog. A thread still
-    /// running under another approved plan of the sandbox is refused: two plans
-    /// writing to one worktree is what worktrees exist to prevent.
-    /// `variant`, when given, is the dialog's choice; the proposal's otherwise.
-    /// A shared plan's worktree is recorded with it.
+    /// Approves with the threads as edited in the dialog. A thread still running
+    /// under another approved plan of the sandbox is refused: two plans must not
+    /// write one worktree. `variant` is the dialog's choice, else the proposal's.
+    /// A shared plan's worktree is recorded.
     pub fn approve(
         &mut self,
         id: &str,
@@ -517,8 +512,8 @@ impl PlanBook {
     }
 
     /// The lead proposes merging finished threads, in order. A shared plan has
-    /// one branch: every thread is merged at once, so all must be done, and an
-    /// empty order means all of them.
+    /// one branch, so all threads merge at once and must all be done; an empty
+    /// order means all of them.
     pub fn propose_merge(
         &mut self,
         id: &str,
@@ -595,8 +590,8 @@ impl PlanBook {
             }
             m.state = MergeState::Merging;
             m.base = base;
-            // A retry keeps what already merged (and so skips those threads): they
-            // may have been closed since, and merging twice is never wanted.
+            // A retry keeps merged threads (skipped): they may be closed since,
+            // and merging twice is never wanted.
             m.results.retain(|r| r.ok);
             if let Some(d) = distillate {
                 m.distillate = d;
@@ -636,9 +631,9 @@ impl PlanBook {
             .collect()
     }
 
-    /// The shared plan `thread` works under, if it does: the latest approved
-    /// plan holding its name, when that plan is shared and not merged yet. Its
-    /// sessions open in the plan's worktree rather than one of their own.
+    /// The shared plan `thread` works under, if any: the latest approved plan
+    /// holding its name, when that plan is shared and not merged yet. Its
+    /// sessions open in the plan's worktree.
     pub fn team_of(&self, sandbox: &str, thread: &str) -> Option<&Plan> {
         self.plans
             .values()
@@ -650,11 +645,9 @@ impl PlanBook {
     }
 
     /// A person closed `thread` of a shared plan: it leaves the plan, so the
-    /// thread list (which lists a shared plan's threads from the plan, having
-    /// no worktree of their own to find them by) stops offering it. The plan
-    /// that lost its last thread has nothing left to do or merge: it is
-    /// refused, which takes its board with it. `None` when `thread` is in no
-    /// shared plan at work.
+    /// thread list stops offering it (shared threads have no worktree to be
+    /// found by). A plan losing its last thread is refused, taking its board
+    /// with it. `None` when `thread` is in no shared plan at work.
     pub fn drop_team_thread(&mut self, sandbox: &str, thread: &str, now: u64) -> Option<Plan> {
         let id = self.team_of(sandbox, thread)?.id.clone();
         let p = self.plans.get_mut(&id)?;
@@ -667,8 +660,8 @@ impl PlanBook {
         Some(p.clone())
     }
 
-    /// The sandbox's shared plan at work: the latest approved one that is
-    /// shared and not merged yet. What its board belongs to.
+    /// The sandbox's shared plan at work: latest approved, shared, not merged.
+    /// Its board belongs to it.
     pub fn team_plan(&self, sandbox: &str) -> Option<&Plan> {
         self.plans
             .values()

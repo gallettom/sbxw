@@ -1,11 +1,10 @@
 //! Account-wide subscription usage: the 5-hour and weekly windows Claude
 //! Code's `/usage` prints.
 //!
-//! Two writers, last one wins: each sandbox's `statusLine` forwards what Claude
-//! Code was told (fresh while an agent works), and the daemon polls Anthropic
-//! *through a sandbox* every five minutes (right before anyone has spoken). A
-//! reading only overwrites a window it actually carries, so a session that has
-//! not seen its first response does not wipe a good value.
+//! Two writers, last one wins: each sandbox's `statusLine` (fresh while an
+//! agent works), and the daemon's poll of Anthropic *through a sandbox* every
+//! five minutes. A reading only overwrites the windows it carries, so a session
+//! that has not seen its first response does not wipe a good value.
 
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +51,6 @@ pub const POLL_SECS: u64 = 300;
 /// Backoff ceiling: the endpoint rate-limits.
 pub const POLL_MAX_SECS: u64 = 1800;
 
-/// The endpoint's answer as a reading.
 pub fn from_api(raw: &str) -> Result<Reading, String> {
     let v: serde_json::Value =
         serde_json::from_str(raw.trim()).map_err(|e| format!("unreadable answer ({e})"))?;

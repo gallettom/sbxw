@@ -1,10 +1,10 @@
 //! Everything sbxw keeps on the host, in one place.
 //!
-//! The old layout grew a file per concern — `<name>.workspace`,
-//! `<name>.model-migrated`, `threads/<name>.json`, `pending-hosts`, … — and
-//! two teardown paths that had to enumerate them by hand (one of them forgot
-//! `env/<name>/` once). Here a sandbox is **one record**,
-//! `state/sandboxes/<name>.json`, and forgetting it is one call.
+//! The old layout grew a file per concern (`<name>.workspace`,
+//! `<name>.model-migrated`, `threads/<name>.json`, `pending-hosts`, …) and two
+//! teardown paths that enumerated them by hand, one forgetting `env/<name>/`.
+//! Here a sandbox is **one record**, `state/sandboxes/<name>.json`, and
+//! forgetting it is one call.
 //!
 //! Every write goes to a temporary file renamed over the target, so a crash
 //! leaves the previous version; files are `0600` in `0700` directories, since a
@@ -14,9 +14,9 @@
 //! read, so sandboxes created by an older sbxw keep their workspace, threads
 //! and model migration.
 //!
-//! Everything is keyed by a `SandboxRef`. A local sandbox's files are where
-//! they always were; a remote host's go under `state/hosts/<host>/`, with the
-//! same layout inside (`sandboxes/<name>.json`, `kits/<name>-volumes/`, …).
+//! Keyed by `SandboxRef`. Local files stay where they always were; a remote
+//! host's go under `state/hosts/<host>/`, with the same layout inside
+//! (`sandboxes/<name>.json`, `kits/<name>-volumes/`, …).
 
 use anyhow::{Context, Result};
 use sbxw_core::hosts::HostAlias;
@@ -105,6 +105,11 @@ impl Paths {
     /// The voice concierge's models, one folder each (see `svc::voice`).
     pub fn models(&self) -> PathBuf {
         self.root.join("models")
+    }
+    /// The names to hide in what is dictated (see `sbxw_core::anonymise`):
+    /// the person's own file, read each time, absent until they write it.
+    pub fn anonymise(&self) -> PathBuf {
+        self.root.join("anonymise.toml")
     }
     /// The skills the person kept from a sandbox, one folder each: data on
     /// the host, installed in new sandboxes by the kit below.

@@ -320,6 +320,11 @@ function sandboxItemHtml(s, groupColor) {
     ? connPanes.map(p => `<span class="sbx-pane-badge">P${p.index + 1}</span>`).join('')
     : '';
   const isActive = connPanes.length > 0;
+  // In no pane: a + at the row's top right opens it in an empty pane, or in
+  // a new one, leaving the focused pane's sandbox where it is.
+  const addTag = !isActive && !sandboxUnreachable(s)
+    ? `<button class="sbx-pane-add" data-action="open-pane" data-name="${escHtml(s.name)}" title="Open in an empty pane, or in a new one" aria-label="Open ${escHtml(s.name)} in another pane">+</button>`
+    : '';
   // The sandbox in the focused pane — the one being worked on — keeps its
   // row's buttons out without a hover (see "Row actions, on demand").
   const isFocused = panes[focusedPane]?.sandbox === s.name;
@@ -380,7 +385,7 @@ function sandboxItemHtml(s, groupColor) {
     ? `<span class="sbx-status sbx-unreachable-note" title="${escHtml(down)}">unreachable since ${escHtml(hostClock(s.unreachable_since))}</span>`
     : `<span class="sbx-status">${escHtml(s.status)}</span>`;
   return `<div class="sbx-item${isActive ? ' active' : ''}${isFocused ? ' focused' : ''}${down ? ' unreachable' : ''}" data-name="${escHtml(s.name)}"${borderStyle}>
-    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span><span class="sbx-name-state"><span class="dot ${dotClass(s.status)}" title="${escHtml(s.status)}"></span>${flagTag}</span>${paneTag}${readyDot}${mapBadge}</div>
+    <div class="sbx-name"><span class="sbx-name-text" title="${escHtml(s.name)}">${escHtml(shown)}</span><span class="sbx-name-state"><span class="dot ${dotClass(s.status)}" title="${escHtml(s.status)}"></span>${flagTag}</span>${paneTag}${readyDot}${mapBadge}${addTag}</div>
     <div class="sbx-meta">
       <span class="dot ${dotClass(s.status)}"></span>
       ${status}
@@ -493,6 +498,7 @@ listEl.addEventListener('click', e => {
     if (action === 'stop')    stopSandbox(name);
     if (action === 'restart') restartSandbox(name);
     if (action === 'connect') connectPane(focusedPane, name, 'claude');
+    if (action === 'open-pane') openInSparePane(name);
     if (action === 'rm')        openRmModal(name);
     if (action === 'ports')     openPortsModal(name);
     if (action === 'duplicate') openDupModal(name);
@@ -504,6 +510,23 @@ listEl.addEventListener('click', e => {
     connectPane(focusedPane, name);
   }
 });
+
+// The + of a row that is in no pane: the first empty pane on screen takes
+// the sandbox, or one more pane is added for it. With no room left for
+// another pane, nothing is replaced: the person chooses what to give up.
+function openInSparePane(name) {
+  let idx = panes.findIndex((p, i) => i < paneCount && !p.sandbox);
+  if (idx < 0) {
+    if (paneCount >= computeMaxPanes()) {
+      showToast('No room for another pane here: close one, or click the row to use the focused pane', 'error');
+      return;
+    }
+    setLayout(paneCount + 1);
+    idx = paneCount - 1;
+  }
+  setFocusedPane(idx);
+  connectPane(idx, name);
+}
 
 // ── API calls ─────────────────────────────────────────────────────────────
 // Remove a sandbox an older sbx made and create it again from what sbxw

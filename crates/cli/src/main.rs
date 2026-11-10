@@ -1,12 +1,10 @@
-//! sbxw — a thin, careful wrapper around the standalone `sbx` (Docker
-//! Sandboxes) CLI for local development with the Claude Code agent. It never
-//! calls `docker sandbox`; only `sbx`.
+//! sbxw — a thin wrapper around the standalone `sbx` (Docker Sandboxes) CLI for
+//! local development with the Claude Code agent. Never `docker sandbox`, only `sbx`.
 //!
-//! This binary is a **client** of one long-lived daemon (`sbxw daemon`, started
-//! on demand): `sbxw up` does in the terminal what only a terminal can — ask
-//! for a sudo password for `/etc/hosts` — and hands the bring-up to the
-//! daemon, rendering its progress here. Commands that are plain `sbx` calls
-//! (`ls`, `stop`, `rm`, …) run directly.
+//! A **client** of one long-lived daemon (`sbxw daemon`, started on demand).
+//! `sbxw up` asks for the sudo password for `/etc/hosts` (only a terminal can),
+//! then hands the bring-up to the daemon and renders its progress. Plain `sbx`
+//! calls (`ls`, `stop`, `rm`, …) run directly.
 
 mod client;
 mod cmd;
@@ -26,10 +24,8 @@ fn banner() -> String {
     } else {
         ("", "", "")
     };
-    // The web UI's header — `>_` then `sb` and `xw` in bold monospace — drawn
-    // from DejaVu Sans Mono Bold in quadrant blocks: 2×2 dots a cell, sampled
-    // twice as finely across as down, since a cell is about twice as tall as
-    // it is wide.
+    // The web UI header (`>_sbxw` in bold mono), drawn in quadrant blocks: 2×2
+    // dots a cell, sampled twice as finely across as down (cells are 2:1).
     const ROWS: [(&str, &str, &str); 6] = [
         ("                   ", "        ▐█▌", ""),
         ("▗▄▖                ", " ▗▄▄▄▄  ▐█▙▄▄▄ ", " ▄▄  ▄▄ ▄▖    ▄▄"),

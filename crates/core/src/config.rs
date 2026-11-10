@@ -1,12 +1,12 @@
 //! `sbxw.toml`.
 //!
-//! * `agent_addr` is the daemon's second listener, the only one sandboxes can
-//!   reach (see the daemon's `http` module for why there are two).
+//! * `agent_addr` is the daemon's second listener, the only one sandboxes
+//!   reach (why two: see the daemon's `http` module).
 //! * A loaded config remembers **where it came from** (`source`): the daemon
-//!   keeps one per sandbox, so a sandbox created from project A is attached
-//!   with A's `env` even when the daemon was started from project B.
-//! * Relative paths (`kits`, `env_files`, `kit_mounts`, `workspaces`) are
-//!   resolved against the file's own directory at load time.
+//!   keeps one per sandbox, so a sandbox from project A keeps A's `env` even
+//!   if the daemon started in project B.
+//! * Relative paths (`kits`, `env_files`, `kit_mounts`, `workspaces`) resolve
+//!   against the file's directory at load.
 
 use crate::hosts::HostAlias;
 use crate::kits::resolve_kit_ref;
@@ -35,36 +35,34 @@ pub struct Config {
     pub ports: Vec<PortMap>,
     /// Kit references, applied at creation (`sbx create --kit`).
     pub kits: Vec<String>,
-    /// Host directories for kit-declared host mounts (`host-mount@1`, sbx
-    /// 0.50): sandbox target path → host directory, passed as `--mount` at
-    /// creation. sbx refuses a target no kit in the set declares.
+    /// Host dirs for kit-declared mounts (`host-mount@1`, sbx 0.50): sandbox
+    /// target → host dir, passed as `--mount` at creation. sbx refuses a
+    /// target no kit declares.
     pub kit_mounts: BTreeMap<String, String>,
     /// Where the main agent starts, inside the workspace (`sbx run --workdir`,
     /// 0.51): relative to the workspace, or absolute. Empty is the workspace.
     pub workdir: String,
-    /// Other host directories mounted at creation, `PATH[:TARGET][:ro]`
-    /// (0.51): `TARGET` an absolute sandbox path, else the host path again;
-    /// `:ro` read-only. `PATH` is relative to this file, or `~/`.
+    /// Extra host dirs mounted at creation, `PATH[:TARGET][:ro]` (0.51):
+    /// `TARGET` absolute in the sandbox, else the host path; `:ro` read-only.
+    /// `PATH` is relative to this file, or `~/`.
     pub workspaces: Vec<String>,
     /// CPUs and memory at creation (`--cpus`, `--memory`); 0 and empty are
     /// sbx's defaults.
     pub cpus: u32,
     pub memory: String,
-    /// `sandboxOptions` only an environment file carries (`sbxw env
-    /// export`): FUSE for this sandbox, and disk sizes. Unset is sbx's.
+    /// Only in an environment file (`sbxw env export`): `sandboxOptions` for
+    /// FUSE and disk sizes. Unset is sbx's.
     pub fuse: Option<bool>,
     pub root_size: String,
     pub docker_size: String,
-    /// Sandbox paths kept on persistent block storage (`volume@1`, sbx 0.50):
-    /// package caches and toolchains outside the workspace, which survive
-    /// `sbxw rm` and come back with a sandbox recreated under the same name.
-    /// Applied at creation only.
+    /// Sandbox paths on persistent block storage (`volume@1`, sbx 0.50): caches
+    /// and toolchains outside the workspace. They survive `sbxw rm` and
+    /// reattach when a sandbox of the same name is recreated. Creation only.
     pub volumes: Vec<String>,
-    /// Mount `~/.sbxw/cache` into new sandboxes, so the bundled kits copy what
-    /// was downloaded once instead of fetching it again.
+    /// Mount `~/.sbxw/cache` into new sandboxes, so bundled kits download once.
     pub cache: bool,
-    /// After this many days the cache is emptied and the next sandbox refills
-    /// it — fresh packages, and a bound on what its filler could have left.
+    /// The cache is emptied after this many days, so the next sandbox refills
+    /// it with fresh packages and a bound on what a previous filler left.
     pub cache_ttl_days: u32,
     /// Passed as `ANTHROPIC_DEFAULT_MODEL`: a default, below a saved `/model`.
     pub claude_model: String,
@@ -168,9 +166,9 @@ impl Default for Config {
             .to_vec(),
             network_deny: vec![],
             ip_per_app: false,
-            // None: a project publishes what its own sbxw.toml names. A
-            // default here would hand every sandbox without a config one
-            // project's ports and hostnames (and a sudo prompt for them).
+            // Empty: a project publishes only what its own sbxw.toml names; a
+            // default would hand every sandbox another project's ports and
+            // hostnames (and a sudo prompt).
             ports: vec![],
             kits: crate::kits::DEFAULT_KITS.map(String::from).to_vec(),
             kit_mounts: BTreeMap::new(),
@@ -264,15 +262,40 @@ fn is_size(v: &str) -> bool {
 pub const SKILL_MODES: [&str; 3] = ["off", "readonly", "readwrite"];
 pub const PULL_POLICIES: [&str; 3] = ["always", "missing", "never"];
 
-/// `#rrggbb` and nothing else: the value is templated into the page as a JS
-/// string, so this is also what keeps it from carrying anything but a colour.
+/// `<IPv4>:<port>` or `[<IPv6>]:<port>`, numeric, nothing else: the IP ends up
+/// in `/etc/hosts` and in sbx network rules.
+fn is_listen_addr(s: &str) -> bool {
+    !s.chars().any(|c| c.is_whitespace() || c.is_control())
+        && s.parse::<std::net::SocketAddr>().is_ok()
+        && (s.starts_with('[') || crate::hosts::is_ipv4_literal(ports::ip_of(s)))
+}
+
+/// Why one `network_allow` / `network_deny` entry is refused, if it is: each
+/// is joined with `,` into one `sbx policy` argument, so a comma, a space or a
+/// leading `-` would change what sbx is told.
+fn network_rule_error(rule: &str) -> Option<&'static str> {
+    if rule.is_empty() {
+        Some("an empty rule")
+    } else if rule == "*" || rule == "**" {
+        Some("a wildcard that matches every host; name the hosts instead")
+    } else if rule.starts_with('-') {
+        Some("a rule may not start with '-' (sbx would read it as an option)")
+    } else if rule.chars().any(|c| c.is_whitespace() || c.is_control() || c == ',') {
+        Some("a rule may not hold whitespace, a comma or a control character")
+    } else {
+        None
+    }
+}
+
+/// `#rrggbb` only: the value is templated into the page as a JS string, so
+/// nothing else may pass.
 fn is_hex_color(s: &str) -> bool {
     s.len() == 7 && s.starts_with('#') && s[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 const MODEL_VAR: &str = "ANTHROPIC_DEFAULT_MODEL";
 
-/// A host directory from the config: `~/` is the home, anything relative is
-/// against the config's own directory.
+/// Host dir from config: `~/` is home; relative paths are against the config's
+/// directory.
 fn resolve_host_dir(dir: &Path, host: &str) -> String {
     if let Some(rest) = host.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
@@ -292,8 +315,8 @@ impl Config {
         self.kit_mounts.iter().map(|(target, host)| format!("{host}:{target}")).collect()
     }
 
-    /// `raw` read and validated as an sbxw.toml, nothing resolved: what a
-    /// rewritten file must pass before it replaces the one on disk.
+    /// Parses and validates `raw` without resolving paths; a rewritten file
+    /// must pass this before it replaces the one on disk.
     pub fn parse(raw: &str) -> Result<Self> {
         let cfg: Config = toml::from_str(raw)?;
         cfg.validate()?;
@@ -345,8 +368,8 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Checked at load rather than left to sbx: a value it refuses fails the
-    /// sandbox, not the setting, and only when somebody asks for a new one.
+    /// Checked here, not left to sbx: sbx would fail the sandbox, not the
+    /// setting, and only when a new one is created.
     pub fn validate(&self) -> Result<()> {
         self.mac.validate().map_err(anyhow::Error::msg)?;
         self.voice.validate().map_err(anyhow::Error::msg)?;
@@ -360,6 +383,11 @@ impl Config {
                 bail!("pull = \"{p}\" — expected one of {}", PULL_POLICIES.join(", "));
             }
         }
+        for (key, v) in [("web_addr", &self.web_addr), ("agent_addr", &self.agent_addr)] {
+            if !is_listen_addr(v) {
+                bail!("{key} = {v:?} — expected IP:PORT, such as 127.0.0.1:7681 or [::1]:7681");
+            }
+        }
         if ports::port_of(&self.web_addr) == ports::port_of(&self.agent_addr)
             && ports::ip_of(&self.web_addr) == ports::ip_of(&self.agent_addr)
         {
@@ -368,6 +396,25 @@ impl Config {
                  listener and nothing else, so they need two ports",
                 self.web_addr
             );
+        }
+        for (key, rules) in [("network_allow", &self.network_allow), ("network_deny", &self.network_deny)] {
+            for r in rules {
+                if let Some(why) = network_rule_error(r) {
+                    bail!("{key}: {r:?} — {why}");
+                }
+            }
+        }
+        let web_port = self.web_port();
+        for r in &self.network_allow {
+            let opens_ui = ["localhost", "127.0.0.1", "host.docker.internal", "[::1]"]
+                .iter()
+                .any(|host| r.eq_ignore_ascii_case(&format!("{host}:{web_port}")));
+            if opens_ui {
+                bail!(
+                    "network_allow: {r:?} — that is the UI listener (web_addr), which no sandbox may \
+                     reach: it approves and releases everything. Sandboxes talk to agent_addr"
+                );
+            }
         }
         for k in &self.kits {
             if let Some(name) = crate::kits::bundled_name(k) {
@@ -576,6 +623,42 @@ mod tests {
         assert!(bad("agent_addr = \"127.0.0.1:7681\""));
         assert!(bad("models = [{ id = \"Bad Id\", label = \"x\" }]"));
         assert!(!bad("skills = \"off\""));
+    }
+
+    #[test]
+    fn listen_addresses_are_an_ip_and_a_port() {
+        let bad = |s: &str| toml::from_str::<Config>(s).unwrap().validate().is_err();
+        for addr in [
+            "127.0.0.1\\n93.184.216.34 github.com:7681",
+            "127.0.0.1 x:7681",
+            "localhost:7681",
+            "127.0.0.1",
+            "127.0.0.1:http",
+            "::1:7681",
+            "",
+        ] {
+            assert!(bad(&format!("web_addr = \"{addr}\"")), "web_addr {addr:?}");
+            assert!(bad(&format!("agent_addr = \"{addr}\"")), "agent_addr {addr:?}");
+        }
+        assert!(!bad("web_addr = \"[::1]:7681\""));
+        assert!(!bad("web_addr = \"192.168.1.2:7681\"\nagent_addr = \"127.0.0.1:7690\""));
+    }
+
+    #[test]
+    fn network_rules_are_single_hosts_and_never_the_ui_port() {
+        Config::default().validate().unwrap();
+        let err = |s: &str| toml::from_str::<Config>(s).unwrap().validate().err().map(|e| e.to_string());
+        for rule in ["*", "**", "-x", "a b", "a,b", "a\\nb", "a\\u001bb", ""] {
+            assert!(err(&format!("network_allow = [\"{rule}\"]")).is_some(), "allow {rule:?}");
+            assert!(err(&format!("network_deny = [\"{rule}\"]")).is_some(), "deny {rule:?}");
+        }
+        for ui in ["localhost:7681", "127.0.0.1:7681", "host.docker.internal:7681", "[::1]:7681", "LOCALHOST:7681"] {
+            let e = err(&format!("network_allow = [\"{ui}\"]")).expect(ui);
+            assert!(e.contains("UI listener"), "{e}");
+        }
+        assert!(err("network_allow = [\"localhost:7682\", \"*.npmjs.org\"]").is_none());
+        assert!(err("web_addr = \"127.0.0.1:9000\"\nnetwork_allow = [\"localhost:9000\"]").is_some());
+        assert!(err("network_deny = [\"localhost:7681\"]").is_none());
     }
 
     #[test]

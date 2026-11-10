@@ -1,17 +1,16 @@
 //! Who may call what.
 //!
-//! **The UI listener** serves the browser, the island and the extension. A
-//! sandbox cannot reach it — its network policy allows the agent port only —
-//! so every decision that moves information between sandboxes or starts work
-//! lives here. What remains to stop is *another web page* in the user's
-//! browser: a request whose `Host` is not the daemon's (DNS rebinding) or
-//! whose `Origin` is not the daemon's page or the extension (a cross-site
-//! WebSocket would otherwise open a shell in a sandbox, or run `monitor_cmd`
-//! on the host). Native clients send no `Origin` and pass.
+//! **The UI listener** serves the browser, the island and the extension.
+//! Sandboxes cannot reach it (network policy allows the agent port only), so
+//! every decision moving information between sandboxes or starting work lives
+//! here. What remains: *another web page* in the user's browser. Refuse a
+//! `Host` that is not the daemon's (DNS rebinding) and an `Origin` that is not
+//! the daemon's page or the extension (a cross-site WebSocket would open a
+//! sandbox shell or run `monitor_cmd`). Native clients send no `Origin` and pass.
 //!
 //! **The agent listener** serves sandboxes only, and only the calls an agent
-//! may make. Each carries the sandbox's token; the daemon derives *which*
-//! sandbox is calling from it, so none can speak for another.
+//! may make. Each carries the sandbox's token, which identifies the calling
+//! sandbox, so none can speak for another.
 
 use super::error::ApiError;
 use crate::app::App;
@@ -31,8 +30,8 @@ pub fn allowed_hosts(web_addr: &str) -> Option<Vec<String>> {
     let ip = ports::ip_of(web_addr);
     let port = ports::port_of(web_addr);
     if ip == "0.0.0.0" || ip == "::" {
-        // Bound on every interface on purpose: any name may reach it, and
-        // only the Origin check stands between it and a page.
+        // Bound on every interface on purpose: any name may reach it; the
+        // Origin check alone stands between it and a page.
         return None;
     }
     let mut hosts = vec![

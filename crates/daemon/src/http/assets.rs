@@ -85,8 +85,8 @@ pub fn routes() -> Router<Arc<App>> {
     r
 }
 
-/// The shell, with the six values it carries baked in. Quotes are stripped
-/// from the monitor command rather than escaped: it lands in a JS string.
+/// The shell with its templated values baked in. Quotes are stripped from the
+/// monitor command rather than escaped: it lands in a JS string.
 async fn index(State(app): State<Arc<App>>) -> impl IntoResponse {
     let monitor = app.cfg.monitor_cmd.join(" ").replace(['"', '\\'], "");
     let initial = app.initial_sandbox.lock().unwrap().clone();

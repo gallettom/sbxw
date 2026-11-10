@@ -19,8 +19,7 @@ pub fn header_spans(line: &str) -> Vec<(String, usize)> {
         let mut end = i;
         while i < chars.len() {
             if chars[i] == ' ' {
-                // Two spaces in a row close the field; a single one is part of
-                // a multi-word header.
+                // Two spaces close the field; one is part of a multi-word header.
                 if chars.get(i + 1).is_none_or(|c| *c == ' ') {
                     break;
                 }
@@ -46,8 +45,8 @@ pub fn header_spans(line: &str) -> Vec<(String, usize)> {
 }
 
 /// Cut `line` at the given character offsets, trimming each cell. A value wider
-/// than its column bleeds into the next one; we accept that over dropping it,
-/// since sbx pads its tables to fit.
+/// than its column bleeds into the next, kept rather than dropped: sbx pads its
+/// tables to fit.
 pub fn slice_at(line: &str, starts: &[usize]) -> Vec<String> {
     let chars: Vec<char> = line.chars().collect();
     starts
@@ -66,9 +65,8 @@ pub fn slice_at(line: &str, starts: &[usize]) -> Vec<String> {
         .collect()
 }
 
-/// A parsed table: header names, and one cell per column per row. Empty for
-/// anything that is not a table, so callers fall back to the raw text rather
-/// than claiming there are no rows.
+/// A parsed table: header names and one cell per column per row. Empty for
+/// non-tables, so callers fall back to the raw text instead of reporting no rows.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct Table {
     pub columns: Vec<String>,

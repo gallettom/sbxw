@@ -1,6 +1,6 @@
 //! The terminal sessions sbxw holds, by typed key.
 //!
-//! Two rules the old global statics enforced, kept here as structure:
+//! Two rules:
 //!
 //! * **One creator per key.** An approved plan's launch and the pane the
 //!   browser opens for the same thread can both miss a lookup at once; without

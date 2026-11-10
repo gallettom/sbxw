@@ -43,7 +43,7 @@ impl IntoResponse for ApiError {
 
 /// A failure from below (sbx, the filesystem): the whole context chain, since
 /// sbx's own words are what the person can act on. An unreachable remote host
-/// is 503: the request was fine and asking again later may work.
+/// is 503: the request was fine and a later retry may work.
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
         if e.chain().any(|c| c.is::<crate::remotes::UnknownHost>()) {

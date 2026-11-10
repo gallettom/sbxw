@@ -12,8 +12,7 @@
 //! * **Idempotent.** Each hook removes its previous copy before adding itself;
 //!   the memory section is fenced and replaced in place.
 //!
-//! New in the rebuild: the scripts talk to the daemon's **agent port**, and the
-//! sandbox's **agent token** is installed at `~/.sbxw/token` (0600) for them to
+//! The scripts talk to the daemon's **agent port**, and the sandbox's **agent token** is installed at `~/.sbxw/token` (0600) for them to
 //! present. The script is built here (pure); the daemon runs it.
 
 pub const HOME: &str = "/home/agent";
@@ -24,7 +23,6 @@ pub const STATUS_HOOK_PATH: &str = "/home/agent/.sbxw/status-hook.js";
 pub const USAGE_STATUSLINE_PATH: &str = "/home/agent/.sbxw/usage-statusline.js";
 /// The statusLine command sbx's own image installs, which sbxw's chains to.
 pub const SBX_STATUS_HOOK: &str = "sbx-claude-hook";
-/// Where the chained statusLine command is kept.
 pub const USAGE_STATUSLINE_CHAIN_PATH: &str = "/home/agent/.sbxw/usage-statusline.chain";
 pub const RELAY_TOOL_PATH: &str = "/home/agent/.sbxw/relay.js";
 pub const RELAY_MCP_PATH: &str = "/home/agent/.sbxw/relay-mcp.js";
@@ -71,12 +69,11 @@ pub mod piece {
     pub const LEAD: &str = "lead";
 }
 
-/// What the agent is told about the relay, in its user memory: the *trigger*,
-/// not the manual. Short and unhedged — a brake ("use it sparingly") reads the
-/// same whether or not the case in front of it is the one worth spending on;
-/// restraint lives in the tool descriptions, read while deciding to call.
-/// The section heading [`relay_guidance`] opens with — what tells the batch
-/// that sbx already wrote it into `CLAUDE.md` from sbxw's base kit.
+/// The heading [`relay_guidance`] opens with; the batch looks for it to tell
+/// that sbx already wrote the guidance into `CLAUDE.md` from sbxw's base kit.
+/// The guidance is the *trigger*, not the manual: short and unhedged, since a
+/// brake ("use it sparingly") reads the same whether or not the case is worth
+/// it. Restraint lives in the tool descriptions, read while deciding to call.
 pub const RELAY_GUIDANCE_HEAD: &str = "## When the answer isn't in this workspace";
 
 /// The fenced copy the tooling batch writes into `~/.claude/CLAUDE.md` when
@@ -85,9 +82,9 @@ pub fn relay_doc() -> String {
     format!("{RELAY_DOC_BEGIN}\n{}{RELAY_DOC_END}\n", relay_guidance())
 }
 
-/// How and when to use the relay, as the agent reads it. sbxw's base kit
-/// carries the same text as its `agent-context@2` body, so sbx writes it
-/// into `CLAUDE.md` before the agent starts (a test keeps the two equal).
+/// How and when to use the relay, as the agent reads it. The base kit carries
+/// the same text as its `agent-context@2` body, so sbx writes it into
+/// `CLAUDE.md` before the agent starts (a test keeps the two equal).
 pub fn relay_guidance() -> String {
     format!(
         "{RELAY_GUIDANCE_HEAD}\n\
@@ -293,7 +290,6 @@ impl Tooling {
         self.piece(piece::LEAD, body)
     }
 
-    /// The whole batch as one Node script.
     pub fn script(&self) -> String {
         let mut s = String::from(PRELUDE);
         for (name, body) in &self.pieces {

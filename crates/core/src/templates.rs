@@ -4,21 +4,20 @@
 //! A template is a snapshot of a sandbox right after its bring-up: its kits
 //! installed, nobody's work in it yet. It goes stale when what is frozen in it
 //! changes: the sbx that made the image, or the *content* of its kits' specs
-//! (what their startup installed). Not sbxw's version: the tooling sbxw puts
-//! in a sandbox is rewritten on every bring-up anyway, so a release that only
-//! touches the UI must not cost a rebuild of several minutes. Which kits it
-//! holds is its identity, not a staleness: two projects with different kits
-//! each get their own template, so creating one never invalidates the other's.
+//! (what their startup installed). Not sbxw's version: the tooling sbxw puts in
+//! a sandbox is rewritten on every bring-up anyway, so a UI-only release must
+//! not cost a rebuild of several minutes. Which kits it holds is its identity,
+//! not a staleness: projects with different kits each get their own template.
 //!
 //! A kit's startup commands run in the background once the container starts,
-//! after `sbx create` returns — so "installed" is known only by watching the
-//! guest's processes until none of those commands is still running.
+//! after `sbx create` returns, so "installed" means watching the guest's
+//! processes until none of those commands still runs.
 
 use serde::{Deserialize, Serialize};
 
-/// Files sbxw put in a sandbox that a snapshot must not carry: its agent
-/// token and its Claude OAuth credentials. A sandbox made from the template
-/// gets its own at its first tooling step.
+/// Files a snapshot must not carry: the agent token and Claude OAuth
+/// credentials. A sandbox made from the template gets its own at its first
+/// tooling step.
 pub const SECRETS: [&str; 2] = [crate::tooling::TOKEN_PATH, "/home/agent/.claude/.credentials.json"];
 
 /// What `template` in sbxw.toml asks for.
@@ -139,10 +138,10 @@ fn fnv1a(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
 
-/// Every startup command a kit spec declares, each as its argv joined by
-/// spaces — the way it shows in the guest's process list. Read wherever a
-/// `startup:` list sits (v1 `commands.startup`, v2 `setup.startup`, v3
-/// `lifecycle@1` config, inside capability groups too).
+/// Every startup command in a kit spec, each argv joined by spaces (as it shows
+/// in the guest's process list). Read wherever a `startup:` list sits: v1
+/// `commands.startup`, v2 `setup.startup`, v3 `lifecycle@1` config, also inside
+/// capability groups.
 pub fn startup_commands(spec: &str) -> Vec<String> {
     let Ok(doc) = serde_norway::from_str::<serde_norway::Value>(spec) else {
         return Vec::new();

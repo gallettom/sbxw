@@ -1,6 +1,6 @@
 //! The relay around its state machine: parking a sandbox on its request,
-//! delivering a question to the routed-to agent, and an outcome to the asker
-//! whose own wait had already come back.
+//! delivering a question to the routed-to agent, and an outcome to an asker
+//! whose wait had already returned.
 
 use crate::app::{now_ms, App};
 use crate::bus::Event;

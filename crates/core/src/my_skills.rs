@@ -1,35 +1,33 @@
-//! The person's own skills: ones they made in a sandbox and chose to keep, so
-//! every sandbox created afterwards has them.
+//! The person's own skills: ones made in a sandbox and kept, so every sandbox
+//! created afterwards has them.
 //!
 //! A kept skill is a folder under `~/.sbxw/skills/<name>/` on the host, copied
-//! out of a sandbox on the person's say-so (the web UI's Skills dialog, on the
-//! UI listener only). They reach sandboxes as one generated kit,
-//! [`kit_files`], which ships each file under `/home/agent/.sbxw/my-skills/`
-//! and a thin `~/.claude/commands/<name>.md` pointing at its `SKILL.md` — the
-//! arrangement the bundled kits use, because `~/.claude/skills` in a sandbox is
-//! a mount of sbx's shared skill store.
+//! out of a sandbox on the person's say-so (the web UI's Skills dialog, UI
+//! listener only). They reach sandboxes as one generated kit, [`kit_files`],
+//! which ships each file under `/home/agent/.sbxw/my-skills/` and a thin
+//! `~/.claude/commands/<name>.md` pointing at its `SKILL.md`. The bundled kits
+//! do the same because `~/.claude/skills` in a sandbox is a mount of sbx's
+//! shared store.
 //!
-//! What a sandbox wrote is data on the host, never something it runs: the
-//! files are not executable there, and the host's own `~/.claude/skills` is
-//! never touched — a skill written by an agent in a sandbox must not become an
-//! instruction to the person's host Claude Code.
+//! What a sandbox wrote is data on the host, never run: files are not
+//! executable there, and the host's `~/.claude/skills` is never touched, so an
+//! agent's skill cannot become an instruction to the host Claude Code.
 
 use serde::{Deserialize, Serialize};
 
 /// The generated kit's `name:`, also its directory under `state/kits/`.
 pub const KIT_NAME: &str = "sbxw-my-skills";
 
-/// Where a kept skill's files land inside a sandbox.
 pub const SANDBOX_ROOT: &str = "/home/agent/.sbxw/my-skills";
 
 /// The manifest sbxw keeps beside a skill's files on the host.
 pub const MANIFEST: &str = ".sbxw-skill.json";
 
-/// A skill bigger than this is not a skill but a project: refuse it.
+/// Bigger than this is a project, not a skill: refused.
 pub const MAX_BYTES: usize = 512 * 1024;
 pub const MAX_FILES: usize = 200;
 
-/// Where a skill was read from inside its sandbox.
+/// Where a skill was read from in its sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Origin {
@@ -51,14 +49,12 @@ impl Origin {
 /// What sbxw records about a kept skill, beside its files.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// The sandbox it was copied from.
     pub sandbox: String,
-    /// Its path there.
     pub path: String,
     /// When it was kept, in seconds since the epoch.
     pub saved: u64,
-    /// Files that were executable in the sandbox, relative to the skill: they
-    /// are executable again in the next sandboxes, never on the host.
+    /// Files executable in the sandbox, relative to the skill: executable again
+    /// in later sandboxes, never on the host.
     #[serde(default)]
     pub executable: Vec<String>,
 }
@@ -79,8 +75,8 @@ pub struct Skill {
     pub files: Vec<File>,
 }
 
-/// A skill's name is a folder name on the host, a path in the sandbox and a
-/// slash command: lowercase letters, digits, `-` and `_`, as Claude Code's own.
+/// Lowercase letters, digits, `-`, `_` (Claude Code's own rule): a host folder,
+/// a sandbox path and a slash command at once.
 pub fn valid_name(name: &str) -> bool {
     let b = name.as_bytes();
     !b.is_empty()
@@ -90,7 +86,7 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 /// A file's path inside a skill: relative, no `..`, no empty or dot segment,
-/// nothing a YAML key or a shell would read twice.
+/// nothing a YAML key or shell would read twice.
 pub fn valid_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 200
@@ -103,8 +99,8 @@ pub fn valid_path(path: &str) -> bool {
         })
 }
 
-/// Check a skill read out of a sandbox before anything is written: the
-/// sandbox's own script applied the same limits, but its word is not taken.
+/// Check a skill read from a sandbox before writing: its script applied the
+/// same limits, but its word is not taken.
 pub fn check(name: &str, files: &[File]) -> Result<(), String> {
     if !valid_name(name) {
         return Err(format!("'{name}' is not a skill name sbxw keeps: lowercase letters, digits, - and _"));
@@ -160,8 +156,7 @@ fn command(name: &str, desc: Option<&str>) -> String {
     )
 }
 
-/// One file of the generated kit's directory: its path inside the kit,
-/// whether it is executable, its bytes.
+/// One file of the kit directory: path inside the kit, executable bit, bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KitFile {
     pub rel: String,
@@ -169,10 +164,10 @@ pub struct KitFile {
     pub content: String,
 }
 
-/// The kit that installs every kept skill, as the files of its directory: a
-/// kit spec v3 `spec.yaml` whose build copies `files/home/agent/` into the
-/// agent's home, and that tree. The files are image content, so sbx copies
-/// them byte for byte — nothing is a YAML scalar that could fold or expand.
+/// The kit installing every kept skill, as its directory's files: a kit spec v3
+/// `spec.yaml` whose build copies `files/home/agent/` into the agent's home,
+/// and that tree. Image content, so sbx copies bytes as-is: nothing is a YAML
+/// scalar that could fold or expand.
 pub fn kit_files(skills: &[Skill]) -> Vec<KitFile> {
     let mut skills: Vec<&Skill> = skills.iter().collect();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
@@ -202,8 +197,8 @@ pub fn kit_files(skills: &[Skill]) -> Vec<KitFile> {
         let cmd = command(&s.name, desc.as_deref());
         out.push(KitFile { rel: format!("files/home/agent/.claude/commands/{}.md", s.name), executable: false, content: cmd });
     }
-    // The host copy is never executable (it is data there); the bit is set in
-    // the sandbox, on every boot, where the skill runs.
+    // The host copy is never executable (data there); the bit is set in the
+    // sandbox on every boot.
     if !executables.is_empty() {
         let argv: Vec<String> = ["chmod", "0755"].iter().map(|s| s.to_string()).chain(executables).collect();
         spec.push_str(&format!(

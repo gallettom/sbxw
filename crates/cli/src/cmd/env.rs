@@ -1,14 +1,14 @@
 //! `sbxw env run` and `sbxw env export`.
 //!
-//! **run**: `sbx env create` does the creation — it is the only thing that
-//! applies an environment file whole (secrets, bindings, registries, MCP,
-//! skills, kits, mounts) — then the rest of sbxw's pipeline runs through the
-//! daemon like any `sbxw up`. Host ports are settled *before* sbx is called:
-//! a port sbx cannot publish costs the whole sandbox (and leaves its secrets
-//! behind), and only rewriting the file can move one.
+//! **run**: `sbx env create` does the creation, the only step that applies an
+//! environment file whole (secrets, bindings, registries, MCP, skills, kits,
+//! mounts). The rest runs through the daemon, as `sbxw up` does. Host ports are
+//! settled *before* sbx is called: a port sbx cannot publish costs the whole
+//! sandbox (and leaves its secrets behind), and only rewriting the file can
+//! move one.
 //!
-//! **export**: `sbxw.toml` as the file sbx reads, written beside the
-//! workspace, never inside it.
+//! **export**: `sbxw.toml` as the file sbx reads, written beside the workspace,
+//! never inside it.
 
 use super::{load_config, up, UpArgs};
 use anyhow::{bail, Context, Result};
@@ -32,10 +32,10 @@ fn next_free(ip: &str, from: u16) -> Option<u16> {
     (from..from.saturating_add(100)).find(|p| host_port_is_free(ip, *p))
 }
 
-/// The ports to use and whether any moved. Ephemeral (no host) and UDP ones
-/// are left alone — a TCP bind cannot test a UDP port, and an untested port is
-/// not reported as tested. With a terminal each conflict is a question; without
-/// one, the next free port is taken and said.
+/// The ports to use and whether any moved. Ephemeral (no host) and UDP ports
+/// are kept as is: a TCP bind cannot test UDP, and an untested port is not
+/// reported as tested. With a terminal each conflict is asked; without one, the
+/// next free port is taken and reported.
 fn negotiate(ports: &[Port], interactive: bool) -> Result<(Vec<Port>, bool)> {
     let mut out = Vec::with_capacity(ports.len());
     let mut moved = false;
@@ -146,9 +146,8 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
         }
     }
 
-    // The ports the sandbox *has*: an ephemeral or renegotiated one differs
-    // from the file, and an alias pointed at the wrong port looks like a
-    // broken dev server.
+    // The ports the sandbox *has*: an ephemeral or renegotiated one differs from
+    // the file, and an alias on the wrong port looks like a broken dev server.
     let published: Vec<Port> = rt.block_on(sbx.ports(&name)).iter().map(Port::from).collect();
     let effective = envfile::Spec {
         ports: if published.is_empty() { spec.ports.clone() } else { published },
@@ -161,7 +160,7 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
             println!("        · {line}");
         }
     }
-    // The merge, on disk: the daemon reads the sandbox's config from a file.
+    // Written to disk: the daemon reads the sandbox's config from a file.
     let merged = store.paths.env_dir(&name).join("sbxw.toml");
     write_atomic(&merged, cfg.to_toml()?.as_bytes())?;
     up(UpArgs {
@@ -199,8 +198,7 @@ pub fn export(path: Option<PathBuf>, name: Option<String>, config: PathBuf, out:
         std::fs::canonicalize(&parent).with_context(|| format!("no such directory: {}", parent.display()))?
     };
     let mut cfg = cfg;
-    // sbxw's base kit first, as `sbxw up` applies it: the file's sandbox runs
-    // sbxw's tooling too.
+    // sbxw's base kit first, as `sbxw up` applies it: the sandbox runs sbxw's tooling too.
     cfg.kits = sbxw_daemon::bundled::resolve(&sbxw_daemon::store::Paths::from_home(), &sbxw_core::kits::with_base(&cfg.kits))?;
     let file = envexport::env_file_for(&name, &cfg, &workspace, envexport::ports_from_config(&cfg), &dir);
     let rendered = file.render(&format!("sbxw {}", env!("CARGO_PKG_VERSION")));

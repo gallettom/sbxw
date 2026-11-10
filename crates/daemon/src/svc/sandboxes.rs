@@ -214,10 +214,10 @@ impl App {
         out
     }
 
-    /// Remove sandboxes and everything sbxw keeps about them: their sessions,
-    /// record and kit, and — a chat's — its throwaway workspace. Only what sbx
-    /// reports removed is forgotten; the rest is the error. Each host's are
-    /// removed by that host's sbx.
+    /// Remove sandboxes and everything sbxw keeps about them: sessions, record,
+    /// kit and, for a chat, its throwaway workspace. Only what sbx reports
+    /// removed is forgotten; the rest is the error. Each host's are removed by
+    /// that host's sbx.
     pub async fn remove(&self, names: &[SandboxRef]) -> Result<()> {
         let mut by_host: BTreeMap<sbxw_core::names::HostName, Vec<SandboxRef>> = BTreeMap::new();
         for n in names {
@@ -444,11 +444,11 @@ impl App {
         self.provision(req, None).await
     }
 
-    /// Remove a sandbox and create it again from what sbxw recorded: its
-    /// workspace, config, mounts and Remote Control choice. For one an older
-    /// sbx made, which takes no kit until then. Anything outside the
-    /// workspace mount is lost — the caller asked the person first. A chat's
-    /// workspace goes with it, so a chat is refused.
+    /// Remove a sandbox and create it again from what sbxw recorded: workspace,
+    /// config, mounts and Remote Control choice. For one an older sbx made,
+    /// which takes no kit until then. Anything outside the workspace mount is
+    /// lost; the caller asked the person first. A chat is refused: its
+    /// workspace goes with it.
     pub async fn recreate(self: &Arc<Self>, name: &SandboxRef) -> Result<Vec<String>> {
         let rec = self.store.get(name);
         if rec.chat {
@@ -706,9 +706,9 @@ pub async fn list_strict(sbx: &sbxw_sbx::Sbx) -> Result<Vec<sbxw_sbx::SandboxInf
 }
 
 /// The repos to mount beside `workspace`, split `(read-only, writable)`. Each
-/// is canonical — sbx mounts it at the same path inside — and apart from every
-/// other: sbx shares a directory once, so a repo inside the workspace (or inside
-/// another repo, or around one) is reached through that mount, with its mode —
+/// is canonical (sbx mounts it at the same path inside) and apart from every
+/// other: sbx shares a directory once, so a repo inside the workspace, inside
+/// another repo, or around one is reached through that mount with its mode, and
 /// a `:ro` on it is silently writable.
 async fn extra_mounts(host: &Host, workspace: &std::path::Path, mounts: Vec<(String, bool)>) -> Result<(Vec<String>, Vec<String>)> {
     let workspace = host.fs.canonicalize(workspace).await.with_context(|| format!("workspace path does not exist: {}", workspace.display()))?;

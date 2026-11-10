@@ -1,11 +1,6 @@
-//! What a terminal session *is*, as a type.
-//!
-//! The old daemon keyed sessions by strings — `"<sb>::claude"`,
-//! `"<sb>::thread:x"`, `"<sb>::thread-bash:x"`, `"__host__::monitor"` — and
-//! re-parsed them with `split_key` wherever it needed to know which kind it
-//! held. Here a key is a struct, and the string forms exist only at the edges
-//! where the wire protocol names them (the WebSocket's `mode=` query and the
-//! `mode` field the island reads).
+//! What a terminal session *is*, as a type. Keys are structs, not strings such
+//! as `<sb>::thread:x`; string forms exist only where the wire protocol names
+//! them (the WebSocket's `mode=` query and the island's `mode` field).
 
 use crate::names::{SandboxRef, ThreadName};
 use serde::Serialize;
@@ -19,20 +14,17 @@ pub enum SessionKind {
     Bash,
     /// Another Claude session, in a git worktree of its own.
     Thread(ThreadName),
-    /// A shell in a thread's worktree. Not an agent: never counts against the
-    /// session ceiling.
+    /// Shell in a thread's worktree; not an agent, so not counted toward the ceiling.
     ThreadBash(ThreadName),
     /// `monitor_cmd` on the host. Belongs to no sandbox.
     Monitor,
-    /// `sbx kit add` on the host, for a kit sbx wants a person to approve
-    /// (0.51: new network rules) and that the daemon recorded as waiting.
-    /// The person answers sbx's prompt in the pane.
+    /// `sbx kit add` on the host, for a kit sbx wants approved (0.51: new network
+    /// rules) that the daemon recorded as waiting. The person answers in the pane.
     KitAdd,
 }
 
 impl SessionKind {
-    /// Whether this session is a Claude agent — what `max_agent_sessions`
-    /// counts.
+    /// Whether this is a Claude agent, i.e. what `max_agent_sessions` counts.
     pub fn is_agent(&self) -> bool {
         matches!(self, SessionKind::Agent | SessionKind::Thread(_))
     }
@@ -44,7 +36,7 @@ impl SessionKind {
         }
     }
 
-    /// The `mode` this kind has on the wire (the old key's second half).
+    /// The wire `mode`: the part after `::` in the key string.
     pub fn mode(&self) -> String {
         match self {
             SessionKind::Agent => "claude".into(),
@@ -56,9 +48,8 @@ impl SessionKind {
         }
     }
 
-    /// The kind a WebSocket asks for: `mode` and `thread` as the page sends
-    /// them. Unknown modes are the agent, as before; a thread with a bad name
-    /// is refused rather than quietly opening the agent instead.
+    /// The kind a WebSocket asks for. Unknown modes are the agent; a bad thread
+    /// name is refused, not quietly turned into the agent.
     pub fn from_query(mode: Option<&str>, thread: Option<&str>) -> Result<Self, &'static str> {
         let thread = thread.filter(|t| !t.is_empty());
         let named = || {
@@ -87,7 +78,6 @@ impl SessionKind {
 /// make it safe: no real sandbox name can contain one.
 pub const MONITOR_SANDBOX: &str = "__host__";
 
-/// One terminal session sbxw holds.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SessionKey {
     /// `None` only for the monitor.
@@ -136,16 +126,15 @@ impl SessionKey {
 }
 
 impl fmt::Display for SessionKey {
-    /// The old wire key, `<sandbox>::<mode>`, for logs and `/api/ptys`; a
-    /// remote sandbox's is `<host>~<sandbox>::<mode>`.
+    /// Wire key `<sandbox>::<mode>` (`<host>~<sandbox>::<mode>` if remote), for
+    /// logs and `/api/ptys`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}::{}", self.sandbox_str(), self.kind.mode())
     }
 }
 
 impl SessionKey {
-    /// The key back from its wire form. The kind's thread name is checked
-    /// like any other.
+    /// Parses the wire form; a thread name is validated like any other.
     pub fn parse(raw: &str) -> Result<Self, &'static str> {
         let (sb, mode) = raw.rsplit_once("::").ok_or("a session key is <sandbox>::<mode>")?;
         let kind = match mode {

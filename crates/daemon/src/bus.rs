@@ -1,6 +1,6 @@
-//! One event bus for everything a client may want to hear about: every change
-//! is one `Event`, published once, and each SSE endpoint is a filter over the
-//! same stream. A new kind of event is a new variant, nothing else.
+//! One event bus for everything clients may hear about: each change is one
+//! `Event`, published once, and each SSE endpoint filters the same stream. A
+//! new kind of event is a new variant, nothing else.
 
 use sbxw_core::agents::SessionInfo;
 use sbxw_core::codemap::Run;
@@ -103,15 +103,15 @@ impl Default for Bus {
 
 impl Bus {
     pub fn new() -> Self {
-        // Deep: a bring-up's detail lines arrive several times a second, and a
-        // slow tab should skip a frame of a progress line, not a step.
+        // Deep: bring-up detail lines arrive several times a second; a slow tab
+        // should skip a progress frame, not a step.
         let (tx, _) = broadcast::channel(1024);
         let (clients, _) = watch::channel(0);
         Self { tx, clients }
     }
 
-    /// Publish. Nobody listening is fine: the state lives in the services,
-    /// and a tab that connects later seeds itself from a snapshot.
+    /// Publish. Nobody listening is fine: state lives in the services, and a
+    /// tab that connects later seeds itself from a snapshot.
     pub fn send(&self, ev: Event) {
         let _ = self.tx.send(ev);
     }

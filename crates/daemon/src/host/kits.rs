@@ -94,7 +94,7 @@ pub async fn mirror_via(
         let h = hash(&read);
         let dest = remote_root.join("kits").join(&h);
         let done = remote_root.join("kits").join(format!(".{h}.ok"));
-        // The marker, not the directory, says "complete": a copy cut short
+        // The marker, not the directory, means complete: a copy cut short
         // leaves a directory but no marker, and is redone.
         if fs.lstat(&done).await?.is_none() {
             let sent = match exec {
@@ -138,8 +138,8 @@ const NO_TAR: i32 = 42;
 /// beside the target and renamed into place; the marker comes last (written
 /// then renamed), so a copy cut anywhere leaves no marker. `-p` keeps the
 /// archive's modes whatever the umask; the root is made 0755 because the
-/// archive has no entry for it. A directory left by a cut-short copy has no
-/// marker, so nothing uses it and it is replaced.
+/// archive has no entry for it. A cut-short directory has no marker and is
+/// replaced.
 const EXTRACT_SCRIPT: &str = r#"command -v tar >/dev/null 2>&1 || exit 42
 k=$1; h=$2
 tmp="$k/.$h.tmp-$$"

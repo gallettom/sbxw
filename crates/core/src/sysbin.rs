@@ -1,12 +1,11 @@
 //! Host helpers sbxw runs (`osascript`, `sudo`, `caffeinate`, `curl`…),
 //! found only in the system's own directories, never through `PATH`.
 //!
-//! `PATH` often holds a directory a sandbox can write — a workspace's
-//! `bin/`, `node_modules/.bin` — and the daemon inherits it. A helper looked
-//! up there would be the sandbox's program running on the host with the
-//! person's rights (sbx 0.50 pinned its own browser, clipboard and update
-//! helpers the same way). `git`, `node` and `sbx` are the person's own
-//! installs and stay on `PATH`.
+//! `PATH` often holds a directory a sandbox can write (a workspace's `bin/`,
+//! `node_modules/.bin`), and the daemon inherits it: a helper found there would
+//! run the sandbox's program on the host with the person's rights. sbx 0.50
+//! pins its own helpers the same way. `git`, `node` and `sbx` are the person's
+//! own installs and stay on `PATH`.
 
 use std::path::PathBuf;
 
@@ -25,13 +24,21 @@ pub fn sys_bin(name: &str) -> PathBuf {
 }
 
 /// Where a package manager installs `gh`: Homebrew (Apple silicon, Intel,
-/// Linux) or the distribution. Never `PATH`, for the reason above — and sbx
-/// itself runs a `--command` secret's helper with no confinement.
+/// Linux) or the distro. Never `PATH`, as above: sbx runs a `--command`
+/// secret's helper unconfined.
 pub const GH_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin", "/usr/bin"];
 
 /// The GitHub CLI's absolute path, if one of [`GH_DIRS`] has it.
 pub fn gh() -> Option<PathBuf> {
     GH_DIRS.iter().map(|d| PathBuf::from(d).join("gh")).find(|p| p.is_file())
+}
+
+/// `uvx` (uv's tool runner), where uv's installer, Homebrew or cargo put it.
+/// Never `PATH`, as above: it runs the speech server with the person's rights.
+pub fn uvx() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let own = home.iter().flat_map(|h| [h.join(".local/bin"), h.join(".cargo/bin")]);
+    own.chain(GH_DIRS.iter().map(PathBuf::from)).map(|d| d.join("uvx")).find(|p| p.is_file())
 }
 
 /// The shell command sbx runs to read the token of `gh`'s login: its path

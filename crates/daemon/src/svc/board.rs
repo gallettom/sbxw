@@ -1,6 +1,6 @@
-//! The Team-mode board around its book: one per sandbox, read from disk on
-//! first use, written after every change, and cleared of a thread's claims
-//! when its plan says it finished.
+//! The Team-mode board around its book: one per sandbox, loaded on first use,
+//! saved after every change, and cleared of a thread's claims when its plan
+//! says it finished.
 
 use crate::app::{now_ms, App};
 use crate::bus::Event;

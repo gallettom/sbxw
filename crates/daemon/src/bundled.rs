@@ -1,9 +1,8 @@
-//! The kits embedded in the binary by `build.rs`: what `sbxw:<name>` in `kits`
-//! refers to. Each is a kit spec v3 directory — `spec.yaml` and the `files/`
-//! tree its `build:` copies into the image. sbx applies a kit from a directory
-//! and keeps its *path*, so each is written to a stable `~/.sbxw/kits/<name>/`
-//! and a file is rewritten only when this build's copy differs: the path never
-//! goes missing under sbx, and an unchanged tree keeps its build cache warm.
+//! The kits embedded by `build.rs`: what `sbxw:<name>` in `kits` refers to.
+//! Each is a kit spec v3 directory (`spec.yaml` plus the `files/` tree its
+//! `build:` copies). sbx keeps a kit's *path*, so each is written to a stable
+//! `~/.sbxw/kits/<name>/`, and a file is rewritten only when this build's copy
+//! differs: the path never goes missing and an unchanged tree keeps its cache.
 
 use crate::store::{write_atomic, Paths};
 use anyhow::{anyhow, Context, Result};

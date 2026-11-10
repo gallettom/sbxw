@@ -1,9 +1,9 @@
-//! Which sandbox serves the page in a browser tab — what the browser side
-//! panel asks before it can chat. The panel sits in its own top-level tab, so
-//! it knows the tab's URL and nothing else. Two answers, in order:
+//! Which sandbox serves the page in a browser tab, for the browser side panel's
+//! chat. The panel sits in its own top-level tab, so it knows only the tab's
+//! URL. Two answers, in order:
 //!
 //!   * a **pairing** the developer chose by hand, keyed by the URL's `host`
-//!     (`app.test`, `localhost:4200`), kept host-side in
+//!     (`app.test`, `localhost:4200`), kept in
 //!     `~/.sbxw/state/embed-pairings.json` (the daemon's store). It wins as the
 //!     one deliberate answer, and is the only one for an app sbxw did not route
 //!     (company DNS, a hand-written `/etc/hosts` line, a host reverse proxy);

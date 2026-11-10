@@ -1,9 +1,8 @@
 //! Port mappings and the host addresses they live on.
 //!
-//! Two vocabularies meet here. sbxw's own — a sandbox port, a host port, an
-//! optional `/etc/hosts` alias, and the `ip_per_app` choice of one loopback
-//! address per app — and sbx's, a publish spec
-//! `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]` and the rows `sbx ports` prints.
+//! Two vocabularies meet here: sbxw's (sandbox port, host port, optional
+//! `/etc/hosts` alias, `ip_per_app`: one loopback address per app) and sbx's
+//! (publish spec `[[HOST_IP:]HOST_PORT:]SANDBOX_PORT[/PROTO]`, rows of `sbx ports`).
 
 use crate::hosts::HostAlias;
 use serde::{Deserialize, Serialize};
@@ -29,8 +28,8 @@ pub struct PortMapping {
 }
 
 impl PortMapping {
-    /// The unpublish spec for exactly this binding: the host IP is included so
-    /// unpublishing one alias (127.0.0.2) leaves another on the same port pair.
+    /// Unpublish spec for exactly this binding. The host IP keeps one alias
+    /// (127.0.0.2) from removing another on the same port pair.
     pub fn spec(&self) -> String {
         format!("{}:{}:{}", self.host_ip, self.host_port, self.sandbox_port)
     }
@@ -46,20 +45,16 @@ pub fn host_ip_for(ip_per_app: bool, index: usize) -> String {
     }
 }
 
-/// `sbx ports --publish` / `sbx create -p` spec for each mapping. The order is
-/// the order of `ports`, which decides each app's loopback IP in `ip_per_app`
-/// mode — callers must keep it.
+/// `sbx create -p` spec per mapping, always `IP:HOST:SANDBOX` on loopback.
+/// Order matters: it decides each app's
+/// loopback IP in `ip_per_app` mode, so callers must keep it.
 pub fn publish_specs(ports: &[WantedPort], ip_per_app: bool) -> Vec<String> {
     ports
         .iter()
         .enumerate()
-        .map(|(i, p)| {
-            if ip_per_app {
-                format!("{}:{}:{}", host_ip_for(true, i), p.host_port, p.sandbox_port)
-            } else {
-                format!("{}:{}", p.host_port, p.sandbox_port)
-            }
-        })
+        // Always with a host IP: a bare `HOST:SANDBOX` binds every interface,
+        // putting a sandbox's dev server on the LAN.
+        .map(|(i, p)| format!("{}:{}:{}", host_ip_for(ip_per_app, i), p.host_port, p.sandbox_port))
         .collect()
 }
 
@@ -82,7 +77,7 @@ pub fn port_of(addr: &str) -> &str {
     addr.rsplit(':').next().unwrap_or("")
 }
 
-/// Host half of an address, brackets off ("[::1]:7681" → "::1").
+/// Host half of an address, brackets off (`[::1]:7681` → `::1`).
 pub fn ip_of(addr: &str) -> &str {
     match addr.rsplit_once(':') {
         Some((host, _)) => host.trim_start_matches('[').trim_end_matches(']'),
@@ -90,23 +85,23 @@ pub fn ip_of(addr: &str) -> &str {
     }
 }
 
-/// The loopback name of the web UI. Only an address on 127.0.0.0/8 earns it:
-/// `sbxw.localhost` pointing at a LAN IP would be a claim about another
-/// machine.
+/// Loopback name of the web UI, earned only by a 127.0.0.0/8 address:
+/// `sbxw.localhost` on a LAN IP would claim another machine.
 pub const WEB_HOSTNAME: &str = "sbxw.localhost";
 
 pub fn web_alias(web_addr: &str) -> Option<HostAlias> {
     let ip = ip_of(web_addr);
-    ip.starts_with("127.").then(|| HostAlias {
+    // A strict dotted quad: this IP is written to /etc/hosts as root, so a
+    // "127." prefix followed by anything (a newline, a second entry) is not one.
+    (crate::hosts::is_ipv4_literal(ip) && ip.starts_with("127.")).then(|| HostAlias {
         hostname: WEB_HOSTNAME.into(),
         ip: ip.to_string(),
     })
 }
 
-/// `sbx ports N --format json`: rows of `host_ip`, `host_port`,
-/// `sandbox_port`, `protocol`; `None` when `raw` is not that. The IPv6
-/// mirror sbx adds for each IPv4 publish is dropped; every distinct IPv4
-/// binding is kept — including the extra loopbacks of `ip_per_app`.
+/// `sbx ports N --format json` rows; `None` when `raw` is not that. Drops the
+/// IPv6 mirror sbx adds per IPv4 publish; keeps every distinct IPv4 binding,
+/// including `ip_per_app` loopbacks.
 pub fn parse_ports_json(raw: &str) -> Option<Vec<PortMapping>> {
     let rows: Vec<serde_json::Value> = serde_json::from_str(raw.trim()).ok()?;
     let port = |v: &serde_json::Value, k: &str| {
@@ -142,9 +137,9 @@ mod tests {
     }
 
     #[test]
-    fn specs_carry_an_ip_only_per_app() {
+    fn specs_always_carry_a_loopback_ip() {
         let ports = [wp(4200, 4200, "myapp.local"), wp(8000, 8000, "")];
-        assert_eq!(publish_specs(&ports, false), ["4200:4200", "8000:8000"]);
+        assert_eq!(publish_specs(&ports, false), ["127.0.0.1:4200:4200", "127.0.0.1:8000:8000"]);
         assert_eq!(
             publish_specs(&ports, true),
             ["127.0.0.2:4200:4200", "127.0.0.3:8000:8000"]
@@ -177,6 +172,14 @@ mod tests {
         assert!(web_alias("127.0.0.1:7681").is_some());
         assert!(web_alias("[::1]:7681").is_none());
         assert!(web_alias("192.168.1.2:7681").is_none());
+    }
+
+    #[test]
+    fn a_web_addr_with_a_smuggled_line_earns_no_alias() {
+        assert!(web_alias("127.0.0.1\n93.184.216.34 github.com:7681").is_none());
+        assert!(web_alias("127.0.0.1 evil:7681").is_none());
+        assert!(web_alias("127.evil:7681").is_none());
+        assert_eq!(web_alias("127.0.0.5:7681").unwrap().ip, "127.0.0.5");
     }
 
     #[test]

@@ -61,8 +61,11 @@ impl HostSys {
     /// that did not work; parks what is still missing.
     pub fn apply(&self, store: &Store, wanted: &[HostAlias]) -> Vec<String> {
         let mut warnings = Vec::new();
+        // A refused alias (a bad IP) must not reach the hosts file either:
+        // nothing is written until every alias has passed.
         if let Err(e) = self.ensure_loopback(wanted) {
             warnings.push(format!("{e:#}"));
+            return warnings;
         }
         if let Err(e) = self.merge(wanted) {
             warnings.push(format!("/etc/hosts not updated: {e:#}"));
@@ -83,7 +86,7 @@ impl HostSys {
 
     pub fn merge(&self, wanted: &[HostAlias]) -> Result<()> {
         let current = std::fs::read_to_string(&self.hosts_file).unwrap_or_default();
-        match hosts::merge_into(&current, wanted) {
+        match hosts::merge_into(&current, wanted).map_err(anyhow::Error::msg)? {
             None => Ok(()),
             Some(next) => self.write(&next),
         }
@@ -138,9 +141,9 @@ impl HostSys {
         }
     }
 
-    /// Stage in a private file (opened `O_EXCL`: a planted path fails rather
-    /// than being followed), then have root `cp` it in place, which keeps the
-    /// target's own owner and mode.
+    /// Stage in a private file (`O_EXCL`: a planted path fails rather than
+    /// being followed), then have root `cp` it in place, keeping the target's
+    /// owner and mode.
     fn write_as_admin(&self, path: &str, content: &str) -> Result<()> {
         use std::io::Write;
         #[cfg(unix)]
@@ -290,5 +293,20 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let sys = for_tests(&d.path().join("h"));
         assert!(sys.ensure_loopback(&[HostAlias::new("x", "$(id)")]).is_err());
+    }
+
+    #[test]
+    fn a_refused_loopback_writes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("hosts");
+        std::fs::write(&file, "127.0.0.1\tlocalhost\n").unwrap();
+        let sys = for_tests(&file);
+        let store = Store::open(Paths::under(d.path()));
+        let want = [
+            HostAlias::new("ok.local", "127.0.0.1"),
+            HostAlias::new("sbxw.localhost", "127.0.0.1\n93.184.216.34 github.com"),
+        ];
+        assert_eq!(sys.apply(&store, &want).len(), 1);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "127.0.0.1\tlocalhost\n");
     }
 }

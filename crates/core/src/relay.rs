@@ -13,7 +13,7 @@
 //!   answer flows onward without an explicit approval.
 //! * **A sandbox may only touch its own side of a request.** The asker waits on
 //!   what it opened; the routed-to sandbox answers what it was handed. With
-//!   agent tokens (see the daemon) "a sandbox" is now an identity the daemon
+//!   agent tokens (see the daemon), "a sandbox" is an identity the daemon
 //!   verified, not one the request claims.
 //!
 //! This is the state machine only: no clock, no channels, no I/O. Every
@@ -261,9 +261,8 @@ impl RelayBook {
         })
     }
 
-    /// A human releases what the asker gets. Something has to be going out;
-    /// which of the two payloads is the human's business. `shots` is the whole
-    /// set as they left it.
+    /// A human releases what the asker gets: an answer, the images, or both.
+    /// Something has to go out. `shots` is the whole set as the human left it.
     pub fn approve(&mut self, id: &str, answer: Option<&str>, shots: Vec<Shot>, now: u64) -> Result<RelayRequest, String> {
         self.mutate(id, now, true, |req| {
             if let Some(text) = answer {
