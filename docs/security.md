@@ -81,12 +81,21 @@ Both addresses must be `IP:PORT` literals; a host name is refused.
   on automatic screenshots in that browser's panel does it answer without a
   click, at most once per sandbox every 10 seconds; further requests wait for
   the click. See [the side panel's screenshots](web-ui.md#screenshots-from-the-browser-side-panel).
-- **Virtual Mac** (`sbxw:terminal-mac`, opt-in): booting it and publishing a
-  port to it need your approval; clicks, typing and screenshots of the guest do
-  not. Those screenshots are of a **shared, disposable guest**, never of your
-  screen, and go to the sandbox holding the lease without a preview. Keep every
-  personal and organisation account out of the guest. terminal-mac is a pinned,
-  SHA-256-checked third-party release run on the host; see
+- **Virtual Mac** (`sbxw:terminal-mac`, opt-in): your approval is needed to
+  create or boot the VM, to resume a paused one, to lend a running VM that
+  sbxw did not start itself, and to publish a port to it. Clicks, typing and
+  screenshots need no approval, but only on a VM sbxw brought up or was lent.
+  Ports published to the guest are removed when the sandbox's lease ends
+  (release, expiry, takeover, or the sandbox stopping). When another sandbox
+  asks for the Mac, the one holding it keeps it for 60 minutes at most. The
+  screenshots are of a **shared, disposable guest**, never of your screen,
+  and go to the sandbox holding the lease without a preview. Keep every
+  personal and organisation account out of the guest. The guest has its own
+  internet access through the VM's NAT, **outside the sandbox's network
+  allowlist**: a sandbox holding the Mac can open any site in the guest's
+  browser and read the pages back through screenshots. Enable the kit only
+  where that is acceptable. terminal-mac is a pinned, SHA-256-checked
+  third-party release run on the host; see
   [its trust notes](../assets/terminal-mac/README.md#trust).
 - **Plans:** nothing starts until you approve. After approval, a lead and its
   threads message each other without clicks, **inside one sandbox only**. See
