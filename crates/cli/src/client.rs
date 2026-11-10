@@ -118,11 +118,18 @@ impl Daemon {
     }
 
     /// One request with the token, again with a fresh one after a 401.
-    fn send(&self, req: impl Fn(&str) -> std::result::Result<ureq::Response, ureq::Error>) -> Result<ureq::Response> {
-        let bearer = |t: &str| format!("Bearer {t}");
-        match req(&bearer(&self.token(false)?)) {
-            Err(ureq::Error::Status(401, _)) => req(&bearer(&self.token(true)?)).map_err(error_of),
-            other => other.map_err(error_of),
+    fn send(&self, req: impl Fn() -> ureq::Request, body: Option<&Value>) -> Result<ureq::Response> {
+        let mut fresh = false;
+        loop {
+            let r = req().set("Authorization", &format!("Bearer {}", self.token(fresh)?));
+            let answer = match body {
+                Some(b) => r.send_json(b),
+                None => r.call(),
+            };
+            match answer {
+                Err(ureq::Error::Status(401, _)) if !fresh => fresh = true,
+                other => return other.map_err(error_of),
+            }
         }
     }
 
@@ -141,14 +148,14 @@ impl Daemon {
 
     pub fn get(&self, path: &str) -> Result<Value> {
         let url = format!("{}{path}", self.base);
-        self.send(|auth| ureq::get(&url).set("Authorization", auth).call())?
+        self.send(|| ureq::get(&url), None)?
             .into_json()
             .context("the daemon's answer was not JSON")
     }
 
     pub fn post(&self, path: &str, body: Value) -> Result<Value> {
         let url = format!("{}{path}", self.base);
-        self.send(|auth| ureq::post(&url).set("Authorization", auth).send_json(body.clone()))?
+        self.send(|| ureq::post(&url), Some(&body))?
             .into_json()
             .context("the daemon's answer was not JSON")
     }
@@ -163,7 +170,7 @@ impl Daemon {
     /// POST, read the NDJSON answer line by line, return the last line.
     pub fn stream(&self, path: &str, body: Value, mut each: impl FnMut(&Value)) -> Result<Value> {
         let url = format!("{}{path}", self.base);
-        let resp = self.send(|auth| ureq::post(&url).set("Authorization", auth).send_json(body.clone()))?;
+        let resp = self.send(|| ureq::post(&url), Some(&body))?;
         let mut last = Value::Null;
         for line in std::io::BufReader::new(resp.into_reader()).lines() {
             let line = line.context("the daemon closed the stream")?;

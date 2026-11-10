@@ -40,10 +40,12 @@ The daemon listens twice, for two audiences:
 
 | Listener | Default | Who | What it allows |
 |---|---|---|---|
-| **UI** (`web_addr`) | `127.0.0.1:7681` | Browser, island, extension | Everything, including every decision that moves information between sandboxes or starts work: routing a question, releasing an answer, approving or merging a plan, pairing a host, opening a terminal |
+| **UI** (`web_addr`) | `127.0.0.1:7681` | Browser, island, extension, `sbxw` CLI | Everything, including every decision that moves information between sandboxes or starts work: routing a question, releasing an answer, approving or merging a plan, pairing a host, opening a terminal |
 | **Agent** (`agent_addr`) | `127.0.0.1:7682` | Sandboxes | Hooks, usage, relay requests, plan proposals and reports. Nothing that approves anything |
 
 Both addresses must be `IP:PORT` literals; a host name is refused.
+
+### The agent listener
 
 - sbxw's own network rule for a sandbox allows **only the agent port**. It
   does not remove a UI-port rule an older sbxw may have added, and a
@@ -54,12 +56,64 @@ Both addresses must be `IP:PORT` literals; a host name is refused.
   bring-up, installed over stdin into `~/.sbxw/token` (mode `0600`), never on a
   command line. The daemon derives *which* sandbox is calling from it, so a
   sandbox can only act as itself.
-- **The UI listener refuses other web pages.** A request must carry a `Host`
-  naming the daemon (`sbxw.localhost`, `localhost`, `127.0.0.1`, `[::1]` on its
-  port), which stops DNS rebinding. An `Origin`, when present, must be the
-  daemon's own page or the extension, which stops a site you visit from opening
-  a terminal (`/ws`: a shell in a sandbox, or `monitor_cmd` **on the host**) or
-  POSTing to the API. Native clients send no `Origin`.
+
+### The UI listener
+
+Every request must pass two checks, in this order.
+
+1. **Host and Origin.** A request must carry a `Host` naming the daemon
+   (`sbxw.localhost`, `localhost`, `127.0.0.1`, `[::1]` on its port), which
+   stops DNS rebinding. An `Origin`, when present, must be the daemon's own
+   page or the extension, which stops a site you visit from opening a
+   terminal (`/ws`: a shell in a sandbox, or `monitor_cmd` **on the host**) or
+   POSTing to the API.
+2. **The UI token.** At every start the daemon mints a new 256-bit token and
+   writes it to `~/.sbxw/run/ui-token` (file `0600`, directory `0700`); it
+   removes the file when it stops. Every request must carry it, compared in
+   constant time:
+   - native clients (the `sbxw` CLI, the island) read the file and send
+     `Authorization: Bearer <token>`;
+   - a browser signs in once per daemon start through the address `sbxw web`
+     prints, `/?t=<token>`. The daemon answers with an `HttpOnly`,
+     `SameSite=Strict` cookie and a redirect to the same address without the
+     token (`Cache-Control: no-store`), so the token stays out of the address
+     bar and the history. The page, its scripts, `/api/events` and the
+     terminal WebSocket all ride on that cookie.
+
+   Without a valid token the daemon answers `401`, with three exceptions that
+   reveal nothing: `/` shows a page saying to run `sbxw web`; `/sidepanel`
+   shows a page saying how to sign the browser in for the extension; and
+   `/api/health` answers only the proof below (no version, no addresses).
+
+**Port squatting.** Before the CLI sends the token, or anything secret such as
+the API key of `sbxw up --use-api-key`, it checks that what answers on the
+port knows the token, without revealing it: it sends a random nonce to
+`/api/health?nonce=`, and the daemon answers `SHA-256(token || nonce)`. On a
+mismatch the CLI sends nothing more and names the port: another process is
+listening there (an sbxw daemon older than the token answers the same way;
+`sbxw down` stops it). It also refuses to start a second daemon on a port that
+answers without the proof.
+
+**What the token protects against:**
+
+- other users of this machine: they cannot read `~/.sbxw/run/`;
+- other processes and web pages that can reach the port but do not have the
+  file;
+- a sandbox whose network policy happens to reach the UI port;
+- a process that took the port before the daemon (the proof above).
+
+**What it does not protect against:** a process running as **your** user. It
+can read the token file (and your browser's cookies) and act as you. The
+token also appears in the terminal where `sbxw web` printed the sign-in
+address.
+
+**The extension's side panel** frames `http://127.0.0.1:<port>/sidepanel`.
+A cookie set at `sbxw.localhost` is not sent to `127.0.0.1`, so the panel
+needs its own sign-in: `sbxw extension` prints the address. Whether Chrome
+sends a `SameSite=Strict` cookie to a frame inside an extension page depends
+on its rules for extensions with host permissions and on third-party cookie
+settings; when it does not, the panel shows the sign-in page instead of the
+chat.
 
 ## Human decisions
 

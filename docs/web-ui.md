@@ -3,7 +3,13 @@
 [← Back to README](../README.md)
 
 Served at <http://sbxw.localhost:7681> by default (`web_addr` in
-[`sbxw.toml`](configuration.md)).
+[`sbxw.toml`](configuration.md)). Open it with `sbxw web` (or
+`sbxw web <sandbox>`; `sbxw up` prints the same address): it prints a sign-in
+address, `http://sbxw.localhost:7681/?t=<token>`, that signs this browser in
+with a cookie and drops the token from the address bar. Typing the bare
+address shows a page that says to run `sbxw web`. The token is new each time
+the daemon starts, so after a restart open the printed address again. See
+[Security: two listeners](security.md#two-listeners).
 
 ![The web UI with one sandbox attached](images/overview.png)
 
