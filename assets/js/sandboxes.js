@@ -529,6 +529,74 @@ function openInSparePane(name) {
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────
+// A bring-up the daemon refused because its sbxw.toml asks for host access
+// the person has not approved for that file (a mount, a host file, a kit, a
+// network host, a host command, a listener…) answers with `consent`: the
+// file and the lines. They are shown as text; Allow sends exactly those lines
+// back, so an edit made in between is a new line and is asked about again.
+// Resolves to the lines approved, or null when the person said no.
+function askHostAccess(consent) {
+  const grants = Array.isArray(consent.grants) ? consent.grants.map(String) : [];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="grants-modal-title" style="width:520px">
+      <div class="modal-head">
+        <span class="modal-title" id="grants-modal-title">Allow host access?</span>
+        <button class="modal-close" data-answer="no" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin:0 0 8px;color:#c9d1d9;font-size:13px;">
+          <bdi style="color:#e6edf3">${escHtml(consent.config || 'sbxw.toml')}</bdi> asks for host access you have not approved yet:
+        </p>
+        <ul style="margin:0 0 8px;padding-left:18px;color:#e6edf3;font-size:12px;font-family:monospace;word-break:break-all;">
+          ${grants.map(g => `<li>${escHtml(g)}</li>`).join('')}
+        </ul>
+        <p style="margin:0;color:#f85149;font-size:11px;">
+          This file can be edited from inside a sandbox. Allow only what you expect.
+          <code>sbxw config grants --revoke</code> forgets the approval.
+        </p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-cancel" data-answer="no">Cancel</button>
+        <button class="btn-create" data-answer="yes">Allow</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-answer="no"].btn-cancel').focus();
+  return new Promise(resolve => {
+    const done = yes => {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      resolve(yes ? grants : null);
+    };
+    // Escape closes this dialog only, not one under it.
+    const onKey = e => { if (e.key === 'Escape') { e.stopImmediatePropagation(); done(false); } };
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) return done(false);
+      const b = e.target.closest('[data-answer]');
+      if (b) done(b.dataset.answer === 'yes');
+    });
+  });
+}
+
+// POST a bring-up (create, chat), asking about host access when the daemon
+// refuses for want of it and sending it again with the approved lines. A
+// "no" answers `{ ok: false, declined: true }`.
+async function postBringUp(url, body) {
+  let approved = [];
+  for (;;) {
+    const data = await postJson(url, { ...body, approved });
+    const grants = data && !data.ok && data.consent && Array.isArray(data.consent.grants) ? data.consent.grants : null;
+    // The same lines refused twice: not a question any more, an error.
+    if (!grants || JSON.stringify(grants) === JSON.stringify(approved)) return data;
+    const yes = await askHostAccess(data.consent);
+    if (!yes) return { ok: false, declined: true, error: 'host access not approved' };
+    approved = yes;
+  }
+}
+
 // Remove a sandbox an older sbx made and create it again from what sbxw
 // recorded. Its workspace is a host folder and survives; nothing else does.
 async function recreateSandbox(name) {

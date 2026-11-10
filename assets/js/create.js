@@ -702,13 +702,13 @@ chatConfirm.addEventListener('click', () => {
   addPendingSandbox(name);
   (async () => {
     try {
-      const data = await postJson('/api/sandboxes/chat', { name });
+      const data = await postBringUp('/api/sandboxes/chat', { name });
       if (data.ok) {
         attachToEmptyPaneOrMarkReady(data.name || name);
         await loadSandboxes();
         showToast(`Chat sandbox “${data.name || name}” is ready`, 'ok');
       } else {
-        showToast(`Failed to start chat: ${data.error || 'unknown error'}`, 'error');
+        showToast(data.declined ? 'Chat not started: host access not approved' : `Failed to start chat: ${data.error || 'unknown error'}`, 'error');
       }
     } catch (e) {
       showToast('Failed to start chat: network error', 'error');
@@ -821,7 +821,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
         if (!c.ok) { showToast(`Could not clone ${gitUrl} on ${host}: ${c.error || 'unknown error'}`, 'error'); return; }
         path = c.path;
       }
-      const data = await postJson('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control, kit_mounts });
+      const data = await postBringUp('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control, kit_mounts });
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.
@@ -841,7 +841,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
               : `Sandbox “${name}” is ready`,
           warnings.length ? 'error' : 'ok');
       } else {
-        showToast(`Failed to create “${name}”: ${data.error || 'unknown error'}`, 'error');
+        showToast(data.declined ? `“${name}” not created: host access not approved` : `Failed to create “${name}”: ${data.error || 'unknown error'}`, 'error');
       }
     } catch (e) {
       showToast(`Failed to create “${name}”: network error`, 'error');
