@@ -74,8 +74,9 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     let (os, arch) = target_os_arch()?;
     let artifact = format!("sbxw-{os}-{arch}");
 
-    let tmp_dir = std::env::temp_dir().join(format!("sbxw-update-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)?;
+    // Removed when it goes out of scope, on every exit path.
+    let tmp = PrivateDir::new("sbxw-update")?;
+    let tmp_dir = tmp.path();
     let tmp_bin = tmp_dir.join(&artifact);
 
     ui.spin(&format!("downloading {artifact}"), || {
@@ -86,7 +87,7 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
 
     // Fail closed: no sums file, or no line for the artifact, aborts the
     // update (release.yml publishes one line per binary and the island zip).
-    fetch_and_verify(&base, &tmp_dir, &tmp_bin, &artifact)
+    fetch_and_verify(&base, tmp_dir, &tmp_bin, &artifact)
         .context("checksum verification failed — aborting update, nothing was installed")
         .inspect_err(|_| ui.fail("checksum"))?;
     ui.ok("checksum", "sha256 verified");
@@ -94,7 +95,7 @@ pub fn run(check_only: bool, no_island: bool) -> Result<()> {
     set_executable(&tmp_bin)?;
 
     install_binary(&ui, &tmp_bin, &exe)?;
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    drop(tmp);
     ui.ok("installed", &exe.display().to_string());
 
     refresh_extension(&ui, &exe);
@@ -289,17 +290,14 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
         return Ok(()); // not installed — nothing to refresh
     };
 
-    let tmp_dir = std::env::temp_dir().join(format!("sbxw-island-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)?;
-    let cleanup = |dir: &std::path::Path| {
-        let _ = std::fs::remove_dir_all(dir);
-    };
+    // Removed when it goes out of scope, on every exit path.
+    let tmp = PrivateDir::new("sbxw-island")?;
+    let tmp_dir = tmp.path();
 
     let tmp_ver = tmp_dir.join("island-version.txt");
     if curl_download(&format!("{base}/island-version.txt"), &tmp_ver).is_err() {
         // Releases before the island got its own version don't publish it.
         // Leaving the app alone beats bouncing it on every update.
-        cleanup(&tmp_dir);
         ui.ok("island", "no version marker in this release — left as is");
         return Ok(());
     }
@@ -307,7 +305,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     let installed = island_bundle_version(&app);
 
     if parse_version(&latest) <= parse_version(&installed) {
-        cleanup(&tmp_dir);
         ui.ok("island", &format!("v{installed} is up to date"));
         return Ok(());
     }
@@ -316,7 +313,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
             "island",
             &format!("v{latest} available  (you have v{installed})"),
         );
-        cleanup(&tmp_dir);
         return Ok(());
     }
 
@@ -327,21 +323,18 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
             .with_context(|| format!("failed to download {artifact}"))
     })?;
 
-    if let Err(e) = fetch_and_verify(base, &tmp_dir, &tmp_zip, artifact) {
-        cleanup(&tmp_dir);
-        return Err(e.context("checksum verification failed — leaving the installed app alone"));
-    }
+    fetch_and_verify(base, tmp_dir, &tmp_zip, artifact)
+        .context("checksum verification failed — leaving the installed app alone")?;
 
     // `ditto -x -k` is what install.sh uses; it restores the bundle layout.
     let status = std::process::Command::new(sbxw_core::sysbin::sys_bin("ditto"))
         .args(["-x", "-k"])
         .arg(&tmp_zip)
-        .arg(&tmp_dir)
+        .arg(tmp_dir)
         .status()
         .context("failed to run ditto")?;
     let staged = tmp_dir.join(ISLAND_APP);
     if !status.success() || !staged.is_dir() {
-        cleanup(&tmp_dir);
         anyhow::bail!("downloaded archive did not contain {ISLAND_APP}");
     }
 
@@ -358,7 +351,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
     // Past the quit, a failure must not leave the user without their island:
     // whatever bundle survives at `app` gets relaunched before we bail.
     if let Err(e) = swap_bundle(&staged, &app) {
-        cleanup(&tmp_dir);
         if was_running && app.is_dir() {
             let _ = open_island(&app);
         }
@@ -369,7 +361,6 @@ fn update_island(ui: &Ui, base: &str, check_only: bool) -> Result<()> {
         .args(["-dr", "com.apple.quarantine"])
         .arg(&app)
         .status();
-    cleanup(&tmp_dir);
 
     let relaunched = was_running && open_island(&app).is_ok_and(|s| s.success());
     ui.ok(
@@ -600,6 +591,64 @@ fn sha256_hex(path: &std::path::Path) -> Result<String> {
         .context("unexpected checksum tool output")
 }
 
+/// A temp directory only this user can enter: a random name created with
+/// `create_dir` (which fails if something already sits there, so nobody can
+/// pre-create it), mode 0700 on unix, removed with everything in it on drop.
+/// A predictable `sbxw-update-<pid>` let another local user plant the
+/// directory and swap the download between the checksum and the move.
+struct PrivateDir(PathBuf);
+
+impl PrivateDir {
+    fn new(prefix: &str) -> Result<Self> {
+        Self::new_in(&std::env::temp_dir(), prefix)
+    }
+
+    fn new_in(parent: &std::path::Path, prefix: &str) -> Result<Self> {
+        let mut last_err = None;
+        for _ in 0..16 {
+            let dir = parent.join(format!("{prefix}-{:016x}", random_u64()));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                builder.mode(0o700);
+            }
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last_err = Some(e),
+                Err(e) => {
+                    return Err(e).with_context(|| format!("could not create {}", dir.display()))
+                }
+            }
+        }
+        Err(last_err.expect("loop ran"))
+            .with_context(|| format!("could not create a private directory in {}", parent.display()))
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// 64 unpredictable bits from std alone: `RandomState` is seeded from the
+/// OS's random source, mixed with the time and pid. Unpredictability is a
+/// bonus here; `create_dir`'s exclusivity is what makes the directory safe.
+fn random_u64() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(std::process::id());
+    if let Ok(t) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        h.write_u128(t.as_nanos());
+    }
+    h.finish()
+}
+
 fn set_executable(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -676,14 +725,30 @@ mod tests {
 
     #[test]
     fn verify_checksum_compares_the_file() {
-        let dir = std::env::temp_dir().join(format!("sbxw-update-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("empty");
+        let tmp = PrivateDir::new("sbxw-update-test").unwrap();
+        let file = tmp.path().join("empty");
         std::fs::write(&file, b"").unwrap();
         // HASH is the sha256 of the empty string.
         assert!(verify_checksum(&file, "a", &format!("{HASH}  a\n")).is_ok());
         let wrong = "1".repeat(64);
         assert!(verify_checksum(&file, "a", &format!("{wrong}  a\n")).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn private_dir_is_fresh_private_and_removed_on_drop() {
+        let parent = PrivateDir::new("sbxw-update-test").unwrap();
+        let a = PrivateDir::new_in(parent.path(), "x").unwrap();
+        let b = PrivateDir::new_in(parent.path(), "x").unwrap();
+        assert_ne!(a.path(), b.path(), "names must not repeat");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::write(a.path().join("f"), b"x").unwrap();
+        let path = a.path().to_path_buf();
+        drop(a);
+        assert!(!path.exists());
     }
 }
