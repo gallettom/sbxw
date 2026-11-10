@@ -22,6 +22,8 @@ pub mod ws;
 mod tests;
 
 use crate::app::App;
+use axum::http::{header, HeaderValue};
+use axum::response::Response;
 use axum::routing::{any, get};
 use axum::Router;
 use std::sync::Arc;
@@ -41,7 +43,25 @@ pub fn ui_router(app: Arc<App>) -> Router {
         .route("/api/plans/propose", any(moved))
         .route("/api/plans/report", any(moved))
         .layer(axum::middleware::from_fn_with_state(app.clone(), guard::ui_guard))
+        .layer(axum::middleware::map_response(security_headers))
         .with_state(app)
+}
+
+/// The page can open a terminal in any sandbox and approve what agents ask,
+/// so no other site may frame it (a click there would be a click here), and
+/// what it serves is taken for the type it says. A header a handler set
+/// itself is left alone: `/sidepanel` lets the extension frame it, and a
+/// sandbox's own files carry `Content-Security-Policy: sandbox`.
+async fn security_headers(mut res: Response) -> Response {
+    let h = res.headers_mut();
+    for (name, value) in [
+        (header::CONTENT_SECURITY_POLICY, "frame-ancestors 'self'"),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::REFERRER_POLICY, "no-referrer"),
+    ] {
+        h.entry(name).or_insert(HeaderValue::from_static(value));
+    }
+    res
 }
 
 pub fn agent_router(app: Arc<App>) -> Router {
@@ -72,4 +92,36 @@ pub async fn serve(app: Arc<App>) -> anyhow::Result<()> {
     u?;
     a?;
     Ok(())
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::ui_router;
+    use crate::testing::app;
+    use axum::body::Body;
+    use axum::http::{header, Request};
+    use tower::ServiceExt;
+
+    async fn headers(path: &str) -> axum::http::HeaderMap {
+        let (_d, app) = app();
+        let req = Request::builder().uri(path).header("host", "127.0.0.1:7681").body(Body::empty()).unwrap();
+        ui_router(app).oneshot(req).await.unwrap().headers().clone()
+    }
+
+    #[tokio::test]
+    async fn the_page_cannot_be_framed_by_another_site() {
+        let h = headers("/").await;
+        assert_eq!(h[header::CONTENT_SECURITY_POLICY], "frame-ancestors 'self'");
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(h[header::REFERRER_POLICY], "no-referrer");
+
+        let h = headers("/sidepanel").await;
+        let csp: Vec<_> = h.get_all(header::CONTENT_SECURITY_POLICY).iter().collect();
+        assert_eq!(csp.len(), 1, "{csp:?}");
+        assert!(csp[0].to_str().unwrap().contains("chrome-extension://"), "{csp:?}");
+        assert_eq!(h[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+
+        let h = headers("/api/health").await;
+        assert_eq!(h[header::CONTENT_SECURITY_POLICY], "frame-ancestors 'self'");
+    }
 }
