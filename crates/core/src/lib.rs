@@ -7,6 +7,7 @@
 //! bring the world; this crate says what to do with it.
 
 pub mod agents;
+pub mod anonymise;
 pub mod approvals;
 pub mod board;
 pub mod artifacts;
@@ -33,6 +34,7 @@ pub mod relay;
 pub mod remote;
 pub mod remote_hosts;
 pub mod session;
+pub mod spoken;
 pub mod sysbin;
 pub mod table;
 pub mod templates;

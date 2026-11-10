@@ -4,7 +4,6 @@ pub mod agents;
 pub mod awake;
 pub mod board;
 pub mod codemap;
-pub mod conversations;
 pub mod hosts;
 pub mod kits;
 pub mod mac;

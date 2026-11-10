@@ -33,6 +33,14 @@ pub fn gh() -> Option<PathBuf> {
     GH_DIRS.iter().map(|d| PathBuf::from(d).join("gh")).find(|p| p.is_file())
 }
 
+/// `uvx` (uv's tool runner), where uv's installer, Homebrew or cargo put it.
+/// Never `PATH`, as above: it runs the speech server with the person's rights.
+pub fn uvx() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let own = home.iter().flat_map(|h| [h.join(".local/bin"), h.join(".cargo/bin")]);
+    own.chain(GH_DIRS.iter().map(PathBuf::from)).map(|d| d.join("uvx")).find(|p| p.is_file())
+}
+
 /// The shell command sbx runs to read the token of `gh`'s login: its path
 /// single-quoted, so a space in it stays one word.
 pub fn gh_token_command(gh: &std::path::Path) -> String {
