@@ -35,7 +35,7 @@ final class SSEClient: NSObject, URLSessionDataDelegate {
     func connect(url: URL) {
         buffer.removeAll()
         dataFields = ""
-        let req = URLRequest(url: url)
+        let req = Config.request(url)
         let t = session.dataTask(with: req)
         task = t
         t.resume()

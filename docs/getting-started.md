@@ -71,7 +71,10 @@ From your project's root:
 sbxw up myapp .        # or: sbxw up myapp /path/to/repo
 ```
 
-Then open <http://sbxw.localhost:7681>. The Claude agent is in the pane.
+Then run `sbxw web myapp` and open the address it prints
+(`http://sbxw.localhost:7681/?t=…`; `sbxw up` prints it too). It signs this
+browser in, and is needed again after each daemon start. The Claude agent is
+in the pane.
 
 What just happened: sbxw created the sandbox, installed its hooks and tools,
 applied the network allowlist, wrote any `/etc/hosts` aliases (asking for

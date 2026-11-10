@@ -31,6 +31,7 @@ tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 portable-pty = "0.8"
 getrandom = "0.2"
+sha2 = "0.10"
 async-trait = "0.1"
 ureq = { version = "2", default-features = false, features = ["json"] }
 tempfile = "3"

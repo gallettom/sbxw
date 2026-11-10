@@ -95,7 +95,7 @@ See [Environment files](environment-files.md).
 | `sbxw logs [name] [-n N]` | Tail the daemon log (default 40 lines). With a name, only lines about that sandbox. |
 | `sbxw down [name]` | Stop the daemon (closing every terminal it holds) **and** remove the `/etc/hosts` block. With a name, only close that sandbox's terminals. |
 | `sbxw update [--check] [--no-island]` | Install the latest release over this binary. See [Updating](getting-started.md#updating). |
-| `sbxw extension` | Write the Chrome/Edge extension folder and print how to load it. See [the side panel](chat.md#the-browser-side-panel). |
+| `sbxw extension` | Write the Chrome/Edge extension folder, print how to load it, and print the sign-in address the panel needs after each daemon start. See [the side panel](chat.md#the-browser-side-panel). |
 | `sbxw completion [shell]` | Print a completion script for bash, zsh, fish, elvish or powershell. |
 
 The daemon's pid and log live in `~/.sbxw/run/`.

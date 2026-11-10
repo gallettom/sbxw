@@ -82,6 +82,12 @@ Then in Chrome or Edge:
 
 Click the sbxw icon in the toolbar (**Alt+Shift+S**) on your app's tab.
 
+**Sign in** (after each daemon start): run `sbxw extension` again and open the
+sign-in address it prints (`http://sbxw.localhost:7681/?t=…`) in the same
+browser. If you already opened sbxw there with `sbxw web`, that sign-in counts
+too: both are on `sbxw.localhost`. Until then the panel shows a page saying
+this, with a link to reload it.
+
 **What it does:**
 
 - Works out which sandbox serves the tab from the published ports and aliases.

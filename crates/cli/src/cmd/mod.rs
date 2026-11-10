@@ -203,21 +203,15 @@ fn derive_name(store: &Store, workspace: &Path) -> SandboxName {
         .expect("an unbounded search finds a name")
 }
 
-fn web_url(cfg: &Config, sandbox: Option<&str>) -> String {
-    let port = cfg.web_port();
-    let host = if ports_is_loopback(&cfg.web_addr) {
-        format!("http://sbxw.localhost:{port}")
-    } else {
-        crate::client::base_url(&cfg.web_addr)
-    };
-    match sandbox {
+/// The address to open sbxw at: its sign-in form (`/?t=<token>`) once the
+/// daemon proved it knows the token, the bare page otherwise.
+fn web_url(daemon: &Daemon, cfg: &Config, sandbox: Option<&str>) -> String {
+    let host = crate::client::browser_url(&cfg.web_addr);
+    let page = match sandbox {
         Some(s) => format!("{host}/#sandbox={s}"),
         None => host,
-    }
-}
-
-fn ports_is_loopback(addr: &str) -> bool {
-    sbxw_core::ports::ip_of(addr).starts_with("127.")
+    };
+    daemon.sign_in_url(&page).unwrap_or(page)
 }
 
 /// The aliases a bring-up wants, written here — in the terminal, the one
@@ -355,7 +349,7 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
         approve_here(&store, &cfg, Scope::Daemon, allow_host_access)?;
         apply_aliases_here(&store, &cfg);
         daemon.ensure(&paths, &config_abs, a.use_api_key)?;
-        eprintln!("sbxw  daemon ready → {}", web_url(&cfg, None));
+        eprintln!("sbxw  daemon ready → {}", web_url(&daemon, &cfg, None));
         return if a.tail { logs(None, 20) } else { Ok(()) };
     };
     let (workspace, ro) = if name.is_local() {
@@ -452,7 +446,7 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
     if last["ok"] != true {
         bail!("{}", last["error"].as_str().unwrap_or("the bring-up failed"));
     }
-    eprintln!("sbxw  '{name}' is up → {}", web_url(&cfg, Some(&name.to_string())));
+    eprintln!("sbxw  '{name}' is up → {}", web_url(&daemon, &cfg, Some(&name.to_string())));
     if a.tail {
         logs(Some(name.to_string()), 20)?;
     }
@@ -597,7 +591,7 @@ pub fn web(name: &str, config: &Path, allow_host_access: bool) -> Result<()> {
     let daemon = Daemon::new(&cfg.web_addr);
     daemon.ensure(&Paths::from_home(), &config_path(&cfg, config)?, false)?;
     daemon.post("/api/initial", json!({ "sandbox": name }))?;
-    eprintln!("sbxw  → {}", web_url(&cfg, Some(&name.to_string())));
+    eprintln!("sbxw  → {}", web_url(&daemon, &cfg, Some(&name.to_string())));
     Ok(())
 }
 
@@ -1100,7 +1094,9 @@ mod tests {
     #[test]
     fn the_url_names_the_sandbox() {
         let cfg = Config::default();
-        assert_eq!(web_url(&cfg, Some("myapp")), "http://sbxw.localhost:7681/#sandbox=myapp");
+        // Nothing answers on port 1: the bare page, no token.
+        let nobody = Daemon::new("127.0.0.1:1");
+        assert_eq!(web_url(&nobody, &cfg, Some("myapp")), "http://sbxw.localhost:7681/#sandbox=myapp");
     }
 
     #[test]

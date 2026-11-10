@@ -49,7 +49,7 @@ are embedded in it. To build from source or change the install options, see
 ```bash
 cd ~/dev/my-project
 sbxw up my-project          # create, provision, serve
-# open http://sbxw.localhost:7681
+sbxw web my-project         # prints the sign-in address: open it in your browser
 ```
 
 Or just run `sbxw up` with no name, then create sandboxes from the browser with

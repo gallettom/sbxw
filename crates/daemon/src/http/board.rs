@@ -173,8 +173,8 @@ async fn board(State(app): S, Path(name): Path<String>) -> ApiResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::http::{agent_router, ui_router};
-    use crate::testing::app;
+    use crate::http::agent_router;
+    use crate::testing::{app, signed_in};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use serde_json::{json, Value};
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(call(agent_router(app.clone()), agent("/api/board/force_release", force)).await.0, StatusCode::FORBIDDEN);
 
         let get = Request::builder().uri("/api/sandboxes/myapp/board").header("host", "127.0.0.1:7681").body(Body::empty()).unwrap();
-        let (s, v) = call(ui_router(app.clone()), get).await;
+        let (s, v) = call(signed_in(app.clone()), get).await;
         assert_eq!(s, StatusCode::OK);
         assert!(v["plan"].is_null(), "the UI gets the shared plan at work in full, and p-1 is in no plan book: {v}");
         assert_eq!(v["claims"][0]["file"], "src/cart.ts");

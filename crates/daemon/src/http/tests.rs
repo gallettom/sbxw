@@ -1,6 +1,7 @@
 //! The two routers, driven as a client would: the security boundaries first.
 
 use super::{agent_router, ui_router};
+use crate::testing::signed_in;
 use crate::testing::app;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -8,6 +9,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const HOST: &str = "127.0.0.1:7681";
+/// The one name a browser signs in at, on a loopback daemon.
+const SIGN_IN_HOST: &str = "sbxw.localhost:7681";
 
 async fn call(router: axum::Router, req: Request<Body>) -> (StatusCode, Value) {
     let res = router.oneshot(req).await.unwrap();
@@ -35,12 +38,12 @@ async fn the_ui_refuses_foreign_hosts_and_origins() {
         }
         b.body(Body::empty()).unwrap()
     };
-    let (s, v) = call(ui_router(app.clone()), get(HOST, None)).await;
+    let (s, v) = call(signed_in(app.clone()), get(HOST, None)).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["ok"], true);
-    assert_eq!(call(ui_router(app.clone()), get("sbxw.localhost:7681", Some("http://sbxw.localhost:7681"))).await.0, StatusCode::OK);
-    assert_eq!(call(ui_router(app.clone()), get("attacker.example:7681", None)).await.0, StatusCode::FORBIDDEN);
-    assert_eq!(call(ui_router(app.clone()), get(HOST, Some("https://evil.example"))).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(signed_in(app.clone()), get("sbxw.localhost:7681", Some("http://sbxw.localhost:7681"))).await.0, StatusCode::OK);
+    assert_eq!(call(signed_in(app.clone()), get("attacker.example:7681", None)).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(signed_in(app.clone()), get(HOST, Some("https://evil.example"))).await.0, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -56,7 +59,7 @@ async fn a_cross_site_websocket_is_refused_before_it_opens() {
         .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(call(ui_router(app), req).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(call(signed_in(app), req).await.0, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -131,7 +134,7 @@ async fn old_tooling_on_the_ui_port_is_told_how_to_fix_it() {
     let (_d, app) = app();
     let body = json!({"hook_event_name": "Stop"});
     let req = json_req(post("/api/hook", body.clone()).header("host", HOST), body);
-    let (s, v) = call(ui_router(app), req).await;
+    let (s, v) = call(signed_in(app), req).await;
     assert_eq!(s, StatusCode::GONE);
     assert!(v["error"].as_str().unwrap().contains("sbxw up"));
 }
@@ -141,7 +144,7 @@ async fn failures_carry_a_status_and_the_old_envelope() {
     let (_d, app) = app();
     let body = json!({"name": "bad name!", "path": "/"});
     let req = json_req(post("/api/sandboxes/create", body.clone()).header("host", HOST), body);
-    let (s, v) = call(ui_router(app), req).await;
+    let (s, v) = call(signed_in(app), req).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert_eq!(v["ok"], false);
     assert!(v["error"].as_str().unwrap().contains("letters, digits and hyphens"));
@@ -150,14 +153,14 @@ async fn failures_carry_a_status_and_the_old_envelope() {
 #[tokio::test]
 async fn the_index_carries_its_versions_and_the_state_is_one_call() {
     let (_d, app) = app();
-    let res = ui_router(app.clone())
+    let res = signed_in(app.clone())
         .oneshot(Request::builder().uri("/").header("host", HOST).body(Body::empty()).unwrap())
         .await
         .unwrap();
     let html = String::from_utf8(axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap().to_vec()).unwrap();
     assert!(html.contains(&format!("const SBXW_VERSION = \"{}\"", env!("CARGO_PKG_VERSION"))));
     assert!(!html.contains("__SBX_VERSION__"));
-    let (s, v) = call(ui_router(app), Request::builder().uri("/api/state").header("host", HOST).body(Body::empty()).unwrap()).await;
+    let (s, v) = call(signed_in(app), Request::builder().uri("/api/state").header("host", HOST).body(Body::empty()).unwrap()).await;
     assert_eq!(s, StatusCode::OK);
     for k in ["sessions", "relay", "plans", "codemap", "leads", "usage", "models"] {
         assert!(v.get(k).is_some(), "{k}");
@@ -179,12 +182,12 @@ fn an_upload_keeps_its_name_as_one_safe_component() {
 async fn a_sandbox_on_an_unregistered_host_is_not_found_and_its_hooks_are_its_own() {
     let (_d, app) = app();
     let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
-    let (s, v) = call(ui_router(app.clone()), get("/api/sandboxes/buildbox~myapp/ports")).await;
+    let (s, v) = call(signed_in(app.clone()), get("/api/sandboxes/buildbox~myapp/ports")).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert!(v["error"].as_str().unwrap().contains("no remote host named 'buildbox'"), "{v}");
     let stop = json_req(post("/api/sandboxes/buildbox~myapp/stop", json!({})).header("host", HOST), json!({}));
-    assert_eq!(call(ui_router(app.clone()), stop).await.0, StatusCode::NOT_FOUND);
-    let (s, _) = call(ui_router(app.clone()), get("/api/sandboxes/a~b~c/ports")).await;
+    assert_eq!(call(signed_in(app.clone()), stop).await.0, StatusCode::NOT_FOUND);
+    let (s, _) = call(signed_in(app.clone()), get("/api/sandboxes/a~b~c/ports")).await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "a malformed ref is a bad request");
     assert!(!app.store.paths.state().join("hosts").exists(), "asking writes nothing");
 
@@ -201,10 +204,10 @@ async fn a_sandbox_on_an_unregistered_host_is_not_found_and_its_hooks_are_its_ow
 async fn the_initial_sandbox_may_be_a_remote_ref() {
     let (_d, app) = app();
     let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "local~myapp"}));
-    assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
+    assert_eq!(call(signed_in(app.clone()), req).await.0, StatusCode::OK);
     assert_eq!(*app.initial_sandbox.lock().unwrap(), "myapp", "normalised");
     let req = json_req(post("/api/initial", json!({})).header("host", HOST), json!({"sandbox": "buildbox~myapp"}));
-    assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::OK);
+    assert_eq!(call(signed_in(app.clone()), req).await.0, StatusCode::OK);
     assert_eq!(*app.initial_sandbox.lock().unwrap(), "buildbox~myapp");
 }
 
@@ -238,7 +241,7 @@ async fn the_virtual_mac_is_lent_by_token_and_steered_only_from_the_ui() {
 async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     let (_d, app) = app();
     let get = Request::builder().uri("/api/voice").header("host", HOST).body(Body::empty()).unwrap();
-    let (s, v) = call(ui_router(app.clone()), get).await;
+    let (s, v) = call(signed_in(app.clone()), get).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["ready"], false, "nothing is downloaded on its own");
     assert_eq!(v["compiled"], cfg!(feature = "voice"));
@@ -247,7 +250,7 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
     assert_eq!(v["speech"]["supported"], sbxw_core::voice::speech_supported());
     assert_eq!(v["hint"], "sbxw voice install");
 
-    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/cancel", json!({})).header("host", HOST), json!({}))).await;
+    let (s, _) = call(signed_in(app.clone()), json_req(post("/api/voice/cancel", json!({})).header("host", HOST), json!({}))).await;
     assert_eq!(s, StatusCode::CONFLICT, "nothing to cancel");
 
     let pcm: Vec<u8> = [0.0f32; 1600].iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -258,37 +261,186 @@ async fn the_voice_panel_reads_its_models_and_refuses_what_it_cannot_do() {
         .header("content-type", "application/octet-stream")
         .body(Body::from(pcm))
         .unwrap();
-    let (s, v) = call(ui_router(app.clone()), req).await;
+    let (s, v) = call(signed_in(app.clone()), req).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "no build or no models: {v}");
     assert!(v["error"].as_str().unwrap().contains("voice"));
 
     // Anonymisation: shapes without a file, names with one, nothing through a broken one.
     let hide = |text: &str| json_req(post("/api/voice/anonymise", json!({})).header("host", HOST), json!({ "text": text }));
-    let (s, v) = call(ui_router(app.clone()), hide("Jeanne Martin, a@b.ch")).await;
+    let (s, v) = call(signed_in(app.clone()), hide("Jeanne Martin, a@b.ch")).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!((v["text"].as_str().unwrap(), v["masked"].as_u64().unwrap()), ("Jeanne Martin, [email]", 1));
     let file = app.store.paths.anonymise();
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(&file, "[replace]\n\"Jeanne Martin\" = \"Personne A\"\n").unwrap();
-    let (_, v) = call(ui_router(app.clone()), hide("jeanne martin, a@b.ch")).await;
+    let (_, v) = call(signed_in(app.clone()), hide("jeanne martin, a@b.ch")).await;
     assert_eq!(v["text"], "Personne A, [email]", "the file is read at once, no restart");
-    let (_, v) = call(ui_router(app.clone()), Request::builder().uri("/api/voice").header("host", HOST).body(Body::empty()).unwrap()).await;
+    let (_, v) = call(signed_in(app.clone()), Request::builder().uri("/api/voice").header("host", HOST).body(Body::empty()).unwrap()).await;
     assert_eq!(v["anonymise"]["terms"], 1);
     std::fs::write(&file, "[remplace]\n").unwrap();
-    let (s, v) = call(ui_router(app.clone()), hide("jeanne martin")).await;
+    let (s, v) = call(signed_in(app.clone()), hide("jeanne martin")).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE, "a typo in the file must not let words through: {v}");
     assert!(v["error"].as_str().unwrap().contains("anonymise.toml"));
     std::fs::remove_file(&file).unwrap();
 
     for gone in ["/api/voice/chat", "/api/voice/conversations"] {
-        let (s, _) = call(ui_router(app.clone()), json_req(post(gone, json!({})).header("host", HOST), json!({}))).await;
+        let (s, _) = call(signed_in(app.clone()), json_req(post(gone, json!({})).header("host", HOST), json!({}))).await;
         assert_eq!(s, StatusCode::NOT_FOUND, "{gone}: no language model, nothing kept");
     }
 
     let empty = json!({"text": "  "});
-    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", empty.clone()).header("host", HOST), empty)).await;
+    let (s, _) = call(signed_in(app.clone()), json_req(post("/api/voice/speak", empty.clone()).header("host", HOST), empty)).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let said = json!({"text": "Bonjour."});
-    let (s, _) = call(ui_router(app.clone()), json_req(post("/api/voice/speak", said.clone()).header("host", HOST), said)).await;
+    let (s, _) = call(signed_in(app.clone()), json_req(post("/api/voice/speak", said.clone()).header("host", HOST), said)).await;
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// ── The UI token ─────────────────────────────────────────────────────────
+
+fn ws_upgrade(b: axum::http::request::Builder) -> Request<Body> {
+    b.uri("/ws?mode=monitor")
+        .header("host", HOST)
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn without_the_ui_token_nothing_but_the_sign_in_answers() {
+    let (_d, app) = app();
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    for path in ["/api/state", "/api/sessions", "/app.css", "/js/main.js", "/vendor/xterm.js"] {
+        let res = ui_router(app.clone()).oneshot(get(path)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let body = axum::body::to_bytes(res.into_body(), 1 << 16).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("sbxw web") && !body.contains(&app.ui_token), "{path}: {body}");
+    }
+    let post_it = json_req(post("/api/sandboxes/create", json!({})).header("host", HOST), json!({"name": "x", "path": "/"}));
+    assert_eq!(call(ui_router(app.clone()), post_it).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(ui_router(app.clone()), ws_upgrade(Request::builder())).await.0, StatusCode::UNAUTHORIZED, "/ws");
+
+    // `/` and `/sidepanel` say how to sign in, and nothing more.
+    for path in ["/", "/sidepanel"] {
+        let res = ui_router(app.clone()).oneshot(get(path)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path}");
+        let html = String::from_utf8(axum::body::to_bytes(res.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
+        assert!(!html.contains("<script") && !html.contains("SBXW_VERSION"), "{path}: {html}");
+    }
+    let h = ui_router(app.clone()).oneshot(get("/sidepanel")).await.unwrap().headers().clone();
+    assert!(h[axum::http::header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("chrome-extension://"), "the extension may frame it");
+    // Health: no version, no addresses.
+    let (s, v) = call(ui_router(app.clone()), get("/api/health")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v, json!({"ok": true, "proof": null}));
+    // The Host check still runs first.
+    let foreign = Request::builder().uri("/api/state").header("host", "evil.example:7681").header("authorization", format!("Bearer {}", app.ui_token)).body(Body::empty()).unwrap();
+    assert_eq!(call(ui_router(app.clone()), foreign).await.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn the_bearer_or_the_cookie_passes_a_wrong_token_does_not() {
+    let (_d, app) = app();
+    let with = |name: &str, value: String| Request::builder().uri("/api/state").header("host", SIGN_IN_HOST).header(name, value).body(Body::empty()).unwrap();
+    let t = app.ui_token.clone();
+    assert_eq!(call(ui_router(app.clone()), with("authorization", format!("Bearer {t}"))).await.0, StatusCode::OK);
+    assert_eq!(call(ui_router(app.clone()), with("cookie", format!("theme=dark; sbxw_ui={t}"))).await.0, StatusCode::OK);
+    let wrong = crate::http::token::mint();
+    assert_eq!(wrong.len(), t.len());
+    assert_eq!(call(ui_router(app.clone()), with("authorization", format!("Bearer {wrong}"))).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(ui_router(app.clone()), with("cookie", format!("sbxw_ui={wrong}"))).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(ui_router(app.clone()), with("cookie", format!("xsbxw_ui={t}"))).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(ui_router(app.clone()), with("authorization", format!("Bearer {}", app.store.token(sbxw_core::SandboxRef::parse("alpha").unwrap()).unwrap()))).await.0, StatusCode::UNAUTHORIZED, "an agent token is not a UI token");
+    // The WebSocket with the cookie gets past the guard (the upgrade itself
+    // needs a real connection, which a oneshot is not).
+    let ws = ws_upgrade(Request::builder().header("cookie", format!("sbxw_ui={t}")).header("host", SIGN_IN_HOST));
+    assert_ne!(call(ui_router(app.clone()), ws).await.0, StatusCode::UNAUTHORIZED);
+    // The cookie counts only at the name it is set for: one that reached a
+    // `127.0.0.1` or `localhost` address was not set by sbxw.
+    for host in [HOST, "localhost:7681"] {
+        let req = Request::builder().uri("/api/state").header("host", host).header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
+        assert_eq!(call(ui_router(app.clone()), req).await.0, StatusCode::UNAUTHORIZED, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn the_sign_in_address_sets_the_cookie_and_drops_the_token() {
+    let (_d, app) = app();
+    let t = app.ui_token.clone();
+    let get = |uri: String| Request::builder().uri(uri).header("host", SIGN_IN_HOST).body(Body::empty()).unwrap();
+    let res = ui_router(app.clone()).oneshot(get(format!("/?t={t}"))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let h = res.headers();
+    assert_eq!(h["location"], "/");
+    assert_eq!(h["cache-control"], "no-store");
+    assert_eq!(h["set-cookie"].to_str().unwrap(), format!("sbxw_ui={t}; HttpOnly; SameSite=Strict; Path=/"));
+
+    let res = ui_router(app.clone()).oneshot(get(format!("/?a=1&t={t}&b=2"))).await.unwrap();
+    assert_eq!(res.headers()["location"], "/?a=1&b=2", "other parameters stay");
+
+    let res = ui_router(app.clone()).oneshot(get(format!("/?t={}", crate::http::token::mint()))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert!(res.headers().get("set-cookie").is_none());
+
+    // At 127.0.0.1 or localhost, where sandbox apps are published: no
+    // cookie, only the same sign-in at sbxw.localhost.
+    for host in [HOST, "localhost:7681"] {
+        let req = Request::builder().uri(format!("/?t={t}&a=1")).header("host", host).body(Body::empty()).unwrap();
+        let res = ui_router(app.clone()).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "{host}");
+        assert!(res.headers().get("set-cookie").is_none(), "{host}");
+        assert_eq!(res.headers()["location"].to_str().unwrap(), format!("http://sbxw.localhost:7681/?t={t}&a=1"));
+        assert_eq!(res.headers()["cache-control"], "no-store");
+    }
+
+    // Signed in, the page itself.
+    let page = Request::builder().uri("/").header("host", SIGN_IN_HOST).header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
+    let res = ui_router(app.clone()).oneshot(page).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap().to_vec()).unwrap();
+    assert!(html.contains("const SBXW_VERSION"));
+}
+
+#[tokio::test]
+async fn health_proves_the_daemon_knows_the_token_without_showing_it() {
+    let (_d, app) = app();
+    let nonce = sbxw_core::ids::random_hex(16);
+    let get = |uri: String| Request::builder().uri(uri).header("host", HOST).body(Body::empty()).unwrap();
+    let (s, v) = call(ui_router(app.clone()), get(format!("/api/health?nonce={nonce}"))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["proof"], crate::http::token::proof(&app.ui_token, &nonce));
+    assert!(v.get("version").is_none() && v.get("web_addr").is_none(), "{v}");
+    assert!(!v.to_string().contains(&app.ui_token));
+    let (_, v) = call(ui_router(app.clone()), get("/api/health?nonce=short".into())).await;
+    assert!(v["proof"].is_null(), "a nonce must be 16 to 128 letters or digits");
+    // Signed in, the full answer.
+    let (_, v) = call(signed_in(app.clone()), get(format!("/api/health?nonce={nonce}"))).await;
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn off_loopback_the_cookie_is_set_for_the_name_the_browser_used() {
+    let d = tempfile::tempdir().unwrap();
+    let cfg = sbxw_core::config::Config { web_addr: "0.0.0.0:7681".into(), ..Default::default() };
+    let app = crate::testing::app_with_config(d.path(), cfg);
+    let t = app.ui_token.clone();
+    let req = Request::builder().uri(format!("/?t={t}")).header("host", "192.168.1.9:7681").body(Body::empty()).unwrap();
+    let res = ui_router(app.clone()).oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(res.headers()["set-cookie"].to_str().unwrap().starts_with("sbxw_ui="));
+    let req = Request::builder().uri("/api/state").header("host", "192.168.1.9:7681").header("cookie", format!("sbxw_ui={t}")).body(Body::empty()).unwrap();
+    assert_eq!(call(ui_router(app), req).await.0, StatusCode::OK);
+}
+
+#[test]
+fn the_cookie_name_is_sbxw_localhost_on_loopback_only() {
+    use super::guard::cookie_host;
+    assert_eq!(cookie_host("127.0.0.1:7681").as_deref(), Some("sbxw.localhost:7681"));
+    assert_eq!(cookie_host("127.0.0.1:7700").as_deref(), Some("sbxw.localhost:7700"));
+    assert_eq!(cookie_host("0.0.0.0:7681"), None);
+    assert_eq!(cookie_host("192.168.1.9:7681"), None);
 }

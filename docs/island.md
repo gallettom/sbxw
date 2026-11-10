@@ -98,6 +98,13 @@ sandbox's token.
 | `Stop` | `idle` (with Claude's reply) |
 | `SessionEnd` | `exited` |
 
+Every request the island makes carries the daemon's UI token
+(`Authorization: Bearer`, read from `~/.sbxw/run/ui-token` before each
+request, since the daemon writes a new one each time it starts). Opening a
+sandbox in the browser when no tab shows sbxw uses the sign-in address
+(`/?t=<token>#sandbox=<name>`), so the new tab is signed in. See
+[Security: two listeners](security.md#two-listeners).
+
 Daemon endpoints the island uses:
 
 | Endpoint | Purpose |

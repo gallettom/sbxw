@@ -91,17 +91,22 @@ pub fn default_dir() -> PathBuf {
         .join("browser-extension")
 }
 
-/// The URL a browser reaches the daemon at. An all-interfaces bind is reached
-/// on loopback.
+/// The URL the panel frames the daemon at: `sbxw.localhost` on loopback, the
+/// one name the UI cookie is set for (see `client::browser_url`).
 pub fn daemon_url(web_addr: &str) -> String {
-    let ip = sbxw_core::ports::ip_of(web_addr);
-    let port = sbxw_core::ports::port_of(web_addr);
-    let host = match ip {
-        "" | "0.0.0.0" | "::" => "127.0.0.1".to_string(),
-        v6 if v6.contains(':') => format!("[{v6}]"),
-        other => other.to_string(),
-    };
-    format!("http://{host}:{port}")
+    crate::client::browser_url(web_addr)
+}
+
+/// An address an earlier install wrote, on the name the UI cookie is set for:
+/// `127.0.0.1` and `localhost` become `sbxw.localhost`, same port.
+fn signed_in_name(daemon: &str) -> String {
+    let d = daemon.trim_end_matches('/');
+    for loopback in ["http://127.0.0.1:", "http://localhost:"] {
+        if let Some(port) = d.strip_prefix(loopback) {
+            return format!("http://{}:{port}", sbxw_core::ports::WEB_HOSTNAME);
+        }
+    }
+    d.to_string()
 }
 
 /// The manifest's `version`. Chrome keeps the manifest and service worker it
@@ -150,19 +155,26 @@ pub fn cmd(web_addr: &str, daemon: Option<String>, refresh: bool) -> Result<()> 
     let dir = default_dir();
     let first = !dir.join("manifest.json").is_file();
     let daemon = daemon
-        .or_else(|| if refresh { installed_daemon(&dir) } else { None })
+        .or_else(|| if refresh { installed_daemon(&dir).map(|d| signed_in_name(&d)) } else { None })
         .unwrap_or_else(|| daemon_url(web_addr));
     install(&dir, &daemon)?;
     if refresh && !first {
         println!("sbxw browser extension refreshed → {}", dir.display());
         return Ok(());
     }
+    // The panel frames `<daemon>/sidepanel`, which needs this browser signed
+    // in at that address.
+    let sign_in = crate::client::Daemon::new(web_addr).sign_in_url(&daemon);
     println!("sbxw browser extension → {}", dir.display());
     println!("  talks to the daemon at {daemon}\n");
     println!("First time, in Chrome or Edge:");
     println!("  1. open chrome://extensions (edge://extensions)");
     println!("  2. turn on Developer mode");
     println!("  3. Load unpacked → choose the folder above\n");
+    match sign_in {
+        Some(url) => println!("Sign this browser in for the panel (once per daemon start), open:\n  {url}\n"),
+        None => println!("Start sbxw (`sbxw up`), then run `sbxw extension` again for the panel's sign-in address.\n"),
+    }
     println!("Then click the sbxw icon in the toolbar (Alt+Shift+S) on your app's tab.");
     println!("`sbxw update` keeps it current; the panel reloads the extension when it must.");
     Ok(())
@@ -173,9 +185,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_daemon_is_reached_where_web_addr_says_and_on_loopback_when_bound_everywhere() {
-        assert_eq!(daemon_url("127.0.0.1:7681"), "http://127.0.0.1:7681");
-        assert_eq!(daemon_url("0.0.0.0:7700"), "http://127.0.0.1:7700");
+    fn the_panel_reaches_the_daemon_at_sbxw_localhost_on_loopback() {
+        assert_eq!(daemon_url("127.0.0.1:7681"), "http://sbxw.localhost:7681");
+        assert_eq!(daemon_url("0.0.0.0:7700"), "http://sbxw.localhost:7700");
+        assert_eq!(signed_in_name("http://127.0.0.1:7681"), "http://sbxw.localhost:7681");
+        assert_eq!(signed_in_name("http://localhost:7700/"), "http://sbxw.localhost:7700");
+        assert_eq!(signed_in_name("http://192.168.1.9:7681"), "http://192.168.1.9:7681");
         assert_eq!(daemon_url("[::1]:7681"), "http://[::1]:7681");
     }
 
@@ -229,7 +244,7 @@ mod tests {
                 }
             }
         }
-        let pinned = ("1.0.1", 0xf5c0_0ff4_4f3d_c57d_u64);
+        let pinned = ("1.0.2", 0x64a9_a6f5_4639_098c_u64);
         let version = manifest_version().unwrap();
         assert!(
             (version.as_str(), hash) == pinned,

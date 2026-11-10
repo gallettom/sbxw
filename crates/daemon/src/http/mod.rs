@@ -1,7 +1,8 @@
 //! Two listeners, two routers.
 //!
 //! * **UI** (`web_addr`): the browser, the island, the extension. Guarded
-//!   against other web pages (Host + Origin, see `guard`).
+//!   against other web pages (Host + Origin) and against anyone without this
+//!   user's UI token (see `guard`, `token`).
 //! * **Agent** (`agent_addr`): the only port a sandbox's policy allows, the
 //!   only calls an agent may make, each authenticated by its token.
 //!
@@ -15,6 +16,7 @@ pub mod error;
 pub mod guard;
 pub mod mac;
 pub mod stream;
+pub mod token;
 pub mod ui;
 pub mod ws;
 
@@ -83,21 +85,46 @@ pub async fn serve(app: Arc<App>) -> anyhow::Result<()> {
     let agent = tokio::net::TcpListener::bind(&app.cfg.agent_addr)
         .await
         .map_err(|e| anyhow::anyhow!("cannot listen on {} ({e})", app.cfg.agent_addr))?;
+    // Only once the port is ours: a daemon that lost the race must not
+    // replace the running one's token.
+    token::write(&app.store.paths, &app.ui_token)
+        .map_err(|e| anyhow::anyhow!("cannot write {} ({e})", token::path(&app.store.paths).display()))?;
+    forget_token_on_signal(app.clone());
     tracing::info!("web UI on http://{} (http://sbxw.localhost:{})", app.cfg.web_addr, app.cfg.web_port());
     tracing::info!("agent API on {} (sandboxes reach it as host.docker.internal)", app.cfg.agent_addr);
     let (u, a) = tokio::join!(
         axum::serve(ui, ui_router(app.clone())),
         axum::serve(agent, agent_router(app.clone()))
     );
+    token::remove(&app.store.paths, &app.ui_token);
     u?;
     a?;
     Ok(())
 }
 
+/// `sbxw down` without a daemon answering sends SIGTERM; Ctrl+C on a
+/// foreground daemon is SIGINT. Either way the token file goes first.
+fn forget_token_on_signal(app: Arc<App>) {
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let (Ok(mut term), Ok(mut int)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt())) else {
+            return;
+        };
+        let code = tokio::select! {
+            _ = term.recv() => 143,
+            _ = int.recv() => 130,
+        };
+        token::remove(&app.store.paths, &app.ui_token);
+        std::process::exit(code);
+    });
+    #[cfg(not(unix))]
+    let _ = app;
+}
+
 #[cfg(test)]
 mod header_tests {
-    use super::ui_router;
-    use crate::testing::app;
+    use crate::testing::{app, signed_in};
     use axum::body::Body;
     use axum::http::{header, Request};
     use tower::ServiceExt;
@@ -105,7 +132,7 @@ mod header_tests {
     async fn headers(path: &str) -> axum::http::HeaderMap {
         let (_d, app) = app();
         let req = Request::builder().uri(path).header("host", "127.0.0.1:7681").body(Body::empty()).unwrap();
-        ui_router(app).oneshot(req).await.unwrap().headers().clone()
+        signed_in(app).oneshot(req).await.unwrap().headers().clone()
     }
 
     #[tokio::test]

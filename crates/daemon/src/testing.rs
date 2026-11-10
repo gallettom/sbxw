@@ -30,9 +30,18 @@ pub fn app_in(dir: &Path) -> Arc<App> {
 }
 
 fn build(dir: &Path, fake: Arc<Fake>) -> Arc<App> {
+    build_with(dir, fake, Config::default())
+}
+
+/// An `App` on `dir` with its own daemon config.
+pub fn app_with_config(dir: &Path, cfg: Config) -> Arc<App> {
+    build_with(dir, Fake::new(sbx_answer), cfg)
+}
+
+fn build_with(dir: &Path, fake: Arc<Fake>, cfg: Config) -> Arc<App> {
     AppBuilder {
         paths: Paths::under(dir),
-        cfg: Config::default(),
+        cfg,
         sbx: Sbx::new(fake),
         hosts: hostsys::for_tests(&dir.join("hosts")),
         use_api_key: true,
@@ -62,4 +71,15 @@ pub fn hosts() -> Vec<(&'static str, crate::host::Host)> {
     let exec: Arc<dyn sbxw_sbx::host::HostExec> = Arc::new(sbxw_sbx::host::LocalExec);
     let via_exec = Host { name: sbxw_core::names::HostName::local(), exec: exec.clone(), fs: Arc::new(ExecFs::new(exec)) };
     vec![("local", Host::local()), ("exec", via_exec)]
+}
+
+/// The UI router as a signed-in client calls it: every request carries the
+/// UI token unless it already says something else.
+pub fn signed_in(app: Arc<App>) -> axum::Router {
+    use axum::http::{header, HeaderValue};
+    let bearer = HeaderValue::from_str(&format!("Bearer {}", app.ui_token)).unwrap();
+    crate::http::ui_router(app).layer(tower::util::MapRequestLayer::new(move |mut req: axum::http::Request<axum::body::Body>| {
+        req.headers_mut().entry(header::AUTHORIZATION).or_insert(bearer.clone());
+        req
+    }))
 }
