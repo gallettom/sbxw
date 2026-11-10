@@ -22,6 +22,12 @@ macro_rules! js {
     };
 }
 
+macro_rules! vendor {
+    ($file:literal, $ctype:literal) => {
+        (concat!("/vendor/", $file), $ctype, include_str!(concat!("../../../../assets/vendor/", $file)))
+    };
+}
+
 /// A closed set known at compile time: nothing resolved at runtime, no path to
 /// traverse.
 const STATIC: &[(&str, &str, &str)] = &[
@@ -59,6 +65,12 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("chat-dock.js"),
     js!("concierge.js"),
     js!("sidepanel.js"),
+    // xterm.js, vendored from the npm registry (see assets/vendor/README.md)
+    // rather than fetched from a CDN into a page that can open a host terminal.
+    vendor!("xterm.js", "application/javascript; charset=utf-8"),
+    vendor!("addon-fit.js", "application/javascript; charset=utf-8"),
+    vendor!("addon-canvas.js", "application/javascript; charset=utf-8"),
+    vendor!("xterm.css", "text/css; charset=utf-8"),
 ];
 
 const SIDEPANEL: &str = r#"<!doctype html>
@@ -194,6 +206,44 @@ mod tests {
                 let file = path.trim_start_matches("/js/");
                 assert!(singleton.contains(file), "singleton.js does not load {file}");
             }
+            if path.starts_with("/vendor/") && path.ends_with(".js") {
+                assert!(singleton.contains(&format!("'{path}'")), "singleton.js does not load {path}");
+            }
+            if path.starts_with("/vendor/") {
+                let body = STATIC.iter().find(|(p, _, _)| p == path).unwrap().2;
+                assert!(!body.contains("sourceMappingURL"), "{path} still names a source map");
+            }
         }
+        assert!(INDEX.contains(r#"href="/vendor/xterm.css""#), "index.html does not link the vendored stylesheet");
+    }
+
+    /// Nothing the shell loads comes from another origin: a page that can open
+    /// a terminal on the host runs only code compiled into the binary.
+    #[test]
+    fn the_shell_loads_nothing_from_a_cdn() {
+        let singleton = STATIC.iter().find(|(p, _, _)| *p == "/js/singleton.js").unwrap().2;
+        // Every `<script>` and `<link>` tag in the shell.
+        for tag in ["<script", "<link"] {
+            for (i, _) in INDEX.match_indices(tag) {
+                let end = i + INDEX[i..].find('>').unwrap();
+                let el = &INDEX[i..end];
+                for attr in ["src=\"", "href=\""] {
+                    if let Some(j) = el.find(attr) {
+                        let url = &el[j + attr.len()..];
+                        let url = &url[..url.find('"').unwrap_or(url.len())];
+                        let local = url.starts_with("data:") || (url.starts_with('/') && !url.starts_with("//"));
+                        assert!(local, "index.html loads a remote URL: {el}");
+                    }
+                }
+            }
+        }
+        // Every string literal in the script list `singleton.js` loads.
+        let start = singleton.find("const SBXW_APP_SCRIPTS").unwrap();
+        let list = &singleton[start..start + singleton[start..].find("];").unwrap()];
+        let code: String = list.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
+        for entry in code.split('\'').skip(1).step_by(2) {
+            assert!(entry.starts_with('/') && !entry.starts_with("//"), "singleton.js loads {entry}");
+        }
+        assert!(!singleton.contains("https://") && !INDEX.contains("cdn.jsdelivr.net"));
     }
 }
