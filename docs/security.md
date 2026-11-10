@@ -71,9 +71,16 @@ Both addresses must be `IP:PORT` literals; a host name is refused.
   agent's terminal, control characters (ESC, CR, the other C0 and C1
   characters) and bidi and zero-width format characters are removed first. The
   text cannot end the paste and type keystrokes of its own.
-- **Screenshots:** nothing leaves until you attach it, to one named sandbox,
-  after seeing a preview of every image. sbxw can't capture your screen; the
-  browser's own picker asks each time. Refusing discards what was attached.
+- **Screenshots:** in the web UI, nothing leaves until you attach it, to one
+  named sandbox, after seeing a preview of every image. sbxw can't capture
+  your screen; the browser's own picker asks each time. Refusing discards what
+  was attached. In the browser side panel, a screenshot request from the
+  panel's sandbox waits for you to click **Send a screenshot of this tab**,
+  which captures the tab beside the panel and sends it at once, without a
+  separate preview; the transcript then shows what was sent. Only if you turn
+  on automatic screenshots in that browser's panel does it answer without a
+  click, at most once per sandbox every 10 seconds; further requests wait for
+  the click. See [the side panel's screenshots](web-ui.md#screenshots-from-the-browser-side-panel).
 - **Virtual Mac** (`sbxw:terminal-mac`, opt-in): booting it and publishing a
   port to it need your approval; clicks, typing and screenshots of the guest do
   not. Those screenshots are of a **shared, disposable guest**, never of your

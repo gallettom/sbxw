@@ -15,6 +15,7 @@ Served at <http://sbxw.localhost:7681> by default (`web_addr` in
 - [Ports and network policy](#ports-and-network-policy)
 - [Environment file and SSH cards](#environment-file-and-ssh-cards)
 - [The sidebar footer](#the-sidebar-footer)
+- [Screenshots from the browser side panel](#screenshots-from-the-browser-side-panel)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 
 ## Layout at a glance
@@ -476,6 +477,22 @@ models are installed.
 
 Nothing said is kept: not the audio, not the text. **Clear** empties the
 panel.
+
+## Screenshots from the browser side panel
+
+When the agent beside your app's tab calls `ask_user_for_screenshot`, the
+[side panel](chat.md#the-browser-side-panel) shows the request above the
+message box: which agent asks, its question, and a **Send a screenshot of
+this tab** button. One click captures the tab beside the panel and sends it to
+that agent; the transcript shows a thumbnail of what it got. Until you click,
+nothing leaves, and the request also waits in sbxw's relay popup.
+
+**Send the screenshots Claude asks for without asking me**, in the panel's
+⋯ menu, is off until you turn it on, and is remembered in this browser only.
+When it is on, the panel answers on its own, at most one request per sandbox
+every 10 seconds; the requests after that wait for your click. Either way it
+only answers screenshot requests from the sandbox the panel talks to, and only
+with the tab beside it.
 
 ## Keyboard shortcuts
 
