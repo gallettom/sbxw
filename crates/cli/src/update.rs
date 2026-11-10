@@ -15,7 +15,7 @@ const REPO: &str = "gallettom/sbxw";
 /// enabled in this build: only the sha256 checks run. Must equal
 /// `RELEASE_PUBLIC_KEY` in install.sh (a test checks it). How to set it:
 /// docs/cli.md#release-signatures.
-const RELEASE_PUBLIC_KEY: &str = "";
+const RELEASE_PUBLIC_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID07mlyWquuz1Yo1dBe23Y9DXiGmnRmeztqzOW0nuHqo sbxw-release";
 /// The signer identity and the `ssh-keygen -Y` namespace of a release
 /// signature, so a signature made with the same key for anything else does
 /// not pass for one.

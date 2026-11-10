@@ -14,7 +14,7 @@ INSTALL_DIR="${SBXW_INSTALL_DIR:-/usr/local/bin}"
 # enabled in this build: only the sha256 checks run. Must match
 # RELEASE_PUBLIC_KEY in crates/cli/src/update.rs (a test checks it).
 # How to set it: docs/cli.md#release-signatures.
-RELEASE_PUBLIC_KEY=""
+RELEASE_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID07mlyWquuz1Yo1dBe23Y9DXiGmnRmeztqzOW0nuHqo sbxw-release"
 
 # ── Colours (disabled when not a tty) ────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
