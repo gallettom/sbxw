@@ -10,7 +10,12 @@
 //!   the built-in default produces none, so a config with nothing special asks
 //!   nothing.
 //! * [`new_grants`] is what the current lines add to an approved list.
-//!   Removing a grant needs no approval.
+//!   Removing a grant needs no approval, with one exception: a carve (a
+//!   folder kept out of, or read-only in, a sandbox) is a restriction, so
+//!   dropping or weakening one gives access back. Carves are recorded as
+//!   `carve:` lines beside the grants; adding one asks nothing, while
+//!   [`restored`] turns a removed or weakened one into an `access restored:`
+//!   line that needs approval like a grant.
 //! * The lines themselves are what is stored and compared: an approval names
 //!   the exact lines shown, so an edit between showing and approving is caught.
 
@@ -20,7 +25,7 @@ use std::collections::BTreeSet;
 /// Every host-access grant in `cfg`, sorted and deduplicated.
 ///
 /// Fields left out, and why (checked by `every_field_is_classified` below):
-/// `web_shell`, `workdir`, `env`, `volumes`, `claude_model`, `models`,
+/// `carve` (a restriction: see [`carve_lines`] and [`restored`]), `web_shell`, `workdir`, `env`, `volumes`, `claude_model`, `models`,
 /// `pull`, `keep_running`, `network_deny`, `cpus`, `memory`, `fuse`,
 /// `root_size`, `docker_size`, `max_agent_sessions`, `keep_awake*`,
 /// `battery_warn_below`, `terminal_*_color`, `voice`, the other `[mac]`
@@ -42,6 +47,7 @@ pub fn grants(cfg: &Config) -> Vec<String> {
             Err(_) => format!("mount: {w}"),
         });
     }
+    out.extend(carve_lines(cfg));
     for (target, host) in &cfg.kit_mounts {
         out.insert(format!("mount (read-write): {host} at {target}"));
     }
@@ -105,9 +111,63 @@ pub fn daemon_grants(cfg: &Config) -> Vec<String> {
     out.into_iter().collect()
 }
 
-/// The lines of `current` not in `approved`, in order.
+/// The lines of `current` not in `approved`, in order. `carve:` lines are
+/// records, not grants, and are never new.
 pub fn new_grants(current: &[String], approved: &[String]) -> Vec<String> {
-    current.iter().filter(|g| !approved.contains(g)).cloned().collect()
+    current.iter().filter(|g| !g.starts_with(CARVE_PREFIX) && !approved.contains(g)).cloned().collect()
+}
+
+pub const CARVE_PREFIX: &str = "carve: ";
+
+/// One line per carve, `carve: /abs/path (none, strict)`: what is recorded
+/// beside the approved grants so a later removal can be noticed.
+pub fn carve_lines(cfg: &Config) -> Vec<String> {
+    cfg.carve.iter().map(|c| format!("{CARVE_PREFIX}{} ({}, {})", c.path, c.access_word(), c.enforce_word())).collect()
+}
+
+/// `(path, access, enforce)` of a `carve:` line; access 2 is `none`, 1 `ro`;
+/// enforce 1 is `strict`, 0 `soft`.
+fn parse_carve_line(l: &str) -> Option<(&str, u8, u8)> {
+    let rest = l.strip_prefix(CARVE_PREFIX)?;
+    let (path, tail) = rest.rsplit_once(" (")?;
+    let (access, enforce) = tail.strip_suffix(')')?.split_once(", ")?;
+    let access = match access {
+        "none" => 2,
+        "ro" => 1,
+        _ => return None,
+    };
+    let enforce = match enforce {
+        "strict" => 1,
+        "soft" => 0,
+        _ => return None,
+    };
+    Some((path, access, enforce))
+}
+
+/// The recorded carves in `approved` that `current` (a config's whole line
+/// list) no longer holds as firmly, as `access restored:` lines. A carve gone,
+/// `none` turned `ro`, or `strict` turned `soft` needs the person's yes; a
+/// new or stronger carve does not.
+pub fn restored(current: &[String], approved: &[String]) -> Vec<String> {
+    let now: Vec<_> = current.iter().filter_map(|l| parse_carve_line(l)).collect();
+    let mut out = vec![];
+    for (path, access, enforce) in approved.iter().filter_map(|l| parse_carve_line(l)) {
+        let held = now.iter().any(|&(p, a, e)| p == path && a >= access && e >= enforce);
+        if !held {
+            let a = if access == 2 { "no access" } else { "read-only" };
+            let e = if enforce == 1 { "strict" } else { "soft" };
+            out.push(format!("access restored: {path} (was: {a}, {e})"));
+        }
+    }
+    out
+}
+
+/// Everything `current` asks beyond `approved`: [`new_grants`] then
+/// [`restored`].
+pub fn pending(current: &[String], approved: &[String]) -> Vec<String> {
+    let mut v = new_grants(current, approved);
+    v.extend(restored(current, approved));
+    v
 }
 
 /// A kit reference that is a path on the host (resolved at load), not an
@@ -168,7 +228,7 @@ mod tests {
     fn the_defaults_and_the_example_grant_nothing() {
         assert!(grants(&Config::default()).is_empty());
         let example: Config = toml::from_str(include_str!("../../../sbxw.toml.example")).unwrap();
-        assert_eq!(grants(&example), Vec::<String>::new());
+        assert_eq!(pending(&grants(&example), &[]), Vec::<String>::new());
         // Writing a default out in full is still the default.
         assert!(lines("network_allow = [\"github.com\"]\nkits = [\"sbxw:retro\"]\nmonitor_cmd = [\"sbx\"]\ncache_ttl_days = 3").is_empty());
     }
@@ -243,7 +303,7 @@ mod tests {
         // this fails when the default serialises a key the list does not name.
         let known = [
             "web_addr", "agent_addr", "web_shell", "network_allow", "network_deny", "ip_per_app", "ports", "kits", "kit_mounts",
-            "workdir", "workspaces", "cpus", "memory", "fuse", "root_size", "docker_size", "volumes", "cache", "cache_ttl_days",
+            "workdir", "workspaces", "carve", "cpus", "memory", "fuse", "root_size", "docker_size", "volumes", "cache", "cache_ttl_days",
             "claude_model", "models", "skills", "pull", "template", "keep_running", "max_agent_sessions", "keep_awake",
             "keep_awake_min_battery", "battery_warn_below", "monitor_cmd", "terminal_color", "terminal_bar_color",
             "terminal_text_color", "env", "env_files", "mac", "voice",
@@ -259,6 +319,24 @@ mod tests {
         let approved = vec!["a".to_string(), "b".into()];
         assert_eq!(new_grants(&["a".into(), "c".into()], &approved), ["c"]);
         assert!(new_grants(&["a".into()], &approved).is_empty(), "a removal asks nothing");
+    }
+
+    #[test]
+    fn a_removed_or_weakened_carve_needs_approval_but_a_new_one_does_not() {
+        let line = |t: &str| lines(&format!("[[carve]]\npath = \"/p/x\"\n{t}"));
+        let strict_none = line("access = \"none\"");
+        assert_eq!(strict_none, ["carve: /p/x (none, strict)"]);
+        assert!(new_grants(&strict_none, &[]).is_empty(), "adding a carve asks nothing");
+        assert!(pending(&strict_none, &[]).is_empty());
+        let approved = strict_none.clone();
+        assert!(pending(&strict_none, &approved).is_empty());
+        assert_eq!(pending(&[], &approved), ["access restored: /p/x (was: no access, strict)"]);
+        assert_eq!(pending(&line("access = \"ro\""), &approved), ["access restored: /p/x (was: no access, strict)"]);
+        assert_eq!(pending(&line("access = \"none\"\nenforce = \"soft\""), &approved), ["access restored: /p/x (was: no access, strict)"]);
+        // Stronger, or the same, is fine.
+        let ro_soft = line("access = \"ro\"\nenforce = \"soft\"");
+        assert!(pending(&strict_none, &ro_soft).is_empty());
+        assert_eq!(pending(&[], &ro_soft), ["access restored: /p/x (was: read-only, soft)"]);
     }
 
     #[test]

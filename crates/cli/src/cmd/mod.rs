@@ -558,7 +558,7 @@ pub fn config_grants(config: &Path, revoke: bool) -> Result<()> {
         return Ok(());
     }
     let approved = store.all_approved_grants().remove(&key).unwrap_or_default();
-    let new = sbxw_core::consent::new_grants(&sbxw_core::consent::grants(&cfg), &approved);
+    let new = sbxw_core::consent::pending(&sbxw_core::consent::grants(&cfg), &approved);
     println!("{key}");
     print_lines("approved", &approved);
     print_lines("asked for, not approved yet", &new);

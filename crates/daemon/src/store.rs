@@ -590,16 +590,29 @@ impl Store {
     /// error is a [`NeedsApproval`](sbxw_core::consent::NeedsApproval) with the
     /// lines still to approve.
     pub fn check_grants(&self, key: &str, all: &[String], checked: &[String], approved_now: &[String]) -> Result<()> {
-        use sbxw_core::consent::{new_grants, NeedsApproval};
+        use sbxw_core::consent::{new_grants, restored, NeedsApproval, CARVE_PREFIX};
         let _guard = self.lock.lock().unwrap();
         let mut book = self.all_approved_grants();
         let before = book.get(key).cloned().unwrap_or_default();
-        let new = new_grants(checked, &before);
+        // A carve dropped or weakened in the file is checked against the whole
+        // list even by a partial check: it hands access back.
+        let mut new = new_grants(checked, &before);
+        let gave_back = restored(all, &before);
+        new.extend(gave_back.iter().cloned());
         let missing = new_grants(&new, approved_now);
         if !missing.is_empty() {
             return Err(NeedsApproval { config: key.to_string(), grants: new }.into());
         }
-        let mut after: Vec<String> = before.iter().filter(|g| all.contains(g)).cloned().chain(new).collect();
+        // The carves now in the file are recorded as they are (adding or
+        // strengthening one asks nothing); the restored lines are not kept.
+        let carves = all.iter().filter(|g| g.starts_with(CARVE_PREFIX)).cloned();
+        let mut after: Vec<String> = before
+            .iter()
+            .filter(|g| all.contains(g))
+            .cloned()
+            .chain(new.into_iter().filter(|g| !gave_back.contains(g)))
+            .chain(carves)
+            .collect();
         after.sort();
         after.dedup();
         if after == before {
@@ -674,6 +687,23 @@ mod tests {
             assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
         }
         assert_eq!(s.all_approved_grants()[key], mount);
+    }
+
+    #[test]
+    fn dropping_a_carve_asks_but_adding_one_does_not() {
+        let (_d, s) = store();
+        let key = "/p/sbxw.toml";
+        let carve = v(&["carve: /p/x (none, strict)"]);
+        s.check_grants(key, &carve, &carve, &[]).unwrap();
+        assert_eq!(s.all_approved_grants()[key], carve, "recorded without a question");
+        let e = s.check_grants(key, &[], &[], &[]).unwrap_err();
+        let shown = needs_approval(&e).unwrap().grants.clone();
+        assert_eq!(shown, v(&["access restored: /p/x (was: no access, strict)"]));
+        // Approving a different line approves nothing; the right one does.
+        assert!(s.check_grants(key, &[], &[], &v(&["x"])).is_err());
+        s.check_grants(key, &[], &[], &shown).unwrap();
+        assert!(s.all_approved_grants().get(key).is_none(), "the restored line is not kept");
+        s.check_grants(key, &[], &[], &[]).unwrap();
     }
 
     #[test]

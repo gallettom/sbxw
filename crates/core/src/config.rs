@@ -46,6 +46,9 @@ pub struct Config {
     /// `TARGET` absolute in the sandbox, else the host path; `:ro` read-only.
     /// `PATH` is relative to this file, or `~/`.
     pub workspaces: Vec<String>,
+    /// Folders inside the main workspace or a `workspaces` folder that the
+    /// sandbox cannot read, or only reads (`[[carve]]`). Creation only.
+    pub carve: Vec<Carve>,
     /// CPUs and memory at creation (`--cpus`, `--memory`); 0 and empty are
     /// sbx's defaults.
     pub cpus: u32,
@@ -175,6 +178,7 @@ impl Default for Config {
             volumes: vec![],
             workdir: String::new(),
             workspaces: vec![],
+            carve: vec![],
             cpus: 0,
             memory: String::new(),
             fuse: None,
@@ -201,6 +205,52 @@ impl Default for Config {
             mac: Default::default(),
             voice: Default::default(),
             source: None,
+        }
+    }
+}
+
+/// What a carve leaves the sandbox: nothing, or a read-only view.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+pub enum CarveAccess {
+    #[serde(rename = "none")]
+    Hidden,
+    #[serde(rename = "ro")]
+    ReadOnly,
+}
+
+/// How hard a carve is held: `strict` keeps the folder out of the VM;
+/// `soft` hides or locks it with a mount an agent with root can remove.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CarveEnforce {
+    #[default]
+    Strict,
+    Soft,
+}
+
+/// One `[[carve]]` table.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Carve {
+    /// Relative to this file, or absolute; inside the main workspace or a
+    /// `workspaces` folder.
+    pub path: String,
+    pub access: CarveAccess,
+    #[serde(default)]
+    pub enforce: CarveEnforce,
+}
+
+impl Carve {
+    /// `none`, `ro` as the file spells them.
+    pub fn access_word(&self) -> &'static str {
+        match self.access {
+            CarveAccess::Hidden => "none",
+            CarveAccess::ReadOnly => "ro",
+        }
+    }
+    pub fn enforce_word(&self) -> &'static str {
+        match self.enforce {
+            CarveEnforce::Strict => "strict",
+            CarveEnforce::Soft => "soft",
         }
     }
 }
@@ -364,6 +414,9 @@ impl Config {
                 Err(_) => w,
             })
             .collect();
+        for c in &mut cfg.carve {
+            c.path = resolve_host_dir(&dir, &c.path);
+        }
         cfg.source = Some(abs);
         Ok(cfg)
     }
@@ -425,6 +478,17 @@ impl Config {
         }
         for w in &self.workspaces {
             parse_workspace(w).map_err(|e| anyhow::anyhow!("workspaces: {w:?} — {e}"))?;
+        }
+        for c in &self.carve {
+            if c.path.trim().is_empty() {
+                bail!("carve: the path is empty");
+            }
+            if c.path.contains('\n') || c.path.contains('\0') {
+                bail!("carve: {:?} — one path, on one line", c.path);
+            }
+            if Path::new(&c.path).components().any(|p| p == std::path::Component::ParentDir) {
+                bail!("carve: {:?} — no `..` in a carve path", c.path);
+            }
         }
         for (key, v) in [("memory", &self.memory), ("root_size", &self.root_size), ("docker_size", &self.docker_size)] {
             if !v.is_empty() && !is_size(v) {
@@ -697,6 +761,29 @@ mod tests {
         assert!(bad.validate().is_err());
         let ok: Config = toml::from_str("memory = \"8g\"\ncpus = 4\nworkspaces = [\"/d:/w/d:ro\"]\nworkdir = \"web\"").unwrap();
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn carves_parse_validate_and_resolve() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("sbxw.toml"),
+            "[[carve]]\npath = \"clients/acme\"\naccess = \"none\"\n\n[[carve]]\npath = \"/abs/x\"\naccess = \"ro\"\nenforce = \"soft\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load(Path::new("sbxw.toml"), dir.path()).unwrap();
+        assert_eq!(cfg.carve[0].path, dir.path().join("clients/acme").to_string_lossy());
+        assert_eq!((cfg.carve[0].access, cfg.carve[0].enforce), (CarveAccess::Hidden, CarveEnforce::Strict));
+        assert_eq!((cfg.carve[1].access, cfg.carve[1].enforce), (CarveAccess::ReadOnly, CarveEnforce::Soft));
+        let bad = |s: &str| toml::from_str::<Config>(s).map_or(true, |c| c.validate().is_err());
+        assert!(bad("[[carve]]\npath = \"\"\naccess = \"none\""));
+        assert!(bad("[[carve]]\npath = \"a/../b\"\naccess = \"none\""));
+        assert!(bad("[[carve]]\npath = \"a\"\naccess = \"rw\""));
+        assert!(bad("[[carve]]\npath = \"a\"\naccess = \"ro\"\nenforce = \"hard\""));
+        assert!(!bad("[[carve]]\npath = \"a\"\naccess = \"ro\""));
+        // And it survives being written out and read again.
+        let back = Config::parse(&cfg.to_toml().unwrap()).unwrap();
+        assert_eq!(back.carve, cfg.carve);
     }
 
     #[test]
