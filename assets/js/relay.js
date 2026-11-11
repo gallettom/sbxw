@@ -8,7 +8,10 @@
 //    the asker until you say so;
 //  - a **screenshot** of what is on your screen — nobody else can supply that,
 //    so there is no routing step at all: you attach one image or several,
-//    describe it in words instead, or refuse.
+//    describe it in words instead, or refuse;
+//  - a **round of questions** for you (`ask_user_questions`): every question
+//    on one form, answered by you, or routed to another sandbox for a draft
+//    that you edit and release like any routed answer.
 //
 // See `src/relay.rs` for the state machine and `assets/relay-tool.js` for the
 // CLI the agents run.
@@ -130,6 +133,11 @@ function relayIsShot(req) {
   return req.kind === 'screenshot';
 }
 
+/** A round of questions for the person (`ask_user_questions`). */
+function relayIsAsk(req) {
+  return req.kind === 'ask';
+}
+
 /** A virtual Mac request: a yes or a no, never routed (see the Mac panel). */
 function relayIsMac(req) {
   return req.kind === 'mac';
@@ -147,6 +155,7 @@ const relayMacRunning = new Set();
  * being asked rather than anyone else.
  */
 function relayQuestionBlock(req) {
+  if (relayIsAsk(req)) return relayAskFrom(req);
   const why = relayIsMac(req)
     ? `asks you to approve this on the virtual Mac.`
     : relayIsShot(req)
@@ -158,6 +167,164 @@ function relayQuestionBlock(req) {
       <span class="relay-from-text">${why}</span>
     </div>
     <pre class="relay-quote">${relayEsc(req.question)}</pre>`;
+}
+
+// ── A round of questions (`ask_user_questions`) ──────────────────────────
+//
+// One form rather than a wizard: every question is on screen at once, in the
+// order the agent asked them, each with its own answer field. A question left
+// empty is skipped. What goes out is the format the tool returns, one line per
+// answered question (`Q1 : …`), masked first by the Concierge's anonymiser.
+//
+// The parser lives in chat-core.js, which loads after this file; the voice
+// lives in concierge.js, later still. Both are reached through a `typeof`
+// check at the moment they are used, never at load.
+
+/** The round in `req.question`, cut into questions. Null until chat-core.js is in. */
+function relayRound(req) {
+  if (typeof chatParseRound !== 'function') return null;
+  const round = chatParseRound(String(req.question || ''));
+  // Text with no question markers at all is still something asked.
+  if (!round.questions.length) {
+    round.questions.push({ id: 'Q1', title: '', ask: round.intro, body: round.intro, rec: '', answer: null });
+    round.intro = '';
+  }
+  return round;
+}
+
+/** Agent text as safe markdown (escaped first), or escaped text before chat-core.js is in. */
+function relayMd(text) {
+  return typeof chatMarkdown === 'function' ? chatMarkdown(text) : `<p>${relayEsc(text)}</p>`;
+}
+function relayInline(text) {
+  return typeof chatInline === 'function' ? chatInline(text) : relayEsc(text);
+}
+
+/** Who asks, and how many questions. */
+function relayAskFrom(req) {
+  const round = relayRound(req);
+  const n = round ? round.questions.length : 0;
+  const who = req.from_thread ? `${req.from} · ${req.from_thread}` : req.from;
+  const count = !round ? 'questions' : n === 1 ? 'one question' : `${n} questions`;
+  const open = req.state === 'pending' || req.state === 'answered';
+  return `
+    <div class="relay-from">
+      <span class="relay-badge-sbx">${relayEsc(who)}</span>
+      <span class="relay-from-text">asks you ${count}.${open ? ` Answer the ones you want;
+        an empty answer skips its question.` : ''}</span>
+    </div>`;
+}
+
+/**
+ * The round itself. With `fields`, each question gets an answer field (filled
+ * from `filled`, by question id) and a button that copies the recommendation
+ * into it; without, it is shown read only (while a sandbox drafts it).
+ */
+function relayAskForm(req, fields, filled = {}) {
+  const round = relayRound(req);
+  if (!round) return `<pre class="relay-quote">${relayEsc(req.question)}</pre>`;
+  const intro = round.intro
+    ? `<div class="relay-ask-intro relay-note">${relayMd(round.intro)}</div>`
+    : '';
+  const items = round.questions.map((q, i) => {
+    const rec = q.rec
+      ? `<div class="relay-ask-rec"><span class="relay-section-label">Recommended</span>
+           <span class="relay-ask-rec-text">${relayInline(q.rec)}</span></div>`
+      : '';
+    const field = fields ? `
+        <textarea class="relay-answer relay-ask-answer" rows="2" data-ask-index="${i}"
+                  aria-label="Answer to ${relayEsc(q.id)}"
+                  placeholder="Your answer to ${relayEsc(q.id)}, or leave empty to skip it">${relayEsc(filled[q.id] || '')}</textarea>
+        ${q.rec ? `<button class="relay-target relay-ask-use" data-relay-action="use-rec" data-ask-index="${i}"
+                  tabindex="-1" title="Fill the answer with the recommendation">Use the recommendation</button>` : ''}` : '';
+    return `
+      <div class="relay-ask-q">
+        <div class="relay-section-label relay-ask-head"><strong>${relayEsc(q.id)}</strong>${q.title ? ` · ${relayEsc(q.title)}` : ''}</div>
+        <div class="relay-ask-body">${relayMd(q.body || q.ask)}</div>
+        ${rec}
+        ${field}
+      </div>`;
+  }).join('');
+  return intro + items;
+}
+
+/**
+ * A draft from a routed sandbox, as answers by question id: each `Q1 : …`
+ * line goes to its question, and a line that follows without an id of its own
+ * continues the one before it. Text before the first id matches nothing; the
+ * whole draft is shown above the form anyway.
+ */
+function relayAskDraft(text) {
+  const out = {};
+  let at = null;
+  for (const line of String(text || '').split('\n')) {
+    const m = line.match(/^\s*\**\s*(Q\d+)\s*\**\s*[:\-–]\s*(.*)$/i);
+    if (m) { at = m[1].toUpperCase(); out[at] = m[2].trim(); continue; }
+    if (at && line.trim()) out[at] = `${out[at]} ${line.trim()}`.trim();
+  }
+  return out;
+}
+
+/** What the form holds, in the tool's format: one line per answered question. */
+function relayAskAnswer(req) {
+  const round = relayRound(req);
+  if (!round) return '';
+  return [...relayBodyEl.querySelectorAll('.relay-ask-answer')]
+    .map(box => {
+      const q = round.questions[Number(box.dataset.askIndex)];
+      // One line per question is the format, so a line break in an answer
+      // becomes a space rather than a line the asker would read as a new one.
+      const text = box.value.trim().replace(/\s*\n\s*/g, ' ');
+      return q && text ? `${q.id} : ${text}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Whether the voice can read a round: concierge.js loaded and the voice set up. */
+function relayCanRead() {
+  return typeof vcCanSpeak === 'function' && typeof vcReadRound === 'function' && vcCanSpeak();
+}
+// Set while a reading this dialog started is playing, so a second click stops it.
+let relayReading = false;
+
+/** The Read aloud button, kept in step with the voice without a repaint. */
+function relaySyncReadButton() {
+  const btn = relayFootEl.querySelector('[data-relay-action="read-aloud"]');
+  if (!btn) return;
+  btn.hidden = !relayCanRead();
+  btn.textContent = relayReading ? 'Stop reading' : 'Read aloud';
+  btn.setAttribute('aria-pressed', String(relayReading));
+}
+// concierge.js says when it starts and stops speaking, and calls
+// `relaySyncReadButton` itself whenever the voice's status changes.
+document.addEventListener('sbxw-speaking', ev => {
+  if (!ev.detail) relayReading = false;
+  relaySyncReadButton();
+});
+
+/** Release the form's answers, masked first. Nothing goes out unmasked. */
+async function relayAskSend(req) {
+  const answer = relayAskAnswer(req);
+  if (!answer) { showToast('No question answered: nothing to send', 'error'); return; }
+  // The Concierge's anonymiser, as it masks the answers it sends itself. If
+  // it is not loaded, or the masking fails (a rules file that does not
+  // parse), nothing is sent: the person is told, and the form keeps its text.
+  if (typeof vcMask !== 'function') {
+    showToast('Not sent: the masking of personal data is not loaded yet. Try again in a moment.', 'error');
+    return;
+  }
+  const holder = { value: answer };
+  let safe = null;
+  try { safe = await vcMask(holder); } catch (_) { safe = null; }
+  if (safe === null || !String(safe).trim()) {
+    showToast('Not sent: the masking of personal data failed', 'error');
+    return;
+  }
+  if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, { answer: safe })) {
+    relayEditing = false;
+    if (safe !== answer) showToast('Some personal data was masked before sending');
+  }
 }
 
 /** The images attached to `id` so far, oldest first. Never null. */
@@ -318,7 +485,17 @@ function relayRender() {
   relayQueueEl.hidden = others === 0;
   relayQueueEl.textContent = others === 1 ? '1 more waiting' : `${others} more waiting`;
   relayTitleEl.textContent = relayIsMac(req) ? 'Virtual Mac request'
-    : relayIsShot(req) ? 'Screenshot request' : 'Information request';
+    : relayIsShot(req) ? 'Screenshot request'
+    : relayIsAsk(req) ? 'Questions for you' : 'Information request';
+
+  // A repaint for some other reason (another request arriving, the sandbox
+  // list refreshing) must not throw away what is typed in a round's form, nor
+  // the field the cursor is in. Carried over only while the request and its
+  // state are the same: a draft arriving replaces the form on purpose.
+  const sameView = relayBodyEl.dataset.reqId === req.id && relayBodyEl.dataset.reqState === req.state;
+  const typed = sameView ? [...relayBodyEl.querySelectorAll('.relay-ask-answer')].map(b => b.value) : null;
+  const focused = sameView && document.activeElement?.classList.contains('relay-ask-answer')
+    ? document.activeElement.dataset.askIndex : null;
 
   let body = relayQuestionBlock(req);
   let foot = '';
@@ -346,6 +523,40 @@ function relayRender() {
          <pre class="relay-quote">${relayEsc(req.answer || '')}</pre>`
       : `<div class="relay-settled no">Refused. Nothing was started or published.</div>`;
     foot = `<button class="btn-cancel" data-relay-action="dismiss">Close</button>`;
+  } else if (relayIsAsk(req) && (req.state === 'pending' || req.state === 'answered')) {
+    // Pending: the person answers. Answered: a routed sandbox drafted it, and
+    // its lines fill the form for the person to edit, clear, and release.
+    // Either way nothing leaves until "Send answers" is clicked.
+    const draft = req.state === 'answered';
+    if (req.note) body += `<p class="relay-note">${relayEsc(req.note)}</p>`;
+    if (draft) {
+      body += `
+        <div class="relay-section-label">
+          ${relayEsc(req.to)} drafted these answers. Edit freely, or clear them and answer
+          yourself; ${relayEsc(req.from)} receives only what you send.
+        </div>
+        <pre class="relay-quote">${relayEsc(req.answer || '')}</pre>`;
+    }
+    body += relayAskForm(req, true, draft ? relayAskDraft(req.answer) : {});
+    if (!draft) body += relayTargetButtons(req, 'Or ask one of these sandboxes to draft the answers');
+    foot = `
+      <button class="btn-cancel" data-relay-action="dismiss">Later</button>
+      <button class="relay-deny" data-relay-action="deny">Refuse</button>
+      <button class="btn-cancel" data-relay-action="read-aloud" hidden>Read aloud</button>
+      ${draft ? `<button class="btn-cancel" data-relay-action="clear-ask">Clear the draft</button>` : ''}
+      <button class="btn-create" data-relay-action="send-ask" disabled title="Send (Ctrl+Enter or ⌘+Enter)">Send answers</button>`;
+  } else if (relayIsAsk(req) && req.state === 'routed') {
+    body += relayAskForm(req, false);
+    body += `
+      <div class="relay-waiting">
+        <span class="relay-spinner"></span>
+        Sent to <strong>${relayEsc(req.to)}</strong> for a draft. You review it before
+        ${relayEsc(req.from)} receives anything.
+      </div>`;
+    body += relayTargetButtons(req, 'Or ask someone else instead');
+    foot = `
+      <button class="btn-cancel" data-relay-action="dismiss">Later</button>
+      <button class="relay-deny" data-relay-action="deny">Refuse</button>`;
   } else if (relayIsShot(req) && !settled) {
     // `pending` is the only live state a screenshot request has: the server
     // refuses to route one, so there is nothing to wait on and nothing to
@@ -403,6 +614,19 @@ function relayRender() {
 
   relayBodyEl.innerHTML = body;
   relayFootEl.innerHTML = foot;
+  // chat-core.js, which cuts a round into questions, loads after this file:
+  // a round shown before it is in gets its form a moment later.
+  if (relayIsAsk(req) && typeof chatParseRound !== 'function') {
+    setTimeout(() => { if (!relayEditing) relayRender(); }, 100);
+  }
+  relayBodyEl.dataset.reqId = req.id;
+  relayBodyEl.dataset.reqState = req.state;
+  if (typed) {
+    relayBodyEl.querySelectorAll('.relay-ask-answer').forEach((b, i) => {
+      if (typed[i] !== undefined) b.value = typed[i];
+    });
+    if (focused !== null) relayBodyEl.querySelector(`.relay-ask-answer[data-ask-index="${focused}"]`)?.focus();
+  }
 
   // "Send" only means something once there is something to send — which, on a
   // screenshot request, an attached image already satisfies with the textarea
@@ -420,6 +644,26 @@ function relayRender() {
   }
   const review = document.getElementById('relay-review-answer');
   if (review) review.addEventListener('input', () => { relayEditing = true; });
+
+  // A round's form: "Send answers" is live once one question has an answer.
+  const askBoxes = [...relayBodyEl.querySelectorAll('.relay-ask-answer')];
+  if (askBoxes.length) {
+    const sendBtn = relayFootEl.querySelector('[data-relay-action="send-ask"]');
+    const round = relayRound(req);
+    const sync = () => {
+      if (sendBtn) sendBtn.disabled = !askBoxes.some(b => b.value.trim());
+      // A field that already holds the recommendation has nothing to gain
+      // from the button that fills it with it.
+      askBoxes.forEach(b => {
+        const use = relayBodyEl.querySelector(`.relay-ask-use[data-ask-index="${b.dataset.askIndex}"]`);
+        const rec = round?.questions[Number(b.dataset.askIndex)]?.rec || '';
+        if (use) use.disabled = b.value.trim() === rec.trim();
+      });
+    };
+    askBoxes.forEach(b => b.addEventListener('input', () => { relayEditing = true; sync(); }));
+    sync();
+  }
+  relaySyncReadButton();
 
   // A file input cannot be delegated: the change fires on the element itself.
   const file = document.getElementById('relay-shot-file');
@@ -449,7 +693,14 @@ function relayShow(id) {
   loadSandboxes().then(relayRender).catch(() => {});
 }
 
+/** Stop a reading this dialog started: it is about a round no longer on screen. */
+function relayStopReading() {
+  if (relayReading && typeof vcStopReading === 'function') vcStopReading();
+  relayReading = false;
+}
+
 function relayClose() {
+  relayStopReading();
   relayOverlay.classList.add('hidden');
   relayCurrentId = null;
   relayEditing = false;
@@ -461,6 +712,7 @@ function relayClose() {
 
 /** Done with this one: show the next request that needs a decision, or close. */
 function relayAdvance() {
+  relayStopReading();
   relayCurrentId = null;
   relayEditing = false;
   const next = relayQueue()[0];
@@ -728,6 +980,34 @@ relayOverlay.addEventListener('click', async ev => {
       // this popup would find a screenshot from the one you just declined.
       relayShots.delete(req.id);
     }
+  } else if (action === 'use-rec') {
+    const i = Number(ev.target.closest('[data-ask-index]')?.dataset.askIndex);
+    const q = relayRound(req)?.questions[i];
+    const box = relayBodyEl.querySelector(`.relay-ask-answer[data-ask-index="${i}"]`);
+    if (q && box) {
+      box.value = q.rec;
+      box.dispatchEvent(new Event('input'));
+    }
+  } else if (action === 'clear-ask') {
+    relayBodyEl.querySelectorAll('.relay-ask-answer').forEach(b => {
+      b.value = '';
+      b.dispatchEvent(new Event('input'));
+    });
+    relayBodyEl.querySelector('.relay-ask-answer')?.focus();
+  } else if (action === 'send-ask') {
+    await relayAskSend(req);
+  } else if (action === 'read-aloud') {
+    if (!relayCanRead()) return;
+    if (relayReading && typeof vcIsSpeaking === 'function' && vcIsSpeaking()) {
+      vcStopReading();
+      relayReading = false;
+    } else {
+      const round = relayRound(req);
+      if (!round) return;
+      vcReadRound(req.from, req.from_thread || null, round);
+      relayReading = true;
+    }
+    relaySyncReadButton();
   } else if (action === 'approve-mac') {
     if (await relayPost(`/api/relay/${encodeURIComponent(req.id)}/approve`, {})) {
       relayMacRunning.add(req.id);
@@ -776,6 +1056,19 @@ document.addEventListener('keydown', ev => {
   relayRender();
 });
 
+// ⌘+Enter or Ctrl+Enter sends a round's answers. Only from inside the dialog:
+// the listener is on the overlay, so a terminal holding the focus never
+// triggers it.
+relayOverlay.addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter' || !(ev.metaKey || ev.ctrlKey)) return;
+  const req = relayCurrent();
+  if (!req || !relayIsAsk(req)) return;
+  const btn = relayFootEl.querySelector('[data-relay-action="send-ask"]');
+  if (!btn || btn.disabled) return;
+  ev.preventDefault();
+  btn.click();
+});
+
 // ── Ingest ────────────────────────────────────────────────────────────────
 
 // How long a settled request stays on screen before the popup moves on.
@@ -783,9 +1076,6 @@ const RELAY_LINGER_MS = 2200;
 
 function relayIngest(req, seed = false) {
   if (!req || !req.id) return;
-  // Questions for the person themselves (`ask_user_questions`) are the
-  // Concierge's: it asks them one at a time, by voice (see concierge.js).
-  if (req.kind === 'ask') return;
   const prev = relayRequests.get(req.id);
   relayRequests.set(req.id, req);
 
@@ -831,6 +1121,11 @@ function relayIngest(req, seed = false) {
   // repaints — including an answer arriving in the popup you are already
   // looking at, rather than stealing focus from another one.
   const isNew = !prev && req.state === 'pending';
+  if (isNew && !seed && relayIsAsk(req) && typeof vcAskCue === 'function') {
+    // A short spoken cue, only with the voice on; the round itself is read
+    // only when "Read aloud" is clicked.
+    vcAskCue(req.from, req.from_thread || null, relayRound(req)?.questions.length || 1);
+  }
   if (isNew && !seed) {
     if (relayOverlay.classList.contains('hidden')) relayShow(req.id);
     else relayRender();

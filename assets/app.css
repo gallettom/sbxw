@@ -2740,6 +2740,52 @@
   }
   .relay-answer:focus { outline: none; border-color: var(--c-blue); }
 
+  /* A round of questions for the person (ask_user_questions): one form, every
+     question in order. No scroll rule of its own: the dialog's .modal-body
+     already scrolls when a long round is taller than the window. The agent's
+     text (intro, question, recommendation) is set as quoted, like
+     .relay-quote, and the recommendation is set apart from the question so
+     it reads as a suggestion, not as part of what is asked. */
+  .relay-ask-intro {
+    color: var(--c-text); font-size: 12.5px; line-height: 1.5;
+    padding: .45rem .7rem; background: var(--c-bg);
+    border: 1px solid var(--c-border); border-left: 3px solid var(--c-purple-strong);
+    border-radius: var(--r-sm); word-break: break-word;
+  }
+  .relay-ask-q {
+    display: flex; flex-direction: column; gap: .4rem;
+  }
+  .relay-ask-q + .relay-ask-q {
+    border-top: 1px solid var(--c-elevated); padding-top: .75rem; margin-top: .15rem;
+  }
+  .relay-ask-body {
+    color: var(--c-text-bright); font-size: 12.5px; line-height: 1.5; word-break: break-word;
+  }
+  .relay-ask-intro > :first-child, .relay-ask-body > :first-child { margin-top: 0; }
+  .relay-ask-intro > :last-child, .relay-ask-body > :last-child { margin-bottom: 0; }
+  .relay-ask-body p, .relay-ask-intro p { margin: .35rem 0; }
+  .relay-ask-body ul, .relay-ask-body ol { margin: .35rem 0; padding-left: 1.2rem; }
+  .relay-ask-rec {
+    display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+    padding: .35rem .6rem; background: var(--c-bg);
+    border-left: 3px solid var(--c-green-strong); border-radius: var(--r-xs);
+  }
+  .relay-ask-rec-text { color: var(--c-text); font-size: 12px; line-height: 1.5; word-break: break-word; }
+  .relay-ask-answer { min-height: 2.7rem; }
+  /* Under its field, small: a shortcut, not the dialog's main gesture. */
+  .relay-target.relay-ask-use {
+    align-self: flex-start; font-size: 11px; font-weight: 500; padding: .2rem .55rem;
+  }
+  .relay-target.relay-ask-use:disabled {
+    opacity: .45; cursor: default; background: var(--c-elevated); border-color: var(--c-border);
+  }
+  /* The question's id and title: the title is the agent's words, so it keeps
+     its own case rather than the label's capitals. */
+  .relay-section-label.relay-ask-head {
+    text-transform: none; letter-spacing: normal; font-size: 12px; color: var(--c-text);
+  }
+  .relay-ask-head strong { color: var(--c-purple); }
+
   .relay-waiting {
     display: flex; align-items: center; gap: .5rem;
     color: var(--c-text); font-size: 12px; line-height: 1.5;

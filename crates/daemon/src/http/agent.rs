@@ -31,6 +31,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/relay/questions", post(questions))
         .route("/api/relay/wait", post(wait))
         .route("/api/relay/reply", post(reply))
+        .route("/api/relay/show", post(show))
         .route("/api/plans/propose", post(propose))
         .route("/api/plans/wait", post(plan_wait))
         .route("/api/plans/status", post(plan_status))
@@ -88,7 +89,7 @@ async fn shot(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiRes
     open_and_park(app, me, b, RelayKind::Screenshot).await
 }
 
-/// Questions for the person (a /grill-me round), answered in the Concierge.
+/// Questions for the person (a /grill-me round), answered in the relay dialog.
 async fn questions(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiResult {
     open_and_park(app, me, b, RelayKind::Ask).await
 }
@@ -103,6 +104,18 @@ struct WaitBody {
 async fn wait(State(app): S, Agent(me): Agent, Json(b): Json<WaitBody>) -> ApiResult {
     let got = app.relay_wait(&b.id, &me, wait_bound(b.timeout)).await?;
     Ok(Json(agent_view(&got)))
+}
+
+#[derive(Deserialize)]
+struct ShowBody {
+    id: String,
+}
+
+/// The routed-to sandbox fetches the question it was told about: only a
+/// one-line notice is typed into its terminal.
+async fn show(State(app): S, Agent(me): Agent, Json(b): Json<ShowBody>) -> ApiResult {
+    let text = app.relay_show(&b.id, &me)?;
+    Ok(ok_with(json!({ "text": text })))
 }
 
 #[derive(Deserialize)]

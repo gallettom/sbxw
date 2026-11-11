@@ -54,8 +54,10 @@ A popup shows the question and one button per running sandbox:
 
 <img src="images/relay.png" alt="An information request from api: the question, buttons for myapp and shop, and a box to answer it yourself" width="600">
 
-1. **Route it:** click a sandbox. The question is typed into that agent,
-   framed as untrusted data, with the id it must answer with.
+1. **Route it:** click a sandbox. A one-line notice is typed into that agent,
+   and it fetches the question with `node ~/.sbxw/relay.js show <id>`, framed
+   as untrusted data, with the id it must answer with. A sandbox brought up
+   before this version has no `show` until you run `sbxw up` for it.
 2. **Carry on:** the popup shrinks to a corner card while the other agent
    works. It comes back by itself when the answer lands.
 3. **Review the answer:** it arrives **editable**. Trim it, cut a secret out,
@@ -117,16 +119,37 @@ to open, or the error), so the agent reads the outcome rather than "approved".
 
 ## Questions for you
 
-`ask_user_questions` puts a set of questions to **you** — a `/grill-me`
-round, or any batch of decisions that are yours — and blocks until you have
+`ask_user_questions` puts a set of questions to **you** (a `/grill-me`
+round, or any batch of decisions that are yours) and blocks until you have
 answered (10 minutes, then a request id for `check_sandbox_question`). Each
-question carries a title, the question and the agent's recommendation. It is
-never routed and never shown in this popup: the [Concierge](web-ui.md#the-voice-concierge)
-takes it, opens its panel on the round (voice on or off), and asks the
-questions one at a time, read aloud when the voice is on; your
-answers are written up, shown, and on your *oui* go back to the agent as the
-tool's result. Nothing is typed into its terminal. **Decline** sets the round
-aside and tells the agent so. `/grill-me` asks its rounds this way in sbxw.
+question carries a title, the question and the agent's recommendation.
+`/grill-me` asks its rounds this way in sbxw.
+
+The round opens this popup like any other request, on **one form**: who
+asks (sandbox and thread), the agent's intro if it wrote one, then every
+question in order with its id, its title, the question, the agent's
+recommendation on its own line, and an answer field. **Use the
+recommendation** fills a field with it. A question you leave empty is
+skipped. **Send answers** (or Ctrl+Enter, ⌘+Enter on a Mac) releases them
+all at once, one line per answered question (`Q1 : …`), which is what the
+tool returns. Personal data is masked first, as the
+[Concierge](web-ui.md#the-voice-concierge) masks what it sends; if the
+masking is not available or fails, nothing is sent. Tab moves from one
+answer field to the next. The popup does not take the keyboard from a
+terminal until you click into it.
+
+You can also **route the round** to another sandbox, with the same buttons
+as a question: its agent gets the round as untrusted text from another
+agent and is asked to draft the answers in the `Q1 : …` format. Its draft
+comes back to the popup, shown as it was written and filled into the form,
+for you to edit, discard with **Clear the draft** and answer yourself, or send. Nothing reaches the
+asker until you click **Send answers**. **Refuse** sets the round aside and
+tells the agent so.
+
+**Read aloud** (shown when the Concierge's voice is set up) reads the round
+with the Concierge's voice: the intro, then each question with its
+recommendation. Click again to stop. Nothing is read in full on its own;
+with the voice on, a short spoken cue says a round has arrived.
 
 ## What a sandbox cannot do
 

@@ -100,6 +100,8 @@ function vcRenderSetup() {
 
 function vcRender() {
   vcRenderSetup();
+  // The relay dialog's "Read aloud" shows only once the voice is set up.
+  if (typeof relaySyncReadButton === 'function') relaySyncReadButton();
   const ready = vcReady() && window.isSecureContext;
   vcTalk.disabled = !ready || vcBusy;
   vcTalk.classList.toggle('recording', !!vcRec);
@@ -509,6 +511,9 @@ const vcSpeech = (() => {
   let gaps = 0;           // times the voice caught up, for the console
   let muted = false;
   try { muted = localStorage.getItem(VC_MUTE) === '1'; } catch (_) {}
+  // Set by read(): this reading was asked for with a click, so it is heard
+  // even with the voice muted. Cleared once it ends or is stopped.
+  let forced = false;
 
   // A sentence ends at . ! ? … or a line break, followed by space or the end
   // (so "3.5" and "e.g." mid-word do not cut).
@@ -527,11 +532,12 @@ const vcSpeech = (() => {
   let was = false;
   function tell() {
     const on = fetching || queue.length > 0 || pending.length > 0 || live.size > 0;
+    if (!on) forced = false;
     if (on !== was) { was = on; vcSpeaking(on); }
   }
   function say(text) {
     text = text.trim();
-    if (!text || muted || !vcReady() || !vcStatus.speech?.supported) return;
+    if (!text || (muted && !forced) || !vcReady() || !vcStatus.speech?.supported) return;
     // Sentences are grouped: a batch leaves 100 ms after its last sentence,
     // or at once when it holds VC_BATCH of them or nears the request limit.
     if (pending.length && pendingChars + text.length + 1 > VC_BATCH_CHARS) batch();
@@ -643,8 +649,11 @@ const vcSpeech = (() => {
       }
     },
     flush() { say(buf); buf = ''; },
+    // Read `text` in place of whatever was being read, muted or not.
+    read(text) { this.stop(); forced = true; this.feed(text); this.flush(); tell(); },
     stop() {
       gen++;
+      forced = false;
       buf = '';
       drop();
       fetching = false;
@@ -736,6 +745,7 @@ vcMic.addEventListener('click', () => {
 function vcSpeaking(on) {
   vcLauncher.classList.toggle('speaking', on);
   vcRenderVoice();
+  document.dispatchEvent(new CustomEvent('sbxw-speaking', { detail: on }));
 }
 vcEl('vc-close').addEventListener('click', () => vcSetOpen(false));
 
@@ -826,7 +836,7 @@ function vcSpeak(text) { vcSpeech.stop(); vcSpeech.feed(text); vcSpeech.flush();
 
 // An agent's message: shown, read aloud, the next words answer it.
 async function vcAgentMessage(sandbox, thread, text) {
-  const grill = vcParseGrill(text);
+  const grill = chatParseRound(text);
   if (grill.questions.length) return vcGrill(sandbox, thread, text, grill);
   const { card, foot } = vcCard('vc-msg-agent', `${vcWho(sandbox, thread)} says`);
   const body = document.createElement('div');
@@ -849,27 +859,14 @@ async function vcAgentMessage(sandbox, thread, text) {
 
 // ── A grill round, one question at a time ───────────────────────────────
 // /grill-me writes its round as `❓ **Q1 - Title** : body` then `➡️ the
-// recommendation`, questions separated by `---`. The round is cut there, so
-// no question is lost or invented, and asked one
-// question at a time: shown, read aloud, answered; then the next. Once every
-// one is answered (or skipped), the answers are listed as one message
-// ("Q1 : …", as they were said), shown, confirmed, and typed into the
-// session at once.
-function vcParseGrill(text) {
-  const parts = text.split(/^\s*❓\s*/m);
-  const intro = parts.shift().trim();
-  const questions = [];
-  for (const raw of parts) {
-    const block = raw.replace(/\n\s*---+\s*$/s, '').trim();
-    const [ask, ...rec] = block.split(/^\s*➡️\s*/m);
-    const head = ask.match(/^\**\s*(Q\d+)\**\s*[-–—:]?\s*\**\s*([^*\n:]*)\**\s*:?\s*/);
-    const id = head ? head[1] : `Q${questions.length + 1}`;
-    const title = head ? head[2].trim() : '';
-    questions.push({ id, title, ask: ask.trim(), body: head ? ask.slice(head[0].length).trim() : ask.trim(), rec: rec.join(' ').replace(/\n\s*---+[\s\S]*$/, '').trim(), answer: null });
-  }
-  return { intro, questions };
-}
-
+// recommendation`, questions separated by `---`. The round is cut there by
+// `chatParseRound` (chat-core.js, shared with the relay dialog), so no
+// question is lost or invented, and asked one question at a time: shown,
+// read aloud, answered; then the next. Once every one is answered (or
+// skipped), the answers are listed as one message ("Q1 : …", as they were
+// said), shown, confirmed, and typed into the session at once. This is the
+// path for a round that arrives in an agent's session; a round asked with
+// `ask_user_questions` goes to the relay dialog instead (relay.js).
 // Markdown without its structure. The symbols left (`_`, `/`, `>=`…) are
 // turned into words by the daemon, which holds the dictionary.
 function vcPlain(md) {
@@ -889,9 +886,7 @@ const VC_REPEAT = /^\s*(r[ée]p[èe]te|encore|repeat|again)\b/i;
 const VC_SKIP = /^\s*(passe|suivante|skip|next|je ne sais pas)\b/i;
 const VC_BACK = /^\s*(pr[ée]c[ée]dente|reviens|back|previous)\b/i;
 
-// `relay`: the request id when the round came through `ask_user_questions`
-// — the answers then go back as that tool's result, not into a terminal.
-function vcGrill(sandbox, thread, text, grill, relay = null) {
+function vcGrill(sandbox, thread, text, grill) {
   const n = grill.questions.length;
   const { card, head, foot } = vcCard('vc-msg-agent vc-grill', `${vcWho(sandbox, thread)} · ${n} question${n > 1 ? 's' : ''}`);
   if (grill.intro) {
@@ -911,7 +906,7 @@ function vcGrill(sandbox, thread, text, grill, relay = null) {
   answers.className = 'vc-grill-answers';
   card.insertBefore(now, foot);
   card.insertBefore(answers, foot);
-  const st = { sandbox, thread, text, grill, i: 0, card, head, relay };
+  const st = { sandbox, thread, text, grill, i: 0, card, head };
 
   const show = () => {
     const q = grill.questions[st.i];
@@ -936,14 +931,6 @@ function vcGrill(sandbox, thread, text, grill, relay = null) {
     vcButton('Skip', () => { grill.questions[st.i].answer = null; st.next(); }),
     vcButton('Not an answer', () => vcDisarm()),
   );
-  if (relay) {
-    // The agent is blocked on its tool call: setting the round aside tells it.
-    foot.append(vcButton('Decline', async () => {
-      await postJsonOrError(`/api/relay/${encodeURIComponent(relay)}/deny`, { note: 'set aside in the Concierge' });
-      vcDisarm(); card.classList.add('done');
-      vcSay('dim', `${vcWho(sandbox, thread)} was told you set its questions aside.`);
-    }));
-  }
   show();
 }
 
@@ -974,13 +961,9 @@ async function vcGrillDone(st) {
   area.setAttribute('aria-label', 'Answer');
   card.append(area);
   vcConfirm(card, `Send these answers to ${vcWho(sandbox, thread)}?`, async () => {
-    // Through the relay when the agent asked with its tool: the answers are
-    // that call's result. Otherwise typed into its session.
     const safe = await vcMask(area);
     if (safe === null) return;
-    const r = st.relay
-      ? await postJsonOrError(`/api/relay/${encodeURIComponent(st.relay)}/approve`, { answer: safe })
-      : await postJsonOrError('/api/chat/push', { text: safe, name: sandbox, thread: thread || undefined });
+    const r = await postJsonOrError('/api/chat/push', { text: safe, name: sandbox, thread: thread || undefined });
     if (!r.ok) { vcSay('err', `Not sent: ${r.error}`); return; }
     area.readOnly = true;
     card.classList.add('done');
@@ -1119,39 +1102,41 @@ function vcChoose(p, dictated) {
   if (!vcSpeech.muted) vcSpeak(`J'envoie : ${label} ?`);
 }
 
-// ── Questions asked through the relay (`ask_user_questions`) ────────────
-// Any sandbox may ask: these are put to the person, whichever project the
-// panel is on. Each round opens the panel on its card, voice on or off: the
-// agent is blocked until the person answers, so the round must be seen, not
-// only heard. Opening moves no keyboard focus, so a terminal being typed in
-// keeps it. Other agent messages (the `session` stream) leave the panel shut.
-const vcAsks = new Map(); // relay id → its card
-function vcAskRelay(req) {
-  if (req.kind !== 'ask') return;
-  if (req.state === 'approved' || req.state === 'denied') {
-    const card = vcAsks.get(req.id);
-    if (card && !card.classList.contains('done')) {
-      card.classList.add('done');
-      if (vcPending?.card === card) vcDisarm();
-    }
-    return;
+// ── The relay dialog's voice (`ask_user_questions`) ─────────────────────
+// A round asked with that tool is answered on one form in the relay dialog
+// (relay.js), which loads before this file and calls these at click time.
+// Nothing is read in full on its own: a short cue says a round arrived, and
+// the dialog's "Read aloud" button reads it (again to stop).
+
+/** Whether the voice is installed and can speak at all (muted or not). */
+function vcCanSpeak() { return vcReady() && !!vcStatus?.speech?.supported; }
+/** Whether something is being read right now. */
+function vcIsSpeaking() { return vcLauncher.classList.contains('speaking'); }
+function vcStopReading() { vcSpeech.stop(); }
+
+/**
+ * Read a round asked through the relay: the intro, then each question with
+ * its recommendation. A click on the button is a request to hear it, so it is
+ * read even with the voice muted; the mute itself is left as it was.
+ */
+function vcReadRound(sandbox, thread, round) {
+  const parts = [];
+  if (round.intro) parts.push(vcPlain(round.intro));
+  for (const q of round.questions) {
+    parts.push(`${q.id}${q.title ? ', ' + vcPlain(q.title) : ''}. ${vcPlain(q.body || q.ask)}${q.rec ? ' Recommandation : ' + vcPlain(q.rec) : ''}`);
   }
-  if (req.state !== 'pending' || vcAsks.has(req.id)) return;
-  const grill = vcParseGrill(req.question);
-  if (!grill.questions.length) grill.questions.push({ id: 'Q1', title: '', ask: req.question, body: req.question, rec: '', answer: null });
-  // Open first: `vcSetOpen` warms the voice and calls no `focus()`.
-  if (!vcOpen) vcSetOpen(true); else vcWarm(!vcSpeech.muted);
-  vcGrill(req.from, req.from_thread || null, req.question, grill, req.id);
-  const card = vcPending?.card || vcLog.lastElementChild;
-  vcAsks.set(req.id, card);
-  // Its card in view and marked (`armed`, set by vcGrill): within the log
-  // only, so the page itself does not scroll.
-  if (card) vcLog.scrollTop += card.getBoundingClientRect().top - vcLog.getBoundingClientRect().top;
+  vcWarm(true);
+  vcSpeech.read(parts.join(' '));
 }
-sbxwStream.addEventListener('relay', ev => {
-  try { vcAskRelay(JSON.parse(ev.data)); } catch (_) {}
-});
-fetch('/api/relay').then(r => r.json()).then(d => (d.requests || []).forEach(vcAskRelay)).catch(() => {});
+
+/** The spoken cue when a round arrives, only with the voice on. */
+function vcAskCue(sandbox, thread, n) {
+  if (vcSpeech.muted || !vcCanSpeak()) return;
+  vcWarm(true);
+  // Queued behind whatever is being read rather than cutting it off.
+  vcSpeech.feed(`${vcWho(sandbox, thread)} te pose ${n > 1 ? n + ' questions' : 'une question'} ; réponds dans la fenêtre des demandes.`);
+  vcSpeech.flush();
+}
 
 sbxwStream.addEventListener('session', ev => {
   let info;
