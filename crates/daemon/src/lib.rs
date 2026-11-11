@@ -13,6 +13,7 @@
 pub mod app;
 pub mod bundled;
 pub mod cache;
+pub mod carving;
 pub mod bus;
 pub mod git;
 pub mod http;

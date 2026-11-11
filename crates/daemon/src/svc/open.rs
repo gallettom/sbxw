@@ -118,7 +118,7 @@ impl App {
                 } else {
                     cfg.env_pairs()
                 };
-                Spawn::sbx(sbxw_sbx::attach_args(&sandbox.name, &env, &cfg.env_files, &cfg.workdir))
+                Spawn::sbx(sbxw_sbx::attach_args(&sandbox.name, &env, &cfg.env_files, &self.store.get(&sandbox).attach_workdir(&cfg.workdir)))
             }
             SessionKind::Agent => Spawn::sbx(sbxw_sbx::shell_args(&sandbox.name, &cfg.web_shell)),
             // `sbx exec` starts a stopped sandbox first (0.50).

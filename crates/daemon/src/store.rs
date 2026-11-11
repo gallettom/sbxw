@@ -83,6 +83,12 @@ impl Paths {
     fn sandboxes(&self, host: &HostName) -> PathBuf {
         self.host_state(host).join("sandboxes")
     }
+    /// Helper folders for carves, on a sandbox's host: `carve/empty` (laid
+    /// read-only over a soft carve) and `carve/<sandbox>/stub` (the primary
+    /// folder of a sandbox whose workspace is split). Never in a workspace.
+    pub fn carve(&self) -> PathBuf {
+        self.root.join("carve")
+    }
     pub fn plans(&self) -> PathBuf {
         self.state().join("plans")
     }
@@ -188,6 +194,31 @@ pub struct MountRecord {
     pub readonly: bool,
 }
 
+/// The carves a sandbox was created with: mounts are fixed at creation, so a
+/// change to them is a recreate.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CarveRecord {
+    /// `sbxw.toml`'s carves as `consent::carve_lines` writes them.
+    pub file: Vec<String>,
+    /// The create dialog's carves, kept for a recreate.
+    pub extra: Vec<sbxw_core::config::Carve>,
+    /// The main workspace's real path when it was split (the primary mount is
+    /// then a stub, and the agent starts in an absolute folder).
+    pub split: Option<String>,
+}
+
+impl SandboxRecord {
+    /// What `sbx run --workdir` is given: the config's `workdir`, made absolute
+    /// when the main workspace is split (a relative one would be read against
+    /// the stub).
+    pub fn attach_workdir(&self, cfg_workdir: &str) -> String {
+        match self.carve.as_ref().and_then(|c| c.split.as_deref()) {
+            Some(main) => sbxw_core::carve::absolute_workdir(main, cfg_workdir),
+            None => cfg_workdir.to_string(),
+        }
+    }
+}
+
 /// Everything sbxw knows about one sandbox.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SandboxRecord {
@@ -215,6 +246,9 @@ pub struct SandboxRecord {
     /// sbx applies them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<MountRecord>,
+    /// The carves it was created with; `None` for one made without any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carve: Option<CarveRecord>,
     /// Kit references sbxw applied — at creation or by `kit add` — so a
     /// bring-up never re-applies one (each `kit add` recreates the container).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -497,6 +531,7 @@ impl Store {
                 })
                 .collect(),
             kits: vec![],
+            carve: None,
             remote_control: false,
             created_by_sbx: None,
             last_status: None,

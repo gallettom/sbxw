@@ -96,6 +96,18 @@ pub struct CreateForm {
     pub kit_mounts: std::collections::BTreeMap<String, String>,
     /// The host-access grant lines the person has just approved.
     pub approved: Vec<String>,
+    /// Folders kept out of the sandbox or read-only, chosen in the dialog.
+    pub carve: Vec<sbxw_core::config::Carve>,
+}
+
+/// The create dialog's carves and mounts as the planner sees them, for the
+/// preview and for creation.
+pub fn carve_extras(cfg: &Config, mounts: &[(String, bool)]) -> Vec<sbxw_core::config::Workspace> {
+    cfg.workspaces
+        .iter()
+        .filter_map(|w| sbxw_core::config::parse_workspace(w).ok())
+        .chain(mounts.iter().map(|(p, ro)| sbxw_core::config::Workspace { path: p.clone(), target: None, readonly: *ro }))
+        .collect()
 }
 
 impl App {
@@ -261,7 +273,7 @@ impl App {
     /// A bring-up from the browser: the daemon's config, the dialog's ports,
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
     pub async fn create(self: &Arc<Self>, name: SandboxRef, path: &str, form: CreateForm, sink: Option<Sink>) -> Result<Vec<String>> {
-        let CreateForm { mounts, ports: extra, template, remote_control, kit_mounts, approved } = form;
+        let CreateForm { mounts, ports: extra, template, remote_control, kit_mounts, approved, carve } = form;
         let path = PathBuf::from(path.trim());
         // The folders are the sandbox's host's, checked there.
         let host = self.host_for(&name).await?;
@@ -292,6 +304,7 @@ impl App {
         req.rw = rw;
         req.template = template;
         req.remote_control = remote_control;
+        req.carve = carve;
         self.provision(req, sink).await
     }
 
@@ -401,6 +414,7 @@ impl App {
             workspace,
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config,
             extra_ports,
             chat,
@@ -449,8 +463,21 @@ impl App {
         let cfg = self.config_for(source).await;
         tracing::info!("duplicating '{source}' as '{new}' (workspace {})", ws.display());
         // The source's recorded config, approved when it was brought up.
-        let req = self.bring_up_request(new, ws, cfg, vec![], false, Consent::Checked(vec![]));
+        let mut req = self.bring_up_request(new, ws, cfg, vec![], false, Consent::Checked(vec![]));
+        req.carve = self.store.get(source).carve.map(|c| c.extra).unwrap_or_default();
         self.provision(req, None).await
+    }
+
+    /// Where a sandbox's carve helpers live on its host: the stub that is its
+    /// primary folder when the workspace is split, and the empty folder laid
+    /// over a soft carve. Not created here.
+    pub async fn carve_dirs(&self, name: &SandboxRef) -> Result<(PathBuf, PathBuf)> {
+        let base = if name.is_local() {
+            self.store.paths.carve()
+        } else {
+            self.ready_remote(name).await?.root().await?.join("carve")
+        };
+        Ok((base.join(name.name.to_string()).join("stub"), base.join("empty")))
     }
 
     /// Remove a sandbox and create it again from what sbxw recorded: workspace,
@@ -473,6 +500,7 @@ impl App {
             if m.readonly { req.ro.push(p) } else { req.rw.push(p) }
         }
         req.remote_control = rec.remote_control;
+        req.carve = rec.carve.map(|c| c.extra).unwrap_or_default();
         self.provision(req, None).await
     }
 

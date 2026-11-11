@@ -284,13 +284,7 @@ pub fn plan(
     }
 
     let (primary, workdir, stub_used) = if split_main {
-        let wd = if workdir.trim().is_empty() {
-            main.path.clone()
-        } else if workdir.starts_with('/') {
-            workdir.to_string()
-        } else {
-            join(&main.path, &parts(workdir))
-        };
+        let wd = absolute_workdir(&main.path, workdir);
         (Mount { host: stub.to_string(), target: stub.to_string(), readonly: false, mask: false }, Some(wd), true)
     } else {
         let first = main_mounts.remove(0);
@@ -310,6 +304,43 @@ pub fn plan(
         ));
     }
     Ok(Plan { primary, mounts, workdir, unshared, warnings, stub: stub_used })
+}
+
+/// The folder the agent starts in when the main workspace is split: the
+/// config's `workdir` (empty, relative to `main`, or absolute) as an absolute
+/// path. `sbx run --workdir` reads a relative one against the stub.
+pub fn absolute_workdir(main: &str, workdir: &str) -> String {
+    let wd = workdir.trim();
+    if wd.is_empty() {
+        main.to_string()
+    } else if wd.starts_with('/') {
+        wd.to_string()
+    } else {
+        join(main, &parts(wd))
+    }
+}
+
+/// The host folders [`plan`] will ask `list` about: for each strict carve, the
+/// folder holding it and every folder above it down from its mounted root.
+/// Lets a caller with an async filesystem list them ahead of time.
+pub fn listing_needs(main: &Workspace, extras: &[Workspace], carves: &[Carve]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for c in carves.iter().filter(|c| c.enforce == CarveEnforce::Strict) {
+        let cp = parts(&c.path);
+        for root in std::iter::once(main).chain(extras.iter()) {
+            let rp = parts(&root.path);
+            if !is_under(&cp, &rp) {
+                continue;
+            }
+            for n in rp.len()..cp.len() {
+                let d = join("/", &cp[..n]);
+                if !out.contains(&d) {
+                    out.push(d);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Same path twice: the stronger of each setting.
@@ -459,6 +490,15 @@ mod tests {
         let p = run(ws("/p"), &[], &[carve("/p/secret", RO, STRICT)], &projects(), "web").unwrap();
         assert_eq!(specs(&p), ["/stub", "/p/.sbxw-artifacts", "/p/a", "/p/b", "/p/secret:ro"]);
         assert_eq!(p.workdir.as_deref(), Some("/p/web"));
+    }
+
+    #[test]
+    fn the_listings_a_plan_needs_are_the_levels_above_each_strict_carve() {
+        let carves = [carve("/p/clients/acme", NONE, STRICT), carve("/p/secret", RO, STRICT), carve("/p/x", NONE, SOFT)];
+        assert_eq!(listing_needs(&ws("/p"), &[], &carves), ["/p", "/p/clients"]);
+        assert_eq!(absolute_workdir("/p", ""), "/p");
+        assert_eq!(absolute_workdir("/p", "web/"), "/p/web");
+        assert_eq!(absolute_workdir("/p", "/q"), "/q");
     }
 
     #[test]
