@@ -367,7 +367,10 @@ function carvePreviewHtml() {
   if (i.unavailable) return 'Preview not available.';
   if (i.ok === false) return `Preview: ${escHtml(i.error || 'error')}`;
   const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
-  const parts = [n((i.mounts || []).length, 'folder mounted', 'folders mounted')];
+  // Real folders only: not the masks, and not the empty stub that comes first
+  // when the main folder itself is not shared.
+  const real = (i.mounts || []).filter((m, k) => !m.mask && !(i.stub && k === 0));
+  const parts = [n(real.length, 'folder mounted', 'folders mounted')];
   const none = carves.filter(c => c.access === 'none').length;
   const ro = carves.length - none;
   if (none) parts.push(`${none} excluded`);
