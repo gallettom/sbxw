@@ -2776,6 +2776,15 @@
   .relay-target.relay-ask-use {
     align-self: flex-start; font-size: 11px; font-weight: 500; padding: .2rem .55rem;
   }
+  .relay-target.relay-ask-use:disabled {
+    opacity: .45; cursor: default; background: var(--c-elevated); border-color: var(--c-border);
+  }
+  /* The question's id and title: the title is the agent's words, so it keeps
+     its own case rather than the label's capitals. */
+  .relay-section-label.relay-ask-head {
+    text-transform: none; letter-spacing: normal; font-size: 12px; color: var(--c-text);
+  }
+  .relay-ask-head strong { color: var(--c-purple); }
 
   .relay-waiting {
     display: flex; align-items: center; gap: .5rem;

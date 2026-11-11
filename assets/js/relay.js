@@ -239,7 +239,7 @@ function relayAskForm(req, fields, filled = {}) {
                   tabindex="-1" title="Fill the answer with the recommendation">Use the recommendation</button>` : ''}` : '';
     return `
       <div class="relay-ask-q">
-        <div class="relay-section-label"><strong>${relayEsc(q.id)}</strong>${q.title ? ` · ${relayEsc(q.title)}` : ''}</div>
+        <div class="relay-section-label relay-ask-head"><strong>${relayEsc(q.id)}</strong>${q.title ? ` · ${relayEsc(q.title)}` : ''}</div>
         <div class="relay-ask-body">${relayMd(q.body || q.ask)}</div>
         ${rec}
         ${field}
@@ -649,8 +649,16 @@ function relayRender() {
   const askBoxes = [...relayBodyEl.querySelectorAll('.relay-ask-answer')];
   if (askBoxes.length) {
     const sendBtn = relayFootEl.querySelector('[data-relay-action="send-ask"]');
+    const round = relayRound(req);
     const sync = () => {
       if (sendBtn) sendBtn.disabled = !askBoxes.some(b => b.value.trim());
+      // A field that already holds the recommendation has nothing to gain
+      // from the button that fills it with it.
+      askBoxes.forEach(b => {
+        const use = relayBodyEl.querySelector(`.relay-ask-use[data-ask-index="${b.dataset.askIndex}"]`);
+        const rec = round?.questions[Number(b.dataset.askIndex)]?.rec || '';
+        if (use) use.disabled = b.value.trim() === rec.trim();
+      });
     };
     askBoxes.forEach(b => b.addEventListener('input', () => { relayEditing = true; sync(); }));
     sync();
