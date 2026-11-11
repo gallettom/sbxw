@@ -74,6 +74,28 @@ lists the optional settings below: extra folders, ports, Remote control. It goes
   folder**) adds it to **Extra folders**. The first is the workspace, always read-write;
   threads put their worktrees there. Others are mounted beside it at the same
   path, read-only by default or read-write.
+- **Restricted sub-folders.** Under the folder list, **＋ Restrict a sub-folder**
+  keeps a folder inside the workspace (or inside a read-write extra folder)
+  out of the agent's reach. Pick it in the folder list, which stays inside the
+  parent, or type a path that is inside it. Each restriction is a row with the
+  path relative to its parent, **No access** or **Read-only**, **Strict** or
+  **Soft**, and a remove button. You can add several per folder.
+  - **Strict** (the default): the folder never enters the sandbox. sbxw does not
+    share the parent as a whole but mounts its sub-folders one by one. The cost:
+    files lying directly in the parent (and at each level down to the folder)
+    are not visible in the sandbox, and nothing new can be created at those
+    levels. It fits a folder of projects.
+  - **Soft**: the parent is shared whole and the folder is covered by an empty
+    folder (or mounted read-only). No such cost, but an agent that uses root in
+    its sandbox can remove the cover, so it guards against mistakes, not against
+    a hostile agent. It fits a repository that has files at its root.
+  - A live preview under the rows says, for example, "14 folders mounted,
+    1 excluded, 3 files not visible in the sandbox". Open it to see those files
+    and any warnings. If a strict restriction hides files, its row says so and
+    offers **Switch to soft**; nothing is switched for you. If the preview
+    reports an error (too many mounts, for example), the row shows it and
+    **Create** stays disabled until it is fixed. Nothing is sent when there are
+    no restrictions. The same rules can be set in `sbxw.toml`.
 - **Favourite folders.** ☆ on a folder pins it as a shortcut chip above the
   picker. Star the folder you keep projects in, not each project. Favourites
   live on the host in `~/.sbxw/state/favourites.json` (hand-editable, up to 12).
