@@ -52,9 +52,11 @@ pub enum RelayKind {
     /// A sandbox asks to boot the virtual Mac or open a port to it: a yes or
     /// a no from the person, never routed (see `mac`).
     Mac,
-    /// Questions for the person themselves — a /grill-me round — answered
-    /// through the voice concierge (or typed), never routed. The answers come
-    /// back as the asking tool's result: nothing is typed into a terminal.
+    /// Questions for the person themselves (a /grill-me round), answered on
+    /// one form in the relay dialog. The person may route the round to another
+    /// sandbox for a draft, which they review and release like any routed
+    /// answer. The answers come back as the asking tool's result: nothing is
+    /// typed into a terminal.
     Ask,
 }
 
@@ -207,9 +209,6 @@ impl RelayBook {
             }
             if req.kind == RelayKind::Mac {
                 return Err(format!("request {id} asks you to approve something on the virtual Mac — only you can"));
-            }
-            if req.kind == RelayKind::Ask {
-                return Err(format!("request {id} asks you, not another sandbox — answer it in the Concierge"));
             }
             if req.from == to {
                 return Err(format!("'{to}' is the sandbox that asked"));
@@ -428,10 +427,8 @@ mod tests {
     #[test]
     fn a_mac_request_is_carried_once_then_settled() {
         let mut b = RelayBook::new();
-        let ask = b.open("a", None, RelayKind::Ask, "Q1?", 1);
-        assert!(b.route(&ask.id, "b", 2).unwrap_err().contains("asks you"), "a question for the person is never routed");
-        assert_eq!(b.approve(&ask.id, Some("Q1 : oui"), vec![], 3).unwrap().state, RelayState::Approved);
         let r = b.open("a", None, RelayKind::Mac, "boot?", 1);
+        assert!(b.route(&r.id, "b", 2).is_err(), "a Mac request is never routed");
         let carried = b.carry(&r.id, 2).unwrap();
         assert_eq!((carried.state, carried.to.as_deref()), (RelayState::Routed, Some("sbxw")));
         assert!(b.carry(&r.id, 3).is_err(), "once");
@@ -439,6 +436,22 @@ mod tests {
         assert_eq!(agent_view(&done)["answer"], "booted");
         let q = b.open("a", None, RelayKind::Question, "q", 5);
         assert!(b.carry(&q.id, 6).is_err(), "only Mac requests");
+    }
+
+    #[test]
+    fn a_round_for_the_person_is_answered_by_them_or_routed_for_a_draft() {
+        let mut b = RelayBook::new();
+        let own = b.open("a", None, RelayKind::Ask, "Q1?", 1);
+        assert_eq!(b.approve(&own.id, Some("Q1 : oui"), vec![], 2).unwrap().state, RelayState::Approved);
+
+        let r = b.open("a", Some("t1"), RelayKind::Ask, "Q1? Q2?", 3);
+        assert!(b.route(&r.id, "a", 4).is_err(), "not to the asker");
+        assert_eq!(b.route(&r.id, "b", 4).unwrap().state, RelayState::Routed);
+        let drafted = b.reply(&r.id, "b", "Q1 : yes\nQ2 : no", 5).unwrap();
+        assert_eq!(drafted.state, RelayState::Answered);
+        assert_eq!(agent_view(&drafted)["answer"], serde_json::Value::Null, "the draft waits for the person");
+        let released = b.approve(&r.id, Some("Q1 : yes\nQ2 : maybe"), vec![], 6).unwrap();
+        assert_eq!(agent_view(&released)["answer"], "Q1 : yes\nQ2 : maybe");
     }
 
     #[test]

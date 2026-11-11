@@ -235,6 +235,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_routed_round_reaches_the_asker_only_once_the_person_releases_it() {
+        let (_d, app) = app();
+        let r = app.relay_open(&sb("alpha"), Some(&sbxw_core::ThreadName::parse("t1").unwrap()), RelayKind::Ask, "❓ **Q1 - Port** : which?").unwrap();
+        // Routed in the book directly: delivery into a real sandbox is not under test.
+        app.relay.lock().unwrap().route(&r.id, "beta", 1).unwrap();
+        app.relay_reply(&r.id, &sb("beta"), "Q1 : 8080").unwrap();
+        let held = app.relay_wait(&r.id, &sb("alpha"), Duration::from_millis(30)).await.unwrap();
+        assert_eq!(held.state, RelayState::Answered, "the draft does not settle the round");
+        assert_eq!(sbxw_core::relay::agent_view(&held)["answer"], serde_json::Value::Null);
+        app.relay_approve(&r.id, Some("Q1 : 8081"), &[]).unwrap();
+        let got = app.relay_wait(&r.id, &sb("alpha"), Duration::from_millis(30)).await.unwrap();
+        assert_eq!(got.state, RelayState::Approved);
+        assert_eq!(sbxw_core::relay::agent_view(&got)["answer"], "Q1 : 8081");
+    }
+
+    #[tokio::test]
     async fn a_timed_out_wait_reports_the_open_state() {
         let (_d, app) = app();
         let r = app.relay_open(&sb("alpha"), None, RelayKind::Screenshot, "show").unwrap();
