@@ -338,6 +338,29 @@
             <div class="repo-rows create-opt-full" id="repo-rows"></div>
           </div>
 
+          <!-- Restricted sub-folders (carves): a folder inside a read-write
+               folder the agent cannot read, or only read. Buttons, rows and
+               the live preview are filled by /js/create.js. -->
+          <div class="create-opt" id="carve-option">
+            <div class="create-opt-text">
+              <span class="create-opt-title">Restricted sub-folders</span>
+              <p class="create-opt-desc">Keep a folder inside a read-write folder out of the agent’s reach, or read-only.</p>
+            </div>
+            <div class="carve-adds" id="carve-adds"></div>
+            <div class="carve-pick hidden create-opt-full" id="carve-pick">
+              <div class="carve-pick-head" id="carve-pick-head"></div>
+              <div class="carve-pick-line">
+                <button type="button" class="btn-add-port" id="carve-pick-use">Use this folder</button>
+                <input class="port-input carve-typed" id="carve-typed" type="text" spellcheck="false" autocomplete="off" placeholder="or type a path inside it">
+                <button type="button" class="btn-add-port" id="carve-typed-add">Add</button>
+                <button type="button" class="repo-main" id="carve-pick-cancel">Cancel</button>
+              </div>
+              <span class="carve-err hidden" id="carve-pick-err"></span>
+            </div>
+            <div class="carve-rows create-opt-full" id="carve-rows"></div>
+            <div class="carve-preview create-opt-full hidden" id="carve-preview"></div>
+          </div>
+
           <div class="create-opt create-opt-ports">
             <div class="create-opt-text">
               <span class="create-opt-title">Ports</span>

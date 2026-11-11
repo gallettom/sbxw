@@ -2915,6 +2915,37 @@
   .repo-mode button.on[data-mode="ro"] { background: var(--c-green-tint); color: var(--c-green); }
   .repo-mode button:disabled { cursor: default; }
 
+  /* ── Restricted sub-folders (carves) of a new sandbox ── */
+  .carve-adds { display: flex; flex-direction: column; align-items: flex-end; gap: .25rem; min-width: 0; }
+  .carve-adds:empty { display: none; }
+  .carve-adds .btn-add-port { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .carve-rows { display: flex; flex-direction: column; gap: .3rem; }
+  .carve-rows:empty { display: none; }
+  .carve-row { background: var(--c-bg); border: 1px solid var(--c-elevated); border-radius: var(--r-xs); padding: .3rem .45rem; font-size: 12px; display: flex; flex-direction: column; gap: .25rem; }
+  .carve-row.bad { border-color: var(--c-red); }
+  .carve-line { display: flex; align-items: center; flex-wrap: wrap; gap: .4rem; }
+  .carve-rel { flex: 1 1 8rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .carve-rel .carve-parent { color: var(--c-text-dim); font-size: 10.5px; margin-right: .35rem; }
+  .carve-mode.repo-mode button.on[data-v="none"] { background: var(--c-red-tint, var(--c-amber-tint)); color: var(--c-red); }
+  .carve-mode.repo-mode button.on[data-v="ro"] { background: var(--c-green-tint); color: var(--c-green); }
+  .carve-mode.repo-mode button.on[data-v="strict"] { background: var(--c-blue-tint); color: var(--c-blue); }
+  .carve-mode.repo-mode button.on[data-v="soft"] { background: var(--c-amber-tint); color: var(--c-amber-strong); }
+  .carve-note { color: var(--c-text-dim); font-size: 11px; line-height: 1.4; }
+  .carve-warn { color: var(--c-amber-strong); font-size: 11.5px; line-height: 1.4; display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+  .carve-err { color: var(--c-red); font-size: 11.5px; line-height: 1.4; }
+  .carve-err.hidden { display: none; }
+  .carve-pick { display: flex; flex-direction: column; gap: .3rem; background: var(--c-bg); border: 1px solid var(--c-blue); border-radius: var(--r-xs); padding: .35rem .45rem; }
+  .carve-pick.hidden { display: none; }
+  .carve-pick-head { font-size: 11.5px; color: var(--c-text-soft); overflow-wrap: anywhere; }
+  .carve-pick-line { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+  .carve-typed { flex: 1 1 10rem; min-width: 0; }
+  .carve-preview { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; }
+  .carve-preview.hidden { display: none; }
+  .carve-preview.bad { color: var(--c-red); }
+  .carve-preview details summary { cursor: pointer; }
+  .carve-preview ul { margin: .25rem 0 0; padding-left: 1.1rem; max-height: 9rem; overflow-y: auto; overflow-wrap: anywhere; }
+  .fs-list.carve-picking { outline: 1px solid var(--c-blue); }
+
   /* ── Create-sandbox dialog: required on top, optional below ──
      Labels here are sentence case at reading size, not the 11px caps used for
      form labels elsewhere: in this dialog the label is the instruction. Each

@@ -11,6 +11,7 @@ pub mod anonymise;
 pub mod approvals;
 pub mod board;
 pub mod artifacts;
+pub mod carve;
 pub mod codemap;
 pub mod config;
 pub mod consent;

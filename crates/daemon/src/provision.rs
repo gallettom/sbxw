@@ -33,6 +33,7 @@ use sbxw_core::templates;
 use sbxw_core::tooling::{self, Tooling};
 use sbxw_core::SandboxRef;
 use sbxw_sbx::CreateOpts;
+use crate::carving;
 use crate::host::Host;
 use crate::remotes::Remote;
 use std::path::{Path, PathBuf};
@@ -46,6 +47,9 @@ pub struct BringUp {
     pub ro: Vec<String>,
     /// Extra directories mounted writable beside the workspace.
     pub rw: Vec<String>,
+    /// Carves the person chose in the create dialog, over the config's own
+    /// (`sbxw.toml`'s `[[carve]]`): absolute host paths, no consent needed.
+    pub carve: Vec<sbxw_core::config::Carve>,
     /// The project config, remembered for the sandbox so later attaches use the
     /// same `env`.
     pub config: Config,
@@ -303,6 +307,15 @@ impl App {
         let kits_here = self.kits_on(on_host.as_deref(), &cfg.kits, &run).await?;
         if existed {
             run.info(format!("sandbox '{name}' already exists — reusing it"));
+            // Mounts too: a changed set of carves is a recreate, never applied.
+            let had = self.store.get(name).carve.map(|c| c.file).unwrap_or_default();
+            let now = sbxw_core::consent::carve_lines(cfg);
+            if sorted(&had) != sorted(&now) {
+                run.warn(format!(
+                    "carves apply when a sandbox is created — '{name}' is unchanged. \
+                     `sbxw rm {name}` then `sbxw up {name}` creates it with them."
+                ));
+            }
             // Block storage exists only at creation: a changed list is a recreate,
             // never applied.
             if !cfg.volumes.is_empty() {
@@ -345,9 +358,44 @@ impl App {
                 own.push(dir.to_string_lossy().into_owned());
             }
             kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &run).await?);
-            let mut ro_mounts = req.ro.clone();
+            // Carves: mounts are fixed now, so the plan is made now.
+            let all_carves: Vec<sbxw_core::config::Carve> = cfg.carve.iter().chain(req.carve.iter()).cloned().collect();
+            let mut primary = workspace.clone();
+            let mut workspaces = cfg.workspaces.clone();
+            let (mut ro_mounts, mut rw_mounts) = (req.ro.clone(), req.rw.clone());
+            let mut carve_record = None;
+            if !all_carves.is_empty() {
+                let (stub, mask) = self.carve_dirs(name).await?;
+                let extras: Vec<sbxw_core::config::Workspace> = cfg
+                    .workspaces
+                    .iter()
+                    .filter_map(|w| sbxw_core::config::parse_workspace(w).ok())
+                    .chain(req.ro.iter().map(|p| sbxw_core::config::Workspace { path: p.clone(), target: None, readonly: true }))
+                    .chain(req.rw.iter().map(|p| sbxw_core::config::Workspace { path: p.clone(), target: None, readonly: false }))
+                    .collect();
+                let plan = carving::plan_on(&host, &req.workspace, &extras, &all_carves, &stub, &mask, &cfg.workdir).await?;
+                carving::make_helpers(&host, &stub, &mask).await?;
+                for w in &plan.warnings {
+                    run.warn(w.clone());
+                }
+                run.info(format!(
+                    "{} carve{}: {} mounts{}, {} entries not visible",
+                    all_carves.len(),
+                    if all_carves.len() == 1 { "" } else { "s" },
+                    1 + plan.mounts.len(),
+                    if plan.stub { " (the workspace is split)" } else { "" },
+                    plan.unshared.len()
+                ));
+                primary = plan.primary_spec();
+                workspaces = plan.specs();
+                (ro_mounts, rw_mounts) = (vec![], vec![]);
+                let split = match plan.stub {
+                    true => Some(canon_string(&host, &req.workspace).await),
+                    false => None,
+                };
+                carve_record = Some(crate::store::CarveRecord { file: sbxw_core::consent::carve_lines(cfg), extra: req.carve.clone(), split });
+            }
             let mut env = if remote { remote::without_auth_env(cfg.env_pairs()) } else { cfg.env_pairs() };
-            let mut rw_mounts = req.rw.clone();
             if wants_cache {
                 // Writable only for the sandbox that fills it: see `cache`.
                 let (dir, mount) = match &on_host {
@@ -365,7 +413,7 @@ impl App {
                 }
             }
             let opts = CreateOpts {
-                workspace: workspace.clone(),
+                workspace: primary,
                 ro_mounts,
                 kits: kit_refs,
                 publish: specs.clone(),
@@ -376,7 +424,7 @@ impl App {
                 env_files: cfg.env_files.clone(),
                 rw_mounts,
                 template,
-                workspaces: cfg.workspaces.clone(),
+                workspaces,
                 cpus: (cfg.cpus > 0).then_some(cfg.cpus),
                 memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
             };
@@ -389,6 +437,7 @@ impl App {
             let _ = self.store.update(name, |r| {
                 r.kits = applied;
                 r.created_by_sbx = made_by;
+                r.carve = carve_record;
             });
         }
 
@@ -951,6 +1000,16 @@ impl App {
 }
 
 /// Whether `p` is a directory on `host`.
+fn sorted(v: &[String]) -> Vec<String> {
+    let mut v = v.to_vec();
+    v.sort();
+    v
+}
+
+async fn canon_string(host: &Host, p: &Path) -> String {
+    host.fs.canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().into_owned()
+}
+
 async fn is_dir_on(host: &Host, p: &std::path::Path) -> Result<bool> {
     Ok(matches!(host.fs.stat(p).await?, Some(m) if m.kind == crate::host::Kind::Dir))
 }
@@ -1033,6 +1092,7 @@ mod tests {
             workspace: ws,
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: Config { kits, template: "auto".into(), network_allow: vec![], network_deny: vec![], ..Config::default() },
             extra_ports: vec![],
             chat: false,
@@ -1160,6 +1220,7 @@ mod tests {
             workspace: ws.to_path_buf(),
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: Config { kits: vec![], ..Config::default() },
             extra_ports: vec![],
             chat: false,
@@ -1194,6 +1255,7 @@ mod tests {
             workspace: ws.clone(),
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: Config::load(&file, &ws).unwrap(),
             extra_ports: vec![],
             chat: false,
@@ -1222,6 +1284,68 @@ mod tests {
         assert!(!app.store.paths.approved_grants().starts_with(&ws), "approvals live outside the workspace");
     }
 
+    /// A strict carve of the workspace: sbx gets a stub as its workspace and
+    /// the other folders by name, the agent starts in the real folder, a
+    /// changed file is a recreate, and dropping the carve asks first.
+    #[tokio::test]
+    async fn a_strict_carve_splits_the_workspace() {
+        let made = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = made.clone();
+        let _ = &made;
+        let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("create") => {
+                seen.store(true, std::sync::atomic::Ordering::SeqCst);
+                sbx_answer(a)
+            }
+            Some("ls") if seen.load(std::sync::atomic::Ordering::SeqCst) => crate::testing::ls(&[("myapp", "running")]),
+            Some("inspect") => Output::ok(r#"{"name":"myapp","kits":[],"created_version":"v0.51.0"}"#),
+            _ => sbx_answer(a),
+        });
+        let ws = std::fs::canonicalize(dir.path()).unwrap().join("myapp");
+        for d in ["a", "secret"] {
+            std::fs::create_dir_all(ws.join(d)).unwrap();
+        }
+        std::fs::write(ws.join("README"), "x").unwrap();
+        let file = ws.join("sbxw.toml");
+        let write = |body: &str| std::fs::write(&file, body).unwrap();
+        let req = |approved: Vec<String>| BringUp {
+            name: SandboxRef::parse("myapp").unwrap(),
+            workspace: ws.clone(),
+            ro: vec![],
+            rw: vec![],
+            carve: vec![],
+            config: Config::load(&file, &ws).unwrap(),
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            template: Default::default(),
+            remote_control: false,
+            git: None,
+            consent: Consent::Check(approved),
+        };
+        write("workdir = \"web\"\n[[carve]]\npath = \"secret\"\naccess = \"none\"\n");
+        let warnings = app.provision(req(vec![]), None).await.unwrap();
+        assert!(warnings.iter().any(|w| w.contains("2 files")), "{warnings:?}");
+        let create = fake.log().into_iter().find(|c| c.starts_with("create")).expect("created");
+        let stub = app.store.paths.carve().join("myapp").join("stub");
+        assert!(create.starts_with(&format!("create claude {} ", stub.display())), "{create}");
+        assert!(create.contains(&ws.join("a").display().to_string()), "{create}");
+        assert!(!create.contains("secret"), "the carved folder never reaches sbx: {create}");
+        assert!(stub.is_dir());
+        let rec = app.store.get(SandboxRef::parse("myapp").unwrap());
+        assert_eq!(rec.attach_workdir("web"), format!("{}/web", ws.display()));
+        // Changing the file's carves does not change the sandbox, and says so.
+        write("workdir = \"web\"\n[[carve]]\npath = \"secret\"\naccess = \"none\"\n[[carve]]\npath = \"a\"\naccess = \"ro\"\n");
+        let w = app.provision(req(vec![]), None).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("carves apply when a sandbox is created")), "{w:?}");
+        // Dropping the carve gives access back: the person is asked.
+        write("workdir = \"web\"\n");
+        let e = app.provision(req(vec![]), None).await.unwrap_err();
+        let lines = crate::store::needs_approval(&e).unwrap().grants.clone();
+        assert_eq!(lines, [format!("access restored: {}/a (was: read-only, strict)", ws.display()), format!("access restored: {}/secret (was: no access, strict)", ws.display())]);
+        app.provision(req(lines), None).await.unwrap();
+    }
+
     #[tokio::test]
     async fn a_kit_waiting_for_approval_is_recorded_for_a_pane_to_answer() {
         let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
@@ -1239,6 +1363,7 @@ mod tests {
             workspace: ws,
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: Config { kits: vec!["sbxw:k8s-tools".into()], network_allow: vec![], network_deny: vec![], ..Config::default() },
             extra_ports: vec![],
             chat: false,
@@ -1273,6 +1398,7 @@ mod tests {
             workspace: ws,
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: Config { kits, ..Config::default() },
             extra_ports: vec![],
             chat: false,
@@ -1320,6 +1446,7 @@ mod tests {
                     workspace: ws.clone(),
                     ro: vec![],
                     rw: vec![],
+                    carve: vec![],
                     config: cfg,
                     extra_ports: vec![],
                     chat: false,
@@ -1382,6 +1509,7 @@ mod tests {
             workspace: ws,
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: cfg,
             extra_ports: vec![],
             chat: false,
@@ -1432,6 +1560,7 @@ mod tests {
                     workspace: ws,
                     ro: vec![],
                     rw: vec![],
+                    carve: vec![],
                     config: with_port(),
                     extra_ports: vec![],
                     chat: false,
@@ -1473,6 +1602,7 @@ mod tests {
                 workspace: ws,
                 ro: vec![],
                 rw: vec![],
+                carve: vec![],
                 config: Config::default(),
                 extra_ports: vec![],
                 chat: false,
@@ -1508,6 +1638,7 @@ mod tests {
             workspace: ws,
             ro: vec![],
             rw: vec![],
+            carve: vec![],
             config: Config { kits: vec![], volumes: vec!["/home/agent/.npm".into()], ..Config::default() },
             extra_ports: vec![],
             chat: false,

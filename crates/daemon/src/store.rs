@@ -83,6 +83,12 @@ impl Paths {
     fn sandboxes(&self, host: &HostName) -> PathBuf {
         self.host_state(host).join("sandboxes")
     }
+    /// Helper folders for carves, on a sandbox's host: `carve/empty` (laid
+    /// read-only over a soft carve) and `carve/<sandbox>/stub` (the primary
+    /// folder of a sandbox whose workspace is split). Never in a workspace.
+    pub fn carve(&self) -> PathBuf {
+        self.root.join("carve")
+    }
     pub fn plans(&self) -> PathBuf {
         self.state().join("plans")
     }
@@ -188,6 +194,31 @@ pub struct MountRecord {
     pub readonly: bool,
 }
 
+/// The carves a sandbox was created with: mounts are fixed at creation, so a
+/// change to them is a recreate.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CarveRecord {
+    /// `sbxw.toml`'s carves as `consent::carve_lines` writes them.
+    pub file: Vec<String>,
+    /// The create dialog's carves, kept for a recreate.
+    pub extra: Vec<sbxw_core::config::Carve>,
+    /// The main workspace's real path when it was split (the primary mount is
+    /// then a stub, and the agent starts in an absolute folder).
+    pub split: Option<String>,
+}
+
+impl SandboxRecord {
+    /// What `sbx run --workdir` is given: the config's `workdir`, made absolute
+    /// when the main workspace is split (a relative one would be read against
+    /// the stub).
+    pub fn attach_workdir(&self, cfg_workdir: &str) -> String {
+        match self.carve.as_ref().and_then(|c| c.split.as_deref()) {
+            Some(main) => sbxw_core::carve::absolute_workdir(main, cfg_workdir),
+            None => cfg_workdir.to_string(),
+        }
+    }
+}
+
 /// Everything sbxw knows about one sandbox.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SandboxRecord {
@@ -215,6 +246,9 @@ pub struct SandboxRecord {
     /// sbx applies them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mounts: Vec<MountRecord>,
+    /// The carves it was created with; `None` for one made without any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carve: Option<CarveRecord>,
     /// Kit references sbxw applied — at creation or by `kit add` — so a
     /// bring-up never re-applies one (each `kit add` recreates the container).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -497,6 +531,7 @@ impl Store {
                 })
                 .collect(),
             kits: vec![],
+            carve: None,
             remote_control: false,
             created_by_sbx: None,
             last_status: None,
@@ -590,16 +625,29 @@ impl Store {
     /// error is a [`NeedsApproval`](sbxw_core::consent::NeedsApproval) with the
     /// lines still to approve.
     pub fn check_grants(&self, key: &str, all: &[String], checked: &[String], approved_now: &[String]) -> Result<()> {
-        use sbxw_core::consent::{new_grants, NeedsApproval};
+        use sbxw_core::consent::{new_grants, restored, NeedsApproval, CARVE_PREFIX};
         let _guard = self.lock.lock().unwrap();
         let mut book = self.all_approved_grants();
         let before = book.get(key).cloned().unwrap_or_default();
-        let new = new_grants(checked, &before);
+        // A carve dropped or weakened in the file is checked against the whole
+        // list even by a partial check: it hands access back.
+        let mut new = new_grants(checked, &before);
+        let gave_back = restored(all, &before);
+        new.extend(gave_back.iter().cloned());
         let missing = new_grants(&new, approved_now);
         if !missing.is_empty() {
             return Err(NeedsApproval { config: key.to_string(), grants: new }.into());
         }
-        let mut after: Vec<String> = before.iter().filter(|g| all.contains(g)).cloned().chain(new).collect();
+        // The carves now in the file are recorded as they are (adding or
+        // strengthening one asks nothing); the restored lines are not kept.
+        let carves = all.iter().filter(|g| g.starts_with(CARVE_PREFIX)).cloned();
+        let mut after: Vec<String> = before
+            .iter()
+            .filter(|g| all.contains(g))
+            .cloned()
+            .chain(new.into_iter().filter(|g| !gave_back.contains(g)))
+            .chain(carves)
+            .collect();
         after.sort();
         after.dedup();
         if after == before {
@@ -674,6 +722,23 @@ mod tests {
             assert_eq!(std::fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
         }
         assert_eq!(s.all_approved_grants()[key], mount);
+    }
+
+    #[test]
+    fn dropping_a_carve_asks_but_adding_one_does_not() {
+        let (_d, s) = store();
+        let key = "/p/sbxw.toml";
+        let carve = v(&["carve: /p/x (none, strict)"]);
+        s.check_grants(key, &carve, &carve, &[]).unwrap();
+        assert_eq!(s.all_approved_grants()[key], carve, "recorded without a question");
+        let e = s.check_grants(key, &[], &[], &[]).unwrap_err();
+        let shown = needs_approval(&e).unwrap().grants.clone();
+        assert_eq!(shown, v(&["access restored: /p/x (was: no access, strict)"]));
+        // Approving a different line approves nothing; the right one does.
+        assert!(s.check_grants(key, &[], &[], &v(&["x"])).is_err());
+        s.check_grants(key, &[], &[], &shown).unwrap();
+        assert!(!s.all_approved_grants().contains_key(key), "the restored line is not kept");
+        s.check_grants(key, &[], &[], &[]).unwrap();
     }
 
     #[test]

@@ -51,6 +51,7 @@ function applyCreateHost() {
   if (remote) document.getElementById('km-option').classList.add('hidden');
   else showKitMounts();
   repos = [];
+  resetCarve();
   renderRepos();
   renderFavourites();
   browseTo(null);
@@ -196,6 +197,7 @@ function renderRepos() {
   }).join('');
   btnAddRepo.disabled = !selectedPath || hasRepo(selectedPath);
   paintPath();
+  renderCarve();
   validateForm();
 }
 
@@ -218,6 +220,248 @@ repoRowsEl.addEventListener('click', ev => {
 
 btnAddRepo.addEventListener('click', () => {
   if (selectedPath && !hasRepo(selectedPath)) toggleRepo(selectedPath);
+});
+
+// ── Restricted sub-folders (carves) ───────────────────────────────────────
+//
+// A folder inside a read-write folder that the agent cannot read ('none') or
+// only read ('ro'). Strict: the folder never enters the sandbox (the server
+// mounts the parent's sub-folders one by one). Soft: the parent is shared whole
+// and the folder is covered. /api/carve/preview says what that would mean.
+const carveAddsEl    = document.getElementById('carve-adds');
+const carveRowsEl    = document.getElementById('carve-rows');
+const carvePreviewEl = document.getElementById('carve-preview');
+const carvePickEl    = document.getElementById('carve-pick');
+const carvePickHead  = document.getElementById('carve-pick-head');
+const carvePickErr   = document.getElementById('carve-pick-err');
+const carveTyped     = document.getElementById('carve-typed');
+let carves = [];          // { path, access: 'none'|'ro', enforce: 'strict'|'soft' }
+let carveInfo = null;     // last preview answer, or { unavailable: true }
+let carvePick = null;     // { root, cur, prev } while the browser picks a sub-folder
+let carveSig = '';        // what the shown preview was asked for
+let carveTimer = null;
+let carveSeq = 0;
+let carveOpen = false;    // the preview's details are expanded
+
+const carveInside = (a, b) => a.startsWith(b.endsWith('/') ? b : b + '/');
+const carveBase = p => p.replace(/\/+$/, '').split('/').pop() || p;
+
+// The folders a restriction can live in: the workspace and the read-write extras.
+function carveParents() {
+  if (repos.length) return repos.filter((r, i) => i === 0 || !r.readonly).map(r => r.path);
+  return selectedPath ? [selectedPath] : [];
+}
+function carveParentOf(c) {
+  return carveParents().filter(p => carveInside(c.path, p)).sort((a, b) => b.length - a.length)[0] || '';
+}
+function carveBlocked() {
+  return carves.length > 0 && !!carveInfo && carveInfo.ok === false;
+}
+
+function carveBody() {
+  const main = repos.length ? repos[0].path : selectedPath;
+  const body = {
+    path: main,
+    mounts: repos.slice(1).map(r => ({ path: r.path, readonly: r.readonly })),
+    carve: carves.map(c => ({ path: c.path, access: c.access, enforce: c.enforce })),
+  };
+  if (createRemote()) body.host = createHost();
+  return body;
+}
+
+function resetCarve() {
+  carves = []; carveInfo = null; carvePick = null; carveSig = ''; carveOpen = false;
+  clearTimeout(carveTimer); carveSeq++;
+  carvePickEl.classList.add('hidden');
+  fsList.classList.remove('carve-picking');
+}
+
+async function refreshCarvePreview() {
+  const seq = ++carveSeq;
+  let info;
+  try {
+    const res = await fetch('/api/carve/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(carveBody()),
+    });
+    if (res.status === 404) info = { unavailable: true };
+    else info = await res.json();
+  } catch (_) {
+    info = { unavailable: true };
+  }
+  if (seq !== carveSeq) return;
+  carveInfo = info;
+  renderCarve(true);
+  validateForm();
+}
+
+function carveFilesFor(c) {
+  if (!carveInfo || !Array.isArray(carveInfo.unshared) || c.enforce !== 'strict') return [];
+  return carveInfo.unshared.filter(f => {
+    const dir = f.slice(0, f.lastIndexOf('/'));
+    return c.path === dir || carveInside(c.path, dir);
+  });
+}
+
+const CARVE_NOTE = {
+  strict: 'Strict: the folder never enters the sandbox. The parent is shared folder by folder, so files lying directly in it are not visible.',
+  soft: 'Soft: the parent is shared whole and the folder is covered. An agent using root can remove the cover, so this guards against mistakes only.',
+};
+
+function renderCarve(fromPreview) {
+  // Drop restrictions whose folder is no longer one of the sandbox's folders.
+  carves = carves.filter(c => carveParentOf(c));
+  const parents = carveParents();
+  carveAddsEl.innerHTML = parents.map(p =>
+    `<button type="button" class="btn-add-port" data-pick="${escHtml(p)}" title="${escHtml(p)}"${carvePick ? ' disabled' : ''}>＋ Restrict a sub-folder${parents.length > 1 ? ' of ' + escHtml(carveBase(p)) : ''}</button>`
+  ).join('');
+
+  const bad = carveBlocked();
+  carveRowsEl.innerHTML = carves.map((c, i) => {
+    const par = carveParentOf(c);
+    const rel = c.path.slice(par.length).replace(/^\/+/, '');
+    const files = carveFilesFor(c);
+    const sw = (k, v, label, title) =>
+      `<button type="button" data-k="${k}" data-v="${v}" data-i="${i}" class="${c[k] === v ? 'on' : ''}" title="${escHtml(title)}">${label}</button>`;
+    const warn = files.length
+      ? `<div class="carve-warn">⚠ ${files.length} file${files.length === 1 ? '' : 's'} next to it will not be visible in the sandbox.
+           <button type="button" class="repo-main" data-soft="${i}">Switch to soft</button></div>`
+      : '';
+    const err = bad ? `<div class="carve-err">${escHtml(carveInfo.error || 'This cannot be mounted.')}</div>` : '';
+    return `<div class="carve-row${bad ? ' bad' : ''}">
+      <div class="carve-line">
+        <span class="carve-rel" title="${escHtml(c.path)}">${parents.length > 1 ? `<span class="carve-parent">in ${escHtml(carveBase(par))}</span>` : ''}<bdi>${escHtml(rel)}</bdi></span>
+        <span class="repo-mode carve-mode">${sw('access', 'none', 'No access', 'The agent cannot see it')}${sw('access', 'ro', 'Read-only', 'The agent can read it, not change it')}</span>
+        <span class="repo-mode carve-mode">${sw('enforce', 'strict', 'Strict', CARVE_NOTE.strict)}${sw('enforce', 'soft', 'Soft', CARVE_NOTE.soft)}</span>
+        <button class="btn-rm-port" type="button" data-rm="${i}" title="Remove">✕</button>
+      </div>
+      <div class="carve-note">${escHtml(CARVE_NOTE[c.enforce])}</div>
+      ${warn}${err}
+    </div>`;
+  }).join('');
+
+  // Live preview, asked again (debounced) when what it depends on changed.
+  if (!carves.length) {
+    carveInfo = null; carveSig = ''; clearTimeout(carveTimer); carveSeq++;
+    carvePreviewEl.classList.add('hidden');
+    carvePreviewEl.innerHTML = '';
+    return;
+  }
+  carvePreviewEl.classList.remove('hidden');
+  carvePreviewEl.classList.toggle('bad', bad);
+  carvePreviewEl.innerHTML = carvePreviewHtml();
+  if (!fromPreview) {
+    const sig = JSON.stringify(carveBody());
+    if (sig !== carveSig) {
+      carveSig = sig;
+      carveInfo = null;
+      clearTimeout(carveTimer);
+      carveTimer = setTimeout(refreshCarvePreview, 400);
+      carvePreviewEl.innerHTML = carvePreviewHtml();
+    }
+  }
+}
+
+function carvePreviewHtml() {
+  const i = carveInfo;
+  if (!i) return 'Checking…';
+  if (i.unavailable) return 'Preview not available.';
+  if (i.ok === false) return `Preview: ${escHtml(i.error || 'error')}`;
+  const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+  // Real folders only: not the masks, and not the empty stub that comes first
+  // when the main folder itself is not shared.
+  const real = (i.mounts || []).filter((m, k) => !m.mask && !(i.stub && k === 0));
+  const parts = [n(real.length, 'folder mounted', 'folders mounted')];
+  const none = carves.filter(c => c.access === 'none').length;
+  const ro = carves.length - none;
+  if (none) parts.push(`${none} excluded`);
+  if (ro) parts.push(`${ro} read-only`);
+  const files = i.unshared || [];
+  const warns = i.warnings || [];
+  if (files.length) parts.push(n(files.length, 'file not visible in the sandbox', 'files not visible in the sandbox'));
+  const stub = i.stub ? '<div class="carve-note">The main folder itself is not shared: nothing can be created directly in it.</div>' : '';
+  const summary = escHtml(parts.join(', '));
+  if (!files.length && !warns.length) return summary + stub;
+  const shown = files.slice(0, 200);
+  return `<details${carveOpen ? ' open' : ''}><summary>${summary}</summary>
+    ${warns.length ? `<ul>${warns.map(w => `<li>⚠ ${escHtml(w)}</li>`).join('')}</ul>` : ''}
+    ${files.length ? `<ul>${shown.map(f => `<li>${escHtml(f)}</li>`).join('')}${files.length > shown.length ? `<li>and ${files.length - shown.length} more</li>` : ''}</ul>` : ''}
+  </details>${stub}`;
+}
+
+carvePreviewEl.addEventListener('toggle', ev => {
+  if (ev.target.tagName === 'DETAILS') carveOpen = ev.target.open;
+}, true);
+
+function addCarve(path) {
+  path = path.replace(/\/+$/, '');
+  if (!carves.some(c => c.path === path)) carves.push({ path, access: 'none', enforce: 'strict' });
+  endCarvePick();
+  renderCarve();
+  validateForm();
+}
+
+function startCarvePick(root) {
+  carvePick = { root, cur: root, prev: selectedPath };
+  carveTyped.value = '';
+  carvePickErr.classList.add('hidden');
+  carvePickEl.classList.remove('hidden');
+  fsList.classList.add('carve-picking');
+  paintCarvePick();
+  renderCarve(true);
+  browseTo(root);
+}
+
+function paintCarvePick() {
+  carvePickHead.innerHTML = `Choose a sub-folder of <bdi>${escHtml(carvePick.root)}</bdi> in the list above (you cannot leave it).<br>Now in: <bdi>${escHtml(carvePick.cur)}</bdi>`;
+  document.getElementById('carve-pick-use').disabled = carvePick.cur === carvePick.root;
+}
+
+// Leaves the picking mode and puts the browser back where the person was.
+function endCarvePick() {
+  if (!carvePick) return;
+  const prev = carvePick.prev;
+  carvePick = null;
+  carvePickEl.classList.add('hidden');
+  fsList.classList.remove('carve-picking');
+  renderCarve(true);
+  browseTo(prev || null);
+}
+
+function carveError(msg) {
+  carvePickErr.textContent = msg;
+  carvePickErr.classList.toggle('hidden', !msg);
+}
+
+carveAddsEl.addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-pick]');
+  if (b && !b.disabled) startCarvePick(b.dataset.pick);
+});
+document.getElementById('carve-pick-cancel').addEventListener('click', () => endCarvePick());
+document.getElementById('carve-pick-use').addEventListener('click', () => {
+  if (carvePick && carvePick.cur !== carvePick.root) addCarve(carvePick.cur);
+});
+function addTypedCarve() {
+  if (!carvePick) return;
+  const p = carveTyped.value.trim().replace(/\/+$/, '');
+  if (!p.startsWith('/') || p.split('/').includes('..')) return carveError('Type an absolute path, without “..”.');
+  if (!carveInside(p, carvePick.root)) return carveError(`The path must be inside ${carvePick.root}.`);
+  carveError('');
+  addCarve(p);
+}
+document.getElementById('carve-typed-add').addEventListener('click', addTypedCarve);
+carveTyped.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); addTypedCarve(); }
+});
+
+carveRowsEl.addEventListener('click', ev => {
+  const b = ev.target.closest('button');
+  if (!b) return;
+  if (b.dataset.rm !== undefined) carves.splice(Number(b.dataset.rm), 1);
+  else if (b.dataset.soft !== undefined) carves[Number(b.dataset.soft)].enforce = 'soft';
+  else if (b.dataset.k) carves[Number(b.dataset.i)][b.dataset.k] = b.dataset.v;
+  else return;
+  renderCarve();
+  validateForm();
 });
 
 const portRowsEl = document.getElementById('port-rows');
@@ -294,6 +538,7 @@ function openModal() {
   fsPath.textContent = '—';
   portRowsEl.innerHTML = '';
   repos = [];
+  resetCarve();
   renderRepos();
   // Re-read every time the modal opens: another tab (or a hand-edited state
   // file) may have changed the list since this one was last used.
@@ -378,12 +623,14 @@ let fsListing = null;
 function renderFsList() {
   if (!fsListing) return;
   let html = '';
-  if (fsListing.parent) {
+  // Picking a restricted sub-folder: the list cannot leave the folder it is in.
+  const canUp = fsListing.parent && (!carvePick || fsListing.parent === carvePick.root || carveInside(fsListing.parent, carvePick.root));
+  if (canUp) {
     html += `<div class="fs-item up" data-path="${escHtml(fsListing.parent)}">
                <span class="fs-icon">↑</span> ..
              </div>`;
   }
-  if (fsListing.entries.length === 0 && !fsListing.parent) {
+  if (fsListing.entries.length === 0 && !canUp) {
     html += '<div class="fs-empty">No subdirectories</div>';
   }
   // The star is a button *inside* the row: the row itself browses, the star
@@ -393,17 +640,17 @@ function renderFsList() {
     const on = isFavourite(e.path);
     const added = hasRepo(e.path);
     // Starring is for this machine's folders (the list lives here).
-    const star = createRemote() ? '' : `<button type="button" class="fs-row-star${on ? ' on' : ''}"
+    const star = createRemote() || carvePick ? '' : `<button type="button" class="fs-row-star${on ? ' on' : ''}"
                data-star-path="${escHtml(e.path)}" aria-pressed="${on}"
                title="${on ? 'Unstar this folder' : 'Star this folder — pins it as a shortcut above'}"
        >${on ? '★' : '☆'}</button>`;
     return `<div class="fs-item" data-path="${escHtml(e.path)}">
        <span class="fs-icon">📁</span>
        <span class="fs-name">${escHtml(e.name)}</span>
-       <button type="button" class="fs-row-add${added ? ' on' : ''}"
+       ${carvePick ? '' : `<button type="button" class="fs-row-add${added ? ' on' : ''}"
                data-add-path="${escHtml(e.path)}" aria-pressed="${added}"
                title="${added ? 'Remove from this sandbox' : 'Add to this sandbox’s repos'}"
-       >${added ? '✓' : '＋'}</button>
+       >${added ? '✓' : '＋'}</button>`}
        ${star}
      </div>`;
   }).join('');
@@ -440,8 +687,16 @@ async function browseTo(path) {
     const res = await fetch(url);
     const data = await res.json();
     if (seq !== browseSeq) return; // a later click already won
-    selectedPath = data.path;
-    renderRepos();
+    if (carvePick) {
+      // Picking a restricted sub-folder: where you are is not the sandbox's
+      // folder, and the list stays inside the folder being restricted.
+      if (data.path !== carvePick.root && !carveInside(data.path, carvePick.root)) return browseTo(carvePick.root);
+      carvePick.cur = data.path;
+      paintCarvePick();
+    } else {
+      selectedPath = data.path;
+      renderRepos();
+    }
     fsListing = data;
     renderFsList();
   } catch (e) {
@@ -482,7 +737,7 @@ function validateForm() {
   if (taken) showNote(nameErrEl, `“${createRef(name)}” already exists — pick another name`);
   const nameOk = !taken && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
   const pathOk = repos.length > 0 || selectedPath.length > 0 || (createRemote() && inpGitUrl.value.trim().length > 0);
-  btnCreate.disabled = !(nameOk && pathOk) || !!nestedRepos();
+  btnCreate.disabled = !(nameOk && pathOk) || !!nestedRepos() || carveBlocked();
 }
 
 function normalizeNameInput() {
@@ -801,6 +1056,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   const mounts = repos.slice(1).map(r => ({ path: r.path, readonly: r.readonly }));
   const ports  = collectPorts();
   const kit_mounts = createRemote() ? {} : collectKitMounts();
+  const carve = carves.map(c => ({ path: c.path, access: c.access, enforce: c.enforce }));
   // Asked over the create dialog, which stays open if this one is closed —
   // unless the person already asked for a rebuild with the box. The
   // template asked about is this machine's sbx's: not a remote host's.
@@ -821,7 +1077,9 @@ document.getElementById('modal-create').addEventListener('click', async () => {
         if (!c.ok) { showToast(`Could not clone ${gitUrl} on ${host}: ${c.error || 'unknown error'}`, 'error'); return; }
         path = c.path;
       }
-      const data = await postBringUp('/api/sandboxes/create', { name, path, mounts, ports, template, remote_control, kit_mounts });
+      const body = { name, path, mounts, ports, template, remote_control, kit_mounts };
+      if (carve.length) body.carve = carve; // nothing is sent without restrictions
+      const data = await postBringUp('/api/sandboxes/create', body);
       if (data.ok) {
         // Attaches to an empty pane if one is sitting idle; otherwise just
         // flags it ready in the list with a blue dot for a manual connect.

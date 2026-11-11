@@ -54,6 +54,7 @@ pub fn routes() -> Router<Arc<App>> {
         // Sandboxes.
         .route("/api/sandboxes", get(list))
         .route("/api/sandboxes/create", post(create))
+        .route("/api/carve/preview", post(carve_preview))
         .route("/api/sandboxes/chat", post(chat))
         .route("/api/chat/push", post(chat_push))
         .route("/api/sandboxes/:name/up", post(up))
@@ -337,6 +338,10 @@ struct CreateBody {
     /// The host-access grant lines the person approved in the page's dialog.
     #[serde(default)]
     approved: Vec<String>,
+    /// Folders kept out of the sandbox or read-only: the person's choice in
+    /// the dialog, so no consent line.
+    #[serde(default)]
+    carve: Vec<sbxw_core::config::Carve>,
 }
 
 /// The `consent` field a refused bring-up answers with: the config file and
@@ -372,6 +377,7 @@ async fn create(State(app): S, Json(b): Json<CreateBody>) -> Result<Response, Ap
         remote_control: b.remote_control,
         kit_mounts: b.kit_mounts,
         approved: b.approved,
+        carve: b.carve,
     };
     bring_up_answer(app.create(name, &b.path, form, None).await, json!({}))
 }
@@ -493,6 +499,62 @@ struct ChatPushBody {
     thread: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct CarvePreviewBody {
+    /// The main workspace.
+    path: String,
+    #[serde(default)]
+    mounts: Vec<MountEntry>,
+    #[serde(default)]
+    carve: Vec<sbxw_core::config::Carve>,
+    /// The host as the create body names it (empty is this machine).
+    #[serde(default)]
+    host: Option<String>,
+}
+
+/// How many unshared entries a preview lists.
+const PREVIEW_UNSHARED: usize = 200;
+
+/// What the planner would mount for a create body's folders and carves, on
+/// the real directory listing. Creates nothing.
+async fn carve_preview(State(app): S, Json(b): Json<CarvePreviewBody>) -> Result<Json<Value>, ApiError> {
+    let fail = |e: String| Ok(Json(json!({ "ok": false, "error": e })));
+    let host_name = non_blank(b.host).unwrap_or_default();
+    let sref = match host_name.is_empty() {
+        true => SandboxRef::local(SandboxName::parse("preview")?),
+        false => match SandboxRef::parse(&format!("{host_name}{}preview", names::REF_SEP)) {
+            Ok(r) => r,
+            Err(e) => return fail(e.to_string()),
+        },
+    };
+    let out: anyhow::Result<_> = async {
+        let host = app.host_for(&sref).await?;
+        let (stub, mask) = app.carve_dirs(&sref).await?;
+        let mut cfg = app.daemon_config();
+        let mounts: Vec<(String, bool)> = b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect();
+        let extras = crate::svc::sandboxes::carve_extras(&cfg, &mounts);
+        let carves: Vec<_> = std::mem::take(&mut cfg.carve).into_iter().chain(b.carve).collect();
+        crate::carving::plan_on(&host, std::path::Path::new(b.path.trim()), &extras, &carves, &stub, &mask, &cfg.workdir).await
+    }
+    .await;
+    let plan = match out {
+        Ok(p) => p,
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    let mut warnings = plan.warnings.clone();
+    let more = plan.unshared.len().saturating_sub(PREVIEW_UNSHARED);
+    if more > 0 {
+        warnings.push(format!("{more} more entries will not be visible"));
+    }
+    Ok(Json(json!({
+        "ok": true,
+        "mounts": plan.all_mounts().map(|m| json!({ "host": m.host, "target": m.target, "readonly": m.readonly, "mask": m.mask })).collect::<Vec<_>>(),
+        "unshared": plan.unshared.iter().take(PREVIEW_UNSHARED).collect::<Vec<_>>(),
+        "warnings": warnings,
+        "stub": plan.stub,
+    })))
+}
+
 async fn chat_push(State(app): S, Json(b): Json<ChatPushBody>) -> ApiResult {
     let name = non_blank(b.name).map(|n| sandbox(&n)).transpose()?;
     let thread = non_blank(b.thread).map(|t| ThreadName::parse(&t)).transpose()?;
@@ -540,6 +602,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         workspace: b.path,
         ro: b.ro,
         rw: b.rw,
+        carve: vec![],
         config,
         extra_ports: b.extra_ports,
         chat: b.chat,
@@ -1846,5 +1909,25 @@ mod tests {
         let body: Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap()).unwrap();
         assert_eq!(body, json!({ "ok": true, "name": "chat-1" }));
         assert!(bring_up_answer(Err(anyhow::anyhow!("sbx failed")), json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_carve_preview_answers_with_the_plan_and_creates_nothing() {
+        let (dir, app, _fake) = crate::testing::app_with(crate::testing::sbx_answer);
+        let ws = std::fs::canonicalize(dir.path()).unwrap().join("p");
+        std::fs::create_dir_all(ws.join("a")).unwrap();
+        std::fs::create_dir_all(ws.join("secret")).unwrap();
+        std::fs::write(ws.join("f"), "x").unwrap();
+        let body = |carve: Value| serde_json::from_value::<CarvePreviewBody>(json!({ "path": ws, "mounts": [], "carve": carve })).unwrap();
+        let Json(v) = carve_preview(State(app.clone()), Json(body(json!([{ "path": ws.join("secret"), "access": "none", "enforce": "strict" }])))).await.unwrap();
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["stub"], true);
+        let hosts: Vec<&str> = v["mounts"].as_array().unwrap().iter().map(|m| m["host"].as_str().unwrap()).collect();
+        assert!(hosts[0].ends_with("/stub") && hosts.contains(&ws.join("a").to_str().unwrap()) && !hosts.iter().any(|h| h.contains("secret")), "{hosts:?}");
+        assert_eq!(v["unshared"], json!([ws.join("f")]));
+        assert!(!app.store.paths.carve().exists(), "a preview creates nothing");
+        let Json(v) = carve_preview(State(app), Json(body(json!([{ "path": "/elsewhere", "access": "ro" }])))).await.unwrap();
+        assert_eq!(v["ok"], false);
+        assert!(v["error"].as_str().unwrap().contains("/elsewhere"), "{v}");
     }
 }

@@ -190,6 +190,16 @@ env_files = []
 # Other host folders mounted at creation, PATH[:TARGET][:ro] (sbx 0.51).
 # workspaces = ["../docs:/workspace/docs:ro", "~/datasets"]
 
+# Keep a folder inside the workspace out of the sandbox, or read-only. Write
+# these tables after every bare key of the file. `strict` (the default) never
+# lets the folder into the VM, but files beside the mounted folders are not
+# visible; `soft` hides it with a mount an agent with root can remove.
+# Creation only; removing or weakening one asks your approval.
+# [[carve]]
+# path = "clients/acme"
+# access = "none"      # or "ro"
+# enforce = "strict"   # or "soft"
+
 # Where the main agent starts, inside the workspace (sbx run --workdir).
 # workdir = "packages/web"
 

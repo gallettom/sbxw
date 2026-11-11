@@ -46,6 +46,7 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `kit_mounts` | `{}` | Sandbox path → host directory for kit-declared host mounts (`host-mount@1`, sbx 0.50+), passed as `--mount HOST:TARGET`. The target must be one a kit declares |
 | `volumes` | `[]` | Sandbox paths kept on persistent storage across `sbxw rm` / `sbxw up` of the same name. See [Persistent volumes](kits-and-skills.md#persistent-volumes) |
 | `workspaces` | `[]` | Other host folders mounted at creation, `PATH[:TARGET][:ro]` (sbx 0.51): `TARGET` an absolute path in the sandbox (else the host path), `:ro` read-only. `PATH` relative to this file, or `~/`. Exported as `additionalWorkspaces` |
+| `[[carve]]` | none | A folder inside the workspace (or a `workspaces` folder) the sandbox cannot read, or can only read. See [Carving a folder out](#carving-a-folder-out) |
 | `workdir` | `""` | Where the main agent starts, relative to the workspace or absolute (`sbx run --workdir`, 0.51) — a monorepo's package, say. Every attach, the existing sandbox's too |
 | `cpus`, `memory` | `0`, `""` | At creation (`--cpus`, `--memory 8g`); 0 and empty leave sbx's defaults. Exported as `sandboxOptions` |
 | `fuse`, `root_size`, `docker_size` | unset | Exported as `sandboxOptions` (`fuse`, `rootSize`, `dockerSize`) for `sbx env run` only: `sbx create` has no flag for them. FUSE is otherwise sbx's `sandbox.fuse` setting (on by default) |
@@ -156,6 +157,53 @@ process list) and in a file most projects commit. Use `sbx secret set`, or an
 
 `sbxw.toml` usually sits inside the workspace, where the agent can edit it. See
 [Security](security.md#the-agent-can-edit-sbxwtoml).
+
+## Carving a folder out
+
+A sandbox can mount a folder read-write while one folder inside it is hidden
+or read-only. Each rule is a `[[carve]]` table. Write the tables after every
+bare key of the file.
+
+```toml
+[[carve]]
+path = "clients/acme"   # relative to this file, or an absolute host path
+access = "none"         # "none": not readable at all, or "ro": read-only
+enforce = "strict"      # "strict" (the default) or "soft"
+```
+
+`path` must lie inside the workspace or inside a `workspaces` folder (not be
+one), with no `..`. A relative path resolves like the file's other relative
+paths. The folder must exist when the sandbox is created. A carve can also be
+added in the Create dialog; the dialog's carves are your own decision and are
+not asked about again.
+
+**Strict** keeps the folder out of the sandbox altogether. sbx cannot leave a
+folder out of a mount, so sbxw does not mount the parent as a whole. It mounts
+every other folder on the way down, one by one, at the same place. The cost:
+files and other non-folders next to the mounted folders (`README.md`, and
+`sbxw.toml` itself) are not visible, and nothing can be created at those
+levels, because they belong to no mount. `sbxw up` and the dialog list the
+files that will be missing. If the workspace itself is split, sbx is given an
+empty stub folder as its workspace, and the agent starts in the real workspace
+path (or your `workdir`, made absolute). A symlink in a split folder is not
+shared either. At most 200 folders can be mounted; a folder holding thousands
+of children is better carved with `soft`.
+
+**Soft** keeps the parent mounted as it is and lays a second mount over the
+carve: an empty read-only folder for `none`, the folder itself read-only for
+`ro`. No file goes missing. But the agent has root in its sandbox and can
+unmount it, so soft protects against mistakes, not against a hostile agent.
+
+Which one: strict for a folder of projects where one must stay private; soft
+for a repository with files at its root (`package.json`, `Makefile`) where
+a split would break the tooling, or when you only want a guard against slips.
+
+Mounts are fixed when a sandbox is created. If the file's carves change later,
+`sbxw up` says the sandbox is unchanged; `sbxw rm <name>` then `sbxw up <name>`
+creates it with the new ones. Because the file can be edited from inside the
+sandbox, removing a carve or weakening it (`none` to `ro`, `strict` to `soft`)
+needs your approval like a new grant; adding or strengthening one does not.
+The line reads `access restored: /path (was: no access, strict)`.
 
 ## Approving host access
 
