@@ -457,8 +457,11 @@ gets each round, and reads it aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
 lot of talking for ordinary work). When the agent asks with the relay's `ask_user_questions` tool (what
 `/grill-me` does in sbxw), the round comes to the Concierge from any
-sandbox, and the answers go back as that tool's result — nothing is typed
-into a terminal. A round the agent only wrote out in its terminal is
+sandbox, and the answers go back as that tool's result; nothing is typed
+into a terminal. Such a round opens the panel on its question card, with the
+voice on or off, since the agent waits until you answer. It does not take the
+keyboard from a terminal you are typing in. A round already waiting when the
+page loads opens it too. Other agent messages leave the panel closed. A round the agent only wrote out in its terminal is
 answered by typing into its session instead. Either way, a grill round is
 taken **one question at a time**: the panel shows and
 reads Q1 with the agent's recommendation, waits for your answer, then
