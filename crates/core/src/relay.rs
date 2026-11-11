@@ -301,6 +301,17 @@ impl RelayBook {
         Ok(req)
     }
 
+    /// Reading a routed request: only the sandbox it was handed, and only
+    /// while it waits on that sandbox's answer. Anyone else, the asker
+    /// included, gets the refusal an unknown id gets, so the id's existence
+    /// is not revealed.
+    pub fn check_target(&self, id: &str, me: &str) -> Result<&RelayRequest, String> {
+        self.requests
+            .get(id)
+            .filter(|r| r.state == RelayState::Routed && r.to.as_deref() == Some(me))
+            .ok_or_else(|| format!("no request '{id}' for you — it may have expired, or never existed"))
+    }
+
     /// Forget requests nobody can act on any more. Returns how many.
     pub fn prune(&mut self, now: u64) -> usize {
         let before = self.requests.len();
@@ -452,6 +463,30 @@ mod tests {
         assert_eq!(agent_view(&drafted)["answer"], serde_json::Value::Null, "the draft waits for the person");
         let released = b.approve(&r.id, Some("Q1 : yes\nQ2 : maybe"), vec![], 6).unwrap();
         assert_eq!(agent_view(&released)["answer"], "Q1 : yes\nQ2 : maybe");
+    }
+
+    #[test]
+    fn only_the_sandbox_it_was_handed_reads_a_routed_request() {
+        let mut b = RelayBook::new();
+        let r = b.open("a", None, RelayKind::Ask, "Q1?", 1);
+        assert!(b.check_target(&r.id, "b").is_err(), "not routed yet");
+        b.route(&r.id, "b", 2).unwrap();
+        assert!(b.check_target(&r.id, "b").is_ok());
+        assert!(b.check_target(&r.id, "c").is_err(), "another sandbox");
+        assert!(b.check_target(&r.id, "a").is_err(), "nor the asker");
+        let unknown = b.check_target("r-999", "c").unwrap_err().replace("r-999", "ID");
+        assert_eq!(b.check_target(&r.id, "c").unwrap_err().replace(&r.id, "ID"), unknown, "same refusal as an unknown id");
+        b.reply(&r.id, "b", "Q1 : x", 3).unwrap();
+        assert!(b.check_target(&r.id, "b").is_err(), "answered: in review, no longer readable");
+        b.route(&r.id, "c", 4).unwrap();
+        assert!(b.check_target(&r.id, "b").is_err(), "re-routed away");
+        assert!(b.check_target(&r.id, "c").is_ok());
+        b.approve(&r.id, Some("Q1 : y"), vec![], 5).unwrap();
+        assert!(b.check_target(&r.id, "c").is_err(), "settled");
+        let d = b.open("a", None, RelayKind::Question, "q", 6);
+        b.route(&d.id, "b", 7).unwrap();
+        b.deny(&d.id, None, 8).unwrap();
+        assert!(b.check_target(&d.id, "b").is_err(), "denied");
     }
 
     #[test]

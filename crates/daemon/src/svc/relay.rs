@@ -119,7 +119,7 @@ impl App {
         self.spawn_push(
             to.clone(),
             SessionKind::Agent,
-            messages::relay_request(&req),
+            messages::relay_notice(&req),
             Some(Box::new(move |e: String| {
                 let why = format!("could not reach '{target}': {e} — try another sandbox");
                 if let Ok(r) = app.relay.lock().unwrap().unroute(&rid, &why, now_ms()) {
@@ -128,6 +128,15 @@ impl App {
             })),
         );
         Ok(())
+    }
+
+    /// The routed-to sandbox reads what it was handed: the question framed as
+    /// untrusted input, with how to answer. Only that sandbox, only while the
+    /// request is with it.
+    pub fn relay_show(&self, id: &str, me: &SandboxRef) -> Result<String, String> {
+        let book = self.relay.lock().unwrap();
+        let req = book.check_target(id, &me.to_string())?;
+        Ok(messages::relay_request(req))
     }
 
     /// A human releases the answer (theirs, or the target's, maybe edited)
@@ -248,6 +257,18 @@ mod tests {
         let got = app.relay_wait(&r.id, &sb("alpha"), Duration::from_millis(30)).await.unwrap();
         assert_eq!(got.state, RelayState::Approved);
         assert_eq!(sbxw_core::relay::agent_view(&got)["answer"], "Q1 : 8081");
+    }
+
+    #[test]
+    fn only_the_routed_sandbox_can_show_a_request() {
+        let (_d, app) = app();
+        let r = app.relay_open(&sb("alpha"), None, RelayKind::Ask, "❓ **Q1 - Port** : which?").unwrap();
+        assert!(app.relay_show(&r.id, &sb("beta")).is_err(), "not routed yet");
+        app.relay.lock().unwrap().route(&r.id, "beta", 1).unwrap();
+        let text = app.relay_show(&r.id, &sb("beta")).unwrap();
+        assert!(text.contains("untrusted input") && text.contains("which?"));
+        assert!(app.relay_show(&r.id, &sb("gamma")).is_err());
+        assert!(app.relay_show(&r.id, &sb("alpha")).is_err(), "nor the asker");
     }
 
     #[tokio::test]

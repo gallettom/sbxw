@@ -14,11 +14,12 @@
 // would not buy that, since it only decides *whether* a host is reachable, not
 // what may cross.
 //
-// Four verbs, all through `http://host.docker.internal:__PORT__`:
+// Five verbs, all through `http://host.docker.internal:__PORT__`:
 //
 //   node relay.js ask "question…" [--timeout 90]
 //   node relay.js shot "what you need to see…" [--timeout 90]   (one or more images back)
 //   node relay.js wait <id> [--timeout 90]
+//   node relay.js show <id>        (read a question a human routed to you)
 //   node relay.js reply <id> "answer…" | --stdin
 //
 // `ask`, `shot` and `wait` return as soon as the request settles, and otherwise
@@ -93,6 +94,7 @@ function usage(msg) {
       "  node relay.js ask <question> [--timeout <seconds>]\n" +
       "  node relay.js shot <what you need to see> [--timeout <seconds>]\n" +
       "  node relay.js wait <request-id> [--timeout <seconds>]\n" +
+      "  node relay.js show <request-id>\n" +
       "  node relay.js reply <request-id> (<answer> | --stdin)\n",
   );
   process.exit(1);
@@ -325,6 +327,17 @@ async function main() {
     if (!id) usage("which request?");
     const res = await request("/api/relay/wait", { from: me, id, timeout }, (timeout + 10) * 1000);
     process.stdout.write(collect(res).text);
+    return;
+  }
+
+  if (verb === "show") {
+    // The question a human routed here. Only a one-line notice is typed into
+    // this terminal; the question itself, framed as another agent's words,
+    // is fetched here.
+    const id = (args.shift() || "").trim();
+    if (!id) usage("which request?");
+    const res = await request("/api/relay/show", { from: me, id }, 15000);
+    process.stdout.write(String(res.text || "") + "\n");
     return;
   }
 

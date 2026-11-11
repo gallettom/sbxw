@@ -54,8 +54,10 @@ A popup shows the question and one button per running sandbox:
 
 <img src="images/relay.png" alt="An information request from api: the question, buttons for myapp and shop, and a box to answer it yourself" width="600">
 
-1. **Route it:** click a sandbox. The question is typed into that agent,
-   framed as untrusted data, with the id it must answer with.
+1. **Route it:** click a sandbox. A one-line notice is typed into that agent,
+   and it fetches the question with `node ~/.sbxw/relay.js show <id>`, framed
+   as untrusted data, with the id it must answer with. A sandbox brought up
+   before this version has no `show` until you run `sbxw up` for it.
 2. **Carry on:** the popup shrinks to a corner card while the other agent
    works. It comes back by itself when the answer lands.
 3. **Review the answer:** it arrives **editable**. Trim it, cut a secret out,

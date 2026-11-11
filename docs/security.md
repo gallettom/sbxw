@@ -136,7 +136,10 @@ page instead of the chat.
 - **Relay:** nothing moves between two sandboxes without a click, and answers
   are editable before release. A question is another agent's text arriving in
   your agent's prompt, so it's delivered quoted and labelled untrusted. Read it
-  before routing. See [Relay](relay.md).
+  before routing. Only a one-line notice with the request id is typed into the
+  routed-to agent's terminal; that agent fetches the question itself with
+  `relay.js show`, which answers only the sandbox it was routed to, while it is
+  waiting on that sandbox's answer. See [Relay](relay.md).
 - **Text typed into a terminal:** when one agent's text is typed into another
   agent's terminal, control characters (ESC, CR, the other C0 and C1
   characters) and bidi and zero-width format characters are removed first. The
