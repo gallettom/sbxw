@@ -1332,7 +1332,7 @@ mod tests {
         assert!(create.contains(&ws.join("a").display().to_string()), "{create}");
         assert!(!create.contains("secret"), "the carved folder never reaches sbx: {create}");
         assert!(stub.is_dir());
-        let rec = app.store.get(&SandboxRef::parse("myapp").unwrap());
+        let rec = app.store.get(SandboxRef::parse("myapp").unwrap());
         assert_eq!(rec.attach_workdir("web"), format!("{}/web", ws.display()));
         // Changing the file's carves does not change the sandbox, and says so.
         write("workdir = \"web\"\n[[carve]]\npath = \"secret\"\naccess = \"none\"\n[[carve]]\npath = \"a\"\naccess = \"ro\"\n");

@@ -395,6 +395,9 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
     // which refuses it until the lines it names are approved below.
     approve_here(&store, &cfg, if name.is_local() { Scope::All } else { Scope::Daemon }, allow_host_access)?;
     apply_aliases_here(&store, &cfg);
+    if name.is_local() {
+        print_carve_summary(&rt, &paths, &cfg, &workspace, &ro)?;
+    }
 
     if a.no_web {
         return up_here(&rt, paths, cfg, sbx_version, allow_host_access, BringUp {
@@ -402,6 +405,7 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
             workspace,
             ro,
             rw: vec![],
+            carve: vec![],
             config: load_config(&a.config)?,
             extra_ports: vec![],
             chat: a.chat,
@@ -449,6 +453,47 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
     eprintln!("sbxw  '{name}' is up → {}", web_url(&daemon, &cfg, Some(&name.to_string())));
     if a.tail {
         logs(Some(name.to_string()), 20)?;
+    }
+    Ok(())
+}
+
+/// What `[[carve]]` will do, before the sandbox is created: folders mounted,
+/// each carve, and the files that will not be visible. A refused plan stops
+/// the bring-up here, with the reason.
+fn print_carve_summary(rt: &tokio::runtime::Runtime, paths: &Paths, cfg: &Config, workspace: &Path, ro: &[String]) -> Result<()> {
+    if cfg.carve.is_empty() {
+        return Ok(());
+    }
+    let extras = sbxw_daemon::svc::sandboxes::carve_extras(cfg, &ro.iter().map(|p| (p.clone(), true)).collect::<Vec<_>>());
+    let dir = paths.carve();
+    let host = sbxw_daemon::host::Host::local();
+    let plan = rt
+        .block_on(sbxw_daemon::carving::plan_on(&host, workspace, &extras, &cfg.carve, &dir.join("stub"), &dir.join("empty"), &cfg.workdir))
+        .context("carve")?;
+    eprintln!(
+        "sbxw  carves: {} folders mounted{}",
+        1 + plan.mounts.len(),
+        if plan.stub { ", the workspace split (sbx gets a stub as its workspace)" } else { "" }
+    );
+    for c in &cfg.carve {
+        let what = match c.access {
+            sbxw_core::config::CarveAccess::Hidden => "not readable",
+            sbxw_core::config::CarveAccess::ReadOnly => "read-only",
+        };
+        eprintln!("sbxw    {}: {what}, {}", c.path, c.enforce_word());
+    }
+    if !plan.unshared.is_empty() {
+        let shown: Vec<&str> = plan.unshared.iter().take(5).map(String::as_str).collect();
+        let more = plan.unshared.len() - shown.len();
+        eprintln!(
+            "sbxw  {} files and other entries will not be visible: {}{}",
+            plan.unshared.len(),
+            shown.join(", "),
+            if more > 0 { format!(" and {more} more") } else { String::new() }
+        );
+    }
+    for w in plan.warnings.iter().filter(|w| w.contains("soft carve")) {
+        eprintln!("sbxw  note: {w}");
     }
     Ok(())
 }

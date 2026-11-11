@@ -737,7 +737,7 @@ mod tests {
         // Approving a different line approves nothing; the right one does.
         assert!(s.check_grants(key, &[], &[], &v(&["x"])).is_err());
         s.check_grants(key, &[], &[], &shown).unwrap();
-        assert!(s.all_approved_grants().get(key).is_none(), "the restored line is not kept");
+        assert!(!s.all_approved_grants().contains_key(key), "the restored line is not kept");
         s.check_grants(key, &[], &[], &[]).unwrap();
     }
 

@@ -17,6 +17,15 @@ safety boundary. This page lists what that boundary is and where it has edges.
 - **Files:** only the workspace folder (and any extra mounts you add). Use
   `--ro` or a **RO** repo for anything the agent should not modify. The sandbox
   is a microVM with its own filesystem, network and Docker daemon.
+- **Files inside a mounted folder can be held back** with a
+  [carve](configuration.md#carving-a-folder-out). A **strict** carve never
+  puts the folder in the VM: the parent is mounted as separate folders around
+  it, so even an agent with root cannot reach it, at the cost of the files
+  beside the mounted folders being invisible. A **soft** carve is a mount over
+  the folder; the agent has root and can unmount it, after which the folder is
+  readable through its parent. Soft guards against mistakes, strict against a
+  hostile agent. Removing or weakening a carve in `sbxw.toml` needs your
+  approval like a new grant.
 - **Network:** an explicit allowlist (`network_allow`), never `**`. Entries of
   `network_allow` and `network_deny` are checked when the config is loaded:
   `*`, `**`, an entry starting with `-`, and one containing whitespace or a
@@ -218,7 +227,9 @@ as with `direnv allow`:
   inside the sandbox; `[env]` is still not for secrets.)
 - **When.** At a bring-up from that file: `sbxw up`, `sbxw chat`, and Create
   or Chat in the web UI (which use the daemon's own config). Only lines not
-  approved before are asked about; removing a setting asks nothing. The CLI
+  approved before are asked about; removing a setting asks nothing, except
+  that a removed or weakened `[[carve]]` gives access back and is asked about
+  (`access restored: ...`). The CLI
   also checks `web_addr`, `agent_addr`, `monitor_cmd` and `[mac]` before it
   starts the daemon with the file (`sbxw up`, `sbxw web`). The first
   `sbxw up` after upgrading asks once for whatever the file grants beyond
