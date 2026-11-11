@@ -308,3 +308,25 @@ function chatComposer(form, input, onSend) {
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
   });
 }
+
+// ── A round of questions ──────────────────────────────────────────────────
+// /grill-me, and the `ask_user_questions` tool (relay-mcp.js, `askRound`),
+// write a round as an optional intro, then `❓ **Q1 - Title** : body` and
+// `➡️ the recommendation` per question, questions separated by `---`. Cut
+// there, so no question is lost or invented. Shared by the Concierge, which
+// asks a round found in an agent's session one question at a time, and the
+// relay dialog, which puts a round asked with the tool on one form.
+function chatParseRound(text) {
+  const parts = text.split(/^\s*❓\s*/m);
+  const intro = parts.shift().trim();
+  const questions = [];
+  for (const raw of parts) {
+    const block = raw.replace(/\n\s*---+\s*$/s, '').trim();
+    const [ask, ...rec] = block.split(/^\s*➡️\s*/m);
+    const head = ask.match(/^\**\s*(Q\d+)\**\s*[-–—:]?\s*\**\s*([^*\n:]*)\**\s*:?\s*/);
+    const id = head ? head[1] : `Q${questions.length + 1}`;
+    const title = head ? head[2].trim() : '';
+    questions.push({ id, title, ask: ask.trim(), body: head ? ask.slice(head[0].length).trim() : ask.trim(), rec: rec.join(' ').replace(/\n\s*---+[\s\S]*$/, '').trim(), answer: null });
+  }
+  return { intro, questions };
+}
