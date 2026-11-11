@@ -180,7 +180,8 @@ after fixing the cause.
 A **shared** plan has one branch: once every thread is done, **Merge** runs
 `git merge --no-ff sbxw/team-<plan>` once, with the same checks. The lead's
 proposal also carries a **distillate**: the decisions and warnings from the
-work that still hold. You approve (or trim) them with the merge, and sbxw
+work that still hold. You approve (or trim) them with the merge: each shows
+as one line you can open to read or edit in full. sbxw then
 writes them to the repo's Claude Code auto memory, as `team-<plan>.md` with a
 line in its `MEMORY.md`, so the next session starts knowing them. With
 **close threads** ticked, the threads' sessions are closed, then the shared
