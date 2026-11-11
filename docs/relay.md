@@ -122,7 +122,8 @@ round, or any batch of decisions that are yours — and blocks until you have
 answered (10 minutes, then a request id for `check_sandbox_question`). Each
 question carries a title, the question and the agent's recommendation. It is
 never routed and never shown in this popup: the [Concierge](web-ui.md#the-voice-concierge)
-takes it, opens, and asks the questions one at a time, read aloud; your
+takes it, opens its panel on the round (voice on or off), and asks the
+questions one at a time, read aloud when the voice is on; your
 answers are written up, shown, and on your *oui* go back to the agent as the
 tool's result. Nothing is typed into its terminal. **Decline** sets the round
 aside and tells the agent so. `/grill-me` asks its rounds this way in sbxw.

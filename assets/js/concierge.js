@@ -1121,7 +1121,10 @@ function vcChoose(p, dictated) {
 
 // ── Questions asked through the relay (`ask_user_questions`) ────────────
 // Any sandbox may ask: these are put to the person, whichever project the
-// panel is on. Each round opens the panel and is asked step by step.
+// panel is on. Each round opens the panel on its card, voice on or off: the
+// agent is blocked until the person answers, so the round must be seen, not
+// only heard. Opening moves no keyboard focus, so a terminal being typed in
+// keeps it. Other agent messages (the `session` stream) leave the panel shut.
 const vcAsks = new Map(); // relay id → its card
 function vcAskRelay(req) {
   if (req.kind !== 'ask') return;
@@ -1136,10 +1139,14 @@ function vcAskRelay(req) {
   if (req.state !== 'pending' || vcAsks.has(req.id)) return;
   const grill = vcParseGrill(req.question);
   if (!grill.questions.length) grill.questions.push({ id: 'Q1', title: '', ask: req.question, body: req.question, rec: '', answer: null });
-  // Read aloud with the panel closed: it is opened by hand when needed.
-  vcWarm(!vcSpeech.muted);
+  // Open first: `vcSetOpen` warms the voice and calls no `focus()`.
+  if (!vcOpen) vcSetOpen(true); else vcWarm(!vcSpeech.muted);
   vcGrill(req.from, req.from_thread || null, req.question, grill, req.id);
-  vcAsks.set(req.id, vcPending?.card || vcLog.lastElementChild);
+  const card = vcPending?.card || vcLog.lastElementChild;
+  vcAsks.set(req.id, card);
+  // Its card in view and marked (`armed`, set by vcGrill): within the log
+  // only, so the page itself does not scroll.
+  if (card) vcLog.scrollTop += card.getBoundingClientRect().top - vcLog.getBoundingClientRect().top;
 }
 sbxwStream.addEventListener('relay', ev => {
   try { vcAskRelay(JSON.parse(ev.data)); } catch (_) {}
