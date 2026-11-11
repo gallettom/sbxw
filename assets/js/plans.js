@@ -202,6 +202,9 @@ function openMergePlan(sandbox) {
 let mergeBoard = null;
 let mergeBoardTimer = null;
 let distillateEdits = null; // [{kind, text, keep}] once the list is first painted
+// Indexes of the notes shown open; every note starts closed, one line each.
+// Kept here so a repaint (which rebuilds the rows) leaves them open.
+let distillateOpen = new Set();
 const mergeTeam = document.getElementById('merge-team');
 
 function stopMergeBoard() {
@@ -209,6 +212,7 @@ function stopMergeBoard() {
   mergeBoardTimer = null;
   mergeBoard = null;
   distillateEdits = null;
+  distillateOpen = new Set();
   mergeTeam.innerHTML = '';
   delete mergeTeam.dataset.key;
 }
@@ -264,10 +268,22 @@ function paintMergeTeam(plan) {
   if (dist.length || !over) {
     html += `<h3 class="merge-h">Distillate</h3>
       <p class="wt-note">Decisions and warnings that still hold. What you keep goes to auto memory with the merge.</p>
-      <ul class="merge-distillate">${dist.map((d, i) => `<li class="merge-dist ${d.keep ? '' : 'dropped'}" data-i="${i}">
-        <input type="checkbox" class="merge-dist-keep" aria-label="Keep this ${escHtml(d.kind)}"${d.keep ? ' checked' : ''}${over ? ' disabled' : ''}>
-        <span class="merge-dist-kind" data-kind="${escHtml(d.kind)}">${d.kind === 'warning' ? '▲ Warning' : '◆ Decision'}</span>
-        <textarea class="field-input merge-dist-text" rows="2"${over ? ' disabled' : ''}>${escHtml(d.text)}</textarea></li>`).join('')
+      <ul class="merge-distillate">${dist.map((d, i) => {
+        const open = distillateOpen.has(i);
+        const label = d.kind === 'warning' ? '▲ Warning' : '◆ Decision';
+        return `<li class="merge-dist${d.keep ? '' : ' dropped'}${open ? ' open' : ''}" data-i="${i}">
+        <div class="merge-dist-head">
+          <input type="checkbox" class="merge-dist-keep" aria-label="Keep this ${escHtml(d.kind)}"${d.keep ? ' checked' : ''}${over ? ' disabled' : ''}>
+          <button type="button" class="merge-dist-toggle" aria-expanded="${open}" aria-controls="merge-dist-body-${i}">
+            <span class="merge-dist-kind" data-kind="${escHtml(d.kind)}">${label}</span>
+            <span class="merge-dist-preview">${escHtml(d.text)}</span>
+            <span class="merge-dist-chevron" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="merge-dist-body" id="merge-dist-body-${i}" role="region" aria-label="${label.slice(2)} ${i + 1}"${open ? '' : ' hidden'}>
+          <textarea class="field-input merge-dist-text" rows="1"${over ? ' disabled' : ''}>${escHtml(d.text)}</textarea>
+        </div></li>`;
+      }).join('')
         || '<li class="wt-note">The lead proposed nothing to keep.</li>'}</ul>`;
   }
   // Repainting while typing would drop the caret: only rebuild when the
@@ -277,11 +293,37 @@ function paintMergeTeam(plan) {
   if (mergeTeam.dataset.key === key) return;
   mergeTeam.dataset.key = key;
   mergeTeam.innerHTML = html;
+  mergeTeam.querySelectorAll('.merge-dist.open .merge-dist-text').forEach(growDistText);
+}
+
+// A note's text area is as tall as its text: no inner scrollbar. Only
+// measurable while its row is open (a hidden one has no scrollHeight).
+function growDistText(t) {
+  t.style.height = 'auto';
+  t.style.height = `${t.scrollHeight + t.offsetHeight - t.clientHeight}px`;
 }
 
 mergeTeam.addEventListener('input', e => {
   const t = e.target.closest('.merge-dist-text');
-  if (t) distillateEdits[+t.closest('.merge-dist').dataset.i].text = t.value;
+  if (!t) return;
+  const li = t.closest('.merge-dist');
+  distillateEdits[+li.dataset.i].text = t.value;
+  li.querySelector('.merge-dist-preview').textContent = t.value;
+  growDistText(t);
+});
+// Clicking a note's header, anywhere but its checkbox, opens or closes it.
+// The toggle is a button, so Enter and Space arrive here as clicks too.
+mergeTeam.addEventListener('click', e => {
+  const head = e.target.closest('.merge-dist-head');
+  if (!head || e.target.closest('.merge-dist-keep')) return;
+  const li = head.closest('.merge-dist');
+  const i = +li.dataset.i;
+  const open = !distillateOpen.has(i);
+  if (open) distillateOpen.add(i); else distillateOpen.delete(i);
+  li.classList.toggle('open', open);
+  li.querySelector('.merge-dist-toggle').setAttribute('aria-expanded', String(open));
+  li.querySelector('.merge-dist-body').hidden = !open;
+  if (open) growDistText(li.querySelector('.merge-dist-text'));
 });
 mergeTeam.addEventListener('change', e => {
   const k = e.target.closest('.merge-dist-keep');
@@ -301,6 +343,7 @@ async function showMerge(plan) {
   setPlanView('merge');
   mergeBoard = null;
   distillateEdits = null;
+  distillateOpen = new Set();
   startMergeBoard(plan);
   if (planRepos?.sandbox !== plan.sandbox) planRepos = null;
   document.getElementById('plan-title').textContent = `Merge the threads of ${plan.sandbox}`;

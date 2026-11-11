@@ -3885,11 +3885,28 @@
   .merge-commits ul { margin: .25rem 0 0; padding: 0; list-style: none; font-size: 12px; }
   .merge-commits li { overflow-wrap: anywhere; }
   .merge-commits code { color: var(--c-text-bright); font-size: 11px; }
-  .merge-distillate { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .4rem; }
-  .merge-dist { display: grid; grid-template-columns: auto 1fr; gap: .2rem .6rem; align-items: center; }
-  .merge-dist-kind { font-size: 11px; font-weight: 600; color: var(--c-blue); }
+  .merge-distillate { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-bg); }
+  .merge-distillate > .wt-note { padding: .45rem .7rem; }
+  .merge-dist + .merge-dist { border-top: 1px solid var(--c-border); }
+  .merge-dist-head { display: flex; align-items: center; gap: .55rem; padding: 0 .3rem 0 .7rem; cursor: pointer; }
+  .merge-dist-head:hover { background: var(--c-hover-subtle); }
+  .merge-dist-keep { flex-shrink: 0; margin: 0; }
+  .merge-dist-toggle {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: .6rem; padding: .45rem .4rem .45rem 0;
+    background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  }
+  .merge-dist .merge-dist-toggle:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; border-radius: var(--r-sm); }
+  .merge-dist-kind { flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--c-blue); }
   .merge-dist-kind[data-kind="warning"] { color: var(--c-amber); }
-  .merge-dist-text { grid-column: 1 / -1; width: 100%; resize: vertical; font-family: var(--font-prose); font-size: 13px; line-height: 1.5; }
+  .merge-dist-preview { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--font-prose); font-size: 13px; color: var(--c-text); }
+  .merge-dist.open .merge-dist-preview { color: var(--c-text-muted); }
+  .merge-dist-chevron { flex-shrink: 0; width: 1ch; color: var(--c-text-dim); font-size: 14px; line-height: 1; transition: transform .15s; }
+  .merge-dist.open .merge-dist-chevron { transform: rotate(90deg); }
+  @media (prefers-reduced-motion: reduce) { .merge-dist-chevron { transition: none; } }
+  .merge-dist-body { padding: 0 .7rem .55rem; }
+  .merge-dist-body[hidden] { display: none; }
+  .merge-dist-text { display: block; width: 100%; resize: none; overflow: hidden; font-family: var(--font-prose); font-size: 13px; line-height: 1.5; }
+  .merge-dist.dropped .merge-dist-preview,
   .merge-dist.dropped .merge-dist-text { opacity: .5; text-decoration: line-through; }
 
   /* ── Voice concierge (see js/concierge.js) ── */
