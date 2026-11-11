@@ -455,14 +455,13 @@ A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
 session sbxw opened there — engages the concierge on its own: the panel
 gets each round, and reads it aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
-lot of talking for ordinary work). When the agent asks with the relay's `ask_user_questions` tool (what
-`/grill-me` does in sbxw), the round comes to the Concierge from any
-sandbox, and the answers go back as that tool's result; nothing is typed
-into a terminal. Such a round opens the panel on its question card, with the
-voice on or off, since the agent waits until you answer. It does not take the
-keyboard from a terminal you are typing in. A round already waiting when the
-page loads opens it too. Other agent messages leave the panel closed. A round the agent only wrote out in its terminal is
-answered by typing into its session instead. Either way, a grill round is
+lot of talking for ordinary work). A round the agent asks with the relay's `ask_user_questions` tool (what
+`/grill-me` does in sbxw) is not the Concierge's: it opens the
+[relay popup](relay.md#questions-for-you) on one form, where you answer it or
+route it to another sandbox, and its **Read aloud** button uses the
+Concierge's voice. With the voice on, the Concierge says a short cue when
+such a round arrives. A round the agent only wrote out in its terminal is
+answered here, by typing into its session. Such a grill round is
 taken **one question at a time**: the panel shows and
 reads Q1 with the agent's recommendation, waits for your answer, then
 moves to Q2 (*répète* reads it again, *passe* skips it, *précédente* goes
@@ -487,6 +486,17 @@ models are installed.
 
 Nothing said is kept: not the audio, not the text. **Clear** empties the
 panel.
+
+## The relay popup
+
+Requests from agents that only you can settle open a popup over the page,
+one at a time (the others wait behind it, counted in its header and in the
+header badge). It never takes the keyboard from a terminal: click into it
+to type. There are four kinds, described in [the relay](relay.md): a
+question for another sandbox, a screenshot request, a virtual Mac request,
+and a round of questions for you from `ask_user_questions`, answered on one
+form (or routed to another sandbox for a draft you review), with a **Read
+aloud** button when the Concierge's voice is set up.
 
 ## Screenshots from the browser side panel
 

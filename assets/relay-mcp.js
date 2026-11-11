@@ -151,17 +151,17 @@ const TOOLS = [
       "result.\n" +
       "\n" +
       "Reach for this whenever you would otherwise write your questions out and end your turn " +
-      "waiting for a reply: in sbxw the person may be answering by voice, and the Concierge " +
-      "takes your questions one at a time — shows each, reads it aloud with your " +
-      "recommendation, waits for the answer — then hands them all back to you at once, after " +
-      "the person confirms. Nothing is typed into your terminal, so nothing can be garbled or " +
-      "half-pasted on the way.\n" +
+      "waiting for a reply: in sbxw the person sees every question at once on one form, with " +
+      "your recommendation beside each (and may have it read aloud). They answer there, or " +
+      "route the round to another sandbox for a draft that they review and edit; either way " +
+      "the answers come back to you all at once, only when the person sends them. Nothing is " +
+      "typed into your terminal, so nothing can be garbled or half-pasted on the way.\n" +
       "\n" +
       "Give each question a short title, the question itself (self-contained, with the choices " +
       "if there are some), and your recommended answer. Word each so that \"yes\" accepts your " +
       "recommendation. Ask only what is truly the person's to decide; facts you can find " +
-      "yourself are not questions. The answers come back as text, one line per question " +
-      "(\"Q1 : …\"); a question the person skipped is absent.\n" +
+      "yourself are not questions. The result format is the same whoever answered: text, one " +
+      "line per question (\"Q1 : …\"); a question the person skipped is absent.\n" +
       "\n" +
       "Waits up to 10 minutes by default. If the person has not answered by then it returns a " +
       "request id — call `check_sandbox_question` with it to keep waiting; do not ask again.",
