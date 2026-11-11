@@ -375,13 +375,14 @@ function carvePreviewHtml() {
   const files = i.unshared || [];
   const warns = i.warnings || [];
   if (files.length) parts.push(n(files.length, 'file not visible in the sandbox', 'files not visible in the sandbox'));
+  const stub = i.stub ? '<div class="carve-note">The main folder itself is not shared: nothing can be created directly in it.</div>' : '';
   const summary = escHtml(parts.join(', '));
-  if (!files.length && !warns.length) return summary;
+  if (!files.length && !warns.length) return summary + stub;
   const shown = files.slice(0, 200);
   return `<details${carveOpen ? ' open' : ''}><summary>${summary}</summary>
     ${warns.length ? `<ul>${warns.map(w => `<li>⚠ ${escHtml(w)}</li>`).join('')}</ul>` : ''}
     ${files.length ? `<ul>${shown.map(f => `<li>${escHtml(f)}</li>`).join('')}${files.length > shown.length ? `<li>and ${files.length - shown.length} more</li>` : ''}</ul>` : ''}
-  </details>`;
+  </details>${stub}`;
 }
 
 carvePreviewEl.addEventListener('toggle', ev => {
