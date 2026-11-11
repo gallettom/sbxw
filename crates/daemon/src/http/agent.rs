@@ -88,7 +88,7 @@ async fn shot(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiRes
     open_and_park(app, me, b, RelayKind::Screenshot).await
 }
 
-/// Questions for the person (a /grill-me round), answered in the Concierge.
+/// Questions for the person (a /grill-me round), answered in the relay dialog.
 async fn questions(State(app): S, Agent(me): Agent, Json(b): Json<AskBody>) -> ApiResult {
     open_and_park(app, me, b, RelayKind::Ask).await
 }
