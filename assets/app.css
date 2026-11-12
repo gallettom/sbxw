@@ -1246,25 +1246,24 @@
   /* Pane badges at the right end, as the float had them. */
   .sbx-name > .sbx-pane-badge { order: 1; float: none; }
   .sbx-name-text + .sbx-pane-badge { margin-left: auto; }
+  /* The state (dot, ⚑) lives beside the name, always: what the sandbox is
+     doing and what waits on the person are read on the first line, whether
+     the row is at rest or showing its actions. */
+  .sbx-name-state { display: inline-flex; align-items: center; gap: .4rem; margin: 0 auto 0 .5rem; font-weight: 400; }
+  .sbx-meta > .dot,
+  .sbx-marks .sbx-flag { display: none; }
   /* Whenever a row shows its actions — the focused pane's row, the one
      under the pointer or holding focus, one with its sessions unfolded — its
      second line is those actions (a running one has five or six, which
-     overflowed the sidebar beside its state): the state (dot, ⚑) moves up
-     beside the name. A touch screen always shows them, so always moves it. */
-  .sbx-name-state { display: none; align-items: center; gap: .4rem; margin: 0 auto 0 .5rem; font-weight: 400; }
-  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-name-state { display: inline-flex; }
-  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-meta > .dot,
+     overflowed the sidebar beside the rest): the status word, the agent and
+     the marks give way, and the actions start at the left edge. A touch
+     screen always shows them. */
   .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-meta > .sbx-status,
-  .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-marks .sbx-flag { display: none; }
-  /* …and, nothing left before them, the actions start at the left edge. */
   .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-meta > .sbx-agent,
   .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-marks { display: none; }
   .sbx-item:is(.focused, :hover, :focus-within, :has(> .sbx-sessions:not([hidden]))) .sbx-actions { margin-left: 0; }
   @media (hover: none) {
-    .sbx-item .sbx-name-state { display: inline-flex; }
-    .sbx-item .sbx-meta > .dot,
     .sbx-item .sbx-meta > .sbx-status,
-    .sbx-item .sbx-marks .sbx-flag { display: none; }
     .sbx-item .sbx-meta > .sbx-agent,
     .sbx-item .sbx-marks { display: none; }
     .sbx-item .sbx-actions { margin-left: 0; }
