@@ -19,6 +19,22 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
+// Startup marker: left when this script ends, however it ends, with the boot
+// it ran in. It is how sbxw knows the kit's startup is over before it saves a
+// template; removed first, so an earlier start's marker is never read as
+// this one's.
+import * as sbxwFs from "node:fs";
+const SBXW_DONE = "/home/agent/.sbxw/startup/" + process.argv[1].replaceAll("/", "_") + ".done";
+try {
+  sbxwFs.mkdirSync("/home/agent/.sbxw/startup", { recursive: true });
+  sbxwFs.rmSync(SBXW_DONE, { force: true });
+} catch {}
+process.on("exit", () => {
+  try {
+    sbxwFs.writeFileSync(SBXW_DONE, sbxwFs.readFileSync("/proc/sys/kernel/random/boot_id"));
+  } catch {}
+});
+
 const SETTINGS = "/home/agent/.claude/settings.json";
 const KIT = "/home/agent/.sbxw/codemap/";
 

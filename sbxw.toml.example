@@ -51,11 +51,13 @@ pull = ""
 # Start new sandboxes from a template instead of sbx's image, skipping the
 # pull and the kits' installs:
 #   "auto"   sbxw keeps one per kit list. When it was saved by another sbx,
-#            or the kits' specs changed since (or there is none yet), the web
-#            UI's create dialog asks whether to
-#            rebuild it from the sandbox being created — which then opens once
-#            its kits have installed and it is saved; the old one is removed.
-#            From the CLI: `sbxw up <name> --rebuild-template`.
+#            or the kits' specs changed since (or there is none yet), the
+#            sandbox is created from sbx's image and the daemon rebuilds the
+#            template in the background, in a sandbox of its own
+#            (`sbxw-tpl-…`, removed once saved); the old one is removed.
+#            To save the sandbox being created instead, and wait for it:
+#            the box in the web UI's create dialog, or
+#            `sbxw up <name> --rebuild-template`.
 #   "<tag>"  one you saved with `sbxw template save <sandbox> <tag>`. Its files
 #            outside the workspace come along — keep it on this host.
 # Read at CREATION only.
@@ -221,9 +223,12 @@ env_files = []
 # docker_size = "60g"
 
 # Mount ~/.sbxw/cache into new sandboxes: the bundled kits copy the apt
-# packages, Chromium, skill tarballs and wheels from it instead of downloading
-# them again. The first sandbox fills it (writable for that one only, read-only
-# for the rest); after cache_ttl_days the next one empties and refills it.
+# packages, Chromium, skill tarballs, wheels and binaries from it instead of
+# downloading them again. sbxw fills it in the background from a sandbox of
+# its own (`sbxw-cache-fill`, removed when done); every sandbox you work in
+# gets it read-only. After cache_ttl_days apt's lists and packages are
+# downloaded again and what the kits pin is kept; after four times that, the
+# cache is emptied and refilled.
 # `sbxw cache` shows it, `sbxw cache clear` empties it.
 # cache = true
 # cache_ttl_days = 7

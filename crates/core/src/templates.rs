@@ -70,6 +70,33 @@ pub struct Record {
     /// was kept, which is then judged on sbxw's version instead.
     #[serde(default)]
     pub content: String,
+    /// When a sandbox was last created from it, in seconds since the Unix
+    /// epoch; 0 in a record from before this was kept.
+    #[serde(default)]
+    pub used_at: u64,
+}
+
+/// An automatic template no sandbox was created from for this long is
+/// removed: each kit list a project ever had keeps one, and a snapshot of a
+/// sandbox is large. It costs nothing but time to get back, since a missing
+/// one is rebuilt in the background.
+pub const UNUSED_AFTER_SECS: u64 = 30 * 86_400;
+
+/// Take out the records nobody used for [`UNUSED_AFTER_SECS`], except `keep`
+/// (the one just saved). A record from before `used_at` was kept starts its
+/// clock now: when it was last used is not known, so it is not removed on
+/// that account. Whether any record changed is the second value.
+pub fn take_unused(records: &mut Vec<Record>, now: u64, keep: &str) -> (Vec<Record>, bool) {
+    let mut changed = false;
+    for r in records.iter_mut().filter(|r| r.used_at == 0) {
+        r.used_at = now;
+        changed = true;
+    }
+    let (gone, kept): (Vec<Record>, Vec<Record>) =
+        std::mem::take(records).into_iter().partition(|r| r.tag != keep && now.saturating_sub(r.used_at) >= UNUSED_AFTER_SECS);
+    *records = kept;
+    changed |= !gone.is_empty();
+    (gone, changed)
 }
 
 /// What a template is judged against: the running versions and the content
@@ -133,6 +160,12 @@ pub fn auto_tag(kits: &[String], sbxw: &str, sbx: &str) -> String {
     format!("sbxw-auto:{:08x}-{}-{}", fnv1a(&kits.join("\n")) as u32, clean(sbxw), clean(sbx))
 }
 
+/// The sandbox the daemon builds this kit list's automatic template in:
+/// `sbxw-tpl-<kits hash>`, one per kit list, nobody's to work in.
+pub fn builder_name(kits: &[String]) -> String {
+    format!("sbxw-tpl-{:08x}", fnv1a(&kits.join("\n")) as u32)
+}
+
 /// Stable across builds and platforms, unlike `std`'s hasher.
 fn fnv1a(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
@@ -191,8 +224,34 @@ pub fn still_running<'a>(processes: &str, commands: &'a [String]) -> Vec<&'a str
 }
 
 /// The guest's uptime in seconds on the first line, then one command line
-/// per process, from `/proc` — no dependency on `ps`.
-pub const PROCESS_LIST: &str = r#"cut -d' ' -f1 /proc/uptime; for p in /proc/[0-9]*; do tr '\0' ' ' < "$p/cmdline" 2>/dev/null; echo; done"#;
+/// per process, from `/proc` — no dependency on `ps`. After [`MARKERS`]: the
+/// boot's id, then one `<marker file> <boot id it was written in>` per end
+/// marker the kits' startup scripts left (see [`marker_of`]).
+pub const PROCESS_LIST: &str = r#"cut -d' ' -f1 /proc/uptime; for p in /proc/[0-9]*; do tr '\0' ' ' < "$p/cmdline" 2>/dev/null; echo; done; echo '#sbxw-markers'; cat /proc/sys/kernel/random/boot_id 2>/dev/null; for m in /home/agent/.sbxw/startup/*.done; do [ -f "$m" ] && echo "$(basename "$m") $(cat "$m" 2>/dev/null)"; done; true"#;
+
+/// The line of [`PROCESS_LIST`]'s output after which the end markers come.
+pub const MARKERS: &str = "#sbxw-markers";
+
+/// The end marker a startup command leaves in `~/.sbxw/startup/` when it is
+/// over: its script's path (the first absolute argument) with `/` as `_`,
+/// then `.done`. sbxw's bundled kits write one, holding the boot's id, from
+/// an exit trap; a command with no script path has none.
+pub fn marker_of(command: &str) -> Option<String> {
+    let script = command.split(' ').skip(1).find(|a| a.starts_with('/'))?;
+    Some(format!("{}.done", script.replace('/', "_")))
+}
+
+/// The commands whose end marker was written in this boot, read from
+/// [`PROCESS_LIST`]'s output. A marker from another boot (one a template
+/// carried, or an earlier start) is not this start's.
+pub fn finished<'a>(listing: &str, commands: &'a [String]) -> Vec<&'a str> {
+    let mut lines = listing.lines().skip_while(|l| l.trim() != MARKERS).skip(1);
+    let Some(boot) = lines.next().map(str::trim).filter(|b| !b.is_empty()) else {
+        return Vec::new();
+    };
+    let marks: Vec<&str> = lines.filter_map(|l| l.trim().split_once(' ')).filter(|(_, at)| at.trim() == boot).map(|(m, _)| m).collect();
+    commands.iter().filter(|c| marker_of(c).is_some_and(|m| marks.contains(&m.as_str()))).map(String::as_str).collect()
+}
 
 /// The uptime [`PROCESS_LIST`] printed first, if it did.
 pub fn uptime(processes: &str) -> Option<f64> {
@@ -204,7 +263,7 @@ mod tests {
     use super::*;
 
     fn rec(kits: &[&str], sbx: &str, sbxw: &str) -> Record {
-        Record { tag: auto_tag(&kits.iter().map(|k| k.to_string()).collect::<Vec<_>>(), sbxw, sbx), sbx: sbx.into(), sbxw: sbxw.into(), kits: kits.iter().map(|k| k.to_string()).collect(), created_at: 1, content: "c1".into() }
+        Record { tag: auto_tag(&kits.iter().map(|k| k.to_string()).collect::<Vec<_>>(), sbxw, sbx), sbx: sbx.into(), sbxw: sbxw.into(), kits: kits.iter().map(|k| k.to_string()).collect(), created_at: 1, content: "c1".into(), used_at: 0 }
     }
 
     fn now<'a>(sbx: &'a str, sbxw: &'a str, content: &'a str) -> Current<'a> {
@@ -247,6 +306,20 @@ mod tests {
     }
 
     #[test]
+    fn a_template_unused_for_a_month_is_taken_out_and_an_old_record_starts_its_clock() {
+        let day = 86_400;
+        let now = 1000 * day;
+        let at = |tag: &str, used_at: u64| Record { tag: tag.into(), used_at, ..rec(&[tag], "0.48.0", "2.1.3") };
+        let mut records = vec![at("recent", now - 29 * day), at("old", now - 30 * day), at("saved", now - 90 * day), at("unknown", 0)];
+        let (gone, changed) = take_unused(&mut records, now, "saved");
+        assert_eq!(gone.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(), ["old"]);
+        assert!(changed);
+        assert_eq!(records.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(), ["recent", "saved", "unknown"]);
+        assert_eq!(records[2].used_at, now, "its last use is not known: counted from now");
+        assert_eq!(take_unused(&mut records, now, "saved"), (vec![], false), "nothing to write the second time");
+    }
+
+    #[test]
     fn the_tag_is_a_valid_docker_tag_per_kits_and_versions() {
         let t = auto_tag(&["sbxw:codemap".into()], "2.1.3", "0.49.1");
         assert!(t.starts_with("sbxw-auto:") && t.ends_with("-2.1.3-0.49.1"), "{t}");
@@ -261,6 +334,19 @@ mod tests {
         let v3 = "schemaVersion: \"3\"\ncapabilities:\n  - group:\n      capabilities:\n        - type: com.docker.sandbox/lifecycle@1\n          config:\n            startup:\n              - command: [sh, -c, \"echo ready\"]\n";
         assert_eq!(startup_commands(v3), ["sh -c echo ready"]);
         assert!(startup_commands("schemaVersion: \"3\"\ncapabilities: []\n").is_empty());
+    }
+
+    #[test]
+    fn an_end_marker_of_this_boot_says_a_command_is_over() {
+        let cmds = vec!["bash /home/agent/.sbxw/agent-skills/install.sh".to_string(), "node /k/hooks.mjs".to_string(), "sh -c true".to_string()];
+        assert_eq!(marker_of(&cmds[0]).as_deref(), Some("_home_agent_.sbxw_agent-skills_install.sh.done"));
+        assert_eq!(marker_of(&cmds[2]), None, "no script, no marker");
+        let listing = "12.5\n/sbin/init \n#sbxw-markers\nboot-b\n_home_agent_.sbxw_agent-skills_install.sh.done boot-b\n_k_hooks.mjs.done boot-a\n";
+        assert_eq!(finished(listing, &cmds), ["bash /home/agent/.sbxw/agent-skills/install.sh"], "another boot's marker does not count");
+        assert!(finished("12.5\n/sbin/init \n", &cmds).is_empty(), "an sbx that printed no markers");
+        assert_eq!(uptime(listing), Some(12.5));
+        // The script that lists them shows in its own listing, on one line.
+        assert!(!PROCESS_LIST.contains('\n'));
     }
 
     #[test]

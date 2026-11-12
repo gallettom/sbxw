@@ -1683,11 +1683,6 @@
   .tpl-force.hidden { display: none; }
   .tpl-force input { margin-top: .15rem; }
   .tpl-force-note { display: block; color: var(--c-text-dim); font-size: 11px; margin-top: .15rem; }
-  .tpl-body p { margin: .6rem 0 0; color: var(--c-text-muted); font-size: 12px; line-height: 1.5; }
-  .tpl-versions { border-collapse: collapse; font-size: 12px; }
-  .tpl-versions td { padding: .15rem .8rem .15rem 0; color: var(--c-text-muted); }
-  .tpl-versions td.tpl-tag { font-family: ui-monospace, monospace; font-size: 11px; color: var(--c-text-dim); }
-  .tpl-versions .changed { color: var(--c-amber); font-weight: 600; }
   .policy-toolbar { display: flex; justify-content: flex-end; align-items: center; gap: .5rem; }
   .blocked-hosts { max-height: 180px; }
   .blocked-hosts td:first-child, .mcp-servers td:first-child { width: 100%; }

@@ -551,8 +551,10 @@ function openModal() {
   inpName.focus();
 }
 
-// The "rebuild" box, offered only when the automatic template is up to date:
-// otherwise Create asks anyway (askTemplate).
+// The "rebuild" box, offered with `template = "auto"`: save the sandbox being
+// created as the template, and wait for it. Left alone, an up-to-date
+// template is used, and a missing or out-of-date one is rebuilt by the daemon
+// in the background.
 const tplForce = document.getElementById('tpl-force');
 const tplForceBox = document.getElementById('tpl-force-box');
 
@@ -562,10 +564,17 @@ async function showTemplateForce() {
   let status;
   try { status = await (await fetch('/api/template/status')).json(); } catch (_) { return; }
   const t = status && status.auto && status.template;
-  if (!t || t.state !== 'fresh') return;
+  if (!t) return;
   const note = document.getElementById('tpl-force-note');
-  note.textContent = 'Save this sandbox as the new starting point. Takes several extra minutes.';
-  note.title = `Replaces ${t.record.tag}. The sandbox opens once its kits have installed and it is saved.`;
+  if (t.state === 'fresh') {
+    note.textContent = 'Save this sandbox as the new starting point. Takes several extra minutes.';
+    note.title = `Replaces ${t.record.tag}. The sandbox opens once its kits have installed and it is saved.`;
+  } else {
+    note.textContent = 'Wait for this sandbox to be saved as the starting point. Left unticked, it opens now and the template is built in the background.';
+    note.title = t.record
+      ? `${t.record.tag} is out of date (${(t.changed || []).join(', ')}).`
+      : 'No template has been saved for these kits yet.';
+  }
   tplForce.classList.remove('hidden');
 }
 
@@ -975,67 +984,6 @@ document.getElementById('modal-cancel').addEventListener('click', closeModal);
 
 wireModal(overlay, closeModal);
 
-// ── The automatic template ────────────────────────────────────────────────
-// With `template = "auto"`, a create first asks whether the template for these
-// kits is still the one this sbx and sbxw would make. If it is, nothing is
-// asked. If it was saved by another version — or never — the person chooses:
-// rebuild it from the sandbox being created (which then opens only once its
-// kits have finished installing and it is saved), use the old one, or go
-// without. Resolves to the choice, or null when the dialog is closed.
-const tplOverlay = document.getElementById('tpl-modal-overlay');
-
-async function askTemplate() {
-  let status;
-  try { status = await (await fetch('/api/template/status')).json(); }
-  catch (_) { return 'default'; }
-  if (!status || !status.auto) return 'default';
-  const t = status.template || {};
-  if (t.state === 'fresh') return 'default';
-
-  const cur = status.current || {};
-  const rec = t.record;
-  const row = (label, was, now) =>
-    `<tr><td>${label}</td><td>${escHtml(was)}</td><td>→</td>` +
-    `<td class="${was === now ? '' : 'changed'}">${escHtml(now)}</td></tr>`;
-  document.getElementById('tpl-modal-title').textContent = rec ? 'Template out of date' : 'No template yet';
-  // What made it stale: sbx itself, or the kits' specs (an sbxw release that
-  // leaves the kits alone does not count).
-  const changed = (t.changed || []).filter(c => !c.startsWith('sbx '));
-  document.getElementById('tpl-versions').innerHTML = rec
-    ? `<tr><td>Template</td><td class="tpl-tag" colspan="3">${escHtml(rec.tag)}</td></tr>` +
-      row('sbx', rec.sbx, cur.sbx) +
-      changed.map(c => `<tr><td>Kits</td><td class="changed" colspan="3">${escHtml(c)}</td></tr>`).join('')
-    : `<tr><td>sbx</td><td>${escHtml(cur.sbx)}</td></tr><tr><td>sbxw</td><td>${escHtml(cur.sbxw)}</td></tr>`;
-  document.getElementById('tpl-explain').textContent =
-    (rec ? 'What it holds was made by another sbx, or from kits that have changed since. ' : 'No template has been saved for these kits. ') +
-    'Rebuild creates this sandbox from sbx\'s image, waits for its kits to finish installing, and saves it as the template ' +
-    '(its token and credentials taken out) before it opens — several minutes this once. ' +
-    (rec ? 'The old template is removed once the new one is saved.' : 'Later sandboxes start from it.');
-  document.getElementById('tpl-keep').classList.toggle('hidden', !rec);
-  modalOpen(tplOverlay);
-  document.getElementById('tpl-rebuild').focus();
-
-  return new Promise(resolve => {
-    const done = choice => {
-      tplOverlay.close();
-      for (const [id, fn] of handlers) document.getElementById(id).removeEventListener('click', fn);
-      tplOverlay.removeEventListener('cancel', onCancel);
-      resolve(choice);
-    };
-    const handlers = [
-      ['tpl-rebuild', () => done('rebuild')],
-      ['tpl-keep', () => done('keep')],
-      ['tpl-skip', () => done('skip')],
-      ['tpl-modal-close', () => done(null)],
-    ];
-    // Escape reaches the top dialog only, so it closes this one and leaves
-    // the create dialog under it open.
-    const onCancel = e => { e.preventDefault(); done(null); };
-    for (const [id, fn] of handlers) document.getElementById(id).addEventListener('click', fn);
-    tplOverlay.addEventListener('cancel', onCancel);
-  });
-}
-
 // Provisioning (network policy, kits, ports…) can take a while, so this
 // doesn't block the UI: the modal closes right away and the request runs
 // in the background behind a corner card reporting its steps, leaving every
@@ -1053,14 +1001,15 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   const ports  = collectPorts();
   const kit_mounts = createRemote() ? {} : collectKitMounts();
   const carve = carves.map(c => ({ path: c.path, access: c.access, enforce: c.enforce }));
-  // Asked over the create dialog, which stays open if this one is closed —
-  // unless the person already asked for a rebuild with the box. The
-  // template asked about is this machine's sbx's: not a remote host's.
+  // Nothing is asked about the automatic template: a missing or out-of-date
+  // one is rebuilt by the daemon in the background while this sandbox opens
+  // from sbx's image. The box is for the person who wants this very sandbox
+  // saved as the template, and waits for it. The template is this machine's
+  // sbx's: not a remote host's.
   const forced = !tplForce.classList.contains('hidden') && tplForceBox.checked;
   const remote_control = document.getElementById('rc-box').checked;
   const chrome = document.getElementById('chrome-box').checked;
-  const template = createRemote() ? 'default' : forced ? 'rebuild' : await askTemplate();
-  if (template === null) return;
+  const template = !createRemote() && forced ? 'rebuild' : 'default';
   closeModal();
 
   (async () => {

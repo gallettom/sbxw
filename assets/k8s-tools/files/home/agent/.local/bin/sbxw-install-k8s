@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 # Idempotent, and never fails the container start: a failed install is
 # reported and skipped. The three tools are independent downloads, so
-# they run side by side; each lands in a temp file and is moved into
-# place only once complete, so a failed download leaves nothing behind.
+# they run side by side; each is checked against its pinned hash before
+# it is moved into place, so a failed or altered download leaves nothing
+# behind.
+# No dollar-brace anywhere: kit `content` fields reject it.
 set -uo pipefail
 info() { echo "  [k8s-tools] $*"; }
+
+# ── Startup marker ───────────────────────────────────────────────────
+# Left when this script ends, however it ends, with the boot it ran in:
+# how sbxw knows the install is over before it saves a template (a process
+# list cannot tell "not started yet" from "finished"). Removed first, so a
+# marker from an earlier start is never read as this one's.
+SBXW_DONE="$HOME/.sbxw/startup/$(echo "$0" | tr / _).done"
+mkdir -p "$HOME/.sbxw/startup" && rm -f "$SBXW_DONE"
+trap 'cat /proc/sys/kernel/random/boot_id > "$SBXW_DONE" 2>/dev/null' EXIT
 
 case "$(uname -m)" in
   x86_64)        ARCH=amd64 ;;
@@ -14,52 +25,120 @@ case "$(uname -m)" in
 esac
 info "arch: $(uname -m) -> $ARCH"
 
-BIN="$HOME/.local/bin"
-mkdir -p "$BIN"
-export PATH="$BIN:$PATH"
+# ── Pins. Move a version and its hashes together: the next container
+#    start installs it. The same version for every sandbox, so a template
+#    or a cache holds what a fresh install would fetch.
+#    kubectl: sha512 of kubernetes-client-linux-<arch>.tar.gz, from the
+#    release's CHANGELOG. k3d, skaffold: sha256 of the release binary. ──
+KUBECTL_VERSION=v1.37.2
+K3D_VERSION=v5.9.0
+SKAFFOLD_VERSION=v2.25.0
+case "$ARCH" in
+  amd64)
+    KUBECTL_SUM=b09ee8f473b44ecd1689e80392dae203e4a0cce49fcd622e47e3b48c98afc78ce0600b6694d13903af4cffb059f90e0309772c4919de166bca30eacf40ee4273
+    K3D_SUM=06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
+    SKAFFOLD_SUM=42b9e2e3246c19b78fcc53dd60cc7ded1da8704293886b909a2a02b9bef34d20 ;;
+  arm64)
+    KUBECTL_SUM=6a224e4787d1877577a58cad1524b132229e1ccc9bd0eb588d0c1764ceba652280223fd1f693196a8d04f2792bbe50cb22b468b7b65b1bf97cf9a7d22263a3f4
+    K3D_SUM=03cde5cf23e6e8e67de5a039ecf26e5b85aca82fba3e5d13dadf904cd218a250
+    SKAFFOLD_SUM=416f5fed2009c2b4adc62ae887ee5fc19ff08cc8a0250b81d8682d55626a75fd ;;
+  arm)
+    KUBECTL_SUM=fc7ac4be3ed77813abfd713e6aaeac2ae75f26ce11805d30decfd74db15f39dd4b8c56e3510e15a91865b3ff0393f0c71eed87aecbeb12370cf51300a13fb1ed
+    K3D_SUM=3b8e5772f880a85b6620e7f1245070240c5338361e80ef2717cbf3bc021e23ca
+    SKAFFOLD_SUM="" ;;   # skaffold publishes no 32-bit arm build
+esac
 
-# fetch_bin NAME URL — download one binary into $BIN.
-fetch_bin() {
-  if curl -fsSLo "$BIN/.$1.part" "$2" && chmod +x "$BIN/.$1.part" && mv "$BIN/.$1.part" "$BIN/$1"; then
-    info "$1 -> $BIN/$1"
-  else
-    rm -f "$BIN/.$1.part"
-    info "$1 download failed — skipped (check network_allow)"
+BIN="$HOME/.local/bin"
+STAMPS="$HOME/.sbxw/k8s-tools"
+mkdir -p "$BIN" "$STAMPS"
+export PATH="$BIN:$PATH"
+WORK="$(mktemp -d)" || { info "no temporary directory — skipping"; exit 0; }
+
+# ── The sbxw host cache ──────────────────────────────────────────────
+# sbxw mounts ~/.sbxw/cache into the sandboxes it creates and names it in
+# SBXW_CACHE: a download made once is copied from there instead of
+# fetched again. Only the sandbox that fills it sees it writable, with
+# SBXW_CACHE_FILL=1. A copy from the cache is checked against the same
+# pinned hash as a download, so nothing a filler left there is trusted.
+CACHE=""; FILL=""
+SBXW_CACHE="$(printenv SBXW_CACHE)"
+if [ -n "$SBXW_CACHE" ] && [ -d "$SBXW_CACHE" ]; then
+  CACHE="$SBXW_CACHE/$(dpkg --print-architecture 2>/dev/null)-$(. /etc/os-release 2>/dev/null; echo "$VERSION_CODENAME")"
+  if [ "$(printenv SBXW_CACHE_FILL)" = 1 ]; then
+    FILL=1; mkdir -p "$CACHE/bin"
   fi
+  [ -d "$CACHE" ] || CACHE=""
+fi
+
+sum_of() { "$1" "$2" 2>/dev/null | cut -d' ' -f1; }
+
+# obtain FILE URL SUMCMD SUM — a copy of URL at $WORK/FILE that matches
+# SUM: the cache's when it has one, else downloaded (and left in the
+# cache by the sandbox that fills it).
+obtain() {
+  file="$1"; url="$2"; sumcmd="$3"; want="$4"; out="$WORK/$file"
+  if [ -n "$CACHE" ] && [ -f "$CACHE/bin/$file" ] && cp "$CACHE/bin/$file" "$out" \
+      && [ "$(sum_of "$sumcmd" "$out")" = "$want" ]; then
+    return 0
+  fi
+  if ! curl -fsSLo "$out" "$url"; then
+    info "$file download failed — skipped (check network_allow)"; rm -f "$out"; return 1
+  fi
+  if [ "$(sum_of "$sumcmd" "$out")" != "$want" ]; then
+    info "$file does not match its pinned hash — not installed"; rm -f "$out"; return 1
+  fi
+  if [ -n "$FILL" ]; then
+    cp "$out" "$CACHE/bin/.$file.part" && mv "$CACHE/bin/.$file.part" "$CACHE/bin/$file"
+  fi
+  return 0
+}
+
+# place NAME SRC VERSION — SRC becomes $BIN/NAME, stamped with VERSION.
+place() {
+  chmod +x "$2" && mv "$2" "$BIN/$1" && echo "$3" > "$STAMPS/$1.version" && info "$1 $3 -> $BIN/$1"
+}
+
+# wanted NAME VERSION — is there something to install? A tool already
+# there is kept, unless this script installed another version of it (a
+# moved pin). One installed before the pins has no stamp and stays.
+wanted() {
+  command -v "$1" >/dev/null 2>&1 || return 0
+  have=""; read -r have 2>/dev/null < "$STAMPS/$1.version"
+  [ -n "$have" ] && [ "$have" != "$2" ]
 }
 
 install_kubectl() {
-  info "installing kubectl (linux/$ARCH)..."
-  K8S_VER=$(curl -fsSL https://dl.k8s.io/release/stable.txt) \
-    || { info "could not read the kubectl stable version — skipped"; return 0; }
-  fetch_bin kubectl "https://dl.k8s.io/release/$K8S_VER/bin/linux/$ARCH/kubectl"
+  info "installing kubectl $KUBECTL_VERSION (linux/$ARCH)..."
+  tgz="kubernetes-client-$KUBECTL_VERSION-linux-$ARCH.tar.gz"
+  obtain "$tgz" "https://dl.k8s.io/$KUBECTL_VERSION/kubernetes-client-linux-$ARCH.tar.gz" sha512sum "$KUBECTL_SUM" || return 0
+  if tar -xzf "$WORK/$tgz" -C "$WORK" kubernetes/client/bin/kubectl; then
+    place kubectl "$WORK/kubernetes/client/bin/kubectl" "$KUBECTL_VERSION"
+  else
+    info "kubectl: the release archive is unreadable — skipped"
+  fi
 }
 install_k3d() {
-  info "installing k3d..."
-  if curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
-      | USE_SUDO=false K3D_INSTALL_DIR="$BIN" bash >/dev/null; then
-    info "k3d -> $BIN/k3d"
-  else
-    info "k3d install failed — skipped (check network_allow)"
-  fi
+  info "installing k3d $K3D_VERSION (linux/$ARCH)..."
+  obtain "k3d-$K3D_VERSION" "https://github.com/k3d-io/k3d/releases/download/$K3D_VERSION/k3d-linux-$ARCH" sha256sum "$K3D_SUM" || return 0
+  place k3d "$WORK/k3d-$K3D_VERSION" "$K3D_VERSION"
 }
 install_skaffold() {
-  info "installing skaffold (linux-$ARCH)..."
-  fetch_bin skaffold "https://storage.googleapis.com/skaffold/releases/latest/skaffold-linux-$ARCH"
+  if [ -z "$SKAFFOLD_SUM" ]; then info "skaffold has no linux/$ARCH build — skipped"; return 0; fi
+  info "installing skaffold $SKAFFOLD_VERSION (linux/$ARCH)..."
+  obtain "skaffold-$SKAFFOLD_VERSION" "https://github.com/GoogleContainerTools/skaffold/releases/download/$SKAFFOLD_VERSION/skaffold-linux-$ARCH" sha256sum "$SKAFFOLD_SUM" || return 0
+  place skaffold "$WORK/skaffold-$SKAFFOLD_VERSION" "$SKAFFOLD_VERSION"
 }
 
-for tool in kubectl k3d skaffold; do
-  if command -v "$tool" >/dev/null 2>&1; then
-    info "$tool already installed"
-  else
-    "install_$tool" &
-  fi
-done
+wanted kubectl "$KUBECTL_VERSION" && install_kubectl &
+wanted k3d "$K3D_VERSION" && install_k3d &
+wanted skaffold "$SKAFFOLD_VERSION" && install_skaffold &
 wait
+rm -rf "$WORK"
 
 for RC in "$HOME/.bashrc" "$HOME/.profile"; do
   [ -f "$RC" ] || continue
   grep -qF '.local/bin' "$RC" || \
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$RC"
 done
+[ -n "$FILL" ] && touch "$CACHE/.filled-k8s-tools"
 info "done."

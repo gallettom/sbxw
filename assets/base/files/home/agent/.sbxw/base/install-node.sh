@@ -10,13 +10,19 @@ set -u
 export DEBIAN_FRONTEND=noninteractive
 
 have() { command -v "$1" >/dev/null 2>&1; }
-say() { printf 'sbxw-base: %s\n' "$*" >&2; }
+# Also kept in the sandbox: sbx does not show an install hook's output, so
+# "what did the Node.js install do?" has no other answer.
+LOG=/var/log/sbxw-base.log
+say() { printf 'sbxw-base: %s\n' "$*" >&2; printf '%s\n' "$*" >> "$LOG" 2>/dev/null; }
 
 if have node && have npm; then
   say "node $(node --version) already installed"
   exit 0
 fi
 
+# Not from sbxw's kit cache: an install hook runs without the sandbox's
+# environment (no SBXW_CACHE, checked against sbx 0.53), so it cannot find
+# it. A sandbox created from a template already has Node.js and stops above.
 apt-get update -qq >/dev/null 2>&1 || say "apt-get update failed; trying the package lists the image has"
 
 # The image's DHI repository carries versioned toolchains (nodejs-24); a

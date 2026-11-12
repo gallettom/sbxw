@@ -96,7 +96,14 @@ pub async fn mirror_via(
         let done = remote_root.join("kits").join(format!(".{h}.ok"));
         // The marker, not the directory, means complete: a copy cut short
         // leaves a directory but no marker, and is redone.
-        if fs.lstat(&done).await?.is_none() {
+        let marker = fs.lstat(&done).await?;
+        // A mirror used again says so, at most once a day: [`prune`] spares
+        // what was used lately, which covers the moment between this and the
+        // sandbox showing in `sbx ls`.
+        if marker.as_ref().is_some_and(|m| age_secs(m.mtime_secs) > 86_400) {
+            fs.write_atomic(&done, b"", 0o644).await?;
+        }
+        if marker.is_none() {
             let sent = match exec {
                 Some(exec) if tar_ok => {
                     let archive = build_tar(&read)?;
@@ -114,6 +121,51 @@ pub async fn mirror_via(
         out.refs.push(dest.to_string_lossy().into_owned());
     }
     Ok(out)
+}
+
+fn age_secs(mtime: u64) -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()).saturating_sub(mtime)
+}
+
+/// A mirror's directory name: the 16 hex digits of its content hash. Nothing
+/// else under `kits/` is a mirror (a host that runs its own sbxw keeps its
+/// bundled kits there, by name).
+fn is_mirror(name: &str) -> bool {
+    name.len() == 16 && name.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Remove the mirrored kits under `<remote_root>/kits/` that no path in
+/// `in_use` names and that were not used for `unused_for`: a changed kit
+/// lands in a new directory at every sbxw release, and the old one is only
+/// needed while a sandbox still points at it. `in_use` must be every kit of
+/// every sandbox on the host, as its sbx says: the caller gives up rather
+/// than guess. The marker goes first, so a removal cut short leaves an
+/// incomplete mirror, which is copied again, never a broken one that counts.
+pub async fn prune(fs: &dyn HostFs, remote_root: &Path, in_use: &[String], unused_for: std::time::Duration) -> Result<Vec<String>> {
+    let dir = remote_root.join("kits");
+    if fs.stat(&dir).await?.is_none() {
+        return Ok(vec![]);
+    }
+    let entries = fs.read_dir(&dir).await?;
+    let mut removed = Vec::new();
+    for e in entries.iter().filter(|e| e.meta.kind == super::Kind::Dir && is_mirror(&e.name)) {
+        let dest = dir.join(&e.name);
+        if in_use.iter().any(|k| Path::new(k) == dest) {
+            continue;
+        }
+        let marker = format!(".{}.ok", e.name);
+        // Judged on the marker's time (the last use); a mirror without one
+        // is a copy cut short, judged on the directory's.
+        let mtime = entries.iter().find(|m| m.name == marker).map_or(e.meta.mtime_secs, |m| m.meta.mtime_secs);
+        // 0 = the host cannot say: left alone.
+        if mtime == 0 || age_secs(mtime) < unused_for.as_secs() {
+            continue;
+        }
+        fs.remove(&dir.join(&marker)).await?;
+        fs.remove(&dest).await?;
+        removed.push(dest.to_string_lossy().into_owned());
+    }
+    Ok(removed)
 }
 
 /// The per-file copy: one `HostFs` call per file.
@@ -360,6 +412,35 @@ mod tests {
         assert_ne!(changed.refs, first.refs);
         assert_eq!(changed.copied, changed.refs);
         assert_eq!(std::fs::read_to_string(dir.join("spec.yaml")).unwrap(), "name: a\n", "the old one stays");
+    }
+
+    #[tokio::test]
+    async fn only_mirrors_nobody_uses_and_nobody_used_lately_are_pruned() {
+        let r = rig();
+        let k = kit(&r.local, "kits/mine", &[("spec.yaml", "name: a\n", 0o644)]);
+        let old = run(&r, std::slice::from_ref(&k), false).await.unwrap().refs.remove(0);
+        std::fs::write(r.local.join("kits/mine/spec.yaml"), "name: b\n").unwrap();
+        let new = run(&r, &[k], false).await.unwrap().refs.remove(0);
+        // What a host running its own sbxw keeps beside the mirrors.
+        std::fs::create_dir_all(r.remote.join("kits/codemap")).unwrap();
+        let week = std::time::Duration::from_secs(7 * 86_400);
+        let none: Vec<String> = prune(&LocalFs, &r.remote, std::slice::from_ref(&new), week).await.unwrap();
+        assert!(none.is_empty(), "used a moment ago: spared, in use or not");
+        // Both last used ten days ago; a sandbox still points at the new one.
+        let ten_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 86_400);
+        for dir in [&old, &new] {
+            let name = Path::new(dir).file_name().unwrap().to_string_lossy().into_owned();
+            let marker = r.remote.join("kits").join(format!(".{name}.ok"));
+            std::fs::File::options().write(true).open(&marker).unwrap().set_modified(ten_days_ago).unwrap();
+        }
+        assert_eq!(prune(&LocalFs, &r.remote, std::slice::from_ref(&new), week).await.unwrap(), std::slice::from_ref(&old));
+        assert!(!Path::new(&old).exists() && Path::new(&new).join("spec.yaml").is_file());
+        assert!(r.remote.join("kits/codemap").is_dir(), "not a mirror: never touched");
+        // Used again, the old marker is renewed, so a prune racing a create spares it.
+        std::fs::write(r.local.join("kits/mine/spec.yaml"), "name: b\n").unwrap();
+        let again = run(&r, &[r.local.join("kits/mine").to_string_lossy().into_owned()], false).await.unwrap();
+        assert!(again.copied.is_empty());
+        assert!(prune(&LocalFs, &r.remote, &[], week).await.unwrap().is_empty(), "its last use is now");
     }
 
     #[tokio::test]

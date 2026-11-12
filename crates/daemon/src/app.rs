@@ -69,6 +69,10 @@ pub struct App {
     /// Kits `sbx kit add` left waiting for a person's approval, per sandbox,
     /// in the order they came: what a `kit-add` pane runs, first one first.
     pub(crate) kit_approvals: Mutex<HashMap<SandboxRef, Vec<String>>>,
+    /// Automatic templates the daemon is building in the background, or
+    /// failed to build, as `<host>/<tag>`: one build at a time per template,
+    /// and a failed one is not started again by every new sandbox.
+    pub(crate) template_builds: Mutex<HashSet<String>>,
     /// The daemon config's `kits`, read once at start and changed only by
     /// the Kits dialog's own write: the file usually sits in a workspace an
     /// agent can write, and a kit planted there must not reach the next
@@ -145,6 +149,7 @@ impl AppBuilder {
             stale_hooks: Mutex::new(HashSet::new()),
             briefings: Mutex::new(HashMap::new()),
             kit_approvals: Mutex::new(HashMap::new()),
+            template_builds: Mutex::new(HashSet::new()),
             daemon_kits,
             awake: Mutex::new(Default::default()),
             remotes: Mutex::new(HashMap::new()),

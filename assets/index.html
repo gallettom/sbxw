@@ -419,9 +419,10 @@
             <input type="checkbox" id="chrome-box" aria-describedby="chrome-desc">
           </label>
 
-          <!-- With `template = "auto"` and a template that is up to date, the
-               one way to rebuild it on purpose. A stale or missing one is asked
-               about on Create instead (tpl-modal). Shown by /js/create.js. -->
+          <!-- With `template = "auto"`: save this very sandbox as the
+               template, and wait for it. Left unticked, a stale or missing
+               template is rebuilt by the daemon in the background. Shown by
+               /js/create.js. -->
           <label class="create-opt create-opt-check tpl-force hidden" id="tpl-force">
             <span class="create-opt-text">
               <span class="create-opt-title">Rebuild the starting template</span>
@@ -443,26 +444,6 @@
   </dialog>
 
   <!-- ── Remove sandbox confirmation modal ── -->
-  <!-- ── The automatic template is stale or missing ──
-       Asked before a create when `template = "auto"` and the template for
-       these kits was saved by another sbx or sbxw, or not yet at all. Filled
-       by askTemplate() in /js/create.js. -->
-  <dialog class="modal" id="tpl-modal-overlay" aria-labelledby="tpl-modal-title" style="width:460px">
-      <div class="modal-head">
-        <h2 class="modal-title" id="tpl-modal-title">Template out of date</h2>
-        <button class="modal-close" id="tpl-modal-close" aria-label="Close">✕</button>
-      </div>
-      <div class="modal-body tpl-body">
-        <table class="tpl-versions" id="tpl-versions"></table>
-        <p id="tpl-explain"></p>
-      </div>
-      <div class="modal-foot">
-        <button class="btn-cancel" id="tpl-skip" title="Create from sbx's image and leave the template alone">Without template</button>
-        <button class="btn-cancel" id="tpl-keep" title="Create from the out-of-date template">Use the old one</button>
-        <button class="btn-create" id="tpl-rebuild">Rebuild template</button>
-      </div>
-  </dialog>
-
   <dialog class="modal" id="rm-modal-overlay" aria-labelledby="rm-modal-title" style="width:360px" closedby="any">
       <div class="modal-head">
         <h2 class="modal-title" id="rm-modal-title">Remove sandbox</h2>

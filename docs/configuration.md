@@ -51,10 +51,10 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `cpus`, `memory` | `0`, `""` | At creation (`--cpus`, `--memory 8g`); 0 and empty leave sbx's defaults. Exported as `sandboxOptions` |
 | `fuse`, `root_size`, `docker_size` | unset | Exported as `sandboxOptions` (`fuse`, `rootSize`, `dockerSize`) for `sbx env run` only: `sbx create` has no flag for them. FUSE is otherwise sbx's `sandbox.fuse` setting (on by default) |
 | `cache` | `true` | Mount the [kit cache](kits-and-skills.md#the-kit-cache) |
-| `cache_ttl_days` | `7` | Days before the kit cache is emptied and refilled |
+| `cache_ttl_days` | `7` | Days before the kit cache's apt lists and packages are downloaded again; pinned downloads are kept four times as long, then the cache is emptied |
 | `skills` | `""` (sbx decides) | `off`, `readonly` or `readwrite`. See [Shared skills](kits-and-skills.md#shared-skills) |
 | `pull` | `""` (sbx decides) | Image pull policy: `always`, `missing` or `never` |
-| `template` | `""` (sbx's image) | Template new sandboxes start from, with no registry pull: `"auto"` for one sbxw keeps per kit list and offers to rebuild when sbx or sbxw changes, or a tag saved with `sbxw template save` |
+| `template` | `""` (sbx's image) | Template new sandboxes start from, with no registry pull: `"auto"` for one sbxw keeps per kit list and rebuilds in the background when sbx or the kits change, or a tag saved with `sbxw template save` |
 
 ### Agent
 

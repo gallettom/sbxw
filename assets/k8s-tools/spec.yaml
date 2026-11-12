@@ -2,7 +2,10 @@
 schemaVersion: "3"
 kind: mixin
 displayName: k8s-dev-tools
-description: Installs k3d, kubectl and skaffold into ~/.local/bin (idempotent, arch-aware).
+description: >
+  Installs kubectl, k3d and skaffold into ~/.local/bin, each pinned to a
+  version and checked against its hash (idempotent, arch-aware; downloaded
+  once per host with sbxw's kit cache).
 
 # Everything the kit ships is image content: files/ is copied into the
 # agent's home at build, owned by the agent. sbx builds this directory when
@@ -16,9 +19,13 @@ capabilities:
     config:
       runtime:
         allow:
+          # kubectl: the release's client archive (dl.k8s.io redirects to its CDN).
           - dl.k8s.io
-          - storage.googleapis.com
-          - get.k3d.io
+          - cdn.dl.k8s.io
+          # k3d and skaffold: GitHub release binaries.
+          - github.com
+          - release-assets.githubusercontent.com
+          - objects.githubusercontent.com
   - type: com.docker.sandbox/lifecycle@1
     config:
       # Every boot, alongside the agent: each script is idempotent.

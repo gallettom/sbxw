@@ -253,6 +253,11 @@ pub struct SandboxRecord {
     /// bring-up never re-applies one (each `kit add` recreates the container).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kits: Vec<String>,
+    /// Kits sbx refused to add to this existing sandbox (they need a
+    /// recreate), each as `<content fingerprint>@<sbx version> <reference>`:
+    /// not tried again until the kit or sbx changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kits_refused: Vec<String>,
     /// The sbx that created it, as `sbx inspect` says (`v0.51.0`); `""` when
     /// inspect said nothing, i.e. an sbx older than 0.51 made it. Asked once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -536,6 +541,7 @@ impl Store {
                 })
                 .collect(),
             kits: vec![],
+            kits_refused: vec![],
             carve: None,
             remote_control: false,
             chrome: false,
@@ -879,7 +885,7 @@ mod tests {
     fn templates_are_kept_per_host_and_local_is_unchanged() {
         use sbxw_core::templates::Record;
         let (d, s) = store();
-        let rec = |tag: &str| Record { tag: tag.into(), sbx: "1".into(), sbxw: "1".into(), kits: vec![], created_at: 0, content: String::new() };
+        let rec = |tag: &str| Record { tag: tag.into(), sbx: "1".into(), sbxw: "1".into(), kits: vec![], created_at: 0, content: String::new(), used_at: 0 };
         let box_ = HostName::parse("buildbox").unwrap();
         s.set_templates(&[rec("local")]).unwrap();
         s.set_templates_of(&box_, &[rec("remote")]).unwrap();

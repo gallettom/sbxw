@@ -956,10 +956,9 @@ pub fn cache(action: crate::CacheAction, config: &Path) -> Result<()> {
             }
             for f in flavours {
                 let state = match f.age {
-                    Some(a) if a < ttl => format!("filled, expires in {}h", (ttl - a).as_secs() / 3600),
-                    Some(_) => "expired — the next sandbox refills it".to_string(),
-                    None if f.filled.is_empty() => "incomplete".to_string(),
-                    None => format!("partial ({})", f.filled.join(", ")),
+                    Some(a) if a < ttl => format!("filled by {}, apt refreshed in {}h", f.filled.join(", "), (ttl - a).as_secs() / 3600),
+                    Some(_) => "expired — the next sandbox refreshes apt and keeps the pinned downloads".to_string(),
+                    None => "incomplete".to_string(),
                 };
                 println!("  {:<20} {:>8.1} MB  {state}", f.name, f.bytes as f64 / 1e6);
             }

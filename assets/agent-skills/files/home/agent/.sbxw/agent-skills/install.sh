@@ -6,6 +6,15 @@
 set -uo pipefail
 info() { echo "  [agent-skills] $*"; }
 
+# ── Startup marker ───────────────────────────────────────────────────
+# Left when this script ends, however it ends, with the boot it ran in:
+# how sbxw knows the install is over before it saves a template (a process
+# list cannot tell "not started yet" from "finished"). Removed first, so a
+# marker from an earlier start is never read as this one's.
+SBXW_DONE="$HOME/.sbxw/startup/$(echo "$0" | tr / _).done"
+mkdir -p "$HOME/.sbxw/startup" && rm -f "$SBXW_DONE"
+trap 'cat /proc/sys/kernel/random/boot_id > "$SBXW_DONE" 2>/dev/null' EXIT
+
 BASE=/home/agent/.sbxw/agent-skills
 BIN=/home/agent/.local/bin
 PW_BROWSERS=/home/agent/.cache/ms-playwright
@@ -16,8 +25,8 @@ mkdir -p "$BASE" "$BIN"
 # sbxw mounts ~/.sbxw/cache into the sandboxes it creates and
 # names it in SBXW_CACHE: what was downloaded once (apt packages and
 # lists, Chromium, the skill tarballs) is copied from there instead of fetched again.
-# Only the sandbox that fills it (the first, or the first after it
-# expires) sees it writable, with SBXW_CACHE_FILL=1. printenv, not the
+# Only the sandbox sbxw's daemon fills it from (its own, which nobody
+# works in) sees it writable, with SBXW_CACHE_FILL=1. printenv, not the
 # variable: set -u, and no dollar-brace defaults in kit content.
 CACHE=""; FILL=""
 SBXW_CACHE="$(printenv SBXW_CACHE)"
@@ -135,6 +144,9 @@ fetch "$POCOCK_REPO" "$POCOCK_REV" skills/productivity/handoff:handoff \
 fetch "$ANTHROPIC_REPO" "$ANTHROPIC_REV" skills/frontend-design:frontend-design &
 fetch_mwg &
 
+# Another kit's startup may hold apt's lock at the same moment (sbx starts
+# them side by side): wait for it rather than fail on it.
+APT_WAIT="-o DPkg::Lock::Timeout=120"
 # apt_install ARGS... — `apt-get install` that refreshes the package
 # lists only when no kit has done so in the last hour (the stamp is
 # shared with the other bundled kits), and once more if the install
@@ -147,7 +159,7 @@ apt_update() {
       && sudo cp "$CACHE"/apt-lists/*_* /var/lib/apt/lists/ 2>/dev/null; then
     mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"; return 0
   fi
-  sudo apt-get update -qq >/dev/null 2>&1 || return 1
+  sudo apt-get $APT_WAIT update -qq >/dev/null 2>&1 || return 1
   mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
   if [ -n "$FILL" ]; then
     find /var/lib/apt/lists -maxdepth 1 -type f -name '*_*' -exec cp {} "$CACHE/apt-lists/" \; 2>/dev/null
@@ -165,8 +177,8 @@ apt_cache_opt() {
 apt_install() {
   apt_update fresh || { info "apt-get update failed (are the apt mirrors in network_allow?)"; return 1; }
   opt="$(apt_cache_opt)"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq --no-install-recommends "$@" >/dev/null 2>&1 && return 0
-  apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq --no-install-recommends "$@" >/dev/null 2>&1
+  sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install $opt -y -qq --no-install-recommends "$@" >/dev/null 2>&1 && return 0
+  apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install $opt -y -qq --no-install-recommends "$@" >/dev/null 2>&1
 }
 
 # ── Headless Chromium, for archify's browser gate and Hyperframes ────
@@ -177,7 +189,25 @@ find_chrome() {
   ls -d "$PW_BROWSERS"/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1
 }
 CHROME="$(find_chrome)"
-if [ -z "$CHROME" ] && [ -z "$FILL" ] && [ -n "$CACHE" ] && ls -d "$CACHE"/ms-playwright/chromium-* >/dev/null 2>&1; then
+# The filling sandbox leaves this beside the build it downloaded. A refill
+# keeps what the kits pin, so a filler that finds its own Playwright version
+# stamped copies the build like the others instead of downloading it again;
+# one that does not (the pin moved) empties the directory first.
+PW_STAMP="$CACHE/ms-playwright/.playwright-$PLAYWRIGHT"
+if [ -n "$FILL" ] && [ ! -f "$PW_STAMP" ]; then
+  rm -rf "$CACHE/ms-playwright" && mkdir -p "$CACHE/ms-playwright"
+fi
+# Only a complete build is copied: the filler is still downloading and
+# unpacking into this directory when the next sandboxes start, and half a
+# Chromium copied now would be found "installed" at every later start. The
+# stamp is written once the whole install is over; a cache filled before the
+# stamp existed is judged on Playwright's own end-of-install marker.
+cache_chrome_complete() {
+  [ -n "$CACHE" ] || return 1
+  [ -f "$PW_STAMP" ] && return 0
+  ls "$CACHE"/ms-playwright/chromium-*/INSTALLATION_COMPLETE >/dev/null 2>&1
+}
+if [ -z "$CHROME" ] && cache_chrome_complete; then
   mkdir -p "$PW_BROWSERS" && cp -a "$CACHE/ms-playwright/." "$PW_BROWSERS/" && info "chromium copied from the sbxw cache"
   CHROME="$(find_chrome)"
 fi
@@ -189,8 +219,11 @@ if [ -n "$CHROME" ]; then
 else
   info "installing chromium (playwright@$PLAYWRIGHT)…"
   (
-    PLAYWRIGHT_BROWSERS_PATH="$PW_INSTALL" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1 \
-      || info "chromium download failed (are registry.npmjs.org and cdn.playwright.dev allowed?)"
+    if PLAYWRIGHT_BROWSERS_PATH="$PW_INSTALL" npx -y "playwright@$PLAYWRIGHT" install chromium >/dev/null 2>&1; then
+      [ -n "$FILL" ] && touch "$PW_STAMP"
+    else
+      info "chromium download failed (are registry.npmjs.org and cdn.playwright.dev allowed?)"
+    fi
   ) &
   CHROME_PID=$!
 fi
@@ -279,6 +312,13 @@ elif [ -n "$CHROME" ] && "$CHROME" --headless=new --no-sandbox --disable-gpu --d
   HAVE_CHROME=1
 else
   [ -n "$CHROME" ] && info "chromium is installed but does not start — archify's browser gate will report skipped"
+  # With every library there, the build itself is what is broken (a copy or
+  # a download cut short): removed, so the next start fetches it again
+  # instead of finding it "installed" for ever.
+  if [ -n "$CHROME" ] && ! chrome_libs_missing; then
+    rm -rf "$PW_BROWSERS"/chromium-* "$PW_BROWSERS"/chromium_headless_shell-*
+    info "the broken chromium build is removed — the next start downloads it again"
+  fi
   rm -f "$BIN/chromium" "$CHROME_OK"
   HAVE_CHROME=""
 fi

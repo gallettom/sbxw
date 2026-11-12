@@ -214,7 +214,9 @@ or installed until you pick a candidate. Needs no network. See
 
 ### `sbxw:k8s-tools`
 
-`kubectl`, `k3d` and `skaffold`, arch-aware and idempotent. Opt-in. See
+`kubectl`, `k3d` and `skaffold`, each pinned to a version and checked against
+its hash, arch-aware and idempotent, downloaded once per host with the kit
+cache. Opt-in. See
 [`assets/k8s-tools/README.md`](../assets/k8s-tools/README.md).
 
 ### `sbxw:git-identity` and `sbxw:ssh-agent`
@@ -300,24 +302,38 @@ accepted, and only at creation.
 
 ## The kit cache
 
-`agent-skills` and `md-to-pdf-tools` spend their startup downloading: apt
-packages, a Playwright Chromium, skill tarballs, Python wheels. With
-`cache = true` (the default), sbxw mounts `~/.sbxw/cache` into every new sandbox
-and sets `SBXW_CACHE`. The kits copy from it and fall back to the network.
+`agent-skills`, `md-to-pdf-tools` and `k8s-tools` spend their startup
+downloading: apt packages, a Playwright Chromium, skill tarballs, Python wheels,
+binaries. With `cache = true` (the default), sbxw mounts `~/.sbxw/cache` into
+every new sandbox and sets `SBXW_CACHE`. The kits copy from it and fall back to
+the network.
 
-- **The first sandbox fills it.** When the cache is empty or expired, the
-  sandbox being created gets it **writable** (`SBXW_CACHE_FILL=1`). Its kits
-  download into it and mark each kit done. Every other sandbox gets it
-  **read-only**. One filler at a time; a fill not done in 30 minutes counts as
-  failed and the next sandbox takes over.
-- **It expires** after `cache_ttl_days` (default 7): the next sandbox empties
-  and refills it. This bounds how long anything the filler's agent might have
-  left there survives.
+- **The daemon fills it, from a sandbox of its own.** When a kit of the
+  sandbox being created has not filled the cache yet, or its fill expired, sbxw
+  creates `sbxw-cache-fill` in the background: the caching kits, an empty
+  workspace, the cache **writable** (`SBXW_CACHE_FILL=1`). Its kits download
+  into the cache and mark each kit done, then it is removed. It shows in the
+  sandbox list while it runs.
+- **Every sandbox you work in gets it read-only**, the one whose creation
+  started the fill included: that one installs from the network, the next ones
+  from the cache. What one sandbox's agent could write, every later sandbox
+  would copy and run.
+- One fill at a time; one not done in 30 minutes counts as failed and the next
+  sandbox created starts another.
+- **apt expires** after `cache_ttl_days` (default 7): the next sandbox drops
+  apt's lists and packages and downloads them again.
+- **What a kit pins is kept** across that refresh: skill tarballs (by commit),
+  Chromium (by Playwright version), wheels, the k8s binaries (checked against
+  their hash on every copy). They are downloaded once, not once a week.
+- **Everything goes** once the cache is four times `cache_ttl_days` old (28
+  days by default), which bounds how long anything written there survives.
+- **Only a complete Chromium is copied**: a sandbox created while another is
+  still filling the cache downloads its own instead of copying half of one.
 - **Per image flavour:** files go under `<arch>-<codename>/` (e.g.
   `arm64-bookworm`), so a `.deb` never reaches the wrong distribution.
 
 ```bash
-sbxw cache          # each flavour, its size, when it expires
+sbxw cache          # each flavour, its size, when apt is refreshed
 sbxw cache clear    # empty it now
 ```
 

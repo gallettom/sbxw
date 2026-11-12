@@ -110,23 +110,27 @@ The **chat sandbox** dialog is the browser version of `sbxw chat`. See
 
 ### The automatic template
 
-With `template = "auto"` in `sbxw.toml`, **Create** first checks the template
-for the configured kits. If it was made by another version of sbx, or the kits'
-specs changed since (an sbxw release that leaves the kits alone does not
-count), or there is none yet, a dialog shows what changed and offers:
+With `template = "auto"` in `sbxw.toml`, **Create** uses the template for the
+configured kits when it is up to date. If it was made by another version of
+sbx, or the kits' specs changed since (an sbxw release that leaves the kits
+alone does not count), or there is none yet, nothing is asked: the sandbox is
+created from sbx's image and opens as usual, and the daemon builds a new
+template in the background.
 
-- **Rebuild template**: the sandbox is created from sbx's image. Once its kits'
-  startup installs have finished, its agent token and credentials are taken
-  out, it is saved as the new template, and they are put back. Only then does
-  it open, so the snapshot holds no one's work. The first time takes several
-  minutes. The old template is removed once the new one is saved.
-- **Use the old one**: create from the out-of-date template.
-- **Without template**: create from sbx's image and leave the template alone.
+The background build uses a sandbox of its own, `sbxw-tpl-…`, on an empty
+workspace: it waits for the new sandbox's kits to finish installing (so it
+copies from the kit cache), creates the builder with the same kits, waits for
+its installs, saves it as the template, and removes it. The builder shows in
+the sandbox list while it runs. It gets no token, no project environment and no
+port. The old template is removed once the new one is saved, and so is any
+automatic template no sandbox was created from for a month. A build that
+fails is reported in the daemon's log and not tried again until the daemon
+restarts.
 
-Closing the dialog returns to the create dialog. A template that is up to date
-is used without asking; to rebuild it anyway, tick **Rebuild the starting
-template** at the bottom of the create dialog (shown only
-then).
+To save the sandbox being created as the template instead, and wait for it,
+tick **Rebuild the starting template** at the bottom of the create dialog. The
+sandbox then opens only once its kits have installed and it is saved, its
+agent token and credentials taken out for the snapshot and put back after.
 
 ### Watching the bring-up
 

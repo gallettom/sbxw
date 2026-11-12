@@ -92,6 +92,54 @@ pub enum Consent {
 const STARTUP_TIMEOUT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(20 * 60) };
 const STARTUP_POLL: Duration = if cfg!(test) { Duration::from_millis(10) } else { Duration::from_secs(2) };
 const STARTUP_SETTLE: Duration = if cfg!(test) { Duration::ZERO } else { Duration::from_secs(15) };
+/// How long a template's builder sandbox is given to start.
+/// How long a quiet process list stands in for an end marker that never
+/// came (a kit written before the markers, a guest whose `/proc` hides the
+/// boot id): the old judgement, held for longer.
+const MARKER_GRACE: Duration = if cfg!(test) { Duration::ZERO } else { Duration::from_secs(60) };
+/// A mirrored kit no sandbox uses is kept this long after its last use.
+const MIRROR_UNUSED_FOR: Duration = Duration::from_secs(7 * 86_400);
+const BUILDER_BOOT: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(60) };
+
+/// A sandbox of the daemon's own, on an empty workspace, that nobody works
+/// in: a template's builder, the kit cache's filler.
+struct Scratch {
+    sb: SandboxRef,
+    sbx: sbxw_sbx::Sbx,
+    host: Host,
+    workspace: PathBuf,
+}
+
+/// What the daemon needs to fill the kit cache in a sandbox of its own.
+struct CacheFill {
+    host: sbxw_core::names::HostName,
+    /// The cache, on the sandbox's host.
+    dir: String,
+    /// The kits that fill it (sbxw's base kit and the caching ones), as
+    /// directories on this machine and as `sbx` on the host names them.
+    resolved: Vec<String>,
+    on_host: Vec<String>,
+    cfg: Config,
+}
+
+/// What the daemon needs to build an automatic template on its own, once the
+/// bring-up that found it missing or out of date is over.
+struct TemplateBuild {
+    /// The sandbox just created with these kits, when it runs: its startup
+    /// installs are waited for first, so the build copies from the kit cache
+    /// it filled instead of downloading beside it.
+    after: Option<SandboxRef>,
+    host: sbxw_core::names::HostName,
+    /// The kit list as the project wrote it, base kit first: the template's
+    /// identity.
+    kits: Vec<String>,
+    /// The same kits as directories on this machine: what is fingerprinted
+    /// and read for startup commands.
+    resolved: Vec<String>,
+    /// The same kits as `sbx` on the sandbox's host names them.
+    on_host: Vec<String>,
+    cfg: Config,
+}
 
 /// Each resolved kit's `spec.yaml`, else its reference: what a template's
 /// content is judged on.
@@ -238,8 +286,10 @@ impl App {
         // An existing sandbox keeps its creation workspace: sbx cannot move its
         // mount. Recording another directory would point the Project panel, env
         // and config at the wrong project, so refuse it before anything changes.
+        // Read once: nothing below changes it before the update that follows.
+        let before = self.store.get(name);
         if existed {
-            if let Some(recorded) = self.store.get(name).workspace {
+            if let Some(recorded) = before.workspace.clone() {
                 let canon = async |p: &Path| host.fs.canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf());
                 if canon(&recorded).await != canon(&req.workspace).await {
                     bail!(
@@ -251,7 +301,7 @@ impl App {
         }
         let stopped = initial.as_ref().is_some_and(|i| i.is_stopped());
         let mut running = Some(initial.as_ref().is_some_and(|i| i.is_running()));
-        let (template, rebuild) = self.template_for(&req, cfg, existed, &mut run).await;
+        let (template, rebuild, background) = self.template_for(&req, cfg, existed, &mut run).await;
         // A template holds the kits' installs, so its kits would never fill the
         // cache this sandbox claimed.
         wants_cache &= template.is_none();
@@ -261,7 +311,7 @@ impl App {
         run.step(progress::WORKSPACE);
         // The credentials kit would come back on every container swap, so
         // only creation can leave it out.
-        let recorded_remote = self.store.get(name).remote_control;
+        let recorded_remote = before.remote_control;
         if existed && req.remote_control && !recorded_remote {
             run.warn(format!(
                 "'{name}' was created without Remote Control — press Remote in its pane to switch it to a claude.ai login"
@@ -276,7 +326,7 @@ impl App {
             false => None,
         };
         let remote = recorded_remote || (!existed && req.remote_control && native_remote.is_none());
-        let chrome = cfg.chrome || req.chrome || self.store.get(name).chrome;
+        let chrome = cfg.chrome || req.chrome || before.chrome;
         self.store
             .update(name, |r| {
                 r.remote_control = remote;
@@ -338,7 +388,7 @@ impl App {
         let mut created_with_kits = false;
         // The project's kits as `sbx` on the sandbox's host names them:
         // mirrored there for a remote host, as they are here.
-        let kits_here = self.kits_on(on_host.as_deref(), &cfg.kits, &run).await?;
+        let (kits_here, mut mirrored) = self.kits_on(on_host.as_deref(), &cfg.kits, &run).await?;
         if existed {
             run.info(format!("sandbox '{name}' already exists — reusing it"));
             // Mounts too: a changed set of carves is a recreate, never applied.
@@ -391,7 +441,9 @@ impl App {
                 run.info(format!("persistent volumes: {} (kept if the sandbox is removed)", cfg.volumes.join(", ")));
                 own.push(dir.to_string_lossy().into_owned());
             }
-            kit_refs.extend(self.kits_on(on_host.as_deref(), &own, &run).await?);
+            let (own_here, sent) = self.kits_on(on_host.as_deref(), &own, &run).await?;
+            mirrored |= sent;
+            kit_refs.extend(own_here);
             // Carves: mounts are fixed now, so the plan is made now.
             let all_carves: Vec<sbxw_core::config::Carve> = cfg.carve.iter().chain(req.carve.iter()).cloned().collect();
             let mut primary = workspace.clone();
@@ -431,20 +483,14 @@ impl App {
             }
             let mut env = if remote { remote::without_auth_env(cfg.env_pairs()) } else { cfg.env_pairs() };
             if wants_cache {
-                // Writable only for the sandbox that fills it: see `cache`.
-                let (dir, mount) = match &on_host {
-                    None => cache::claim(&self.store.paths, cfg.cache_ttl())?,
-                    Some(r) => cache::claim_on(&*host.fs, &r.root().await?, cfg.cache_ttl()).await?,
-                };
-                let dir = dir.to_string_lossy().into_owned();
-                env.push(format!("SBXW_CACHE={dir}"));
-                if mount == cache::Mount::Fill {
-                    run.info("this sandbox fills the shared kit cache — the next ones install from it");
-                    env.push("SBXW_CACHE_FILL=1".into());
-                    rw_mounts.push(dir);
-                } else {
-                    ro_mounts.push(dir);
+                // Read-only, always: a sandbox someone works in never writes
+                // what the others will run. See `cache`.
+                let (dir, filling) = self.cache_for(name, cfg, &req.config.kits, &cfg.kits, &kits_here).await?;
+                if filling {
+                    run.info("the shared kit cache is being filled in the background — this sandbox installs from the network, the next ones from the cache");
                 }
+                env.push(format!("SBXW_CACHE={dir}"));
+                ro_mounts.push(dir);
             }
             let opts = CreateOpts {
                 workspace: primary,
@@ -465,6 +511,12 @@ impl App {
             let applied = opts.kits.clone();
             self.create_with_port_fallback(name, &opts, sink, &mut run).await?;
             created_with_kits = true;
+            // A kit that changed was just mirrored to its host under a new
+            // directory: the moment the ones it replaces may have become
+            // nobody's. After the create, so this sandbox counts as a user.
+            if let (true, Some(r)) = (mirrored, &on_host) {
+                self.prune_mirrors_later(r.clone());
+            }
             // Created by this sbxw: its kits are known, and on this machine
             // the sbx that made it too (a remote host's is asked of it).
             let made_by = name.is_local().then(|| self.versions.sbx.clone().map(|v| format!("v{}", v.trim_start_matches('v')))).flatten();
@@ -577,7 +629,14 @@ impl App {
         // The first kit is sbxw's base kit, applied at creation only.
         if !created_with_kits && cfg.kits.len() > 1 {
             run.step(progress::KITS);
-            let recorded = self.store.get(name).kits;
+            let record = self.store.get(name);
+            let recorded = record.kits;
+            // A kit sbx refused to add to an existing sandbox is not offered
+            // to it again while neither the kit nor sbx changed: the answer
+            // would be the same, after sbx has resolved the whole composition.
+            let sbx_version = self.template_versions().0;
+            let refusal = |kit: &str| format!("{}@{sbx_version} {kit}", templates::fingerprint(&[kits::content_text(kit)]));
+            let mut refused: Vec<String> = Vec::new();
             let pending: Vec<&String> = kits_here.iter().skip(1).filter(|k| !recorded.contains(k)).collect();
             // `sbx inspect` only when sbxw's own record does not settle it.
             let present = match pending.is_empty() {
@@ -597,6 +656,15 @@ impl App {
                         let k = kit.clone();
                         let _ = self.store.update(name, |r| r.kits.push(k));
                     }
+                    continue;
+                }
+                if record.kits_refused.contains(&refusal(kit)) {
+                    refused.push(refusal(kit));
+                    run.warn(format!(
+                        "kit '{kit}' still waits for '{name}' to be recreated: sbx refused to add it to an existing \
+                         sandbox, and neither the kit nor sbx changed since. `sbxw rm {name}` then `sbxw up {name}` \
+                         picks it up; anything outside the workspace mount is lost in the process."
+                    ));
                     continue;
                 }
                 run.info(format!("applying kit {kit} (this recreates the container; state is kept)"));
@@ -620,13 +688,21 @@ impl App {
                              press ✓ on '{name}' in the sidebar to answer in a pane, or run `sbx kit add {n} {kit}` in a terminal.\n{e:#}"
                         ))
                     }
-                    Err(e) if kits::add_needs_recreate(&format!("{e:#}")) => run.warn(format!(
-                        "`sbx kit add` cannot apply kit '{kit}' to an existing sandbox — '{name}' is \
-                         unchanged. Recreate it to pick the kit up: `sbxw rm {name}` then `sbxw up {name}`. \
-                         Anything outside the workspace mount is lost in the process.\n{e:#}"
-                    )),
+                    Err(e) if kits::add_needs_recreate(&format!("{e:#}")) => {
+                        refused.push(refusal(kit));
+                        run.warn(format!(
+                            "`sbx kit add` cannot apply kit '{kit}' to an existing sandbox — '{name}' is \
+                             unchanged. Recreate it to pick the kit up: `sbxw rm {name}` then `sbxw up {name}`. \
+                             Anything outside the workspace mount is lost in the process.\n{e:#}"
+                        ))
+                    }
                     Err(e) => run.warn(format!("kit '{kit}' failed to apply: {e:#}")),
                 }
+            }
+            // Only the refusals that still stand: a kit dropped from `kits`,
+            // edited, or met by another sbx is forgotten.
+            if refused != record.kits_refused {
+                let _ = self.store.update(name, |r| r.kits_refused = refused);
             }
         }
 
@@ -671,12 +747,22 @@ impl App {
                 run.warn(format!("the automatic template was not saved: {e:#}"));
             }
         }
+        if background {
+            self.build_template_later(TemplateBuild {
+                after: up.then(|| name.clone()),
+                host: name.host.clone(),
+                kits: req.config.kits.clone(),
+                resolved: cfg.kits.clone(),
+                on_host: kits_here,
+                cfg: cfg.clone(),
+            });
+        }
         Ok(run.warnings)
     }
 
     /// The template `sbx create` starts from, and whether this bring-up saves
     /// a new automatic one. Only a sandbox being created is concerned.
-    async fn template_for(&self, req: &BringUp, cfg: &Config, existed: bool, run: &mut Run<'_>) -> (Option<String>, bool) {
+    async fn template_for(&self, req: &BringUp, cfg: &Config, existed: bool, run: &mut Run<'_>) -> (Option<String>, bool, bool) {
         if existed {
             if req.template == templates::Choice::Rebuild {
                 run.warn(format!(
@@ -685,13 +771,13 @@ impl App {
                     req.name
                 ));
             }
-            return (None, false);
+            return (None, false, false);
         }
         match req.config.template_mode() {
-            templates::Mode::Off => (None, false),
+            templates::Mode::Off => (None, false, false),
             templates::Mode::Tag(t) => {
                 run.info(format!("creating from template {t}"));
-                (Some(t), false)
+                (Some(t), false, false)
             }
             templates::Mode::Auto => {
                 let (sbx, sbxw) = self.template_versions();
@@ -711,30 +797,49 @@ impl App {
                     }
                 }
                 match (fresh, req.template) {
-                    (_, Choice::Skip) => (None, false),
-                    (_, Choice::Rebuild) => (None, true),
+                    (_, Choice::Skip) => (None, false, false),
+                    (_, Choice::Rebuild) => (None, true, false),
                     (Freshness::Fresh { record }, _) => {
+                        self.template_used(&req.name, &record.tag);
                         run.info(format!("creating from the automatic template {} (sbx {}, sbxw {})", record.tag, record.sbx, record.sbxw));
-                        (Some(record.tag), false)
+                        (Some(record.tag), false, false)
                     }
                     (Freshness::Stale { record, .. }, Choice::Keep) => {
+                        self.template_used(&req.name, &record.tag);
                         run.info(format!("creating from the out-of-date automatic template {}, as asked", record.tag));
-                        (Some(record.tag), false)
+                        (Some(record.tag), false, false)
                     }
+                    // Nobody waits for a template: this sandbox is created
+                    // from sbx's image and opens as soon as it is up, and the
+                    // daemon builds the template beside it, from a sandbox of
+                    // its own that nobody works in.
                     (Freshness::Stale { changed, .. }, Choice::Default) => {
-                        run.warn(format!(
-                            "the automatic template is out of date ({}) — creating from sbx's image. \
-                             Rebuild it from the web UI's create dialog, or with `sbxw up --rebuild-template`",
+                        run.info(format!(
+                            "the automatic template is out of date ({}) — creating from sbx's image; \
+                             a new one is built in the background for the next sandboxes",
                             changed.join(", ")
                         ));
-                        (None, false)
+                        (None, false, true)
                     }
                     (Freshness::Missing, _) => {
-                        run.info("no automatic template for these kits yet — creating from sbx's image");
-                        (None, false)
+                        run.info(
+                            "no automatic template for these kits yet — creating from sbx's image; \
+                             one is built in the background for the next sandboxes",
+                        );
+                        (None, false, true)
                     }
                 }
             }
+        }
+    }
+
+    /// Note that a sandbox is being created from the automatic template
+    /// `tag`: one nobody uses for a month is removed when another is saved.
+    fn template_used(&self, sb: &SandboxRef, tag: &str) {
+        let mut records = self.store.templates_of(&sb.host);
+        if let Some(r) = records.iter_mut().find(|r| r.tag == tag) {
+            r.used_at = unix_now();
+            let _ = self.store.set_templates_of(&sb.host, &records);
         }
     }
 
@@ -761,6 +866,188 @@ impl App {
         }
     }
 
+    /// Build an automatic template in the background, in a sandbox of the
+    /// daemon's own: nobody waits for it, and a failure costs the template,
+    /// never a sandbox. One build per template at a time; one that failed is
+    /// not started again until the daemon restarts, so a kit whose install
+    /// never ends does not cost a builder per new sandbox.
+    fn build_template_later(self: &Arc<Self>, build: TemplateBuild) {
+        let (sbx, sbxw) = self.template_versions();
+        let key = format!("{}/{}", build.host, templates::auto_tag(&build.kits, sbxw, &sbx));
+        if !self.template_builds.lock().unwrap().insert(key.clone()) {
+            return;
+        }
+        let app = self.clone();
+        tokio::spawn(async move {
+            match app.build_template(&build).await {
+                Ok(()) => {
+                    app.template_builds.lock().unwrap().remove(&key);
+                }
+                Err(e) => tracing::warn!("the automatic template {key} was not built: {e:#}"),
+            }
+        });
+    }
+
+    /// Create a sandbox with `build`'s kits on an empty workspace, wait for
+    /// their installs, save it as the template, remove it. It gets no
+    /// tooling, no token, no project environment, no port and none of the
+    /// person's own kits: what a template holds is the kits' installs, and
+    /// everything else is put in again at each bring-up.
+    async fn build_template(self: &Arc<Self>, build: &TemplateBuild) -> Result<()> {
+        let sink: Sink = Arc::new(|_| {});
+        let mut run = Run { sink: &sink, warnings: vec![] };
+        let name = sbxw_core::names::SandboxName::parse(&templates::builder_name(&build.kits)).map_err(|e| anyhow!("{e}"))?;
+        let builder = SandboxRef::new(build.host.clone(), name);
+        if let Some(first) = &build.after {
+            // Best effort: a sandbox stopped or removed meanwhile is not waited for.
+            let (commands, marked) = self.startup_commands(&build.resolved);
+            let _ = self.wait_for_startups(first, &commands, &marked, &run).await;
+        }
+        let cfg = &build.cfg;
+        let (mut env, mut ro_mounts) = (vec![], vec![]);
+        if cfg.cache && cache::wanted_by(&build.kits) {
+            let (dir, _) = self.cache_for(&builder, cfg, &build.kits, &build.resolved, &build.on_host).await?;
+            env.push(format!("SBXW_CACHE={dir}"));
+            ro_mounts.push(dir);
+        }
+        tracing::info!("building the automatic template for {} in '{builder}'", build.kits.join(", "));
+        let scratch = self.scratch_up(builder, "template-build", build.on_host.clone(), cfg, env, ro_mounts, vec![]).await?;
+        let built = self.save_auto_template(&scratch.sb, &build.kits, &build.resolved, false, &mut run).await;
+        self.scratch_down(&scratch).await;
+        built
+    }
+
+    /// The kit cache as a sandbox with `kits` mounts it, which is read-only
+    /// whoever asks, and whether it is being filled. When a kit of the list
+    /// has not filled it, or its fill expired, the daemon fills it in a
+    /// sandbox of its own ([`App::fill_cache`]) while the sandbox being
+    /// created installs from the network. `kits`, `resolved` and `on_host`
+    /// are the same kits: as the project names them, as directories here,
+    /// and as `sbx` on the sandbox's host names them.
+    async fn cache_for(self: &Arc<Self>, sb: &SandboxRef, cfg: &Config, kits: &[String], resolved: &[String], on_host: &[String]) -> Result<(String, bool)> {
+        let host = self.host_for(sb).await?;
+        let root = self.root_on(sb).await?;
+        let (dir, mount) = cache::claim_on(&*host.fs, &root, cfg.cache_ttl(), kits).await?;
+        let dir = dir.to_string_lossy().into_owned();
+        if mount == cache::Mount::Fill {
+            let fills: Vec<usize> = kits.iter().enumerate().filter(|(_, k)| cache::fills(k)).map(|(i, _)| i).collect();
+            let pick = |from: &[String]| fills.iter().filter_map(|i| from.get(*i).cloned()).collect::<Vec<_>>();
+            let fill = CacheFill { host: sb.host.clone(), dir: dir.clone(), resolved: pick(resolved), on_host: pick(on_host), cfg: cfg.clone() };
+            let app = self.clone();
+            tokio::spawn(async move {
+                match app.fill_cache(&fill).await {
+                    Ok(()) => tracing::info!("the kit cache on host '{}' is filled", fill.host),
+                    // The claim's lock stands for half an hour: the next
+                    // sandbox created after that starts another fill.
+                    Err(e) => tracing::warn!("the kit cache on host '{}' was not filled: {e:#}", fill.host),
+                }
+            });
+        }
+        Ok((dir, mount == cache::Mount::Fill))
+    }
+
+    /// Fill the kit cache from a sandbox of the daemon's own: created with
+    /// the caching kits and the cache writable, left to run their startup
+    /// installs (which download into it and mark it), then removed. Nobody
+    /// works in it and it has no workspace to read, so nothing a person or
+    /// an agent does can reach what every later sandbox copies and runs.
+    async fn fill_cache(self: &Arc<Self>, fill: &CacheFill) -> Result<()> {
+        let sink: Sink = Arc::new(|_| {});
+        let run = Run { sink: &sink, warnings: vec![] };
+        let name = sbxw_core::names::SandboxName::parse(cache::FILLER).map_err(|e| anyhow!("{e}"))?;
+        let filler = SandboxRef::new(fill.host.clone(), name);
+        let env = vec![format!("SBXW_CACHE={}", fill.dir), "SBXW_CACHE_FILL=1".to_string()];
+        tracing::info!("filling the kit cache on host '{}' in '{filler}'", fill.host);
+        let scratch = self.scratch_up(filler, "cache-fill", fill.on_host.clone(), &fill.cfg, env, vec![], vec![fill.dir.clone()]).await?;
+        let (commands, marked) = self.startup_commands(&fill.resolved);
+        let filled = self.wait_for_startups(&scratch.sb, &commands, &marked, &run).await;
+        self.scratch_down(&scratch).await;
+        filled
+    }
+
+    /// `~/.sbxw` on `sb`'s host.
+    async fn root_on(&self, sb: &SandboxRef) -> Result<PathBuf> {
+        match sb.is_local() {
+            true => Ok(self.store.paths.root.clone()),
+            false => self.ready_remote(sb).await?.root().await,
+        }
+    }
+
+    /// Create `sb` with `kits` on an empty workspace under `~/.sbxw/<folder>/`
+    /// and hold it up, with the project's sizing and egress and nothing else
+    /// of the project: no tooling, token, environment, port or mount beyond
+    /// the ones given. Removed again if it does not come up.
+    #[allow(clippy::too_many_arguments)]
+    async fn scratch_up(&self, sb: SandboxRef, folder: &str, kits: Vec<String>, cfg: &Config, env: Vec<String>, ro_mounts: Vec<String>, rw_mounts: Vec<String>) -> Result<Scratch> {
+        let sbx = self.sbx_for(&sb).await?;
+        let host = self.host_for(&sb).await?;
+        let n = &sb.name;
+        // One left by a daemon that stopped midway.
+        if sbx.exists(n).await {
+            sbx.rm(std::slice::from_ref(n)).await?;
+        }
+        let workspace = self.root_on(&sb).await?.join(folder).join(n.as_str());
+        host.fs.create_dir_all(&workspace).await.with_context(|| format!("creating {}", workspace.display()))?;
+        let opts = CreateOpts {
+            workspace: workspace.to_string_lossy().into_owned(),
+            ro_mounts,
+            kits,
+            publish: vec![],
+            kit_mounts: cfg.kit_mount_specs(),
+            skills: cfg.skills_mode().map(String::from),
+            pull: cfg.pull_policy().map(String::from),
+            env,
+            env_files: vec![],
+            rw_mounts,
+            template: None,
+            workspaces: vec![],
+            cpus: (cfg.cpus > 0).then_some(cfg.cpus),
+            memory: Some(cfg.memory.clone()).filter(|m| !m.is_empty()),
+        };
+        sbx.create(n, &opts, None).await.with_context(|| format!("creating '{sb}'"))?;
+        let scratch = Scratch { sb, sbx, host, workspace };
+        let up = async {
+            let (sbx, n) = (&scratch.sbx, &scratch.sb.name);
+            // Held up with nobody attached: the kits' startup runs in a
+            // running sandbox only.
+            sbx.run_detached(n).await?;
+            if !sbx.wait_until_running(n, BUILDER_BOOT).await {
+                bail!("'{}' did not start", scratch.sb);
+            }
+            // The project's egress, as its own sandboxes get it: a kit's
+            // install may count on it. Best effort, as an organization may
+            // manage the policy.
+            if !cfg.network_allow.is_empty() {
+                if let Err(e) = sbx.policy("allow", Some(n), &cfg.network_allow.join(",")).await {
+                    tracing::warn!("'{}': the network allowlist was not applied: {e:#}", scratch.sb);
+                }
+            }
+            if !cfg.network_deny.is_empty() {
+                if let Err(e) = sbx.policy("deny", Some(n), &cfg.network_deny.join(",")).await {
+                    tracing::warn!("'{}': the network denylist was not applied: {e:#}", scratch.sb);
+                }
+            }
+            Ok(())
+        }
+        .await;
+        match up {
+            Ok(()) => Ok(scratch),
+            Err(e) => {
+                self.scratch_down(&scratch).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Remove a scratch sandbox and its workspace: it is nobody's to keep.
+    async fn scratch_down(&self, scratch: &Scratch) {
+        let n = &scratch.sb.name;
+        if let Err(e) = scratch.sbx.rm(std::slice::from_ref(n)).await {
+            tracing::warn!("could not remove '{}' ({e:#}) — `sbx rm {n}` it by hand", scratch.sb);
+        }
+        let _ = scratch.host.fs.remove(&scratch.workspace).await;
+    }
+
     /// The sbx and sbxw versions a template is recorded against.
     pub fn template_versions(&self) -> (String, &'static str) {
         (self.versions.sbx.clone().unwrap_or_else(|| "unknown".into()), env!("CARGO_PKG_VERSION"))
@@ -769,11 +1056,7 @@ impl App {
     /// Snapshot the sandbox just brought up as this kit list's automatic
     /// template, then remove the one it replaces.
     async fn save_auto_template(&self, name: &SandboxRef, kits: &[String], resolved: &[String], keep_running: bool, run: &mut Run<'_>) -> Result<()> {
-        let commands: Vec<String> = resolved
-            .iter()
-            .filter_map(|k| std::fs::read_to_string(std::path::Path::new(k).join("spec.yaml")).ok())
-            .flat_map(|spec| templates::startup_commands(&spec))
-            .collect();
+        let (commands, marked) = self.startup_commands(resolved);
         let unseen: Vec<&String> = resolved.iter().filter(|k| !std::path::Path::new(k.as_str()).join("spec.yaml").is_file()).collect();
         if !unseen.is_empty() {
             run.warn(format!(
@@ -782,7 +1065,7 @@ impl App {
                 unseen.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
             ));
         }
-        self.wait_for_startups(name, &commands, run).await?;
+        self.wait_for_startups(name, &commands, &marked, run).await?;
 
         let (sbx, sbxw) = self.template_versions();
         let tag = templates::auto_tag(kits, sbxw, &sbx);
@@ -796,8 +1079,9 @@ impl App {
             sbx,
             sbxw: sbxw.to_string(),
             kits: kits.to_vec(),
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+            created_at: unix_now(),
             content: templates::fingerprint(&spec_texts(resolved)),
+            used_at: unix_now(),
         };
         let mut records = self.store.templates_of(&name.host);
         let old = templates::replace(&mut records, record);
@@ -807,6 +1091,19 @@ impl App {
             match self.sbx_for(name).await?.template_rm(&old.tag).await {
                 Ok(()) => run.info(format!("removed the previous template {}", old.tag)),
                 Err(e) => run.warn(format!("could not remove the previous template {} ({e:#}) — `sbx template rm` it by hand", old.tag)),
+            }
+        }
+        // The templates of kit lists no sandbox was created with for a month:
+        // each is a whole sandbox image, and a missing one is rebuilt in the
+        // background the day it is wanted again.
+        let (unused, changed) = templates::take_unused(&mut records, unix_now(), &tag);
+        if changed {
+            self.store.set_templates_of(&name.host, &records).context("recording the automatic templates")?;
+        }
+        for gone in unused {
+            match self.sbx_for(name).await?.template_rm(&gone.tag).await {
+                Ok(()) => run.info(format!("removed the template {}, unused for a month", gone.tag)),
+                Err(e) => run.warn(format!("could not remove the unused template {} ({e:#}) — `sbx template rm` it by hand", gone.tag)),
             }
         }
         Ok(())
@@ -860,10 +1157,34 @@ impl App {
         (saved.map(drop), warnings)
     }
 
-    /// Until none of the kits' startup commands runs in the guest: they start
-    /// in the background after `sbx create` returns, and a snapshot taken
+    /// The startup commands of the kits at `resolved` (local directories),
+    /// and those of them that leave an end marker: the bundled kits', whose
+    /// scripts this build wrote.
+    fn startup_commands(&self, resolved: &[String]) -> (Vec<String>, Vec<String>) {
+        let bundled = self.store.paths.kits();
+        let (mut all, mut marked) = (Vec::new(), Vec::new());
+        for kit in resolved {
+            let Ok(spec) = std::fs::read_to_string(Path::new(kit).join("spec.yaml")) else { continue };
+            let commands = templates::startup_commands(&spec);
+            if Path::new(kit).starts_with(&bundled) {
+                marked.extend(commands.iter().filter(|c| templates::marker_of(c).is_some()).cloned());
+            }
+            all.extend(commands);
+        }
+        (all, marked)
+    }
+
+    /// Until the kits' startup commands are over in the guest: they start in
+    /// the background after `sbx create` returns, and a snapshot taken
     /// mid-install is broken.
-    async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], run: &Run<'_>) -> Result<()> {
+    ///
+    /// A command in `marked` is over when its end marker for this boot is
+    /// there, which is exact: it cannot be mistaken for one that has not
+    /// started yet. The others are judged on the process list, as none of
+    /// them running, twice in a row, once they have had time to start. That
+    /// judgement also stands in for a marker that never comes, after
+    /// `MARKER_GRACE` of quiet.
+    async fn wait_for_startups(&self, sb: &SandboxRef, commands: &[String], marked: &[String], run: &Run<'_>) -> Result<()> {
         if commands.is_empty() {
             return Ok(());
         }
@@ -873,6 +1194,7 @@ impl App {
         let started = tokio::time::Instant::now();
         let deadline = started + STARTUP_TIMEOUT;
         let mut quiet = 0;
+        let mut quiet_since: Option<tokio::time::Instant> = None;
         let mut seen = false;
         let mut shown = String::new();
         loop {
@@ -882,6 +1204,12 @@ impl App {
             }
             let ps = out.stdout_str();
             let busy = templates::still_running(&ps, commands);
+            let finished = templates::finished(&ps, marked);
+            let unmarked = marked.iter().filter(|c| !finished.contains(&c.as_str())).count();
+            if marked.len() == commands.len() && unmarked == 0 {
+                // Every command says so itself.
+                return Ok(());
+            }
             // Nothing running proves nothing until the commands have had time
             // to start: seen one, or a guest up for longer than that.
             let settled = seen
@@ -889,13 +1217,19 @@ impl App {
                 || started.elapsed() >= STARTUP_SETTLE;
             if busy.is_empty() && settled {
                 quiet += 1;
+                let since = *quiet_since.get_or_insert_with(tokio::time::Instant::now);
                 // Twice in a row: one command ending as the next begins is not done.
-                if quiet >= 2 {
+                if quiet >= 2 && unmarked == 0 {
+                    return Ok(());
+                }
+                if quiet >= 2 && since.elapsed() >= MARKER_GRACE {
+                    run.info(format!("{unmarked} startup command(s) left no end marker; judged on the process list"));
                     return Ok(());
                 }
             } else if !busy.is_empty() {
                 seen = true;
                 quiet = 0;
+                quiet_since = None;
                 let now = format!("still installing: {}", busy.join(", "));
                 if now != shown {
                     run.info(&now);
@@ -920,6 +1254,20 @@ impl App {
                 s(p);
             }
         });
+        // A host port already taken on this machine fails the whole create,
+        // after sbx has built the kits and prepared the image: asked of the
+        // OS first, that create is not attempted at all. A remote host's
+        // ports cannot be probed from here, so it keeps the retry below.
+        let busy = if sb.is_local() && !cfg!(test) { busy_host_ports(&opts.publish) } else { vec![] };
+        if !busy.is_empty() {
+            run.warn(format!(
+                "host port already in use: {} — '{name}' is created without its port mappings; each is then \
+                 published on its own once it runs, so a busy port costs that port, not the sandbox",
+                busy.join(", ")
+            ));
+            let bare = CreateOpts { publish: vec![], ..opts.clone() };
+            return sbx.create(name, &bare, Some(lines)).await;
+        }
         let first = match sbx.create(name, opts, Some(lines.clone())).await {
             Ok(()) => return Ok(()),
             Err(e) if opts.publish.is_empty() => return Err(e),
@@ -1003,10 +1351,10 @@ impl App {
     /// The kits `refs` as `sbx` on `on_host` names them: unchanged here,
     /// mirrored for a remote host (once per content), refusing a kit that
     /// carries secrets to a host not trusted with them.
-    async fn kits_on(&self, on_host: Option<&Remote>, refs: &[String], run: &Run<'_>) -> Result<Vec<String>> {
-        let Some(r) = on_host else { return Ok(refs.to_vec()) };
+    async fn kits_on(&self, on_host: Option<&Remote>, refs: &[String], run: &Run<'_>) -> Result<(Vec<String>, bool)> {
+        let Some(r) = on_host else { return Ok((refs.to_vec(), false)) };
         if refs.is_empty() {
-            return Ok(vec![]);
+            return Ok((vec![], false));
         }
         let root = r.root().await?;
         let m = crate::host::kits::mirror_via(&*r.host.fs, Some(&*r.host.exec), &self.store.paths.root, &root, refs, r.cfg.trust_secrets)
@@ -1015,7 +1363,36 @@ impl App {
         for c in &m.copied {
             run.info(format!("kit copied to host '{}': {c}", r.cfg.name));
         }
-        Ok(m.refs)
+        Ok((m.refs, !m.copied.is_empty()))
+    }
+
+    /// Remove, in the background, the kits mirrored to `r`'s host that none
+    /// of its sandboxes uses any more (see [`crate::host::kits::prune`]).
+    /// What is in use is asked of the host's own sbx, sandbox by sandbox, so
+    /// one made by another daemon counts too; a sandbox that cannot be
+    /// asked, or names no kit at all, ends the attempt with nothing removed.
+    fn prune_mirrors_later(self: &Arc<Self>, r: Arc<Remote>) {
+        tokio::spawn(async move {
+            let pruned: Result<Vec<String>> = async {
+                let sbx = r.sbx().await?;
+                let mut in_use = Vec::new();
+                for sb in crate::svc::sandboxes::list_strict(&sbx).await? {
+                    let name = sbxw_core::names::SandboxName::parse(&sb.name).map_err(|e| anyhow!("{}: {e}", sb.name))?;
+                    let kits = sbx.inspect(&name).await?.kits;
+                    if kits.is_empty() {
+                        bail!("sbx names no kit for '{name}'");
+                    }
+                    in_use.extend(kits);
+                }
+                crate::host::kits::prune(&*r.host.fs, &r.root().await?, &in_use, MIRROR_UNUSED_FOR).await
+            }
+            .await;
+            match pruned {
+                Ok(removed) if removed.is_empty() => {}
+                Ok(removed) => tracing::info!("host '{}': removed {} unused mirrored kit(s): {}", r.cfg.name, removed.len(), removed.join(", ")),
+                Err(e) => tracing::info!("host '{}': mirrored kits left as they are: {e:#}", r.cfg.name),
+            }
+        });
     }
 
     /// For a remote sandbox, forward the host port of a just-published
@@ -1033,7 +1410,32 @@ impl App {
     }
 }
 
-/// Whether `p` is a directory on `host`.
+/// The `IP:HOST:SANDBOX` mappings whose host address something on this
+/// machine already listens on. Only "address in use" counts: an address this
+/// machine does not have yet (a loopback alias added later in the bring-up)
+/// or a port this process may not bind says nothing about sbx's chances.
+fn busy_host_ports(specs: &[String]) -> Vec<String> {
+    specs
+        .iter()
+        .filter(|spec| {
+            let mut parts = spec.rsplitn(3, ':').skip(1);
+            let port = parts.next().and_then(|p| p.parse::<u16>().ok());
+            let ip = parts.next().and_then(|ip| ip.parse::<std::net::IpAddr>().ok());
+            match (ip, port) {
+                (Some(ip), Some(port)) => {
+                    matches!(std::net::TcpListener::bind((ip, port)), Err(e) if e.kind() == std::io::ErrorKind::AddrInUse)
+                }
+                _ => false,
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
 fn sorted(v: &[String]) -> Vec<String> {
     let mut v = v.to_vec();
     v.sort();
@@ -1044,6 +1446,7 @@ async fn canon_string(host: &Host, p: &Path) -> String {
     host.fs.canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().into_owned()
 }
 
+/// Whether `p` is a directory on `host`.
 async fn is_dir_on(host: &Host, p: &std::path::Path) -> Result<bool> {
     Ok(matches!(host.fs.stat(p).await?, Some(m) if m.kind == crate::host::Kind::Dir))
 }
@@ -1139,19 +1542,25 @@ mod tests {
         }
     }
 
-    /// An sbx whose sandbox exists once created, whose kit install is seen
-    /// running `busy` times, and whose secrets read back as "secret".
+    /// An sbx whose sandboxes exist and run once created (and are gone once
+    /// removed), whose kit install is seen running `busy` times, and whose
+    /// secrets read back as "secret".
     fn auto_sbx(busy: usize) -> impl Fn(&[String]) -> Output + Send + Sync + 'static {
-        let created = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let created = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         move |a: &[String]| {
             let joined = a.join(" ");
             match a.first().map(String::as_str) {
-                Some("ls") if created.load(std::sync::atomic::Ordering::SeqCst) => {
-                    Output::ok(r#"[{"name":"myapp","agent":"claude","status":"running"}]"#)
+                Some("ls") => {
+                    let rows: Vec<(String, &str)> = created.lock().unwrap().iter().map(|n| (n.clone(), "running")).collect();
+                    crate::testing::ls(&rows.iter().map(|(n, s)| (n.as_str(), *s)).collect::<Vec<_>>())
                 }
                 Some("create") => {
-                    created.store(true, std::sync::atomic::Ordering::SeqCst);
+                    created.lock().unwrap().push(a[4].clone());
+                    Output::ok("")
+                }
+                Some("rm") => {
+                    created.lock().unwrap().retain(|n| !a.contains(n));
                     Output::ok("")
                 }
                 Some("exec") if joined.contains("/proc/") => {
@@ -1166,6 +1575,17 @@ mod tests {
                 _ => sbx_answer(a),
             }
         }
+    }
+
+    /// Until `done`, or two seconds: what a background build is given.
+    async fn eventually(done: impl Fn() -> bool) -> bool {
+        for _ in 0..200 {
+            if done() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        done()
     }
 
     fn kit_with_startup(dir: &std::path::Path) -> String {
@@ -1183,7 +1603,7 @@ mod tests {
     async fn a_rebuild_waits_for_the_installs_snapshots_without_secrets_and_drops_the_old_template() {
         let (dir, app, fake) = app_with(auto_sbx(3));
         let kits = vec![kit_with_startup(dir.path())];
-        let old = templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), sbxw: "2.1.2".into(), kits: kits::with_base(&kits), created_at: 1, content: String::new() };
+        let old = templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), sbxw: "2.1.2".into(), kits: kits::with_base(&kits), created_at: 1, content: String::new(), used_at: 0 };
         app.store.set_templates(&[old]).unwrap();
 
         let w = app.provision(auto_request(dir.path(), kits.clone(), templates::Choice::Rebuild), None).await.unwrap();
@@ -1202,11 +1622,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_fresh_template_is_used_and_a_stale_one_only_warns() {
+    async fn a_fresh_template_is_used_and_a_stale_one_is_rebuilt_in_the_background() {
         let (dir, app, fake) = app_with(auto_sbx(0));
         let kits = vec!["sbxw:codemap".to_string()];
         let applied = kits::with_base(&kits);
-        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &applied).unwrap() };
+        let fresh = templates::Record { tag: "sbxw-auto:fresh".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied.clone(), created_at: 1, content: crate::bundled::fingerprint(&app.store.paths, &applied).unwrap(), used_at: 0 };
         app.store.set_templates(std::slice::from_ref(&fresh)).unwrap();
         let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let s2 = seen.clone();
@@ -1214,14 +1634,133 @@ mod tests {
         app.provision(auto_request(dir.path(), kits.clone(), templates::Choice::Default), Some(sink)).await.unwrap();
         assert!(fake.log().iter().any(|c| c.starts_with("create") && c.contains("--template sbxw-auto:fresh")));
         assert!(seen.lock().unwrap().iter().any(|l| l.contains("creating from the automatic template sbxw-auto:fresh")), "the card says so");
+        assert!(!fake.log().iter().any(|c| c.starts_with("template save")), "a fresh template is left alone");
 
         let (dir, app, fake) = app_with(auto_sbx(0));
-        app.store.set_templates(&[templates::Record { sbx: "0.47.0".into(), ..fresh }]).unwrap();
+        app.store.set_templates(&[templates::Record { tag: "sbxw-auto:old".into(), sbx: "0.47.0".into(), ..fresh }]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
-        assert!(w.iter().any(|w| w.contains("out of date (sbx 0.47.0 → 0.51.0)")), "{w:?}");
+        assert!(w.is_empty(), "nobody is warned or made to wait: {w:?}");
+        let builder = templates::builder_name(&applied);
+        assert!(eventually(|| app.store.templates().iter().any(|r| r.sbx == "0.51.0")).await, "{:?}", fake.log());
+        assert!(eventually(|| fake.log().iter().any(|c| c.starts_with("rm") && c.contains(&builder))).await, "the builder is removed");
         let log = fake.log();
-        assert!(log.iter().any(|c| c.starts_with("create") && !c.contains("--template")));
-        assert!(!log.iter().any(|c| c.starts_with("template")), "nothing saved or removed unasked");
+        let at = |p: &str| log.iter().position(|c| c.starts_with(p)).unwrap_or_else(|| panic!("no `{p}` in {log:?}"));
+        assert!(!log[at("create claude")].contains("--template"), "the person's sandbox comes from sbx's image");
+        let made = at(&format!("create claude {}", app.store.paths.root.join("template-build").join(&builder).display()));
+        assert!(log[made].contains(&format!("--name {builder}")) && !log[made].contains("myapp"), "{}", log[made]);
+        assert!(log.iter().any(|c| c == &format!("run -d --name {builder}")), "held up so its kits install");
+        assert!(at(&format!("template save {builder} sbxw-auto:")) < at("template rm sbxw-auto:old"), "the old one goes once the new one exists");
+        assert!(!log.iter().any(|c| c.starts_with("template save myapp")), "never from the sandbox someone works in");
+        assert_eq!(app.store.templates().len(), 1);
+        assert!(app.template_builds.lock().unwrap().is_empty(), "built: the next stale one may build again");
+    }
+
+    #[tokio::test]
+    async fn saving_a_template_removes_the_ones_unused_for_a_month() {
+        let (dir, app, fake) = app_with(auto_sbx(0));
+        let rec = |tag: &str, kit: &str, used_at: u64| templates::Record { tag: tag.into(), sbx: "0.51.0".into(), sbxw: "1".into(), kits: vec![kit.into()], created_at: 1, content: "c".into(), used_at };
+        app.store.set_templates(&[rec("sbxw-auto:lately", "a", unix_now() - 86_400), rec("sbxw-auto:forgotten", "b", unix_now() - 40 * 86_400), rec("sbxw-auto:before", "c", 0)]).unwrap();
+        let w = app.provision(auto_request(dir.path(), vec!["sbxw:codemap".into()], templates::Choice::Rebuild), None).await.unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        assert!(fake.log().iter().any(|c| c == "template rm sbxw-auto:forgotten"), "{:?}", fake.log());
+        let kept: Vec<String> = app.store.templates().into_iter().map(|r| r.tag).collect();
+        assert_eq!(kept.len(), 3, "{kept:?}");
+        assert!(kept.contains(&"sbxw-auto:lately".to_string()) && kept.contains(&"sbxw-auto:before".to_string()), "{kept:?}");
+        assert!(!fake.log().iter().any(|c| c == "template rm sbxw-auto:before"), "a record with no last use starts its clock");
+    }
+
+    #[tokio::test]
+    async fn end_markers_of_this_boot_end_the_wait_at_the_first_look() {
+        let listing = "5.0\n/sbin/init \n#sbxw-markers\nboot-1\n\
+            _home_agent_.sbxw_codemap_install-memory.mjs.done boot-1\n\
+            _home_agent_.sbxw_codemap_install-hooks.mjs.done boot-1\n";
+        let inner = auto_sbx(0);
+        let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("exec") if a.join(" ").contains("/proc/") => Output::ok(listing),
+            _ => inner(a),
+        });
+        let w = app.provision(auto_request(dir.path(), vec!["sbxw:codemap".into()], templates::Choice::Rebuild), None).await.unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        let log = fake.log();
+        assert_eq!(log.iter().filter(|c| c.contains("/proc/")).count(), 1, "no second look, no settling: {log:?}");
+        assert!(log.iter().any(|c| c.starts_with("template save myapp sbxw-auto:")));
+    }
+
+    #[tokio::test]
+    async fn a_background_build_that_fails_is_not_started_again() {
+        // The builder never shows as running; the sandboxes people create do.
+        let made = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => {
+                let made = made.lock().unwrap();
+                crate::testing::ls(&made.iter().map(|n| (n.as_str(), "running")).collect::<Vec<_>>())
+            }
+            Some("create") => {
+                if !a[4].starts_with("sbxw-tpl-") {
+                    made.lock().unwrap().push(a[4].clone());
+                }
+                Output::ok("")
+            }
+            _ => sbx_answer(a),
+        });
+        let kits = vec!["sbxw:codemap".to_string()];
+        let builder = templates::builder_name(&kits::with_base(&kits));
+        for name in ["one", "two"] {
+            let mut req = auto_request(dir.path(), kits.clone(), templates::Choice::Default);
+            req.name = SandboxRef::parse(name).unwrap();
+            app.provision(req, None).await.unwrap();
+            assert!(eventually(|| fake.log().iter().any(|c| c.starts_with("rm") && c.contains(&builder))).await, "a failed builder is removed too");
+        }
+        let builds = fake.log().iter().filter(|c| c.starts_with("create") && c.contains(&builder)).count();
+        assert_eq!(builds, 1, "{:?}", fake.log());
+        assert!(app.store.templates().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_kit_that_needs_a_recreate_is_refused_once_not_at_every_bring_up() {
+        let (dir, app, fake) = app_with(|a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") => crate::testing::ls(&[("myapp", "running")]),
+            Some("kit") => Output::fail(1, "kit declares credentials: recreate the sandbox to apply it"),
+            _ => sbx_answer(a),
+        });
+        let ws = dir.path().join("myapp");
+        std::fs::create_dir_all(&ws).unwrap();
+        let kit = dir.path().join("kit");
+        std::fs::create_dir_all(&kit).unwrap();
+        let spec = "# syntax=docker/sandbox-kit:3\nschemaVersion: \"3\"\nkind: mixin\n";
+        std::fs::write(kit.join("spec.yaml"), spec).unwrap();
+        let myapp = SandboxRef::parse("myapp").unwrap();
+        app.store.update(&myapp, |r| r.workspace = Some(ws.clone())).unwrap();
+        let req = || {
+            let mut r = auto_request(dir.path(), vec![kit.to_string_lossy().into_owned()], Default::default());
+            r.config.template = String::new();
+            r
+        };
+        let adds = || fake.log().iter().filter(|c| c.starts_with("kit add")).count();
+        let w = app.provision(req(), None).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("cannot apply kit")), "{w:?}");
+        assert_eq!(adds(), 1);
+        let w = app.provision(req(), None).await.unwrap();
+        assert!(w.iter().any(|w| w.contains("still waits for 'myapp' to be recreated")), "still said: {w:?}");
+        assert_eq!(adds(), 1, "sbx is not asked the same question again");
+        // An edited kit is another question.
+        std::fs::write(kit.join("spec.yaml"), format!("{spec}description: changed\n")).unwrap();
+        app.provision(req(), None).await.unwrap();
+        assert_eq!(adds(), 2);
+        assert_eq!(app.store.get(&myapp).kits_refused.len(), 1, "one refusal per kit, the current one");
+    }
+
+    #[test]
+    fn a_host_port_someone_listens_on_is_found_before_the_create() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = format!("127.0.0.1:{}:4200", held.local_addr().unwrap().port());
+        let free = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("127.0.0.1:{}:8000", l.local_addr().unwrap().port())
+        };
+        // An address this machine does not have is not "in use".
+        let elsewhere = "203.0.113.7:4300:4300".to_string();
+        assert_eq!(busy_host_ports(&[taken.clone(), free, elsewhere, "nonsense".into()]), [taken]);
     }
 
     #[tokio::test]
@@ -1230,7 +1769,7 @@ mod tests {
         let kits = vec!["sbxw:codemap".to_string()];
         let applied = kits::with_base(&kits);
         let content = crate::bundled::fingerprint(&app.store.paths, &applied).unwrap();
-        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied, created_at: 1, content };
+        let gone = templates::Record { tag: "sbxw-auto:gone".into(), sbx: "0.51.0".into(), sbxw: env!("CARGO_PKG_VERSION").into(), kits: applied, created_at: 1, content, used_at: 0 };
         app.store.set_templates(&[gone]).unwrap();
         let w = app.provision(auto_request(dir.path(), kits, templates::Choice::Default), None).await.unwrap();
         assert!(w.iter().any(|w| w.contains("sbxw-auto:gone is no longer in sbx")), "{w:?}");
@@ -1668,7 +2207,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_first_sandbox_fills_the_cache_the_next_read_it() {
+    async fn the_daemon_fills_the_cache_from_its_own_sandbox_and_everyone_reads_it() {
         let made = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let m = made.clone();
         let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
@@ -1710,8 +2249,26 @@ mod tests {
         let log = fake.log();
         let create = |n: &str| log.iter().find(|c| c.starts_with("create") && c.contains(&format!("--name {n} "))).unwrap().clone();
         let (a, b) = (create("a"), create("b"));
-        assert!(a.contains(&format!(" {cache} ")) && a.contains("SBXW_CACHE_FILL=1"), "the filler writes: {a}");
-        assert!(b.contains(&format!("{cache}:ro")) && b.contains(&format!("-e SBXW_CACHE={cache}")) && !b.contains("FILL"), "{b}");
+        for (name, made) in [("a", &a), ("b", &b)] {
+            assert!(made.contains(&format!("{cache}:ro")) && made.contains(&format!("-e SBXW_CACHE={cache}")) && !made.contains("FILL"), "{name} only reads: {made}");
+            assert!(!made.contains(&format!(" {cache} ")), "never writable where someone works: {made}");
+        }
+        // One filler, the daemon's own: the cache writable, the kits that fill
+        // it and sbxw's base kit, an empty workspace, and gone when done.
+        assert!(eventually(|| fake.log().iter().any(|c| c.starts_with("rm") && c.contains(cache::FILLER))).await, "{:?}", fake.log());
+        let log = fake.log();
+        let fills: Vec<&String> = log.iter().filter(|c| c.starts_with("create") && c.contains(&format!("--name {} ", cache::FILLER))).collect();
+        assert_eq!(fills.len(), 1, "the second sandbox finds a fill under way: {log:?}");
+        let f = fills[0];
+        assert!(f.contains(&format!(" {cache} ")) && f.contains("SBXW_CACHE_FILL=1") && !f.contains(&format!("{cache}:ro")), "the filler writes: {f}");
+        assert!(f.starts_with(&format!("create claude {}", paths.root.join("cache-fill").join(cache::FILLER).display())), "{f}");
+        for k in ["base", "agent-skills", "md-to-pdf-tools"] {
+            assert!(f.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}: {f}");
+        }
+        for k in ["codemap", "retro"] {
+            assert!(!f.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k} fills nothing: {f}");
+        }
+        assert!(log.iter().any(|c| c == &format!("run -d --name {}", cache::FILLER)), "held up so its kits install");
         for k in ["codemap", "agent-skills", "md-to-pdf-tools", "retro"] {
             assert!(b.contains(&format!("--kit {}", paths.kits().join(k).display())), "{k}");
         }

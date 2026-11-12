@@ -5,12 +5,21 @@
 set -uo pipefail
 info() { echo "  [md-to-pdf-tools] $*"; }
 
+# ── Startup marker ───────────────────────────────────────────────────
+# Left when this script ends, however it ends, with the boot it ran in:
+# how sbxw knows the install is over before it saves a template (a process
+# list cannot tell "not started yet" from "finished"). Removed first, so a
+# marker from an earlier start is never read as this one's.
+SBXW_DONE="$HOME/.sbxw/startup/$(echo "$0" | tr / _).done"
+mkdir -p "$HOME/.sbxw/startup" && rm -f "$SBXW_DONE"
+trap 'cat /proc/sys/kernel/random/boot_id > "$SBXW_DONE" 2>/dev/null' EXIT
+
 # ── The sbxw host cache ──────────────────────────────────────────────
 # sbxw mounts ~/.sbxw/cache into the sandboxes it creates and
 # names it in SBXW_CACHE: what was downloaded once (apt packages and
 # lists, the Python wheels) is copied from there instead of fetched again.
-# Only the sandbox that fills it (the first, or the first after it
-# expires) sees it writable, with SBXW_CACHE_FILL=1. printenv, not the
+# Only the sandbox sbxw's daemon fills it from (its own, which nobody
+# works in) sees it writable, with SBXW_CACHE_FILL=1. printenv, not the
 # variable: set -u, and no dollar-brace defaults in kit content.
 CACHE=""; FILL=""
 SBXW_CACHE="$(printenv SBXW_CACHE)"
@@ -22,6 +31,9 @@ if [ -n "$SBXW_CACHE" ] && [ -d "$SBXW_CACHE" ]; then
   [ -d "$CACHE" ] || CACHE=""
 fi
 
+# Another kit's startup may hold apt's lock at the same moment (sbx starts
+# them side by side): wait for it rather than fail on it.
+APT_WAIT="-o DPkg::Lock::Timeout=120"
 # apt_install ARGS... — `apt-get install` that refreshes the package
 # lists only when no kit has done so in the last hour (the stamp is
 # shared with the other bundled kits), and once more if the install
@@ -34,7 +46,7 @@ apt_update() {
       && sudo cp "$CACHE"/apt-lists/*_* /var/lib/apt/lists/ 2>/dev/null; then
     mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"; return 0
   fi
-  sudo apt-get update -qq >/dev/null 2>&1 || return 1
+  sudo apt-get $APT_WAIT update -qq >/dev/null 2>&1 || return 1
   mkdir -p "$(dirname "$APT_STAMP")" && touch "$APT_STAMP"
   if [ -n "$FILL" ]; then
     find /var/lib/apt/lists -maxdepth 1 -type f -name '*_*' -exec cp {} "$CACHE/apt-lists/" \; 2>/dev/null
@@ -52,8 +64,8 @@ apt_cache_opt() {
 apt_install() {
   apt_update fresh || return 1
   opt="$(apt_cache_opt)"
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq "$@" && return 0
-  apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get install $opt -y -qq "$@"
+  sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install $opt -y -qq "$@" && return 0
+  apt_update force && sudo DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install $opt -y -qq "$@"
 }
 
 # ── 1. System libs (WeasyPrint's renderer + poppler's pdftoppm) ──────
@@ -89,11 +101,15 @@ if [ -z "$NEED_PIP" ]; then
 else
   info "pip installing: $NEED_PIP"
   (
-    if [ -n "$FILL" ]; then
-      pip3 wheel -q -w "$CACHE/wheels" $NEED_PIP >/dev/null 2>&1 || info "could not build wheels into the cache"
-    fi
-    if [ -n "$CACHE" ] && pip3 install --break-system-packages -q --no-index --find-links "$CACHE/wheels" $NEED_PIP 2>/dev/null; then
+    # The cache first, for the filling sandbox too: a refill keeps the
+    # wheels, so it only builds them when they are not there yet.
+    from_cache() {
+      [ -n "$CACHE" ] && pip3 install --break-system-packages -q --no-index --find-links "$CACHE/wheels" $NEED_PIP 2>/dev/null
+    }
+    if from_cache; then
       info "python packages installed from the sbxw cache"
+    elif [ -n "$FILL" ] && pip3 wheel -q -w "$CACHE/wheels" $NEED_PIP >/dev/null 2>&1 && from_cache; then
+      info "python packages installed, and their wheels left in the sbxw cache"
     elif pip3 install --break-system-packages -q $NEED_PIP; then
       info "python packages installed"
     else

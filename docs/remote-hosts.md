@@ -145,7 +145,10 @@ The agent port defaults to 7682; change it with `--agent-port` if something on
 the host already uses it.
 
 Kits you use are copied to `~/.sbxw/kits/<hash>/` on the host, once per content:
-an unchanged kit is not sent again, a changed one gets a new directory.
+an unchanged kit is not sent again, a changed one gets a new directory. After a
+create that sent a kit, sbxw removes the copies no sandbox on the host uses any
+more and that were not used for a week. It asks the host's sbx which kits each
+sandbox uses; if one cannot be asked, nothing is removed.
 
 ## Ports
 

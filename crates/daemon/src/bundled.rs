@@ -11,8 +11,9 @@ use std::path::Path;
 
 include!(concat!(env!("OUT_DIR"), "/bundled_kits.rs"));
 
-/// The kits that fill the shared cache, in the order they are applied.
-pub const CACHING: [&str; 2] = ["agent-skills", "md-to-pdf-tools"];
+/// The kits that fill the shared cache: each drops `.filled-<name>` there
+/// once its startup has downloaded into it.
+pub const CACHING: [&str; 3] = ["agent-skills", "md-to-pdf-tools", "k8s-tools"];
 
 /// `kits` with every `sbxw:<name>` replaced by its written-out directory.
 pub fn resolve(paths: &Paths, kits: &[String]) -> Result<Vec<String>> {
@@ -31,9 +32,20 @@ pub fn fingerprint(paths: &Paths, kits: &[String]) -> Result<String> {
     Ok(sbxw_core::templates::fingerprint(&texts))
 }
 
+/// The kit directories this process has already written out and checked.
+/// Every bring-up resolves its kits several times (the create, the template
+/// fingerprint, a mirror), and comparing each embedded file with the disk
+/// each time is file I/O on the async threads for nothing: the bytes are this
+/// build's and do not change while it runs. A directory someone removed is
+/// written again.
+static WRITTEN: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 fn write_out(paths: &Paths, name: &str) -> Result<String> {
     let (_, files) = KITS.iter().find(|(n, _)| *n == name).ok_or_else(|| anyhow!("no bundled kit named '{name}'"))?;
     let dir = paths.kits().join(name);
+    if WRITTEN.lock().unwrap().contains(&dir) && dir.join("spec.yaml").is_file() {
+        return Ok(dir.to_string_lossy().into_owned());
+    }
     for (rel, mode, bytes) in *files {
         let file = dir.join(rel);
         if std::fs::read(&file).ok().as_deref() != Some(*bytes) {
@@ -44,6 +56,7 @@ fn write_out(paths: &Paths, name: &str) -> Result<String> {
     prune(&dir.join("files"), &dir, files);
     // Readable by sbx and its builder; nothing here is a secret.
     set_tree_mode(&dir);
+    WRITTEN.lock().unwrap().push(dir.clone());
     Ok(dir.to_string_lossy().into_owned())
 }
 

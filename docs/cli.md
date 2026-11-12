@@ -33,7 +33,7 @@ Every command takes `--help`. Commands that read the project config take
 | `--allow-host-access` | Approve the host access the config asks for (mounts, env files, kits, network hosts, ports, the Monitor pane's command, the listeners) as shown, without asking. For scripts: off a terminal, `sbxw up` otherwise fails with the list. See [Approving host access](configuration.md#approving-host-access). |
 | `--no-web` | Run the pipeline in this process and attach the agent in this terminal. No daemon. |
 | `--tail` | Follow the daemon log afterwards. |
-| `--rebuild-template` | With `template = "auto"`: once this new sandbox is up and its kits have finished installing, save it as the template for its kits and remove the previous one. Without it, an out-of-date template is only reported. On a sandbox that already exists it does nothing and says so: a template is only taken from a sandbox nobody has worked in yet. |
+| `--rebuild-template` | With `template = "auto"`: once this new sandbox is up and its kits have finished installing, save it as the template for its kits and remove the previous one. Without it, a missing or out-of-date template is rebuilt by the daemon in the background, in a sandbox of its own, while this one is created from sbx's image. On a sandbox that already exists it does nothing and says so: a template is only taken from a sandbox nobody has worked in yet. |
 
 `sbxw chat` takes `--no-web`, `--use-api-key` and `--tail` too.
 
