@@ -1,12 +1,16 @@
-// ── Voice concierge ───────────────────────────────────────────────────────
+// ── Jarvis, the voice side (the code still says "concierge") ─────────────
 // The voice side of sbxw, apart from the chat dock (which talks to the
 // `ephemeral-chat` sandboxes): a 🎙 button beside it opens its own panel.
-// See `.sbxw-artifacts/specs/concierge-vocal.md`.
+// The person reads its name as Jarvis; identifiers, CSS classes (`vc-*`)
+// and the `[voice]` table keep the old one.
+// See `.sbxw-artifacts/specs/concierge-vocal.md` and docs/jarvis.md.
 //
-// * **No language model.** What is said becomes text (Parakeet, in the
-//   daemon) and goes to an agent as it was said, once read and confirmed;
-//   what an agent writes is read aloud as it was written (Voxtral TTS, a
-//   local server the daemon starts). Nothing is reworded on the way.
+// * **No language model here.** What is said becomes text (Parakeet, in the
+//   daemon) and goes to an agent as it was said; what an agent writes is
+//   read aloud as it was written (Voxtral TTS, a local server the daemon
+//   starts). Nothing is reworded on the way. Jarvis's brain is a Claude
+//   session in the `sbxw-jarvis` sandbox, an agent like any other: picked
+//   in the bar, it is where the words go (see JARVIS below).
 // * **Push-to-talk only**: hold the button, or the key `[voice]` names (F8 by
 //   default — no terminal binds it). Nothing listens while nothing is held.
 // * **The page resamples**: MediaRecorder's own container (webm, mp4) is
@@ -130,7 +134,7 @@ function vcRender() {
 function vcNews() {
   if (vcOpen) return;
   vcLauncher.classList.add('news');
-  vcOpenBtn.title = 'Open the Concierge panel: something new is in it';
+  vcOpenBtn.title = 'Open the Jarvis panel: something new is in it';
 }
 
 function vcSay(who, text, meta) {
@@ -376,57 +380,142 @@ async function vcToPcm(blob) {
 // ── The sandbox ──────────────────────────────────────────────────────────
 // Asked of the daemon each time: the page's own list is the one it loaded
 // with, and misses a sandbox started since (it took a reload to appear).
+// Jarvis's own sandbox is not a project: it has its own row, first.
 const VC_TARGET = 'sbxw-concierge-target';
+const JARVIS = 'sbxw-jarvis';
 async function vcTargets() {
   let list = typeof sandboxes !== 'undefined' ? sandboxes : [];
   try {
     const fresh = await fetch('/api/sandboxes').then(r => r.json());
     if (Array.isArray(fresh)) list = fresh;
   } catch (_) {}
-  const live = list.filter(s => s.status === 'running' && !s.unreachable_since).map(s => s.name);
+  const live = list.filter(s => s.status === 'running' && !s.unreachable_since && s.name !== JARVIS).map(s => s.name);
   return [...new Set(live)].sort();
 }
 
+// What the person reads for a target: Jarvis is a name, not a sandbox.
+function vcLabel(name) { return name === JARVIS ? 'Jarvis' : name; }
+
+// Spoken prompts follow the voice: French for a `fr_*` voice, else English.
+// With no status yet, French, the default voice's language.
+function vcFr() { return /^fr_/.test(vcStatus?.speech?.voice || 'fr_'); }
+function vcLang(fr, en) { return vcFr() ? fr : en; }
+
+// Jarvis's sandbox, as the daemon reports it: absent, creating, running,
+// stopped or failed. Nothing creates it but the Start button below.
+let vcJarvis = { state: 'absent' };
+async function vcJarvisStatus() {
+  try {
+    const r = await fetch('/api/jarvis/status');
+    if (r.ok) vcJarvis = await r.json();
+  } catch (_) {}
+  vcRenderTarget();
+  return vcJarvis;
+}
+function vcJarvisUp() { return vcJarvis.state === 'running'; }
+const VC_JARVIS_STATE = {
+  absent: 'not created yet', creating: 'starting…', running: 'running',
+  stopped: 'stopped', failed: 'failed to start',
+};
+
 // Picked at the top, remembered per browser: the sandbox whose agents are
-// followed, and where a message said with nothing to answer goes.
+// followed, and where a message said with nothing to answer goes. Nothing
+// picked yet: Jarvis. "No sandbox" picked: stored as '' and kept.
 const vcPick = vcEl('vc-target');
 const vcBarTarget = vcEl('vc-l-target');
 const vcBarName = vcEl('vc-l-name');
-let vcTarget = null;
-try { vcTarget = localStorage.getItem(VC_TARGET) || null; } catch (_) {}
+let vcTarget = JARVIS;
+try { const kept = localStorage.getItem(VC_TARGET); if (kept !== null) vcTarget = kept || null; } catch (_) {}
 
 async function vcFillTargets() {
   const targets = await vcTargets();
-  if (vcTarget && !targets.includes(vcTarget)) targets.unshift(vcTarget); // stopped, but still the choice
+  if (vcTarget && vcTarget !== JARVIS && !targets.includes(vcTarget)) targets.unshift(vcTarget); // stopped, but still the choice
   vcPick.replaceChildren();
-  const none = document.createElement('option');
-  none.value = ''; none.textContent = targets.length ? '— no project —' : 'no running sandbox';
-  vcPick.append(none);
-  for (const name of targets) {
-    const o = document.createElement('option');
-    o.value = o.textContent = name;
-    vcPick.append(o);
-  }
+  const opt = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; return o; };
+  vcPick.append(opt(JARVIS, 'Jarvis'));
+  for (const name of targets) vcPick.append(opt(name, name));
+  vcPick.append(opt('', 'No sandbox'));
   vcPick.value = vcTarget || '';
   vcRenderTarget();
 }
 function vcRenderTarget() {
-  vcBarName.textContent = vcTarget || 'pick a sandbox';
+  vcBarName.textContent = vcTarget ? vcLabel(vcTarget) : 'pick a sandbox';
   vcBarTarget.classList.toggle('none', !vcTarget);
+  vcBarTarget.classList.toggle('jarvis', vcTarget === JARVIS);
+  vcBarTarget.classList.toggle('jarvis-down', vcTarget === JARVIS && !vcJarvisUp());
+  vcBarTarget.title = vcTarget === JARVIS
+    ? `Your words go to Jarvis (${VC_JARVIS_STATE[vcJarvis.state] || vcJarvis.state}): click to change`
+    : 'The sandbox your words go to: click to change';
 }
 function vcSetTarget(name) {
   vcTarget = name || null;
-  try { vcTarget ? localStorage.setItem(VC_TARGET, vcTarget) : localStorage.removeItem(VC_TARGET); } catch (_) {}
+  try { localStorage.setItem(VC_TARGET, vcTarget || ''); } catch (_) {}
   if (![...vcPick.options].some(o => o.value === (vcTarget || ''))) vcFillTargets();
   vcPick.value = vcTarget || '';
   vcRenderTarget();
+  // Picked and not running: offer to start it. Nothing starts on its own.
+  if (vcTarget === JARVIS) vcJarvisStatus().then(st => { if (st.state !== 'running') vcOfferJarvis(); });
 }
 vcPick.addEventListener('change', () => vcSetTarget(vcPick.value));
 vcFillTargets();
+vcJarvisStatus();
 
-// The name in the bar opens a menu of the running sandboxes, the app's own
-// (the pane menu's shell): one row each, the current one ticked, and a last
-// row for none. Arrows move, Enter picks, Escape or a click elsewhere closes.
+// ── Starting Jarvis ──────────────────────────────────────────────────────
+// One card in the panel: what state the sandbox is in, and a Start button
+// (POST /api/jarvis/start, which creates it the first time). Then the state
+// is asked again every couple of seconds until it settles.
+let vcJarvisCard = null;
+let vcJarvisPoll = null;
+function vcOfferJarvis(why) {
+  if (!vcOpen) vcSetOpen(true);
+  if (vcJarvisCard?.card.isConnected) vcJarvisCard.card.remove();
+  const { card, head, foot } = vcCard('vc-jarvis-start', 'Jarvis');
+  vcJarvisCard = { card, head, foot };
+  const body = document.createElement('p');
+  body.className = 'vc-jarvis-state';
+  card.insertBefore(body, foot);
+  const start = vcButton('Start Jarvis', async () => {
+    start.disabled = true;
+    const r = await postJsonOrError('/api/jarvis/start', {});
+    if (r && r.ok === false) { vcSay('err', `Jarvis did not start: ${r.error}`); start.disabled = false; return; }
+    vcJarvis = { state: r?.state || 'creating', error: r?.error };
+    paint();
+    // Still stopped: the daemon left it for its terminal to start.
+    if (vcJarvis.state === 'stopped') { body.textContent = 'Jarvis did not start. Open its terminal, sbxw-jarvis, to start it.'; return; }
+    clearInterval(vcJarvisPoll);
+    vcJarvisPoll = setInterval(async () => {
+      const st = await vcJarvisStatus();
+      paint();
+      if (st.state !== 'creating') {
+        clearInterval(vcJarvisPoll);
+        if (st.state === 'running' && !vcSpeech.muted && vcCanSpeak()) vcSpeak(vcLang('Jarvis est prêt.', 'Jarvis is ready.'));
+      }
+    }, 2000);
+  }, true);
+  start.classList.add('vc-jarvis-go');
+  const paint = () => {
+    const st = vcJarvis.state;
+    body.textContent = st === 'running' ? 'Jarvis is running. Talk or type: your words go to its Claude session.'
+      : st === 'creating' ? 'Starting Jarvis… The first time, its sandbox is created: this can take a minute or two.'
+      : st === 'failed' ? `Jarvis failed to start${vcJarvis.error ? `: ${vcJarvis.error}` : '.'}`
+      : st === 'stopped' ? 'Jarvis is stopped. Start it to talk to it.'
+      : `Jarvis runs in its own sandbox, ${JARVIS}, which does not exist yet. Start it to create it.`;
+    if (why) body.textContent = `${why} ${body.textContent}`;
+    head.textContent = `Jarvis · ${VC_JARVIS_STATE[st] || st}`;
+    card.classList.toggle('done', st === 'running');
+    start.hidden = st === 'running' || st === 'creating';
+    start.disabled = false;
+    start.textContent = st === 'failed' ? 'Try again' : 'Start Jarvis';
+    card.classList.toggle('vc-busy', st === 'creating');
+  };
+  foot.append(start);
+  paint();
+}
+
+// The name in the bar opens a menu: Jarvis first, then the running
+// sandboxes, the app's own (the pane menu's shell): one row each, the
+// current one ticked, and a last row for none. Arrows move, Enter picks,
+// Escape or a click elsewhere closes.
 let vcMenu = null;
 function vcCloseMenu(refocus) {
   if (!vcMenu || vcMenu.hidden) return;
@@ -439,7 +528,7 @@ async function vcOpenMenu() {
     vcMenu = document.createElement('div');
     vcMenu.className = 'pane-menu vc-target-menu';
     vcMenu.setAttribute('role', 'menu');
-    vcMenu.setAttribute('aria-label', 'The sandbox your words go to');
+    vcMenu.setAttribute('aria-label', 'Where your words go');
     vcMenu.hidden = true;
     vcMenu.addEventListener('click', e => {
       const row = e.target.closest('button[data-name]');
@@ -460,9 +549,9 @@ async function vcOpenMenu() {
     });
     document.body.appendChild(vcMenu);
   }
-  const targets = await vcTargets();
-  if (vcTarget && !targets.includes(vcTarget)) targets.unshift(vcTarget); // stopped, but still the choice
-  const row = (name, label, cls) => {
+  const [targets] = await Promise.all([vcTargets(), vcJarvisStatus()]);
+  if (vcTarget && vcTarget !== JARVIS && !targets.includes(vcTarget)) targets.unshift(vcTarget); // stopped, but still the choice
+  const row = (name, label, cls, note) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.dataset.name = name;
@@ -475,17 +564,24 @@ async function vcOpenMenu() {
     text.className = `vc-tm-name ${cls || ''}`;
     text.textContent = label;
     b.append(tick, text);
+    if (note) {
+      const n = document.createElement('span');
+      n.className = 'vc-tm-note';
+      n.textContent = note;
+      b.append(n);
+    }
     return b;
   };
   vcMenu.replaceChildren();
+  vcMenu.append(row(JARVIS, 'Jarvis', 'vc-tm-jarvis', vcJarvisUp() ? '' : VC_JARVIS_STATE[vcJarvis.state] || vcJarvis.state));
   if (!targets.length) {
     const none = document.createElement('div');
     none.className = 'vc-tm-empty';
-    none.textContent = 'No running sandbox';
+    none.textContent = 'No running project sandbox';
     vcMenu.append(none);
   }
   for (const name of targets) vcMenu.append(row(name, name));
-  if (vcTarget || targets.length) vcMenu.append(row('', 'No sandbox', 'vc-tm-none'));
+  vcMenu.append(row('', 'No sandbox', 'vc-tm-none'));
   vcMenu.hidden = false;
   vcBarTarget.setAttribute('aria-expanded', 'true');
   const r = vcBarTarget.getBoundingClientRect();
@@ -499,17 +595,22 @@ vcBarTarget.addEventListener('click', () => (vcMenu && !vcMenu.hidden ? vcCloseM
 // ── A message to the sandbox ─────────────────────────────────────────────
 // Words said (or typed) with nothing to answer are a message for the picked
 // sandbox's agent: masked, then typed into it at once, with no card to
-// confirm. What left is shown when the masking changed it.
+// confirm. What left is shown when the masking changed it. Jarvis is sent
+// to the same way, once it runs; until then the words wait in a card.
 async function vcDraft(text) {
   const name = vcTarget;
   if (!name) return vcDraftCard(text);
+  if (name === JARVIS && !vcJarvisUp() && (await vcJarvisStatus()).state !== 'running') {
+    vcOfferJarvis('Not sent yet: Jarvis is not running.');
+    return vcDraftCard(text);
+  }
   const safe = await postJsonOrError('/api/voice/anonymise', { text: text.trim() });
   if (!safe.ok) { vcSay('err', `Not sent, the anonymisation failed: ${safe.error}`); return; }
   const r = await postJsonOrError('/api/chat/push', { text: safe.text, name });
   // Not lost: the words wait in a card, to send again or drop.
-  if (!r.ok) { vcSay('err', `Not sent to ${name}: ${r.error}`); return vcDraftCard(safe.text); }
-  vcSay('dim', safe.masked ? `Sent to ${name}, ${vcMaskedNote(safe.masked).replace(' before sending', '')}: ${safe.text}` : `Sent to ${name}.`);
-  if (!vcSpeech.muted) vcSpeak('Envoyé.');
+  if (!r.ok) { vcSay('err', `Not sent to ${vcLabel(name)}: ${r.error}`); return vcDraftCard(safe.text); }
+  vcSay('dim', safe.masked ? `Sent to ${vcLabel(name)}, ${vcMaskedNote(safe.masked).replace(' before sending', '')}: ${safe.text}` : `Sent to ${vcLabel(name)}.`);
+  if (!vcSpeech.muted) vcSpeak(vcLang('Envoyé.', 'Sent.'));
 }
 
 // With no sandbox picked, or when sending failed, the words are kept in an
@@ -517,7 +618,7 @@ async function vcDraft(text) {
 // agent, "non" or Discard drops it.
 function vcDraftCard(text) {
   const target = vcTarget;
-  const { card, head, foot } = vcCard('vc-draft', target ? `To ${target}` : 'Pick a sandbox at the top first');
+  const { card, head, foot } = vcCard('vc-draft', target ? `To ${vcLabel(target)}` : 'Pick a sandbox at the top first');
   const area = document.createElement('textarea');
   area.className = 'vc-brief-text';
   area.value = text;
@@ -535,9 +636,9 @@ function vcDraftCard(text) {
     const safe = await vcMask(area);
     if (safe === null) { send.disabled = false; return; }
     const r = await postJsonOrError('/api/chat/push', { text: safe, name });
-    if (!r.ok) { send.disabled = false; vcSay('err', `Not sent to ${name}: ${r.error}`); return; }
-    head.textContent = `Sent to ${name}`;
-    done(`Typed into ${name}'s agent.`);
+    if (!r.ok) { send.disabled = false; vcSay('err', `Not sent to ${vcLabel(name)}: ${r.error}`); return; }
+    head.textContent = `Sent to ${vcLabel(name)}`;
+    done(name === JARVIS ? 'Sent to Jarvis.' : `Typed into ${name}'s agent.`);
   }, true);
   const drop = vcButton('Discard', () => { card.remove(); vcDisarm(); });
   const hint = document.createElement('span');
@@ -549,7 +650,7 @@ function vcDraftCard(text) {
     add: more => { area.value = `${area.value.trimEnd()} ${more}`.trim(); fit(); vcLog.scrollTop = vcLog.scrollHeight; },
     yes: () => send.click(), no: () => drop.click(),
   });
-  if (!vcSpeech.muted) vcSpeak(target ? "C'est noté. J'envoie ?" : 'Choisis un sandbox en haut.');
+  if (!vcSpeech.muted) vcSpeak(target ? vcLang("C'est noté. J'envoie ?", 'Got it. Shall I send it?') : vcLang('Choisis un sandbox en haut.', 'Pick a sandbox at the top.'));
 }
 
 // Start over: the log emptied, nothing armed, the voice quiet.
@@ -794,7 +895,7 @@ function vcSetOpen(open) {
   vcOpenBtn.setAttribute('aria-expanded', String(open));
   vcLauncher.classList.toggle('open', open);
   if (open) { vcLauncher.classList.remove('news'); vcLog.scrollTop = vcLog.scrollHeight; }
-  vcOpenBtn.title = open ? 'Close the Concierge panel' : 'Open the Concierge panel';
+  vcOpenBtn.title = open ? 'Close the Jarvis panel' : 'Open the Jarvis panel';
   vcOpenBtn.setAttribute('aria-label', vcOpenBtn.title);
   vcEl('vc-l-open-label').textContent = open ? 'Close' : 'Open';
   if (open) { vcRefresh(); vcWarm(!vcSpeech.muted); vcFillTargets(); }
@@ -871,11 +972,12 @@ try { vcFollow = localStorage.getItem(VC_FOLLOW) === '1'; } catch (_) {}
 const VC_GRILL_PROMPT = /^\s*\/(grill-me|grilling)\b/i;
 const VC_GRILL_REPLY = /❓\s*\*\*Q\d+/;
 function vcEngages(info, reply) {
-  return vcFollow || VC_GRILL_PROMPT.test(info.last_input || '') || VC_GRILL_REPLY.test(reply || '');
+  // Jarvis is talked to, not watched: its every answer is shown and read.
+  return info.sandbox === JARVIS || vcFollow || VC_GRILL_PROMPT.test(info.last_input || '') || VC_GRILL_REPLY.test(reply || '');
 }
 
 function vcModeOf(thread) { return thread ? `thread:${thread}` : 'claude'; }
-function vcWho(sandbox, thread) { return thread ? `${sandbox} · ${thread}` : sandbox; }
+function vcWho(sandbox, thread) { return thread ? `${vcLabel(sandbox)} · ${thread}` : vcLabel(sandbox); }
 
 // Arm the next words for `p`, and say so on the card.
 function vcArm(p) {
@@ -1103,6 +1205,14 @@ function vcHear(text) {
     if (VC_YES.test(text)) return p.yes();
     if (VC_NO.test(text)) return p.no();
   }
+  // A Jarvis proposal (jarvis.js): a yes or a no answers it; anything else
+  // is a message of its own, and the proposal waits in its dialog.
+  if (p?.kind === 'jarvis') {
+    if (VC_YES.test(text)) return p.yes();
+    if (VC_NO.test(text)) return p.no();
+    vcDisarm();
+    return vcHear(text);
+  }
   if (p?.kind === 'grill' && vcGrillHear(p.st, text)) return;
   if (p?.kind !== 'grill') vcSay('me', text);
   if (p?.kind === 'draft') return p.add(text);
@@ -1133,7 +1243,7 @@ async function vcAnswerAgent(p, dictated) {
   }
   card.classList.add('done');
   vcSay('dim', `Answer typed into ${vcWho(p.sandbox, p.thread)}.`);
-  if (!vcSpeech.muted) vcSpeak('Envoyé.');
+  if (!vcSpeech.muted) vcSpeak(vcLang('Envoyé.', 'Sent.'));
 }
 
 // Which option the words name, 1-based, or 0: a number ("la deux", "option

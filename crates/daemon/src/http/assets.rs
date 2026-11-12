@@ -65,6 +65,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("board.js"),
     js!("chat-dock.js"),
     js!("concierge.js"),
+    js!("jarvis.js"),
     js!("sidepanel.js"),
     // xterm.js, vendored from the npm registry (see assets/vendor/README.md)
     // rather than fetched from a CDN into a page that can open a host terminal.

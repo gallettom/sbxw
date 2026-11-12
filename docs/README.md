@@ -15,6 +15,7 @@
 | [Chat](chat.md) | Chat sandboxes, the chat dock, the browser side panel |
 | [Threads and the lead](threads-and-lead.md) | Several agents per sandbox, worktree graph, plans, one-click merge |
 | [Relay](relay.md) | Questions between sandboxes, screenshot requests |
+| [Jarvis](jarvis.md) | The voice of sbxw, and its assistant: what it can change, how you approve it, how to remove it |
 | [Virtual Mac](../assets/terminal-mac/README.md) | A macOS guest agents drive: Safari, Mac apps (`sbxw:terminal-mac`) |
 | [Dynamic Island](island.md) | The macOS notch companion, session hooks, usage |
 | [SSH](ssh.md) | `<name>.sbx` hosts, VS Code, Claude Desktop |

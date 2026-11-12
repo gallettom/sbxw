@@ -133,7 +133,7 @@ recommendation** fills a field with it. A question you leave empty is
 skipped. **Send answers** (or Ctrl+Enter, ⌘+Enter on a Mac) releases them
 all at once, one line per answered question (`Q1 : …`), which is what the
 tool returns. Personal data is masked first, as the
-[Concierge](web-ui.md#the-voice-concierge) masks what it sends; if the
+[Jarvis](web-ui.md#jarvis) masks what it sends; if the
 masking is not available or fails, nothing is sent. Tab moves from one
 answer field to the next. The popup does not take the keyboard from a
 terminal until you click into it.
@@ -146,8 +146,8 @@ for you to edit, discard with **Clear the draft** and answer yourself, or send. 
 asker until you click **Send answers**. **Refuse** sets the round aside and
 tells the agent so.
 
-**Read aloud** (shown when the Concierge's voice is set up) reads the round
-with the Concierge's voice: the intro, then each question with its
+**Read aloud** (shown when Jarvis's voice is set up) reads the round
+with Jarvis's voice: the intro, then each question with its
 recommendation. Click again to stop. Nothing is read in full on its own;
 with the voice on, a short spoken cue says a round has arrived.
 

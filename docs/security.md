@@ -8,6 +8,7 @@ safety boundary. This page lists what that boundary is and where it has edges.
 - [What a sandbox can reach](#what-a-sandbox-can-reach)
 - [Two listeners](#two-listeners)
 - [Human decisions](#human-decisions)
+- [Jarvis](#jarvis)
 - [Secrets](#secrets)
 - [Host changes](#host-changes)
 - [Known edges](#known-edges)
@@ -182,6 +183,63 @@ page instead of the chat.
 - **Plans:** nothing starts until you approve. After approval, a lead and its
   threads message each other without clicks, **inside one sandbox only**. See
   [the lead's trust model](threads-and-lead.md#trust).
+
+## Jarvis
+
+[Jarvis](jarvis.md) is a Claude session in a sandbox the daemon owns,
+`sbxw-jarvis`, that can propose changes to sbxw's configuration. Its trust
+model has three steps: **the sandbox proposes, the daemon validates, the
+person approves.**
+
+- **The sandbox proposes.** Jarvis sends data, not files or commands:
+  "add this bundled kit to that `kits` line", "set this key to that value".
+  It never names a path on the host and never runs anything there.
+- **The daemon validates and writes.** It turns each change into the exact
+  write and a diff, or refuses it with a reason:
+  - kits are written by sbxw, under `~/.sbxw/state/kits/jarvis-*` only. sbxw
+    renders the `spec.yaml` itself: image content and a `chmod` for scripts,
+    no install command, no network rule. Kit files land under `/home/agent/`
+    in a sandbox, never in sbxw's own files or Claude Code's settings;
+  - settings come from a fixed list and are checked as the config loader
+    checks them; `network_allow` entries get the usual checks (`*`, `**` and
+    the UI port are refused);
+  - **no secrets**: a change carrying something shaped like a key or a token
+    is refused. The person adds an MCP server's secrets in Setup;
+  - at approval, the daemon plans again against the files as they are. If a
+    diff differs from the one shown, nothing is applied.
+- **The person approves.** Nothing is applied without Approve, in the web UI,
+  on the UI listener. There is no auto-approve.
+
+**Only `sbxw-jarvis` may call the proposal endpoints.** On the agent listener,
+the daemon answers them for one caller: the local sandbox named `sbxw-jarvis`
+that it created on Jarvis's own workspace. Every other sandbox is refused,
+whatever its token. The name is reserved on every host, so a project sandbox
+cannot take it, and a sandbox of that name sbxw did not create is not Jarvis.
+The `sbxw:jarvis` kit, which holds the proposal tools, is never offered and a
+project's `kits` cannot list it.
+
+**Jarvis's sandbox is kept small.** Its workspace is an empty folder under
+sbxw's state: it sees no project and none of sbxw's files. It is built from
+sbxw's defaults, not the daemon's `sbxw.toml` (only the listeners, the
+network policy and the model are taken), so no mount, env, port or shared
+skill store reaches it.
+
+**Low risk and high risk.** Every change has a risk, and a proposal takes
+the highest of its changes:
+
+| Low risk | High risk |
+|---|---|
+| A setting from the fixed list; adding or removing a bundled kit (`sbxw:<name>`) in a `kits` line | Writing or removing a Jarvis kit; putting a Jarvis kit in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
+
+A low-risk proposal may be approved by voice (a spoken *oui* after Jarvis
+reads its summary). A high-risk one is approved only with a click in the
+dialog, after its diff is on screen: the daemon refuses a voice approval of
+it (HTTP 409). The diff is the sandbox's text: the page shows it as text,
+never as HTML.
+
+What Jarvis says is an agent's text, like any other sandbox's: its summary
+may be wrong or written to persuade. The diff is what the daemon would
+write; read it.
 
 ## Secrets
 

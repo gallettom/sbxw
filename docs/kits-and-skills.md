@@ -263,6 +263,26 @@ approval, clicks and typing do not. Opt-in, Apple silicon hosts only; sbxw
 installs a pinned, SHA-256-checked release. See
 [`assets/terminal-mac/README.md`](../assets/terminal-mac/README.md).
 
+## Jarvis kits
+
+[Jarvis](jarvis.md) can propose kits of its own: skills, slash commands,
+scripts and text for the agent's `CLAUDE.md`. Once you approve one, sbxw
+writes it to `~/.sbxw/state/kits/jarvis-<name>/`. sbxw renders its
+`spec.yaml` itself (image content from `files/home/agent/`, a `chmod` for
+scripts, an optional `agent-context@2`): a Jarvis kit has no install command
+and no network rule. Its files go under `/home/agent/`, never into sbxw's
+own files or Claude Code's settings.
+
+A Jarvis kit reaches a sandbox like any local kit: through a `kits` line,
+which Jarvis can also propose to change. Writing a Jarvis kit, and putting
+one in a `kits` line, are high risk: they are approved with a click, never
+by voice. Adding a bundled kit to a `kits` line is low risk.
+
+To remove one, take it out of the `kits` lines that list it, then delete its
+folder (or approve Jarvis's proposal to remove it). `sbxw:jarvis`, the kit
+of Jarvis's own sandbox, is not one of these: it is never offered, and a
+project's `kits` cannot list it.
+
 ## Kits are checked before anything is created
 
 On every `sbxw up`, each of your own local kits (a directory, not a bundled

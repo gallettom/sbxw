@@ -28,6 +28,7 @@ sbxw only ever calls `sbx`, never `docker sandbox`.
 | ★ **A lead that plans the work** | The main agent splits a task into threads. You approve the plan, then merge in one click. [Lead →](docs/threads-and-lead.md#the-lead) |
 | 🔁 **Sandboxes that ask each other** | An agent can ask another sandbox, or you, for a screenshot. Nothing moves until you approve it. [Relay →](docs/relay.md) |
 | 💬 **Throwaway chats** | An agent on an empty folder, from the CLI, a chat dock, or a Chrome side panel. [Chat →](docs/chat.md) |
+| 🎙️ **Jarvis** | Talk to your agents, hear their answers, and let sbxw's own assistant propose config changes you approve. [Jarvis →](docs/jarvis.md) |
 | 🧰 **Batteries included** | Bundled kits: code maps, diagrams, launch videos, Markdown→PDF, k8s tools. [Kits →](docs/kits-and-skills.md) |
 | 🏝️ **macOS Dynamic Island** | Every session in your notch. Answer an agent's questions from there. [Island →](docs/island.md) |
 
@@ -69,6 +70,7 @@ or the published ports won't reach them.
 | [Chat](docs/chat.md) | Chat sandboxes, the chat dock, the browser side panel |
 | [Threads and the lead](docs/threads-and-lead.md) | Several agents per sandbox, worktree graph, plans, one-click merge |
 | [Relay](docs/relay.md) | Questions between sandboxes, screenshot requests |
+| [Jarvis](docs/jarvis.md) | The voice of sbxw, and its assistant: proposals you approve |
 | [Dynamic Island](docs/island.md) | The macOS notch companion, session hooks, usage |
 | [Kits and skills](docs/kits-and-skills.md) | Bundled kits, the kit cache, the shared skill store |
 | [Configuration](docs/configuration.md) | Every `sbxw.toml` key, models, environment variables |
