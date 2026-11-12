@@ -201,12 +201,16 @@ person approves.**
     no install command, no network rule. Kit files land under `/home/agent/`
     in a sandbox, never in sbxw's own files or Claude Code's settings;
   - settings come from a fixed list and are checked as the config loader
-    checks them; `network_allow` entries get the usual checks (`*`, `**` and
-    the UI port are refused);
+    checks them; a `network_allow` entry is a bare host name (no address,
+    no port, no wildcard, not this machine), and approving it records the
+    same consent as any new grant;
   - **no secrets**: a change carrying something shaped like a key or a token
-    is refused. The person adds an MCP server's secrets in Setup;
+    is refused, and so is an MCP server with a credential in a header, its
+    URL or an argument. Jarvis writes `${key}` placeholders; the person fills
+    in the secrets in Setup;
   - at approval, the daemon plans again against the files as they are. If a
-    diff differs from the one shown, nothing is applied.
+    diff differs from the one shown, nothing is applied. Changes are applied
+    in order and stop at the first failure.
 - **The person approves.** Nothing is applied without Approve, in the web UI,
   on the UI listener. There is no auto-approve.
 
@@ -229,7 +233,7 @@ the highest of its changes:
 
 | Low risk | High risk |
 |---|---|
-| A setting from the fixed list; adding or removing a bundled kit (`sbxw:<name>`) in a `kits` line | Writing or removing a Jarvis kit; putting a Jarvis kit in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
+| A setting from the fixed list; a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
 
 A low-risk proposal may be approved by voice (a spoken *oui* after Jarvis
 reads its summary). A high-risk one is approved only with a click in the

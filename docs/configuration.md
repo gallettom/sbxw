@@ -244,7 +244,7 @@ applied by the daemon only after you approve it, as a diff you read first:
   keys, `claude_model`, `terminal_color`, `terminal_bar_color`,
   `terminal_text_color`, `keep_awake`, `keep_awake_min_battery`,
   `battery_warn_below`, `cache_ttl_days`;
-- the daemon's `network_allow`;
+- the daemon's `network_allow`, bare host names only;
 - the `kits` line of the daemon's `sbxw.toml` or of one sandbox's, with
   bundled kits and Jarvis kits only;
 - MCP servers, as the MCP tab of Setup adds them.

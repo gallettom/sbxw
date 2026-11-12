@@ -41,9 +41,9 @@ Each proposal holds one or more changes. Jarvis can propose:
 | Change | What it does | Risk |
 |---|---|---|
 | **Kit** (`kit_write`, `kit_remove`) | Create, update or remove a kit sbxw keeps for you under `~/.sbxw/state/kits/jarvis-<name>/`: files placed under `/home/agent/` (skills, slash commands, scripts) and optional text for the agent's `CLAUDE.md` | High |
-| **Kits line** (`kits_line`) | Add or remove a kit in the `kits` list of the daemon's `sbxw.toml` or of one sandbox's. Only bundled kits (`sbxw:<name>`) and Jarvis kits | Low for a bundled kit, high for a Jarvis kit |
+| **Kits line** (`kits_line`) | Add or remove a kit in the `kits` list of the daemon's `sbxw.toml` or of one sandbox's. Only bundled kits (`sbxw:<name>`) and Jarvis kits | Low when it only adds bundled kits or only removes; high when it adds a Jarvis kit |
 | **Setting** (`setting`) | One key of the daemon's `sbxw.toml`, from a fixed list: the `[voice]` keys, `claude_model`, the terminal colours, `keep_awake`, `keep_awake_min_battery`, `battery_warn_below`, `cache_ttl_days`. It takes effect when the daemon restarts | Low |
-| **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. The usual checks apply (`*` and `**` are refused) | High |
+| **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
 | **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does | High |
 
 A proposal is as risky as its riskiest change. Every change is shown to you
@@ -51,7 +51,8 @@ as a diff of what would be written, before anything is.
 
 The daemon keeps one proposal pending at a time. Jarvis waits for your
 answer, and is told what came of it: applied, refused (with your reason, if
-you gave one) or failed (with the error).
+you gave one) or failed (with the error). Proposals are kept in
+`~/.sbxw/state/jarvis.json`: every pending one and the last 50 settled.
 
 ## What Jarvis can never do
 
@@ -67,8 +68,9 @@ construction:
   image content and a `chmod` for scripts. A Jarvis kit has no install
   command and no network rule.
 - **No secrets.** A change that carries something shaped like a key or a
-  token is refused. Secrets for an MCP server are added by you, in the MCP
-  tab of Setup.
+  token is refused, and so is an MCP server with a credential in a header,
+  its URL or an argument. Jarvis writes a `${key}` placeholder instead, and
+  you fill in the secret in the MCP tab of Setup.
 - **No setting outside the list above**, and no value the config check
   would refuse.
 - **Nothing without you.** There is no auto-approve. A proposal you have not
@@ -88,8 +90,8 @@ from a terminal: click into it to use it. It shows:
 When you approve, the daemon plans the changes again against the files as
 they are at that moment. If a diff differs from the one you read (a file
 changed in between), nothing is applied and the proposal fails with that
-reason. After the answer, the dialog shows the result of each change, and
-the error when one failed.
+reason. The changes are applied in order and stop at the first that fails:
+the dialog then shows the result of each change, and the error.
 
 **✕** means later. The bar's **Jarvis · N to review** brings the dialog back.
 
@@ -129,6 +131,8 @@ Prompts are spoken in French with a French voice (`[voice] tts_voice =
    applied without your click, so nothing changes when it goes.
 2. To remove the kits Jarvis wrote too, take them out of any `kits` line
    that lists them, then delete their folders, `~/.sbxw/state/kits/jarvis-*`.
+   The history of proposals is `~/.sbxw/state/jarvis.json`; delete it too if
+   you want it gone.
 
 Picking **Jarvis** again later offers to start a fresh one. The voice does not
 depend on the sandbox: dictation and reading aloud keep working without it.
