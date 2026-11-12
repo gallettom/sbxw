@@ -13,6 +13,7 @@ pub mod board;
 pub mod artifacts;
 pub mod carve;
 pub mod codemap;
+pub mod chrome;
 pub mod config;
 pub mod consent;
 pub mod embed;

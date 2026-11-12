@@ -90,6 +90,15 @@ pub struct App {
     pub mac_boot_wait: Mutex<Duration>,
     /// Where the guest reaches the host, when a test names it.
     pub mac_guest_ip_override: Mutex<Option<String>>,
+    /// The hosts allowed from each sandbox's Browser panel since its browser
+    /// was opened, with the rules that made (see `svc::browser`).
+    pub(crate) browser_grants: Mutex<HashMap<SandboxRef, Vec<crate::svc::browser::Grant>>>,
+    /// Sandboxes whose agent said it is using its browser, and has not said
+    /// it stopped: each shows a tab on its terminal.
+    pub(crate) browsing: Mutex<HashSet<SandboxRef>>,
+    /// Held across one panel allow (two listings around an `sbx policy
+    /// allow`): see `svc::browser`.
+    pub(crate) browser_allowing: tokio::sync::Mutex<()>,
     /// Each sandbox's last Remote Control probe (see `svc::remote`).
     pub(crate) remote_probes: Mutex<HashMap<SandboxRef, crate::svc::remote::ProbeSlot>>,
     /// The voice models' install job and the loaded recogniser (see `svc::voice`).
@@ -145,6 +154,9 @@ impl AppBuilder {
             mac_boot_wait: Mutex::new(crate::svc::mac::BOOT_WAIT),
             mac_guest_ip_override: Mutex::new(None),
             remote_probes: Mutex::new(HashMap::new()),
+            browser_grants: Mutex::new(HashMap::new()),
+            browsing: Mutex::new(HashSet::new()),
+            browser_allowing: tokio::sync::Mutex::new(()),
             voice: Mutex::new(Default::default()),
         })
     }

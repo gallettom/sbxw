@@ -63,6 +63,8 @@ pub struct BringUp {
     /// login inside instead (`sbxw_core::remote`). Only a new sandbox takes
     /// it; a recorded one keeps its choice.
     pub remote_control: bool,
+    /// Start its agent with `--chrome` from now on (Claude in Chrome).
+    pub chrome: bool,
     /// Clone this into `workspace` first, on the sandbox's host, when
     /// `workspace` does not exist yet (`sbxw up --git <url>`).
     pub git: Option<String>,
@@ -265,10 +267,20 @@ impl App {
                 "'{name}' was created without Remote Control — press Remote in its pane to switch it to a claude.ai login"
             ));
         }
-        let remote = recorded_remote || (!existed && req.remote_control);
+        // sbx 0.53 keeps Remote Control's credentials on the host, behind its
+        // `claude.remoteControl` setting: a sandbox signed in the usual way
+        // takes /remote-control, and none is created without credentials any
+        // more. An older sbx does not know the setting.
+        let native_remote = match !existed && req.remote_control {
+            true => sbx.setting_bool(remote::SETTING, remote::SINCE).await?,
+            false => None,
+        };
+        let remote = recorded_remote || (!existed && req.remote_control && native_remote.is_none());
+        let chrome = cfg.chrome || req.chrome || self.store.get(name).chrome;
         self.store
             .update(name, |r| {
                 r.remote_control = remote;
+                r.chrome |= req.chrome;
                 r.workspace = Some(req.workspace.clone());
                 r.config.clone_from(&cfg.source);
                 r.config_snapshot = Some(snapshot);
@@ -297,6 +309,28 @@ impl App {
         if remote {
             run.info("Remote Control: no credentials injected — log in with /login in the agent's pane");
             own_allow.extend(remote::LOGIN_HOSTS.iter().map(|h| h.to_string()));
+        }
+        match native_remote {
+            Some(true) => {
+                run.info("Remote Control: sbx keeps its credentials on the host — press Remote in the agent's pane");
+                self.watch_remote(name);
+            }
+            Some(false) => {
+                run.warn(remote::setting_advice());
+                self.watch_remote(name);
+            }
+            None => {}
+        }
+        if chrome {
+            match sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE).await {
+                Ok(Some(true)) => run.info("Claude in Chrome: the agent starts with --chrome"),
+                Ok(Some(false)) => run.warn(sbxw_core::chrome::setting_advice()),
+                Ok(None) => run.warn(sbxw_core::chrome::NEEDS_SBX),
+                Err(e) => run.warn(format!("Claude in Chrome: could not read sbx's `{}` setting: {e:#}", sbxw_core::chrome::SETTING)),
+            }
+            if req.api_key.as_deref().is_some_and(|k| !k.trim().is_empty()) {
+                run.warn(sbxw_core::chrome::NEEDS_SUBSCRIPTION);
+            }
         }
 
         // ── Create, or reuse ─────────────────────────────────────────────
@@ -1099,6 +1133,7 @@ mod tests {
             api_key: None,
             template,
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Checked(vec![]),
         }
@@ -1227,6 +1262,7 @@ mod tests {
             api_key: None,
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Checked(vec![]),
         };
@@ -1262,6 +1298,7 @@ mod tests {
             api_key: None,
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Check(approved),
         };
@@ -1320,6 +1357,7 @@ mod tests {
             api_key: None,
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Check(approved),
         };
@@ -1370,6 +1408,7 @@ mod tests {
             api_key: None,
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Checked(vec![]),
         };
@@ -1405,6 +1444,7 @@ mod tests {
             api_key: None,
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Checked(vec![]),
         };
@@ -1453,6 +1493,7 @@ mod tests {
                     api_key: None,
                     template: Default::default(),
                     remote_control: false,
+                    chrome: false,
                     git: None,
                     consent: Consent::Checked(vec![]),
                 },
@@ -1516,6 +1557,7 @@ mod tests {
             api_key: Some("sk-key".into()),
             template: Default::default(),
             remote_control: true,
+            chrome: false,
             git: None,
             consent: Consent::Checked(vec![]),
         };
@@ -1533,6 +1575,52 @@ mod tests {
         app.provision(BringUp { remote_control: false, ..req }, None).await.unwrap();
         assert!(fake.log().iter().all(|c| !c.contains(".credentials.json") && !c.contains("kit add")));
         assert!(app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap()).remote_control);
+    }
+
+    /// sbx 0.53 keeps Remote Control's credentials on the host: the sandbox
+    /// is created like any other, and Chrome is said once, with what to run.
+    #[tokio::test]
+    async fn with_sbx_0_53_a_remote_control_sandbox_keeps_its_sign_in_and_chrome_is_recorded() {
+        let created = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let c = created.clone();
+        let (dir, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("ls") if c.load(std::sync::atomic::Ordering::SeqCst) => crate::testing::ls(&[("myapp", "running")]),
+            Some("ls") => crate::testing::ls(&[]),
+            Some("create") => {
+                c.store(true, std::sync::atomic::Ordering::SeqCst);
+                Output::ok("")
+            }
+            Some("settings") if a.last().map(String::as_str) == Some("claude.remoteControl") => Output::ok("true\n"),
+            Some("settings") if a.last().map(String::as_str) == Some("claude.chrome") => Output::ok("false\n"),
+            Some("exec") if a.join(" ").contains("node -") => Output::ok("SBXW-TOOLING []\n"),
+            _ => sbx_answer(a),
+        });
+        let ws = dir.path().join("myapp");
+        std::fs::create_dir_all(&ws).unwrap();
+        let req = BringUp {
+            name: SandboxRef::parse("myapp").unwrap(),
+            workspace: ws,
+            ro: vec![],
+            rw: vec![],
+            carve: vec![],
+            config: Config::default(),
+            extra_ports: vec![],
+            chat: false,
+            api_key: None,
+            template: Default::default(),
+            remote_control: true,
+            chrome: true,
+            git: None,
+            consent: Consent::Checked(vec![]),
+        };
+        let warnings = app.provision(req, None).await.unwrap();
+        let rec = app.store.get(sbxw_core::SandboxRef::parse("myapp").unwrap());
+        assert!(!rec.remote_control, "not a sandbox without credentials");
+        assert!(rec.chrome, "asked for once, kept");
+        let log = fake.log();
+        assert!(log.iter().all(|c| !(c.starts_with("policy allow") && c.contains("platform.claude.com"))), "no /login inside: {log:?}");
+        assert!(warnings.iter().any(|w| w.contains("sbx settings set claude.chrome true")), "{warnings:?}");
+        assert!(warnings.iter().all(|w| !w.contains("claude.remoteControl")), "it is on: {warnings:?}");
     }
 
     #[tokio::test]
@@ -1567,6 +1655,7 @@ mod tests {
                     api_key: None,
                             template: Default::default(),
                     remote_control: false,
+                    chrome: false,
                     git: None,
                     consent: Consent::Checked(vec![]),
                 },
@@ -1609,6 +1698,7 @@ mod tests {
                 api_key: None,
                     template: Default::default(),
                 remote_control: false,
+                chrome: false,
                 git: None,
                 consent: Consent::Checked(vec![]),
             }
@@ -1645,6 +1735,7 @@ mod tests {
             api_key: None,
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent: Consent::Checked(vec![]),
         };

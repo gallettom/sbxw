@@ -22,6 +22,27 @@ const EXEMPT_BASENAMES = new Set([
   'contributing.md', 'claude.md', 'agents.md', 'code_of_conduct.md',
 ]);
 
+// An .html file is a deliverable (a report, an export) or a web page of the
+// project being built. Built is the likelier reading when it is the site's
+// entry point, when it sits in a folder web projects keep pages in, or when
+// web code sits beside it; only an .html with none of those is redirected.
+const WEB_DIRS = new Set([
+  'public', 'static', 'src', 'app', 'pages', 'views', 'templates', 'www', 'site',
+  'web', 'frontend', 'client', 'html', 'assets', 'dist', 'build', 'components',
+]);
+const WEB_CODE = /\.(css|scss|sass|less|m?js|cjs|jsx|tsx?|vue|svelte|astro|php|py|rb|go)$|^package\.json$/i;
+
+function isWebPage(abs, cwd) {
+  if (path.basename(abs).toLowerCase() === 'index.html') return true;
+  const dirs = path.relative(cwd, path.dirname(abs)).split(path.sep).map((d) => d.toLowerCase());
+  if (dirs.some((d) => WEB_DIRS.has(d))) return true;
+  try {
+    return fs.readdirSync(path.dirname(abs)).some((f) => WEB_CODE.test(f));
+  } catch (e) {
+    return false;
+  }
+}
+
 let raw = '';
 process.stdin.on('data', (chunk) => { raw += chunk; });
 process.stdin.on('end', () => {
@@ -55,7 +76,8 @@ process.stdin.on('end', () => {
       !insideClaudeDir &&
       !alreadyExists &&
       EXTENSIONS.has(ext) &&
-      !EXEMPT_BASENAMES.has(base)
+      !EXEMPT_BASENAMES.has(base) &&
+      !(ext === 'html' && isWebPage(abs, cwd))
     ) {
       const rel = path.relative(cwd, abs) || abs;
       // PreToolUse contract (per `claude /hooks`): exit code 2 blocks the

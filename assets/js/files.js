@@ -706,7 +706,7 @@ async function generateCodemap(name) {
 /// files appearing under `.sbxw-artifacts/` with nobody in this tab involved —
 /// so the panel re-reads rather than being told what changed.
 function refreshFilesModal(name) {
-  if (filesTarget !== name || filesOverlay.classList.contains('hidden')) return;
+  if (filesTarget !== name || !filesOverlay.open) return;
   fetchCodemapState(name);
   if (fx.recent) { fxOpenRecent({ push: false, select: fx.selected }); return; }
   fxOpen(fx.path, { push: false, select: fx.selected });
@@ -735,7 +735,7 @@ async function fetchCodemapState(name) {
 async function openFilesModal(name) {
   filesTarget = name;
   filesNameEl.textContent = name;
-  filesOverlay.classList.remove('hidden');
+  modalOpen(filesOverlay);
   Object.assign(fx, { path: '', parent: null, entries: [], history: [], selected: null, recent: null, fresh: null });
   document.getElementById('fx-filter').value = '';
   fxNotice('');
@@ -748,7 +748,7 @@ async function openFilesModal(name) {
   if (artifacts && fx.places.artifacts) fxOpen(fx.places.artifacts, { push: true });
 }
 
-function closeFilesModal() { filesOverlay.classList.add('hidden'); filesTarget = null; fx.seq++; }
+function closeFilesModal() { filesOverlay.close(); filesTarget = null; fx.seq++; }
 
 document.getElementById('files-modal-codemap').addEventListener('click', () => {
   if (!filesTarget) return;
@@ -765,13 +765,13 @@ document.getElementById('files-modal-close2').addEventListener('click', closeFil
 document.getElementById('files-modal-refresh').addEventListener('click', () => {
   if (filesTarget) refreshFilesModal(filesTarget);
 });
-filesOverlay.addEventListener('click', e => { if (e.target === filesOverlay) closeFilesModal(); });
+wireModal(filesOverlay, closeFilesModal);
 document.addEventListener('keydown', e => {
-  if (filesOverlay.classList.contains('hidden')) return;
+  if (!filesOverlay.open) return;
   if (e.key === 'Escape') {
-    // Escape leaves the path field first, the panel second.
-    if (!document.getElementById('fx-path-input').classList.contains('hidden')) { closePathInput(); return; }
-    closeFilesModal();
+    // Escape leaves the path field first; preventing it keeps the dialog
+    // open. The next one closes the panel (wireModal below).
+    if (!document.getElementById('fx-path-input').classList.contains('hidden')) { e.preventDefault(); closePathInput(); }
   } else if (e.key === 'Backspace' && e.altKey && fx.parent) {
     fxOpen(fx.parent);
   }
@@ -810,7 +810,7 @@ document.getElementById('fx-crumbs').addEventListener('click', (e) => {
   openPathInput();
 });
 document.getElementById('fx-path-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
+  if (isEnterKey(e)) {
     const v = e.target.value.trim();
     closePathInput();
     if (v && v !== fx.path) fxOpen(v.replace(/^~(?=\/|$)/, fx.places.home));

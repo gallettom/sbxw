@@ -92,6 +92,8 @@ pub struct CreateForm {
     pub ports: Vec<WantedPort>,
     pub template: templates::Choice,
     pub remote_control: bool,
+    /// Start the agent with `--chrome` (Claude in Chrome).
+    pub chrome: bool,
     /// Host folders for kit-declared host mounts, over `kit_mounts`.
     pub kit_mounts: std::collections::BTreeMap<String, String>,
     /// The host-access grant lines the person has just approved.
@@ -247,6 +249,7 @@ impl App {
             chats.extend(gone.iter().filter_map(|n| self.store.chat_workspace(*n)));
             for n in &gone {
                 self.sessions.drop_sandbox(&n.to_string());
+                self.browser_forget(n);
                 self.store.forget(*n);
             }
             self.forget_remote(&gone);
@@ -273,7 +276,7 @@ impl App {
     /// A bring-up from the browser: the daemon's config, the dialog's ports,
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
     pub async fn create(self: &Arc<Self>, name: SandboxRef, path: &str, form: CreateForm, sink: Option<Sink>) -> Result<Vec<String>> {
-        let CreateForm { mounts, ports: extra, template, remote_control, kit_mounts, approved, carve } = form;
+        let CreateForm { mounts, ports: extra, template, remote_control, chrome, kit_mounts, approved, carve } = form;
         let path = PathBuf::from(path.trim());
         // The folders are the sandbox's host's, checked there.
         let host = self.host_for(&name).await?;
@@ -304,6 +307,7 @@ impl App {
         req.rw = rw;
         req.template = template;
         req.remote_control = remote_control;
+        req.chrome = chrome;
         req.carve = carve;
         self.provision(req, sink).await
     }
@@ -424,6 +428,7 @@ impl App {
                 .flatten(),
             template: Default::default(),
             remote_control: false,
+            chrome: false,
             git: None,
             consent,
         }
@@ -500,6 +505,7 @@ impl App {
             if m.readonly { req.ro.push(p) } else { req.rw.push(p) }
         }
         req.remote_control = rec.remote_control;
+        req.chrome = rec.chrome;
         req.carve = rec.carve.map(|c| c.extra).unwrap_or_default();
         self.provision(req, None).await
     }

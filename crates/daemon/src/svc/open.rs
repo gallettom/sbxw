@@ -118,7 +118,19 @@ impl App {
                 } else {
                     cfg.env_pairs()
                 };
-                Spawn::sbx(sbxw_sbx::attach_args(&sandbox.name, &env, &cfg.env_files, &self.store.get(&sandbox).attach_workdir(&cfg.workdir)))
+                // Claude in Chrome: only with sbx's own setting on, read now
+                // so switching it off takes effect at the next attach.
+                let rec = self.store.get(&sandbox);
+                let chrome = match cfg.chrome || rec.chrome {
+                    // Not read: the agent starts without --chrome, and says why.
+                    true => sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE).await.unwrap_or_else(|e| {
+                        tracing::warn!("'{sandbox}' starts without --chrome, sbx's setting could not be read: {e:#}");
+                        None
+                    }),
+                    false => None,
+                };
+                let flags = sbxw_core::chrome::agent_flags(cfg.chrome || rec.chrome, chrome);
+                Spawn::sbx(sbxw_sbx::attach_args(&sandbox.name, &env, &cfg.env_files, &rec.attach_workdir(&cfg.workdir), flags))
             }
             SessionKind::Agent => Spawn::sbx(sbxw_sbx::shell_args(&sandbox.name, &cfg.web_shell)),
             // `sbx exec` starts a stopped sandbox first (0.50).
@@ -437,6 +449,31 @@ mod tests {
         app.store.update(&sb, |r| r.config_snapshot = None).unwrap();
         let args = app.spawn_here(&SessionKey::agent(&sb)).await.unwrap().args.join(" ");
         assert!(!args.contains(".aws") && !args.contains("--env-file"), "{args}");
+    }
+
+    /// Claude in Chrome: the flag follows the sandbox's wish *and* sbx's own
+    /// setting, read at each attach.
+    #[tokio::test]
+    async fn the_agent_starts_with_chrome_only_while_sbx_allows_it() {
+        use sbxw_core::session::SessionKey;
+        let on = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let o = on.clone();
+        let (_d, app, fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("settings") => Output::ok(if o.load(std::sync::atomic::Ordering::SeqCst) { "true\n" } else { "false\n" }),
+            _ => sbx_answer(a),
+        });
+        let sb = SandboxRef::parse("myapp").unwrap();
+        let args = app.spawn_here(&SessionKey::agent(&sb)).await.unwrap().args.join(" ");
+        assert!(!args.contains("--chrome"), "{args}");
+        assert!(!fake.log().iter().any(|c| c.starts_with("settings")), "not asked for, not looked up");
+
+        app.store.update(&sb, |r| r.chrome = true).unwrap();
+        let args = app.spawn_here(&SessionKey::agent(&sb)).await.unwrap().args.join(" ");
+        assert!(args.ends_with("-- --chrome"), "{args}");
+
+        on.store(false, std::sync::atomic::Ordering::SeqCst);
+        let args = app.spawn_here(&SessionKey::agent(&sb)).await.unwrap().args.join(" ");
+        assert!(!args.contains("--chrome"), "switched off on the host: {args}");
     }
 
     /// `sbx run` on a stopped sandbox: a line, a long silence while the

@@ -29,12 +29,12 @@ function openMacModal() {
   // so the subscription is taken on first open, not at load.
   if (!macSubscribed && typeof sbxwStream !== 'undefined') {
     macSubscribed = true;
-    sbxwStream.addEventListener('mac', () => { if (!macOverlay.classList.contains('hidden')) loadMac(); });
+    sbxwStream.addEventListener('mac', () => { if (macOverlay.open) loadMac(); });
   }
-  macOverlay.classList.remove('hidden');
+  modalOpen(macOverlay);
   loadMac();
 }
-function closeMacModal() { macOverlay.classList.add('hidden'); }
+function closeMacModal() { macOverlay.close(); }
 
 async function loadMac() {
   let r;
@@ -167,13 +167,10 @@ macBody.addEventListener('click', async e => {
 // The `mac` event says when the lease or a job moved. While the guest is
 // being set up nothing fires, so poll then.
 setInterval(() => {
-  if (macOverlay.classList.contains('hidden') || !macState) return;
+  if (!macOverlay.open || !macState) return;
   if (macState.busy || (macState.state === 'running' && !macState.guest_ready) || macState.state === 'starting') loadMac();
 }, 5000);
 
 document.getElementById('mac-modal-close').addEventListener('click', closeMacModal);
 document.getElementById('mac-modal-close2').addEventListener('click', closeMacModal);
-macOverlay.addEventListener('click', e => { if (e.target === macOverlay) closeMacModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !macOverlay.classList.contains('hidden')) closeMacModal();
-});
+wireModal(macOverlay, closeMacModal);

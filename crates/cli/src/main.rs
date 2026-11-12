@@ -94,6 +94,10 @@ enum Cmd {
         /// from sbxw; run /login in its agent to sign in to claude.ai.
         #[arg(long)]
         remote_control: bool,
+        /// Start the agent with --chrome from now on: Claude in Chrome, on
+        /// tabs of your host browser (sbx 0.53, `claude.chrome` setting on).
+        #[arg(long)]
+        chrome: bool,
         /// Approve the host access the config asks for (mounts, host files,
         /// kits, network, host command, listeners) as shown, without asking.
         #[arg(long)]
@@ -187,6 +191,13 @@ enum Cmd {
         dry_run: bool,
         #[arg(long, short = 'y')]
         yes: bool,
+    },
+    /// Disk used by sbx's images, containers and managed volumes, and what is
+    /// reclaimable (`sbx df`, sbx 0.53).
+    Df {
+        /// List each image, container and volume.
+        #[arg(long, short = 'v')]
+        verbose: bool,
     },
     /// Check sbxw (sbx version, config, daemon, local kits), then summarise
     /// `sbx diagnose`.
@@ -361,8 +372,8 @@ pub enum CacheAction {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Up { name, path, path_flag, git, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control, allow_host_access } => cmd::up_with(
-            cmd::UpArgs { name, path: path.or(path_flag), git, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control },
+        Cmd::Up { name, path, path_flag, git, ro, add_sandbox, config, no_web, use_api_key, tail, rebuild_template, remote_control, chrome, allow_host_access } => cmd::up_with(
+            cmd::UpArgs { name, path: path.or(path_flag), git, ro, add_sandbox, config, no_web, use_api_key, tail, chat: false, rebuild_template, remote_control, chrome },
             allow_host_access,
         ),
         Cmd::Chat { name, config, no_web, use_api_key, tail, allow_host_access } => cmd::chat(name, config, no_web, use_api_key, tail, allow_host_access),
@@ -386,6 +397,7 @@ fn main() -> Result<()> {
         Cmd::PortsLs { name, all } => cmd::ports_ls(name, all),
         Cmd::Stop { names, all } => cmd::stop(names, all),
         Cmd::Rm { names, all } => cmd::rm(names, all),
+        Cmd::Df { verbose } => cmd::df(verbose),
         Cmd::Prune { since, dry_run, yes } => cmd::prune(since.as_deref(), dry_run, yes),
         Cmd::Env { cmd: EnvCmd::Run { paths, config, no_web, yes, use_api_key, tail, env_args, allow_host_access } } => {
             cmd::env::run(paths, config, no_web, yes, use_api_key, tail, env_args, allow_host_access)

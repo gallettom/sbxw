@@ -64,6 +64,7 @@ Read **at creation only**. Changing them doesn't affect existing sandboxes.
 | `models` | Sonnet 5.5, Opus 5.5, Haiku 5.5 | `{ id, label }` choices for new threads and a lead's plans |
 | `web_shell` | `""` | Empty attaches the Claude agent. Set to e.g. `"bash"` to open a shell in the main pane instead |
 | `keep_running` | `false` | Keep the sandbox up with nobody attached (`sbx run -d`) until `sbxw stop`. Useful for a dev server |
+| `chrome` | `false` | Start the agent with `--chrome`: Claude in Chrome, on tabs of your host browser (sbx 0.53). A host-access grant. Also needs `sbx settings set claude.chrome true`, the Claude extension and a subscription login. Same as **Claude in Chrome** in the create dialog or `sbxw up --chrome` |
 
 ### Network
 

@@ -190,7 +190,7 @@ async function testHost(host) {
   else showToast(`${host}: ${r.error || 'the test failed'}`, 'error');
   await loadRemoteHosts();
   renderSidebar();
-  if (!hostsOverlay.classList.contains('hidden')) renderHostsList();
+  if (hostsOverlay.open) renderHostsList();
 }
 
 // ── Provision ─────────────────────────────────────────────────────────────
@@ -205,10 +205,10 @@ const shellWord = w => /^[A-Za-z0-9_@%+=:,./~-]+$/.test(w) ? w : `'${w.replace(/
 function openProvisionModal(host) {
   provCmd.textContent = `${shellWord(sbxwBin)} host provision ${shellWord(host)}`;
   document.getElementById('provision-host').textContent = host;
-  provOverlay.classList.remove('hidden');
+  modalOpen(provOverlay);
   document.getElementById('provision-copy').focus();
 }
-function closeProvisionModal() { provOverlay.classList.add('hidden'); }
+function closeProvisionModal() { provOverlay.close(); }
 
 document.getElementById('provision-copy').addEventListener('click', () => {
   if (!navigator.clipboard) { showToast('Clipboard unavailable — select the command and copy it', 'error'); return; }
@@ -218,10 +218,7 @@ document.getElementById('provision-copy').addEventListener('click', () => {
 });
 document.getElementById('provision-modal-close').addEventListener('click', closeProvisionModal);
 document.getElementById('provision-modal-close2').addEventListener('click', closeProvisionModal);
-provOverlay.addEventListener('click', e => { if (e.target === provOverlay) closeProvisionModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !provOverlay.classList.contains('hidden')) closeProvisionModal();
-});
+wireModal(provOverlay, closeProvisionModal);
 
 // ── Setup → Hosts ─────────────────────────────────────────────────────────
 const hostsOverlay = document.getElementById('hosts-modal-overlay');
@@ -237,11 +234,11 @@ let hostsPendingKey = null;
 
 function openHostsModal() {
   showNote(hostsError, '');
-  hostsOverlay.classList.remove('hidden');
+  modalOpen(hostsOverlay);
   hostsReset();
   loadRemoteHosts().then(renderHostsList);
 }
-function closeHostsModal() { hostsOverlay.classList.add('hidden'); }
+function closeHostsModal() { hostsOverlay.close(); }
 
 function renderHostsList() {
   if (!remoteHosts.length) {
@@ -421,7 +418,4 @@ document.getElementById('hosts-reload').addEventListener('click', async () => {
 
 document.getElementById('hosts-modal-close').addEventListener('click', closeHostsModal);
 document.getElementById('hosts-modal-close2').addEventListener('click', closeHostsModal);
-hostsOverlay.addEventListener('click', e => { if (e.target === hostsOverlay) closeHostsModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !hostsOverlay.classList.contains('hidden')) closeHostsModal();
-});
+wireModal(hostsOverlay, closeHostsModal);

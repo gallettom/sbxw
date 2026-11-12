@@ -17,14 +17,14 @@ function openApprovalsModal(name) {
   approvalsFor = name;
   document.getElementById('approvals-modal-title').textContent = `Waiting for you — ${name}`;
   showNote(approvalsError, '');
-  approvalsOverlay.classList.remove('hidden');
+  modalOpen(approvalsOverlay);
   loadApprovals();
   // A port request lapses in 45 s: keep the list honest while it is open.
   clearInterval(approvalsTimer);
   approvalsTimer = setInterval(loadApprovals, 5000);
 }
 function closeApprovalsModal() {
-  approvalsOverlay.classList.add('hidden');
+  approvalsOverlay.close();
   clearInterval(approvalsTimer);
   approvalsFor = null;
   loadSandboxes();
@@ -60,4 +60,4 @@ approvalsBody.addEventListener('click', async e => {
 
 document.getElementById('approvals-modal-close').addEventListener('click', closeApprovalsModal);
 document.getElementById('approvals-modal-close2').addEventListener('click', closeApprovalsModal);
-approvalsOverlay.addEventListener('click', e => { if (e.target === approvalsOverlay) closeApprovalsModal(); });
+wireModal(approvalsOverlay, closeApprovalsModal);

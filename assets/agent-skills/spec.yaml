@@ -6,7 +6,9 @@ description: >
   Ships third-party agent skills, pinned to a commit, as user-level Claude
   Code commands: /i-have-adhd (ayghri/i-have-adhd — output shaped for a reader
   with ADHD, always on through a SessionStart hook), /handoff, /grill-me and
-  grilling (mattpocock/skills), /frontend-design (anthropics/skills), /archify
+  grilling (mattpocock/skills), /frontend-design (anthropics/skills),
+  /modern-web-guidance + /chrome-extensions (GoogleChrome/modern-web-guidance,
+  telemetry removed), /archify
   (tt-a1i/archify — validated, interactive HTML
   architecture / workflow / sequence / dataflow / lifecycle diagrams) and /brag
   + /brag-slim (latent-spaces/brag — a short launch video of the project).
@@ -47,3 +49,38 @@ capabilities:
       startup:
         - command: ["bash", "/home/agent/.sbxw/agent-skills/install.sh"]
         - command: ["node", "/home/agent/.sbxw/agent-skills/install-hooks.mjs"]
+  # The sandbox's own browser, which the person can watch from sbxw's Browser
+  # panel. Written into the agent's CLAUDE.md by sbx; optional, so a sandbox
+  # whose agent takes no context still gets the rest of the kit.
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config:
+      content: |
+          ## A browser the person can watch
+
+          This sandbox has its own headless Chromium. The person can open it
+          in sbxw's Browser panel and see, live, the page you are on: use it
+          whenever you look at a web page or check one you built, a local
+          server included (`http://localhost:<port>` works from it).
+
+          **Use this browser, not one of your own.** A Chromium you launch
+          yourself (`chromium.launch()`, `npx playwright screenshot`, a
+          headless `chrome` command) is invisible to the person: no tab shows
+          on your terminal and the panel stays empty. With Playwright,
+          connect to the shared one instead:
+          `chromium.connectOverCDP('http://127.0.0.1:9222')`, after
+          `node /home/agent/.sbxw/browser/browser.mjs start`.
+
+          `node /home/agent/.sbxw/browser/browser.mjs open <url>` loads a
+          page in the tab they see. Also: `url`, `text`, `eval <js>`,
+          `click <selector>`, `type <selector> <text>`, `shot <file.png>`,
+          `stop`.
+
+          To check a page on a phone or a tablet, `viewport mobile` (390
+          wide, touch, a phone's user agent), `viewport tablet`, `viewport
+          <w>x<h> [mobile]`; `viewport auto` goes back. The device holds for
+          your next commands and the person sees it too.
+
+          It goes through this sandbox's network policy like everything
+          else here. When a page is refused, say which host you need: the
+          person can allow it from the Browser panel with one click.

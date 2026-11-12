@@ -290,7 +290,7 @@ function chatQuestion(c, { sandbox, mode = 'claude', openLabel, onOpen, onChange
 }
 
 // Enter sends, Shift+Enter is a new line, and the box grows with its text up
-// to 120px. `onSend` gets the trimmed text; the box is already cleared.
+// to its max-height. `onSend` gets the trimmed text; the box is already cleared.
 function chatComposer(form, input, onSend) {
   form.addEventListener('submit', e => {
     e.preventDefault();
@@ -301,12 +301,21 @@ function chatComposer(form, input, onSend) {
     onSend(text);
   });
   input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    // Not the Enter that confirms an IME composition; 229 is Safari's, which
+    // has already cleared isComposing (util.js's isEnterKey is not loaded in
+    // the side panel).
+    if (!e.isComposing && e.keyCode !== 229) form.requestSubmit();
   });
-  input.addEventListener('input', () => {
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-  });
+  // CSS grows the box (`field-sizing: content`, capped by max-height in
+  // app.css); measure it by hand only where that is not supported.
+  if (!CSS.supports('field-sizing', 'content')) {
+    input.addEventListener('input', () => {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    });
+  }
 }
 
 // ── A round of questions ──────────────────────────────────────────────────

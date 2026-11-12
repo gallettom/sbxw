@@ -176,6 +176,7 @@ pub fn run(paths: Vec<PathBuf>, config: PathBuf, no_web: bool, yes: bool, use_ap
         chat: false,
         rebuild_template: false,
         remote_control: false,
+        chrome: false,
     }, allow_host_access)
 }
 

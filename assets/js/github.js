@@ -22,7 +22,7 @@ function openGithubModal() {
   showNote(githubError, '');
   githubToken.value = '';
   secretValue.value = '';
-  githubOverlay.classList.remove('hidden');
+  modalOpen(githubOverlay);
   loadGithub();
   loadCustomSecrets();
   githubToken.focus();
@@ -31,7 +31,7 @@ function closeGithubModal() {
   if ((githubToken.value || secretValue.value) && !confirm('Discard the secret you typed?')) return;
   githubToken.value = '';
   secretValue.value = '';
-  githubOverlay.classList.add('hidden');
+  githubOverlay.close();
 }
 
 // A pill like the Mac tab's: a dot and a word.
@@ -78,7 +78,7 @@ githubUseGh.addEventListener('click', async () => {
   if (!r.ok) { showNote(githubError, r.error || 'sbx could not read a token from gh — is `gh auth login` done?'); return; }
   loadGithub();
 });
-githubToken.addEventListener('keydown', e => { if (e.key === 'Enter') githubSave.click(); });
+githubToken.addEventListener('keydown', e => { if (isEnterKey(e)) githubSave.click(); });
 
 githubRemove.addEventListener('click', async () => {
   if (!confirm('Remove the GitHub token? Sandboxes lose git push over HTTPS until you set another.')) return;
@@ -89,7 +89,7 @@ githubRemove.addEventListener('click', async () => {
 
 document.getElementById('github-modal-close').addEventListener('click', closeGithubModal);
 document.getElementById('github-modal-close2').addEventListener('click', closeGithubModal);
-githubOverlay.addEventListener('click', e => { if (e.target === githubOverlay) closeGithubModal(); });
+wireModal(githubOverlay, closeGithubModal);
 
 // ── Other services: sbx's custom secrets, names and scopes only ────────────
 async function loadCustomSecrets() {

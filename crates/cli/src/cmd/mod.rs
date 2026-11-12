@@ -244,6 +244,8 @@ pub struct UpArgs {
     pub rebuild_template: bool,
     /// Create it for Remote Control: sbxw signs its agent in with nothing.
     pub remote_control: bool,
+    /// Start the agent with `--chrome` from now on.
+    pub chrome: bool,
 }
 
 fn template_choice(rebuild: bool) -> sbxw_core::templates::Choice {
@@ -412,6 +414,7 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
             api_key,
             template: template_choice(a.rebuild_template),
             remote_control: a.remote_control,
+            chrome: a.chrome,
             git: a.git.clone(),
             consent: sbxw_daemon::provision::Consent::Check(vec![]),
         });
@@ -431,6 +434,7 @@ pub fn up_with(a: UpArgs, allow_host_access: bool) -> Result<()> {
                 "api_key": api_key,
                 "template": template_choice(a.rebuild_template),
                 "remote_control": a.remote_control,
+                "chrome": a.chrome,
                 "git": a.git,
                 "approved": approved,
             }),
@@ -527,7 +531,24 @@ fn up_here(rt: &tokio::runtime::Runtime, paths: Paths, cfg: Config, sbx_version:
     }
     eprintln!("sbxw  attaching the agent in this terminal (Ctrl-C to detach)");
     let cfg = &app.cfg;
-    let args = sbxw_sbx::attach_args(&name.name, &cfg.env_pairs(), &cfg.env_files, &app.store.get(&name).attach_workdir(&cfg.workdir));
+    let rec = app.store.get(&name);
+    // Claude in Chrome, as the web UI's pane starts it (svc/open.rs).
+    let wants_chrome = cfg.chrome || rec.chrome;
+    let chrome = match (wants_chrome, rt.block_on(app.sbx_for(&name))) {
+        (true, Ok(sbx)) => rt.block_on(sbx.setting_bool(sbxw_core::chrome::SETTING, sbxw_core::chrome::SINCE)).unwrap_or_else(|e| {
+            eprintln!("sbxw  warning: starting without --chrome, sbx's setting could not be read: {e:#}");
+            None
+        }),
+        // No sbx for this sandbox: the attach below reports it.
+        _ => None,
+    };
+    let args = sbxw_sbx::attach_args(
+        &name.name,
+        &cfg.env_pairs(),
+        &cfg.env_files,
+        &rec.attach_workdir(&cfg.workdir),
+        sbxw_core::chrome::agent_flags(wants_chrome, chrome),
+    );
     // A remote sandbox's agent through this process's link to its host,
     // which stays up (and keeps the hooks' tunnel) while it runs.
     let (program, args) = if name.is_local() {
@@ -586,6 +607,7 @@ pub fn chat(name: Option<String>, config: PathBuf, no_web: bool, use_api_key: bo
         chat: true,
         rebuild_template: false,
         remote_control: false,
+        chrome: false,
     }, allow_host_access)
 }
 
@@ -952,6 +974,15 @@ pub fn cache(action: crate::CacheAction, config: &Path) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// `sbx df`, as sbx prints it.
+pub fn df(verbose: bool) -> Result<()> {
+    let rt = runtime();
+    check_sbx(&rt)?;
+    let out = rt.block_on(Sbx::process().df(verbose)).context("`sbx df` needs sbx 0.53 or newer")?;
+    println!("{}", out.trim_end());
+    Ok(())
 }
 
 /// `sbx prune`, previewed and confirmed, then the cleanup `rm` does for

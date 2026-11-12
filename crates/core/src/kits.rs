@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 /// The kits that ship inside sbxw, referred to as `sbxw:<name>` in `kits`.
-pub const BUNDLED: [&str; 8] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac"];
+pub const BUNDLED: [&str; 9] = ["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac", "dev-ports"];
 
 /// sbxw's own kit, applied to every sandbox before the project's: Node.js,
 /// which sbx 0.51's Claude Code image lacks and every in-sandbox piece of sbxw
@@ -41,12 +41,13 @@ pub const DEFAULT_KITS: [&str; 4] = ["sbxw:codemap", "sbxw:agent-skills", "sbxw:
 pub fn about(name: &str) -> &'static str {
     match name {
         "codemap" => "/codemap and /codemap-lens: agents read a repo's code map before its source",
-        "agent-skills" => "/archify, /brag, /i-have-adhd, /handoff, /grilling, /frontend-design, with Chromium and FFmpeg",
+        "agent-skills" => "/archify, /brag, /i-have-adhd, /handoff, /grilling, /frontend-design, /modern-web-guidance, with Chromium and FFmpeg",
         "md-to-pdf-tools" => "/md-to-pdf, with WeasyPrint, poppler-utils and Pillow",
         "retro" => "/retro: past sessions read back for what should become a script, hook, skill, rule or kit",
         "k8s-tools" => "kubectl, k3d and skaffold in ~/.local/bin",
         "git-identity" => "your host's Git user.name and user.email in the sandbox",
         "ssh-agent" => "your host's SSH agent, restricted to signing commits and the common Git hosts",
+        "dev-ports" => "the agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53; at creation only)",
         "terminal-mac" => "a virtual Mac the agent drives (Safari, Mac apps) through the host's terminal-mac; Apple silicon hosts",
         _ => "",
     }

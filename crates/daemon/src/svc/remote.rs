@@ -102,14 +102,15 @@ impl App {
         if state.active {
             bail!("Remote Control is already on in this session");
         }
-        match state.login {
-            Login::Full => {}
-            Login::Missing => bail!("Claude in '{sandbox}' is not logged in to claude.ai — run /login in its pane, then try again"),
-            Login::TokenOnly => bail!(
-                "Claude in '{sandbox}' is signed in with a setup token (CLAUDE_CODE_OAUTH_TOKEN), which Remote Control refuses — \
-                 switch it to a claude.ai login first"
-            ),
-            Login::ApiKeyHelper => bail!("{}", remote::helper_advice(&sandbox.to_string())),
+        // sbx 0.53 supplies the credentials itself, from the host, when its
+        // setting is on: the login inside the sandbox no longer decides. Only
+        // an API key still does (Remote Control refuses one whoever holds it).
+        let native = self.sbx_for(sandbox).await?.setting_bool(remote::SETTING, remote::SINCE).await?;
+        match (native, state.login) {
+            (Some(false), _) => bail!("{}", remote::setting_advice()),
+            (Some(true), Login::ApiKeyHelper) => bail!("{}", remote::helper_advice(&sandbox.to_string())),
+            (Some(true), _) => {}
+            (None, login) => remote_login_gate(sandbox, login)?,
         }
         self.watch_remote(sandbox);
         let typed = self.push_text(sandbox, kind, remote::COMMAND).await.map_err(anyhow::Error::msg);
@@ -136,6 +137,21 @@ impl App {
         }
         self.push_text(sandbox, kind, remote::LOGIN_COMMAND).await.map_err(anyhow::Error::msg)
     }
+}
+
+/// Before sbx 0.53: Remote Control takes only a claude.ai login made
+/// inside the sandbox.
+fn remote_login_gate(sandbox: &SandboxRef, login: Login) -> Result<()> {
+    match login {
+        Login::Full => {}
+        Login::Missing => bail!("Claude in '{sandbox}' is not logged in to claude.ai — run /login in its pane, then try again"),
+        Login::TokenOnly => bail!(
+            "Claude in '{sandbox}' is signed in with a setup token (CLAUDE_CODE_OAUTH_TOKEN), which Remote Control refuses — \
+             switch it to a claude.ai login first"
+        ),
+        Login::ApiKeyHelper => bail!("{}", remote::helper_advice(&sandbox.to_string())),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -190,6 +206,40 @@ mod tests {
             assert!(format!("{e:#}").contains("not running"), "{e:#}");
         }
         assert_eq!(fake.log().iter().filter(|c| c.starts_with("ls")).count(), 1, "{:?}", fake.log());
+    }
+
+    /// sbx 0.53: the credentials are sbx's, on the host, behind its setting.
+    /// The login inside the sandbox no longer decides; the setting does.
+    #[tokio::test]
+    async fn with_sbx_supplying_the_credentials_only_its_setting_decides() {
+        let probe = r#"{"present":true,"scopes":["user:inference"],"sessions":[]}"#;
+        let setting = |value: &'static str| {
+            move |a: &[String]| match a.first().map(String::as_str) {
+                Some("settings") if a.last().map(String::as_str) == Some("claude.remoteControl") => Output::ok(value),
+                _ => signed_in_with(probe)(a),
+            }
+        };
+        let name = SandboxRef::parse("myapp").unwrap();
+
+        let (_d, app, _fake) = app_with(setting("false\n"));
+        let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
+        assert!(format!("{e:#}").contains("sbx settings set claude.remoteControl true"), "{e:#}");
+
+        // On: a login Remote Control used to refuse is no reason to stop. What
+        // fails here is only the typing, which needs a live session.
+        let (_d, app, _fake) = app_with(setting("true\n"));
+        let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
+        let said = format!("{e:#}");
+        assert!(!said.contains("switch") && !said.contains("settings set"), "{said}");
+        assert!(!app.store.get(&name).remote_control, "nothing is switched: the sandbox keeps its sign-in");
+
+        // An API key is still refused, whoever holds the rest.
+        let (_d, app, _fake) = app_with(move |a: &[String]| match a.first().map(String::as_str) {
+            Some("settings") => Output::ok("true\n"),
+            _ => signed_in_with(r#"{"present":false,"scopes":[],"helper":true,"sessions":[]}"#)(a),
+        });
+        let e = app.remote_control(&name, SessionKind::Agent).await.unwrap_err();
+        assert!(format!("{e:#}").contains("apiKeyHelper"), "{e:#}");
     }
 
     #[tokio::test]

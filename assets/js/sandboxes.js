@@ -352,6 +352,7 @@ function sandboxItemHtml(s, groupColor) {
     ? `<button class="icon-btn stop-btn" data-action="stop" data-name="${escHtml(s.name)}" title="Stop">■</button>
        <button class="icon-btn restart-btn" data-action="restart" data-name="${escHtml(s.name)}" title="Reload">↺</button>
        <button class="icon-btn ports-btn" data-action="ports" data-name="${escHtml(s.name)}" title="Ports &amp; network policy">⇌</button>
+       <button class="icon-btn browser-btn" data-action="browser" data-name="${escHtml(s.name)}" title="Browser — the sandbox's own Chromium, live" aria-label="Browser"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M1.7 8h12.6M8 1.7c2.2 2 2.2 10.600 0 12.6M8 1.7c-2.2 2-2.2 10.600 0 12.6"/></svg></button>
        ${dupBtn}
        <button class="icon-btn rm-btn" data-action="rm" data-name="${escHtml(s.name)}" title="Remove permanently">✕</button>`
     : `<button class="icon-btn connect-btn" data-action="connect" data-name="${escHtml(s.name)}" title="Connect">▶</button>
@@ -501,6 +502,7 @@ listEl.addEventListener('click', e => {
     if (action === 'open-pane') openInSparePane(name);
     if (action === 'rm')        openRmModal(name);
     if (action === 'ports')     openPortsModal(name);
+    if (action === 'browser')   openBrowserPanel(name);
     if (action === 'duplicate') openDupModal(name);
     if (action === 'recreate')  recreateSandbox(name);
     if (action === 'approvals') openApprovalsModal(name);
@@ -537,12 +539,14 @@ function openInSparePane(name) {
 // Resolves to the lines approved, or null when the person said no.
 function askHostAccess(consent) {
   const grants = Array.isArray(consent.grants) ? consent.grants.map(String) : [];
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="grants-modal-title" style="width:520px">
+  const dlg = document.createElement('dialog');
+  dlg.className = 'modal';
+  dlg.style.width = '520px';
+  dlg.setAttribute('aria-labelledby', 'grants-modal-title');
+  dlg.setAttribute('closedby', 'any');
+  dlg.innerHTML = `
       <div class="modal-head">
-        <span class="modal-title" id="grants-modal-title">Allow host access?</span>
+        <h2 class="modal-title" id="grants-modal-title">Allow host access?</h2>
         <button class="modal-close" data-answer="no" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -560,21 +564,21 @@ function askHostAccess(consent) {
       <div class="modal-foot">
         <button class="btn-cancel" data-answer="no">Cancel</button>
         <button class="btn-create" data-answer="yes">Allow</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('[data-answer="no"].btn-cancel').focus();
+      </div>`;
+  document.body.appendChild(dlg);
+  dlg.showModal();
+  dlg.querySelector('[data-answer="no"].btn-cancel').focus();
   return new Promise(resolve => {
     const done = yes => {
-      document.removeEventListener('keydown', onKey, true);
-      overlay.remove();
+      // Closed before it is removed: closing is what hands focus back.
+      if (dlg.open) dlg.close();
+      dlg.remove();
       resolve(yes ? grants : null);
     };
-    // Escape closes this dialog only, not one under it.
-    const onKey = e => { if (e.key === 'Escape') { e.stopImmediatePropagation(); done(false); } };
-    document.addEventListener('keydown', onKey, true);
-    overlay.addEventListener('click', e => {
-      if (e.target === overlay) return done(false);
+    // Escape and the backdrop answer no. Escape reaches the top dialog only,
+    // so a dialog under this one stays open.
+    wireModal(dlg, () => done(false));
+    dlg.addEventListener('click', e => {
       const b = e.target.closest('[data-answer]');
       if (b) done(b.dataset.answer === 'yes');
     });
@@ -624,6 +628,26 @@ async function loadSandboxes() {
     renderSidebar();
     sandboxes.filter(s => s.status === 'running' && !s.unreachable_since).forEach(s => refreshThreadList(s.name));
   } catch (_) {}
+}
+
+// A sandbox that should be running and is not listed so yet. The list is
+// read when a pane's socket opens, which is before `sbx run` has started a
+// stopped sandbox: read once, the row would say "stopped" (and offer
+// Connect, not Stop, Ports or the browser) for as long as nothing else
+// reloaded the list. So it is read again, a few times and further apart,
+// until the sandbox shows as running.
+const RUNNING_RECHECK_MS = [1500, 3000, 6000, 12000, 24000];
+const runningRechecks = new Map(); // name → timer
+function expectRunning(name) {
+  if (!name || runningRechecks.has(name)) return;
+  const listed = () => sandboxes.find(x => x.name === name);
+  const step = i => {
+    const s = listed();
+    if (!s || s.status === 'running' || i >= RUNNING_RECHECK_MS.length) { runningRechecks.delete(name); return; }
+    runningRechecks.set(name, setTimeout(async () => { await loadSandboxes(); step(i + 1); }, RUNNING_RECHECK_MS[i]));
+  };
+  runningRechecks.set(name, 0);
+  step(0);
 }
 
 async function stopSandbox(name) {

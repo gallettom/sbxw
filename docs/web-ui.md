@@ -236,7 +236,10 @@ Notes:
 ![The Project panel's Files tab: favourites on the left, a folder listing, and a README preview](images/project-files.png)
 
 A file browser over the sandbox's **own** filesystem, opening on
-`.sbxw-artifacts/`, where agents put deliverables.
+`.sbxw-artifacts/`, where agents put deliverables. A hook sends a new
+document there (Markdown, PDF, an image, a lone `.html` report); a project's
+own web pages stay where they are: an `index.html`, a page under a folder
+such as `public/`, `src/` or `templates/`, or one beside web code.
 
 - **Navigate:** breadcrumb (click its empty space to type a path, `~` works),
   back and up, a filter, and a **Hidden** toggle for dotfiles.
@@ -505,6 +508,14 @@ terminal as if from the keyboard — Claude's prompt, or a shell. No Enter is
 pressed, so you can read and fix them first; end with *entrée* (or
 *envoie*) and Enter is pressed for you. The button shows once the voice
 models are installed.
+
+**Words as you say them.** While you speak, to the concierge or into a
+terminal, what has been heard so far is shown about once a second: in the
+concierge's panel, above its bar when the panel is closed, or in a strip at
+the foot of the pane. It is a preview, transcribed again from the start each
+time (the model reads a whole recording, not a stream), so a word can change
+as the sentence goes on. Nothing is typed or sent until you stop; a dictation
+longer than half a minute previews its last half minute.
 
 Nothing said is kept: not the audio, not the text. **Clear** empties the
 panel.

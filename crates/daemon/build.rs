@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// The kits that ship in the binary, as `sbxw:<name>`. `base` is sbxw's own,
 /// applied to every sandbox; the rest are `sbxw_core::kits::BUNDLED`.
-const KITS: [&str; 9] = ["base", "codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac"];
+const KITS: [&str; 10] = ["base", "codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools", "git-identity", "ssh-agent", "terminal-mac", "dev-ports"];
 
 fn main() {
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets").canonicalize().expect("assets/");

@@ -80,7 +80,7 @@ function kitsRender() {
 
 async function openKitsModal() {
   showNote(kitsError, '');
-  kitsOverlay.classList.remove('hidden');
+  modalOpen(kitsOverlay);
   let r;
   try { r = await (await fetch('/api/kits')).json(); }
   catch (e) { r = { ok: false, error: e.message }; }
@@ -103,7 +103,7 @@ async function openKitsModal() {
 
 function closeKitsModal() {
   if (kitsDirty && !confirm('Close without saving the kits?')) return;
-  kitsOverlay.classList.add('hidden');
+  kitsOverlay.close();
 }
 
 async function kitsWrite(kits) {
@@ -158,7 +158,7 @@ function kitsAdd() {
   kitsRender();
 }
 document.getElementById('kits-add').addEventListener('click', kitsAdd);
-kitsAddInput.addEventListener('keydown', e => { if (e.key === 'Enter') kitsAdd(); });
+kitsAddInput.addEventListener('keydown', e => { if (isEnterKey(e)) kitsAdd(); });
 
 kitsSave.addEventListener('click', () => kitsWrite(kitsList));
 kitsDefaults.addEventListener('click', () => {
@@ -168,7 +168,4 @@ kitsDefaults.addEventListener('click', () => {
 
 document.getElementById('kits-modal-close').addEventListener('click', closeKitsModal);
 document.getElementById('kits-modal-close2').addEventListener('click', closeKitsModal);
-kitsOverlay.addEventListener('click', e => { if (e.target === kitsOverlay) closeKitsModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !kitsOverlay.classList.contains('hidden')) closeKitsModal();
-});
+wireModal(kitsOverlay, closeKitsModal);

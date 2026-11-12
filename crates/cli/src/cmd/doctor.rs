@@ -151,6 +151,26 @@ pub fn run(config: &Path, json: bool) -> Result<()> {
         ),
         Err(e) => r.line(Level::Warn, "clipboard.textCopy", &format!("could not read it: {e:#}")),
     }
+    // sbx 0.53: two Claude features are off until their setting is on. An
+    // older sbx knows neither key and refuses the read: nothing to report.
+    for (key, on, off) in [
+        (
+            "claude.remoteControl",
+            "on — a sandbox's Claude session can be driven from claude.ai/code",
+            "off — Remote Control from a sandbox is refused: `sbx settings set claude.remoteControl true`",
+        ),
+        (
+            "claude.chrome",
+            "on — a sandboxed Claude Code started with --chrome can use Claude in Chrome",
+            "off — Claude in Chrome is not reachable from sandboxes (`sbx settings set claude.chrome true` to allow it)",
+        ),
+    ] {
+        match rt.block_on(sbx.setting_get(key)) {
+            Ok(v) if v.trim() == "true" => r.line(Level::Ok, key, on),
+            Ok(_) => r.line(Level::Ok, key, off),
+            Err(_) => {}
+        }
+    }
 
     println!("\nsbx diagnose");
     match rt.block_on(sbx.diagnose()) {

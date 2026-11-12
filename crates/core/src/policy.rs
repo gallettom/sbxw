@@ -256,7 +256,9 @@ impl EgressLog {
             match out.iter_mut().find(|b| b.host == e.host) {
                 Some(b) => b.count += e.count,
                 None => out.push(BlockedHost {
-                    resource: allow_resource(&e.host),
+                    // sbx 0.53 folds refused UDP destinations past the 20th
+                    // into `<further blocked attempts>`: nothing to allow.
+                    resource: if e.host.trim_start().starts_with('<') { String::new() } else { allow_resource(&e.host) },
                     host: e.host.clone(),
                     count: e.count,
                     last_seen: e.last_seen.clone(),
@@ -316,7 +318,8 @@ fn entry(v: &serde_json::Value) -> Option<EgressEntry> {
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct BlockedHost {
     pub host: String,
-    /// What an allow rule for it names: the host without its port.
+    /// What an allow rule for it names: the host without its port. Empty for
+    /// a row that is not one destination, which gets no Allow.
     pub resource: String,
     pub count: u64,
     pub last_seen: String,
@@ -343,8 +346,81 @@ pub fn allow_resource(host: &str) -> String {
     }
 }
 
+/// A bare host name, the only thing the Browser panel may allow: what a page
+/// asked for is the sandbox's word, so no wildcard, port, list or flag.
+pub fn clean_host(raw: &str) -> Result<String, String> {
+    let h = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    let label = |l: &str| !l.is_empty() && l.len() <= 63 && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if h.is_empty() || h.len() > 253 || !h.split('.').all(label) {
+        return Err(format!("'{}' is not a host name", raw.trim().chars().take(80).collect::<String>()));
+    }
+    // A page can ask for this machine as easily as for a site, and a rule
+    // without a port opens every service on it: that is a decision for the
+    // network panel, where the port is named, not for one click here.
+    let last = h.rsplit('.').next().unwrap_or_default();
+    let this_machine = h == "localhost" || h.ends_with(".localhost") || h.ends_with(".internal") || h.ends_with(".local");
+    if this_machine || last.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("'{h}' is this machine or an address on your network: allow it, with its port, in Ports & network"));
+    }
+    Ok(h)
+}
+
+/// The rule ids `after` has and `before` had not, among the rows naming
+/// `host`: the rule an allow just made. Empty when the listing has no
+/// rule-id column or no resource column: a rule that cannot be tied to the
+/// host is not claimed, and then cannot be removed by id.
+pub fn new_rule_ids(before: &PolicyView, after: &PolicyView, host: &str) -> Vec<String> {
+    let ids = |v: &PolicyView| -> Vec<(String, String)> {
+        let Some(i) = v.roles.iter().position(|r| *r == "rule_id") else { return vec![] };
+        let h = v.roles.iter().position(|r| *r == "host");
+        v.rows
+            .iter()
+            .filter_map(|row| {
+                let id = row.get(i)?.trim();
+                (!id.is_empty() && id != "-").then(|| (id.to_string(), h.and_then(|h| row.get(h)).cloned().unwrap_or_default()))
+            })
+            .collect()
+    };
+    let old: Vec<String> = ids(before).into_iter().map(|(id, _)| id).collect();
+    ids(after)
+        .into_iter()
+        .filter(|(id, _)| !old.contains(id))
+        .filter(|(_, res)| res.split([',', ' ']).any(|r| allow_resource(r).eq_ignore_ascii_case(host)))
+        .map(|(id, _)| id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_browser_panel_allows_one_plain_host_only() {
+        assert_eq!(clean_host(" Example.COM. ").unwrap(), "example.com");
+        for bad in ["", "*.example.com", "a.com,b.com", "a.com:443", "-x", "a..b", "a b", "http://a.com", "**"] {
+            assert!(clean_host(bad).is_err(), "{bad}");
+        }
+        for bad in ["localhost", "app.localhost", "host.docker.internal", "gateway.docker.internal", "127.0.0.1", "192.168.1.10", "printer.local"] {
+            assert!(clean_host(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_rule_an_allow_made_is_the_new_row_naming_its_host() {
+        const HEAD: &str = "RULE ID   SANDBOX   RESOURCE    ACTION\n";
+        const R1: &str = "r-1       myapp     a.com       allow\n";
+        let before = PolicyView::build(&format!("{HEAD}{R1}"), true, "myapp");
+        let after = PolicyView::build(
+            &format!("{HEAD}{R1}r-2       myapp     b.com:443   allow\nr-3       myapp     c.com       allow\n"),
+            true,
+            "myapp",
+        );
+        assert_eq!(new_rule_ids(&before, &after, "b.com"), ["r-2"]);
+        assert!(new_rule_ids(&after, &after, "b.com").is_empty());
+        let bare = PolicyView::build("RESOURCE   ACTION\nb.com      allow\n", true, "myapp");
+        assert!(new_rule_ids(&before, &bare, "b.com").is_empty(), "no rule-id column, no id");
+        let no_host = PolicyView::build("RULE ID   ACTION\nr-9       allow\n", true, "myapp");
+        assert!(new_rule_ids(&before, &no_host, "b.com").is_empty(), "a rule that names no host is not claimed");
+    }
+
     use super::*;
 
     #[test]
@@ -356,6 +432,14 @@ mod tests {
         assert!(HttpMatch::parse("", "search", "").is_err(), "a path is a glob from /");
         assert!(HttpMatch::parse("", "", "=x").is_err());
         assert!(HttpMatch::parse("", "", "--sandbox=x").is_err(), "never a flag");
+    }
+
+    #[test]
+    fn the_row_that_sums_up_further_attempts_offers_nothing_to_allow() {
+        let raw = r#"{"allowed":[],"blocked":[{"host":"<further blocked attempts>","reason":"udp egress disabled","count":7,"last_seen":"2026-11-11T10:00:00Z"},{"host":"host.docker.internal","reason":"udp egress disabled","count":1,"last_seen":"2026-11-11T09:00:00Z"}]}"#;
+        let b = EgressLog::parse(raw).unwrap().blocked_hosts();
+        assert_eq!((b[0].host.as_str(), b[0].resource.as_str(), b[0].count), ("<further blocked attempts>", "", 7));
+        assert_eq!(b[1].resource, "host.docker.internal");
     }
 
     #[test]

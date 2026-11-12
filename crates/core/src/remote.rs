@@ -12,6 +12,20 @@
 //! from its path on every container swap, and would otherwise put the token
 //! back over the login.
 
+/// sbx 0.53's switch. On, sbx keeps Remote Control's environment and session
+/// credentials on the host: the sandbox holds placeholders, the proxy puts the
+/// real ones in, and `/remote-control` works in a sandbox signed in the usual
+/// way. Off (the default), sbx refuses it. An sbx that does not know the
+/// setting is older, and the login rules above are all there is.
+pub const SETTING: &str = "claude.remoteControl";
+/// The sbx release that added the setting: an older one refuses the key.
+pub const SINCE: (u32, u32, u32) = (0, 53, 0);
+
+/// What to run when sbx has Remote Control off.
+pub fn setting_advice() -> String {
+    format!("Remote Control is off in sbx: run `sbx settings set {SETTING} true` on the host, then press Remote in the agent's pane")
+}
+
 /// Typed into a Claude session to start Remote Control in it.
 /// Never typed while it is on: it then opens a disconnect dialog instead.
 pub const COMMAND: &str = "/remote-control";

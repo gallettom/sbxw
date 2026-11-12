@@ -92,12 +92,13 @@ path, since sbx doesn't know `sbxw:` names.
 | Kit | Default | What it adds |
 |---|---|---|
 | `sbxw:codemap` | ✓ | `/codemap` and `/codemap-lens`: agents read a repo's code map before its source |
-| `sbxw:agent-skills` | ✓ | `/archify`, `/brag`, `/brag-slim`, `/i-have-adhd`, `/handoff`, `/grill-me`, `/grilling`, `/frontend-design`, plus headless Chromium and FFmpeg |
+| `sbxw:agent-skills` | ✓ | `/archify`, `/brag`, `/brag-slim`, `/i-have-adhd`, `/handoff`, `/grill-me`, `/grilling`, `/frontend-design`, `/modern-web-guidance`, `/chrome-extensions`, plus headless Chromium and FFmpeg |
 | `sbxw:md-to-pdf-tools` | ✓ | `/md-to-pdf`, with WeasyPrint, poppler-utils and Pillow |
 | `sbxw:retro` | ✓ | `/retro`: reads past sessions and proposes what should become a script, hook, skill, rule or kit |
 | `sbxw:k8s-tools` | | `kubectl`, `k3d` and `skaffold` in `~/.local/bin` |
 | `sbxw:git-identity` | | Your host's Git `user.name` and `user.email` in the sandbox |
 | `sbxw:ssh-agent` | | Your host's SSH agent, restricted to signing commits and the common Git hosts |
+| `sbxw:dev-ports` | | The agent publishes a dev server on a loopback port sbx picks, without a prompt (sbx 0.53) |
 | `sbxw:terminal-mac` | | A virtual Mac the agent drives (Safari, Mac apps) through terminal-mac on an Apple silicon host |
 
 The web UI's **Skills** button lists each command and whether it runs on its own
@@ -128,7 +129,8 @@ See [`assets/codemap/README.md`](../assets/codemap/README.md).
 
 ### `sbxw:agent-skills`
 
-Each skill is pinned to a commit:
+Each skill is pinned to a commit (modern-web-guidance to an npm version and
+its sha512):
 
 | Command | Source | What it does |
 |---|---|---|
@@ -137,11 +139,60 @@ Each skill is pinned to a commit:
 | `/i-have-adhd` | [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) | Answers shaped for ADHD readers. On in every session via a `SessionStart` hook |
 | `/handoff`, `/grill-me`, `/grilling` | [mattpocock/skills](https://github.com/mattpocock/skills) | Handoff documents; relentless plan interviews |
 | `/frontend-design` | [anthropics/skills](https://github.com/anthropics/skills) | Guidance for distinctive UI design |
+| `/modern-web-guidance`, `/chrome-extensions` | [GoogleChrome/modern-web-guidance](https://github.com/GoogleChrome/modern-web-guidance) | Current web platform practice (HTML, CSS, client-side JS, accessibility, performance), searched offline before writing web code; Manifest V3 extensions. **Telemetry removed** |
 
 Plus Playwright's headless Chromium (which has linux-arm64 builds) and FFmpeg.
 Skills land in `~/.sbxw/agent-skills/` with thin user-level commands pointing at
 them, never in the shared skill store. See
 [`assets/agent-skills/README.md`](../assets/agent-skills/README.md).
+
+#### The sandbox browser
+
+That Chromium is also the sandbox's own browser. While the agent uses it, a
+globe tab shows on the edge of that sandbox's terminal; click it to watch. The
+panel opens beside the terminal, on the side away from it, and pushes the
+panes over; without room for both (the panes must keep 480 px beside at least
+560 px for the browser) it opens as a dialog instead. A click on the tab hides
+it again. The globe button of a running sandbox opens the same **Browser
+panel**: the page it is on, live, with its address
+always shown at the top. You can click, scroll and type in it, or type an
+address yourself. The agent drives the same browser with
+`node ~/.sbxw/browser/browser.mjs open <url>` (also `url`, `text`, `eval`,
+`click`, `type`, `shot`, `stop`), or with Playwright over
+`http://127.0.0.1:9222`.
+
+The picker beside the address lays the page out as a phone (390 px, touch,
+a phone's user agent), a tablet (820 px) or a desktop (1280 px); **Auto** fits
+the panel. The agent has the same with `browser.mjs viewport mobile` (also
+`tablet`, `desktop`, `<w>x<h> [mobile]`, `auto`), and whoever picks a device,
+the other sees it: it is kept in the sandbox until changed.
+
+It runs inside the sandbox and goes through its proxy, so the network policy
+applies to it, unlike Claude in Chrome, which browses from your own machine.
+When the policy refuses a host, the panel lists it with an **Allow** button:
+one click writes an allow rule for **that sandbox only**. **Close browser**
+quits Chromium and, if you allowed hosts from the panel, asks once whether to
+keep those rules or remove them. The browser reopens on the page it was on
+when it was closed. ✕ only hides the panel; the browser keeps
+running for the agent.
+
+A Chromium the agent launches for itself would be invisible to you, so the
+kit adds a Claude Code hook that refuses such a command once (a one-off
+`playwright screenshot`, `chromium.launch()` inline or in a script under
+`/tmp`) and tells the agent to use the shared browser instead. A project's own
+test suite is not affected, and `SBXW_OWN_BROWSER=1` before a command lets the
+agent use its own browser when it says why.
+
+Every key typed in the page goes to it, Tab and Escape included; **F6** moves
+to the address bar. The panel offers a bare host name only: `localhost`,
+`host.docker.internal`, a `.local` name or an IP address is this machine or
+your network, and is allowed with its port in Ports & network instead. A rule
+is removed at closing only when sbx's listing identified it with certainty;
+otherwise the panel says so and leaves it to you.
+
+Chromium's command port (9222) has no password, so it listens on the
+sandbox's loopback only and is never published. The panel reaches it through
+`sbx exec`, behind the UI token. Sandboxes on this machine only, for now.
 
 ### `sbxw:md-to-pdf-tools`
 
@@ -183,6 +234,22 @@ sandbox something of yours:
 Both are optional capabilities: on a host without a Git identity or a running
 agent, the sandbox is created without them rather than failing. Neither works
 in cloud sandboxes.
+
+### `sbxw:dev-ports`
+
+Needs sbx 0.53. The kit carries one grant (`api@1`, `ports.publish` with
+`approval: none`) and one script. The agent runs
+`node ~/.sbxw/dev-ports/publish.mjs 3000` and gets back an address such as
+`http://127.0.0.1:49213` to give you: a host port on the loopback interface
+only, chosen by sbx, with no prompt. The port shows in the ports panel like
+any other.
+
+- The binding lasts until the sandbox stops and is not restored at the next
+  start; the agent is told to publish again.
+- A fixed host port still needs you: `[[ports]]` in `sbxw.toml`, or the ports
+  panel.
+- Opt-in, and only when the sandbox is created: on an existing one, recreate it.
+  An sbx older than 0.53 does not know the grant.
 
 ### `sbxw:terminal-mac`
 

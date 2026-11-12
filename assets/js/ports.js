@@ -393,6 +393,7 @@ function renderBlockedHosts(blocked) {
     const when = timeAgo(b.last_seen);
     const action = b.governed
       ? `<span class="rule-locked" title="${escHtml(b.reason || 'Blocked by organisation policy')}">🔒 org</span>`
+      : !b.resource ? ''
       : `<button class="btn-allow-host" data-resource="${escHtml(b.resource)}" title="Allow ${escHtml(b.resource)} for this sandbox">Allow</button>`;
     return `<tr><td><span class="policy-cell">${escHtml(b.host)}</span></td>` +
       `<td class="blocked-count">${b.count > 1 ? `×${b.count}` : ''}</td>` +
@@ -442,7 +443,7 @@ function wirePolicyForm() {
 
   const sync = () => { btn.disabled = !res.value.trim(); };
   res.addEventListener('input', sync);
-  res.addEventListener('keydown', e => { if (e.key === 'Enter' && !btn.disabled) btn.click(); });
+  res.addEventListener('keydown', e => { if (isEnterKey(e) && !btn.disabled) btn.click(); });
 
   btn.addEventListener('click', async () => {
     const resources = res.value.trim();
@@ -648,14 +649,17 @@ function openPortsModal(name) {
   addHostPort.placeholder = 'same';
   btnAddMapping.disabled = true;
   portsAddError.classList.add('hidden');
-  portsOverlay.classList.remove('hidden');
+  modalOpen(portsOverlay);
   fetchPorts(name);
 }
 
-function closePortsModal() { portsOverlay.classList.add('hidden'); portsTarget = null; }
+function closePortsModal() { portsOverlay.close(); portsTarget = null; }
 
 // Only its own buttons close it: no backdrop click, no Escape, so a stray
 // click while editing a rule never throws the dialog away.
+// `closedby="none"` in the markup says so; where a browser does not know
+// it, Escape's `cancel` is prevented here.
+portsOverlay.addEventListener('cancel', e => e.preventDefault());
 document.getElementById('ports-modal-close').addEventListener('click', closePortsModal);
 document.getElementById('ports-modal-close2').addEventListener('click', closePortsModal);
 document.getElementById('ports-modal-refresh').addEventListener('click', () => {

@@ -677,7 +677,7 @@
    */
   function applyRun(run, seed = false) {
     if (!run || run.sandbox !== state.sandbox) return;
-    if ($('codemap-modal-overlay').classList.contains('hidden')) return;
+    if (!$('codemap-modal-overlay').open) return;
     const lens = run.kind === 'lens';
     if (run.phase === 'writing') {
       setLensNote(lens
@@ -984,7 +984,7 @@
   /* ── Wiring ───────────────────────────────────────────────────────────── */
 
   function open(name) {
-    $('codemap-modal-overlay').classList.remove('hidden');
+    modalOpen($('codemap-modal-overlay'));
     $('codemap-name').textContent = name;
     $('codemap-search').value = '';
     state.filter = '';
@@ -1001,7 +1001,7 @@
   }
 
   function close() {
-    $('codemap-modal-overlay').classList.add('hidden');
+    $('codemap-modal-overlay').close();
     if (state.raf) { cancelAnimationFrame(state.raf); state.raf = null; }
   }
 
@@ -1017,10 +1017,7 @@
       close();
       if (name && typeof openFilesModal === 'function') openFilesModal(name);
     });
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !overlay.classList.contains('hidden')) close();
-    });
+    wireModal(overlay, close);
     // Refresh keeps you on the retelling you were reading: a lens the agent has
     // just rewritten is exactly what you pressed it for.
     $('codemap-refresh').addEventListener('click', () => {

@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod awake;
 pub mod board;
+pub mod browser;
 pub mod codemap;
 pub mod hosts;
 pub mod kits;

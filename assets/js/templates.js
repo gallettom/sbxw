@@ -11,6 +11,21 @@ const templatesSandbox = document.getElementById('templates-sandbox');
 const templatesTag     = document.getElementById('templates-tag');
 const templatesSave    = document.getElementById('templates-save');
 const templatesError   = document.getElementById('templates-error');
+const dfOut            = document.getElementById('df-out');
+const dfVerbose        = document.getElementById('df-verbose');
+
+// `sbx df` (0.53) as sbx prints it. An older sbx has no such command: said
+// in one line, not as an error.
+async function loadDiskUsage() {
+  dfOut.textContent = 'Loading…';
+  let r;
+  try { r = await (await fetch('/api/disk-usage' + (dfVerbose.checked ? '?verbose=true' : ''))).json(); }
+  catch (e) { r = { ok: false, error: e.message }; }
+  dfOut.textContent = r.ok ? (r.text || '').trimEnd() || 'Nothing to report.'
+    : /unknown command|unknown flag/i.test(r.error || '') ? 'Needs sbx 0.53 or newer.'
+    : `Could not read disk usage: ${r.error || 'unknown error'}`;
+}
+dfVerbose.addEventListener('change', loadDiskUsage);
 
 function openTemplatesModal() {
   showNote(templatesError, '');
@@ -19,10 +34,11 @@ function openTemplatesModal() {
     : '<option value="">No sandbox</option>';
   const focused = panes[focusedPane]?.sandbox;
   if (focused && sandboxes.some(s => s.name === focused)) templatesSandbox.value = focused;
-  templatesOverlay.classList.remove('hidden');
+  modalOpen(templatesOverlay);
   loadTemplates();
+  loadDiskUsage();
 }
-function closeTemplatesModal() { templatesOverlay.classList.add('hidden'); }
+function closeTemplatesModal() { templatesOverlay.close(); }
 
 async function loadTemplates() {
   let r;
@@ -61,6 +77,7 @@ templatesList.addEventListener('click', async e => {
   if (!r.ok) { btn.disabled = false; showNote(templatesError, r.error || 'Could not remove it'); return; }
   showToast(`Removed template ${tag}`);
   loadTemplates();
+  loadDiskUsage();
 });
 
 templatesSave.addEventListener('click', async () => {
@@ -78,12 +95,10 @@ templatesSave.addEventListener('click', async () => {
   templatesTag.value = '';
   showToast(r.warnings?.length ? `Saved ${tag} — ${r.warnings.join('; ')}` : `Saved ${sandbox} as ${tag}`);
   loadTemplates();
+  loadDiskUsage();
 });
-templatesTag.addEventListener('keydown', e => { if (e.key === 'Enter') templatesSave.click(); });
+templatesTag.addEventListener('keydown', e => { if (isEnterKey(e)) templatesSave.click(); });
 
 document.getElementById('templates-modal-close').addEventListener('click', closeTemplatesModal);
 document.getElementById('templates-modal-close2').addEventListener('click', closeTemplatesModal);
-templatesOverlay.addEventListener('click', e => { if (e.target === templatesOverlay) closeTemplatesModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !templatesOverlay.classList.contains('hidden')) closeTemplatesModal();
-});
+wireModal(templatesOverlay, closeTemplatesModal);

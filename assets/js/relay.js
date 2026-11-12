@@ -416,7 +416,7 @@ function relayCanCapture() {
  * request instead of on every SSE update.
  */
 function relayRenderDocks() {
-  const shown = relayOverlay.classList.contains('hidden') ? null : relayCurrentId;
+  const shown = !relayOverlay.open ? null : relayCurrentId;
   // Whatever is on screen in the popup doesn't also need a card for itself.
   const docked = relayDocked().filter(r => r.id !== shown);
   const wanted = new Set(docked.map(r => r.id));
@@ -685,7 +685,7 @@ function relayShow(id) {
   clearTimeout(relayLingerTimer);
   if (id) relayCurrentId = id;
   relayEditing = false;
-  relayOverlay.classList.remove('hidden');
+  modalOpen(relayOverlay);
   relayRender();
   // The target buttons are built from the sandbox list, which is only refreshed
   // on explicit actions — a sandbox started since the last refresh would
@@ -701,7 +701,7 @@ function relayStopReading() {
 
 function relayClose() {
   relayStopReading();
-  relayOverlay.classList.add('hidden');
+  relayOverlay.close();
   relayCurrentId = null;
   relayEditing = false;
   // A request that was only hidden because the popup was showing it gets its
@@ -906,7 +906,7 @@ function relayImagesFrom(data) {
 // Scoped to a screenshot request that is actually on screen, so it never
 // swallows a paste meant for a terminal or a textarea.
 document.addEventListener('paste', ev => {
-  if (relayOverlay.classList.contains('hidden')) return;
+  if (!relayOverlay.open) return;
   const req = relayCurrent();
   if (!req || !relayIsShot(req) || req.state !== 'pending') return;
   const files = relayImagesFrom(ev.clipboardData);
@@ -1048,13 +1048,9 @@ document.getElementById('relay-modal-close').addEventListener('click', () => {
 relayBadgeEl.addEventListener('click', () => relayShow());
 
 // Escape dismisses, like every other modal here — and, like the ✕, it means
-// "later". Only when the popup is actually up, so it doesn't swallow the key
-// from the terminal.
-document.addEventListener('keydown', ev => {
-  if (ev.key !== 'Escape' || relayOverlay.classList.contains('hidden')) return;
-  relayClose();
-  relayRender();
-});
+// "later". No click on the backdrop (no `closedby="any"`): an agent's
+// question is not dropped by a stray click.
+wireModal(relayOverlay, () => { relayClose(); relayRender(); });
 
 // ⌘+Enter or Ctrl+Enter sends a round's answers. Only from inside the dialog:
 // the listener is on the overlay, so a terminal holding the focus never
@@ -1112,7 +1108,7 @@ function relayIngest(req, seed = false) {
   // shows up in the "N more waiting" count.
   const wantsYouBack = prev?.state === 'routed' && req.state !== 'routed';
   if (wantsYouBack && !seed) {
-    if (relayOverlay.classList.contains('hidden')) relayShow(req.id);
+    if (!relayOverlay.open) relayShow(req.id);
     else relayRender();
     return;
   }
@@ -1127,7 +1123,7 @@ function relayIngest(req, seed = false) {
     vcAskCue(req.from, req.from_thread || null, relayRound(req)?.questions.length || 1);
   }
   if (isNew && !seed) {
-    if (relayOverlay.classList.contains('hidden')) relayShow(req.id);
+    if (!relayOverlay.open) relayShow(req.id);
     else relayRender();
     return;
   }

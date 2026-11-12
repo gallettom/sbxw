@@ -80,6 +80,10 @@ pub struct Config {
     pub template: String,
     /// Hold the sandbox up with nobody attached (`sbx run -d`).
     pub keep_running: bool,
+    /// Start the agent with `--chrome` (sbx 0.53): Claude in Chrome, the
+    /// agent working with tabs of the host's browser. Also needs sbx's own
+    /// `claude.chrome` setting and a subscription login.
+    pub chrome: bool,
     /// Agent + threads one sandbox may hold open.
     pub max_agent_sessions: usize,
     /// macOS: hold the host awake with `caffeinate` — `remote` while Remote
@@ -192,6 +196,7 @@ impl Default for Config {
             pull: String::new(),
             template: String::new(),
             keep_running: false,
+            chrome: false,
             max_agent_sessions: 4,
             keep_awake: crate::power::KeepAwake::Remote,
             keep_awake_min_battery: 5,

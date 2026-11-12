@@ -15,9 +15,11 @@
 //!   hooks, credentials, ports, `/etc/hosts`) for every run.
 //! * **Ports are all-or-nothing.** If a port can't be published, creation fails
 //!   *and removes the new sandbox*, leaving provisioned secrets behind. No CLI
-//!   flag overrides a port, and a second file can't replace one (lists
-//!   concatenate). So sbxw checks host ports *before* calling sbx and rewrites
-//!   the document (see `Loaded::set_ports`).
+//!   flag overrides a port. Since sbx 0.53 a later entry for the same sandbox
+//!   port replaces an earlier one whole, across merged files too (other lists
+//!   still concatenate), but a busy host port still fails the create. So sbxw
+//!   checks host ports *before* calling sbx and rewrites the document (see
+//!   `Loaded::set_ports`).
 //! * **Half of sbxw isn't in the format.** The egress allowlist is `sbx policy`,
 //!   not a file field; the browser terminal, `/etc/hosts` aliases and OAuth
 //!   injection are sbxw's own. Export writes those omissions into the header
@@ -58,6 +60,15 @@ pub struct Port {
     /// `None` is sbx's default (`tcp4`). Kept so a rewrite can't turn `udp`
     /// into TCP.
     pub protocol: Option<String>,
+}
+
+impl Port {
+    /// The same published port as `other`, the way sbx 0.53 matches entries:
+    /// sandbox port and transport (`tcp4`, `tcp6` and no protocol are all TCP).
+    pub fn same_port(&self, other: &Port) -> bool {
+        let udp = |p: &Port| p.protocol.as_deref().is_some_and(|x| x.to_ascii_lowercase().starts_with("udp"));
+        self.sandbox == other.sandbox && udp(self) == udp(other)
+    }
 }
 
 impl From<&crate::ports::PortMapping> for Port {
@@ -654,7 +665,7 @@ pub struct Spec {
     pub env: BTreeMap<String, String>,
     pub ports: Vec<Port>,
     /// How many of `ports` come from the user-level base (first, since it
-    /// merges beneath and lists concatenate).
+    /// merges beneath); one the project replaces is not counted, nor kept.
     pub user_ports: usize,
     /// Top-level keys sbx handles and sbxw only passes through.
     pub delegated: Vec<String>,
@@ -684,7 +695,7 @@ impl Loaded {
     /// a newer sbx field still runs; sbx rejects it later with a better message.
     pub fn spec(&self) -> Result<Spec> {
         let merged = merge(self.user_doc.clone(), self.doc.clone());
-        let user_ports = match self.user_doc.get("ports") {
+        let base_ports = match self.user_doc.get("ports") {
             Some(Value::Sequence(items)) => items.len(),
             _ => 0,
         };
@@ -786,6 +797,12 @@ impl Loaded {
                 });
             }
         }
+        // sbx 0.53: the last entry for a port wins, whole, across merged files.
+        // The base's entries come first, so the ones a project replaces go.
+        let replaced: Vec<bool> = (0..ports.len()).map(|i| ports[i + 1..].iter().any(|later| later.same_port(&ports[i]))).collect();
+        let user_ports = replaced.iter().take(base_ports).filter(|gone| !**gone).count();
+        let mut gone = replaced.into_iter();
+        ports.retain(|_| !gone.next().unwrap_or(false));
 
         let delegated = DELEGATED_KEYS
             .iter()
@@ -987,8 +1004,29 @@ mod tests {
         }
     }
 
-    /// **Lists concatenate**: an override file can only add ports, so sbxw
-    /// rewrites the document to change one.
+    /// sbx 0.53: a later entry for the same sandbox port replaces the earlier
+    /// one whole, the user base's included; another transport is another port.
+    #[test]
+    fn the_last_entry_for_a_port_wins_across_merged_files() {
+        let home = scratch("ports-home");
+        let project = scratch("ports-project");
+        let user = home.join(USER_FILE_NAME);
+        std::fs::write(&user, "ports:\n  - sandbox: 9000\n    host: 9000\n  - sandbox: 3000\n    host: 3000\n    hostIP: 127.0.0.2\n").unwrap();
+        let file = project.join(FILE_NAME);
+        std::fs::write(
+            &file,
+            "agent: claude\nworkspace: .\nports:\n  - sandbox: 3000\n    host: 3100\n  - sandbox: 3000\n    protocol: udp\n  - sandbox: 8080\n  - sandbox: 8080\n    host: 8081\n",
+        )
+        .unwrap();
+        let spec = load(&[file], Some(&user), &[]).unwrap().spec().unwrap();
+        let seen: Vec<(u16, Option<u16>, Option<&str>)> = spec.ports.iter().map(|p| (p.sandbox, p.host, p.protocol.as_deref())).collect();
+        assert_eq!(seen, [(9000, Some(9000), None), (3000, Some(3100), None), (3000, None, Some("udp")), (8080, Some(8081), None)]);
+        assert_eq!(spec.ports[1].host_ip, None, "a replacement replaces the whole entry");
+        assert_eq!(spec.user_ports, 1, "the base's 3000 was replaced by the project's");
+    }
+
+    /// **Lists concatenate** (ports aside): sbxw rewrites the document to
+    /// change a port.
     #[test]
     fn merging_follows_sbx_rules_including_lists_that_concatenate() {
         let dir = scratch("merge");

@@ -39,6 +39,9 @@ pub enum Event {
     Mac,
     /// The voice models or their download moved: `/api/voice`'s answer.
     Voice(serde_json::Value),
+    /// A sandbox's agent started or stopped using its browser:
+    /// `{ "sandbox", "active" }`.
+    Browser(crate::svc::browser::BrowserState),
 }
 
 impl Event {
@@ -57,6 +60,7 @@ impl Event {
             Event::Board(_) => "board",
             Event::Mac => "mac",
             Event::Voice(_) => "voice",
+            Event::Browser(_) => "browser",
         }
     }
 
@@ -73,6 +77,7 @@ impl Event {
             Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.to_string(),
             Event::Mac => String::new(),
             Event::Voice(v) => v.to_string(),
+            Event::Browser(v) => json(v),
         }
     }
 }

@@ -7,6 +7,51 @@ function escHtml(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// True for an Enter that should act (submit, add, navigate), false for the
+// Enter that confirms an IME composition (Japanese, Chinese, Korean input):
+// acting on that one sends half-typed text. `keyCode === 229` catches Safari,
+// which clears `isComposing` before the confirming keydown reaches script.
+function isEnterKey(e) {
+  return e.key === 'Enter' && !e.isComposing && e.keyCode !== 229;
+}
+
+// ── Modal dialogs ─────────────────────────────────────────────────────────
+// Every dialog is a native <dialog>: showModal() puts it in the top layer,
+// keeps focus inside, makes the page behind inert and closes it on Escape;
+// `closedby="any"` in the markup adds a click on the backdrop. What is left
+// to script is routing those closes through the panel's own close function,
+// so its clean-up runs however the dialog was dismissed.
+
+/// Open `dlg` as a modal; a no-op when it already is.
+function modalOpen(dlg) {
+  if (!dlg.open) dlg.showModal();
+}
+
+/// Send Escape (and a backdrop click, for `closedby="any"`) to `requestClose`,
+/// which closes the dialog itself (`dlg.close()`) or decides not to.
+/// The `cancel` event is prevented so a dialog never closes behind the
+/// panel's back; where it cannot be (a second Escape with no click between),
+/// `requestClose` still runs. Safari has no `closedby` yet: there, a press
+/// *and* release outside the box stands in for it, so a drag that selects
+/// text and ends on the backdrop does not dismiss.
+function wireModal(dlg, requestClose) {
+  dlg.addEventListener('cancel', e => { e.preventDefault(); requestClose(); });
+  if ('closedBy' in HTMLDialogElement.prototype || dlg.getAttribute('closedby') !== 'any') return;
+  const outside = e => {
+    const r = dlg.getBoundingClientRect();
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+  };
+  let pressedOutside = false;
+  dlg.addEventListener('pointerdown', e => { pressedOutside = outside(e); });
+  dlg.addEventListener('pointerup', e => { if (pressedOutside && outside(e)) requestClose(); });
+}
+
+/// True while any modal dialog is up (keyboard shortcuts for the page under
+/// it stand down).
+function anyModalOpen() {
+  return !!document.querySelector('dialog:modal');
+}
+
 // ── Signed out ────────────────────────────────────────────────────────────
 // The daemon mints a new UI token each time it starts, so after a restart
 // this tab's cookie is stale and every call answers 401. Reload, and the
@@ -154,6 +199,12 @@ function showToast(msg, kind) {
   const t = document.getElementById('paste-toast');
   t.textContent = msg;
   t.className = 'paste-toast show' + (kind ? ' ' + kind : '');
+  // A popover shown after a modal dialog sits above it in the top layer, so
+  // re-showing it each time keeps a toast said from inside a dialog visible.
+  if ('showPopover' in t) {
+    if (t.matches(':popover-open')) t.hidePopover();
+    t.showPopover();
+  }
   clearTimeout(pasteToastTimer);
   if (kind !== 'progress')
     pasteToastTimer = setTimeout(() => { t.className = 'paste-toast'; }, 3000);

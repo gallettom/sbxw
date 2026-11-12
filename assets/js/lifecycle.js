@@ -9,10 +9,10 @@ function openRmModal(name) {
   rmNameEl.textContent = name;
   rmConfirm.disabled = false;
   rmConfirm.textContent = 'Remove';
-  rmOverlay.classList.remove('hidden');
+  modalOpen(rmOverlay);
 }
 
-function closeRmModal() { rmOverlay.classList.add('hidden'); rmTarget = null; }
+function closeRmModal() { rmOverlay.close(); rmTarget = null; }
 
 async function removeSandbox(name) {
   // The sandbox is going away and so is every terminal onto it. Emptying the
@@ -35,10 +35,7 @@ async function removeSandbox(name) {
 
 document.getElementById('rm-modal-close').addEventListener('click', closeRmModal);
 document.getElementById('rm-modal-cancel').addEventListener('click', closeRmModal);
-rmOverlay.addEventListener('click', e => { if (e.target === rmOverlay) closeRmModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !rmOverlay.classList.contains('hidden')) closeRmModal();
-});
+wireModal(rmOverlay, closeRmModal);
 
 rmConfirm.addEventListener('click', async () => {
   if (!rmTarget) return;
@@ -73,13 +70,13 @@ function openDupModal(name) {
   dupNameErr.classList.add('hidden');
   dupErrEl.textContent = '';
   dupErrEl.classList.add('hidden');
-  dupOverlay.classList.remove('hidden');
+  modalOpen(dupOverlay);
   validateDupForm();
   dupInpName.focus();
   dupInpName.select();
 }
 
-function closeDupModal() { dupOverlay.classList.add('hidden'); dupSource = null; }
+function closeDupModal() { dupOverlay.close(); dupSource = null; }
 
 function validateDupForm() {
   const nameOk = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(dupInpName.value.trim());
@@ -106,15 +103,12 @@ dupInpName.addEventListener('input', () => {
 });
 
 dupInpName.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !dupConfirm.disabled) dupConfirm.click();
+  if (isEnterKey(e) && !dupConfirm.disabled) dupConfirm.click();
 });
 
 document.getElementById('dup-modal-close').addEventListener('click', closeDupModal);
 document.getElementById('dup-modal-cancel').addEventListener('click', closeDupModal);
-dupOverlay.addEventListener('click', e => { if (e.target === dupOverlay) closeDupModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !dupOverlay.classList.contains('hidden')) closeDupModal();
-});
+wireModal(dupOverlay, closeDupModal);
 
 // Same fire-and-forget pattern as sandbox creation: close the modal right away
 // and let the copy report its steps from a corner card while provisioning runs.

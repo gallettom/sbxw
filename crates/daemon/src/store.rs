@@ -261,6 +261,11 @@ pub struct SandboxRecord {
     /// kit, no auth variables — so it logs in to claude.ai itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remote_control: bool,
+    /// Its agent starts with `--chrome` (Claude in Chrome), asked for in the
+    /// create dialog or by `sbxw up --chrome`; `chrome` in sbxw.toml does the
+    /// same without this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chrome: bool,
     /// A remote sandbox's status the last time its host answered: what it
     /// is listed with while the host is unreachable. Never set for this
     /// machine's sandboxes, so their records are unchanged.
@@ -533,6 +538,7 @@ impl Store {
             kits: vec![],
             carve: None,
             remote_control: false,
+            chrome: false,
             created_by_sbx: None,
             last_status: None,
         }

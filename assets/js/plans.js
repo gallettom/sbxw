@@ -112,11 +112,11 @@ function askEndLead(idx) {
   showNote(leadEndError, '');
   leadEndConfirm.disabled = false;
   leadEndConfirm.textContent = 'End lead mode';
-  leadEndOverlay.classList.remove('hidden');
+  modalOpen(leadEndOverlay);
   leadEndConfirm.focus();
 }
 
-function closeLeadEnd() { leadEndOverlay.classList.add('hidden'); leadEndAsk = null; }
+function closeLeadEnd() { leadEndOverlay.close(); leadEndAsk = null; }
 
 leadEndConfirm.addEventListener('click', async () => {
   const ask = leadEndAsk;
@@ -139,10 +139,7 @@ leadEndConfirm.addEventListener('click', async () => {
 });
 document.getElementById('lead-end-cancel').addEventListener('click', closeLeadEnd);
 document.getElementById('lead-end-x').addEventListener('click', closeLeadEnd);
-leadEndOverlay.addEventListener('click', e => { if (e.target === leadEndOverlay) closeLeadEnd(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !leadEndOverlay.classList.contains('hidden')) closeLeadEnd();
-});
+wireModal(leadEndOverlay, closeLeadEnd);
 
 // "Review plan" on the main pane, shown while its plan waits on a person —
 // the way back to a dialog closed with Later.
@@ -335,7 +332,7 @@ mergeTeam.addEventListener('change', e => {
 
 function setPlanView(view) {
   planView = view;
-  planOverlay.querySelector('.plan-modal').classList.toggle('merge-view', view === 'merge');
+  planOverlay.classList.toggle('merge-view', view === 'merge');
 }
 
 async function showMerge(plan) {
@@ -350,7 +347,7 @@ async function showMerge(plan) {
   mergeClose.checked = true;
   showNote(mergeError, '');
   paintMerge(plan);
-  planOverlay.classList.remove('hidden');
+  modalOpen(planOverlay);
   (mergeAll.hidden || mergeAll.disabled ? mergeLater : mergeAll).focus();
   if (!planRepos) {
     const r = await fetchRepos(plan.sandbox);
@@ -670,7 +667,7 @@ async function showPlan(plan) {
   setPlanError('');
   planApprove.disabled = false;
   planApprove.textContent = 'Approve and start';
-  planOverlay.classList.remove('hidden');
+  modalOpen(planOverlay);
   planRows.querySelectorAll('.plan-thread').forEach(paintPlanRow);
   updatePlanReady();
   updatePlanCount();
@@ -703,7 +700,7 @@ async function updatePlanCount() {
 
 function closePlan() {
   stopMergeBoard();
-  planOverlay.classList.add('hidden');
+  planOverlay.close();
   planShown = null;
   mergeAsk = null;
   planBudget = null;
@@ -733,7 +730,7 @@ function ingestPlan(plan, seed = false) {
   plans.set(plan.id, plan);
   // A new proposal asks for attention at once; one found on reload too, unless
   // a dialog is already up — its pane's Review plan button leads back to it.
-  if (plan.state === 'pending' && !prev && planOverlay.classList.contains('hidden')) showPlan(plan);
+  if (plan.state === 'pending' && !prev && !planOverlay.open) showPlan(plan);
   if (plan.state === 'approved' && !seed && prev?.state === 'pending' && !panesOpenedFor.has(plan.id)) {
     panesOpenedFor.add(plan.id);
     openPlanPanes(plan);
@@ -834,10 +831,7 @@ document.getElementById('plan-refuse').addEventListener('click', async () => {
 
 document.getElementById('plan-later').addEventListener('click', closePlan);
 document.getElementById('plan-x').addEventListener('click', closePlan);
-planOverlay.addEventListener('click', e => { if (e.target === planOverlay) closePlan(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !planOverlay.classList.contains('hidden')) closePlan();
-});
+wireModal(planOverlay, closePlan);
 
 fetchModels().then(m => {
   planModels = m;

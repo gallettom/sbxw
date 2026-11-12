@@ -1,0 +1,41 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+displayName: dev-ports
+description: >
+  Lets the agent show a dev server to the person without a prompt: it asks sbx
+  for a host port on the loopback interface, assigned by sbx (ports.publish
+  with approval: none, sbx 0.53). The binding lasts until the sandbox stops and
+  is not restored at the next start. A fixed host port still needs the
+  person's approval: that is `[[ports]]` in sbxw.toml, or the ports panel.
+  Opt-in, and only at creation.
+
+build: |
+  FROM scratch
+  COPY --chown=1000:1000 files/home/agent/ /home/agent/
+
+capabilities:
+  # The grant: without it sbx asks the person about each publication.
+  - type: com.docker.sandbox/api@1
+    config:
+      operation: ports.publish
+      approval: none
+  - type: com.docker.sandbox/agent-context@2
+    optional: true
+    config:
+      content: |
+          ## Showing a dev server to the person
+
+          A server you start in this sandbox is not reachable from the
+          person's browser until its port is published. You can publish one
+          yourself, without asking:
+
+          `node /home/agent/.sbxw/dev-ports/publish.mjs <port>`
+
+          It prints the address to give the person (`http://127.0.0.1:<host
+          port>`). The server must listen on `0.0.0.0`, not only `127.0.0.1`.
+          The address is on the person's own machine only, the host port is
+          chosen by sbx, and it goes away when the sandbox stops: publish
+          again after a restart, and say the new address. Publish a port once
+          the server answers, not before, and only the ports the person needs
+          to open.

@@ -221,10 +221,9 @@
        the sort of thing you want to read *before* the form, not guess from an
        emoji in the sidebar. Picking a card closes this and opens that kind's
        own modal. -->
-  <div class="modal-overlay hidden" id="kind-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="kind-modal-title" style="width:440px">
+  <dialog class="modal" id="kind-modal-overlay" aria-labelledby="kind-modal-title" style="width:440px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="kind-modal-title">New sandbox</span>
+        <h2 class="modal-title" id="kind-modal-title">New sandbox</h2>
         <button class="modal-close" id="kind-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -259,14 +258,12 @@
           </button>
         </div>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Create sandbox modal ── -->
-  <div class="modal-overlay hidden" id="modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <dialog class="modal" id="modal-overlay" aria-labelledby="modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="modal-title">New sandbox</span>
+        <h2 class="modal-title" id="modal-title">New sandbox</h2>
         <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body create-body">
@@ -392,17 +389,34 @@
             <div class="km-rows create-opt-full" id="km-rows"></div>
           </div>
 
-          <!-- Only at creation: the credentials kit sbx re-applies on every
-               container swap would bring the token back to a sandbox switched
-               over later. See sbxw_core::remote. -->
+          <!-- sbx 0.53 keeps Remote Control's credentials on the host
+               (claude.remoteControl): the box then only says to watch the
+               sandbox. Before 0.53 it matters at creation alone: the
+               credentials kit sbx re-applies on every container swap would
+               bring the token back to a sandbox switched over later. See
+               sbxw_core::remote. -->
           <label class="create-opt create-opt-check" id="rc-option">
             <span class="create-opt-text">
               <span class="create-opt-title">Remote control</span>
               <span class="create-opt-desc">Use this sandbox from claude.ai/code or the Claude app.
-                You log in once with <code>/login</code> in its pane.</span>
+                Needs <code>sbx settings set claude.remoteControl true</code> once
+                (before sbx 0.53: <code>/login</code> in its pane instead).</span>
             </span>
             <input type="checkbox" id="rc-box"
-                   title="sbxw injects no OAuth token or API key here: Remote Control refuses them">
+                   title="sbx 0.53 supplies Remote Control's credentials from the host; an older sbx gets a sandbox with no token, which logs in itself">
+          </label>
+
+          <!-- Claude in Chrome (sbx 0.53): the agent is started with --chrome.
+               Ticked here by the person, so it asks no approval; `chrome = true`
+               in sbxw.toml is a host-access grant. See sbxw_core::chrome. -->
+          <label class="create-opt create-opt-check" id="chrome-option" for="chrome-box">
+            <span class="create-opt-text">
+              <span class="create-opt-title">Claude in Chrome</span>
+              <span class="create-opt-desc" id="chrome-desc">The agent opens and reads tabs in your browser.
+                Needs the Claude extension, a subscription login (an API key alone is refused) and
+                <code>sbx settings set claude.chrome true</code> once.</span>
+            </span>
+            <input type="checkbox" id="chrome-box" aria-describedby="chrome-desc">
           </label>
 
           <!-- With `template = "auto"` and a template that is up to date, the
@@ -426,18 +440,16 @@
         <button class="btn-cancel" id="modal-cancel">Cancel</button>
         <button class="btn-create" id="modal-create" disabled>✓ Create</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Remove sandbox confirmation modal ── -->
   <!-- ── The automatic template is stale or missing ──
        Asked before a create when `template = "auto"` and the template for
        these kits was saved by another sbx or sbxw, or not yet at all. Filled
        by askTemplate() in /js/create.js. -->
-  <div class="modal-overlay hidden" id="tpl-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tpl-modal-title" style="width:460px">
+  <dialog class="modal" id="tpl-modal-overlay" aria-labelledby="tpl-modal-title" style="width:460px">
       <div class="modal-head">
-        <span class="modal-title" id="tpl-modal-title">Template out of date</span>
+        <h2 class="modal-title" id="tpl-modal-title">Template out of date</h2>
         <button class="modal-close" id="tpl-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body tpl-body">
@@ -449,13 +461,11 @@
         <button class="btn-cancel" id="tpl-keep" title="Create from the out-of-date template">Use the old one</button>
         <button class="btn-create" id="tpl-rebuild">Rebuild template</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
-  <div class="modal-overlay hidden" id="rm-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rm-modal-title" style="width:360px">
+  <dialog class="modal" id="rm-modal-overlay" aria-labelledby="rm-modal-title" style="width:360px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="rm-modal-title">Remove sandbox</span>
+        <h2 class="modal-title" id="rm-modal-title">Remove sandbox</h2>
         <button class="modal-close" id="rm-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -468,17 +478,15 @@
         <button class="btn-cancel" id="rm-modal-cancel">Cancel</button>
         <button class="btn-danger" id="rm-modal-confirm">Remove</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Open a thread ──
        Names a thread of the sandbox in the pane that asked: a new one, or one
        of the existing worktrees, offered as chips. Filled by openThread() in
        /js/panes.js. -->
-  <div class="modal-overlay hidden" id="thread-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-modal-title" style="width:440px">
+  <dialog class="modal" id="thread-modal-overlay" aria-labelledby="thread-modal-title" style="width:440px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="thread-modal-title">New thread</span>
+        <h2 class="modal-title" id="thread-modal-title">New thread</h2>
         <button class="modal-close" id="thread-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -514,17 +522,15 @@
         <button class="btn-cancel" id="thread-modal-cancel">Cancel</button>
         <button class="btn-create" id="thread-modal-open" disabled>Open thread</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Close a thread ──
        Says what closing would throw away before anything is thrown away:
        uncommitted files must be ticked off explicitly, and an unmerged branch
        is kept unless asked. Filled by closeThread() in /js/panes.js. -->
-  <div class="modal-overlay hidden" id="thread-close-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="thread-close-title" style="width:440px">
+  <dialog class="modal" id="thread-close-overlay" aria-labelledby="thread-close-title" style="width:440px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="thread-close-title">Close thread</span>
+        <h2 class="modal-title" id="thread-close-title">Close thread</h2>
         <button class="modal-close" id="thread-close-x" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -544,18 +550,16 @@
         <button class="btn-cancel" id="thread-close-cancel">Cancel</button>
         <button class="btn-danger" id="thread-close-confirm">Close thread</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Worktree graph ──
        Where each thread's branch stands against the branch the lead works on,
        as lanes off that branch with the same in words beside each. Opened
        from the miniature at the top of the Thread menu; filled, and read
        again while open, by /js/worktrees.js. -->
-  <div class="modal-overlay hidden" id="wt-overlay">
-    <div class="modal wt-modal" role="dialog" aria-modal="true" aria-labelledby="wt-title" aria-describedby="wt-intro">
+  <dialog class="modal wt-modal" id="wt-overlay" aria-labelledby="wt-title" aria-describedby="wt-intro" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="wt-title">Worktree graph</span>
+        <h2 class="modal-title" id="wt-title">Worktree graph</h2>
         <button class="modal-close" id="wt-x" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -567,17 +571,15 @@
         <span class="wt-updated" id="wt-updated"></span>
         <button class="btn-cancel" id="wt-close">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── End lead mode ──
        Says what ending would leave behind — threads still running, a plan
        still waiting — before the main session stops being the lead. Filled by
        askEndLead() in /js/plans.js. -->
-  <div class="modal-overlay hidden" id="lead-end-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="lead-end-title" style="width:440px">
+  <dialog class="modal" id="lead-end-overlay" aria-labelledby="lead-end-title" style="width:440px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="lead-end-title">End lead mode</span>
+        <h2 class="modal-title" id="lead-end-title">End lead mode</h2>
         <button class="modal-close" id="lead-end-x" aria-label="Close">✕</button>
       </div>
       <div class="modal-body" id="lead-end-body"></div>
@@ -586,17 +588,15 @@
         <button class="btn-cancel" id="lead-end-cancel">Keep leading</button>
         <button class="btn-create" id="lead-end-confirm">End lead mode</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Approve a plan ──
        A lead session's proposal: threads to run in parallel, each with a goal
        and the files it owns. Everything is editable before it starts, and
        nothing starts until Approve. Filled by /js/plans.js. -->
-  <div class="modal-overlay hidden" id="plan-overlay">
-    <div class="modal plan-modal" role="dialog" aria-modal="true" aria-labelledby="plan-title">
+  <dialog class="modal plan-modal" id="plan-overlay" aria-labelledby="plan-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="plan-title">Plan</span>
+        <h2 class="modal-title" id="plan-title">Plan</h2>
         <button class="modal-close" id="plan-x" aria-label="Close">✕</button>
       </div>
       <div class="modal-body plan-review-part">
@@ -629,8 +629,7 @@
         <button class="btn-cancel" id="plan-later">Later</button>
         <button class="btn-create" id="plan-approve">Approve and start</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── SSH connection details ──
        What to type into an SSH client's "add a connection" form (Claude
@@ -701,10 +700,9 @@
        What sbx waits for a person to decide for one sandbox (`sbx policy
        approval`): a host no rule allows, a kit's host port (45 s). Each
        request offers its own options. Filled by /js/approvals.js. -->
-  <div class="modal-overlay hidden" id="approvals-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="approvals-modal-title" style="width:560px">
+  <dialog class="modal" id="approvals-modal-overlay" aria-labelledby="approvals-modal-title" style="width:560px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="approvals-modal-title">Waiting for you</span>
+        <h2 class="modal-title" id="approvals-modal-title">Waiting for you</h2>
         <button class="modal-close" id="approvals-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body sec-body" id="approvals-body"><p class="repo-note">Loading…</p></div>
@@ -712,13 +710,11 @@
         <span class="create-error hidden" id="approvals-error"></span>
         <button class="btn-cancel" id="approvals-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
-  <div class="modal-overlay hidden" id="dup-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dup-modal-title" style="width:360px">
+  <dialog class="modal" id="dup-modal-overlay" aria-labelledby="dup-modal-title" style="width:360px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="dup-modal-title">Duplicate sandbox</span>
+        <h2 class="modal-title" id="dup-modal-title">Duplicate sandbox</h2>
         <button class="modal-close" id="dup-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -734,14 +730,12 @@
         <button class="btn-cancel" id="dup-modal-cancel">Cancel</button>
         <button class="btn-create" id="dup-modal-confirm" disabled>⧉ Duplicate</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── New chat sandbox wizard ── -->
-  <div class="modal-overlay hidden" id="chat-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="chat-modal-title" style="width:380px">
+  <dialog class="modal" id="chat-modal-overlay" aria-labelledby="chat-modal-title" style="width:380px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="chat-modal-title">New chat sandbox</span>
+        <h2 class="modal-title" id="chat-modal-title">New chat sandbox</h2>
         <button class="modal-close" id="chat-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -763,14 +757,12 @@
         <button class="btn-cancel" id="chat-modal-cancel">Cancel</button>
         <button class="btn-create" id="chat-modal-confirm">💬 Start</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Ports info modal ── -->
-  <div class="modal-overlay hidden" id="ports-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ports-modal-title" style="width:1440px">
+  <dialog class="modal" id="ports-modal-overlay" aria-labelledby="ports-modal-title" closedby="none" style="width:1440px">
       <div class="modal-head">
-        <span class="modal-title" id="ports-modal-title">Ports &amp; network — <span id="ports-modal-name"></span></span>
+        <h2 class="modal-title" id="ports-modal-title">Ports &amp; network — <span id="ports-modal-name"></span></h2>
         <button class="modal-close" id="ports-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body" style="gap:0;padding-bottom:.5rem">
@@ -828,25 +820,90 @@
         </button>
         <button class="btn-cancel" id="ports-modal-close2">Close</button>
       </div>
+  </dialog>
+
+  <!-- ── Browser panel ──
+       The sandbox's own headless Chromium, live: the agent drives it, the
+       person watches and can take over. It runs inside the sandbox and goes
+       through its proxy, so the network policy applies; a host the policy
+       refused is offered here with one click, for this sandbox only. ✕ hides
+       the panel and leaves the browser running; "Close browser" ends it and
+       asks what to do with the hosts allowed from here. /js/browser.js. -->
+  <dialog class="modal-shell" id="browser-overlay" aria-labelledby="browser-title" closedby="none">
+    <div class="modal browser-modal">
+      <div class="modal-head">
+        <h2 class="modal-title" id="browser-title">Browser — <span id="browser-name"></span></h2>
+        <button class="modal-close" id="browser-hide" aria-label="Hide the panel" title="Hide the panel — the browser keeps running in the sandbox">✕</button>
+      </div>
+      <div class="browser-bar">
+        <button class="browser-nav" id="browser-back" title="Back" aria-label="Back">←</button>
+        <button class="browser-nav" id="browser-forward" title="Forward" aria-label="Forward">→</button>
+        <button class="browser-nav" id="browser-reload" title="Reload" aria-label="Reload">↻</button>
+        <input id="browser-url" class="browser-url" type="text" inputmode="url" autocomplete="off" autocorrect="off"
+               autocapitalize="none" spellcheck="false" autofocus
+               aria-label="Address of the page shown" placeholder="The page the browser is on — type an address and press Enter">
+        <select id="browser-viewport" class="browser-viewport" aria-label="Device the page is laid out for: a phone, a tablet or a desktop; Auto fits this panel">
+          <option value="auto">Auto</option>
+          <option value="mobile">Mobile · 390</option>
+          <option value="tablet">Tablet · 820</option>
+          <option value="desktop">Desktop · 1280</option>
+        </select>
+      </div>
+      <div class="browser-blocked hidden" id="browser-blocked"></div>
+      <!-- What a toast would say, while the panel is the modal dialog: a
+           toast is outside it, and so out of reach. -->
+      <p class="browser-note hidden" id="browser-note" role="status"></p>
+      <!-- The page itself: every key typed here goes to it, so it is an
+           application surface, and F6 is the way out (see browser.js). -->
+      <div class="browser-stage" id="browser-stage" tabindex="0" role="application"
+           aria-label="Sandbox browser page" aria-describedby="browser-keys-hint">
+        <img id="browser-screen" class="browser-screen hidden" alt="The sandbox browser's page" draggable="false"
+             width="1280" height="800" decoding="async">
+        <div id="browser-status" class="browser-status"></div>
+      </div>
+      <div class="modal-foot browser-foot">
+        <span class="browser-foot-notes">
+          <span class="browser-grant-note" id="browser-grant-note"></span>
+          <span class="browser-keys-hint" id="browser-keys-hint">Keys typed in the page go to it. <kbd>F6</kbd> moves to the address bar.</span>
+        </span>
+        <button class="btn-danger" id="browser-close" title="Quit the sandbox's browser">Close browser</button>
+      </div>
     </div>
-  </div>
+  </dialog>
+
+  <!-- Asked once, when the browser closes, and only if hosts were allowed
+       from the panel: each was allowed for that sandbox alone. -->
+  <dialog class="modal" id="browser-settle-overlay" aria-labelledby="browser-settle-title" style="width:440px">
+      <div class="modal-head">
+        <h2 class="modal-title" id="browser-settle-title">Network access allowed from the browser</h2>
+      </div>
+      <div class="modal-body">
+        <p class="browser-settle-lead">
+          While the browser was open you allowed these hosts for <strong id="browser-settle-name"></strong> only.
+          Remove them now, or keep them for this sandbox?
+        </p>
+        <ul class="browser-settle-list" id="browser-settle-list"></ul>
+      </div>
+      <div class="modal-foot">
+        <button class="btn-cancel" id="browser-settle-keep" autofocus>Keep them</button>
+        <button class="btn-danger" id="browser-settle-remove">Remove them</button>
+      </div>
+  </dialog>
 
   <!-- ── Host monitor ──
        `monitor_cmd` in a terminal of its own, nearly the whole window: a TUI
        showing every sandbox at once has nothing to show in a quarter of the
        grid. No Escape to close — the TUI needs that key (see /js/create.js). -->
-  <div class="modal-overlay hidden" id="monitor-overlay">
-    <div class="modal monitor-modal" role="dialog" aria-modal="true" aria-labelledby="monitor-title">
+  <dialog class="modal monitor-modal" id="monitor-overlay" aria-labelledby="monitor-title">
       <div class="modal-head">
-        <span class="modal-title" id="monitor-title">
+        <h2 class="modal-title" id="monitor-title">
           <span class="dot term-disconnected" id="monitor-dot" title="Terminal connection"></span>
           Monitor Sandboxes <code class="monitor-cmd" id="monitor-cmd"></code>
-        </span>
+        </h2>
         <button class="modal-close" id="monitor-close" aria-label="Close">✕</button>
       </div>
       <div class="pane-term monitor-term" id="monitor-term"></div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Project modal ──
        A file explorer over the sandbox's own filesystem — the whole of it, read
@@ -855,10 +912,9 @@
        the agent leaves its deliverables, is where it opens; above it, Recent
        lists the newest files wherever they were written. Opened from the 📁 button beside the sandbox name in a pane's top
        bar (see /js/panes.js, /js/files.js). -->
-  <div class="modal-overlay hidden" id="files-modal-overlay">
-    <div class="modal files-modal" role="dialog" aria-modal="true" aria-labelledby="files-modal-title">
+  <dialog class="modal files-modal" id="files-modal-overlay" aria-labelledby="files-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="files-modal-title">Project — <span id="files-modal-name"></span></span>
+        <h2 class="modal-title" id="files-modal-title">Project — <span id="files-modal-name"></span></h2>
         <!-- Files and Code map are the two halves of one project, so they are
              tabs at the top rather than a list with a map button in its footer,
              where the one thing sbxw adds over any file browser was the
@@ -933,8 +989,7 @@
         </div>
         <button class="btn-cancel" id="files-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Code map modal ──
        The markdown knowledge graph under .sbxw-artifacts/codemap/, made
@@ -944,10 +999,9 @@
        it writes by asking the sandbox's own agent (see the lens bar below).
        Opened from the Project panel's "Code map" button (see /js/files.js,
        /js/codemap.js). -->
-  <div class="modal-overlay hidden" id="codemap-modal-overlay">
-    <div class="modal codemap-modal" role="dialog" aria-modal="true" aria-labelledby="codemap-title">
+  <dialog class="modal codemap-modal" id="codemap-modal-overlay" aria-labelledby="codemap-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="codemap-title">Project — <span id="codemap-name"></span></span>
+        <h2 class="modal-title" id="codemap-title">Project — <span id="codemap-name"></span></h2>
         <!-- The Project modal's tabs, with this side selected: Files goes back
              to the explorer on the same sandbox. -->
         <div class="proj-tabs" role="tablist" aria-label="Project">
@@ -1030,8 +1084,7 @@
         </button>
         <button class="btn-cancel" id="codemap-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Skills modal ──
        The person's kept skills first (live, from the daemon), then what the
@@ -1039,10 +1092,9 @@
        kits are files in this repository, and a sandbox only has a kit's
        commands if sbxw.toml's `kits` lists it — the lead says so rather than
        the page pretending to know. Opened from the sidebar footer (/js/skills.js). -->
-  <div class="modal-overlay hidden" id="skills-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="skills" role="dialog" aria-modal="true" aria-labelledby="skills-modal-title">
+  <dialog class="modal setup-modal" id="skills-modal-overlay" data-setup-tab="skills" aria-labelledby="skills-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="skills-modal-title">Skills in your sandboxes</span>
+        <h2 class="modal-title" id="skills-modal-title">Skills in your sandboxes</h2>
         <button class="modal-close" id="skills-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1138,18 +1190,16 @@
       <div class="modal-foot">
         <button class="btn-cancel" id="skills-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Templates modal ──
        The templates `sbx template ls` reports, each removable, and a form to
        save a sandbox as a new one. Saving goes through the daemon, which takes
        the sandbox's agent token and Claude credentials out first and puts
        them back after (provision.rs, App::snapshot). (/js/templates.js) -->
-  <div class="modal-overlay hidden" id="kits-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="kits" role="dialog" aria-modal="true" aria-labelledby="kits-modal-title">
+  <dialog class="modal setup-modal" id="kits-modal-overlay" data-setup-tab="kits" aria-labelledby="kits-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="kits-modal-title">Kits</span>
+        <h2 class="modal-title" id="kits-modal-title">Kits</h2>
         <button class="modal-close" id="kits-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1186,17 +1236,15 @@
         <button class="btn-cancel" id="kits-modal-close2">Close</button>
         <button class="btn-create" id="kits-save" disabled>Save</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── MCP modal ──
        The MCP servers registered on this host (`sbx mcp ls`): add one, edit
        one (sbx has no edit — the daemon removes then adds it), remove one,
        and load it into or unload it from a sandbox. (/js/mcp.js) -->
-  <div class="modal-overlay hidden" id="mcp-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="mcp" role="dialog" aria-modal="true" aria-labelledby="mcp-modal-title">
+  <dialog class="modal setup-modal" id="mcp-modal-overlay" data-setup-tab="mcp" aria-labelledby="mcp-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="mcp-modal-title">MCP servers</span>
+        <h2 class="modal-title" id="mcp-modal-title">MCP servers</h2>
         <button class="modal-close" id="mcp-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1249,13 +1297,11 @@
         <button class="btn-cancel" id="mcp-modal-close2">Close</button>
         <button class="btn-create" id="mcp-save">Add</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
-  <div class="modal-overlay hidden" id="templates-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="templates" role="dialog" aria-modal="true" aria-labelledby="templates-modal-title">
+  <dialog class="modal setup-modal" id="templates-modal-overlay" data-setup-tab="templates" aria-labelledby="templates-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="templates-modal-title">Templates</span>
+        <h2 class="modal-title" id="templates-modal-title">Templates</h2>
         <button class="modal-close" id="templates-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1267,6 +1313,16 @@
         <div>
           <span class="field-label">Saved</span>
           <div class="tpl-list" id="templates-list"><p class="repo-note">Loading…</p></div>
+        </div>
+        <div>
+          <div class="df-head">
+            <span class="field-label" id="df-label">Disk usage</span>
+            <label class="df-verbose" for="df-verbose"><input type="checkbox" id="df-verbose"> Each image, container and volume</label>
+          </div>
+          <!-- Scrolls, so the keyboard must be able to reach it. -->
+          <pre class="df-out" id="df-out" tabindex="0" role="region" aria-labelledby="df-label">Loading…</pre>
+          <p class="repo-note">From <code>sbx df</code>. Reclaimable is an estimate for unused images, containers and
+            volumes, not what removing templates or <code>sbxw prune</code> alone frees.</p>
         </div>
         <div>
           <span class="field-label">New template from a sandbox</span>
@@ -1283,16 +1339,14 @@
         <span class="create-error hidden" id="templates-error"></span>
         <button class="btn-cancel" id="templates-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Setup → Mac ──
        The virtual Mac (terminal-mac) the sbxw:terminal-mac kit lends to
        sandboxes: install, start, guest setup checklist, lease. (/js/mac.js) -->
-  <div class="modal-overlay hidden" id="mac-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="mac" role="dialog" aria-modal="true" aria-labelledby="mac-modal-title">
+  <dialog class="modal setup-modal" id="mac-modal-overlay" data-setup-tab="mac" aria-labelledby="mac-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="mac-modal-title">Virtual Mac</span>
+        <h2 class="modal-title" id="mac-modal-title">Virtual Mac</h2>
         <button class="modal-close" id="mac-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body" id="mac-body"><p class="repo-note">Loading…</p></div>
@@ -1300,17 +1354,15 @@
         <span class="create-error hidden" id="mac-error"></span>
         <button class="btn-cancel" id="mac-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Setup → GitHub ──
        The token sbx's proxy injects into git and gh traffic from every
        sandbox (`sbx secret set github`). Write-only: the value is never
        read back. (/js/github.js) -->
-  <div class="modal-overlay hidden" id="github-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="github" role="dialog" aria-modal="true" aria-labelledby="github-modal-title">
+  <dialog class="modal setup-modal" id="github-modal-overlay" data-setup-tab="github" aria-labelledby="github-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="github-modal-title">Secrets</span>
+        <h2 class="modal-title" id="github-modal-title">Secrets</h2>
         <button class="modal-close" id="github-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body sec-body">
@@ -1356,17 +1408,15 @@
         <span class="create-error hidden" id="github-error"></span>
         <button class="btn-cancel" id="github-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Setup → Hosts (EXPERIMENTAL) ──
        The remote hosts of ~/.sbxw/hosts.toml: listed with their link, added,
        edited and removed. A new address's host key is shown as a fingerprint
        and trusted only on "Trust and save". Filled by /js/hosts.js. -->
-  <div class="modal-overlay hidden" id="hosts-modal-overlay">
-    <div class="modal setup-modal" data-setup-tab="hosts" role="dialog" aria-modal="true" aria-labelledby="hosts-modal-title">
+  <dialog class="modal setup-modal" id="hosts-modal-overlay" data-setup-tab="hosts" aria-labelledby="hosts-modal-title" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="hosts-modal-title">Hosts</span>
+        <h2 class="modal-title" id="hosts-modal-title">Hosts</h2>
         <button class="modal-close" id="hosts-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1442,17 +1492,15 @@
         <button class="btn-cancel" id="hosts-modal-close2">Close</button>
         <button class="btn-create" id="hosts-save">Add host</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Provision a host ──
        `sbxw host provision` needs sudo on the host, so it runs in a terminal
        on this machine where the password is typed; the page only hands over
        the command. Filled by /js/hosts.js. -->
-  <div class="modal-overlay hidden" id="provision-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="provision-modal-title" style="width:560px">
+  <dialog class="modal" id="provision-modal-overlay" aria-labelledby="provision-modal-title" style="width:560px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="provision-modal-title">Provision <span id="provision-host"></span></span>
+        <h2 class="modal-title" id="provision-modal-title">Provision <span id="provision-host"></span></h2>
         <button class="modal-close" id="provision-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1468,17 +1516,15 @@
       <div class="modal-foot">
         <button class="btn-cancel" id="provision-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Upload: which sandbox? ──
        Opened by a file landing in the sidebar's upload box. Picking a sandbox
        uploads the file there and types its path into that sandbox's Claude
        prompt, opening a pane for it first when none shows it. -->
-  <div class="modal-overlay hidden" id="upload-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="upload-modal-title" style="width:540px">
+  <dialog class="modal" id="upload-modal-overlay" aria-labelledby="upload-modal-title" style="width:540px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="upload-modal-title">Send to a sandbox</span>
+        <h2 class="modal-title" id="upload-modal-title">Send to a sandbox</h2>
         <button class="modal-close" id="upload-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1494,8 +1540,7 @@
         <button class="btn-cancel" id="upload-modal-cancel">Cancel</button>
         <button class="btn-create" id="upload-modal-send" disabled>Send</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Help modal ──
        Answers the one question sbxw cannot answer for itself: an empty sandbox
@@ -1503,10 +1548,9 @@
        what the `sbx` CLI hands it, so when the CLI has nothing, so does the UI.
        Opened from the header's "?" button or from the sidebar's empty state
        (see /js/help.js). -->
-  <div class="modal-overlay hidden" id="help-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="help-modal-title" style="width:540px">
+  <dialog class="modal" id="help-modal-overlay" aria-labelledby="help-modal-title" style="width:540px" closedby="any">
       <div class="modal-head">
-        <span class="modal-title" id="help-modal-title">Help — no sandboxes showing?</span>
+        <h2 class="modal-title" id="help-modal-title">Help — no sandboxes showing?</h2>
         <button class="modal-close" id="help-modal-close" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -1560,30 +1604,27 @@
         </button>
         <button class="btn-cancel" id="help-modal-close2">Close</button>
       </div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Cross-sandbox information request (human in the loop) ──
        Raised when an agent asks for something outside its own workspace. The
        body and footer are rebuilt per state by /js/relay.js: route it to a
        sandbox, read what comes back, then approve or refuse. -->
-  <div class="modal-overlay hidden" id="relay-modal-overlay">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="relay-modal-title" style="width:560px">
+  <dialog class="modal" id="relay-modal-overlay" aria-labelledby="relay-modal-title" style="width:560px">
       <div class="modal-head">
-        <span class="modal-title" id="relay-modal-title">Information request</span>
+        <h2 class="modal-title" id="relay-modal-title">Information request</h2>
         <span class="relay-queue" id="relay-queue" hidden></span>
         <button class="modal-close" id="relay-modal-close" aria-label="Later">✕</button>
       </div>
       <div class="modal-body" id="relay-modal-body"></div>
       <div class="modal-foot" id="relay-modal-foot"></div>
-    </div>
-  </div>
+  </dialog>
 
   <!-- ── Multi-pane terminal area (panes injected here by JS) ── -->
   <div class="main" id="main-area"></div>
 </div>
 
-<div class="paste-toast" id="paste-toast"></div>
+<div class="paste-toast" id="paste-toast" popover="manual"></div>
 
 <!-- ── Chat dock ──
      A chat with the ephemeral-chat sandboxes that needs no terminal: the

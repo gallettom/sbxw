@@ -61,12 +61,12 @@ function openUploadModal(files) {
   const big = uploadFiles.find(f => f.size > UPLOAD_MAX);
   setUploadError(big ? `${big.name} is over ${humanSize(UPLOAD_MAX)}, the most one upload takes.` : '');
   renderUploadSandboxes(big);
-  uploadOverlay.classList.remove('hidden');
+  modalOpen(uploadOverlay);
   uploadList.querySelector('input:checked')?.focus();
 }
 
 function closeUploadModal() {
-  uploadOverlay.classList.add('hidden');
+  uploadOverlay.close();
   uploadFiles = [];
   uploadInput.value = '';
   uploadThumbs.forEach(u => URL.revokeObjectURL(u));
@@ -223,9 +223,8 @@ uploadSendBtn.addEventListener('click', sendUpload);
 uploadList.addEventListener('dblclick', e => { if (e.target.closest('.upload-sbx') && !uploadSendBtn.disabled) sendUpload(); });
 document.getElementById('upload-modal-close').addEventListener('click', closeUploadModal);
 document.getElementById('upload-modal-cancel').addEventListener('click', closeUploadModal);
-uploadOverlay.addEventListener('click', e => { if (e.target === uploadOverlay) closeUploadModal(); });
+wireModal(uploadOverlay, closeUploadModal);
 document.addEventListener('keydown', e => {
-  if (uploadOverlay.classList.contains('hidden')) return;
-  if (e.key === 'Escape') closeUploadModal();
-  else if (e.key === 'Enter' && !uploadSendBtn.disabled) { e.preventDefault(); sendUpload(); }
+  if (!uploadOverlay.open) return;
+  if (isEnterKey(e) && !uploadSendBtn.disabled) { e.preventDefault(); sendUpload(); }
 });

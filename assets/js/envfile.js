@@ -119,5 +119,5 @@ document.getElementById('envfile-copy').addEventListener('click', e => {
 });
 // Enter in the root field means "show me what that changes", not "submit".
 envfileRootInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); envfileRender(); }
+  if (isEnterKey(e)) { e.preventDefault(); envfileRender(); }
 });

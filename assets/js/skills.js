@@ -87,13 +87,13 @@ async function mySkillsForget(btn) {
 }
 
 function openSkillsModal() {
-  skillsOverlay.classList.remove('hidden');
+  modalOpen(skillsOverlay);
   showNote(mySkillsError, '');
   mySkillsFound.classList.add('hidden');
   mySkillsSandboxes();
   mySkillsLoad();
 }
-function closeSkillsModal() { skillsOverlay.classList.add('hidden'); }
+function closeSkillsModal() { skillsOverlay.close(); }
 
 document.getElementById('my-skills-look').addEventListener('click', mySkillsLook);
 mySkillsFound.addEventListener('click', e => {
@@ -107,7 +107,4 @@ mySkillsList.addEventListener('click', e => {
 
 document.getElementById('skills-modal-close').addEventListener('click', closeSkillsModal);
 document.getElementById('skills-modal-close2').addEventListener('click', closeSkillsModal);
-skillsOverlay.addEventListener('click', e => { if (e.target === skillsOverlay) closeSkillsModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !skillsOverlay.classList.contains('hidden')) closeSkillsModal();
-});
+wireModal(skillsOverlay, closeSkillsModal);

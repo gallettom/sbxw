@@ -450,7 +450,7 @@ function addTypedCarve() {
 }
 document.getElementById('carve-typed-add').addEventListener('click', addTypedCarve);
 carveTyped.addEventListener('keydown', ev => {
-  if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); addTypedCarve(); }
+  if (isEnterKey(ev)) { ev.preventDefault(); ev.stopPropagation(); addTypedCarve(); }
 });
 
 carveRowsEl.addEventListener('click', ev => {
@@ -526,7 +526,7 @@ btnBrowseNative.addEventListener('click', async () => {
 });
 
 function openModal() {
-  overlay.classList.remove('hidden');
+  modalOpen(overlay);
   inpName.value = '';
   inpName.classList.remove('error');
   nameErrEl.textContent = '';
@@ -545,6 +545,7 @@ function openModal() {
   loadFavourites();
   showTemplateForce();
   document.getElementById('rc-box').checked = false;
+  document.getElementById('chrome-box').checked = false;
   fillHostField();
   applyCreateHost();
   inpName.focus();
@@ -613,7 +614,7 @@ function collectKitMounts() {
   return out;
 }
 
-function closeModal() { overlay.classList.add('hidden'); }
+function closeModal() { overlay.close(); }
 
 // The listing currently on screen. Kept so starring a row can repaint the list
 // from memory: the folders haven't changed, only which of them are starred, and
@@ -769,15 +770,12 @@ inpGitUrl.addEventListener('input', validateForm);
 // of them mounts your code and the other deliberately does not.
 const kindOverlay = document.getElementById('kind-modal-overlay');
 
-function openKindModal() { kindOverlay.classList.remove('hidden'); }
-function closeKindModal() { kindOverlay.classList.add('hidden'); }
+function openKindModal() { modalOpen(kindOverlay); }
+function closeKindModal() { kindOverlay.close(); }
 
 document.getElementById('btn-new-sandbox').addEventListener('click', openKindModal);
 document.getElementById('kind-modal-close').addEventListener('click', closeKindModal);
-kindOverlay.addEventListener('click', e => { if (e.target === kindOverlay) closeKindModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !kindOverlay.classList.contains('hidden')) closeKindModal();
-});
+wireModal(kindOverlay, closeKindModal);
 
 // Alt+N (⌃⌥N on a Mac, see isAppShortcut) opens the chooser from anywhere —
 // Ctrl/⌘+N belongs to the browser and cannot be taken. Listened for on window in the capture phase because xterm
@@ -785,7 +783,7 @@ document.addEventListener('keydown', e => {
 // Not while another dialog is open: one modal stacked on another is the bug.
 window.addEventListener('keydown', e => {
   if (!isAppShortcut(e, 'KeyN')) return;
-  if (document.querySelector('.modal-overlay:not(.hidden)')) return;
+  if (anyModalOpen()) return;
   e.preventDefault();
   e.stopPropagation();
   openKindModal();
@@ -832,7 +830,7 @@ const monitorDot = document.getElementById('monitor-dot');
 let monitorPane = null;
 
 function openMonitor() {
-  monitorOverlay.classList.remove('hidden');
+  modalOpen(monitorOverlay);
   if (!monitorPane) {
     monitorPane = {
       index: 'monitor', termEl: document.getElementById('monitor-term'),
@@ -862,7 +860,7 @@ function openMonitor() {
 }
 
 function closeMonitor() {
-  monitorOverlay.classList.add('hidden');
+  monitorOverlay.close();
   if (monitorPane?.ws) { try { monitorPane.ws.close(); } catch (_) {} monitorPane.ws = null; }
   monitorDot.className = 'dot term-disconnected';
   panes[focusedPane]?.term.focus();
@@ -873,8 +871,11 @@ if (MONITOR_CMD) {
   btnMonitor.title = `Host monitor — runs \`${MONITOR_CMD}\` in a large window`;
   document.getElementById('monitor-cmd').textContent = MONITOR_CMD;
   btnMonitor.addEventListener('click', () =>
-    monitorOverlay.classList.contains('hidden') ? openMonitor() : closeMonitor());
+    !monitorOverlay.open ? openMonitor() : closeMonitor());
   document.getElementById('monitor-close').addEventListener('click', closeMonitor);
+  // Escape belongs to the TUI: never a close request (no wireModal), and no
+  // `closedby` in the markup, so the backdrop is handled here.
+  monitorOverlay.addEventListener('cancel', e => e.preventDefault());
   monitorOverlay.addEventListener('mousedown', e => { if (e.target === monitorOverlay) closeMonitor(); });
 }
 
@@ -900,12 +901,12 @@ function openChatModal() {
   chatInpName.classList.remove('error');
   chatNameErr.textContent = '';
   chatNameErr.classList.add('hidden');
-  chatOverlay.classList.remove('hidden');
+  modalOpen(chatOverlay);
   validateChatForm();
   chatInpName.focus();
 }
 
-function closeChatModal() { chatOverlay.classList.add('hidden'); }
+function closeChatModal() { chatOverlay.close(); }
 
 // Empty is valid (the suggestion is used); a typed name has to be well-formed
 // and free — provisioning an existing name would adopt that sandbox instead of
@@ -940,15 +941,12 @@ chatInpName.addEventListener('input', () => {
 });
 
 chatInpName.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !chatConfirm.disabled) chatConfirm.click();
+  if (isEnterKey(e) && !chatConfirm.disabled) chatConfirm.click();
 });
 
 document.getElementById('chat-modal-close').addEventListener('click', closeChatModal);
 document.getElementById('chat-modal-cancel').addEventListener('click', closeChatModal);
-chatOverlay.addEventListener('click', e => { if (e.target === chatOverlay) closeChatModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !chatOverlay.classList.contains('hidden')) closeChatModal();
-});
+wireModal(chatOverlay, closeChatModal);
 
 chatConfirm.addEventListener('click', () => {
   if (chatConfirm.disabled) return;
@@ -975,10 +973,7 @@ chatConfirm.addEventListener('click', () => {
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
 
-overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeModal();
-});
+wireModal(overlay, closeModal);
 
 // ── The automatic template ────────────────────────────────────────────────
 // With `template = "auto"`, a create first asks whether the template for these
@@ -1017,14 +1012,14 @@ async function askTemplate() {
     '(its token and credentials taken out) before it opens — several minutes this once. ' +
     (rec ? 'The old template is removed once the new one is saved.' : 'Later sandboxes start from it.');
   document.getElementById('tpl-keep').classList.toggle('hidden', !rec);
-  tplOverlay.classList.remove('hidden');
+  modalOpen(tplOverlay);
   document.getElementById('tpl-rebuild').focus();
 
   return new Promise(resolve => {
     const done = choice => {
-      tplOverlay.classList.add('hidden');
+      tplOverlay.close();
       for (const [id, fn] of handlers) document.getElementById(id).removeEventListener('click', fn);
-      document.removeEventListener('keydown', onKey, true);
+      tplOverlay.removeEventListener('cancel', onCancel);
       resolve(choice);
     };
     const handlers = [
@@ -1033,10 +1028,11 @@ async function askTemplate() {
       ['tpl-skip', () => done('skip')],
       ['tpl-modal-close', () => done(null)],
     ];
-    // Escape closes this dialog only, not the create dialog under it.
-    const onKey = e => { if (e.key === 'Escape') { e.stopImmediatePropagation(); done(null); } };
+    // Escape reaches the top dialog only, so it closes this one and leaves
+    // the create dialog under it open.
+    const onCancel = e => { e.preventDefault(); done(null); };
     for (const [id, fn] of handlers) document.getElementById(id).addEventListener('click', fn);
-    document.addEventListener('keydown', onKey, true);
+    tplOverlay.addEventListener('cancel', onCancel);
   });
 }
 
@@ -1062,6 +1058,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
   // template asked about is this machine's sbx's: not a remote host's.
   const forced = !tplForce.classList.contains('hidden') && tplForceBox.checked;
   const remote_control = document.getElementById('rc-box').checked;
+  const chrome = document.getElementById('chrome-box').checked;
   const template = createRemote() ? 'default' : forced ? 'rebuild' : await askTemplate();
   if (template === null) return;
   closeModal();
@@ -1077,7 +1074,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
         if (!c.ok) { showToast(`Could not clone ${gitUrl} on ${host}: ${c.error || 'unknown error'}`, 'error'); return; }
         path = c.path;
       }
-      const body = { name, path, mounts, ports, template, remote_control, kit_mounts };
+      const body = { name, path, mounts, ports, template, remote_control, chrome, kit_mounts };
       if (carve.length) body.carve = carve; // nothing is sent without restrictions
       const data = await postBringUp('/api/sandboxes/create', body);
       if (data.ok) {
@@ -1095,7 +1092,7 @@ document.getElementById('modal-create').addEventListener('click', async () => {
           warnings.length
             ? `Sandbox “${name}” is ready — ⚠ ${warnings[warnings.length - 1]}`
             : remote_control
-              ? `Sandbox “${name}” is ready — log in with /login in its pane, then press Remote`
+              ? `Sandbox “${name}” is ready — press Remote in its pane (before sbx 0.53: /login there first)`
               : `Sandbox “${name}” is ready`,
           warnings.length ? 'error' : 'ok');
       } else {

@@ -205,7 +205,7 @@ await visit('Host menu: Provision', async () => {
   await page.screenshot({ path: png.replace(/\.png$/, '-provision.png') });
 });
 // Setup → Hosts: lists both, and adds a third, confirming its key first.
-await visit('Setup: Hosts', async () => { await button(/^Setup$/).click(); await page.locator('.modal-overlay:not(.hidden) .setup-tab[data-tab="hosts"]').click(); }, async () => {
+await visit('Setup: Hosts', async () => { await button(/^Setup$/).click(); await page.locator('dialog[open] .setup-tab[data-tab="hosts"]').click(); }, async () => {
   const rows = await page.locator('#hosts-list .host-row .tpl-tag').allTextContents();
   if (rows.join(',') !== 'fake,gone') problems.push(`hosts tab lists [${rows}], want fake,gone`);
   await page.locator('#hosts-f-name').fill('newbox');
@@ -248,7 +248,7 @@ console.error(JSON.stringify({ before_monitor: { tour, problems } }, null, 2));
 await visit('Monitor', () => button(/^Monitor$/).click());
 await visit('Help', () => button(/^Help$/).click());
 // Setup is one dialog with a tab per part: open it, then walk the tabs.
-const tab = (re) => page.locator('.modal-overlay:not(.hidden) .setup-tab').filter({ hasText: re });
+const tab = (re) => page.locator('dialog[open] .setup-tab').filter({ hasText: re });
 await visit('Setup: Skills', async () => { await button(/^Setup$/).click(); await tab(/^Skills$/).click(); });
 await visit('Setup: Templates', async () => { await button(/^Setup$/).click(); await tab(/^Templates$/).click(); },
   () => page.screenshot({ path: png.replace(/\.png$/, '-templates.png') }));

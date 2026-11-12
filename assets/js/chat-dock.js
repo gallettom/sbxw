@@ -357,7 +357,7 @@ cdPanel.addEventListener('keydown', e => {
 // is kill-line in every shell a pane runs.
 window.addEventListener('keydown', e => {
   if (!isAppShortcut(e, 'KeyM')) return;
-  if (document.querySelector('.modal-overlay:not(.hidden)')) return;
+  if (anyModalOpen()) return;
   e.preventDefault();
   e.stopPropagation();
   cdToggle();

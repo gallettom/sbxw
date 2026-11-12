@@ -81,6 +81,9 @@ pub fn grants(cfg: &Config) -> Vec<String> {
     if let crate::templates::Mode::Tag(t) = cfg.template_mode() {
         out.insert(format!("template: {t}"));
     }
+    if cfg.chrome {
+        out.insert("Claude in Chrome: the agent opens, drives and reads tabs in your host browser (chrome)".into());
+    }
     if cfg.cache_ttl_days > d.cache_ttl_days {
         out.insert(format!("kit cache kept {} days (default {})", cfg.cache_ttl_days, d.cache_ttl_days));
     }
@@ -304,7 +307,7 @@ mod tests {
         let known = [
             "web_addr", "agent_addr", "web_shell", "network_allow", "network_deny", "ip_per_app", "ports", "kits", "kit_mounts",
             "workdir", "workspaces", "carve", "cpus", "memory", "fuse", "root_size", "docker_size", "volumes", "cache", "cache_ttl_days",
-            "claude_model", "models", "skills", "pull", "template", "keep_running", "max_agent_sessions", "keep_awake",
+            "claude_model", "models", "skills", "pull", "template", "keep_running", "chrome", "max_agent_sessions", "keep_awake",
             "keep_awake_min_battery", "battery_warn_below", "monitor_cmd", "terminal_color", "terminal_bar_color",
             "terminal_text_color", "env", "env_files", "mac", "voice",
         ];
@@ -312,6 +315,12 @@ mod tests {
         for key in v.as_table().unwrap().keys() {
             assert!(known.contains(&key.as_str()), "classify the new key `{key}` in consent::grants");
         }
+    }
+
+    #[test]
+    fn chrome_from_the_file_is_a_grant() {
+        let cfg: Config = toml::from_str("chrome = true\n").unwrap();
+        assert!(grants(&cfg).iter().any(|g| g.starts_with("Claude in Chrome")), "{:?}", grants(&cfg));
     }
 
     #[test]

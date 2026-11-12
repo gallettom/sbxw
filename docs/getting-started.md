@@ -129,11 +129,18 @@ Host environment variables do **not** reach sandboxes by themselves. Pick one:
    placeholder tokens the sandbox proxy swaps for the real ones: no token
    ever enters a sandbox. sbxw no longer injects `CLAUDE_CODE_OAUTH_TOKEN`
    (`sbxw up` says so when it is set).
-3. **Remote Control.** Tick *Remote control* in the create dialog (or
+3. **Remote Control.** With sbx 0.53, run `sbx settings set
+   claude.remoteControl true` once: sbx then supplies Remote Control's
+   credentials from your machine, and **⇄ Remote** works in any sandbox signed
+   in to claude.ai (not with an API key). While the setting is off, the button
+   says what to run.
+
+   Before sbx 0.53: tick *Remote control* in the create dialog (or
    `sbxw up … --remote-control`). Remote Control refuses the setup token and an
    API key, so sbxw gives this sandbox neither — no auth variable from `env` —
-   and allows the login hosts. Run `/login` in its pane once, then
-   press **⇄ Remote** in the pane bar: sbxw types `/remote-control` and Claude
+   and allows the login hosts. Run `/login` in its pane once.
+
+   Then press **⇄ Remote** in the pane bar: sbxw types `/remote-control` and Claude
    prints the claude.ai/code link. The button reads **On** while Remote Control
    is connected in that pane's session (read from Claude Code's session
    registry in the sandbox, every 15 s); it is then only an indicator — turn
@@ -141,6 +148,14 @@ Host environment variables do **not** reach sandboxes by themselves. Pick one:
    token (one given in `env`), Remote offers to switch it: sbxw types `/login`. A global
    `anthropic` secret (`--use-api-key`) is sbx's, for every sandbox; remove it
    if the agent signs in with it instead.
+
+   **Claude in Chrome** (sbx 0.53) is the other way round: the agent works
+   with tabs of *your* browser. Install the Claude extension, sign in with the
+   same subscription account, run `sbx settings set claude.chrome true`, then
+   tick *Claude in Chrome* in the create dialog (or `sbxw up … --chrome`, or
+   `chrome = true` in `sbxw.toml`). The agent starts with `--chrome`. Setting
+   it back to `false` blocks new browser connections; end the Claude browser
+   session to cut one that is open.
 
    **On a Mac, sbxw keeps the host awake** while Remote Control is on in at
    least one session (`caffeinate -i -s`, tied to the daemon). On battery at or

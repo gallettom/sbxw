@@ -39,6 +39,18 @@ settings.hooks.SessionStart.splice(at < 0 ? settings.hooks.SessionStart.length :
   hooks: [{ type: "command", command: "node", args: [HOOK], timeout: 30 }],
 });
 
+// The shared browser's guard (hook-browser.mjs), on Bash, the same way.
+const BROWSER_HOOK = "/home/agent/.sbxw/agent-skills/hook-browser.mjs";
+const oursBrowser = (entry) =>
+  (entry.hooks || []).some((h) => (h.args || []).includes(BROWSER_HOOK) || String(h.command || "").includes(BROWSER_HOOK));
+const pre = settings.hooks.PreToolUse || [];
+const preAt = pre.findIndex(oursBrowser);
+settings.hooks.PreToolUse = pre.filter((e) => !oursBrowser(e));
+settings.hooks.PreToolUse.splice(preAt < 0 ? settings.hooks.PreToolUse.length : preAt, 0, {
+  matcher: "Bash",
+  hooks: [{ type: "command", command: "node", args: [BROWSER_HOOK], timeout: 10 }],
+});
+
 // Written only when it changes, so a restart leaves the file untouched.
 const next = JSON.stringify(settings, null, 2) + "\n";
 if (next !== raw) {
@@ -50,4 +62,4 @@ if (!existsSync(SEEDED)) {
   writeFileSync(FLAG, "");
   writeFileSync(SEEDED, "");
 }
-console.log("  [agent-skills] i-have-adhd hook installed (always-on " + (existsSync(FLAG) ? "on" : "off: " + FLAG + " was deleted") + ")");
+console.log("  [agent-skills] shared-browser guard installed; i-have-adhd hook installed (always-on " + (existsSync(FLAG) ? "on" : "off: " + FLAG + " was deleted") + ")");

@@ -27,7 +27,7 @@ function openWorktrees(sandbox, idx) {
   document.getElementById('wt-title').textContent = `Worktree graph of ${sandbox}`;
   setHtml(wtBody, '<p class="wt-note">Reading the branches…</p>');
   wtUpdated.textContent = '';
-  wtOverlay.classList.remove('hidden');
+  modalOpen(wtOverlay);
   document.getElementById('wt-close').focus();
   readWorktrees();
   clearInterval(wtView.timer);
@@ -37,7 +37,7 @@ function openWorktrees(sandbox, idx) {
 }
 
 function closeWorktrees() {
-  wtOverlay.classList.add('hidden');
+  wtOverlay.close();
   clearInterval(wtView.timer);
   Object.assign(wtView, { sandbox: null, idx: null, timer: null, data: null, board: null });
 }
@@ -370,7 +370,4 @@ wtBody.addEventListener('click', e => {
 boardBindFilters(wtBody, paintWorktrees);
 document.getElementById('wt-x').addEventListener('click', closeWorktrees);
 document.getElementById('wt-close').addEventListener('click', closeWorktrees);
-wtOverlay.addEventListener('click', e => { if (e.target === wtOverlay) closeWorktrees(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !wtOverlay.classList.contains('hidden')) closeWorktrees();
-});
+wireModal(wtOverlay, closeWorktrees);

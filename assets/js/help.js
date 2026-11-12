@@ -9,16 +9,13 @@
 // is where the question actually gets asked.
 const helpOverlay = document.getElementById('help-modal-overlay');
 
-function openHelpModal()  { helpOverlay.classList.remove('hidden'); }
-function closeHelpModal() { helpOverlay.classList.add('hidden'); }
+function openHelpModal()  { modalOpen(helpOverlay); }
+function closeHelpModal() { helpOverlay.close(); }
 
 document.getElementById('btn-help').addEventListener('click', openHelpModal);
 document.getElementById('help-modal-close').addEventListener('click', closeHelpModal);
 document.getElementById('help-modal-close2').addEventListener('click', closeHelpModal);
-helpOverlay.addEventListener('click', e => { if (e.target === helpOverlay) closeHelpModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !helpOverlay.classList.contains('hidden')) closeHelpModal();
-});
+wireModal(helpOverlay, closeHelpModal);
 
 // The list is rebuilt from an HTML string on every render, so the empty
 // state's "Why is this empty?" button is bound by delegation rather than

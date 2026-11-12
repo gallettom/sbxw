@@ -81,6 +81,11 @@ What sbxw assumes, unconditionally:
 | `kit add` of v3 image content and hooks (0.51) | the bundled kits on an existing sandbox |
 | `sbx --version` without the daemon (0.51) | the version check |
 | `settings get clipboard.textCopy` (0.51) | `sbxw doctor` |
+| `settings get claude.remoteControl` (0.53; unknown to an older sbx, which keeps the `/login` path) | the Remote button, `--remote-control`, `sbxw doctor` |
+| `settings get claude.chrome`, `run --name N -- --chrome` (0.53) | `chrome`, **Claude in Chrome** in the create dialog, `sbxw doctor` |
+| `df [--verbose]` (0.53) | `sbxw df`, **Disk usage** in the Templates dialog |
+| `api@1` grant `ports.publish`, `approval: none` (0.53) | `sbxw:dev-ports` |
+| Environment files: the last entry for a port wins (0.53) | `sbxw env run`'s port check |
 | `inspect --format json` (`kits`, `created_version`) (0.51) | kits already applied, skipped on a bring-up |
 | claude.ai sign-in kept on the host (0.51 `claude` workload) | no token injected; `/login` once |
 | `diagnose --format json` | `sbxw doctor` |

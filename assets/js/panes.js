@@ -833,7 +833,8 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
     fitPane(pane, 'socket open');
     nudgePaneRepaint(pane, pane.ws);
     if (focusedPane === idx) pane.term.focus();
-    loadSandboxes();
+    // The socket is open, the sandbox may still be starting: see expectRunning.
+    loadSandboxes().then(() => expectRunning(name));
   };
   pane.ws.onmessage = ev => handlePaneData(pane, ev);
   pane.ws.onclose = () => {
@@ -905,7 +906,7 @@ async function openThread(idx, checkout = false) {
   document.getElementById('thread-existing-wrap').hidden = !known.length;
   threadInput.value = `${prefix}${n}`;
   validateThreadName();
-  threadOverlay.classList.remove('hidden');
+  modalOpen(threadOverlay);
   threadInput.focus();
   threadInput.select();
 }
@@ -951,7 +952,7 @@ function renderThreadModels() {
       </label>`).join('') : '';
 }
 
-function closeThreadModal() { threadOverlay.classList.add('hidden'); threadAsk = null; }
+function closeThreadModal() { threadOverlay.close(); threadAsk = null; }
 
 function validateThreadName() {
   const name = threadInput.value.trim();
@@ -1020,7 +1021,7 @@ document.getElementById('thread-models').addEventListener('change', e => {
   if (threadAsk && e.target.name === 'thread-model') threadAsk.model = e.target.value;
 });
 threadInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(threadInput.value.trim()); }
+  if (isEnterKey(e) && !threadOpenBtn.disabled) { e.preventDefault(); submitThread(threadInput.value.trim()); }
 });
 threadOpenBtn.addEventListener('click', () => submitThread(threadInput.value.trim()));
 document.getElementById('thread-existing').addEventListener('click', e => {
@@ -1029,7 +1030,7 @@ document.getElementById('thread-existing').addEventListener('click', e => {
 });
 document.getElementById('thread-modal-close').addEventListener('click', closeThreadModal);
 document.getElementById('thread-modal-cancel').addEventListener('click', closeThreadModal);
-threadOverlay.addEventListener('click', e => { if (e.target === threadOverlay) closeThreadModal(); });
+wireModal(threadOverlay, closeThreadModal);
 
 // ── Close a thread ──
 // What would be lost is read first and shown, and the dialog cannot discard
@@ -1056,7 +1057,7 @@ async function closeThread(idx) {
   setCloseError('');
   closeConfirm.disabled = true;
   closeConfirm.textContent = 'Close thread';
-  closeOverlay.classList.remove('hidden');
+  modalOpen(closeOverlay);
 
   let st;
   try {
@@ -1105,7 +1106,7 @@ function updateCloseConfirm() {
   closeConfirm.disabled = !st || (st.dirty > 0 && !discardBox.checked);
 }
 
-function closeCloseModal() { closeOverlay.classList.add('hidden'); closeAsk = null; }
+function closeCloseModal() { closeOverlay.close(); closeAsk = null; }
 
 discardBox.addEventListener('change', updateCloseConfirm);
 closeConfirm.addEventListener('click', async () => {
@@ -1140,7 +1141,7 @@ function afterThreadClosed(sandbox, thread) {
 }
 document.getElementById('thread-close-x').addEventListener('click', closeCloseModal);
 document.getElementById('thread-close-cancel').addEventListener('click', closeCloseModal);
-closeOverlay.addEventListener('click', e => { if (e.target === closeOverlay) closeCloseModal(); });
+wireModal(closeOverlay, closeCloseModal);
 
 // ── The ⋯ menu ──
 // One element for every pane, like the Thread menu, placed under whichever
@@ -1249,8 +1250,6 @@ document.addEventListener('keydown', e => {
     closePaneMenu();
     document.getElementById(`pmore-${idx}`)?.focus();
   }
-  if (!threadOverlay.classList.contains('hidden')) closeThreadModal();
-  if (!closeOverlay.classList.contains('hidden')) closeCloseModal();
 });
 
 // ── Sessions, shown and folded ────────────────────────────────────────────

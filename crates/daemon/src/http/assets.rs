@@ -40,6 +40,7 @@ const STATIC: &[(&str, &str, &str)] = &[
     js!("sandboxes.js"),
     js!("create.js"),
     js!("ports.js"),
+    js!("browser.js"),
     js!("files.js"),
     js!("codemap.js"),
     js!("ssh.js"),

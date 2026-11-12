@@ -12,10 +12,11 @@
 //!            [--mount HOST:TARGET]…           (only a target a kit declares)
 //!            [--env-file F]… [-e K=V]…        (creation: the only moment kits apply whole;
 //!                                              -p is all-or-nothing)
-//! sbx run --name N [--env-file F]… [-e K=V]…  (attach; -e applies to the agent session)
+//! sbx run --name N [--env-file F]… [-e K=V]… [-- FLAG…]  (attach; -e applies to the agent session;
+//!                                              flags after -- follow the workload's own, 0.53)
 //! sbx run -d --name N                         (keep running with nobody attached)
 //! sbx ls --format json                        (a bare array)
-//! sbx exec [-i|-it] N -- cmd…                 (starts a stopped sandbox first; -d fails; 125 = not run)
+//! sbx exec [-i|-it] N -- cmd…                 (starts a stopped sandbox first; no --detach since 0.53; 125 = not run)
 //! sbx ports N --format json · sbx ports N --publish|--unpublish SPEC
 //! sbx policy allow|deny network [--sandbox N] [--method M,…] [--path GLOB] [--query K=V]… RESOURCES
 //! sbx policy ls [N] [--wide] · sbx policy log [N]   (N positional here)
@@ -33,6 +34,7 @@
 //! sbx template save N TAG                    (--description is cloud-only: refused locally)
 //! sbx template ls · sbx template rm TAG · create --template TAG
 //! sbx diagnose --format json · sbx skills import · sbx setup ssh
+//! sbx df [--verbose]                         (0.53; a table, read by people)
 //! ```
 //!
 //! Facts the methods below are built on:
@@ -304,6 +306,24 @@ pub fn upgrade_notes(before: &str, now: &str) -> Vec<&'static str> {
              true` (sbxw doctor shows whether it is on).",
         );
     }
+    if before < (0, 53, 0) && now >= (0, 53, 0) {
+        notes.push(
+            "sbx 0.53 matches HTTP rule paths and query parameters without regard to case: an allow for /Admin/** now \
+             also covers /admin/**. Review the rules made with \"Only some HTTP requests\" in the network panel that \
+             told requests apart by case.",
+        );
+        notes.push(
+            "sbx 0.53 runs a secret's host command from a temporary directory and skips relative PATH entries: your \
+             own `--command` and `--ref` secrets need tools in absolute PATH directories, and asdf or mise versions \
+             set globally. The GitHub secret sbxw sets up already names `gh` by its absolute path.",
+        );
+        notes.push(
+            "sbx 0.53 puts Claude Code Remote Control behind a setting: if a Remote Control sandbox no longer \
+             connects, run `sbx settings set claude.remoteControl true` (`sbxw doctor` shows it). sbx also closes \
+             outbound connections stalled for about 30 seconds now; `sbx settings set \
+             egress.stalledConnectionTimeoutSeconds 0` turns that off.",
+        );
+    }
     notes
 }
 
@@ -420,8 +440,10 @@ pub fn create_args(name: &SandboxName, o: &CreateOpts) -> Vec<String> {
 }
 
 /// Re-attach the agent. The env flags apply to the agent session: how an
-/// edited `env` reaches a sandbox that already exists.
-pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String], workdir: &str) -> Vec<String> {
+/// edited `env` reaches a sandbox that already exists. `agent_flags` go to
+/// the agent itself, after `--`: sbx 0.53 adds them after the workload's own
+/// when the first begins with `-`, which is all sbxw ever passes (`--chrome`).
+pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String], workdir: &str, agent_flags: &[&str]) -> Vec<String> {
     let mut a = vec!["run".to_string(), "--name".into(), name.to_string()];
     // This session only, re-attach included (0.51).
     if !workdir.is_empty() {
@@ -433,6 +455,19 @@ pub fn attach_args(name: &SandboxName, env: &[String], env_files: &[String], wor
     for e in env {
         a.extend(["-e".into(), e.clone()]);
     }
+    if !agent_flags.is_empty() {
+        a.push("--".into());
+        a.extend(agent_flags.iter().map(|f| f.to_string()));
+    }
+    a
+}
+
+/// `sbx exec -i <name> -- <args>`: a long-lived command whose stdin and
+/// stdout stay open (the Browser panel's bridge). `-i` without `-t`, as
+/// [`Sbx::exec`]: a PTY would rewrite the bytes.
+pub fn exec_stream_args(name: &SandboxName, args: &[&str]) -> Vec<String> {
+    let mut a = vec!["exec".to_string(), "-i".into(), name.to_string(), "--".into()];
+    a.extend(args.iter().map(|x| x.to_string()));
     a
 }
 
@@ -910,6 +945,38 @@ impl Sbx {
         Ok(self.capture(s(&["settings", "get", key])).await?.trim().to_string())
     }
 
+    /// A boolean setting. `Ok(None)` only when this sbx is older than
+    /// `since` (the release that added the key) and so refuses it, or when it
+    /// prints something that is not a boolean. Any other failure is an
+    /// error: callers decide lasting things on `None` ("an older sbx"), and
+    /// a daemon that did not answer once must not be read as one.
+    pub async fn setting_bool(&self, key: &str, since: (u32, u32, u32)) -> Result<Option<bool>> {
+        let args = s(&["settings", "get", key]);
+        let out = self.runner.run(Invocation::new(args.clone())).await?;
+        if out.success() {
+            return Ok(match out.stdout_str().trim() {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            });
+        }
+        match self.version().await? {
+            Some(v) if v < since => Ok(None),
+            _ => Err(command_error(&args, &out)),
+        }
+    }
+
+    /// `sbx df` (0.53): what local images, containers and managed volumes
+    /// take, and an estimate of what is reclaimable. The table as sbx prints
+    /// it: the JSON's shape is not documented.
+    pub async fn df(&self, verbose: bool) -> Result<String> {
+        let mut a = s(&["df"]);
+        if verbose {
+            a.push("--verbose".into());
+        }
+        self.capture(a).await
+    }
+
     /// Whether a *global* secret for `service` is stored (`sbx secret ls`,
     /// which never prints values). See [`has_global_secret`].
     pub async fn secret_has(&self, service: &str) -> Result<bool> {
@@ -1099,6 +1166,9 @@ mod tests {
     fn crossing_0_50_is_announced_once_and_only_then() {
         assert_eq!(upgrade_notes("0.50.1", "0.51.0").len(), 3, "kits, templates, clipboard");
         assert!(upgrade_notes("0.51.0", "0.51.2").is_empty());
+        assert_eq!(upgrade_notes("0.51.2", "0.53.0").len(), 3, "policy case, secret commands, Remote Control");
+        assert_eq!(upgrade_notes("0.50.1", "0.53.0").len(), 6, "0.52 was skipped: both crossings at once");
+        assert!(upgrade_notes("0.53.0", "0.53.1").is_empty());
         assert!(upgrade_notes("", "0.50.0").is_empty(), "a first install has nothing to upgrade from");
     }
 
@@ -1189,8 +1259,9 @@ mod tests {
 
     #[test]
     fn small_argvs() {
-        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[], "").join(" "), "run --name n -e A=1");
-        assert_eq!(attach_args(&sb("n"), &[], &[], "packages/web").join(" "), "run --name n --workdir packages/web");
+        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[], "", &[]).join(" "), "run --name n -e A=1");
+        assert_eq!(attach_args(&sb("n"), &[], &[], "packages/web", &[]).join(" "), "run --name n --workdir packages/web");
+        assert_eq!(attach_args(&sb("n"), &["A=1".into()], &[], "", &["--chrome"]).join(" "), "run --name n -e A=1 -- --chrome");
         assert_eq!(policy_rule_args("deny", Some(&sb("n")), "x.com", &HttpMatch::default()).join(" "), "policy deny network --sandbox n x.com");
         assert_eq!(policy_rm_args("r-1", None).join(" "), "policy rm network --id r-1 --force");
         assert_eq!(secret_args("anthropic", None).join(" "), "secret set anthropic");
@@ -1291,6 +1362,35 @@ mod tests {
         let both = format!("{ls}  (global)   service   github      gho_GC****...****qy\n");
         assert!(has_global_secret(&both, "github"));
         assert!(has_global_secret("SCOPE      SERVICE   SECRET\n(global)   github    gho_GCaw4o****\n", "github"), "the documented older layout");
+    }
+
+    #[tokio::test]
+    async fn a_boolean_setting_is_unknown_to_an_older_sbx_and_df_is_passed_through() {
+        let fake = Fake::new(|a| match (a[0].as_str(), a.last().map(String::as_str)) {
+            ("settings", Some("claude.chrome")) => Output::ok("true\n"),
+            ("settings", Some("claude.remoteControl")) => Output::ok("false\n"),
+            ("settings", _) => Output::fail(1, "unknown setting"),
+            ("df", _) => Output::ok("TYPE     TOTAL   ACTIVE   SIZE     RECLAIMABLE\nImages   3       1        4.2GB    1.1GB\n"),
+            _ => Output::ok(""),
+        });
+        let sbx = Sbx::new(fake.clone());
+        // The fake answers `--version` with nothing readable: not an older sbx.
+        const SINCE: (u32, u32, u32) = (0, 53, 0);
+        assert_eq!(sbx.setting_bool("claude.chrome", SINCE).await.unwrap(), Some(true));
+        assert_eq!(sbx.setting_bool("claude.remoteControl", SINCE).await.unwrap(), Some(false));
+        assert!(sbx.setting_bool("claude.nothing", SINCE).await.is_err(), "a failure is not an older sbx");
+        let old = Sbx::new(Fake::new(|a| match a[0].as_str() {
+            "--version" => Output::ok("sbx version 0.52.1\n"),
+            _ => Output::fail(1, "unknown setting"),
+        }));
+        assert_eq!(old.setting_bool("claude.chrome", SINCE).await.unwrap(), None, "an sbx without the setting");
+        let new = Sbx::new(Fake::new(|a| match a[0].as_str() {
+            "--version" => Output::ok("sbx version 0.53.0\n"),
+            _ => Output::fail(1, "daemon not running"),
+        }));
+        assert!(new.setting_bool("claude.chrome", SINCE).await.is_err(), "0.53 knows the key: the failure is real");
+        assert!(sbx.df(true).await.unwrap().contains("RECLAIMABLE"));
+        assert!(fake.called("df --verbose"), "{:?}", fake.log());
     }
 
     #[tokio::test]

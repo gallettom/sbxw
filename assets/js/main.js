@@ -321,6 +321,12 @@ function ingestSession(info, seed = false) {
   const thread = mode === 'claude' ? threadOfSession(info) : null;
   const key = thread ? `${info.sandbox}::thread:${thread}` : `${info.sandbox}::${mode}`;
   const prev = agentStates.get(key);
+  // An agent that speaks is in a running sandbox, whatever the list said
+  // when it was last read.
+  if (!seed && info.state !== 'exited' && typeof sandboxes !== 'undefined') {
+    const row = sandboxes.find(s => s.name === info.sandbox);
+    if (row && row.status !== 'running') expectRunning(info.sandbox);
+  }
   if (info.state === 'exited') agentStates.delete(key);
   // A main session that ended takes its lead role with it.
   if (info.state === 'exited' && !thread && typeof refreshLeads === 'function') refreshLeads();

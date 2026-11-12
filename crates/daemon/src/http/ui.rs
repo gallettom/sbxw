@@ -81,6 +81,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/template/status", get(template_status))
         .route("/api/kit-mounts", get(kit_mounts))
         .route("/api/templates", get(templates_list))
+        .route("/api/disk-usage", get(disk_usage))
         .route("/api/templates/save", post(template_save))
         .route("/api/templates/rm", post(template_rm))
         .route("/api/kits", get(kits_panel).post(kits_set))
@@ -332,6 +333,8 @@ struct CreateBody {
     template: sbxw_core::templates::Choice,
     #[serde(default)]
     remote_control: bool,
+    #[serde(default)]
+    chrome: bool,
     /// Sandbox target → host folder, for the kits' declared host mounts.
     #[serde(default)]
     kit_mounts: std::collections::BTreeMap<String, String>,
@@ -375,6 +378,7 @@ async fn create(State(app): S, Json(b): Json<CreateBody>) -> Result<Response, Ap
         mounts: b.mounts.into_iter().map(|m| (m.path, m.readonly)).collect(),
         template: b.template,
         remote_control: b.remote_control,
+        chrome: b.chrome,
         kit_mounts: b.kit_mounts,
         approved: b.approved,
         carve: b.carve,
@@ -394,6 +398,18 @@ async fn template_status(State(app): S) -> ApiResult {
 /// The saved templates, for the sidebar's Templates dialog.
 async fn templates_list(State(app): S) -> ApiResult {
     Ok(ok_with(app.templates().await?))
+}
+
+#[derive(Deserialize)]
+struct DiskUsageQuery {
+    #[serde(default)]
+    verbose: bool,
+}
+
+/// `sbx df` as sbx prints it (0.53): this machine's images, containers and
+/// managed volumes, and what is reclaimable.
+async fn disk_usage(State(app): S, Query(q): Query<DiskUsageQuery>) -> ApiResult {
+    Ok(ok_with(json!({ "text": app.sbx.df(q.verbose).await? })))
 }
 
 #[derive(Deserialize)]
@@ -583,6 +599,8 @@ struct UpBody {
     template: sbxw_core::templates::Choice,
     #[serde(default)]
     remote_control: bool,
+    #[serde(default)]
+    chrome: bool,
     /// Clone this into `path` first when it does not exist yet.
     #[serde(default)]
     git: Option<String>,
@@ -609,6 +627,7 @@ async fn up(State(app): S, Path(name): Path<String>, Json(b): Json<UpBody>) -> R
         api_key: b.api_key,
         template: b.template,
         remote_control: b.remote_control,
+        chrome: b.chrome,
         git: b.git,
         consent: Consent::Check(b.approved),
     };
@@ -655,6 +674,8 @@ async fn recreate(State(app): S, Path(name): Path<String>) -> ApiResult {
 async fn stop(State(app): S, Path(name): Path<String>) -> ApiResult {
     let sb = sandbox(&name)?;
     app.sbx_for(&sb).await?.stop(&sb.name).await?;
+    // Its Chromium stopped with it.
+    app.browser_set_active(&sb, false);
     Ok(ok())
 }
 

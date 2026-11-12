@@ -68,6 +68,14 @@ template = ""
 # is held up from its next start.
 keep_running = false
 
+# Claude in Chrome (sbx 0.53): start the agent with `--chrome`, so it can open,
+# drive and read tabs in your host browser. A host-access grant: `sbxw up` asks
+# before the first use. It also needs the Claude extension in your browser, a
+# Claude subscription login (the same account; an API key alone is refused) and
+# `sbx settings set claude.chrome true` on the host. Without that setting the
+# agent starts as usual and the bring-up says what to run.
+chrome = false
+
 # How many Claude sessions a sandbox may hold open at once in the web UI: the
 # agent, plus each thread opened beside it with "+ Thread" (one git worktree
 # and branch per thread). They share the sandbox's CPU and memory and your
@@ -159,8 +167,9 @@ env_files = []
 #   sbxw:codemap         /codemap: agents read (and write) a repo's code map in
 #                        .sbxw-artifacts/codemap/ before reading its source.
 #   sbxw:agent-skills    /archify, /brag, /brag-slim, /i-have-adhd, /handoff,
-#                        /grill-me, /grilling, /frontend-design, pinned, with
-#                        Chromium and ffmpeg.
+#                        /grill-me, /grilling, /frontend-design,
+#                        /modern-web-guidance, /chrome-extensions, pinned,
+#                        with Chromium and ffmpeg.
 #   sbxw:md-to-pdf-tools /md-to-pdf, with WeasyPrint and poppler.
 #   sbxw:retro           /retro: past sessions read back for what should become
 #                        a script, a hook, a skill, a rule or a kit.

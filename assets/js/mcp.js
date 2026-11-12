@@ -207,7 +207,7 @@ async function mcpRowAction(btn) {
 async function openMcpModal() {
   showNote(mcpError, '');
   mcpInspect.classList.add('hidden');
-  mcpOverlay.classList.remove('hidden');
+  modalOpen(mcpOverlay);
   mcpRenderSandboxes();
   await mcpLoad();
 }
@@ -219,7 +219,7 @@ function mcpFormDirty() {
 function closeMcpModal() {
   if (mcpFormDirty() && !confirm('Close without saving the server?')) return;
   mcpResetForm();
-  mcpOverlay.classList.add('hidden');
+  mcpOverlay.close();
 }
 
 mcpListEl.addEventListener('click', e => {
@@ -234,7 +234,4 @@ mcpCancel.addEventListener('click', () => { mcpResetForm(); showNote(mcpError, '
 
 document.getElementById('mcp-modal-close').addEventListener('click', closeMcpModal);
 document.getElementById('mcp-modal-close2').addEventListener('click', closeMcpModal);
-mcpOverlay.addEventListener('click', e => { if (e.target === mcpOverlay) closeMcpModal(); });
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !mcpOverlay.classList.contains('hidden')) closeMcpModal();
-});
+wireModal(mcpOverlay, closeMcpModal);

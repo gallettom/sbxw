@@ -180,10 +180,87 @@ async function vcStart(dest = null) {
   const recorder = new MediaRecorder(stream);
   const rec = { recorder, chunks: [], stream, started: performance.now(), dest };
   recorder.ondataavailable = e => { if (e.data.size) rec.chunks.push(e.data); };
-  recorder.start();
+  // In slices, so what was said so far can be shown while it is being said.
+  recorder.start(VC_LIVE_SLICE_MS);
   vcStarting = false;
   vcRec = rec;
   vcRender();
+  vcLiveLoop(rec);
+}
+
+// ── Words as they are said ───────────────────────────────────────────────
+// Parakeet transcribes a whole recording, not a stream, so the preview is
+// the recording so far, transcribed again every couple of seconds. It is
+// provisional: shown beside where the words will go, never typed or sent.
+// Only what `vcStop` gets back counts. A preview that takes long is asked
+// for less often, and a long dictation previews its last half minute.
+//
+// Where the delay went: the recorder hands audio over a slice at a time (the
+// newest words wait for the slice to close), and the pause between previews
+// used to come *after* each one, so a cycle was the pause plus the decode,
+// the upload and the transcription. Now the slices are short and the cycle
+// is counted from the start of a preview, so its own work is inside it.
+const VC_LIVE_SLICE_MS = 250;
+const VC_LIVE_FIRST_MS = 800;
+const VC_LIVE_EVERY_MS = 1200;
+const VC_LIVE_WINDOW_S = 30;
+let vcLiveEl = null;
+
+async function vcLiveLoop(rec) {
+  let seen = 0;
+  let every = VC_LIVE_EVERY_MS;
+  let next = performance.now() + VC_LIVE_FIRST_MS;
+  while (vcRec === rec) {
+    await new Promise(res => setTimeout(res, Math.max(0, next - performance.now())));
+    if (vcRec !== rec) break;
+    const began = performance.now();
+    next = began + every;
+    if (rec.chunks.length === seen) continue;
+    seen = rec.chunks.length;
+    try {
+      let pcm = await vcToPcm(new Blob(rec.chunks, { type: rec.recorder.mimeType }));
+      const cut = pcm.length > VC_LIVE_WINDOW_S * VC_RATE;
+      if (cut) pcm = pcm.slice(pcm.length - VC_LIVE_WINDOW_S * VC_RATE);
+      if (vcRec !== rec) break;
+      const r = await fetch('/api/voice/transcribe', {
+        method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: pcm.buffer,
+      }).then(r => r.json());
+      if (vcRec !== rec) break;
+      if (r.ok && r.text) vcLiveShow(rec, (cut ? '… ' : '') + r.text);
+      // The model is shared with the final transcription: at most about two
+      // thirds of the time goes to previews, so a stop is rarely queued
+      // behind one for long.
+      every = Math.max(VC_LIVE_EVERY_MS, (performance.now() - began) * 1.5);
+      next = began + every;
+    } catch (_) {
+      // A browser that cannot decode a recording still being written: no
+      // preview, and the words arrive at the end as before.
+    }
+  }
+}
+
+function vcLiveShow(rec, text) {
+  if (!vcLiveEl) {
+    vcLiveEl = document.createElement('div');
+    vcLiveEl.className = 'vc-live';
+    vcLiveEl.setAttribute('aria-live', 'off');
+  }
+  // In the concierge's log when it is open; else over the pane dictated
+  // into, or above the bar.
+  const pane = rec.dest ? panes[rec.dest.pane]?.el : null;
+  const home = pane || (vcOpen ? vcLog : document.body);
+  if (vcLiveEl.parentNode !== home) home.append(vcLiveEl);
+  vcLiveEl.classList.toggle('vc-live-pane', !!pane);
+  vcLiveEl.classList.toggle('vc-live-log', !pane && vcOpen);
+  vcLiveEl.classList.toggle('vc-live-bar', !pane && !vcOpen);
+  vcLiveEl.textContent = text;
+  if (home === vcLog) vcLog.scrollTop = vcLog.scrollHeight;
+  // A long dictation shows its end: what was just said.
+  vcLiveEl.scrollTop = vcLiveEl.scrollHeight;
+}
+
+function vcLiveClear() {
+  if (vcLiveEl) vcLiveEl.remove();
 }
 
 async function vcStop() {
@@ -194,7 +271,7 @@ async function vcStop() {
   rec.recorder.stop();
   await stopped;
   rec.stream.getTracks().forEach(t => t.stop());
-  if (performance.now() - rec.started < 300) { vcRender(); return; } // a tap, not speech
+  if (performance.now() - rec.started < 300) { vcLiveClear(); vcRender(); return; } // a tap, not speech
   vcBusy = true;
   vcRender();
   try {
@@ -215,6 +292,7 @@ async function vcStop() {
     if (rec.dest) showToast(`Dictation failed: ${e.message || e}`, 'error');
     else vcSay('err', `Could not transcribe: ${e.message || e}`);
   } finally {
+    vcLiveClear();
     vcBusy = false;
     vcRender();
   }

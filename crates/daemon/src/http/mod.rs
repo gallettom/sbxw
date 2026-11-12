@@ -12,6 +12,7 @@
 pub mod agent;
 pub mod assets;
 pub mod board;
+pub mod browser;
 pub mod error;
 pub mod guard;
 pub mod mac;
@@ -36,6 +37,7 @@ pub fn ui_router(app: Arc<App>) -> Router {
         .merge(stream::routes())
         .merge(ui::routes())
         .merge(mac::ui_routes())
+        .merge(browser::routes())
         .route("/ws", get(ws::handler))
         .route("/api/hook", any(moved))
         .route("/api/relay/ask", any(moved))

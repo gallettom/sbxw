@@ -378,6 +378,9 @@
   .tpl-row { display: flex; align-items: center; gap: .5rem; padding: .4rem .6rem; }
   .tpl-row + .tpl-row { border-top: 1px solid var(--c-elevated); }
   .tpl-tag { font-family: var(--font-mono); font-size: 12px; color: var(--c-text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .df-out { margin: 0; padding: .5rem .6rem; border: 1px solid var(--c-border); border-radius: var(--r-sm); font-size: 11px; line-height: 1.5; max-height: 220px; overflow: auto; white-space: pre; color: var(--c-text-muted); }
+  .df-head { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+  .df-verbose { display: inline-flex; align-items: center; gap: .35rem; font-size: 11px; color: var(--c-text-muted); cursor: pointer; }
   .tpl-meta { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; margin-left: auto; }
   .tpl-rm {
     flex-shrink: 0; background: none; border: 1px solid transparent; border-radius: var(--r-sm);
@@ -713,24 +716,32 @@
   .sidebar-actions { display: flex; align-items: center; gap: 2px; }
 
   /* ── Modal ── */
-  .modal-overlay {
-    position: fixed; inset: 0;
-    background: rgba(var(--c-shadow-rgb), .75);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 200;
-  }
-  .modal-overlay.hidden { display: none; }
+  /* Every dialog is a native <dialog> opened with showModal() (util.js,
+     wireModal): the browser gives it the top layer, the dimmed ::backdrop,
+     Escape, focus kept inside and the page behind made inert. `display` only
+     on [open], or it would show a closed one. `.modal-shell` is the browser
+     panel's: a bare frame around a box that can leave it for the dock. */
   .modal {
     background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg);
     width: 460px; max-width: 92vw; max-height: 85vh;
     display: flex; flex-direction: column;
     box-shadow: 0 24px 64px rgba(var(--c-shadow-rgb), .9);
   }
+  dialog.modal, dialog.modal-shell { padding: 0; color: inherit; overflow: visible; }
+  dialog.modal:not([open]) { display: none; }
+  dialog.modal-shell { border: 0; background: none; max-width: none; max-height: none; }
+  dialog:modal { overscroll-behavior: contain; }
+  dialog::backdrop {
+    background: rgb(1 4 9 / .75); /* --c-shadow-rgb: not every browser lets ::backdrop see the page's custom properties */
+    overflow: hidden; overscroll-behavior: contain;
+  }
   .modal-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: .75rem 1rem; border-bottom: 1px solid var(--c-elevated); flex-shrink: 0;
   }
-  .modal-title { color: var(--c-text-bright); font-weight: 600; font-size: 14px; }
+  /* Each dialog's title is its heading (an <h2>): the look is this rule's,
+     so the heading's own margins and size are taken off. */
+  .modal-title { margin: 0; color: var(--c-text-bright); font-weight: 600; font-size: 14px; line-height: inherit; }
   .modal-close {
     background: none; border: none; color: var(--c-text-dim); cursor: pointer;
     font-size: 18px; line-height: 1; padding: .1rem .3rem; border-radius: var(--r-xs);
@@ -1448,6 +1459,9 @@
   .sbx-actions button.icon-btn svg { vertical-align: -1px; display: inline-block; }
   .sbx-actions button.restart-btn { color: var(--c-green); }
   .sbx-actions button.restart-btn:hover { background: var(--c-green-tint); border-color: var(--c-green); color: var(--c-green); }
+  /* Amber: the one hue of the row no other button uses (duplicate is purple). */
+  .sbx-actions button.browser-btn { color: var(--c-amber-strong); }
+  .sbx-actions button.browser-btn:hover { color: var(--c-amber-strong); border-color: var(--c-amber); background: var(--c-amber-tint); }
   .sbx-actions button.ports-btn { color: var(--c-blue); }
   .sbx-actions button.ports-btn:hover   { color: var(--c-blue); border-color: var(--c-blue); background: var(--c-blue-tint); }
   .sbx-actions button.dup-btn { color: var(--c-purple); }
@@ -2476,6 +2490,8 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .paste-toast.show { opacity: 1; transform: translateY(0); }
+  /* The UA centres a popover (inset: 0; margin: auto); this one keeps its corner. */
+  #paste-toast[popover] { inset: auto 16px 76px auto; margin: 0; }
   .paste-toast.ok      { border-color: var(--c-green-strong); color: var(--c-green); }
   .paste-toast.error   { border-color: var(--c-red); color: var(--c-red); }
   .paste-toast.progress { border-color: var(--c-blue); color: var(--c-blue); }
@@ -3630,7 +3646,7 @@
   .cd-composer { display: flex; flex-direction: column; gap: .35rem; padding: .5rem; border-top: 1px solid var(--c-elevated); }
   .cd-row { display: flex; align-items: flex-end; gap: .4rem; }
   .cd-composer textarea {
-    flex: 1; min-height: 34px; max-height: 120px; resize: none;
+    flex: 1; min-height: 34px; max-height: 120px; resize: none; field-sizing: content;
     padding: .45rem .55rem; background: var(--c-bg); color: var(--c-text-bright);
     border: 1px solid var(--c-border); border-radius: 7px;
     font: 12.5px/1.4 var(--font-mono);
@@ -3778,7 +3794,8 @@
   }
   .sp-composer:focus-within { border-color: var(--c-blue); }
   .sp-composer textarea {
-    min-height: 40px; max-height: 160px; resize: none; padding: .65rem .75rem .2rem;
+    min-height: 40px; max-height: 160px; resize: none; field-sizing: content;
+    padding: .65rem .75rem .2rem;
     background: none; border: 0; outline: none;
     color: var(--c-text-bright); font: 13px/1.45 var(--font-prose);
   }
@@ -4105,3 +4122,126 @@
   body.voice-ready .pane-dictate-btn { display: inline-flex; align-items: center; }
   .pane-dictate-btn.recording { color: var(--c-red); border-color: var(--c-red); background: var(--c-red-tint); }
   .pane-dictate-btn.busy { opacity: .6; }
+
+  /* ── Browser panel ── the sandbox's own Chromium, live. The stage takes
+     whatever height is left, so the page is laid out at the panel's size. */
+  .browser-modal { width: 1320px; max-width: 96vw; height: 92vh; max-height: 92vh; }
+  .browser-bar { display: flex; align-items: center; gap: .35rem; padding: .5rem .75rem; border-bottom: 1px solid var(--c-elevated); flex-shrink: 0; }
+  .browser-nav {
+    background: none; border: 1px solid transparent; border-radius: var(--r-sm); color: var(--c-text-muted);
+    min-inline-size: 28px; min-block-size: 28px; font-size: 15px; line-height: 1; cursor: pointer; flex-shrink: 0;
+  }
+  .browser-nav:hover { color: var(--c-text-bright); background: var(--c-elevated); border-color: var(--c-border); }
+  .browser-url {
+    flex: 1; min-width: 0; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    color: var(--c-text-bright); font: 12px var(--font-mono); padding: .4rem .6rem;
+  }
+  /* An outline, not a border colour: it survives forced colours. */
+  .browser-url:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -1px; border-color: var(--c-blue); }
+  .browser-viewport {
+    flex-shrink: 0; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    color: var(--c-text); font: 12px var(--font-mono); padding: .35rem .4rem; cursor: pointer;
+  }
+  .browser-viewport:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -1px; border-color: var(--c-blue); }
+  .browser-blocked {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .45rem; padding: .45rem .75rem;
+    background: var(--c-amber-tint); border-bottom: 1px solid var(--c-elevated); flex-shrink: 0;
+    max-height: 92px; overflow-y: auto;
+  }
+  .browser-blocked.hidden { display: none; }
+  .browser-blocked-label { color: var(--c-amber-strong); font-size: 11px; margin-right: .2rem; }
+  .browser-chip {
+    display: inline-flex; align-items: center; gap: .35rem; padding: .15rem .2rem .15rem .5rem;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  }
+  .browser-chip code { color: var(--c-text-bright); font: 11px var(--font-mono); }
+  .browser-chip-why { color: var(--c-text-muted); font-size: 11px; }
+  .browser-allow {
+    background: var(--c-green-deep); border: none; border-radius: var(--r-xs); color: var(--c-white);
+    font-size: 11px; font-weight: 600; padding: .2rem .5rem; cursor: pointer;
+  }
+  .browser-allow:hover { background: var(--c-green-strong); }
+  .browser-allow[aria-disabled="true"] { opacity: .5; cursor: default; }
+  .browser-ignore {
+    background: none; border: none; color: var(--c-text-muted); cursor: pointer; font-size: 12px; padding: .1rem .3rem; border-radius: var(--r-xs);
+    min-inline-size: 24px; min-block-size: 24px;
+  }
+  .browser-ignore:hover { color: var(--c-text-bright); background: var(--c-elevated); }
+  .browser-stage {
+    flex: 1; min-height: 0; background: var(--c-bg); position: relative; overflow: hidden;
+    display: flex; align-items: flex-start; justify-content: center;
+  }
+  /* Shown for the mouse too: it says where the keys go. An outline, drawn
+     over the picture and kept in forced colours; an inset shadow is neither. */
+  .browser-stage:focus { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  /* width/height attributes give the box its ratio; these fit it. */
+  .browser-screen { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; user-select: none; -webkit-user-drag: none; }
+  .browser-screen.hidden { display: none; }
+  .browser-status {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: 2rem; color: var(--c-text-muted); font-size: 13px; line-height: 1.5;
+  }
+  .browser-status.hidden { display: none; }
+  .browser-status-error { color: var(--c-red); }
+  .browser-foot { justify-content: space-between; align-items: center; gap: .75rem; }
+  .browser-foot-notes { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+  .browser-keys-hint { color: var(--c-text-muted); font-size: 11px; }
+  .browser-keys-hint kbd { font: 10px var(--font-mono); padding: 0 .3rem; border: 1px solid var(--c-border); border-radius: var(--r-xs); color: var(--c-text); }
+  .browser-note { margin: 0; padding: .4rem .75rem; font-size: 12px; color: var(--c-text-bright); background: var(--c-elevated); border-bottom: 1px solid var(--c-border); flex-shrink: 0; }
+  .browser-note.hidden { display: none; }
+  .browser-note-error { color: var(--c-red); }
+  .browser-grant-note { color: var(--c-text-muted); font-size: 11px; }
+  .browser-settle-lead { margin: 0; color: var(--c-text); font-size: 13px; line-height: 1.5; }
+  .browser-settle-lead strong { color: var(--c-text-bright); }
+  .browser-settle-list { margin: 0; padding-left: 1.1rem; max-height: 180px; overflow-y: auto; color: var(--c-text-bright); font-size: 12px; line-height: 1.7; }
+  @media (max-width: 640px) {
+    .browser-modal { height: 96vh; max-height: 96vh; }
+    .browser-foot { flex-wrap: wrap; gap: .5rem; }
+  }
+
+  /* ── Words as they are said ── the provisional text of a dictation in
+     progress: beside where the words will go, never in their place. */
+  .vc-live {
+    font: 13px/1.5 var(--font-prose); color: var(--c-text-muted); font-style: italic; white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  /* The dot is a picture of "recording": no text of its own to read out. */
+  .vc-live::before { content: "● "; content: "● " / ""; color: var(--c-red); font-style: normal; }
+  .vc-live-log { align-self: flex-end; max-width: 85%; padding: .35rem .6rem; border-radius: var(--r-md); border: 1px dashed var(--c-border); }
+  .vc-live-pane, .vc-live-bar {
+    z-index: 30; padding: .5rem .7rem; max-height: 9.5em; overflow: hidden;
+    background: var(--c-surface); border: 1px solid var(--c-red); border-radius: var(--r-md);
+    box-shadow: 0 8px 24px rgba(var(--c-shadow-rgb), .7); color: var(--c-text-bright);
+  }
+  .vc-live-pane { position: absolute; left: .75rem; right: .75rem; bottom: .75rem; pointer-events: none; }
+  .vc-live-bar { position: fixed; left: 50%; transform: translateX(-50%); top: 3.6rem; width: min(640px, 92vw); pointer-events: none; }
+
+  /* The Browser panel beside the terminal: the same box as the dialog, in a
+     column of the layout that pushes the panes over. */
+  .browser-dock { flex-shrink: 0; display: flex; padding: 6px 0; min-width: 0; }
+  .browser-dock[data-side="right"] { padding-right: 6px; }
+  .browser-dock[data-side="left"] { padding-left: 6px; }
+  .browser-dock.hidden { display: none; }
+  /* Clear of the chat's corner button. */
+  .browser-dock[data-side="right"] .browser-foot { padding-right: 4.5rem; }
+  .browser-modal.docked {
+    width: 100%; max-width: none; height: 100%; max-height: none;
+    border-radius: var(--r-md); box-shadow: none;
+  }
+  /* The tab on a terminal whose agent is browsing: on the edge the panel
+     opens from, half out of the pane like the chat's handle. */
+  .browser-tab {
+    position: absolute; top: 42%; z-index: 25;
+    display: flex; align-items: center; justify-content: center;
+    width: 26px; height: 52px; padding: 0; cursor: pointer;
+    color: var(--c-amber-strong); background: var(--c-surface);
+    border: 1px solid var(--c-amber); box-shadow: 0 4px 14px rgba(var(--c-shadow-rgb), .6);
+  }
+  .browser-tab[data-side="right"] { right: 0; border-right: none; border-radius: var(--r-sm) 0 0 var(--r-sm); }
+  .browser-tab[data-side="left"] { left: 0; border-left: none; border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+  .browser-tab:hover, .browser-tab.open { background: var(--c-amber-tint); }
+  .browser-tab.open { color: var(--c-white); }
+  @keyframes browser-tab-in { from { opacity: 0; transform: scale(.8); } to { opacity: 1; transform: none; } }
+  /* Motion for those who have not asked for less of it. */
+  @media (prefers-reduced-motion: no-preference) { .browser-tab { animation: browser-tab-in .25s ease-out; } }
+

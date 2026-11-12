@@ -40,6 +40,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/sandboxes/:name/codemap/done", post(codemap_done))
         .merge(super::board::agent_routes())
         .merge(super::mac::agent_routes())
+        .merge(super::browser::agent_routes())
 }
 
 /// Answered with what the hook should print: on a prompt from a Remote

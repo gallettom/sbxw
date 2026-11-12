@@ -20,7 +20,7 @@ const SETUP_TABS = [
 const SETUP_KEY = 'sbxw.setup-tab';
 
 const setupOverlay = id => document.getElementById(`${id}-modal-overlay`);
-const setupIsOpen  = id => !setupOverlay(id).classList.contains('hidden');
+const setupIsOpen  = id => setupOverlay(id).open;
 
 function setupOpen(id) {
   const tab = SETUP_TABS.find(t => t.id === id) || SETUP_TABS[0];
