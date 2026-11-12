@@ -23,8 +23,16 @@ commit, with what they run on:
 - **[frontend-design](https://github.com/anthropics/skills/tree/main/skills/frontend-design)**
   (`/frontend-design`) — Anthropic's guidance for distinctive, intentional UI
   design; the agent reaches for it on its own when building UI.
+- **[modern-web-guidance](https://github.com/GoogleChrome/modern-web-guidance)**
+  (`/modern-web-guidance`, `/chrome-extensions`) — Google Chrome's guides to
+  current web platform practice (dialogs, popovers, forms, container queries,
+  view transitions, accessibility, Core Web Vitals, security…), which the agent
+  searches before writing HTML, CSS or client-side JS, so it stops reaching for
+  patterns its training data made obsolete; plus Manifest V3 guidance for Chrome
+  extensions. **Telemetry removed**: see below.
 
-These five are plain markdown: no runtime, no extra network. `/i-have-adhd`,
+The markdown skills (all but Archify, /brag and modern-web-guidance) need no
+runtime and no extra network. `/i-have-adhd`,
 `/handoff` and `/grill-me` keep their upstream `disable-model-invocation`, so
 they run only when typed.
 
@@ -49,14 +57,16 @@ for the current session.
 | `~/.sbxw/agent-skills/archify/` | Archify's skill package (`SKILL.md`, `bin/archify.mjs`, schemas, references) |
 | `~/.sbxw/agent-skills/brag/`, `…/brag-slim/` | the two /brag skills, bundled music and SFX included |
 | `~/.sbxw/agent-skills/i-have-adhd/`, `…/handoff/`, `…/grill-me/`, `…/grilling/`, `…/frontend-design/` | the markdown skills |
+| `~/.sbxw/agent-skills/modern-web-guidance/`, `…/chrome-extensions/` | Google's two skills from the npm package: guides, the offline search index and CLI, extension references; the telemetry sender (`watchdog/`) deleted |
+| `~/.local/bin/modern-web-guidance` | the CLI wrapper: the pinned copy, `DISABLE_TELEMETRY=1`, `install`/`update` refused |
 | `~/.sbxw/agent-skills/hook-adhd.mjs`, `install-hooks.mjs` | i-have-adhd's always-on hook, and what registers it in `~/.claude/settings.json` |
 | `~/.claude/.i-have-adhd-always` | the always-on flag, created on the first start |
 | `~/.sbxw/agent-skills/*/.sbxw-rev` | the commit each was installed from |
-| `~/.claude/commands/archify.md`, `brag.md`, `brag-slim.md`, `i-have-adhd.md`, `handoff.md`, `grill-me.md`, `grilling.md`, `frontend-design.md` | the commands: each points the agent at the pinned `SKILL.md` and says what is specific to a sandbox |
+| `~/.claude/commands/archify.md`, `brag.md`, `brag-slim.md`, `i-have-adhd.md`, `handoff.md`, `grill-me.md`, `grilling.md`, `frontend-design.md`, `modern-web-guidance.md`, `chrome-extensions.md` | the commands: each points the agent at the pinned `SKILL.md` and says what is specific to a sandbox |
 | `~/.sbxw/agent-skills/install.sh` | the installer, run at every container start |
 | `~/.cache/ms-playwright/chromium-*` + `~/.local/bin/chromium` | headless Chromium, and a wrapper that adds `--no-sandbox` |
 | `ffmpeg` (apt) | /brag's poster frame and final mux |
-| a fenced block in `/etc/sandbox-persistent.sh` | `ARCHIFY_CHROME` and `HYPERFRAMES_BROWSER_PATH`, pointing at the wrapper |
+| a fenced block in `/etc/sandbox-persistent.sh` | `DISABLE_TELEMETRY=1`, and `ARCHIFY_CHROME` and `HYPERFRAMES_BROWSER_PATH` pointing at the Chromium wrapper |
 
 ## Why commands that point at a copy, and not skills
 
@@ -90,6 +100,34 @@ same): an update is a change to this kit, reviewed like any other.
 | i-have-adhd | `1ecea19` — main, 2026-10-11 |
 | /handoff, /grill-me, grilling | `49dd158` — main, 2026-10-09 |
 | frontend-design | `dbd4588` — main, 2026-10-09 |
+| modern-web-guidance, chrome-extensions | npm `modern-web-guidance@1.0.0` (`MWG_VERSION`, checked against `MWG_SHA512`) — repo `4dd9683`, release v1.0.0 |
+
+modern-web-guidance is the one pinned by npm version rather than commit: its
+search CLI and index ship only in the npm package, not in the git repository.
+The tarball's sha512 is pinned beside the version, so a republished 1.0.0 is
+refused rather than installed.
+
+## modern-web-guidance without telemetry
+
+Upstream, the skill runs `npx -y modern-web-guidance@latest search|retrieve …`.
+`search` and `retrieve` are local (an embedded index and the bundled guides);
+the CLI's only network use is telemetry: a detached `watchdog/main.js` child
+that posts the agent's search queries, the guide ids retrieved, the agent's name,
+OS and latencies to Google (`play.googleapis.com`). The kit turns that off three
+ways, so no one of them has to hold:
+
+1. `install.sh` deletes `watchdog/` from the installed copy (checked at every
+   start). The CLI works without it: the spawn fails silently.
+2. The command tells the agent to run `modern-web-guidance …` (the wrapper on
+   `PATH`) instead of `npx …@latest`; the wrapper sets `DISABLE_TELEMETRY=1`,
+   upstream's documented opt-out, and refuses `install`/`update`, which would
+   pull the skill from GitHub into the shared skill store past the pin.
+3. `DISABLE_TELEMETRY=1` is in the sandbox environment too, for an agent that
+   runs the `npx` form anyway. Other CLIs reading that variable go quiet as well.
+
+And `play.googleapis.com` is not in the kit's network allow list. Checked on
+1.0.0: without the opt-out a `search` spawns the watchdog; with it, nothing is
+spawned or connected. Recheck when moving the pin.
 
 ## Why Playwright's Chromium
 

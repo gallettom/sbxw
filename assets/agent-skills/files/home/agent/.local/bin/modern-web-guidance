@@ -1,0 +1,13 @@
+#!/bin/sh
+# modern-web-guidance (GoogleChrome/modern-web-guidance), the copy pinned
+# by sbxw's agent-skills kit, with telemetry off. search, retrieve, list and
+# legacy-scan run offline; install and update are refused: they would pull
+# the skill from GitHub into the shared skill store, past the pin.
+case "$1" in
+  install|update)
+    echo "modern-web-guidance: '$1' is disabled here; sbxw's agent-skills kit pins this skill (move MWG_VERSION in its install.sh)." >&2
+    exit 2 ;;
+esac
+DISABLE_TELEMETRY=1
+export DISABLE_TELEMETRY
+exec node /home/agent/.sbxw/agent-skills/modern-web-guidance/modern-web.mjs "$@"

@@ -41,6 +41,10 @@ POCOCK_REV=49dd158d1076134a641b33efb035946536778336    # main, 2026-10-09
 ANTHROPIC_REPO=anthropics/skills
 ANTHROPIC_REV=dbd4588f9e1033efb41dad4bef2f7947c8993d44 # main, 2026-10-09
 PLAYWRIGHT=1.63.0
+# modern-web-guidance is pinned by npm version and the tarball's sha512:
+# its CLI (search, retrieve) ships only on npm, not in the git repository.
+MWG_VERSION=1.0.0
+MWG_SHA512=bda7c86700bc012e908ccdb2ca87e565b9dcee7dff4d538c2db10c45d3d3c1c172d1ff7f4eaf2ce6b250f1422a46dd8a3e5f62c6b6afc9a311e274c6b94adc9a
 
 # fetch REPO REV TARGET... — each TARGET is "subdir:dest". One tarball
 # per repository, unpacked once, and a dest is swapped in whole, so a
@@ -81,7 +85,47 @@ fetch() {
   rm -rf "$tmp"
 }
 
-# The five repositories are independent: fetched side by side, and
+# fetch_mwg — GoogleChrome/modern-web-guidance from npm: its two skills,
+# modern-web-guidance (with the offline search CLI and its guides) and
+# chrome-extensions. Telemetry is removed, not just switched off: the
+# CLI's only network use is a `watchdog/` child process that posts usage
+# (queries, guide ids, agent name) to play.googleapis.com, so that
+# directory is deleted from the copy; the CLI runs fine without it (it
+# also gets DISABLE_TELEMETRY=1 from its wrapper and the environment).
+fetch_mwg() {
+  rm -rf "$BASE/modern-web-guidance/watchdog"
+  have=""; read -r have 2>/dev/null < "$BASE/modern-web-guidance/.sbxw-rev"
+  have2=""; read -r have2 2>/dev/null < "$BASE/chrome-extensions/.sbxw-rev"
+  if [ "$have" = "$MWG_VERSION" ] && [ "$have2" = "$MWG_VERSION" ]; then
+    info "modern-web-guidance already at $MWG_VERSION"; return 0
+  fi
+  tmp="$(mktemp -d)"; tgz="$tmp/mwg.tgz"
+  cached="$CACHE/tarballs/modern-web-guidance-$MWG_VERSION.tgz"
+  if [ -n "$CACHE" ] && [ -f "$cached" ]; then
+    cp "$cached" "$tgz"
+  elif ! curl -fsSL "https://registry.npmjs.org/modern-web-guidance/-/modern-web-guidance-$MWG_VERSION.tgz" -o "$tgz"; then
+    info "could not download modern-web-guidance@$MWG_VERSION — keeping what is installed (is registry.npmjs.org allowed?)"
+    rm -rf "$tmp"; return 1
+  fi
+  if [ "$(sha512sum "$tgz" | cut -d' ' -f1)" != "$MWG_SHA512" ]; then
+    info "modern-web-guidance@$MWG_VERSION does not match its pinned sha512 — not installed"
+    rm -rf "$tmp"; return 1
+  fi
+  [ -n "$FILL" ] && [ ! -f "$cached" ] && cp "$tgz" "$cached.part" && mv "$cached.part" "$cached"
+  tar -xzf "$tgz" -C "$tmp" || { info "modern-web-guidance@$MWG_VERSION is unreadable"; rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp/package/skills/modern-web-guidance/watchdog"
+  for name in modern-web-guidance chrome-extensions; do
+    src="$tmp/package/skills/$name"; dest="$BASE/$name"
+    if [ ! -f "$src/SKILL.md" ]; then info "modern-web-guidance@$MWG_VERSION has no $name/SKILL.md — skipped"; continue; fi
+    rm -rf "$dest.new" && cp -a "$src" "$dest.new" \
+      && echo "$MWG_VERSION" > "$dest.new/.sbxw-rev" \
+      && rm -rf "$dest" && mv "$dest.new" "$dest" \
+      && info "$name -> $dest ($MWG_VERSION, telemetry removed)"
+  done
+  rm -rf "$tmp"
+}
+
+# The six sources are independent: fetched side by side, and
 # waited for at the end. Each writes only its own dests.
 fetch "$ARCHIFY_REPO" "$ARCHIFY_REV" archify:archify &
 fetch "$BRAG_REPO" "$BRAG_REV" skills/brag:brag skills/brag-slim:brag-slim &
@@ -89,6 +133,7 @@ fetch "$ADHD_REPO" "$ADHD_REV" skills/i-have-adhd:i-have-adhd &
 fetch "$POCOCK_REPO" "$POCOCK_REV" skills/productivity/handoff:handoff \
   skills/productivity/grill-me:grill-me skills/productivity/grilling:grilling &
 fetch "$ANTHROPIC_REPO" "$ANTHROPIC_REV" skills/frontend-design:frontend-design &
+fetch_mwg &
 
 # apt_install ARGS... — `apt-get install` that refreshes the package
 # lists only when no kit has done so in the last hour (the stamp is
@@ -239,22 +284,26 @@ else
 fi
 
 # ── Environment, for every later shell the agent opens ───────────────
-# Rewritten between fences, so re-running replaces rather than appends,
-# and removed when there is no browser to point at: archify treats a set
-# but broken ARCHIFY_CHROME as a failure, an absent one as "skipped".
+# Rewritten between fences, so re-running replaces rather than appends.
+# The browser lines are left out when there is no browser to point at:
+# archify treats a set but broken ARCHIFY_CHROME as a failure, an absent
+# one as "skipped". DISABLE_TELEMETRY=1 is always there, so an agent that
+# runs `npx modern-web-guidance@latest` despite its command still sends
+# nothing (other CLIs that read the same variable also go quiet).
 BEGIN="# >>> sbxw agent-skills >>>"
 END="# <<< sbxw agent-skills <<<"
 if [ -f "$ENV_FILE" ]; then
   tmpenv="$(mktemp)"
   sed "/^$BEGIN\$/,/^$END\$/d" "$ENV_FILE" > "$tmpenv"
-  if [ -n "$HAVE_CHROME" ]; then
-    {
-      echo "$BEGIN"
+  {
+    echo "$BEGIN"
+    echo "export DISABLE_TELEMETRY=1"
+    if [ -n "$HAVE_CHROME" ]; then
       echo "export ARCHIFY_CHROME=$BIN/chromium"
       echo "export HYPERFRAMES_BROWSER_PATH=$BIN/chromium"
-      echo "$END"
-    } >> "$tmpenv"
-  fi
+    fi
+    echo "$END"
+  } >> "$tmpenv"
   if ! cmp -s "$tmpenv" "$ENV_FILE"; then
     { cat "$tmpenv" > "$ENV_FILE"; } 2>/dev/null || sudo tee "$ENV_FILE" < "$tmpenv" >/dev/null \
       || info "could not update $ENV_FILE"
