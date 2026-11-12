@@ -479,14 +479,18 @@ function vcOfferJarvis(why) {
     const r = await postJsonOrError('/api/jarvis/start', {});
     if (r && r.ok === false) { vcSay('err', `Jarvis did not start: ${r.error}`); start.disabled = false; return; }
     vcJarvis = { state: r?.state || 'creating', error: r?.error };
+    // A stopped one may still read as stopped for a moment: shown as starting.
+    if (vcJarvis.state === 'stopped') vcJarvis = { state: 'creating' };
     paint();
-    // Still stopped: the daemon left it for its terminal to start.
-    if (vcJarvis.state === 'stopped') { body.textContent = 'Jarvis did not start. Open its terminal, sbxw-jarvis, to start it.'; return; }
     clearInterval(vcJarvisPoll);
+    const since = Date.now();
     vcJarvisPoll = setInterval(async () => {
       const st = await vcJarvisStatus();
+      // Until it runs or fails; a sandbox that stays stopped for 3 minutes did not start.
+      const settled = st.state === 'running' || st.state === 'failed' || st.state === 'absent' || Date.now() - since > 180_000;
+      if (!settled && st.state === 'stopped') vcJarvis = { state: 'creating' };
       paint();
-      if (st.state !== 'creating') {
+      if (settled) {
         clearInterval(vcJarvisPoll);
         if (st.state === 'running' && !vcSpeech.muted && vcCanSpeak()) vcSpeak(vcLang('Jarvis est prêt.', 'Jarvis is ready.'));
       }
