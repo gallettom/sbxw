@@ -68,14 +68,20 @@ function chatEscape(s) {
   return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Code spans are lifted out first and replaced by a placeholder (private-use
+// characters, stripped from the input beforehand so the text cannot forge
+// one), so bold, italics and link labels can wrap a code span while its
+// content is never read as markdown. Placeholders are excluded from link URLs.
 function chatInline(s) {
-  return s.split(/(`[^`\n]+`)/).map((part, i) => {
-    if (i % 2) return `<code>${chatEscape(part.slice(1, -1))}</code>`;
-    return chatEscape(part)
-      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?![\w*])/g, '$1<em>$2</em>')
-      .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  }).join('');
+  const codes = [];
+  const text = s
+    .replace(/[\uE000\uE001]/g, '')
+    .replace(/`([^`\n]+)`/g, (_, code) => `\uE000${codes.push(code) - 1}\uE001`);
+  return chatEscape(text)
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*\w])\*([^*\s][^*\n]*?)\*(?![\w*])/g, '$1<em>$2</em>')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)\uE000\uE001]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\uE000(\d+)\uE001/g, (_, n) => `<code>${chatEscape(codes[n])}</code>`);
 }
 
 function chatMarkdown(text) {
