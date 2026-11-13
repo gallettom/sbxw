@@ -52,7 +52,7 @@ non-code files under `docs/`; move them if the lead prefers.
 
 ## Evidence
 
-Tests: `cd desktop && cargo test`: **32 passed**, 1 ignored (the terminal
+Tests before the terminal merge: `cd desktop && cargo test`: **32 passed**, 1 ignored (the terminal
 thread's benchmark): 28 unit tests, 3 in `tests/link.rs` against a real
 stand-in process, 1 in `tests/pump.rs`. Notable: `luau::every_example_in_the_doc_renders` renders
 the example of every element in `screens.md`;
@@ -160,22 +160,64 @@ test tool, not changed.
   inset in headless on every OS).
 - After a tap, a button's tooltip shows in headless snapshots (Rune draws
   tooltips for the pointer at rest); harmless, visible in `live-end.png`.
-- The terminal's 20 pt status line is kept because `TerminalState::fit`
-  subtracts it (terminal thread's code).
+- Each terminal draws its own status line (size, connection) above its grid (`terminal::pane`), under the core's pane bar.
 - A pane's terminal is opened on the UI thread (a loopback WebSocket
   handshake, a few ms); a slow daemon would stall a frame.
 
-## For the lead and the terminal thread
+## Terminal wiring (after merging sbxw/desktop-terminal a0cf739)
 
-- `shell.rs` holds `terminal_view` (moved from `main.rs`): it calls only
-  `TerminalState::{new, size, rows, cursor, status, fit, on_key, poll,
-  screen_text}` and `terminal::{cell_width, rgb, BG, MONO_FAMILIES,
-  LINE_HEIGHT, PAD, STATUS_H}`, as the spike's `main.rs` did. A change in
-  the terminal's API lands there when the branches merge.
-- `main.rs` sets both Rune font families to `terminal::MONO_FAMILIES` (the
-  web UI is monospace throughout).
-- `scripts/headless/click-and-type.json` lost its two taps on
-  `btn-select-docs` (that key no longer exists); its terminal part is as it was.
+Merged once, as the lead allowed; `src/terminal.rs` and `src/terminal/`
+not edited. The shell uses the terminal's new API per pane:
+
+| What | Where |
+|---|---|
+| `rune::App::new(spec).on_ime(..).run()`; the input method goes to the focused pane | `main.rs`, `App::on_ime` |
+| `terminal::pane(t, lens(i))` in a row, one lens per pane (`shell::lens`); `TerminalState::id` = the pane number, so keys stay `grid-N`, `terminal-N` | `pane_view` |
+| `poll_tx` for every pane, then `take_events()`: `Attention` puts an amber dot and a "wants you" chip on the pane bar and a notice, until a key in that pane; `Title` shows on the pane bar; `Disconnected`/`Reconnected` make the pane's status `reconnecting`; `Bell` is logged | `App::poll` |
+| OSC 52 `Clipboard`: **ignored**, with a notice ("a program asked to copy N bytes to your clipboard; ignored"). My judgment: a program in a sandbox should not write the person's clipboard on its own; when wanted, it belongs behind a core-drawn approval. term-demo copies up to 4 KB; the web UI's behaviour was not checked | `App::poll` |
+| `on_key_tx` to the focused pane (window `on_key`); the grid's own `on_key` when it has Rune's focus | `App::on_key`, `terminal::view` |
+| Root `on_paste` (the macOS Edit menu takes Cmd+V before any key handler) and `on_window_focus` | `shell::view` |
+| `set_focused(true)` only on the pane with the keyboard while the window has it, `false` on the others (hollow cursor, one IME caret) | `App::poll` |
+| Which pane has the keyboard: follows Rune's focus (a click in a terminal focuses its `grid-N`, read in `poll` through `tx.focused()`), and Rune's focus follows the core when an intent opens or focuses a pane (`tx.focus`) | `App::poll` |
+| `TerminalState::with_reconnect(conn, reopen)`; `reopen` asks whatever daemon the link holds *now* (a restarted daemon has a new token, so the old `HttpDaemon` would be refused). The shell's own "reopen closed panes on Up" was removed | `App::open` |
+| Theme: `Theme` defaults (the web UI's); the person's `terminal_color` settings are not read yet | |
+| Headless: steady cursor (`cursor_blink = false`), and `hold:` marks now poll the terminals too, so a reconnect runs during a hold | |
+| Sender type: kept the forwarder thread (`TerminalConn::input` stays `mpsc::Sender<TermInput>`), so nothing of desktop-terminal changed | `client.rs` |
+
+Evidence (looked at):
+
+- `core/wiring-scrollback.png` (`scripts/headless/two-panes-live.json`, at
+  5.5 s): two live panes. The right one (docs) ran `seq -f 'history line %g'
+  1 300` and was scrolled up by Shift+PageUp and the wheel: "scrolled 40 of
+  266 lines", lines 226 to 261. The left one got the keyboard by a tap on
+  `grid-1` and shows `echo dead key: ê` → `dead key: ê` (a scripted
+  `^` preedit then `ê` commit through `App::on_ime`), and `echo alpha bravo
+  charlie`.
+- `core/wiring-selection-focus.png` (same run, end): "bravo" selected by a
+  double click in the left pane, which has the solid cursor; the right pane,
+  wheeled back to the bottom without taking the keyboard, ends on `history
+  line 300` and its prompt with a **hollow** cursor.
+- `core/wiring-reconnect.png` (`scripts/demo-reconnect.sh`): top, `echo
+  before the restart` against the first stand-in; bottom, after the stand-in
+  was killed and a new one started on the same port with a **new token in
+  the token file**: the same pane `connected`, `echo after the restart`
+  answered. Log: stream ended, connection refused, connected again, a new
+  terminal socket. The earlier lines are gone because the stand-in does not
+  replay; the daemon replays its last 256 KB.
+- Regressions rerun: `demo-live.sh` (3 list changes in order),
+  `demo-reload.sh` (5 loads as before), `--chrome` (0 overlapping),
+  desktop-terminal's `term-shot.sh` with the scrollback script (offset 69,
+  history 269).
+
+Tests: 59 pass (55 unit, of which the terminal thread's; 3 link; 1 pump),
+2 ignored benchmarks.
+
+Unverified for the wiring: a real Mac keyboard (dead keys, Option
+characters and IME were scripted only), the clipboard (copy, paste, the
+Edit menu's Paste), focus by a real click in a real window, the daemon's
+`attention` frame in the shell (the stand-in does not send one; the
+terminal thread tested the event itself), reconnect with the real daemon and
+its replay.
 
 ## Screens that can now be built in parallel
 

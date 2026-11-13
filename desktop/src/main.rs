@@ -32,8 +32,12 @@ fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
     s.poll(clock, tx)
 }
 
-fn on_key(s: &mut App, ev: &KeyEvent, _tx: &mut Tx) -> bool {
-    s.on_key(ev)
+fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    s.on_key(ev, tx)
+}
+
+fn on_ime(s: &mut App, ime: &rune::Ime, _tx: &mut Tx) -> bool {
+    s.on_ime(ime)
 }
 
 fn view(s: &App, cx: &mut Cx<App>) -> El {
@@ -42,7 +46,7 @@ fn view(s: &App, cx: &mut Cx<App>) -> El {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu=warn,naga=warn")).init();
-    rune::run(AppSpec::<App> {
+    let spec = AppSpec::<App> {
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
@@ -50,5 +54,7 @@ fn main() {
         // The web UI's look: monospace everywhere (`--font-mono` on `body`).
         families: (terminal::MONO_FAMILIES, terminal::MONO_FAMILIES),
         ..AppSpec::new("sbxw", (1280.0, 800.0), init, view)
-    });
+    };
+    // `on_ime`: dead keys, CJK and emoji composed by the input method reach the focused terminal.
+    rune::App::new(spec).on_ime(on_ime).run();
 }

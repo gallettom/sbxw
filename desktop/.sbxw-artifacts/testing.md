@@ -16,6 +16,8 @@ root; the first build takes about a minute, later ones a few seconds.
 | Check nothing sits under macOS's window buttons | add `--chrome` to `shot.sh` (prints `0 overlapping elements` or the culprits) |
 | Show live list updates | `desktop/scripts/demo-live.sh` |
 | Show hot reload through the override folder | `desktop/scripts/demo-reload.sh` |
+| Show a daemon restart (new token) reconnecting the list and a terminal | `desktop/scripts/demo-reconnect.sh` |
+| Two live terminals: scrollback, selection, focus, a dead key | `desktop/scripts/shot.sh shots/x.png --script desktop/scripts/headless/two-panes-live.json` |
 | Run the unit and link tests | `cd desktop && cargo test` |
 
 Outputs go to `desktop/shots/` (git-ignored). Keep `CARGO_TARGET_DIR` on the
@@ -90,6 +92,7 @@ Rune replays a JSON script on the virtual clock (`--script s.json`):
 - `type` sends each character as typed. A `key` event with `"shift": true`
   only sets the modifier (`"a"` with shift still types `a`): name the
   character (`"A"`) instead.
+- `ime` (`preedit` with `cursor`, then `commit`) is a dead key or an input method: it goes to the focused pane.
 - Other events: `down`, `up`, `drag`, `double-click`, `key` with `ctrl`,
   `alt`, `cmd`, `paste`, `fling`, `resize` (`dw`, `dh`, `dur`). Rune's
   README ("Agent tooling") has the full list.

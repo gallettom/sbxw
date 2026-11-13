@@ -12,9 +12,9 @@ use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, Ter
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
 use crate::intent::{Intent, Mode, PaneTarget, Risk, Split};
 use crate::screen::{self, Host, ScreenState};
-use crate::terminal::{self, TerminalState, LINE_HEIGHT, PAD, STATUS_H};
+use crate::terminal::{self, TerminalEvent, TerminalState};
 use crate::theme::{self, c, layout};
-use rune::{col, el, grid, row, text, Cursor, Cx, El, Key, KeyEvent, TextStyle, Tx, Waker};
+use rune::{col, el, row, text, Cursor, Cx, El, Key, KeyEvent, TextStyle, Tx, Waker};
 use serde_json::Value as J;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -69,26 +69,35 @@ pub struct Pane {
     pub thread: Option<String>,
     pub term: Option<TerminalState>,
     pub error: Option<String>,
+    /// The program's title (OSC 0/2), shown on the pane bar.
+    pub title: Option<String>,
+    /// The daemon's "the session wants you" frame, until a key in this pane.
+    pub attention: bool,
+    /// Lost the socket; the terminal is reconnecting on its own.
+    pub reconnecting: Option<String>,
 }
 
 impl Pane {
     fn empty() -> Pane {
-        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None }
+        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None }
     }
 
     fn status(&self) -> String {
         match (&self.sandbox, &self.term, &self.error) {
             (None, _, _) => "empty".into(),
             (_, _, Some(_)) => "error".into(),
+            (_, Some(_), _) if self.reconnecting.is_some() => "reconnecting".into(),
             (_, Some(t), _) if t.status.starts_with("closed") => "closed".into(),
             (_, Some(t), _) => t.status.clone(),
             (Some(_), None, None) => "closed".into(),
         }
     }
 
-    fn closed(&self) -> bool {
-        self.sandbox.is_some() && self.term.as_ref().is_none_or(|t| t.status.starts_with("closed"))
-    }
+}
+
+/// Finds pane `i`'s terminal in the app (the terminal's handlers take one per pane).
+pub fn lens(i: usize) -> impl Fn(&mut App) -> Option<&mut TerminalState> + Clone + 'static {
+    move |s: &mut App| s.panes.get_mut(i).and_then(|p| p.term.as_mut())
 }
 
 /// Headless script marks the app acts on.
@@ -136,6 +145,13 @@ pub struct App {
     waker: Option<Waker>,
     /// The link's way to wake the UI, set once `setup` has the waker.
     wake_slot: Arc<std::sync::Mutex<Option<Waker>>>,
+    /// The daemon now, for terminals reconnecting on their own (a restarted
+    /// daemon has a new token, so an old `HttpDaemon` would be refused).
+    current: Arc<std::sync::Mutex<Option<Arc<dyn Daemon>>>>,
+    /// Whether the window has the keyboard (`on_window_focus`).
+    pub window_focused: bool,
+    /// The core moved the focused pane: move Rune's keyboard focus there next poll.
+    refocus: bool,
 }
 
 pub fn headless() -> bool {
@@ -196,6 +212,9 @@ impl App {
             start: a.sandbox.clone().map(|s| (s, if a.mode.as_deref() == Some("agent") { Mode::Agent } else { Mode::Bash })),
             waker: None,
             wake_slot: Arc::new(std::sync::Mutex::new(None)),
+            current: Arc::new(std::sync::Mutex::new(None)),
+            window_focused: true,
+            refocus: true,
         };
         if let Some(n) = init.panes {
             app.layout.0 = n.clamp(1, 4);
@@ -353,21 +372,16 @@ impl App {
                 if !self.fixed_connection {
                     self.connection = Connection { state: "up", text: d.describe() };
                 }
+                *self.current.lock().unwrap() = Some(d.clone());
                 self.daemon = Some(d);
-                // The daemon restarted: panes whose socket closed open again (the
-                // daemon keeps the PTY and replays its last 256 KB).
-                for i in 0..self.panes.len() {
-                    let had = self.panes[i].term.is_some();
-                    if had && self.panes[i].closed() && self.panes[i].error.is_none() {
-                        let p = &self.panes[i];
-                        let (sb, mode, th) = (p.sandbox.clone().unwrap(), p.mode, p.thread.clone());
-                        self.open(i, &sb, mode, th);
-                    }
-                }
+                // Terminals whose socket closed reconnect on their own
+                // (`TerminalState::with_reconnect`, through `current`), and the
+                // daemon replays what they missed.
             }
             LinkEvent::Down(why) => {
                 self.connection = Connection { state: "down", text: why };
                 self.daemon = None;
+                *self.current.lock().unwrap() = None;
             }
             LinkEvent::Sandboxes(l) => {
                 self.listed = true;
@@ -409,6 +423,12 @@ impl App {
                         for s in &mut self.screens {
                             changed |= s.poll();
                         }
+                        // Terminals too: output, and their own reconnect (real time).
+                        for p in &mut self.panes {
+                            if let Some(t) = &mut p.term {
+                                changed |= t.poll(None);
+                            }
+                        }
                         std::thread::sleep(Duration::from_millis(20));
                     }
                 }
@@ -448,15 +468,57 @@ impl App {
         } else if let Some(n) = &self.notice {
             tx.wake_after(n.2.saturating_duration_since(now));
         }
-        let settle = headless().then_some(Duration::from_millis(1500));
-        for (i, p) in self.panes.iter_mut().enumerate() {
-            if let Some(t) = &mut p.term {
-                let ch = t.poll(settle);
-                if let (true, true, Some(path)) = (ch, i == self.focused, &self.dump_text) {
-                    let _ = std::fs::write(path, format!("{}x{}\n{}\n", t.size.0, t.size.1, t.screen_text().trim_end()));
-                }
-                changed |= ch;
+        // The focused pane follows Rune's keyboard focus (a click in a
+        // terminal focuses its grid, `grid-<id>`), and Rune's follows the core
+        // when an intent moved it.
+        let shown = self.layout.0.min(self.panes.len());
+        if self.refocus {
+            self.refocus = false;
+            if let Some(t) = self.panes.get(self.focused).and_then(|p| p.term.as_ref()) {
+                tx.focus(t.key("grid"), false);
             }
+        } else if let Some(k) = tx.focused().map(str::to_string) {
+            if let Some(i) = (0..shown).find(|&i| self.panes[i].term.as_ref().is_some_and(|t| t.key("grid") == k)) {
+                if i != self.focused {
+                    self.focused = i;
+                    changed = true;
+                }
+            }
+        }
+        let settle = headless().then_some(Duration::from_millis(1500));
+        let mut notes = vec![];
+        for (i, p) in self.panes.iter_mut().enumerate() {
+            let Some(t) = &mut p.term else { continue };
+            // Only the pane with the keyboard shows a solid cursor and gets
+            // the input method's caret (Rune wants one).
+            t.set_focused(self.window_focused && i == self.focused && i < shown);
+            let mut ch = t.poll_tx(settle, clock, tx);
+            for ev in t.take_events() {
+                ch = true;
+                let name = p.sandbox.clone().unwrap_or_default();
+                match ev {
+                    TerminalEvent::Attention => {
+                        p.attention = true;
+                        notes.push((format!("{name} wants you (pane {})", i + 1), false));
+                    }
+                    TerminalEvent::Bell => log::info!("pane {}: bell", i + 1),
+                    TerminalEvent::Title(title) => p.title = Some(title).filter(|t| !t.is_empty()),
+                    // OSC 52: a program in the sandbox asking to write the
+                    // person's clipboard. Not done: nothing a sandbox runs
+                    // should reach the host's clipboard on its own (later, a
+                    // core-drawn approval, as for other cross-boundary acts).
+                    TerminalEvent::Clipboard(c) => notes.push((format!("{name}: a program asked to copy {} bytes to your clipboard; ignored", c.len()), false)),
+                    TerminalEvent::Disconnected(why) => p.reconnecting = Some(why),
+                    TerminalEvent::Reconnected => p.reconnecting = None,
+                }
+            }
+            if let (true, true, Some(path)) = (ch, i == self.focused, &self.dump_text) {
+                let _ = std::fs::write(path, format!("{}x{} offset {} selection {:?}\n{}\n", t.size.0, t.size.1, t.display_offset(), t.selection_text(), t.visible_text().trim_end()));
+            }
+            changed |= ch;
+        }
+        for (n, e) in notes {
+            self.notify(n, e);
         }
         if changed {
             self.push_data();
@@ -464,12 +526,30 @@ impl App {
         changed
     }
 
-    pub fn on_key(&mut self, ev: &KeyEvent) -> bool {
+    /// The window's keys (nothing focused, or what the focused control passed on).
+    pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key == Key::Escape && self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
         let f = self.focused;
-        self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_key(ev))
+        if let Some(p) = self.panes.get_mut(f) {
+            p.attention = false;
+        }
+        self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_key_tx(ev, tx, lens(f)))
+    }
+
+    /// The input method (dead keys, CJK, emoji): to the focused pane.
+    pub fn on_ime(&mut self, ime: &rune::Ime) -> bool {
+        let f = self.focused;
+        self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_ime(ime))
+    }
+
+    /// The window's paste (the macOS Edit menu, Cmd+V before any key handler): to the focused pane.
+    pub fn paste(&mut self, text: &str) {
+        let f = self.focused;
+        if let Some(t) = self.panes.get_mut(f).and_then(|p| p.term.as_mut()) {
+            t.paste(text);
+        }
     }
 
     /// Opens a terminal in pane `i`.
@@ -482,6 +562,9 @@ impl App {
         p.thread = thread.clone();
         p.error = None;
         p.term = None;
+        p.title = None;
+        p.attention = false;
+        p.reconnecting = None;
         let req = TerminalRequest { sandbox: sandbox.to_string(), mode: mode.query(), thread };
         let r = match (&self.daemon, waker) {
             (Some(d), Some(w)) => d.open_terminal(&req, w).map_err(|e| format!("{e:#}")),
@@ -489,7 +572,21 @@ impl App {
             (_, None) => Err("not started".into()),
         };
         match r {
-            Ok(conn) => self.panes[i].term = Some(TerminalState::new(conn)),
+            Ok(conn) => {
+                let (current, wake) = (self.current.clone(), self.waker.clone().expect("setup ran"));
+                let reopen: terminal::Reconnect = Arc::new(move || {
+                    let d = current.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("not connected to the daemon"))?;
+                    d.open_terminal(&req, wake.clone())
+                });
+                let mut t = TerminalState::with_reconnect(conn, reopen);
+                // Element keys `grid-N`, `terminal-N` (N the pane's number).
+                t.id = (i + 1).to_string();
+                // Headless shots: a steady cursor, so a PNG does not catch it off.
+                t.cursor_blink = !headless();
+                self.panes[i].term = Some(t);
+                self.focused = i;
+                self.refocus = true;
+            }
             Err(e) => self.panes[i].error = Some(e),
         }
         let running = self.sandboxes.iter().any(|s| s.name == sandbox && s.status == "running");
@@ -597,7 +694,12 @@ fn tile(e: El) -> El {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
-    let root = col().w_full().h_full().fill(c("floor"));
+    let root = col()
+        .w_full()
+        .h_full()
+        .fill(c("floor"))
+        .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| s.window_focused = focused)
+        .on_paste(|s: &mut App, text: &str, _tx: &mut Tx| s.paste(text));
     if let Some(name) = &s.solo {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
         return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
@@ -678,8 +780,14 @@ fn pane_view(s: &App, i: usize) -> El {
         .gap(8.0)
         .items_center()
         .fill(c("pane-bar"))
-        .child(el().w(7.0).h(7.0).radius(3.5).fill(c(if connected { "blue" } else { "dim" })))
+        .child(el().w(7.0).h(7.0).radius(3.5).fill(c(if pane.is_some_and(|p| p.attention) { "amber" } else if connected { "blue" } else { "dim" })))
         .child(text(label).font(small(12.0, 500.0)).color(c("text-bright")).truncate().min_w(0.0));
+    if let Some(t) = pane.and_then(|p| p.title.clone()) {
+        bar = bar.child(text(t).font(small(11.0, 400.0)).color(c("text-muted")).truncate().min_w(0.0).max_w(320.0));
+    }
+    if pane.is_some_and(|p| p.attention) {
+        bar = bar.child(el().key(format!("pane-{}-attention", i + 1)).px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("amber-tint")).border(1.0, c("amber")).child(text("wants you").font(small(10.5, 500.0)).color(c("amber"))));
+    }
     if let Some(p) = pane.filter(|p| p.sandbox.is_some()) {
         bar = bar.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(10.5, 400.0)).color(c("text-muted"))));
         if !connected {
@@ -704,7 +812,8 @@ fn pane_view(s: &App, i: usize) -> El {
         );
     }
     let body = match pane {
-        Some(Pane { term: Some(t), .. }) => terminal_view(t, i),
+        // The pane fills a row (its width grows, its height is the row's).
+        Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane(t, lens(i))),
         Some(p) => {
             let msg = match (&p.sandbox, &p.error) {
                 (_, Some(e)) => e.clone(),
@@ -736,30 +845,4 @@ fn pane_view(s: &App, i: usize) -> El {
         .child(bar)
         .child(el().h(1.0).w_full().fill(c(if focused { "blue" } else { "elevated" })))
         .child(body)
-}
-
-fn terminal_view(t: &TerminalState, i: usize) -> El {
-    let (cols, rows) = t.size;
-    let cw = terminal::cell_width();
-    let mut g = grid(cols as u16, cw, LINE_HEIGHT, t.rows.clone()).key(format!("grid-{}", i + 1)).w(cols as f32 * cw).h(rows as f32 * LINE_HEIGHT);
-    if let Some((cc, r)) = t.cursor {
-        g = g.grid_caret(cc, r);
-    }
-    col()
-        .key(format!("terminal-{}", i + 1))
-        .grow(1.0)
-        .w_full()
-        .min_w(0.0)
-        .min_h(0.0)
-        .padding(PAD)
-        .fill(terminal::rgb(terminal::BG))
-        .focusable(true)
-        .on_key(move |s: &mut App, ev: &KeyEvent, _tx: &mut Tx| s.panes.get_mut(i).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_key(ev)))
-        .on_layout(move |s: &mut App, r: [f32; 4]| {
-            if let Some(t) = s.panes.get_mut(i).and_then(|p| p.term.as_mut()) {
-                t.fit(r[2], r[3]);
-            }
-        })
-        .child(el().h(STATUS_H).child(text(format!("terminal {cols}x{rows}  {}", t.status)).font(small(11.0, 400.0)).color(c("text-dim"))))
-        .child(g)
 }

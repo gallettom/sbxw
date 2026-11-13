@@ -68,7 +68,7 @@ unchanged.
 | `selected` | The selected sandbox's name, or nil |
 | `focused` | The focused pane's number, from 1 |
 | `layout.panes`, `layout.split` | 1 to 4; `columns` or `rows` |
-| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `closed`, `error`) |
+| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
 | `platform` | `macos`, `linux`, `windows` |
 
 ## Elements

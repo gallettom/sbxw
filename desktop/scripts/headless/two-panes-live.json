@@ -1,0 +1,109 @@
+{
+  "events": [
+    {
+      "t": 0.3,
+      "type": "tap",
+      "key": "layout"
+    },
+    {
+      "t": 0.5,
+      "type": "tap",
+      "key": "layout-2c"
+    },
+    {
+      "t": 0.8,
+      "type": "tap",
+      "key": "spare-docs"
+    },
+    {
+      "t": 1.2,
+      "type": "type",
+      "every": 0.02,
+      "text": "seq -f 'history line %g' 1 300"
+    },
+    {
+      "t": 2.0,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 2.4,
+      "type": "key",
+      "name": "PageUp",
+      "shift": true
+    },
+    {
+      "t": 2.6,
+      "type": "wheel",
+      "dx": 0,
+      "dy": 90,
+      "x": 1000,
+      "y": 400
+    },
+    {
+      "t": 3.0,
+      "type": "tap",
+      "key": "grid-1"
+    },
+    {
+      "t": 3.3,
+      "type": "type",
+      "every": 0.02,
+      "text": "echo dead key: "
+    },
+    {
+      "t": 3.8,
+      "type": "ime",
+      "preedit": "^",
+      "cursor": [
+        1,
+        1
+      ]
+    },
+    {
+      "t": 4.0,
+      "type": "ime",
+      "commit": "ê"
+    },
+    {
+      "t": 4.2,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 4.5,
+      "type": "type",
+      "every": 0.02,
+      "text": "echo alpha bravo charlie"
+    },
+    {
+      "t": 5.2,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 5.6,
+      "type": "mark",
+      "name": "scrolled"
+    },
+    {
+      "t": 5.8,
+      "type": "double-click",
+      "x": 327,
+      "y": 184
+    },
+    {
+      "t": 6.2,
+      "type": "wheel",
+      "dx": 0,
+      "dy": -2000,
+      "x": 1000,
+      "y": 400
+    },
+    {
+      "t": 6.6,
+      "type": "mark",
+      "name": "end"
+    }
+  ]
+}
