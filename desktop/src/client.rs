@@ -276,8 +276,7 @@ impl Daemon for HttpDaemon {
         stream.set_nodelay(true)?;
         let (socket, resp) = tungstenite::client(request, stream).map_err(|e| anyhow!("WebSocket handshake: {e}"))?;
         log::info!("terminal socket open ({})", resp.status());
-        // Short read timeout: one thread both reads and drains what to send.
-        socket.get_ref().set_read_timeout(Some(Duration::from_millis(5)))?;
+        socket.get_ref().set_read_timeout(None)?;
         let (ev_tx, ev_rx) = mpsc::channel();
         let (in_tx, in_rx) = mpsc::channel();
         let send = Events { tx: ev_tx, wake };
@@ -336,46 +335,113 @@ impl Events {
     }
 }
 
+const SOCKET: mio::Token = mio::Token(0);
+const INPUT: mio::Token = mio::Token(1);
+
+/// The terminal's socket thread. It sleeps in `mio::Poll` until the socket
+/// is readable or writable, or input is queued, so a key goes out and its
+/// echo comes back with no polling delay, and an idle terminal costs no
+/// wake-ups. The input side stays a plain `mpsc::Sender<TermInput>` (what
+/// `TerminalConn::input` always was): a forwarder thread blocks on it and
+/// rings a `mio::Waker` for each message.
 fn pump(mut ws: tungstenite::WebSocket<TcpStream>, tx: Events, rx: mpsc::Receiver<TermInput>) {
-    let why = loop {
-        match ws.read() {
-            Ok(Message::Binary(b)) => {
-                let _ = tx.unbounded_send(TermEvent::Output(b.to_vec()));
+    let why = match pump_loop(&mut ws, &tx, rx) {
+        Ok(why) => why,
+        Err(e) => e.to_string(),
+    };
+    let _ = tx.unbounded_send(TermEvent::Closed(why));
+}
+
+fn would_block(e: &tungstenite::Error) -> bool {
+    matches!(e, tungstenite::Error::Io(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted))
+}
+
+fn pump_loop(ws: &mut tungstenite::WebSocket<TcpStream>, tx: &Events, rx: mpsc::Receiver<TermInput>) -> std::io::Result<String> {
+    let mut poll = mio::Poll::new()?;
+    let waker = Arc::new(mio::Waker::new(poll.registry(), INPUT)?);
+    let (fwd_tx, fwd_rx) = mpsc::channel::<TermInput>();
+    {
+        let waker = waker.clone();
+        std::thread::Builder::new().name("terminal-input".into()).spawn(move || {
+            for m in rx {
+                if fwd_tx.send(m).is_err() {
+                    return;
+                }
+                let _ = waker.wake();
             }
-            Ok(Message::Text(t)) => {
-                let ev = match serde_json::from_str::<serde_json::Value>(&t) {
-                    Ok(v) if v["type"] == "attention" => TermEvent::Attention,
-                    Ok(_) => continue,
-                    Err(_) => TermEvent::Notice(t.to_string()),
-                };
-                let _ = tx.unbounded_send(ev);
-            }
-            Ok(Message::Close(_)) => break "closed by the daemon".to_string(),
-            Ok(_) => {}
-            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-            Err(e) => break e.to_string(),
-        }
+            // The terminal was dropped: dropping `fwd_tx` tells the pump.
+            drop(fwd_tx);
+            let _ = waker.wake();
+        })?;
+    }
+    ws.get_ref().set_nonblocking(true)?;
+    // A second handle on the same socket, for readiness only: tungstenite
+    // keeps reading and writing through its own.
+    let mut source = mio::net::TcpStream::from_std(ws.get_ref().try_clone()?);
+    poll.registry().register(&mut source, SOCKET, mio::Interest::READABLE | mio::Interest::WRITABLE)?;
+    let mut events = mio::Events::with_capacity(8);
+    loop {
+        // Everything readable now (tungstenite may also hold frames the
+        // handshake read): readiness is edge-triggered, so drain to WouldBlock.
         loop {
-            match rx.try_recv() {
+            match ws.read() {
+                Ok(Message::Binary(b)) => {
+                    let _ = tx.unbounded_send(TermEvent::Output(b.to_vec()));
+                }
+                Ok(Message::Text(t)) => {
+                    let ev = match serde_json::from_str::<serde_json::Value>(&t) {
+                        Ok(v) if v["type"] == "attention" => TermEvent::Attention,
+                        Ok(_) => continue,
+                        Err(_) => TermEvent::Notice(t.to_string()),
+                    };
+                    let _ = tx.unbounded_send(ev);
+                }
+                Ok(Message::Close(_)) => return Ok("closed by the daemon".into()),
+                Ok(_) => {}
+                Err(e) if would_block(&e) => break,
+                Err(e) => return Ok(e.to_string()),
+            }
+        }
+        // Everything queued to send. A full socket buffer keeps the frame in
+        // tungstenite's buffer (WouldBlock); the next writable event flushes it.
+        loop {
+            match fwd_rx.try_recv() {
                 Ok(TermInput::Bytes(b)) => {
                     if let Err(e) = ws.send(Message::Binary(b.into())) {
-                        let _ = tx.unbounded_send(TermEvent::Closed(e.to_string()));
-                        return;
+                        if !would_block(&e) {
+                            return Ok(e.to_string());
+                        }
                     }
                 }
                 Ok(TermInput::Resize { cols, rows }) => {
                     let msg = serde_json::json!({ "type": "resize", "cols": cols, "rows": rows }).to_string();
-                    let _ = ws.send(Message::Text(msg.into()));
+                    if let Err(e) = ws.send(Message::Text(msg.into())) {
+                        if !would_block(&e) {
+                            return Ok(e.to_string());
+                        }
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     let _ = ws.close(None);
-                    return;
+                    let _ = ws.flush();
+                    return Ok("closed".into());
                 }
             }
         }
-    };
-    let _ = tx.unbounded_send(TermEvent::Closed(why));
+        match ws.flush() {
+            Ok(()) => {}
+            Err(e) if would_block(&e) => {}
+            Err(e) => return Ok(e.to_string()),
+        }
+        loop {
+            match poll.poll(&mut events, None) {
+                Ok(()) => break,
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

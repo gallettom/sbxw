@@ -52,9 +52,9 @@ non-code files under `docs/`; move them if the lead prefers.
 
 ## Evidence
 
-Tests: `cd desktop && cargo test`: **31 passed**, 1 ignored (the terminal
+Tests: `cd desktop && cargo test`: **32 passed**, 1 ignored (the terminal
 thread's benchmark): 28 unit tests, 3 in `tests/link.rs` against a real
-stand-in process. Notable: `luau::every_example_in_the_doc_renders` renders
+stand-in process, 1 in `tests/pump.rs`. Notable: `luau::every_example_in_the_doc_renders` renders
 the example of every element in `screens.md`;
 `screen::override_file_wins_reloads_and_deleting_it_restores_the_builtin`
 uses real files and the real watcher thread (it found a race, fixed: an edit
@@ -108,6 +108,31 @@ Images in `.sbxw-artifacts/core/`, each one looked at:
   scroll area (a scripted 600 pt wheel moves `row-svc-01` from y 518 to
   -89); the amber banner with the "No sbxw daemon" line; "No sandboxes yet";
   the top bar alone.
+
+## The terminal socket thread (asked by desktop-terminal through the lead)
+
+`client::pump` no longer loops on a 5 ms read timeout. It sleeps in
+`mio::Poll` (mio 1.2.4, already in the lock through tokio, same features)
+on the socket (readable and writable, edge-triggered, drained to
+`WouldBlock`) and a `mio::Waker`. `TerminalConn::input` keeps its type,
+`mpsc::Sender<TermInput>`: on this branch `terminal.rs` stores it as that
+concrete type, so a new type would not compile here. A forwarder thread
+blocks on the channel and rings the waker per message. A full socket buffer
+keeps a frame in tungstenite's buffer until the next writable event.
+
+`tests/pump.rs` (release, in-process echo server with blocking reads, 200
+keys one at a time): before p50 12.0 ms, p90 13.5, p99 16.6, max 16.9;
+after p50 0.055 ms, p90 0.059, p99 0.113, max 0.141. The test also checks an
+idle terminal wakes the UI 0 times a second (it was 0 before too: the 83
+wake-ups a second measured by desktop-terminal were the socket thread's own,
+which the new loop removes by construction, as it sleeps with no timeout;
+not counted by this test), that a resize still goes out, and that dropping
+the input closes the socket. Linux (epoll) only: macOS (kqueue) and Windows
+(the duplicated socket handle registered with IOCP) are unverified.
+
+The stand-in still polls with a 5 ms timeout on its side, so key-to-echo in
+headless runs against it stays about 14 ms (p50 13.8 ms in `term2`); it is a
+test tool, not changed.
 
 ## Not verified
 

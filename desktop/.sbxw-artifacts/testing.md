@@ -157,5 +157,8 @@ SBXW_DAEMON=127.0.0.1:7681 SBXW_TOKEN=$(cat ~/.sbxw/run/ui-token) SBXW_SANDBOX=<
 - `tests/link.rs` (real stand-in process): a change behind the app reaches
   the list; a restarted daemon with a new token in the token file is found
   again; no daemon gives the one-line message.
+- `tests/pump.rs`: key-to-echo through the terminal socket thread against an
+  in-process echo server, idle wake-ups, close on drop (`cargo test --release
+  --test pump -- --nocapture` prints the numbers).
 - `terminal` (thread desktop-terminal): key bytes; `full_screen_redraw_cost`
   is `--ignored` (a benchmark).
