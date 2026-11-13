@@ -874,6 +874,29 @@ mod tests {
         assert!(h.act("nope", &J::Null, &J::Null).unwrap_err().contains("no action 'nope'"));
     }
 
+    /// Each element's example in docs/screens.md renders as written.
+    #[test]
+    fn every_example_in_the_doc_renders() {
+        let doc = include_str!("../docs/screens.md");
+        let mut n = 0;
+        for section in doc.split("\n### `").skip(1) {
+            let name = section.split('`').next().unwrap();
+            let Some(block) = section.split("```lua\n").nth(1).and_then(|b| b.split("\n```").next()) else { panic!("{name}: no example") };
+            let code: Vec<&str> = block.lines().filter(|l| !l.trim_start().starts_with("--")).collect();
+            let src = format!(
+                "local sb = {{ name = 'docs', status = 'running' }} local state = {{ filter = '', ro = false }} local step, steps = 1, 2\nreturn {{ render = function() return {} end }}",
+                code.join("\n")
+            );
+            let mut h = host();
+            h.load("doc", &src).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let node = h.render(&J::Null).unwrap_or_else(|e| panic!("{name}: {e}\n{block}"));
+            assert!(SPEC.iter().any(|s| s.0 == name), "{name}");
+            let _ = node;
+            n += 1;
+        }
+        assert_eq!(n, SPEC.len(), "one example per element");
+    }
+
     #[test]
     fn every_element_and_prop_is_documented() {
         let doc = include_str!("../docs/screens.md");
