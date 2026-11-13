@@ -22,6 +22,12 @@
 //!   the input method wired; [`view`] is the grid element alone. `lens` finds
 //!   the terminal in the app's state.
 //!
+//! Keys the shell keeps: [`KeyOpts::reserved`](keys::KeyOpts) (field
+//! `keys.reserved`, empty by default). A reserved key pressed with no Cmd,
+//! Ctrl or Alt is not sent and `on_key_tx` returns false, so it reaches the
+//! shell's handlers (push-to-talk, F8 by default); with a modifier it still
+//! goes to the program. Releases are never sent to the program.
+//!
 //! Input, for callers that route events themselves:
 //! * [`TerminalState::on_key`] (keys and scrollback keys) and
 //!   [`TerminalState::on_key_tx`] (plus copy, paste, select all through Rune's
@@ -767,6 +773,11 @@ impl TerminalState {
         L: Fn(&mut S) -> Option<&mut TerminalState> + 'static,
     {
         let pane = self.id.clone();
+        // The shell's own keys (push-to-talk): nothing to the program.
+        if self.keys.is_reserved(ev) {
+            debug_key(ev, &pane, tx, "reserved for the shell");
+            return false;
+        }
         match keys::shortcut(ev, self.keys.mac) {
             Some(Shortcut::Copy) => {
                 let text = self.selection_text();

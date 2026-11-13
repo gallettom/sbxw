@@ -23,7 +23,7 @@ fn ctrl_byte(c: char) -> Option<u8> {
 }
 
 /// How keys map on this machine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct KeyOpts {
     /// macOS rules: ⌘ is the app's, Option composes characters.
     pub mac: bool,
@@ -32,11 +32,25 @@ pub struct KeyOpts {
     /// iTerm2. (Rune delivers the unshifted key with `alt` while the terminal's
     /// caret sets `ime_option_as_alt`, which the view does when this is on.)
     pub option_as_meta: bool,
+    /// Keys the shell keeps for itself (push-to-talk, F8 by default): pressed
+    /// with no Cmd, Ctrl or Alt, [`TerminalState::on_key_tx`](super::TerminalState::on_key_tx)
+    /// sends nothing and returns false, so the key bubbles to the shell. With
+    /// a modifier they still reach the program. Empty by default. Releases
+    /// never reach the program (the terminal sends no key-up bytes).
+    pub reserved: &'static [Key],
 }
 
 impl Default for KeyOpts {
     fn default() -> Self {
-        KeyOpts { mac: cfg!(target_os = "macos"), option_as_meta: false }
+        KeyOpts { mac: cfg!(target_os = "macos"), option_as_meta: false, reserved: &[] }
+    }
+}
+
+impl KeyOpts {
+    /// `ev` is one of [`Self::reserved`], pressed alone (Shift allowed).
+    pub fn is_reserved(&self, ev: &KeyEvent) -> bool {
+        let m = ev.mods;
+        !(m.cmd || m.ctrl || m.alt || m.logo) && self.reserved.contains(&ev.key)
     }
 }
 
@@ -232,8 +246,8 @@ mod tests {
         assert_eq!(key_bytes(&k(Key::Text(" ".into()), |m| (m.cmd, m.logo) = (true, true)), false), None);
     }
 
-    const MAC: KeyOpts = KeyOpts { mac: true, option_as_meta: false };
-    const LINUX: KeyOpts = KeyOpts { mac: false, option_as_meta: false };
+    const MAC: KeyOpts = KeyOpts { mac: true, option_as_meta: false, reserved: &[] };
+    const LINUX: KeyOpts = KeyOpts { mac: false, option_as_meta: false, reserved: &[] };
 
     #[test]
     fn composed_characters_are_text_not_meta() {
