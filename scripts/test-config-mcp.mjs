@@ -86,8 +86,8 @@ await test("initialize names the server", async () => {
 await test("tools/list lists every tool, each with its rules", async () => {
   const r = await rpc("tools/list", {});
   const names = r.result.tools.map((t) => t.name);
-  assert.deepEqual(names, ["sbxw_state", "propose_kit", "remove_kit", "set_kits", "set_setting", "set_voice_word", "allow_network", "propose_mcp_server", "remove_mcp_server", "check_proposal"]);
-  for (const t of r.result.tools.filter((t) => !["sbxw_state", "check_proposal"].includes(t.name))) {
+  assert.deepEqual(names, ["sbxw_state", "propose_kit", "remove_kit", "set_kits", "set_setting", "set_voice_word", "allow_network", "propose_mcp_server", "remove_mcp_server", "read_desktop_screen", "read_desktop_docs", "propose_desktop_screen", "remove_desktop_screen", "check_proposal"]);
+  for (const t of r.result.tools.filter((t) => !["sbxw_state", "check_proposal", "read_desktop_screen", "read_desktop_docs"].includes(t.name))) {
     assert.match(t.description, /PROPOSAL, not a change/, t.name);
     assert.match(t.description, /Never put a secret/, t.name);
     assert.ok(t.inputSchema.required.includes("summary"), t.name);
@@ -106,6 +106,14 @@ await test("tools/list lists every tool, each with its rules", async () => {
   const mcp = r.result.tools.find((t) => t.name === "propose_mcp_server").description;
   assert.match(mcp, /Prefer `remote`/);
   assert.match(mcp, /tick an acknowledgement/);
+  const screen = r.result.tools.find((t) => t.name === "propose_desktop_screen").description;
+  assert.match(screen, /`read_desktop_docs`, then `read_desktop_screen`/);
+  assert.match(screen, /Keep changes small/);
+  assert.match(screen, /last good view/);
+  assert.match(screen, /cannot add a screen/);
+  assert.match(screen, /click on the diff/);
+  assert.match(r.result.tools.find((t) => t.name === "remove_desktop_screen").description, /never a spoken yes/);
+  assert.match(r.result.tools.find((t) => t.name === "read_desktop_docs").description, /BEFORE/);
 });
 
 await test("a proposal reaches the daemon with the token and reads back applied", async () => {
@@ -156,6 +164,8 @@ await test("every other kind is shaped as the contract says", async () => {
     ["allow_network", { add: ["pypi.org"] }, { kind: "network_allow", add: ["pypi.org"], remove: [] }],
     ["propose_mcp_server", { spec: { name: "docs", kind: "remote", url: "https://example.org/mcp" } }, { kind: "mcp_server", spec: { name: "docs", kind: "remote", url: "https://example.org/mcp" } }],
     ["remove_mcp_server", { name: "docs" }, { kind: "mcp_remove", name: "docs" }],
+    ["propose_desktop_screen", { name: "topbar.luau", content: "return {}\n" }, { kind: "desktop_screen", name: "topbar", content: "return {}\n" }],
+    ["remove_desktop_screen", { name: "topbar" }, { kind: "desktop_screen_remove", name: "topbar" }],
   ];
   for (const [tool, args, change] of cases) {
     seen.length = 0;
@@ -198,6 +208,14 @@ await test("a secret, a bundled kit or a missing summary never leaves the sandbo
   assert.match(text(unsaid), /Say how the word is said/);
   const both = await call("set_voice_word", { summary: "s", word: "nginx", fr: "x", remove: true });
   assert.match(text(both), /not both/);
+  const path = await call("propose_desktop_screen", { summary: "s", name: "../../x", content: "return {}" });
+  assert.match(text(path), /not a screen name/);
+  const empty = await call("propose_desktop_screen", { summary: "s", name: "topbar", content: " " });
+  assert.match(text(empty), /remove_desktop_screen/);
+  const big = await call("propose_desktop_screen", { summary: "s", name: "topbar", content: "x".repeat(64 * 1024 + 1) });
+  assert.match(text(big), /64 KB/);
+  const badRead = await call("read_desktop_screen", { name: "/etc/passwd" });
+  assert.equal(badRead.isError, true);
   assert.equal(seen.length, 0);
 });
 
@@ -207,6 +225,14 @@ await test("sbxw_state is a read, and a refusal comes back as a failed tool call
   const st = await call("sbxw_state", {});
   assert.deepEqual(JSON.parse(text(st)), { kits: [] });
   assert.equal(seen[0].url, "/api/jarvis/state");
+  reply = (url, body) => [200, url === "/api/jarvis/desktop/screen" ? { ok: true, name: body.name, override: false, content: "c", builtin: "c" } : { ok: true, screens_md: "# Writing screens", intents: [] }];
+  seen.length = 0;
+  const scr = await call("read_desktop_screen", { name: "topbar" });
+  assert.equal(JSON.parse(text(scr)).name, "topbar");
+  const docs = await call("read_desktop_docs", {});
+  assert.equal(JSON.parse(text(docs)).screens_md, "# Writing screens");
+  assert.deepEqual(seen.map((s) => [s.url, s.body]), [["/api/jarvis/desktop/screen", { name: "topbar" }], ["/api/jarvis/desktop/docs", {}]]);
+  reply = () => [403, { ok: false, error: "not the Jarvis sandbox" }];
   const r = await call("remove_kit", { summary: "s", kit: "jarvis-x" });
   assert.equal(r.isError, true);
   assert.match(text(r), /only the Jarvis sandbox/);
