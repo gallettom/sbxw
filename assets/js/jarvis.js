@@ -240,9 +240,19 @@ function jvTake(data) {
   else jvLoad();
 }
 
+// Not answerable (gone, answered, or one already on its way): a yes said or
+// typed in the panel gets a reason there; a click sees the dialog.
+function jvNotNow(p, via) {
+  if (via === 'voice') {
+    jvSay('err', !p || p.state !== 'pending' ? "Jarvis's proposal is no longer waiting for an answer."
+      : 'Wait: an answer to a Jarvis proposal is already on its way.');
+  }
+  return false;
+}
+
 async function jvApprove(id, via) {
   const p = jvProposals.get(id);
-  if (!p || p.state !== 'pending' || jvBusy) return;
+  if (!p || p.state !== 'pending' || jvBusy) return jvNotNow(p, via);
   // A spoken yes never approves a high-risk proposal: say so, again.
   if (via === 'voice' && jvScreenOnly(p)) return jvHighRisk(p);
   const body = { via };
@@ -269,16 +279,18 @@ async function jvApprove(id, via) {
   jvSay('dim', `Approved: ${p.summary}`);
 }
 
-async function jvRefuse(id, reason) {
+async function jvRefuse(id, reason, via) {
   const p = jvProposals.get(id);
-  if (!p || p.state !== 'pending' || jvBusy) return;
+  if (!p || p.state !== 'pending' || jvBusy) return jvNotNow(p, via);
   jvBusy = true; jvRender();
   const r = await jvPost(`/api/jarvis/proposals/${encodeURIComponent(id)}/refuse`, reason ? { reason } : {});
   jvBusy = false;
   if (!r.ok) {
-    showToast(`Could not refuse Jarvis's proposal: ${r.data?.error || `HTTP ${r.status}`}`, 'error');
+    const err = r.data?.error || `HTTP ${r.status}`;
+    showToast(`Could not refuse Jarvis's proposal: ${err}`, 'error');
+    if (via === 'voice') jvSay('err', `Proposal not refused: ${err}`);
     jvRender();
-    return;
+    return false;
   }
   jvTake(r.data);
   jvSay('dim', `Refused: ${p.summary}`);
@@ -301,7 +313,7 @@ function jvArm(p) {
   vcArm({
     kind: 'jarvis', id: p.id,
     yes: () => jvApprove(p.id, 'voice'),
-    no: () => { jvRefuse(p.id, ''); jvSpeak(jvLang('Refusé.', 'Refused.')); },
+    no: async () => { if ((await jvRefuse(p.id, '', 'voice')) !== false) jvSpeak(jvLang('Refusé.', 'Refused.')); },
   });
 }
 function jvAnnounce(p) {

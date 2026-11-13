@@ -33,7 +33,9 @@ goes to Jarvis's Claude session, masked first like any message, and its
 answers are shown and read aloud.
 
 Jarvis needs the same Claude sign-in as your other sandboxes. The voice is
-optional: you can type to Jarvis and read its answers.
+optional: you can type to Jarvis and read its answers, even in an sbxw built
+without voice or with the voice models not installed. Press Enter to send.
+If the message cannot leave, the panel says why and keeps it in the input.
 
 ## What Jarvis can change
 
