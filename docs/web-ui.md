@@ -494,7 +494,8 @@ sending fails, the words wait in an editable card (**Send** or *oui*,
 **Talking to Jarvis.** Jarvis's sandbox is created the first time you ask
 for it, never before. Pick **Jarvis** while it is not running and the panel
 offers **Start Jarvis**, then shows its progress (the first start creates
-the sandbox and takes a minute or two). Your words reach its Claude session
+the sandbox and takes a minute or two; a later one starts the stopped
+sandbox and opens its session). Your words reach its Claude session
 the way they reach any agent, masked first; its answers are shown in the
 panel and read aloud, without **Follow**.
 

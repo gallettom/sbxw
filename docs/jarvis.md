@@ -27,7 +27,8 @@ Nothing is created until you ask. Pick **Jarvis** where your words go (the
 name in the bar, or the list at the top of the panel; it is the first entry
 and the default). While its sandbox is not running, the panel offers
 **Start Jarvis**. The first start creates the sandbox, which takes a minute
-or two; the panel shows where it stands. After that, what you say or type
+or two; a later one starts the stopped sandbox and opens Jarvis's session,
+with no terminal to open. The panel shows where it stands. After that, what you say or type
 goes to Jarvis's Claude session, masked first like any message, and its
 answers are shown and read aloud.
 

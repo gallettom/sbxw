@@ -401,8 +401,8 @@ function vcLabel(name) { return name === JARVIS ? 'Jarvis' : name; }
 function vcFr() { return /^fr_/.test(vcStatus?.speech?.voice || 'fr_'); }
 function vcLang(fr, en) { return vcFr() ? fr : en; }
 
-// Jarvis's sandbox, as the daemon reports it: absent, creating, running,
-// stopped or failed. Nothing creates it but the Start button below.
+// Jarvis's sandbox, as the daemon reports it: absent, creating, starting
+// (a stopped one whose session is being opened), running, stopped or failed. Nothing creates it but the Start button below.
 let vcJarvis = { state: 'absent' };
 async function vcJarvisStatus() {
   try {
@@ -414,7 +414,7 @@ async function vcJarvisStatus() {
 }
 function vcJarvisUp() { return vcJarvis.state === 'running'; }
 const VC_JARVIS_STATE = {
-  absent: 'not created yet', creating: 'starting…', running: 'running',
+  absent: 'not created yet', creating: 'being created…', starting: 'starting…', running: 'running',
   stopped: 'stopped', failed: 'failed to start',
 };
 
@@ -480,7 +480,7 @@ function vcOfferJarvis(why) {
     if (r && r.ok === false) { vcSay('err', `Jarvis did not start: ${r.error}`); start.disabled = false; return; }
     vcJarvis = { state: r?.state || 'creating', error: r?.error };
     // A stopped one may still read as stopped for a moment: shown as starting.
-    if (vcJarvis.state === 'stopped') vcJarvis = { state: 'creating' };
+    if (vcJarvis.state === 'stopped') vcJarvis = { state: 'starting' };
     paint();
     clearInterval(vcJarvisPoll);
     const since = Date.now();
@@ -488,7 +488,7 @@ function vcOfferJarvis(why) {
       const st = await vcJarvisStatus();
       // Until it runs or fails; a sandbox that stays stopped for 3 minutes did not start.
       const settled = st.state === 'running' || st.state === 'failed' || st.state === 'absent' || Date.now() - since > 180_000;
-      if (!settled && st.state === 'stopped') vcJarvis = { state: 'creating' };
+      if (!settled && st.state === 'stopped') vcJarvis = { state: 'starting' };
       paint();
       if (settled) {
         clearInterval(vcJarvisPoll);
@@ -500,17 +500,18 @@ function vcOfferJarvis(why) {
   const paint = () => {
     const st = vcJarvis.state;
     body.textContent = st === 'running' ? 'Jarvis is running. Talk or type: your words go to its Claude session.'
-      : st === 'creating' ? 'Starting Jarvis… The first time, its sandbox is created: this can take a minute or two.'
+      : st === 'creating' ? 'Creating Jarvis\'s sandbox… The first time takes a minute or two.'
+      : st === 'starting' ? 'Starting Jarvis…'
       : st === 'failed' ? `Jarvis failed to start${vcJarvis.error ? `: ${vcJarvis.error}` : '.'}`
       : st === 'stopped' ? 'Jarvis is stopped. Start it to talk to it.'
       : `Jarvis runs in its own sandbox, ${JARVIS}, which does not exist yet. Start it to create it.`;
     if (why) body.textContent = `${why} ${body.textContent}`;
     head.textContent = `Jarvis · ${VC_JARVIS_STATE[st] || st}`;
     card.classList.toggle('done', st === 'running');
-    start.hidden = st === 'running' || st === 'creating';
+    start.hidden = st === 'running' || st === 'creating' || st === 'starting';
     start.disabled = false;
     start.textContent = st === 'failed' ? 'Try again' : 'Start Jarvis';
-    card.classList.toggle('vc-busy', st === 'creating');
+    card.classList.toggle('vc-busy', st === 'creating' || st === 'starting');
   };
   foot.append(start);
   paint();
