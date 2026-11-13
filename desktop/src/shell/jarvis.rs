@@ -291,7 +291,7 @@ impl App {
         changed
     }
 
-    fn on_jevent(&mut self, ev: JEvent) {
+    pub(super) fn on_jevent(&mut self, ev: JEvent) {
         match ev {
             JEvent::Status(Ok(v)) => {
                 let state = v["state"].as_str().unwrap_or("unknown").to_string();
@@ -483,7 +483,7 @@ impl App {
         }
     }
 
-    fn answer(&mut self, id: &str, via: &'static str) {
+    pub(super) fn answer(&mut self, id: &str, via: &'static str) {
         let Some(p) = self.jarvis.proposal(id).cloned() else { return };
         if !jarvis::pending(&p) {
             self.jarvis.say(Who::Error, "Jarvis's proposal is no longer waiting for an answer.");

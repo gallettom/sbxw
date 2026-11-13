@@ -14,6 +14,19 @@
 //! followed by a `session` event on the stream, which is what makes the app
 //! read the list again (the real daemon has no "list changed" event either).
 //!
+//! Jarvis (`--jarvis absent|running`): `GET /api/jarvis/status`, `POST
+//! /api/jarvis/start` (creating, then running 1.5 s later), `GET
+//! /api/jarvis`, `POST /api/jarvis/proposals/:id/approve|refuse` (the
+//! daemon's rule: voice only for low risk, `ack_host_command` for a host
+//! command, else 409), `GET /api/sessions`, `POST /api/chat/push` and `POST
+//! /api/voice/anonymise` ("Jeanne Martin" is masked). A scripted Jarvis
+//! answers what is pushed to `sbxw-jarvis` with a `session` event (working,
+//! then idle with a `reply`); words in the message make it propose: "english"
+//! a low-risk setting, "review" a high-risk kit, "command" a stdio MCP
+//! server, "screen" a change of the `sandboxes` screen, written to
+//! `--screens-dir` when approved (so the app's hot reload shows it). `GET
+//! /api/voice` answers 404 (a daemon without voice).
+//!
 //! What it does not do: keep the PTY across reconnects, replay the last
 //! 256 KB, Host/Origin checks, threads, monitor mode.
 //!
@@ -39,6 +52,12 @@ struct State {
     sandboxes: Vec<Sandbox>,
     streams: Vec<mpsc::Sender<String>>,
     streamed: bool,
+    jarvis: String,
+    proposals: Vec<serde_json::Value>,
+    session: serde_json::Value,
+    screens_dir: Option<std::path::PathBuf>,
+    next: u64,
+    voice: bool,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -72,6 +91,9 @@ fn main() -> anyhow::Result<()> {
     let token = args.next().unwrap_or_else(|| "test-token".into());
     let mut fixture = DEFAULT_FIXTURE.to_string();
     let mut changes: Vec<(f64, String, String)> = vec![];
+    let mut jarvis = "absent".to_string();
+    let mut screens_dir = None;
+    let mut voice = false;
     while let Some(k) = args.next() {
         let v = args.next().unwrap_or_default();
         match k.as_str() {
@@ -87,12 +109,19 @@ fn main() -> anyhow::Result<()> {
                 let (n, s) = rest.split_once('=').ok_or_else(|| anyhow::anyhow!("--change SECS:NAME=STATUS"))?;
                 changes.push((t.parse()?, n.into(), s.into()));
             }
+            "--jarvis" => jarvis = v,
+            // `--voice TEXT`: the voice is ready, and every recording is heard as TEXT.
+            "--voice" => {
+                voice = true;
+                std::env::set_var("STANDIN_HEARD", v);
+            }
+            "--screens-dir" => screens_dir = Some(std::path::PathBuf::from(v)),
             _ => anyhow::bail!("unknown argument {k}"),
         }
     }
     let fx: serde_json::Value = serde_json::from_str(&fixture)?;
     let sandboxes: Vec<Sandbox> = serde_json::from_value(fx["daemon"]["sandboxes"].clone()).unwrap_or_default();
-    let st: Shared = Arc::new(Mutex::new(State { sandboxes, ..Default::default() }));
+    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, ..Default::default() }));
     let listener = TcpListener::bind(&addr)?;
     eprintln!("standin: listening on {addr}");
     let changes = Arc::new(Mutex::new(Some(changes)));
@@ -175,6 +204,12 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
         let _ = write!(s, "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     };
     let stop = path.strip_prefix("/api/sandboxes/").and_then(|r| r.strip_suffix("/stop")).map(decode);
+    if authed && (path.starts_with("/api/jarvis") || matches!(path, "/api/sessions" | "/api/chat/push" | "/api/voice" | "/api/voice/anonymise" | "/api/voice/transcribe")) {
+        let body = read_body(&mut s, &head, &text)?;
+        let (code, out) = jarvis_route(st, &method, path, &body);
+        reply(&mut s, code, out.to_string());
+        return Ok(());
+    }
     match (method.as_str(), path) {
         ("GET", "/api/health") => {
             let nonce = query_value(query, "nonce").unwrap_or("");
@@ -307,4 +342,174 @@ fn terminal(mut ws: tungstenite::WebSocket<Prefixed>, raw: &TcpStream) -> anyhow
     let _ = child.kill();
     eprintln!("standin: terminal closed");
     Ok(())
+}
+
+/// The request's body after its head (`Content-Length` bytes).
+fn read_body(s: &mut TcpStream, head: &[u8], text: &str) -> anyhow::Result<serde_json::Value> {
+    let len: usize = text.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-length")).and_then(|(_, v)| v.trim().parse().ok())).unwrap_or(0);
+    let start = head.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4).unwrap_or(head.len());
+    let mut body = head[start..].to_vec();
+    let mut b = [0u8; 4096];
+    while body.len() < len {
+        let n = s.read(&mut b)?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&b[..n]);
+    }
+    Ok(serde_json::from_slice(&body).unwrap_or_default())
+}
+
+fn publish_session(st: &Shared, state: &str, reply: Option<&str>, last_input: &str) {
+    let info = serde_json::json!({ "sandbox": "sbxw-jarvis", "mode": "claude", "state": state, "agent": "claude", "started_ms": 0,
+        "last_input": last_input, "reply": reply, "origin": "tty", "answerable": false, "ts": 0 });
+    st.lock().unwrap().session = info.clone();
+    publish(st, "session", &info.to_string());
+}
+
+/// What the scripted Jarvis answers, and the proposal it makes.
+fn jarvis_answer(text: &str, n: u64) -> (String, Option<serde_json::Value>) {
+    let t = text.to_lowercase();
+    let id = format!("p-{n}");
+    let created = n;
+    if t.contains("english") {
+        return ("I propose switching the voice to `en_female`. It is a **low-risk** setting: say or type *yes* to apply it.".into(), Some(serde_json::json!({
+            "id": id, "summary": "Read answers with the English voice", "risk": "low", "state": "pending", "created": created,
+            "changes": [{ "kind": "setting", "title": "voice.tts_voice in ~/.sbxw/sbxw.toml", "risk": "low",
+                "diff": "--- ~/.sbxw/sbxw.toml\n+++ ~/.sbxw/sbxw.toml\n@@ -1,2 +1,2 @@\n [voice]\n-tts_voice = \"fr_female\"\n+tts_voice = \"en_female\"\n" }] })));
+    }
+    if t.contains("review") {
+        return ("I wrote a kit with a `/review` command. A kit is **high risk**: read the diff and click Approve.".into(), Some(serde_json::json!({
+            "id": id, "summary": "Add a /review command to web-app", "risk": "high", "state": "pending", "created": created,
+            "changes": [{ "kind": "kit_write", "title": "kit jarvis-review: 1 file", "risk": "high",
+                "diff": "--- /dev/null\n+++ ~/.sbxw/state/kits/jarvis-review/files/home/agent/.claude/commands/review.md\n@@ -0,0 +1,2 @@\n+Review the staged diff.\n+List each bug with its file and line.\n" }] })));
+    }
+    if t.contains("command") {
+        return ("A stdio MCP server runs on this machine: tick that you read its command.".into(), Some(serde_json::json!({
+            "id": id, "summary": "Add the Playwright MCP server", "risk": "high", "state": "pending", "created": created, "needs_ack": true,
+            "changes": [{ "kind": "mcp_server", "title": "MCP server pw (stdio)", "risk": "high", "host_command": "npx -y @playwright/mcp@latest",
+                "diff": "--- sbx mcp ls\n+++ sbx mcp ls\n@@ -0,0 +1,1 @@\n+pw  stdio  npx -y @playwright/mcp@latest\n" }] })));
+    }
+    if t.contains("screen") {
+        return ("I propose a new title for the sandbox list. A screen change is **high risk**: click Approve.".into(), Some(serde_json::json!({
+            "id": id, "summary": "Rename the sandbox list's title", "risk": "high", "state": "pending", "created": created,
+            "changes": [{ "kind": "desktop_screen", "title": "desktop screen sandboxes (override ~/.sbxw/desktop/screens/sandboxes.luau)", "risk": "high",
+                "intents": [{ "name": "open_terminal", "risk": "direct", "new": false }, { "name": "select", "risk": "direct", "new": false }],
+                "content": SCREEN_EDIT,
+                "diff": "# This screen can ask the app to: open_terminal, select.\n--- builtin/screens/sandboxes.luau\n+++ ~/.sbxw/desktop/screens/sandboxes.luau\n@@ -1,1 +1,1 @@\n-SANDBOXES\n+MY SANDBOXES (by Jarvis)\n" }] })));
+    }
+    (format!("You said: *{}*. Ask me for the **english** voice, a **review** command, an MCP **command** or a **screen** change.", text.trim()), None)
+}
+
+const SCREEN_EDIT: &str = include_str!("../../screens/sandboxes.luau");
+
+fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value) -> (&'static str, serde_json::Value) {
+    use serde_json::json;
+    let err = |code: &'static str, m: String| (code, json!({ "ok": false, "error": m }));
+    match (method, path) {
+        ("GET", "/api/jarvis/status") => ("200 OK", json!({ "state": st.lock().unwrap().jarvis })),
+        ("POST", "/api/jarvis/start") => {
+            let now = st.lock().unwrap().jarvis.clone();
+            if now == "running" || now == "creating" {
+                return ("200 OK", json!({ "state": now }));
+            }
+            st.lock().unwrap().jarvis = "creating".into();
+            let st2 = st.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1500));
+                st2.lock().unwrap().jarvis = "running".into();
+                eprintln!("standin: jarvis is running");
+                publish_session(&st2, "idle", None, "");
+            });
+            ("200 OK", json!({ "state": "creating" }))
+        }
+        ("GET", "/api/jarvis") => {
+            let mut list = st.lock().unwrap().proposals.clone();
+            list.reverse();
+            ("200 OK", json!({ "ok": true, "proposals": list }))
+        }
+        ("GET", "/api/sessions") => {
+            let s = st.lock().unwrap().session.clone();
+            ("200 OK", if s.is_null() { json!([]) } else { json!([s]) })
+        }
+        ("GET", "/api/voice") if st.lock().unwrap().voice => ("200 OK", json!({ "ok": true, "compiled": true, "ready": true, "speech": { "supported": false }, "push_to_talk_key": "F8" })),
+        ("GET", "/api/voice") => err("404 Not Found", "not found".into()),
+        ("POST", "/api/voice/transcribe") => {
+            let heard = std::env::var("STANDIN_HEARD").unwrap_or_default();
+            eprintln!("standin: transcribed as {heard:?}");
+            ("200 OK", json!({ "ok": true, "text": heard, "masked": 0 }))
+        }
+        ("POST", "/api/voice/anonymise") => {
+            let t = body["text"].as_str().unwrap_or("");
+            let n = t.matches("Jeanne Martin").count();
+            ("200 OK", json!({ "ok": true, "text": t.replace("Jeanne Martin", "Personne A"), "masked": n }))
+        }
+        ("POST", "/api/chat/push") => {
+            let (text, name) = (body["text"].as_str().unwrap_or("").to_string(), body["name"].as_str().unwrap_or(""));
+            if name != "sbxw-jarvis" {
+                return ("200 OK", json!({ "ok": true, "name": name }));
+            }
+            if st.lock().unwrap().jarvis != "running" {
+                return err("409 Conflict", "Jarvis is not running".into());
+            }
+            eprintln!("standin: jarvis heard {text:?}");
+            publish_session(st, "working", None, &text);
+            let st2 = st.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(700));
+                let n = {
+                    let mut g = st2.lock().unwrap();
+                    g.next += 1;
+                    g.next
+                };
+                let (reply, proposal) = jarvis_answer(&text, n);
+                if let Some(p) = proposal {
+                    st2.lock().unwrap().proposals.push(p.clone());
+                    publish(&st2, "jarvis", &p.to_string());
+                    eprintln!("standin: jarvis proposes {}", p["id"]);
+                }
+                publish_session(&st2, "idle", Some(&reply), &text);
+            });
+            ("200 OK", json!({ "ok": true, "name": "sbxw-jarvis" }))
+        }
+        _ => {
+            let Some(rest) = path.strip_prefix("/api/jarvis/proposals/") else { return err("404 Not Found", "no such route".into()) };
+            let (id, action) = rest.rsplit_once('/').unwrap_or((rest, ""));
+            let id = decode(id);
+            let mut g = st.lock().unwrap();
+            let dir = g.screens_dir.clone();
+            let Some(p) = g.proposals.iter_mut().find(|p| p["id"] == id.as_str()) else { return err("404 Not Found", format!("no proposal {id}")) };
+            match action {
+                "approve" => {
+                    let via = body["via"].as_str().unwrap_or("click");
+                    if let Err(e) = sbxw_desktop::client::fixture_rule(p, via, body["ack_host_command"] == true) {
+                        return err("409 Conflict", sbxw_desktop::client::reason(&e));
+                    }
+                    p["state"] = "applied".into();
+                    p["via"] = via.into();
+                    if let (Some(dir), Some(content)) = (dir, p["changes"][0]["content"].as_str()) {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let edited = content.replace("\"SANDBOXES\"", "\"MY SANDBOXES (by Jarvis)\"");
+                        let _ = std::fs::write(dir.join("sandboxes.luau"), edited);
+                        eprintln!("standin: wrote {}", dir.join("sandboxes.luau").display());
+                    }
+                }
+                "refuse" => {
+                    if p["state"] != "pending" {
+                        return err("409 Conflict", "already answered".into());
+                    }
+                    p["state"] = "refused".into();
+                    if let Some(r) = body["reason"].as_str() {
+                        p["reason"] = r.into();
+                    }
+                }
+                _ => return err("404 Not Found", "no such route".into()),
+            }
+            let p = p.clone();
+            drop(g);
+            eprintln!("standin: proposal {id} is {}", p["state"]);
+            publish(st, "jarvis", &p.to_string());
+            ("200 OK", json!({ "ok": true, "proposal": p }))
+        }
+    }
 }

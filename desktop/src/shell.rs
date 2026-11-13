@@ -243,7 +243,7 @@ impl App {
         if init.jarvis_open {
             app.jarvis.open = true;
         }
-        if init.fake_audio {
+        if init.fake_audio || std::env::var_os("SBXW_DESKTOP_FAKE_AUDIO").is_some() {
             app.audio = Box::new(crate::voice::FakeAudio { capture: vec![0u8; 16_000 * 4], ..Default::default() });
         }
         for (who, text) in &init.jarvis_log {
@@ -1039,10 +1039,71 @@ fn pane_view(s: &App, i: usize) -> El {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::ProposalAnswers;
 
     fn app() -> App {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
         App::new(Args { fixture: Some(fixture.into()), ..Args::default() })
+    }
+
+    /// A yes the screen put in the input itself is a message, never an
+    /// approval; the same word typed by the person approves a low-risk one.
+    #[test]
+    fn only_the_persons_own_yes_approves_and_only_low_risk() {
+        let open = |f: &str| App::new(Args { fixture: Some(format!("{}/fixtures/jarvis/{f}.json", env!("CARGO_MANIFEST_DIR"))), ..Args::default() });
+        let wait = |a: &mut App| {
+            let until = Instant::now() + Duration::from_secs(3);
+            while a.wiring.pending.load(std::sync::atomic::Ordering::SeqCst) > 0 && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            while let Ok(ev) = a.wiring.rx.try_recv() {
+                a.on_jevent(ev);
+            }
+        };
+        let put = |a: &mut App, text: &str, by_screen: bool| {
+            let given = by_screen.then(|| text.to_string());
+            a.screen_mut("jarvis").unwrap().ui.edits.insert("jarvis-input".into(), (rune::TextEdit::new(text), given));
+            a.run_intent("jarvis", Intent::SendToJarvis { input: "jarvis-input".into() });
+        };
+        let mut a = open("proposal-low");
+        assert_eq!(a.jarvis.armed.as_deref(), Some("p-low-1"));
+        put(&mut a, "yes", true);
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-low-1").unwrap()["state"], "pending", "the screen's own yes approves nothing");
+        let mut a = open("proposal-low");
+        put(&mut a, "yes", false);
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-low-1").unwrap()["state"], "applied");
+        assert_eq!(a.jarvis.proposal("p-low-1").unwrap()["via"], "voice");
+        assert_eq!(a.screen_mut("jarvis").unwrap().ui.edits["jarvis-input"].0.text, "", "taken, so emptied");
+        let mut a = open("proposal-high");
+        put(&mut a, "oui", false);
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-high-1").unwrap()["state"], "pending", "high risk: a click only");
+        assert!(a.jarvis.log.last().unwrap().text.starts_with("High risk: approve it on screen"));
+        // Even a voice approval sent past the core is refused by the daemon's rule.
+        a.answer("p-high-1", "voice");
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-high-1").unwrap()["state"], "pending");
+        // The screen's `approve_proposal` only shows the dialog.
+        a.jarvis.shown = None;
+        a.intents("jarvis", vec![Intent::ApproveProposal { id: "p-high-1".into() }]);
+        wait(&mut a);
+        assert_eq!((a.jarvis.shown.as_deref(), a.jarvis.proposal("p-high-1").unwrap()["state"].as_str()), (Some("p-high-1"), Some("pending")));
+        // A host command: the click is refused until the box is ticked.
+        let mut a = open("proposal-ack");
+        a.approve_click();
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-ack-1").unwrap()["state"], "pending");
+        a.toggle_ack();
+        a.approve_click();
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-ack-1").unwrap()["state"], "applied");
+        // A 409: the daemon's reason beside the buttons.
+        let mut a = open("proposal-refused");
+        a.approve_click();
+        wait(&mut a);
+        assert!(a.jarvis.dialog_error.as_ref().unwrap().1.contains("changed since the proposal"), "{:?}", a.jarvis.dialog_error);
     }
 
     #[test]
