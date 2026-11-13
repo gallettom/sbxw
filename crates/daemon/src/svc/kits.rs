@@ -34,7 +34,9 @@ impl App {
 
     fn kit_files(&self) -> BTreeMap<PathBuf, Users> {
         let mut out: BTreeMap<PathBuf, Users> = BTreeMap::new();
-        if let Some(p) = &self.cfg.source {
+        // The file the daemon was asked to read, even when it does not exist
+        // yet: saving its kits creates it.
+        if let Some(p) = self.cfg.source.as_ref().or(self.cfg.asked.as_ref()) {
             out.entry(p.clone()).or_default().daemon = true;
         }
         for name in self.store.names() {

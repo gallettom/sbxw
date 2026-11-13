@@ -211,8 +211,13 @@ person approves.**
     is refused, and so is an MCP server with a credential in a header, its
     URL or an argument. Jarvis writes `${key}` placeholders; the person fills
     in the secrets in Setup;
+  - a change to the daemon's `sbxw.toml` when that file does not exist
+    creates it, only at the path the daemon was started with and only in a
+    folder that already exists. The title names the path and the diff shows
+    a new file; the risk is that of the change, as for an existing file;
   - at approval, the daemon plans again against the files as they are. If a
-    diff differs from the one shown, nothing is applied. Changes are applied
+    diff differs from the one shown, nothing is applied. A file that appeared
+    since the proposal counts as changed. Changes are applied
     in order and stop at the first failure.
 - **The person approves.** Nothing is applied without Approve, in the web UI,
   on the UI listener. There is no auto-approve.
