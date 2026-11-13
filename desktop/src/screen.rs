@@ -144,7 +144,7 @@ pub fn view<S: 'static>(s: &ScreenState, get: fn(&mut S) -> &mut ScreenState) ->
     if let Some(e) = &s.error {
         panel = panel.child(
             el().key("screen-error").w_full().padding(8.0).radius(6.0).fill(rgb(0x5c1f2b)).child(
-                text(format!("screen error, showing the last good view:\n{e}")).font(TextStyle::new(12.0, 400.0)).color(rgb(0xffd7de)).wrap(),
+                text(format!("screen error, showing the last good view:\n{e}")).font(TextStyle::new(12.0, 400.0)).color(rgb(0xffd7de)).wrap().w_full(),
             ),
         );
     }
@@ -187,5 +187,68 @@ fn node<S: 'static>(n: &Node, ids: &mut usize, get: fn(&mut S) -> &mut ScreenSta
                 .on_press(move |s: &mut S| get(s).act(&action, arg.as_deref()))
                 .child(text(label.clone()).font(BODY).color(rgb(0xffffff)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const SCREEN: &str = r#"
+return {
+  init = function() return { n = 0 } end,
+  render = function(state, data) return text{ "TITLE " .. state.n } end,
+  actions = { bump = function(state) state.n = state.n + 1 end },
+}"#;
+
+    fn title(s: &ScreenState) -> String {
+        match &s.last_good {
+            Some(Node::Text { text, .. }) => text.clone(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// The watcher thread sees a real edit, wakes the UI, and `poll` reloads
+    /// it with the state kept; a broken edit keeps the last good view.
+    #[test]
+    fn the_watcher_reloads_a_real_edit_and_keeps_state() {
+        let dir = std::env::temp_dir().join(format!("sbxw-screen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.luau");
+        std::fs::write(&path, SCREEN).unwrap();
+        let mut s = ScreenState::new(path.clone(), serde_json::json!({}));
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let w = wakes.clone();
+        s.watch(Arc::new(move || {
+            w.fetch_add(1, Ordering::SeqCst);
+        }));
+        s.act("bump", None);
+        assert_eq!(title(&s), "TITLE 1");
+
+        let wait_wake = |n: usize| {
+            for _ in 0..100 {
+                if wakes.load(Ordering::SeqCst) >= n {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            panic!("no wake");
+        };
+        // Some file systems keep whole-second mtimes: wait past the second.
+        std::thread::sleep(Duration::from_millis(1100));
+        std::fs::write(&path, SCREEN.replace("TITLE", "EDITED")).unwrap();
+        wait_wake(1);
+        assert!(s.poll());
+        assert_eq!(title(&s), "EDITED 1", "state kept across the reload");
+
+        std::thread::sleep(Duration::from_millis(1100));
+        std::fs::write(&path, "return {{{").unwrap();
+        wait_wake(2);
+        assert!(s.poll());
+        assert_eq!(title(&s), "EDITED 1", "last good view kept");
+        assert!(s.error.as_deref().unwrap_or("").contains("s.luau"), "error shown: {:?}", s.error);
+        assert_eq!(s.reloads, 3);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

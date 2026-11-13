@@ -469,4 +469,71 @@ mod tests {
         assert_eq!(key_bytes(&k(Key::Tab, |m| m.shift = true), false), Some(b"\x1b[Z".to_vec()));
         assert_eq!(key_bytes(&k(Key::Text("b".into()), |m| m.alt = true), false), Some(b"\x1bb".to_vec()));
     }
+
+    /// Full-screen redraw cost, CPU side: every row of a 111x42 screen changes
+    /// each frame (colours on every cell, like `htop` or a `cat` of coloured
+    /// output), then Rune lays out and builds the frame's instances. GPU
+    /// raster and presentation are not included.
+    /// `cargo test --release --lib full_screen -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn full_screen_redraw_cost() {
+        use super::*;
+        use crate::client::{TermEvent, TerminalConn};
+        use rune::{Cx, El, Env, Runtime};
+        use std::time::Instant;
+
+        struct S(TerminalState);
+        fn view(s: &S, _: &mut Cx<S>) -> El {
+            let (c, r) = s.0.size;
+            rune::grid(c as u16, cell_width(), LINE_HEIGHT, s.0.rows.clone()).w(c as f32 * cell_width()).h(r as f32 * LINE_HEIGHT)
+        }
+        let (ev_tx, ev_rx) = mpsc::channel();
+        let (in_tx, _in_rx) = mpsc::channel();
+        let mut t = TerminalState::new(TerminalConn { events: ev_rx, input: in_tx });
+        t.fit(PAD * 2.0 + 111.0 * cell_width() + 0.5, PAD * 2.0 + STATUS_H + 42.0 * LINE_HEIGHT + 0.5);
+        assert_eq!(t.size, (111, 42));
+        let frame_bytes = |k: usize| {
+            let mut out = String::from("\x1b[H");
+            for r in 0..42 {
+                for c in 0..111 {
+                    let col = 31 + (r + c + k) % 7;
+                    out += &format!("\x1b[{col}m{}", (b'a' + ((r * 7 + c + k) % 26) as u8) as char);
+                }
+                if r < 41 {
+                    out += "\r\n";
+                }
+            }
+            out.into_bytes()
+        };
+        let mut rt = Runtime::new(S(t), view, (960.0, 800.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        let (mut feed, mut rebuild, mut frame) = (vec![], vec![], vec![]);
+        for k in 0..120 {
+            let bytes = frame_bytes(k);
+            let a = Instant::now();
+            ev_tx.send(TermEvent::Output(bytes)).unwrap();
+            let mut changed = false;
+            rt.update(|s, _| changed = s.0.poll(None));
+            let b = Instant::now();
+            rt.frame(1.0 / 60.0);
+            let c = Instant::now();
+            assert!(changed);
+            feed.push((b - a).as_secs_f64() * 1e3);
+            frame.push((c - b).as_secs_f64() * 1e3);
+            rebuild.push(0.0);
+        }
+        let med = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            (v[v.len() / 2], v[v.len() * 95 / 100])
+        };
+        let _ = &mut rebuild;
+        let (f50, f95) = med(&mut feed);
+        let (r50, r95) = med(&mut frame);
+        println!("111x42, every row changed, 120 frames, scale 2:");
+        println!("  parse + rebuild rows: p50 {f50:.2} ms, p95 {f95:.2} ms");
+        println!("  Rune layout + paint (CPU): p50 {r50:.2} ms, p95 {r95:.2} ms");
+        println!("  total p50 {:.2} ms", f50 + r50);
+        println!("  instances last frame: {}", rt.instances.len());
+    }
 }

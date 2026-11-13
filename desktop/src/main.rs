@@ -22,6 +22,7 @@ struct Args {
     token: Option<String>,
     sandbox: String,
     screen: PathBuf,
+    dump_text: Option<PathBuf>,
 }
 
 fn args() -> Args {
@@ -30,6 +31,7 @@ fn args() -> Args {
         token: None,
         sandbox: "web-app".into(),
         screen: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/screens/sandboxes.luau")),
+        dump_text: None,
     };
     // What Rune did not take as its own flags.
     let mut it = rune::extra_args().iter();
@@ -41,6 +43,7 @@ fn args() -> Args {
             "--token-file" => a.token = std::fs::read_to_string(&v).ok().map(|s| s.trim().to_string()),
             "--sandbox" => a.sandbox = v,
             "--screen" => a.screen = v.into(),
+            "--dump-text" => a.dump_text = Some(v.into()),
             _ => eprintln!("unknown argument {k}"),
         }
     }
@@ -55,6 +58,9 @@ struct App {
     status: String,
     /// Script marks `screen:<path>` not yet applied (headless only).
     marks: Vec<(f64, PathBuf)>,
+    /// Where to write the terminal's text when it changes (`--dump-text`):
+    /// Rune's `--tree` names the terminal element but not its lines.
+    dump_text: Option<PathBuf>,
 }
 
 fn init() -> App {
@@ -73,7 +79,7 @@ fn init() -> App {
     let marks = rune::tooling::headless_run()
         .map(|r| r.marks().filter_map(|(n, t)| n.strip_prefix("screen:").map(|p| (t, PathBuf::from(p)))).collect())
         .unwrap_or_default();
-    App { daemon, sandbox: a.sandbox, screen: ScreenState::new(a.screen, data), term: None, status, marks }
+    App { daemon, sandbox: a.sandbox, screen: ScreenState::new(a.screen, data), term: None, status, marks, dump_text: a.dump_text }
 }
 
 fn setup(s: &mut App, waker: Waker) {
@@ -101,7 +107,11 @@ fn poll(s: &mut App, clock: f64, _tx: &mut Tx) -> bool {
     }
     if let Some(t) = &mut s.term {
         // Headless frames run on a virtual clock: wait for the shell instead.
-        changed |= t.poll(headless().then_some(Duration::from_millis(1500)));
+        let term_changed = t.poll(headless().then_some(Duration::from_millis(1500)));
+        if let (true, Some(p)) = (term_changed, &s.dump_text) {
+            let _ = std::fs::write(p, format!("{}x{}\n{}\n", t.size.0, t.size.1, t.screen_text().trim_end()));
+        }
+        changed |= term_changed;
     }
     changed
 }
