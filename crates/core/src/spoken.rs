@@ -7,6 +7,14 @@
 //! inside a name is said, the one ending a sentence is not; `12:30` stays a
 //! time). The aim is to be understood by ear, not to spell: `_` is a pause
 //! between two words, brackets and braces are dropped.
+//!
+//! Words are different: how a name is said is the person's to correct.
+//! [`WORDS`] holds the built-in ones; `[voice.words]` in the daemon's
+//! sbxw.toml adds or replaces them, and [`word_table`] merges the two into
+//! what [`speakable`] reads.
+
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// The language the symbols are said in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,9 +79,124 @@ pub const DICT: &[(&str, &str, &str)] = &[
     ("]", "", ""),
 ];
 
-/// Word, French, English: names a voice cannot read, spelt letter by
-/// letter instead. Matched as a whole word, whatever its case.
+/// Word, French, English: the built-in names a voice cannot read, spelt
+/// letter by letter instead. Matched as a whole word, whatever its case. A
+/// `[voice.words]` entry of the same word replaces its row.
 pub const WORDS: &[(&str, &str, &str)] = &[("sbxw", "ece bé ixe double vé", "S B X W")];
+
+/// At most this many entries in `[voice.words]`.
+pub const MAX_WORDS: usize = 200;
+/// A word is at most this many characters.
+pub const MAX_WORD: usize = 40;
+/// A spoken form is at most this many characters.
+pub const MAX_SAID: usize = 120;
+
+/// How one word is said, per language. A language left out: the word is
+/// read as written in it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Said {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub en: Option<String>,
+}
+
+impl Said {
+    pub fn get(&self, lang: Lang) -> Option<&str> {
+        match lang {
+            Lang::Fr => self.fr.as_deref(),
+            Lang::En => self.en.as_deref(),
+        }
+    }
+}
+
+/// Where a word of the table comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    /// [`WORDS`], with no `[voice.words]` entry for it.
+    BuiltIn,
+    /// `[voice.words]` only.
+    Configured,
+    /// A `[voice.words]` entry for a word [`WORDS`] has too: it wins.
+    ReplacesBuiltIn,
+}
+
+/// One word of the table [`speakable`] reads, in lower case.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Word {
+    pub word: String,
+    pub said: Said,
+    pub origin: Origin,
+}
+
+/// [`WORDS`] merged with `configured` (`[voice.words]`): a configured word
+/// replaces the built-in one of the same word, whatever its case. Longer
+/// words first, so `sbxw.toml` would win over `sbxw`.
+pub fn word_table(configured: &BTreeMap<String, Said>) -> Vec<Word> {
+    let mut out: Vec<Word> = WORDS
+        .iter()
+        .map(|(w, fr, en)| Word { word: w.to_lowercase(), said: Said { fr: Some(fr.to_string()), en: Some(en.to_string()) }, origin: Origin::BuiltIn })
+        .collect();
+    for (w, said) in configured {
+        let w = w.to_lowercase();
+        match out.iter_mut().find(|o| o.word == w) {
+            Some(o) if o.origin == Origin::BuiltIn => *o = Word { word: w, said: said.clone(), origin: Origin::ReplacesBuiltIn },
+            Some(o) => o.said = said.clone(),
+            None => out.push(Word { word: w, said: said.clone(), origin: Origin::Configured }),
+        }
+    }
+    out.sort_by(|a, b| b.word.chars().count().cmp(&a.word.chars().count()).then_with(|| a.word.cmp(&b.word)));
+    out
+}
+
+/// A word `[voice.words]` may hold: 1 to [`MAX_WORD`] letters, digits, `-`,
+/// `_` or `.`, starting and ending with a letter or digit (a word is matched
+/// whole, between two non-letters).
+pub fn check_word(word: &str) -> Result<(), String> {
+    let n = word.chars().count();
+    let ok_char = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '.');
+    let ends = word.chars().next().is_some_and(char::is_alphanumeric) && word.chars().last().is_some_and(char::is_alphanumeric);
+    if !(1..=MAX_WORD).contains(&n) || !word.chars().all(ok_char) || !ends {
+        return Err(format!("'{word}' is not a word: 1 to {MAX_WORD} letters, digits, '-', '_' or '.', starting and ending with a letter or digit"));
+    }
+    Ok(())
+}
+
+/// A spoken form: one line of 1 to [`MAX_SAID`] characters, no control
+/// characters.
+pub fn check_said(word: &str, lang: &str, said: &str) -> Result<(), String> {
+    if said.trim().is_empty() {
+        return Err(format!("'{word}': the {lang} form is empty; leave {lang} out for the word to be read as written"));
+    }
+    if said.chars().count() > MAX_SAID || said.chars().any(char::is_control) {
+        return Err(format!("'{word}': the {lang} form is one line of at most {MAX_SAID} characters, with no control characters"));
+    }
+    Ok(())
+}
+
+/// `[voice.words]` as [`crate::config::Config::validate`] checks it.
+pub fn check_words(words: &BTreeMap<String, Said>) -> Result<(), String> {
+    if words.len() > MAX_WORDS {
+        return Err(format!("[voice.words] has {} entries: at most {MAX_WORDS}", words.len()));
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for (w, said) in words {
+        check_word(w).map_err(|e| format!("[voice.words] {e}"))?;
+        let lower = w.to_lowercase();
+        if seen.contains(&lower) {
+            return Err(format!("[voice.words] '{w}' is given twice (case does not count)"));
+        }
+        seen.push(lower);
+        for (lang, s) in [("fr", &said.fr), ("en", &said.en)] {
+            if let Some(s) = s {
+                check_said(w, lang, s).map_err(|e| format!("[voice.words] {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Unit, French, English, in the plural. Said in full after a number only
 /// (`0,43 s`, `8 Go`), longer units first.
@@ -139,8 +262,9 @@ const EN: Words = Words {
     dollars: "dollars",
 };
 
-/// `text` with its symbols said in words, in `lang`.
-pub fn speakable(text: &str, lang: Lang) -> String {
+/// `text` with its symbols said in words, in `lang`, and the names of
+/// `words` (see [`word_table`]) said as the table says them.
+pub fn speakable(text: &str, lang: Lang, words: &[Word]) -> String {
     let w = match lang {
         Lang::Fr => &FR,
         Lang::En => &EN,
@@ -181,13 +305,14 @@ pub fn speakable(text: &str, lang: Lang) -> String {
             }
         }
         if !word(prev) {
-            let spelt = WORDS.iter().find(|(w, ..)| {
-                let n = w.chars().count();
-                !word(at(i + n)) && w.chars().enumerate().all(|(k, x)| at(i + k).is_some_and(|y| y.to_ascii_lowercase() == x))
+            // A word with no form in this language is read as written.
+            let spelt = words.iter().filter_map(|w| Some((w, w.said.get(lang)?))).find(|(w, _)| {
+                let n = w.word.chars().count();
+                !word(at(i + n)) && w.word.chars().enumerate().all(|(k, x)| at(i + k).is_some_and(|y| y.to_lowercase().eq(x.to_lowercase())))
             });
-            if let Some((w, fr, en)) = spelt {
-                say(&mut out, if lang == Lang::Fr { fr } else { en });
-                i += w.chars().count();
+            if let Some((w, said)) = spelt {
+                say(&mut out, said.trim());
+                i += w.word.chars().count();
                 continue;
             }
         }
@@ -284,7 +409,11 @@ mod tests {
     use super::*;
 
     fn fr(s: &str) -> String {
-        speakable(s, Lang::Fr)
+        speakable(s, Lang::Fr, &word_table(&BTreeMap::new()))
+    }
+
+    fn en(s: &str) -> String {
+        speakable(s, Lang::En, &word_table(&BTreeMap::new()))
     }
 
     #[test]
@@ -331,7 +460,7 @@ mod tests {
         assert_eq!(fr("Lance sbxw, puis SBXW down."), "Lance ece bé ixe double vé, puis ece bé ixe double vé down.");
         assert_eq!(fr("dans sbxw.toml"), "dans ece bé ixe double vé point toml");
         assert_eq!(fr("sbxwd et xsbxw"), "sbxwd et xsbxw");
-        assert_eq!(speakable("run sbxw", Lang::En), "run S B X W");
+        assert_eq!(en("run sbxw"), "run S B X W");
     }
 
     #[test]
@@ -340,7 +469,7 @@ mod tests {
         assert_eq!(fr("0.43s, puis 120 ms et 1 s"), "0 point 43 secondes, puis 120 millisecondes et 1 seconde");
         assert_eq!(fr("8 Go à 24 kHz pendant 5 min"), "8 gigaoctets à 24 kilohertz pendant 5 minutes");
         assert_eq!(fr("les 3 sandboxes, 2 hôtes, 4 s'il faut"), "les 3 sandboxes, 2 hôtes, 4 s'il faut");
-        assert_eq!(speakable("11 s and 2 GB", Lang::En), "11 seconds and 2 gigabytes");
+        assert_eq!(en("11 s and 2 GB"), "11 seconds and 2 gigabytes");
     }
 
     #[test]
@@ -362,7 +491,7 @@ mod tests {
     fn another_voice_speaks_english() {
         assert_eq!(Lang::of_voice("fr_female"), Lang::Fr);
         assert_eq!(Lang::of_voice("casual_male"), Lang::En);
-        assert_eq!(speakable("x >= 1 @ a.b", Lang::En), "x greater than or equal to 1 at a dot b");
+        assert_eq!(en("x >= 1 @ a.b"), "x greater than or equal to 1 at a dot b");
     }
 
     #[test]
@@ -370,5 +499,53 @@ mod tests {
         for (i, (sym, ..)) in DICT.iter().enumerate() {
             assert!(!DICT[..i].iter().any(|(earlier, ..)| sym.starts_with(earlier)), "'{sym}' is hidden by an earlier, shorter row");
         }
+    }
+
+    fn said(fr: Option<&str>, en: Option<&str>) -> Said {
+        Said { fr: fr.map(String::from), en: en.map(String::from) }
+    }
+
+    #[test]
+    fn configured_words_add_to_and_replace_the_built_in_ones() {
+        let mut cfg = BTreeMap::new();
+        cfg.insert("Nginx".to_string(), said(Some("engine ixe"), Some("engine X")));
+        cfg.insert("sbxw".to_string(), said(Some("sandbox double vé"), None));
+        let t = word_table(&cfg);
+        assert_eq!(t.iter().map(|w| (w.word.as_str(), w.origin)).collect::<Vec<_>>(), [("nginx", Origin::Configured), ("sbxw", Origin::ReplacesBuiltIn)]);
+        assert_eq!(speakable("NGINX devant sbxw, et nginx2", Lang::Fr, &t), "engine ixe devant sandbox double vé, et nginx2");
+        // No English form: read as written, not the built-in spelling.
+        assert_eq!(speakable("nginx and sbxw", Lang::En, &t), "engine X and sbxw");
+        // The override gone, the built-in comes back.
+        cfg.remove("sbxw");
+        let t = word_table(&cfg);
+        assert_eq!(speakable("sbxw", Lang::Fr, &t), "ece bé ixe double vé");
+        assert_eq!(t.iter().find(|w| w.word == "sbxw").unwrap().origin, Origin::BuiltIn);
+    }
+
+    #[test]
+    fn a_longer_word_wins_and_words_may_hold_dots() {
+        let mut cfg = BTreeMap::new();
+        cfg.insert("node.js".to_string(), said(Some("node jé esse"), None));
+        cfg.insert("node".to_string(), said(Some("naude"), None));
+        let t = word_table(&cfg);
+        assert_eq!(speakable("node.js et node", Lang::Fr, &t), "node jé esse et naude");
+    }
+
+    #[test]
+    fn configured_words_are_checked() {
+        let one = |w: &str, s: Said| check_words(&BTreeMap::from([(w.to_string(), s)]));
+        assert!(one("node.js", said(Some("node"), None)).is_ok());
+        assert!(one("été-2", said(None, Some("summer two"))).is_ok());
+        assert!(one("two words", said(Some("x"), None)).unwrap_err().contains("'two words' is not a word"));
+        assert!(one("-x", said(Some("x"), None)).is_err());
+        assert!(one("", said(Some("x"), None)).is_err());
+        assert!(one(&"a".repeat(41), said(Some("x"), None)).is_err());
+        assert!(one("x", said(Some("a\nb"), None)).unwrap_err().contains("'x': the fr form"));
+        assert!(one("x", said(None, Some(&"a".repeat(121)))).unwrap_err().contains("at most 120"));
+        assert!(one("x", said(Some(" "), None)).unwrap_err().contains("empty"));
+        let twice = BTreeMap::from([("Sbx".to_string(), said(Some("a"), None)), ("sbx".to_string(), said(Some("b"), None))]);
+        assert!(check_words(&twice).unwrap_err().contains("twice"));
+        let many: BTreeMap<String, Said> = (0..=MAX_WORDS).map(|i| (format!("w{i}"), said(Some("x"), None))).collect();
+        assert!(check_words(&many).unwrap_err().contains("at most 200"));
     }
 }

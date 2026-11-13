@@ -52,10 +52,18 @@ Each proposal holds one or more changes. Jarvis can propose:
 | **Kit** (`kit_write`, `kit_remove`) | Create, update or remove a kit sbxw keeps for you under `~/.sbxw/state/kits/jarvis-<name>/`: files placed under `/home/agent/` (skills, slash commands, scripts) and optional text for the agent's `CLAUDE.md` | High |
 | **Kits line** (`kits_line`) | Add or remove a kit in the `kits` list of the daemon's `sbxw.toml` or of one sandbox's. Only bundled kits (`sbxw:<name>`) and Jarvis kits | Low when it only adds bundled kits or only removes; high when it adds a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac` (they reach your keys, identity, ports or a Mac) |
 | **Setting** (`setting`) | One key of the daemon's `sbxw.toml`, from a fixed list: the `[voice]` keys, `claude_model`, the terminal colours, `keep_awake`, `keep_awake_min_battery`, `battery_warn_below`, `cache_ttl_days`. It takes effect when the daemon restarts | Low |
+| **Pronunciation** (`voice_word`) | How the voice reads one word aloud: add or replace its entry in `[voice.words]` of the daemon's `sbxw.toml`, in French, English or both, or remove that entry (a built-in word gets its own pronunciation back). Only what is read aloud changes, never dictation. Used from the next sentence read, no restart. See [Words read aloud](configuration.md#words-read-aloud) | Low |
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
 | **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
 
-If the daemon was started where there is no `sbxw.toml`, a setting change creates one at the path the daemon was asked to read. The dialog says it creates that file, and the diff shows a new file. The folder must already exist; sbxw does not create folders, and refuses the change otherwise.
+Ask Jarvis "how do you say sbxw?" or tell it a word is said badly: it reads
+the dictionary (the built-in words and yours, marked which) and proposes the
+fix. The tools it has for all this, in its `sbxw-config` MCP server:
+`sbxw_state` (read), `propose_kit`, `remove_kit`, `set_kits`, `set_setting`,
+`set_voice_word`, `allow_network`, `propose_mcp_server`, `remove_mcp_server`
+and `check_proposal`.
+
+If the daemon was started where there is no `sbxw.toml`, a setting or pronunciation change creates one at the path the daemon was asked to read. The dialog says it creates that file, and the diff shows a new file. The folder must already exist; sbxw does not create folders, and refuses the change otherwise.
 
 A proposal is as risky as its riskiest change. Every change is shown to you
 as a diff of what would be written, before anything is.
@@ -86,7 +94,8 @@ construction:
   its URL or an argument. Jarvis writes a `${key}` placeholder instead, and
   you fill in the secret in the MCP tab of Setup.
 - **No setting outside the list above**, and no value the config check
-  would refuse.
+  would refuse. A pronunciation change writes one entry of
+  `[voice.words]` and nothing else.
 - **Nothing without you.** There is no auto-approve. A proposal you have not
   approved changes nothing.
 

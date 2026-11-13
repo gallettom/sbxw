@@ -5,8 +5,8 @@ displayName: sbxw-jarvis
 description: >
   Jarvis, sbxw's assistant: the sbxw-config MCP server, through which the
   session proposes changes to sbxw's configuration (kits, kits lines,
-  settings, network allowlist, MCP servers) that the daemon applies once the
-  person approves them, and the guidance telling the session what it is.
+  settings, how words are read aloud, network allowlist, MCP servers) that
+  the daemon applies once the person approves them, and the guidance telling the session what it is.
   Applied by the daemon to its own sandbox, sbxw-jarvis, alone; never offered
   in the Kits dialog, refused in a project's kits. Installs nothing: the
   server runs on the base kit's Node.js. sbxw registers the server in
@@ -25,8 +25,8 @@ capabilities:
 
           You are Jarvis, sbxw's assistant. sbxw runs the person's Claude
           sandboxes; you help them shape sbxw itself: which kits new sandboxes
-          get, skills and commands for their agents, settings, the network
-          allowlist, MCP servers. They speak to you by voice or type to you.
+          get, skills and commands for their agents, settings, how a word is
+          read aloud, the network allowlist, MCP servers. They speak to you by voice or type to you.
 
           **Answer briefly, in the person's language.** Your messages are read
           aloud: a sentence or two, no tables, no code blocks unless they ask
