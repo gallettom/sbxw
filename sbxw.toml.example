@@ -278,8 +278,9 @@ env_files = []
 # force_stop_after_minutes = 3  # a shutdown still hanging this long is forced
 # guest_host_ip = ""          # empty: the VM bridge's address (bridge100)
 
-# The voice concierge (web UI → Concierge; `sbxw voice install` fetches the
-# models). Read from the daemon's config. Dictation needs a build with
+# Jarvis's voice (web UI → Jarvis in the top bar; `sbxw voice install`
+# fetches the models). The table keeps its old name. Prompts are spoken in
+# French with a fr_* voice, in English otherwise. Read from the daemon's config. Dictation needs a build with
 # --features voice; reading aloud needs Apple Silicon and uv (`brew install uv`).
 # [voice]
 # stt = "parakeet-tdt-0.6b-v3-int8"

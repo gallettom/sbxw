@@ -404,17 +404,26 @@ host-side fixes, each with a copy button:
 
 Run them in a terminal on the host, not in a sandbox pane.
 
-## The voice concierge
+## Jarvis
 
-The concierge sits in the middle of the top bar, the voice side of sbxw,
-apart from the chat dock. From left to right:
+Jarvis sits in the middle of the top bar. It is two things at once:
+
+- **The voice of sbxw**, apart from the chat dock: dictation, agents'
+  messages read aloud, your words sent to a sandbox. This part runs on your
+  machine and has no language model.
+- **sbxw's assistant**: a Claude session in a sandbox of its own,
+  `sbxw-jarvis`, that can propose changes to sbxw's configuration. Nothing
+  it proposes is applied until you approve it. See [Jarvis](jarvis.md).
+
+From left to right in the bar:
 
 | Part | What it does |
 |---|---|
 | Microphone, green when voice is set up | Click to talk, click again to send; **F8**, held, does the same from the keyboard. Red while it listens |
-| Sandbox name, in blue | Where your words go. Click it to pick another running sandbox |
+| Destination, in blue | Where your words go: **Jarvis** (the default), or a running sandbox. Click it to pick another |
 | Speaker | Turns the voice on and off. Blue while a message is read; crossed out when the voice is off. Click to stop the reading and mute; click again to hear the next messages (what was missed is not replayed) |
 | **Open** | Opens the panel under the bar (**Close** closes it): what was sent, agents' messages, errors |
+| **Jarvis · N to review** | Shown while Jarvis has proposals waiting for you. Click it to see them |
 
 Rings leave the border while someone talks: blue when the voice reads, red
 when the microphone listens. The panel never opens by itself: a message
@@ -446,7 +455,7 @@ stays silent. A message is read a few sentences at a time, and the sound
 plays as it is made rather than once a batch is finished. Symbols are said
 in words (`>=`, `@`, `/`, a file name's dot…), in French for a French voice
 and in English for the others. The speaker in the bar, or the same one in the
-panel's header, switches the voice off: nothing is read, the Concierge's own
+panel's header, switches the voice off: nothing is read, Jarvis's own
 prompts included, until you switch it back on, and the choice is remembered
 in this browser. Talking stops the current reading without muting. The voice is `[voice]
 tts_voice`.
@@ -473,22 +482,53 @@ another way; a message is sent as soon as it is said, so the list is the
 only guard. What you type straight into a
 terminal is not filtered. `sbxw voice status` shows what is in force.
 
-Pick a sandbox at the top of the panel. What you say with nothing to answer
-becomes a message for its agent: it is masked and typed into the agent at
-once, with nothing to confirm; the panel shows what left when the masking
-changed it. The same goes for your answer to an agent's question. With no
-sandbox picked, or if sending fails, the words wait in an editable card
-(**Send** or *oui*, **Discard** or *non*). You can also type.
+Pick where your words go at the top of the panel, or with the name in the
+bar. **Jarvis** comes first, and is the default. A project sandbox works
+as before. What you say with nothing to answer becomes a message for that
+agent: it is masked and typed into the agent at once, with nothing to
+confirm; the panel shows what left when the masking changed it. The same
+goes for your answer to an agent's question. With no sandbox picked, or if
+sending fails, the words wait in an editable card (**Send** or *oui*,
+**Discard** or *non*). You can also type.
 
-A `/grill-me` in the picked sandbox — in its main agent, or in a thread or
-session sbxw opened there — engages the concierge on its own: the panel
+**Talking to Jarvis.** Jarvis's sandbox is created the first time you ask
+for it, never before. Pick **Jarvis** while it is not running and the panel
+offers **Start Jarvis**, then shows its progress (the first start creates
+the sandbox and takes a minute or two; a later one starts the stopped
+sandbox and opens its session). Your words reach its Claude session
+the way they reach any agent, masked first; its answers are shown in the
+panel and read aloud, without **Follow**.
+
+**Jarvis's proposals.** When Jarvis proposes a change, a dialog opens under
+the bar. It does not take the keyboard: a terminal you are typing into keeps
+it, and you click into the dialog to use it. It shows the summary, a risk
+badge (**Low risk** or **High risk**) and each change with its title and its
+diff, as plain text in a scrollable box. **Approve** applies it; **Refuse**
+drops it, with an optional reason Jarvis is told. Then the dialog shows what
+happened to each change, and the error if one failed. **✕** means later: the
+bar's **Jarvis · N to review** brings it back.
+
+With the voice on, Jarvis reads the summary of a new proposal:
+
+- **Low risk:** it asks whether to apply it. *Oui* (or *yes*) approves it,
+  *non* (or *no*) refuses it. Anything else is a message to Jarvis, and the
+  proposal waits in its dialog.
+- **High risk:** it says that this one must be read and approved on screen.
+  A spoken *oui* does not approve it: Jarvis only says that again. The
+  daemon also refuses a voice approval of a high-risk proposal.
+
+Spoken prompts are in French with a French voice (`fr_*`) and in English with
+the others.
+
+A `/grill-me` in the picked sandbox (in its main agent, or in a thread or
+session sbxw opened there) engages Jarvis on its own: the panel
 gets each round, and reads it aloud. **Follow** does
 the same for every turn any of its agents ends (off by default: that is a
 lot of talking for ordinary work). A round the agent asks with the relay's `ask_user_questions` tool (what
-`/grill-me` does in sbxw) is not the Concierge's: it opens the
+`/grill-me` does in sbxw) is not Jarvis's: it opens the
 [relay popup](relay.md#questions-for-you) on one form, where you answer it or
-route it to another sandbox, and its **Read aloud** button uses the
-Concierge's voice. With the voice on, the Concierge says a short cue when
+route it to another sandbox, and its **Read aloud** button uses
+Jarvis's voice. With the voice on, Jarvis says a short cue when
 such a round arrives. A round the agent only wrote out in its terminal is
 answered here, by typing into its session. Such a grill round is
 taken **one question at a time**: the panel shows and
@@ -513,9 +553,9 @@ pressed, so you can read and fix them first; end with *entrée* (or
 *envoie*) and Enter is pressed for you. The button shows once the voice
 models are installed.
 
-**Words as you say them.** While you speak, to the concierge or into a
+**Words as you say them.** While you speak, to Jarvis or into a
 terminal, what has been heard so far is shown about once a second: in the
-concierge's panel, above its bar when the panel is closed, or in a strip at
+Jarvis panel, above its bar when the panel is closed, or in a strip at
 the foot of the pane. It is a preview, transcribed again from the start each
 time (the model reads a whole recording, not a stream), so a word can change
 as the sentence goes on. Nothing is typed or sent until you stop; a dictation
@@ -533,7 +573,7 @@ to type. There are four kinds, described in [the relay](relay.md): a
 question for another sandbox, a screenshot request, a virtual Mac request,
 and a round of questions for you from `ask_user_questions`, answered on one
 form (or routed to another sandbox for a draft you review), with a **Read
-aloud** button when the Concierge's voice is set up.
+aloud** button when Jarvis's voice is set up.
 
 ## Screenshots from the browser side panel
 
@@ -557,7 +597,7 @@ with the tab beside it.
 |---|---|---|
 | New sandbox | ⌃⌥N | Alt+N |
 | Toggle the chat dock | ⌃⌥M | Alt+M |
-| Talk to the Concierge (hold) | F8 | F8 |
+| Talk to Jarvis (hold) | F8 | F8 |
 | Dictate into the focused terminal (hold) | F9 | F9 |
 | Write the lens (in its dialog) | ⌘↩ | Ctrl+Enter |
 

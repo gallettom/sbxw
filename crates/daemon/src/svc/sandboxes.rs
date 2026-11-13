@@ -248,6 +248,9 @@ impl App {
             let gone: Vec<&SandboxRef> = refs.iter().filter(|n| results.iter().any(|r| r.removed && r.name == n.name.as_str())).collect();
             chats.extend(gone.iter().filter_map(|n| self.store.chat_workspace(*n)));
             for n in &gone {
+                if crate::svc::jarvis_sandbox::is_jarvis_name(n) {
+                    crate::svc::jarvis_sandbox::forget(&self.store.paths);
+                }
                 self.sessions.drop_sandbox(&n.to_string());
                 self.browser_forget(n);
                 self.store.forget(*n);
@@ -277,6 +280,10 @@ impl App {
     /// and the other repos it mounts beside the workspace as `(path, readonly)`.
     pub async fn create(self: &Arc<Self>, name: SandboxRef, path: &str, form: CreateForm, sink: Option<Sink>) -> Result<Vec<String>> {
         let CreateForm { mounts, ports: extra, template, remote_control, chrome, kit_mounts, approved, carve } = form;
+        // Before "already exists", which would send the person to remove it.
+        if let Some(why) = crate::svc::jarvis_sandbox::reserved(&name) {
+            bail!("{why}");
+        }
         let path = PathBuf::from(path.trim());
         // The folders are the sandbox's host's, checked there.
         let host = self.host_for(&name).await?;
@@ -459,6 +466,9 @@ impl App {
             .store
             .workspace(source)
             .ok_or_else(|| anyhow!("no known workspace for '{source}' — it may predate this sbxw version"))?;
+        if let Some(why) = crate::svc::jarvis_sandbox::reserved(&new) {
+            bail!("{why}");
+        }
         if new.host != source.host {
             bail!("'{new}' would be on another host than '{source}', whose workspace it shares");
         }

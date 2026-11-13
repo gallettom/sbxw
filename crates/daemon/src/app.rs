@@ -107,6 +107,8 @@ pub struct App {
     pub(crate) remote_probes: Mutex<HashMap<SandboxRef, crate::svc::remote::ProbeSlot>>,
     /// The voice models' install job and the loaded recogniser (see `svc::voice`).
     pub(crate) voice: Mutex<crate::svc::voice::VoiceRuntime>,
+    /// Jarvis's proposals (see `svc::jarvis`).
+    pub(crate) jarvis: Mutex<sbxw_core::jarvis::Book>,
 }
 
 pub struct AppBuilder {
@@ -123,6 +125,7 @@ impl AppBuilder {
         let store = Store::open(self.paths);
         let plans = load_plans(&store.paths.plans());
         let daemon_kits = Mutex::new(self.cfg.kits.clone());
+        let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
             store,
             sbx: self.sbx,
@@ -163,6 +166,7 @@ impl AppBuilder {
             browsing: Mutex::new(HashSet::new()),
             browser_allowing: tokio::sync::Mutex::new(()),
             voice: Mutex::new(Default::default()),
+            jarvis: Mutex::new(jarvis),
         })
     }
 }

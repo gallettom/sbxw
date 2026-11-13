@@ -67,6 +67,8 @@ const SBXW_APP_SCRIPTS = [
   '/js/chat-dock.js',
   // Its own stream listener (`voice`); nothing depends on it.
   '/js/concierge.js',
+  // After concierge.js, whose voice reads its proposals; own `jarvis` listener.
+  '/js/jarvis.js',
 ];
 
 function sbxwLoadScript(src) {

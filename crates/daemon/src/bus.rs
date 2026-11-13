@@ -42,6 +42,8 @@ pub enum Event {
     /// A sandbox's agent started or stopped using its browser:
     /// `{ "sandbox", "active" }`.
     Browser(crate::svc::browser::BrowserState),
+    /// A Jarvis proposal was made or settled: re-read `/api/jarvis`.
+    Jarvis(sbxw_core::jarvis::Proposal),
 }
 
 impl Event {
@@ -61,6 +63,7 @@ impl Event {
             Event::Mac => "mac",
             Event::Voice(_) => "voice",
             Event::Browser(_) => "browser",
+            Event::Jarvis(_) => "jarvis",
         }
     }
 
@@ -78,6 +81,7 @@ impl Event {
             Event::Mac => String::new(),
             Event::Voice(v) => v.to_string(),
             Event::Browser(v) => json(v),
+            Event::Jarvis(v) => v.ui_view().to_string(),
         }
     }
 }

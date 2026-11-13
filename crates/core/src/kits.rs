@@ -25,6 +25,18 @@ pub const BUNDLED: [&str; 9] = ["codemap", "agent-skills", "md-to-pdf-tools", "r
 /// runs on. Not one of [`BUNDLED`]: it is not offered, and not listed in `kits`.
 pub const BASE: &str = "base";
 
+/// Jarvis's kit: the `sbxw-config` MCP server and the guidance telling the
+/// session it is sbxw's assistant. Applied by the daemon to
+/// [`JARVIS_SANDBOX`] only. Not one of [`BUNDLED`]: the Kits dialog never
+/// offers it, and a project's `kits` refuses it, since it hands a sandbox the
+/// power to propose changes to sbxw's own configuration.
+pub const JARVIS: &str = "jarvis";
+
+/// The daemon-owned sandbox Jarvis runs in, on this machine. Its name is
+/// reserved on every host: a project sandbox cannot be created under it, so
+/// no sandbox but the daemon's own is ever taken for Jarvis.
+pub const JARVIS_SANDBOX: &str = crate::jarvis::SANDBOX;
+
 /// `kits` as applied: [`BASE`] first, then the project's, without repeating it.
 pub fn with_base(kits: &[String]) -> Vec<String> {
     let base = format!("sbxw:{BASE}");

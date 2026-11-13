@@ -162,7 +162,7 @@ fn kit_lines(dir: &Path, list: Vec<String>) -> Vec<String> {
 /// random name and is created with `create_new`, which never opens an existing
 /// file and never follows a symlink planted under that name (`O_CREAT|O_EXCL`
 /// fails on one, POSIX).
-fn write_in_place(path: &Path, text: &str) -> Result<()> {
+pub(crate) fn write_in_place(path: &Path, text: &str) -> Result<()> {
     use std::io::Write;
     if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!("{} is a symlink: sbxw does not write through it", path.display());

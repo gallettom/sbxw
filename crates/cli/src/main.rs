@@ -220,7 +220,7 @@ enum Cmd {
         #[arg(long, default_value = "sbxw.toml")]
         config: PathBuf,
     },
-    /// The voice concierge's local models: status, install, cancel, rm.
+    /// Jarvis's voice: its local models (status, install, cancel, rm).
     Voice {
         #[command(subcommand)]
         cmd: Option<cmd::voice::VoiceCmd>,

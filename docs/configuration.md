@@ -12,6 +12,7 @@ lists every key with its default.
 - [Environment variables](#environment-variables)
 - [Which config a sandbox uses](#which-config-a-sandbox-uses)
 - [Approving host access](#approving-host-access)
+- [Changes Jarvis proposes](#changes-jarvis-proposes)
 
 > **TOML trap:** `[env]` and `[[ports]]` are tables. Every root key must come
 > **before** the first of them. A key written after `[[ports]]` belongs to that
@@ -33,7 +34,7 @@ lists every key with its default.
 | `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
 | `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
-| `[voice]` | see below | The voice concierge's local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `tts` (`"voxtral-tts-6bit"`, Voxtral TTS at 3.5 GB; also `"voxtral-tts-4bit"` at 2.5 GB and `"voxtral-tts-bf16"` at 8 GB), `tts_voice` (`"fr_male"`, one of Voxtral's 20 voices: `fr_female`, `casual_male`, `neutral_female`…), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal). Read from the daemon's config. Reading aloud needs a Mac with Apple Silicon and [uv](https://docs.astral.sh/uv/); `llm` and `retention_days` of an older sbxw are ignored. A table: write it after every root key |
+| `[voice]` | see below | Jarvis's voice: its local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `tts` (`"voxtral-tts-6bit"`, Voxtral TTS at 3.5 GB; also `"voxtral-tts-4bit"` at 2.5 GB and `"voxtral-tts-bf16"` at 8 GB), `tts_voice` (`"fr_male"`, one of Voxtral's 20 voices: `fr_female`, `casual_male`, `neutral_female`…), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal). Read from the daemon's config. Reading aloud needs a Mac with Apple Silicon and [uv](https://docs.astral.sh/uv/); `llm` and `retention_days` of an older sbxw are ignored. A table: write it after every root key |
 | `[mac]` | see below | The [virtual Mac](../assets/terminal-mac/README.md#configuration): `vm` (`"default"`), `idle_release_minutes` (`10`), `pause_after_minutes` (`15`), `stop_after_minutes` (`120`), `force_stop_after_minutes` (`3`), `guest_host_ip` (`""`, the VM bridge's address). A table: write it after every root key |
 
 ### Sandbox creation
@@ -233,3 +234,22 @@ sbxw config grants --revoke   # forget it; the next bring-up asks again
 
 The full list of what is asked, and where approvals are kept, is in
 [Security](security.md#the-agent-can-edit-sbxwtoml).
+
+## Changes Jarvis proposes
+
+[Jarvis](jarvis.md) can propose changes to this configuration. Each one is
+applied by the daemon only after you approve it, as a diff you read first:
+
+- one of a fixed list of keys of the daemon's `sbxw.toml`: the `[voice]`
+  keys, `claude_model`, `terminal_color`, `terminal_bar_color`,
+  `terminal_text_color`, `keep_awake`, `keep_awake_min_battery`,
+  `battery_warn_below`, `cache_ttl_days`;
+- the daemon's `network_allow`, bare host names only;
+- the `kits` line of the daemon's `sbxw.toml` or of one sandbox's, with
+  bundled kits and Jarvis kits only;
+- MCP servers, as the MCP tab of Setup adds them.
+
+Comments and key order in the file are kept. A setting or `network_allow`
+change takes effect when the daemon restarts. The kits Jarvis writes live
+under `~/.sbxw/state/kits/jarvis-*`; see
+[Jarvis kits](kits-and-skills.md#jarvis-kits).

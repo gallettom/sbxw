@@ -110,15 +110,19 @@
        whether you start something long. The versions used to share this
        corner and no longer do — they never change, and a number that never
        changes should not sit beside the one you check. -->
-  <!-- The voice concierge in the bar: the microphone (click to talk), the
-       sandbox the words go to (click to change), the speaker (the voice
-       on/off switch, the same as the panel's) and Open, for its panel. See /js/concierge.js. -->
-  <div class="vc-launcher" id="vc-launcher" role="group" aria-label="Concierge">
+  <!-- Jarvis in the bar (the code says "concierge"): the microphone (click
+       to talk), where the words go (Jarvis first, or a sandbox; click to
+       change), the speaker (the voice on/off switch, the same as the
+       panel's) and Open, for its panel. See /js/concierge.js. -->
+  <div class="vc-launcher" id="vc-launcher" role="group" aria-label="Jarvis">
     <button type="button" class="vc-l-btn vc-l-mic" id="vc-l-mic" aria-pressed="false" aria-label="Talk"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><kbd>F8</kbd></button>
-    <button type="button" class="vc-l-target" id="vc-l-target" aria-haspopup="menu" aria-expanded="false" title="The sandbox your words go to: click to change"><span id="vc-l-name">pick a sandbox</span></button>
+    <button type="button" class="vc-l-target" id="vc-l-target" aria-haspopup="menu" aria-expanded="false" title="The sandbox your words go to: click to change"><span id="vc-l-name">Jarvis</span></button>
     <button type="button" class="vc-l-btn vc-l-stop" id="vc-l-stop" aria-pressed="true" title="Voice on: click to mute" aria-label="Voice on: click to mute"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
-    <button type="button" class="vc-l-btn vc-l-open" id="vc-l-open" aria-expanded="false" aria-controls="vc-panel" title="Open the Concierge panel" aria-label="Open the Concierge panel"><span id="vc-l-open-label">Open</span></button>
+    <button type="button" class="vc-l-btn vc-l-open" id="vc-l-open" aria-expanded="false" aria-controls="vc-panel" title="Open the Jarvis panel" aria-label="Open the Jarvis panel"><span id="vc-l-open-label">Open</span></button>
   </div>
+  <!-- Jarvis's proposals waiting for a decision. Hidden while there are
+       none; a click shows the proposal dialog. See /js/jarvis.js. -->
+  <button type="button" class="jv-badge" id="jv-badge" hidden></button>
   <div class="usage" id="usage" hidden title="Claude subscription usage, account-wide">
     <span class="usage-title">Usage</span>
     <span class="usage-win" id="usage-5h" hidden>
@@ -1601,6 +1605,21 @@
       <div class="modal-foot" id="relay-modal-foot"></div>
   </dialog>
 
+  <!-- ── A change Jarvis proposes to sbxw's configuration ──
+       Opened beside the page, never as a modal, so it does not take the
+       keyboard from a terminal. Body and footer are rebuilt by /js/jarvis.js;
+       the diffs are the sandbox's text and are shown as text only. -->
+  <dialog class="modal jv-dialog" id="jv-dialog" aria-labelledby="jv-title">
+      <div class="modal-head">
+        <h2 class="modal-title" id="jv-title">Jarvis proposes</h2>
+        <span class="jv-risk" id="jv-risk"></span>
+        <span class="relay-queue" id="jv-queue" hidden></span>
+        <button type="button" class="modal-close" id="jv-close" aria-label="Later">✕</button>
+      </div>
+      <div class="modal-body jv-body" id="jv-body"></div>
+      <div class="modal-foot jv-foot" id="jv-foot"></div>
+  </dialog>
+
   <!-- ── Multi-pane terminal area (panes injected here by JS) ── -->
   <div class="main" id="main-area"></div>
 </div>
@@ -1643,20 +1662,20 @@
   </button>
 </div>
 
-<!-- ── Voice concierge ──
+<!-- ── Jarvis's panel (the voice concierge in the code) ──
      Push-to-talk to a local model, apart from the chat dock: the panel drops
      down from its launcher in the middle of the top bar.
      See /js/concierge.js. -->
 <div class="vc-dock" id="vc-dock">
-  <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Concierge" hidden>
+  <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Jarvis" hidden>
     <div class="cd-head">
-      <span class="vc-title">Concierge</span>
+      <span class="vc-title">Jarvis</span>
       <button type="button" class="cd-close" id="vc-mute" aria-pressed="true" title="Voice on: click to mute" aria-label="Voice on: click to mute"></button>
       <button type="button" class="cd-close" id="vc-new" title="Clear the panel">Clear</button>
       <button type="button" class="cd-close" id="vc-close" title="Close (Esc)" aria-label="Close">✕</button>
     </div>
     <div class="vc-ctx">
-      <select id="vc-target" aria-label="The sandbox to follow and to send to"></select>
+      <select id="vc-target" aria-label="Where your words go: Jarvis, or a sandbox to follow"></select>
       <span class="vc-ctx-info"></span>
       <button type="button" class="vc-btn vc-follow" id="vc-follow" aria-pressed="false">Follow</button>
     </div>

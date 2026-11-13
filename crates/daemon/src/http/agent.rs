@@ -39,6 +39,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/plans/report", post(report))
         .route("/api/sandboxes/:name/codemap/done", post(codemap_done))
         .merge(super::board::agent_routes())
+        .merge(super::jarvis::agent_routes())
         .merge(super::mac::agent_routes())
         .merge(super::browser::agent_routes())
 }

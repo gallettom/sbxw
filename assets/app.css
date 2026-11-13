@@ -4239,3 +4239,91 @@
   /* Motion for those who have not asked for less of it. */
   @media (prefers-reduced-motion: no-preference) { .browser-tab { animation: browser-tab-in .25s ease-out; } }
 
+
+  /* ── Jarvis: its row in the bar's menu, its start card, its proposals ──
+     (see js/concierge.js and js/jarvis.js). Jarvis is a name, not a sandbox:
+     its row is first and set apart, in the prose font. */
+  .vc-l-target.jarvis { font-weight: 600; }
+  .vc-l-target.jarvis-down { color: var(--c-text-muted); }
+  .vc-tm-name.vc-tm-jarvis { font-family: var(--font-prose); font-weight: 600; }
+  .vc-target-menu button:has(.vc-tm-jarvis) { border-bottom: 1px solid var(--c-border); border-radius: var(--r-sm) var(--r-sm) 0 0; margin-bottom: .2rem; padding-bottom: .45rem; }
+  .vc-tm-note { margin-left: auto; flex: none; color: var(--c-text-dim); font-size: 11px; font-family: var(--font-prose); }
+  .vc-jarvis-state { margin: .3rem 0; color: var(--c-text); line-height: 1.5; }
+  .vc-jarvis-start.vc-busy .vc-agent-head::after { content: ' ⋯'; color: var(--c-blue); }
+
+  /* The bar's way back to a proposal closed with "Later": a decision to make,
+     in the voice's blue rather than the relay's purple. */
+  .jv-badge {
+    display: flex; align-items: center; gap: .3rem;
+    font: inherit; font-size: 12px; font-weight: 600; color: var(--c-blue);
+    background: var(--c-blue-tint); border: 1px solid var(--c-blue); border-radius: var(--r-sm);
+    padding: .3rem .65rem; cursor: pointer; white-space: nowrap;
+  }
+  .jv-badge::before { content: '✦'; font-weight: 400; }
+  .jv-badge:hover { background: #13294d; }
+  .jv-badge[hidden] { display: none; }
+
+  /* Not a modal (show(), not showModal()): it floats under the bar, the page
+     stays usable, and a terminal keeps the keyboard. */
+  dialog.jv-dialog {
+    position: fixed; top: calc(6px + 48px + 8px); left: 50%; right: auto; transform: translateX(-50%);
+    margin: 0; z-index: 900; width: 640px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px);
+  }
+  .jv-risk { margin-left: .6rem; margin-right: auto; padding: .1rem .5rem; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .jv-risk-low { color: var(--c-green); background: var(--c-green-tint); border: 1px solid var(--c-green-deep); }
+  .jv-risk-high { color: var(--c-amber-strong); background: var(--c-amber-tint); border: 1px solid var(--c-amber); }
+  .jv-summary { margin: 0; color: var(--c-text-bright); font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .jv-note { margin: 0; padding: .45rem .6rem; border-left: 3px solid var(--c-amber); background: var(--c-amber-tint); color: var(--c-text); font-size: 12px; border-radius: var(--r-xs); }
+  .jv-changes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .6rem; }
+  .jv-change { border: 1px solid var(--c-border); border-radius: var(--r-sm); background: var(--c-surface-alt); overflow: hidden; }
+  .jv-change-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; padding: .4rem .6rem; }
+  .jv-kind { flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--c-text-muted); background: var(--c-elevated); border-radius: var(--r-xs); padding: .05rem .35rem; }
+  .jv-change-title { flex: 1 1 12rem; min-width: 0; color: var(--c-text-bright); font-size: 12.5px; word-break: break-word; }
+  .jv-result { flex: none; font-size: 11px; font-weight: 600; }
+  .jv-result.ok { color: var(--c-green); }
+  .jv-result.bad { color: var(--c-red); }
+  .jv-result.dim, .jv-dim { color: var(--c-text-muted); }
+  /* The diff: the sandbox's text, as text, scrolled in its own box. */
+  .jv-diff {
+    margin: 0; padding: .5rem .6rem; max-height: 16rem; overflow: auto;
+    background: var(--c-bg); border-top: 1px solid var(--c-border);
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.45; color: var(--c-text);
+    white-space: pre; tab-size: 4;
+  }
+  .jv-diff:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
+  .jv-add { color: var(--c-green); }
+  .jv-del { color: var(--c-red); }
+  .jv-outcome { margin: 0; font-weight: 600; font-size: 12.5px; }
+  .jv-outcome.jv-applied { color: var(--c-green); }
+  .jv-outcome.jv-refused { color: var(--c-text-muted); }
+  .jv-outcome.jv-failed { color: var(--c-red); }
+  .jv-error { font-weight: 400; color: var(--c-text); word-break: break-word; }
+  .jv-foot { flex-wrap: wrap; align-items: center; }
+  .jv-reason {
+    flex: 1 1 12rem; min-width: 0; margin-right: auto;
+    background: var(--c-bg); color: var(--c-text); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    padding: .3rem .5rem; font: inherit; font-size: 12px;
+  }
+  .jv-btn {
+    background: var(--c-elevated); color: var(--c-text); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    padding: .3rem .9rem; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .jv-btn:hover:not(:disabled) { border-color: var(--c-dim); color: var(--c-text-bright); }
+  .jv-btn:disabled { opacity: .5; cursor: not-allowed; }
+  @media (max-width: 560px) {
+    dialog.jv-dialog { top: 48px; }
+    .jv-foot .jv-reason { flex-basis: 100%; margin-right: 0; }
+  }
+  .jv-result-msg { margin: 0; padding: 0 .6rem .4rem; color: var(--c-text-muted); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+  .jv-result-msg.bad { color: var(--c-red); }
+  /* A command that will run on this machine, outside any sandbox: red, and
+     shown whole, since it is what the person acknowledges. */
+  .jv-host { margin: 0; padding: .5rem .6rem; border-top: 1px solid var(--c-red); background: var(--c-red-tint); }
+  .jv-host-title { margin: 0 0 .35rem; color: var(--c-red); font-weight: 600; font-size: 12px; }
+  .jv-host-cmd {
+    margin: 0; padding: .45rem .55rem; max-height: 10rem; overflow: auto;
+    background: var(--c-bg); border: 1px solid var(--c-red); border-radius: var(--r-xs);
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--c-text-bright); white-space: pre-wrap; word-break: break-all;
+  }
+  .jv-ack { display: flex; align-items: center; gap: .35rem; flex-basis: 100%; color: var(--c-text-bright); font-size: 12px; cursor: pointer; }
+  .jv-ack input { accent-color: var(--c-red); }

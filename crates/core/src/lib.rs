@@ -22,6 +22,7 @@ pub mod envfile;
 pub mod favourites;
 pub mod hosts;
 pub mod ids;
+pub mod jarvis;
 pub mod kits;
 pub mod mac;
 pub mod mcp;

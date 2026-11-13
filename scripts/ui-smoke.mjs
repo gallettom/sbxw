@@ -21,7 +21,33 @@ if (process.env.XTERM_VENDOR) {
 const problems = [];
 page.on('pageerror', (e) => problems.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') problems.push('console: ' + m.text()); });
-page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400) problems.push(`HTTP ${r.status()} ${r.url()}`); });
+// The 409 a voice approval of a high-risk proposal gets is expected (see below).
+const expected = new Set();
+page.on('response', (r) => { if (r.url().includes('/api/') && r.status() >= 400 && !expected.has(`${r.status()} ${new URL(r.url()).pathname}`)) problems.push(`HTTP ${r.status()} ${r.url()}`); });
+// Jarvis's endpoints, stubbed: the smoke has no `sbxw-jarvis` sandbox to
+// propose anything, and nothing may be created by loading the page. The stub
+// keeps what was posted, so the checks below can say what reached the daemon.
+const jv = { status: { state: 'absent' }, proposals: [], posts: [] };
+await page.route('**/api/jarvis/status', (route) => route.fulfill({ json: jv.status }));
+await page.route('**/api/jarvis/start', (route) => { jv.posts.push({ url: 'start' }); jv.status = { state: 'creating' }; route.fulfill({ json: { ok: true, state: 'creating' } }); });
+await page.route('**/api/jarvis', (route) => route.fulfill({ json: { proposals: jv.proposals } }));
+await page.route('**/api/jarvis/proposals/*/*', (route) => {
+  const [, id, act] = new URL(route.request().url()).pathname.match(/proposals\/([^/]+)\/(\w+)$/);
+  const body = JSON.parse(route.request().postData() || '{}');
+  jv.posts.push({ id, act, ...body });
+  const p = jv.proposals.find(x => x.id === id);
+  if (!p) return route.fulfill({ status: 404, json: { ok: false, error: 'no such proposal' } });
+  if (act === 'approve' && body.via === 'voice' && p.risk === 'high') {
+    return route.fulfill({ status: 409, json: { ok: false, error: 'a high-risk proposal is approved on screen' } });
+  }
+  if (act === 'approve' && p.needs_ack && body.ack_host_command !== true) {
+    return route.fulfill({ status: 409, json: { ok: false, error: 'acknowledge the host command first' } });
+  }
+  p.state = act === 'approve' ? 'applied' : 'refused';
+  if (act === 'approve') p.results = p.changes.map(() => ({ ok: true, message: 'written', restart: false }));
+  route.fulfill({ json: { ok: true, proposal: p } });
+});
+expected.add('409 /api/jarvis/proposals/smoke-high/approve');
 await page.goto(`http://127.0.0.1:${port}/#sandbox=${sandbox}`, { waitUntil: 'domcontentloaded' });
 let listed = false;
 for (let i = 0; i < 60 && !listed; i++) {
@@ -71,7 +97,7 @@ await visit('Sidebar sessions', () => page.locator('.sbx-sessions-toggle').first
 // The voice concierge: nothing installed in the throwaway home, so its panel
 // says which command installs the models and offers the button — and the
 // talk button stays off.
-await visit('Concierge', () => page.locator('#vc-launcher').click(), async () => {
+await visit('Jarvis (voice setup)', () => page.locator('#vc-launcher').click(), async () => {
   await page.screenshot({ path: png.replace(/\.png$/, '-concierge.png') });
   const vc = await page.evaluate(() => ({
     setup: document.getElementById('vc-setup').innerText,
@@ -80,6 +106,121 @@ await visit('Concierge', () => page.locator('#vc-launcher').click(), async () =>
   if (!vc.setup.includes('sbxw voice install') || !/Install voice/.test(vc.setup) || !vc.talk) {
     problems.push(`concierge: ${JSON.stringify(vc)}, want the install command, the install button and a disabled talk button`);
   }
+});
+// Jarvis as a destination: first in the bar's menu, its state beside it;
+// picking it while absent offers to start it, and starts nothing.
+await visit('Jarvis in the picker', () => page.locator('#vc-l-target').click(), async () => {
+  const rows = await page.locator('.vc-target-menu button').allInnerTexts();
+  if (!/^✓?\s*Jarvis\s*not created yet/.test(rows[0] || '')) problems.push(`picker: first row ${JSON.stringify(rows[0])}, want Jarvis, not created yet`);
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-picker.png') });
+  await page.locator('.vc-target-menu button[data-name="sbxw-jarvis"]').click();
+  await page.waitForTimeout(600);
+  const offer = await page.evaluate(() => ({
+    bar: document.getElementById('vc-l-name').textContent,
+    start: !!document.querySelector('#vc-log .vc-jarvis-go:not([hidden])'),
+    open: !document.getElementById('vc-panel').hidden,
+  }));
+  if (offer.bar !== 'Jarvis' || !offer.start || !offer.open) problems.push(`jarvis offer: ${JSON.stringify(offer)}, want Jarvis in the bar and a Start button in the open panel`);
+  if (jv.posts.some(p => p.url === 'start')) problems.push('jarvis: started without a click on Start');
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-start.png') });
+  await page.evaluate(() => vcSetOpen(false));
+});
+// A low-risk proposal: shown beside the page with its risk and its diff as
+// text (markup in it stays text), and approved by a click.
+await visit('Jarvis: low risk, approved by click', async () => {
+  const low = { id: 'smoke-low', summary: 'Add the k8s kit to the default kits', risk: 'low', state: 'pending', created: 1794045600000,
+    changes: [{ kind: 'kits', title: 'sbxw.toml: kits', diff: '-kits = ["sbxw:codemap"]\n+kits = ["sbxw:codemap", "sbxw:k8s-tools"]\n <img src=x onerror="window.jvPwned=1">' }] };
+  jv.proposals.push(low);
+  await page.evaluate((p) => jvIngest(structuredClone(p)), low);
+  await page.waitForTimeout(300);
+}, async () => {
+  const shown = await page.evaluate(() => ({
+    open: document.getElementById('jv-dialog').open,
+    modal: document.getElementById('jv-dialog').matches(':modal'),
+    risk: document.getElementById('jv-risk').textContent,
+    diff: document.querySelector('#jv-body .jv-diff')?.textContent || '',
+    img: !!document.querySelector('#jv-body img'),
+    badge: document.getElementById('jv-badge').textContent,
+  }));
+  if (!shown.open || shown.modal || shown.risk !== 'Low risk' || !shown.diff.includes('<img src=x') || shown.img || !/1 to review/.test(shown.badge)) {
+    problems.push(`jarvis low: ${JSON.stringify(shown)}, want a non-modal dialog, Low risk, the diff as text, the badge`);
+  }
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-low.png') });
+  await page.locator('#jv-foot [data-jv-action="approve"]').click();
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => ({
+    outcome: document.querySelector('#jv-body .jv-outcome')?.textContent || '',
+    result: document.querySelector('#jv-body .jv-result')?.textContent || '',
+  }));
+  const post = jv.posts.find(p => p.id === 'smoke-low');
+  if (!post || post.act !== 'approve' || post.via !== 'click' || after.outcome !== 'Applied.' || after.result !== 'Applied') {
+    problems.push(`jarvis low approve: posted ${JSON.stringify(post)}, shown ${JSON.stringify(after)}, want via click and Applied`);
+  }
+  await page.evaluate(() => jvClose());
+});
+// A high-risk proposal: a spoken yes approves nothing and says why; a voice
+// approval that reaches the daemon anyway gets 409, said the same way.
+await visit('Jarvis: high risk, voice approval refused', async () => {
+  const high = { id: 'smoke-high', summary: 'Allow all network traffic', risk: 'high', state: 'pending', created: 1794045660000,
+    changes: [{ kind: 'network', title: 'network_allow', diff: '+network_allow = ["**"]' }] };
+  jv.proposals.push(high);
+  await page.evaluate((p) => jvIngest(structuredClone(p)), high);
+  await page.waitForTimeout(300);
+}, async () => {
+  const before = jv.posts.length;
+  await page.evaluate(() => vcHear('oui'));
+  await page.waitForTimeout(300);
+  const spoken = jv.posts.slice(before);
+  // As if the page still held it as low risk and the daemon knew better.
+  await page.evaluate(async () => {
+    const p = jvProposals.get('smoke-high');
+    p.risk = 'low';
+    await jvApprove('smoke-high', 'voice');
+    p.risk = 'high';
+    jvRender();
+  });
+  await page.waitForTimeout(500);
+  const forced = jv.posts.slice(before + spoken.length);
+  const st = await page.evaluate(() => ({
+    risk: document.getElementById('jv-risk').textContent,
+    approve: !!document.querySelector('#jv-foot [data-jv-action="approve"]'),
+    said: [...document.querySelectorAll('#vc-log .vc-msg')].filter(e => /approve it on screen/.test(e.textContent)).length,
+    state: jvProposals.get('smoke-high')?.state,
+  }));
+  if (spoken.length || forced.length !== 1 || forced[0].via !== 'voice' || st.risk !== 'High risk' || !st.approve || st.said < 2 || st.state !== 'pending') {
+    problems.push(`jarvis high: spoken yes posted ${JSON.stringify(spoken)}, voice approval ${JSON.stringify(forced)}, shown ${JSON.stringify(st)}; want nothing, one 409, the message twice, still pending`);
+  }
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-high.png') });
+  await page.locator('#jv-foot [data-jv-action="refuse"]').click();
+  await page.waitForTimeout(300);
+  await page.evaluate(() => jvClose());
+});
+// A stdio MCP server runs a command on this machine: the dialog shows it in
+// full, and Approve stays off until "I have read this command" is ticked; the
+// acknowledgement is sent from that box only.
+await visit('Jarvis: host command acknowledged', async () => {
+  const host = { id: 'smoke-host', summary: 'Add a local MCP server', risk: 'high', state: 'pending', needs_ack: true, created: 1794045720000,
+    changes: [{ kind: 'mcp_server', title: 'MCP server notes (stdio)', risk: 'high', host_command: 'npx -y notes-mcp --root ~/notes', diff: '+ sbx mcp add notes -- npx -y notes-mcp --root ~/notes' }] };
+  jv.proposals.push(host);
+  await page.evaluate((p) => jvIngest(structuredClone(p)), host);
+  await page.waitForTimeout(300);
+}, async () => {
+  const approve = page.locator('#jv-foot [data-jv-action="approve"]');
+  const before = await page.evaluate(() => ({
+    banner: document.querySelector('#jv-body .jv-host-cmd')?.textContent || '',
+    disabled: document.querySelector('#jv-foot [data-jv-action="approve"]')?.disabled,
+    box: !!document.querySelector('#jv-foot [data-jv-action="ack"]'),
+  }));
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-host.png') });
+  await page.locator('#jv-foot [data-jv-action="ack"]').check();
+  const enabled = await approve.isEnabled();
+  await approve.click();
+  await page.waitForTimeout(500);
+  const post = jv.posts.find(p => p.id === 'smoke-host');
+  if (before.banner !== 'npx -y notes-mcp --root ~/notes' || before.disabled !== true || !before.box || !enabled || !post || post.ack_host_command !== true || post.via !== 'click') {
+    problems.push(`jarvis host command: ${JSON.stringify(before)}, enabled after tick ${enabled}, posted ${JSON.stringify(post)}; want the command shown, Approve off until ticked, ack_host_command sent`);
+  }
+  await page.evaluate(() => jvClose());
 });
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
