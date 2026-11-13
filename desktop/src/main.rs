@@ -1,6 +1,6 @@
 //! sbxw desktop: the native client of the sbxw daemon.
 //!
-//! `sbxw-desktop` with no arguments talks to the daemon at 127.0.0.1:7681
+//! `sbxw` (this desktop app; `cargo run --release` in desktop/) with no arguments talks to the daemon at 127.0.0.1:7681
 //! with the token in `~/.sbxw/run/ui-token`, and retries in the background
 //! while there is none. Options (after Rune's own):
 //!

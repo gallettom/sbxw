@@ -48,7 +48,7 @@ run_app() {
   local log="$1"; shift
   local target=(--daemon "${daemon:-}" --token "${token:-}")
   case " $* " in *" --fixture "*) target=() ;; esac
-  env -u DISPLAY -u WAYLAND_DISPLAY "$bin/sbxw-desktop" "${target[@]}" \
+  env -u DISPLAY -u WAYLAND_DISPLAY "$bin/sbxw" "${target[@]}" \
     --size "${SHOT_SIZE:-1280x800}" --scale "${SHOT_SCALE:-1}" "$@" >"$log" 2>&1 \
     || { echo "app failed; see $log" >&2; tail -5 "$log" >&2; return 1; }
 }

@@ -280,6 +280,38 @@ mod tests {
         assert_eq!(shortcut(&k(Key::End, |m| m.shift = true), false), Some(Shortcut::ScrollBottom));
     }
 
+    /// The shapes Rune's window host makes of real presses (rune
+    /// src/window/keys.rs: `map_mods` sets `cmd` from Super on macOS and
+    /// from Ctrl elsewhere, `logo` from Super; `map_key` lowers the letter of
+    /// a `cmd` chord into `Key::Command`). On macOS ⌘ switches the layout to
+    /// its Latin one, so ⌘C is `Command('c')` on French, Swiss and Russian
+    /// layouts alike.
+    #[test]
+    fn real_event_shapes() {
+        let mac_cmd = |c, shift| k(Key::Command(c), |m| (m.cmd, m.logo, m.shift) = (true, true, shift));
+        assert_eq!(shortcut(&mac_cmd('c', false), true), Some(Shortcut::Copy));
+        assert_eq!(shortcut(&mac_cmd('v', false), true), Some(Shortcut::Paste));
+        assert_eq!(shortcut(&mac_cmd('a', false), true), Some(Shortcut::SelectAll));
+        // ⇧⌘C copies too (Shift is not checked on macOS); no ⌘ chord reaches the program.
+        assert_eq!(shortcut(&mac_cmd('c', true), true), Some(Shortcut::Copy));
+        assert_eq!(key_bytes_with(&mac_cmd('c', true), false, MAC), None);
+        assert_eq!(key_bytes_with(&mac_cmd('v', false), false, MAC), None);
+        // ⌃C on macOS: `cmd` off, the letter as text with `ctrl`: the interrupt.
+        let mac_ctrl = |c: &str| k(Key::Text(c.into()), |m| m.ctrl = true);
+        assert_eq!(shortcut(&mac_ctrl("c"), true), None);
+        assert_eq!(key_bytes_with(&mac_ctrl("c"), false, MAC), Some(vec![3]));
+        assert_eq!(key_bytes_with(&mac_ctrl("v"), false, MAC), Some(vec![0x16]));
+        // Linux and Windows: Ctrl is `cmd` and `ctrl`; Ctrl+Shift+C/V/A are the
+        // app's, plain Ctrl+C and Ctrl+V the program's.
+        let pc = |c, shift| k(Key::Command(c), |m| (m.cmd, m.ctrl, m.shift) = (true, true, shift));
+        assert_eq!(shortcut(&pc('c', true), false), Some(Shortcut::Copy));
+        assert_eq!(shortcut(&pc('v', true), false), Some(Shortcut::Paste));
+        assert_eq!(shortcut(&pc('c', false), false), None);
+        assert_eq!(shortcut(&pc('v', false), false), None);
+        assert_eq!(key_bytes_with(&pc('c', false), false, LINUX), Some(vec![3]));
+        assert_eq!(key_bytes_with(&pc('v', false), false, LINUX), Some(vec![0x16]));
+    }
+
     #[test]
     fn paste_is_bracketed_and_safe() {
         assert_eq!(paste_bytes("a\nb\r\nc", false), b"a\rb\rc".to_vec());

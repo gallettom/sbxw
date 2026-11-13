@@ -64,7 +64,7 @@ use alacritty_terminal::event::{Event as TermEv, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
+use alacritty_terminal::term::{Config, Osc52, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor, Processor, Rgb, StdSyncHandler};
 use rune::{GridRow, KeyEvent, TextStyle, Tx};
 use std::hash::{Hash, Hasher};
@@ -252,8 +252,50 @@ pub struct TerminalState {
     pub id: String,
 }
 
+/// `SBXW_DESKTOP_DEBUG_KEYS=1`: one line on stderr per key reaching a
+/// terminal, per paste and per copy, so a broken shortcut on someone's
+/// machine can be diagnosed from their terminal. Never the content: keys are
+/// named only when Cmd, Ctrl or the logo key is held (shortcut candidates)
+/// or when they type nothing (Enter, arrows); typed text is "text", pastes
+/// and copies are byte counts.
+pub fn debug_keys() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("SBXW_DESKTOP_DEBUG_KEYS").is_ok_and(|v| !v.is_empty() && v != "0"))
+}
+
+/// What [`debug_keys`] prints for a key: its name only when it cannot be
+/// typed text.
+pub fn key_label(ev: &KeyEvent) -> String {
+    let m = ev.mods;
+    let chord = m.cmd || m.ctrl || m.logo;
+    let key = match &ev.key {
+        rune::Key::Text(_) if !chord => "text".to_string(),
+        rune::Key::Text(t) if t.chars().count() == 1 => format!("Text({t:?})"),
+        rune::Key::Text(_) => "text".to_string(),
+        rune::Key::Command(c) => format!("Command({c:?})"),
+        k => format!("{k:?}"),
+    };
+    let mut mods = vec![];
+    for (on, name) in [(m.cmd, "cmd"), (m.logo, "logo"), (m.ctrl, "ctrl"), (m.alt, "alt"), (m.shift, "shift")] {
+        if on {
+            mods.push(name);
+        }
+    }
+    format!("{key} mods=[{}]", mods.join(","))
+}
+
+fn debug_key(ev: &KeyEvent, pane: &str, tx: &Tx, what: &str) {
+    if debug_keys() {
+        eprintln!("sbxw keys: key {} pane {} focus {} -> {what}", key_label(ev), if pane.is_empty() { "-" } else { pane }, tx.focused().unwrap_or("none"));
+    }
+}
+
 fn new_term(size: (usize, usize), input: &Input, events: &mpsc::Sender<TermEv>) -> Term<Listener> {
-    let config = Config { scrolling_history: SCROLLBACK, ..Config::default() };
+    // OSC 52: writes only (`OnlyCopy`, alacritty's default, stated here so it
+    // cannot change under us). The read form (`52;c;?`) would hand the
+    // person's clipboard to whatever runs in the sandbox; alacritty drops it
+    // before it becomes an event (term/mod.rs, `clipboard_load`).
+    let config = Config { scrolling_history: SCROLLBACK, osc52: Osc52::OnlyCopy, ..Config::default() };
     Term::new(config, &Size { cols: size.0, rows: size.1 }, Listener { input: input.clone(), events: events.clone() })
 }
 
@@ -724,31 +766,47 @@ impl TerminalState {
     where
         L: Fn(&mut S) -> Option<&mut TerminalState> + 'static,
     {
+        let pane = self.id.clone();
         match keys::shortcut(ev, self.keys.mac) {
             Some(Shortcut::Copy) => {
                 let text = self.selection_text();
-                log::debug!("copy: {} bytes", text.as_ref().map_or(0, String::len));
+                let n = text.as_ref().map_or(0, String::len);
+                log::debug!("copy: {n} bytes");
                 if let Some(text) = text {
                     tx.copy(text);
                 }
+                let why = match (n, mouse::reporting(self.mode())) {
+                    (0, true) => ", no selection in the terminal: the program holds the mouse, select with Shift+drag",
+                    (0, false) => ", no selection in the terminal",
+                    _ => "",
+                };
+                debug_key(ev, &pane, tx, &format!("copy ({n} bytes{why})"));
                 return true;
             }
             Some(Shortcut::Paste) => {
                 tx.read_clipboard(move |s: &mut S, content: &rune::ClipboardContent, _tx: &mut Tx| {
                     log::debug!("paste: {} bytes", content.text().len());
                     if let Some(t) = lens(s) {
+                        if debug_keys() {
+                            let bracketed = t.mode().contains(TermMode::BRACKETED_PASTE);
+                            eprintln!("sbxw keys: paste (read_clipboard) pane {} {} bytes{}", t.id, content.text().len(), if bracketed { " bracketed" } else { "" });
+                        }
                         t.paste(content.text());
                     }
                 });
+                debug_key(ev, &pane, tx, "paste (clipboard read asked)");
                 return true;
             }
             Some(Shortcut::SelectAll) => {
                 self.select_all();
+                debug_key(ev, &pane, tx, "select all");
                 return true;
             }
             _ => {}
         }
-        self.on_key(ev)
+        let taken = self.on_key(ev);
+        debug_key(ev, &pane, tx, if taken { "sent to the program" } else { "not taken" });
+        taken
     }
 
     /// Pastes `text` (bracketed when the program asked).
@@ -757,6 +815,7 @@ impl TerminalState {
             return;
         }
         let bracketed = self.mode().contains(TermMode::BRACKETED_PASTE);
+        log::debug!("paste: {} bytes{}", text.len(), if bracketed { " bracketed" } else { "" });
         self.send(paste_bytes(text, bracketed));
     }
 

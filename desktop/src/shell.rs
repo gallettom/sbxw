@@ -136,6 +136,8 @@ pub struct App {
     /// A line at the bottom right: text, is an error, until.
     pub notice: Option<(String, bool, Instant)>,
     pub approvals: Vec<approval::Pending>,
+    /// An OSC 52 copy too long to make unasked, waiting for a click (approval.rs).
+    pub copy_offer: Option<approval::CopyOffer>,
     /// Sandboxes whose start is being watched: name, next recheck step.
     expect: Vec<(String, usize, Instant)>,
     marks: Vec<(f64, Mark)>,
@@ -152,6 +154,11 @@ pub struct App {
     pub window_focused: bool,
     /// The core moved the focused pane: move Rune's keyboard focus there next poll.
     refocus: bool,
+}
+
+/// Whether the window takes pastes at its root (see `view`).
+pub fn window_paste() -> bool {
+    cfg!(target_os = "macos") || headless()
 }
 
 pub fn headless() -> bool {
@@ -205,6 +212,7 @@ impl App {
             selected: init.selected.clone(),
             notice: None,
             approvals: vec![],
+            copy_offer: None,
             expect: vec![],
             marks: vec![],
             dump_text: a.dump_text.clone(),
@@ -462,6 +470,12 @@ impl App {
         if let Some(next) = self.expect.iter().map(|e| e.2).min() {
             tx.wake_after(next.saturating_duration_since(now));
         }
+        if self.copy_offer.as_ref().is_some_and(|o| o.until <= now) {
+            self.copy_offer = None;
+            changed = true;
+        } else if let Some(o) = &self.copy_offer {
+            tx.wake_after(o.until.saturating_duration_since(now));
+        }
         if self.notice.as_ref().is_some_and(|n| n.2 <= now) {
             self.notice = None;
             changed = true;
@@ -487,6 +501,7 @@ impl App {
         }
         let settle = headless().then_some(Duration::from_millis(1500));
         let mut notes = vec![];
+        let mut copies = vec![];
         for (i, p) in self.panes.iter_mut().enumerate() {
             let Some(t) = &mut p.term else { continue };
             // Only the pane with the keyboard shows a solid cursor and gets
@@ -504,10 +519,9 @@ impl App {
                     TerminalEvent::Bell => log::info!("pane {}: bell", i + 1),
                     TerminalEvent::Title(title) => p.title = Some(title).filter(|t| !t.is_empty()),
                     // OSC 52: a program in the sandbox asking to write the
-                    // person's clipboard. Not done: nothing a sandbox runs
-                    // should reach the host's clipboard on its own (later, a
-                    // core-drawn approval, as for other cross-boundary acts).
-                    TerminalEvent::Clipboard(c) => notes.push((format!("{name}: a program asked to copy {} bytes to your clipboard; ignored", c.len()), false)),
+                    // person's clipboard (Claude Code's own copy). By size:
+                    // copied, offered or dropped (approval.rs, `osc_tier`).
+                    TerminalEvent::Clipboard(c) => copies.push((i, name, c)),
                     TerminalEvent::Disconnected(why) => p.reconnecting = Some(why),
                     TerminalEvent::Reconnected => p.reconnecting = None,
                 }
@@ -519,6 +533,10 @@ impl App {
         }
         for (n, e) in notes {
             self.notify(n, e);
+        }
+        for (i, name, text) in copies {
+            self.osc_copy(i, &name, text, now, tx);
+            changed = true;
         }
         if changed {
             self.push_data();
@@ -535,7 +553,13 @@ impl App {
         if let Some(p) = self.panes.get_mut(f) {
             p.attention = false;
         }
-        self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_key_tx(ev, tx, lens(f)))
+        let Some(t) = self.panes.get_mut(f).and_then(|p| p.term.as_mut()) else {
+            if terminal::debug_keys() {
+                eprintln!("sbxw keys: key {} pane {} focus {} -> no terminal in the focused pane", terminal::key_label(ev), f + 1, tx.focused().unwrap_or("none"));
+            }
+            return false;
+        };
+        t.on_key_tx(ev, tx, lens(f))
     }
 
     /// The input method (dead keys, CJK, emoji): to the focused pane.
@@ -544,11 +568,62 @@ impl App {
         self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_ime(ime))
     }
 
-    /// The window's paste (the macOS Edit menu, Cmd+V before any key handler): to the focused pane.
+    /// The window's paste, to the focused pane. On macOS this is ⌘V (and
+    /// Edit > Paste): Rune reads the clipboard itself and calls the root's
+    /// `on_paste` instead of handing the key to anyone (rune
+    /// `runtime/input/physical.rs`, `dispatch_physical`), so it never reaches
+    /// `on_key`. Elsewhere Ctrl+Shift+V reads the clipboard from the key
+    /// (`TerminalState::on_key_tx`), and plain Ctrl+V stays the program's.
     pub fn paste(&mut self, text: &str) {
         let f = self.focused;
-        if let Some(t) = self.panes.get_mut(f).and_then(|p| p.term.as_mut()) {
+        let t = self.panes.get_mut(f).and_then(|p| p.term.as_mut());
+        if terminal::debug_keys() {
+            let to = t.as_ref().map_or("no terminal".to_string(), |t| {
+                let bracketed = t.mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE);
+                format!("pane {}{}", t.id, if bracketed { " bracketed" } else { "" })
+            });
+            eprintln!("sbxw keys: paste (window on_paste) {} bytes -> {to}", text.len());
+        }
+        if let Some(t) = t {
             t.paste(text);
+        }
+    }
+
+    /// An OSC 52 copy from pane `i`'s program: copied, offered or dropped by
+    /// size, as the web UI does (approval.rs).
+    fn osc_copy(&mut self, i: usize, sandbox: &str, text: String, now: Instant, tx: &mut Tx) {
+        if text.is_empty() {
+            return;
+        }
+        let bytes = text.len();
+        let who = if sandbox.is_empty() { "the sandbox" } else { sandbox };
+        let tier = approval::osc_tier(bytes);
+        if terminal::debug_keys() {
+            eprintln!("sbxw keys: osc52 copy pane {} {bytes} bytes -> {tier:?}", i + 1);
+        }
+        match tier {
+            approval::OscTier::Copy => {
+                tx.copy(text);
+                self.notify(format!("Copied {} from {who}", approval::size_label(bytes)), false);
+            }
+            // A newer offer replaces the one showing.
+            approval::OscTier::Offer => self.copy_offer = Some(approval::CopyOffer::new(sandbox, text, now)),
+            approval::OscTier::Drop => self.notify(
+                format!("{} tried to copy {} to the clipboard: more than {}, dropped", if sandbox.is_empty() { "A sandbox" } else { sandbox }, approval::size_label(bytes), approval::size_label(approval::OSC_COPY_MAX)),
+                true,
+            ),
+        }
+    }
+
+    /// The person clicked Copy on the offer.
+    pub fn accept_copy_offer(&mut self, tx: &mut Tx) {
+        if let Some(o) = self.copy_offer.take() {
+            if terminal::debug_keys() {
+                eprintln!("sbxw keys: osc52 offer copied {} bytes", o.bytes);
+            }
+            let who = if o.sandbox.is_empty() { "the sandbox".to_string() } else { o.sandbox.clone() };
+            tx.copy(o.text);
+            self.notify(format!("Copied {} from {who}", approval::size_label(o.bytes)), false);
         }
     }
 
@@ -698,8 +773,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .w_full()
         .h_full()
         .fill(c("floor"))
-        .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| s.window_focused = focused)
-        .on_paste(|s: &mut App, text: &str, _tx: &mut Tx| s.paste(text));
+        .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| s.window_focused = focused);
+    // A root `on_paste` makes Rune take the primary modifier + V as a paste
+    // before any key handler: ⌘V on macOS, as wanted, but plain Ctrl+V
+    // elsewhere, which a terminal must send (^V: Bash's quoted insert, Vim's
+    // block selection). So off macOS there is none, and Ctrl+Shift+V pastes
+    // through the key. Headless runs keep it for scripted pastes.
+    let root = if window_paste() { root.on_paste(|s: &mut App, text: &str, _tx: &mut Tx| s.paste(text)) } else { root };
     if let Some(name) = &s.solo {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
         return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
@@ -743,6 +823,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 .on_press(|s: &mut App| s.notice = None)
                 .child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap()),
         );
+    }
+    if let Some(o) = &s.copy_offer {
+        root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
     if let Some(dialog) = approval::view::<App>(&s.approvals) {
         root = root.child(dialog);
@@ -845,4 +928,44 @@ fn pane_view(s: &App, i: usize) -> El {
         .child(bar)
         .child(el().h(1.0).w_full().fill(c(if focused { "blue" } else { "elevated" })))
         .child(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
+        App::new(Args { fixture: Some(fixture.into()), ..Args::default() })
+    }
+
+    #[test]
+    fn osc52_copies_offers_or_drops_by_size_and_a_newer_offer_replaces() {
+        let mut a = app();
+        let mut tx = Tx::default();
+        let now = Instant::now();
+        // Up to 4 KB: copied at once, and said so.
+        a.osc_copy(0, "mus", "x".repeat(40), now, &mut tx);
+        assert_eq!(a.notice.as_ref().map(|n| (n.0.as_str(), n.1)), Some(("Copied 40 B from mus", false)));
+        assert!(a.copy_offer.is_none());
+        // Up to 100 KB: offered, nothing copied yet; a newer offer replaces it.
+        a.notice = None;
+        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut tx);
+        assert_eq!(a.copy_offer.as_ref().map(|o| o.bytes), Some(6 * 1024));
+        assert!(a.notice.is_none());
+        a.osc_copy(1, "web-app", "z".repeat(5000), now, &mut tx);
+        let o = a.copy_offer.as_ref().unwrap();
+        assert_eq!((o.sandbox.as_str(), o.bytes), ("web-app", 5000));
+        assert_eq!(o.headline(), "web-app wants to copy 4.9 KB to your clipboard:");
+        // A click on Copy copies and closes it.
+        a.accept_copy_offer(&mut tx);
+        assert!(a.copy_offer.is_none());
+        assert_eq!(a.notice.as_ref().map(|n| n.0.as_str()), Some("Copied 4.9 KB from web-app"));
+        // Above: dropped, with an error notice; an offer showing stays.
+        a.osc_copy(0, "mus", "y".repeat(6 * 1024), now, &mut tx);
+        a.osc_copy(0, "mus", "w".repeat(100 * 1024 + 1), now, &mut tx);
+        assert_eq!(a.notice.as_ref().map(|n| n.1), Some(true));
+        assert!(a.notice.as_ref().unwrap().0.contains("more than 100.0 KB, dropped"), "{:?}", a.notice);
+        assert_eq!(a.copy_offer.as_ref().map(|o| o.bytes), Some(6 * 1024));
+    }
 }
