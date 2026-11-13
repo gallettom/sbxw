@@ -293,14 +293,19 @@ impl Engine {
         }
     }
 
-    /// Drain the ring into the recording; returns false once the capture is over.
+    /// Drain the ring into the recording.
     fn drain_capture(&mut self) {
         let Some(c) = self.capture.as_mut() else { return };
-        loop {
-            let n = c.ring.pop_slice(&mut self.scratch);
+        // At most one ring's worth per call: a device that delivers faster
+        // than real time (ALSA's null device does) must not keep this
+        // thread from its commands. The excess is dropped at the ring.
+        let mut budget = RING;
+        while budget > 0 {
+            let n = c.ring.pop_slice(&mut self.scratch[..budget.min(4096)]);
             if n == 0 {
                 break;
             }
+            budget -= n;
             let block = &self.scratch[..n];
             c.device_samples += n as u64;
             for &v in block {
@@ -364,7 +369,7 @@ impl Engine {
             if lost > 0 {
                 log::warn!("audio: {lost} input samples were lost (the control thread was late)");
             }
-            if !c.any_sound {
+            if !c.any_sound && self.opts.silence_check.is_some() {
                 // Silence only (shorter than the check): nothing to transcribe.
                 return Vec::new();
             }

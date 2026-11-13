@@ -196,11 +196,40 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 /// The machine's default host (CoreAudio, WASAPI, ALSA).
 pub struct CpalBackend {
     host: cpal::Host,
+    /// A device by name instead of the default (the demo's `--input`, `--output`).
+    input: Option<String>,
+    output: Option<String>,
 }
 
 impl CpalBackend {
     pub fn new() -> CpalBackend {
-        CpalBackend { host: cpal::default_host() }
+        CpalBackend::named(None, None)
+    }
+
+    /// Devices by name (as `audio-demo list` prints them) or id; `None` is the default.
+    pub fn named(input: Option<String>, output: Option<String>) -> CpalBackend {
+        CpalBackend { host: cpal::default_host(), input, output }
+    }
+
+    fn find(&self, name: &Option<String>, input: bool) -> Result<cpal::Device, AudioError> {
+        if let Some(want) = name {
+            let devices = self.host.devices().map_err(|e| from_cpal(&e, input))?;
+            for d in devices {
+                if &device_name(&d) == want || d.id().map(|i| &i.to_string() == want).unwrap_or(false) {
+                    return Ok(d);
+                }
+            }
+            return Err(AudioError { kind: ErrorKind::NoDevice, message: format!("No device named \"{want}\".") });
+        }
+        let d = if input { self.host.default_input_device() } else { self.host.default_output_device() };
+        d.ok_or_else(|| AudioError {
+            kind: ErrorKind::NoDevice,
+            message: if input {
+                "No microphone found. Plug one in or pick one as the default input in the system's sound settings.".into()
+            } else {
+                "No speaker or headphones found. Pick an output in the system's sound settings.".into()
+            },
+        })
     }
 }
 
@@ -226,11 +255,14 @@ pub fn from_cpal(e: &cpal::Error, input: bool) -> AudioError {
         cpal::ErrorKind::Xrun => ErrorKind::Glitch,
         _ => ErrorKind::Other,
     };
+    let full = e.to_string();
+    let e = full.trim_end_matches('.');
     let message = match kind {
         ErrorKind::Permission if input => format!(
             "The microphone was refused ({e}). On macOS, allow it for the app sbxw was started from: System Settings, Privacy & Security, Microphone."
         ),
         ErrorKind::Permission => format!("The speaker was refused: {e}."),
+        ErrorKind::NoDevice => format!("No {what} found ({e})."),
         ErrorKind::DeviceGone => format!("The {what} went away: {e}."),
         ErrorKind::Busy => format!("The {what} is busy with another program: {e}."),
         ErrorKind::Unsupported => format!("The {what} does not accept this format: {e}."),
@@ -239,14 +271,32 @@ pub fn from_cpal(e: &cpal::Error, input: bool) -> AudioError {
     AudioError { kind, message }
 }
 
+/// A failure to open: a device that is "not available" was never there.
+fn opening(mut e: AudioError, input: bool) -> AudioError {
+    if e.kind == ErrorKind::DeviceGone {
+        e.kind = ErrorKind::NoDevice;
+        e.message = if input {
+            format!("No microphone could be opened ({}). Plug one in or pick one as the default input in the system's sound settings.", e.message.trim_start_matches("The microphone went away: ").trim_end_matches('.'))
+        } else {
+            format!("No speaker could be opened ({}). Pick an output in the system's sound settings.", e.message.trim_start_matches("The speaker went away: ").trim_end_matches('.'))
+        };
+    }
+    e
+}
+
 /// The configurations to try, best first: the device's default, then each
 /// supported range at a standard rate, then at its highest rate.
-fn candidates(device: &cpal::Device, input: bool) -> Vec<cpal::SupportedStreamConfig> {
+/// With them, why the device's default configuration could not be read.
+fn candidates(device: &cpal::Device, input: bool) -> (Vec<cpal::SupportedStreamConfig>, Option<cpal::Error>) {
     let mut out = Vec::new();
     let default = if input { device.default_input_config() } else { device.default_output_config() };
-    if let Ok(c) = default {
-        out.push(c);
-    }
+    let why = match default {
+        Ok(c) => {
+            out.push(c);
+            None
+        }
+        Err(e) => Some(e),
+    };
     let ranges: Vec<cpal::SupportedStreamConfigRange> = if input {
         device.supported_input_configs().map(|i| i.collect()).unwrap_or_default()
     } else {
@@ -260,7 +310,7 @@ fn candidates(device: &cpal::Device, input: bool) -> Vec<cpal::SupportedStreamCo
             out.push(c);
         }
     }
-    out
+    (out, why)
 }
 
 macro_rules! dispatch {
@@ -315,17 +365,15 @@ where
 
 impl Backend for CpalBackend {
     fn open_input(&mut self, make: &mut dyn FnMut(u32) -> InputSink, errors: ErrorSink) -> Result<Opened, AudioError> {
-        let device = self.host.default_input_device().ok_or_else(|| AudioError {
-            kind: ErrorKind::NoDevice,
-            message: "No microphone found. Plug one in or pick one as the default input in the system's sound settings.".into(),
-        })?;
+        let device = self.find(&self.input, true)?;
         let name = device_name(&device);
         // A configuration the device refuses: the next one is tried, and we
         // convert whatever format it uses.
-        let mut last = None;
-        for c in candidates(&device, true) {
+        let (configs, why) = candidates(&device, true);
+        let mut last = why.map(|e| from_cpal(&e, true));
+        for c in configs {
             let (fmt, cfg) = (c.sample_format(), c.config());
-            match dispatch!(fmt, build_input, &device, cfg.clone(), make, &errors) {
+            match dispatch!(fmt, build_input, &device, cfg, make, &errors) {
                 Ok(stream) => {
                     stream.play().map_err(|e| from_cpal(&e, true))?;
                     return Ok(Opened { stream: Box::new(stream), device: name, rate: cfg.sample_rate, channels: cfg.channels, format: fmt.to_string() });
@@ -333,22 +381,23 @@ impl Backend for CpalBackend {
                 Err(e) => last = Some(e),
             }
         }
-        Err(last.unwrap_or_else(|| AudioError {
-            kind: ErrorKind::Unsupported,
-            message: format!("The microphone \"{name}\" offers no format this app can record."),
-        }))
+        Err(opening(
+            last.unwrap_or_else(|| AudioError {
+                kind: ErrorKind::Unsupported,
+                message: format!("The microphone \"{name}\" offers no format this app can record."),
+            }),
+            true,
+        ))
     }
 
     fn open_output(&mut self, make: &mut dyn FnMut(u32) -> OutputSource, errors: ErrorSink) -> Result<Opened, AudioError> {
-        let device = self.host.default_output_device().ok_or_else(|| AudioError {
-            kind: ErrorKind::NoDevice,
-            message: "No speaker or headphones found. Pick an output in the system's sound settings.".into(),
-        })?;
+        let device = self.find(&self.output, false)?;
         let name = device_name(&device);
-        let mut last = None;
-        for c in candidates(&device, false) {
+        let (configs, why) = candidates(&device, false);
+        let mut last = why.map(|e| from_cpal(&e, false));
+        for c in configs {
             let (fmt, cfg) = (c.sample_format(), c.config());
-            match dispatch!(fmt, build_output, &device, cfg.clone(), make, &errors) {
+            match dispatch!(fmt, build_output, &device, cfg, make, &errors) {
                 Ok(stream) => {
                     stream.play().map_err(|e| from_cpal(&e, false))?;
                     return Ok(Opened { stream: Box::new(stream), device: name, rate: cfg.sample_rate, channels: cfg.channels, format: fmt.to_string() });
@@ -356,10 +405,13 @@ impl Backend for CpalBackend {
                 Err(e) => last = Some(e),
             }
         }
-        Err(last.unwrap_or_else(|| AudioError {
-            kind: ErrorKind::Unsupported,
-            message: format!("The output \"{name}\" offers no format this app can play."),
-        }))
+        Err(opening(
+            last.unwrap_or_else(|| AudioError {
+                kind: ErrorKind::Unsupported,
+                message: format!("The output \"{name}\" offers no format this app can play."),
+            }),
+            false,
+        ))
     }
 
     fn any_device(&mut self) -> bool {
@@ -370,6 +422,8 @@ impl Backend for CpalBackend {
 /// One device as `audio-demo list` shows it.
 pub struct DeviceInfo {
     pub name: String,
+    /// cpal's id (`--input`/`--output` take it too).
+    pub id: String,
     pub input: bool,
     pub output: bool,
     pub default_input: bool,
@@ -394,6 +448,7 @@ pub fn list_devices() -> Result<(String, Vec<DeviceInfo>), AudioError> {
         let did = id(&d);
         out.push(DeviceInfo {
             name: device_name(&d),
+            id: did.as_ref().map(|i| i.to_string()).unwrap_or_default(),
             input: d.supports_input(),
             output: d.supports_output(),
             default_input: did.is_some() && did == din,

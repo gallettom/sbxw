@@ -20,7 +20,7 @@ pub fn f32_le_bytes(samples: &[f32]) -> Vec<u8> {
 /// The reverse of [`f32_le_bytes`] (tests and the demo). A trailing partial
 /// sample is ignored.
 pub fn f32_from_le_bytes(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 /// `f32` samples in `[-1, 1]` as 16-bit LE PCM, clipped (the demo plays a
@@ -50,11 +50,11 @@ impl S16Decoder {
             out.push(i16::from_le_bytes([lo, bytes[0]]) as f32 / 32768.0);
             bytes = &bytes[1..];
         }
-        let pairs = bytes.chunks_exact(2);
-        if let [last] = pairs.remainder() {
+        let (pairs, rest) = bytes.as_chunks::<2>();
+        if let [last] = rest {
             self.odd = Some(*last);
         }
-        out.extend(pairs.map(|p| i16::from_le_bytes([p[0], p[1]]) as f32 / 32768.0));
+        out.extend(pairs.iter().map(|p| i16::from_le_bytes(*p) as f32 / 32768.0));
     }
 
     /// Whether half a sample is left over (an odd-length body).
