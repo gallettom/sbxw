@@ -294,8 +294,19 @@ fn body(size: f32, weight: f32) -> TextStyle {
     TextStyle::new(size, weight)
 }
 
-/// The panel for screen `name`, drawn from its last good view.
+/// The panel for screen `name`, drawn from its last good view, with its
+/// open menus inside it (a screen drawn alone).
 pub fn view<S: Host>(s: &ScreenState) -> El {
+    let (mut panel, overlays) = view_parts::<S>(s);
+    for o in overlays {
+        panel = panel.child(o);
+    }
+    panel
+}
+
+/// The panel, and its open menus apart: the shell puts those last in the
+/// window so they paint over every other tile.
+pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     let name: Rc<str> = s.name.as_str().into();
     let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![] };
     let mut panel = col().key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
@@ -309,10 +320,7 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
     if let Some(n) = &s.last_good {
         panel = panel.child(b.node::<S>(n));
     }
-    for o in b.overlays {
-        panel = panel.child(o);
-    }
-    panel
+    (panel, b.overlays)
 }
 
 struct Build<'a> {

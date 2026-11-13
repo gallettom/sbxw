@@ -134,6 +134,8 @@ pub struct App {
     solo: Option<String>,
     start: Option<(String, Mode)>,
     waker: Option<Waker>,
+    /// The link's way to wake the UI, set once `setup` has the waker.
+    wake_slot: Arc<std::sync::Mutex<Option<Waker>>>,
 }
 
 pub fn headless() -> bool {
@@ -193,6 +195,7 @@ impl App {
             solo: a.solo.clone(),
             start: a.sandbox.clone().map(|s| (s, if a.mode.as_deref() == Some("agent") { Mode::Agent } else { Mode::Bash })),
             waker: None,
+            wake_slot: Arc::new(std::sync::Mutex::new(None)),
         };
         if let Some(n) = init.panes {
             app.layout.0 = n.clamp(1, 4);
@@ -221,11 +224,23 @@ impl App {
                 app.fixed_connection = true;
             }
         }
-        let data = app.screen_data();
-        let names: Vec<&str> = match &app.solo {
-            Some(s) => vec![s.as_str()],
-            None => SCREENS.to_vec(),
+        let names: Vec<String> = match &app.solo {
+            Some(s) => vec![s.clone()],
+            None => SCREENS.iter().map(|s| s.to_string()).collect(),
         };
+        // The link starts now, not in `setup`: Rune checks a script's element
+        // keys against the first frame, so in a headless run the first list
+        // must be in before it. Its waker is filled in by `setup`.
+        let slot = app.wake_slot.clone();
+        app.link = Some(Link::start(app.target.clone(), Arc::new(move || {
+            if let Some(w) = slot.lock().unwrap().as_ref() {
+                w();
+            }
+        })));
+        if headless() {
+            app.drain(Some(Duration::from_millis(1500)), true);
+        }
+        let data = app.screen_data();
         app.screens = names.iter().map(|n| ScreenState::new(n, &dir, data.clone())).collect();
         app.marks = rune::tooling::headless_run()
             .map(|r| {
@@ -254,12 +269,8 @@ impl App {
         for s in &mut self.screens {
             s.watch(waker.clone());
         }
-        self.link = Some(Link::start(self.target.clone(), waker.clone()));
+        *self.wake_slot.lock().unwrap() = Some(waker.clone());
         self.waker = Some(waker);
-        if headless() {
-            // Let the first connection land before the first frame.
-            self.drain(Some(Duration::from_millis(1500)), true);
-        }
         if let Some((sb, mode)) = self.start.take() {
             self.open(0, &sb, mode, None);
         }
@@ -362,6 +373,12 @@ impl App {
                 self.listed = true;
                 if l == self.sandboxes {
                     return false;
+                }
+                let was: HashMap<String, String> = self.sandboxes.iter().map(|s| (s.name.clone(), s.status.clone())).collect();
+                for sb in &l {
+                    if was.get(&sb.name).is_some_and(|w| *w != sb.status) {
+                        log::info!("list: {} is now {}", sb.name, sb.status);
+                    }
                 }
                 self.sandboxes = l;
                 // A watched start that now shows as running is done.
@@ -588,6 +605,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let inset = cx.titlebar_inset();
     let top = s.screens.iter().find(|x| x.name == "topbar").unwrap();
     let side = s.screens.iter().find(|x| x.name == "sandboxes").unwrap();
+    let (top_el, mut overlays) = screen::view_parts::<App>(top);
+    let (side_el, more) = screen::view_parts::<App>(side);
+    overlays.extend(more);
     let bar = row()
         .key("top-bar")
         .h(layout::TOP_BAR_H)
@@ -600,10 +620,13 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .window_drag()
         // The traffic lights (macOS) sit over this band: nothing goes under them.
         .child(el().key("traffic-lights-room").w(inset + 4.0).h_full())
-        .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(screen::view::<App>(top)));
-    let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(screen::view::<App>(side));
+        .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(top_el));
+    let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
     let main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
     let mut root = root.child(bar).child(main);
+    for o in overlays {
+        root = root.child(o);
+    }
     if let Some((t, err, _)) = &s.notice {
         root = root.child(
             el().key("notice")
