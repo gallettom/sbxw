@@ -288,3 +288,13 @@ env_files = []
 # tts_voice = "fr_male"        # or fr_female, casual_male, neutral_female… (Voxtral's 20 voices)
 # push_to_talk_key = "F8"      # hold it anywhere on the page to talk
 # dictate_key = "F9"          # hold it to dictate into the focused terminal
+#
+# How a word is said aloud (not what dictation writes). One word per line:
+# letters, digits, '-', '_' or '.', matched whole and whatever its case. `fr`
+# is for a fr_* voice, `en` for every other; a language left out is read as
+# written. The built-in `sbxw` row applies unless you give your own. At most
+# 200 words; each form is one line of at most 120 characters. Jarvis can
+# propose these too, and an approved change is used at once.
+# [voice.words]
+# sbxw = { fr = "ece bé ixe double vé", en = "S B X W" }
+# nginx = { en = "engine X" }

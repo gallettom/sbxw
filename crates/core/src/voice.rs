@@ -128,6 +128,11 @@ pub struct VoiceSettings {
     pub push_to_talk_key: String,
     /// Held, it dictates into the focused terminal instead.
     pub dictate_key: String,
+    /// `[voice.words]`: how a word is said aloud, per language. Merged with
+    /// the built-in words by [`crate::spoken::word_table`]; checked by
+    /// `Config::validate`.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub words: std::collections::BTreeMap<String, crate::spoken::Said>,
 }
 
 impl Default for VoiceSettings {
@@ -139,6 +144,7 @@ impl Default for VoiceSettings {
             tts_voice: "fr_male".into(),
             push_to_talk_key: "F8".into(),
             dictate_key: "F9".into(),
+            words: Default::default(),
         }
     }
 }

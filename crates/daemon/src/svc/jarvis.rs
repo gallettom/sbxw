@@ -131,7 +131,7 @@ fn creatable(path: &Path) -> Result<(), String> {
 /// The sbxw.toml an op writes, if any.
 fn op_toml(op: &Op) -> Option<&str> {
     match op {
-        Op::KitsLine { path, .. } | Op::WriteToml { path, .. } => Some(path),
+        Op::KitsLine { path, .. } | Op::WriteToml { path, .. } | Op::VoiceWords { path, .. } => Some(path),
         _ => None,
     }
 }
@@ -228,6 +228,12 @@ impl App {
             .iter()
             .map(|(k, _)| json!({ "key": k, "value": jarvis::current_value(&shown, k), "allowed": jarvis::allowed_values(k, &world.models) }))
             .collect();
+        // The file's table when it parses, else what the voice uses now.
+        let configured = daemon_cfg.as_ref().map(|c| c.voice.words.clone()).unwrap_or_else(|| self.voice_words());
+        let voice_words: Vec<Value> = sbxw_core::spoken::word_table(&configured)
+            .into_iter()
+            .map(|w| json!({ "word": w.word, "fr": w.said.fr, "en": w.said.en, "origin": w.origin }))
+            .collect();
         let mcp: Vec<Value> = match self.sbx.mcp_ls().await {
             Ok(list) => list.into_iter().map(|s| json!({ "name": s.name, "type": s.kind })).collect(),
             Err(_) => vec![],
@@ -240,11 +246,12 @@ impl App {
             "default_kits": kits::DEFAULT_KITS,
             "jarvis_kits": jarvis_kits,
             "settings": settings,
+            "voice_words": voice_words,
             "network_allow": shown.network_allow,
             "mcp_servers": mcp,
             "running_sandboxes": running,
             "daemon_file": daemon_cfg.is_some() || world.files.contains_key(jarvis::DAEMON_FILE),
-            "limits": { "changes": jarvis::MAX_CHANGES, "kit_files": sbxw_core::my_skills::MAX_FILES, "kit_bytes": sbxw_core::my_skills::MAX_BYTES },
+            "limits": { "voice_words": sbxw_core::spoken::MAX_WORDS, "voice_word_chars": sbxw_core::spoken::MAX_WORD, "voice_said_chars": sbxw_core::spoken::MAX_SAID, "changes": jarvis::MAX_CHANGES, "kit_files": sbxw_core::my_skills::MAX_FILES, "kit_bytes": sbxw_core::my_skills::MAX_BYTES },
         })
     }
 
@@ -383,6 +390,15 @@ impl App {
                     }
                 }
                 ok(format!("{path} {}; it takes effect when the daemon restarts", if created { "created" } else { "written" }), true)
+            }
+            Op::VoiceWords { path, text, words } => {
+                let p = Path::new(&path);
+                let created = !p.exists();
+                if let Err(e) = crate::svc::kits::write_in_place(p, &text) {
+                    return err(format!("{e:#}"));
+                }
+                self.set_voice_words(words);
+                ok(format!("{path} {}; the voice says it this way from the next sentence it reads", if created { "created" } else { "written" }), false)
             }
             Op::McpAdd { replace, spec } => {
                 if replace {
@@ -575,5 +591,30 @@ mod tests {
         let app = app_at(d.path(), &gone);
         let e = app.jarvis_propose("voice", changes(json!([{"kind": "setting", "key": "keep_awake", "value": "always"}]))).await.unwrap_err();
         assert!(e.contains("does not exist") && e.contains("nowhere"), "{e}");
+    }
+
+    /// A word's pronunciation: low risk, so a spoken yes approves it; the
+    /// file gets `[voice.words]` and the voice takes it at once.
+    #[tokio::test]
+    async fn approving_a_voice_word_writes_it_and_the_voice_uses_it() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("sbxw.toml");
+        std::fs::write(&file, "# mine\nkeep_awake = \"off\"\n").unwrap();
+        let app = app_at(d.path(), &file);
+        let state = app.jarvis_state().await;
+        assert_eq!(state["voice_words"], json!([{"word": "sbxw", "fr": "ece bé ixe double vé", "en": "S B X W", "origin": "built_in"}]));
+
+        let p = app.jarvis_propose("dictionary", changes(json!([{"kind": "voice_word", "word": "sbxw", "fr": "esse bé ixe double vé"}, {"kind": "voice_word", "word": "nginx", "en": "engine X"}]))).await.unwrap();
+        assert_eq!(p.risk, sbxw_core::jarvis::Risk::Low);
+        assert!(app.voice_words().is_empty(), "nothing changes before approval");
+        let done = app.jarvis_approve(&p.id, Via::Voice, false).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert!(done.results[0].message.contains("from the next sentence") && !done.results[0].restart, "{:?}", done.results[0]);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text, "# mine\nkeep_awake = \"off\"\n\n[voice.words]\nsbxw = { fr = \"esse bé ixe double vé\" }\nnginx = { en = \"engine X\" }\n");
+        assert_eq!(app.voice_words()["sbxw"].fr.as_deref(), Some("esse bé ixe double vé"), "live, no restart");
+        let state = app.jarvis_state().await;
+        let origins: Vec<(String, String)> = state["voice_words"].as_array().unwrap().iter().map(|w| (w["word"].as_str().unwrap().into(), w["origin"].as_str().unwrap().into())).collect();
+        assert_eq!(origins, [("nginx".to_string(), "configured".to_string()), ("sbxw".into(), "replaces_built_in".into())]);
     }
 }

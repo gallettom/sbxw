@@ -34,7 +34,7 @@ lists every key with its default.
 | `keep_awake` | `remote` | macOS: hold the Mac awake with `caffeinate` — `remote` while Remote Control is on in some session, `always`, or `off` |
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
 | `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
-| `[voice]` | see below | Jarvis's voice: its local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `tts` (`"voxtral-tts-6bit"`, Voxtral TTS at 3.5 GB; also `"voxtral-tts-4bit"` at 2.5 GB and `"voxtral-tts-bf16"` at 8 GB), `tts_voice` (`"fr_male"`, one of Voxtral's 20 voices: `fr_female`, `casual_male`, `neutral_female`…), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal). Read from the daemon's config. Reading aloud needs a Mac with Apple Silicon and [uv](https://docs.astral.sh/uv/); `llm` and `retention_days` of an older sbxw are ignored. A table: write it after every root key |
+| `[voice]` | see below | Jarvis's voice: its local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `tts` (`"voxtral-tts-6bit"`, Voxtral TTS at 3.5 GB; also `"voxtral-tts-4bit"` at 2.5 GB and `"voxtral-tts-bf16"` at 8 GB), `tts_voice` (`"fr_male"`, one of Voxtral's 20 voices: `fr_female`, `casual_male`, `neutral_female`…), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal), `[voice.words]` (how words are said aloud, see [below](#words-read-aloud)). Read from the daemon's config. Reading aloud needs a Mac with Apple Silicon and [uv](https://docs.astral.sh/uv/); `llm` and `retention_days` of an older sbxw are ignored. A table: write it after every root key |
 | `[mac]` | see below | The [virtual Mac](../assets/terminal-mac/README.md#configuration): `vm` (`"default"`), `idle_release_minutes` (`10`), `pause_after_minutes` (`15`), `stop_after_minutes` (`120`), `force_stop_after_minutes` (`3`), `guest_host_ip` (`""`, the VM bridge's address). A table: write it after every root key |
 
 ### Sandbox creation
@@ -235,6 +235,36 @@ sbxw config grants --revoke   # forget it; the next bring-up asks again
 The full list of what is asked, and where approvals are kept, is in
 [Security](security.md#the-agent-can-edit-sbxwtoml).
 
+## Words read aloud
+
+`[voice.words]` in the daemon's `sbxw.toml` says how the voice reads a word
+it would say badly. It changes only what is read aloud: dictation, and what
+is sent to an agent, are untouched.
+
+```toml
+[voice.words]
+sbxw = { fr = "ece bé ixe double vé", en = "S B X W" }
+nginx = { en = "engine X" }
+"node.js" = { fr = "node jé esse" }
+```
+
+- **The word** is 1 to 40 letters, digits, `-`, `_` or `.`, starting and
+  ending with a letter or digit (quote it when it holds a dot). It is
+  matched as a whole word, whatever its case: `nginx` is not changed in
+  `nginx2`. A longer word is tried first. The same word twice, in two cases,
+  is refused.
+- **How it is said**, per language: `fr` for a French voice (`tts_voice =
+  "fr_*"`), `en` for every other. Each is one line of at most 120
+  characters, with no control characters. A language left out: the word is
+  read as written in it.
+- **Built-in words.** sbxw ships one, `sbxw`, spelt letter by letter. An
+  entry of the same word replaces it whole (so `sbxw = { fr = "…" }` alone
+  reads `sbxw` as written in English); without one, the built-in applies.
+- At most 200 entries. A table: write it after every root key.
+
+A change by hand takes effect when the daemon restarts. A change Jarvis
+proposes and you approve is used from the next sentence read.
+
 ## Changes Jarvis proposes
 
 [Jarvis](jarvis.md) can propose changes to this configuration. Each one is
@@ -244,13 +274,15 @@ applied by the daemon only after you approve it, as a diff you read first:
   keys, `claude_model`, `terminal_color`, `terminal_bar_color`,
   `terminal_text_color`, `keep_awake`, `keep_awake_min_battery`,
   `battery_warn_below`, `cache_ttl_days`;
+- one word of `[voice.words]`: added, replaced, or its entry removed;
 - the daemon's `network_allow`, bare host names only;
 - the `kits` line of the daemon's `sbxw.toml` or of one sandbox's, with
   bundled kits and Jarvis kits only;
 - MCP servers, as the MCP tab of Setup adds them.
 
 Comments and key order in the file are kept. A setting or `network_allow`
-change takes effect when the daemon restarts. When the daemon was started where
+change takes effect when the daemon restarts; a `[voice.words]` change is
+used from the next sentence read. When the daemon was started where
 there is no `sbxw.toml`, the first such change creates it, at the path the
 daemon was asked to read (its folder must exist); the dialog says so and the
 diff shows a new file. The Kits dialog lists that file too, and saving its

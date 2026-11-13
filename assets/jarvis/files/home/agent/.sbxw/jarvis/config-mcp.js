@@ -1,6 +1,6 @@
 // sbxw-config, an MCP server for Jarvis alone: the only way the Jarvis session
-// changes sbxw's configuration (kits, kits lines, settings, network, MCP
-// servers), and only by *proposing*. The daemon validates each proposal, the
+// changes sbxw's configuration (kits, kits lines, settings, the words read
+// aloud, network, MCP servers), and only by *proposing*. The daemon validates each proposal, the
 // person approves or refuses it in the web UI, and the daemon applies it.
 // Nothing here writes a configuration file; nothing here can.
 //
@@ -153,7 +153,9 @@ const TOOLS = [
     description:
       "Read what sbxw's configuration holds right now and what you may propose to change: the " +
       "editable sbxw.toml files and their kits lines, the bundled kits, the jarvis-* kits with " +
-      "their files, the settings you may set and their allowed values, the network allowlist, " +
+      "their files, the settings you may set and their allowed values, the pronunciation " +
+      "dictionary (`voice_words`: each word, how it is said in French and in English, and whether " +
+      "it is built in or configured), the network allowlist, " +
       "the MCP server names and the sandboxes running.\n" +
       "\n" +
       "Call it BEFORE every proposal, and again when a proposal is refused for naming something " +
@@ -288,6 +290,34 @@ const TOOLS = [
         timeout_seconds: TIMEOUT,
       },
       required: ["summary", "key", "value"],
+    },
+  },
+  {
+    name: "set_voice_word",
+    description:
+      "Propose how sbxw's voice says one word aloud, when the person says a word is pronounced " +
+      "badly (\"it says sbxw wrong\", \"say nginx as engine X\") or asks about the pronunciation " +
+      "dictionary. Read `voice_words` in `sbxw_state` first. This changes only how text is READ " +
+      "ALOUD, never what dictation writes nor what is sent to an agent.\n" +
+      "\n" +
+      "Give `word` (one word: letters, digits, '-', '_' or '.', at most 40 characters; case does " +
+      "not count) and how it is said: `fr` for the French voice, `en` for every other, each one " +
+      "line of at most 120 characters, written as it sounds (\"ece bé ixe\", \"S B X W\"). A " +
+      "language left out is read as written. To drop a configured word, set `remove` to true: a " +
+      "built-in word then gets its built-in pronunciation back. Low risk: the person may approve " +
+      "it by voice, and it is used from the next sentence read." +
+      PROPOSAL_RULES,
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: SUMMARY,
+        word: { type: "string", description: "The word as it is written, for example \"nginx\"." },
+        fr: { type: "string", description: "How the French voice says it, spelt as it sounds." },
+        en: { type: "string", description: "How every other voice says it, spelt as it sounds." },
+        remove: { type: "boolean", description: "True to drop the configured entry for this word instead." },
+        timeout_seconds: TIMEOUT,
+      },
+      required: ["summary", "word"],
     },
   },
   {
@@ -460,6 +490,21 @@ function changesFor(name, args) {
       if (!key) throw new Refusal("No setting key given.");
       if (args.value === undefined) throw new Refusal("No value given.");
       return [{ kind: "setting", key, value: args.value }];
+    }
+    case "set_voice_word": {
+      const word = String(args.word || "").trim();
+      if (!word) throw new Refusal("No word given.");
+      const said = (v) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+      const fr = said(args.fr), en = said(args.en);
+      if (args.remove === true) {
+        if (fr || en) throw new Refusal("Either remove the word or say how it is said, not both.");
+        return [{ kind: "voice_word", word }];
+      }
+      if (!fr && !en) throw new Refusal("Say how the word is said (fr, en or both), or set remove to true.");
+      const change = { kind: "voice_word", word };
+      if (fr) change.fr = fr;
+      if (en) change.en = en;
+      return [change];
     }
     case "allow_network": {
       const add = list(args.add), remove = list(args.remove);

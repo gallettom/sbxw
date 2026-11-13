@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::kits;
 use crate::mcp::McpSpec;
 use crate::my_skills::{self, KitFile};
+use crate::spoken::{self, Said};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -189,6 +190,16 @@ pub enum Change {
     },
     /// One of [`SETTINGS`] in the daemon's sbxw.toml; `null` removes the key.
     Setting { key: String, value: Value },
+    /// One word of `[voice.words]` in the daemon's sbxw.toml: how it is said
+    /// aloud. `fr` and `en` both absent removes the configured entry (a
+    /// built-in word then comes back).
+    VoiceWord {
+        word: String,
+        #[serde(default)]
+        fr: Option<String>,
+        #[serde(default)]
+        en: Option<String>,
+    },
     /// The daemon config's `network_allow`.
     NetworkAllow {
         #[serde(default)]
@@ -207,6 +218,7 @@ impl Change {
             Change::KitRemove { .. } => "kit_remove",
             Change::KitsLine { .. } => "kits_line",
             Change::Setting { .. } => "setting",
+            Change::VoiceWord { .. } => "voice_word",
             Change::NetworkAllow { .. } => "network_allow",
             Change::McpServer { .. } => "mcp_server",
             Change::McpRemove { .. } => "mcp_remove",
@@ -352,6 +364,75 @@ pub fn set_setting(raw: &str, key: &str, value: &Value, models: &[String]) -> Re
     let next = doc.to_string();
     Config::parse(&next).map_err(|e| format!("{key}: {e:#}"))?;
     Ok(next)
+}
+
+// ---------------------------------------------------------------------------
+// Voice words
+
+/// `raw` (an sbxw.toml) with `word` in `[voice.words]` said as `said`
+/// (`None`: its entry removed), and the table after it. The word is written
+/// in lower case and replaces an entry of the same word whatever its case.
+/// Checked as Config parsing checks it; comments and order are kept.
+pub fn set_voice_word(raw: &str, word: &str, said: Option<&Said>) -> Result<(String, BTreeMap<String, Said>), String> {
+    let word = word.trim();
+    spoken::check_word(word)?;
+    let lower = word.to_lowercase();
+    if let Some(said) = said {
+        for (lang, s) in [("fr", &said.fr), ("en", &said.en)] {
+            if let Some(s) = s {
+                spoken::check_said(word, lang, s)?;
+            }
+        }
+    }
+    let mut doc: toml_edit::DocumentMut = raw.parse().map_err(|e| format!("the daemon's sbxw.toml is not valid TOML: {e}"))?;
+    if !doc.contains_key("voice") {
+        let mut t = toml_edit::Table::new();
+        t.set_implicit(true);
+        doc["voice"] = toml_edit::Item::Table(t);
+    }
+    let Some(voice) = doc["voice"].as_table_like_mut() else {
+        return Err("[voice] in the daemon's sbxw.toml is not a table".into());
+    };
+    if voice.get("words").is_none() {
+        if said.is_none() {
+            return Err(format!("'{lower}' has no entry in [voice.words], so there is none to remove"));
+        }
+        voice.insert("words", toml_edit::table());
+    }
+    let Some(words) = voice.get_mut("words").and_then(|w| w.as_table_like_mut()) else {
+        return Err("[voice.words] in the daemon's sbxw.toml is not a table".into());
+    };
+    let existing: Vec<String> = words.iter().map(|(k, _)| k.to_string()).filter(|k| k.to_lowercase() == lower).collect();
+    match said {
+        Some(said) => {
+            let mut entry = toml_edit::InlineTable::new();
+            for (lang, s) in [("fr", &said.fr), ("en", &said.en)] {
+                if let Some(s) = s {
+                    entry.insert(lang, s.trim().into());
+                }
+            }
+            // An entry already in lower case is replaced in place.
+            for k in existing.iter().filter(|k| **k != lower) {
+                words.remove(k);
+            }
+            words.insert(&lower, toml_edit::value(entry));
+        }
+        None => {
+            if existing.is_empty() {
+                return Err(format!("'{lower}' has no entry in [voice.words], so there is none to remove"));
+            }
+            for k in &existing {
+                words.remove(k);
+            }
+        }
+    }
+    let empty = words.is_empty();
+    if empty {
+        voice.remove("words");
+    }
+    let next = doc.to_string();
+    let cfg = Config::parse(&next).map_err(|e| format!("{e:#}"))?;
+    Ok((next, cfg.voice.words))
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +633,9 @@ pub enum Op {
     /// The daemon's sbxw.toml rewritten in place; `network_added`: the
     /// hosts this write adds, recorded as approved.
     WriteToml { path: String, text: String, network_added: Vec<String> },
+    /// The daemon's sbxw.toml rewritten in place, with `[voice.words]` as
+    /// `words` after it: the voice takes the table at once.
+    VoiceWords { path: String, text: String, words: BTreeMap<String, Said> },
     McpAdd { replace: bool, spec: McpSpec },
     McpRm { name: String },
 }
@@ -757,6 +841,38 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             Ok(Planned {
                 view: view(format!("Set {key} to {shown}{} (takes effect when the daemon restarts)", f.creates()), diff, Risk::Low),
                 op: Op::WriteToml { path: f.path, text, network_added: vec![] },
+            })
+        }
+        Change::VoiceWord { word, fr, en } => {
+            let said = (fr.is_some() || en.is_some()).then(|| Said { fr: fr.clone(), en: en.clone() });
+            spoken::check_word(word.trim())?;
+            let f = daemon_file(w)?;
+            let (text, words) = set_voice_word(&f.raw, word, said.as_ref())?;
+            let lower = word.trim().to_lowercase();
+            if text == f.raw {
+                return Err(format!("'{lower}' is already said this way"));
+            }
+            let built_in = spoken::WORDS.iter().any(|(b, ..)| b.to_lowercase() == lower);
+            let shown = |s: &Said| {
+                let mut parts = Vec::new();
+                if let Some(x) = &s.fr {
+                    parts.push(format!("\"{}\" in French", x.trim()));
+                }
+                if let Some(x) = &s.en {
+                    parts.push(format!("\"{}\" in English", x.trim()));
+                }
+                parts.join(", ")
+            };
+            let what = match &said {
+                Some(s) => format!("Say '{lower}' as {}", shown(s)),
+                None if built_in => format!("Remove the configured pronunciation of '{lower}' (the built-in one comes back)"),
+                None => format!("Remove the pronunciation of '{lower}' (read as written)"),
+            };
+            let diff = f.diff_to(&text);
+            w.files.insert(DAEMON_FILE.into(), f.written(text.clone()));
+            Ok(Planned {
+                view: view(format!("{what}{} (the voice uses it from the next sentence it reads)", f.creates()), diff, Risk::Low),
+                op: Op::VoiceWords { path: f.path, text, words },
             })
         }
         Change::NetworkAllow { add, remove } => {
@@ -1376,6 +1492,48 @@ mod tests {
         let k = plan(&w, &[change(json!({"kind": "kits_line", "file": "daemon", "remove": ["sbxw:retro"]}))]).unwrap();
         assert!(k[0].view.diff.starts_with("--- /dev/null\n") && k[0].view.title.contains("creating /h/sbxw.toml"), "{:?}", k[0].view);
         assert_eq!(k[0].view.risk, Risk::Low);
+    }
+
+    #[test]
+    fn a_voice_word_is_low_risk_and_writes_only_voice_words() {
+        let w = world();
+        let p = plan(&w, &[change(json!({"kind": "voice_word", "word": "Nginx", "fr": "engine ixe"}))]).unwrap();
+        assert_eq!((p[0].view.kind.as_str(), p[0].view.risk), ("voice_word", Risk::Low));
+        assert!(p[0].view.title.contains("Say 'nginx' as \"engine ixe\" in French"), "{}", p[0].view.title);
+        assert!(p[0].view.diff.contains("+[voice.words]\n+nginx = { fr = \"engine ixe\" }\n"), "{}", p[0].view.diff);
+        let Op::VoiceWords { text, words, .. } = &p[0].op else { panic!("{:?}", p[0].op) };
+        assert!(text.starts_with("# mine\n"), "the rest of the file is kept: {text}");
+        assert_eq!(words["nginx"].fr.as_deref(), Some("engine ixe"));
+        assert_eq!(Config::parse(text).unwrap().voice.stt, "parakeet-tdt-0.6b-v3-int8");
+
+        // Replacing the built-in, then removing that override, in one proposal.
+        let both = plan(&w, &[change(json!({"kind": "voice_word", "word": "SBXW", "en": "sandbox W"})), change(json!({"kind": "voice_word", "word": "sbxw"}))]).unwrap();
+        assert!(both[0].view.diff.contains("+sbxw = { en = \"sandbox W\" }"), "{}", both[0].view.diff);
+        assert!(both[1].view.title.contains("the built-in one comes back"), "{}", both[1].view.title);
+        let Op::VoiceWords { text, words, .. } = &both[1].op else { panic!() };
+        assert!(words.is_empty() && !text.contains("words"), "{text}");
+
+        // Refused: a bad word, a bad form, nothing to remove, an unknown field.
+        assert!(plan(&w, &[change(json!({"kind": "voice_word", "word": "two words", "fr": "x"}))]).unwrap_err().contains("is not a word"));
+        assert!(plan(&w, &[change(json!({"kind": "voice_word", "word": "x", "fr": "a\nb"}))]).unwrap_err().contains("one line"));
+        assert!(plan(&w, &[change(json!({"kind": "voice_word", "word": "nginx"}))]).unwrap_err().contains("none to remove"));
+        assert!(serde_json::from_value::<Change>(json!({"kind": "voice_word", "word": "x", "de": "y"})).is_err());
+        // The same again: nothing to change.
+        let mut again = world();
+        again.files.get_mut(DAEMON_FILE).unwrap().raw.push_str("\n[voice.words]\nnginx = { fr = \"engine ixe\" }\n");
+        assert!(plan(&again, &[change(json!({"kind": "voice_word", "word": "nginx", "fr": "engine ixe"}))]).unwrap_err().contains("already"));
+        // An entry of another case is replaced, not doubled.
+        let p = plan(&again, &[change(json!({"kind": "voice_word", "word": "NGINX", "fr": "n jinx"}))]).unwrap();
+        assert!(p[0].view.diff.contains("-nginx = { fr = \"engine ixe\" }\n+nginx = { fr = \"n jinx\" }"), "{}", p[0].view.diff);
+
+        // A missing daemon file is created.
+        let mut gone = world();
+        gone.files.insert(DAEMON_FILE.into(), TomlFile { path: "/h/sbxw.toml".into(), raw: String::new(), missing: true });
+        let p = plan(&gone, &[change(json!({"kind": "voice_word", "word": "nginx", "en": "engine X"}))]).unwrap();
+        assert!(p[0].view.diff.starts_with("--- /dev/null\n"), "{}", p[0].view.diff);
+        assert!(p[0].view.title.contains("creating /h/sbxw.toml"), "{}", p[0].view.title);
+        let Op::VoiceWords { text, .. } = &p[0].op else { panic!() };
+        assert_eq!(text, "[voice.words]\nnginx = { en = \"engine X\" }\n");
     }
 
     #[test]

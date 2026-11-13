@@ -437,6 +437,7 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         self.mac.validate().map_err(anyhow::Error::msg)?;
         self.voice.validate().map_err(anyhow::Error::msg)?;
+        crate::spoken::check_words(&self.voice.words).map_err(anyhow::Error::msg)?;
         if let Some(mode) = self.skills_mode() {
             if !SKILL_MODES.contains(&mode) {
                 bail!("skills = \"{mode}\" — expected one of {}", SKILL_MODES.join(", "));
@@ -645,6 +646,20 @@ mod tests {
         assert_eq!(back.env, cfg.env);
         assert_eq!(back.ports, cfg.ports);
         assert_eq!(back.source.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn voice_words_parse_and_are_checked() {
+        let cfg = Config::parse("[voice.words]\nsbxw = { fr = \"ece bé\", en = \"S B X W\" }\n\"node.js\" = { en = \"node J S\" }\n").unwrap();
+        assert_eq!(cfg.voice.words["sbxw"].fr.as_deref(), Some("ece bé"));
+        assert_eq!((cfg.voice.words["node.js"].fr.as_deref(), cfg.voice.words["node.js"].en.as_deref()), (None, Some("node J S")));
+        assert_eq!(cfg.voice.tts_voice, "fr_male", "the rest of [voice] keeps its defaults");
+        let e = format!("{:#}", Config::parse("[voice.words]\nsbxw = { de = \"x\" }\n").unwrap_err());
+        assert!(e.contains("de"), "{e}");
+        let e = format!("{:#}", Config::parse("[voice.words]\n\"a b\" = { fr = \"x\" }\n").unwrap_err());
+        assert!(e.contains("[voice.words] 'a b' is not a word"), "{e}");
+        let e = format!("{:#}", Config::parse("[voice.words]\nx = { fr = \"a\\nb\" }\n").unwrap_err());
+        assert!(e.contains("'x': the fr form"), "{e}");
     }
 
     #[test]

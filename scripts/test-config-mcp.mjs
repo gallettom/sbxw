@@ -86,7 +86,7 @@ await test("initialize names the server", async () => {
 await test("tools/list lists every tool, each with its rules", async () => {
   const r = await rpc("tools/list", {});
   const names = r.result.tools.map((t) => t.name);
-  assert.deepEqual(names, ["sbxw_state", "propose_kit", "remove_kit", "set_kits", "set_setting", "allow_network", "propose_mcp_server", "remove_mcp_server", "check_proposal"]);
+  assert.deepEqual(names, ["sbxw_state", "propose_kit", "remove_kit", "set_kits", "set_setting", "set_voice_word", "allow_network", "propose_mcp_server", "remove_mcp_server", "check_proposal"]);
   for (const t of r.result.tools.filter((t) => !["sbxw_state", "check_proposal"].includes(t.name))) {
     assert.match(t.description, /PROPOSAL, not a change/, t.name);
     assert.match(t.description, /Never put a secret/, t.name);
@@ -100,6 +100,9 @@ await test("tools/list lists every tool, each with its rules", async () => {
   const sets = r.result.tools.find((t) => t.name === "set_kits").description;
   assert.match(sets, /sbxw:ssh-agent.*high risk/s);
   assert.match(sets, /spoken yes does not count/);
+  const word = r.result.tools.find((t) => t.name === "set_voice_word").description;
+  assert.match(word, /pronounced badly/);
+  assert.match(word, /never what dictation writes/);
   const mcp = r.result.tools.find((t) => t.name === "propose_mcp_server").description;
   assert.match(mcp, /Prefer `remote`/);
   assert.match(mcp, /tick an acknowledgement/);
@@ -147,6 +150,9 @@ await test("every other kind is shaped as the contract says", async () => {
     ["remove_kit", { kit: "jarvis-notes" }, { kind: "kit_remove", kit: "jarvis-notes" }],
     ["set_kits", { file: "daemon", add: ["sbxw:retro"] }, { kind: "kits_line", file: "daemon", add: ["sbxw:retro"], remove: [] }],
     ["set_setting", { key: "keep_running", value: true }, { kind: "setting", key: "keep_running", value: true }],
+    ["set_voice_word", { word: "nginx", fr: " engine ixe ", en: "engine X" }, { kind: "voice_word", word: "nginx", fr: "engine ixe", en: "engine X" }],
+    ["set_voice_word", { word: "sbxw", en: "S B X W" }, { kind: "voice_word", word: "sbxw", en: "S B X W" }],
+    ["set_voice_word", { word: "sbxw", remove: true }, { kind: "voice_word", word: "sbxw" }],
     ["allow_network", { add: ["pypi.org"] }, { kind: "network_allow", add: ["pypi.org"], remove: [] }],
     ["propose_mcp_server", { spec: { name: "docs", kind: "remote", url: "https://example.org/mcp" } }, { kind: "mcp_server", spec: { name: "docs", kind: "remote", url: "https://example.org/mcp" } }],
     ["remove_mcp_server", { name: "docs" }, { kind: "mcp_remove", name: "docs" }],
@@ -188,6 +194,10 @@ await test("a secret, a bundled kit or a missing summary never leaves the sandbo
   assert.match(text(escape), /not a path relative/);
   const none = await call("set_kits", { file: "daemon", add: ["sbxw:retro"] });
   assert.match(text(none), /summary/);
+  const unsaid = await call("set_voice_word", { summary: "s", word: "nginx" });
+  assert.match(text(unsaid), /Say how the word is said/);
+  const both = await call("set_voice_word", { summary: "s", word: "nginx", fr: "x", remove: true });
+  assert.match(text(both), /not both/);
   assert.equal(seen.length, 0);
 });
 

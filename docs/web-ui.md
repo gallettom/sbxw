@@ -456,7 +456,9 @@ during the install). It needs a Mac with Apple Silicon and
 stays silent. A message is read a few sentences at a time, and the sound
 plays as it is made rather than once a batch is finished. Symbols are said
 in words (`>=`, `@`, `/`, a file name's dot…), in French for a French voice
-and in English for the others. The speaker in the bar, or the same one in the
+and in English for the others. A word the voice says badly can be given its
+own pronunciation in `[voice.words]`, or by asking Jarvis
+([Words read aloud](configuration.md#words-read-aloud)). The speaker in the bar, or the same one in the
 panel's header, switches the voice off: nothing is read, Jarvis's own
 prompts included, until you switch it back on, and the choice is remembered
 in this browser. Talking stops the current reading without muting. The voice is `[voice]

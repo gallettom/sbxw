@@ -204,7 +204,9 @@ person approves.**
     `.claude/hooks/`, `.claude/CLAUDE.md` and `.local/bin/claude` are
     refused;
   - settings come from a fixed list and are checked as the config loader
-    checks them; a `network_allow` entry is a bare host name (no address,
+    checks them; a pronunciation change writes one entry of `[voice.words]`
+    only, a word of letters, digits, `-`, `_` or `.` and one line of text
+    per language; a `network_allow` entry is a bare host name (no address,
     no port, no wildcard, not this machine), and approving it records the
     same consent as any new grant;
   - **no secrets**: a change carrying something shaped like a key or a token
@@ -241,10 +243,14 @@ the highest of its changes:
 
 | Low risk | High risk |
 |---|---|
-| A setting from the fixed list; a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac`, in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
+| A setting from the fixed list; a word's pronunciation (`[voice.words]`); a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac`, in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
 
 A low-risk proposal may be approved by voice (a spoken *oui* after Jarvis
-reads its summary). A high-risk one is approved only with a click in the
+reads its summary). A pronunciation is low risk because its value is only
+text the voice reads aloud on this machine: it reaches no sandbox, no agent
+and no dictation, it runs nothing, and it is bounded (one word, one line of
+at most 120 characters per language, 200 entries). The worst it does is make
+a word sound wrong, which the person hears and can undo the same way. A high-risk one is approved only with a click in the
 dialog, after its diff is on screen: the daemon refuses a voice approval of
 it (HTTP 409). The diff is the sandbox's text: the page shows it as text,
 never as HTML.

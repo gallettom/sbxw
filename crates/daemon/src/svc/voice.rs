@@ -81,6 +81,9 @@ pub struct VoiceRuntime {
     speech_used: Option<Instant>,
     /// Held while a model loads (see `ensure_*`).
     loading: Arc<tokio::sync::Mutex<()>>,
+    /// `[voice.words]` as a Jarvis change last wrote it; `None`: the
+    /// startup config's.
+    words: Option<std::collections::BTreeMap<String, sbxw_core::spoken::Said>>,
 }
 
 /// The running `mlx_audio.server`, in a process group of its own: `uvx`
@@ -595,12 +598,24 @@ impl App {
         check_speech(&text)?;
         let (server, dir) = self.ensure_speech().await?;
         let voice = &self.cfg.voice.tts_voice;
-        // Symbols are said in words: see `sbxw_core::spoken`.
-        let text = sbxw_core::spoken::speakable(&text, sbxw_core::spoken::Lang::of_voice(voice));
+        // Symbols are said in words, and names as the table says: see `sbxw_core::spoken`.
+        let words = sbxw_core::spoken::word_table(&self.voice_words());
+        let text = sbxw_core::spoken::speakable(&text, sbxw_core::spoken::Lang::of_voice(voice), &words);
         let mut speech = server.say(&dir, voice, &text).await?;
         speech._server = Some(server);
         self.speech_used();
         Ok(speech)
+    }
+
+    /// `[voice.words]` as the voice uses it now: the startup config's, or
+    /// what an approved Jarvis change wrote since.
+    pub fn voice_words(&self) -> std::collections::BTreeMap<String, sbxw_core::spoken::Said> {
+        self.voice.lock().unwrap().words.clone().unwrap_or_else(|| self.cfg.voice.words.clone())
+    }
+
+    /// The voice reads `words` from the next sentence on.
+    pub(crate) fn set_voice_words(&self, words: std::collections::BTreeMap<String, sbxw_core::spoken::Said>) {
+        self.voice.lock().unwrap().words = Some(words);
     }
 
     /// The person's rules for what is masked, read from `anonymise.toml` each
