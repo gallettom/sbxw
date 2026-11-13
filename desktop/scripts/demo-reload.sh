@@ -1,45 +1,51 @@
 #!/usr/bin/env bash
-# Proof B, headless: click "select" on docs twice, then the screen file is
-# edited, broken, and fixed while the app runs. State must survive; the
-# broken file must keep the last good view with the error shown.
-#
-# A headless run has a virtual clock, so the edits cannot be made from this
-# shell mid-run. Instead the three versions are written first, and the
-# script's marks `screen:<file>` make the app load each one at its time,
-# through the same reload code a real edit goes through (the file watcher
-# itself is covered by `cargo test screen`). Output: shots/reload-{1..4}-*.png
-# and shots/reload-strip.png (Rune's own --strip, panel crops side by side).
+# Hot reload through the override folder, headless, with real file edits.
+# One run, a fixture (no daemon):
+#   t=0.3  type "web" in the filter (screen state);
+#   t=1.0  a copy of sandboxes.luau appears in the override folder, edited:
+#          it replaces the built-in, the filter is kept;
+#   t=1.5  the copy is broken: the last good view stays, with the error;
+#   t=2.0  the copy is fixed;
+#   t=2.5  the copy is deleted: the built-in comes back, the filter still kept.
+# At each time the app holds (`hold:` mark) and this script, watching the
+# app's log for that hold, edits the file; the app's watcher thread sees it
+# as it would in a window. Output: shots/reload-strip.png (five frames 0.5 s
+# apart from 0.8 s, the sidebar), the log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots"
-mkdir -p "$shots"
-tmp=$(mktemp -d)
-v0="$tmp/sandboxes.luau"; v1="$tmp/edited.luau"; v2="$tmp/broken.luau"; v3="$tmp/fixed.luau"
-cp "$here/screens/sandboxes.luau" "$v0"
-sed 's/text{ "Sandboxes", bold = true }/text{ "Sandboxes (edited live)", bold = true, color = "#f9e2af" }, text{ "a line added while running" }/' "$v0" >"$v1"
-cp "$v1" "$v2"; printf '\nreturn {{{\n' >>"$v2"
-cp "$v1" "$v3"
-cat >"$tmp/script.json" <<JSON
+shots="$here/shots"; mkdir -p "$shots"
+dir=$(mktemp -d); export SBXW_DESKTOP_SCREENS="$dir"
+f="$dir/sandboxes.luau"
+edited=$(mktemp)
+sed 's/text{ "SANDBOXES", size = "sm", weight = "semibold", color = "text" }/text{ "SANDBOXES (edited live)", size = "sm", weight = "semibold", color = "amber" }/' \
+  "$here/screens/sandboxes.luau" >"$edited"
+grep -q "edited live" "$edited"
+script="$shots/reload-script.json"
+cat >"$script" <<JSON
 {"events": [
-  {"t": 0.3, "type": "tap", "key": "btn-select-docs"},
-  {"t": 0.6, "type": "tap", "key": "btn-select-docs"},
-  {"t": 1.0, "type": "mark", "name": "screen:$v1"},
-  {"t": 1.5, "type": "mark", "name": "screen:$v2"},
-  {"t": 2.0, "type": "mark", "name": "screen:$v3"},
-  {"t": 2.5, "type": "mark", "name": "end"}
+  {"t": 0.3, "type": "tap", "key": "filter"},
+  {"t": 0.4, "type": "type", "text": "web", "every": 0.05},
+  {"t": 1.0, "type": "mark", "name": "hold:1200"},
+  {"t": 1.5, "type": "mark", "name": "hold:1201"},
+  {"t": 2.0, "type": "mark", "name": "hold:1202"},
+  {"t": 2.5, "type": "mark", "name": "hold:1203"},
+  {"t": 3.0, "type": "mark", "name": "end"}
 ]}
 JSON
-start_daemon "$shots"
-i=1
-for step in "0.9 clicked" "1.4 edited" "1.9 broken" "2.4 fixed"; do
-  set -- $step
-  run_app "$shots/app-reload-$i.log" --screen "$v0" --script "$tmp/script.json" --snap "$shots/reload-$i-$2.png" --at "$1"
-  echo "$shots/reload-$i-$2.png"
-  i=$((i + 1))
-done
-# One run, four frames 0.5 s apart from 0.9 s, the left panel cropped from each.
-run_app "$shots/app-reload-strip.log" --screen "$v0" --script "$tmp/script.json" \
-  --start 0.9 --frames 91 --every 30 --cols 4 --strip "$shots/reload-strip.png" --crop 0,0,320,260
+build
+log="$shots/app-reload.log"
+run_app "$log" --fixture "$here/fixtures/sandboxes/basic.json" --script "$script" \
+  --start 0.8 --frames 121 --every 30 --cols 5 --strip "$shots/reload-strip.png" --crop 0,0,250,420 &
+app=$!
+on_hold() { # wait for the app to enter hold <ms>, then let its watcher settle in
+  for _ in $(seq 300); do grep -q "hold $1 ms" "$log" 2>/dev/null && { sleep 0.2; return; }; sleep 0.05; done
+  echo "the app never held $1" >&2; exit 1
+}
+on_hold 1200; cp "$edited" "$f"
+on_hold 1201; printf '\nreturn {{{\n' >>"$f"
+on_hold 1202; cp "$edited" "$f"; touch -d '+1 second' "$f"
+on_hold 1203; rm "$f"
+wait $app
+rm -rf "$dir" "$edited"
 echo "$shots/reload-strip.png"
-grep -hE "screen [^ ]+(: | loaded)" "$shots/app-reload-4.log" | sed 's/^\[[^]]*\] //'
-rm -rf "$tmp"
+grep -hE "screen sandboxes" "$log" | sed 's/^\[[^]]*\] //'

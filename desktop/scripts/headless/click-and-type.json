@@ -1,19 +1,77 @@
 {
   "events": [
-    { "t": 0.3, "type": "tap", "key": "btn-select-docs" },
-    { "t": 0.6, "type": "tap", "key": "btn-select-docs" },
-    { "t": 0.9, "type": "type", "every": 0.02, "text": "echo 'Hello (World) | <ok> {x} ~@#$%^&*_+' | tr a-z A-Z" },
-    { "t": 2.4, "type": "key", "name": "Enter" },
-    { "t": 2.6, "type": "type", "every": 0.02, "text": "printf '\\e[1;31mbold red\\e[0m \\e[42;30mgreen bg\\e[0m \\e[4munderline\\e[0m \\e[38;5;208m256-colour\\e[0m wide:日本語|\\n'" },
-    { "t": 5.0, "type": "key", "name": "Enter" },
-    { "t": 5.2, "type": "type", "every": 0.02, "text": "echo shift keys:" },
-    { "t": 5.8, "type": "key", "name": "a", "shift": true },
-    { "t": 5.9, "type": "key", "name": "9", "shift": true },
-    { "t": 6.0, "type": "key", "name": "A", "shift": true },
-    { "t": 6.1, "type": "key", "name": "Enter" },
-    { "t": 6.3, "type": "type", "every": 0.02, "text": "sleep 30" },
-    { "t": 6.6, "type": "key", "name": "Enter" },
-    { "t": 6.9, "type": "key", "name": "c", "ctrl": true },
-    { "t": 7.2, "type": "mark", "name": "end" }
+    {
+      "t": 0.9,
+      "type": "type",
+      "every": 0.02,
+      "text": "echo 'Hello (World) | <ok> {x} ~@#$%^&*_+' | tr a-z A-Z"
+    },
+    {
+      "t": 2.4,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 2.6,
+      "type": "type",
+      "every": 0.02,
+      "text": "printf '\\e[1;31mbold red\\e[0m \\e[42;30mgreen bg\\e[0m \\e[4munderline\\e[0m \\e[38;5;208m256-colour\\e[0m wide:日本語|\\n'"
+    },
+    {
+      "t": 5.0,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 5.2,
+      "type": "type",
+      "every": 0.02,
+      "text": "echo shift keys:"
+    },
+    {
+      "t": 5.8,
+      "type": "key",
+      "name": "a",
+      "shift": true
+    },
+    {
+      "t": 5.9,
+      "type": "key",
+      "name": "9",
+      "shift": true
+    },
+    {
+      "t": 6.0,
+      "type": "key",
+      "name": "A",
+      "shift": true
+    },
+    {
+      "t": 6.1,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 6.3,
+      "type": "type",
+      "every": 0.02,
+      "text": "sleep 30"
+    },
+    {
+      "t": 6.6,
+      "type": "key",
+      "name": "Enter"
+    },
+    {
+      "t": 6.9,
+      "type": "key",
+      "name": "c",
+      "ctrl": true
+    },
+    {
+      "t": 7.2,
+      "type": "mark",
+      "name": "end"
+    }
   ]
 }

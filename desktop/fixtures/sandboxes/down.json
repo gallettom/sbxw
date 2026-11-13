@@ -1,0 +1,37 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web",
+        "created_at": "2026-11-10T09:12:00Z"
+      },
+      {
+        "name": "web-api",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web"
+      }
+    ]
+  },
+  "app": {
+    "connection": {
+      "state": "down",
+      "text": "No sbxw daemon at 127.0.0.1:7681. Start it with `sbxw up`; retrying."
+    }
+  }
+}

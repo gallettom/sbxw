@@ -1,0 +1,9 @@
+{
+  "daemon": {},
+  "app": {
+    "connection": {
+      "state": "down",
+      "text": "No sbxw daemon at 127.0.0.1:7681. Start it with `sbxw up`; retrying."
+    }
+  }
+}

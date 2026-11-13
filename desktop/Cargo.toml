@@ -17,6 +17,9 @@ rune = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fb
 alacritty_terminal = "=0.26.0"
 mlua = { version = "=0.12.2", features = ["luau"] }
 tungstenite = "=0.30.0"
+# The terminal socket thread waits on the socket and the input side at once
+# (already in the lock through tokio; same version and features).
+mio = { version = "=1.2.4", features = ["os-poll", "net"] }
 ureq = { version = "2", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
