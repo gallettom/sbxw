@@ -1668,24 +1668,21 @@
      See /js/concierge.js. -->
 <div class="vc-dock" id="vc-dock">
   <div class="vc-panel" id="vc-panel" role="dialog" aria-label="Jarvis" hidden>
-    <div class="cd-head">
-      <span class="vc-title">Jarvis</span>
+    <!-- One row: where the words go (the picker is the title), Follow for a
+         sandbox only, the voice switch, Clear, close. -->
+    <div class="cd-head vc-head">
+      <select id="vc-target" class="vc-target" aria-label="Where your words go: Jarvis, or a sandbox to follow"></select>
+      <button type="button" class="vc-btn vc-follow" id="vc-follow" aria-pressed="false" hidden>Follow</button>
       <button type="button" class="cd-close" id="vc-mute" aria-pressed="true" title="Voice on: click to mute" aria-label="Voice on: click to mute"></button>
       <button type="button" class="cd-close" id="vc-new" title="Clear the panel">Clear</button>
       <button type="button" class="cd-close" id="vc-close" title="Close (Esc)" aria-label="Close">✕</button>
     </div>
-    <div class="vc-ctx">
-      <select id="vc-target" aria-label="Where your words go: Jarvis, or a sandbox to follow"></select>
-      <span class="vc-ctx-info"></span>
-      <button type="button" class="vc-btn vc-follow" id="vc-follow" aria-pressed="false">Follow</button>
-    </div>
     <div class="vc-setup" id="vc-setup"></div>
     <div class="cd-log vc-log" id="vc-log" aria-live="polite"></div>
-    <div class="vc-foot">
-      <button type="button" class="vc-talk" id="vc-talk" disabled>Hold to talk (F8)</button>
-      <form class="vc-type" id="vc-type"><input id="vc-type-input" type="text" placeholder="…or type" aria-label="Message" autocomplete="off"></form>
-      <span class="cd-hint" id="vc-hint"></span>
-    </div>
+    <form class="vc-foot" id="vc-type">
+      <input id="vc-type-input" type="text" placeholder="Message Jarvis" aria-label="Message" autocomplete="off">
+      <button type="button" class="vc-talk" id="vc-talk" disabled title="Hold to talk (F8)" aria-label="Hold to talk (F8)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+    </form>
   </div>
 </div>
 

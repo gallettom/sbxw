@@ -32,6 +32,12 @@ with no terminal to open. The panel shows where it stands. After that, what you 
 goes to Jarvis's Claude session, masked first like any message, and its
 answers are shown and read aloud.
 
+The panel reads as a conversation: your words on the right, Jarvis's
+answers as plain text on the left, in full (only the panel scrolls). With
+Jarvis picked, whatever you say or type next goes to Jarvis, so there is
+nothing to arm. The small speaker on an answer reads it again; it shows once
+the voice is set up. The text box and the microphone share the bottom row.
+
 Jarvis needs the same Claude sign-in as your other sandboxes. The voice is
 optional: you can type to Jarvis and read its answers, even in an sbxw built
 without voice or with the voice models not installed. Press Enter to send.

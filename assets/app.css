@@ -4018,7 +4018,17 @@
     transform-origin: top center; animation: vc-drop .14s ease-out;
   }
   @keyframes vc-drop { from { opacity: 0; transform: translateY(-6px) scale(.98); } }
-  .vc-title { flex: 1; color: var(--c-text-bright); font: 600 12px var(--font-mono); padding-left: .3rem; }
+  /* The header is one row: the picker of where the words go reads as the
+     panel's title, then Follow (a sandbox only), the voice, Clear, close. */
+  .vc-head .vc-target {
+    flex: 1; min-width: 0; height: 26px; padding: 0 .3rem; cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
+    color: var(--c-text-bright); font: 600 12px var(--font-mono);
+  }
+  .vc-head .vc-target:hover { background: var(--c-elevated); }
+  .vc-head .vc-target:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; }
+  .vc-head .vc-follow { margin: 0; padding: .15rem .5rem; }
+  .vc-follow.on { border-color: var(--c-green); color: var(--c-text-bright); }
   .vc-setup { padding: 0 .75rem; font: 12.5px/1.5 var(--font-prose); color: var(--c-text); }
   .vc-setup:empty { display: none; }
   .vc-setup p { margin: .5rem 0 .25rem; }
@@ -4045,60 +4055,73 @@
   .vc-msg.vc-err { color: var(--c-amber); }
   .vc-msg.vc-dim { color: var(--c-text-muted); font-style: italic; }
   .vc-meta { display: block; margin-top: .15rem; color: var(--c-dim); font: 10.5px var(--font-mono); }
-  .vc-foot { display: grid; gap: .3rem; padding: .5rem .75rem .6rem; border-top: 1px solid var(--c-elevated); }
-  .vc-talk {
-    padding: .55rem; cursor: pointer; user-select: none; touch-action: none;
-    background: var(--c-elevated); border: 1px solid var(--c-border); border-radius: var(--r-md);
-    color: var(--c-text-bright); font: 600 13px var(--font-mono);
-  }
-  .vc-talk:disabled { cursor: default; opacity: .5; }
-  .vc-talk.recording { border-color: var(--c-red, #f85149); color: var(--c-red, #f85149); }
-  .vc-talk:focus-visible, .vc-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
-  .vc-msg.vc-ai { align-self: flex-start; max-width: 92%; }
-  .vc-msg.vc-ai.pending::after { content: '▍'; color: var(--c-dim); animation: cd-blink 1.1s steps(1) infinite; }
-  .vc-type input {
-    width: 100%; box-sizing: border-box; padding: .35rem .5rem;
+  /* One row: the text takes the width, the push-to-talk glyph beside it. */
+  .vc-foot { display: flex; align-items: center; gap: .4rem; padding: .5rem .75rem .6rem; border-top: 1px solid var(--c-elevated); }
+  .vc-foot input {
+    flex: 1; min-width: 0; height: 30px; box-sizing: border-box; padding: 0 .5rem;
     background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm);
     color: var(--c-text); font: 12.5px var(--font-prose);
   }
-  .vc-type input:focus { outline: none; border-color: var(--c-blue); }
-  .vc-brief {
-    display: grid; gap: .4rem; padding: .5rem; border-radius: var(--r-md);
-    border: 1px solid var(--c-blue); background: var(--c-bg);
+  .vc-foot input:focus { outline: none; border-color: var(--c-blue); }
+  .vc-talk {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 30px; padding: 0; cursor: pointer; user-select: none; touch-action: none;
+    background: var(--c-elevated); border: 1px solid var(--c-border); border-radius: var(--r-sm);
+    color: var(--c-text-bright);
   }
-  .vc-brief.sent { border-color: var(--c-green); opacity: .85; }
-  .vc-brief-head { color: var(--c-text-bright); font: 600 12px var(--font-mono); }
+  .vc-talk:hover:not(:disabled) { border-color: var(--c-dim); }
+  .vc-talk:disabled { cursor: default; opacity: .4; }
+  .vc-talk.recording { border-color: var(--c-red); color: var(--c-red); background: var(--c-red-tint); }
+  .vc-talk.busy { color: var(--c-text-muted); }
+  .vc-talk:focus-visible, .vc-btn:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }
+  /* Jarvis's answer: plain prose on the left, as in a conversation. Only the
+     log scrolls, so a long answer shows in full. */
+  .vc-msg.vc-jarvis {
+    align-self: stretch; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .25rem; align-items: start;
+    white-space: normal; font: 13.5px/1.55 var(--font-prose);
+  }
+  /* "Read aloud": the header's speaker, small, on a message. */
+  .vc-read {
+    display: none; flex: none; align-items: center; justify-content: center; padding: .15rem; cursor: pointer;
+    background: none; border: 0; border-radius: var(--r-sm); color: var(--c-dim);
+  }
+  body.voice-speaks .vc-read { display: inline-flex; }
+  .vc-read:hover { background: var(--c-elevated); color: var(--c-text-bright); }
+  .vc-read:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 1px; color: var(--c-text-bright); }
+  .vc-read svg { display: block; width: 13px; height: 13px; }
+  /* The Markdown of a message (chatMarkdown in js/chat-core.js). */
+  .vc-md { overflow-wrap: anywhere; }
+  .vc-md strong { color: var(--c-text-bright); }
+  .vc-md a { color: var(--c-blue); }
+  .vc-md code { padding: 0 .25rem; background: var(--c-elevated); border-radius: var(--r-xs); font: 12px var(--font-mono); }
+  .vc-md pre {
+    margin: 0 0 .6em; padding: .45rem .55rem; overflow-x: auto; white-space: pre;
+    background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--r-sm); font-size: 11.5px;
+  }
+  .vc-md pre code { padding: 0; background: none; }
+  .vc-md p, .vc-md ul, .vc-md ol { margin: 0 0 .6em; }
+  .vc-md ul, .vc-md ol { padding-left: 1.3em; }
+  .vc-md li { margin: .2em 0; }
+  .vc-md li::marker { color: var(--c-text-dim); }
+  .vc-md > :last-child { margin-bottom: 0; }
   .vc-brief-text {
     width: 100%; box-sizing: border-box; resize: vertical; min-height: 9rem;
     padding: .4rem .5rem; border: 1px solid var(--c-border); border-radius: var(--r-sm);
     background: var(--c-surface); color: var(--c-text); font: 12.5px/1.5 var(--font-mono);
   }
   .vc-brief-text:focus { outline: none; border-color: var(--c-blue); }
-  .vc-brief-row { display: flex; gap: .4rem; align-items: center; }
-  .vc-brief-to { flex: 1; min-width: 0; color: var(--c-text-muted); font: 12px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .vc-brief-row .vc-btn { margin: 0; }
-  .vc-ctx {
-    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
-    padding: .4rem .75rem; border-bottom: 1px solid var(--c-elevated);
-  }
-  .vc-ctx select {
-    max-width: 55%; height: 26px; padding: 0 .4rem;
-    background: var(--c-bg); color: var(--c-text-bright); border: 1px solid var(--c-border); border-radius: var(--r-sm);
-    font: 12px var(--font-mono);
-  }
-  .vc-ctx-info { flex: 1; min-width: 0; color: var(--c-text-muted); font: 11px var(--font-mono); }
-  .vc-ctx .vc-btn { margin: 0; padding: .15rem .5rem; }
-  .vc-follow.on { border-color: var(--c-green); color: var(--c-text-bright); }
+  /* A card (another agent's message, a grill round, a draft, Jarvis's start):
+     a left rule rather than a frame, amber while the next words answer it. */
   .vc-agent {
-    display: grid; gap: .4rem; padding: .5rem; border-radius: var(--r-md);
-    border: 1px solid var(--c-border); background: var(--c-bg);
+    display: grid; gap: .4rem; padding: .15rem 0 .15rem .6rem;
+    border-left: 2px solid var(--c-border);
   }
-  .vc-agent.armed { border-color: var(--c-amber); }
+  .vc-agent.armed { border-left-color: var(--c-amber); }
   .vc-agent.done { opacity: .7; }
-  .vc-agent-head { color: var(--c-text-bright); font: 600 12px var(--font-mono); }
-  .vc-agent-body { max-height: 12rem; overflow-y: auto; font: 12.5px/1.5 var(--font-prose); color: var(--c-text); }
+  .vc-agent-head { display: flex; align-items: center; gap: .3rem; color: var(--c-text-muted); font: 600 11.5px var(--font-mono); }
+  .vc-agent-head .vc-read { margin-left: auto; }
+  .vc-agent-body { font: 12.5px/1.5 var(--font-prose); color: var(--c-text); }
   .vc-agent-body p, .vc-agent-body ul, .vc-agent-body ol { margin: 0 0 .4rem; }
-  .vc-agent-body pre { overflow-x: auto; font-size: 11.5px; }
   .vc-agent-foot { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
   .vc-agent-foot .vc-btn { margin: 0; padding: .15rem .5rem; }
   .vc-armed-hint { display: none; color: var(--c-amber); font: 11px var(--font-mono); }
