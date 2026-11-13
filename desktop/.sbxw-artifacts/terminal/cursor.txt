@@ -1,0 +1,6 @@
+111x33 offset 0 history 0 status connected
+selection: None
+events: []
+bytes in 283, rows rebuilt 76 in 14 rebuilds, build 2.1 ms, polls 114 (1155.5 ms)
+✓ agent@sbxw-2:~$ printf '\e[6 q\e[?1004h'; cat -v
+^[[O^[[Ibeam

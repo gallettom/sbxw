@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "t": 0.3, "type": "paste", "text": "printf '\\e[6 q\\e[?1004h'; cat -v" },
+    { "t": 0.5, "type": "key", "name": "Enter" },
+    { "t": 0.8, "focus": false },
+    { "t": 1.0, "focus": true },
+    { "t": 1.2, "type": "type", "every": 0.02, "text": "beam" },
+    { "t": 1.5, "type": "mark", "name": "end" }
+  ]
+}

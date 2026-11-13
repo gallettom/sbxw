@@ -1,0 +1,13 @@
+111x33 offset 0 history 0 status connected
+selection: Some("bravo charlie\ndelta echo fo")
+events: []
+bytes in 551, rows rebuilt 220 in 109 rebuilds, build 57.6 ms, polls 354 (10591.8 ms)
+✓ agent@sbxw-2:~$ echo alpha bravo charlie; echo delta echo foxtrot
+alpha bravo charlie
+delta echo foxtrot
+✓ agent@sbxw-2:~$ printf '\e[?2004h'; cat -v
+^[[200~pasted one
+pasted two^[[201~^[[200~pasted one
+
+pasted two^[[201~
+✓ agent@sbxw-2:~$

@@ -1,0 +1,37 @@
+111x33 offset 69 history 269 status connected
+selection: None
+events: []
+bytes in 5513, rows rebuilt 227 in 38 rebuilds, build 32.3 ms, polls 162 (4106.0 ms)
+history line 200
+history line 201
+history line 202
+history line 203
+history line 204
+history line 205
+history line 206
+history line 207
+history line 208
+history line 209
+history line 210
+history line 211
+history line 212
+history line 213
+history line 214
+history line 215
+history line 216
+history line 217
+history line 218
+history line 219
+history line 220
+history line 221
+history line 222
+history line 223
+history line 224
+history line 225
+history line 226
+history line 227
+history line 228
+history line 229
+history line 230
+history line 231
+history line 232
