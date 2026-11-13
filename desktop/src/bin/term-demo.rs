@@ -333,14 +333,18 @@ fn view(s: &Demo, _cx: &mut Cx<Demo>) -> El {
             if let Some(t) = &mut s.term {
                 t.set_focused(focused);
             }
-        })
-        // The window's paste (the macOS Edit menu's Paste, which takes ⌘V before
-        // any key handler; a script's `paste`) goes to the terminal.
-        .on_paste(|s: &mut Demo, text: &str, _tx: &mut Tx| {
+        });
+    // The window's paste (⌘V on macOS, which Rune turns into this before any
+    // key handler; a script's `paste`) goes to the terminal. Not off macOS:
+    // there a root `on_paste` would take plain Ctrl+V, which is the program's
+    // (sbxw_desktop::shell::window_paste).
+    if sbxw_desktop::shell::window_paste() {
+        root = root.on_paste(|s: &mut Demo, text: &str, _tx: &mut Tx| {
             if let Some(t) = &mut s.term {
                 t.paste(text);
             }
         });
+    }
     if !s.banner.is_empty() {
         let color = if s.attention { 0xd29922 } else { 0x30363d };
         root = root.child(

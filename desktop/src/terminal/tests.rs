@@ -561,3 +561,129 @@ fn big_cat_throughput() {
     println!("  with Rune layout + paint: {:.0} ms ({:.0} MB/s), {:.2} ms per frame", total.as_secs_f64() * 1e3, mb / total.as_secs_f64(), total.as_secs_f64() * 1e3 / frames as f64);
     println!("  rows rebuilt {} over {} rebuilds", t.rebuilt_rows, t.rebuilds);
 }
+
+// ---- Copy and paste through a real Rune runtime (memory clipboard) ----
+//
+// Key events in the shapes Rune's window host makes of real presses
+// (rune src/window/keys.rs, `map_mods`/`map_key`): on macOS ⌘ sets both
+// `cmd` and `logo` and the letter arrives as `Key::Command`, lower case;
+// off macOS Ctrl sets `cmd` and `ctrl`, and Shift may make the letter upper
+// case before Rune lowers it. `Runtime::key` routes them as the host does
+// once the physical-key step is past: the focused grid's own `on_key` first.
+
+struct Win {
+    t: TerminalState,
+    root_paste: bool,
+}
+
+fn win_view(s: &Win, _cx: &mut rune::Cx<Win>) -> rune::El {
+    let root = rune::col().w_full().h_full();
+    let root = if s.root_paste { root.on_paste(|s: &mut Win, text: &str, _tx: &mut rune::Tx| s.t.paste(text)) } else { root };
+    root.child(super::view(&s.t, |s: &mut Win| Some(&mut s.t)))
+}
+
+fn window(mac: bool, root_paste: bool) -> (rune::Runtime<Win>, rune::clipboard::MemoryClipboard, Sender<TermEvent>, Receiver<TermInput>) {
+    let (mut t, ev, rx) = term();
+    t.keys.mac = mac;
+    let mut rt = rune::Runtime::new(Win { t, root_paste }, win_view, (800.0, 300.0), rune::Env::new(true, 1.0));
+    let clip = rune::clipboard::memory();
+    rt.use_clipboard(&clip);
+    rt.frame(0.0);
+    // A click in the grid gives it Rune's focus, as in the window.
+    let (x, y) = rt.find("grid").expect("grid drawn");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.016);
+    rt.state.t.clear_selection();
+    (rt, clip, ev, rx)
+}
+
+const MAC_CMD: fn(&mut Mods) = |m| (m.cmd, m.logo) = (true, true);
+const PC_CTRL_SHIFT: fn(&mut Mods) = |m| (m.cmd, m.ctrl, m.shift) = (true, true, true);
+
+#[test]
+fn mac_cmd_c_copies_the_selection_held_while_the_program_has_the_mouse() {
+    let (mut rt, clip, _ev, rx) = window(true, true);
+    // A TUI holding the mouse (Claude Code does): a plain drag is the program's.
+    rt.state.t.feed(b"echo alpha bravo\r\n\x1b[?1002h\x1b[?1006h");
+    let none = Mods::default();
+    drag(&mut rt.state.t, Phase::Down, (5, 0), (5, 0), 1, none);
+    drag(&mut rt.state.t, Phase::Up, (5, 0), (9, 0), 1, none);
+    assert_eq!(rt.state.t.selection_text(), None, "a plain drag is reported, not selected");
+    let _ = written(&rx);
+    // Shift+drag selects locally even then, as in xterm and iTerm2.
+    let shift = Mods { shift: true, ..Mods::default() };
+    drag(&mut rt.state.t, Phase::Down, (5, 0), (5, 0), 1, shift);
+    drag(&mut rt.state.t, Phase::Move, (5, 0), (9, 0), 1, shift);
+    drag(&mut rt.state.t, Phase::Up, (5, 0), (9, 0), 1, shift);
+    assert_eq!(rt.state.t.selection_text().as_deref(), Some("alpha"));
+    rt.key(key(Key::Command('c'), MAC_CMD));
+    rt.frame(0.032);
+    assert_eq!(clip.text().as_deref().map(String::as_str), Some("alpha"));
+    assert_eq!(written(&rx), b"", "⌘C sends nothing to the program");
+    // ⌘A selects everything; ⌘C again copies it all.
+    rt.key(key(Key::Command('a'), MAC_CMD));
+    rt.key(key(Key::Command('c'), MAC_CMD));
+    rt.frame(0.048);
+    assert!(clip.text().is_some_and(|t| t.starts_with("echo alpha bravo")), "{:?}", clip.text());
+}
+
+#[test]
+fn mac_paste_through_the_root_reaches_the_terminal_bracketed_or_not() {
+    let (mut rt, _clip, _ev, rx) = window(true, true);
+    let _ = written(&rx);
+    // What ⌘V becomes on macOS: Rune reads the clipboard and calls the root's
+    // `on_paste` (rune src/runtime/input/physical.rs, `dispatch_physical`).
+    rt.paste("one\ntwo");
+    rt.frame(0.032);
+    assert_eq!(written(&rx), b"one\rtwo");
+    rt.state.t.feed(b"\x1b[?2004h");
+    rt.paste("ls\n");
+    rt.frame(0.048);
+    assert_eq!(written(&rx), b"\x1b[200~ls\r\x1b[201~");
+    // ⌘V as a key (Edit menu absent, a remapped equivalent): read, then pasted once.
+    let clip_text = "from the clipboard";
+    _clip.set_text(clip_text);
+    rt.key(key(Key::Command('v'), MAC_CMD));
+    rt.frame(0.064);
+    rt.frame(0.080);
+    assert_eq!(written(&rx), format!("\x1b[200~{clip_text}\x1b[201~").as_bytes());
+}
+
+#[test]
+fn pc_ctrl_shift_c_and_v_copy_and_paste_while_ctrl_c_and_ctrl_v_stay_the_programs() {
+    let (mut rt, clip, _ev, rx) = window(false, false);
+    rt.state.t.feed(b"echo alpha bravo\r\n");
+    let shift = Mods { shift: true, ..Mods::default() };
+    drag(&mut rt.state.t, Phase::Down, (11, 0), (11, 0), 1, shift);
+    drag(&mut rt.state.t, Phase::Move, (11, 0), (15, 0), 1, shift);
+    drag(&mut rt.state.t, Phase::Up, (11, 0), (15, 0), 1, shift);
+    let _ = written(&rx);
+    rt.key(key(Key::Command('c'), PC_CTRL_SHIFT));
+    rt.frame(0.032);
+    assert_eq!(clip.text().as_deref().map(String::as_str), Some("bravo"));
+    assert_eq!(written(&rx), b"");
+    clip.set_text("pasted");
+    rt.key(key(Key::Command('v'), PC_CTRL_SHIFT));
+    rt.frame(0.048);
+    rt.frame(0.064);
+    assert_eq!(written(&rx), b"pasted");
+    // Plain Ctrl+C is the interrupt, plain Ctrl+V the program's ^V.
+    let ctrl = |m: &mut Mods| (m.cmd, m.ctrl) = (true, true);
+    rt.key(key(Key::Command('c'), ctrl));
+    rt.key(key(Key::Command('v'), ctrl));
+    rt.frame(0.080);
+    assert_eq!(written(&rx), vec![0x03, 0x16]);
+}
+
+#[test]
+fn osc52_read_form_is_never_answered() {
+    let (mut t, _ev, rx) = term();
+    t.feed(b"\x1b]52;c;?\x07\x1b]52;p;?\x1b\\");
+    assert_eq!(written(&rx), b"", "nothing goes back down the PTY");
+    let evs = t.take_events();
+    assert!(!evs.iter().any(|e| matches!(e, TerminalEvent::Clipboard(_))), "{evs:?}");
+    // The write form still arrives, decoded (UTF-8 kept whole).
+    t.feed(b"\x1b]52;c;w6p0ZQ==\x07");
+    assert!(t.take_events().contains(&TerminalEvent::Clipboard("ête".into())));
+}
