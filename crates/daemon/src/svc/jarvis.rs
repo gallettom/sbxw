@@ -102,10 +102,37 @@ fn write_kit_tree(dir: &Path, files: &[KitFile]) -> anyhow::Result<()> {
 }
 
 fn read_or_empty(path: &Path) -> Result<String, String> {
+    Ok(read_toml(path)?.raw)
+}
+
+/// The file as the planner sees it: missing is an empty file to create.
+fn read_toml(path: &Path) -> Result<TomlFile, String> {
+    let path_s = path.to_string_lossy().into_owned();
     match std::fs::read_to_string(path) {
-        Ok(raw) => Ok(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Ok(raw) => Ok(TomlFile { path: path_s, raw, missing: false }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(TomlFile { path: path_s, raw: String::new(), missing: true }),
         Err(e) => Err(format!("{} is not readable: {e}", path.display())),
+    }
+}
+
+/// A file sbxw may create: its folder is there already. sbxw does not make
+/// folders on the person's machine.
+fn creatable(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    match path.parent() {
+        Some(dir) if dir.is_dir() => Ok(()),
+        Some(dir) => Err(format!("{} cannot be created: its folder {} does not exist", path.display(), dir.display())),
+        None => Err(format!("{} cannot be created", path.display())),
+    }
+}
+
+/// The sbxw.toml an op writes, if any.
+fn op_toml(op: &Op) -> Option<&str> {
+    match op {
+        Op::KitsLine { path, .. } | Op::WriteToml { path, .. } => Some(path),
+        _ => None,
     }
 }
 
@@ -133,11 +160,12 @@ impl App {
         p
     }
 
-    /// The sbxw.toml files sbxw uses, by `kits_line` key: the daemon's, and
-    /// each sandbox's own.
+    /// The sbxw.toml files sbxw uses, by `kits_line` key: the daemon's (the
+    /// one it was asked to read, even when it does not exist yet), and each
+    /// sandbox's own.
     fn jarvis_toml_paths(&self) -> BTreeMap<String, PathBuf> {
         let mut out = BTreeMap::new();
-        if let Some(p) = &self.cfg.source {
+        if let Some(p) = self.cfg.source.as_ref().or(self.cfg.asked.as_ref()) {
             out.insert(jarvis::DAEMON_FILE.to_string(), p.clone());
         }
         for name in self.store.names() {
@@ -153,7 +181,7 @@ impl App {
     async fn jarvis_world(&self, with_mcp: bool) -> Result<World, String> {
         let mut files = BTreeMap::new();
         for (key, path) in self.jarvis_toml_paths() {
-            files.insert(key, TomlFile { path: path.to_string_lossy().into_owned(), raw: read_or_empty(&path)? });
+            files.insert(key, read_toml(&path)?);
         }
         let mcp = if with_mcp {
             Some(self.sbx.mcp_ls().await.map_err(|e| format!("the MCP servers could not be listed: {e:#}"))?.into_iter().map(|s| s.name).collect())
@@ -180,6 +208,8 @@ impl App {
                 json!({
                     "file": key,
                     "path": f.path,
+                    "exists": !f.missing,
+                    "note": f.missing.then_some("this file does not exist yet: a change to it creates it"),
                     "kits": kits.as_ref().ok().cloned().flatten(),
                     "defaults_apply": kits.as_ref().is_ok_and(|k| k.is_none()),
                     "error": kits.err().map(|e| format!("not valid TOML: {e}")),
@@ -230,6 +260,9 @@ impl App {
         }
         let world = self.jarvis_world(with_mcp).await?;
         let planned = jarvis::plan(&world, &changes)?;
+        for path in planned.iter().filter_map(|p| op_toml(&p.op)) {
+            creatable(Path::new(path))?;
+        }
         let views = planned.into_iter().map(|p| p.view).collect();
         let id = format!("j-{}", sbxw_core::ids::random_hex(8));
         let p = self.jarvis.lock().unwrap().propose(id, summary, changes, views, now_ms())?;
@@ -303,6 +336,11 @@ impl App {
     async fn jarvis_apply(&self, op: Op) -> ChangeResult {
         let ok = |message: String, restart: bool| ChangeResult { ok: true, message, restart };
         let err = |message: String| ChangeResult { ok: false, message, restart: false };
+        if let Some(path) = op_toml(&op) {
+            if let Err(e) = creatable(Path::new(path)) {
+                return err(e);
+            }
+        }
         match op {
             Op::WriteKit { kit, tree } => match write_kit_tree(&self.jarvis_kit_root().join(&kit), &tree) {
                 Ok(()) => ok(format!("{kit} written; add it to a kits line for new sandboxes to get it"), false),
@@ -324,6 +362,7 @@ impl App {
             },
             Op::WriteToml { path, text, network_added } => {
                 let p = Path::new(&path);
+                let created = !p.exists();
                 let before = read_or_empty(p).unwrap_or_default();
                 if let Err(e) = crate::svc::kits::write_in_place(p, &text) {
                     return err(format!("{e:#}"));
@@ -343,7 +382,7 @@ impl App {
                         }
                     }
                 }
-                ok(format!("{path} written; it takes effect when the daemon restarts"), true)
+                ok(format!("{path} {}; it takes effect when the daemon restarts", if created { "created" } else { "written" }), true)
             }
             Op::McpAdd { replace, spec } => {
                 if replace {
@@ -483,5 +522,58 @@ mod tests {
         assert_eq!(done.state, State::Failed);
         assert!(done.error.as_deref().unwrap().contains("changed since"), "{:?}", done.error);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "battery_warn_below = 10\n");
+    }
+
+    fn app_at(d: &std::path::Path, file: &std::path::Path) -> std::sync::Arc<crate::app::App> {
+        crate::app::AppBuilder {
+            paths: crate::store::Paths::under(d),
+            cfg: sbxw_core::config::Config::load(file, std::path::Path::new("/")).unwrap(),
+            sbx: sbxw_sbx::Sbx::new(sbxw_sbx::runner::Fake::new(sbx_answer)),
+            hosts: crate::hostsys::for_tests(&d.join("hosts")),
+            use_api_key: true,
+            sbx_version: Some("0.51.0".into()),
+        }
+        .build()
+    }
+
+    /// Started where there is no sbxw.toml: the voice can still be changed,
+    /// by creating the file the daemon was asked to read.
+    #[tokio::test]
+    async fn a_setting_creates_the_missing_daemon_file() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("sbxw.toml");
+        let app = app_at(d.path(), &file);
+        let state = app.jarvis_state().await;
+        assert_eq!(state["daemon_file"], true);
+        let daemon = state["files"].as_array().unwrap().iter().find(|f| f["file"] == "daemon").unwrap().clone();
+        assert_eq!((daemon["path"].as_str(), &daemon["exists"]), (file.to_str(), &json!(false)), "{daemon}");
+
+        let p = app.jarvis_propose("voice", changes(json!([{"kind": "setting", "key": "voice.tts_voice", "value": "de_female"}]))).await.unwrap();
+        assert_eq!(p.risk, sbxw_core::jarvis::Risk::Low);
+        assert!(p.views[0].title.contains(&format!("creating {}", file.display())), "{}", p.views[0].title);
+        assert!(p.views[0].diff.starts_with("--- /dev/null\n"), "{}", p.views[0].diff);
+        assert!(!file.exists(), "nothing is written before approval");
+        let done = app.jarvis_approve(&p.id, Via::Voice, false).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert!(done.results[0].message.contains("created"), "{}", done.results[0].message);
+        let cfg = sbxw_core::config::Config::load(&file, std::path::Path::new("/")).unwrap();
+        assert_eq!(sbxw_core::jarvis::current_value(&cfg, "voice.tts_voice"), json!("de_female"));
+
+        // The file appears between proposal and approval: nothing written.
+        let other = tempfile::tempdir().unwrap();
+        let file = other.path().join("sbxw.toml");
+        let app = app_at(other.path(), &file);
+        let p = app.jarvis_propose("voice", changes(json!([{"kind": "setting", "key": "keep_awake", "value": "always"}]))).await.unwrap();
+        std::fs::write(&file, "battery_warn_below = 10\n").unwrap();
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
+        assert_eq!(done.state, State::Failed);
+        assert!(done.error.as_deref().unwrap().contains("changed since"), "{:?}", done.error);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "battery_warn_below = 10\n");
+
+        // No folder to create it in: refused, with the reason.
+        let gone = d.path().join("nowhere/sbxw.toml");
+        let app = app_at(d.path(), &gone);
+        let e = app.jarvis_propose("voice", changes(json!([{"kind": "setting", "key": "keep_awake", "value": "always"}]))).await.unwrap_err();
+        assert!(e.contains("does not exist") && e.contains("nowhere"), "{e}");
     }
 }

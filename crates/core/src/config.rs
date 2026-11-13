@@ -115,6 +115,10 @@ pub struct Config {
     /// The file this was read from, absolute. `None` for built-in defaults.
     #[serde(skip)]
     pub source: Option<PathBuf>,
+    /// The file [`Config::load`] was asked to read, absolute, whether or not
+    /// it exists: where a setting is written when there is no file yet.
+    #[serde(skip)]
+    pub asked: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -210,6 +214,7 @@ impl Default for Config {
             mac: Default::default(),
             voice: Default::default(),
             source: None,
+            asked: None,
         }
     }
 }
@@ -387,7 +392,7 @@ impl Config {
             cwd.join(path)
         };
         if !abs.exists() {
-            return Ok(Config::default());
+            return Ok(Config { asked: Some(abs), ..Config::default() });
         }
         let raw = std::fs::read_to_string(&abs).with_context(|| format!("reading {}", abs.display()))?;
         let mut cfg: Config =
@@ -422,7 +427,8 @@ impl Config {
         for c in &mut cfg.carve {
             c.path = resolve_host_dir(&dir, &c.path);
         }
-        cfg.source = Some(abs);
+        cfg.source = Some(abs.clone());
+        cfg.asked = Some(abs);
         Ok(cfg)
     }
 
@@ -647,6 +653,7 @@ mod tests {
         assert_eq!(cfg.web_addr, DEFAULT_WEB_ADDR);
         assert_eq!(cfg.agent_addr, DEFAULT_AGENT_ADDR);
         assert!(cfg.source.is_none());
+        assert_eq!(cfg.asked.as_deref(), Some(Path::new("/nonexistent/sbxw.toml")), "the path is kept to create it later");
     }
 
     #[test]

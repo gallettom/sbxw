@@ -250,6 +250,10 @@ applied by the daemon only after you approve it, as a diff you read first:
 - MCP servers, as the MCP tab of Setup adds them.
 
 Comments and key order in the file are kept. A setting or `network_allow`
-change takes effect when the daemon restarts. The kits Jarvis writes live
+change takes effect when the daemon restarts. When the daemon was started where
+there is no `sbxw.toml`, the first such change creates it, at the path the
+daemon was asked to read (its folder must exist); the dialog says so and the
+diff shows a new file. The Kits dialog lists that file too, and saving its
+`kits` creates it. The kits Jarvis writes live
 under `~/.sbxw/state/kits/jarvis-*`; see
 [Jarvis kits](kits-and-skills.md#jarvis-kits).

@@ -495,6 +495,29 @@ pub struct TomlFile {
     pub path: String,
     /// Empty when the file does not exist yet.
     pub raw: String,
+    /// The file does not exist yet: a change to it creates it.
+    pub missing: bool,
+}
+
+impl TomlFile {
+    /// The diff from this file to `text`: a new file when it is missing.
+    fn diff_to(&self, text: &str) -> String {
+        unified(&self.raw, text, if self.missing { "/dev/null" } else { &self.path }, &self.path)
+    }
+
+    /// What a title adds when the write creates the file.
+    fn creates(&self) -> String {
+        if self.missing {
+            format!(", creating {} (it does not exist yet)", self.path)
+        } else {
+            String::new()
+        }
+    }
+
+    /// The same file once `text` is written.
+    fn written(&self, text: String) -> TomlFile {
+        TomlFile { path: self.path.clone(), raw: text, missing: false }
+    }
 }
 
 /// What the daemon read, for [`plan`].
@@ -713,9 +736,9 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             }
             let text = kits::set_kits_line(&f.raw, Some(list.as_slice())).map_err(|e| format!("{} is not valid TOML: {e}", f.path))?;
             Config::parse(&text).map_err(|e| format!("the new kits line: {e:#}"))?;
-            let diff = unified(&f.raw, &text, &f.path, &f.path);
-            let title = format!("Kits of {} ({}): {}", file, f.path, change_words(&add, &remove));
-            w.files.insert(file.clone(), TomlFile { path: f.path.clone(), raw: text });
+            let diff = f.diff_to(&text);
+            let title = format!("Kits of {} ({}): {}{}", file, f.path, change_words(&add, &remove), f.creates());
+            w.files.insert(file.clone(), f.written(text));
             Ok(Planned { view: view(title, diff, risk), op: Op::KitsLine { file: file.clone(), path: f.path, list } })
         }
         Change::Setting { key, value } => {
@@ -728,11 +751,11 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             if text == f.raw {
                 return Err(format!("{key} already is {value}"));
             }
-            let diff = unified(&f.raw, &text, &f.path, &f.path);
+            let diff = f.diff_to(&text);
             let shown = if value.is_null() { "the default".to_string() } else { value.to_string() };
-            w.files.insert(DAEMON_FILE.into(), TomlFile { path: f.path.clone(), raw: text.clone() });
+            w.files.insert(DAEMON_FILE.into(), f.written(text.clone()));
             Ok(Planned {
-                view: view(format!("Set {key} to {shown} (takes effect when the daemon restarts)"), diff, Risk::Low),
+                view: view(format!("Set {key} to {shown}{} (takes effect when the daemon restarts)", f.creates()), diff, Risk::Low),
                 op: Op::WriteToml { path: f.path, text, network_added: vec![] },
             })
         }
@@ -769,10 +792,10 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             doc["network_allow"] = toml_edit::value(arr);
             let text = doc.to_string();
             Config::parse(&text).map_err(|e| format!("the new network_allow: {e:#}"))?;
-            let diff = unified(&f.raw, &text, &f.path, &f.path);
-            w.files.insert(DAEMON_FILE.into(), TomlFile { path: f.path.clone(), raw: text.clone() });
+            let diff = f.diff_to(&text);
+            w.files.insert(DAEMON_FILE.into(), f.written(text.clone()));
             Ok(Planned {
-                view: view(format!("network_allow: {} (for sandboxes created after the daemon restarts)", change_words(&add, &remove)), diff, Risk::High),
+                view: view(format!("network_allow: {}{} (for sandboxes created after the daemon restarts)", change_words(&add, &remove), f.creates()), diff, Risk::High),
                 op: Op::WriteToml { path: f.path, text, network_added: added },
             })
         }
@@ -835,7 +858,7 @@ pub fn host_command(s: &McpSpec) -> Option<String> {
 }
 
 fn daemon_file(w: &World) -> Result<TomlFile, String> {
-    w.files.get(DAEMON_FILE).cloned().ok_or_else(|| "the daemon runs without an sbxw.toml, so there is no file to change".into())
+    w.files.get(DAEMON_FILE).cloned().ok_or_else(|| "the daemon does not know where its sbxw.toml would be, so there is no file to change".into())
 }
 
 fn plural(n: usize) -> &'static str {
@@ -1187,8 +1210,8 @@ mod tests {
 
     fn world() -> World {
         let mut w = World { kit_root: "/h/.sbxw/state/kits".into(), mcp: Some(vec!["github".into()]), models: vec!["claude-sonnet-5-5".into(), "claude-opus-5-5".into()], ..Default::default() };
-        w.files.insert(DAEMON_FILE.into(), TomlFile { path: "/h/sbxw.toml".into(), raw: "# mine\nkits = [\"sbxw:codemap\"]\n\n[voice]\nstt = \"parakeet-tdt-0.6b-v3-int8\"\n".into() });
-        w.files.insert("myapp".into(), TomlFile { path: "/p/sbxw.toml".into(), raw: String::new() });
+        w.files.insert(DAEMON_FILE.into(), TomlFile { path: "/h/sbxw.toml".into(), raw: "# mine\nkits = [\"sbxw:codemap\"]\n\n[voice]\nstt = \"parakeet-tdt-0.6b-v3-int8\"\n".into(), missing: false });
+        w.files.insert("myapp".into(), TomlFile { path: "/p/sbxw.toml".into(), raw: String::new(), missing: false });
         w
     }
 
@@ -1329,6 +1352,30 @@ mod tests {
         assert!(text.starts_with("# mine\n") && text.contains("tts_voice = \"de_female\"") && text.contains("battery_warn_below = 30"), "{text}");
         let cfg = Config::parse(text).unwrap();
         assert_eq!(current_value(&cfg, "voice.tts_voice"), json!("de_female"));
+    }
+
+    /// The daemon started where there is no sbxw.toml: a setting creates it,
+    /// says so, and stays low risk; the next change in the same proposal
+    /// edits the file the first one creates.
+    #[test]
+    fn a_setting_on_a_missing_file_creates_it() {
+        let mut w = world();
+        w.files.insert(DAEMON_FILE.into(), TomlFile { path: "/h/sbxw.toml".into(), raw: String::new(), missing: true });
+        let p = plan(&w, &[change(json!({"kind": "setting", "key": "voice.tts_voice", "value": "de_female"})), change(json!({"kind": "setting", "key": "battery_warn_below", "value": 30}))]).unwrap();
+        assert!(p[0].view.diff.starts_with("--- /dev/null\n+++ /h/sbxw.toml\n"), "{}", p[0].view.diff);
+        assert!(p[0].view.title.contains("creating /h/sbxw.toml"), "{}", p[0].view.title);
+        assert_eq!(p[0].view.risk, Risk::Low);
+        assert!(p[1].view.diff.starts_with("--- /h/sbxw.toml\n"), "{}", p[1].view.diff);
+        assert!(!p[1].view.title.contains("creating"), "{}", p[1].view.title);
+        let Op::WriteToml { path, text, .. } = &p[1].op else { panic!() };
+        assert_eq!(path, "/h/sbxw.toml");
+        let cfg = Config::parse(text).unwrap();
+        assert_eq!((current_value(&cfg, "voice.tts_voice"), cfg.battery_warn_below), (json!("de_female"), 30));
+
+        // A kits line on the missing file creates it too, from the defaults.
+        let k = plan(&w, &[change(json!({"kind": "kits_line", "file": "daemon", "remove": ["sbxw:retro"]}))]).unwrap();
+        assert!(k[0].view.diff.starts_with("--- /dev/null\n") && k[0].view.title.contains("creating /h/sbxw.toml"), "{:?}", k[0].view);
+        assert_eq!(k[0].view.risk, Risk::Low);
     }
 
     #[test]
