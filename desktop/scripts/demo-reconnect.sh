@@ -25,7 +25,7 @@ JSON
 start_standin() { "$bin/standin" "$addr" "$1" --token-file "$tokfile" >>"$shots/standin-reconnect.log" 2>&1 & sp=$!; for _ in $(seq 50); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.1; done; }
 run() { # run <log> <rune args...>
   local log="$1"; shift
-  env -u DISPLAY -u WAYLAND_DISPLAY "$bin/sbxw-desktop" --daemon "$addr" --token-file "$tokfile" --sandbox web-app \
+  env -u DISPLAY -u WAYLAND_DISPLAY "$bin/sbxw" --daemon "$addr" --token-file "$tokfile" --sandbox web-app \
     --size 1280x800 --scale 1 --script "$script" "$@" >"$log" 2>&1
 }
 : >"$shots/standin-reconnect.log"

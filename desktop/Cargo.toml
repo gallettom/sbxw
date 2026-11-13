@@ -4,7 +4,17 @@ version = "0.0.0"
 edition = "2021"
 license = "MIT"
 publish = false
-default-run = "sbxw-desktop"
+default-run = "sbxw"
+
+# The person sees the executable's name: on macOS an app outside a bundle is
+# named after its process (menu bar, Dock, app switcher, and Rune's About,
+# Hide and Quit items: rune src/native_menu/default_macos.rs,
+# `relabel_app_items`). So the binary is `sbxw`; the package stays
+# `sbxw-desktop` (cargo metadata only). Never installed on PATH, where the
+# CLI's `sbxw` lives. A future .app bundle sets CFBundleName "sbxw".
+[[bin]]
+name = "sbxw"
+path = "src/main.rs"
 
 # Its own workspace: the root workspace lists its members explicitly and never
 # builds this directory; this table stops cargo here from climbing up to it.

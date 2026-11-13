@@ -229,8 +229,8 @@ added) took 88 s while the disk was nearly full; treat build times as roughly
 
 | Artefact | Size |
 |----------|------|
-| `sbxw-desktop` release, stripped | 20.2 MB |
-| `sbxw-desktop` debug | 537 MB |
+| `sbxw` (then `sbxw-desktop`) release, stripped | 20.2 MB |
+| `sbxw` (then `sbxw-desktop`) debug | 537 MB |
 | `standin` release | 1.1 MB |
 | Target directory after debug + release | 6.0 GB |
 
