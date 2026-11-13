@@ -383,7 +383,14 @@ pub fn key_bytes(ev: &KeyEvent, app_cursor: bool) -> Option<Vec<u8>> {
         Key::Command(c) if m.ctrl => alt(vec![ctrl_byte(*c)?]),
         // ⌘ shortcuts on macOS belong to the app, not the shell.
         Key::Command(_) => None,
+        // AltGr on Windows arrives as Left Ctrl + Left Alt with the character it
+        // typed ("@" on a German layout's Q): text, not a chord.
+        Key::Text(s) if m.ctrl && m.alt && !cfg!(target_os = "macos") => Some(s.as_bytes().to_vec()),
         Key::Text(s) if m.ctrl && s.chars().count() == 1 => alt(vec![ctrl_byte(s.chars().next()?)?]),
+        // macOS: Option composes characters (`|` is Option+7 on Swiss and French
+        // layouts, `@` Option+G...). Send what it typed, as Terminal.app and iTerm2
+        // do unless "Option as Meta" is on; Alt stays Meta elsewhere.
+        Key::Text(s) if m.alt && cfg!(target_os = "macos") => Some(s.as_bytes().to_vec()),
         Key::Text(s) => alt(s.as_bytes().to_vec()),
         _ => None,
     }
