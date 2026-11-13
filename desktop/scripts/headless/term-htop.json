@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "t": 0.3, "type": "type", "every": 0.02, "text": "htop -d 50" },
+    { "t": 0.6, "type": "key", "name": "Enter" },
+    { "t": 1.4, "type": "tap", "x": 470, "y": 199 },
+    { "t": 1.7, "type": "tap", "x": 300, "y": 271 },
+    { "t": 2.0, "type": "wheel", "dx": 0, "dy": -54, "x": 400, "y": 400 },
+    { "t": 2.4, "type": "mark", "name": "end" }
+  ]
+}

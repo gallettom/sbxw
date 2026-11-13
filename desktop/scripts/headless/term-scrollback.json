@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "t": 0.3, "type": "type", "every": 0.02, "text": "seq -f 'history line %g' 1 300" },
+    { "t": 1.2, "type": "key", "name": "Enter" },
+    { "t": 1.6, "type": "key", "name": "PageUp", "shift": true },
+    { "t": 1.8, "type": "key", "name": "PageUp", "shift": true },
+    { "t": 2.0, "type": "wheel", "dx": 0, "dy": 90, "x": 300, "y": 300 },
+    { "t": 2.3, "type": "mark", "name": "end" }
+  ]
+}

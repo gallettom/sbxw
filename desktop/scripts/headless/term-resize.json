@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "t": 0.3, "type": "type", "every": 0.02, "text": "stty size" },
+    { "t": 0.6, "type": "key", "name": "Enter" },
+    { "t": 0.8, "type": "resize", "dw": -420, "dh": -260, "dur": 0.4 },
+    { "t": 1.6, "type": "type", "every": 0.02, "text": "stty size; seq 1 30 | paste -sd ' '; echo '日本語|x'" },
+    { "t": 3.2, "type": "key", "name": "Enter" },
+    { "t": 3.6, "type": "mark", "name": "end" }
+  ]
+}

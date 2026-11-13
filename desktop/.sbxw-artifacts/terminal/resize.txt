@@ -1,0 +1,13 @@
+62x19 offset 0 history 0 status connected
+selection: None
+events: []
+bytes in 499, rows rebuilt 661 in 85 rebuilds, build 4.2 ms, polls 240 (7723.5 ms)
+✓ agent@sbxw-2:~$ stty size
+33 111
+✓ agent@sbxw-2:~$ stty size; seq 1 30 | paste -sd ' '; echo '
+日本語|x'
+19 62
+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+ 25 26 27 28 29 30
+日本語|x
+✓ agent@sbxw-2:~$
