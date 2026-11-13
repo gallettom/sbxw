@@ -11,7 +11,9 @@ default-run = "sbxw-desktop"
 [workspace]
 
 [dependencies]
-gpui = "=0.2.2"
+# Rune, pinned to one rev of its `dev` branch (never rewritten). Pre-release, git only.
+# `tooling` keeps the headless flags (--snap, --tree, --script) in release builds too.
+rune = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac", features = ["tooling"] }
 alacritty_terminal = "=0.26.0"
 mlua = { version = "=0.12.2", features = ["luau"] }
 tungstenite = "=0.30.0"
@@ -21,7 +23,6 @@ serde_json = "1"
 sha2 = "0.10"
 getrandom = "0.2"
 anyhow = "1"
-futures = "0.3"
 log = "0.4"
 env_logger = "0.11"
 # The stand-in daemon only (src/bin/standin.rs).
@@ -30,3 +31,12 @@ portable-pty = "0.8"
 [profile.release]
 opt-level = 3
 strip = true
+
+# Rune patches these four crates in its own workspace; a dependency's [patch]
+# does not reach the app, so the app repeats it from the same rev
+# (crates/rune/README.md, "Depending on Rune").
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac" }
