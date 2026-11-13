@@ -1,0 +1,32 @@
+[package]
+name = "sbxw-desktop"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+default-run = "sbxw-desktop"
+
+# Its own workspace: the root workspace lists its members explicitly and never
+# builds this directory; this table stops cargo here from climbing up to it.
+[workspace]
+
+[dependencies]
+gpui = "=0.2.2"
+alacritty_terminal = "=0.26.0"
+mlua = { version = "=0.12.2", features = ["luau"] }
+tungstenite = "=0.30.0"
+ureq = { version = "2", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+getrandom = "0.2"
+anyhow = "1"
+futures = "0.3"
+log = "0.4"
+env_logger = "0.11"
+# The stand-in daemon only (src/bin/standin.rs).
+portable-pty = "0.8"
+
+[profile.release]
+opt-level = 3
+strip = true
