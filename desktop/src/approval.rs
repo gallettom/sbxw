@@ -343,7 +343,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         .border(1.0, c(if high { "red-border" } else { "border" }))
         .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
         .child(head)
-        .child(col().scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).grow(1.0).child(body))
+        .child(col().key("jv-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 130.0).max(80.0)).child(body))
         .child(foot)
 }
 

@@ -323,7 +323,11 @@ impl App {
             .unwrap_or_default();
         app.marks.sort_by(|a, b| a.0.total_cmp(&b.0));
         if elsewhere {
-            app.notify(format!("Screens are read from {}: Jarvis's screen changes go to ~/.sbxw/desktop/screens instead", dir.display()), false);
+            let line = format!("Screens are read from {}: Jarvis's screen changes go to ~/.sbxw/desktop/screens instead", dir.display());
+            log::info!("{line}");
+            if !headless() {
+                app.notify(line, false);
+            }
         }
         if let Target::Fixture(f) = &app.target {
             // A fixture answers at once: no thread, so the first frame has it all.

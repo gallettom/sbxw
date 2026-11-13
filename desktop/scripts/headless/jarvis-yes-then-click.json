@@ -1,0 +1,8 @@
+{ "events": [
+  { "t": 0.3, "type": "tap", "key": "jarvis-input" },
+  { "t": 0.5, "type": "type", "every": 0.03, "text": "yes" },
+  { "t": 0.8, "type": "key", "name": "Enter" },
+  { "t": 1.4, "type": "mark", "name": "told" },
+  { "t": 1.6, "type": "tap", "key": "jv-approve" },
+  { "t": 2.2, "type": "mark", "name": "end" }
+] }
