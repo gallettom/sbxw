@@ -3,7 +3,7 @@
 //! the terminal's events shown in a banner.
 //!
 //! term-demo --daemon 127.0.0.1:7399 --token test-token [--sandbox web-app] [--mode bash]
-//!           [--dump-text out.txt] [--simulate-drop] [--theme '#fdf6e3' --text auto]
+//!           [--dump-text out.txt] [--simulate-drop] [--no-blink] [--theme '#fdf6e3' --text auto]
 //! term-demo --bench-echo 300      key-to-echo latency of client.rs's socket thread
 //!
 //! Rune's flags work too (`--snap`, `--script`, `--at`, `--size`, `--scale`).
@@ -31,6 +31,8 @@ struct Args {
     mode: String,
     dump_text: Option<PathBuf>,
     simulate_drop: bool,
+    /// A steady cursor, so a shot does not catch it blinked off.
+    no_blink: bool,
     theme: Option<(String, String)>,
     bench_echo: Option<usize>,
 }
@@ -42,6 +44,10 @@ fn args() -> Args {
     while let Some(k) = it.next() {
         if k == "--simulate-drop" {
             a.simulate_drop = true;
+            continue;
+        }
+        if k == "--no-blink" {
+            a.no_blink = true;
             continue;
         }
         let v = it.next().cloned().unwrap_or_default();
@@ -202,6 +208,7 @@ fn setup(s: &mut Demo, waker: Waker) {
         let reopen: Reconnect = Arc::new(move || d.open_terminal(&req, waker.clone()));
         TerminalState::with_reconnect(conn, reopen)
     };
+    t.cursor_blink = !s.args.no_blink;
     if let Some((bg, text)) = &s.args.theme {
         t.set_theme(Theme::from_setting_strings(bg, text));
     }
@@ -279,7 +286,7 @@ fn poll(s: &mut Demo, clock: f64, tx: &mut Tx) -> bool {
         }
         if let Some(p) = &s.args.dump_text {
             let dump = format!(
-                "{}x{} offset {} history {} status {}\nselection: {:?}\nevents: {:?}\nrows rebuilt {} in {} rebuilds, build {:.1} ms, polls {} ({:.1} ms)\n{}\n",
+                "{}x{} offset {} history {} status {}\nselection: {:?}\nevents: {:?}\nbytes in {}, rows rebuilt {} in {} rebuilds, build {:.1} ms, polls {} ({:.1} ms)\n{}\n",
                 t.size.0,
                 t.size.1,
                 t.display_offset(),
@@ -287,6 +294,7 @@ fn poll(s: &mut Demo, clock: f64, tx: &mut Tx) -> bool {
                 t.status,
                 t.selection_text(),
                 s.banner,
+                t.bytes_in,
                 t.rebuilt_rows,
                 t.rebuilds,
                 t.build_time.as_secs_f64() * 1e3,
@@ -342,7 +350,8 @@ fn view(s: &Demo, _cx: &mut Cx<Demo>) -> El {
         );
     }
     match &s.term {
-        Some(t) => root.child(terminal::pane(t, lens)),
+        // The pane fills a row (its width grows, its height is the row's).
+        Some(t) => root.child(rune::row().w_full().grow(1.0).min_h(0.0).child(terminal::pane(t, lens))),
         None => root.child(text(s.error.clone()).color(rgb(0xf85149)).wrap()),
     }
 }
@@ -420,6 +429,37 @@ fn bench_echo(n: usize) {
         v.push(t.elapsed().as_secs_f64() * 1e3);
     }
     stats("client.rs socket thread (5 ms read timeout)", &mut v);
+    // What the polling costs at rest: the socket thread's CPU over 5 idle seconds.
+    let ws_ticks = || -> Option<u64> {
+        for e in std::fs::read_dir("/proc/self/task").ok()?.flatten() {
+            let p = e.path();
+            if std::fs::read_to_string(p.join("comm")).ok()?.trim() == "terminal-ws" {
+                let stat = std::fs::read_to_string(p.join("stat")).ok()?;
+                let f: Vec<&str> = stat.rsplit(')').next()?.split_whitespace().collect();
+                return Some(f[11].parse::<u64>().ok()? + f[12].parse::<u64>().ok()?);
+            }
+        }
+        None
+    };
+    let wakeups = |pid_task: &str| -> Option<u64> {
+        let s = std::fs::read_to_string(format!("/proc/self/task/{pid_task}/status")).ok()?;
+        let n = |k: &str| s.lines().find(|l| l.starts_with(k)).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok());
+        Some(n("voluntary_ctxt_switches:")? + n("nonvoluntary_ctxt_switches:")?)
+    };
+    let ws_tid = std::fs::read_dir("/proc/self/task").ok().and_then(|d| {
+        d.flatten().find(|e| std::fs::read_to_string(e.path().join("comm")).is_ok_and(|c| c.trim() == "terminal-ws")).map(|e| e.file_name().to_string_lossy().to_string())
+    });
+    if let (Some(t0), Some(tid)) = (ws_ticks(), ws_tid) {
+        let w0 = wakeups(&tid).unwrap_or(0);
+        std::thread::sleep(Duration::from_secs(5));
+        let (t1, w1) = (ws_ticks().unwrap_or(t0), wakeups(&tid).unwrap_or(w0));
+        let hz = 100.0; // USER_HZ on Linux
+        println!(
+            "socket thread at rest: {:.1} ms CPU per second, {:.0} wake-ups per second",
+            (t1 - t0) as f64 / hz * 1000.0 / 5.0,
+            (w1 - w0) as f64 / 5.0
+        );
+    }
     // Baseline: blocking reads on a cloned stream, writes from the caller.
     let mut req = tungstenite::client::IntoClientRequest::into_client_request(format!("ws://{addr}/ws?sandbox=x").as_str()).unwrap();
     req.headers_mut().insert("Authorization", format!("Bearer {token}").parse().unwrap());

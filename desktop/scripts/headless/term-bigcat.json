@@ -1,0 +1,7 @@
+{
+  "events": [
+    { "t": 0.3, "type": "paste", "text": "time cat /Users/thomasgallet/dev/sbxw/.sbxw-worktrees/desktop-terminal/desktop/shots/term/big.log" },
+    { "t": 0.5, "type": "key", "name": "Enter" },
+    { "t": 3.0, "type": "mark", "name": "end" }
+  ]
+}

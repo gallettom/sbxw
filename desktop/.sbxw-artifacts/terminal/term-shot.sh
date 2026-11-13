@@ -22,6 +22,8 @@ mkdir -p "$(dirname "$out")"
 start_daemon "$(dirname "$out")"
 args=(--snap "$out" --at "${at:-mark:end+0.4}" --size "${SHOT_SIZE:-960x640}" --scale "${SHOT_SCALE:-1}")
 [ -n "$script" ] && args+=(--script "$script")
+# A steady cursor unless BLINK=1: a shot should not catch it blinked off.
+[ "${BLINK:-0}" = 1 ] || args+=(--no-blink)
 env -u DISPLAY -u WAYLAND_DISPLAY RUST_LOG="${RUST_LOG:-info,wgpu=warn,naga=warn}" "$bin/term-demo" --daemon "$daemon" --token "$token" --sandbox web-app \
   --dump-text "${out%.png}.txt" "${args[@]}" "${rest[@]}" >"${out%.png}.log" 2>&1 \
   || { echo "term-demo failed; see ${out%.png}.log" >&2; tail -5 "${out%.png}.log" >&2; exit 1; }
