@@ -74,47 +74,9 @@ use std::time::Duration;
 use backend::{Backend, CpalBackend};
 use engine::{Cmd, Engine, Tag, AVAIL_NO};
 
-// ------------------------------------------------------------ seam mirror
-// A copy of `desktop/src/voice.rs` on branch sbxw/desktop-jarvis (commit
-// a346ed8), kept identical so that after the merge the adapter is
-// `impl voice::AudioIo for Audio` forwarding each method, and these two
-// copies are deleted in favour of `crate::voice`.
-
-/// Sample rate of the capture `stop_capture` returns.
-pub const CAPTURE_RATE: u32 = 16_000;
-/// Longest recording the daemon accepts (`svc::voice::MAX_SAMPLES`): 120 s.
-pub const MAX_CAPTURE_SECS: u32 = 120;
-
-/// What the audio side reports (see `voice.rs` for each variant).
-#[derive(Debug, Clone, PartialEq)]
-pub enum AudioEvent {
-    CaptureStarted,
-    CaptureLevel(f32),
-    CaptureEnded,
-    CaptureFailed(String),
-    PlaybackStarted,
-    PlaybackLevel(f32),
-    PlaybackEnded,
-    PlaybackFailed(String),
-}
-
-/// Called from an audio thread after queueing an event (the UI's waker).
-pub type Wake = Arc<dyn Fn() + Send + Sync>;
-
-/// Native audio, as the Jarvis panel uses it.
-pub trait AudioIo: Send {
-    fn available(&self) -> bool;
-    fn start_capture(&mut self) -> Result<(), String>;
-    fn stop_capture(&mut self) -> Result<Vec<u8>, String>;
-    fn cancel_capture(&mut self);
-    fn play(&mut self, rate: u32, pcm: Box<dyn Read + Send>) -> Result<(), String>;
-    fn stop_playback(&mut self);
-    fn events(&mut self) -> Vec<AudioEvent>;
-}
-
-/// Builds the implementation once the UI's waker exists.
-pub type AudioFactory = fn(Wake) -> Box<dyn AudioIo>;
-// ------------------------------------------------------- end seam mirror
+// The seam lives in `crate::voice` (thread desktop-jarvis); its names are
+// re-exported here so this module and its tests read as before the merge.
+pub use crate::voice::{AudioEvent, AudioFactory, AudioIo, Wake, CAPTURE_RATE, MAX_CAPTURE_SECS};
 
 /// The longest `stop_capture` waits for the control thread.
 pub const STOP_WAIT: Duration = Duration::from_millis(500);
@@ -335,7 +297,8 @@ impl Drop for Audio {
     }
 }
 
-impl AudioIo for Audio {
+/// The real implementation of the seam: each method forwards to Audio's own.
+impl crate::voice::AudioIo for Audio {
     fn available(&self) -> bool {
         Audio::available(self)
     }

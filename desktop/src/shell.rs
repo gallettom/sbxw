@@ -158,7 +158,7 @@ pub struct App {
     refocus: bool,
     /// Jarvis: the conversation, its proposals, the panel (jarvis.rs).
     pub jarvis: crate::jarvis::Jarvis,
-    /// Native audio (audio.rs once merged; none headless and in fixtures).
+    /// Native audio (`audio::Audio` in a window; `NullAudio` headless and in fixtures).
     pub audio: Box<dyn crate::voice::AudioIo>,
     wiring: jarvis::Wiring,
     /// The window's size in points (the root's layout).
@@ -361,6 +361,15 @@ impl App {
             s.watch(waker.clone());
         }
         *self.wake_slot.lock().unwrap() = Some(waker.clone());
+        // Native audio (audio.rs) in a real window on a real daemon; headless
+        // runs and fixtures keep NullAudio (or FakeAudio for scripts).
+        let real = !headless() && !matches!(self.target, Target::Fixture(_)) && !self.audio.available() && std::env::var_os("SBXW_DESKTOP_NO_AUDIO").is_none();
+        if real {
+            let w = waker.clone();
+            let factory: crate::voice::AudioFactory = crate::audio::Audio::boxed;
+            self.audio = factory(Arc::new(move || w()));
+            log::info!("audio: native");
+        }
         self.waker = Some(waker);
         if let Some((sb, mode)) = self.start.take() {
             self.open(0, &sb, mode, None);
