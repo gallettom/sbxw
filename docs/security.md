@@ -213,6 +213,13 @@ person approves.**
     is refused, and so is an MCP server with a credential in a header, its
     URL or an argument. Jarvis writes `${key}` placeholders; the person fills
     in the secrets in Setup;
+  - a desktop screen is written only as
+    `~/.sbxw/desktop/screens/<name>.luau`, a path the daemon builds from the
+    name alone; the name must be one of the screens the desktop app wrote in
+    `~/.sbxw/desktop/builtin/screens/` (no new screen), the text is UTF-8,
+    at most 64 KB, with no NUL. The daemon only reads `builtin/`. That
+    folder sbxw creates when it is missing, because it is sbxw's own, under
+    its home;
   - a change to the daemon's `sbxw.toml` when that file does not exist
     creates it, only at the path the daemon was started with and only in a
     folder that already exists. The title names the path and the diff shows
@@ -243,7 +250,7 @@ the highest of its changes:
 
 | Low risk | High risk |
 |---|---|
-| A setting from the fixed list; a word's pronunciation (`[voice.words]`); a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac`, in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
+| A setting from the fixed list; a word's pronunciation (`[voice.words]`); a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac`, in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server; changing or removing a desktop app screen |
 
 A low-risk proposal may be approved by voice (a spoken *oui* after Jarvis
 reads its summary). A pronunciation is low risk because its value is only
@@ -263,6 +270,24 @@ refuses its approval (HTTP 409) unless the request carries
 command** box, beside a red banner that shows the full command as text, and
 keeps Approve off until it is ticked. Such a proposal is high risk, so never
 approved by voice.
+
+**A desktop screen can mislead, not do more.** A screen of the desktop app
+is a sandboxed Luau file: no file, network or process access, and it can
+only emit intents from the closed list the app's core defines, which checks
+each one and draws any approval itself. So a screen Jarvis writes cannot do
+anything the app could not do before. What it can do is lie: a button
+labelled "Open" that emits `stop_sandbox`. That is why every screen change
+is high risk, approved only with a click on its diff, never by voice.
+
+To help the person see it, the diff starts with the intents the new screen
+can emit, with the risk the app declares for each, and marks those the
+screen used now does not emit. This list comes from reading the text for
+the intent names in the app's `intents.json`: it is a **hint, not a
+proof**. A name built at run time (`"stop_" .. "sandbox"`) escapes it, which
+the list says when it sees `intent(` called with something other than a
+quoted name, and a name in a comment is counted. Read the diff itself. At
+approval the daemon refuses the change if the person's version or the
+built-in screen moved since the proposal.
 
 What Jarvis says is an agent's text, like any other sandbox's: its summary
 may be wrong or written to persuade. The diff is what the daemon would
