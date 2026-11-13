@@ -11,6 +11,7 @@
 //! * [`terminal`]: a terminal emulator drawn with Rune's grid (thread desktop-terminal).
 
 pub mod approval;
+pub mod audio;
 pub mod client;
 pub mod fixture;
 pub mod icons;
