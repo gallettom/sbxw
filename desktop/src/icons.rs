@@ -45,6 +45,10 @@ icons! {
     GRID "grid" concat!(st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#), st!("line", r#"x1="8" y1="2.5" x2="8" y2="13.5""#), st!("line", r#"x1="1.5" y1="8" x2="14.5" y2="8""#));
     SINGLE "single" st!("rect", r#"x="1.5" y="2.5" width="13" height="11" rx="1.5""#);
     CHAT "chat" st!("path", r#"d="M2 3.5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3 2.5v-2.5H3a1 1 0 0 1-1-1z""#);
+    MIC "mic" concat!(st!("rect", r#"x="5.5" y="1.5" width="5" height="8" rx="2.5""#), st!("path", r#"d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2""#));
+    SPEAKER "speaker" concat!(st!("path", r#"d="M2.5 6h2.5l3.5-3v10l-3.5-3h-2.5z""#), st!("path", r#"d="M11 5.5a3.5 3.5 0 0 1 0 5""#));
+    SEND "send" concat!(st!("path", r#"d="M2 8l12-5.5-4.5 12-2.5-5z""#), st!("line", r#"x1="7" y1="9.5" x2="14" y2="2.5""#));
+    SPARKLE "sparkle" st!("path", r#"d="M8 1.5c.6 3.3 1.9 5.2 5.5 6.5-3.6 1.3-4.9 3.2-5.5 6.5-.6-3.3-1.9-5.2-5.5-6.5 3.6-1.3 4.9-3.2 5.5-6.5z""#);
     LINK "link" concat!(st!("path", r#"d="M6.5 9.5l3-3""#), st!("path", r#"d="M7.5 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M8.5 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1""#));
 }
 

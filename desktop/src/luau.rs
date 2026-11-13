@@ -51,6 +51,7 @@ pub enum Kind {
     Select,
     Checkbox,
     Progress,
+    Markdown,
 }
 
 /// A width or height.
@@ -211,6 +212,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
+    ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg"]),
 ];
 
 /// Tones of `badge`, `dot` and `progress`.
@@ -244,7 +246,7 @@ local function mk(kind) return function(t)
   return t
 end end
 for _, k in ipairs({ "text", "row", "column", "list", "scroll", "button", "input", "icon", "badge",
-                     "dot", "split", "spacer", "divider", "menu", "select", "checkbox", "progress" }) do
+                     "dot", "split", "spacer", "divider", "menu", "select", "checkbox", "progress", "markdown" }) do
   _G[k] = mk(k)
 end
 intent = function(name, args)
@@ -895,6 +897,14 @@ mod tests {
             n += 1;
         }
         assert_eq!(n, SPEC.len(), "one example per element");
+    }
+
+    #[test]
+    fn markdown_is_an_element_with_text_only() {
+        let n = render(r#"markdown{ "**run `ls`**", color = "text", size = 13, on = "link", key = "m" }"#).unwrap();
+        assert_eq!((n.kind, n.text.as_str(), n.on.as_deref()), (Kind::Markdown, "**run `ls`**", Some("link")));
+        assert!(render("markdown{ text'x' }").unwrap_err().contains("takes one string"));
+        assert!(render("markdown{ 'x', wrap = true }").unwrap_err().contains("unknown prop 'wrap'"));
     }
 
     #[test]

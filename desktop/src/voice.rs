@@ -116,7 +116,7 @@ pub struct FakeAudio {
     pub capture: Vec<u8>,
     pub recording: bool,
     pub played: Vec<(u32, usize)>,
-    queued: Vec<AudioEvent>,
+    pub queued: Vec<AudioEvent>,
 }
 
 impl AudioIo for FakeAudio {
@@ -149,5 +149,41 @@ impl AudioIo for FakeAudio {
     }
     fn events(&mut self) -> Vec<AudioEvent> {
         std::mem::take(&mut self.queued)
+    }
+}
+
+/// One reader over several `/api/voice/speak` answers: the daemon speaks at
+/// most 1000 characters at a time, so a long answer is several requests,
+/// fetched one after the other as the previous body is drained. Playback
+/// sees one stream at one rate, with no gap between pieces.
+pub struct Chain {
+    daemon: std::sync::Arc<dyn crate::client::Daemon>,
+    rest: std::collections::VecDeque<String>,
+    cur: Box<dyn Read + Send>,
+}
+
+impl Chain {
+    /// Speaks the first piece now (its errors are the caller's), the rest as read.
+    pub fn start(daemon: std::sync::Arc<dyn crate::client::Daemon>, pieces: Vec<String>) -> anyhow::Result<(u32, Chain)> {
+        let mut rest: std::collections::VecDeque<String> = pieces.into();
+        let first = rest.pop_front().ok_or_else(|| anyhow::anyhow!("nothing to read"))?;
+        let (rate, cur) = daemon.speak(&first)?;
+        Ok((rate, Chain { daemon, rest, cur }))
+    }
+}
+
+impl Read for Chain {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let n = self.cur.read(buf)?;
+            if n > 0 || buf.is_empty() {
+                return Ok(n);
+            }
+            let Some(next) = self.rest.pop_front() else { return Ok(0) };
+            match self.daemon.speak(&next) {
+                Ok((_, r)) => self.cur = r,
+                Err(e) => return Err(std::io::Error::other(format!("{e:#}"))),
+            }
+        }
     }
 }

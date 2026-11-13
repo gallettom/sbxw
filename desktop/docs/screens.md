@@ -7,8 +7,9 @@ for things by returning **intents** from its actions. The core checks every
 element, every prop and every intent, and refuses anything it does not know.
 
 This document is the whole contract: write a screen against it without
-reading the Rust. The element set is **frozen** (wave 1). Asking for a new
-element or intent goes through the core's owner.
+reading the Rust. The element set is **frozen** (wave 1): elements may be
+added, existing ones never change (`markdown` was added in phase 2). Asking
+for a new element or intent goes through the core's owner.
 
 Contents: [The file](#the-file) · [Data](#data) · [Elements](#elements) ·
 [Events and actions](#events-and-actions) · [Intents](#intents) ·
@@ -50,6 +51,7 @@ return {
 |---|---|
 | `data.sandboxes` | `GET /api/sandboxes`, an array of sandboxes (below) |
 | `data.app` | The core's own state (below) |
+| `data.jarvis` | Jarvis: the conversation, its sandbox's state, waiting proposals, the voice (below) |
 | other keys | Later waves add their daemon data here (`threads`, `plans`, ...), by the key their fixture uses |
 
 A sandbox: `name` (string), `agent` (`claude`, `codex`, ...), `status`
@@ -70,6 +72,23 @@ unchanged.
 | `layout.panes`, `layout.split` | 1 to 4; `columns` or `rows` |
 | `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
 | `platform` | `macos`, `linux`, `windows` |
+
+`data.jarvis` (every screen gets it; the `jarvis` screen draws it):
+
+| Key | What |
+|---|---|
+| `open` | The panel is open |
+| `status` | Jarvis's sandbox: `unknown` (not asked yet), `absent`, `creating`, `starting`, `running`, `stopped`, `failed` |
+| `error` | Why it failed, or nil |
+| `working` | Jarvis is on a turn (thinking) |
+| `sending` | A message is on its way |
+| `log` | The conversation, oldest first: `id` (number), `who` (`me`, `jarvis`, `note`, `error`), `text` (Jarvis's answers are Markdown: draw them with `markdown`), `reading` (bool: being read aloud) |
+| `pending` | Proposals waiting for the person: `id`, `summary`, `risk` (`low`: a typed or spoken yes approves it; `high`: only a click on the core's dialog). No diffs: the dialog is the core's |
+| `voice.installed` | The daemon has the voice |
+| `voice.hears`, `voice.speaks` | This machine can record and transcribe; can read aloud |
+| `voice.recording`, `voice.level` | Push-to-talk is recording; its loudness, 0 to 1 |
+| `voice.reading` | Something is being read aloud |
+| `voice.key`, `voice.key_note` | The push-to-talk key's name (`F8`), and why there is none, when there is none |
 
 ## Elements
 
@@ -362,6 +381,28 @@ A 4 pt bar.
 progress{ value = step / steps, tone = "green" }
 ```
 
+### `markdown`
+
+Text written in Markdown, drawn as it reads: paragraphs (blank lines between,
+line breaks kept), `#` headings, `-` / `*` / `1.` lists, fenced code blocks
+(```` ``` ````, monospace, wrapped), and inline `code`, `**bold**`,
+`*italics*`, `[links](https://...)` and bare `https://` URLs. Code spans are
+read first, so bold can hold code (`**run `ls`**`). Nothing else is
+interpreted: no HTML, no images, no tables, and only `http` and `https` are
+links (any other link shows its label as text). Positional: the string.
+
+| Prop | Value | Effect |
+|---|---|---|
+| `color` | colour | Text colour (default `text`; headings are `text-bright`) |
+| `size` | number or text size | Text size (default 13) |
+| `on` | action name | Called when a link is pressed; `value` = its URL. Without `on`, links are drawn but do nothing |
+| `arg` | any value | Passed too |
+
+```lua
+markdown{ "Run **`sbxw up`** first, then see [the docs](https://example.org/sbxw).", on = "link" }
+-- actions.link = function(_, _, url) return intent("open_link", { url = url }) end
+```
+
 ## Events and actions
 
 Every event calls an action of the screen: **`action(state, arg, value)`**.
@@ -372,6 +413,7 @@ Every event calls an action of the screen: **`action(state, arg, value)`**.
 | `input` | `on`: each edit; `on_submit`: Enter | its `arg` | the text |
 | `menu`, `select` | pick | its `arg` | the item's id |
 | `checkbox` | press | its `arg` | the new bool |
+| `markdown` with `on` | a link pressed | its `arg` | the link's URL |
 
 An action may change `state` (the screen renders again) and may **return**:
 nothing, one intent, or a list of intents. Anything else is an error. A
@@ -391,6 +433,15 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | How many panes show, and how two split |
+| `toggle_jarvis_panel` | `open` (bool; none: toggles) | Opens or closes the Jarvis panel docked on the right; it narrows the terminals |
+| `start_jarvis` | none | Creates Jarvis's sandbox the first time (a minute or two), or starts it, and opens its session; `data.jarvis.status` follows |
+| `send_to_jarvis` | `input` (the `id` of this screen's input, required) | Sends what the person typed there to Jarvis, masked first. **The core reads the text itself**, from its own copy of the input: a screen cannot pass words of its own. Emptied once sent; kept, with the reason in the log, when it could not leave. A `yes` / `oui` or `no` / `non` typed and submitted with Enter answers the waiting proposal instead: a yes approves only a low-risk one, else the log says a click is needed |
+| `talk_start`, `talk_stop` | none | Push-to-talk from a button: start recording; stop, transcribe, send to Jarvis (as `send_to_jarvis`, spoken) |
+| `read_aloud` | `id` (a `log` entry's id) | Reads that message aloud |
+| `stop_reading` | none | Stops reading aloud |
+| `approve_proposal` | `id` (string) | **Risk: approval.** Opens the core's dialog for that proposal. It approves nothing: only the person's click on the dialog does |
+| `refuse_proposal` | `id` (string), `reason` (string) | Refuses that proposal; Jarvis is told the reason |
+| `open_link` | `url` (an `http://` or `https://` URL) | Opens it in the browser. Any other scheme is refused |
 
 `pane` is `"focused"` (default), `"spare"` (the first pane with nothing in
 it, or a new pane while there are fewer than 4) or a number 1 to 4.
@@ -405,10 +456,14 @@ actions = {
 ```
 
 Each intent has a declared risk in the core. All of the above run when a
-screen asks. Later intents that need the person's yes (a Jarvis proposal, a
-network rule, a host command) will be held, and **the core** draws the
-question above every screen; a screen can neither draw that dialog nor
-answer it.
+screen asks, except `approve_proposal`: an intent of risk *approval* is held,
+and **the core** draws the question above every screen (for a Jarvis
+proposal: its summary, risk, every change with its diff, Approve and
+Refuse). A screen can neither draw that dialog, nor see it, nor press it.
+
+The push-to-talk key (F8 by default, the daemon's `[voice]
+push_to_talk_key`) and the panel's key (⌘J on macOS, F7 elsewhere) are the
+core's: a terminal with the focus does not receive them.
 
 ## Theme
 
@@ -433,7 +488,7 @@ rows `sm`, cards and menus `md`, dialogs `lg`.
 `play`, `stop`, `reload`, `plus`, `close`, `terminal`, `chevron-down`,
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
-`single`, `chat`, `link`.
+`single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`.
 
 ## Where screens live
 
@@ -442,9 +497,20 @@ A file with the same name in the **override folder** replaces it and reloads
 on every save (within about 150 ms); deleting the file brings the built-in
 back. The folder is `~/.sbxw/desktop/screens/`, or `$SBXW_DESKTOP_SCREENS`.
 
-Screens of wave 1: `topbar` (the bar at the top, right of macOS's window
-buttons) and `sandboxes` (the side panel). The terminals and their pane bars
-are drawn by the core.
+Screens: `topbar` (the bar at the top, right of macOS's window buttons),
+`sandboxes` (the side panel) and `jarvis` (the panel docked on the right,
+shown while `data.jarvis.open`). The terminals, their pane bars, the
+panel's resize handle and every approval dialog are drawn by the core.
+
+Jarvis can propose changes to these screens (the daemon writes the file in
+`~/.sbxw/desktop/screens/` once the person approves). With
+`$SBXW_DESKTOP_SCREENS` set (tests), the app reads that folder instead and
+says so: Jarvis's changes do not reach it.
+
+At every start the app writes what it has built in to
+`~/.sbxw/desktop/builtin/` (`screens/<name>.luau`, this document as
+`screens.md`, and `intents.json`), for the daemon to show Jarvis. The app
+never reads that folder.
 
 ## Limits
 

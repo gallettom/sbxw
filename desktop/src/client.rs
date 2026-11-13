@@ -621,7 +621,7 @@ pub struct FixtureData {
     pub jarvis_status: Option<serde_json::Value>,
     /// `GET /api/jarvis`'s proposals, newest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub jarvis: Vec<serde_json::Value>,
+    pub jarvis_proposals: Vec<serde_json::Value>,
     /// `GET /api/sessions`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<serde_json::Value>,
@@ -634,6 +634,9 @@ pub struct FixtureData {
     /// Messages pushed, kept for tests.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pushed: Vec<(String, String)>,
+    /// What `POST /api/voice/transcribe` answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
 }
 
 impl FixtureDaemon {
@@ -678,16 +681,14 @@ impl Daemon for FixtureDaemon {
         Ok(d.jarvis_status.clone().unwrap())
     }
     fn jarvis_proposals(&self) -> Result<Vec<serde_json::Value>> {
-        Ok(self.data.lock().unwrap().jarvis.clone())
+        Ok(self.data.lock().unwrap().jarvis_proposals.clone())
     }
     fn jarvis_approve(&self, id: &str, via: &str, ack: bool) -> Result<serde_json::Value> {
         let mut d = self.data.lock().unwrap();
         let err = d.jarvis_approve_error.clone();
-        let p = d.jarvis.iter_mut().find(|p| p["id"] == id).ok_or_else(|| anyhow!(HttpError { path: "approve".into(), code: 404, message: format!("no proposal {id}") }))?;
+        let p = d.jarvis_proposals.iter_mut().find(|p| p["id"] == id).ok_or_else(|| anyhow!(HttpError { path: "approve".into(), code: 404, message: format!("no proposal {id}") }))?;
         fixture_rule(p, via, ack)?;
         if let Some(e) = err {
-            p["state"] = "failed".into();
-            p["error"] = e.clone().into();
             return Err(anyhow!(HttpError { path: "approve".into(), code: 409, message: e }));
         }
         p["state"] = "applied".into();
@@ -696,7 +697,7 @@ impl Daemon for FixtureDaemon {
     }
     fn jarvis_refuse(&self, id: &str, reason: Option<&str>) -> Result<serde_json::Value> {
         let mut d = self.data.lock().unwrap();
-        let p = d.jarvis.iter_mut().find(|p| p["id"] == id).ok_or_else(|| anyhow!("no proposal {id}"))?;
+        let p = d.jarvis_proposals.iter_mut().find(|p| p["id"] == id).ok_or_else(|| anyhow!("no proposal {id}"))?;
         p["state"] = "refused".into();
         if let Some(r) = reason {
             p["reason"] = r.into();
@@ -712,6 +713,13 @@ impl Daemon for FixtureDaemon {
     }
     fn voice_status(&self) -> Result<serde_json::Value> {
         self.data.lock().unwrap().voice.clone().ok_or_else(|| anyhow!(HttpError { path: "/api/voice".into(), code: 404, message: "not found".into() }))
+    }
+    fn transcribe(&self, _pcm: Vec<u8>) -> Result<String> {
+        self.data.lock().unwrap().transcript.clone().ok_or_else(|| anyhow!("fixture {}: no transcript", self.name))
+    }
+    fn speak(&self, text: &str) -> Result<(u32, Box<dyn std::io::Read + Send>)> {
+        // Silence, 10 ms per character: enough for a scripted playback.
+        Ok((24_000, Box::new(std::io::Cursor::new(vec![0u8; text.chars().count() * 480]))))
     }
 }
 

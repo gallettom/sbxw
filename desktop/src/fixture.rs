@@ -33,6 +33,15 @@ pub struct AppInit {
     pub focused: Option<usize>,
     /// Show this connection state instead of the fixture's own ("up").
     pub connection: Option<ConnInit>,
+    /// The Jarvis panel is open at start.
+    #[serde(default)]
+    pub jarvis_open: bool,
+    /// Use the scripted audio (`voice::FakeAudio`) instead of none.
+    #[serde(default)]
+    pub fake_audio: bool,
+    /// Messages already in the conversation: `[who, text]` (`me`, `jarvis`, `note`, `error`).
+    #[serde(default)]
+    pub jarvis_log: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,8 +151,27 @@ pub fn screen_data(daemon: &serde_json::Value, app: &AppView) -> serde_json::Val
         _ => serde_json::Map::new(),
     };
     d.entry("sandboxes").or_insert_with(|| serde_json::json!([]));
+    if !d.get("jarvis").is_some_and(|j| j.is_object()) {
+        let j = jarvis_of(daemon);
+        d.insert("jarvis".into(), j.screen_data(false));
+    }
     d.insert("app".into(), serde_json::to_value(app).expect("app view"));
     serde_json::Value::Object(d)
+}
+
+/// Jarvis as a fixture's daemon keys describe it (`jarvis_status`,
+/// `jarvis_proposals`, `sessions`, `voice`), for a screen drawn alone.
+pub fn jarvis_of(daemon: &serde_json::Value) -> crate::jarvis::Jarvis {
+    let mut j = crate::jarvis::Jarvis::default();
+    if let Some(s) = daemon["jarvis_status"]["state"].as_str() {
+        j.status = s.to_string();
+    }
+    j.status_error = daemon["jarvis_status"]["error"].as_str().map(str::to_string);
+    j.voice = daemon.get("voice").cloned();
+    j.seed_proposals(daemon["jarvis_proposals"].as_array().cloned().unwrap_or_default());
+    j.seed_sessions(daemon["sessions"].as_array().map(Vec::as_slice).unwrap_or(&[]));
+    j.open = true;
+    j
 }
 
 #[cfg(test)]

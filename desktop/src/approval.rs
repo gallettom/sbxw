@@ -1,35 +1,350 @@
-//! Where sensitive approvals will live (wave 4: Jarvis proposals on a diff,
-//! network rules, host commands). Not built in wave 1, on purpose.
+//! Sensitive approvals, drawn by the core: Jarvis's proposals (a diff to
+//! approve or refuse) and OSC 52 clipboard offers.
 //!
 //! The rule this module exists for: **a screen never draws or answers an
 //! approval.** An intent whose registered risk is
 //! [`Risk::Approval`](crate::intent::Risk::Approval) is not run when a
-//! screen returns it. `App::intents` (shell.rs) queues it here instead, and
-//! [`view`] draws the dialog in the core's layer, above every screen, from
-//! Rust only; only the person's press on that dialog runs the intent. Luau
-//! cannot see the queue, cannot press the buttons, and cannot draw over the
-//! dialog (screens are laid out under it).
+//! screen returns it: `App::intents` (shell.rs) turns `approve_proposal`
+//! into "show that proposal's dialog", and [`proposal_view`] draws the dialog
+//! in the core's layer, above every screen, from Rust only; only the
+//! person's press on that dialog approves. Luau cannot see the dialog,
+//! cannot press its buttons, and cannot draw over it (screens are laid out
+//! under it).
 //!
-//! Until the dialogs exist, a queued approval is refused at once with a
-//! notice (no intent of wave 1 has that risk, so none can reach here).
+//! The Jarvis dialog follows `assets/js/jarvis.js`: the summary and the
+//! diffs are the sandbox's words and are shown as plain text only; the
+//! risk badge; a note when it is high risk (a spoken or typed yes does not
+//! approve it); per change its kind, title, the command a stdio MCP server
+//! would run on this machine (red banner), for a desktop screen the intents
+//! it can emit, and the unified diff (monospace, coloured, scrollable);
+//! Approve, off until "I have read this command" is ticked when the daemon
+//! says `needs_ack`; Refuse with an optional reason; the daemon's refusal
+//! (409) shown beside the buttons; once answered, the result per change.
 
 use crate::intent::Intent;
-use rune::El;
+use rune::{El, TextEdit};
+use serde_json::Value as J;
 
 /// An intent waiting for the person's answer.
 pub struct Pending {
     /// The screen that asked.
     pub screen: String,
     pub intent: Intent,
-    /// What the dialog will ask (the registry's text).
+    /// What the dialog asks (the registry's text).
     pub asks: &'static str,
 }
 
-/// The dialog layer: `None` while nothing waits. Wave 4 draws a modal here
-/// (`El::modal`, Allow / Refuse, the diff for a Jarvis proposal).
-pub fn view<S: 'static>(pending: &[Pending]) -> Option<El> {
-    let _ = pending;
-    None
+/// What the proposal dialog's buttons do, in the app.
+pub trait ProposalAnswers: Sized + 'static {
+    /// Approve, by a click: `via: "click"`, with the acknowledgement when ticked.
+    fn approve_click(&mut self);
+    fn refuse_click(&mut self);
+    /// "I have read this command".
+    fn toggle_ack(&mut self);
+    /// ✕: later. The proposal stays pending; the panel can bring it back.
+    fn close_dialog(&mut self);
+    /// After an answer: the next pending proposal, or close.
+    fn next_dialog(&mut self);
+    /// The refusal reason's text.
+    fn reason_edit(&mut self) -> &mut TextEdit;
+}
+
+/// The change kinds, as the person reads them (jarvis.js, `JV_KINDS`).
+pub fn kind_label(kind: &str) -> &str {
+    match kind {
+        "kit_write" => "kit",
+        "kit_remove" => "kit removed",
+        "kits_line" => "kits line",
+        "setting" => "setting",
+        "voice_word" => "pronunciation",
+        "network_allow" => "network",
+        "mcp_server" => "MCP server",
+        "mcp_remove" => "MCP server removed",
+        "desktop_screen" => "desktop screen",
+        "desktop_screen_remove" => "desktop screen removed",
+        k => k,
+    }
+}
+
+/// What a desktop screen change lets the screen do, in plain words: the
+/// daemon's `intents: [{name, risk, new}]`. `None` for other kinds.
+pub fn screen_intents(change: &J) -> Option<Vec<(String, bool, bool)>> {
+    let list = change["intents"].as_array()?;
+    Some(
+        list.iter()
+            .map(|i| {
+                let name = i["name"].as_str().unwrap_or("?").to_string();
+                let risk = i["risk"].as_str().unwrap_or("");
+                let words = crate::intent::spec(&name).map(|s| s.doc.split(['.', '(']).next().unwrap_or(s.doc).trim().to_string()).unwrap_or_else(|| name.replace('_', " "));
+                (format!("{words} (`{name}`)"), i["new"] == true, risk.starts_with("approval"))
+            })
+            .collect(),
+    )
+}
+
+/// What one change came to, once the proposal is answered (jarvis.js, `jvChangeResult`).
+pub fn change_result(p: &J, i: usize) -> Option<(Option<bool>, String, String)> {
+    let state = p["state"].as_str().unwrap_or("");
+    if state == "pending" {
+        return None;
+    }
+    if let Some(r) = p["results"].as_array().and_then(|r| r.get(i)) {
+        let ok = r["ok"] == true;
+        let text = if ok {
+            if r["restart"] == true {
+                "Applied, takes effect when the daemon restarts"
+            } else {
+                "Applied"
+            }
+        } else {
+            "Failed"
+        };
+        return Some((Some(ok), text.into(), r["message"].as_str().unwrap_or("").into()));
+    }
+    Some(match state {
+        "applied" => (Some(true), "Applied".into(), String::new()),
+        "refused" => (None, "Not applied (refused)".into(), String::new()),
+        _ => (Some(false), "Not applied".into(), String::new()),
+    })
+}
+
+/// What the dialog needs from the app's state.
+pub struct DialogState<'a> {
+    pub proposal: &'a J,
+    /// Other pending proposals.
+    pub waiting: usize,
+    pub acked: bool,
+    /// The daemon's refusal of the last answer (409: changed since proposal...).
+    pub error: Option<&'a str>,
+    pub busy: bool,
+    pub reason: &'a TextEdit,
+    /// Insets from the window's edges: left, top, right; and the height left.
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub max_h: f32,
+}
+
+/// The proposal dialog (key `jv-dialog`; buttons `jv-approve`, `jv-refuse`,
+/// `jv-ack`, `jv-close`, `jv-next`; the reason `jv-reason`).
+pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
+    use crate::theme::{c, radius};
+    use rune::{col, row, text, Cursor, ScrollSpec, Span, TextStyle};
+    let p = d.proposal;
+    let pending = crate::jarvis::pending(p);
+    let high = crate::jarvis::screen_only(p);
+    let needs_ack = crate::jarvis::needs_ack(p);
+    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap().w_full().min_w(0.0);
+    let badge = |t: &str, tone: &str| {
+        let (fg, tint) = crate::screen::tone(tone);
+        rune::el().px(6.0).py(1.0).radius(radius("xs").unwrap()).fill(crate::theme::hex(tint)).border(1.0, crate::theme::hex(fg)).child(text(t.to_string()).font(TextStyle::new(10.5, 500.0)).color(crate::theme::hex(fg)))
+    };
+    let button = |key: &str, label: &str, primary: bool, enabled: bool| {
+        let b = rune::el()
+            .key(key)
+            .role("button")
+            .label(label)
+            .px(12.0)
+            .py(5.0)
+            .radius(radius("sm").unwrap())
+            .fill(c(if primary { "green-deep" } else { "elevated" }))
+            .border(1.0, c(if primary { "green-strong" } else { "border" }))
+            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")));
+        if enabled {
+            b.hover(c(if primary { "green-strong" } else { "dim" })).cursor(Cursor::Pointer)
+        } else {
+            b.opacity(0.45).disabled(true)
+        }
+    };
+
+    let mut head = row().w_full().gap(8.0).items_center().child(text("Jarvis proposes").font(TextStyle::new(13.0, 600.0)).color(c("text-bright"))).child(badge(if high { "High risk" } else { "Low risk" }, if high { "red" } else { "green" }));
+    if d.waiting > 0 {
+        head = head.child(text(format!("{} more waiting", d.waiting)).font(TextStyle::new(11.0, 400.0)).color(c("text-muted")));
+    }
+    head = head.child(rune::el().grow(1.0)).child(
+        rune::el()
+            .key("jv-close")
+            .role("button")
+            .label("Later")
+            .help("Later: the proposal waits, the Jarvis panel brings it back")
+            .padding(3.0)
+            .radius(radius("xs").unwrap())
+            .hover(c("border"))
+            .cursor(Cursor::Pointer)
+            .on_press(|s: &mut S| s.close_dialog())
+            .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
+    );
+
+    let mut body = col().w_full().min_w(0.0).gap(10.0);
+    body = body.child(small(p["summary"].as_str().filter(|s| !s.is_empty()).unwrap_or("(no summary)").to_string(), 13.0, 400.0, "text-bright").key("jv-summary"));
+    if high && pending {
+        body = body.child(small("High risk: read every change below before you approve. A spoken or typed yes does not approve this one: click Approve.".into(), 11.5, 400.0, "amber").key("jv-high-note"));
+    }
+    let changes = p["changes"].as_array().cloned().unwrap_or_default();
+    for (i, ch) in changes.iter().enumerate() {
+        let mut item = col().key(format!("jv-change-{i}")).w_full().min_w(0.0).gap(6.0);
+        let mut h = row().w_full().gap(6.0).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0));
+        if ch["risk"] == "high" && pending {
+            h = h.child(badge("high risk", "red"));
+        }
+        let res = change_result(p, i);
+        if let Some((ok, t, _)) = &res {
+            h = h.child(badge(t, match ok {
+                Some(true) => "green",
+                Some(false) => "red",
+                None => "neutral",
+            }));
+        }
+        item = item.child(h);
+        if let Some((ok, _, msg)) = &res {
+            if !msg.is_empty() {
+                item = item.child(small(msg.clone(), 11.0, 400.0, if *ok == Some(false) { "red" } else { "text-muted" }));
+            }
+        }
+        if let Some(cmd) = ch["host_command"].as_str() {
+            item = item.child(
+                col()
+                    .key(format!("jv-host-{i}"))
+                    .role("alert")
+                    .w_full()
+                    .padding(8.0)
+                    .gap(4.0)
+                    .radius(radius("sm").unwrap())
+                    .fill(c("red-tint"))
+                    .border(1.0, c("red"))
+                    .child(small("This command will run on this machine, outside any sandbox:".into(), 11.5, 600.0, "text-bright"))
+                    .child(text(cmd.to_string()).font(TextStyle::new(12.0, 400.0).mono()).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0)),
+            );
+        }
+        if let Some(list) = screen_intents(ch) {
+            let mut box_ = col().key(format!("jv-intents-{i}")).w_full().gap(2.0).padding(8.0).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
+            box_ = box_.child(small(if list.is_empty() { "This screen asks the app for nothing.".into() } else { "This screen can ask the app to:".into() }, 11.5, 600.0, "text-bright"));
+            for (words, new, approval) in list {
+                let mut line = words;
+                if new {
+                    line = format!("{line}  NEW: the current screen does not");
+                }
+                if approval {
+                    line = format!("{line}  (needs your approval in a core dialog)");
+                }
+                box_ = box_.child(small(format!("• {line}"), 11.5, 400.0, if new { "amber" } else { "text" }));
+            }
+            item = item.child(box_);
+        }
+        if let Some(diff) = ch["diff"].as_str().filter(|d| !d.is_empty()) {
+            // The sandbox's text, as text, coloured by line.
+            let mut spans = vec![];
+            let mut at = 0;
+            for line in diff.split_inclusive('\n') {
+                let colour = if line.starts_with("+++") || line.starts_with("---") {
+                    Some("text-bright")
+                } else if line.starts_with('+') {
+                    Some("green")
+                } else if line.starts_with('-') {
+                    Some("red")
+                } else if line.starts_with("@@") {
+                    Some("blue")
+                } else if line.starts_with('#') {
+                    Some("amber")
+                } else {
+                    None
+                };
+                if let Some(col_) = colour {
+                    spans.push(Span::new(at, at + line.len()).color(c(col_)));
+                }
+                at += line.len();
+            }
+            item = item.child(
+                col()
+                    .key(format!("jv-diff-{i}"))
+                    .role("document")
+                    .label(format!("Diff of {}", ch["title"].as_str().unwrap_or("this change")))
+                    .scroll(ScrollSpec { stick_bottom: false })
+                    .w_full()
+                    .max_h(280.0)
+                    .min_h(0.0)
+                    .padding(8.0)
+                    .radius(radius("sm").unwrap())
+                    .fill(c("bg"))
+                    .border(1.0, c("elevated"))
+                    .child(rune::rich(diff.to_string(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0)),
+            );
+        }
+        body = body.child(item);
+    }
+    if changes.is_empty() {
+        body = body.child(small("No change listed.".into(), 12.0, 400.0, "text-muted"));
+    }
+    if !pending {
+        let state = p["state"].as_str().unwrap_or("");
+        let (t, col_) = match state {
+            "applied" => ("Applied.".to_string(), "green"),
+            "refused" => ("Refused: nothing was changed.".to_string(), "text-muted"),
+            _ => ("Failed.".to_string(), "red"),
+        };
+        let t = match p["error"].as_str() {
+            Some(e) => format!("{t} {e}"),
+            None => t,
+        };
+        body = body.child(small(t, 12.0, 500.0, col_).key("jv-outcome"));
+    }
+    if let Some(e) = d.error {
+        body = body.child(small(e.to_string(), 12.0, 500.0, "red").key("jv-error"));
+    }
+
+    let mut foot = row().w_full().gap(8.0).items_center();
+    if pending {
+        if needs_ack {
+            let on = d.acked;
+            let mut b = rune::el().w(14.0).h(14.0).radius(4.0).border(1.0, c(if on { "blue" } else { "dim" })).items_center().justify_center();
+            if on {
+                b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
+            }
+            foot = foot.child(
+                row()
+                    .key("jv-ack")
+                    .role("checkbox")
+                    .checked(on)
+                    .label("I have read this command")
+                    .gap(6.0)
+                    .items_center()
+                    .cursor(Cursor::Pointer)
+                    .on_press(|s: &mut S| s.toggle_ack())
+                    .child(b)
+                    .child(text("I have read this command").font(TextStyle::new(12.0, 500.0)).color(c("text-bright"))),
+            );
+        }
+        let reason = rune::text_input(d.reason, TextStyle::new(12.0, 400.0))
+            .single_line()
+            .key("jv-reason")
+            .color(c("text-bright"))
+            .placeholder("Why not (optional, told to Jarvis)", c("text-dim"))
+            .w_full()
+            .on_edit(|s: &mut S| s.reason_edit());
+        foot = foot
+            .child(rune::el().grow(1.0).min_w(80.0).h(28.0).px(8.0).items_center().fill(c("bg")).border(1.0, c("border")).radius(radius("sm").unwrap()).child(reason))
+            .child(if d.busy { button("jv-refuse", "Refuse", false, false) } else { button("jv-refuse", "Refuse", false, true).on_press(|s: &mut S| s.refuse_click()) });
+        let can = !d.busy && (!needs_ack || d.acked);
+        foot = foot.child(if can { button("jv-approve", "Approve", true, true).on_press(|s: &mut S| s.approve_click()) } else { button("jv-approve", "Approve", true, false) });
+    } else {
+        foot = foot.child(rune::el().grow(1.0)).child(button("jv-next", if d.waiting > 0 { "Next proposal" } else { "Close" }, false, true).on_press(|s: &mut S| s.next_dialog()));
+    }
+
+    col()
+        .key("jv-dialog")
+        .role("dialog")
+        .label("Jarvis proposes a change")
+        .pin(Some(d.left), Some(d.top), Some(d.right), None)
+        .max_h(d.max_h.max(160.0))
+        .padding(14.0)
+        .gap(10.0)
+        .radius(radius("lg").unwrap())
+        .fill(c("surface"))
+        .border(1.0, c(if high { "red-border" } else { "border" }))
+        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
+        .child(head)
+        .child(col().scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).grow(1.0).child(body))
+        .child(foot)
 }
 
 // ---- OSC 52: a program in the sandbox asking to write the clipboard ----
