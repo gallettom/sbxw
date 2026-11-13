@@ -209,6 +209,12 @@ pub enum Change {
     },
     McpServer { spec: McpServerSpec },
     McpRemove { name: String },
+    /// One screen of the desktop app, whole: written as `<name>.luau` in the
+    /// app's override folder, which the app uses instead of its built-in.
+    /// `name` must be a built-in screen's.
+    DesktopScreen { name: String, content: String },
+    /// Delete the override of screen `name`: the app's built-in comes back.
+    DesktopScreenRemove { name: String },
 }
 
 impl Change {
@@ -222,6 +228,8 @@ impl Change {
             Change::NetworkAllow { .. } => "network_allow",
             Change::McpServer { .. } => "mcp_server",
             Change::McpRemove { .. } => "mcp_remove",
+            Change::DesktopScreen { .. } => "desktop_screen",
+            Change::DesktopScreenRemove { .. } => "desktop_screen_remove",
         }
     }
 }
@@ -614,6 +622,8 @@ pub struct World {
     pub mcp: Option<Vec<String>>,
     /// The models `claude_model` may name.
     pub models: Vec<String>,
+    /// The desktop app's screens, as the daemon read them.
+    pub desktop: Desktop,
 }
 
 impl World {
@@ -638,6 +648,11 @@ pub enum Op {
     VoiceWords { path: String, text: String, words: BTreeMap<String, Said> },
     McpAdd { replace: bool, spec: McpSpec },
     McpRm { name: String },
+    /// The override of screen `name` written with `content`. The daemon
+    /// builds the path from the name alone.
+    WriteScreen { name: String, content: String },
+    /// The override of screen `name` deleted.
+    RemoveScreen { name: String },
 }
 
 /// One change, planned.
@@ -648,7 +663,7 @@ pub struct Planned {
 }
 
 /// What the person reads about one change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeView {
     pub kind: String,
     pub title: String,
@@ -658,6 +673,15 @@ pub struct ChangeView {
     /// any sandbox: what the person must acknowledge on screen to approve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_command: Option<String>,
+    /// A desktop screen change: the intents the new screen can emit, as a
+    /// best-effort scan of its text finds them (a hint, not a proof).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intents: Option<Vec<IntentHint>>,
+    /// What the change was planned against, when the diff alone does not
+    /// say it (a desktop screen: the override and the built-in). Approval
+    /// compares it like the rest of the view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// Plan every change in order against `world` (each sees the ones before
@@ -693,7 +717,7 @@ fn clean_list(list: &[String]) -> Vec<String> {
 }
 
 fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
-    let view = |title: String, diff: String, risk: Risk| ChangeView { kind: c.kind().into(), title, diff, risk, host_command: None };
+    let view = |title: String, diff: String, risk: Risk| ChangeView { kind: c.kind().into(), title, diff, risk, ..Default::default() };
     match c {
         Change::KitWrite { kit, description, files, remove, context } => {
             if !valid_kit(kit) {
@@ -947,6 +971,53 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             servers.retain(|s| *s != name);
             Ok(Planned { view: view(format!("Remove MCP server {name}"), format!("- sbx mcp rm {name}\n"), Risk::High), op: Op::McpRm { name } })
         }
+        Change::DesktopScreen { name, content } => {
+            let d = w.desktop.screen(name)?.clone();
+            if content.contains('\0') {
+                return Err(format!("the {name} screen: text only, no NUL character"));
+            }
+            if content.len() > MAX_SCREEN {
+                return Err(format!("the {name} screen: {} KB, a screen is at most {} KB", content.len().div_ceil(1024), MAX_SCREEN / 1024));
+            }
+            if content.trim().is_empty() {
+                return Err(format!("an empty {name} screen draws nothing; to give the app its built-in screen back, remove your override (desktop_screen_remove)"));
+            }
+            let (now, is_override) = d.effective(name).unwrap_or_default();
+            if now == content {
+                return Err(format!("the {name} screen already is exactly this: nothing to change"));
+            }
+            let (target, from) = (d.override_path(name), if is_override { d.override_path(name) } else { d.builtin_path(name) });
+            let title = if is_override {
+                format!("Desktop app: changes your {name} screen ({target}); the app reloads it at once")
+            } else {
+                format!("Desktop app: replaces the built-in {name} screen with yours ({target}); the app reloads it at once")
+            };
+            let hints = d.hints(content, now);
+            let diff = format!("{}{}", hint_lines(&d, &hints, content), unified(now, content, &from, &target));
+            let mut v = view(title, diff, Risk::High);
+            v.intents = Some(hints);
+            v.base = Some(d.fingerprint(name));
+            w.desktop.overrides.insert(name.clone(), content.clone());
+            Ok(Planned { view: v, op: Op::WriteScreen { name: name.clone(), content: content.clone() } })
+        }
+        Change::DesktopScreenRemove { name } => {
+            let d = w.desktop.screen(name)?.clone();
+            let Some(current) = d.overrides.get(name) else {
+                return Err(format!("the {name} screen has no override: the app already uses its built-in screen"));
+            };
+            let builtin = d.builtin.get(name).map(String::as_str).unwrap_or_default();
+            let hints = d.hints(builtin, current);
+            let mut diff = hint_lines(&d, &hints, builtin);
+            if current == builtin {
+                diff.push_str("# Your override is the same as the built-in: removing it changes nothing on screen.\n");
+            }
+            diff.push_str(&unified(current, builtin, &d.override_path(name), &d.builtin_path(name)));
+            let mut v = view(format!("Desktop app: removes your {name} screen ({}), which restores the built-in", d.override_path(name)), diff, Risk::High);
+            v.intents = Some(hints);
+            v.base = Some(d.fingerprint(name));
+            w.desktop.overrides.remove(name);
+            Ok(Planned { view: v, op: Op::RemoveScreen { name: name.clone() } })
+        }
     }
 }
 
@@ -971,6 +1042,198 @@ pub fn host_command(s: &McpSpec) -> Option<String> {
         "" => line,
         d => format!("cd {} && {line}", quote(d)),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Desktop screens
+
+/// A screen's size limit, in bytes.
+pub const MAX_SCREEN: usize = 64 * 1024;
+
+/// A screen name: 1 to 40 of lowercase letters, digits and `-`.
+pub fn valid_screen_name(name: &str) -> bool {
+    (1..=40).contains(&name.len()) && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
+/// One intent the desktop app's core knows, from its `intents.json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentInfo {
+    pub name: String,
+    /// The risk the app declares for it, as it writes it (`direct`,
+    /// `approval`, ...); `unknown` when it gives none.
+    pub risk: String,
+}
+
+/// An intent a proposed screen can emit, from a scan of its text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IntentHint {
+    pub name: String,
+    pub risk: String,
+    /// The screen the app uses now does not emit it.
+    #[serde(default)]
+    pub new: bool,
+}
+
+/// The intents of the app's `intents.json`: an array of objects with a
+/// `name` and a `risk` (other fields, such as `args`, ignored), the same
+/// under an `intents` key, or an object keyed by name. A `risk` that is an
+/// object is named by its `kind`, else its first key.
+pub fn parse_intents(raw: &str) -> Result<Vec<IntentInfo>, String> {
+    let v: Value = serde_json::from_str(raw).map_err(|e| format!("intents.json is not valid JSON: {e}"))?;
+    let risk = |r: Option<&Value>| match r {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Object(o)) => o.get("kind").and_then(Value::as_str).map(String::from).or_else(|| o.keys().next().cloned()).unwrap_or_else(|| "unknown".into()),
+        _ => "unknown".into(),
+    };
+    let rows: Vec<(String, Option<&Value>)> = match v.get("intents").unwrap_or(&v) {
+        Value::Array(list) => list.iter().filter_map(|i| Some((i.get("name")?.as_str()?.to_string(), i.get("risk")))).collect(),
+        Value::Object(map) => map.iter().map(|(k, i)| (k.clone(), i.get("risk"))).collect(),
+        _ => return Err("intents.json is neither a list of intents nor an object of them".into()),
+    };
+    let mut out: Vec<IntentInfo> = Vec::new();
+    for (name, r) in rows {
+        let ok = !name.is_empty() && name.len() <= 64 && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b'.');
+        if ok && !out.iter().any(|i| i.name == name) {
+            out.push(IntentInfo { name, risk: risk(r) });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// The names of `known` intents that appear in `text` as a whole word: a
+/// best-effort reading of what a screen can emit. A name built at run time
+/// (`"stop_" .. "sandbox"`) escapes it, and a name in a comment is counted.
+pub fn scan_intents<'a>(text: &str, known: &'a [IntentInfo]) -> Vec<&'a IntentInfo> {
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    known
+        .iter()
+        .filter(|i| {
+            text.match_indices(i.name.as_str()).any(|(at, m)| {
+                let before = text.as_bytes().get(at.wrapping_sub(1)).copied();
+                let after = text.as_bytes().get(at + m.len()).copied();
+                !before.is_some_and(word) && !after.is_some_and(word)
+            })
+        })
+        .collect()
+}
+
+/// `intent(` called with something other than a quoted name: the screen
+/// builds an intent name at run time, which the scan cannot follow.
+pub fn builds_intent_names(text: &str) -> bool {
+    text.match_indices("intent").any(|(at, m)| {
+        let before = text.as_bytes().get(at.wrapping_sub(1)).copied();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
+            return false;
+        }
+        let rest = text[at + m.len()..].trim_start();
+        let Some(args) = rest.strip_prefix('(') else { return false };
+        !args.trim_start().starts_with(['"', '\'', '['])
+    })
+}
+
+/// The desktop app's screens, as the daemon read them from sbxw's home.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Desktop {
+    /// `builtin/` exists: the app has run on this machine.
+    pub present: bool,
+    /// `<sbxw home>/desktop/builtin`, absolute.
+    pub builtin_dir: String,
+    /// `<sbxw home>/desktop/screens`, absolute: the override folder.
+    pub screens_dir: String,
+    /// The built-in screens by name.
+    pub builtin: BTreeMap<String, String>,
+    /// The overrides by name.
+    pub overrides: BTreeMap<String, String>,
+    pub intents: Vec<IntentInfo>,
+    /// Why `intents.json` could not be read, if it could not.
+    pub intents_error: Option<String>,
+}
+
+impl Desktop {
+    pub fn override_path(&self, name: &str) -> String {
+        format!("{}/{name}.luau", self.screens_dir.trim_end_matches('/'))
+    }
+
+    pub fn builtin_path(&self, name: &str) -> String {
+        format!("{}/screens/{name}.luau", self.builtin_dir.trim_end_matches('/'))
+    }
+
+    /// What the app uses now for `name`, and whether it is an override.
+    pub fn effective(&self, name: &str) -> Option<(&str, bool)> {
+        match self.overrides.get(name) {
+            Some(o) => Some((o.as_str(), true)),
+            None => self.builtin.get(name).map(|b| (b.as_str(), false)),
+        }
+    }
+
+    /// Screen `name`, checked: the app has run, and it is a built-in's name.
+    pub fn screen(&self, name: &str) -> Result<&Self, String> {
+        if !self.present {
+            return Err(format!(
+                "sbxw's desktop app has not run on this machine yet ({} does not exist), so there is no screen to change: the person starts the desktop app once, then asks again",
+                self.builtin_dir
+            ));
+        }
+        if !valid_screen_name(name) {
+            return Err(format!("'{}' is not a screen name: 1 to 40 of a-z, 0-9 and '-'", name.chars().take(60).collect::<String>()));
+        }
+        if !self.builtin.contains_key(name) {
+            let names = self.builtin.keys().cloned().collect::<Vec<_>>().join(", ");
+            return Err(format!(
+                "the desktop app has no '{name}' screen (its screens: {names}). A change can only replace one of these: the app has no place to show a new screen in this version"
+            ));
+        }
+        Ok(self)
+    }
+
+    /// The intents `next` can emit, each marked new when `now` does not.
+    pub fn hints(&self, next: &str, now: &str) -> Vec<IntentHint> {
+        let before = scan_intents(now, &self.intents);
+        scan_intents(next, &self.intents).into_iter().map(|i| IntentHint { name: i.name.clone(), risk: i.risk.clone(), new: !before.contains(&i) }).collect()
+    }
+
+    /// What a change to `name` was planned against: the override (or its
+    /// absence) and the built-in, so approval refuses when either moved.
+    pub fn fingerprint(&self, name: &str) -> String {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |b: &[u8]| {
+            for x in b {
+                h ^= u64::from(*x);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        match self.overrides.get(name) {
+            Some(o) => {
+                eat(b"override\0");
+                eat(o.as_bytes());
+            }
+            None => eat(b"none\0"),
+        }
+        eat(b"\0builtin\0");
+        eat(self.builtin.get(name).map(String::as_bytes).unwrap_or_default());
+        format!("fnv1a64:{h:016x}")
+    }
+}
+
+/// The lines above a screen's diff that list what it can emit.
+fn hint_lines(d: &Desktop, hints: &[IntentHint], next: &str) -> String {
+    const HINT: &str = "a hint from reading its text, not a proof";
+    let mut out = String::new();
+    if let Some(e) = &d.intents_error {
+        out.push_str(&format!("# The app's intents.json could not be read ({e}): no hint of what this screen emits.\n"));
+    } else if hints.is_empty() {
+        out.push_str(&format!("# This screen emits none of the app's intents ({HINT}).\n"));
+    } else {
+        out.push_str(&format!("# Intents this screen can emit ({HINT}):\n"));
+        for h in hints {
+            out.push_str(&format!("#   {} (risk: {}){}\n", h.name, h.risk, if h.new { ", NEW: the screen used now does not emit it" } else { "" }));
+        }
+    }
+    if builds_intent_names(next) {
+        out.push_str("# It also builds an intent name at run time, which this list cannot follow.\n");
+    }
+    out
 }
 
 fn daemon_file(w: &World) -> Result<TomlFile, String> {
@@ -1602,7 +1865,7 @@ mod tests {
     #[test]
     fn one_pending_voice_only_for_low_risk_and_settled_once() {
         let mut b = Book::default();
-        let high = vec![ChangeView { kind: "kit_remove".into(), title: "t".into(), diff: "".into(), risk: Risk::High, host_command: None }];
+        let high = vec![ChangeView { kind: "kit_remove".into(), title: "t".into(), diff: "".into(), risk: Risk::High, ..Default::default() }];
         let p = b.propose("j1".into(), "remove it", vec![], high, 1).unwrap();
         assert_eq!((p.risk, p.state), (Risk::High, State::Pending));
         assert!(b.propose("j2".into(), "again", vec![], vec![], 2).unwrap_err().contains("still waiting"));
@@ -1616,6 +1879,142 @@ mod tests {
         b.propose("j2".into(), "s", vec![], vec![], 5).unwrap();
         assert_eq!(b.refuse("j2", Some(" no ".into()), 6).unwrap().reason.as_deref(), Some("no"));
         assert!(matches!(b.begin("nope", Via::Click, false), Err(ApproveError::NotFound(_))));
+    }
+
+    const TOPBAR: &str = "return {\n  render = function(state, data)\n    return row{ text{ \"sbxw\" } }\n  end,\n  actions = {\n    one = function() return intent(\"set_layout\", { panes = 1 }) end,\n  },\n}\n";
+
+    fn desktop_world() -> World {
+        let mut w = world();
+        w.desktop = Desktop {
+            present: true,
+            builtin_dir: "/h/.sbxw/desktop/builtin".into(),
+            screens_dir: "/h/.sbxw/desktop/screens".into(),
+            builtin: [("topbar".to_string(), TOPBAR.to_string()), ("sandboxes".to_string(), "return { render = function() return text{ \"x\" } end }\n".to_string())].into(),
+            overrides: BTreeMap::new(),
+            intents: parse_intents(r#"[{"name": "open_terminal", "risk": "direct", "args": {"sandbox": "string"}}, {"name": "stop_sandbox", "risk": "direct"}, {"name": "select", "risk": "direct"}, {"name": "set_layout", "risk": "direct"}]"#).unwrap(),
+            intents_error: None,
+        };
+        w
+    }
+
+    fn screen(name: &str, content: &str) -> Change {
+        change(json!({"kind": "desktop_screen", "name": name, "content": content}))
+    }
+
+    #[test]
+    fn a_desktop_screen_replaces_the_built_in_then_changes_the_override() {
+        let w = desktop_world();
+        let next = TOPBAR.replace("\"sbxw\"", "\"Open\"").replace("set_layout\", { panes = 1 }", "stop_sandbox\", { sandbox = data.app.selected }");
+        let p = plan(&w, &[screen("topbar", &next)]).unwrap();
+        let v = &p[0].view;
+        assert_eq!((v.kind.as_str(), v.risk), ("desktop_screen", Risk::High));
+        assert!(v.title.contains("replaces the built-in topbar screen") && v.title.contains("/h/.sbxw/desktop/screens/topbar.luau"), "{}", v.title);
+        assert!(v.diff.contains("--- /h/.sbxw/desktop/builtin/screens/topbar.luau\n+++ /h/.sbxw/desktop/screens/topbar.luau\n"), "{}", v.diff);
+        assert!(v.diff.contains("-    return row{ text{ \"sbxw\" } }\n+    return row{ text{ \"Open\" } }\n"), "{}", v.diff);
+        assert!(v.diff.contains("#   stop_sandbox (risk: direct), NEW") && v.diff.contains("not a proof"), "{}", v.diff);
+        assert_eq!(v.intents.as_ref().unwrap(), &vec![IntentHint { name: "stop_sandbox".into(), risk: "direct".into(), new: true }]);
+        let Op::WriteScreen { name, content } = &p[0].op else { panic!("{:?}", p[0].op) };
+        assert_eq!((name.as_str(), content.as_str()), ("topbar", next.as_str()));
+
+        // With an override in place: the diff is against it, the title says "your".
+        let mut o = desktop_world();
+        o.desktop.overrides.insert("topbar".into(), next.clone());
+        let again = format!("{next}-- tidy\n");
+        let p = plan(&o, &[screen("topbar", &again)]).unwrap();
+        assert!(p[0].view.title.contains("changes your topbar screen"), "{}", p[0].view.title);
+        assert!(p[0].view.diff.contains("--- /h/.sbxw/desktop/screens/topbar.luau\n+++ /h/.sbxw/desktop/screens/topbar.luau\n") && p[0].view.diff.contains("+-- tidy\n"), "{}", p[0].view.diff);
+        assert!(p[0].view.diff.contains("#   stop_sandbox (risk: direct)\n"), "not new against the override: {}", p[0].view.diff);
+        assert!(plan(&o, &[screen("topbar", &next)]).unwrap_err().contains("already is exactly this"));
+        assert!(plan(&w, &[screen("topbar", TOPBAR)]).unwrap_err().contains("already is exactly this"));
+
+        // Two in a row in one proposal: the second sees the first.
+        let p = plan(&w, &[screen("topbar", &next), screen("topbar", &again)]).unwrap();
+        assert!(p[1].view.title.contains("changes your topbar screen"), "{}", p[1].view.title);
+    }
+
+    #[test]
+    fn removing_a_screen_override_restores_the_built_in() {
+        let mut w = desktop_world();
+        assert!(plan(&w, &[change(json!({"kind": "desktop_screen_remove", "name": "topbar"}))]).unwrap_err().contains("already uses its built-in"));
+        w.desktop.overrides.insert("topbar".into(), "return { render = function() return text{ \"mine\" } end }\n".into());
+        let p = plan(&w, &[change(json!({"kind": "desktop_screen_remove", "name": "topbar"}))]).unwrap();
+        let v = &p[0].view;
+        assert_eq!((v.kind.as_str(), v.risk), ("desktop_screen_remove", Risk::High));
+        assert!(v.title.contains("restores the built-in"), "{}", v.title);
+        assert!(v.diff.contains("--- /h/.sbxw/desktop/screens/topbar.luau\n+++ /h/.sbxw/desktop/builtin/screens/topbar.luau\n"), "{}", v.diff);
+        assert!(v.diff.contains("#   set_layout (risk: direct), NEW"), "the built-in emits what the override did not: {}", v.diff);
+        assert!(matches!(&p[0].op, Op::RemoveScreen { name } if name == "topbar"));
+    }
+
+    #[test]
+    fn a_desktop_screen_is_checked_before_anything_is_planned() {
+        let w = desktop_world();
+        let e = plan(&w, &[screen("settings", "return {}\n")]).unwrap_err();
+        assert!(e.contains("no 'settings' screen") && e.contains("sandboxes, topbar") && e.contains("no place to show a new screen"), "{e}");
+        for bad in ["", "Topbar", "../topbar", "top bar", "a/b", &"a".repeat(41)] {
+            assert!(plan(&w, &[screen(bad, "return {}\n")]).unwrap_err().contains("is not a screen name"), "{bad:?}");
+        }
+        assert!(plan(&w, &[screen("topbar", "a\0b")]).unwrap_err().contains("NUL"));
+        assert!(plan(&w, &[screen("topbar", &"x".repeat(MAX_SCREEN + 1))]).unwrap_err().contains("at most 64 KB"));
+        assert!(plan(&w, &[screen("topbar", &"x".repeat(MAX_SCREEN))]).is_ok());
+        assert!(plan(&w, &[screen("topbar", " \n")]).unwrap_err().contains("remove your override"));
+        assert!(serde_json::from_value::<Change>(json!({"kind": "desktop_screen", "name": "topbar"})).is_err(), "content is required");
+        assert!(serde_json::from_value::<Change>(json!({"kind": "desktop_screen", "name": "topbar", "content": "x", "path": "/etc/x"})).is_err(), "no path from the agent");
+
+        // The app never ran: said in plain words, nothing proposed.
+        let mut none = world();
+        none.desktop.builtin_dir = "/h/.sbxw/desktop/builtin".into();
+        let e = plan(&none, &[screen("topbar", "return {}\n")]).unwrap_err();
+        assert!(e.contains("desktop app has not run on this machine yet") && e.contains("/h/.sbxw/desktop/builtin"), "{e}");
+        assert!(plan(&none, &[change(json!({"kind": "desktop_screen_remove", "name": "topbar"}))]).unwrap_err().contains("has not run"));
+    }
+
+    #[test]
+    fn a_desktop_screen_is_never_approved_by_voice() {
+        let p = plan(&desktop_world(), &[screen("topbar", "return { render = function() return text{ \"hi\" } end }\n")]).unwrap();
+        let mut b = Book::default();
+        b.propose("j1".into(), "a calmer top bar", vec![], p.into_iter().map(|x| x.view).collect(), 1).unwrap();
+        assert!(matches!(b.begin("j1", Via::Voice, false), Err(ApproveError::Conflict(_))));
+        b.begin("j1", Via::Click, false).unwrap();
+    }
+
+    /// Approval compares the views: a moved override or built-in changes the
+    /// base, even where the diff would not show it.
+    #[test]
+    fn a_changed_base_changes_the_view() {
+        let w = desktop_world();
+        let next = "return { render = function() return text{ \"hi\" } end }\n";
+        let then = plan(&w, &[screen("topbar", next)]).unwrap();
+        let mut o = w.clone();
+        o.desktop.overrides.insert("topbar".into(), TOPBAR.into());
+        let now = plan(&o, &[screen("topbar", next)]).unwrap();
+        assert_eq!(then[0].view.diff.lines().filter(|l| !l.starts_with("---") && !l.starts_with("+++")).collect::<Vec<_>>(), now[0].view.diff.lines().filter(|l| !l.starts_with("---") && !l.starts_with("+++")).collect::<Vec<_>>(), "same lines changed");
+        assert_ne!(then[0].view, now[0].view);
+        assert_ne!(then[0].view.base, now[0].view.base);
+
+        // An override in place, and the built-in moves under it.
+        let mut b = o.clone();
+        b.desktop.builtin.insert("topbar".into(), format!("{TOPBAR}-- 2\n"));
+        let (x, y) = (plan(&o, &[screen("topbar", next)]).unwrap(), plan(&b, &[screen("topbar", next)]).unwrap());
+        assert_eq!(x[0].view.diff, y[0].view.diff);
+        assert_ne!(x[0].view, y[0].view, "the base differs");
+    }
+
+    #[test]
+    fn intents_json_is_read_in_its_shapes_and_the_scan_is_by_whole_word() {
+        let list = parse_intents(r#"{"intents": [{"name": "select", "risk": {"kind": "approval", "asks": "x"}}, {"name": "stop_sandbox"}]}"#).unwrap();
+        assert_eq!(list, vec![IntentInfo { name: "select".into(), risk: "approval".into() }, IntentInfo { name: "stop_sandbox".into(), risk: "unknown".into() }]);
+        let map = parse_intents(r#"{"open_terminal": {"risk": "direct"}}"#).unwrap();
+        assert_eq!(map[0].name, "open_terminal");
+        assert!(parse_intents("[").is_err() && parse_intents("3").is_err());
+        let known = desktop_world().desktop.intents;
+        let found: Vec<&str> = scan_intents("intent('select', {}) -- stop_sandbox_all, preselect\n", &known).iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(found, ["select"]);
+        assert!(builds_intent_names("return intent(name, {})") && builds_intent_names("intent (\n x)"));
+        assert!(!builds_intent_names("intent(\"select\") intent( 'x') intents(x) my_intent(x)"));
+        let w = desktop_world();
+        let p = plan(&w, &[screen("topbar", "local n = \"stop_\" .. \"sandbox\"\nreturn { actions = { a = function() return intent(n, {}) end } }\n")]).unwrap();
+        assert!(p[0].view.diff.contains("builds an intent name at run time") && p[0].view.diff.contains("emits none of the app's intents"), "{}", p[0].view.diff);
     }
 
     #[test]

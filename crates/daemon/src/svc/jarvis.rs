@@ -12,7 +12,7 @@ use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::store::write_atomic;
 use sbxw_core::config::Config;
-use sbxw_core::jarvis::{self, ApproveError, Change, ChangeResult, JarvisKit, KitFileIn, Op, Proposal, State, TomlFile, Via, World};
+use sbxw_core::jarvis::{self, ApproveError, Change, ChangeResult, Desktop, JarvisKit, KitFileIn, Op, Proposal, State, TomlFile, Via, World};
 use sbxw_core::my_skills::KitFile;
 use sbxw_core::kits;
 use serde_json::{json, Value};
@@ -136,6 +136,51 @@ fn op_toml(op: &Op) -> Option<&str> {
     }
 }
 
+/// The `<name>.luau` files of `dir` whose name is a screen name, by name.
+/// A file that is not UTF-8 text is left out.
+fn read_screens(dir: &Path) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Some(file) = e.file_name().to_str().map(String::from) else { continue };
+        let Some(name) = file.strip_suffix(".luau") else { continue };
+        if !jarvis::valid_screen_name(name) || !e.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(e.path()) {
+            out.insert(name.to_string(), text);
+        }
+    }
+    out
+}
+
+/// What the desktop app left in `<sbxw home>/desktop/`: `builtin/` is the
+/// app's to write at each start (read only here), `screens/` the override
+/// folder sbxw writes on approval.
+pub(crate) fn read_desktop(root: &Path) -> Desktop {
+    let builtin_dir = root.join("builtin");
+    let present = builtin_dir.join("screens").is_dir();
+    let (intents, intents_error) = if present {
+        match std::fs::read_to_string(builtin_dir.join("intents.json")) {
+            Ok(raw) => match jarvis::parse_intents(&raw) {
+                Ok(list) => (list, None),
+                Err(e) => (vec![], Some(e)),
+            },
+            Err(e) => (vec![], Some(format!("{} is not readable: {e}", builtin_dir.join("intents.json").display()))),
+        }
+    } else {
+        (vec![], None)
+    };
+    Desktop {
+        present,
+        builtin_dir: builtin_dir.to_string_lossy().into_owned(),
+        screens_dir: root.join("screens").to_string_lossy().into_owned(),
+        builtin: if present { read_screens(&builtin_dir.join("screens")) } else { BTreeMap::new() },
+        overrides: read_screens(&root.join("screens")),
+        intents,
+        intents_error,
+    }
+}
+
 /// Saved proposals; a file that cannot be read costs the history, nothing else.
 pub(crate) fn load(path: &Path) -> Vec<Proposal> {
     std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
@@ -144,6 +189,20 @@ pub(crate) fn load(path: &Path) -> Vec<Proposal> {
 impl App {
     pub(crate) fn jarvis_file(&self) -> PathBuf {
         self.store.paths.state().join("jarvis.json")
+    }
+
+    /// `<sbxw home>/desktop/`: the desktop app's `builtin/` and the
+    /// override folder `screens/`.
+    pub fn desktop_root(&self) -> PathBuf {
+        self.store.paths.root.join("desktop")
+    }
+
+    /// The override file of screen `name`, built from the name alone.
+    fn screen_file(&self, name: &str) -> Result<PathBuf, String> {
+        if !jarvis::valid_screen_name(name) {
+            return Err(format!("'{name}' is not a screen name"));
+        }
+        Ok(self.desktop_root().join("screens").join(format!("{name}.luau")))
     }
 
     /// `state/kits/`, where every Jarvis kit's directory is.
@@ -194,6 +253,7 @@ impl App {
             kit_root: self.jarvis_kit_root().to_string_lossy().into_owned(),
             mcp,
             models: self.cfg.models.iter().map(|m| m.id.clone()).collect(),
+            desktop: read_desktop(&self.desktop_root()),
         })
     }
 
@@ -239,6 +299,16 @@ impl App {
             Err(_) => vec![],
         };
         let running: Vec<String> = self.sbx.ls().await.into_iter().filter(|s| s.is_running()).map(|s| s.name).collect();
+        let d = &world.desktop;
+        let desktop = json!({
+            "app_ran": d.present,
+            "note": (!d.present).then(|| format!("sbxw's desktop app has not run on this machine yet ({} does not exist): there is no screen to change until the person starts it once", d.builtin_dir)),
+            "override_folder": d.screens_dir,
+            "screens": d.builtin.keys().map(|n| json!({ "name": n, "override": d.overrides.contains_key(n) })).collect::<Vec<_>>(),
+            "overrides_without_builtin": d.overrides.keys().filter(|n| d.present && !d.builtin.contains_key(*n)).collect::<Vec<_>>(),
+            "intents": d.intents,
+            "intents_error": d.intents_error,
+        });
         json!({
             "ok": true,
             "files": files,
@@ -250,9 +320,44 @@ impl App {
             "network_allow": shown.network_allow,
             "mcp_servers": mcp,
             "running_sandboxes": running,
+            "desktop": desktop,
             "daemon_file": daemon_cfg.is_some() || world.files.contains_key(jarvis::DAEMON_FILE),
-            "limits": { "voice_words": sbxw_core::spoken::MAX_WORDS, "voice_word_chars": sbxw_core::spoken::MAX_WORD, "voice_said_chars": sbxw_core::spoken::MAX_SAID, "changes": jarvis::MAX_CHANGES, "kit_files": sbxw_core::my_skills::MAX_FILES, "kit_bytes": sbxw_core::my_skills::MAX_BYTES },
+            "limits": { "voice_words": sbxw_core::spoken::MAX_WORDS, "voice_word_chars": sbxw_core::spoken::MAX_WORD, "voice_said_chars": sbxw_core::spoken::MAX_SAID, "changes": jarvis::MAX_CHANGES, "kit_files": sbxw_core::my_skills::MAX_FILES, "kit_bytes": sbxw_core::my_skills::MAX_BYTES, "screen_bytes": jarvis::MAX_SCREEN },
         })
+    }
+
+    /// One desktop screen as the app uses it now: its text, whether it is
+    /// the person's override, and the built-in it replaces.
+    pub fn jarvis_desktop_screen(&self, name: &str) -> Result<Value, String> {
+        let d = read_desktop(&self.desktop_root());
+        d.screen(name)?;
+        let (content, is_override) = d.effective(name).unwrap_or_default();
+        Ok(json!({
+            "ok": true,
+            "name": name,
+            "override": is_override,
+            "path": d.override_path(name),
+            "content": content,
+            "builtin": d.builtin.get(name),
+        }))
+    }
+
+    /// The desktop app's own documentation of what a screen may use
+    /// (`screens.md`) and its intents (`intents.json`), as it wrote them.
+    pub fn jarvis_desktop_docs(&self) -> Result<Value, String> {
+        let d = read_desktop(&self.desktop_root());
+        if !d.present {
+            return Err(d.screen("x").unwrap_err());
+        }
+        let dir = Path::new(&d.builtin_dir);
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).map_err(|e| format!("{} is not readable: {e}", dir.join(f).display()));
+        let intents = read("intents.json").and_then(|raw| serde_json::from_str::<Value>(&raw).map_err(|e| format!("intents.json is not valid JSON: {e}")));
+        Ok(json!({
+            "ok": true,
+            "screens_md": read("screens.md").unwrap_or_else(|e| e),
+            "intents": intents.unwrap_or_else(Value::String),
+            "screens": d.builtin.keys().collect::<Vec<_>>(),
+        }))
     }
 
     pub fn jarvis_list(&self) -> Vec<Proposal> {
@@ -423,6 +528,29 @@ impl App {
                 Ok(()) => ok(format!("MCP server {name} removed"), false),
                 Err(e) => err(format!("{e:#}")),
             },
+            // The path is the daemon's, from the name alone. The folder is
+            // sbxw's own, under its home: created when missing (unlike the
+            // folder of an sbxw.toml, which is the person's).
+            Op::WriteScreen { name, content } => {
+                let path = match self.screen_file(&name) {
+                    Ok(p) => p,
+                    Err(e) => return err(e),
+                };
+                match write_atomic(&path, content.as_bytes()) {
+                    Ok(()) => ok(format!("your {name} screen written ({}); the desktop app reloads it at once, and if it does not load, keeps the last good view and shows the error", path.display()), false),
+                    Err(e) => err(format!("writing {}: {e:#}", path.display())),
+                }
+            }
+            Op::RemoveScreen { name } => {
+                let path = match self.screen_file(&name) {
+                    Ok(p) => p,
+                    Err(e) => return err(e),
+                };
+                match std::fs::remove_file(&path) {
+                    Ok(()) => ok(format!("your {name} screen removed; the desktop app is back on its built-in one"), false),
+                    Err(e) => err(format!("removing {}: {e}", path.display())),
+                }
+            }
         }
     }
 }
@@ -616,5 +744,70 @@ mod tests {
         let state = app.jarvis_state().await;
         let origins: Vec<(String, String)> = state["voice_words"].as_array().unwrap().iter().map(|w| (w["word"].as_str().unwrap().into(), w["origin"].as_str().unwrap().into())).collect();
         assert_eq!(origins, [("nginx".to_string(), "configured".to_string()), ("sbxw".into(), "replaces_built_in".into())]);
+    }
+
+    /// The desktop app's builtin/ as it writes it at each start.
+    fn desktop_fixture(app: &crate::app::App) {
+        let b = app.desktop_root().join("builtin");
+        std::fs::create_dir_all(b.join("screens")).unwrap();
+        std::fs::write(b.join("screens/topbar.luau"), "return { render = function() return text{ \"sbxw\" } end }\n").unwrap();
+        std::fs::write(b.join("screens/sandboxes.luau"), "return { render = function() return text{ \"list\" } end }\n").unwrap();
+        std::fs::write(b.join("screens.md"), "# Writing screens\n").unwrap();
+        std::fs::write(b.join("intents.json"), r#"[{"name": "stop_sandbox", "args": [{"name": "sandbox", "type": "string", "required": true}], "risk": "direct"}, {"name": "select", "args": [], "risk": "direct"}]"#).unwrap();
+    }
+
+    /// A desktop screen: nothing until the app has run; then a click writes
+    /// the override under sbxw's home (the folder created), a removal
+    /// deletes it, and a built-in that moved since the proposal refuses it.
+    #[tokio::test]
+    async fn approving_a_desktop_screen_writes_the_override_and_removal_deletes_it() {
+        let (_dir, app, _) = app_with(sbx_answer);
+        let next = "return { actions = { go = function() return intent(\"stop_sandbox\", { sandbox = \"x\" }) end }, render = function() return text{ \"Open\" } end }\n";
+        let screen = |content: &str| changes(json!([{"kind": "desktop_screen", "name": "topbar", "content": content}]));
+
+        let state = app.jarvis_state().await;
+        assert_eq!(state["desktop"]["app_ran"], false);
+        assert!(state["desktop"]["note"].as_str().unwrap().contains("has not run"), "{}", state["desktop"]);
+        assert!(app.jarvis_propose("top bar", screen(next)).await.unwrap_err().contains("has not run on this machine"));
+        assert!(app.jarvis_desktop_docs().unwrap_err().contains("has not run"));
+
+        desktop_fixture(&app);
+        let state = app.jarvis_state().await;
+        assert_eq!(state["desktop"]["screens"], json!([{"name": "sandboxes", "override": false}, {"name": "topbar", "override": false}]));
+        assert_eq!(state["desktop"]["intents"][0], json!({"name": "select", "risk": "direct"}));
+        let docs = app.jarvis_desktop_docs().unwrap();
+        assert_eq!((docs["screens_md"].as_str(), &docs["intents"][0]["name"]), (Some("# Writing screens\n"), &json!("stop_sandbox")));
+        let read = app.jarvis_desktop_screen("topbar").unwrap();
+        assert_eq!((&read["override"], read["content"] == read["builtin"]), (&json!(false), true));
+        assert!(app.jarvis_desktop_screen("nope").unwrap_err().contains("no 'nope' screen"));
+
+        let p = app.jarvis_propose("top bar", screen(next)).await.unwrap();
+        assert_eq!(p.risk, sbxw_core::jarvis::Risk::High);
+        assert!(p.views[0].diff.contains("stop_sandbox (risk: direct), NEW"), "{}", p.views[0].diff);
+        let file = app.desktop_root().join("screens/topbar.luau");
+        assert!(!file.parent().unwrap().exists(), "nothing written, not even the folder, before approval");
+        assert!(matches!(app.jarvis_approve(&p.id, Via::Voice, false).await, Err(sbxw_core::jarvis::ApproveError::Conflict(_))));
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), next);
+        assert_eq!(app.jarvis_state().await["desktop"]["screens"][1], json!({"name": "topbar", "override": true}));
+        let read = app.jarvis_desktop_screen("topbar").unwrap();
+        assert_eq!((&read["override"], read["content"].as_str()), (&json!(true), Some(next)));
+
+        // The built-in moves between proposal and approval: nothing written.
+        let p = app.jarvis_propose("again", screen("return {}\n")).await.unwrap();
+        std::fs::write(app.desktop_root().join("builtin/screens/topbar.luau"), "return { render = function() return text{ \"v2\" } end }\n").unwrap();
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
+        assert_eq!(done.state, State::Failed);
+        assert!(done.error.as_deref().unwrap().contains("changed since"), "{:?}", done.error);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), next);
+
+        // Removal: the file goes, the built-in is back.
+        let p = app.jarvis_propose("back to the built-in", changes(json!([{"kind": "desktop_screen_remove", "name": "topbar"}]))).await.unwrap();
+        assert!(p.views[0].title.contains("restores the built-in"), "{}", p.views[0].title);
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert!(!file.exists());
+        assert_eq!(app.jarvis_desktop_screen("topbar").unwrap()["override"], false);
     }
 }

@@ -20,6 +20,8 @@ pub fn agent_routes() -> Router<Arc<App>> {
         .route("/api/jarvis/state", post(state))
         .route("/api/jarvis/propose", post(propose))
         .route("/api/jarvis/wait", post(wait))
+        .route("/api/jarvis/desktop/screen", post(desktop_screen))
+        .route("/api/jarvis/desktop/docs", post(desktop_docs))
 }
 
 pub fn ui_routes() -> Router<Arc<App>> {
@@ -93,6 +95,24 @@ async fn wait(State(app): S, Agent(me): Agent, Json(v): Json<Value>) -> ApiResul
     let b: WaitBody = body(v)?;
     let p = app.jarvis_wait(&b.id, jarvis::wait_bound(b.timeout)).await.map_err(ApiError::not_found)?;
     Ok(ok_with(p.agent_view()))
+}
+
+#[derive(Deserialize)]
+struct ScreenBody {
+    name: String,
+}
+
+/// One desktop screen: what the app uses now, and the built-in.
+async fn desktop_screen(State(app): S, Agent(me): Agent, Json(v): Json<Value>) -> ApiResult {
+    only_jarvis(&app, &me)?;
+    let b: ScreenBody = body(v)?;
+    Ok(Json(app.jarvis_desktop_screen(b.name.trim())?))
+}
+
+/// The desktop app's screens.md and intents.json.
+async fn desktop_docs(State(app): S, Agent(me): Agent) -> ApiResult {
+    only_jarvis(&app, &me)?;
+    Ok(Json(app.jarvis_desktop_docs()?))
 }
 
 async fn list(State(app): S) -> Json<Value> {
