@@ -1,0 +1,5 @@
+111x33 offset 0 history 0 status connected
+selection: None
+events: []
+bytes in 136, rows rebuilt 83 in 22 rebuilds, build 1.8 ms, polls 114 (2171.0 ms)
+✓ agent@sbxw-2:~$ echo dead key: ê

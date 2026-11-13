@@ -128,9 +128,21 @@ pub enum TerminalEvent {
     Reconnected,
 }
 
+/// Where input goes: `TerminalConn::input` behind its `send`, whatever its
+/// type (the closure is built where the connection is taken apart, so
+/// client.rs can change the sender's type without touching this module).
+#[derive(Clone)]
+struct Input(Arc<dyn Fn(TermInput) + Send + Sync>);
+
+impl Input {
+    fn send(&self, i: TermInput) {
+        (self.0)(i)
+    }
+}
+
 #[derive(Clone)]
 struct Listener {
-    input: mpsc::Sender<TermInput>,
+    input: Input,
     events: mpsc::Sender<TermEv>,
 }
 impl EventListener for Listener {
@@ -138,7 +150,7 @@ impl EventListener for Listener {
         match ev {
             // Answers to the program's queries (cursor position, device attributes).
             TermEv::PtyWrite(s) => {
-                let _ = self.input.send(TermInput::Bytes(s.into_bytes()));
+                self.input.send(TermInput::Bytes(s.into_bytes()));
             }
             TermEv::MouseCursorDirty | TermEv::Wakeup | TermEv::CursorBlinkingChange => {}
             ev => {
@@ -190,7 +202,7 @@ pub struct TerminalState {
     term: Term<Listener>,
     parser: Processor<StdSyncHandler>,
     term_events: mpsc::Receiver<TermEv>,
-    input: mpsc::Sender<TermInput>,
+    input: Input,
     events: mpsc::Receiver<TermEvent>,
     pub size: (usize, usize),
     pub status: String,
@@ -235,9 +247,12 @@ pub struct TerminalState {
     clock: f64,
     /// The input method's composition, drawn at the cursor.
     pub preedit: Option<String>,
+    /// Suffix for the element keys when a window has several terminals
+    /// (`grid-<id>`, `terminal-<id>`); empty: `grid`, `terminal`.
+    pub id: String,
 }
 
-fn new_term(size: (usize, usize), input: &mpsc::Sender<TermInput>, events: &mpsc::Sender<TermEv>) -> Term<Listener> {
+fn new_term(size: (usize, usize), input: &Input, events: &mpsc::Sender<TermEv>) -> Term<Listener> {
     let config = Config { scrolling_history: SCROLLBACK, ..Config::default() };
     Term::new(config, &Size { cols: size.0, rows: size.1 }, Listener { input: input.clone(), events: events.clone() })
 }
@@ -245,6 +260,9 @@ fn new_term(size: (usize, usize), input: &mpsc::Sender<TermInput>, events: &mpsc
 impl TerminalState {
     pub fn new(conn: TerminalConn) -> Self {
         let TerminalConn { events, input } = conn;
+        let input = Input(Arc::new(move |i| {
+            let _ = input.send(i);
+        }));
         let size = (100, 30);
         let (tev_tx, tev_rx) = mpsc::channel();
         let term = new_term(size, &input, &tev_tx);
@@ -286,6 +304,7 @@ impl TerminalState {
             blink_on: true,
             clock: 0.0,
             preedit: None,
+            id: String::new(),
         };
         t.flush_resize();
         t.rebuild();
@@ -297,6 +316,15 @@ impl TerminalState {
         let mut t = Self::new(conn);
         t.reconnect = Some(reopen);
         t
+    }
+
+    /// An element key for this terminal: `base`, or `base-<id>`.
+    pub fn key(&self, base: &str) -> String {
+        if self.id.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base}-{}", self.id)
+        }
     }
 
     pub fn theme(&self) -> &Theme {
@@ -464,7 +492,7 @@ impl TerminalState {
                         _ => self.theme.foreground,
                     });
                     let rgb = Rgb { r: (c >> 16) as u8, g: (c >> 8) as u8, b: c as u8 };
-                    let _ = self.input.send(TermInput::Bytes(f(rgb).into_bytes()));
+                    self.input.send(TermInput::Bytes(f(rgb).into_bytes()));
                 }
                 TermEv::TextAreaSizeRequest(f) => {
                     let ws = WindowSize {
@@ -473,7 +501,7 @@ impl TerminalState {
                         cell_width: cell_width() as u16,
                         cell_height: LINE_HEIGHT as u16,
                     };
-                    let _ = self.input.send(TermInput::Bytes(f(ws).into_bytes()));
+                    self.input.send(TermInput::Bytes(f(ws).into_bytes()));
                 }
                 _ => {}
             }
@@ -559,7 +587,9 @@ impl TerminalState {
     fn adopt(&mut self, conn: TerminalConn) {
         let TerminalConn { events, input } = conn;
         self.events = events;
-        self.input = input;
+        self.input = Input(Arc::new(move |i| {
+            let _ = input.send(i);
+        }));
         let (tev_tx, tev_rx) = mpsc::channel();
         self.term = new_term(self.size, &self.input, &tev_tx);
         self.term_events = tev_rx;
@@ -580,7 +610,7 @@ impl TerminalState {
         if self.sent_size != Some(self.size) {
             self.sent_size = Some(self.size);
             log::info!("terminal resized to {}x{}", self.size.0, self.size.1);
-            let _ = self.input.send(TermInput::Resize { cols: self.size.0 as u16, rows: self.size.1 as u16 });
+            self.input.send(TermInput::Resize { cols: self.size.0 as u16, rows: self.size.1 as u16 });
         }
     }
 
@@ -596,12 +626,12 @@ impl TerminalState {
         if self.term.selection.take().is_some() {
             self.dirty = true;
         }
-        let _ = self.input.send(TermInput::Bytes(bytes));
+        self.input.send(TermInput::Bytes(bytes));
     }
 
     /// Bytes the program asked for (mouse and focus reports): no jump.
     fn send_report(&mut self, bytes: Vec<u8>) {
-        let _ = self.input.send(TermInput::Bytes(bytes));
+        self.input.send(TermInput::Bytes(bytes));
     }
 
     /// The terminal element was laid out at `w` x `h` points. The grid
@@ -690,7 +720,10 @@ impl TerminalState {
     /// [`Self::on_key`] plus the platform's copy, paste and select-all
     /// shortcuts, through Rune's clipboard. `lens` finds this terminal in the
     /// app's state when the clipboard answers.
-    pub fn on_key_tx<S: 'static>(&mut self, ev: &KeyEvent, tx: &mut Tx, lens: fn(&mut S) -> Option<&mut TerminalState>) -> bool {
+    pub fn on_key_tx<S: 'static, L>(&mut self, ev: &KeyEvent, tx: &mut Tx, lens: L) -> bool
+    where
+        L: Fn(&mut S) -> Option<&mut TerminalState> + 'static,
+    {
         match keys::shortcut(ev, self.keys.mac) {
             Some(Shortcut::Copy) => {
                 let text = self.selection_text();
