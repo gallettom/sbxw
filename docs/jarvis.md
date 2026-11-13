@@ -55,6 +55,8 @@ Each proposal holds one or more changes. Jarvis can propose:
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
 | **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
 
+If the daemon was started where there is no `sbxw.toml`, a setting change creates one at the path the daemon was asked to read. The dialog says it creates that file, and the diff shows a new file. The folder must already exist; sbxw does not create folders, and refuses the change otherwise.
+
 A proposal is as risky as its riskiest change. Every change is shown to you
 as a diff of what would be written, before anything is.
 
