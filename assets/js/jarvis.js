@@ -29,6 +29,16 @@ const jvProposals = new Map(); // id → proposal, as the daemon last sent it
 let jvCurrentId = null;
 let jvBusy = false;           // an answer is on its way to the daemon
 let jvSeeded = false;         // the first list is in: what arrives later is new
+const jvAcked = new Set();    // proposals whose host command the person ticked as read
+let jvError = null;           // { id, text }: the last refused answer, shown in the dialog
+
+// A change that runs a command on this machine, outside any sandbox (a stdio
+// MCP server). The daemon flags the proposal `needs_ack` and refuses an
+// approval without `ack_host_command: true`, which only the checkbox sends.
+function jvHostCommands(p) { return (p.changes || []).map(c => c.host_command).filter(Boolean); }
+function jvNeedsAck(p) { return !!p.needs_ack || jvHostCommands(p).length > 0; }
+// On screen only: high risk, or a host command to acknowledge.
+function jvScreenOnly(p) { return p.risk === 'high' || jvNeedsAck(p); }
 
 function jvPending() {
   return [...jvProposals.values()].filter(p => p.state === 'pending')
@@ -80,7 +90,7 @@ function jvRender() {
   const p = jvCurrent();
   jvRenderBadge();
   if (!p) { jvBody.replaceChildren(); jvFoot.replaceChildren(); return; }
-  const high = p.risk === 'high';
+  const high = jvScreenOnly(p);
   jvRiskEl.textContent = high ? 'High risk' : 'Low risk';
   jvRiskEl.className = `jv-risk ${high ? 'jv-risk-high' : 'jv-risk-low'}`;
   const waiting = jvPending().filter(x => x.id !== p.id).length;
@@ -88,7 +98,7 @@ function jvRender() {
   jvQueueEl.textContent = waiting ? `${waiting} more waiting` : '';
 
   const parts = [jvEl('p', 'jv-summary', p.summary || '(no summary)')];
-  if (high && p.state === 'pending') {
+  if ((high || jvNeedsAck(p)) && p.state === 'pending') {
     parts.push(jvEl('p', 'jv-note', 'High risk: read every change below before you approve. A spoken yes does not approve this one.'));
   }
   const list = jvEl('ol', 'jv-changes');
@@ -101,6 +111,17 @@ function jvRender() {
     if (res) head.append(jvEl('span', `jv-result ${res.ok === true ? 'ok' : res.ok === false ? 'bad' : 'dim'}`, res.text));
     li.append(head);
     if (res?.message) li.append(jvEl('p', `jv-result-msg ${res.ok ? '' : 'bad'}`, res.message));
+    if (c.host_command) {
+      // The full command, as text: the one change that runs code on the host.
+      const warn = jvEl('div', 'jv-host');
+      warn.setAttribute('role', 'alert');
+      warn.append(jvEl('p', 'jv-host-title', 'This command will run on this machine, outside any sandbox:'));
+      const cmd = jvEl('pre', 'jv-host-cmd', String(c.host_command));
+      cmd.tabIndex = 0;
+      cmd.setAttribute('aria-label', 'The command that will run on this machine');
+      warn.append(cmd);
+      li.append(warn);
+    }
     if (c.diff) {
       // The sandbox's text, shown as text: no markup survives.
       const pre = jvEl('pre', 'jv-diff');
@@ -117,6 +138,7 @@ function jvRender() {
   });
   if (!(p.changes || []).length) list.append(jvEl('li', 'jv-dim', 'No change listed.'));
   parts.push(list);
+  if (jvError?.id === p.id && p.state === 'pending') parts.push(jvEl('p', 'jv-outcome jv-failed', jvError.text));
   if (p.state !== 'pending') {
     const outcome = p.state === 'applied' ? 'Applied.' : p.state === 'refused' ? 'Refused: nothing was changed.' : 'Failed.';
     const o = jvEl('p', `jv-outcome jv-${p.state}`, outcome);
@@ -139,8 +161,22 @@ function jvRender() {
     const approve = jvEl('button', 'btn-create', 'Approve');
     approve.type = 'button';
     approve.dataset.jvAction = 'approve';
-    approve.disabled = jvBusy;
+    const ackNeeded = jvNeedsAck(p);
+    approve.disabled = jvBusy || (ackNeeded && !jvAcked.has(p.id));
     approve.onclick = () => jvApprove(p.id, 'click');
+    if (ackNeeded) {
+      const label = jvEl('label', 'jv-ack');
+      const box = jvEl('input');
+      box.type = 'checkbox';
+      box.dataset.jvAction = 'ack';
+      box.checked = jvAcked.has(p.id);
+      box.onchange = () => {
+        if (box.checked) jvAcked.add(p.id); else jvAcked.delete(p.id);
+        approve.disabled = jvBusy || !box.checked;
+      };
+      label.append(box, document.createTextNode(' I have read this command'));
+      jvFoot.append(label);
+    }
     jvFoot.append(reason, refuse, approve);
   } else {
     const next = jvPending()[0];
@@ -208,18 +244,27 @@ async function jvApprove(id, via) {
   const p = jvProposals.get(id);
   if (!p || p.state !== 'pending' || jvBusy) return;
   // A spoken yes never approves a high-risk proposal: say so, again.
-  if (via === 'voice' && p.risk === 'high') return jvHighRisk(p);
-  jvBusy = true; jvRender();
-  const r = await jvPost(`/api/jarvis/proposals/${encodeURIComponent(id)}/approve`, { via });
+  if (via === 'voice' && jvScreenOnly(p)) return jvHighRisk(p);
+  const body = { via };
+  // Only the ticked checkbox acknowledges a host command; never the voice.
+  if (via === 'click' && jvNeedsAck(p)) {
+    if (!jvAcked.has(id)) { jvError = { id, text: 'Tick "I have read this command" first.' }; jvRender(); return; }
+    body.ack_host_command = true;
+  }
+  jvBusy = true; jvError = null; jvRender();
+  const r = await jvPost(`/api/jarvis/proposals/${encodeURIComponent(id)}/approve`, body);
   jvBusy = false;
   if (r.status === 409 && via === 'voice') { jvRender(); return jvHighRisk(p); }
   if (!r.ok) {
     const err = r.data?.error || `HTTP ${r.status}`;
+    // Shown in the dialog, beside the buttons: a 409 is an answer, not a silence.
+    jvError = { id, text: `Not applied: ${err}` };
     showToast(`Jarvis's proposal was not applied: ${err}`, 'error');
     jvSay('err', `Proposal not applied: ${err}`);
     jvRender();
     return;
   }
+  jvAcked.delete(id);
   jvTake(r.data);
   jvSay('dim', `Approved: ${p.summary}`);
 }
@@ -261,7 +306,7 @@ function jvArm(p) {
 }
 function jvAnnounce(p) {
   const intro = jvLang(`Jarvis propose : ${p.summary}.`, `Jarvis proposes: ${p.summary}.`);
-  if (p.risk === 'high') {
+  if (jvScreenOnly(p)) {
     jvSpeak(`${intro} ${JV_HIGH()}`);
   } else {
     jvSpeak(`${intro} ${jvLang("Je l'applique ?", 'Shall I apply it?')}`);

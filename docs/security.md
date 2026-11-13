@@ -199,7 +199,10 @@ person approves.**
   - kits are written by sbxw, under `~/.sbxw/state/kits/jarvis-*` only. sbxw
     renders the `spec.yaml` itself: image content and a `chmod` for scripts,
     no install command, no network rule. Kit files land under `/home/agent/`
-    in a sandbox, never in sbxw's own files or Claude Code's settings;
+    in a sandbox, never in sbxw's own files or Claude Code's settings, and
+    never as code that runs unasked: shell start files, `.ssh/`,
+    `.claude/hooks/`, `.claude/CLAUDE.md` and `.local/bin/claude` are
+    refused;
   - settings come from a fixed list and are checked as the config loader
     checks them; a `network_allow` entry is a bare host name (no address,
     no port, no wildcard, not this machine), and approving it records the
@@ -233,13 +236,22 @@ the highest of its changes:
 
 | Low risk | High risk |
 |---|---|
-| A setting from the fixed list; a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
+| A setting from the fixed list; a `kits` line change that only adds bundled kits (`sbxw:<name>`) or only removes | Writing or removing a Jarvis kit; putting a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac`, in a `kits` line; changing `network_allow`; adding, replacing or removing an MCP server |
 
 A low-risk proposal may be approved by voice (a spoken *oui* after Jarvis
 reads its summary). A high-risk one is approved only with a click in the
 dialog, after its diff is on screen: the daemon refuses a voice approval of
 it (HTTP 409). The diff is the sandbox's text: the page shows it as text,
 never as HTML.
+
+**A stdio MCP server runs on the host.** It is a command sbx runs on this
+machine, outside any sandbox, with the person's rights: the one Jarvis change
+that runs code on the host. The daemon marks such a proposal `needs_ack` and
+refuses its approval (HTTP 409) unless the request carries
+`ack_host_command: true`. The page sends that only from an **I have read this
+command** box, beside a red banner that shows the full command as text, and
+keeps Approve off until it is ticked. Such a proposal is high risk, so never
+approved by voice.
 
 What Jarvis says is an agent's text, like any other sandbox's: its summary
 may be wrong or written to persuade. The diff is what the daemon would

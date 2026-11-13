@@ -4316,3 +4316,14 @@
   }
   .jv-result-msg { margin: 0; padding: 0 .6rem .4rem; color: var(--c-text-muted); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
   .jv-result-msg.bad { color: var(--c-red); }
+  /* A command that will run on this machine, outside any sandbox: red, and
+     shown whole, since it is what the person acknowledges. */
+  .jv-host { margin: 0; padding: .5rem .6rem; border-top: 1px solid var(--c-red); background: var(--c-red-tint); }
+  .jv-host-title { margin: 0 0 .35rem; color: var(--c-red); font-weight: 600; font-size: 12px; }
+  .jv-host-cmd {
+    margin: 0; padding: .45rem .55rem; max-height: 10rem; overflow: auto;
+    background: var(--c-bg); border: 1px solid var(--c-red); border-radius: var(--r-xs);
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--c-text-bright); white-space: pre-wrap; word-break: break-all;
+  }
+  .jv-ack { display: flex; align-items: center; gap: .35rem; flex-basis: 100%; color: var(--c-text-bright); font-size: 12px; cursor: pointer; }
+  .jv-ack input { accent-color: var(--c-red); }

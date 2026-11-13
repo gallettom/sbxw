@@ -42,10 +42,10 @@ Each proposal holds one or more changes. Jarvis can propose:
 | Change | What it does | Risk |
 |---|---|---|
 | **Kit** (`kit_write`, `kit_remove`) | Create, update or remove a kit sbxw keeps for you under `~/.sbxw/state/kits/jarvis-<name>/`: files placed under `/home/agent/` (skills, slash commands, scripts) and optional text for the agent's `CLAUDE.md` | High |
-| **Kits line** (`kits_line`) | Add or remove a kit in the `kits` list of the daemon's `sbxw.toml` or of one sandbox's. Only bundled kits (`sbxw:<name>`) and Jarvis kits | Low when it only adds bundled kits or only removes; high when it adds a Jarvis kit |
+| **Kits line** (`kits_line`) | Add or remove a kit in the `kits` list of the daemon's `sbxw.toml` or of one sandbox's. Only bundled kits (`sbxw:<name>`) and Jarvis kits | Low when it only adds bundled kits or only removes; high when it adds a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac` (they reach your keys, identity, ports or a Mac) |
 | **Setting** (`setting`) | One key of the daemon's `sbxw.toml`, from a fixed list: the `[voice]` keys, `claude_model`, the terminal colours, `keep_awake`, `keep_awake_min_battery`, `battery_warn_below`, `cache_ttl_days`. It takes effect when the daemon restarts | Low |
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
-| **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does | High |
+| **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
 
 A proposal is as risky as its riskiest change. Every change is shown to you
 as a diff of what would be written, before anything is.
@@ -64,10 +64,13 @@ construction:
   (the daemon's `sbxw.toml`, a sandbox's), and a kit always lives under
   `~/.sbxw/state/kits/jarvis-*`. Kit files go under `/home/agent/` in the
   sandbox, never into sbxw's own files or Claude Code's settings (no hooks,
-  no permissions).
-- **No command of its choosing.** sbxw writes the kit's `spec.yaml` itself:
-  image content and a `chmod` for scripts. A Jarvis kit has no install
-  command and no network rule.
+  no permissions). Also refused: shell start files (`.bashrc`, `.profile`,
+  `.zshrc` and the like), anything under `.ssh/` or `.claude/hooks/`,
+  `.claude/CLAUDE.md` (the kit's context field is for that), and a
+  `.local/bin/claude` that would replace the agent.
+- **No command of its choosing in a sandbox.** sbxw writes the kit's
+  `spec.yaml` itself: image content and a `chmod` for scripts. A Jarvis kit
+  has no install command and no network rule.
 - **No secrets.** A change that carries something shaped like a key or a
   token is refused, and so is an MCP server with a credential in a header,
   its URL or an argument. Jarvis writes a `${key}` placeholder instead, and
@@ -76,6 +79,25 @@ construction:
   would refuse.
 - **Nothing without you.** There is no auto-approve. A proposal you have not
   approved changes nothing.
+
+### The one exception: a stdio MCP server
+
+A stdio MCP server is a command that sbx runs **on your machine, outside
+any sandbox**, with your rights. It is the one change Jarvis can propose that
+runs code on the host. What guards it:
+
+- the dialog shows a red banner, "This command will run on this machine,
+  outside any sandbox", with the full command as plain text;
+- **Approve** stays off until you tick **I have read this command**, and only
+  that box tells the daemon you read it (`ack_host_command`). Without it the
+  daemon refuses the approval (HTTP 409) and the dialog says so;
+- it is high risk: never approved by voice. Jarvis reads the summary and
+  says it must be read and approved on screen;
+- the command's secrets are `${key}` placeholders you fill in Setup, as for
+  any MCP server.
+
+Read the command as you would a script someone sent you. If you don't know
+what it runs, refuse it.
 
 ## How approval works
 

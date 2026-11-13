@@ -40,6 +40,9 @@ await page.route('**/api/jarvis/proposals/*/*', (route) => {
   if (act === 'approve' && body.via === 'voice' && p.risk === 'high') {
     return route.fulfill({ status: 409, json: { ok: false, error: 'a high-risk proposal is approved on screen' } });
   }
+  if (act === 'approve' && p.needs_ack && body.ack_host_command !== true) {
+    return route.fulfill({ status: 409, json: { ok: false, error: 'acknowledge the host command first' } });
+  }
   p.state = act === 'approve' ? 'applied' : 'refused';
   if (act === 'approve') p.results = p.changes.map(() => ({ ok: true, message: 'written', restart: false }));
   route.fulfill({ json: { ok: true, proposal: p } });
@@ -190,6 +193,33 @@ await visit('Jarvis: high risk, voice approval refused', async () => {
   await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-high.png') });
   await page.locator('#jv-foot [data-jv-action="refuse"]').click();
   await page.waitForTimeout(300);
+  await page.evaluate(() => jvClose());
+});
+// A stdio MCP server runs a command on this machine: the dialog shows it in
+// full, and Approve stays off until "I have read this command" is ticked; the
+// acknowledgement is sent from that box only.
+await visit('Jarvis: host command acknowledged', async () => {
+  const host = { id: 'smoke-host', summary: 'Add a local MCP server', risk: 'high', state: 'pending', needs_ack: true, created: 1794045720000,
+    changes: [{ kind: 'mcp_server', title: 'MCP server notes (stdio)', risk: 'high', host_command: 'npx -y notes-mcp --root ~/notes', diff: '+ sbx mcp add notes -- npx -y notes-mcp --root ~/notes' }] };
+  jv.proposals.push(host);
+  await page.evaluate((p) => jvIngest(structuredClone(p)), host);
+  await page.waitForTimeout(300);
+}, async () => {
+  const approve = page.locator('#jv-foot [data-jv-action="approve"]');
+  const before = await page.evaluate(() => ({
+    banner: document.querySelector('#jv-body .jv-host-cmd')?.textContent || '',
+    disabled: document.querySelector('#jv-foot [data-jv-action="approve"]')?.disabled,
+    box: !!document.querySelector('#jv-foot [data-jv-action="ack"]'),
+  }));
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-host.png') });
+  await page.locator('#jv-foot [data-jv-action="ack"]').check();
+  const enabled = await approve.isEnabled();
+  await approve.click();
+  await page.waitForTimeout(500);
+  const post = jv.posts.find(p => p.id === 'smoke-host');
+  if (before.banner !== 'npx -y notes-mcp --root ~/notes' || before.disabled !== true || !before.box || !enabled || !post || post.ack_host_command !== true || post.via !== 'click') {
+    problems.push(`jarvis host command: ${JSON.stringify(before)}, enabled after tick ${enabled}, posted ${JSON.stringify(post)}; want the command shown, Approve off until ticked, ack_host_command sent`);
+  }
   await page.evaluate(() => jvClose());
 });
 await visit('Bash pane', () => button(/Bash/).click());
