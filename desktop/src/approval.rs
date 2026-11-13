@@ -160,12 +160,13 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
         .border(1.0, c("amber"))
         .child(text(o.headline()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap())
         .child(
-            rune::el()
+            col()
                 .w_full()
+                .min_w(0.0)
                 .padding(8.0)
                 .radius(radius("sm").unwrap())
                 .fill(c("bg"))
-                .child(text(osc_preview(&o.text)).font(TextStyle::new(12.0, 400.0)).color(c("text")).wrap()),
+                .child(text(osc_preview(&o.text)).font(TextStyle::new(12.0, 400.0)).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
         )
         .child(
             row()
