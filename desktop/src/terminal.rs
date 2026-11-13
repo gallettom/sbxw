@@ -693,13 +693,16 @@ impl TerminalState {
     pub fn on_key_tx<S: 'static>(&mut self, ev: &KeyEvent, tx: &mut Tx, lens: fn(&mut S) -> Option<&mut TerminalState>) -> bool {
         match keys::shortcut(ev, self.keys.mac) {
             Some(Shortcut::Copy) => {
-                if let Some(text) = self.selection_text() {
+                let text = self.selection_text();
+                log::debug!("copy: {} bytes", text.as_ref().map_or(0, String::len));
+                if let Some(text) = text {
                     tx.copy(text);
                 }
                 return true;
             }
             Some(Shortcut::Paste) => {
                 tx.read_clipboard(move |s: &mut S, content: &rune::ClipboardContent, _tx: &mut Tx| {
+                    log::debug!("paste: {} bytes", content.text().len());
                     if let Some(t) = lens(s) {
                         t.paste(content.text());
                     }
@@ -967,6 +970,7 @@ impl TerminalState {
     /// The pointer moved over the grid with no button down: motion reports
     /// (DECSET 1003) and the hovered link.
     pub fn on_pointer_move(&mut self, x: f32, y: f32, mods: rune::Mods) {
+        log::trace!("pointer at {x:.1},{y:.1}");
         if self.gesture.is_none() && self.mode().contains(TermMode::MOUSE_MOTION) {
             self.mouse_report(mouse::Button::None, mouse::Action::Motion, x, y, mods);
         }

@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "t": 0.3, "type": "paste", "text": "clear; cat /Users/thomasgallet/dev/sbxw/.sbxw-worktrees/desktop-terminal/desktop/.sbxw-artifacts/terminal/samples/glyphs.ans | sed 's/$//'" },
+    { "t": 0.6, "type": "key", "name": "Enter" },
+    { "t": 1.2, "type": "move", "x": 130, "y": 289 },
+    { "t": 1.6, "type": "mark", "name": "end" }
+  ]
+}

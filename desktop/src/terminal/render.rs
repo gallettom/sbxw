@@ -164,12 +164,14 @@ pub fn build_row(row: &Row<Cell>, ctx: &RowCtx) -> GridRow {
                 _ => fills.push((c as u16, (c + width) as u16, col, bg)),
             }
         }
-        let x0 = c as f32 * cw;
-        let x1 = x0 + width as f32 * cw;
+        // Cell edges on whole points, so neighbouring cells' vectors meet with
+        // no seam (cell widths are fractional).
+        let x0 = (c as f32 * cw).round();
+        let x1 = ((c + width) as f32 * cw).round();
         let fgc = rgb(fg);
         // Lines a font cannot draw edge to edge.
         let ch = if cell.c == '\0' || cell.c == '\t' { ' ' } else { cell.c };
-        let drawn = !is_wide && cell.zerowidth().is_none() && draw_glyph(&mut p, ch, x0, cw, lh, light, fgc);
+        let drawn = !is_wide && cell.zerowidth().is_none() && draw_glyph(&mut p, ch, x0, x1, lh, light, fgc);
         // Underlines, strikethrough.
         let ul_color = cell.underline_color().map(|u| rgb(resolve(u, ctx.colors, theme, true))).unwrap_or(fgc);
         let f = cell.flags;
@@ -288,12 +290,14 @@ fn box_lines(ch: char) -> Option<[u8; 4]> {
 
 /// Draws `ch` as vectors when it is a line or block glyph; returns false for
 /// everything the font draws.
-fn draw_glyph(p: &mut Painter, ch: char, x0: f32, cw: f32, lh: f32, light: f32, c: Color) -> bool {
-    let x1 = x0 + cw;
+fn draw_glyph(p: &mut Painter, ch: char, x0: f32, x1: f32, lh: f32, light: f32, c: Color) -> bool {
+    let cw = x1 - x0;
     let u = ch as u32;
+    // The light line's left edge and top edge, on whole points; its centre.
+    let mid = ((x0 + x1) / 2.0).floor();
+    let (cx, cy) = (mid + light / 2.0, (lh / 2.0).floor() + light / 2.0);
     // Rounded corners: a quarter curve from one edge's middle to the other's.
     if (0x256d..=0x2570).contains(&u) {
-        let (cx, cy) = (x0 + (cw / 2.0).floor() + light / 2.0, (lh / 2.0).floor() + light / 2.0);
         let (a, b) = match u {
             0x256d => ([cx, lh], [x1, cy]),
             0x256e => ([x0, cy], [cx, lh]),
@@ -328,34 +332,87 @@ fn draw_glyph(p: &mut Painter, ch: char, x0: f32, cw: f32, lh: f32, light: f32, 
         return true;
     }
     if let Some(w) = box_lines(ch) {
-        let cx = x0 + (cw / 2.0).floor();
-        let cy = (lh / 2.0).floor();
         let heavy = light * 2.0;
-        let gap = light;
+        // Double strokes sit this far either side of the centre.
+        let d = light * 2.0;
         let th = |k: u8| if k == 2 { heavy } else { light };
-        // Up, right, down, left.
+        // A stroke of thickness `t` around centre `m`, on whole points.
+        let lo = |m: f32| m - light / 2.0;
+        // How far a crossing segment reaches from the centre, toward the
+        // cell's top or left (`neg`) and bottom or right (`pos`): a heavy
+        // stroke is the light one widened on its bottom or right side.
+        let neg = |k: u8| match k {
+            1 | 2 => light / 2.0,
+            3 => d + light / 2.0,
+            _ => 0.0,
+        };
+        let pos = |k: u8| match k {
+            1 => light / 2.0,
+            2 => heavy - light / 2.0,
+            3 => d + light / 2.0,
+            _ => 0.0,
+        };
+        let [up, right, down, left] = w;
+        let (h_neg, h_pos) = (neg(left).max(neg(right)), pos(left).max(pos(right)));
+        let (v_neg, v_pos) = (neg(up).max(neg(down)), pos(up).max(pos(down)));
+        let (hdouble, vdouble) = (left == 3 || right == 3, up == 3 || down == 3);
         for (dir, &k) in w.iter().enumerate() {
-            if k == 0 {
-                continue;
-            }
-            let offsets: &[f32] = if k == 3 { &[-gap - light / 2.0, gap + light / 2.0] } else { &[0.0] };
-            for &o in offsets {
-                let t = th(k);
-                let (a, b) = (-t / 2.0 + o, t / 2.0 + o);
-                // Reach a bit past the centre so joints close.
-                let reach = heavy / 2.0 + if k == 3 { gap + light } else { 0.0 };
-                match dir {
-                    0 => p.rect(cx + light / 2.0 + a, 0.0, cx + light / 2.0 + b, cy + light / 2.0 + reach, c),
-                    1 => p.rect(cx + light / 2.0 - reach, cy + light / 2.0 + a, x1, cy + light / 2.0 + b, c),
-                    2 => p.rect(cx + light / 2.0 + a, cy + light / 2.0 - reach, cx + light / 2.0 + b, lh, c),
-                    _ => p.rect(x0, cy + light / 2.0 + a, cx + light / 2.0 + reach, cy + light / 2.0 + b, c),
+            match k {
+                1 | 2 => {
+                    let t = th(k);
+                    match dir {
+                        0 => {
+                            let end = if hdouble && down == 0 { cy - d + light / 2.0 } else { cy + h_pos.max(light / 2.0) };
+                            p.rect(lo(cx), 0.0, lo(cx) + t, end, c);
+                        }
+                        2 => {
+                            let start = if hdouble && up == 0 { cy + d - light / 2.0 } else { cy - h_neg.max(light / 2.0) };
+                            p.rect(lo(cx), start, lo(cx) + t, lh, c);
+                        }
+                        1 => {
+                            let start = if vdouble && left == 0 { cx + d - light / 2.0 } else { cx - v_neg.max(light / 2.0) };
+                            p.rect(start, lo(cy), x1, lo(cy) + t, c);
+                        }
+                        _ => {
+                            let end = if vdouble && right == 0 { cx - d + light / 2.0 } else { cx + v_pos.max(light / 2.0) };
+                            p.rect(x0, lo(cy), end, lo(cy) + t, c);
+                        }
+                    }
                 }
+                3 => {
+                    // Two strokes; at a corner the outer one runs to the far
+                    // stroke of the crossing pair and the inner one stops at its near one.
+                    for s in [-1.0f32, 1.0] {
+                        let (side, other) = match (dir, s < 0.0) {
+                            (0 | 2, true) => (left, right),
+                            (0 | 2, false) => (right, left),
+                            (_, true) => (up, down),
+                            (_, false) => (down, up),
+                        };
+                        let reach = |centre: f32, toward_far: f32| {
+                            if side == 3 {
+                                centre - toward_far * (d - light / 2.0)
+                            } else if other == 3 {
+                                centre + toward_far * (d + light / 2.0)
+                            } else {
+                                centre + toward_far * light / 2.0
+                            }
+                        };
+                        match dir {
+                            0 => p.rect(lo(cx + s * d), 0.0, lo(cx + s * d) + light, reach(cy, 1.0), c),
+                            2 => p.rect(lo(cx + s * d), reach(cy, -1.0), lo(cx + s * d) + light, lh, c),
+                            1 => p.rect(reach(cx, -1.0), lo(cy + s * d), x1, lo(cy + s * d) + light, c),
+                            _ => p.rect(x0, lo(cy + s * d), reach(cx, 1.0), lo(cy + s * d) + light, c),
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         return true;
     }
     // Block elements.
-    let (hx, hy) = (x0 + cw / 2.0, lh / 2.0);
+    let (hx, hy) = (((x0 + x1) / 2.0).round(), lh / 2.0);
     match u {
         0x2580 => p.rect(x0, 0.0, x1, hy, c),
         0x2581..=0x2588 => {
