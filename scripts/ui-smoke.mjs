@@ -222,6 +222,54 @@ await visit('Jarvis: host command acknowledged', async () => {
   }
   await page.evaluate(() => jvClose());
 });
+// Typing to Jarvis needs no voice: with /api/voice saying voice was not
+// compiled in, Enter in the panel's input masks the text, sends it once, and
+// empties the input; a push that fails says why and keeps the text.
+const chat = { posts: [], fail: false };
+await visit('Jarvis: typed without voice', async () => {
+  await page.route('**/api/voice', (route) => route.fulfill({ json: { compiled: false, ready: false, push_to_talk_key: 'F8' } }));
+  await page.route('**/api/voice/anonymise', (route) => {
+    const { text } = JSON.parse(route.request().postData() || '{}');
+    const safe = text.replace(/\S+@\S+/g, '[e-mail]');
+    route.fulfill({ json: { ok: true, text: safe, masked: safe === text ? 0 : 1 } });
+  });
+  await page.route('**/api/chat/push', (route) => {
+    chat.posts.push(JSON.parse(route.request().postData() || '{}'));
+    // 200 with ok: false, as postJsonOrError reads it: a 5xx would log a console error.
+    if (chat.fail) return route.fulfill({ json: { ok: false, error: 'smoke: push refused' } });
+    route.fulfill({ json: { ok: true } });
+  });
+  jv.status = { state: 'running' };
+  await page.evaluate(async () => { vcDisarm(); vcSetOpen(true); await vcRefresh(); vcSetTarget('sbxw-jarvis'); await vcJarvisStatus(); });
+  await page.waitForTimeout(300);
+}, async () => {
+  const input = page.locator('#vc-type-input');
+  const noVoice = await page.evaluate(() => ({ ready: vcReady(), talk: document.getElementById('vc-talk').disabled }));
+  await input.fill('change the voice, mail me at a.b@example.org');
+  await input.press('Enter');
+  await page.waitForTimeout(600);
+  const sent = { posts: chat.posts.slice(), left: await input.inputValue() };
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-typed.png') });
+  chat.fail = true;
+  await input.fill('change the voice again');
+  await input.press('Enter');
+  await page.waitForTimeout(600);
+  const failed = await page.evaluate(() => ({
+    left: document.getElementById('vc-type-input').value,
+    err: [...document.querySelectorAll('#vc-log .vc-err')].some(e => /smoke: push refused/.test(e.textContent)),
+  }));
+  if (noVoice.ready || !noVoice.talk || sent.posts.length !== 1 || sent.posts[0].name !== 'sbxw-jarvis'
+    || sent.posts[0].text !== 'change the voice, mail me at [e-mail]' || sent.left !== ''
+    || chat.posts.length !== 2 || failed.left !== 'change the voice again' || !failed.err) {
+    problems.push(`jarvis typed: voice ${JSON.stringify(noVoice)}, sent ${JSON.stringify(sent)}, after a failed push ${JSON.stringify(failed)} (${chat.posts.length} posts); want no voice, one masked push to sbxw-jarvis, the input emptied, then an error and the text kept`);
+  }
+  await page.unroute('**/api/voice');
+  await page.unroute('**/api/voice/anonymise');
+  await page.unroute('**/api/chat/push');
+  jv.status = { state: 'absent' };
+  await input.fill('');
+  await page.evaluate(async () => { await vcRefresh(); vcSetOpen(false); });
+});
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
 // A reconnect (the pane's ↻) forces one full TUI repaint: a resize to one column

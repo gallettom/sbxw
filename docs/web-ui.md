@@ -489,7 +489,11 @@ agent: it is masked and typed into the agent at once, with nothing to
 confirm; the panel shows what left when the masking changed it. The same
 goes for your answer to an agent's question. With no sandbox picked, or if
 sending fails, the words wait in an editable card (**Send** or *oui*,
-**Discard** or *non*). You can also type.
+**Discard** or *non*). You can also type, and typing needs no voice: it
+works in a build without the voice models. Enter sends the text, masked like
+speech. If it cannot be sent (no sandbox picked, Jarvis not running, the
+masking or the send failed), the panel says why and the text stays in the
+input.
 
 **Talking to Jarvis.** Jarvis's sandbox is created the first time you ask
 for it, never before. Pick **Jarvis** while it is not running and the panel

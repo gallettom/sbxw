@@ -602,20 +602,35 @@ vcBarTarget.addEventListener('click', () => (vcMenu && !vcMenu.hidden ? vcCloseM
 // sandbox's agent: masked, then typed into it at once, with no card to
 // confirm. What left is shown when the masking changed it. Jarvis is sent
 // to the same way, once it runs; until then the words wait in a card.
-async function vcDraft(text) {
+// Typed words (`typed`) never wait in a card: they stay in the input, and
+// the reason they did not leave is said. Resolves to whether they were sent
+// (or kept in a card); false keeps the typed text where it is.
+async function vcDraft(text, typed = false) {
   const name = vcTarget;
-  if (!name) return vcDraftCard(text);
+  if (!name) {
+    if (typed) { vcSay('err', 'Not sent: pick a sandbox at the top first.'); return false; }
+    vcDraftCard(text);
+    return true;
+  }
   if (name === JARVIS && !vcJarvisUp() && (await vcJarvisStatus()).state !== 'running') {
     vcOfferJarvis('Not sent yet: Jarvis is not running.');
-    return vcDraftCard(text);
+    if (typed) { vcSay('err', 'Not sent: Jarvis is not running. Start it, then press Enter again.'); return false; }
+    vcDraftCard(text);
+    return true;
   }
   const safe = await postJsonOrError('/api/voice/anonymise', { text: text.trim() });
-  if (!safe.ok) { vcSay('err', `Not sent, the anonymisation failed: ${safe.error}`); return; }
+  if (!safe.ok) { vcSay('err', `Not sent, the anonymisation failed: ${safe.error}`); return false; }
   const r = await postJsonOrError('/api/chat/push', { text: safe.text, name });
-  // Not lost: the words wait in a card, to send again or drop.
-  if (!r.ok) { vcSay('err', `Not sent to ${vcLabel(name)}: ${r.error}`); return vcDraftCard(safe.text); }
+  if (!r.ok) {
+    vcSay('err', `Not sent to ${vcLabel(name)}: ${r.error}`);
+    if (typed) return false;
+    // Not lost: the spoken words wait in a card, to send again or drop.
+    vcDraftCard(safe.text);
+    return true;
+  }
   vcSay('dim', safe.masked ? `Sent to ${vcLabel(name)}, ${vcMaskedNote(safe.masked).replace(' before sending', '')}: ${safe.text}` : `Sent to ${vcLabel(name)}.`);
   if (!vcSpeech.muted) vcSpeak(vcLang('Envoyé.', 'Sent.'));
+  return true;
 }
 
 // With no sandbox picked, or when sending failed, the words are kept in an
@@ -665,14 +680,20 @@ function vcReset() {
   vcLog.replaceChildren();
 }
 
-// Typing does what speaking does, for when speaking is not an option.
-vcEl('vc-type').addEventListener('submit', e => {
+// Typing does what speaking does, for when speaking is not an option: it
+// needs no voice at all, so it is how Jarvis is used in a build without it.
+// The text leaves the input only once it was taken; otherwise it stays, and
+// the panel says why.
+vcEl('vc-type').addEventListener('submit', async e => {
   e.preventDefault();
   const input = vcEl('vc-type-input');
   const text = input.value.trim();
-  if (!text || !vcReady()) return;
-  input.value = '';
-  vcHear(text);
+  if (!text || input.readOnly) return;
+  input.readOnly = true; // one message at a time
+  let taken = false;
+  try { taken = await vcHear(text, true); } catch (err) { vcSay('err', `Not sent: ${err?.message || err}`); }
+  input.readOnly = false;
+  if (taken && input.value.trim() === text) input.value = '';
 });
 vcEl('vc-new').addEventListener('click', vcReset);
 
@@ -1203,27 +1224,29 @@ const VC_YES = /^\s*(oui|ouais|ok|okay|d'accord|vas-y|envoie|confirme|yes|send|g
 const VC_NO = /^\s*(non|annule|stop|laisse|no|cancel)\b/i;
 
 // Everything heard or typed comes here first: an armed card takes it,
-// otherwise it starts a message to the picked sandbox.
-function vcHear(text) {
+// otherwise it starts a message to the picked sandbox. `typed`: from the
+// panel's input. Resolves to whether the words were taken; false means they
+// were not sent, the reason is in the panel, and typed text stays in the input.
+async function vcHear(text, typed = false) {
   const p = vcPending;
   if (p?.kind === 'confirm' || p?.kind === 'draft') {
-    if (VC_YES.test(text)) return p.yes();
-    if (VC_NO.test(text)) return p.no();
+    if (VC_YES.test(text)) { p.yes(); return true; }
+    if (VC_NO.test(text)) { p.no(); return true; }
   }
   // A Jarvis proposal (jarvis.js): a yes or a no answers it; anything else
   // is a message of its own, and the proposal waits in its dialog.
   if (p?.kind === 'jarvis') {
-    if (VC_YES.test(text)) return p.yes();
-    if (VC_NO.test(text)) return p.no();
+    if (VC_YES.test(text)) { p.yes(); return true; }
+    if (VC_NO.test(text)) { p.no(); return true; }
     vcDisarm();
-    return vcHear(text);
+    return vcHear(text, typed);
   }
-  if (p?.kind === 'grill' && vcGrillHear(p.st, text)) return;
+  if (p?.kind === 'grill' && vcGrillHear(p.st, text)) return true;
   if (p?.kind !== 'grill') vcSay('me', text);
-  if (p?.kind === 'draft') return p.add(text);
+  if (p?.kind === 'draft') { p.add(text); return true; }
   if (p?.kind === 'reply') return vcAnswerAgent(p, text);
   if (p?.kind === 'choose') return vcChoose(p, text);
-  vcDraft(text);
+  return vcDraft(text, typed);
 }
 
 // The words said are the answer: masked, sent at once, and shown as they left.
@@ -1240,15 +1263,16 @@ async function vcAnswerAgent(p, dictated) {
   const safe = await vcMask(area);
   const r = safe === null ? null : await postJsonOrError('/api/chat/push', { text: safe, name: p.sandbox, thread: p.thread || undefined });
   if (!r?.ok) {
-    // The question stays open: say the answer again.
+    // The question stays open: say (or type) the answer again.
     if (r) vcSay('err', `Not sent: ${r.error}`);
     area.remove();
     vcArm(p);
-    return;
+    return false;
   }
   card.classList.add('done');
   vcSay('dim', `Answer typed into ${vcWho(p.sandbox, p.thread)}.`);
   if (!vcSpeech.muted) vcSpeak(vcLang('Envoyé.', 'Sent.'));
+  return true;
 }
 
 // Which option the words name, 1-based, or 0: a number ("la deux", "option
@@ -1284,15 +1308,16 @@ function vcChoose(p, dictated) {
   const { step } = p;
   const n = vcPickOption(dictated, step.options);
   if (!n) {
-    vcSay('dim', `“${dictated}” matches no option — say its number, or click it.`);
+    vcSay('err', `“${dictated}” matches no option: give its number, or click it.`);
     if (!vcSpeech.muted) vcSpeak("Je n'ai pas reconnu l'option. Dis son numéro, ou clique dessus.");
-    return;
+    return false;
   }
   const label = step.options[n - 1];
   const btn = p.card.querySelectorAll('.cd-opts button')[n - 1];
   p.card.querySelectorAll('.cd-opts button').forEach(b => b.classList.toggle('picked', b === btn));
   vcConfirm(p.card, `Answer “${label}”?`, async () => { btn?.click(); });
   if (!vcSpeech.muted) vcSpeak(`J'envoie : ${label} ?`);
+  return true;
 }
 
 // ── The relay dialog's voice (`ask_user_questions`) ─────────────────────
