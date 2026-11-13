@@ -15,6 +15,7 @@ pub mod client;
 pub mod fixture;
 pub mod icons;
 pub mod intent;
+pub mod jarvis;
 pub mod luau;
 pub mod markdown;
 pub mod screen;
