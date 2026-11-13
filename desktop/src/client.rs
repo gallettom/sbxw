@@ -16,7 +16,6 @@
 //!   squatting the port never sees the token.
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::channel::mpsc as fmpsc;
 use serde::Deserialize;
 use std::io::ErrorKind;
 use std::net::TcpStream;
@@ -58,16 +57,19 @@ pub enum TermInput {
     Resize { cols: u16, rows: u16 },
 }
 
-/// A live terminal: events arrive on `events` (async, for the UI thread),
-/// keys and resizes go out on `input`.
+/// A live terminal: events arrive on `events`, and `wake` is called after
+/// each one so the UI thread drains them; keys and resizes go out on `input`.
 pub struct TerminalConn {
-    pub events: fmpsc::UnboundedReceiver<TermEvent>,
+    pub events: mpsc::Receiver<TermEvent>,
     pub input: mpsc::Sender<TermInput>,
 }
 
+/// Called from the socket thread when an event is queued (the UI's waker).
+pub type Wake = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 pub trait Daemon: Send + Sync + 'static {
     fn sandboxes(&self) -> Result<Vec<Sandbox>>;
-    fn open_terminal(&self, req: &TerminalRequest) -> Result<TerminalConn>;
+    fn open_terminal(&self, req: &TerminalRequest, wake: Wake) -> Result<TerminalConn>;
     /// Where it talks to, for the window's status line.
     fn describe(&self) -> String;
 }
@@ -127,7 +129,7 @@ impl Daemon for HttpDaemon {
             .into_json()?)
     }
 
-    fn open_terminal(&self, req: &TerminalRequest) -> Result<TerminalConn> {
+    fn open_terminal(&self, req: &TerminalRequest, wake: Wake) -> Result<TerminalConn> {
         let mut url = format!("ws://{}/ws?sandbox={}", self.addr, enc(&req.sandbox));
         if let Some(m) = &req.mode {
             url += &format!("&mode={}", enc(m));
@@ -143,9 +145,10 @@ impl Daemon for HttpDaemon {
         log::info!("terminal socket open ({})", resp.status());
         // Short read timeout: one thread both reads and drains what to send.
         socket.get_ref().set_read_timeout(Some(Duration::from_millis(5)))?;
-        let (ev_tx, ev_rx) = fmpsc::unbounded();
+        let (ev_tx, ev_rx) = mpsc::channel();
         let (in_tx, in_rx) = mpsc::channel();
-        std::thread::Builder::new().name("terminal-ws".into()).spawn(move || pump(socket, ev_tx, in_rx))?;
+        let send = Events { tx: ev_tx, wake };
+        std::thread::Builder::new().name("terminal-ws".into()).spawn(move || pump(socket, send, in_rx))?;
         Ok(TerminalConn { events: ev_rx, input: in_tx })
     }
 
@@ -154,11 +157,21 @@ impl Daemon for HttpDaemon {
     }
 }
 
-fn pump(
-    mut ws: tungstenite::WebSocket<TcpStream>,
-    tx: fmpsc::UnboundedSender<TermEvent>,
-    rx: mpsc::Receiver<TermInput>,
-) {
+/// The socket thread's side of `events`: queue, then wake the UI.
+struct Events {
+    tx: mpsc::Sender<TermEvent>,
+    wake: Wake,
+}
+
+impl Events {
+    fn unbounded_send(&self, ev: TermEvent) -> Result<(), ()> {
+        self.tx.send(ev).map_err(|_| ())?;
+        (self.wake)();
+        Ok(())
+    }
+}
+
+fn pump(mut ws: tungstenite::WebSocket<TcpStream>, tx: Events, rx: mpsc::Receiver<TermInput>) {
     let why = loop {
         match ws.read() {
             Ok(Message::Binary(b)) => {

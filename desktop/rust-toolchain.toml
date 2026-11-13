@@ -1,0 +1,3 @@
+# Rune pins this toolchain in its own rust-toolchain.toml.
+[toolchain]
+channel = "1.99.1"

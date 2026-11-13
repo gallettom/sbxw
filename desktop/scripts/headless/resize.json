@@ -1,0 +1,10 @@
+{
+  "events": [
+    { "t": 0.3, "type": "type", "every": 0.02, "text": "stty size" },
+    { "t": 0.6, "type": "key", "name": "Enter" },
+    { "t": 0.8, "type": "resize", "dw": -480, "dh": -300, "dur": 0.3 },
+    { "t": 1.4, "type": "type", "every": 0.02, "text": "stty size; seq 1 40 | paste -sd ' '" },
+    { "t": 2.4, "type": "key", "name": "Enter" },
+    { "t": 2.8, "type": "mark", "name": "end" }
+  ]
+}

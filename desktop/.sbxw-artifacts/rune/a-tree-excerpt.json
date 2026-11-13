@@ -1,0 +1,85 @@
+{
+ "note": "excerpt of shots/tree.json: keyed elements only",
+ "elements": [
+  {
+   "key": "screen",
+   "path": "#0/screen",
+   "rect": [
+    0.0,
+    0.0,
+    320.0,
+    800.0
+   ],
+   "role": "group"
+  },
+  {
+   "key": "btn-select-web-app",
+   "label": "select",
+   "path": "#0/screen/#0/#2/#0/#0/btn-select-web-app",
+   "rect": [
+    155.0,
+    59.0,
+    56.0,
+    17.5
+   ],
+   "role": "button"
+  },
+  {
+   "key": "btn-select-data-pipeline",
+   "label": "select",
+   "path": "#0/screen/#0/#2/#2/#0/btn-select-data-pipeline",
+   "rect": [
+    187.0,
+    85.5,
+    56.0,
+    17.5
+   ],
+   "role": "button"
+  },
+  {
+   "key": "btn-select-docs",
+   "label": "select",
+   "path": "#0/screen/#0/#2/#4/#0/btn-select-docs",
+   "rect": [
+    128.0,
+    112.0,
+    56.0,
+    17.5
+   ],
+   "role": "button"
+  },
+  {
+   "key": "terminal",
+   "path": "#0/terminal",
+   "rect": [
+    320.0,
+    0.0,
+    960.0,
+    800.0
+   ],
+   "role": "group"
+  },
+  {
+   "key": "term-status",
+   "path": "#0/terminal/term-status",
+   "rect": [
+    328.0,
+    8.0,
+    944.0,
+    20.0
+   ],
+   "role": "group"
+  },
+  {
+   "key": "grid",
+   "path": "#0/terminal/grid",
+   "rect": [
+    328.0,
+    28.0,
+    935.59,
+    756.0
+   ],
+   "role": "terminal"
+  }
+ ]
+}

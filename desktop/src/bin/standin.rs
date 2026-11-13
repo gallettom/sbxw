@@ -104,6 +104,11 @@ fn terminal(mut ws: tungstenite::WebSocket<Prefixed>, raw: &TcpStream) -> anyhow
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.env("TERM", "xterm-256color");
+    // A UTF-8 locale, as a sandbox has: under POSIX bash counts a prompt's
+    // multibyte characters as several columns and wraps long lines wrongly.
+    if std::env::var("LANG").map_or(true, |l| l.is_empty()) {
+        cmd.env("LANG", "C.UTF-8");
+    }
     let mut child = pty.slave.spawn_command(cmd)?;
     drop(pty.slave);
     let mut reader = pty.master.try_clone_reader()?;
