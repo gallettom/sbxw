@@ -54,6 +54,29 @@ and its row here.
 | `GET /api/stream` | `subscribe()` | SSE; every event passed on as `LinkEvent::Bus` (wave 1 uses them only to refresh the list) |
 | `GET /ws?sandbox=&mode=&thread=` | `open_terminal()` | binary PTY frames, JSON `resize`, text error lines, `{"type":"attention"}`; `mode` absent is the agent (starts a stopped sandbox) |
 
+### Covered in phase 2 (Jarvis, thread desktop-jarvis)
+
+| Route | `Daemon` method | Notes |
+|---|---|---|
+| `GET /api/jarvis/status` | `jarvis_status()` | `{state: absent\|creating\|starting\|running\|stopped\|failed, error?}` (`svc/jarvis_sandbox.rs`, `Status`). Read on connect, then every 1.5 s while `creating` or `starting`, and after a `session` or `provision` event while not running |
+| `POST /api/jarvis/start` | `jarvis_start()` | same shape, answered at once; the work runs in the daemon's background |
+| `GET /api/jarvis` | `jarvis_proposals()` | `{ok, proposals: [ui_view, newest first]}`; `ui_view` = `{id, summary, risk: low\|high, state: pending\|applied\|refused\|failed, created, changes: [{kind, title, diff, risk, host_command?, intents?}], needs_ack?, results?, error?, via?, reason?, settled?}` (`crates/core/src/jarvis.rs`, `Proposal::ui_view`) |
+| `POST /api/jarvis/proposals/:id/approve` | `jarvis_approve(id, via, ack)` | body `{via: "click"\|"voice", ack_host_command}`; answer `{ok, proposal}`. 409 (`client::HttpError`, code and message): voice on a high-risk one, a host command not acknowledged, already answered. A file changed since the proposal is `200` with `state: failed` and `error` |
+| `POST /api/jarvis/proposals/:id/refuse` | `jarvis_refuse(id, reason)` | body `{reason?}`; answer `{ok, proposal}` |
+| bus event `jarvis` | `LinkEvent::Bus` | data: one proposal's `ui_view` (`bus.rs`). The app also takes `{proposals: [...]}` or nothing (then reads the list), as jarvis.js does |
+| `GET /api/sessions` | `sessions()` | every `SessionInfo`; the app reads Jarvis's (`sandbox: "sbxw-jarvis"`, no `thread`) `last_input` and `reply` as the conversation's first look |
+| bus event `session` | `LinkEvent::Bus` | a `SessionInfo`. Jarvis's answer = `reply` when its `state` goes from `working` or `attention` to `idle` (chat-core.js, `chatIngest`) |
+| `POST /api/voice/anonymise` | `anonymise(text)` | `{text}` → `{ok, text, masked}`; every message is masked before it leaves, as the web UI does |
+| `POST /api/chat/push` | `chat_push(name, text)` | `{text, name: "sbxw-jarvis"}`: types the masked text into Jarvis's agent session (concierge.js, `vcDraft`) |
+| `GET /api/voice` | `voice_status()` | `{compiled, ready, speech: {supported, ...}, push_to_talk_key, ...}`; 404 or an error = no voice. Bus event `voice` carries the same |
+| `POST /api/voice/transcribe` | `transcribe(pcm)` | body: 16 kHz mono f32 LE PCM, at most 120 s, `application/octet-stream`; answer `{ok, text, masked, audio_s, ms}` (text already masked) |
+| `POST /api/voice/speak` | `speak(text)` | `{text}`, 1 to 1000 characters; answer: s16 LE mono PCM streamed, rate in `x-sample-rate` (24000). Longer answers are cut at sentences and chained in one reader (`voice::Chain`) |
+| `POST /api/voice/cancel` | `voice_cancel()` | stops a model download; not called by the panel yet |
+
+Gone on the daemon: `/api/voice/chat` and `/api/voice/conversations` answer
+404 (no language model in the daemon; `http/tests.rs`). Words go to Jarvis
+through `/api/chat/push` like any agent's message.
+
 ### Not covered yet
 
 Grouped by the screen that will need them, with the web UI file that calls
@@ -61,8 +84,8 @@ each group, so a later thread can read what it expects.
 
 | Area (web UI file) | Routes |
 |---|---|
-| Sandbox lifecycle (`lifecycle.js`, `sandboxes.js`, `create.js`) | `POST /api/sandboxes/create`, `POST /api/sandboxes/chat`, `POST /api/sandboxes/:name/up`, `/detach`, `/duplicate`, `/recreate`, `/rm`, `POST /api/carve/preview`, `POST /api/chat/push`, `GET /api/fs`, `POST /api/fs/pick`, `GET`/`POST /api/fs/favourites` |
-| Sessions and agents (`main.js`, `panes.js`) | `GET /api/sessions`, `GET /api/ptys`, `POST /api/input`, `POST /api/answer`, `GET /api/hook/log`, `GET /api/models`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events` |
+| Sandbox lifecycle (`lifecycle.js`, `sandboxes.js`, `create.js`) | `POST /api/sandboxes/create`, `POST /api/sandboxes/chat`, `POST /api/sandboxes/:name/up`, `/detach`, `/duplicate`, `/recreate`, `/rm`, `POST /api/carve/preview`, `GET /api/fs`, `POST /api/fs/pick`, `GET`/`POST /api/fs/favourites` |
+| Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `POST /api/input`, `POST /api/answer`, `GET /api/hook/log`, `GET /api/models`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events` |
 | Threads and lead (`sidepanel.js`, `pane-controls.js`, `plans.js`, `board.js`) | `GET /api/sandboxes/:name/threads`, `/repos`, `/worktrees`, `GET /api/sandboxes/:name/threads/:thread`, `POST .../threads/:thread/close`, `POST /api/sandboxes/:name/lead`, `POST .../lead/end`, `GET /api/leads`, `GET /api/plans`, `POST /api/plans/:id/approve`, `/refuse`, `/merge`, `GET /api/sandboxes/:name/board` |
 | Relay (`relay.js`) | `GET /api/relay`, `POST /api/relay/:id/route`, `POST /api/relay/:id/deny`, `GET /api/relay/events` |
 | Approvals, ports, network (`approvals.js`, `ports.js`) | `GET /api/approvals`, `POST /api/approvals/respond`, `GET /api/sandboxes/:name/ports`, `POST .../ports/publish`, `/unpublish`, `GET /api/sandboxes/:name/policy`, `POST .../policy/rules`, `POST .../policy/rules/rm`, `POST /api/policy/refresh`, `GET /api/hosts` |
@@ -74,7 +97,7 @@ each group, so a later thread can read what it expects.
 | Usage, state (`main.js`) | `GET /api/usage`, `GET /api/state`, `POST /api/initial`, `POST /api/shutdown` |
 | Browser side panel (`browser.js`) | `GET /ws/browser`, `POST /api/sandboxes/:name/browser/allow`, `GET .../browser/grants`, `POST .../browser/settle`, `GET /api/browser/active`, `GET /api/embed/resolve`, `GET`/`POST /api/embed/pairings`, `POST /api/embed/pairings/rm` |
 | Virtual Mac (`mac.js`) | `GET /api/mac`, `POST /api/mac/install`, `/up`, `/stop`, `/force-off`, `/pause`, `/show`, `/take-back` |
-| Jarvis and voice (`jarvis.js`, `concierge.js`) | `GET /api/jarvis`, `GET /api/jarvis/status`, `POST /api/jarvis/start`, `POST /api/jarvis/proposals/:id/approve`, `/refuse`, `GET /api/voice`, `POST /api/voice/install`, `/cancel`, `/rm`, `/speak`, `/warm`, `/anonymise` |
+| Voice setup (`concierge.js`) | `POST /api/voice/install`, `/rm`, `/warm` (the Jarvis routes are covered above) |
 
 Routes a client never calls: `GET /` and `/sidepanel` (pages), and the
 agent-listener routes the UI listener answers with "moved" (`/api/hook`,

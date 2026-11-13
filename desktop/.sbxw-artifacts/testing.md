@@ -165,3 +165,11 @@ SBXW_DAEMON=127.0.0.1:7681 SBXW_TOKEN=$(cat ~/.sbxw/run/ui-token) SBXW_SANDBOX=<
   --test pump -- --nocapture` prints the numbers).
 - `terminal` (thread desktop-terminal): key bytes; `full_screen_redraw_cost`
   is `--ignored` (a benchmark).
+
+## Jarvis
+
+- `scripts/screen.sh jarvis <fixture>`: the panel alone (`fixtures/jarvis/`).
+- `scripts/shot.sh out.png --fixture fixtures/jarvis/proposal-high.json [--script scripts/headless/jarvis-yes-then-click.json]`: the whole window with the core's dialog.
+- `scripts/demo-jarvis.sh`: end to end against the stand-in's scripted Jarvis (start, message, typed yes on low risk, yes then click on high risk, a screen change hot reloaded). Shots in `shots/jarvis/`.
+- Push-to-talk: `SBXW_DESKTOP_FAKE_AUDIO=1`, stand-in `--voice "text"`, `scripts/headless/jarvis-ptt.json` (F8 `key` then `key-up`).
+- See `JARVIS.md`.
