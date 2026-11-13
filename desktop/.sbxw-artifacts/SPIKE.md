@@ -1,8 +1,5 @@
 # sbxw desktop: spike report
 
-> Superseded: the GPUI layer was replaced by Rune. See `RUNE.md`. This
-> report and its images describe commit 1416916 and are kept as history.
-
 A native client of the sbxw daemon in Rust with GPUI, screens in Luau. This
 spike checks four points before the full build is split into parallel
 threads. Verified on Linux (Debian trixie, aarch64, 10 cores) inside an sbx
