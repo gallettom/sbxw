@@ -111,10 +111,14 @@ async fn start(State(app): S) -> ApiResult {
 #[derive(Deserialize)]
 struct ApproveBody {
     via: Via,
+    /// The person acknowledged the command a stdio server runs on this
+    /// machine; refused with 409 when one is needed and this is not set.
+    #[serde(default)]
+    ack_host_command: bool,
 }
 
 async fn approve(State(app): S, Path(id): Path<String>, Json(b): Json<ApproveBody>) -> ApiResult {
-    let p = app.jarvis_approve(&id, b.via).await.map_err(approve_error)?;
+    let p = app.jarvis_approve(&id, b.via, b.ack_host_command).await.map_err(approve_error)?;
     Ok(ok_with(json!({ "proposal": p.ui_view() })))
 }
 

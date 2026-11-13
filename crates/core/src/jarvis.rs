@@ -77,7 +77,51 @@ pub fn check_path(path: &str) -> Result<(), String> {
     if forbidden {
         return Err(format!("'{path}': nothing under .sbxw/, nor .claude/settings.json, .claude/settings.local.json or .claude.json, is a kit's to write"));
     }
+    // Code that runs without anyone invoking it, or that stands in for the
+    // agent: a kit carries no startup command chosen by Jarvis, so none
+    // reaches the sandbox by another door. Compared on the validated path,
+    // so a look-alike deeper down (`.claude/skills/x/.bashrc`) is data.
+    if SHELL_START_FILES.contains(&path) {
+        return Err(format!("'{path}': a shell start file runs at every login, which a kit's file may not do; put a script under bin/ and a slash command or the kit's context that says when to run it"));
+    }
+    if path.strip_prefix(".local/bin/").is_some_and(|rest| rest.rsplit('/').next() == Some("claude")) {
+        return Err(format!("'{path}': a kit may not replace the agent itself"));
+    }
+    if path == ".ssh" || path.starts_with(".ssh/") {
+        return Err(format!("'{path}': nothing under .ssh/ is a kit's to write; SSH keys reach a sandbox through the sbxw:ssh-agent kit, added by the person"));
+    }
+    if path == ".claude/CLAUDE.md" {
+        return Err(format!("'{path}': sbx writes the agent's CLAUDE.md; use the kit's `context` field for text the agent should read"));
+    }
+    if path == ".claude/hooks" || path.starts_with(".claude/hooks/") {
+        return Err(format!("'{path}': hooks run without anyone invoking them, which a kit Jarvis writes may not carry"));
+    }
     Ok(())
+}
+
+/// Shell start files at the home root: run at every login or shell.
+/// `.inputrc` is not one: readline reads it as data.
+const SHELL_START_FILES: &[&str] = &[".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zshenv", ".zprofile"];
+
+/// Bundled kits that hand the sandbox something of the person's (their SSH
+/// agent, their Git identity), a grant (a port published without a
+/// prompt), or a machine (the virtual Mac): adding one is high risk, a
+/// click in the dialog. Every other bundled kit is in [`TOOL_KITS`]; a test
+/// checks each one of [`kits::BUNDLED`] is in exactly one list, so a new
+/// kit is never low risk by default.
+pub const PERSONAL_KITS: &[&str] = &["ssh-agent", "git-identity", "dev-ports", "terminal-mac"];
+
+/// Bundled kits that add tools and skills only: adding one is low risk.
+pub const TOOL_KITS: &[&str] = &["codemap", "agent-skills", "md-to-pdf-tools", "retro", "k8s-tools"];
+
+/// The risk of adding bundled kit `name`: low only when it is known to add
+/// tools alone.
+pub fn bundled_risk(name: &str) -> Risk {
+    if TOOL_KITS.contains(&name) && !PERSONAL_KITS.contains(&name) {
+        Risk::Low
+    } else {
+        Risk::High
+    }
 }
 
 /// One file of a kit as Jarvis writes it: relative to `/home/agent/`.
@@ -503,6 +547,10 @@ pub struct ChangeView {
     pub title: String,
     pub diff: String,
     pub risk: Risk,
+    /// The command line a `stdio` MCP server runs on this machine, outside
+    /// any sandbox: what the person must acknowledge on screen to approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_command: Option<String>,
 }
 
 /// Plan every change in order against `world` (each sees the ones before
@@ -538,7 +586,7 @@ fn clean_list(list: &[String]) -> Vec<String> {
 }
 
 fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
-    let view = |title: String, diff: String, risk: Risk| ChangeView { kind: c.kind().into(), title, diff, risk };
+    let view = |title: String, diff: String, risk: Risk| ChangeView { kind: c.kind().into(), title, diff, risk, host_command: None };
     match c {
         Change::KitWrite { kit, description, files, remove, context } => {
             if !valid_kit(kit) {
@@ -646,7 +694,10 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             let mut risk = Risk::Low;
             for k in &add {
                 let r = match kits::bundled_name(k) {
-                    Some(b) if kits::BUNDLED.contains(&b) => k.clone(),
+                    Some(b) if kits::BUNDLED.contains(&b) => {
+                        risk = risk.max(bundled_risk(b));
+                        k.clone()
+                    }
                     Some(_) => return Err(format!("'{k}' is not a bundled kit; the bundled ones: {}", kits::BUNDLED.iter().map(|b| format!("sbxw:{b}")).collect::<Vec<_>>().join(", "))),
                     None if valid_kit(k) && w.kits.contains_key(k) => {
                         risk = Risk::High;
@@ -744,7 +795,9 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
                 diff.push_str(&format!("# secrets to add in the MCP dialog: {}\n", keys.iter().map(|k| format!("${{{k}}}")).collect::<Vec<_>>().join(", ")));
             }
             let title = format!("{} MCP server {name} ({})", if replace { "Replace" } else { "Add" }, s.kind);
-            Ok(Planned { view: view(title, diff, Risk::High), op: Op::McpAdd { replace, spec: s } })
+            let mut v = view(title, diff, Risk::High);
+            v.host_command = host_command(&s);
+            Ok(Planned { view: v, op: Op::McpAdd { replace, spec: s } })
         }
         Change::McpRemove { name } => {
             let name = crate::mcp::check_name(name)?;
@@ -756,6 +809,29 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             Ok(Planned { view: view(format!("Remove MCP server {name}"), format!("- sbx mcp rm {name}\n"), Risk::High), op: Op::McpRm { name } })
         }
     }
+}
+
+/// What a `stdio` server runs on this machine, as one shell line: the
+/// command and its arguments as sbx gets them (trimmed, blanks dropped),
+/// after a `cd` into its directory when one is set. `None` for a remote one.
+pub fn host_command(s: &McpSpec) -> Option<String> {
+    if s.kind != "stdio" {
+        return None;
+    }
+    let quote = |w: &str| {
+        if !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c)) {
+            w.to_string()
+        } else {
+            format!("'{}'", w.replace('\'', "'\\''"))
+        }
+    };
+    let mut words = vec![quote(s.command.trim())];
+    words.extend(s.args.iter().map(|a| a.trim()).filter(|a| !a.is_empty()).map(quote));
+    let line = words.join(" ");
+    Some(match s.dir.trim() {
+        "" => line,
+        d => format!("cd {} && {line}", quote(d)),
+    })
 }
 
 fn daemon_file(w: &World) -> Result<TomlFile, String> {
@@ -913,6 +989,12 @@ pub struct Proposal {
 }
 
 impl Proposal {
+    /// Some change runs a command on this machine: approving takes an
+    /// explicit acknowledgement on screen.
+    pub fn needs_ack(&self) -> bool {
+        self.views.iter().any(|v| v.host_command.is_some())
+    }
+
     /// What the agent reads: no diffs, which it wrote itself.
     pub fn agent_view(&self) -> Value {
         let mut v = json!({ "id": self.id, "state": self.state, "risk": self.risk });
@@ -948,6 +1030,9 @@ impl Proposal {
         }
         if let Some(s) = self.settled {
             v["settled"] = s.into();
+        }
+        if self.needs_ack() {
+            v["needs_ack"] = true.into();
         }
         v
     }
@@ -1017,13 +1102,18 @@ impl Book {
 
     /// Start applying: only a pending proposal, once, and `voice` only for a
     /// low-risk one.
-    pub fn begin(&mut self, id: &str, via: Via) -> Result<Proposal, ApproveError> {
+    pub fn begin(&mut self, id: &str, via: Via, ack_host_command: bool) -> Result<Proposal, ApproveError> {
         let p = self.get(id).ok_or_else(|| ApproveError::NotFound(format!("no proposal '{id}'")))?.clone();
         if p.state != State::Pending || self.applying.as_deref() == Some(id) {
             return Err(ApproveError::Conflict(format!("proposal {id} is not waiting for approval")));
         }
         if via == Via::Voice && p.risk == Risk::High {
             return Err(ApproveError::Conflict("a high-risk proposal is approved with a click in the dialog, not by voice".into()));
+        }
+        if p.needs_ack() && !ack_host_command {
+            return Err(ApproveError::Conflict(
+                "this proposal runs a command on this machine, outside any sandbox: it is approved only on screen, with that command acknowledged".into(),
+            ));
         }
         self.applying = Some(id.to_string());
         Ok(p)
@@ -1126,6 +1216,34 @@ mod tests {
             assert!(e.starts_with("change 1 (kit_write): "), "{e}");
         }
         assert!(check_path(".claude/commands/hello.md").is_ok() && check_path("bin/tool.sh").is_ok());
+    }
+
+    #[test]
+    fn code_that_runs_by_itself_or_replaces_the_agent_is_refused() {
+        for bad in [".bashrc", ".bash_profile", ".bash_login", ".bash_logout", ".profile", ".zshrc", ".zshenv", ".zprofile",
+            ".local/bin/claude", ".local/bin/x/claude", ".ssh/authorized_keys", ".ssh", ".claude/CLAUDE.md", ".claude/hooks/pre.sh", ".claude/hooks"] {
+            assert!(check_path(bad).is_err(), "{bad}");
+        }
+        assert!(check_path(".bashrc").unwrap_err().contains("bin/"), "says what to use instead");
+        assert!(check_path(".claude/CLAUDE.md").unwrap_err().contains("context"));
+        for ok in [".inputrc", ".claude/skills/x/.bashrc", "notes/.profile", ".local/bin/claude-helper", ".local/bin/tool", "docs/.ssh/x", "x/.claude/CLAUDE.md", ".claude/commands/hooks.md"] {
+            assert!(check_path(ok).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn every_bundled_kit_has_a_risk_and_personal_ones_are_high() {
+        for b in kits::BUNDLED {
+            assert!(PERSONAL_KITS.contains(&b) != TOOL_KITS.contains(&b), "{b} is classified exactly once");
+        }
+        assert!(PERSONAL_KITS.iter().chain(TOOL_KITS).all(|k| kits::BUNDLED.contains(k)), "no stale name");
+        for b in PERSONAL_KITS {
+            let p = plan(&world(), &[change(json!({"kind": "kits_line", "file": "daemon", "add": [format!("sbxw:{b}")]}))]).unwrap();
+            assert_eq!(p[0].view.risk, Risk::High, "{b}");
+        }
+        let mixed = plan(&world(), &[change(json!({"kind": "kits_line", "file": "daemon", "add": ["sbxw:retro", "sbxw:ssh-agent"]}))]).unwrap();
+        assert_eq!(mixed[0].view.risk, Risk::High);
+        assert_eq!(bundled_risk("some-new-kit"), Risk::High, "unknown is high");
     }
 
     #[test]
@@ -1241,6 +1359,30 @@ mod tests {
     }
 
     #[test]
+    fn a_stdio_server_shows_its_host_command_and_needs_an_ack() {
+        let w = world();
+        let p = plan(&w, &[change(json!({"kind": "mcp_server", "spec": {"name": "pw", "kind": "stdio", "command": " npx ", "args": ["-y", "", "@playwright/mcp@latest", "a b"], "dir": "/srv/my dir"}}))]).unwrap();
+        assert_eq!(p[0].view.host_command.as_deref(), Some("cd '/srv/my dir' && npx -y @playwright/mcp@latest 'a b'"));
+        let remote = plan(&w, &[change(json!({"kind": "mcp_server", "spec": {"name": "r", "kind": "remote", "url": "https://x"}}))]).unwrap();
+        assert_eq!(remote[0].view.host_command, None);
+
+        let mut b = Book::default();
+        let views: Vec<ChangeView> = p.into_iter().map(|x| x.view).collect();
+        let prop = b.propose("j1".into(), "pw", vec![], views, 1).unwrap();
+        assert!(prop.needs_ack() && prop.ui_view()["needs_ack"] == true);
+        assert_eq!(prop.ui_view()["changes"][0]["host_command"], "cd '/srv/my dir' && npx -y @playwright/mcp@latest 'a b'");
+        assert!(b.begin("j1", Via::Click, false).unwrap_err().to_string().contains("acknowledged"));
+        assert!(matches!(b.begin("j1", Via::Voice, true), Err(ApproveError::Conflict(_))), "never by voice");
+        b.begin("j1", Via::Click, true).unwrap();
+        let rv: Vec<ChangeView> = remote.into_iter().map(|x| x.view).collect();
+        let mut b2 = Book::default();
+        let rp = b2.propose("j2".into(), "r", vec![], rv, 1).unwrap();
+        assert!(!rp.needs_ack() && rp.ui_view().get("needs_ack").is_none());
+        assert!(rp.ui_view()["changes"][0].get("host_command").is_none());
+        b2.begin("j2", Via::Click, false).unwrap();
+    }
+
+    #[test]
     fn the_unified_diff_has_hunks_with_context() {
         let old: String = (1..=20).flat_map(|i| [format!("l{i}"), "\n".into()]).collect();
         let new = old.replace("l5\n", "five\n").replace("l18\n", "");
@@ -1255,20 +1397,20 @@ mod tests {
     #[test]
     fn one_pending_voice_only_for_low_risk_and_settled_once() {
         let mut b = Book::default();
-        let high = vec![ChangeView { kind: "kit_remove".into(), title: "t".into(), diff: "".into(), risk: Risk::High }];
+        let high = vec![ChangeView { kind: "kit_remove".into(), title: "t".into(), diff: "".into(), risk: Risk::High, host_command: None }];
         let p = b.propose("j1".into(), "remove it", vec![], high, 1).unwrap();
         assert_eq!((p.risk, p.state), (Risk::High, State::Pending));
         assert!(b.propose("j2".into(), "again", vec![], vec![], 2).unwrap_err().contains("still waiting"));
-        assert!(matches!(b.begin("j1", Via::Voice), Err(ApproveError::Conflict(_))));
-        b.begin("j1", Via::Click).unwrap();
-        assert!(b.begin("j1", Via::Click).is_err(), "once");
+        assert!(matches!(b.begin("j1", Via::Voice, false), Err(ApproveError::Conflict(_))));
+        b.begin("j1", Via::Click, false).unwrap();
+        assert!(b.begin("j1", Via::Click, false).is_err(), "once");
         assert!(b.refuse("j1", None, 3).is_err(), "not while applying");
         let done = b.finish("j1", Via::Click, vec![ChangeResult { ok: false, message: "boom".into(), restart: false }], None, 4).unwrap();
         assert_eq!((done.state, done.error.as_deref()), (State::Failed, Some("boom")));
         assert!(b.propose("j2".into(), " ", vec![], vec![], 5).unwrap_err().contains("summary"));
         b.propose("j2".into(), "s", vec![], vec![], 5).unwrap();
         assert_eq!(b.refuse("j2", Some(" no ".into()), 6).unwrap().reason.as_deref(), Some("no"));
-        assert!(matches!(b.begin("nope", Via::Click), Err(ApproveError::NotFound(_))));
+        assert!(matches!(b.begin("nope", Via::Click, false), Err(ApproveError::NotFound(_))));
     }
 
     #[test]

@@ -503,3 +503,30 @@ async fn only_the_jarvis_sandbox_may_propose_and_voice_cannot_approve_high_risk(
     assert_eq!((s, v["state"].as_str()), (StatusCode::OK, Some("applied")));
     assert_eq!(call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{id}/refuse"), json!({}))).await.0, StatusCode::CONFLICT);
 }
+
+/// A stdio MCP server runs on this machine: the approve route answers 409
+/// until the person acknowledged that command, and a remote one needs none.
+#[tokio::test]
+async fn a_host_command_must_be_acknowledged_to_approve() {
+    let answer = |a: &[String]| match a.first().map(String::as_str) {
+        Some("mcp") if a.get(1).map(String::as_str) == Some("ls") => sbxw_sbx::runner::Output::ok("[]"),
+        _ => crate::testing::sbx_answer(a),
+    };
+    let (_d, app, _fake) = crate::testing::app_with(answer);
+    let ui = |path: String, body: Value| json_req(post(&path, body.clone()).header("host", HOST), body);
+    let stdio = serde_json::from_value(json!([{"kind": "mcp_server", "spec": {"name": "pw", "kind": "stdio", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}}])).unwrap();
+    let p = app.jarvis_propose("pw", stdio).await.unwrap();
+    let (_, v) = call(signed_in(app.clone()), Request::builder().uri("/api/jarvis").header("host", HOST).body(Body::empty()).unwrap()).await;
+    assert_eq!(v["proposals"][0]["needs_ack"], true);
+    assert_eq!(v["proposals"][0]["changes"][0]["host_command"], "npx -y @playwright/mcp@latest");
+    let (s, v) = call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{}/approve", p.id), json!({"via": "click"}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("acknowledged"));
+    let (s, v) = call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{}/approve", p.id), json!({"via": "click", "ack_host_command": true}))).await;
+    assert_eq!((s, v["proposal"]["state"].as_str()), (StatusCode::OK, Some("applied")), "{v}");
+
+    let remote = serde_json::from_value(json!([{"kind": "mcp_server", "spec": {"name": "r", "kind": "remote", "url": "https://mcp.example.com/mcp"}}])).unwrap();
+    let p = app.jarvis_propose("r", remote).await.unwrap();
+    let (s, v) = call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{}/approve", p.id), json!({"via": "click"}))).await;
+    assert_eq!((s, v["proposal"]["state"].as_str()), (StatusCode::OK, Some("applied")), "a remote server needs no ack: {v}");
+}

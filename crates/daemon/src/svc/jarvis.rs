@@ -267,8 +267,8 @@ impl App {
     /// The person approved: plan again against the files as they are now,
     /// refuse when what would be written is not what they read, then apply
     /// in order and stop at the first failure.
-    pub async fn jarvis_approve(&self, id: &str, via: Via) -> Result<Proposal, ApproveError> {
-        let p = self.jarvis.lock().unwrap().begin(id, via)?;
+    pub async fn jarvis_approve(&self, id: &str, via: Via, ack_host_command: bool) -> Result<Proposal, ApproveError> {
+        let p = self.jarvis.lock().unwrap().begin(id, via, ack_host_command)?;
         let finish = |results: Vec<ChangeResult>, error: Option<String>| {
             let done = self.jarvis.lock().unwrap().finish(id, via, results, error, now_ms());
             done.map(|d| self.jarvis_changed(d)).ok_or_else(|| ApproveError::NotFound(format!("no proposal '{id}'")))
@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(p.state, State::Pending);
         let root = app.jarvis_kit_root().join("jarvis-hello");
         assert!(!root.exists(), "nothing is written before approval");
-        let done = app.jarvis_approve(&p.id, Via::Click).await.unwrap();
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
         assert_eq!(done.state, State::Applied, "{:?}", done.error);
         assert!(sbxw_core::kits::is_v3_kit(&root));
         assert_eq!(std::fs::read_to_string(root.join("files/home/agent/bin/hi.sh")).unwrap(), "#!/bin/sh\necho hi\n");
@@ -414,16 +414,37 @@ mod tests {
         assert_eq!(state["jarvis_kits"][0]["description"], "Hello");
         let p = app.jarvis_propose("drop the script", changes(json!([{"kind": "kit_write", "kit": "jarvis-hello", "remove": ["bin/hi.sh"]}]))).await.unwrap();
         assert!(p.views[0].diff.contains("+++ /dev/null"), "{}", p.views[0].diff);
-        assert_eq!(app.jarvis_approve(&p.id, Via::Click).await.unwrap().state, State::Applied);
+        assert_eq!(app.jarvis_approve(&p.id, Via::Click, false).await.unwrap().state, State::Applied);
         assert!(!root.join("files/home/agent/bin").exists());
         assert!(root.join("files/home/agent/.claude/commands/hello.md").exists());
+    }
+
+    /// A stdio server runs on this machine: applied only with the command
+    /// acknowledged, and then exactly that command reaches sbx.
+    #[tokio::test]
+    async fn a_host_command_is_applied_only_once_acknowledged() {
+        let answer = |a: &[String]| match a.first().map(String::as_str) {
+            Some("mcp") if a.get(1).map(String::as_str) == Some("ls") => sbxw_sbx::runner::Output::ok("[]"),
+            _ => sbx_answer(a),
+        };
+        let (_dir, app, fake) = app_with(answer);
+        let p = app
+            .jarvis_propose("playwright", changes(json!([{"kind": "mcp_server", "spec": {"name": "pw", "kind": "stdio", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}}])))
+            .await
+            .unwrap();
+        assert_eq!(p.views[0].host_command.as_deref(), Some("npx -y @playwright/mcp@latest"));
+        assert!(matches!(app.jarvis_approve(&p.id, Via::Click, false).await, Err(sbxw_core::jarvis::ApproveError::Conflict(_))));
+        assert!(!fake.called("mcp add"), "nothing applied without the ack");
+        let done = app.jarvis_approve(&p.id, Via::Click, true).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert!(fake.log().iter().any(|l| l.contains("mcp add pw --command=npx --args=-y,@playwright/mcp@latest")), "{:?}", fake.log());
     }
 
     #[tokio::test]
     async fn voice_cannot_approve_a_high_risk_proposal() {
         let (_dir, app, _) = app_with(sbx_answer);
         let p = app.jarvis_propose("kit", changes(json!([{"kind": "kit_write", "kit": "jarvis-a", "files": [{"path": "a.md", "content": "a"}]}]))).await.unwrap();
-        assert!(matches!(app.jarvis_approve(&p.id, Via::Voice).await, Err(sbxw_core::jarvis::ApproveError::Conflict(_))));
+        assert!(matches!(app.jarvis_approve(&p.id, Via::Voice, false).await, Err(sbxw_core::jarvis::ApproveError::Conflict(_))));
         assert_eq!(app.jarvis_list()[0].state, State::Pending, "still waiting for a click");
         assert!(app.jarvis_propose("another", changes(json!([{"kind": "kit_remove", "kit": "jarvis-a"}]))).await.unwrap_err().contains("still waiting"));
         assert_eq!(app.jarvis_refuse(&p.id, Some("no".into())).unwrap().state, State::Refused);
@@ -448,7 +469,7 @@ mod tests {
 
         // A low-risk proposal approved by voice: written, and the daemon's kits follow.
         let p = app.jarvis_propose("retro", changes(json!([{"kind": "kits_line", "file": "daemon", "add": ["sbxw:retro"]}, {"kind": "setting", "key": "keep_awake", "value": "always"}]))).await.unwrap();
-        let done = app.jarvis_approve(&p.id, Via::Voice).await.unwrap();
+        let done = app.jarvis_approve(&p.id, Via::Voice, false).await.unwrap();
         assert_eq!(done.state, State::Applied, "{:?}", done.error);
         assert!(done.results[1].restart);
         let text = std::fs::read_to_string(&file).unwrap();
@@ -458,7 +479,7 @@ mod tests {
         // Changed by hand after the proposal: refused, the hand edit kept.
         let p = app.jarvis_propose("more", changes(json!([{"kind": "setting", "key": "battery_warn_below", "value": 40}]))).await.unwrap();
         std::fs::write(&file, "battery_warn_below = 10\n").unwrap();
-        let done = app.jarvis_approve(&p.id, Via::Click).await.unwrap();
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
         assert_eq!(done.state, State::Failed);
         assert!(done.error.as_deref().unwrap().contains("changed since"), "{:?}", done.error);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "battery_warn_below = 10\n");
