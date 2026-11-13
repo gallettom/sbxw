@@ -6,6 +6,8 @@ pub mod board;
 pub mod browser;
 pub mod codemap;
 pub mod hosts;
+pub mod jarvis;
+pub mod jarvis_sandbox;
 pub mod kits;
 pub mod mac;
 pub mod my_skills;

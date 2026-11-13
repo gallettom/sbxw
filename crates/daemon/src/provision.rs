@@ -201,6 +201,17 @@ impl App {
     /// `extra` (the caller's own view, e.g. the CLI's stream), closing with
     /// `Done` whichever way it went.
     pub async fn provision(self: &Arc<Self>, req: BringUp, extra: Option<Sink>) -> Result<Vec<String>> {
+        // The daemon's own sandboxes are made by the daemon alone: one under
+        // Jarvis's name would be taken for Jarvis.
+        if let Some(why) = crate::svc::jarvis_sandbox::reserved(&req.name) {
+            bail!("{why}");
+        }
+        self.provision_owned(req, extra).await
+    }
+
+    /// [`App::provision`] for a sandbox the daemon owns, whose name is
+    /// reserved: only the daemon's own services call it.
+    pub(crate) async fn provision_owned(self: &Arc<Self>, req: BringUp, extra: Option<Sink>) -> Result<Vec<String>> {
         let bus = self.bus.clone();
         let name = req.name.clone();
         let sink: Sink = Arc::new(move |p: Progress| {
@@ -430,7 +441,10 @@ impl App {
             let mut own: Vec<String> = Vec::new();
             // Kept skills go to every new sandbox, whatever its `kits` say: they
             // are the person's, not the project's.
+            let jarvis = crate::svc::jarvis_sandbox::is_jarvis_name(name);
             match self.my_skills_kit() {
+                // Jarvis gets sbxw's kits and nothing of the person's.
+                Ok(Some(_)) if jarvis => {}
                 Ok(Some(_)) if !trusted => run.info(format!("your kept skills stay here: host '{}' is not trusted with secrets", name.host)),
                 Ok(Some(dir)) => own.push(dir.to_string_lossy().into_owned()),
                 Ok(None) => {}
@@ -566,8 +580,12 @@ impl App {
             .artifact_hook()
             .status_hooks(&agent_port)
             .usage_statusline(&agent_port)
-            .relay(&agent_port)
-            .lead_command();
+            .relay(&agent_port);
+        // Jarvis: its proposal tools, and no /lead (one session, no threads).
+        let batch = match crate::svc::jarvis_sandbox::is_jarvis_name(name) {
+            true => batch.config_mcp(&agent_port),
+            false => batch.lead_command(),
+        };
         if up {
             run.step(progress::TOOLING);
         }

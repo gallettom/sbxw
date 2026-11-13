@@ -31,6 +31,11 @@ pub const TEAM_GUARD_PATH: &str = "/home/agent/.sbxw/team-guard.js";
 pub const TEAM_GUARD_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 pub const TOKEN_PATH: &str = "/home/agent/.sbxw/token";
 pub const RELAY_MCP_NAME: &str = "sbxw-relay";
+/// Jarvis's own MCP server: proposals to change sbxw's configuration. The
+/// script is image content of the `sbxw:jarvis` kit; only its registration is
+/// written here, since the port is the daemon's.
+pub const CONFIG_MCP_NAME: &str = "sbxw-config";
+pub const CONFIG_MCP_PATH: &str = "/home/agent/.sbxw/jarvis/config-mcp.js";
 pub const USER_MEMORY_PATH: &str = "/home/agent/.claude/CLAUDE.md";
 pub const LEAD_COMMAND_PATH: &str = "/home/agent/.claude/commands/lead.md";
 pub const CODEMAP_COMMAND_PATH: &str = "/home/agent/.claude/commands/codemap.md";
@@ -67,6 +72,7 @@ pub mod piece {
     pub const USAGE_STATUSLINE: &str = "usage-statusline";
     pub const RELAY: &str = "relay";
     pub const LEAD: &str = "lead";
+    pub const CONFIG_MCP: &str = "config-mcp";
 }
 
 /// The heading [`relay_guidance`] opens with; the batch looks for it to tell
@@ -290,6 +296,23 @@ impl Tooling {
         self.piece(piece::LEAD, body)
     }
 
+    /// Register `sbxw-config` (user scope), Jarvis's proposal tools, beside
+    /// `sbxw-relay`. For the Jarvis sandbox only: the daemon refuses its
+    /// routes to any other, and least privilege keeps the tools out of sight
+    /// of every project's agent too. The port goes in the server's
+    /// environment, since the script itself is the kit's, byte for byte.
+    pub fn config_mcp(self, agent_port: &str) -> Self {
+        let body = format!(
+            "const d=json({claude_json});d.mcpServers=d.mcpServers||{{}};\
+             d.mcpServers[{name}]={{type:'stdio',command:'node',args:[{path}],env:{{SBXW_AGENT_PORT:{port}}}}};",
+            claude_json = js(CLAUDE_JSON_PATH),
+            name = js(CONFIG_MCP_NAME),
+            path = js(CONFIG_MCP_PATH),
+            port = js(agent_port),
+        );
+        self.piece(piece::CONFIG_MCP, body)
+    }
+
     pub fn script(&self) -> String {
         let mut s = String::from(PRELUDE);
         for (name, body) in &self.pieces {
@@ -339,6 +362,7 @@ pub fn consequence(piece: &str) -> &'static str {
         piece::USAGE_STATUSLINE => "could not install the usage statusLine",
         piece::RELAY => "could not install the cross-sandbox relay",
         piece::LEAD => "could not install /lead",
+        piece::CONFIG_MCP => "could not register Jarvis's sbxw-config tools",
         _ => "a tooling step failed",
     }
 }
@@ -511,6 +535,30 @@ mod tests {
         });
         assert_eq!(guard(d, Some("shared"), post).0, 0);
         assert!(!lock.exists(), "and dropped it after");
+    }
+
+    #[test]
+    fn jarvis_s_config_server_is_registered_beside_the_relay() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::write(h.join(".claude.json"), r#"{"mcpServers":{"mine":{"command":"x"}}}"#).unwrap();
+        let batch = Tooling::new().relay("7682").config_mcp("7682");
+        let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
+        let out = run_node(&script).unwrap();
+        assert_eq!(batch.parse_report(&out).unwrap(), ToolingOutcome::default(), "{out}");
+        let c: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.join(".claude.json")).unwrap()).unwrap();
+        let s = &c["mcpServers"][CONFIG_MCP_NAME];
+        assert_eq!(s["command"], "node");
+        assert_eq!(s["args"][0].as_str().unwrap(), format!("{}/.sbxw/jarvis/config-mcp.js", h.display()));
+        assert_eq!(s["env"]["SBXW_AGENT_PORT"], "7682");
+        assert_eq!(c["mcpServers"]["mine"]["command"], "x", "the person's own servers stay");
+        assert_eq!(c["mcpServers"][RELAY_MCP_NAME]["command"], "node");
+        let plain = Tooling::new().relay("7682").script();
+        assert!(!plain.contains(CONFIG_MCP_NAME), "no other sandbox is given the server");
     }
 
     #[test]
