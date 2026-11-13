@@ -5,12 +5,16 @@
 //! * [`screen`]: draws a Luau screen with Rune elements and reloads it on change.
 //! * [`luau`]: the sandboxed VM that runs screen files, and the frozen element set.
 //! * [`intent`]: the closed list of what a screen may ask.
-//! * [`approval`]: where the core's own approval dialogs will go (wave 4).
+//! * [`approval`]: the core's own approval dialogs (Jarvis proposals, clipboard offers).
+//! * [`jarvis`]: Jarvis's conversation, state and proposal rule; [`markdown`]: the `markdown` element.
+//! * [`voice`]: the audio seam; [`audio`]: native audio behind it (thread desktop-audio).
+//! * [`builtin`]: the built-in screens written out for the daemon.
 //! * [`theme`], [`icons`]: the web UI's tokens; the icons screens may name.
 //! * [`fixture`]: daemon data from JSON files, for headless screens.
 //! * [`terminal`]: a terminal emulator drawn with Rune's grid (thread desktop-terminal).
 
 pub mod approval;
+pub mod audio;
 pub mod builtin;
 pub mod client;
 pub mod fixture;
