@@ -15,6 +15,7 @@ pub mod board;
 pub mod browser;
 pub mod error;
 pub mod guard;
+pub mod jarvis;
 pub mod mac;
 pub mod stream;
 pub mod token;

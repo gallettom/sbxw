@@ -444,3 +444,62 @@ fn the_cookie_name_is_sbxw_localhost_on_loopback_only() {
     assert_eq!(cookie_host("0.0.0.0:7681"), None);
     assert_eq!(cookie_host("192.168.1.9:7681"), None);
 }
+
+/// Jarvis's routes answer the daemon's own `sbxw-jarvis` sandbox alone: not
+/// another sandbox, not one of that name on a remote host, not one of that
+/// name the daemon did not create. The person's half is on the UI listener.
+#[tokio::test]
+async fn only_the_jarvis_sandbox_may_propose_and_voice_cannot_approve_high_risk() {
+    use sbxw_core::SandboxRef;
+    let (_d, app) = app();
+    let jarvis = SandboxRef::parse(sbxw_core::jarvis::SANDBOX).unwrap();
+    let ws = crate::svc::jarvis_sandbox::workspace(&app.store.paths);
+    app.store.update(jarvis.clone(), |r| r.workspace = Some(ws.clone())).unwrap();
+    let remote = SandboxRef::parse(&format!("bb~{}", sbxw_core::jarvis::SANDBOX)).unwrap();
+    app.store.update(remote.clone(), |r| r.workspace = Some(ws.clone())).unwrap();
+    let as_ = |sb: &SandboxRef, path: &str, body: Value| {
+        let token = app.store.token(sb.clone()).unwrap();
+        json_req(post(path, body.clone()).header("authorization", format!("Bearer {token}")), body)
+    };
+    let kit = json!({"summary": "a kit", "timeout": 1, "changes": [{"kind": "kit_write", "kit": "jarvis-a", "files": [{"path": "a.md", "content": "a"}]}]});
+
+    for who in ["myapp", "sbxw-jarvis-2"] {
+        let sb = SandboxRef::parse(who).unwrap();
+        for path in ["/api/jarvis/state", "/api/jarvis/propose", "/api/jarvis/wait"] {
+            assert_eq!(call(agent_router(app.clone()), as_(&sb, path, kit.clone())).await.0, StatusCode::FORBIDDEN, "{who} {path}");
+        }
+    }
+    assert_eq!(call(agent_router(app.clone()), as_(&remote, "/api/jarvis/propose", kit.clone())).await.0, StatusCode::FORBIDDEN, "a remote host's sandbox of that name");
+    let impostor = SandboxRef::parse("sbxw-jarvis").unwrap();
+    app.store.update(impostor.clone(), |r| r.workspace = Some("/elsewhere".into())).unwrap();
+    assert_eq!(call(agent_router(app.clone()), as_(&impostor, "/api/jarvis/state", json!({}))).await.0, StatusCode::FORBIDDEN, "not created by the daemon");
+    app.store.update(jarvis.clone(), |r| r.workspace = Some(ws.clone())).unwrap();
+
+    let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/state", json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["settings"].as_array().unwrap().iter().any(|s| s["key"] == "voice.tts_voice"));
+    assert!(!v.to_string().contains("sbxw_"), "no token in the view: {v}");
+
+    let bad = json!({"summary": "s", "changes": [{"kind": "setting", "key": "web_addr", "value": "0.0.0.0:1"}]});
+    let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/propose", bad)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap().contains("not a setting Jarvis may change"), "{v}");
+
+    let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/propose", kit)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["state"].as_str(), v["risk"].as_str()), (Some("pending"), Some("high")));
+    let id = v["id"].as_str().unwrap().to_string();
+
+    let ui = |path: String, body: Value| json_req(post(&path, body.clone()).header("host", HOST), body);
+    let (s, v) = call(signed_in(app.clone()), Request::builder().uri("/api/jarvis").header("host", HOST).body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["proposals"][0]["changes"][0]["diff"].as_str().unwrap().contains("+++ jarvis-a/spec.yaml"), "{v}");
+    let (s, _) = call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{id}/approve"), json!({"via": "voice"}))).await;
+    assert_eq!(s, StatusCode::CONFLICT, "voice never approves a high-risk proposal");
+    let (s, v) = call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{id}/approve"), json!({"via": "click"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["proposal"]["state"], "applied");
+    let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/wait", json!({"id": id, "timeout": 1}))).await;
+    assert_eq!((s, v["state"].as_str()), (StatusCode::OK, Some("applied")));
+    assert_eq!(call(signed_in(app.clone()), ui(format!("/api/jarvis/proposals/{id}/refuse"), json!({}))).await.0, StatusCode::CONFLICT);
+}

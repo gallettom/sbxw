@@ -14,7 +14,7 @@ use std::time::Duration;
 
 #[derive(Subcommand, Clone, Copy, Default)]
 pub enum VoiceCmd {
-    /// Which models the concierge uses and whether they are downloaded.
+    /// Which models Jarvis's voice uses and whether they are downloaded.
     #[default]
     Status,
     /// Download the models `[voice]` names (~4 GB, resumable, checksums from Hugging Face) into ~/.sbxw/models, and the speech runtime.
@@ -52,7 +52,7 @@ pub fn run(cmd: VoiceCmd, config: &Path) -> Result<()> {
             daemon.post("/api/voice/install", json!({}))?;
             let s = follow(&daemon)?;
             match s["job"]["state"].as_str() {
-                Some("done") => println!("\ninstalled. Open the web UI's Concierge and hold its talk button (or {}) to talk.", s["push_to_talk_key"].as_str().unwrap_or("F8")),
+                Some("done") => println!("\ninstalled. Open Jarvis in the web UI's top bar and hold its talk button (or {}) to talk.", s["push_to_talk_key"].as_str().unwrap_or("F8")),
                 Some("cancelled") => bail!("cancelled — `sbxw voice install` resumes where it stopped"),
                 _ => bail!("{}", s["job"]["error"].as_str().unwrap_or("the download did not finish")),
             }
