@@ -270,6 +270,59 @@ await visit('Jarvis: typed without voice', async () => {
   await input.fill('');
   await page.evaluate(async () => { await vcRefresh(); vcSetOpen(false); });
 });
+// The panel is a plain conversation: with Jarvis picked, its answer is prose
+// on the left of the log (no card, no inner scrollbar, nothing armed, no
+// "Answer it"), markup in it stays text, and Follow is hidden. The footer is
+// one row: the input and the talk glyph side by side, the talk button named.
+// Another sandbox's message stays a card the next words answer.
+await visit('Jarvis: a plain conversation', async () => {
+  jv.status = { state: 'running' };
+  await page.evaluate(async () => { vcReset(); vcSetOpen(true); vcSetTarget('sbxw-jarvis'); await vcJarvisStatus(); });
+  await page.waitForTimeout(300);
+}, async () => {
+  const long = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of a **long** answer with \`code\`.`).join('\n\n');
+  const got = await page.evaluate(async (long) => {
+    await vcAgentMessage('sbxw-jarvis', null, 'Short answer. <img src=x onerror=alert(1)>');
+    await vcAgentMessage('sbxw-jarvis', null, long);
+    const rows = [...document.querySelectorAll('#vc-log .vc-jarvis')];
+    const inner = rows.some(r => [r, ...r.querySelectorAll('*')].some(e => e.tagName !== 'PRE' && e.scrollHeight > e.clientHeight + 2 && /auto|scroll/.test(getComputedStyle(e).overflowY)));
+    const input = document.getElementById('vc-type-input').getBoundingClientRect();
+    const talk = document.getElementById('vc-talk').getBoundingClientRect();
+    return {
+      rows: rows.length,
+      cards: document.querySelectorAll('#vc-log .vc-agent').length,
+      img: !!document.querySelector('#vc-log img'),
+      buttons: [...document.querySelectorAll('#vc-log button')].map(b => b.getAttribute('aria-label') || b.textContent),
+      armed: !!vcPending,
+      inner,
+      left: rows.every(r => r.getBoundingClientRect().left < document.getElementById('vc-log').getBoundingClientRect().left + 20),
+      follow: document.getElementById('vc-follow').hidden,
+      hint: !!document.getElementById('vc-hint'),
+      oneRow: Math.abs(input.top - talk.top) < 6 && input.width > talk.width * 4,
+      talkName: document.getElementById('vc-talk').getAttribute('aria-label'),
+      lines: [...document.querySelectorAll('#vc-log .vc-dim')].map(e => e.textContent),
+    };
+  }, long);
+  await page.screenshot({ path: png.replace(/\.png$/, '-jarvis-conversation.png') });
+  const other = await page.evaluate(async () => {
+    vcSetTarget('smoke-other');
+    await vcAgentMessage('smoke-other', null, 'A question from another agent?');
+    const card = [...document.querySelectorAll('#vc-log .vc-agent')].pop();
+    return {
+      follow: document.getElementById('vc-follow').hidden,
+      armed: vcPending?.kind,
+      answer: !!card && [...card.querySelectorAll('button')].some(b => b.textContent === 'Answer it'),
+      frame: card ? getComputedStyle(card).borderTopWidth : null,
+    };
+  });
+  if (got.rows !== 2 || got.cards || got.img || got.buttons.some(b => b !== 'Read aloud') || got.armed || got.inner || !got.left
+    || !got.follow || got.hint || !got.oneRow || !/^Hold to talk \(F8\)|Talking is off/.test(got.talkName || '') || got.lines.length
+    || other.follow || other.armed !== 'reply' || !other.answer || other.frame !== '0px') {
+    problems.push(`jarvis conversation: ${JSON.stringify(got)}, another sandbox ${JSON.stringify(other)}; want two plain answers on the left, markup as text, only Read aloud buttons, nothing armed, no inner scrollbar, Follow hidden, no hint line, a one-row footer; and for another sandbox Follow shown and an armed card with a left rule`);
+  }
+  jv.status = { state: 'absent' };
+  await page.evaluate(() => { vcReset(); vcSetTarget('sbxw-jarvis'); vcSetOpen(false); });
+});
 await visit('Bash pane', () => button(/Bash/).click());
 await visit('Claude pane', () => button(/Claude/).click());
 // A reconnect (the pane's ↻) forces one full TUI repaint: a resize to one column

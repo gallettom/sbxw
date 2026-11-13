@@ -32,6 +32,12 @@ with no terminal to open. The panel shows where it stands. After that, what you 
 goes to Jarvis's Claude session, masked first like any message, and its
 answers are shown and read aloud.
 
+The panel reads as a conversation: your words on the right, Jarvis's
+answers as plain text on the left, in full (only the panel scrolls). With
+Jarvis picked, whatever you say or type next goes to Jarvis, so there is
+nothing to arm. The small speaker on an answer reads it again; it shows once
+the voice is set up. The text box and the microphone share the bottom row.
+
 Jarvis needs the same Claude sign-in as your other sandboxes. The voice is
 optional: you can type to Jarvis and read its answers, even in an sbxw built
 without voice or with the voice models not installed. Press Enter to send.
@@ -48,6 +54,8 @@ Each proposal holds one or more changes. Jarvis can propose:
 | **Setting** (`setting`) | One key of the daemon's `sbxw.toml`, from a fixed list: the `[voice]` keys, `claude_model`, the terminal colours, `keep_awake`, `keep_awake_min_battery`, `battery_warn_below`, `cache_ttl_days`. It takes effect when the daemon restarts | Low |
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
 | **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
+
+If the daemon was started where there is no `sbxw.toml`, a setting change creates one at the path the daemon was asked to read. The dialog says it creates that file, and the diff shows a new file. The folder must already exist; sbxw does not create folders, and refuses the change otherwise.
 
 A proposal is as risky as its riskiest change. Every change is shown to you
 as a diff of what would be written, before anything is.

@@ -430,10 +430,12 @@ when the microphone listens. The panel never opens by itself: a message
 read aloud, a question or an error leaves a blue dot on **Open** (an error is
 also a toast), and you open the panel when you want to see it.
 
-In the panel, hold the talk button, or hold
+In the panel, hold the microphone beside the text box, or hold
 **F8** anywhere on the page (terminals included; `[voice] push_to_talk_key`
 changes it), speak, and release: the speech is turned into text on this
-machine. The audio is never kept, and neither is the text.
+machine. The audio is never kept, and neither is the text. The microphone's
+tooltip says so, and says why it is off when it is (a build without voice,
+models not installed, a page not on `127.0.0.1`).
 
 Two local models do the work, and no language model sits between you and
 the agent: Parakeet turns speech into text, and Voxtral TTS reads an agent's
@@ -482,11 +484,12 @@ another way; a message is sent as soon as it is said, so the list is the
 only guard. What you type straight into a
 terminal is not filtered. `sbxw voice status` shows what is in force.
 
-Pick where your words go at the top of the panel, or with the name in the
-bar. **Jarvis** comes first, and is the default. A project sandbox works
-as before. What you say with nothing to answer becomes a message for that
-agent: it is masked and typed into the agent at once, with nothing to
-confirm; the panel shows what left when the masking changed it. The same
+Pick where your words go in the panel's header (the name there is the
+picker), or with the name in the bar. **Jarvis** comes first, and is the
+default. A project sandbox works as before. What you say with nothing to
+answer becomes a message for that agent: it is masked and typed into the
+agent at once, with nothing to confirm. Your words show on the right of the
+panel; a line under them shows what left only when the masking changed it. The same
 goes for your answer to an agent's question. With no sandbox picked, or if
 sending fails, the words wait in an editable card (**Send** or *oui*,
 **Discard** or *non*). You can also type, and typing needs no voice: it
@@ -501,7 +504,11 @@ offers **Start Jarvis**, then shows its progress (the first start creates
 the sandbox and takes a minute or two; a later one starts the stopped
 sandbox and opens its session). Your words reach its Claude session
 the way they reach any agent, masked first; its answers are shown in the
-panel and read aloud, without **Follow**.
+panel and read aloud. They read as a conversation: plain text on the left,
+in full, with only the panel scrolling, and a small speaker on each answer
+that reads it again (shown once the voice is set up). With Jarvis picked,
+your next words always go to Jarvis, so there is nothing to arm, and
+**Follow** is hidden: it only applies to a sandbox.
 
 **Jarvis's proposals.** When Jarvis proposes a change, a dialog opens under
 the bar. It does not take the keyboard: a terminal you are typing into keeps
@@ -526,7 +533,8 @@ the others.
 
 A `/grill-me` in the picked sandbox (in its main agent, or in a thread or
 session sbxw opened there) engages Jarvis on its own: the panel
-gets each round, and reads it aloud. **Follow** does
+gets each round, and reads it aloud. **Follow**, in the header when a
+sandbox is picked, does
 the same for every turn any of its agents ends (off by default: that is a
 lot of talking for ordinary work). A round the agent asks with the relay's `ask_user_questions` tool (what
 `/grill-me` does in sbxw) is not Jarvis's: it opens the
@@ -541,13 +549,12 @@ moves to Q2 (*répète* reads it again, *passe* skips it, *précédente* goes
 back). Once every question is answered, the answers are listed as one
 message ("Q1 : …", as you said them), shown, and sent at once on your
 *oui*. Any other message that arrives is read aloud as written (code blocks
-left out), and what you say next answers it: your words are shown,
-editable, and the panel asks "J'envoie ?". Say *oui* (or click Send) and
-they are typed into that session; *non* drops them. A multiple-choice
-question is read with its options, and what you say picks one — its number
-("la deux"), its rank ("la dernière") or its words — confirmed the same
-way. **Not an answer** on a message makes your next words a message of your
-own instead.
+left out), and shown as a card with a thin rule on its left, amber while
+what you say next answers it: your words are masked and typed into that
+session. A multiple-choice question is read with its options, and what you
+say picks one (its number, "la deux"; its rank, "la dernière"; or its
+words), shown, and sent on your *oui*. **Not an answer** on a card makes your
+next words a message of your own instead; **Answer it** arms it again.
 
 **Dictation into a terminal.** Click the microphone in a pane's bar, speak,
 and click it again — or hold **F9** in the pane that has focus and release:

@@ -30,7 +30,6 @@ const vcPanel = vcEl('vc-panel');
 const vcLog = vcEl('vc-log');
 const vcSetup = vcEl('vc-setup');
 const vcTalk = vcEl('vc-talk');
-const vcHint = vcEl('vc-hint');
 
 const VC_RATE = 16000;
 let vcStatus = null;
@@ -108,11 +107,19 @@ function vcRender() {
   if (typeof relaySyncReadButton === 'function') relaySyncReadButton();
   const ready = vcReady() && window.isSecureContext;
   vcTalk.disabled = !ready || vcBusy;
-  vcTalk.classList.toggle('recording', !!vcRec);
-  vcTalk.textContent = vcRec ? '● Listening… release to send' : vcBusy ? 'Transcribing…' : `Hold to talk (${vcKey()})`;
-  vcHint.textContent = !ready ? '' : vcStatus.speech?.supported
-    ? 'Speech is turned into text locally; the audio is never kept.'
-    : 'Speech is turned into text locally. Reading aloud needs a Mac with Apple Silicon.';
+  vcTalk.classList.toggle('recording', !!vcRec && !vcRec.dest);
+  vcTalk.classList.toggle('busy', vcBusy && !vcRec);
+  // A glyph, so what it does and why it is off are in its title. The
+  // privacy note lives here too rather than as a line under the input.
+  const talk = !vcStatus ? `Hold to talk (${vcKey()})`
+    : !vcStatus.compiled ? 'Talking is off: this sbxw was built without voice. Type instead.'
+    : !vcStatus.ready ? 'Talking is off until the voice models are installed (see above). Type instead.'
+    : !window.isSecureContext ? 'Talking is off: the microphone needs sbxw on 127.0.0.1 or HTTPS. Type instead.'
+    : vcRec && !vcRec.dest ? 'Listening: release to send'
+    : vcBusy ? 'Transcribing…'
+    : `Hold to talk (${vcKey()}). Speech is turned into text on this machine; the audio is never kept.${vcStatus.speech?.supported ? '' : ' Reading aloud needs a Mac with Apple Silicon.'}`;
+  vcTalk.title = talk;
+  vcTalk.setAttribute('aria-label', vcRec || vcBusy || !ready ? talk : `Hold to talk (${vcKey()})`);
   vcLauncher.classList.toggle('ready', ready);
   vcLauncher.classList.toggle('listening', !!vcRec && !vcRec.dest);
   vcLauncher.classList.toggle('busy', vcBusy && !vcRec);
@@ -126,6 +133,8 @@ function vcRender() {
   });
   // On <body>, so a pane opened later shows its button too.
   document.body.classList.toggle('voice-ready', vcReady());
+  // The "Read aloud" icon on messages shows only when the voice can speak.
+  document.body.classList.toggle('voice-speaks', vcCanSpeak());
   vcLauncher.querySelector('kbd').textContent = vcKey();
 }
 
@@ -446,6 +455,10 @@ function vcRenderTarget() {
   vcBarTarget.title = vcTarget === JARVIS
     ? `Your words go to Jarvis (${VC_JARVIS_STATE[vcJarvis.state] || vcJarvis.state}): click to change`
     : 'The sandbox your words go to: click to change';
+  // Follow is about a sandbox's agents: Jarvis is always heard, and with no
+  // sandbox there is nothing to follow.
+  vcEl('vc-follow').hidden = !vcTarget || vcTarget === JARVIS;
+  vcEl('vc-type-input').placeholder = vcTarget ? `Message ${vcLabel(vcTarget)}` : 'Pick where your words go first';
 }
 function vcSetTarget(name) {
   vcTarget = name || null;
@@ -628,7 +641,8 @@ async function vcDraft(text, typed = false) {
     vcDraftCard(safe.text);
     return true;
   }
-  vcSay('dim', safe.masked ? `Sent to ${vcLabel(name)}, ${vcMaskedNote(safe.masked).replace(' before sending', '')}: ${safe.text}` : `Sent to ${vcLabel(name)}.`);
+  // Your words are already in the log: only what the masking changed is news.
+  if (safe.masked) vcSay('dim', `Sent to ${vcLabel(name)}, ${vcMaskedNote(safe.masked).replace(' before sending', '')}: ${safe.text}`);
   if (!vcSpeech.muted) vcSpeak(vcLang('Envoyé.', 'Sent.'));
   return true;
 }
@@ -658,7 +672,7 @@ function vcDraftCard(text) {
     const r = await postJsonOrError('/api/chat/push', { text: safe, name });
     if (!r.ok) { send.disabled = false; vcSay('err', `Not sent to ${vcLabel(name)}: ${r.error}`); return; }
     head.textContent = `Sent to ${vcLabel(name)}`;
-    done(name === JARVIS ? 'Sent to Jarvis.' : `Typed into ${name}'s agent.`);
+    done();
   }, true);
   const drop = vcButton('Discard', () => { card.remove(); vcDisarm(); });
   const hint = document.createElement('span');
@@ -1040,20 +1054,51 @@ function vcButton(label, onClick, primary) {
 // Speak `text` at once, in place of whatever was being read.
 function vcSpeak(text) { vcSpeech.stop(); vcSpeech.feed(text); vcSpeech.flush(); }
 
+// The speaker of the header, small, on a message: reads it again, muted or
+// not (a click is a request to hear it). Shown only while the voice can
+// speak (`body.voice-speaks`, see vcRender).
+function vcReadButton(text) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'vc-read';
+  b.title = 'Read aloud';
+  b.setAttribute('aria-label', 'Read aloud');
+  b.innerHTML = VC_ICON_ON;
+  b.addEventListener('click', () => { vcWarm(true); vcSpeech.read(vcPlain(text)); });
+  return b;
+}
+
 // An agent's message: shown, read aloud, the next words answer it.
+// Jarvis's own session is a conversation: its answer is plain text in the
+// log, and nothing is armed, since with Jarvis picked the next words go to
+// Jarvis anyway. Another agent's message (or a thread's) is a card that the
+// next words answer, typed into that session.
 async function vcAgentMessage(sandbox, thread, text) {
   const grill = chatParseRound(text);
   if (grill.questions.length) return vcGrill(sandbox, thread, text, grill);
-  const { card, foot } = vcCard('vc-msg-agent', `${vcWho(sandbox, thread)} says`);
+  if (sandbox === JARVIS && !thread) {
+    const row = document.createElement('div');
+    row.className = 'vc-msg vc-jarvis';
+    const body = document.createElement('div');
+    body.className = 'vc-md';
+    body.innerHTML = chatMarkdown(text);
+    row.append(body, vcReadButton(text));
+    vcLog.append(row);
+    vcLog.scrollTop = vcLog.scrollHeight;
+    vcNews();
+    if (!vcSpeech.muted) vcReadAgent(text);
+    return;
+  }
+  const { card, head, foot } = vcCard('vc-msg-agent', `${vcWho(sandbox, thread)} says`);
+  head.append(vcReadButton(text));
   const body = document.createElement('div');
-  body.className = 'vc-agent-body';
+  body.className = 'vc-agent-body vc-md';
   body.innerHTML = chatMarkdown(text);
   card.insertBefore(body, foot);
   const hint = document.createElement('span');
   hint.className = 'vc-armed-hint';
   hint.textContent = 'Your next words answer it.';
   foot.append(
-    vcButton('Read aloud', () => vcReadAgent(text)),
     vcButton('Answer it', () => vcArm({ kind: 'reply', sandbox, thread, text, card })),
     vcButton('Not an answer', () => vcDisarm()),
     hint,
@@ -1101,13 +1146,13 @@ function vcGrill(sandbox, thread, text, grill) {
     const sum = document.createElement('summary');
     sum.textContent = 'Context';
     const b = document.createElement('div');
-    b.className = 'vc-agent-body';
+    b.className = 'vc-agent-body vc-md';
     b.innerHTML = chatMarkdown(grill.intro);
     ctx.append(sum, b);
     card.insertBefore(ctx, foot);
   }
   const now = document.createElement('div');
-  now.className = 'vc-grill-now';
+  now.className = 'vc-grill-now vc-md';
   const answers = document.createElement('ol');
   answers.className = 'vc-grill-answers';
   card.insertBefore(now, foot);
@@ -1173,7 +1218,7 @@ async function vcGrillDone(st) {
     if (!r.ok) { vcSay('err', `Not sent: ${r.error}`); return; }
     area.readOnly = true;
     card.classList.add('done');
-    vcSay('dim', `Answers typed into ${vcWho(sandbox, thread)}.`);
+    st.head.textContent = `${vcWho(sandbox, thread)} · answers sent`;
   });
   if (!vcSpeech.muted) vcSpeak("J'ai toutes tes réponses. Relis-les. J'envoie ?");
 }
@@ -1269,8 +1314,8 @@ async function vcAnswerAgent(p, dictated) {
     vcArm(p);
     return false;
   }
+  // The card, dimmed, with the answer in it, says it left.
   card.classList.add('done');
-  vcSay('dim', `Answer typed into ${vcWho(p.sandbox, p.thread)}.`);
   if (!vcSpeech.muted) vcSpeak(vcLang('Envoyé.', 'Sent.'));
   return true;
 }
