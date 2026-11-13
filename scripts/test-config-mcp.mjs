@@ -96,6 +96,13 @@ await test("tools/list lists every tool, each with its rules", async () => {
   assert.match(kit, /read-only/);
   assert.match(kit, /created AFTER/);
   assert.match(kit, /sbxw kit add/);
+  assert.match(kit, /\.claude\/hooks\//);
+  const sets = r.result.tools.find((t) => t.name === "set_kits").description;
+  assert.match(sets, /sbxw:ssh-agent.*high risk/s);
+  assert.match(sets, /spoken yes does not count/);
+  const mcp = r.result.tools.find((t) => t.name === "propose_mcp_server").description;
+  assert.match(mcp, /Prefer `remote`/);
+  assert.match(mcp, /tick an acknowledgement/);
 });
 
 await test("a proposal reaches the daemon with the token and reads back applied", async () => {
