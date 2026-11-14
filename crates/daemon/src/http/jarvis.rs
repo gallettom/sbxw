@@ -121,7 +121,7 @@ async fn list(State(app): S) -> Json<Value> {
 }
 
 async fn status(State(app): S) -> ApiResult {
-    Ok(Json(serde_json::to_value(app.jarvis_status().await).unwrap_or_default()))
+    Ok(Json(serde_json::to_value(app.jarvis_report().await).unwrap_or_default()))
 }
 
 async fn start(State(app): S) -> ApiResult {

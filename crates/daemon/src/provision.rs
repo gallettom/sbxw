@@ -581,9 +581,11 @@ impl App {
             .status_hooks(&agent_port)
             .usage_statusline(&agent_port)
             .relay(&agent_port);
-        // Jarvis: its proposal tools, and no /lead (one session, no threads).
-        let batch = match crate::svc::jarvis_sandbox::is_jarvis_name(name) {
-            true => batch.config_mcp(&agent_port),
+        // Jarvis: its role and its proposal tools, and no /lead (one session,
+        // no threads).
+        let jarvis = crate::svc::jarvis_sandbox::is_jarvis_name(name);
+        let batch = match jarvis {
+            true => crate::svc::jarvis_sandbox::with_jarvis_tooling(batch, &agent_port),
             false => batch.lead_command(),
         };
         if up {
@@ -598,6 +600,11 @@ impl App {
             },
             sbx.policy("allow", Some(n), &allow)
         );
+        if let (true, Some(tooled)) = (jarvis, &tooled) {
+            // The session open that follows a bring-up need not write it again.
+            let setup = crate::svc::jarvis_sandbox::Setup::from_outcome(tooled, true);
+            crate::svc::jarvis_sandbox::record_setup(&self.store.paths, setup);
+        }
         if let Some(tooled) = tooled {
             match tooled {
                 Ok(outcome) => {
@@ -2080,6 +2087,13 @@ mod tests {
         let token = rec.token.unwrap();
         assert!(log.iter().all(|c| !c.contains(&token)));
         assert!(fake.stdins.lock().unwrap().iter().any(|s| String::from_utf8_lossy(s).contains(&token)));
+        // Jarvis's role and tools are Jarvis's alone.
+        let stdins = fake.stdins.lock().unwrap();
+        assert!(stdins.iter().all(|s| {
+            let s = String::from_utf8_lossy(s);
+            !s.contains(sbxw_core::tooling::JARVIS_DOC_BEGIN) && !s.contains(sbxw_core::tooling::CONFIG_MCP_NAME)
+        }));
+        assert_eq!(crate::svc::jarvis_sandbox::setup(&app.store.paths), Default::default(), "nothing recorded for Jarvis");
     }
 
     #[tokio::test]
