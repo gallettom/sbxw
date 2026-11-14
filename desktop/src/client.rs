@@ -136,6 +136,99 @@ pub trait Daemon: Send + Sync + 'static {
     /// `GET /api/stream`: calls `sink` for each event until the stream ends
     /// (an error, or `sink` returning false). Blocks.
     fn subscribe(&self, sink: &mut dyn FnMut(BusEvent) -> bool) -> Result<()>;
+
+    // ---- Jarvis (crates/daemon/src/http/jarvis.rs) ----
+
+    /// `GET /api/jarvis/status`: `{state: absent|creating|starting|running|stopped|failed, error?}`.
+    fn jarvis_status(&self) -> Result<serde_json::Value> {
+        bail!("{}: no Jarvis here", self.describe())
+    }
+    /// `POST /api/jarvis/start`: the same shape, at once (the work runs in the background).
+    fn jarvis_start(&self) -> Result<serde_json::Value> {
+        bail!("{}: no Jarvis here", self.describe())
+    }
+    /// `GET /api/jarvis`: `{ok, proposals: [ui_view, newest first]}`.
+    fn jarvis_proposals(&self) -> Result<Vec<serde_json::Value>> {
+        Ok(vec![])
+    }
+    /// `POST /api/jarvis/proposals/:id/approve {via, ack_host_command}`: the
+    /// proposal as it now stands. 409 ([`HttpError`]) when the daemon refuses:
+    /// voice on a high-risk one, no acknowledgement of a host command, a file
+    /// changed since the proposal, already answered.
+    fn jarvis_approve(&self, id: &str, via: &str, ack_host_command: bool) -> Result<serde_json::Value> {
+        let _ = (id, via, ack_host_command);
+        bail!("{}: no Jarvis here", self.describe())
+    }
+    /// `POST /api/jarvis/proposals/:id/refuse {reason?}`: the proposal.
+    fn jarvis_refuse(&self, id: &str, reason: Option<&str>) -> Result<serde_json::Value> {
+        let _ = (id, reason);
+        bail!("{}: no Jarvis here", self.describe())
+    }
+
+    // ---- Agents' sessions and messages ----
+
+    /// `GET /api/sessions`: every agent session's `SessionInfo` (state, last_input, reply...).
+    fn sessions(&self) -> Result<Vec<serde_json::Value>> {
+        Ok(vec![])
+    }
+    /// `POST /api/chat/push {text, name}`: types `text` into that sandbox's agent.
+    fn chat_push(&self, name: &str, text: &str) -> Result<()> {
+        let _ = (name, text);
+        bail!("{}: cannot send messages", self.describe())
+    }
+
+    // ---- Voice (crates/daemon/src/http/ui.rs, "Voice") ----
+
+    /// `GET /api/voice`: `{ok, compiled, ready, speech: {supported, ...}, push_to_talk_key, ...}`.
+    fn voice_status(&self) -> Result<serde_json::Value> {
+        bail!("{}: no voice", self.describe())
+    }
+    /// `POST /api/voice/anonymise {text}`: the masked text and how many were masked.
+    fn anonymise(&self, text: &str) -> Result<(String, u64)> {
+        Ok((text.to_string(), 0))
+    }
+    /// `POST /api/voice/transcribe`, body 16 kHz mono f32 LE PCM: the masked text.
+    fn transcribe(&self, pcm: Vec<u8>) -> Result<String> {
+        let _ = pcm;
+        bail!("{}: no voice", self.describe())
+    }
+    /// `POST /api/voice/speak {text}` (at most 1000 characters): the sample
+    /// rate (`x-sample-rate`) and the body, 16-bit LE mono PCM, as it streams.
+    fn speak(&self, text: &str) -> Result<(u32, Box<dyn std::io::Read + Send>)> {
+        let _ = text;
+        bail!("{}: no voice", self.describe())
+    }
+    /// `POST /api/voice/cancel`: stops a model download in progress.
+    fn voice_cancel(&self) -> Result<()> {
+        bail!("{}: no voice", self.describe())
+    }
+}
+
+/// The daemon answered with an error status: the code, and its `error` text.
+#[derive(Debug, Clone)]
+pub struct HttpError {
+    pub path: String,
+    pub code: u16,
+    pub message: String,
+}
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}: {} {}", self.path, self.code, self.message)
+    }
+}
+impl std::error::Error for HttpError {}
+
+/// The daemon's own words for a failed call: an [`HttpError`]'s message, or the chain.
+pub fn reason(e: &anyhow::Error) -> String {
+    match e.downcast_ref::<HttpError>() {
+        Some(h) => h.message.clone(),
+        None => format!("{e:#}"),
+    }
+}
+
+/// The status of a failed call, when the daemon answered.
+pub fn status_of(e: &anyhow::Error) -> Option<u16> {
+    e.downcast_ref::<HttpError>().map(|h| h.code)
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +282,18 @@ impl HttpDaemon {
             .send_json(body.clone());
         Ok(answer(r, path)?.into_json()?)
     }
+
+    /// `POST path` with a raw body, JSON answer.
+    pub fn post_bytes<T: serde::de::DeserializeOwned>(&self, path: &str, content_type: &str, body: &[u8]) -> Result<T> {
+        let r = self
+            .agent
+            .post(&format!("http://{}{path}", self.addr))
+            .set("Authorization", &self.auth())
+            .set("Content-Type", content_type)
+            .timeout(Duration::from_secs(120))
+            .send_bytes(body);
+        Ok(answer(r, path)?.into_json()?)
+    }
 }
 
 /// The daemon's errors come back as `{"error": "..."}` or plain text: show that, not ureq's chain.
@@ -201,7 +306,7 @@ fn answer(r: Result<ureq::Response, ureq::Error>, path: &str) -> Result<ureq::Re
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
                 .unwrap_or_else(|| body.trim().to_string());
-            bail!("{path}: {code} {msg}")
+            Err(anyhow!(HttpError { path: path.to_string(), code, message: msg }))
         }
         Err(e) => Err(anyhow!(Unreachable(e.to_string()))),
     }
@@ -291,6 +396,58 @@ impl Daemon for HttpDaemon {
         let r = agent.get(&format!("http://{}/api/stream", self.addr)).set("Authorization", &self.auth()).set("Accept", "text/event-stream").call();
         let resp = answer(r, "/api/stream")?;
         read_sse(BufReader::new(resp.into_reader()), sink)
+    }
+
+    fn jarvis_status(&self) -> Result<serde_json::Value> {
+        self.get("/api/jarvis/status")
+    }
+    fn jarvis_start(&self) -> Result<serde_json::Value> {
+        self.post("/api/jarvis/start", &serde_json::json!({}))
+    }
+    fn jarvis_proposals(&self) -> Result<Vec<serde_json::Value>> {
+        let v: serde_json::Value = self.get("/api/jarvis")?;
+        Ok(v["proposals"].as_array().cloned().unwrap_or_default())
+    }
+    fn jarvis_approve(&self, id: &str, via: &str, ack_host_command: bool) -> Result<serde_json::Value> {
+        let v: serde_json::Value = self.post(&format!("/api/jarvis/proposals/{}/approve", enc(id)), &serde_json::json!({ "via": via, "ack_host_command": ack_host_command }))?;
+        Ok(v["proposal"].clone())
+    }
+    fn jarvis_refuse(&self, id: &str, reason: Option<&str>) -> Result<serde_json::Value> {
+        let body = match reason {
+            Some(r) => serde_json::json!({ "reason": r }),
+            None => serde_json::json!({}),
+        };
+        let v: serde_json::Value = self.post(&format!("/api/jarvis/proposals/{}/refuse", enc(id)), &body)?;
+        Ok(v["proposal"].clone())
+    }
+    fn sessions(&self) -> Result<Vec<serde_json::Value>> {
+        self.get("/api/sessions")
+    }
+    fn chat_push(&self, name: &str, text: &str) -> Result<()> {
+        let _: serde_json::Value = self.post("/api/chat/push", &serde_json::json!({ "text": text, "name": name }))?;
+        Ok(())
+    }
+    fn voice_status(&self) -> Result<serde_json::Value> {
+        self.get("/api/voice")
+    }
+    fn anonymise(&self, text: &str) -> Result<(String, u64)> {
+        let v: serde_json::Value = self.post("/api/voice/anonymise", &serde_json::json!({ "text": text }))?;
+        Ok((v["text"].as_str().unwrap_or_default().to_string(), v["masked"].as_u64().unwrap_or(0)))
+    }
+    fn transcribe(&self, pcm: Vec<u8>) -> Result<String> {
+        let v: serde_json::Value = self.post_bytes("/api/voice/transcribe", "application/octet-stream", &pcm)?;
+        Ok(v["text"].as_str().unwrap_or_default().to_string())
+    }
+    fn speak(&self, text: &str) -> Result<(u32, Box<dyn std::io::Read + Send>)> {
+        let path = "/api/voice/speak";
+        let r = self.agent.post(&format!("http://{}{path}", self.addr)).set("Authorization", &self.auth()).send_json(serde_json::json!({ "text": text }));
+        let resp = answer(r, path)?;
+        let rate = resp.header("x-sample-rate").and_then(|r| r.parse().ok()).unwrap_or(24_000);
+        Ok((rate, Box::new(resp.into_reader())))
+    }
+    fn voice_cancel(&self) -> Result<()> {
+        let _: serde_json::Value = self.post("/api/voice/cancel", &serde_json::json!({}))?;
+        Ok(())
     }
 }
 
@@ -459,6 +616,27 @@ pub struct FixtureDaemon {
 pub struct FixtureData {
     #[serde(default)]
     pub sandboxes: Vec<Sandbox>,
+    /// `GET /api/jarvis/status`; absent: `{state: "absent"}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jarvis_status: Option<serde_json::Value>,
+    /// `GET /api/jarvis`'s proposals, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jarvis_proposals: Vec<serde_json::Value>,
+    /// `GET /api/sessions`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<serde_json::Value>,
+    /// `GET /api/voice`; absent: a daemon built without voice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<serde_json::Value>,
+    /// What an approval answers with, as a 409 (a file changed since the proposal...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jarvis_approve_error: Option<String>,
+    /// Messages pushed, kept for tests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pushed: Vec<(String, String)>,
+    /// What `POST /api/voice/transcribe` answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
 }
 
 impl FixtureDaemon {
@@ -489,6 +667,77 @@ impl Daemon for FixtureDaemon {
             std::thread::sleep(Duration::from_secs(3600));
         }
     }
+    fn jarvis_status(&self) -> Result<serde_json::Value> {
+        Ok(self.data.lock().unwrap().jarvis_status.clone().unwrap_or_else(|| serde_json::json!({ "state": "absent" })))
+    }
+    fn jarvis_start(&self) -> Result<serde_json::Value> {
+        let mut d = self.data.lock().unwrap();
+        let next = match d.jarvis_status.as_ref().and_then(|v| v["state"].as_str()) {
+            Some("running") => "running",
+            Some("stopped") => "starting",
+            _ => "creating",
+        };
+        d.jarvis_status = Some(serde_json::json!({ "state": next }));
+        Ok(d.jarvis_status.clone().unwrap())
+    }
+    fn jarvis_proposals(&self) -> Result<Vec<serde_json::Value>> {
+        Ok(self.data.lock().unwrap().jarvis_proposals.clone())
+    }
+    fn jarvis_approve(&self, id: &str, via: &str, ack: bool) -> Result<serde_json::Value> {
+        let mut d = self.data.lock().unwrap();
+        let err = d.jarvis_approve_error.clone();
+        let p = d.jarvis_proposals.iter_mut().find(|p| p["id"] == id).ok_or_else(|| anyhow!(HttpError { path: "approve".into(), code: 404, message: format!("no proposal {id}") }))?;
+        fixture_rule(p, via, ack)?;
+        if let Some(e) = err {
+            return Err(anyhow!(HttpError { path: "approve".into(), code: 409, message: e }));
+        }
+        p["state"] = "applied".into();
+        p["via"] = via.into();
+        Ok(p.clone())
+    }
+    fn jarvis_refuse(&self, id: &str, reason: Option<&str>) -> Result<serde_json::Value> {
+        let mut d = self.data.lock().unwrap();
+        let p = d.jarvis_proposals.iter_mut().find(|p| p["id"] == id).ok_or_else(|| anyhow!("no proposal {id}"))?;
+        p["state"] = "refused".into();
+        if let Some(r) = reason {
+            p["reason"] = r.into();
+        }
+        Ok(p.clone())
+    }
+    fn sessions(&self) -> Result<Vec<serde_json::Value>> {
+        Ok(self.data.lock().unwrap().sessions.clone())
+    }
+    fn chat_push(&self, name: &str, text: &str) -> Result<()> {
+        self.data.lock().unwrap().pushed.push((name.to_string(), text.to_string()));
+        Ok(())
+    }
+    fn voice_status(&self) -> Result<serde_json::Value> {
+        self.data.lock().unwrap().voice.clone().ok_or_else(|| anyhow!(HttpError { path: "/api/voice".into(), code: 404, message: "not found".into() }))
+    }
+    fn transcribe(&self, _pcm: Vec<u8>) -> Result<String> {
+        self.data.lock().unwrap().transcript.clone().ok_or_else(|| anyhow!("fixture {}: no transcript", self.name))
+    }
+    fn speak(&self, text: &str) -> Result<(u32, Box<dyn std::io::Read + Send>)> {
+        // Silence, 10 ms per character: enough for a scripted playback.
+        Ok((24_000, Box::new(std::io::Cursor::new(vec![0u8; text.chars().count() * 480]))))
+    }
+}
+
+/// The daemon's approval rule, as `sbxw_core::jarvis` enforces it: a voice
+/// approval only of a low-risk proposal, a host command only acknowledged,
+/// only a pending one. Used by the fixture daemon and the stand-in.
+pub fn fixture_rule(p: &serde_json::Value, via: &str, ack: bool) -> Result<()> {
+    let refuse = |m: &str| Err(anyhow!(HttpError { path: "approve".into(), code: 409, message: m.to_string() }));
+    if p["state"] != "pending" {
+        return refuse(&format!("proposal {} is already {}", p["id"].as_str().unwrap_or(""), p["state"].as_str().unwrap_or("")));
+    }
+    if via == "voice" && (p["risk"] != "low" || p["needs_ack"] == true) {
+        return refuse("a high-risk proposal is approved on screen only, not by voice");
+    }
+    if p["needs_ack"] == true && !ack {
+        return refuse("this proposal runs a command on this machine: tick that you read it first");
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

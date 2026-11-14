@@ -7,6 +7,8 @@
 //! 6 pt apart, rounded tiles: the header (48 pt), the sidebar, and one tile
 //! per pane, each with a 32 pt bar over its terminal.
 
+mod jarvis;
+
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
@@ -22,7 +24,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The screens the shell shows, in the order they are loaded.
-pub const SCREENS: &[&str] = &["topbar", "sandboxes"];
+pub const SCREENS: &[&str] = &["topbar", "sandboxes", "jarvis"];
 
 /// Command-line options (what Rune did not take as its own flags).
 #[derive(Debug, Clone, Default)]
@@ -154,6 +156,13 @@ pub struct App {
     pub window_focused: bool,
     /// The core moved the focused pane: move Rune's keyboard focus there next poll.
     refocus: bool,
+    /// Jarvis: the conversation, its proposals, the panel (jarvis.rs).
+    pub jarvis: crate::jarvis::Jarvis,
+    /// Native audio (`audio::Audio` in a window; `NullAudio` headless and in fixtures).
+    pub audio: Box<dyn crate::voice::AudioIo>,
+    wiring: jarvis::Wiring,
+    /// The window's size in points (the root's layout).
+    pub window: (f32, f32),
 }
 
 /// Whether the window takes pastes at its root (see `view`).
@@ -195,6 +204,8 @@ impl App {
         };
         let dir = a.screens_dir.clone().unwrap_or_else(screen::override_dir);
         log::info!("screen overrides: {}", dir.display());
+        // Jarvis writes its screen changes to ~/.sbxw/desktop/screens: say when this run reads elsewhere.
+        let elsewhere = a.screens_dir.is_some() || std::env::var_os("SBXW_DESKTOP_SCREENS").is_some_and(|d| !d.is_empty());
         let mut app = App {
             target,
             link: None,
@@ -223,7 +234,35 @@ impl App {
             current: Arc::new(std::sync::Mutex::new(None)),
             window_focused: true,
             refocus: true,
+            jarvis: crate::jarvis::Jarvis::default(),
+            audio: Box::new(crate::voice::NullAudio::default()),
+            wiring: jarvis::Wiring::new(),
+            window: (1280.0, 800.0),
         };
+        jarvis::load_prefs(&mut app.jarvis);
+        if init.jarvis_open {
+            app.jarvis.open = true;
+        }
+        if init.fake_audio || std::env::var_os("SBXW_DESKTOP_FAKE_AUDIO").is_some() {
+            app.audio = Box::new(crate::voice::FakeAudio { capture: vec![0u8; 16_000 * 4], ..Default::default() });
+        }
+        for (who, text) in &init.jarvis_log {
+            let w = match who.as_str() {
+                "me" => crate::jarvis::Who::Me,
+                "note" => crate::jarvis::Who::Note,
+                "error" => crate::jarvis::Who::Error,
+                _ => crate::jarvis::Who::Jarvis,
+            };
+            app.jarvis.say(w, text.clone());
+        }
+        // What the app has built in, for the daemon to show Jarvis (builtin.rs).
+        let export = std::env::var_os("SBXW_DESKTOP_BUILTIN").map(PathBuf::from).or_else(|| (!headless() && a.fixture.is_none()).then(crate::builtin::default_dir));
+        if let Some(dir) = export {
+            match crate::builtin::export(&dir) {
+                Ok(()) => log::info!("built-in screens written to {}", dir.display()),
+                Err(e) => log::warn!("could not write {}: {e}", dir.display()),
+            }
+        }
         if let Some(n) = init.panes {
             app.layout.0 = n.clamp(1, 4);
         }
@@ -283,6 +322,31 @@ impl App {
             })
             .unwrap_or_default();
         app.marks.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if elsewhere {
+            let line = format!("Screens are read from {}: Jarvis's screen changes go to ~/.sbxw/desktop/screens instead", dir.display());
+            log::info!("{line}");
+            if !headless() {
+                app.notify(line, false);
+            }
+        }
+        if let Target::Fixture(f) = &app.target {
+            // A fixture answers at once: no thread, so the first frame has it all.
+            let d: Arc<dyn Daemon> = f.clone();
+            app.daemon.get_or_insert(d.clone());
+            let v = d.voice_status().ok();
+            app.set_voice(v);
+            if let Ok(st) = d.jarvis_status() {
+                app.jarvis.status = st["state"].as_str().unwrap_or("unknown").to_string();
+                app.jarvis.status_error = st["error"].as_str().map(str::to_string);
+            }
+            let list = d.jarvis_proposals().unwrap_or_default();
+            app.jarvis.seed_proposals(list);
+            app.jarvis.seed_sessions(&d.sessions().unwrap_or_default());
+            let data = app.screen_data();
+            for s in &mut app.screens {
+                s.set_data(data.clone());
+            }
+        }
         app
     }
 
@@ -297,6 +361,15 @@ impl App {
             s.watch(waker.clone());
         }
         *self.wake_slot.lock().unwrap() = Some(waker.clone());
+        // Native audio (audio.rs) in a real window on a real daemon; headless
+        // runs and fixtures keep NullAudio (or FakeAudio for scripts).
+        let real = !headless() && !matches!(self.target, Target::Fixture(_)) && !self.audio.available() && std::env::var_os("SBXW_DESKTOP_NO_AUDIO").is_none();
+        if real {
+            let w = waker.clone();
+            let factory: crate::voice::AudioFactory = crate::audio::Audio::boxed;
+            self.audio = factory(Arc::new(move || w()));
+            log::info!("audio: native");
+        }
         self.waker = Some(waker);
         if let Some((sb, mode)) = self.start.take() {
             self.open(0, &sb, mode, None);
@@ -327,6 +400,7 @@ impl App {
             _ => serde_json::Map::new(),
         };
         daemon.insert("sandboxes".into(), serde_json::to_value(&self.sandboxes).expect("sandboxes"));
+        daemon.insert("jarvis".into(), self.jarvis.screen_data(self.audio.available()));
         crate::fixture::screen_data(&J::Object(daemon), &self.view_model())
     }
 
@@ -382,6 +456,9 @@ impl App {
                 }
                 *self.current.lock().unwrap() = Some(d.clone());
                 self.daemon = Some(d);
+                if !matches!(self.target, Target::Fixture(_)) {
+                    self.jarvis_connected();
+                }
                 // Terminals whose socket closed reconnect on their own
                 // (`TerminalState::with_reconnect`, through `current`), and the
                 // daemon replays what they missed.
@@ -409,7 +486,7 @@ impl App {
             }
             LinkEvent::Bus(ev) => {
                 log::debug!("event {} {}", ev.name, ev.data);
-                return false;
+                return self.jarvis_bus(&ev.name, &ev.data);
             }
             LinkEvent::Done { what, result } => match result {
                 Ok(()) => self.notify(format!("{what}: done"), false),
@@ -449,6 +526,7 @@ impl App {
             }
         }
         changed |= self.drain(headless().then_some(Duration::from_millis(1500)), true);
+        changed |= self.poll_jarvis(tx);
         for s in &mut self.screens {
             changed |= s.poll();
         }
@@ -547,6 +625,10 @@ impl App {
     /// The window's keys (nothing focused, or what the focused control passed on).
     pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key == Key::Escape && self.screens.iter_mut().any(|s| s.close_menus()) {
+            return true;
+        }
+        if self.jarvis_key(ev, tx) {
+            self.push_data();
             return true;
         }
         let f = self.focused;
@@ -656,6 +738,8 @@ impl App {
                 let mut t = TerminalState::with_reconnect(conn, reopen);
                 // Element keys `grid-N`, `terminal-N` (N the pane's number).
                 t.id = (i + 1).to_string();
+                // Push-to-talk and the panel's key are the shell's, even with a terminal focused.
+                t.keys.reserved = self.wiring.reserved;
                 // Headless shots: a steady cursor, so a PNG does not catch it off.
                 t.cursor_blink = !headless();
                 self.panes[i].term = Some(t);
@@ -732,6 +816,7 @@ impl App {
                     self.focused = 0;
                 }
             }
+            other => self.run_jarvis_intent(from, other),
         }
     }
 }
@@ -745,12 +830,16 @@ impl Host for App {
         for i in intents {
             match i.risk() {
                 Risk::Direct => self.run_intent(screen, i),
-                Risk::Approval(asks) => {
-                    // Wave 4 draws the dialog (approval.rs); until then, refuse.
-                    self.approvals.push(approval::Pending { screen: screen.into(), intent: i, asks });
-                    self.approvals.clear();
-                    self.notify(format!("{screen}: '{asks}' needs an approval dialog, which is not built yet: refused"), true);
-                }
+                Risk::Approval(asks) => match i {
+                    // The screen only opens the core's dialog; the click there approves.
+                    Intent::ApproveProposal { id } => self.show_proposal(&id),
+                    i => {
+                        // No other intent has this risk; if one is added without its dialog, refuse.
+                        self.approvals.push(approval::Pending { screen: screen.into(), intent: i, asks });
+                        self.approvals.clear();
+                        self.notify(format!("{screen}: '{asks}' needs an approval dialog, which is not built: refused"), true);
+                    }
+                },
             }
         }
         self.push_data();
@@ -773,7 +862,21 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .w_full()
         .h_full()
         .fill(c("floor"))
-        .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| s.window_focused = focused);
+        .on_layout(|s: &mut App, r: [f32; 4]| s.window = (r[2], r[3]))
+        .on_key_up(|s: &mut App, ev: &KeyEvent, _tx: &mut Tx| {
+            let took = s.jarvis_key_up(ev);
+            if took {
+                s.push_data();
+            }
+            took
+        })
+        .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| {
+            s.window_focused = focused;
+            // A key held while the window loses focus never comes up here.
+            if !focused {
+                s.talk_stop();
+            }
+        });
     // A root `on_paste` makes Rune take the primary modifier + V as a paste
     // before any key handler: ⌘V on macOS, as wanted, but plain Ctrl+V
     // elsewhere, which a terminal must send (^V: Bash's quoted insert, Vim's
@@ -790,6 +893,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let (top_el, mut overlays) = screen::view_parts::<App>(top);
     let (side_el, more) = screen::view_parts::<App>(side);
     overlays.extend(more);
+    let panel = match s.screens.iter().find(|x| x.name == "jarvis") {
+        Some(j) if s.jarvis.open => {
+            let (el_, more) = screen::view_parts::<App>(j);
+            overlays.extend(more);
+            Some(s.panel_view(el_))
+        }
+        _ => None,
+    };
     let bar = row()
         .key("top-bar")
         .h(layout::TOP_BAR_H)
@@ -804,7 +915,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .child(el().key("traffic-lights-room").w(inset + 4.0).h_full())
         .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(top_el));
     let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
-    let main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
+    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
+    // Docked on the right: it narrows the panes instead of covering them.
+    if let Some(p) = panel {
+        main = main.child(p);
+    }
     let mut root = root.child(bar).child(main);
     for o in overlays {
         root = root.child(o);
@@ -827,7 +942,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
-    if let Some(dialog) = approval::view::<App>(&s.approvals) {
+    if let Some(dialog) = s.dialog_view() {
         root = root.child(dialog);
     }
     root
@@ -933,10 +1048,71 @@ fn pane_view(s: &App, i: usize) -> El {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approval::ProposalAnswers;
 
     fn app() -> App {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
         App::new(Args { fixture: Some(fixture.into()), ..Args::default() })
+    }
+
+    /// A yes the screen put in the input itself is a message, never an
+    /// approval; the same word typed by the person approves a low-risk one.
+    #[test]
+    fn only_the_persons_own_yes_approves_and_only_low_risk() {
+        let open = |f: &str| App::new(Args { fixture: Some(format!("{}/fixtures/jarvis/{f}.json", env!("CARGO_MANIFEST_DIR"))), ..Args::default() });
+        let wait = |a: &mut App| {
+            let until = Instant::now() + Duration::from_secs(3);
+            while a.wiring.pending.load(std::sync::atomic::Ordering::SeqCst) > 0 && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            while let Ok(ev) = a.wiring.rx.try_recv() {
+                a.on_jevent(ev);
+            }
+        };
+        let put = |a: &mut App, text: &str, by_screen: bool| {
+            let given = by_screen.then(|| text.to_string());
+            a.screen_mut("jarvis").unwrap().ui.edits.insert("jarvis-input".into(), (rune::TextEdit::new(text), given));
+            a.run_intent("jarvis", Intent::SendToJarvis { input: "jarvis-input".into() });
+        };
+        let mut a = open("proposal-low");
+        assert_eq!(a.jarvis.armed.as_deref(), Some("p-low-1"));
+        put(&mut a, "yes", true);
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-low-1").unwrap()["state"], "pending", "the screen's own yes approves nothing");
+        let mut a = open("proposal-low");
+        put(&mut a, "yes", false);
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-low-1").unwrap()["state"], "applied");
+        assert_eq!(a.jarvis.proposal("p-low-1").unwrap()["via"], "voice");
+        assert_eq!(a.screen_mut("jarvis").unwrap().ui.edits["jarvis-input"].0.text, "", "taken, so emptied");
+        let mut a = open("proposal-high");
+        put(&mut a, "oui", false);
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-high-1").unwrap()["state"], "pending", "high risk: a click only");
+        assert!(a.jarvis.log.last().unwrap().text.starts_with("High risk: approve it on screen"));
+        // Even a voice approval sent past the core is refused by the daemon's rule.
+        a.answer("p-high-1", "voice");
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-high-1").unwrap()["state"], "pending");
+        // The screen's `approve_proposal` only shows the dialog.
+        a.jarvis.shown = None;
+        a.intents("jarvis", vec![Intent::ApproveProposal { id: "p-high-1".into() }]);
+        wait(&mut a);
+        assert_eq!((a.jarvis.shown.as_deref(), a.jarvis.proposal("p-high-1").unwrap()["state"].as_str()), (Some("p-high-1"), Some("pending")));
+        // A host command: the click is refused until the box is ticked.
+        let mut a = open("proposal-ack");
+        a.approve_click();
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-ack-1").unwrap()["state"], "pending");
+        a.toggle_ack();
+        a.approve_click();
+        wait(&mut a);
+        assert_eq!(a.jarvis.proposal("p-ack-1").unwrap()["state"], "applied");
+        // A 409: the daemon's reason beside the buttons.
+        let mut a = open("proposal-refused");
+        a.approve_click();
+        wait(&mut a);
+        assert!(a.jarvis.dialog_error.as_ref().unwrap().1.contains("changed since the proposal"), "{:?}", a.jarvis.dialog_error);
     }
 
     #[test]

@@ -16,7 +16,7 @@
 //! **Approvals.** An intent whose risk is [`Risk::Approval`] is not run when
 //! a screen asks: the core queues it (`App::approvals`) and draws the dialog
 //! itself (`approval.rs`), above everything, out of reach of Luau; only the
-//! person's answer there runs it. No wave-1 intent has that risk.
+//! person's answer there runs it. `approve_proposal` is the one with that risk.
 
 use serde_json::{Map, Value};
 
@@ -43,6 +43,26 @@ pub enum Intent {
     Select { sandbox: Option<String> },
     /// Pane count (1 to 4) and how two panes split.
     SetLayout { panes: usize, split: Split },
+    /// Creates Jarvis's sandbox, or starts it, and opens its session.
+    StartJarvis,
+    /// Sends what the person typed in this screen's input `input` to Jarvis.
+    /// The core reads the text from its own copy of the input, never from
+    /// the screen, so a screen cannot put words in the person's mouth.
+    SendToJarvis { input: String },
+    /// Opens or closes the Jarvis panel (`open` absent: toggles).
+    ToggleJarvisPanel { open: Option<bool> },
+    /// Push-to-talk from a button: start recording, then stop and send.
+    TalkStart,
+    TalkStop,
+    /// Reads one of the conversation's messages aloud (`data.jarvis.log[i].id`).
+    ReadAloud { id: u64 },
+    StopReading,
+    /// Shows a proposal's dialog. Risk Approval: the screen only opens the
+    /// core's dialog; approving takes the person's click there.
+    ApproveProposal { id: String },
+    RefuseProposal { id: String, reason: Option<String> },
+    /// Opens an http(s) link in the browser (a link in a `markdown` element).
+    OpenLink { url: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -97,6 +117,9 @@ pub enum Arg {
     Int(i64, i64),
     /// `"focused"`, `"spare"` or a pane number 1 to 4.
     Pane,
+    Bool,
+    /// An `http://` or `https://` URL.
+    Url,
 }
 
 /// One entry of the closed list.
@@ -133,6 +156,26 @@ pub const REGISTRY: &[Spec] = &[
         args: &[("panes", Arg::Int(1, 4), false), ("split", Arg::OneOf(&["columns", "rows"]), false)],
         doc: "Sets how many terminal panes show (1 to 4) and whether two split side by side or stacked.",
     },
+    Spec { name: "start_jarvis", risk: Risk::Direct, args: &[], doc: "Creates Jarvis's sandbox (the first time) or starts it, and opens its session (`POST /api/jarvis/start`)." },
+    Spec {
+        name: "send_to_jarvis",
+        risk: Risk::Direct,
+        args: &[("input", Arg::Str, true)],
+        doc: "Sends what the person typed in this screen's input `input` to Jarvis, masked first. The core reads the text itself; the input is emptied once sent and kept when sending fails. A typed yes or no answers a waiting proposal (a yes only a low-risk one).",
+    },
+    Spec { name: "toggle_jarvis_panel", risk: Risk::Direct, args: &[("open", Arg::Bool, false)], doc: "Opens or closes the Jarvis panel docked on the right (no `open`: toggles)." },
+    Spec { name: "talk_start", risk: Risk::Direct, args: &[], doc: "Starts recording for Jarvis (push-to-talk from a button)." },
+    Spec { name: "talk_stop", risk: Risk::Direct, args: &[], doc: "Stops recording; the words are transcribed and sent to Jarvis." },
+    Spec { name: "read_aloud", risk: Risk::Direct, args: &[("id", Arg::Int(1, i64::MAX), true)], doc: "Reads one message of the conversation aloud (`data.jarvis.log[i].id`)." },
+    Spec { name: "stop_reading", risk: Risk::Direct, args: &[], doc: "Stops reading aloud." },
+    Spec {
+        name: "approve_proposal",
+        risk: Risk::Approval("Approve a Jarvis proposal"),
+        args: &[("id", Arg::Str, true)],
+        doc: "Opens the core's dialog for that proposal. Never approves by itself: only the person's click on the dialog does.",
+    },
+    Spec { name: "refuse_proposal", risk: Risk::Direct, args: &[("id", Arg::Str, true), ("reason", Arg::Str, false)], doc: "Refuses a Jarvis proposal, with an optional reason Jarvis is told." },
+    Spec { name: "open_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "Opens an `http://` or `https://` link in the browser." },
 ];
 
 impl Intent {
@@ -143,6 +186,16 @@ impl Intent {
             Intent::StopSandbox { .. } => "stop_sandbox",
             Intent::Select { .. } => "select",
             Intent::SetLayout { .. } => "set_layout",
+            Intent::StartJarvis => "start_jarvis",
+            Intent::SendToJarvis { .. } => "send_to_jarvis",
+            Intent::ToggleJarvisPanel { .. } => "toggle_jarvis_panel",
+            Intent::TalkStart => "talk_start",
+            Intent::TalkStop => "talk_stop",
+            Intent::ReadAloud { .. } => "read_aloud",
+            Intent::StopReading => "stop_reading",
+            Intent::ApproveProposal { .. } => "approve_proposal",
+            Intent::RefuseProposal { .. } => "refuse_proposal",
+            Intent::OpenLink { .. } => "open_link",
         }
     }
 
@@ -227,6 +280,16 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
             panes: m.get("panes").and_then(Value::as_u64).unwrap_or(1) as usize,
             split: if s("split").as_deref() == Some("rows") { Split::Rows } else { Split::Columns },
         },
+        "start_jarvis" => Intent::StartJarvis,
+        "send_to_jarvis" => Intent::SendToJarvis { input: s("input").unwrap() },
+        "toggle_jarvis_panel" => Intent::ToggleJarvisPanel { open: m.get("open").and_then(Value::as_bool) },
+        "talk_start" => Intent::TalkStart,
+        "talk_stop" => Intent::TalkStop,
+        "read_aloud" => Intent::ReadAloud { id: m.get("id").and_then(Value::as_f64).unwrap_or(0.0) as u64 },
+        "stop_reading" => Intent::StopReading,
+        "approve_proposal" => Intent::ApproveProposal { id: s("id").unwrap() },
+        "refuse_proposal" => Intent::RefuseProposal { id: s("id").unwrap(), reason: s("reason") },
+        "open_link" => Intent::OpenLink { url: s("url").unwrap() },
         _ => unreachable!("{name} is registered but not built"),
     })
 }
@@ -238,6 +301,8 @@ fn check(name: &str, a: &str, ty: Arg, v: &Value) -> Result<(), String> {
         (Arg::Int(lo, hi), Value::Number(n)) => n.as_f64().is_some_and(|f| f.fract() == 0.0 && f >= lo as f64 && f <= hi as f64),
         (Arg::Pane, Value::String(s)) => s == "focused" || s == "spare",
         (Arg::Pane, Value::Number(n)) => n.as_f64().is_some_and(|f| f.fract() == 0.0 && (1.0..=4.0).contains(&f)),
+        (Arg::Bool, Value::Bool(_)) => true,
+        (Arg::Url, Value::String(u)) => crate::markdown::safe_url(u),
         _ => false,
     };
     if ok {
@@ -248,6 +313,8 @@ fn check(name: &str, a: &str, ty: Arg, v: &Value) -> Result<(), String> {
         Arg::OneOf(set) => format!("{name}: '{a}' must be one of {}", set.join(", ")),
         Arg::Int(lo, hi) => format!("{name}: '{a}' must be a whole number from {lo} to {hi}"),
         Arg::Pane => format!("{name}: '{a}' must be \"focused\", \"spare\" or a pane number 1 to 4"),
+        Arg::Bool => format!("{name}: '{a}' must be true or false"),
+        Arg::Url => format!("{name}: '{a}' must be an http:// or https:// URL"),
     })
 }
 
@@ -272,8 +339,13 @@ mod tests {
         );
         assert_eq!(parse(&i("set_layout", json!({ "panes": 2, "split": "rows" }))).unwrap(), vec![Intent::SetLayout { panes: 2, split: Split::Rows }]);
         for spec in REGISTRY {
-            assert_eq!(spec.risk, Risk::Direct, "no wave-1 intent needs an approval");
+            let approval = matches!(spec.risk, Risk::Approval(_));
+            assert_eq!(approval, spec.name == "approve_proposal", "{}: only approving a proposal needs the core's dialog", spec.name);
         }
+        assert_eq!(parse(&i("send_to_jarvis", json!({ "input": "jarvis-input" }))).unwrap(), vec![Intent::SendToJarvis { input: "jarvis-input".into() }]);
+        assert_eq!(parse(&i("toggle_jarvis_panel", json!({}))).unwrap(), vec![Intent::ToggleJarvisPanel { open: None }]);
+        assert_eq!(parse(&i("read_aloud", json!({ "id": 3 }))).unwrap(), vec![Intent::ReadAloud { id: 3 }]);
+        assert_eq!(parse(&i("approve_proposal", json!({ "id": "p1" }))).unwrap()[0].risk(), Risk::Approval("Approve a Jarvis proposal"));
         assert_eq!(parse(&i("select", json!([]))).unwrap(), vec![Intent::Select { sandbox: None }]);
         assert_eq!(parse(&Value::Null).unwrap(), vec![]);
     }
@@ -289,6 +361,10 @@ mod tests {
             (i("open_terminal", json!({ "sandbox": "a", "mode": "root" })), "must be one of agent, bash"),
             (json!([i("select", json!({})), { "name": "stop_sandbox" }]), "item 2"),
             (json!("stop everything"), "must return nil"),
+            (i("send_to_jarvis", json!({ "text": "yes" })), "unknown argument 'text'"),
+            (i("open_link", json!({ "url": "javascript:alert(1)" })), "http:// or https://"),
+            (i("open_link", json!({ "url": "file:///etc/passwd" })), "http:// or https://"),
+            (i("toggle_jarvis_panel", json!({ "open": "yes" })), "true or false"),
         ] {
             let e = parse(&v).unwrap_err();
             assert!(e.contains(want), "{v}: {e}");

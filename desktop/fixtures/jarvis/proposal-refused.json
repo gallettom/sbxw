@@ -1,0 +1,121 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web",
+        "created_at": "2026-11-10T09:12:00Z"
+      },
+      {
+        "name": "web-api",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web"
+      },
+      {
+        "name": "data-pipeline",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/data"
+      },
+      {
+        "name": "docs",
+        "agent": "codex",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 2,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      },
+      {
+        "name": "chat-0412",
+        "agent": "claude",
+        "status": "running",
+        "chat": true,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/.sbxw/chats/0412"
+      }
+    ],
+    "jarvis_status": {
+      "state": "running"
+    },
+    "voice": {
+      "ok": true,
+      "compiled": true,
+      "ready": true,
+      "speech": {
+        "supported": true,
+        "runtime_ready": true,
+        "voice": "fr_female"
+      },
+      "push_to_talk_key": "F8",
+      "dictate_key": "F9",
+      "models": []
+    },
+    "jarvis_proposals": [
+      {
+        "id": "p-high-2",
+        "summary": "Add a /review command to web-app",
+        "risk": "high",
+        "state": "pending",
+        "created": 1763070100000,
+        "changes": [
+          {
+            "kind": "kit_write",
+            "title": "kit jarvis-review: 1 file",
+            "risk": "high",
+            "diff": "--- /dev/null\n+++ ~/.sbxw/state/kits/jarvis-review/files/home/agent/.claude/commands/review.md\n@@ -0,0 +1,6 @@\n+Review the staged diff.\n+\n+1. Run `git diff --cached`.\n+2. List each bug with its file and line.\n+3. Say nothing about style.\n+\n"
+          },
+          {
+            "kind": "kits_line",
+            "title": "kits of web-app (/Users/ana/dev/web/sbxw.toml)",
+            "risk": "high",
+            "diff": "--- /Users/ana/dev/web/sbxw.toml\n+++ /Users/ana/dev/web/sbxw.toml\n@@ -1,3 +1,3 @@\n name = \"web-app\"\n-kits = [\"sbxw:dev-ports\"]\n+kits = [\"sbxw:dev-ports\", \"jarvis-review\"]\n"
+          }
+        ]
+      }
+    ],
+    "jarvis_approve_error": "the file /Users/ana/dev/web/sbxw.toml changed since the proposal: nothing was applied, ask Jarvis to propose again"
+  },
+  "app": {
+    "jarvis_open": true,
+    "fake_audio": true,
+    "jarvis_log": [
+      [
+        "me",
+        "Give web-app a /review command."
+      ],
+      [
+        "jarvis",
+        "Proposed. Read the diff and click Approve."
+      ]
+    ]
+  }
+}

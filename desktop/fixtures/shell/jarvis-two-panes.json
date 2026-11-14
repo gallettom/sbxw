@@ -1,0 +1,102 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web",
+        "created_at": "2026-11-10T09:12:00Z"
+      },
+      {
+        "name": "web-api",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web"
+      },
+      {
+        "name": "data-pipeline",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/data"
+      },
+      {
+        "name": "docs",
+        "agent": "codex",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 2,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      },
+      {
+        "name": "chat-0412",
+        "agent": "claude",
+        "status": "running",
+        "chat": true,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/.sbxw/chats/0412"
+      }
+    ],
+    "jarvis_status": {
+      "state": "running"
+    },
+    "voice": {
+      "ok": true,
+      "compiled": true,
+      "ready": true,
+      "speech": {
+        "supported": true,
+        "runtime_ready": true,
+        "voice": "fr_female"
+      },
+      "push_to_talk_key": "F8",
+      "dictate_key": "F9",
+      "models": []
+    },
+    "sessions": [
+      {
+        "sandbox": "sbxw-jarvis",
+        "state": "idle",
+        "last_input": "What can you change for me?",
+        "reply": "Kits, settings, network hosts, MCP servers and pronunciations. **Nothing is applied until you approve it.**"
+      }
+    ]
+  },
+  "app": {
+    "selected": "docs",
+    "panes": 2,
+    "split": "columns",
+    "open": [
+      "web-app",
+      "docs"
+    ],
+    "focused": 2,
+    "jarvis_open": true
+  }
+}

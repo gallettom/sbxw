@@ -1,0 +1,4 @@
+{ "events": [
+  { "t": 0.4, "type": "tap", "key": "jv-approve" },
+  { "t": 1.0, "type": "mark", "name": "end" }
+] }

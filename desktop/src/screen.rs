@@ -31,6 +31,7 @@ use std::time::{Duration, SystemTime};
 pub const BUILTIN: &[(&str, &str)] = &[
     ("sandboxes", include_str!("../screens/sandboxes.luau")),
     ("topbar", include_str!("../screens/topbar.luau")),
+    ("jarvis", include_str!("../screens/jarvis.luau")),
 ];
 
 pub fn builtin(name: &str) -> Option<&'static str> {
@@ -78,6 +79,26 @@ pub struct Ui {
     pub splits: HashMap<String, (f32, f32)>,
     /// The `menu` or `select` whose list is open.
     pub open: Option<String>,
+    /// An input's per-keystroke `on` action is running: what it returns
+    /// was not asked for by the person (no Enter, no press). Intents that
+    /// act on what the person typed refuse to answer a proposal then.
+    pub editing: bool,
+}
+
+impl Ui {
+    /// The text the person typed in input `id`, when it is theirs: the
+    /// screen did not set it through `value`. `None` otherwise.
+    pub fn typed(&self, id: &str) -> Option<String> {
+        let (edit, given) = self.edits.get(id)?;
+        (given.as_deref() != Some(edit.text.as_str())).then(|| edit.text.clone())
+    }
+
+    /// Empties input `id` (the core took its text).
+    pub fn clear(&mut self, id: &str) {
+        if let Some((edit, _)) = self.edits.get_mut(id) {
+            edit.replace_text(String::new());
+        }
+    }
 }
 
 pub struct ScreenState {
@@ -503,7 +524,9 @@ impl Build<'_> {
                     let (name, arg) = (self.name.clone(), n.arg.clone());
                     t = t.on_input_change(move |s: &mut S, _| {
                         let v = s.screen(&name).ui.edits.get(&id).map(|e| e.0.text.clone()).unwrap_or_default();
+                        s.screen(&name).ui.editing = true;
                         fire(s, &name, &on, &arg, &J::String(v));
+                        s.screen(&name).ui.editing = false;
                     });
                 }
                 if let Some(on) = n.on_submit.clone() {
@@ -565,6 +588,15 @@ impl Build<'_> {
                 }
                 r
             }
+            Kind::Markdown => {
+                let look = crate::markdown::Look { color: st.color.unwrap_or(theme::color_value("text").unwrap()), size: st.size.unwrap_or(13.0) };
+                let on_link: Option<Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>> = n.on.clone().map(|on| {
+                    let (name, arg) = (name.clone(), n.arg.clone());
+                    Rc::new(move |s: &mut S, url: &str, _tx: &mut rune::Tx| fire(s, &name, &on, &arg, &J::String(url.to_string()))) as Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>
+                });
+                let k = key.clone().unwrap_or_else(|| "md".into());
+                crate::markdown::view::<S>(&n.text, &look, &k, on_link)
+            }
             Kind::Progress => {
                 let v = n.value.as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
@@ -573,7 +605,7 @@ impl Build<'_> {
         };
         let e = match (&key, n.kind) {
             // Inputs and menus key their inner part.
-            (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Menu | Kind::Select | Kind::Button) => e.key(k.clone()),
+            (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Menu | Kind::Select | Kind::Button | Kind::Markdown) => e.key(k.clone()),
             _ => e,
         };
         apply(e, st, &n.help)

@@ -687,3 +687,25 @@ fn osc52_read_form_is_never_answered() {
     t.feed(b"\x1b]52;c;w6p0ZQ==\x07");
     assert!(t.take_events().contains(&TerminalEvent::Clipboard("ête".into())));
 }
+
+/// Push-to-talk: a key the shell reserves is not sent and is passed on
+/// (false); with Ctrl it is the program's again; an empty list changes nothing.
+#[test]
+fn reserved_keys_stay_with_the_shell() {
+    static F8: [Key; 1] = [Key::Function(8)];
+    let (mut t, _ev, rx) = term();
+    let mut tx = rune::Tx::default();
+    fn lens(_: &mut ()) -> Option<&mut TerminalState> {
+        None
+    }
+    assert!(t.on_key_tx(&key(Key::Function(8), |_| {}), &mut tx, lens), "not reserved: sent");
+    assert_eq!(written(&rx), b"\x1b[19~");
+    t.keys.reserved = &F8;
+    assert!(!t.on_key_tx(&key(Key::Function(8), |_| {}), &mut tx, lens), "reserved: passed on");
+    assert!(!t.on_key_tx(&key(Key::Function(8), |m| m.shift = true), &mut tx, lens), "Shift is not a modifier that frees it");
+    assert_eq!(written(&rx), b"", "nothing reached the program");
+    assert!(t.on_key_tx(&key(Key::Function(8), |m| m.ctrl = true), &mut tx, lens));
+    assert_eq!(written(&rx), b"\x1b[19;5~", "Ctrl+F8 is the program's");
+    assert!(t.on_key_tx(&key(Key::Function(9), |_| {}), &mut tx, lens));
+    assert_eq!(written(&rx), b"\x1b[20~", "other keys unchanged");
+}

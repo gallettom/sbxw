@@ -1,0 +1,97 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web",
+        "created_at": "2026-11-10T09:12:00Z"
+      },
+      {
+        "name": "web-api",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web"
+      },
+      {
+        "name": "data-pipeline",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/data"
+      },
+      {
+        "name": "docs",
+        "agent": "codex",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 2,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      },
+      {
+        "name": "chat-0412",
+        "agent": "claude",
+        "status": "running",
+        "chat": true,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/.sbxw/chats/0412"
+      }
+    ],
+    "jarvis_status": {
+      "state": "running"
+    },
+    "voice": {
+      "ok": true,
+      "compiled": true,
+      "ready": true,
+      "speech": {
+        "supported": true,
+        "runtime_ready": true,
+        "voice": "fr_female"
+      },
+      "push_to_talk_key": "F8",
+      "dictate_key": "F9",
+      "models": []
+    }
+  },
+  "app": {
+    "jarvis_open": true,
+    "fake_audio": true,
+    "jarvis_log": [
+      [
+        "me",
+        "How does sbxw up work?"
+      ],
+      [
+        "jarvis",
+        "Here is how **`sbxw up`** brings a project up, step by step:\n\n## What happens\n\n1. The daemon reads `sbxw.toml` in the folder you name.\n2. It asks you about any **new grant** (a host in `network_allow`, a mount) before it goes on.\n3. It creates the sandbox with `sbx create`, then runs the kits' install steps.\n4. Your agent starts in the workspace, and the web UI and this app list it.\n\nA few things worth knowing:\n\n- Kits are cached: a second sandbox with the same kits starts in seconds.\n- *Network rules* apply when the sandbox is created; a change needs `sbxw recreate`.\n- Secrets never go into `sbxw.toml`: set them with `sbxw secret set`.\n\n```sh\nsbxw up ~/dev/web --kits sbxw:dev-ports\nsbxw ls\n```\n\nIf a step fails, the error names the file and the line. The full guide is at [the sbxw docs](https://github.com/example/sbxw/blob/main/docs/configuration.md), and `sbxw doctor` checks the usual causes.\n\n### Words read aloud\n\nYou asked about pronunciation too: say \"how do you say nginx?\" and I will read the dictionary and propose a fix. That change is **low risk**, so a spoken *oui* applies it.\n\nOne more paragraph so the answer is long enough to scroll inside the log while the input row stays where it is at the bottom of the panel. The panel itself never scrolls; only this conversation does."
+      ]
+    ]
+  }
+}
