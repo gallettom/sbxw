@@ -49,8 +49,24 @@ status line and the bundled kits' scripts all run on it. It opens
 `deb.debian.org`, `security.debian.org` and `dhi.io` for that hook only. It is
 never listed in `kits` and the Kits dialog does not offer it. It also carries, as `agent-context@2`, the agent's
 instructions for the relay (asking another sandbox, asking you for a
-screenshot): sbx writes them into `~/.claude/CLAUDE.md` before the agent
-starts, and sbxw's tooling writes the same text afterwards only if sbx did not.
+screenshot). sbx 0.53 does not copy a kit's context into
+`~/.claude/CLAUDE.md`: it saves it as a file under
+`~/.claude/kits-agent-context/` and writes a `## Kits` index in `CLAUDE.md`,
+one line per kit, telling the agent to read a kit's file only when that kit
+becomes relevant. So sbxw's tooling writes the relay text into `CLAUDE.md`
+itself, in a fenced block it replaces at each bring-up (it skips it when the
+text is already there, as an older sbx wrote it).
+
+### A kit's context is read only on demand
+
+Because of that index, the agent reads a kit's `agent-context` text only if
+it decides the kit matters to its task. Text that must always be read has to
+be in `CLAUDE.md` itself. sbxw does that for the relay (every sandbox) and
+for Jarvis's role ([Jarvis](jarvis.md#its-sandbox)). The other bundled kits
+with a context (`sbxw:agent-skills`: the browser the person can watch;
+`sbxw:dev-ports`: showing a dev server) are left to the index: their text
+matters only once the agent is doing that kind of work. The same holds for
+your own kits and for the optional context of a [Jarvis kit](#jarvis-kits).
 
 The web UI's **Kits** button edits the same line without opening the file:
 see [the sidebar footer](web-ui.md#the-sidebar-footer).

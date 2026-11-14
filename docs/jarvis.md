@@ -203,6 +203,23 @@ Prompts are spoken in French with a French voice (`[voice] tts_voice =
   `sbxw-config` MCP server (the proposal tools) and the guidance that tells
   the session what it is. That kit is never offered in the Kits dialog, and a
   project's `kits` cannot list it.
+- **Its role and its tools, at each start.** sbx 0.53 only lists a kit's
+  guidance in `CLAUDE.md` and leaves the agent to read it if it seems
+  relevant, so sbxw writes Jarvis's role into the sandbox's
+  `~/.claude/CLAUDE.md` itself, in a block between
+  `<!-- sbxw:jarvis:begin -->` and `<!-- sbxw:jarvis:end -->`, and registers
+  `sbxw-config` in `~/.claude.json`. It does this when it creates the
+  sandbox and again before each Claude session starts there, replacing the
+  block, never adding a second. A Jarvis made by an older sbxw is repaired
+  this way at its next start.
+- **Checking it.** `GET /api/jarvis/status` adds `role_written` and
+  `tools_registered` (what the last setup wrote; `null` when no session
+  started since the daemon did) and a `note` in plain words when something
+  is missing. A session that was already running keeps what it read when it
+  started: stop the sandbox (`sbxw stop sbxw-jarvis`) and start Jarvis again
+  to get a session that reads its role and has its tools. If the
+  `sbxw-config` server's script is missing from the sandbox, only recreating
+  it repairs that: `sbxw rm sbxw-jarvis`, then start Jarvis.
 - **Config:** sbxw's defaults, not your daemon's `sbxw.toml`. Only the
   listeners, the network policy and the model are taken from it. No mounts,
   no env, no ports, no shared skills, one session and no threads.

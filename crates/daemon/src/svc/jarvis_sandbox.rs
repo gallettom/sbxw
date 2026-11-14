@@ -146,7 +146,7 @@ pub struct Setup {
 
 /// What a new session needs for a repair to reach it. A running session
 /// read `CLAUDE.md` and loaded its MCP servers when it started.
-const RESTART: &str = "Stop Jarvis's sandbox (`sbxw stop sbxw-jarvis`, or Stop in its sidebar row), then start Jarvis again: \
+const RESTART: &str = "Stop Jarvis's sandbox (`sbxw stop sbxw-jarvis`), then start Jarvis again: \
                        its next Claude session reads its role and loads its tools.";
 
 impl Setup {
