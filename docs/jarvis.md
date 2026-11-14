@@ -95,10 +95,13 @@ then proposes the whole new file.
   built-in topbar screen"). Removing your version shows the way back to the
   built-in.
 - **What the screen can do.** Above the diff, the dialog lists the intents
-  the new screen can emit (open a terminal, stop a sandbox, ...), with their
-  risk, and marks those the screen used now does not emit. The list comes
-  from reading the text: a hint, not a proof. Check that each button's label
-  says what it does.
+  written by name in the new screen (open a terminal, stop a sandbox, ...),
+  with their risk, and marks those the screen used now does not emit. It
+  also names the lines where the screen builds an intent in a way that
+  hides its name. The list comes from reading the text: a hint, not a proof,
+  since a screen can hide an intent name. Read the diff, and check that
+  each button's label says what it does. See
+  [Security: Jarvis](security.md#jarvis).
 - **Always high risk**: approved with a click on the diff, never by voice.
 - **A broken screen** does not break the app: it keeps the last good view and
   shows the error in a red banner. Ask Jarvis to fix it, or to remove your

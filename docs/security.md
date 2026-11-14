@@ -279,15 +279,28 @@ anything the app could not do before. What it can do is lie: a button
 labelled "Open" that emits `stop_sandbox`. That is why every screen change
 is high risk, approved only with a click on its diff, never by voice.
 
-To help the person see it, the diff starts with the intents the new screen
-can emit, with the risk the app declares for each, and marks those the
-screen used now does not emit. This list comes from reading the text for
-the intent names in the app's `intents.json`: it is a **hint, not a
-proof**. A name built at run time (`"stop_" .. "sandbox"`) escapes it, which
-the list says when it sees `intent(` called with something other than a
-quoted name, and a name in a comment is counted. Read the diff itself. At
-approval the daemon refuses the change if the person's version or the
-built-in screen moved since the proposal.
+To help the person see it, the diff starts with the intents written by name
+in the new screen, with the risk the app declares for each, and marks those
+the screen used now does not emit. The daemon reads the screen's Luau for
+its string literals (comments are skipped, escapes decoded) and keeps those
+that are intent names from the app's `intents.json`.
+
+A screen can emit an intent two ways: `intent("name", args)`, or by
+returning any table `{ kind = "intent", name = ..., args = ... }`. The scan
+flags, with the line, the forms it recognises as hiding a name:
+`intent(...)` called with anything but one plain string, `intent` passed
+around as a value, a table with `kind = "intent"` whose `name` is not one
+plain string, a table whose `kind` is computed, a table key that is
+computed (`[k] = v` in a constructor), a `kind` or `name` set field by field
+(`t.kind = ...`, `t["name"] = ...`), and `rawset` or `setmetatable`.
+
+This list is a **hint, not a proof**, and the dialog says so on every
+screen change: "a screen can hide an intent name; read the diff". A text
+scan cannot follow a name or the word `intent` assembled from pieces
+(`"int" .. "ent"`) and stored through a computed key outside a constructor
+(`t[k] = v`), which ordinary screens do for their own data. A string that is
+never emitted is still listed. At approval the daemon refuses the change if
+the person's version or the built-in screen moved since the proposal.
 
 What Jarvis says is an agent's text, like any other sandbox's: its summary
 may be wrong or written to persuade. The diff is what the daemon would

@@ -1,0 +1,123 @@
+{
+  "intents": [
+    {
+      "name": "open_terminal",
+      "args": {
+        "sandbox": "string, required",
+        "mode": "one of agent, bash",
+        "thread": "string",
+        "pane": "\"focused\", \"spare\" or a pane number 1 to 4"
+      },
+      "doc": "Opens a terminal on a sandbox, in the focused pane by default. The agent mode starts a stopped sandbox.",
+      "risk": "direct"
+    },
+    {
+      "name": "start_sandbox",
+      "args": {
+        "sandbox": "string, required",
+        "pane": "\"focused\", \"spare\" or a pane number 1 to 4"
+      },
+      "doc": "Starts a stopped sandbox by opening its agent terminal, as the web UI's Connect does.",
+      "risk": "direct"
+    },
+    {
+      "name": "stop_sandbox",
+      "args": {
+        "sandbox": "string, required"
+      },
+      "doc": "Stops a sandbox (`POST /api/sandboxes/:name/stop`).",
+      "risk": "direct"
+    },
+    {
+      "name": "select",
+      "args": {
+        "sandbox": "string"
+      },
+      "doc": "Marks a sandbox as selected (no `sandbox`: none).",
+      "risk": "direct"
+    },
+    {
+      "name": "set_layout",
+      "args": {
+        "panes": "whole number 1 to 4",
+        "split": "one of columns, rows"
+      },
+      "doc": "Sets how many terminal panes show (1 to 4) and whether two split side by side or stacked.",
+      "risk": "direct"
+    },
+    {
+      "name": "start_jarvis",
+      "args": {},
+      "doc": "Creates Jarvis's sandbox (the first time) or starts it, and opens its session (`POST /api/jarvis/start`).",
+      "risk": "direct"
+    },
+    {
+      "name": "send_to_jarvis",
+      "args": {
+        "input": "string, required"
+      },
+      "doc": "Sends what the person typed in this screen's input `input` to Jarvis, masked first. The core reads the text itself; the input is emptied once sent and kept when sending fails. A typed yes or no answers a waiting proposal (a yes only a low-risk one).",
+      "risk": "direct"
+    },
+    {
+      "name": "toggle_jarvis_panel",
+      "args": {
+        "open": "true or false"
+      },
+      "doc": "Opens or closes the Jarvis panel docked on the right (no `open`: toggles).",
+      "risk": "direct"
+    },
+    {
+      "name": "talk_start",
+      "args": {},
+      "doc": "Starts recording for Jarvis (push-to-talk from a button).",
+      "risk": "direct"
+    },
+    {
+      "name": "talk_stop",
+      "args": {},
+      "doc": "Stops recording; the words are transcribed and sent to Jarvis.",
+      "risk": "direct"
+    },
+    {
+      "name": "read_aloud",
+      "args": {
+        "id": "whole number from 1, required"
+      },
+      "doc": "Reads one message of the conversation aloud (`data.jarvis.log[i].id`).",
+      "risk": "direct"
+    },
+    {
+      "name": "stop_reading",
+      "args": {},
+      "doc": "Stops reading aloud.",
+      "risk": "direct"
+    },
+    {
+      "name": "approve_proposal",
+      "args": {
+        "id": "string, required"
+      },
+      "doc": "Opens the core's dialog for that proposal. Never approves by itself: only the person's click on the dialog does.",
+      "risk": "approval",
+      "asks": "Approve a Jarvis proposal"
+    },
+    {
+      "name": "refuse_proposal",
+      "args": {
+        "id": "string, required",
+        "reason": "string"
+      },
+      "doc": "Refuses a Jarvis proposal, with an optional reason Jarvis is told.",
+      "risk": "direct"
+    },
+    {
+      "name": "open_link",
+      "args": {
+        "url": "an http:// or https:// URL, required"
+      },
+      "doc": "Opens an `http://` or `https://` link in the browser.",
+      "risk": "direct"
+    }
+  ]
+}

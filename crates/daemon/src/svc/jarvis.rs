@@ -746,14 +746,20 @@ mod tests {
         assert_eq!(origins, [("nginx".to_string(), "configured".to_string()), ("sbxw".into(), "replaces_built_in".into())]);
     }
 
-    /// The desktop app's builtin/ as it writes it at each start.
+    /// The desktop app's builtin/ as it writes it at each start (copies in
+    /// crates/core/testdata/desktop-builtin).
     fn desktop_fixture(app: &crate::app::App) {
         let b = app.desktop_root().join("builtin");
         std::fs::create_dir_all(b.join("screens")).unwrap();
-        std::fs::write(b.join("screens/topbar.luau"), "return { render = function() return text{ \"sbxw\" } end }\n").unwrap();
-        std::fs::write(b.join("screens/sandboxes.luau"), "return { render = function() return text{ \"list\" } end }\n").unwrap();
-        std::fs::write(b.join("screens.md"), "# Writing screens\n").unwrap();
-        std::fs::write(b.join("intents.json"), r#"[{"name": "stop_sandbox", "args": [{"name": "sandbox", "type": "string", "required": true}], "risk": "direct"}, {"name": "select", "args": [], "risk": "direct"}]"#).unwrap();
+        for (f, text) in [
+            ("screens/topbar.luau", include_str!("../../../core/testdata/desktop-builtin/screens/topbar.luau")),
+            ("screens/sandboxes.luau", include_str!("../../../core/testdata/desktop-builtin/screens/sandboxes.luau")),
+            ("screens/jarvis.luau", include_str!("../../../core/testdata/desktop-builtin/screens/jarvis.luau")),
+            ("screens.md", include_str!("../../../core/testdata/desktop-builtin/screens.md")),
+            ("intents.json", include_str!("../../../core/testdata/desktop-builtin/intents.json")),
+        ] {
+            std::fs::write(b.join(f), text).unwrap();
+        }
     }
 
     /// A desktop screen: nothing until the app has run; then a click writes
@@ -773,10 +779,10 @@ mod tests {
 
         desktop_fixture(&app);
         let state = app.jarvis_state().await;
-        assert_eq!(state["desktop"]["screens"], json!([{"name": "sandboxes", "override": false}, {"name": "topbar", "override": false}]));
-        assert_eq!(state["desktop"]["intents"][0], json!({"name": "select", "risk": "direct"}));
+        assert_eq!(state["desktop"]["screens"], json!([{"name": "jarvis", "override": false}, {"name": "sandboxes", "override": false}, {"name": "topbar", "override": false}]));
+        assert_eq!(state["desktop"]["intents"][0], json!({"name": "approve_proposal", "risk": "approval"}));
         let docs = app.jarvis_desktop_docs().unwrap();
-        assert_eq!((docs["screens_md"].as_str(), &docs["intents"][0]["name"]), (Some("# Writing screens\n"), &json!("stop_sandbox")));
+        assert_eq!((docs["screens_md"].as_str(), &docs["intents"]["intents"][0]["name"]), (Some(include_str!("../../../core/testdata/desktop-builtin/screens.md")), &json!("open_terminal")));
         let read = app.jarvis_desktop_screen("topbar").unwrap();
         assert_eq!((&read["override"], read["content"] == read["builtin"]), (&json!(false), true));
         assert!(app.jarvis_desktop_screen("nope").unwrap_err().contains("no 'nope' screen"));
@@ -790,7 +796,7 @@ mod tests {
         let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
         assert_eq!(done.state, State::Applied, "{:?}", done.error);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), next);
-        assert_eq!(app.jarvis_state().await["desktop"]["screens"][1], json!({"name": "topbar", "override": true}));
+        assert_eq!(app.jarvis_state().await["desktop"]["screens"][2], json!({"name": "topbar", "override": true}));
         let read = app.jarvis_desktop_screen("topbar").unwrap();
         assert_eq!((&read["override"], read["content"].as_str()), (&json!(true), Some(next)));
 

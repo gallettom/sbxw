@@ -1101,35 +1101,336 @@ pub fn parse_intents(raw: &str) -> Result<Vec<IntentInfo>, String> {
     Ok(out)
 }
 
-/// The names of `known` intents that appear in `text` as a whole word: a
-/// best-effort reading of what a screen can emit. A name built at run time
-/// (`"stop_" .. "sandbox"`) escapes it, and a name in a comment is counted.
+/// The names of `known` intents written as a string literal in `text`, read
+/// as Luau ([`scan_screen`]): a best-effort reading of what a screen can
+/// emit. A literal that is never emitted is counted; a name built at run
+/// time is not, and [`hidden_intents`] says where the text does that in a
+/// way the scan recognises.
 pub fn scan_intents<'a>(text: &str, known: &'a [IntentInfo]) -> Vec<&'a IntentInfo> {
-    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    known
-        .iter()
-        .filter(|i| {
-            text.match_indices(i.name.as_str()).any(|(at, m)| {
-                let before = text.as_bytes().get(at.wrapping_sub(1)).copied();
-                let after = text.as_bytes().get(at + m.len()).copied();
-                !before.is_some_and(word) && !after.is_some_and(word)
-            })
-        })
-        .collect()
+    let scan = scan_screen(text);
+    known.iter().filter(|i| scan.literals.contains(&i.name)).collect()
 }
 
-/// `intent(` called with something other than a quoted name: the screen
-/// builds an intent name at run time, which the scan cannot follow.
-pub fn builds_intent_names(text: &str) -> bool {
-    text.match_indices("intent").any(|(at, m)| {
-        let before = text.as_bytes().get(at.wrapping_sub(1)).copied();
-        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
-            return false;
+/// Where `text` builds an intent in a way that hides its name, one line
+/// each, `line N: what`. Empty does not prove there is none: a name or the
+/// word `intent` assembled from pieces (`"int" .. "ent"`) and put in a table
+/// by a computed key is invisible to a text scan.
+pub fn hidden_intents(text: &str) -> Vec<String> {
+    scan_screen(text).hidden
+}
+
+/// What [`scan_screen`] reads in a screen.
+#[derive(Debug, Default)]
+pub struct ScreenScan {
+    /// Every string literal's value (escapes decoded).
+    pub literals: std::collections::BTreeSet<String>,
+    /// `line N: what`, where an intent's name is hidden from the scan.
+    pub hidden: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Tok {
+    Name(String),
+    /// A string literal and its value.
+    Str(String),
+    /// An interpolated string (`` `a{b}` ``): not a literal.
+    Interp,
+    Sym(char),
+    /// `..`, `==`, `+=` and the other operators of more than one character.
+    Op(String),
+    Num,
+}
+
+/// Luau tokens of `text` with their line, comments dropped. `Err` with the
+/// line where a string or a comment does not end.
+fn luau_tokens(text: &str) -> Result<Vec<(Tok, usize)>, usize> {
+    let b: Vec<char> = text.chars().collect();
+    let (mut i, mut line, mut out) = (0usize, 1usize, Vec::new());
+    // `[`, `=`*n, `[` at `at`: the level n, if it opens a long bracket.
+    let long_open = |at: usize| -> Option<usize> {
+        let mut j = at + 1;
+        while b.get(j) == Some(&'=') {
+            j += 1;
         }
-        let rest = text[at + m.len()..].trim_start();
-        let Some(args) = rest.strip_prefix('(') else { return false };
-        !args.trim_start().starts_with(['"', '\'', '['])
-    })
+        (b.get(at) == Some(&'[') && b.get(j) == Some(&'[')).then_some(j - at - 1)
+    };
+    // From `at` (just after the opening bracket), the text up to `]`, `=`*n, `]`.
+    let long_body = |at: usize, n: usize, line: &mut usize| -> Option<(String, usize)> {
+        let mut j = at;
+        while j < b.len() {
+            if b[j] == ']' && (1..=n).all(|k| b.get(j + k) == Some(&'=')) && b.get(j + n + 1) == Some(&']') {
+                return Some((b[at..j].iter().collect(), j + n + 2));
+            }
+            if b[j] == '\n' {
+                *line += 1;
+            }
+            j += 1;
+        }
+        None
+    };
+    while i < b.len() {
+        let c = b[i];
+        let at_line = line;
+        if c == '\n' {
+            line += 1;
+            i += 1;
+        } else if c.is_whitespace() {
+            i += 1;
+        } else if c == '-' && b.get(i + 1) == Some(&'-') {
+            if let Some(n) = long_open(i + 2) {
+                let (_, end) = long_body(i + 2 + n + 2, n, &mut line).ok_or(at_line)?;
+                i = end;
+            } else {
+                while i < b.len() && b[i] != '\n' {
+                    i += 1;
+                }
+            }
+        } else if let Some(n) = (c == '[').then(|| long_open(i)).flatten() {
+            let (body, end) = long_body(i + n + 2, n, &mut line).ok_or(at_line)?;
+            // A long string skips one newline right after its opening.
+            let body = body.strip_prefix("\r\n").or_else(|| body.strip_prefix('\n')).unwrap_or(&body).to_string();
+            out.push((Tok::Str(body), at_line));
+            i = end;
+        } else if c == '"' || c == '\'' {
+            let mut v = String::new();
+            i += 1;
+            loop {
+                let Some(&x) = b.get(i) else { return Err(at_line) };
+                i += 1;
+                if x == c {
+                    break;
+                }
+                if x == '\n' {
+                    return Err(at_line);
+                }
+                if x != '\\' {
+                    v.push(x);
+                    continue;
+                }
+                let Some(&e) = b.get(i) else { return Err(at_line) };
+                i += 1;
+                match e {
+                    'n' => v.push('\n'),
+                    't' => v.push('\t'),
+                    'r' => v.push('\r'),
+                    'a' => v.push('\u{7}'),
+                    'b' => v.push('\u{8}'),
+                    'f' => v.push('\u{c}'),
+                    'v' => v.push('\u{b}'),
+                    '\n' => {
+                        line += 1;
+                        v.push('\n');
+                    }
+                    'z' => {
+                        while b.get(i).is_some_and(|x| x.is_whitespace()) {
+                            if b[i] == '\n' {
+                                line += 1;
+                            }
+                            i += 1;
+                        }
+                    }
+                    'x' => {
+                        let h: String = b.iter().skip(i).take(2).collect();
+                        i += 2;
+                        v.extend(u32::from_str_radix(&h, 16).ok().and_then(char::from_u32));
+                    }
+                    'u' if b.get(i) == Some(&'{') => {
+                        let h: String = b.iter().skip(i + 1).take_while(|x| **x != '}').collect();
+                        i += h.chars().count() + 2;
+                        v.extend(u32::from_str_radix(&h, 16).ok().and_then(char::from_u32));
+                    }
+                    d if d.is_ascii_digit() => {
+                        let mut n = d.to_digit(10).unwrap_or(0);
+                        for _ in 0..2 {
+                            match b.get(i).and_then(|x| x.to_digit(10)) {
+                                Some(k) => {
+                                    n = n * 10 + k;
+                                    i += 1;
+                                }
+                                None => break,
+                            }
+                        }
+                        v.extend(char::from_u32(n));
+                    }
+                    other => v.push(other),
+                }
+            }
+            out.push((Tok::Str(v), at_line));
+        } else if c == '`' {
+            let (mut v, mut plain) = (String::new(), true);
+            i += 1;
+            loop {
+                let Some(&x) = b.get(i) else { return Err(at_line) };
+                i += 1;
+                match x {
+                    '`' => break,
+                    '\\' => {
+                        v.extend(b.get(i));
+                        i += 1;
+                    }
+                    '{' => plain = false,
+                    '\n' => {
+                        line += 1;
+                        v.push(x);
+                    }
+                    _ => v.push(x),
+                }
+            }
+            out.push((if plain { Tok::Str(v) } else { Tok::Interp }, at_line));
+        } else if c.is_alphabetic() || c == '_' {
+            let start = i;
+            while b.get(i).is_some_and(|x| x.is_alphanumeric() || *x == '_') {
+                i += 1;
+            }
+            out.push((Tok::Name(b[start..i].iter().collect()), at_line));
+        } else if c.is_ascii_digit() {
+            while b.get(i).is_some_and(|x| x.is_alphanumeric() || *x == '_' || *x == '.') {
+                i += 1;
+            }
+            out.push((Tok::Num, at_line));
+        } else {
+            let two: String = b.iter().skip(i).take(3).collect();
+            let op = ["...", "..=", "//="].into_iter().find(|o| two.starts_with(o)).or_else(|| {
+                ["..", "==", "~=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "^=", "//", "::", "->"].into_iter().find(|o| two.starts_with(o))
+            });
+            match op {
+                Some(o) => {
+                    out.push((Tok::Op(o.into()), at_line));
+                    i += o.len();
+                }
+                None => {
+                    out.push((Tok::Sym(c), at_line));
+                    i += 1;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Read a screen's Luau for what the intent hint needs: its string literals,
+/// and the places where an intent is built in a way that hides its name.
+/// The core recognises an intent as `intent("name", args)` or as any table
+/// `{ kind = "intent", name = ..., args = ... }`, so the scan looks at:
+///
+/// - `intent(` whose name is not one plain string literal, and `intent`
+///   passed around as a value;
+/// - a table constructor with `kind = "intent"` (or `["kind"] = "intent"`)
+///   whose `name` is not one plain string literal; one whose `kind` is
+///   computed; one with a computed key (`[k] = v`);
+/// - `kind` or `name` set field by field (`t.kind = ...`, `t["name"] = ...`),
+///   and `rawset`, `setmetatable`, which set fields out of sight.
+///
+/// What it cannot see: the word `intent` or a name assembled from pieces and
+/// stored through a computed key outside a constructor (`t[k] = v`), which
+/// ordinary screens do all the time. Hence the hint is never a proof.
+pub fn scan_screen(text: &str) -> ScreenScan {
+    let mut scan = ScreenScan::default();
+    let toks = match luau_tokens(text) {
+        Ok(t) => t,
+        Err(line) => {
+            scan.hidden.push(format!("line {line}: a string or a comment does not end, so the rest of the file cannot be read"));
+            return scan;
+        }
+    };
+    let mut flag = |line: usize, what: &str| {
+        let s = format!("line {line}: {what}");
+        if !scan.hidden.contains(&s) {
+            scan.hidden.push(s);
+        }
+    };
+    let sep = |t: Option<&(Tok, usize)>| matches!(t, Some((Tok::Sym(',' | ';' | '}' | ')'), _)) | None);
+    let assign = |t: Option<&(Tok, usize)>| matches!(t, Some((Tok::Sym('='), _)));
+    for (k, (t, line)) in toks.iter().enumerate() {
+        let (prev, next) = (k.checked_sub(1).and_then(|p| toks.get(p)).map(|x| &x.0), toks.get(k + 1).map(|x| &x.0));
+        match t {
+            Tok::Str(v) => {
+                scan.literals.insert(v.clone());
+            }
+            Tok::Name(n) if n == "intent" && !matches!(prev, Some(Tok::Sym('.' | ':'))) => match next {
+                Some(Tok::Sym('(')) => {
+                    let lone = matches!(toks.get(k + 2), Some((Tok::Str(_), _))) && sep(toks.get(k + 3));
+                    if !lone {
+                        flag(*line, "intent(...) is called with a name that is not written as plain text");
+                    }
+                }
+                Some(Tok::Str(_)) => {}
+                Some(Tok::Sym('=')) if matches!(prev, Some(Tok::Sym('{' | ',' | ';'))) => {}
+                _ => flag(*line, "intent is used as a value, so where its calls go cannot be followed"),
+            },
+            Tok::Name(n) if matches!(n.as_str(), "rawset" | "setmetatable") && next == Some(&Tok::Sym('(')) => {
+                flag(*line, &format!("{n}(...) sets fields this scan does not see"));
+            }
+            // `t.kind = ...`, `t.name = ...`
+            Tok::Name(n) if matches!(n.as_str(), "kind" | "name") && prev == Some(&Tok::Sym('.')) && assign(toks.get(k + 1)) => {
+                flag(*line, &format!("a table's {n} is set field by field"));
+            }
+            // `t["kind"] = ...` outside a constructor (inside one, `[` follows `{`, `,` or `;`).
+            Tok::Sym('[') if !matches!(prev, Some(Tok::Sym('{' | ',' | ';'))) => {
+                if let (Some((Tok::Str(key), _)), Some((Tok::Sym(']'), _))) = (toks.get(k + 1), toks.get(k + 2)) {
+                    if matches!(key.as_str(), "kind" | "name") && assign(toks.get(k + 3)) {
+                        flag(*line, &format!("a table's {key} is set field by field"));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Table constructors: each `{` with its matching `}`, fields at its own depth.
+    let mut open = Vec::new();
+    let mut pairs = Vec::new();
+    for (k, (t, _)) in toks.iter().enumerate() {
+        match t {
+            Tok::Sym('{') => open.push(k),
+            Tok::Sym('}') => {
+                if let Some(o) = open.pop() {
+                    pairs.push((o, k));
+                }
+            }
+            _ => {}
+        }
+    }
+    for (o, c) in pairs {
+        let line = toks[o].1;
+        let mut fields: Vec<&[(Tok, usize)]> = Vec::new();
+        let (mut depth, mut from) = (0i32, o + 1);
+        for k in o + 1..c {
+            match &toks[k].0 {
+                Tok::Sym('(' | '[' | '{') => depth += 1,
+                Tok::Sym(')' | ']' | '}') => depth -= 1,
+                Tok::Sym(',' | ';') if depth == 0 => {
+                    fields.push(&toks[from..k]);
+                    from = k + 1;
+                }
+                _ => {}
+            }
+        }
+        fields.push(&toks[from..c]);
+        let mut keyed: Vec<(String, &[(Tok, usize)])> = Vec::new();
+        for f in fields {
+            match f {
+                [(Tok::Name(key), _), (Tok::Sym('='), _), value @ ..] => keyed.push((key.clone(), value)),
+                [(Tok::Sym('['), _), (Tok::Str(key), _), (Tok::Sym(']'), _), (Tok::Sym('='), _), value @ ..] => keyed.push((key.clone(), value)),
+                [(Tok::Sym('['), l), ..] => flag(*l, "a table key is computed ([...] = ...), so a kind or a name can hide in it"),
+                _ => {}
+            }
+        }
+        let literal = |v: &[(Tok, usize)]| match v {
+            [(Tok::Str(s), _)] => Some(s.clone()),
+            _ => None,
+        };
+        for (key, value) in &keyed {
+            if key == "kind" && literal(value).is_none() {
+                flag(line, "a table's kind is computed, not written as plain text");
+            }
+        }
+        let is_intent = keyed.iter().any(|(k, v)| k == "kind" && literal(v).as_deref() == Some("intent"));
+        if is_intent && !keyed.iter().any(|(k, v)| k == "name" && literal(v).is_some()) {
+            flag(line, "a table with kind = \"intent\" has a name that is not written as plain text");
+        }
+    }
+    scan.hidden.sort_by_key(|h| h.split(':').next().and_then(|l| l.trim_start_matches("line ").parse::<usize>().ok()).unwrap_or(0));
+    scan
 }
 
 /// The desktop app's screens, as the daemon read them from sbxw's home.
@@ -1218,21 +1519,25 @@ impl Desktop {
 
 /// The lines above a screen's diff that list what it can emit.
 fn hint_lines(d: &Desktop, hints: &[IntentHint], next: &str) -> String {
-    const HINT: &str = "a hint from reading its text, not a proof";
     let mut out = String::new();
     if let Some(e) = &d.intents_error {
-        out.push_str(&format!("# The app's intents.json could not be read ({e}): no hint of what this screen emits.\n"));
+        out.push_str(&format!("# The app's intents.json could not be read ({e}): no list of what this screen emits.\n"));
     } else if hints.is_empty() {
-        out.push_str(&format!("# This screen emits none of the app's intents ({HINT}).\n"));
+        out.push_str("# No intent of the app is written by name in this screen.\n");
     } else {
-        out.push_str(&format!("# Intents this screen can emit ({HINT}):\n"));
+        out.push_str("# Intents written by name in this screen:\n");
         for h in hints {
             out.push_str(&format!("#   {} (risk: {}){}\n", h.name, h.risk, if h.new { ", NEW: the screen used now does not emit it" } else { "" }));
         }
     }
-    if builds_intent_names(next) {
-        out.push_str("# It also builds an intent name at run time, which this list cannot follow.\n");
+    let hidden = hidden_intents(next);
+    if !hidden.is_empty() {
+        out.push_str("# This screen builds an intent in a way that hides its name:\n");
+        for h in hidden {
+            out.push_str(&format!("#   {h}\n"));
+        }
     }
+    out.push_str("# This list is a hint: a screen can hide an intent name; read the diff.\n");
     out
 }
 
@@ -1881,7 +2186,11 @@ mod tests {
         assert!(matches!(b.begin("nope", Via::Click, false), Err(ApproveError::NotFound(_))));
     }
 
-    const TOPBAR: &str = "return {\n  render = function(state, data)\n    return row{ text{ \"sbxw\" } }\n  end,\n  actions = {\n    one = function() return intent(\"set_layout\", { panes = 1 }) end,\n  },\n}\n";
+    // What the desktop app writes in builtin/ (copies, see testdata/desktop-builtin/README.md).
+    const TOPBAR: &str = include_str!("../testdata/desktop-builtin/screens/topbar.luau");
+    const SANDBOXES: &str = include_str!("../testdata/desktop-builtin/screens/sandboxes.luau");
+    const JARVIS: &str = include_str!("../testdata/desktop-builtin/screens/jarvis.luau");
+    const INTENTS: &str = include_str!("../testdata/desktop-builtin/intents.json");
 
     fn desktop_world() -> World {
         let mut w = world();
@@ -1889,12 +2198,16 @@ mod tests {
             present: true,
             builtin_dir: "/h/.sbxw/desktop/builtin".into(),
             screens_dir: "/h/.sbxw/desktop/screens".into(),
-            builtin: [("topbar".to_string(), TOPBAR.to_string()), ("sandboxes".to_string(), "return { render = function() return text{ \"x\" } end }\n".to_string())].into(),
+            builtin: [("topbar", TOPBAR), ("sandboxes", SANDBOXES), ("jarvis", JARVIS)].into_iter().map(|(n, t)| (n.to_string(), t.to_string())).collect(),
             overrides: BTreeMap::new(),
-            intents: parse_intents(r#"[{"name": "open_terminal", "risk": "direct", "args": {"sandbox": "string"}}, {"name": "stop_sandbox", "risk": "direct"}, {"name": "select", "risk": "direct"}, {"name": "set_layout", "risk": "direct"}]"#).unwrap(),
+            intents: parse_intents(INTENTS).unwrap(),
             intents_error: None,
         };
         w
+    }
+
+    fn names(text: &str) -> Vec<String> {
+        scan_intents(text, &desktop_world().desktop.intents).into_iter().map(|i| i.name.clone()).collect()
     }
 
     fn screen(name: &str, content: &str) -> Change {
@@ -1904,15 +2217,19 @@ mod tests {
     #[test]
     fn a_desktop_screen_replaces_the_built_in_then_changes_the_override() {
         let w = desktop_world();
-        let next = TOPBAR.replace("\"sbxw\"", "\"Open\"").replace("set_layout\", { panes = 1 }", "stop_sandbox\", { sandbox = data.app.selected }");
+        let next = TOPBAR.replace("text{ \"sbxw\",", "text{ \"Open\",").replace("intent(\"toggle_jarvis_panel\")", "intent(\"stop_sandbox\", { sandbox = \"x\" })");
         let p = plan(&w, &[screen("topbar", &next)]).unwrap();
         let v = &p[0].view;
         assert_eq!((v.kind.as_str(), v.risk), ("desktop_screen", Risk::High));
         assert!(v.title.contains("replaces the built-in topbar screen") && v.title.contains("/h/.sbxw/desktop/screens/topbar.luau"), "{}", v.title);
         assert!(v.diff.contains("--- /h/.sbxw/desktop/builtin/screens/topbar.luau\n+++ /h/.sbxw/desktop/screens/topbar.luau\n"), "{}", v.diff);
-        assert!(v.diff.contains("-    return row{ text{ \"sbxw\" } }\n+    return row{ text{ \"Open\" } }\n"), "{}", v.diff);
-        assert!(v.diff.contains("#   stop_sandbox (risk: direct), NEW") && v.diff.contains("not a proof"), "{}", v.diff);
-        assert_eq!(v.intents.as_ref().unwrap(), &vec![IntentHint { name: "stop_sandbox".into(), risk: "direct".into(), new: true }]);
+        assert!(v.diff.contains("-      text{ \"sbxw\", weight") && v.diff.contains("+      text{ \"Open\", weight"), "{}", v.diff);
+        assert!(v.diff.contains("#   stop_sandbox (risk: direct), NEW") && v.diff.contains("#   set_layout (risk: direct)\n"), "{}", v.diff);
+        assert!(v.diff.contains("# This list is a hint: a screen can hide an intent name; read the diff.\n") && !v.diff.contains("hides its name"), "{}", v.diff);
+        assert_eq!(
+            v.intents.as_ref().unwrap(),
+            &vec![IntentHint { name: "set_layout".into(), risk: "direct".into(), new: false }, IntentHint { name: "stop_sandbox".into(), risk: "direct".into(), new: true }]
+        );
         let Op::WriteScreen { name, content } = &p[0].op else { panic!("{:?}", p[0].op) };
         assert_eq!((name.as_str(), content.as_str()), ("topbar", next.as_str()));
 
@@ -1942,7 +2259,7 @@ mod tests {
         assert_eq!((v.kind.as_str(), v.risk), ("desktop_screen_remove", Risk::High));
         assert!(v.title.contains("restores the built-in"), "{}", v.title);
         assert!(v.diff.contains("--- /h/.sbxw/desktop/screens/topbar.luau\n+++ /h/.sbxw/desktop/builtin/screens/topbar.luau\n"), "{}", v.diff);
-        assert!(v.diff.contains("#   set_layout (risk: direct), NEW"), "the built-in emits what the override did not: {}", v.diff);
+        assert!(v.diff.contains("#   set_layout (risk: direct), NEW") && v.diff.contains("#   toggle_jarvis_panel (risk: direct), NEW"), "the built-in emits what the override did not: {}", v.diff);
         assert!(matches!(&p[0].op, Op::RemoveScreen { name } if name == "topbar"));
     }
 
@@ -1950,7 +2267,7 @@ mod tests {
     fn a_desktop_screen_is_checked_before_anything_is_planned() {
         let w = desktop_world();
         let e = plan(&w, &[screen("settings", "return {}\n")]).unwrap_err();
-        assert!(e.contains("no 'settings' screen") && e.contains("sandboxes, topbar") && e.contains("no place to show a new screen"), "{e}");
+        assert!(e.contains("no 'settings' screen") && e.contains("jarvis, sandboxes, topbar") && e.contains("no place to show a new screen"), "{e}");
         for bad in ["", "Topbar", "../topbar", "top bar", "a/b", &"a".repeat(41)] {
             assert!(plan(&w, &[screen(bad, "return {}\n")]).unwrap_err().contains("is not a screen name"), "{bad:?}");
         }
@@ -2001,20 +2318,66 @@ mod tests {
     }
 
     #[test]
-    fn intents_json_is_read_in_its_shapes_and_the_scan_is_by_whole_word() {
+    fn intents_json_is_read_in_its_shapes() {
+        // The app's own export: {"intents": [{name, args, risk, asks?, doc}]}.
+        let real = parse_intents(INTENTS).unwrap();
+        assert_eq!(real.len(), 15);
+        assert_eq!(real.iter().find(|i| i.name == "approve_proposal").unwrap().risk, "approval");
+        assert_eq!(real.iter().find(|i| i.name == "stop_sandbox").unwrap().risk, "direct");
         let list = parse_intents(r#"{"intents": [{"name": "select", "risk": {"kind": "approval", "asks": "x"}}, {"name": "stop_sandbox"}]}"#).unwrap();
         assert_eq!(list, vec![IntentInfo { name: "select".into(), risk: "approval".into() }, IntentInfo { name: "stop_sandbox".into(), risk: "unknown".into() }]);
-        let map = parse_intents(r#"{"open_terminal": {"risk": "direct"}}"#).unwrap();
-        assert_eq!(map[0].name, "open_terminal");
+        assert_eq!(parse_intents(r#"{"open_terminal": {"risk": "direct"}}"#).unwrap()[0].name, "open_terminal");
+        assert_eq!(parse_intents(r#"[{"name": "select", "risk": "direct"}]"#).unwrap()[0].name, "select");
         assert!(parse_intents("[").is_err() && parse_intents("3").is_err());
-        let known = desktop_world().desktop.intents;
-        let found: Vec<&str> = scan_intents("intent('select', {}) -- stop_sandbox_all, preselect\n", &known).iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(found, ["select"]);
-        assert!(builds_intent_names("return intent(name, {})") && builds_intent_names("intent (\n x)"));
-        assert!(!builds_intent_names("intent(\"select\") intent( 'x') intents(x) my_intent(x)"));
-        let w = desktop_world();
-        let p = plan(&w, &[screen("topbar", "local n = \"stop_\" .. \"sandbox\"\nreturn { actions = { a = function() return intent(n, {}) end } }\n")]).unwrap();
-        assert!(p[0].view.diff.contains("builds an intent name at run time") && p[0].view.diff.contains("emits none of the app's intents"), "{}", p[0].view.diff);
+    }
+
+    /// The built-in screens: every intent they emit is found by name, and
+    /// nothing in them is flagged as hiding one.
+    #[test]
+    fn the_built_in_screens_read_clean() {
+        assert_eq!(names(TOPBAR), ["set_layout", "toggle_jarvis_panel"]);
+        assert_eq!(names(SANDBOXES), ["open_terminal", "select", "start_sandbox", "stop_sandbox"]);
+        assert_eq!(names(JARVIS), ["approve_proposal", "open_link", "read_aloud", "send_to_jarvis", "start_jarvis", "talk_start", "talk_stop", "toggle_jarvis_panel"]);
+        for (n, t) in [("topbar", TOPBAR), ("sandboxes", SANDBOXES), ("jarvis", JARVIS)] {
+            assert_eq!(hidden_intents(t), Vec::<String>::new(), "{n}");
+        }
+    }
+
+    #[test]
+    fn literals_count_wherever_they_are_written_and_comments_do_not() {
+        assert_eq!(names("intent('select', {}) -- stop_sandbox, open_link\n--[[ start_jarvis ]] x = 1"), ["select"]);
+        assert_eq!(names("return { kind = \"intent\", name = 'stop_sandbox', args = {} }"), ["stop_sandbox"]);
+        assert_eq!(names("local n = [[stop_sandbox]] local m = [==[\nselect]==] local o = \"\\115tart_jarvis\" local p = `open_link`"), ["open_link", "select", "start_jarvis", "stop_sandbox"]);
+        assert_eq!(names("local x = \"preselect stop_sandbox_all\""), Vec::<String>::new(), "whole literals only");
+    }
+
+    #[test]
+    fn an_intent_built_out_of_sight_is_flagged() {
+        let flagged = |t: &str| hidden_intents(t);
+        // intent( with a computed name, or intent passed around.
+        assert_eq!(flagged("return intent(n, {})"), ["line 1: intent(...) is called with a name that is not written as plain text"]);
+        assert_eq!(flagged("return intent(\"stop_\" .. \"sandbox\", {})").len(), 1);
+        assert_eq!(flagged("local f = intent\nreturn f('select')"), ["line 1: intent is used as a value, so where its calls go cannot be followed"]);
+        // A table the core takes for an intent, its name computed.
+        for t in ["return { kind = \"intent\", name = n }", "return {kind='intent',name=n}", "return { [\"kind\"] = \"intent\", name = \"stop_\" .. x }", "return {\n  kind   =   'intent' ;\n  args = { name = 'select' } }"] {
+            assert_eq!(flagged(t), ["line 1: a table with kind = \"intent\" has a name that is not written as plain text"], "{t}");
+        }
+        // ... unless its name is a literal: then it is counted, not flagged.
+        assert!(flagged("return { kind = \"intent\", name = \"stop_sandbox\", args = { sandbox = \"x\" } }").is_empty());
+        assert!(flagged("return { [\"kind\"] = \"intent\", [\"name\"] = \"select\" }").is_empty());
+        // A kind that is computed, a computed key, fields set one by one.
+        assert_eq!(flagged("return { kind = \"int\" .. \"ent\", name = \"select\" }"), ["line 1: a table's kind is computed, not written as plain text"]);
+        assert_eq!(flagged("return { [k] = v }"), ["line 1: a table key is computed ([...] = ...), so a kind or a name can hide in it"]);
+        assert_eq!(flagged("local t = {}\nt.kind = k\nt[\"name\"] = n"), ["line 2: a table's kind is set field by field", "line 3: a table's name is set field by field"]);
+        assert_eq!(flagged("rawset(t, k, v)"), ["line 1: rawset(...) sets fields this scan does not see"]);
+        assert_eq!(flagged("local s = \"never ends"), ["line 1: a string or a comment does not end, so the rest of the file cannot be read"]);
+        // Not flagged: ordinary screen code.
+        assert!(flagged("by_ws[w] = {}\nlog[#log + 1] = text{ \"x\" }\nlocal a = t.name\nif x.kind == \"y\" then end\nreturn { intent = 1, row{ key = \"k\" } }").is_empty());
+        // Named honestly in the diff, with the line, and the hint line always.
+        let p = plan(&desktop_world(), &[screen("topbar", "local n = \"stop_\" .. \"sandbox\"\nreturn { actions = { a = function() return { kind = \"intent\", name = n } end } }\n")]).unwrap();
+        let d = &p[0].view.diff;
+        assert!(d.contains("# No intent of the app is written by name in this screen.\n# This screen builds an intent in a way that hides its name:\n#   line 2: a table with kind = \"intent\" has a name"), "{d}");
+        assert!(d.contains("# This list is a hint: a screen can hide an intent name; read the diff.\n"), "{d}");
     }
 
     #[test]
