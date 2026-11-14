@@ -827,6 +827,9 @@ impl Host for App {
     }
 
     fn intents(&mut self, screen: &str, intents: Vec<Intent>) {
+        // "Start Jarvis and send": one press returns both; only then is the
+        // input sent once Jarvis runs (never by itself later).
+        self.wiring.start_and_send = intents.iter().any(|i| matches!(i, Intent::StartJarvis)) && intents.iter().any(|i| matches!(i, Intent::SendToJarvis { .. }));
         for i in intents {
             match i.risk() {
                 Risk::Direct => self.run_intent(screen, i),
@@ -842,6 +845,7 @@ impl Host for App {
                 },
             }
         }
+        self.wiring.start_and_send = false;
         self.push_data();
     }
 }

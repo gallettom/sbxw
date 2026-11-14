@@ -643,6 +643,11 @@ impl FixtureDaemon {
     pub fn new(name: &str, data: FixtureData) -> Self {
         Self { name: name.to_string(), data: std::sync::Mutex::new(data) }
     }
+
+    /// The messages pushed so far, `(name, text)`.
+    pub fn pushed(&self) -> Vec<(String, String)> {
+        self.data.lock().unwrap().pushed.clone()
+    }
 }
 
 impl Daemon for FixtureDaemon {
