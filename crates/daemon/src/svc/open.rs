@@ -102,6 +102,11 @@ impl App {
         if matches!(key.kind, SessionKind::Agent | SessionKind::Bash) && !sbx.is_running(&sandbox.name).await {
             self.release_busy_ports(&sandbox, &cfg).await;
         }
+        // Jarvis's role and tools, written before its Claude session starts,
+        // which reads them only then: how one an older daemon made is repaired.
+        if matches!(key.kind, SessionKind::Agent) && self.is_jarvis(&sandbox) {
+            self.jarvis_setup().await;
+        }
         Ok(match &key.kind {
             SessionKind::Monitor => unreachable!("the monitor has no sandbox"),
             // Only a kit the daemon recorded: the pane never names one.
