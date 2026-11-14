@@ -207,6 +207,174 @@ Shots, each looked at (`desktop/.sbxw-artifacts/jarvis/`):
   spoken words that cannot leave (Jarvis not running) are put in the input.
 - One proposal dialog at a time, as the daemon keeps one pending.
 
+## First real run: two fixes
+
+Thread `desktop-jarvis-fixes`, branch `sbxw/desktop-jarvis-fixes`. The
+user's first run on a Mac against the real daemon showed two defects, then
+a third (the microphone did not silence Jarvis). Line numbers below are
+those of the code before the fix (commit c7a3a18).
+
+### What the code shows about the run
+
+- The desktop cannot read aloud a reply it did not log: before the fix,
+  `read()` was only called right after `say()` (`src/shell/jarvis.rs:178`),
+  and only when the person's last message was spoken
+  (`Wiring::spoken`). A typed message is never read back.
+- The web UI reads every Jarvis answer and every question aloud on its own
+  (`assets/js/concierge.js:1089`, `vcAgentQuestion` at 1250, voice unmuted
+  by default). The user confirmed a browser tab was probably open at the
+  same time. So the voice heard for the missing first answer most likely came
+  from that tab, while the panel had dropped the answer.
+- The daemon sends one `session` event **per session of the sandbox** on
+  every hook (`crates/core/src/agents.rs:442`, `infos_for(sandbox)`), and a
+  session it first hears of mid-turn starts as `working` (`SessionState`
+  default). A Claude Code question (`AskUserQuestion`) puts the session in
+  `attention` with `steps`, and the next turn starts when it is answered.
+
+### Defect 1: the first answer was not in the panel (and the stuck "…")
+
+Cause, two parts, both in `src/jarvis.rs`:
+
+1. `ingest_session` (`src/jarvis.rs:230-241`) only took a reply on `idle`
+   after `working`/`attention`, and ignored `attention` entirely. A first
+   answer that is a question with numbered options (`AskUserQuestion`, which
+   the person then answered with "2") was never shown; the answer after "2"
+   was an ordinary reply and was shown. That matches the screenshot.
+2. It kept **one** previous state for the whole sandbox
+   (`session_state`, line 230) and set `working` from whichever event came
+   last (line 231). With a second session in the sandbox (for example an
+   older one left as `working`), the events alternate, so a turn's
+   `working` to `idle` is seen across two sessions (a reply dropped), and
+   `working` ends `true` after every hook: the lone "…" drawn by
+   `screens/jarvis.luau:68`. The seed (`seed_sessions`, line 247) could also
+   overwrite the state with a stale snapshot.
+
+Fix: each session is followed by `session_id`; a reply is new when that
+session's own turn ended, or when a session never seen before is idle with a
+reply while our message waits for its answer (`awaiting`); a question
+(`attention` with `steps`) is shown as Jarvis's message with its options
+numbered and "Answer with the number of your choice." (a typed number answers
+it, as the person did); each reply and question is shown once. "…" means:
+our message is not answered yet, or the newest session is working; it clears
+on a reply, a question, a failed send, Jarvis leaving `running`, and a
+reconnect.
+
+Rule, enforced in code: anything read aloud is a message of the log, read
+by id (`read(msg)` takes no text); a message is read by itself at most once
+(`Jarvis::auto_read`), again only with its speaker button. The proposal
+announcement that used to be read without a log line now has one.
+
+### Defect 2: "Not sent: Jarvis is not running..." stayed at the top
+
+Cause: `send()` wrote the refusal into the conversation as an error line
+(`src/shell/jarvis.rs:458`); the log keeps every line, so it stayed above
+everything after Jarvis started.
+
+Fix: a refused send is not a conversation line. It is shown in red beside
+the input row (`data.jarvis.send`), the text stays in the input, and one
+button says what it does: **Start Jarvis and send** (absent, stopped,
+failed) or **Send once it runs** (creating, starting). That button returns
+`start_jarvis` and `send_to_jarvis` together; only that pair queues the
+text, which leaves once Jarvis runs (`send_kept`). A plain Start, or Enter
+while Jarvis starts, never sends later. The line goes when Jarvis runs, when
+a send succeeds, or when the person edits the input (the screen's
+`edited` action); with the line shown, the log's own Start button is hidden,
+so there is one Start button. Emptying the input cancels a queued send.
+
+### Defect 3: the talk button did not silence Jarvis
+
+Cause: `read()` asks the daemon for speech on a thread
+(`src/shell/jarvis.rs:577-588`); its answer, `JEvent::Speech`, was played
+unconditionally (line 381). Pressing talk while that speech was still being
+made stopped nothing (nothing played yet) and the speech then played into
+the open microphone, which recorded Jarvis. Nothing in `src/audio/` is at
+fault: `start_capture` does stop what plays.
+
+Fix: every reading has a generation; `stop_reading()` (called by talk, F8,
+the speaker button and "stop reading") bumps it, stops playback, clears the
+panel's reading state at once, and sets the stop flag of the reading's
+`voice::Chain` so no further piece is fetched. A `Speech` of an older
+generation, or arriving while recording, is dropped. Nothing is read while
+the microphone is open: an answer arriving then is shown, not read; nothing
+resumes after the capture.
+
+The doubled reading the user heard is most likely the browser tab reading
+the same answer. The desktop now says so: when the daemon's `clients` event
+counts another `/api/stream` client, one muted line under the header reads
+"sbxw is also open in another window or browser tab: Jarvis may be read
+aloud there too." (The island uses `/api/events` and is not counted.)
+
+### Evidence
+
+Tests (`src/shell/jarvis.rs`, module `tests`, the app with a fixture daemon
+and a shared `FakeAudio`, events shaped as the daemon sends them):
+`first_answer_with_options_is_shown_and_working_clears`,
+`a_reply_from_a_session_never_seen_is_the_answer_once`,
+`talk_stops_the_reading_for_good_and_nothing_is_read_twice`,
+`a_refused_send_offers_start_and_send_and_clears`. Run against the code
+before the fix (a detached worktree of c7a3a18 with the same tests), all
+four fail: the question is missing (`left: 0, right: 1`), the never-seen
+session's reply is missing, the speech that arrived after talk was played
+(`left: 2, right: 1`), the refusal is in the conversation. After the fix:
+`cargo test --release`: 118 passed (114 unit, 3 link, 1 pump), 2 ignored.
+
+Shots (`scripts/demo-jarvis-first-run.sh`, stand-in with
+`--jarvis absent --stale-session yes`; `strip-first-run.png` puts the first
+four side by side):
+
+- `first-refused.png`: "changez la voix" typed, Enter: no conversation line;
+  above the input, in red, "Not sent: Jarvis is not running." with the green
+  **Start Jarvis and send** button; the text still in the input; the panel's
+  explanation without a second Start button.
+- `first-edited.png`: one Backspace later: the red line and its button are
+  gone, the log's **Start Jarvis** is back, "changez la voi" in the input.
+- `first-asked.png`: after the button: Jarvis started, the kept text left by
+  itself (log "running, sending the kept message as asked"), the input is
+  empty, the error gone, and the first answer shown: "Which voice should
+  read my answers?", the list 1. fr_female 2. en_female 3. de_male, "Answer
+  with the number of your choice."; no "…" although the stand-in's older
+  session stays `working`.
+- `first-answered.png` and `first-end.png` (2 s later): "2" in a bubble,
+  then the second answer "You chose **en_female**..."; no "…" under it.
+- `first-others.png` (`--clients 2`): the muted line about another window or
+  tab under the header.
+- `scripts/demo-jarvis.sh` rerun: same steps and outcomes as before
+  (`demo-high-told.png` refreshed: no stray "…").
+
+### Not verified
+
+- The real daemon and a real Jarvis session: the event shapes come from
+  `crates/core/src/agents.rs`; whether the Mac's sandbox really had a second
+  session, and whether the first answer was an `AskUserQuestion`, cannot be
+  seen from here. Both cases are handled.
+- macOS, the real microphone and speakers (`audio::Audio`): the reading race
+  is covered with `FakeAudio`; the timing on a real device is not.
+- `docs/screens.md` (outside this thread) does not yet list
+  `data.jarvis.send` and `data.jarvis.others`.
+
+### Check on the Mac
+
+1. Close every browser tab of sbxw first (then once more with one open, for
+   step 6). `cd desktop && git pull && cargo run --release`.
+2. If Jarvis runs, stop it (`sbx stop sbxw-jarvis`). Open the panel (⌘J),
+   type `changez la voix`, Enter. Expect: no line in the conversation, the
+   red "Not sent: Jarvis is not running." beside the input with **Start
+   Jarvis and send**, your text still in the input. Type one letter: the
+   line goes. Press Enter again: it comes back.
+3. Click **Start Jarvis and send**. Expect: Jarvis starts, then your text
+   leaves by itself, the input empties, the red line is gone.
+4. Jarvis's first answer, whatever its form (a question with options or
+   text), shows in the panel. If it lists options, type `2`, Enter: the
+   next answer shows. After each answer, no "…" stays under it.
+5. Hold F8 (or click the mic) and ask something; while Jarvis's answer is
+   being read, click the mic: the reading stops at once and does not
+   resume; release or click again: what you said is sent, not Jarvis's
+   words. Ask again and wait: each answer is read once.
+6. Open the web UI in a browser tab: the panel shows "sbxw is also open in
+   another window or browser tab: Jarvis may be read aloud there too."
+7. If something differs, send the log: `RUST_LOG=info cargo run --release
+   2>~/sbxw-jarvis.log`, the lines starting with `jarvis`.
+
 ## Test on the Mac
 
 1. Audio alone first (isolates device problems), from `AUDIO.md`:

@@ -33,8 +33,29 @@ local function message(m, speaks)
   return text{ m.text, wrap = true, size = "sm", color = "text-muted" }
 end
 
+-- Why the last message did not leave, beside the input. Hidden once the
+-- person edits the input (the core clears it when a send succeeds or Jarvis
+-- runs). The button says what it does: start and send the kept text.
+local function send_note(j, state)
+  local e = j.send
+  if not e then return false end
+  if not e.queued and state.edited ~= nil and state.edited ~= e.input then return false end
+  local offer = false
+  if e.offer == "start" then
+    offer = button{ "Start Jarvis and send", icon = "play", variant = "primary", on = "start_send",
+      help = "Starts Jarvis, then sends what is in the input" }
+  elseif e.offer == "wait" then
+    offer = button{ "Send once it runs", variant = "ghost", on = "start_send",
+      help = "Sends what is in the input as soon as Jarvis runs" }
+  end
+  return row{ w = "full", gap = 8,
+    column{ grow = 1, text{ e.text, wrap = true, size = "sm", color = e.queued and "text-muted" or "red" } },
+    offer,
+  }
+end
+
 return {
-  render = function(_, data)
+  render = function(state, data)
     local j = data.jarvis
     local v = j.voice
     local running = j.status == "running"
@@ -50,12 +71,13 @@ return {
       button{ icon = "close", variant = "ghost", on = "close", help = "Close the Jarvis panel" },
     }
 
+    local note = send_note(j, state)
     local log = {}
     if not running and #j.log == 0 then
       local why = WHY[j.status] or ""
       if j.status == "failed" then why = "Jarvis could not start: " .. (j.error or "unknown error") end
       log[#log + 1] = text{ why, wrap = true, color = "text-muted" }
-      if j.status == "absent" or j.status == "stopped" or j.status == "failed" then
+      if (j.status == "absent" or j.status == "stopped" or j.status == "failed") and not note then
         log[#log + 1] = row{ button{ "Start Jarvis", icon = "play", variant = "primary", on = "start" } }
       elseif j.status == "creating" or j.status == "starting" then
         log[#log + 1] = progress{ value = 0.5, tone = "blue" }
@@ -67,7 +89,7 @@ return {
     if j.working or j.sending then
       log[#log + 1] = text{ "…", color = "text-muted", key = "jarvis-working" }
     end
-    if not running and #j.log > 0 and (j.status == "absent" or j.status == "stopped" or j.status == "failed") then
+    if not running and #j.log > 0 and not note and (j.status == "absent" or j.status == "stopped" or j.status == "failed") then
       log[#log + 1] = row{ button{ "Start Jarvis", icon = "play", variant = "primary", on = "start" } }
     end
     log.gap = 12
@@ -84,10 +106,13 @@ return {
 
     return column{ w = "full", h = "full", gap = 8,
       head,
+      (j.others or 0) > 0 and text{ "sbxw is also open in another window or browser tab: Jarvis may be read aloud there too.",
+        wrap = true, size = "sm", color = "text-muted" } or false,
       scroll(log),
       v.recording and progress{ value = v.level, tone = "red" } or false,
+      note,
       row{ w = "full", gap = 6,
-        column{ grow = 1, input{ id = "jarvis-input", on_submit = "send",
+        column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited",
           placeholder = running and "Ask Jarvis" or "Ask Jarvis (start it first)" } },
         talk,
         button{ icon = "send", on = "send", help = "Send (Enter)" },
@@ -96,8 +121,14 @@ return {
   end,
 
   actions = {
-    send = function() return intent("send_to_jarvis", { input = "jarvis-input" }) end,
+    send = function(state) state.edited = nil; return intent("send_to_jarvis", { input = "jarvis-input" }) end,
+    edited = function(state, _, text) state.edited = text or "" end,
     start = function() return intent("start_jarvis") end,
+    -- One press, both intents: the core sends the input once Jarvis runs.
+    start_send = function(state)
+      state.edited = nil
+      return { intent("start_jarvis"), intent("send_to_jarvis", { input = "jarvis-input" }) }
+    end,
     close = function() return intent("toggle_jarvis_panel", { open = false }) end,
     review = function(_, id) return intent("approve_proposal", { id = id }) end,
     talk = function(_, recording)

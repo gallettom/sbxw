@@ -34,7 +34,9 @@ pub enum JEvent {
     Approved { id: String, via: &'static str, result: Result<J, (Option<u16>, String)> },
     Refused { id: String, result: Result<J, String> },
     Transcribed(Result<String, String>),
-    Speech { msg: u64, result: Result<(u32, crate::voice::Chain), String> },
+    /// The speech of message `msg` for reading `gen` (a newer reading, a stop
+    /// or the microphone makes it stale: it is then dropped, never played).
+    Speech { msg: u64, gen: u64, result: Result<(u32, crate::voice::Chain), String> },
 }
 
 pub struct Wiring {
@@ -55,6 +57,13 @@ pub struct Wiring {
     pub reserved: &'static [Key],
     /// The panel's width while its handle is dragged.
     pub drag_from: f32,
+    /// The current reading; bumped by every new reading and every stop.
+    pub read_gen: u64,
+    /// Stops the current reading's chain of speech requests for good.
+    pub read_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// The intents being run hold `start_jarvis` and `send_to_jarvis`: the
+    /// person pressed "Start Jarvis and send".
+    pub start_and_send: bool,
 }
 
 impl Wiring {
@@ -71,6 +80,9 @@ impl Wiring {
             spoken: false,
             reserved: reserved_for("F8"),
             drag_from: 0.0,
+            read_gen: 0,
+            read_stop: None,
+            start_and_send: false,
         }
     }
 }
@@ -145,6 +157,7 @@ impl App {
 
     /// Connected (again): read where Jarvis stands, its proposals, its last turn, the voice.
     pub(super) fn jarvis_connected(&mut self) {
+        self.jarvis.reconnected();
         self.jarvis_job(|d| JEvent::Status(d.jarvis_status().map_err(|e| client::reason(&e))));
         self.jarvis_job(|d| JEvent::Proposals(d.jarvis_proposals().map_err(|e| client::reason(&e))));
         self.jarvis_job(|d| JEvent::Sessions(d.sessions().unwrap_or_default()));
@@ -175,12 +188,14 @@ impl App {
                 if !self.jarvis.running() {
                     self.wiring.status_due = Some(Instant::now());
                 }
-                if let Some(reply) = self.jarvis.ingest_session(&v) {
-                    if self.wiring.spoken {
-                        let id = self.jarvis.log.last().map(|m| m.id).unwrap_or(0);
-                        self.read(id, reply);
-                    }
+                // Shown first (in the log), then perhaps read: never the other way.
+                if let Some(id) = self.jarvis.ingest_session(&v) {
+                    self.auto_read(id);
                 }
+                true
+            }
+            "clients" => {
+                self.jarvis.clients = data.trim().parse().unwrap_or(1);
                 true
             }
             "voice" => {
@@ -218,12 +233,13 @@ impl App {
             ProposalNews::New(id) => {
                 let summary = self.jarvis.proposal(&id).and_then(|p| p["summary"].as_str()).unwrap_or("").to_string();
                 log::info!("jarvis proposes {id}: {summary}");
-                // The dialog shows it; the voice reads the summary when the person talks.
+                // The dialog shows it; when the person talks, the summary is
+                // said too, and what is said is in the log first.
                 if self.wiring.spoken {
                     let high = self.jarvis.proposal(&id).is_some_and(jarvis::screen_only);
                     let say = if high { format!("Jarvis proposes: {summary}. {CLICK_NEEDED}") } else { format!("Jarvis proposes: {summary}. Shall I apply it?") };
-                    let msg = self.jarvis.log.last().map(|m| m.id).unwrap_or(0);
-                    self.read(msg, say);
+                    let msg = self.jarvis.say(Who::Note, say);
+                    self.auto_read(msg);
                 }
             }
             ProposalNews::Settled(id, state) => {
@@ -302,14 +318,32 @@ impl App {
                 if matches!(state.as_str(), "creating" | "starting") {
                     self.wiring.status_due = Some(Instant::now() + Duration::from_millis(1500));
                 }
-                if state == "running" && self.jarvis.status != "running" {
+                let was_running = self.jarvis.running();
+                self.jarvis.status = state.clone();
+                if state == "running" && !was_running {
                     self.jarvis_job(|d| JEvent::Sessions(d.sessions().unwrap_or_default()));
+                    // Running: a "not running" error is over; a send the
+                    // person asked for with "Start Jarvis and send" leaves now.
+                    if let Some(e) = self.jarvis.send_error.take() {
+                        if e.queued {
+                            self.send_kept();
+                        }
+                    }
+                } else if state != "running" {
+                    self.jarvis.not_awaiting();
+                    if state == "failed" || state == "stopped" || state == "absent" {
+                        if let Some(e) = self.jarvis.send_error.as_mut().filter(|e| e.queued) {
+                            e.queued = false;
+                            e.offer = "start";
+                            e.text = format!("Not sent: Jarvis could not start{}.", self.jarvis.status_error.as_deref().map(|x| format!(" ({x})")).unwrap_or_default());
+                        }
+                    }
                 }
-                self.jarvis.status = state;
             }
             JEvent::Status(Err(e)) => {
                 self.jarvis.status = "unknown".into();
                 self.jarvis.status_error = Some(e);
+                self.jarvis.not_awaiting();
             }
             JEvent::Proposals(Ok(list)) => {
                 let first = self.jarvis.proposals.is_empty();
@@ -327,13 +361,14 @@ impl App {
                         if let Some(i) = input {
                             self.screen_mut("jarvis").map(|s| s.ui.clear(&i));
                         }
-                        self.jarvis.working = true;
+                        self.jarvis.send_error = None;
                         if masked > 0 {
                             self.jarvis.say(Who::Note, format!("Sent with {masked} name{} masked: {text}", if masked == 1 { "" } else { "s" }));
                         }
                     }
                     Err(e) => {
-                        self.jarvis.say(Who::Error, format!("Not sent: {e}"));
+                        self.jarvis.not_awaiting();
+                        self.send_failed(format!("Not sent: {e}"), "none", false);
                     }
                 }
             }
@@ -377,10 +412,16 @@ impl App {
             JEvent::Transcribed(Err(e)) => {
                 self.jarvis.say(Who::Error, format!("Could not transcribe: {e}"));
             }
-            JEvent::Speech { msg, result } => match result {
+            // A reading stopped, replaced, or overtaken by the microphone
+            // while its speech was being made is dropped here: never played.
+            JEvent::Speech { gen, .. } if gen != self.wiring.read_gen || self.jarvis.recording => {
+                log::info!("jarvis: a stale reading dropped");
+            }
+            JEvent::Speech { msg, result, .. } => match result {
                 Ok((rate, chain)) => match self.audio.play(rate, Box::new(chain)) {
                     Ok(()) => self.jarvis.reading = Some(msg),
                     Err(e) => {
+                        self.jarvis.reading = None;
                         self.jarvis.say(Who::Error, format!("Could not read aloud: {e}"));
                     }
                 },
@@ -441,21 +482,37 @@ impl App {
     fn click_needed(&mut self, id: &str) {
         self.jarvis.shown = Some(id.to_string());
         self.jarvis.armed = Some(id.to_string());
-        self.jarvis.say(Who::Note, CLICK_NEEDED);
-        if self.wiring.spoken {
-            let msg = self.jarvis.log.last().map(|m| m.id).unwrap_or(0);
-            self.read(msg, CLICK_NEEDED.to_string());
+        let msg = self.jarvis.say(Who::Note, CLICK_NEEDED);
+        self.auto_read(msg);
+    }
+
+    /// The input's text now.
+    fn input_text(&mut self) -> String {
+        self.screen_mut("jarvis").and_then(|s| s.ui.edits.get(INPUT).map(|e| e.0.text.clone())).unwrap_or_default()
+    }
+
+    /// A message could not leave: why, beside the input (not in the
+    /// conversation), with what the panel offers; the text stays in the input.
+    fn send_failed(&mut self, text: String, offer: &'static str, queued: bool) {
+        let input = self.input_text();
+        self.jarvis.send_error = Some(jarvis::SendError { text, offer, queued, input });
+    }
+
+    /// Jarvis runs and the person had pressed "Start Jarvis and send": the
+    /// input's text leaves now (emptied by the person: nothing leaves).
+    fn send_kept(&mut self) {
+        let text = self.input_text();
+        if text.trim().is_empty() {
+            return;
         }
+        log::info!("jarvis: running, sending the kept message as asked");
+        // Never an answer to a proposal: only a message.
+        self.send(text.trim().to_string(), Some(INPUT.to_string()));
     }
 
     /// A message to Jarvis: masked, then typed into its session.
     fn send(&mut self, text: String, input: Option<String>) {
         if !self.jarvis.running() {
-            let why = match self.jarvis.status.as_str() {
-                "creating" | "starting" => "Not sent: Jarvis is starting. Press Enter again once it runs.",
-                _ => "Not sent: Jarvis is not running. Start it, then press Enter again.",
-            };
-            self.jarvis.say(Who::Error, why);
             // Spoken words are not lost: they wait in the input.
             if input.is_none() {
                 if let Some(s) = self.screen_mut("jarvis") {
@@ -464,22 +521,32 @@ impl App {
                     }
                 }
             }
+            let starting = matches!(self.jarvis.status.as_str(), "creating" | "starting");
+            let queued = self.wiring.start_and_send;
+            let (why, offer) = match (starting || queued, queued) {
+                (_, true) => ("Starting Jarvis: your message leaves once it runs. Empty the input to cancel.", "none"),
+                (true, false) => ("Not sent: Jarvis is still starting.", "wait"),
+                _ => ("Not sent: Jarvis is not running.", "start"),
+            };
+            self.send_failed(why.into(), offer, queued);
             return;
         }
         if self.jarvis.sending {
-            self.jarvis.say(Who::Error, "Not sent: the last message is still on its way.");
+            self.send_failed("Not sent: the last message is still on its way.".into(), "none", false);
             return;
         }
         self.jarvis.say(Who::Me, &text);
         self.jarvis.sending = true;
+        self.jarvis.sent();
         let started = self.jarvis_job(move |d| {
             let r = d.anonymise(&text).and_then(|(safe, n)| d.chat_push(jarvis::SANDBOX, &safe).map(|()| (safe, n)));
             JEvent::Sent { input, result: r.map_err(|e| client::reason(&e)) }
         });
         if !started {
             self.jarvis.sending = false;
+            self.jarvis.not_awaiting();
             let why = self.connection.text.clone();
-            self.jarvis.say(Who::Error, format!("Not sent: {why}"));
+            self.send_failed(format!("Not sent: {why}"), "none", false);
         }
     }
 
@@ -539,7 +606,9 @@ impl App {
         if let Some(n) = &self.jarvis.key_note {
             log::info!("{n}");
         }
-        self.jarvis.reading = None;
+        // The microphone must not hear Jarvis: the reading ends for good,
+        // including speech still being made for it.
+        self.stop_reading();
         match self.audio.start_capture() {
             Ok(()) => {
                 self.jarvis.recording = true;
@@ -573,19 +642,43 @@ impl App {
         }
     }
 
-    /// Reads `text` aloud, for message `msg`.
-    fn read(&mut self, msg: u64, text: String) {
-        if !self.audio.available() || !self.jarvis.voice.as_ref().is_some_and(|v| v["speech"]["supported"] == true && v["ready"] == true) {
+    /// A message of the log read by itself (an answer to words spoken):
+    /// once per message, never while the microphone is open.
+    fn auto_read(&mut self, msg: u64) {
+        if !self.wiring.spoken || self.jarvis.recording || !self.jarvis.auto_read.insert(msg) {
+            return;
+        }
+        self.read(msg);
+    }
+
+    /// Reads message `msg` of the log aloud: only what is shown is said.
+    fn read(&mut self, msg: u64) {
+        let Some(text) = self.jarvis.log.iter().find(|m| m.id == msg).map(|m| m.text.clone()) else { return };
+        if self.jarvis.recording || !self.audio.available() || !self.jarvis.voice.as_ref().is_some_and(|v| v["speech"]["supported"] == true && v["ready"] == true) {
             return;
         }
         let pieces = jarvis::speech_pieces(&text, 1000);
         if pieces.is_empty() {
             return;
         }
-        self.audio.stop_playback();
-        self.jarvis.reading = Some(msg);
+        self.stop_reading();
         let Some(d) = self.daemon.clone() else { return };
-        self.jarvis_job(move |_| JEvent::Speech { msg, result: crate::voice::Chain::start(d, pieces).map_err(|e| client::reason(&e)) });
+        let gen = self.wiring.read_gen;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.wiring.read_stop = Some(stop.clone());
+        self.jarvis.reading = Some(msg);
+        self.jarvis_job(move |_| JEvent::Speech { msg, gen, result: crate::voice::Chain::start(d, pieces, stop).map_err(|e| client::reason(&e)) });
+    }
+
+    /// Ends the reading for good: what plays stops, speech still being made
+    /// for it is dropped when it arrives, and its chain fetches nothing more.
+    pub(super) fn stop_reading(&mut self) {
+        self.wiring.read_gen += 1;
+        if let Some(s) = self.wiring.read_stop.take() {
+            s.store(true, Ordering::Release);
+        }
+        self.audio.stop_playback();
+        self.jarvis.reading = None;
     }
 
     /// The Jarvis intents.
@@ -611,16 +704,12 @@ impl App {
             Intent::TalkStop => self.talk_stop(),
             Intent::ReadAloud { id } => {
                 if self.jarvis.reading == Some(id) {
-                    self.audio.stop_playback();
-                    self.jarvis.reading = None;
-                } else if let Some(m) = self.jarvis.log.iter().find(|m| m.id == id).cloned() {
-                    self.read(id, m.text);
+                    self.stop_reading();
+                } else {
+                    self.read(id);
                 }
             }
-            Intent::StopReading => {
-                self.audio.stop_playback();
-                self.jarvis.reading = None;
-            }
+            Intent::StopReading => self.stop_reading(),
             Intent::RefuseProposal { id, reason } => self.refuse(&id, reason),
             Intent::OpenLink { url } => {
                 if crate::markdown::safe_url(&url) {
@@ -772,5 +861,267 @@ impl ProposalAnswers for App {
     }
     fn reason_edit(&mut self) -> &mut TextEdit {
         &mut self.wiring.reason
+    }
+}
+
+/// The first real run on a Mac (JARVIS.md, "First real run: two fixes"),
+/// replayed with the daemon's own event shapes.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{FixtureDaemon, FixtureData};
+    use crate::screen::Host;
+    use crate::shell::Args;
+    use crate::voice::{AudioIo, FakeAudio};
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    /// FakeAudio the test can look into while the app owns it.
+    struct Shared(Arc<Mutex<FakeAudio>>);
+    impl AudioIo for Shared {
+        fn available(&self) -> bool {
+            true
+        }
+        fn start_capture(&mut self) -> Result<(), String> {
+            self.0.lock().unwrap().start_capture()
+        }
+        fn stop_capture(&mut self) -> Result<Vec<u8>, String> {
+            self.0.lock().unwrap().stop_capture()
+        }
+        fn cancel_capture(&mut self) {
+            self.0.lock().unwrap().cancel_capture()
+        }
+        fn play(&mut self, rate: u32, pcm: Box<dyn std::io::Read + Send>) -> Result<(), String> {
+            self.0.lock().unwrap().play(rate, pcm)
+        }
+        fn stop_playback(&mut self) {
+            self.0.lock().unwrap().stop_playback()
+        }
+        fn events(&mut self) -> Vec<AudioEvent> {
+            self.0.lock().unwrap().events()
+        }
+    }
+
+    struct Run {
+        a: App,
+        d: Arc<FixtureDaemon>,
+        audio: Arc<Mutex<FakeAudio>>,
+    }
+
+    impl Run {
+        /// The panel open on a daemon where Jarvis is `status`, with a voice that speaks.
+        fn new(status: &str) -> Run {
+            let mut a = App::new(Args { fixture: Some(format!("{}/fixtures/jarvis/absent.json", env!("CARGO_MANIFEST_DIR"))), ..Args::default() });
+            let voice = json!({ "ok": true, "ready": true, "speech": { "supported": true }, "push_to_talk_key": "F8" });
+            let data: FixtureData = serde_json::from_value(json!({ "jarvis_status": { "state": status }, "voice": voice })).unwrap();
+            let d = Arc::new(FixtureDaemon::new("first-run", data));
+            a.daemon = Some(d.clone());
+            let audio = Arc::new(Mutex::new(FakeAudio { capture: vec![0u8; 16_000 * 4], ..Default::default() }));
+            a.audio = Box::new(Shared(audio.clone()));
+            a.jarvis.voice = Some(voice);
+            a.jarvis.open = true;
+            let mut r = Run { a, d, audio };
+            r.a.on_jevent(JEvent::Status(Ok(json!({ "state": status }))));
+            r.settle();
+            r
+        }
+        /// Every daemon call answered, every audio event drained.
+        fn settle(&mut self) {
+            let until = Instant::now() + Duration::from_secs(3);
+            loop {
+                while self.a.wiring.pending.load(Ordering::SeqCst) > 0 && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let mut any = false;
+                while let Ok(ev) = self.a.wiring.rx.try_recv() {
+                    self.a.on_jevent(ev);
+                    any = true;
+                }
+                any |= self.a.poll_jarvis(&mut Tx::default());
+                if !any && self.a.wiring.pending.load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+            }
+        }
+        fn input(&mut self) -> String {
+            self.a.screen_mut("jarvis").unwrap().ui.edits.get(INPUT).map(|e| e.0.text.clone()).unwrap_or_default()
+        }
+        /// The person types `text` and presses Enter.
+        fn enter(&mut self, text: &str) {
+            self.a.screen_mut("jarvis").unwrap().ui.edits.insert(INPUT.into(), (TextEdit::new(text), None));
+            self.a.intents("jarvis", vec![Intent::SendToJarvis { input: INPUT.into() }]);
+            self.settle();
+        }
+        fn pushed(&self) -> Vec<String> {
+            self.d.pushed().into_iter().map(|p| p.1).collect()
+        }
+        /// One hook of the daemon: a `session` event for EACH session of the
+        /// sandbox, in session id order (agents.rs `apply` then `infos_for`).
+        fn hook(&mut self, sessions: &[J]) {
+            for s in sessions {
+                self.a.jarvis_bus("session", &s.to_string());
+            }
+            self.settle();
+        }
+        fn shown(&self) -> Vec<(Who, String)> {
+            self.a.jarvis.log.iter().map(|m| (m.who, m.text.clone())).collect()
+        }
+        fn played(&self) -> usize {
+            self.audio.lock().unwrap().played.len()
+        }
+    }
+
+    fn sess(id: &str, started: u64, state: &str, extra: J) -> J {
+        let mut v = json!({ "sandbox": jarvis::SANDBOX, "mode": "claude", "state": state, "agent": "claude", "started_ms": started,
+            "session_id": id, "origin": "tty", "answerable": true, "ts": 0 });
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        v
+    }
+
+    const OPTIONS: &str = "Which voice do you want?\n\n1. fr_female\n2. en_female\n3. de_male";
+
+    /// The sequence of the first real run: panel open while Jarvis is not
+    /// running, a message refused, Jarvis started, Enter again, a first
+    /// answer offering numbered options (a question, `AskUserQuestion`),
+    /// "2", the second answer. Jarvis's sandbox holds an older session left
+    /// behind as `working` (its hooks stopped), so every hook of the new
+    /// session comes with that one's event too.
+    #[test]
+    fn first_answer_with_options_is_shown_and_working_clears() {
+        let mut r = Run::new("absent");
+        r.enter("changez la voix");
+        assert!(r.pushed().is_empty());
+        r.a.intents("jarvis", vec![Intent::StartJarvis]);
+        r.settle();
+        r.a.on_jevent(JEvent::Status(Ok(json!({ "state": "running" }))));
+        r.settle();
+        let old = |state: &str| sess("z-old", 1, state, json!({}));
+        r.hook(&[sess("a-new", 2, "idle", json!({})), old("working")]);
+        r.enter("changez la voix");
+        assert_eq!(r.pushed(), vec!["changez la voix".to_string()]);
+        r.hook(&[sess("a-new", 2, "working", json!({ "last_input": "changez la voix" })), old("working")]);
+        let ask = json!({ "steps": [{ "text": "Which voice do you want?", "options": ["fr_female", "en_female", "de_male"] }], "activity": "Which voice do you want?" });
+        r.hook(&[sess("a-new", 2, "attention", ask.clone()), old("working")]);
+        let jarvis_lines = |r: &Run| r.shown().into_iter().filter(|m| m.0 == Who::Jarvis).map(|m| m.1).collect::<Vec<_>>();
+        assert_eq!(jarvis_lines(&r).len(), 1, "the first answer (a question with options) is shown: {:?}", r.shown());
+        assert!(jarvis_lines(&r)[0].starts_with(OPTIONS), "{:?}", jarvis_lines(&r));
+        assert!(!r.a.jarvis.working, "a question waits for the person: no \"…\"");
+        // The same state again (another hook): not shown twice.
+        r.hook(&[sess("a-new", 2, "attention", ask), old("working")]);
+        assert_eq!(jarvis_lines(&r).len(), 1);
+        r.enter("2");
+        r.hook(&[sess("a-new", 2, "working", json!({})), old("working")]);
+        assert!(r.a.jarvis.working);
+        let second = "Done: I propose the English voice.";
+        r.hook(&[sess("a-new", 2, "idle", json!({ "reply": second })), old("working")]);
+        r.hook(&[sess("a-new", 2, "idle", json!({ "reply": second })), old("working")]);
+        assert_eq!(jarvis_lines(&r).len(), 2, "{:?}", r.shown());
+        assert_eq!(jarvis_lines(&r)[1], second);
+        assert!(!r.a.jarvis.working, "the \"…\" ends with the turn, whatever the older session says");
+        assert_eq!(r.a.jarvis.screen_data(true)["working"], false);
+    }
+
+    /// A first turn whose working state was never seen (the session is new
+    /// to the panel): its reply is still the answer to the message sent.
+    #[test]
+    fn a_reply_from_a_session_never_seen_is_the_answer_once() {
+        let mut r = Run::new("running");
+        r.enter("hello");
+        r.hook(&[sess("s1", 5, "idle", json!({ "reply": "Hello, I am Jarvis.\n\n1. Voice\n2. Kits" }))]);
+        r.hook(&[sess("s1", 5, "idle", json!({ "reply": "Hello, I am Jarvis.\n\n1. Voice\n2. Kits" }))]);
+        let answers: Vec<_> = r.shown().into_iter().filter(|m| m.0 == Who::Jarvis).collect();
+        assert_eq!(answers.len(), 1, "{:?}", r.shown());
+        assert!(!r.a.jarvis.working);
+        // Reconnected: the "…" is not carried over.
+        r.a.jarvis.working = true;
+        r.a.jarvis_connected();
+        assert!(!r.a.jarvis.working);
+    }
+
+    /// Spoken words: whatever is read aloud is in the log first, each answer
+    /// read once; the microphone stops the reading for good, including the
+    /// speech still being made, and nothing is read while it is open.
+    #[test]
+    fn talk_stops_the_reading_for_good_and_nothing_is_read_twice() {
+        let mut r = Run::new("running");
+        r.a.wiring.spoken = true;
+        r.a.jarvis.sent();
+        r.hook(&[sess("s1", 5, "working", json!({}))]);
+        r.hook(&[sess("s1", 5, "idle", json!({ "reply": "First answer." }))]);
+        assert_eq!(r.played(), 1, "read once");
+        assert_eq!(r.a.jarvis.log.last().unwrap().text, "First answer.", "shown, and before it was read");
+        r.hook(&[sess("s1", 5, "idle", json!({ "reply": "First answer." }))]);
+        assert_eq!(r.played(), 1, "the same answer again is not read again");
+
+        // The next answer: its speech is being made when talk is pressed.
+        r.hook(&[sess("s1", 5, "working", json!({}))]);
+        r.a.jarvis_bus("session", &sess("s1", 5, "idle", json!({ "reply": "Second answer." })).to_string());
+        assert!(r.a.jarvis.reading.is_some());
+        r.a.intents("jarvis", vec![Intent::TalkStart]);
+        assert!(r.a.jarvis.reading.is_none(), "the panel says at once that the reading ended");
+        r.settle();
+        assert_eq!(r.played(), 1, "the speech that arrived after talk was pressed is never played");
+        assert!(r.a.jarvis.recording);
+        // An answer arriving while the microphone is open is shown, not read.
+        r.hook(&[sess("s1", 5, "working", json!({}))]);
+        r.hook(&[sess("s1", 5, "idle", json!({ "reply": "Third answer." }))]);
+        assert_eq!(r.a.jarvis.log.last().unwrap().text, "Third answer.");
+        assert_eq!(r.played(), 1);
+        // Released: nothing comes back by itself.
+        r.a.intents("jarvis", vec![Intent::TalkStop]);
+        r.settle();
+        assert_eq!(r.played(), 1, "no reading resumes after the capture");
+        // Its read-aloud button still reads it, on demand.
+        let id = r.a.jarvis.log.iter().find(|m| m.text == "Second answer.").unwrap().id;
+        r.a.intents("jarvis", vec![Intent::ReadAloud { id }]);
+        r.settle();
+        assert_eq!(r.played(), 2);
+    }
+
+    /// A send refused because Jarvis is not running: no line in the
+    /// conversation, the text kept, the error beside the input with "Start
+    /// Jarvis and send"; gone once Jarvis runs or a send succeeds; the kept
+    /// text leaves by itself only when that button was pressed.
+    #[test]
+    fn a_refused_send_offers_start_and_send_and_clears() {
+        let mut r = Run::new("absent");
+        r.enter("changez la voix");
+        assert!(r.a.jarvis.log.is_empty(), "not in the conversation: {:?}", r.shown());
+        assert_eq!(r.input(), "changez la voix", "kept");
+        let e = r.a.jarvis.send_error.clone().expect("shown beside the input");
+        assert_eq!((e.offer, e.queued, e.input.as_str()), ("start", false, "changez la voix"));
+        assert_eq!(r.a.jarvis.screen_data(true)["send"]["offer"], "start");
+        // Plain Start: once running the error goes, and nothing is sent.
+        r.a.intents("jarvis", vec![Intent::StartJarvis]);
+        r.settle();
+        r.a.on_jevent(JEvent::Status(Ok(json!({ "state": "running" }))));
+        r.settle();
+        assert!(r.a.jarvis.send_error.is_none());
+        assert!(r.pushed().is_empty(), "never sent without the person asking");
+        r.enter("changez la voix");
+        assert_eq!(r.pushed().len(), 1);
+        assert!(r.a.jarvis.send_error.is_none());
+
+        // "Start Jarvis and send": sent once running, the input emptied.
+        let mut r = Run::new("stopped");
+        r.enter("use the english voice");
+        r.a.intents("jarvis", vec![Intent::StartJarvis, Intent::SendToJarvis { input: INPUT.into() }]);
+        r.settle();
+        assert!(r.a.jarvis.send_error.as_ref().is_some_and(|e| e.queued));
+        assert!(r.pushed().is_empty());
+        r.a.on_jevent(JEvent::Status(Ok(json!({ "state": "running" }))));
+        r.settle();
+        assert_eq!(r.pushed(), vec!["use the english voice".to_string()]);
+        assert_eq!(r.input(), "");
+        assert!(r.a.jarvis.send_error.is_none());
+        // A later Enter while not running and no button: nothing queued.
+        let mut r = Run::new("starting");
+        r.enter("hello");
+        assert_eq!(r.a.jarvis.send_error.as_ref().map(|e| (e.offer, e.queued)), Some(("wait", false)));
+        r.a.on_jevent(JEvent::Status(Ok(json!({ "state": "running" }))));
+        r.settle();
+        assert!(r.pushed().is_empty());
     }
 }

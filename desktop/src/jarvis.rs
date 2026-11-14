@@ -19,7 +19,7 @@
 //!   daemon enforces the same rule (409).
 
 use serde_json::{json, Value as J};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The daemon's own Jarvis sandbox (`sbxw_core::jarvis::SANDBOX`).
 pub const SANDBOX: &str = "sbxw-jarvis";
@@ -111,10 +111,24 @@ pub struct Jarvis {
     pub status_error: Option<String>,
     pub log: Vec<Msg>,
     next_id: u64,
-    /// Jarvis's session is working on a turn.
+    /// Jarvis's session is working on a turn (or a message sent is not answered yet).
     pub working: bool,
-    session_state: String,
+    /// Each Claude session of Jarvis's sandbox, by `session_id`. The daemon
+    /// sends one `session` event per session of the sandbox on every hook
+    /// (crates/core/src/agents.rs, `Agents::apply` then `infos_for`), so a
+    /// turn is followed per session, never across them.
+    sessions: HashMap<String, Sess>,
+    /// A message left and its answer (a reply or a question) is not shown yet.
+    pub awaiting: bool,
     seeded: bool,
+    /// Messages already read aloud on their own; a message is read by itself
+    /// at most once, again only by its read-aloud button.
+    pub auto_read: HashSet<u64>,
+    /// Why the last message could not leave, shown beside the input until
+    /// the person edits the input, a send succeeds, or Jarvis runs.
+    pub send_error: Option<SendError>,
+    /// `/api/stream` clients, this app included (the daemon's `clients` event).
+    pub clients: u64,
     /// Proposals as the daemon last sent them, oldest first.
     pub proposals: Vec<J>,
     /// The proposal the dialog shows.
@@ -151,8 +165,12 @@ impl Default for Jarvis {
             log: vec![],
             next_id: 1,
             working: false,
-            session_state: String::new(),
+            sessions: HashMap::new(),
+            awaiting: false,
             seeded: false,
+            auto_read: HashSet::new(),
+            send_error: None,
+            clients: 1,
             proposals: vec![],
             shown: None,
             acked: HashSet::new(),
@@ -168,6 +186,59 @@ impl Default for Jarvis {
             key_name: "F8".into(),
         }
     }
+}
+
+/// One Claude session of Jarvis's sandbox, as last seen.
+#[derive(Debug, Clone, Default)]
+struct Sess {
+    state: String,
+    started: u64,
+    /// The reply this session's last turn ended with, once shown or known.
+    reply: Option<String>,
+    /// The question it waits on, once shown.
+    question: Option<String>,
+}
+
+/// A message that could not leave: why, what the panel offers, and the
+/// input's text at that moment (an edit of it hides the error).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SendError {
+    pub text: String,
+    /// `start`: Jarvis is not running, offer "Start Jarvis and send";
+    /// `wait`: it is starting, offer "Send once it runs"; `none`.
+    pub offer: &'static str,
+    /// The person pressed that button: the input is sent once Jarvis runs.
+    pub queued: bool,
+    pub input: String,
+}
+
+/// A session's pending question as text: the question, then its options
+/// numbered, so a typed number answers it (as in the terminal).
+pub fn question_text(info: &J) -> Option<String> {
+    let steps: Vec<J> = match info["steps"].as_array() {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ if info["question"].is_object() => vec![info["question"].clone()],
+        _ => vec![],
+    };
+    let mut parts = vec![];
+    for q in &steps {
+        let text = q["text"].as_str().unwrap_or("").trim();
+        let opts: Vec<String> = q["options"].as_array().map(|o| o.iter().filter_map(|x| x.as_str()).map(str::to_string).collect()).unwrap_or_default();
+        if text.is_empty() && opts.is_empty() {
+            continue;
+        }
+        let mut p = text.to_string();
+        if !opts.is_empty() {
+            p.push_str("\n\n");
+            p.push_str(&opts.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect::<Vec<_>>().join("\n"));
+        }
+        parts.push(p);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let hint = if steps.len() == 1 { "Answer with the number of your choice." } else { "Several questions: answer them in order, with the number of each choice." };
+    Some(format!("{}\n\n{hint}", parts.join("\n\n")))
 }
 
 /// What happened when a proposal came in, for the shell to act on.
@@ -220,32 +291,115 @@ impl Jarvis {
         Heard::Send(text.trim().to_string())
     }
 
-    /// One `session` event (a `SessionInfo`): Jarvis's answer when its turn
-    /// ended with one. Other sandboxes and threads are not Jarvis.
-    pub fn ingest_session(&mut self, info: &J) -> Option<String> {
+    /// One `session` event (a `SessionInfo`) of Jarvis's sandbox: the new
+    /// message to show, when its turn ended with a reply or it asks a
+    /// question. Returns the log id of that message (shown before anything
+    /// reads it). Other sandboxes and threads are not Jarvis.
+    ///
+    /// A reply is new when this session's own turn ended (`working` or
+    /// `attention` to `idle`, chat-core.js `chatIngest`), or when a session
+    /// never seen before is idle with a reply while a message of ours waits
+    /// for its answer (its first turn, missed working state). Shown once.
+    pub fn ingest_session(&mut self, info: &J) -> Option<u64> {
         if info["sandbox"] != SANDBOX || info["thread"].is_string() {
             return None;
         }
-        let state = info["state"].as_str().unwrap_or("").to_string();
-        let prev = std::mem::replace(&mut self.session_state, if state == "exited" { "idle".into() } else { state.clone() });
-        self.working = state == "working";
-        let reply = info["reply"].as_str().filter(|r| !r.trim().is_empty())?;
-        if state == "idle" && (prev == "working" || prev == "attention") {
-            let dup = self.log.iter().rev().find(|m| m.who == Who::Jarvis).is_some_and(|m| m.text == reply);
-            if !dup {
-                self.say(Who::Jarvis, reply);
-                return Some(reply.to_string());
-            }
+        let sid = info["session_id"].as_str().unwrap_or("").to_string();
+        let raw = info["state"].as_str().unwrap_or("");
+        let state = if raw == "exited" { "idle" } else { raw }.to_string();
+        let known = self.sessions.contains_key(&sid);
+        let awaiting = self.awaiting;
+        let s = self.sessions.entry(sid.clone()).or_default();
+        let prev = std::mem::replace(&mut s.state, state.clone());
+        if let Some(t) = info["started_ms"].as_u64() {
+            s.started = t;
         }
-        None
+        let in_turn = prev == "working" || prev == "attention";
+        let mut show = None;
+        match state.as_str() {
+            "working" => {
+                // A new turn: the same words later are a new answer.
+                s.reply = None;
+                s.question = None;
+            }
+            "idle" => {
+                let reply = info["reply"].as_str().filter(|r| !r.trim().is_empty());
+                if let Some(r) = reply {
+                    if (in_turn || (!known && awaiting)) && s.reply.as_deref() != Some(r) {
+                        show = Some(r.to_string());
+                    }
+                    s.reply = Some(r.to_string());
+                }
+                s.question = None;
+                if in_turn || show.is_some() {
+                    self.awaiting = false;
+                }
+            }
+            "attention" => {
+                let q = question_text(info).or_else(|| info["activity"].as_str().map(|a| format!("Jarvis is waiting in its terminal: {a}")));
+                if let Some(q) = q {
+                    if s.question.as_deref() != Some(q.as_str()) {
+                        s.question = Some(q.clone());
+                        show = Some(q);
+                    }
+                }
+                self.awaiting = false;
+            }
+            _ => {}
+        }
+        if raw == "exited" {
+            self.sessions.remove(&sid);
+        }
+        self.update_working();
+        show.map(|t| self.say(Who::Jarvis, t))
     }
 
-    /// The first look (`GET /api/sessions`): the last prompt and its answer,
-    /// when the conversation is still empty.
+    /// Working: a message waits for its answer, or Jarvis's newest session is
+    /// in a turn. An older session left behind never shows "…".
+    fn update_working(&mut self) {
+        let newest = self.sessions.values().max_by_key(|s| s.started);
+        self.working = self.awaiting || newest.is_some_and(|s| s.state == "working");
+    }
+
+    /// A message is on its way: its answer is awaited.
+    pub fn sent(&mut self) {
+        self.awaiting = true;
+        self.send_error = None;
+        self.update_working();
+    }
+
+    /// A message did not leave, or the connection was lost: nothing is awaited.
+    pub fn not_awaiting(&mut self) {
+        self.awaiting = false;
+        self.update_working();
+    }
+
+    /// Connected again: what was known of the sessions may be stale; the
+    /// first look (`seed_sessions`) and the next events say where they are.
+    pub fn reconnected(&mut self) {
+        self.sessions.clear();
+        self.awaiting = false;
+        self.working = false;
+    }
+
+    /// The first look (`GET /api/sessions`): each session's state where no
+    /// event said it yet, and the last prompt and its answer when the
+    /// conversation is still empty.
     pub fn seed_sessions(&mut self, list: &[J]) {
-        let Some(info) = list.iter().find(|i| i["sandbox"] == SANDBOX && !i["thread"].is_string()) else { return };
-        self.session_state = info["state"].as_str().unwrap_or("").to_string();
-        self.working = self.session_state == "working";
+        let mine: Vec<&J> = list.iter().filter(|i| i["sandbox"] == SANDBOX && !i["thread"].is_string()).collect();
+        for info in &mine {
+            let sid = info["session_id"].as_str().unwrap_or("").to_string();
+            let s = self.sessions.entry(sid).or_insert_with(|| Sess {
+                state: info["state"].as_str().map(|x| if x == "exited" { "idle" } else { x }).unwrap_or("").to_string(),
+                ..Sess::default()
+            });
+            s.started = info["started_ms"].as_u64().unwrap_or(s.started);
+            if s.reply.is_none() {
+                s.reply = info["reply"].as_str().filter(|r| !r.trim().is_empty()).map(str::to_string);
+            }
+        }
+        self.update_working();
+        let Some(info) = mine.iter().max_by_key(|i| i["started_ms"].as_u64().unwrap_or(0)) else { return };
         if self.seeded || !self.log.is_empty() {
             return;
         }
@@ -317,8 +471,10 @@ impl Jarvis {
             "open": self.open,
             "status": self.status,
             "error": self.status_error,
-            "working": self.working,
+            "working": self.running() && (self.working || self.sending),
             "sending": self.sending,
+            "send": self.send_error.as_ref().map(|e| json!({ "text": e.text, "offer": e.offer, "queued": e.queued, "input": e.input })),
+            "others": self.clients.saturating_sub(1),
             "log": self.log.iter().map(|m| json!({ "id": m.id, "who": m.who.name(), "text": m.text, "reading": self.reading == Some(m.id) })).collect::<Vec<_>>(),
             "pending": self.pending_list().iter().map(|p| json!({
                 "id": p["id"], "summary": p["summary"], "risk": if screen_only(p) { "high" } else { "low" },
@@ -468,7 +624,7 @@ mod tests {
         let ev = |state: &str, reply: Option<&str>| json!({ "sandbox": SANDBOX, "state": state, "reply": reply });
         assert_eq!(j.ingest_session(&ev("working", None)), None);
         assert!(j.working);
-        assert_eq!(j.ingest_session(&ev("idle", Some("Hello."))), Some("Hello.".into()));
+        assert!(j.ingest_session(&ev("idle", Some("Hello."))).is_some());
         assert_eq!(j.ingest_session(&ev("idle", Some("Hello."))), None, "an idle repeat is not a new answer");
         assert_eq!(j.ingest_session(&json!({ "sandbox": "web", "state": "idle", "reply": "x" })), None);
         assert_eq!(j.ingest_session(&json!({ "sandbox": SANDBOX, "thread": "t", "state": "idle", "reply": "x" })), None);

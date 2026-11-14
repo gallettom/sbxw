@@ -25,7 +25,13 @@
 //! a low-risk setting, "review" a high-risk kit, "command" a stdio MCP
 //! server, "screen" a change of the `sandboxes` screen, written to
 //! `--screens-dir` when approved (so the app's hot reload shows it). `GET
-//! /api/voice` answers 404 (a daemon without voice).
+//! /api/voice` answers 404 (a daemon without voice). "voix" or "change the
+//! voice" makes it ask a question with options (`AskUserQuestion`: state
+//! `attention` with `steps`), which the next message answers; "options" makes
+//! it answer a sentence and a numbered list. Every hook publishes one
+//! `session` event per session of the sandbox, with `session_id` and
+//! `started_ms`, as the daemon does; `--stale-session yes` keeps an older
+//! session left as `working`. `--clients N` reports N stream clients.
 //!
 //! What it does not do: keep the PTY across reconnects, replay the last
 //! 256 KB, Host/Origin checks, threads, monitor mode.
@@ -54,7 +60,13 @@ struct State {
     streamed: bool,
     jarvis: String,
     proposals: Vec<serde_json::Value>,
-    session: serde_json::Value,
+    /// Jarvis's sessions as the daemon keeps them, by session id (one
+    /// event per session of the sandbox on every hook, as agents.rs does).
+    sessions: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Jarvis asked a question (`AskUserQuestion`): the next words answer it.
+    asked: bool,
+    /// `--clients N`: other clients of the stream, reported in `clients`.
+    others: u64,
     screens_dir: Option<std::path::PathBuf>,
     next: u64,
     voice: bool,
@@ -94,6 +106,8 @@ fn main() -> anyhow::Result<()> {
     let mut jarvis = "absent".to_string();
     let mut screens_dir = None;
     let mut voice = false;
+    let mut stale = false;
+    let mut others = 0;
     while let Some(k) = args.next() {
         let v = args.next().unwrap_or_default();
         match k.as_str() {
@@ -116,12 +130,21 @@ fn main() -> anyhow::Result<()> {
                 std::env::set_var("STANDIN_HEARD", v);
             }
             "--screens-dir" => screens_dir = Some(std::path::PathBuf::from(v)),
+            // `--stale-session yes`: an older Jarvis session left as `working`
+            // (its hooks stopped), as the first real run on a Mac suggested.
+            "--stale-session" => stale = v == "yes",
+            "--clients" => others = v.parse::<u64>().unwrap_or(1).saturating_sub(1),
             _ => anyhow::bail!("unknown argument {k}"),
         }
     }
     let fx: serde_json::Value = serde_json::from_str(&fixture)?;
     let sandboxes: Vec<Sandbox> = serde_json::from_value(fx["daemon"]["sandboxes"].clone()).unwrap_or_default();
-    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, ..Default::default() }));
+    let mut sessions = std::collections::BTreeMap::new();
+    if stale {
+        sessions.insert("z-old".to_string(), serde_json::json!({ "sandbox": "sbxw-jarvis", "mode": "claude", "state": "working", "agent": "claude",
+            "started_ms": 1, "session_id": "z-old", "origin": "tty", "answerable": false, "ts": 0 }));
+    }
+    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, sessions, others, ..Default::default() }));
     let listener = TcpListener::bind(&addr)?;
     eprintln!("standin: listening on {addr}");
     let changes = Arc::new(Mutex::new(Some(changes)));
@@ -249,7 +272,8 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                     }
                 }
             }
-            write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\nevent: clients\ndata: 1\n\n")?;
+            let clients = { let g = st.lock().unwrap(); g.streams.len() as u64 + g.others };
+            write!(s, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\nevent: clients\ndata: {clients}\n\n")?;
             s.flush()?;
             loop {
                 match rx.recv_timeout(Duration::from_secs(15)) {
@@ -360,11 +384,23 @@ fn read_body(s: &mut TcpStream, head: &[u8], text: &str) -> anyhow::Result<serde
     Ok(serde_json::from_slice(&body).unwrap_or_default())
 }
 
-fn publish_session(st: &Shared, state: &str, reply: Option<&str>, last_input: &str) {
-    let info = serde_json::json!({ "sandbox": "sbxw-jarvis", "mode": "claude", "state": state, "agent": "claude", "started_ms": 0,
-        "last_input": last_input, "reply": reply, "origin": "tty", "answerable": false, "ts": 0 });
-    st.lock().unwrap().session = info.clone();
-    publish(st, "session", &info.to_string());
+/// One hook of Jarvis's live session ("a-jarvis"): its new state, then one
+/// `session` event per session of the sandbox, in session id order (the
+/// real daemon's `Agents::apply` returns `infos_for(sandbox)`).
+fn publish_session(st: &Shared, state: &str, reply: Option<&str>, last_input: &str, extra: serde_json::Value) {
+    let mut info = serde_json::json!({ "sandbox": "sbxw-jarvis", "mode": "claude", "state": state, "agent": "claude", "started_ms": 2,
+        "session_id": "a-jarvis", "last_input": last_input, "reply": reply, "origin": "tty", "answerable": true, "ts": 0 });
+    if let (Some(o), Some(e)) = (info.as_object_mut(), extra.as_object()) {
+        o.extend(e.clone());
+    }
+    let all: Vec<serde_json::Value> = {
+        let mut g = st.lock().unwrap();
+        g.sessions.insert("a-jarvis".into(), info);
+        g.sessions.values().cloned().collect()
+    };
+    for i in all {
+        publish(st, "session", &i.to_string());
+    }
 }
 
 /// What the scripted Jarvis answers, and the proposal it makes.
@@ -398,6 +434,9 @@ fn jarvis_answer(text: &str, n: u64) -> (String, Option<serde_json::Value>) {
                 "content": SCREEN_EDIT,
                 "diff": "# This screen can ask the app to: open_terminal, select.\n--- builtin/screens/sandboxes.luau\n+++ ~/.sbxw/desktop/screens/sandboxes.luau\n@@ -1,1 +1,1 @@\n-SANDBOXES\n+MY SANDBOXES (by Jarvis)\n" }] })));
     }
+    if t.contains("options") {
+        return ("I can change three things for you:\n\n1. The voice that reads my answers\n2. The kits of a sandbox\n3. The MCP servers\n\nType the number of your choice.".into(), None);
+    }
     (format!("You said: *{}*. Ask me for the **english** voice, a **review** command, an MCP **command** or a **screen** change.", text.trim()), None)
 }
 
@@ -419,7 +458,7 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
                 std::thread::sleep(Duration::from_millis(1500));
                 st2.lock().unwrap().jarvis = "running".into();
                 eprintln!("standin: jarvis is running");
-                publish_session(&st2, "idle", None, "");
+                publish_session(&st2, "idle", None, "", serde_json::json!({}));
             });
             ("200 OK", json!({ "state": "creating" }))
         }
@@ -428,10 +467,7 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
             list.reverse();
             ("200 OK", json!({ "ok": true, "proposals": list }))
         }
-        ("GET", "/api/sessions") => {
-            let s = st.lock().unwrap().session.clone();
-            ("200 OK", if s.is_null() { json!([]) } else { json!([s]) })
-        }
+        ("GET", "/api/sessions") => ("200 OK", json!(st.lock().unwrap().sessions.values().cloned().collect::<Vec<_>>())),
         ("GET", "/api/voice") if st.lock().unwrap().voice => ("200 OK", json!({ "ok": true, "compiled": true, "ready": true, "speech": { "supported": false }, "push_to_talk_key": "F8" })),
         ("GET", "/api/voice") => err("404 Not Found", "not found".into()),
         ("POST", "/api/voice/transcribe") => {
@@ -453,7 +489,34 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
                 return err("409 Conflict", "Jarvis is not running".into());
             }
             eprintln!("standin: jarvis heard {text:?}");
-            publish_session(st, "working", None, &text);
+            let answering = std::mem::take(&mut st.lock().unwrap().asked);
+            if answering {
+                // The question's answer: typed into the prompt, the turn goes on.
+                publish_session(st, "working", None, "change the voice", json!({}));
+                let st2 = st.clone();
+                let pick = text.trim().to_string();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(700));
+                    let voice = match pick.as_str() { "1" => "fr_female", "2" => "en_female", _ => "de_male" };
+                    let reply = format!("You chose **{voice}**. Say *use the english voice* and I will propose the change; nothing is applied until you approve it.");
+                    publish_session(&st2, "idle", Some(&reply), "change the voice", json!({}));
+                });
+                return ("200 OK", json!({ "ok": true, "name": "sbxw-jarvis" }));
+            }
+            publish_session(st, "working", None, &text, json!({}));
+            let lower = text.to_lowercase();
+            if lower.contains("voix") || lower.contains("change the voice") {
+                // `AskUserQuestion`: the session waits on a question with options.
+                let st2 = st.clone();
+                let text2 = text.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(700));
+                    st2.lock().unwrap().asked = true;
+                    let q = json!({ "text": "Which voice should read my answers?", "options": ["fr_female", "en_female", "de_male"] });
+                    publish_session(&st2, "attention", None, &text2, json!({ "steps": [q], "question": q, "activity": "Which voice should read my answers?" }));
+                });
+                return ("200 OK", json!({ "ok": true, "name": "sbxw-jarvis" }));
+            }
             let st2 = st.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(700));
@@ -468,7 +531,7 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
                     publish(&st2, "jarvis", &p.to_string());
                     eprintln!("standin: jarvis proposes {}", p["id"]);
                 }
-                publish_session(&st2, "idle", Some(&reply), &text);
+                publish_session(&st2, "idle", Some(&reply), &text, json!({}));
             });
             ("200 OK", json!({ "ok": true, "name": "sbxw-jarvis" }))
         }

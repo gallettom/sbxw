@@ -156,30 +156,42 @@ impl AudioIo for FakeAudio {
 /// most 1000 characters at a time, so a long answer is several requests,
 /// fetched one after the other as the previous body is drained. Playback
 /// sees one stream at one rate, with no gap between pieces.
+/// `stop` ends it for good: once set, nothing more is read or fetched.
 pub struct Chain {
     daemon: std::sync::Arc<dyn crate::client::Daemon>,
     rest: std::collections::VecDeque<String>,
     cur: Box<dyn Read + Send>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Chain {
     /// Speaks the first piece now (its errors are the caller's), the rest as read.
-    pub fn start(daemon: std::sync::Arc<dyn crate::client::Daemon>, pieces: Vec<String>) -> anyhow::Result<(u32, Chain)> {
+    pub fn start(daemon: std::sync::Arc<dyn crate::client::Daemon>, pieces: Vec<String>, stop: Arc<std::sync::atomic::AtomicBool>) -> anyhow::Result<(u32, Chain)> {
         let mut rest: std::collections::VecDeque<String> = pieces.into();
         let first = rest.pop_front().ok_or_else(|| anyhow::anyhow!("nothing to read"))?;
         let (rate, cur) = daemon.speak(&first)?;
-        Ok((rate, Chain { daemon, rest, cur }))
+        Ok((rate, Chain { daemon, rest, cur, stop }))
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
 impl Read for Chain {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
+            if self.stopped() {
+                return Ok(0);
+            }
             let n = self.cur.read(buf)?;
             if n > 0 || buf.is_empty() {
                 return Ok(n);
             }
             let Some(next) = self.rest.pop_front() else { return Ok(0) };
+            if self.stopped() {
+                return Ok(0);
+            }
             match self.daemon.speak(&next) {
                 Ok((_, r)) => self.cur = r,
                 Err(e) => return Err(std::io::Error::other(format!("{e:#}"))),
