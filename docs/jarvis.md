@@ -54,14 +54,16 @@ Each proposal holds one or more changes. Jarvis can propose:
 | **Setting** (`setting`) | One key of the daemon's `sbxw.toml`, from a fixed list: the `[voice]` keys, `claude_model`, the terminal colours, `keep_awake`, `keep_awake_min_battery`, `battery_warn_below`, `cache_ttl_days`. It takes effect when the daemon restarts | Low |
 | **Pronunciation** (`voice_word`) | How the voice reads one word aloud: add or replace its entry in `[voice.words]` of the daemon's `sbxw.toml`, in French, English or both, or remove that entry (a built-in word gets its own pronunciation back). Only what is read aloud changes, never dictation. Used from the next sentence read, no restart. See [Words read aloud](configuration.md#words-read-aloud) | Low |
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
+| **Desktop screen** (`desktop_screen`, `desktop_screen_remove`) | Replace one screen of sbxw's desktop app with your own version, `~/.sbxw/desktop/screens/<name>.luau`, or remove your version so the app's built-in one comes back. Only a screen the app has (no new screen). The app reloads it at once. See [Desktop screens](#desktop-screens) | High |
 | **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
 
 Ask Jarvis "how do you say sbxw?" or tell it a word is said badly: it reads
 the dictionary (the built-in words and yours, marked which) and proposes the
 fix. The tools it has for all this, in its `sbxw-config` MCP server:
 `sbxw_state` (read), `propose_kit`, `remove_kit`, `set_kits`, `set_setting`,
-`set_voice_word`, `allow_network`, `propose_mcp_server`, `remove_mcp_server`
-and `check_proposal`.
+`set_voice_word`, `allow_network`, `propose_mcp_server`, `remove_mcp_server`,
+`read_desktop_screen`, `read_desktop_docs`, `propose_desktop_screen`,
+`remove_desktop_screen` and `check_proposal`.
 
 If the daemon was started where there is no `sbxw.toml`, a setting or pronunciation change creates one at the path the daemon was asked to read. The dialog says it creates that file, and the diff shows a new file. The folder must already exist; sbxw does not create folders, and refuses the change otherwise.
 
@@ -72,6 +74,43 @@ The daemon keeps one proposal pending at a time. Jarvis waits for your
 answer, and is told what came of it: applied, refused (with your reason, if
 you gave one) or failed (with the error). Proposals are kept in
 `~/.sbxw/state/jarvis.json`: every pending one and the last 50 settled.
+
+### Desktop screens
+
+The desktop app draws parts of its window (the top bar, the sandbox list)
+with small Luau files called screens. Each one is built into the app, and a
+file of the same name in `~/.sbxw/desktop/screens/` replaces it. Ask Jarvis
+to change one ("put the stop button on the right", "show the agent's name
+in the top bar"): it reads the app's documentation and the screen as it is,
+then proposes the whole new file.
+
+- **What the daemon reads.** At each start the app writes, in
+  `~/.sbxw/desktop/builtin/`, its built-in screens (`screens/<name>.luau`),
+  the documentation of what a screen may use (`screens.md`) and the list of
+  intents a screen may ask for (`intents.json`). The daemon only reads that
+  folder. If the app has never run on this machine, Jarvis says so and
+  proposes nothing.
+- **The diff** is against what the app uses now: your version if you have
+  one ("changes your topbar screen"), else the built-in ("replaces the
+  built-in topbar screen"). Removing your version shows the way back to the
+  built-in.
+- **What the screen can do.** Above the diff, the dialog lists the intents
+  written by name in the new screen (open a terminal, stop a sandbox, ...),
+  with their risk, and marks those the screen used now does not emit. It
+  also names the lines where the screen builds an intent in a way that
+  hides its name. The list comes from reading the text: a hint, not a proof,
+  since a screen can hide an intent name. Read the diff, and check that
+  each button's label says what it does. See
+  [Security: Jarvis](security.md#jarvis).
+- **Always high risk**: approved with a click on the diff, never by voice.
+- **A broken screen** does not break the app: it keeps the last good view and
+  shows the error in a red banner. Ask Jarvis to fix it, or to remove your
+  version.
+- **Limits:** only screens the app already has (it has no place for a new
+  one), no new intent or element, at most 64 KB of text. The folder
+  `~/.sbxw/desktop/screens/` is created when missing. The app also honours
+  `$SBXW_DESKTOP_SCREENS` for its override folder; Jarvis always writes to
+  `~/.sbxw/desktop/screens/`.
 
 ## What Jarvis can never do
 
@@ -93,6 +132,9 @@ construction:
   token is refused, and so is an MCP server with a credential in a header,
   its URL or an argument. Jarvis writes a `${key}` placeholder instead, and
   you fill in the secret in the MCP tab of Setup.
+- **No new screen, intent or element in the desktop app.** A screen
+  Jarvis writes uses only what the app's core already offers, and the core
+  checks every intent it emits.
 - **No setting outside the list above**, and no value the config check
   would refuse. A pronunciation change writes one entry of
   `[voice.words]` and nothing else.

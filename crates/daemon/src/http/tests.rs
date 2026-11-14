@@ -465,7 +465,7 @@ async fn only_the_jarvis_sandbox_may_propose_and_voice_cannot_approve_high_risk(
 
     for who in ["myapp", "sbxw-jarvis-2"] {
         let sb = SandboxRef::parse(who).unwrap();
-        for path in ["/api/jarvis/state", "/api/jarvis/propose", "/api/jarvis/wait"] {
+        for path in ["/api/jarvis/state", "/api/jarvis/propose", "/api/jarvis/wait", "/api/jarvis/desktop/screen", "/api/jarvis/desktop/docs"] {
             assert_eq!(call(agent_router(app.clone()), as_(&sb, path, kit.clone())).await.0, StatusCode::FORBIDDEN, "{who} {path}");
         }
     }
@@ -479,6 +479,13 @@ async fn only_the_jarvis_sandbox_may_propose_and_voice_cannot_approve_high_risk(
     assert_eq!(s, StatusCode::OK, "{v}");
     assert!(v["settings"].as_array().unwrap().iter().any(|s| s["key"] == "voice.tts_voice"));
     assert!(!v.to_string().contains("sbxw_"), "no token in the view: {v}");
+    assert_eq!(v["desktop"]["app_ran"], false, "{v}");
+    // The desktop app never ran here: its routes say so, in words.
+    let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/desktop/screen", json!({"name": "topbar"}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(v["error"].as_str().unwrap().contains("has not run on this machine"), "{v}");
+    let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/desktop/docs", json!({}))).await;
+    assert!(s == StatusCode::BAD_REQUEST && v["error"].as_str().unwrap().contains("has not run"), "{v}");
 
     let bad = json!({"summary": "s", "changes": [{"kind": "setting", "key": "web_addr", "value": "0.0.0.0:1"}]});
     let (s, v) = call(agent_router(app.clone()), as_(&jarvis, "/api/jarvis/propose", bad)).await;

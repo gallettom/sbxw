@@ -1,6 +1,7 @@
 // sbxw-config, an MCP server for Jarvis alone: the only way the Jarvis session
 // changes sbxw's configuration (kits, kits lines, settings, the words read
-// aloud, network, MCP servers), and only by *proposing*. The daemon validates each proposal, the
+// aloud, network, MCP servers, the desktop app's screens), and only by
+// *proposing*. The daemon validates each proposal, the
 // person approves or refuses it in the web UI, and the daemon applies it.
 // Nothing here writes a configuration file; nothing here can.
 //
@@ -156,7 +157,9 @@ const TOOLS = [
       "their files, the settings you may set and their allowed values, the pronunciation " +
       "dictionary (`voice_words`: each word, how it is said in French and in English, and whether " +
       "it is built in or configured), the network allowlist, " +
-      "the MCP server names and the sandboxes running.\n" +
+      "the MCP server names, the sandboxes running, and the desktop app's screens (`desktop`: " +
+      "whether the app has run on this machine, each screen and whether the person has their own " +
+      "version of it, the intents a screen may emit).\n" +
       "\n" +
       "Call it BEFORE every proposal, and again when a proposal is refused for naming something " +
       "that does not exist: propose against what is there, never against what you remember. Read " +
@@ -380,6 +383,76 @@ const TOOLS = [
     },
   },
   {
+    name: "read_desktop_screen",
+    description:
+      "Read one screen of sbxw's desktop app, before proposing any change to it: the text the app " +
+      "uses now (`content`), whether that is the person's own version (`override`) or the built-in, " +
+      "and the built-in text (`builtin`). Propose against this text, never against what you " +
+      "remember. The screen names are in `desktop.screens` of `sbxw_state`. Read only.",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string", description: "The screen's name, as `sbxw_state` lists it, for example \"topbar\"." } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "read_desktop_docs",
+    description:
+      "Read the desktop app's own documentation for writing a screen: `screens_md` (the file " +
+      "format, the data a screen gets, the elements and props it may use, its limits) and " +
+      "`intents` (each intent a screen may emit, its arguments and its risk). Read it BEFORE " +
+      "writing any screen: the app refuses an unknown element, prop or intent. Read only.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "propose_desktop_screen",
+    description:
+      "Propose a new version of one screen of sbxw's desktop app, when the person wants it to " +
+      "look or behave differently (\"make the top bar show...\", \"put the stop button on the " +
+      "right\"). A screen is a sandboxed Luau file: it draws with the app's elements and can only " +
+      "ask for the intents the app already has.\n" +
+      "\n" +
+      "Before proposing: call `read_desktop_docs`, then `read_desktop_screen` for that screen, and " +
+      "send the WHOLE new file, changed as little as the request needs. Keep changes small: the " +
+      "person reads the diff. Label every button for what its intent does; a label that hides " +
+      "what it emits is exactly what the person checks for.\n" +
+      "\n" +
+      "You cannot add a screen (only the names `sbxw_state` lists exist) nor an intent, element " +
+      "or prop: say so when the person asks for one. If the app has not run on this machine, " +
+      "there is nothing to change: tell them to start it once. If the new file does not load, " +
+      "the app keeps its last good view and shows the error in a banner; `remove_desktop_screen` " +
+      "brings the built-in back.\n" +
+      "\n" +
+      "Always high risk: the person approves it with a click on the diff in sbxw's window, never " +
+      "by a spoken yes. Say so when you propose it. The app reloads the screen as soon as it is " +
+      "applied." +
+      PROPOSAL_RULES,
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: SUMMARY,
+        name: { type: "string", description: "The screen's name, as `sbxw_state` lists it." },
+        content: { type: "string", description: "The whole new .luau file, at most 64 KB." },
+        timeout_seconds: TIMEOUT,
+      },
+      required: ["summary", "name", "content"],
+    },
+  },
+  {
+    name: "remove_desktop_screen",
+    description:
+      "Propose dropping the person's own version of a desktop app screen, so the app goes back " +
+      "to its built-in one: when they say \"put the top bar back as it was\", or a screen you " +
+      "changed shows an error. Only a screen `sbxw_state` marks `override: true` has one. High " +
+      "risk: a click on the diff in sbxw's window, never a spoken yes." +
+      PROPOSAL_RULES,
+    inputSchema: {
+      type: "object",
+      properties: { summary: SUMMARY, name: { type: "string", description: "The screen's name." }, timeout_seconds: TIMEOUT },
+      required: ["summary", "name"],
+    },
+  },
+  {
     name: "check_proposal",
     description:
       "Pick up a proposal an earlier call returned as still pending, by its id, when the person " +
@@ -449,6 +522,13 @@ function slug(raw, what) {
   return s;
 }
 
+/// A desktop screen's name: what the daemon builds the file name from.
+function screenName(raw) {
+  const n = String(raw || "").trim().replace(/\.luau$/, "");
+  if (!/^[a-z0-9-]{1,40}$/.test(n)) throw new Refusal(`"${raw}" is not a screen name: 1 to 40 lowercase letters, digits and dashes, as \`sbxw_state\` lists them.`);
+  return n;
+}
+
 function kitWrite(args) {
   const files = [];
   for (const f of Array.isArray(args.files) ? args.files : []) files.push({ path: homePath(f && f.path), content: String((f && f.content) ?? "") });
@@ -516,6 +596,14 @@ function changesFor(name, args) {
       if (!spec || !String(spec.name || "").trim()) throw new Refusal("The spec needs at least a name and a kind.");
       return [{ kind: "mcp_server", spec }];
     }
+    case "propose_desktop_screen": {
+      const n = screenName(args.name);
+      if (typeof args.content !== "string" || !args.content.trim()) throw new Refusal("Give the whole new screen file in `content`. To go back to the built-in screen, use `remove_desktop_screen`.");
+      if (Buffer.byteLength(args.content, "utf8") > 64 * 1024) throw new Refusal("A screen is at most 64 KB. Keep the change small.");
+      return [{ kind: "desktop_screen", name: n, content: args.content }];
+    }
+    case "remove_desktop_screen":
+      return [{ kind: "desktop_screen_remove", name: screenName(args.name) }];
     case "remove_mcp_server": {
       const n = String(args.name || "").trim();
       if (!n) throw new Refusal("No server name given.");
@@ -572,6 +660,21 @@ async function callTool(name, args) {
   args = args || {};
   if (name === "sbxw_state") {
     const res = await request("/api/jarvis/state", {}, 30 * 1000);
+    return textResult(JSON.stringify(res, null, 2), false);
+  }
+  if (name === "read_desktop_screen") {
+    let n;
+    try {
+      n = screenName(args.name);
+    } catch (e) {
+      if (e instanceof Refusal) return textResult(e.message, true);
+      throw e;
+    }
+    const res = await request("/api/jarvis/desktop/screen", { name: n }, 30 * 1000);
+    return textResult(JSON.stringify(res, null, 2), false);
+  }
+  if (name === "read_desktop_docs") {
+    const res = await request("/api/jarvis/desktop/docs", {}, 30 * 1000);
     return textResult(JSON.stringify(res, null, 2), false);
   }
   if (name === "check_proposal") {

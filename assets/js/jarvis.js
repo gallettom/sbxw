@@ -54,7 +54,7 @@ function jvSay(who, text) { if (typeof vcSay === 'function') vcSay(who, text); }
 
 // The daemon's change kinds, as the person reads them.
 const JV_KINDS = {
-  kit_write: 'kit', kit_remove: 'kit removed', kits_line: 'kits line', setting: 'setting', voice_word: 'pronunciation',
+  kit_write: 'kit', kit_remove: 'kit removed', kits_line: 'kits line', setting: 'setting', voice_word: 'pronunciation', desktop_screen: 'desktop screen', desktop_screen_remove: 'desktop screen restored',
   network_allow: 'network', mcp_server: 'MCP server', mcp_remove: 'MCP server removed',
 };
 
