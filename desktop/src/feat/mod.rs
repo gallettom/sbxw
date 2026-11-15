@@ -60,11 +60,16 @@ pub struct Feature {
     /// The stand-in daemon's answer to a request for this feature, if the
     /// route is its: `(status, JSON body)`.
     pub standin: Option<fn(&mut Standin, &str, &str, &J) -> Option<(u16, J)>>,
+    /// Body fields only the core may set, and only after the person pressed
+    /// Confirm on the core's dialog ([`Confirm::grant`]): a call whose body
+    /// has one at the top level, sent any other way, is refused. (Create's
+    /// `approved`: a screen or its arguments can never send it.)
+    pub core_only: &'static [&'static str],
 }
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, extras: None, standin: None };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, extras: None, standin: None, core_only: &[] };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -286,12 +291,15 @@ pub struct Confirm {
     pub cancel: String,
     /// Confirm in red (removing, widening access).
     pub danger: bool,
+    /// Body fields the core sets to `true` on Confirm, and only then (see
+    /// [`Feature::core_only`]). The feature cannot put them in the body itself.
+    pub grants: Vec<String>,
     pub call: Call,
 }
 
 impl Confirm {
     pub fn new(title: impl Into<String>, call: Call) -> Confirm {
-        Confirm { title: title.into(), lines: vec![], preview: None, ack: None, secrets: vec![], confirm: "Confirm".into(), cancel: "Cancel".into(), danger: false, call }
+        Confirm { title: title.into(), lines: vec![], preview: None, ack: None, secrets: vec![], confirm: "Confirm".into(), cancel: "Cancel".into(), danger: false, grants: vec![], call }
     }
     pub fn line(mut self, l: impl Into<String>) -> Confirm {
         self.lines.push(l.into());
@@ -323,6 +331,11 @@ impl Confirm {
     /// A secret field that may stay empty: then it is left out of the body (an edit keeping the old value).
     pub fn optional_secret(mut self, label: &str, field: &str, placeholder: &str) -> Confirm {
         self.secrets.push(Secret { label: label.into(), placeholder: placeholder.into(), field: field.into(), multiline: false, optional: true });
+        self
+    }
+    /// `field` (one of the feature's `core_only`) is set to `true` in the body on Confirm.
+    pub fn grant(mut self, field: &str) -> Confirm {
+        self.grants.push(field.into());
         self
     }
     pub fn into_action(self) -> Action {
@@ -414,6 +427,19 @@ pub struct Standin<'a> {
     pub publish: &'a mut dyn FnMut(&str, J),
 }
 
+thread_local! {
+    static LATER: std::cell::RefCell<Vec<(u64, String, J)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Standin<'_> {
+    /// An event published after the data lock is released, `ms` after the
+    /// previous one, before the answer is written (a bring-up's `provision`
+    /// lines). In a fixture daemon they go out at once.
+    pub fn publish_after(&mut self, ms: u64, name: &str, data: J) {
+        LATER.with(|l| l.borrow_mut().push((ms, name.to_string(), data)));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The list
 
@@ -428,6 +454,8 @@ macro_rules! features {
 }
 
 features! {
+    create,
+    setup,
 }
 
 // ---------------------------------------------------------------------------
@@ -516,14 +544,30 @@ fn decode(s: &str) -> String {
 /// the first feature whose `standin` takes it, else a `GET` of a declared
 /// [`Data`] path answers that key of `data` (per sandbox: its entry).
 pub fn answer_from(data: &mut J, method: &str, path: &str, body: &J, publish: &mut dyn FnMut(&str, J)) -> (u16, J) {
+    let (r, later) = answer_later(data, method, path, body, publish);
+    // No one to wait for here (a fixture): the delayed events go out now.
+    for (_, n, d) in later {
+        publish(&n, d);
+    }
+    r
+}
+
+/// [`answer_from`], with the events a route asked to publish later (the
+/// stand-in plays them with the lock released).
+pub fn answer_later(data: &mut J, method: &str, path: &str, body: &J, publish: &mut dyn FnMut(&str, J)) -> ((u16, J), Vec<(u64, String, J)>) {
     for f in FEATURES {
         if let Some(sf) = f.standin {
+            LATER.with(|l| l.borrow_mut().clear());
             let mut st = Standin { data: &mut *data, publish: &mut *publish };
             if let Some(r) = sf(&mut st, method, path, body) {
-                return r;
+                return (r, LATER.with(|l| std::mem::take(&mut *l.borrow_mut())));
             }
         }
     }
+    (answer_data(data, method, path), vec![])
+}
+
+fn answer_data(data: &J, method: &str, path: &str) -> (u16, J) {
     if method == "GET" {
         for d in FEATURES.iter().flat_map(|f| f.data.iter()) {
             if let Some(caps) = match_path(d.path.split('?').next().unwrap_or(d.path), path) {

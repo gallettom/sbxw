@@ -949,7 +949,7 @@ impl Link {
         self.job(move || {
             let get = |p: &str| match daemon.request("GET", p, &serde_json::Value::Null, Duration::from_secs(30)) {
                 Ok((c, v)) if (200..300).contains(&c) => Ok(v),
-                Ok((c, v)) => Err(format!("{p}: {c} {}", v["error"].as_str().unwrap_or(""))),
+                Ok((c, v)) => Err(v["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}"))),
                 Err(e) => Err(format!("{e:#}")),
             };
             let result = match paths.as_slice() {

@@ -37,6 +37,9 @@ pub struct Dialog {
 pub struct Feats {
     /// Data read for features, by key (over the fixture's keys).
     pub data: Map<String, J>,
+    /// Why a key's last read failed (the daemon's words), until the next
+    /// read works: `data.app.errors[key]`. The key keeps its last good value.
+    pub errors: Map<String, J>,
     /// The modal screen showing and its argument.
     pub modal: Option<(String, J)>,
     /// Open panels, in the order opened; `panel` the one shown.
@@ -112,7 +115,7 @@ impl App {
         for a in acts {
             match a {
                 Action::Call(call) => {
-                    self.feature_call(f, call);
+                    self.feature_call(f, call, false);
                 }
                 Action::Confirm(c) => self.open_dialog(f, from, Some(*c), None),
                 Action::Prepare(p) => self.open_dialog(f, from, None, Some(p)),
@@ -148,7 +151,13 @@ impl App {
     }
 
     /// Sends a call; returns its id (0: not connected, said in a notice).
-    fn feature_call(&mut self, f: &'static Feature, call: Call) -> u64 {
+    /// `confirmed`: sent by the person's Confirm on the core's dialog; only
+    /// then may the body carry the feature's `core_only` fields.
+    fn feature_call(&mut self, f: &'static Feature, call: Call, confirmed: bool) -> u64 {
+        if let Err(e) = core_only_check(f, &call, confirmed) {
+            self.notify(format!("{}: {e}", f.name), true);
+            return 0;
+        }
         let (Some(d), Some(_)) = (self.daemon.clone(), &self.link) else {
             self.notify(format!("{}: not connected: {}", call.what, self.connection.text), true);
             return 0;
@@ -190,7 +199,7 @@ impl App {
         let secrets = confirm.as_ref().map(secret_edits).unwrap_or_default();
         let mut d = Dialog { feature: f.name, from: from.to_string(), title, confirm, preparing: None, prepare: None, running: None, error: None, acked: false, secrets };
         if let Some(p) = prepare {
-            let id = self.feature_call(f, p.call.clone().quiet());
+            let id = self.feature_call(f, p.call.clone().quiet(), false);
             d.preparing = Some(id);
             if id == 0 {
                 d.error = Some(format!("Not connected: {}", self.connection.text));
@@ -299,12 +308,19 @@ impl App {
         match ev {
             LinkEvent::Data { key, result } => match result {
                 Ok(v) => {
-                    if self.feats.data.get(&key) == Some(&v) {
+                    let had_error = self.feats.errors.remove(&key).is_some();
+                    if self.feats.data.get(&key) == Some(&v) && !had_error {
                         return false;
                     }
                     self.feats.data.insert(key, v);
                 }
-                Err(e) => log::warn!("{key}: {e}"),
+                Err(e) => {
+                    log::warn!("{key}: {e}");
+                    if self.feats.errors.get(&key).and_then(J::as_str) == Some(e.as_str()) {
+                        return false;
+                    }
+                    self.feats.errors.insert(key, J::String(e));
+                }
             },
             LinkEvent::Answer { id, feature, call, result } => {
                 let Some(f) = Self::feature_of(feature) else { return false };
@@ -399,6 +415,7 @@ impl App {
                 }
             }
         }
+        let _ = &self.feats.errors;
         (modal, panels, json!({ "topbar": topbar, "sandboxes": sandboxes }), panes)
     }
 
@@ -580,6 +597,18 @@ impl App {
     }
 }
 
+/// A call's body may hold a feature's `core_only` fields only when the
+/// person confirmed it on the core's dialog.
+pub fn core_only_check(f: &Feature, call: &Call, confirmed: bool) -> Result<(), String> {
+    if confirmed {
+        return Ok(());
+    }
+    match f.core_only.iter().find(|k| call.body.get(**k).is_some()) {
+        Some(k) => Err(format!("{}: '{k}' is set only by your Confirm on the app's own dialog: refused", call.what)),
+        None => Ok(()),
+    }
+}
+
 fn secret_edits(c: &Confirm) -> Vec<TextEdit> {
     c.secrets.iter().map(|_| TextEdit::new("").secure()).collect()
 }
@@ -607,8 +636,16 @@ impl ConfirmAnswers for App {
                 return;
             }
         }
+        for g in &confirm.grants {
+            if let Err(e) = feat::put_at(&mut call.body, g, J::Bool(true)) {
+                if let Some(d) = self.feats.dialog.as_mut() {
+                    d.error = Some(e);
+                }
+                return;
+            }
+        }
         log::info!("{}: confirmed '{}' ({:?} {})", f.name, confirm.title, call.method, call.path);
-        let id = self.feature_call(f, call);
+        let id = self.feature_call(f, call, true);
         if let Some(d) = self.feats.dialog.as_mut() {
             for e in &mut d.secrets {
                 e.replace_text(String::new());
@@ -657,5 +694,23 @@ mod tests {
         assert!(admit(risk, "allow", vec![]).is_err());
         assert!(admit(risk, "allow", vec![Confirm::new("t", call.clone()).into_action()]).is_ok());
         assert!(admit(Risk::Direct, "deny", vec![Action::Call(call)]).is_ok());
+    }
+
+    #[test]
+    fn core_only_fields_go_out_only_after_a_confirm() {
+        const F: Feature = Feature { name: "t", core_only: &["approved"], ..Feature::EMPTY };
+        let sneaky = Call::post("/api/sandboxes/create", json!({ "name": "x", "approved": true }), "create x");
+        assert!(core_only_check(&F, &sneaky, false).is_err(), "a feature (or a screen's args copied into the body) cannot send it");
+        assert!(core_only_check(&F, &Call::post("/api/sandboxes/create", json!({ "name": "x" }), "create x"), false).is_ok());
+        // On Confirm the core adds it itself; the feature cannot preset it.
+        let c = Confirm::new("Create x?", Call::post("/api/sandboxes/create", json!({ "name": "x" }), "create x")).grant("approved");
+        let mut body = c.call.body.clone();
+        for g in &c.grants {
+            feat::put_at(&mut body, g, J::Bool(true)).unwrap();
+        }
+        assert_eq!(body["approved"], true);
+        let preset = Confirm::new("t", sneaky.clone()).grant("approved");
+        let mut b2 = preset.call.body.clone();
+        assert!(feat::put_at(&mut b2, "approved", J::Bool(true)).is_err());
     }
 }

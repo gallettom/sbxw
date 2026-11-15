@@ -413,6 +413,7 @@ impl App {
         data["app"]["modal"] = modal;
         data["app"]["panels"] = panels;
         data["app"]["extras"] = extras;
+        data["app"]["errors"] = J::Object(self.feats.errors.clone());
         data
     }
 

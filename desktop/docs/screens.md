@@ -540,3 +540,112 @@ desktop/scripts/screen.sh <screen> [fixture] [--file my.luau] [--script s.json]
 draws the screen alone from `desktop/fixtures/<screen>/<fixture>.json` and
 writes a PNG and the element tree. `desktop/.sbxw-artifacts/testing.md` has the rest:
 fixtures, scripts that press elements by key, the whole window.
+
+## Adding a feature
+
+A feature is one area of the web UI ported to the app (network, create,
+settings, and later threads, relay, files...). Its Rust lives in
+`desktop/src/feat/<area>.rs` (or `feat/<area>/`), its screens in
+`desktop/screens/`, its fixtures in `desktop/fixtures/<area>/`. It is
+declared in **one** place, a `pub const FEATURE: Feature`, and registered by
+**one** line, `<area>,`, in the `features! { }` list at the bottom of
+`src/feat/mod.rs` (the core's owner adds that line). The core does the rest:
+reading its data, loading its screens, checking and running its intents,
+drawing its dialog and slots.
+
+What a feature declares:
+
+| Field | What |
+|---|---|
+| `name` | Short name, the notices' prefix |
+| `data` | `Data { key, path, on, every, lazy }`: a `GET` route read into `data.<key>` at connection, again 300 ms after a stream event in `on`, every `every` seconds, or when an action asks (`lazy`: only then). `{sandbox}` in the path: read for each running sandbox, `data.<key>` is then an object by sandbox name. A fixture holds the same key in its `daemon` object |
+| `events` | Stream events handed to `on_event`, which answers actions |
+| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) |
+| `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
+| `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
+| `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
+| `extras` | Buttons and badges in others' slots: `Extra { place: Sandbox(name) / Topbar / Pane(sandbox), id, label, icon, tone, help, count, intent }` |
+| `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
+| `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
+
+Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
+`Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
+`.store(key)`, `.timeout(secs)`, `.tag(t)`, `.quiet()`), `Confirm`,
+`Prepare`, `Refresh(key)`, `Fetch { key, path }`, `Set { key, value }`,
+`OpenModal { screen, arg }`, `CloseModal`, `OpenPanel(screen)`,
+`ClosePanel(screen)`, `Notice { text, error, then }` (`then`: an intent a
+click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
+exactly as from a screen).
+
+**Approval.** An intent of risk `Approval` may only answer one `Confirm` or
+one `Prepare`; anything else is refused and nothing runs. `Confirm` is the
+core's own dialog, built in Rust from the daemon's data: `Confirm::new(title,
+call).line(..).preview(text, diff).ack(text).secret(label, "secrets.KEY")
+.optional_secret(label, field, placeholder).grant("approved").labels(yes,
+no).danger()`. Secret fields are Rune secure inputs drawn by the core:
+masked, no copy, no accessibility text, absent from the tree and from
+screen data; their values go into the call's body (a dotted path, never over
+a field already there) on Confirm, and the inputs are wiped. `Prepare {
+title, call, asked, build }` shows the dialog loading, reads `call` itself,
+and `build` makes the `Confirm` from the answer (a host key's fingerprints),
+so a screen cannot forge what is shown. A Direct intent may also answer a
+`Confirm` (more confirmation, never less). Screens never see the dialog.
+
+**What screens get.** The feature's keys under `data`, and in `data.app`:
+`modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown}`),
+`extras` (`topbar`, a list; `sandboxes`, lists by sandbox name; each `{id,
+label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
+data key, why its last read failed (the daemon's words), until a read works;
+the key keeps its last good value meanwhile.
+
+### Worked example
+
+```rust
+// src/feat/hello.rs
+use super::*;
+use crate::intent::{Arg, Risk, Spec};
+
+pub const FEATURE: Feature = Feature {
+    name: "hello",
+    data: &[Data { key: "hello_rules", path: "/api/hello", on: &["hello"], every: 0, lazy: false }],
+    screens: &[ScreenDecl { name: "hello", src: include_str!("../../screens/hello.luau"), slot: Slot::Panel { title: "Hello", icon: "info", width: 320.0 } }],
+    intents: &[
+        Spec { name: "hello_allow", risk: Risk::Approval("Allow a host"), args: &[("host", Arg::Str, true)], doc: "Asks the core's dialog to allow a host." },
+        Spec { name: "hello_remove", risk: Risk::Direct, args: &[("host", Arg::Str, true)], doc: "Removes a rule." },
+    ],
+    act,
+    ..Feature::EMPTY
+};
+
+fn act(_cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
+    let host = a.req("host");
+    Ok(match a.name {
+        "hello_allow" => vec![Confirm::new(format!("Allow {host}?"), Call::post("/api/hello/allow", serde_json::json!({ "host": host }), format!("allow {host}")).then(&["hello_rules"]))
+            .line(format!("Every sandbox may reach {host}, until you remove the rule."))
+            .labels("Allow", "Cancel")
+            .into_action()],
+        _ => vec![Action::Call(Call::post("/api/hello/rm", serde_json::json!({ "host": host }), format!("remove {host}")).then(&["hello_rules"]))],
+    })
+}
+```
+
+```lua
+-- screens/hello.luau: a button in a list row
+button{ "Allow", action = "allow", arg = row.host }
+-- actions
+allow = function(_, host) return intent("hello_allow", { host = host }) end,
+```
+
+Then `hello,` in `features! { }`, a fixture `fixtures/hello/basic.json`
+with `daemon.hello_rules`, and `scripts/screen.sh hello basic`.
+
+## Features
+
+Each feature's own section: its data keys, screens, intents and extras.
+Each thread owns the text under its heading.
+
+### network
+
+### create
+
+### setup
