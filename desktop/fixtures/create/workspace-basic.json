@@ -1,0 +1,90 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": true,
+      "can_create": true,
+      "carve_parents": [
+        {
+          "label": "shop",
+          "path": "/home/you/dev/shop"
+        }
+      ],
+      "carve_pick": null,
+      "carves": [],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "",
+      "chrome": false,
+      "create_problem": null,
+      "dialog": "workspace",
+      "error": null,
+      "favourites": [
+        {
+          "missing": false,
+          "name": "dev",
+          "path": "/home/you/dev"
+        }
+      ],
+      "git_url": "",
+      "host": "local",
+      "hosts": [],
+      "jobs": [],
+      "kit_mounts": [],
+      "listing": {
+        "can_up": true,
+        "entries": [
+          {
+            "added": false,
+            "name": "backend",
+            "path": "/home/you/dev/shop/backend",
+            "starred": false
+          },
+          {
+            "added": false,
+            "name": "frontend",
+            "path": "/home/you/dev/shop/frontend",
+            "starred": false
+          },
+          {
+            "added": false,
+            "name": "secrets",
+            "path": "/home/you/dev/shop/secrets",
+            "starred": false
+          }
+        ],
+        "parent": "/home/you/dev",
+        "path": "/home/you/dev/shop"
+      },
+      "listing_error": null,
+      "name": "shop",
+      "name_note": null,
+      "name_problem": null,
+      "path": "/home/you/dev/shop",
+      "path_tag": "Selected",
+      "ports": [],
+      "preview": null,
+      "rebuild": false,
+      "remote": false,
+      "remote_control": false,
+      "repo_hint": "Other repos the agent can read, or change, next to the project folder.",
+      "repo_hint_error": false,
+      "repos": [],
+      "template": null
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": false,
+      "can_create": false,
+      "carve_parents": [],
+      "carve_pick": null,
+      "carves": [],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "",
+      "chrome": false,
+      "create_problem": "Give the sandbox a name.",
+      "dialog": null,
+      "error": null,
+      "favourites": [],
+      "git_url": "",
+      "host": "local",
+      "hosts": [],
+      "jobs": [
+        {
+          "can_retry": false,
+          "error": null,
+          "headline": "Creating... 2/5",
+          "sandbox": "shop",
+          "state": "running",
+          "steps": [
+            {
+              "detail": null,
+              "label": "Prepare the workspace",
+              "state": "done"
+            },
+            {
+              "detail": "Pulling image docker/sandbox-templates:claude-code 63%",
+              "label": "Create the sandbox",
+              "state": "running"
+            },
+            {
+              "detail": null,
+              "label": "Start it",
+              "state": "waiting"
+            },
+            {
+              "detail": null,
+              "label": "Install kits",
+              "state": "waiting"
+            },
+            {
+              "detail": null,
+              "label": "Publish ports",
+              "state": "waiting"
+            }
+          ],
+          "warnings": []
+        },
+        {
+          "can_retry": true,
+          "error": "sbx: kit sbxw:node: npm ERR! network request to registry.npmjs.org failed (ECONNRESET)",
+          "headline": "Not created",
+          "sandbox": "api",
+          "state": "failed",
+          "steps": [
+            {
+              "detail": null,
+              "label": "Prepare the workspace",
+              "state": "done"
+            },
+            {
+              "detail": null,
+              "label": "Create the sandbox",
+              "state": "done"
+            },
+            {
+              "detail": null,
+              "label": "Install kits",
+              "state": "failed"
+            }
+          ],
+          "warnings": []
+        },
+        {
+          "can_retry": true,
+          "error": "Waiting for your answer: /home/you/dev/tools/sbxw.toml asks for host access you have not approved yet.",
+          "headline": "Waiting for you",
+          "sandbox": "tools",
+          "state": "asking",
+          "steps": [],
+          "warnings": []
+        }
+      ],
+      "kit_mounts": [],
+      "listing": null,
+      "listing_error": null,
+      "name": "",
+      "name_note": null,
+      "name_problem": "Give the sandbox a name.",
+      "path": "",
+      "path_tag": "Selected",
+      "ports": [],
+      "preview": null,
+      "rebuild": false,
+      "remote": false,
+      "remote_control": false,
+      "repo_hint": "Other repos the agent can read, or change, next to the project folder.",
+      "repo_hint_error": false,
+      "repos": [],
+      "template": null
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}

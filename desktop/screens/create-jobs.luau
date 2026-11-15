@@ -11,9 +11,9 @@ local function job(j)
   local kids = { w = "full", gap = 4, pad = 10, radius = "md", border = j.state == "failed" and "red-border" or "border",
     fill = "surface", key = "job-" .. j.sandbox,
     row{ w = "full", gap = 8,
-      dot{ tone = j.state == "ready" and "green" or j.state == "failed" and "red" or "blue" },
+      dot{ tone = j.state == "ready" and "green" or j.state == "failed" and "red" or j.state == "asking" and "amber" or "blue" },
       text{ j.sandbox, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
-      text{ j.headline, size = "sm", color = j.state == "failed" and "red" or "text-muted" },
+      text{ j.headline, size = "sm", color = j.state == "failed" and "red" or j.state == "asking" and "amber" or "text-muted" },
     },
   }
   local total = #j.steps
@@ -34,7 +34,7 @@ local function job(j)
     end
   end
   if j.error then
-    kids[#kids + 1] = text{ j.error, wrap = true, size = "sm", color = "red", key = "job-" .. j.sandbox .. "-error" }
+    kids[#kids + 1] = text{ j.error, wrap = true, size = "sm", color = j.state == "asking" and "amber" or "red", key = "job-" .. j.sandbox .. "-error" }
   end
   for _, w in ipairs(j.warnings or {}) do
     kids[#kids + 1] = row{ w = "full", gap = 6, icon{ "warning", size = 12, color = "amber" },

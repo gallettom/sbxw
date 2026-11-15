@@ -324,8 +324,10 @@ fn write_create_fixtures() {
     r.st.form.carves.push(model::Carve { path: "/home/you/dev/shop/backend/src".into(), access: "ro", enforce: "strict" });
     r.st.form.preview = Some(Preview::Answer(json!({ "ok": false, "error": "/home/you/dev/shop/backend/src: a sub-folder cannot be read-only inside a read-only folder" })));
     r.ask("create_repo", json!({ "action": "toggle", "path": "/home/you/dev/shop" })).unwrap();
-    r.st.form.error = Some("Could not update favourites: '/home/you/nope' is not a folder".into());
     r.ask("create_set", json!({ "field": "name", "value": "Docs!" })).unwrap();
+    r.st.form.error = Some("Could not update favourites: '/home/you/nope' is not a folder".into());
+    r.st.form.preview = Some(Preview::Answer(json!({ "ok": false, "error": "/home/you/dev/shop/backend/src: cannot be read-only here, sbx shares /home/you/dev/shop once" })));
+    r.data[KEY] = r.st.view(&super::taken(&Ctx { data: &r.ctx_data() }));
     save("create", "workspace-errors", &r);
 
     // A remote host: no stars, no native picker, a git URL instead.
