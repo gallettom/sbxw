@@ -460,7 +460,9 @@ impl App {
             .key("modal")
             .role("dialog")
             .pin(Some(side), Some(top), Some(side), None)
-            .max_h((self.window.1 - top - 24.0).max(160.0))
+            // A fixed height: the screen fills it and scrolls inside (its
+            // own close button; Escape and a press outside close it too).
+            .h((self.window.1 - top - 24.0).clamp(160.0, 720.0))
             .padding(14.0)
             .gap(8.0)
             .radius(radius("lg").unwrap())
@@ -469,23 +471,6 @@ impl App {
             .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
             // A press inside stays inside (it does not reach the scrim).
             .on_press(|_s: &mut App| {})
-            .child(
-                row().w_full().child(el().grow(1.0)).child(
-                    el().key("modal-close")
-                        .role("button")
-                        .label("Close")
-                        .help("Close (Escape)")
-                        .padding(3.0)
-                        .radius(radius("xs").unwrap())
-                        .hover(c("border"))
-                        .cursor(Cursor::Pointer)
-                        .on_press(|s: &mut App| {
-                            s.feats.modal = None;
-                            s.push_data();
-                        })
-                        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
-                ),
-            )
             .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
         el().key("modal-scrim")
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
@@ -637,7 +622,7 @@ impl ConfirmAnswers for App {
             }
         }
         for g in &confirm.grants {
-            if let Err(e) = feat::put_at(&mut call.body, g, J::Bool(true)) {
+            if let Err(e) = feat::put_at(&mut call.body, &g.field, g.value()) {
                 if let Some(d) = self.feats.dialog.as_mut() {
                     d.error = Some(e);
                 }
@@ -706,9 +691,19 @@ mod tests {
         let c = Confirm::new("Create x?", Call::post("/api/sandboxes/create", json!({ "name": "x" }), "create x")).grant("approved");
         let mut body = c.call.body.clone();
         for g in &c.grants {
-            feat::put_at(&mut body, g, J::Bool(true)).unwrap();
+            feat::put_at(&mut body, &g.field, g.value()).unwrap();
         }
         assert_eq!(body["approved"], true);
+        // Lines: what the dialog lists is exactly what is sent.
+        let lines = vec!["network: allow api.github.com".to_string(), "mount: ~/data (read only)".to_string()];
+        let c = Confirm::new("Create x?", Call::post("/api/sandboxes/create", json!({ "name": "x" }), "create x")).grant_lines("approved", lines.clone());
+        let shown = approval::granted_lines(&c);
+        assert_eq!(shown, lines);
+        let mut body = c.call.body.clone();
+        for g in &c.grants {
+            feat::put_at(&mut body, &g.field, g.value()).unwrap();
+        }
+        assert_eq!(body["approved"], json!(shown));
         let preset = Confirm::new("t", sneaky.clone()).grant("approved");
         let mut b2 = preset.call.body.clone();
         assert!(feat::put_at(&mut b2, "approved", J::Bool(true)).is_err());

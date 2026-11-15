@@ -16,6 +16,22 @@ local function current(layout)
 end
 
 local tones = { up = "green", connecting = "amber", down = "red" }
+local badge_tones = { blue = "blue", green = "green", amber = "amber", red = "red", purple = "purple" }
+
+-- Features' buttons and badges (data.app.extras.topbar): the intent of each
+-- by id, for the action (filled by render; actions do not get `data`).
+local extra_intents = {}
+
+local function extra(e)
+  local label = e.label or ""
+  if e.count then label = (label ~= "" and (label .. " ") or "") .. tostring(e.count) end
+  if e.intent then
+    extra_intents[e.id] = e.intent
+    return button{ label, icon = e.icon, key = "extra-topbar-" .. e.id, on = "extra", arg = e.id, help = e.help,
+      variant = (e.tone == "amber" or e.tone == "red") and "primary" or "neutral" }
+  end
+  return badge{ label, tone = badge_tones[e.tone] or "neutral", help = e.help, key = "extra-topbar-" .. e.id }
+end
 
 return {
   render = function(_, data)
@@ -23,10 +39,13 @@ return {
     local j = data.jarvis or { open = false, pending = {}, voice = {} }
     local n = #j.pending
     local key = app.platform == "macos" and "⌘J" or "F7"
+    local extras = { gap = 8 }
+    for _, e in ipairs((app.extras or {}).topbar or {}) do table.insert(extras, extra(e)) end
     return row{ gap = 14, w = "full", h = "full",
       text{ "sbxw", weight = "bold", size = "lg", color = "text-bright" },
       select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" },
       spacer{},
+      row(extras),
       button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
         key = "jarvis-toggle", on = "jarvis", variant = (j.open or n > 0) and "primary" or "neutral",
         help = (j.open and "Close Jarvis (" or "Open Jarvis (") .. key .. ")" },
@@ -44,5 +63,9 @@ return {
       return intent("set_layout", { panes = panes, split = string.sub(id, 2, 2) == "r" and "rows" or "columns" })
     end,
     jarvis = function() return intent("toggle_jarvis_panel") end,
+    extra = function(_, id)
+      local i = extra_intents[id]
+      if i then return intent(i.name, i.args) end
+    end,
   },
 }

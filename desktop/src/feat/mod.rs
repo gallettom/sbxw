@@ -291,9 +291,9 @@ pub struct Confirm {
     pub cancel: String,
     /// Confirm in red (removing, widening access).
     pub danger: bool,
-    /// Body fields the core sets to `true` on Confirm, and only then (see
+    /// Body fields the core sets on Confirm, and only then (see
     /// [`Feature::core_only`]). The feature cannot put them in the body itself.
-    pub grants: Vec<String>,
+    pub grants: Vec<Grant>,
     pub call: Call,
 }
 
@@ -335,11 +335,36 @@ impl Confirm {
     }
     /// `field` (one of the feature's `core_only`) is set to `true` in the body on Confirm.
     pub fn grant(mut self, field: &str) -> Confirm {
-        self.grants.push(field.into());
+        self.grants.push(Grant { field: field.into(), lines: None });
+        self
+    }
+    /// The dialog lists exactly these lines as what is granted, and on
+    /// Confirm the core sends exactly the same strings, as a list, at
+    /// `field` (one of the feature's `core_only`): what is shown is what is sent.
+    pub fn grant_lines(mut self, field: &str, lines: Vec<String>) -> Confirm {
+        self.grants.push(Grant { field: field.into(), lines: Some(lines) });
         self
     }
     pub fn into_action(self) -> Action {
         Action::Confirm(Box::new(self))
+    }
+}
+
+/// A body field the core sets on Confirm only: `true`, or (`lines`) the
+/// list of lines the dialog showed as granted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Grant {
+    pub field: String,
+    pub lines: Option<Vec<String>>,
+}
+
+impl Grant {
+    /// What goes in the body.
+    pub fn value(&self) -> J {
+        match &self.lines {
+            Some(l) => J::Array(l.iter().cloned().map(J::String).collect()),
+            None => J::Bool(true),
+        }
     }
 }
 

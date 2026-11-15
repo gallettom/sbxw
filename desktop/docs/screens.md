@@ -527,9 +527,9 @@ The VM has `string`, `table`, `math`, `utf8` and `bit32`, and nothing else:
 no `io`, `os`, `require`, `load`, `loadstring`, `dofile`, `getfenv`,
 `setfenv`, `collectgarbage`. Libraries and `theme` are read only. Each call
 into the screen (`init`, `render`, an action) gets 200,000 interrupt checks
-(calls and loop turns) and 50 ms; memory is capped at 16 MB; one render may
-return 5,000 elements, nested 32 deep. Going over is an error in the banner;
-the app keeps running.
+(calls and loop turns), the hard limit, which does not depend on how busy the machine is, and 1 s of wall clock, which only catches a call that blocks; memory is capped at 16 MB; one render may
+return 5,000 elements, nested 32 deep. Going over is an error in the banner
+over the last good view, retried on the next change; the app keeps running.
 
 ## Checking your screen
 
@@ -597,6 +597,12 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
 the key keeps its last good value meanwhile.
+
+The built-in screens draw extras with these element keys (scripts press
+them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a
+sandbox's row; a feature extra there replaces the plain approvals flag),
+and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
+`intent` is a button, without one a badge.
 
 ### Worked example
 

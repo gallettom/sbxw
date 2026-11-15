@@ -392,6 +392,12 @@ impl ConfirmState<'_> {
     }
 }
 
+/// The lines the dialog lists as granted (`Confirm::grant_lines`), in
+/// order: exactly the strings Confirm sends.
+pub fn granted_lines(c: &crate::feat::Confirm) -> Vec<String> {
+    c.grants.iter().filter_map(|g| g.lines.clone()).flatten().collect()
+}
+
 /// The confirmation (key `cf-dialog`; buttons `cf-confirm`, `cf-cancel`,
 /// `cf-ack`; secret fields `cf-secret-<i>`; lines `cf-line-<i>`; the block `cf-preview`).
 pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
@@ -446,6 +452,15 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     if let Some(x) = d.confirm {
         for (i, l) in x.lines.iter().enumerate() {
             body = body.child(small(l.clone(), 12.5, 400.0, "text-bright").key(format!("cf-line-{i}")));
+        }
+        let granted = granted_lines(x);
+        if !granted.is_empty() {
+            let mut list = col().key("cf-grants").w_full().gap(3.0).padding(8.0).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
+            list = list.child(small("You grant:".into(), 11.5, 600.0, "text-bright"));
+            for (i, g) in granted.iter().enumerate() {
+                list = list.child(small(format!("• {g}"), 12.0, 400.0, "text").key(format!("cf-grant-{i}")));
+            }
+            body = body.child(list);
         }
         if let Some(p) = &x.preview {
             let mut spans = vec![];

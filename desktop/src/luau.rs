@@ -225,7 +225,9 @@ pub struct Limits {
     pub memory_bytes: usize,
     /// Interrupt callbacks allowed per call into the script.
     pub interrupts: u64,
-    /// Wall clock allowed per call into the script.
+    /// Wall clock allowed per call into the script: generous (1 s), it only
+    /// catches a call that blocks. The interrupt count is the real limit (it
+    /// is the same on a busy machine), so load never breaks a screen.
     pub wall: Duration,
     /// Elements one render may return.
     pub nodes: usize,
@@ -233,7 +235,7 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { memory_bytes: 16 << 20, interrupts: 200_000, wall: Duration::from_millis(50), nodes: 5_000 }
+        Self { memory_bytes: 16 << 20, interrupts: 200_000, wall: Duration::from_secs(1), nodes: 5_000 }
     }
 }
 
@@ -296,8 +298,11 @@ impl LuauHost {
             let n = b.count.get() + 1;
             b.count.set(n);
             let late = b.deadline.get().is_some_and(|d| Instant::now() > d);
-            if n > max || late {
+            if n > max {
                 return Err(mlua::Error::runtime(format!("instruction budget exceeded ({n} interrupts)")));
+            }
+            if late {
+                return Err(mlua::Error::runtime(format!("time budget exceeded (still running after {n} interrupts)")));
             }
             Ok(VmState::Continue)
         });
