@@ -331,7 +331,7 @@ impl Confirm {
 }
 
 /// See [`Action::Prepare`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Prepare {
     /// The dialog's title while it loads.
     pub title: String,
@@ -340,6 +340,13 @@ pub struct Prepare {
     /// The intent that asked, handed back to `build`.
     pub asked: Asked,
     pub build: fn(&Ctx, &Asked, &J) -> Result<Confirm, String>,
+}
+
+impl PartialEq for Prepare {
+    fn eq(&self, o: &Self) -> bool {
+        // `build` is a function: two are told apart by what they are built from.
+        (&self.title, &self.call, &self.asked) == (&o.title, &o.call, &o.asked)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -453,6 +460,85 @@ pub fn put_at(body: &mut J, path: &str, value: J) -> Result<(), String> {
     Ok(())
 }
 
+/// Matches a route pattern with `{name}` segments against a path (its
+/// query string ignored): the captured values, decoded, or `None`.
+pub fn match_path(pattern: &str, path: &str) -> Option<Vec<(String, String)>> {
+    let path = path.split('?').next().unwrap_or("");
+    let (a, b): (Vec<&str>, Vec<&str>) = (pattern.split('/').collect(), path.split('/').collect());
+    if a.len() != b.len() {
+        return None;
+    }
+    let mut out = vec![];
+    for (p, v) in a.iter().zip(b.iter()) {
+        if let Some(name) = p.strip_prefix('{').and_then(|p| p.strip_suffix('}')) {
+            if v.is_empty() {
+                return None;
+            }
+            out.push((name.to_string(), decode(v)));
+        } else if p != v {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// A query string's value (`?a=b&c=d`), decoded.
+pub fn query(path: &str, key: &str) -> Option<String> {
+    let q = path.split_once('?')?.1;
+    q.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| decode(v)))
+}
+
+fn decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
+                    Ok(v) => {
+                        out.push(v);
+                        i += 3;
+                        continue;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            b'+' => out.push(b' '),
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// What a fixture daemon (and the stand-in) answers for a feature route:
+/// the first feature whose `standin` takes it, else a `GET` of a declared
+/// [`Data`] path answers that key of `data` (per sandbox: its entry).
+pub fn answer_from(data: &mut J, method: &str, path: &str, body: &J, publish: &mut dyn FnMut(&str, J)) -> (u16, J) {
+    for f in FEATURES {
+        if let Some(sf) = f.standin {
+            let mut st = Standin { data: &mut *data, publish: &mut *publish };
+            if let Some(r) = sf(&mut st, method, path, body) {
+                return r;
+            }
+        }
+    }
+    if method == "GET" {
+        for d in FEATURES.iter().flat_map(|f| f.data.iter()) {
+            if let Some(caps) = match_path(d.path.split('?').next().unwrap_or(d.path), path) {
+                let v = &data[d.key];
+                let v = match caps.iter().find(|(k, _)| k == "sandbox") {
+                    Some((_, sb)) => v[sb.as_str()].clone(),
+                    None => v.clone(),
+                };
+                return (200, v);
+            }
+        }
+    }
+    (404, serde_json::json!({ "error": format!("no route {method} {}", path.split('?').next().unwrap_or("")) }))
+}
+
 /// The feature that owns intent `name`, and its row.
 pub fn intent(name: &str) -> Option<(&'static Feature, &'static Spec)> {
     FEATURES.iter().find_map(|f| f.intents.iter().find(|s| s.name == name).map(|s| (*f, s)))
@@ -505,6 +591,14 @@ mod tests {
             assert!(put_at(&mut b, bad, "z".into()).is_err(), "{bad}");
         }
         assert_eq!((b["spec"]["name"].as_str(), b["secrets"]["API_KEY"].as_str()), (Some("x"), Some("s1")));
+    }
+
+    #[test]
+    fn paths_match_their_patterns() {
+        assert_eq!(match_path("/api/sandboxes/{sandbox}/ports", "/api/sandboxes/web%20app/ports?x=1"), Some(vec![("sandbox".into(), "web app".into())]));
+        assert_eq!(match_path("/api/sandboxes/{sandbox}/ports", "/api/sandboxes//ports"), None);
+        assert_eq!(match_path("/api/approvals", "/api/approvals/respond"), None);
+        assert_eq!(query("/api/fs?path=%2Fhome&x=2", "path").as_deref(), Some("/home"));
     }
 
     #[test]

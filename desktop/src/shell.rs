@@ -7,6 +7,7 @@
 //! 6 pt apart, rounded tiles: the header (48 pt), the sidebar, and one tile
 //! per pane, each with a 32 pt bar over its terminal.
 
+mod features;
 mod jarvis;
 
 use crate::approval;
@@ -163,6 +164,8 @@ pub struct App {
     wiring: jarvis::Wiring,
     /// The window's size in points (the root's layout).
     pub window: (f32, f32),
+    /// Features (`src/feat/`): their data, slots and dialog (shell/features.rs).
+    pub feats: features::Feats,
 }
 
 /// Whether the window takes pastes at its root (see `view`).
@@ -185,7 +188,7 @@ impl App {
                     PathBuf::from(f)
                 };
                 match Fixture::load(&path) {
-                    Ok(fx) => (Target::Fixture(Arc::new(FixtureDaemon::new(&fx.name, fx.daemon.clone()))), fx.raw.clone(), fx.app.clone()),
+                    Ok(fx) => (Target::Fixture(Arc::new(FixtureDaemon::new(&fx.name, fx.daemon.clone()).with_raw(fx.raw.clone()))), fx.raw.clone(), fx.app.clone()),
                     Err(e) => {
                         eprintln!("{e:#}");
                         std::process::exit(2);
@@ -238,6 +241,7 @@ impl App {
             audio: Box::new(crate::voice::NullAudio::default()),
             wiring: jarvis::Wiring::new(),
             window: (1280.0, 800.0),
+            feats: features::Feats::default(),
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -292,7 +296,7 @@ impl App {
         }
         let names: Vec<String> = match &app.solo {
             Some(s) => vec![s.clone()],
-            None => SCREENS.iter().map(|s| s.to_string()).collect(),
+            None => SCREENS.iter().map(|s| s.to_string()).chain(crate::feat::screens().map(|(n, _)| n.to_string())).collect(),
         };
         // The link starts now, not in `setup`: Rune checks a script's element
         // keys against the first frame, so in a headless run the first list
@@ -401,11 +405,20 @@ impl App {
         };
         daemon.insert("sandboxes".into(), serde_json::to_value(&self.sandboxes).expect("sandboxes"));
         daemon.insert("jarvis".into(), self.jarvis.screen_data(self.audio.available()));
-        crate::fixture::screen_data(&J::Object(daemon), &self.view_model())
+        for (k, v) in &self.feats.data {
+            daemon.insert(k.clone(), v.clone());
+        }
+        let mut data = crate::fixture::screen_data(&J::Object(daemon), &self.view_model());
+        let (modal, panels, extras, _) = self.feats_app(&data);
+        data["app"]["modal"] = modal;
+        data["app"]["panels"] = panels;
+        data["app"]["extras"] = extras;
+        data
     }
 
     fn push_data(&mut self) {
         let d = self.screen_data();
+        self.feats.pane_extras = self.feats_app(&d).3;
         for s in &mut self.screens {
             s.set_data(d.clone());
         }
@@ -459,6 +472,7 @@ impl App {
                 if !matches!(self.target, Target::Fixture(_)) {
                     self.jarvis_connected();
                 }
+                self.feats_connected();
                 // Terminals whose socket closed reconnect on their own
                 // (`TerminalState::with_reconnect`, through `current`), and the
                 // daemon replays what they missed.
@@ -483,15 +497,18 @@ impl App {
                 // A watched start that now shows as running is done.
                 let running: Vec<String> = self.sandboxes.iter().filter(|s| s.status == "running").map(|s| s.name.clone()).collect();
                 self.expect.retain(|(n, _, _)| !running.contains(n));
+                self.feats_sandboxes();
             }
             LinkEvent::Bus(ev) => {
                 log::debug!("event {} {}", ev.name, ev.data);
-                return self.jarvis_bus(&ev.name, &ev.data);
+                let f = self.feats_bus(&ev.name, &ev.data);
+                return self.jarvis_bus(&ev.name, &ev.data) || f;
             }
             LinkEvent::Done { what, result } => match result {
                 Ok(()) => self.notify(format!("{what}: done"), false),
                 Err(e) => self.notify(format!("{what}: {e}"), true),
             },
+            ev @ (LinkEvent::Answer { .. } | LinkEvent::Data { .. }) => return self.feats_link(ev),
         }
         true
     }
@@ -527,6 +544,9 @@ impl App {
         }
         changed |= self.drain(headless().then_some(Duration::from_millis(1500)), true);
         changed |= self.poll_jarvis(tx);
+        if let Some(t) = self.feats_poll() {
+            tx.wake_after(t.saturating_duration_since(Instant::now()));
+        }
         for s in &mut self.screens {
             changed |= s.poll();
         }
@@ -625,6 +645,14 @@ impl App {
     /// The window's keys (nothing focused, or what the focused control passed on).
     pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key == Key::Escape && self.screens.iter_mut().any(|s| s.close_menus()) {
+            return true;
+        }
+        if ev.key == Key::Escape && (self.feats.dialog.is_some() || self.feats.modal.is_some()) {
+            // The confirmation first, then the modal under it.
+            if self.feats.dialog.take().is_none() {
+                self.feats.modal = None;
+            }
+            self.push_data();
             return true;
         }
         if self.jarvis_key(ev, tx) {
@@ -816,6 +844,7 @@ impl App {
                     self.focused = 0;
                 }
             }
+            i @ (Intent::OpenModal { .. } | Intent::CloseModal | Intent::OpenPanel { .. } | Intent::ClosePanel { .. } | Intent::Feature(_)) => self.run_feature_intent(from, i),
             other => self.run_jarvis_intent(from, other),
         }
     }
@@ -836,6 +865,8 @@ impl Host for App {
                 Risk::Approval(asks) => match i {
                     // The screen only opens the core's dialog; the click there approves.
                     Intent::ApproveProposal { id } => self.show_proposal(&id),
+                    // A feature's: its answer may only be the core's dialog (features::admit).
+                    i @ Intent::Feature(_) => self.run_intent(screen, i),
                     i => {
                         // No other intent has this risk; if one is added without its dialog, refuse.
                         self.approvals.push(approval::Pending { screen: screen.into(), intent: i, asks });
@@ -897,6 +928,21 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let (top_el, mut overlays) = screen::view_parts::<App>(top);
     let (side_el, more) = screen::view_parts::<App>(side);
     overlays.extend(more);
+    // A feature's panel, docked left of Jarvis's.
+    let fpanel = s.feats.panel.as_ref().and_then(|name| {
+        let (_, decl) = crate::feat::screen(name)?;
+        let crate::feat::Slot::Panel { width, .. } = decl.slot else { return None };
+        let sc = s.screens.iter().find(|x| &x.name == name)?;
+        let (el_, more) = screen::view_parts::<App>(sc);
+        overlays.extend(more);
+        Some(s.feat_panel_view(el_, width))
+    });
+    let modal = s.feats.modal.as_ref().and_then(|(name, _)| {
+        let (_, decl) = crate::feat::screen(name)?;
+        let crate::feat::Slot::Modal { width } = decl.slot else { return None };
+        let sc = s.screens.iter().find(|x| &x.name == name)?;
+        Some(s.modal_view(screen::view::<App>(sc), width))
+    });
     let panel = match s.screens.iter().find(|x| x.name == "jarvis") {
         Some(j) if s.jarvis.open => {
             let (el_, more) = screen::view_parts::<App>(j);
@@ -920,6 +966,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(top_el));
     let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
     let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
+    if let Some(p) = fpanel {
+        main = main.child(p);
+    }
     // Docked on the right: it narrows the panes instead of covering them.
     if let Some(p) = panel {
         main = main.child(p);
@@ -928,7 +977,15 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     for o in overlays {
         root = root.child(o);
     }
+    if let Some(m) = modal {
+        root = root.child(m);
+    }
     if let Some((t, err, _)) = &s.notice {
+        let offer = s.feats.notice_then.is_some();
+        let mut note = col().gap(3.0).child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap());
+        if offer {
+            note = note.child(text("Click to open").font(small(11.0, 500.0)).color(c("blue")));
+        }
         root = root.child(
             el().key("notice")
                 .pin(None, None, Some(16.0), Some(16.0))
@@ -939,14 +996,24 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 .fill(c(if *err { "red-tint" } else { "surface" }))
                 .border(1.0, c(if *err { "red" } else { "border" }))
                 .cursor(Cursor::Pointer)
-                .on_press(|s: &mut App| s.notice = None)
-                .child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap()),
+                .on_press(|s: &mut App| {
+                    s.notice = None;
+                    // The notice's offer: a click runs it, checked as any intent.
+                    if let Some((name, args)) = s.feats.notice_then.take() {
+                        s.press_extra("notice", &name, &args);
+                    }
+                    s.push_data();
+                })
+                .child(note),
         );
     }
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
     if let Some(dialog) = s.dialog_view() {
+        root = root.child(dialog);
+    }
+    if let Some(dialog) = s.confirm_view() {
         root = root.child(dialog);
     }
     root
@@ -992,6 +1059,9 @@ fn pane_view(s: &App, i: usize) -> El {
     }
     if let Some(p) = pane.filter(|p| p.sandbox.is_some()) {
         bar = bar.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(10.5, 400.0)).color(c("text-muted"))));
+        for x in s.pane_extras(i, p.sandbox.as_deref().unwrap_or("")) {
+            bar = bar.child(x);
+        }
         if !connected {
             bar = bar.child(text(p.status()).font(small(11.0, 400.0)).color(c("text-muted")));
         }
