@@ -22,6 +22,13 @@ fn bad(msg: impl Into<String>) -> Option<(u16, J)> {
     Some((400, json!({ "ok": false, "error": msg.into() })))
 }
 
+/// A route's answer from the fixture: one holding `{ok: false, error}` is
+/// served as the daemon serves a failure (503), so the core files it under
+/// `data.app.errors`.
+fn served(v: &J) -> Option<(u16, J)> {
+    Some((if v["ok"] == false { 503 } else { 200 }, v.clone()))
+}
+
 fn arr<'a>(data: &'a mut J, key: &str, inner: &str) -> &'a mut Vec<J> {
     if !data[key].is_object() {
         data[key] = json!({ "ok": true });
@@ -98,18 +105,18 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
     let get = method.eq_ignore_ascii_case("GET");
     let d = &mut *st.data;
     match (get, s.as_slice()) {
-        (true, ["api", "secrets"]) => Some((200, d["secrets"].clone())),
-        (true, ["api", "github-token"]) => Some((200, d["github_token"].clone())),
-        (true, ["api", "kits"]) => Some((200, d["kits"].clone())),
-        (true, ["api", "my-skills"]) => Some((200, d["my_skills"].clone())),
-        (true, ["api", "mcp"]) => Some((200, d["mcp"].clone())),
-        (true, ["api", "remote-hosts"]) => Some((200, d["remote_hosts"].clone())),
+        (true, ["api", "secrets"]) => served(&d["secrets"]),
+        (true, ["api", "github-token"]) => served(&d["github_token"]),
+        (true, ["api", "kits"]) => served(&d["kits"]),
+        (true, ["api", "my-skills"]) => served(&d["my_skills"]),
+        (true, ["api", "mcp"]) => served(&d["mcp"]),
+        (true, ["api", "remote-hosts"]) => served(&d["remote_hosts"]),
         (true, ["api", "voice"]) => {
             voice_tick(st);
-            Some((200, st.data["voice"].clone()))
+            served(&st.data["voice"])
         }
         (true, ["api", "sandboxes", sb, "skills"]) => {
-            Some((200, d["sandbox_skills_of"].get(*sb).cloned().unwrap_or_else(|| json!({ "ok": true, "skills": [] }))))
+            served(&d["sandbox_skills_of"].get(*sb).cloned().unwrap_or_else(|| json!({ "ok": true, "skills": [] })))
         }
         (true, ["api", "mcp", server]) => {
             let text = d["mcp_inspect_of"][*server].as_str().unwrap_or("").to_string();

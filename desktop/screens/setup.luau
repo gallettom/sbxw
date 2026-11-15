@@ -19,8 +19,9 @@ local TABS = {
   { id = "voice", label = "Voice" },
 }
 
--- The daemon's answers (one key per route) as the tabs read them. A key
--- whose read failed holds `{ ok = false, error = ... }`.
+-- The daemon's answers (one key per route) as the tabs read them. Why a
+-- key's last read failed is in `data.app.errors[key]` (the key keeps its
+-- last good value); an answer `{ ok = false, error = ... }` says it too.
 local function failed(v)
   if type(v) == "table" and v.ok == false then return v.error or "the daemon refused" end
   return nil
@@ -34,6 +35,8 @@ end
 
 local function view(data)
   local d = { sandboxes = data.sandboxes or {}, errors = {} }
+  local app_errors = (data.app and data.app.errors) or {}
+  local function err(key) return app_errors[key] or failed(data[key]) end
   local sec = data.secrets
   local services, custom = {}, {}
   if type(sec) == "table" then
@@ -43,10 +46,10 @@ local function view(data)
   end
   local gh = data.github_token
   d.secrets = { github = (type(gh) == "table" and gh.ok ~= false) and gh or nil, services = services, custom = custom }
-  d.errors.secrets = failed(sec) or failed(gh)
+  d.errors.secrets = err("secrets") or err("github_token")
 
   d.kits = data.kits or {}
-  d.errors.kits = failed(data.kits)
+  d.errors.kits = err("kits")
 
   local kept_names = {}
   local ms = data.my_skills or {}
@@ -70,7 +73,7 @@ local function view(data)
     end
   end
   d.skills = { kept = ms.skills or {}, look = look }
-  d.errors.skills = failed(data.my_skills) or (look and look.error)
+  d.errors.skills = err("my_skills") or (look and look.error) or app_errors.sandbox_skills
 
   local servers = {}
   for _, x in ipairs((data.mcp or {}).servers or {}) do
@@ -83,17 +86,17 @@ local function view(data)
       text = type(t) == "table" and (t.text or t.error or "") or "Reading…" }
   end
   d.mcp = { servers = servers, inspect = inspect }
-  d.errors.mcp = failed(data.mcp)
+  d.errors.mcp = err("mcp")
 
   local rh = data.remote_hosts or {}
   d.hosts = { hosts = rh.hosts or {}, provision = data.provision }
-  d.errors.hosts = failed(data.remote_hosts)
+  d.errors.hosts = err("remote_hosts")
 
   local v = data.voice
-  if v == nil then
+  if failed(v) or (v == nil and app_errors.voice) then
+    d.voice = { unavailable = "This daemon has no voice: " .. (failed(v) or app_errors.voice) }
+  elseif v == nil then
     d.voice = nil
-  elseif failed(v) then
-    d.voice = { unavailable = "This daemon has no voice: " .. failed(v) }
   else
     d.voice = v
     local files = false
@@ -442,24 +445,31 @@ local function mcp_tab(state, d)
     } or false,
   }
 
+  -- Added: the server is listed now, so the form starts again (as the web
+  -- UI resets it). The next edit drops the old fields (`reset`).
   local f = state.mcp or {}
+  local done = false
+  if f.sent and not f.replace then
+    for _, x in ipairs(m.servers or {}) do if x.name == f.sent then done = true end end
+  end
+  if done then f = {} end
   local stdio = f.kind == "stdio"
   local keys = placeholders(f.headers)
   local form = {
     title(f.replace and ("Edit " .. f.replace) or "New server"),
-    field("Name", input{ id = "mcp-name", value = f.name or "", on = "mcp_field", arg = "name", placeholder = "github" }),
-    field("Kind", select{ id = "mcp-kind", value = stdio and "stdio" or "remote", on = "mcp_kind", items = {
+    field("Name", input{ id = "mcp-name", value = f.name or "", on = "mcp_field", arg = { k = "name", reset = done }, placeholder = "github" }),
+    field("Kind", select{ id = "mcp-kind", value = stdio and "stdio" or "remote", on = "mcp_kind", arg = { reset = done }, items = {
       { id = "remote", label = "Remote (an HTTP endpoint)" },
       { id = "stdio", label = "Local command (runs on this machine)" } } }),
   }
   if stdio then
-    form[#form + 1] = field("Command", input{ id = "mcp-command", value = f.command or "", on = "mcp_field", arg = "command", placeholder = "npx" })
-    form[#form + 1] = field("Arguments", input{ id = "mcp-args", value = f.args or "", on = "mcp_field", arg = "args", placeholder = "-y @modelcontextprotocol/server-filesystem /srv" })
-    form[#form + 1] = field("Directory", input{ id = "mcp-dir", value = f.dir or "", on = "mcp_field", arg = "dir", placeholder = "optional" })
+    form[#form + 1] = field("Command", input{ id = "mcp-command", value = f.command or "", on = "mcp_field", arg = { k = "command", reset = done }, placeholder = "npx" })
+    form[#form + 1] = field("Arguments", input{ id = "mcp-args", value = f.args or "", on = "mcp_field", arg = { k = "args", reset = done }, placeholder = "-y @modelcontextprotocol/server-filesystem /srv" })
+    form[#form + 1] = field("Directory", input{ id = "mcp-dir", value = f.dir or "", on = "mcp_field", arg = { k = "dir", reset = done }, placeholder = "optional" })
     form[#form + 1] = note("A local command runs on this machine, outside any sandbox: the next dialog shows the exact line and asks you to confirm you read it.", "amber")
   else
-    form[#form + 1] = field("URL", input{ id = "mcp-url", value = f.url or "", on = "mcp_field", arg = "url", placeholder = "https://mcp.example.com/mcp" })
-    form[#form + 1] = field("Headers", input{ id = "mcp-headers", value = f.headers or "", on = "mcp_field", arg = "headers",
+    form[#form + 1] = field("URL", input{ id = "mcp-url", value = f.url or "", on = "mcp_field", arg = { k = "url", reset = done }, placeholder = "https://mcp.example.com/mcp" })
+    form[#form + 1] = field("Headers", input{ id = "mcp-headers", value = f.headers or "", on = "mcp_field", arg = { k = "headers", reset = done },
       placeholder = "Authorization: Bearer ${TOKEN}; one per ;" })
     if #keys > 0 then
       form[#form + 1] = note("Secrets asked in the next dialog: " .. table.concat(keys, ", ") .. (f.replace and " (left empty: unchanged)" or ""))
@@ -515,26 +525,31 @@ local function hosts_tab(state, d)
   }
 
   local f = state.host or {}
+  local done = false
+  if f.sent and not f.editing then
+    for _, h in ipairs(hs.hosts or {}) do if h.name == f.sent then done = true end end
+  end
+  if done then f = {} end
   local alias = f.mode ~= "direct"
   local form = {
     title(f.editing and ("Edit " .. f.editing) or "Add a host"),
-    field("Name", input{ id = "host-name", value = f.name or "", on = "host_field", arg = "name", placeholder = "build-box",
+    field("Name", input{ id = "host-name", value = f.name or "", on = "host_field", arg = { k = "name", reset = done }, placeholder = "build-box",
       disabled = f.editing ~= nil }),
-    field("Connect by", select{ id = "host-mode", value = alias and "alias" or "direct", on = "host_mode", items = {
+    field("Connect by", select{ id = "host-mode", value = alias and "alias" or "direct", on = "host_mode", arg = { reset = done }, items = {
       { id = "alias", label = "An alias from ~/.ssh/config" },
       { id = "direct", label = "Address, user, port, key" } } }),
   }
   if alias then
-    form[#form + 1] = field("SSH alias", input{ id = "host-ssh", value = f.ssh or "", on = "host_field", arg = "ssh", placeholder = "build-box" })
+    form[#form + 1] = field("SSH alias", input{ id = "host-ssh", value = f.ssh or "", on = "host_field", arg = { k = "ssh", reset = done }, placeholder = "build-box" })
   else
-    form[#form + 1] = field("Address", input{ id = "host-host", value = f.host or "", on = "host_field", arg = "host", placeholder = "10.0.0.12" })
-    form[#form + 1] = field("User", input{ id = "host-user", value = f.user or "", on = "host_field", arg = "user", placeholder = "optional" })
-    form[#form + 1] = field("Port", input{ id = "host-port", value = f.port or "", on = "host_field", arg = "port", placeholder = "22" })
-    form[#form + 1] = field("Key file", input{ id = "host-key", value = f.key or "", on = "host_field", arg = "key", placeholder = "~/.ssh/id_ed25519" })
+    form[#form + 1] = field("Address", input{ id = "host-host", value = f.host or "", on = "host_field", arg = { k = "host", reset = done }, placeholder = "10.0.0.12" })
+    form[#form + 1] = field("User", input{ id = "host-user", value = f.user or "", on = "host_field", arg = { k = "user", reset = done }, placeholder = "optional" })
+    form[#form + 1] = field("Port", input{ id = "host-port", value = f.port or "", on = "host_field", arg = { k = "port", reset = done }, placeholder = "22" })
+    form[#form + 1] = field("Key file", input{ id = "host-key", value = f.key or "", on = "host_field", arg = { k = "key", reset = done }, placeholder = "~/.ssh/id_ed25519" })
   end
-  form[#form + 1] = field("Agent port", input{ id = "host-agent-port", value = f.agent_port or "", on = "host_field", arg = "agent_port", placeholder = "7682" })
-  form[#form + 1] = field("sbx path", input{ id = "host-sbx-path", value = f.sbx_path or "", on = "host_field", arg = "sbx_path", placeholder = "optional" })
-  form[#form + 1] = checkbox{ "Trust this host with secrets", value = f.trust == true, on = "host_trust" }
+  form[#form + 1] = field("Agent port", input{ id = "host-agent-port", value = f.agent_port or "", on = "host_field", arg = { k = "agent_port", reset = done }, placeholder = "7682" })
+  form[#form + 1] = field("sbx path", input{ id = "host-sbx-path", value = f.sbx_path or "", on = "host_field", arg = { k = "sbx_path", reset = done }, placeholder = "optional" })
+  form[#form + 1] = checkbox{ "Trust this host with secrets", value = f.trust == true, on = "host_trust", arg = { reset = done } }
   if f.trust then
     form[#form + 1] = note("sbxw then sends it your Anthropic token (CLAUDE_CODE_OAUTH_TOKEN or API key), the OAuth kit (your Claude login) and your skills. Anyone with root on the host can read them.", "amber")
   end
@@ -742,8 +757,14 @@ return {
     mcp_inspect = function(_, server) return intent("mcp_inspect", { server = server }) end,
     mcp_inspect_close = function() return intent("mcp_inspect_close") end,
     mcp_rm = function(_, server) return intent("mcp_rm", { server = server }) end,
-    mcp_field = function(state, k, v) state.mcp = state.mcp or {}; state.mcp[k] = v end,
-    mcp_kind = function(state, _, v) state.mcp = state.mcp or {}; state.mcp.kind = v end,
+    mcp_field = function(state, a, v)
+      if a.reset or not state.mcp then state.mcp = {} end
+      state.mcp[a.k] = v
+    end,
+    mcp_kind = function(state, a, v)
+      if a.reset or not state.mcp then state.mcp = {} end
+      state.mcp.kind = v
+    end,
     mcp_clear = function(state) state.mcp = {} end,
     mcp_save = function(state)
       local f = state.mcp or {}
@@ -757,13 +778,24 @@ return {
         if trim(f.headers) ~= "" then args.headers = trim(f.headers) end
       end
       if f.replace then args.replace = f.replace end
+      f.sent = args.name
+      state.mcp = f
       return intent("mcp_save", args)
     end,
 
     -- Hosts
-    host_field = function(state, k, v) state.host = state.host or {}; state.host[k] = v end,
-    host_mode = function(state, _, v) state.host = state.host or {}; state.host.mode = v end,
-    host_trust = function(state, _, on) state.host = state.host or {}; state.host.trust = on end,
+    host_field = function(state, a, v)
+      if a.reset or not state.host then state.host = {} end
+      state.host[a.k] = v
+    end,
+    host_mode = function(state, a, v)
+      if a.reset or not state.host then state.host = {} end
+      state.host.mode = v
+    end,
+    host_trust = function(state, a, on)
+      if a.reset or not state.host then state.host = {} end
+      state.host.trust = on
+    end,
     host_clear = function(state) state.host = {} end,
     host_test = function(_, name) return intent("host_test", { name = name }) end,
     host_rm = function(_, name) return intent("host_rm", { name = name }) end,
@@ -776,7 +808,11 @@ return {
     end,
     host_provision = function(_, name) return intent("host_provision", { name = name }) end,
     provision_close = function() return intent("host_provision_close") end,
-    host_save = function(state) return intent("host_save", host_args(state.host or {})) end,
+    host_save = function(state)
+      state.host = state.host or {}
+      state.host.sent = trim(state.host.name)
+      return intent("host_save", host_args(state.host))
+    end,
 
     -- Voice
     voice_install = function() return intent("voice_install") end,

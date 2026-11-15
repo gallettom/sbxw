@@ -320,3 +320,12 @@ fn the_tabs_show_what_the_daemon_said() {
     let v = render_tab("voice-downloading", "voice").join("\n");
     assert!(v.contains("Downloading") && v.contains("Cancel"), "{v}");
 }
+
+#[test]
+fn every_setup_intent_is_described_in_the_screen_doc() {
+    let doc = include_str!("../../../docs/screens.md");
+    let section = &doc[doc.find("### setup").expect("a ### setup section")..];
+    for s in INTENTS {
+        assert!(section.contains(&format!("`{}`", s.name)), "docs/screens.md, ### setup, does not describe {}", s.name);
+    }
+}

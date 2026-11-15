@@ -710,3 +710,52 @@ dialog and sends them back as `approved` only on Allow (`core_only`). Once
 ready, the core selects the sandbox and opens its agent in a spare pane.
 
 ### setup
+
+The web UI's Setup dialog (`assets/js/setup.js` and its tabs): secrets and
+the GitHub token, kits lines, kept skills, MCP servers, remote hosts, the
+voice models. A modal, opened by the gear in the top bar
+(`open_modal { screen = "setup", arg = <tab> }`). A sandbox with a kit
+waiting gets an amber ✓ on its row (`open_terminal` with `mode = "kit-add"`).
+
+Files: `src/feat/setup/` (rules, stand-in, tests), `screens/setup.luau`,
+`fixtures/setup/`. Data, each key one route's answer as the daemon gives
+it (why a read failed: `data.app.errors[key]`, shown as a red line in its
+tab): `data.secrets` (`GET /api/secrets`:
+names, scopes and kinds, never a value), `data.github_token` (`{set, gh}`),
+`data.kits` (`GET /api/kits`), `data.my_skills`, `data.mcp`,
+`data.remote_hosts`, `data.voice` (`GET /api/voice`, then each `voice`
+event). Set by its intents: `data.skills_for` and `data.sandbox_skills`
+(`skills_look`), `data.mcp_inspect_for` and `data.mcp_inspect`
+(`mcp_inspect`), `data.provision` (`{host, command}`, `host_provision`).
+
+**No intent carries a secret value.** The value of a token, a custom secret
+or an MCP header placeholder is typed in the core's dialog, sent once and
+forgotten; a screen only sees names and whether a value is set.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `setup_load` | `section` (`secrets`, `kits`, `skills`, `mcp`, `hosts`, `voice`) | direct | Reads that tab's data again |
+| `github_token_set` | none | approval | Asks for the token in its dialog, stores it as sbx's `github` secret |
+| `github_token_gh` | none | approval | Makes sbx use this machine's `gh auth token` |
+| `github_token_rm` | none | approval | Removes the `github` secret |
+| `secret_custom_set` | `hosts` (comma or space separated), `env` | approval | Asks for the value in its dialog; the proxy puts it in requests to those hosts |
+| `secret_rm` | `name` | approval | Removes a global secret |
+| `kits_save` | `path`, `kits` (one reference per line) or `defaults = true` | approval | Rewrites that file's `kits` line (or removes it); the dialog lists what is added and removed and asks for an acknowledgement for kits that reach outside the sandbox |
+| `skills_look` | `sandbox` | direct | Lists that sandbox's skills (`data.sandbox_skills`) |
+| `skill_keep` | `sandbox`, `name` | approval | Keeps a skill found by `skills_look` for every new sandbox |
+| `skill_forget` | `name` | approval | Stops keeping it |
+| `mcp_load` | `server`, `sandbox` | direct | Loads a server into a running sandbox |
+| `mcp_unload` | `server`, `sandbox` | approval | Unloads it |
+| `mcp_auth` | `server` | direct | `sbx mcp auth`, in this machine's browser |
+| `mcp_inspect`, `mcp_inspect_close` | `server` / none | direct | Shows or hides `sbx mcp inspect` |
+| `mcp_rm` | `server` | approval | Unregisters a server |
+| `mcp_save` | `name`, `kind` (`remote`, `stdio`), `url`, `headers` (`;` or new lines), `command`, `args`, `dir`, `replace` | approval | Registers (or replaces) a server; one secret field per `${KEY}`; a `stdio` one shows its host command and needs "I have read this command" |
+| `host_save` | `name`, `ssh` or `host`/`user`/`port`/`key`, `agent_port`, `sbx_path`, `trust_secrets`, `editing` | approval | For a new address, reads the host key first and shows its fingerprints; adds or edits the host |
+| `host_rm` | `name` | approval | Unregisters a host (with records there: an acknowledgement, then forced) |
+| `host_test` | `name` | direct | `sbx version` over the link |
+| `host_provision`, `host_provision_close` | `name` / none | direct | Shows or hides the command that installs sbx there |
+| `hosts_reload` | none | direct | Reads hosts.toml again |
+| `voice_install` | none | approval | Downloads the voice models; progress in `data.voice.job` |
+| `voice_cancel` | none | direct | Stops the download |
+| `voice_rm` | none | approval | Deletes the models |
+| `voice_warm` | none | direct | Loads the models now |

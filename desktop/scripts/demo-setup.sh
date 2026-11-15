@@ -111,10 +111,12 @@ marks=(opened token-dialog token-typed token-saved mcp-dialog mcp-acked mcp-adde
 build
 for m in "${marks[@]}"; do
   SHOT_SIZE="1280x860" run_app "$shots/window-$m.log" --fixture "$here/fixtures/setup/full.json" \
-    --script "$script" --snap "$shots/window-$m.png" --at "mark:$m+0.05"
+    --script "$script" --snap "$shots/window-$m.png" --tree "$shots/window-$m.tree.json" --at "mark:$m+0.05"
   echo "$shots/window-$m.png"
 done
-if grep -l "$token" "$shots"/window-*.log "$shots"/window-*.json 2>/dev/null; then
+# The script types the token, so it holds it; nothing else may.
+if grep -l "$token" "$shots"/window-*.log "$shots"/window-*.tree.json 2>/dev/null; then
   echo "FAIL: the token reached a log or a tree" >&2; exit 1
 fi
+echo "token in no log and no element tree: ok"
 grep -hE "setup:|confirmed|intent" "$shots/window-end.log" | sed 's/^\[[^]]*\] //' | sort -u | head -40 || true
