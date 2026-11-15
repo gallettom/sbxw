@@ -695,6 +695,46 @@ mod tests {
         assert!(admit(Risk::Direct, "deny", vec![Action::Call(call)]).is_ok());
     }
 
+    /// The rule end to end, through the app: an allow a screen emits opens
+    /// the core's dialog and sends nothing; only Confirm there sends it.
+    #[test]
+    fn a_screen_emitted_allow_never_runs_without_the_core_dialog() {
+        use crate::screen::Host;
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/network/basic.json");
+        let mut a = App::new(super::super::Args { fixture: Some(fixture.into()), ..Default::default() });
+        let raw = |a: &App| match &a.target {
+            crate::client::Target::Fixture(f) => f.raw(),
+            _ => unreachable!(),
+        };
+        let pending = |a: &App| raw(a)["approvals"]["approvals"].as_array().map(Vec::len).unwrap_or(0);
+        a.drain(Some(Duration::from_secs(3)), true);
+        assert_eq!(pending(&a), 1);
+        // The screen asks to allow, three ways: the request, a blocked host, a typed rule.
+        let ask = |a: &mut App, v: J| {
+            let list = crate::intent::parse(&v).unwrap();
+            a.intents("network", list);
+            a.drain(Some(Duration::from_secs(3)), true);
+        };
+        ask(&mut a, json!({ "kind": "intent", "name": "approval_answer", "args": { "id": "network:abc", "option": "allow" } }));
+        assert_eq!(pending(&a), 1, "nothing sent before the person's click");
+        let d = a.feats.dialog.as_ref().expect("the core's dialog shows");
+        assert!(d.confirm.as_ref().unwrap().lines.iter().any(|l| l == "Asks for: api.github.com:443"));
+        let rules = |a: &App| raw(a)["policy"]["web-app"]["rules"]["rows"].as_array().map(Vec::len).unwrap_or(0);
+        let before = rules(&a);
+        a.cancel_click();
+        ask(&mut a, json!({ "kind": "intent", "name": "network_allow", "args": { "sandbox": "web-app", "resources": "evil.com", "global": true } }));
+        assert!(a.feats.dialog.as_ref().unwrap().confirm.as_ref().unwrap().danger);
+        assert_eq!(rules(&a), before, "a global allow waits for the dialog");
+        a.cancel_click();
+        assert_eq!((rules(&a), pending(&a)), (before, 1), "cancel sends nothing");
+        // Only the click on Confirm answers.
+        ask(&mut a, json!({ "kind": "intent", "name": "approval_answer", "args": { "id": "network:abc", "option": "allow" } }));
+        a.confirm_click();
+        a.drain(Some(Duration::from_secs(3)), true);
+        assert_eq!(pending(&a), 0);
+        assert!(a.feats.dialog.is_none(), "closed once answered");
+    }
+
     #[test]
     fn core_only_fields_go_out_only_after_a_confirm() {
         const F: Feature = Feature { name: "t", core_only: &["approved"], ..Feature::EMPTY };

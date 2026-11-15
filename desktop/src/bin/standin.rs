@@ -73,6 +73,8 @@ struct State {
     /// The fixture's whole `daemon` object: features' routes answer from it
     /// and change it (`Feature::standin`, `feat::answer_later`).
     raw: serde_json::Value,
+    /// `--approval SECS`: sbx asks (a host for web-app) that long after the first stream client.
+    approval_after: Option<f64>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -111,6 +113,7 @@ fn main() -> anyhow::Result<()> {
     let mut voice = false;
     let mut stale = false;
     let mut others = 0;
+    let mut approval_after = None;
     while let Some(k) = args.next() {
         let v = args.next().unwrap_or_default();
         match k.as_str() {
@@ -136,6 +139,7 @@ fn main() -> anyhow::Result<()> {
             // `--stale-session yes`: an older Jarvis session left as `working`
             // (its hooks stopped), as the first real run on a Mac suggested.
             "--stale-session" => stale = v == "yes",
+            "--approval" => approval_after = Some(v.parse()?),
             "--clients" => others = v.parse::<u64>().unwrap_or(1).saturating_sub(1),
             _ => anyhow::bail!("unknown argument {k}"),
         }
@@ -148,7 +152,7 @@ fn main() -> anyhow::Result<()> {
             "started_ms": 1, "session_id": "z-old", "origin": "tty", "answerable": false, "ts": 0 }));
     }
     let raw = if fx["daemon"].is_object() { fx["daemon"].clone() } else { serde_json::json!({}) };
-    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, sessions, others, raw, ..Default::default() }));
+    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, sessions, others, raw, approval_after, ..Default::default() }));
     let listener = TcpListener::bind(&addr)?;
     eprintln!("standin: listening on {addr}");
     let changes = Arc::new(Mutex::new(Some(changes)));
@@ -265,6 +269,13 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                 g.streams.push(tx);
                 if !g.streamed {
                     g.streamed = true;
+                    if let Some(t) = g.approval_after {
+                        let st = st.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_secs_f64(t));
+                            new_approval(&st);
+                        });
+                    }
                     if let Some(list) = changes.lock().unwrap().take() {
                         for (t, name, status) in list {
                             let st = st.clone();
@@ -345,6 +356,25 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
         _ => reply(&mut s, "404 Not Found", "\"no such route\"".into()),
     }
     Ok(())
+}
+
+/// sbx asks: web-app tried to reach api.github.com (`--approval`).
+fn new_approval(st: &Shared) {
+    {
+        let mut g = st.lock().unwrap();
+        let a = serde_json::json!({ "id": "network:demo", "kind": "network", "sandbox": "web-app", "title": "api.github.com:443",
+            "detail": "HTTPS through sbx's proxy\nNo rule allows this host", "created_at": "2026-11-15T22:00:00Z",
+            "options": [{ "id": "allow", "label": "Allow always" }, { "id": "allow-once", "label": "Allow once" }, { "id": "deny", "label": "Deny" }] });
+        if !g.raw["approvals"]["approvals"].is_array() {
+            g.raw["approvals"] = serde_json::json!({ "ok": true, "approvals": [] });
+        }
+        g.raw["approvals"]["approvals"].as_array_mut().unwrap().push(a);
+        if let Some(sb) = g.sandboxes.iter_mut().find(|s| s.name == "web-app") {
+            sb.approvals += 1;
+        }
+    }
+    eprintln!("standin: sbx asks for api.github.com:443 (web-app)");
+    publish(st, "session", &serde_json::json!({ "sandbox": "web-app", "state": "working" }).to_string());
 }
 
 fn terminal(mut ws: tungstenite::WebSocket<Prefixed>, raw: &TcpStream) -> anyhow::Result<()> {
