@@ -428,7 +428,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 
 | Intent | Arguments | What the core does |
 |---|---|---|
-| `open_terminal` | `sandbox` (string, required), `mode` (`agent` default, or `bash`), `thread` (string), `pane` | Opens that terminal in a pane and focuses it. The agent of a stopped sandbox starts it (the daemon runs `sbx run`); the list then shows it running |
+| `open_terminal` | `sandbox` (string, required), `mode` (`agent` default, `bash`, or `kit-add`: the pane where sbx's prompt for a waiting kit is answered), `thread` (string), `pane` | Opens that terminal in a pane and focuses it. The agent of a stopped sandbox starts it (the daemon runs `sbx run`); the list then shows it running |
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
@@ -442,6 +442,15 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `approve_proposal` | `id` (string) | **Risk: approval.** Opens the core's dialog for that proposal. It approves nothing: only the person's click on the dialog does |
 | `refuse_proposal` | `id` (string), `reason` (string) | Refuses that proposal; Jarvis is told the reason |
 | `open_link` | `url` (an `http://` or `https://` URL) | Opens it in the browser. Any other scheme is refused |
+| `open_modal` | `screen` (required), `arg` (string) | Shows a feature's dialog screen over the window, one at a time; Escape or a press outside closes it. The screen reads `data.app.modal.screen` and `data.app.modal.arg` |
+| `close_modal` | none | Closes the dialog screen |
+| `open_panel` | `screen` (required) | Opens a feature's panel docked on the right, beside Jarvis's; several open show as tabs, one shown at a time |
+| `close_panel` | `screen` (none: the one shown) | Closes that panel |
+
+Features (`src/feat/`, see [Adding a feature](#adding-a-feature)) add
+their own rows: each is listed, with its arguments, risk and what it does,
+in `intents.json` next to the built-in screens, and in its feature's
+section below.
 
 `pane` is `"focused"` (default), `"spare"` (the first pane with nothing in
 it, or a new pane while there are fewer than 4) or a number 1 to 4.
