@@ -47,7 +47,11 @@ debug info). Scripted runs: `scripts/demo-network.sh`, `demo-create.sh`,
 ## For the next plan (threads and plans, relay, files, sandbox browser, virtual Mac, templates)
 
 Still to build: each of those areas as a feature (`src/feat/<area>`), with
-its routes from the "Not covered yet" table of daemon-api.md. What a new
+its routes from the "Not covered yet" table of daemon-api.md; also left by
+this plan's threads: the Templates dialog (`templates.js`) and the env file
+card (`envfile.js`), the Alt+N shortcut to open New (needs a core shortcut
+registry for features), the remote host remembered across runs (needs a
+core store), and the Setup leftovers listed above. What a new
 feature thread needs to know that "Adding a feature" does not say yet:
 
 - **Register through the integrator.** Never edit `src/feat/mod.rs`
@@ -72,6 +76,14 @@ feature thread needs to know that "Adding a feature" does not say yet:
 - **Stream events** reach a feature only if named in `events`; data keys
   can also follow events (`Data::on`). There is no event for sbx approvals,
   so network polls every 5 s.
+- **Long calls and headless shots.** A window never waits for a call: the
+  stream's events keep arriving and drawing while a bring-up's POST is
+  pending (`tests/long_call.rs`: seven `provision` steps received over 2 s
+  before the answer, each poll under 20 µs). A headless run, though, waits
+  for pending calls before each frame (so its virtual clock does not outrun
+  the daemon), so a long call's live progress shows only coarsely in
+  headless shots. Changing that (not waiting for calls longer than 120 s)
+  was tried and reverted: `demo-create.sh` relies on the wait.
 - **Fixture keys are route answers**: a fixture's `daemon` object holds
   each route's answer under the feature's data key, in the shape the daemon
   sends, so the stand-in, fixtures and the real daemon agree.
