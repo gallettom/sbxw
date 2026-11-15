@@ -13,7 +13,9 @@
 # It opens Setup from the top bar's gear, stores a GitHub token through the
 # core's dialog (typed into its secure field), adds a stdio MCP server
 # (the host command and the acknowledgement), adds a remote host (the
-# fingerprints read by the core), and starts the voice download. One PNG
+# fingerprints read by the core), starts the voice download, saves a kits
+# line adding sbxw:ssh-agent (acknowledged), closes Setup and presses the
+# amber check on docs (a kit-add pane). One PNG
 # per step in shots/setup/window-*.png, and the app log, where the token
 # must not appear.
 set -euo pipefail
@@ -104,10 +106,20 @@ add(type="tap", key="cf-confirm")
 mark("voice-started", 500)
 add(type="tap", key="setup-reload")
 mark("voice-progress", 400)
+add(type="tap", key="tab-kits")
+add(type="tap", key="kit-ssh-agent")
+add(type="tap", key="kits-save")
+mark("kits-dialog", 300)
+add(type="tap", key="cf-ack")
+add(type="tap", key="cf-confirm")
+mark("kits-saved", 500)
+add(type="tap", key="setup-close")
+add(type="tap", key="extra-sandbox-docs-kit-add")
+mark("kit-pane", 500)
 mark("end")
 print(json.dumps({"events": ev}, indent=1))
 PY
-marks=(opened token-dialog token-typed token-saved mcp-dialog mcp-acked mcp-added host-dialog host-added voice-removed voice-dialog voice-started voice-progress end)
+marks=(opened token-dialog token-typed token-saved mcp-dialog mcp-acked mcp-added host-dialog host-added voice-removed voice-dialog voice-started voice-progress kits-dialog kits-saved kit-pane end)
 build
 for m in "${marks[@]}"; do
   SHOT_SIZE="1280x860" run_app "$shots/window-$m.log" --fixture "$here/fixtures/setup/full.json" \

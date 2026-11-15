@@ -67,16 +67,18 @@ intent's checked arguments:
 | Setup → Templates, Setup → Mac | Not in this thread's area (templates and the virtual Mac are other screens) |
 | MCP: Edit prefills the form from `sbx mcp ls` detail | `sbx mcp ls --format json` only documents `name` and `type`; the desktop form starts empty with "Clear". Replace is possible by typing the server again (`replace`) but no button prefills it yet |
 | Provision: Copy to clipboard | No clipboard intent for screens; the command is shown as text to type or select |
+| The last tab across restarts | Kept for the session only (the screen's state); the web UI keeps it in localStorage |
 | Kept skill's save date | Luau has no date formatting (`os` is not in the VM); the sandbox it came from is shown |
 | SSH connection card (`ssh.js`) | Per sandbox, a pane-control popover, not Setup; belongs with the sandbox actions |
-| A failed read shown in its tab in the real app | The fixtures show it (`errors`): a red line per tab. The core keeps a failed read in its log only (asked of desktop-shell) |
 | Anthropic / claude.ai login switch (Remote Control) | Per sandbox (`pane-controls.js`), not Setup |
 
 ## Evidence
 
-Unit tests (`cargo test -j2 --lib setup`, against HEAD 84cc09e with
-`setup,` registered in a scratch copy): **16 passed**. Whole lib: 135
-passed, 0 failed, 2 ignored.
+Unit tests, real tree at fa226b3 plus my last commits
+(`CARGO_PROFILE_DEV_DEBUG=0 cargo test -j1 --lib setup`): **17 passed**.
+The whole `cargo test -j1` in desktop/: 148 passed, 3 failed, all three in
+`feat::create::tests` (desktop-create's work in progress, not touched
+here).
 
 | Test | Proves |
 |---|---|
@@ -90,6 +92,7 @@ passed, 0 failed, 2 ignored.
 | `keeping_a_skill_uses_the_cores_listing_not_the_screens_words` | `origin` and `replace` come from the core's data |
 | `a_new_host_is_confirmed_on_fingerprints_the_core_read` | Prepare reads the key; build shows and sends exactly those fingerprints; known key; keyscan failure; edit without key |
 | `removing_a_host_with_sandboxes_needs_the_tick_and_forces` | |
+| `every_setup_intent_is_described_in_the_screen_doc` | Each of the 27 intents is in `docs/screens.md`, `### setup` |
 | others | rows unique and documented, routes and refusals, voice event, ✓ extra, stand-in voice steps, tab contents |
 
 Headless PNGs in `.sbxw-artifacts/setup/` (`demo-setup.sh`, 760x820, each
@@ -134,12 +137,70 @@ looked at):
 - the rest (`full-*`, `empty-*`, `errors-mcp`, `errors-hosts`) the same
   states for the other tabs.
 
-One run under load (load average 10, a debug build, other threads linking)
-showed the screen's red banner "instruction budget exceeded (1
-interrupts)": the 50 ms wall clock per call ran out. Run again alone, the
-same shot rendered (above). Debug builds only; noted for the lead.
+One early run under load (load average 10, a debug build) showed the
+screen's red banner "instruction budget exceeded (1 interrupts)": the old
+50 ms wall clock per call ran out. desktop-shell has since made the
+instruction count the hard limit (wall clock 1 s); the shots above were
+taken again.
 
-WINDOW-RUN
+### The whole window (`demo-setup.sh window`, fixture `full`)
+
+One scripted run, one PNG per step (1280x860), in `.sbxw-artifacts/setup/`:
+
+- `window-opened.png`: the top bar's gear (`extra-topbar-setup`) opened
+  Setup as a modal over the dimmed window, Secrets tab. The sidebar shows
+  docs with the amber "✓ 1" (kit waiting).
+- `window-token-typed.png`: "Replace the GitHub token", the core's dialog
+  over the modal: its two lines, the label, and the secure field showing
+  **only bullets** for the 33 typed characters; Cancel, Save.
+- `window-token-saved.png`: dialog gone, notice "store the GitHub token:
+  done", the tab read again.
+- `window-mcp-acked.png`: "Register MCP server playwright2": the host line
+  `npx -y @playwright/mcp@latest`, "I have read this command" ticked, Add
+  now on (it is off until the tick).
+- `window-mcp-added.png`: playwright2 listed (3 servers), notice "add
+  playwright2: done", and the form started again (empty, Remote).
+- `window-host-dialog.png`: "Add host gpu": the core read the key first
+  (Prepare), then shows two fingerprints (ED25519, RSA) for 10.0.0.9 in a
+  monospace block; "Add host" greyed until "These fingerprints are the
+  host's" is ticked.
+- `window-host-added.png`: notice "add host gpu: done" (the stand-in log:
+  "host gpu saved (fingerprints confirmed: 2)"). The list still reads "No
+  remote host yet": see the conflict with desktop-create below.
+- `window-kits-dialog.png`: after ticking `sbxw:ssh-agent` and Save…:
+  "Change the kits of sbxw.toml", the path, "Adds sbxw:ssh-agent
+  (bundled).", who uses the file, the warning, the old line in red and the
+  new one in green, Save greyed until "I know what sbxw:ssh-agent brings".
+- `window-voice-progress.png`: after Remove models → Remove and Install →
+  Download: the bar at 50%, "Downloading … 50% (1610 MB / 3220 MB)",
+  Cancel; notices from the core.
+- `window-kit-pane.png` (fixture: no terminal) and `standin-kit-pane.png`
+  (against the stand-in): Setup closed, the ✓ on docs pressed
+  (`extra-sandbox-docs-kit-add`): a pane "docs kit-add", `terminal
+  119x40 connected` and a prompt; the stand-in logged `terminal opened
+  (sandbox=docs&mode=kit-add)`.
+
+Log order (app): `OpenModal setup`, `github_token_set`, `confirmed 'Replace
+the GitHub token' (Post /api/github-token)`, `mcp_save`, `confirmed
+'Register MCP server playwright2'`, `host_save`, `Post
+/api/remote-hosts/key`, `confirmed 'Add host gpu' (Post
+/api/remote-hosts/add)`, `voice_rm`, `voice_install`, `kits_save`,
+`confirmed 'Change the kits of sbxw.toml'`, `CloseModal`, `OpenTerminal
+docs KitAdd Spare`. The script then checks the typed token is in no app
+log and no element tree (`--tree` dump at every step): "token in no log
+and no element tree: ok".
+
+### Found in the whole-window runs, for other threads
+
+- desktop-create's stand-in answers `GET /api/remote-hosts` itself and
+  expects the fixture key `remote_hosts` to be an array; mine is the
+  route's answer `{ok, hosts, sbxw}`. create comes first, so under the
+  stand-in and fixtures the Hosts tab lists nothing. The real daemon is
+  unaffected. Reported to the lead.
+- The stand-in binary answers `GET /api/voice` in the core (Jarvis's
+  route: 404 unless started with voice), before feature routes, so under
+  the binary the Voice tab gets no data. Fixtures (in memory) are fine.
+  Reported.
 
 ## Not verified
 
@@ -149,7 +210,8 @@ WINDOW-RUN
   them under which name?) are a guess: the stand-in uses the variable name.
 - **macOS**: not built; the dialog, secure fields and tabs were seen only
   headless on Linux.
-- **The whole window with the core's dialog**: WINDOW-STATUS
+- The Hosts list and Voice tab under the stand-in binary (the two
+  conflicts above); both seen working from fixtures alone.
 - A real keyboard in the secure fields (paste of a token with ⌘V).
 
 ## macOS test procedure
@@ -189,5 +251,9 @@ this branch (`cd desktop && cargo run --release`).
 10. Voice: on a Mac without the models, Install voice… → Download: the bar
     moves; Cancel stops it; Install again resumes. Remove models… →
     Remove. Load the models now does nothing visible (warms them).
-11. Press Escape, or ✕: the dialog closes. Reopen: the last tab is not
-    remembered (the web UI remembers it; see "not ported").
+11. Press Escape, a click outside, or ✕: the dialog closes. Reopen it: it
+    shows the tab used last (kept for the session, not across restarts as
+    the web UI's localStorage does).
+12. Stop sbx (`sbx daemon stop`) with Setup open on Secrets, press the
+    reload icon: a red line gives the daemon's error; start sbx, reload:
+    it goes.

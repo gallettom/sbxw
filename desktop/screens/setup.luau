@@ -667,7 +667,7 @@ return {
     end
     tabs[#tabs + 1] = spacer{}
     tabs[#tabs + 1] = button{ icon = "reload", key = "setup-reload", variant = "ghost", on = "reload", arg = tab, help = "Read it again" }
-    tabs[#tabs + 1] = button{ icon = "close", variant = "ghost", on = "close", help = "Close" }
+    tabs[#tabs + 1] = button{ icon = "close", key = "setup-close", variant = "ghost", on = "close", help = "Close" }
 
     local body = BODY[tab](state, d)
     body.key = "setup-body"
