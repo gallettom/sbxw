@@ -12,7 +12,8 @@
 //! * `create_consent`: `{config, grants}`: a create is refused with 409
 //!   until those exact lines come back as `approved`;
 //! * `create_fail`: `{name: reason}`: that bring-up fails once at its kits
-//!   step, then works on Retry.
+//!   step, then works on Retry;
+//! * `create_step_ms`: how long each step takes (default 350).
 
 use super::super::Standin;
 use serde_json::{json, Value as J};
@@ -169,7 +170,7 @@ fn bring_up(s: &mut Standin, b: &J, chat: bool) -> (u16, J) {
         v.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
         v
     };
-    let ms = STEP.as_millis() as u64;
+    let ms = s.data["create_step_ms"].as_u64().unwrap_or(STEP.as_millis() as u64);
     s.publish_after(0, "provision", ev(json!({ "kind": "plan", "steps": steps.iter().map(|(i, l)| json!({ "id": i, "label": l })).collect::<Vec<_>>() })));
     let fail = s.data["create_fail"][&name].as_str().map(str::to_string);
     for (id, _) in &steps {

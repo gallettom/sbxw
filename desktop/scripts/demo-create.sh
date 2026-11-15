@@ -11,7 +11,9 @@
 # fixture is fixtures/create/standin.json (create_consent, create_fail).
 #
 # The stand-in's state changes during a run, so each picture is its own run
-# against a fresh stand-in, up to that mark. Out: shots/create/window-<mark>.png,
+# against a fresh stand-in, up to that mark. A headless run waits for the
+# app's own pending calls before drawing on, so the steps in between are not
+# pictured here (fixtures/create-jobs/basic.json shows a bring-up mid-way). Out: shots/create/window-<mark>.png,
 # the element tree and the app log beside each.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -45,17 +47,15 @@ mark("confirm-grants", 300)
 add(type="tap", key="cf-confirm")
 mark("consent", 600)
 add(type="tap", key="cf-confirm")
-mark("progress", 1100)
-mark("failed", 2000)
+mark("failed", 600)
 add(type="tap", key="job-retry-shop")
 mark("consent-again", 600)
 add(type="tap", key="cf-confirm")
-mark("progress-again", 900)
-mark("ready", 2600)
+mark("ready", 600)
 mark("end", 300)
 print(json.dumps({"events": ev}, indent=1))
 PY
-marks=(chooser form filled confirm-grants consent progress failed consent-again progress-again ready end)
+marks=(${MARKS:-chooser form filled confirm-grants consent failed consent-again ready end})
 build
 for m in "${marks[@]}"; do
   start_daemon "$shots/standin-$m" --fixture "$here/fixtures/create/standin.json"
