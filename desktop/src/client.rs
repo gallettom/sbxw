@@ -709,10 +709,16 @@ impl Daemon for FixtureDaemon {
     }
     fn request(&self, method: &str, path: &str, body: &serde_json::Value, _timeout: Duration) -> Result<(u16, serde_json::Value)> {
         let mut raw = self.raw.lock().unwrap();
-        if let Some(sb) = self.data.lock().ok().map(|d| d.sandboxes.clone()) {
-            raw["sandboxes"] = serde_json::to_value(sb).unwrap_or_default();
+        let before = serde_json::to_value(self.data.lock().unwrap().sandboxes.clone()).unwrap_or_default();
+        raw["sandboxes"] = before.clone();
+        let r = crate::feat::answer_from(&mut raw, method, path, body, &mut |_, _| {});
+        // A route that changed the list (a sandbox removed or created): the list follows.
+        if raw["sandboxes"] != before {
+            if let Ok(l) = serde_json::from_value::<Vec<Sandbox>>(raw["sandboxes"].clone()) {
+                self.data.lock().unwrap().sandboxes = l;
+            }
         }
-        Ok(crate::feat::answer_from(&mut raw, method, path, body, &mut |_, _| {}))
+        Ok(r)
     }
     fn stop_sandbox(&self, name: &str) -> Result<()> {
         let mut d = self.data.lock().unwrap();
@@ -933,12 +939,19 @@ impl Link {
 
     /// Runs a feature's call off the UI thread; answers `Answer` with `id`.
     pub fn call(&self, daemon: Arc<dyn Daemon>, id: u64, feature: &'static str, call: crate::feat::Call) {
+        let send2 = Sender { tx: self.tx.clone(), wake: self.wake.clone() };
         self.job(move || {
             let method = match call.method {
                 crate::feat::Method::Get => "GET",
                 crate::feat::Method::Post => "POST",
             };
             let result = daemon.request(method, &call.path, &call.body, Duration::from_secs(call.timeout.max(1))).map_err(|e| format!("{e:#}"));
+            // As after a stop: a change (a sandbox removed, created) reaches the list at once.
+            if method == "POST" {
+                if let Ok(l) = daemon.sandboxes() {
+                    send_now(&send2, LinkEvent::Sandboxes(l));
+                }
+            }
             LinkEvent::Answer { id, feature, call, result }
         });
     }
@@ -970,6 +983,10 @@ impl Link {
             LinkEvent::Data { key, result }
         });
     }
+}
+
+fn send_now(s: &Sender, ev: LinkEvent) {
+    s.send(ev);
 }
 
 /// The daemon the link is connected to right now, if any.

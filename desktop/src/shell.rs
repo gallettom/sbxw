@@ -125,6 +125,8 @@ pub struct App {
     pub sandboxes: Vec<Sandbox>,
     /// A list arrived since the last connection.
     listed: bool,
+    /// A list arrived at least once (panes of a sandbox that leaves it empty).
+    listed_once: bool,
     /// The fixture set the connection state: the link does not change it.
     fixed_connection: bool,
     /// The fixture's daemon data (keys of later waves), when there is one.
@@ -216,6 +218,7 @@ impl App {
             connection: Connection::default(),
             sandboxes: vec![],
             listed: false,
+            listed_once: false,
             fixed_connection: false,
             raw,
             screens: vec![],
@@ -491,6 +494,7 @@ impl App {
             LinkEvent::Sandboxes(l) => {
                 self.listed = true;
                 if l == self.sandboxes {
+                    self.listed_once = true;
                     return false;
                 }
                 let was: HashMap<String, String> = self.sandboxes.iter().map(|s| (s.name.clone(), s.status.clone())).collect();
@@ -499,6 +503,15 @@ impl App {
                         log::info!("list: {} is now {}", sb.name, sb.status);
                     }
                 }
+                // A sandbox gone from the list (removed): its panes empty, as the web UI does.
+                if self.listed_once {
+                    for p in &mut self.panes {
+                        if p.sandbox.as_ref().is_some_and(|n| !l.iter().any(|s| &s.name == n)) {
+                            *p = Pane::empty();
+                        }
+                    }
+                }
+                self.listed_once = true;
                 self.sandboxes = l;
                 // A watched start that now shows as running is done.
                 let running: Vec<String> = self.sandboxes.iter().filter(|s| s.status == "running").map(|s| s.name.clone()).collect();
