@@ -538,7 +538,11 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
         }
         ("GET", "/api/sessions") => ("200 OK", json!(st.lock().unwrap().sessions.values().cloned().collect::<Vec<_>>())),
         ("GET", "/api/voice") if st.lock().unwrap().voice => ("200 OK", json!({ "ok": true, "compiled": true, "ready": true, "speech": { "supported": false }, "push_to_talk_key": "F8" })),
-        ("GET", "/api/voice") => err("404 Not Found", "not found".into()),
+        // No voice of its own: the fixture's `voice` key if it has one (Setup's Voice tab), else 404.
+        ("GET", "/api/voice") => {
+            let v = st.lock().unwrap().raw["voice"].clone();
+            if v.is_object() { ("200 OK", v) } else { err("404 Not Found", "not found".into()) }
+        }
         ("POST", "/api/voice/transcribe") => {
             let heard = std::env::var("STANDIN_HEARD").unwrap_or_default();
             eprintln!("standin: transcribed as {heard:?}");
