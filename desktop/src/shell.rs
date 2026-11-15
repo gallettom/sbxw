@@ -267,6 +267,11 @@ impl App {
                 Err(e) => log::warn!("could not write {}: {e}", dir.display()),
             }
         }
+        for p in &init.panels {
+            app.feats.panels.push(p.clone());
+            app.feats.panel = Some(p.clone());
+        }
+        app.feats.modal = init.modal.clone();
         if let Some(n) = init.panes {
             app.layout.0 = n.clamp(1, 4);
         }

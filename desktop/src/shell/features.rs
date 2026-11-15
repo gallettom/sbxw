@@ -312,7 +312,10 @@ impl App {
                     if self.feats.data.get(&key) == Some(&v) && !had_error {
                         return false;
                     }
-                    self.feats.data.insert(key, v);
+                    let old = self.feats.data.insert(key.clone(), v.clone()).unwrap_or(J::Null);
+                    if old != v {
+                        self.feats_data_changed(&key, &old, &v);
+                    }
                 }
                 Err(e) => {
                     log::warn!("{key}: {e}");
@@ -380,6 +383,17 @@ impl App {
             _ => return false,
         }
         true
+    }
+
+    /// Tells the feature that declared `key` (its `on_data`).
+    fn feats_data_changed(&mut self, key: &str, old: &J, new: &J) {
+        for f in feat::FEATURES {
+            if let (true, Some(on)) = (f.data.iter().any(|d| d.key == key), f.on_data) {
+                let data = self.feat_ctx_data();
+                let acts = on(&Ctx { data: &data }, key, old, new);
+                self.feature_actions(f, &format!("feature:{}", f.name), acts);
+            }
+        }
     }
 
     fn fail(&mut self, from_dialog: bool, what: &str, why: String) {

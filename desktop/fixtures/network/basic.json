@@ -1,0 +1,410 @@
+{
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web",
+    "approvals": 1
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "approvals": {
+   "ok": true,
+   "approvals": [
+    {
+     "id": "network:abc",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "api.github.com:443",
+     "detail": "HTTPS through sbx's proxy\nNo rule allows this host",
+     "created_at": "2026-11-15T21:58:00Z",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow always"
+      },
+      {
+       "id": "allow-once",
+       "label": "Allow once"
+      },
+      {
+       "id": "deny",
+       "label": "Deny"
+      }
+     ]
+    }
+   ]
+  },
+  "policy": {
+   "web-app": {
+    "ok": true,
+    "policies": {
+     "columns": [
+      "POLICY",
+      "SOURCE",
+      "APPLIES TO",
+      "SUMMARY"
+     ],
+     "roles": [
+      "id",
+      "source",
+      "applies",
+      "summary"
+     ],
+     "rows": [
+      [
+       "local-policy",
+       "local",
+       "sandbox:web-app",
+       "network: 2 allow; network: 1 deny"
+      ],
+      [
+       "corp-7f3a",
+       "org",
+       "all",
+       "network: 1 deny"
+      ]
+     ],
+     "other_sandboxes": 1,
+     "truncated": 0,
+     "sandbox_scoped": true,
+     "raw": ""
+    },
+    "rules": {
+     "columns": [
+      "POLICY",
+      "RULE ID",
+      "SOURCE",
+      "APPLIES TO",
+      "ACTION",
+      "HOST"
+     ],
+     "roles": [
+      "id",
+      "rule_id",
+      "source",
+      "applies",
+      "action",
+      "host"
+     ],
+     "rows": [
+      [
+       "local-policy",
+       "r-1",
+       "local",
+       "sandbox:web-app",
+       "allow",
+       "api.anthropic.com"
+      ],
+      [
+       "local-policy",
+       "r-2",
+       "local",
+       "sandbox:web-app",
+       "deny",
+       "evil.example.com"
+      ],
+      [
+       "corp-7f3a",
+       "r-org",
+       "org",
+       "all",
+       "deny",
+       "pastebin.com"
+      ],
+      [
+       "kit-node",
+       "r-3",
+       "kit",
+       "sandbox:web-app",
+       "allow",
+       "registry.yarnpkg.com"
+      ]
+     ],
+     "other_sandboxes": 0,
+     "truncated": 0,
+     "sandbox_scoped": true,
+     "raw": ""
+    },
+    "log": {
+     "columns": [
+      "TIME",
+      "ACTION",
+      "HOST",
+      "REASON"
+     ],
+     "roles": [
+      "time",
+      "action",
+      "host",
+      "reason"
+     ],
+     "rows": [
+      [
+       "21:58",
+       "deny",
+       "registry.npmjs.org:443",
+       "no matching allow rule"
+      ],
+      [
+       "21:57",
+       "allow",
+       "api.anthropic.com:443",
+       "r-1"
+      ],
+      [
+       "21:40",
+       "deny",
+       "pastebin.com:443",
+       "Blocked by org policy"
+      ]
+     ],
+     "other_sandboxes": 0,
+     "truncated": 0,
+     "sandbox_scoped": true,
+     "raw": ""
+    },
+    "blocked": [
+     {
+      "host": "registry.npmjs.org:443",
+      "resource": "registry.npmjs.org",
+      "count": 5,
+      "last_seen": "2026-11-15T21:58:00Z",
+      "reason": "no matching allow rule",
+      "governed": false
+     },
+     {
+      "host": "pastebin.com:443",
+      "resource": "pastebin.com",
+      "count": 1,
+      "last_seen": "2026-11-15T21:40:00Z",
+      "reason": "Blocked by org policy",
+      "governed": true
+     }
+    ],
+    "configured_allow": [
+     "api.anthropic.com",
+     "registry.yarnpkg.com"
+    ],
+    "configured_deny": []
+   },
+   "docs": {
+    "ok": true,
+    "policies": {},
+    "rules": {
+     "columns": [],
+     "roles": [],
+     "rows": []
+    },
+    "log": {},
+    "blocked": [],
+    "configured_allow": [],
+    "configured_deny": []
+   }
+  },
+  "ports": {
+   "web-app": {
+    "ports": [
+     {
+      "spec": "127.0.0.1:43000:3000/tcp",
+      "sandbox_port": 3000,
+      "proto": "tcp",
+      "host_ip": "127.0.0.1",
+      "host_port": 43000
+     }
+    ]
+   },
+   "docs": {
+    "ports": []
+   }
+  },
+  "network_hosts": [
+   {
+    "hostname": "web-app.sbx",
+    "ip": "127.0.0.1"
+   }
+  ],
+  "network_for": "web-app",
+  "network_policy": {
+   "ok": true,
+   "policies": {
+    "columns": [
+     "POLICY",
+     "SOURCE",
+     "APPLIES TO",
+     "SUMMARY"
+    ],
+    "roles": [
+     "id",
+     "source",
+     "applies",
+     "summary"
+    ],
+    "rows": [
+     [
+      "local-policy",
+      "local",
+      "sandbox:web-app",
+      "network: 2 allow; network: 1 deny"
+     ],
+     [
+      "corp-7f3a",
+      "org",
+      "all",
+      "network: 1 deny"
+     ]
+    ],
+    "other_sandboxes": 1,
+    "truncated": 0,
+    "sandbox_scoped": true,
+    "raw": ""
+   },
+   "rules": {
+    "columns": [
+     "POLICY",
+     "RULE ID",
+     "SOURCE",
+     "APPLIES TO",
+     "ACTION",
+     "HOST"
+    ],
+    "roles": [
+     "id",
+     "rule_id",
+     "source",
+     "applies",
+     "action",
+     "host"
+    ],
+    "rows": [
+     [
+      "local-policy",
+      "r-1",
+      "local",
+      "sandbox:web-app",
+      "allow",
+      "api.anthropic.com"
+     ],
+     [
+      "local-policy",
+      "r-2",
+      "local",
+      "sandbox:web-app",
+      "deny",
+      "evil.example.com"
+     ],
+     [
+      "corp-7f3a",
+      "r-org",
+      "org",
+      "all",
+      "deny",
+      "pastebin.com"
+     ],
+     [
+      "kit-node",
+      "r-3",
+      "kit",
+      "sandbox:web-app",
+      "allow",
+      "registry.yarnpkg.com"
+     ]
+    ],
+    "other_sandboxes": 0,
+    "truncated": 0,
+    "sandbox_scoped": true,
+    "raw": ""
+   },
+   "log": {
+    "columns": [
+     "TIME",
+     "ACTION",
+     "HOST",
+     "REASON"
+    ],
+    "roles": [
+     "time",
+     "action",
+     "host",
+     "reason"
+    ],
+    "rows": [
+     [
+      "21:58",
+      "deny",
+      "registry.npmjs.org:443",
+      "no matching allow rule"
+     ],
+     [
+      "21:57",
+      "allow",
+      "api.anthropic.com:443",
+      "r-1"
+     ],
+     [
+      "21:40",
+      "deny",
+      "pastebin.com:443",
+      "Blocked by org policy"
+     ]
+    ],
+    "other_sandboxes": 0,
+    "truncated": 0,
+    "sandbox_scoped": true,
+    "raw": ""
+   },
+   "blocked": [
+    {
+     "host": "registry.npmjs.org:443",
+     "resource": "registry.npmjs.org",
+     "count": 5,
+     "last_seen": "2026-11-15T21:58:00Z",
+     "reason": "no matching allow rule",
+     "governed": false
+    },
+    {
+     "host": "pastebin.com:443",
+     "resource": "pastebin.com",
+     "count": 1,
+     "last_seen": "2026-11-15T21:40:00Z",
+     "reason": "Blocked by org policy",
+     "governed": true
+    }
+   ],
+   "configured_allow": [
+    "api.anthropic.com",
+    "registry.yarnpkg.com"
+   ],
+   "configured_deny": []
+  },
+  "network_ports": {
+   "ports": [
+    {
+     "spec": "127.0.0.1:43000:3000/tcp",
+     "sandbox_port": 3000,
+     "proto": "tcp",
+     "host_ip": "127.0.0.1",
+     "host_port": 43000
+    }
+   ]
+  }
+ },
+ "app": {
+  "panels": [
+   "network"
+  ],
+  "selected": "web-app"
+ }
+}

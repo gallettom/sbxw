@@ -55,6 +55,10 @@ pub struct Feature {
     /// reason). When set, the core leaves the answer to it: no notice, no
     /// `store`; `then` keys are still read again.
     pub on_answer: Option<fn(&Ctx, &Call, Result<(u16, J), String>) -> Vec<Action>>,
+    /// One of its data keys changed (a read brought something new): `(key,
+    /// old value, new value)`; `old` is null on the first read. A new sbx
+    /// request becomes a notice here.
+    pub on_data: Option<fn(&Ctx, &str, &J, &J) -> Vec<Action>>,
     /// Buttons and badges in slots drawn by others, from the current data.
     pub extras: Option<fn(&Ctx) -> Vec<Extra>>,
     /// The stand-in daemon's answer to a request for this feature, if the
@@ -69,7 +73,7 @@ pub struct Feature {
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, extras: None, standin: None, core_only: &[] };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[] };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -480,6 +484,7 @@ macro_rules! features {
 
 features! {
     create,
+    network,
     setup,
 }
 
