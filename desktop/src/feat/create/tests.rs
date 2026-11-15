@@ -90,7 +90,7 @@ fn a_workspace_sandbox_from_the_chooser_to_its_terminal() {
     assert_eq!(r.c()["hosts"], json!([]), "no remote hosts: no host field");
     r.ask("create_browse", json!({ "path": "/home/you/dev/shop" })).unwrap();
     assert_eq!(r.c()["path"], "/home/you/dev/shop");
-    r.ask("create_set", json!({ "field": "name", "value": "Docs" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "Docs!" })).unwrap();
     assert_eq!(r.c()["name"], "docs");
     assert!(r.c()["name_note"].as_str().unwrap().contains("Lowercase"));
     assert!(r.c()["name_problem"].as_str().unwrap().contains("already exists"));
@@ -213,4 +213,24 @@ fn every_intent_is_documented() {
     for s in FEATURE.intents {
         assert!(doc.contains(&format!("`{}`", s.name)), "docs/screens.md does not describe {}", s.name);
     }
+}
+
+#[test]
+fn approved_lines_only_ever_come_from_the_daemons_question() {
+    // No intent can carry them: the core refuses an argument its row does not declare.
+    for s in FEATURE.intents {
+        assert!(s.args.iter().all(|(a, _, _)| *a != "approved"), "{} takes 'approved'", s.name);
+    }
+    // And act ignores one slipped in anyway: the first send approves nothing.
+    let mut r = Run::new(json!({ "sandboxes": [], "create_consent": { "config": "/w/sbxw.toml", "grants": ["mount /etc"] } }));
+    r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "web" })).unwrap();
+    let d = r.ctx_data();
+    let a = Asked { name: "create_submit", args: match json!({ "approved": ["mount /etc"] }) { J::Object(m) => m, _ => unreachable!() } };
+    let out = r.st.act(&Ctx { data: &d }, &a).unwrap();
+    let call = out.iter().find_map(|x| if let Action::Call(c) = x { Some(c.clone()) } else { None }).unwrap();
+    assert_eq!(call.body["approved"], json!([]));
+    r.run(vec![Action::Call(call)]);
+    assert_eq!(r.confirms.len(), 1, "the daemon asked; only the person's Confirm sends the lines");
+    assert!(r.daemon["sandboxes"].as_array().unwrap().is_empty());
 }

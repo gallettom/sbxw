@@ -198,11 +198,6 @@ pub fn inside(a: &str, b: &str) -> bool {
     a.starts_with(&b)
 }
 
-fn base(p: &str) -> &str {
-    let t = p.trim_end_matches('/');
-    t.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(p)
-}
-
 /// The form of the two create dialogs.
 #[derive(Debug, Clone)]
 pub struct Form {

@@ -432,7 +432,8 @@ impl State {
             other => return Err(format!("{other}: not a create intent")),
         }
         out.extend(self.preview());
-        out.push(self.set(&taken));
+        // The view first: the calls above answer later and set it again.
+        out.insert(0, self.set(&taken));
         Ok(out)
     }
 
@@ -612,7 +613,7 @@ impl State {
             _ => {}
         }
         out.extend(self.preview());
-        out.push(self.set(&taken));
+        out.insert(0, self.set(&taken));
         out
     }
 
