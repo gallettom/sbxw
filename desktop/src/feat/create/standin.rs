@@ -4,8 +4,11 @@
 //! with no sbx.
 //!
 //! Fixture keys (all optional), in the fixture's `daemon` object:
-//! * `fs`: `{folder: [sub-folder names]}` (default: a small tree under `/home/you`);
-//! * `favourites`: paths; `remote_hosts`; `kit_mounts`; `template_status`;
+//! * `fs_tree`: `{folder: [sub-folder names]}` (default: a small tree under `/home/you`);
+//! * keys in their route's shape: `favourites` (`GET /api/fs/favourites`),
+//!   `kit_mounts` (`GET /api/kit-mounts`), `template_status`; `remote_hosts`
+//!   is desktop-setup's Data (`GET /api/remote-hosts`, `{ok, hosts}`), served
+//!   by the core, not here;
 //! * `create_consent`: `{config, grants}`: a create is refused with 409
 //!   until those exact lines come back as `approved`;
 //! * `create_fail`: `{name: reason}`: that bring-up fails once at its kits
@@ -62,14 +65,15 @@ fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// `{ok, favourites: [{path, name, missing}]}`, `missing` checked against the tree.
 fn favourites(d: &J) -> J {
-    let tree = d.get("fs").cloned().unwrap_or_else(default_tree);
-    let list: Vec<J> = d["favourites"]
+    let tree = d.get("fs_tree").cloned().unwrap_or_else(default_tree);
+    let list: Vec<J> = d["favourites"]["favourites"]
         .as_array()
         .cloned()
         .unwrap_or_default()
         .iter()
-        .filter_map(J::as_str)
+        .filter_map(|f| f["path"].as_str())
         .map(|p| json!({ "path": p, "name": p.rsplit('/').next().unwrap_or(p), "missing": tree.get(p).is_none() }))
         .collect();
     json!({ "ok": true, "favourites": list })
@@ -81,7 +85,7 @@ pub fn route(s: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16
     let arg = |k: &str| q.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone());
     Some(match (method, p) {
         ("GET", "/api/fs") => {
-            let tree = s.data.get("fs").cloned().unwrap_or_else(default_tree);
+            let tree = s.data.get("fs_tree").cloned().unwrap_or_else(default_tree);
             let dir = arg("path").unwrap_or_else(|| HOME.into());
             let dir = dir.trim_end_matches('/').to_string();
             let Some(kids) = tree.get(&dir).and_then(J::as_array) else { return Some((200, json!({ "path": dir, "parent": parent(&dir), "entries": [] }))) };
@@ -92,20 +96,19 @@ pub fn route(s: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16
         ("GET", "/api/fs/favourites") => (200, favourites(s.data)),
         ("POST", "/api/fs/favourites") => {
             let path = body["path"].as_str().unwrap_or("").to_string();
-            let tree = s.data.get("fs").cloned().unwrap_or_else(default_tree);
+            let tree = s.data.get("fs_tree").cloned().unwrap_or_else(default_tree);
             if body["favourite"] == true && tree.get(&path).is_none() {
                 return Some((400, json!({ "ok": false, "error": format!("'{path}' is not a folder") })));
             }
-            let mut list: Vec<J> = s.data["favourites"].as_array().cloned().unwrap_or_default();
-            list.retain(|x| x != &J::from(path.clone()));
+            let mut list: Vec<J> = s.data["favourites"]["favourites"].as_array().cloned().unwrap_or_default();
+            list.retain(|x| x["path"] != path.as_str());
             if body["favourite"] == true {
-                list.push(path.into());
+                list.push(json!({ "path": path }));
             }
-            s.data["favourites"] = J::Array(list);
+            s.data["favourites"] = json!({ "ok": true, "favourites": list });
             (200, favourites(s.data))
         }
-        ("GET", "/api/remote-hosts") => (200, json!({ "ok": true, "hosts": s.data.get("remote_hosts").cloned().unwrap_or(json!([])) })),
-        ("GET", "/api/kit-mounts") => (200, json!({ "mounts": s.data.get("kit_mounts").cloned().unwrap_or(json!([])) })),
+        ("GET", "/api/kit-mounts") => (200, s.data.get("kit_mounts").cloned().unwrap_or(json!({ "mounts": [] }))),
         ("GET", "/api/template/status") => (200, s.data.get("template_status").cloned().unwrap_or(json!({ "auto": false }))),
         ("POST", "/api/carve/preview") => (200, preview(s.data, body)),
         ("POST", "/api/sandboxes/create") => bring_up(s, body, false),

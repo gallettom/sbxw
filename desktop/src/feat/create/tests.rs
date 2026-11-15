@@ -265,7 +265,7 @@ fn write_create_fixtures() {
         std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(&f).unwrap() + "\n").unwrap();
     };
     let base = || {
-        let mut r = Run::new(json!({ "sandboxes": sandboxes.clone(), "favourites": ["/home/you/dev"] }));
+        let mut r = Run::new(json!({ "sandboxes": sandboxes.clone(), "favourites": { "ok": true, "favourites": [{ "path": "/home/you/dev" }] } }));
         r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
         r
     };
@@ -282,8 +282,8 @@ fn write_create_fixtures() {
 
     // Everything optional filled in, local, with the template offer and kit folders.
     let mut r = Run::new(json!({
-        "sandboxes": sandboxes.clone(), "favourites": ["/home/you/dev", "/home/you/gone"],
-        "kit_mounts": [{ "kit": "sbxw:ssh-agent", "target": "/home/agent/.ssh", "host": "" }],
+        "sandboxes": sandboxes.clone(), "favourites": { "ok": true, "favourites": [{ "path": "/home/you/dev" }, { "path": "/home/you/gone" }] },
+        "kit_mounts": { "mounts": [{ "kit": "sbxw:ssh-agent", "target": "/home/agent/.ssh", "host": "" }] },
         "template_status": { "auto": true, "template": { "state": "stale", "record": { "tag": "sbxw-auto:7" }, "changed": ["sbx 0.52.1 → 0.53.0"] } },
     }));
     r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
@@ -331,10 +331,10 @@ fn write_create_fixtures() {
     save("create", "workspace-errors", &r);
 
     // A remote host: no stars, no native picker, a git URL instead.
-    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone(), "remote_hosts": [
+    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone(), "remote_hosts": { "ok": true, "hosts": [
         { "name": "buildbox", "address": "you@buildbox.lan", "link": "up" },
         { "name": "gpu", "address": "gpu.lan", "link": "down" },
-    ] }));
+    ] } }));
     r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
     r.ask("create_host", json!({ "host": "buildbox" })).unwrap();
     r.ask("create_set", json!({ "field": "name", "value": "api" })).unwrap();
