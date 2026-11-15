@@ -94,8 +94,8 @@ Images (`desktop/.sbxw-artifacts/network/`, `shell-extras/`):
 Older demos rerun after the changes: `demo-live.sh` (three list changes in
 order), `demo-reload.sh` (five loads, the syntax error banner),
 `demo-reconnect.sh` (reconnected with a new token), `demo-jarvis.sh`
-(proposals applied, the screen file written). `demo-reconnect.sh` is not
-executable in the tree (`bash scripts/demo-reconnect.sh` runs it).
+(proposals applied, the screen file written). `demo-reconnect.sh` is now
+executable in the tree.
 
 ## Not verified
 
