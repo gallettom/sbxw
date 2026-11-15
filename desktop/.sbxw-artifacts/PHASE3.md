@@ -25,7 +25,7 @@ Tests at the end of the phase: `cd desktop && CARGO_PROFILE_DEV_DEBUG=0 cargo te
 (the link step is killed for memory when several builds run at once with
 debug info). Scripted runs: `scripts/demo-network.sh`, `demo-create.sh`,
 `demo-setup.sh window`, and the older `demo-live.sh`, `demo-reload.sh`,
-`demo-reconnect.sh` (run with `bash`), `demo-jarvis.sh`, all rerun.
+`demo-reconnect.sh`, `demo-jarvis.sh`, all rerun.
 
 ## What of the web UI is still not ported
 
