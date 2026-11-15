@@ -276,7 +276,7 @@ local function workspace(c)
       hint("Where the sandbox runs. Remote hosts are experimental."),
     }
   end
-  local body = { gap = 14, w = "full", key = "create-scroll", h = 470,
+  local body = { gap = 14, w = "full", key = "create-scroll", grow = 1,
     host,
     column{ w = "full", gap = 4,
       title("Name"),
@@ -299,7 +299,7 @@ local function workspace(c)
     (c.template and not c.remote) and option("Rebuild the starting template", c.template.note,
       checkbox{ "", value = c.rebuild, on = "toggle", arg = "rebuild", key = "create-rebuild", help = c.template.help }) or false,
   }
-  return column{ w = "full", gap = 10,
+  return column{ w = "full", h = "full", gap = 10,
     head("New sandbox"),
     scroll(body),
     c.error and hint(c.error, "red") or false,

@@ -92,6 +92,8 @@ pub const FEATURE: Feature = Feature {
     on_answer: Some(on_answer),
     extras: Some(extras),
     standin: Some(standin::route),
+    // The host-access lines go out only from the core's dialog, on Allow.
+    core_only: &["approved"],
     ..Feature::EMPTY
 };
 
@@ -675,14 +677,15 @@ impl State {
             }
             Answer::AskConsent(c) => {
                 j.state = JobState::Asking(format!("Waiting for your answer: {} asks for host access you have not approved yet.", c.config));
-                let mut body = call.body.clone();
-                body["approved"] = json!(c.grants);
-                let again = bring_up(j.route.unwrap_or("create"), name, body, vec![], None);
-                let mut d = Confirm::new("Allow host access?", again).line(format!("{} asks for host access you have not approved yet:", c.config));
-                for g in &c.grants {
-                    d = d.line(format!("• {g}"));
-                }
-                d = d.line("This file can be edited from inside a sandbox. Allow only what you expect. `sbxw config grants --revoke` forgets the approval.").labels("Allow", "Cancel").danger();
+                // The lines are the daemon's, shown by the core's dialog under
+                // "You grant:" and sent back as `approved` only on Allow.
+                let again = bring_up(j.route.unwrap_or("create"), name, call.body.clone(), vec![], None);
+                let d = Confirm::new("Allow host access?", again)
+                    .line(format!("{} asks for host access you have not approved yet.", c.config))
+                    .line("This file can be edited from inside a sandbox. Allow only what you expect. `sbxw config grants --revoke` forgets the approval.")
+                    .grant_lines("approved", c.grants)
+                    .labels("Allow", "Cancel")
+                    .danger();
                 vec![d.into_action()]
             }
             Answer::Failed(e) => {
@@ -698,8 +701,10 @@ fn bring_up(route: &str, name: &str, mut body: J, approved: Vec<String>, clone: 
     if let Some((host, url)) = clone {
         return Call::post(format!("/api/remote-hosts/{}/clone", enc(&host)), json!({ "url": url }), format!("clone {url} on {host}")).timeout(BRING_UP_SECS).tag(&format!("clone:{name}"));
     }
-    if body.get("approved").is_none() || !approved.is_empty() {
-        body["approved"] = json!(approved);
+    // Never set here: only the core's dialog adds `approved` (core_only).
+    let _ = approved;
+    if let Some(o) = body.as_object_mut() {
+        o.remove("approved");
     }
     Call::post(format!("/api/sandboxes/{route}"), body, format!("create {name}")).timeout(BRING_UP_SECS).tag(&format!("up:{name}"))
 }

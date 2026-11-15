@@ -166,25 +166,23 @@ fn bring_up(s: &mut Standin, b: &J, chat: bool) -> (u16, J) {
         v.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
         v
     };
-    (s.publish)("provision", ev(json!({ "kind": "plan", "steps": steps.iter().map(|(i, l)| json!({ "id": i, "label": l })).collect::<Vec<_>>() })));
+    let ms = STEP.as_millis() as u64;
+    s.publish_after(0, "provision", ev(json!({ "kind": "plan", "steps": steps.iter().map(|(i, l)| json!({ "id": i, "label": l })).collect::<Vec<_>>() })));
     let fail = s.data["create_fail"][&name].as_str().map(str::to_string);
     for (id, _) in &steps {
-        std::thread::sleep(STEP);
-        (s.publish)("provision", ev(json!({ "kind": "started", "id": id })));
+        s.publish_after(ms, "provision", ev(json!({ "kind": "started", "id": id })));
         if *id == "create" {
-            (s.publish)("provision", ev(json!({ "kind": "detail", "text": "Pulling image docker/sandbox-templates:claude-code 63%" })));
+            s.publish_after(ms / 2, "provision", ev(json!({ "kind": "detail", "text": "Pulling image docker/sandbox-templates:claude-code 63%" })));
         }
         if *id == "kits" {
             if let Some(why) = &fail {
-                std::thread::sleep(STEP);
                 s.data["create_fail"].as_object_mut().unwrap().remove(&name);
-                (s.publish)("provision", ev(json!({ "kind": "done", "error": why })));
+                s.publish_after(ms, "provision", ev(json!({ "kind": "done", "error": why })));
                 return (502, json!({ "ok": false, "error": why }));
             }
         }
     }
-    std::thread::sleep(STEP);
-    (s.publish)("provision", ev(json!({ "kind": "done" })));
+    s.publish_after(ms, "provision", ev(json!({ "kind": "done" })));
     let ws = if chat { format!("/tmp/sbxw-chat/{name}") } else { b["path"].as_str().unwrap_or("").to_string() };
     if let Some(a) = s.data["sandboxes"].as_array_mut() {
         a.push(json!({ "name": name, "agent": "claude", "status": "running", "workspace": ws, "chat": chat }));
@@ -204,8 +202,7 @@ mod tests {
         let mut evs = vec![];
         let r = {
             let mut publish = |_: &str, v: J| evs.push(v);
-            let mut s = Standin { data, publish: &mut publish };
-            route(&mut s, method, path, &body).unwrap()
+            crate::feat::answer_from(data, method, path, &body, &mut publish)
         };
         (r, evs)
     }

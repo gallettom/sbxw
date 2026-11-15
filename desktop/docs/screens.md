@@ -654,4 +654,59 @@ Each thread owns the text under its heading.
 
 ### create
 
+New sandbox (the web UI's `create.js`, and the bring-up cards of
+`sandboxes.js`). The form is the core's: the screens show it and change it
+one intent at a time, so what is sent and what the core's dialogs list is
+never text from a screen.
+
+**Screens.** `create` (modal, 640 pt): the chooser, the workspace form and
+the chat form, by `data.create.dialog`. `create-jobs` (panel "New
+sandboxes"): every bring-up in progress, failed or waiting for an answer.
+
+**Extras.** In the top bar: `extra-topbar-create` ("New", opens the
+chooser), and `extra-topbar-create-jobs` ("Creating", with a count) while a
+bring-up runs.
+
+**Data.** `data.create` (set by the core, not read from a route):
+
+| Key | What |
+|---|---|
+| `dialog` | `chooser`, `workspace`, `chat`, or nil |
+| `hosts`, `host`, `remote` | Host items (`id`, `label`; empty with no remote host), the chosen one, whether it is remote |
+| `name`, `name_note`, `name_problem` | The name as cleaned, the rule when a character was dropped, why it cannot be used (taken, rule) |
+| `chat_name`, `chat_suggestion`, `chat_note`, `chat_problem` | The same for a chat; empty uses the suggestion |
+| `path`, `path_tag` | The folder shown; `Selected` (it is the workspace) or `Browsing` (extra folders are added) |
+| `listing` | `path`, `parent`, `can_up`, `entries` (`name`, `path`, `starred`, `added`); `listing_error` when it failed |
+| `favourites` | `path`, `name`, `missing` |
+| `repos`, `repo_hint`, `repo_hint_error`, `can_add_repo` | The sandbox's folders (`path`, `readonly`; the first is the workspace) |
+| `carve_parents`, `carves`, `carve_pick`, `preview` | Restricted sub-folders: where one can go, each (`rel`, `access`, `enforce`, `note`, `hidden_count`, `error`), the pick in progress (`root`, `cur`, `can_use`, `typed`, `error`), the daemon's preview (`summary`, `bad`, `warnings`, `files`, `more`, `stub`) |
+| `ports`, `kit_mounts` | Port rows (`sandbox`, `host`, `alias`, as typed); kit folders (`kit`, `target`, `host`) |
+| `template`, `rebuild`, `remote_control`, `chrome`, `git_url` | The template offer (`note`, `help`) when `template = "auto"`; the boxes; the git URL (remote host only) |
+| `can_create`, `create_problem`, `error` | Create is pressable; why not; the last refusal of the picker or the favourites |
+| `jobs` | `sandbox`, `state` (`running`, `asking`, `ready`, `failed`), `headline`, `steps` (`label`, `state`: `done`, `running`, `failed`, `waiting`; `detail`), `error`, `warnings`, `can_retry` |
+
+**Intents** (all Direct; indexes count from 1):
+
+| Intent | Arguments | What the core does |
+|---|---|---|
+| `create_open` | `dialog` (`chooser` default, `workspace`, `chat`) | Opens the dialog; the workspace form starts empty and reads the folders, favourites, remote hosts, kit folders and template state |
+| `create_host` | `host` (`local` or a remote host) | The folder list, kit folders and git field follow |
+| `create_browse` | `path` (none: home) | Lists that folder; while picking a restricted sub-folder, a folder outside it is refused |
+| `create_pick` | `kit` (number) | The system's folder picker (`POST /api/fs/pick`); browses to the folder, or fills kit folder `kit` |
+| `create_star` | `path` | Stars or unstars it (`POST /api/fs/favourites`; the daemon's refusal shows in `error`) |
+| `create_repo` | `action` (`toggle` with `path`, `add`, or `main`, `rw`, `ro`, `remove` with `index`) | The sandbox's folders |
+| `create_carve` | `action` (`pick` with `path`; `use`, `typed`, `cancel`; `none`, `ro`, `strict`, `soft`, `remove` with `index`) | Restricted sub-folders; the preview is asked again (`POST /api/carve/preview`) |
+| `create_port` | `action` (`add`, `remove` with `index`) | Port rows |
+| `create_set` | `field` (`name`, `chat_name`, `git_url`, `port_sandbox`, `port_host`, `port_alias`, `kit_mount`, `carve_typed`), `value` (none: empty), `index` | A text field; give it on every edit |
+| `create_toggle` | `field` (`remote_control`, `chrome`, `rebuild`), `on` | A box |
+| `create_submit` | none | Creates (`POST /api/sandboxes/create`). When the sandbox reaches more of this machine than its workspace (extra folders, kit folders, ports, Chrome) the core lists what in its own dialog first |
+| `create_chat` | none | Creates the chat sandbox (`POST /api/sandboxes/chat`) |
+| `create_retry` | `sandbox` | Sends a failed creation again, as first sent |
+| `create_dismiss` | `sandbox` | Forgets a finished or failed one |
+
+When the daemon refuses a bring-up for want of host access its `sbxw.toml`
+asks for (409 with `consent`), the core shows the daemon's lines in its own
+dialog and sends them back as `approved` only on Allow (`core_only`). Once
+ready, the core selects the sandbox and opens its agent in a spare pane.
+
 ### setup

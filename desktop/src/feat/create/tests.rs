@@ -3,7 +3,7 @@
 //! answering the calls.
 
 use super::*;
-use crate::feat::{Method, Standin};
+use crate::feat::Method;
 use serde_json::Map;
 
 struct Run {
@@ -53,8 +53,7 @@ impl Run {
         let mut evs = vec![];
         let r = {
             let mut publish = |n: &str, v: J| evs.push((n.to_string(), v));
-            let mut s = Standin { data: &mut self.daemon, publish: &mut publish };
-            standin::route(&mut s, method, &c.path, &c.body)
+            crate::feat::answer_from(&mut self.daemon, method, &c.path, &c.body, &mut publish)
         };
         for (n, v) in evs {
             self.events.push(v.clone());
@@ -62,7 +61,7 @@ impl Run {
             let out = self.st.on_event(&Ctx { data: &d }, &n, &v);
             self.run(out);
         }
-        let r = r.ok_or_else(|| format!("no stand-in route for {method} {}", c.path));
+        let r: Result<(u16, J), String> = Ok(r);
         let d = self.ctx_data();
         let out = self.st.on_answer(&Ctx { data: &d }, &c, r);
         self.run(out);
@@ -71,7 +70,15 @@ impl Run {
     /// Presses Confirm on the oldest dialog.
     fn confirm(&mut self) {
         let c = self.confirms.remove(0);
-        self.call(c.call);
+        let mut call = c.call;
+        // As the core does on Confirm (shell/features.rs, confirm_click).
+        for g in &c.grants {
+            call.body[g.field.as_str()] = match &g.lines {
+                Some(l) => json!(l),
+                None => J::Bool(true),
+            };
+        }
+        self.call(call);
     }
 
     fn c(&self) -> &J {
@@ -149,9 +156,10 @@ fn host_access_is_asked_with_the_daemons_lines_and_a_failure_can_be_retried() {
     assert_eq!(r.confirms.len(), 1, "the 409 became the core's dialog");
     let c = &r.confirms[0];
     assert_eq!(c.title, "Allow host access?");
-    assert!(c.lines.iter().any(|l| l.contains("network: api.example.com")) && c.lines.iter().any(|l| l.contains("~/.npmrc")));
+    assert_eq!(crate::approval::granted_lines(c), vec!["network: api.example.com".to_string(), "host file ~/.npmrc".into()], "the daemon's lines, shown as is");
+    assert!(c.lines[0].contains("/home/you/dev/docs/sbxw.toml"));
     assert!(c.danger);
-    assert_eq!(c.call.body["approved"], json!(["network: api.example.com", "host file ~/.npmrc"]));
+    assert_eq!(c.call.body.get("approved"), None, "set by the core on Allow only");
     r.confirm();
     let job = &r.c()["jobs"][0];
     assert_eq!(job["state"], "failed");
@@ -229,8 +237,139 @@ fn approved_lines_only_ever_come_from_the_daemons_question() {
     let a = Asked { name: "create_submit", args: match json!({ "approved": ["mount /etc"] }) { J::Object(m) => m, _ => unreachable!() } };
     let out = r.st.act(&Ctx { data: &d }, &a).unwrap();
     let call = out.iter().find_map(|x| if let Action::Call(c) = x { Some(c.clone()) } else { None }).unwrap();
-    assert_eq!(call.body["approved"], json!([]));
+    assert_eq!(call.body.get("approved"), None, "the first send approves nothing");
+    assert_eq!(FEATURE.core_only, &["approved"], "the core refuses it on any call not confirmed (shell::features::core_only_check)");
     r.run(vec![Action::Call(call)]);
     assert_eq!(r.confirms.len(), 1, "the daemon asked; only the person's Confirm sends the lines");
     assert!(r.daemon["sandboxes"].as_array().unwrap().is_empty());
+}
+
+/// Writes `fixtures/create/*.json` and `fixtures/create-jobs/*.json` from
+/// real runs through the stand-in routes, so fixtures match the code:
+/// `cargo test write_create_fixtures -- --ignored`.
+#[test]
+#[ignore]
+fn write_create_fixtures() {
+    let sandboxes = json!([
+        { "name": "docs", "agent": "claude", "status": "running", "workspace": "/home/you/dev/docs" },
+        { "name": "web-app", "agent": "claude", "status": "stopped", "workspace": "/home/you/dev/web-app" },
+    ]);
+    let save = |screen: &str, name: &str, r: &Run| {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(screen);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut view = r.c().clone();
+        if view["chat_suggestion"].as_str().is_some_and(|s| !s.is_empty()) {
+            view["chat_suggestion"] = "chat-3f9a1c".into();
+        }
+        let f = json!({ "daemon": { "sandboxes": r.daemon["sandboxes"], "create": view } });
+        std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(&f).unwrap() + "\n").unwrap();
+    };
+    let base = || {
+        let mut r = Run::new(json!({ "sandboxes": sandboxes.clone(), "favourites": ["/home/you/dev"] }));
+        r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
+        r
+    };
+
+    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone() }));
+    r.ask("create_open", json!({})).unwrap();
+    save("create", "chooser", &r);
+
+    let mut r = base();
+    save("create", "workspace-empty", &r);
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "shop" })).unwrap();
+    save("create", "workspace-basic", &r);
+
+    // Everything optional filled in, local, with the template offer and kit folders.
+    let mut r = Run::new(json!({
+        "sandboxes": sandboxes.clone(), "favourites": ["/home/you/dev", "/home/you/gone"],
+        "kit_mounts": [{ "kit": "sbxw:ssh-agent", "target": "/home/agent/.ssh", "host": "" }],
+        "template_status": { "auto": true, "template": { "state": "stale", "record": { "tag": "sbxw-auto:7" }, "changed": ["sbx 0.52.1 → 0.53.0"] } },
+    }));
+    r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "shop" })).unwrap();
+    r.ask("create_repo", json!({ "action": "toggle", "path": "/home/you/dev/shop/backend" })).unwrap();
+    r.ask("create_repo", json!({ "action": "toggle", "path": "/home/you/dev/shop/frontend" })).unwrap();
+    r.ask("create_repo", json!({ "action": "rw", "index": 2 })).unwrap();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop/backend" })).unwrap();
+    r.ask("create_carve", json!({ "action": "pick", "path": "/home/you/dev/shop/backend" })).unwrap();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop/backend/src" })).unwrap();
+    r.ask("create_carve", json!({ "action": "use" })).unwrap();
+    r.ask("create_port", json!({ "action": "add" })).unwrap();
+    r.ask("create_set", json!({ "field": "port_sandbox", "value": "3000", "index": 1 })).unwrap();
+    r.ask("create_set", json!({ "field": "port_alias", "value": "shop.local", "index": 1 })).unwrap();
+    r.ask("create_set", json!({ "field": "kit_mount", "value": "/home/you/.ssh", "index": 1 })).unwrap();
+    r.ask("create_toggle", json!({ "field": "chrome", "on": true })).unwrap();
+    save("create", "workspace-full", &r);
+
+    // Picking a restricted sub-folder.
+    let mut r = base();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop" })).unwrap();
+    r.ask("create_carve", json!({ "action": "pick", "path": "/home/you/dev/shop" })).unwrap();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop/secrets" })).unwrap();
+    r.ask("create_set", json!({ "field": "carve_typed", "value": "../etc" })).unwrap();
+    r.ask("create_carve", json!({ "action": "typed" })).unwrap();
+    save("create", "workspace-carve-pick", &r);
+
+    // What the core and the daemon refuse: a taken name with a bad character,
+    // nested folders, a restriction the daemon cannot mount, a picker error.
+    let mut r = base();
+    r.ask("create_browse", json!({ "path": "/home/you/dev/shop" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "Docs!" })).unwrap();
+    r.ask("create_repo", json!({ "action": "toggle", "path": "/home/you/dev/shop/backend" })).unwrap();
+    r.ask("create_repo", json!({ "action": "rw", "index": 1 })).unwrap();
+    r.ask("create_carve", json!({ "action": "pick", "path": "/home/you/dev/shop/backend" })).unwrap();
+    r.ask("create_carve", json!({ "action": "cancel" })).unwrap();
+    r.st.form.carves.push(model::Carve { path: "/home/you/dev/shop/backend/src".into(), access: "ro", enforce: "strict" });
+    r.st.form.preview = Some(Preview::Answer(json!({ "ok": false, "error": "/home/you/dev/shop/backend/src: a sub-folder cannot be read-only inside a read-only folder" })));
+    r.ask("create_repo", json!({ "action": "toggle", "path": "/home/you/dev/shop" })).unwrap();
+    r.st.form.error = Some("Could not update favourites: '/home/you/nope' is not a folder".into());
+    r.ask("create_set", json!({ "field": "name", "value": "Docs!" })).unwrap();
+    save("create", "workspace-errors", &r);
+
+    // A remote host: no stars, no native picker, a git URL instead.
+    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone(), "remote_hosts": [
+        { "name": "buildbox", "address": "you@buildbox.lan", "link": "up" },
+        { "name": "gpu", "address": "gpu.lan", "link": "down" },
+    ] }));
+    r.ask("create_open", json!({ "dialog": "workspace" })).unwrap();
+    r.ask("create_host", json!({ "host": "buildbox" })).unwrap();
+    r.ask("create_set", json!({ "field": "name", "value": "api" })).unwrap();
+    r.ask("create_set", json!({ "field": "git_url", "value": "https://github.com/you/api.git" })).unwrap();
+    save("create", "workspace-remote", &r);
+
+    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone() }));
+    r.ask("create_open", json!({ "dialog": "chat" })).unwrap();
+    save("create", "chat", &r);
+    r.ask("create_set", json!({ "field": "chat_name", "value": "Docs" })).unwrap();
+    save("create", "chat-taken", &r);
+
+    // Bring-ups: one running mid-way, one failed, one waiting for the person.
+    let mut r = Run::new(json!({ "sandboxes": sandboxes.clone() }));
+    let steps = r#"[{"id":"workspace","label":"Prepare the workspace"},{"id":"create","label":"Create the sandbox"},{"id":"boot","label":"Start it"},{"id":"kits","label":"Install kits"},{"id":"ports","label":"Publish ports"}]"#;
+    r.st.jobs.push(Job::new("shop", Some("create"), Some(json!({}))));
+    for e in [
+        format!(r#"{{"sandbox":"shop","kind":"plan","steps":{steps}}}"#),
+        r#"{"sandbox":"shop","kind":"started","id":"create"}"#.into(),
+        r#"{"sandbox":"shop","kind":"detail","text":"Pulling image docker/sandbox-templates:claude-code 63%"}"#.into(),
+    ] {
+        model::apply_provision(&mut r.st.jobs, &e);
+    }
+    let mut failed = Job::new("api", Some("create"), Some(json!({})));
+    model::apply_provision(&mut vec![], "{}");
+    failed.steps = vec![("workspace".into(), "Prepare the workspace".into()), ("create".into(), "Create the sandbox".into()), ("kits".into(), "Install kits".into())];
+    failed.at = 2;
+    failed.posting = false;
+    failed.state = JobState::Failed("sbx: kit sbxw:node: npm ERR! network request to registry.npmjs.org failed (ECONNRESET)".into());
+    r.st.jobs.push(failed);
+    let mut asking = Job::new("tools", Some("create"), Some(json!({})));
+    asking.posting = false;
+    asking.state = JobState::Asking("Waiting for your answer: /home/you/dev/tools/sbxw.toml asks for host access you have not approved yet.".into());
+    r.st.jobs.push(asking);
+    r.data[KEY] = r.st.view(&[]);
+    save("create-jobs", "basic", &r);
+    r.st.jobs.clear();
+    r.data[KEY] = r.st.view(&[]);
+    save("create-jobs", "empty", &r);
 }
