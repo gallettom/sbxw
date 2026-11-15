@@ -290,6 +290,7 @@
       "push_to_talk_key": "F8",
       "dictate_key": "F9",
       "dir": "/Users/ana/.sbxw/models"
-    }
+    },
+    "standin_voice_steps": true
   }
 }

@@ -8,7 +8,8 @@
 //! Fixture keys (each one route's answer): `secrets`, `github_token`, `kits`,
 //! `my_skills`, `mcp`, `remote_hosts`, `voice`, plus `sandbox_skills_of`
 //! (sandbox name → `GET /api/sandboxes/:name/skills`) and `mcp_inspect_of`
-//! (server → its inspect text).
+//! (server → its inspect text), and `standin_voice_steps` (true: each
+//! `GET /api/voice` moves a running download a quarter on).
 
 use crate::feat::Standin;
 use serde_json::{json, Value as J};
@@ -52,6 +53,11 @@ fn decode(seg: &str) -> String {
 /// One step of a running voice download per request, so a scripted run sees
 /// progress, then the models installed.
 fn voice_tick(st: &mut Standin) {
+    // Only where the fixture asks (`standin_voice_steps`): a fixture showing
+    // a download in progress stays as it is.
+    if st.data["standin_voice_steps"] != true {
+        return;
+    }
     let v = &mut st.data["voice"];
     if v["job"]["state"] != "running" {
         return;
@@ -90,9 +96,6 @@ pub fn answer(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u
         return None;
     }
     let get = method.eq_ignore_ascii_case("GET");
-    if !(get && s.as_slice() == ["api", "voice"]) {
-        voice_tick(st);
-    }
     let d = &mut *st.data;
     match (get, s.as_slice()) {
         (true, ["api", "secrets"]) => Some((200, d["secrets"].clone())),

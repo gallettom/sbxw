@@ -181,12 +181,12 @@ local function secrets_tab(state, d)
   }
   if gh then
     gh_children[#gh_children + 1] = row{ w = "full", gap = 8,
-      button{ gh.set and "Replace token…" or "Set token…", icon = "plus", variant = "primary", on = "github_set",
+      button{ gh.set and "Replace token…" or "Set token…", key = "github-set", icon = "plus", variant = "primary", on = "github_set",
         help = "The core asks for the token in its own dialog; this window never holds it" },
-      gh.gh and button{ "Use my gh login", on = "github_gh",
+      gh.gh and button{ "Use my gh login", key = "github-gh", on = "github_gh",
         help = "sbx runs " .. gh.gh .. " auth token when it needs the token, and refreshes it" } or false,
       spacer{},
-      gh.set and button{ "Remove", icon = "trash", variant = "danger", on = "github_rm" } or false,
+      gh.set and button{ "Remove", key = "github-rm", icon = "trash", variant = "danger", on = "github_rm" } or false,
     }
     gh_children[#gh_children + 1] = note(gh.gh and "sbx can ask gh for the token and keep it fresh."
       or "Install gh and run gh auth login to skip pasting.")
@@ -212,7 +212,7 @@ local function secrets_tab(state, d)
     row{ w = "full", gap = 8,
       note("The value is typed in the next dialog, drawn by sbxw."),
       spacer{},
-      button{ "Add…", icon = "plus", on = "secret_add" },
+      button{ "Add…", key = "secret-add", icon = "plus", on = "secret_add" },
     },
   }
   return out
@@ -469,7 +469,7 @@ local function mcp_tab(state, d)
   form[#form + 1] = row{ w = "full", gap = 8,
     spacer{},
     (f.replace or trim(f.name) ~= "") and button{ "Clear", variant = "ghost", on = "mcp_clear" } or false,
-    button{ f.replace and "Save…" or "Add…", variant = "primary", on = "mcp_save", disabled = trim(f.name) == "" },
+    button{ f.replace and "Save…" or "Add…", key = "mcp-save", variant = "primary", on = "mcp_save", disabled = trim(f.name) == "" },
   }
   out[#out + 1] = card(form)
   return out
@@ -599,7 +599,7 @@ local function voice_tab(state, d)
       note((job.state == "verifying" and "Checking " or "Downloading ") .. (job.model or "") .. " · " .. (job.file or "")
         .. ": " .. math.floor(pct * 100) .. "% (" .. mb(job.done) .. " / " .. mb(job.total) .. ")"),
       spacer{},
-      button{ "Cancel", on = "voice_cancel" },
+      button{ "Cancel", key = "voice-cancel", on = "voice_cancel" },
     }
   else
     if job and job.state == "failed" then children[#children + 1] = note("Last download failed: " .. (job.error or "unknown error"), "red") end
@@ -608,10 +608,10 @@ local function voice_tab(state, d)
       children[#children + 1] = note("About " .. gb(v.approx_mb) .. " of models, into " .. (v.dir or "the models folder") .. ". From a terminal: " .. (v.hint or "sbxw voice install"))
     end
     children[#children + 1] = row{ w = "full", gap = 8,
-      (not v.ready and v.compiled) and button{ "Install voice (~" .. gb(v.approx_mb) .. ")…", icon = "plus", variant = "primary", on = "voice_install" } or false,
+      (not v.ready and v.compiled) and button{ "Install voice (~" .. gb(v.approx_mb) .. ")…", key = "voice-install", icon = "plus", variant = "primary", on = "voice_install" } or false,
       v.ready and button{ "Load the models now", on = "voice_warm", help = "Loads the recogniser (and the voice) before the first word" } or false,
       spacer{},
-      v.has_files and button{ "Remove models…", icon = "trash", variant = "danger", on = "voice_rm" } or false,
+      v.has_files and button{ "Remove models…", key = "voice-rm", icon = "trash", variant = "danger", on = "voice_rm" } or false,
     }
   end
   if v.key then
@@ -651,7 +651,7 @@ return {
         color = t.id == tab and "text-bright" or "text-muted" }
     end
     tabs[#tabs + 1] = spacer{}
-    tabs[#tabs + 1] = button{ icon = "reload", variant = "ghost", on = "reload", arg = tab, help = "Read it again" }
+    tabs[#tabs + 1] = button{ icon = "reload", key = "setup-reload", variant = "ghost", on = "reload", arg = tab, help = "Read it again" }
     tabs[#tabs + 1] = button{ icon = "close", variant = "ghost", on = "close", help = "Close" }
 
     local body = BODY[tab](state, d)
