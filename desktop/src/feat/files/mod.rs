@@ -199,6 +199,8 @@ struct MapState {
     waiting: usize,
     gen: u64,
     loading: bool,
+    /// The next artifacts answer for this sandbox is read as the map again.
+    reload: bool,
     current: Option<String>,
     anchor: Option<String>,
     filter: String,
@@ -490,7 +492,9 @@ impl State {
                 let lens = std::mem::take(&mut self.map.lens);
                 self.map = MapState { sandbox: Some(sb.clone()), want: a.s("map").map(str::to_string), loading: true, gen: self.map.gen + 1, lens, ..MapState::default() };
                 out.push(Action::OpenPanel(MAP_SCREEN.into()));
-                if self.asked_for.get(ARTIFACTS) == Some(&sb) && cx.get(ARTIFACTS).is_object() && self.map.want.is_some() {
+                // Already read for this sandbox: the map is read from it now (a read
+                // bringing the same answer would not come back as new data).
+                if self.asked_for.get(ARTIFACTS) == Some(&sb) && cx.get(ARTIFACTS).is_object() {
                     out.extend(self.load_map(cx));
                 } else {
                     out.push(self.fetch(ARTIFACTS, &sb, "/artifacts"));
@@ -1181,7 +1185,8 @@ impl State {
                 }
             }
         }
-        if key == ARTIFACTS && self.map.loading && self.map.sandbox.is_some() && self.asked_for.get(ARTIFACTS) == self.map.sandbox.as_ref() {
+        if key == ARTIFACTS && (self.map.loading || self.map.reload) && self.map.sandbox.is_some() && self.asked_for.get(ARTIFACTS) == self.map.sandbox.as_ref() {
+            self.map.reload = false;
             out.extend(self.load_map(cx));
         }
         out.extend(self.ui_action(cx));
@@ -1208,6 +1213,10 @@ impl State {
                 if self.sandbox.as_deref() == Some(&sb) || self.map.sandbox.as_deref() == Some(&sb) {
                     if self.map.sandbox.as_deref() == Some(&sb) {
                         self.map.loading = true;
+                        if self.asked_for.get(ARTIFACTS) == Some(&sb) && cx.get(ARTIFACTS).is_object() {
+                            out.extend(self.load_map(cx));
+                        }
+                        self.map.reload = true;
                     }
                     out.push(self.fetch(ARTIFACTS, &sb, "/artifacts"));
                 }

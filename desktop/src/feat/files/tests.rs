@@ -733,3 +733,16 @@ fn a_cancelled_pane_drop_leaves_no_file_waiting_nor_uploadable() {
     assert!(a.iter().any(|x| matches!(x, Action::ForgetFiles(f) if f == &paths[1..])));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn the_map_opens_from_the_project_panel_without_a_new_answer() {
+    // The Project panel already read the listing: the same answer again
+    // would not come back as new data, so the map is read from what is there.
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "codemap_open", json!({ "sandbox": "web-app" })).unwrap();
+    assert!(!a.iter().any(|x| matches!(x, Action::Fetch { .. })), "{a:?}");
+    pump(&mut st, &mut d, a);
+    assert_eq!(d[MAP_UI]["map"]["count"], 3);
+    assert_eq!(d[MAP_UI]["loading"], false);
+}
