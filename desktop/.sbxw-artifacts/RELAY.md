@@ -111,6 +111,16 @@ Whole window against the stand-in (`window-*.png`, from
   "grill me on the migration" sent, web-app's round on the Requests panel's
   form (Set aside instead of Refuse, no routing) and one line in the log.
 
+With a sandbox picked, the Jarvis panel shows that sandbox's state, not
+Jarvis's (fixture `fixtures/jarvis/follow.json`): `jarvis-follow-before.png`
+(Jarvis picked: "absent", Start Jarvis, "1 to review"); `jarvis-follow-picked.png`
+(web-app picked: an amber "wants you" badge on a line under the title with
+Follow and "rounds only", no Jarvis status, no Start Jarvis, "1 to review"
+still there); `window-follow-fallback.png` (docs picked, then stopped from the
+sidebar: the panel is back on Jarvis, its log and a notice say "docs is
+stopped: your words go to Jarvis again. Nothing was sent."). Test
+`a_followed_sandbox_that_stops_falls_back_to_jarvis` (stopped, then gone).
+
 Logs (`shots/relay/window-*.log`): every routing and release reads
 `relay: confirmed '…'` before its POST; no `/api/relay/*/approve` and no
 `/api/chat/push` without one.

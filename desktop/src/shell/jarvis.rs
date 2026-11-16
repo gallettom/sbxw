@@ -237,6 +237,26 @@ impl App {
         changed
     }
 
+    /// The followed sandbox stopped or is gone: the panel says so and its
+    /// words go to Jarvis again. Nothing is sent. Only once the list is known.
+    fn follow_check(&mut self) -> bool {
+        let Some(t) = relay::follow::target() else { return false };
+        if self.sandboxes.is_empty() {
+            return false;
+        }
+        let why = match self.sandboxes.iter().find(|s| s.name == t) {
+            Some(s) if s.status == "running" => return false,
+            Some(s) => format!("{t} is {}", s.status.trim_end_matches('…')),
+            None => format!("{t} is gone"),
+        };
+        self.relay_intent("follow_target", serde_json::json!({}));
+        let line = format!("{why}: your words go to Jarvis again. Nothing was sent.");
+        log::info!("follow: {line}");
+        self.jarvis.say(Who::Note, line.clone());
+        self.notify(line, false);
+        true
+    }
+
     /// Reads a message of the followed sandbox (or the relay's voice) once,
     /// never while the microphone is open. Shown first, by the caller.
     fn follow_read(&mut self, msg: u64) {
@@ -312,7 +332,7 @@ impl App {
     /// Drains the calls' answers and the audio's events; checks Jarvis's
     /// status while it is being created or started.
     pub(super) fn poll_jarvis(&mut self, tx: &mut Tx) -> bool {
-        let mut changed = self.relay_speech();
+        let mut changed = self.relay_speech() | self.follow_check();
         // Headless: the virtual clock does not wait for the daemon.
         let until = headless().then(|| Instant::now() + Duration::from_millis(1500));
         loop {
@@ -1145,6 +1165,27 @@ mod tests {
         r.a.feats.dialog = None;
         follow(None, false);
         assert_eq!(r.a.jarvis.hear("yes"), Heard::Approve("p-1".into()), "still armed: a yes for Jarvis answers it");
+    }
+
+    /// The followed sandbox stops: the panel says so, the words go to Jarvis
+    /// again, nothing is sent.
+    #[test]
+    fn a_followed_sandbox_that_stops_falls_back_to_jarvis() {
+        let mut r = Run::new("running");
+        r.a.sandboxes = serde_json::from_value(json!([{ "name": "web-app", "status": "running" }, { "name": "docs", "status": "running" }])).unwrap();
+        follow(Some("web-app"), true);
+        r.settle();
+        assert_eq!(relay::follow::target().as_deref(), Some("web-app"), "running: kept");
+        r.a.sandboxes[0].status = "stopped".into();
+        r.settle();
+        assert_eq!(relay::follow::target(), None);
+        assert!(r.shown().iter().any(|(w, t)| *w == Who::Note && t == "web-app is stopped: your words go to Jarvis again. Nothing was sent."), "{:?}", r.shown());
+        assert!(r.pushed().is_empty());
+        follow(Some("docs"), false);
+        r.a.sandboxes.retain(|s| s.name != "docs");
+        r.settle();
+        assert_eq!(relay::follow::target(), None, "gone: back to Jarvis");
+        assert!(r.shown().iter().any(|(_, t)| t.starts_with("docs is gone")));
     }
 
     /// A followed agent's turn: shown once, read only with Follow on, never
