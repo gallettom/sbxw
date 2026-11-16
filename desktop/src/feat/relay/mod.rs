@@ -34,7 +34,7 @@ mod standin;
 #[cfg(test)]
 mod tests;
 
-use super::{Action, Asked, Call, Confirm, Ctx, Data, Extra, Feature, Place, Prepare, ScreenDecl, Slot};
+use super::{Action, Asked, Call, Confirm, Ctx, Data, Extra, Feature, Incoming, Place, Prepare, ScreenDecl, Slot};
 use crate::client::enc;
 use crate::intent::{Arg, Risk, Spec};
 use serde_json::{json, Map, Value as J};
@@ -62,6 +62,7 @@ pub const FEATURE: Feature = Feature {
     on_data: Some(on_data),
     extras: Some(extras),
     standin: Some(standin::route),
+    on_files: Some(on_files),
     ..Feature::EMPTY
 };
 
@@ -141,6 +142,7 @@ pub struct State {
     review: HashMap<String, (String, String)>,
     caption: HashMap<String, String>,
     shots: HashMap<String, Vec<Shot>>,
+    shot_seq: u64,
     /// Questions already announced, by session key and question.
     seen_asks: HashSet<String>,
     /// AskUserQuestion picks, by session key: (the question's text, pick per step).
@@ -171,6 +173,9 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
 }
 fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
     STATE().lock().unwrap().on_answer(cx, call, r)
+}
+fn on_files(cx: &Ctx, inc: Incoming) -> Vec<Action> {
+    STATE().lock().unwrap().on_files(cx, inc)
 }
 fn on_event(cx: &Ctx, name: &str, data: &J) -> Vec<Action> {
     STATE().lock().unwrap().on_event(cx, name, data)
@@ -436,20 +441,21 @@ impl State {
                     return Err(format!("{} images is the most one reply carries: remove one first", shots::MAX_SHOTS));
                 }
                 self.current = Some(id.clone());
-                vec![intake::ask(a.name == "relay_shot_paste")]
+                vec![if a.name == "relay_shot_paste" {
+                    Action::ReadClipboard
+                } else {
+                    Action::PickFiles { title: format!("Images for {}", who(&r)), extensions: vec!["png".into(), "jpg".into(), "jpeg".into(), "webp".into()], multiple: true }
+                }]
             }
             "relay_shot_remove" => {
                 find(cx, &id)?;
-                match a.i("index") {
-                    Some(i) => {
-                        let held = self.shots.entry(id.clone()).or_default();
-                        if (i as usize) <= held.len() {
-                            held.remove(i as usize - 1);
-                        }
-                    }
-                    None => drop(self.shots.remove(&id)),
-                }
-                vec![]
+                let held = self.shots.entry(id.clone()).or_default();
+                let gone: Vec<Shot> = match a.i("index") {
+                    Some(i) if (i as usize) <= held.len() => vec![held.remove(i as usize - 1)],
+                    Some(_) => vec![],
+                    None => std::mem::take(held),
+                };
+                gone.into_iter().map(|s| Action::Image { key: s.key, bytes: vec![] }).collect()
             }
             "agent_pick" => return self.pick(cx, a),
             "relay_voice" => {
@@ -544,6 +550,11 @@ impl State {
         }
         f.answers.resize(rd.questions.len(), String::new());
         f
+    }
+
+    /// The pictures held for a request, and their previews, dropped.
+    fn drop_shots(&mut self, id: &str) -> Vec<Action> {
+        self.shots.remove(id).unwrap_or_default().into_iter().map(|s| Action::Image { key: s.key, bytes: vec![] }).collect()
     }
 
     fn forget(&mut self, id: &str) {
@@ -758,7 +769,7 @@ impl State {
                 // What was attached has left: the core keeps no copy of someone's screen.
                 if let Some(id) = call.path.split('/').nth(3) {
                     let id = id.to_string();
-                    self.shots.remove(&id);
+                    v.extend(self.drop_shots(&id));
                 }
             }
             v.push(Action::Refresh("relay"));
@@ -789,7 +800,7 @@ impl State {
                 let prev = before.iter().find(|p| p["id"] == id.as_str());
                 if settled(r) {
                     // Whatever was attached was sent or refused: dropped either way.
-                    self.shots.remove(&id);
+                    v.extend(self.drop_shots(&id));
                     continue;
                 }
                 let st = s(r, "state");
@@ -927,9 +938,10 @@ impl State {
         Action::Set { key: UI.into(), value: self.ui(cx) }
     }
 
-    /// Images the core handed over (a drop, a paste, the file dialog), for the
-    /// screenshot request the panel shows. Each is checked and added in
-    /// order; a refusal says why.
+    /// Pictures the person handed over (a drop, a paste, the file dialog),
+    /// for the screenshot request the panel shows. Each is decoded and
+    /// checked by the core's helper and added in order, its preview shown;
+    /// a refusal says why.
     pub fn take_images(&mut self, cx: &Ctx, items: Vec<(Vec<u8>, String)>) -> Vec<Action> {
         let reqs = requests(cx);
         let target = self
@@ -937,18 +949,53 @@ impl State {
             .clone()
             .filter(|id| reqs.iter().any(|r| r["id"] == id.as_str() && s(r, "kind") == "screenshot" && s(r, "state") == "pending"))
             .or_else(|| queue(&reqs).into_iter().find(|r| s(r, "kind") == "screenshot").map(|r| s(r, "id").to_string()));
-        let Some(id) = target else { return vec![Action::error("No screenshot request is waiting: nothing to attach that image to")] };
+        let Some(id) = target else { return vec![Action::error("No screenshot request is waiting: nothing to attach that picture to")] };
         let mut v = vec![];
-        let held = self.shots.entry(id.clone()).or_default();
         for (bytes, source) in items {
-            match shots::prepare(&bytes, &source).and_then(|sh| shots::admit(held, sh)) {
-                Ok(()) => {}
+            match shots::prepare(&bytes, &source) {
+                Ok((mut shot, preview)) => {
+                    self.shot_seq += 1;
+                    shot.key = format!("relay-shot-{}", self.shot_seq);
+                    let key = shot.key.clone();
+                    match shots::admit(self.shots.entry(id.clone()).or_default(), shot) {
+                        Ok(()) => v.push(Action::Image { key, bytes: preview }),
+                        Err(e) => v.push(Action::error(e)),
+                    }
+                }
                 Err(e) => v.push(Action::error(e)),
             }
         }
         self.current = Some(id);
         v.push(self.ui_action(cx));
         v
+    }
+
+    /// What the person handed over: dropped or chosen files (read here, from
+    /// the core's paths only, size-capped), or the clipboard's picture.
+    fn on_files(&mut self, cx: &Ctx, inc: Incoming) -> Vec<Action> {
+        let items = match inc {
+            Incoming::Png(b) => vec![(b, "from clipboard".to_string())],
+            Incoming::Files(paths) => {
+                let mut items = vec![];
+                let mut errs = vec![];
+                for p in paths {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+                    match std::fs::metadata(&p) {
+                        Ok(m) if !m.is_file() => errs.push(Action::error(format!("{name}: not a file"))),
+                        Ok(m) if m.len() > shots::MAX_FILE => errs.push(Action::error(format!("{name}: {} is too large to be a screenshot", shots::weight(m.len() as usize)))),
+                        Ok(_) => match std::fs::read(&p) {
+                            Ok(b) => items.push((b, name)),
+                            Err(e) => errs.push(Action::error(format!("{name}: {e}"))),
+                        },
+                        Err(e) => errs.push(Action::error(format!("{name}: {e}"))),
+                    }
+                }
+                let mut v = self.take_images(cx, items);
+                errs.append(&mut v);
+                return errs;
+            }
+        };
+        self.take_images(cx, items)
     }
 }
 
@@ -1041,16 +1088,6 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
     v
 }
 
-/// Where images come from. The core's file intake (a drop, a paste, the
-/// native dialog) is being added by the core's owner; until then the
-/// buttons say so.
-pub mod intake {
-    use super::Action;
-
-    pub fn ask(paste: bool) -> Action {
-        Action::error(if paste { "Pasting an image is not in this build yet: drop the image on the panel instead" } else { "The file dialog is not in this build yet: drop the image on the panel instead" })
-    }
-}
 
 /// A question of a round, as read when it is answered by voice.
 fn question_words(rd: &round::Round, at: usize) -> String {

@@ -74,7 +74,8 @@ end
 local function foot(r, send_label, can_send, extra)
   local kids = { gap = 6, w = "full",
     button{ "Later", variant = "ghost", on = "later", arg = r.id, key = "relay-later-" .. r.id, help = "Put it aside; it stays in the list" },
-    button{ "Refuse", variant = "danger", on = "deny", arg = r.id, key = "relay-deny-" .. r.id, help = "Nothing is shared, and the agent is told not to ask again" },
+    r["local"] and button{ "Set aside", variant = "danger", on = "deny", arg = r.id, key = "relay-deny-" .. r.id, help = "Drop this form; nothing is typed into the session" }
+      or button{ "Refuse", variant = "danger", on = "deny", arg = r.id, key = "relay-deny-" .. r.id, help = "Nothing is shared, and the agent is told not to ask again" },
   }
   if extra then kids[#kids + 1] = extra end
   kids[#kids + 1] = spacer{}
@@ -95,12 +96,14 @@ end
 local function round_form(r, ui, editable)
   local rd = (ui.rounds or {})[r.id] or { intro = "", questions = {} }
   local answers = (ui.forms or {})[r.id] or {}
+  local listening = ui.voice and ui.voice.id == r.id and ui.voice.index or nil
   local kids = { gap = 10, w = "full" }
   if nz(rd.intro) then
     kids[#kids + 1] = column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", markdown{ rd.intro, size = "sm", color = "text-soft" } }
   end
   for i, q in ipairs(rd.questions or {}) do
     local qk = { gap = 4, w = "full", key = "relay-q-" .. r.id .. "-" .. i,
+      border = listening == i and "blue" or nil, pad = listening == i and 6 or nil, radius = listening == i and "sm" or nil,
       row{ gap = 6, w = "full",
         text{ q.id, weight = "semibold", color = "text-bright", size = "sm" },
         nz(q.title) and text{ q.title, size = "sm", color = "text-bright", truncate = true, grow = 1 } or false,
@@ -210,13 +213,27 @@ local function detail(data, ui, r)
       add(foot(r, nil, false))
       return column(kids)
     end
-    add(from_line(r, "asks you " .. count .. ". Answer the ones you want; an empty answer skips its question."))
+    add(from_line(r, (r["local"] and "asked you " .. count .. " in its session" or "asks you " .. count) .. ". Answer the ones you want; an empty answer skips its question."))
+    local v = (data.jarvis and data.jarvis.voice) or {}
+    if v.hears or v.speaks then
+      local on = ui.voice and ui.voice.id == r.id
+      add(row{ gap = 6, w = "full",
+        v.hears and button{ on and "Stop answering by voice" or "Answer by voice", icon = "mic", variant = on and "primary" or "neutral",
+          on = "voice", arg = { id = r.id, on = not on }, key = "relay-voice-" .. r.id,
+          help = "Each question is read; what you say next (hold " .. (v.key or "F8") .. ") is its answer. Say repeat, skip or back." } or false,
+        v.speaks and button{ "Read aloud", icon = "speaker", variant = "ghost", on = "read", arg = r.id, key = "relay-read-" .. r.id } or false,
+      })
+      if on then
+        local q = ((((ui.rounds or {})[r.id] or {}).questions or {})[ui.voice.index or 1]) or {}
+        add(note("Listening for " .. (q.id or "the next question") .. ": hold " .. (v.key or "F8") .. " and speak. Say repeat, skip or back.", "blue"))
+      end
+    end
     if r.state == "answered" then
       add(text{ (r.to or "?") .. " drafted these answers. Edit them, or clear them and answer yourself; " .. r.from .. " receives only what you send.", size = "sm", color = "text-muted", wrap = true })
       add(quote(r.answer))
     end
     add(round_form(r, ui, true))
-    if r.state == "pending" then add(targets(data, r, "Or ask one of these sandboxes to draft the answers")) end
+    if r.state == "pending" and not r["local"] then add(targets(data, r, "Or ask one of these sandboxes to draft the answers")) end
     add(foot(r, "Send answers…", any_answer(ui, r.id),
       r.state == "answered" and button{ "Clear the draft", variant = "ghost", on = "clear", arg = r.id, key = "relay-clear-" .. r.id } or nil))
     return column(kids)
@@ -392,6 +409,8 @@ return {
     shot_paste = function(_, id) return intent("relay_shot_paste", { id = id }) end,
     shot_choose = function(_, id) return intent("relay_shot_choose", { id = id }) end,
     shot_rm = function(_, a) return intent("relay_shot_remove", { id = a.id, index = a.index }) end,
+    voice = function(_, a) return intent("relay_voice", { id = a.id, on = a.on }) end,
+    read = function(_, id) return intent("relay_read", { id = id }) end,
     pick = function(_, a) return intent("agent_pick", { sandbox = a.sandbox, thread = a.thread, step = a.step, option = a.option }) end,
     terminal = function(_, a) return intent("open_terminal", { sandbox = a.sandbox, thread = a.thread, pane = "spare" }) end,
   },

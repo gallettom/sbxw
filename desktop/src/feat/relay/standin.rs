@@ -45,6 +45,29 @@ pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u1
         let n = t.matches("Jeanne Martin").count();
         return Some((200, json!({ "ok": true, "text": t.replace("Jeanne Martin", "Personne A"), "masked": n })));
     }
+    if (method, bare) == ("POST", "/api/chat/push") && body["name"].as_str().is_some_and(|n| n != super::JARVIS) {
+        // A followed sandbox's agent: a turn, then its reply (the stand-in
+        // binary hands other sandboxes' pushes to features).
+        let name = body["name"].as_str().unwrap_or("").to_string();
+        let text = body["text"].as_str().unwrap_or("").to_string();
+        let thread = body["thread"].as_str().map(str::to_string);
+        let mut info = json!({ "sandbox": name, "mode": "claude", "agent": "claude", "state": "working", "origin": "tty", "answerable": true,
+            "session_id": format!("s-{name}"), "started_ms": 1, "last_input": text, "ts": now_ms() });
+        if let Some(t) = &thread {
+            info["thread"] = t.clone().into();
+        }
+        (st.publish)("session", info.clone());
+        let reply = if text.to_lowercase().contains("grill") {
+            "Before I go on:\n\n❓ **Q1 - Scope** : migrate every table, or only `orders`?\n➡️ Only `orders` first.\n\n---\n\n❓ **Q2 - Downtime** : is a 2-minute write freeze acceptable?\n➡️ Yes, at night.".to_string()
+        } else {
+            format!("Done: {}. 42 tests pass. (Scripted stand-in agent.)", text.trim().trim_end_matches('.'))
+        };
+        info["state"] = "idle".into();
+        info["reply"] = reply.into();
+        info["ts"] = (now_ms() + 1).into();
+        st.publish_after(700, "session", info);
+        return Some((200, json!({ "ok": true, "name": name, "created": false, "thread": thread })));
+    }
     if (method, bare) == ("POST", "/api/answer") {
         let sb = body["sandbox"].as_str().unwrap_or("").to_string();
         let mode = body["mode"].as_str().unwrap_or("claude");
