@@ -746,9 +746,22 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
             obj(&mut u, "merge_check").remove(rest);
             let listed: Vec<&str> = body["threads"].as_array().into_iter().flatten().filter_map(|t| t["name"].as_str()).collect();
             let left: Vec<String> = check["threads"].as_array().into_iter().flatten().filter_map(|t| t.as_str()).filter(|t| listed.contains(t)).map(str::to_string).collect();
+            // The panes of the threads closed go, as after a Close.
+            let sb = check["sandbox"].as_str().unwrap_or("").to_string();
+            let closed: Vec<Action> = check["threads"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.as_str())
+                .filter(|t| !listed.contains(t))
+                .map(|t| Action::Intent { name: "close_panes".into(), args: json!({ "sandbox": sb, "thread": t }) })
+                .chain([Action::Refresh("threads"), Action::Refresh("sessions")])
+                .collect();
             if left.is_empty() {
                 obj(&mut u, "merge_note").insert(rest.into(), json!("Every merged thread was closed."));
-                vec![set_ui(u)]
+                let mut out = vec![set_ui(u)];
+                out.extend(closed);
+                out
             } else {
                 let text = format!(
                     "Not closed: {}. {} still listed after the merge; the daemon gave the reason to the lead's session. Close {} from the Threads panel to see why.",
@@ -757,7 +770,9 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
                     if left.len() == 1 { "it" } else { "them" }
                 );
                 obj(&mut u, "merge_note").insert(rest.into(), json!(text));
-                vec![set_ui(u), Action::error(text)]
+                let mut out = vec![set_ui(u), Action::error(text)];
+                out.extend(closed);
+                out
             }
         }
         "close" => {

@@ -358,6 +358,8 @@ fn a_whole_plan_against_the_standin() {
     let mut data = d.clone();
     data[UI] = ui.take();
     let acts = on_answer(&Ctx { data: &data }, &Call::get("/x", "x").tag(&format!("merge-check:{id}")), Ok((200, d["threads"]["web-app"].clone())));
+    assert!(acts.contains(&Action::Intent { name: "close_panes".into(), args: json!({ "sandbox": "web-app", "thread": "api-routes" }) }), "closed threads leave the screen");
+    assert!(!acts.contains(&Action::Intent { name: "close_panes".into(), args: json!({ "sandbox": "web-app", "thread": "docs" }) }), "one still there keeps its pane");
     apply(&mut data, &acts);
     assert!(data[UI]["merge_note"][&id].as_str().unwrap().starts_with("Not closed: docs."));
 }
