@@ -12,8 +12,8 @@
 //! `GET .../fs/file` and `.../artifacts/download`), `files_map_after` (the
 //! artifacts answer once a code map run is done).
 //!
-//! File bodies are answered as JSON strings: the stand-in answers JSON (see
-//! `RAW_READS`); the daemon answers raw bytes.
+//! File bodies are answered raw, in the stand-in's form (`{"$raw": text,
+//! "$type": ...}`, or `{"$raw_hex": ...}` for a picture).
 
 use super::view;
 use crate::feat::{match_path, query, Standin};
@@ -36,9 +36,17 @@ fn listing(data: &J, path: &str) -> Option<J> {
     (d.is_object() && (path.is_empty() || d["path"] == path)).then(|| d.clone())
 }
 
+/// A file's body, raw (`{"$raw": text}` or the fixture's own `{"$raw_hex": ...}`).
 fn content(data: &J, path: &str, max: Option<usize>) -> Option<(u16, J)> {
-    match data["files_content"][path].as_str() {
-        Some(t) => {
+    let ty = match view::ext(path).as_str() {
+        "md" | "markdown" => "text/markdown",
+        "html" | "htm" => "text/html",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        _ => "text/plain",
+    };
+    match &data["files_content"][path] {
+        J::String(t) => {
             let t = match max {
                 Some(m) if t.len() > m => {
                     let mut c = m;
@@ -47,11 +55,12 @@ fn content(data: &J, path: &str, max: Option<usize>) -> Option<(u16, J)> {
                     }
                     &t[..c]
                 }
-                _ => t,
+                _ => t.as_str(),
             };
-            Some((200, J::String(t.to_string())))
+            Some((200, json!({ "$raw": t, "$type": ty })))
         }
-        None => err(404, format!("{path}: No such file or directory")),
+        J::Object(o) if o.contains_key("$raw_hex") => Some((200, J::Object(o.clone()))),
+        _ => err(404, format!("{path}: No such file or directory")),
     }
 }
 
@@ -88,7 +97,7 @@ pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u1
         let p = query(path, "path").unwrap_or_default();
         let max = query(path, "max").and_then(|m| m.parse().ok());
         let head = query(path, "head").is_some();
-        let size = st.data["files_content"][p.as_str()].as_str().map(str::len).unwrap_or(0);
+        let size = st.data["files_content"][p.as_str()].as_str().map(str::len).unwrap_or_else(|| st.data["files_content"][p.as_str()]["$raw_hex"].as_str().map_or(0, |h| h.len() / 2));
         if let (Some(m), false) = (max, head) {
             if size > m {
                 return err(413, format!("{p} is larger than {m} bytes"));

@@ -1,5 +1,5 @@
 {
-  "about": "A picture: in this build, the note that pictures wait for the core's raw read.",
+  "about": "A picture, read raw and decoded by the core (alone, a fixture has no picture registered: picture not loaded).",
   "app": {
     "open": [
       "web-app"
@@ -54,7 +54,7 @@
           "modified": 1794198200,
           "name": "wireframe.png",
           "path": "wireframe.png",
-          "size": 48213
+          "size": 632
         },
         {
           "modified": 1794192800,
@@ -184,7 +184,7 @@
           "link": false,
           "modified": 1794198200,
           "name": "wireframe.png",
-          "size": 48213
+          "size": 632
         },
         {
           "kind": "file",
@@ -340,8 +340,10 @@
         }
       ],
       "preview": {
-        "state": "note",
-        "text": "Pictures preview once the app reads files byte for byte, which is not in this build yet: download it meanwhile."
+        "h": 200,
+        "key": "files-preview-3",
+        "state": "image",
+        "w": 320
       },
       "recent_days": 7,
       "recent_fresh": 0,
@@ -365,7 +367,7 @@
           "kind": "file",
           "name": "wireframe.png",
           "selected": true,
-          "size": "47.1 KB",
+          "size": "632 B",
           "when": "7 d ago"
         },
         {
@@ -404,6 +406,7 @@
       ],
       "run": null,
       "sandbox": "web-app",
+      "saved": null,
       "selected": {
         "can_delete": true,
         "id": "wireframe.png",
@@ -411,7 +414,7 @@
         "modified": "2026-11-09",
         "name": "wireframe.png",
         "path": "/Users/me/web/.sbxw-artifacts/wireframe.png",
-        "size": "47.1 KB",
+        "size": "632 B",
         "type": "PNG picture"
       },
       "staged": [],

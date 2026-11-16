@@ -54,23 +54,32 @@ local function uploads(ui)
   }
   local staged = ui.staged or {}
   if #staged == 0 then
-    kids[#kids + 1] = note("Drop files on this panel, or paste a picture (⌘V). Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt.")
+    kids[#kids + 1] = note("Drop files on this panel or on a terminal, or paste a picture. Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt, not submitted.")
   else
-    local blocked = false
     for _, s in ipairs(staged) do
-      blocked = blocked or nz(s.problem)
+      local sending = s.state == "sending"
       kids[#kids + 1] = row{ gap = 6, w = "full", key = "files-staged-" .. s.index,
         icon{ "file", size = 11, color = "text-muted" },
-        text{ s.name, size = "sm", truncate = true, grow = 1 },
-        nz(s.problem) and text{ s.problem, size = "xs", color = "red" } or text{ s.size, size = "xs", color = "text-muted" },
-        button{ icon = "close", key = "files-unstage-" .. s.index, on = "unstage", arg = s.index, variant = "ghost", help = "Leave it out" },
+        column{ gap = 2, grow = 1,
+          text{ s.name, size = "sm", truncate = true },
+          nz(s.problem) and text{ s.problem, size = "xs", color = "red", wrap = true }
+            or text{ s.size .. (s.to and ("  →  " .. s.to) or ""), size = "xs", color = "text-muted", truncate = true },
+          sending and progress{ value = s.progress or 0 } or false,
+        },
+        button{ sending and "Sending…" or "Upload", key = "files-upload-send-" .. s.index, icon = "send", variant = s.index == 1 and "primary" or "neutral",
+          on = "send", arg = s.index, disabled = nz(s.problem) or sending, help = "The app shows the file, its size and where it goes first" },
+        button{ icon = "close", key = "files-unstage-" .. s.index, on = "unstage", arg = s.index, variant = "ghost", help = "Leave it out", disabled = sending },
       }
     end
-    kids[#kids + 1] = row{ gap = 6, w = "full",
-      button{ "Clear", key = "files-unstage-all", on = "unstage", variant = "ghost" },
-      spacer{},
-      button{ #staged == 1 and "Upload" or ("Upload " .. #staged .. " files"), key = "files-upload-send", icon = "send", variant = "primary",
-        on = "send", disabled = blocked, help = "The app shows each file and its size first" },
+    if #staged > 1 then
+      kids[#kids + 1] = row{ w = "full", spacer{}, button{ "Clear all", key = "files-unstage-all", on = "unstage", variant = "ghost" } }
+    end
+  end
+  if ui.saved then
+    kids[#kids + 1] = row{ gap = 6, w = "full", key = "files-saved",
+      icon{ "check", size = 11, color = "green" },
+      text{ "Saved " .. ui.saved.name, size = "xs", color = "text-muted", truncate = true, grow = 1, help = ui.saved.path },
+      button{ "Show in folder", key = "files-show-saved", on = "show_saved", variant = "ghost" },
     }
   end
   return column(kids)
@@ -210,7 +219,8 @@ return {
     pick = function() return intent("files_upload_pick", {}) end,
     paste = function() return intent("files_upload_paste", {}) end,
     unstage = function(_, i) if i then return intent("files_upload_remove", { index = i }) end return intent("files_upload_remove", {}) end,
-    send = function() return intent("files_upload_send", {}) end,
+    send = function(_, i) return intent("files_upload_send", { index = i }) end,
+    show_saved = function() return intent("files_show_saved", {}) end,
     back = function() return intent("files_back", {}) end,
     up = function() return intent("files_up", {}) end,
     go = function(_, _, path) if path and path ~= "" then return intent("files_browse", { path = path }) end end,

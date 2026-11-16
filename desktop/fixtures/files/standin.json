@@ -33,7 +33,7 @@
     {
      "path": "wireframe.png",
      "name": "wireframe.png",
-     "size": 48213,
+     "size": 632,
      "modified": 1794198200
     },
     {
@@ -316,7 +316,7 @@
       "name": "wireframe.png",
       "kind": "file",
       "link": false,
-      "size": 48213,
+      "size": 632,
       "modified": 1794198200
      },
      {
@@ -486,7 +486,11 @@
    "/Users/me/web/.sbxw-artifacts/codemap/cli.md": "# CLI\n\n## Commands\n\n`web serve` starts the dev server. It reads the [[net#proxy]] settings.\n\n## Flags\n\n- `--port`: the port to listen on\n- `--open`: opens the browser\n",
    "/Users/me/web/.sbxw-artifacts/codemap/net.md": "# Net\n\n## Proxy\n\nRequests go through the proxy in [[src/net/proxy.ts]]. Back to [[codemap|the index]].\n\n## Retries\n\nThree tries, then the error. A quoted example stays text: `[[not-a-link]]`.\n\n```ts\n// [[inside-fence]] is not a link either\nretry(3)\n```\n",
    "/Users/me/web/.sbxw-artifacts/codemap/diagram/architecture.html": "<!doctype html><html><head><title>Architecture</title><script>alert('agent page')</script></head><body><h1>Architecture</h1></body></html>",
-   "/Users/me/web/.sbxw-artifacts/codemap-lenses/product-owner/product-owner.md": "# Web app for a product owner\n\nWhat each part delivers: the [[cli]] for developers, the network layer for every customer request.\n"
+   "/Users/me/web/.sbxw-artifacts/codemap-lenses/product-owner/product-owner.md": "# Web app for a product owner\n\nWhat each part delivers: the [[cli]] for developers, the network layer for every customer request.\n",
+   "/Users/me/web/.sbxw-artifacts/wireframe.png": {
+    "$raw_hex": "89504e470d0a1a0a0000000d4948445200000140000000c808020000001666affc0000023f4944415478daeddbb10d8020108651c67126a773261a37a0a2a521168e60210a97bce44df05fbef2d2b61f4050c904206040c0808041c08080010103020601030206040c0206040c0818103008181030206040c0206040c0808041c08080817f02eefd028212300818103020601030206040c0808041c08080010183800101030206040c0206040c081810300818103020601030206040c0c0c701e77c026f0818042c601030206010b08041c0020601030206010b18042c60881c30e09901103008181030206040c0206040c0808001018380010103020601030206040c0818040c0818103008181030206040c0206040c0808001018380010103020601030206040c0818040c081810303024e0521b2b7bbc60ab85b9048c80052c60012360048c8011b080052c60010b58c00246c00818012360010b58c00216b080058c8011b080058c80052c60012360048c8011b080052c60010b58c00246c00818012360010b58c01212300246c00858c00246c00216b08011300246c00858c00216b080052c60012360048c8011b080052c60048c8011300216b08011b080052c60048c8011300216b080052c60010b58c00818010b58c00858c00216300246c00818010b58c00216b080052c60048c8011300216f098808189040c0206040c0818040c0818103020601030206040c0206040c08080010183800101030206040c0206040c0818040c0818103020601030206040c0808041c08080010183800101030206040c0206040c0818046c051030206040c0206040c08080010183808125dc30216f9c8916ad050000000049454e44ae426082",
+    "$type": "image/png"
+   }
   }
  },
  "app": {

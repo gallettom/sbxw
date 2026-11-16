@@ -54,7 +54,7 @@
           "modified": 1794198200,
           "name": "wireframe.png",
           "path": "wireframe.png",
-          "size": 48213
+          "size": 632
         },
         {
           "modified": 1794192800,
@@ -387,7 +387,7 @@
           "kind": "file",
           "name": "wireframe.png",
           "selected": false,
-          "size": "47.1 KB",
+          "size": "632 B",
           "when": "7 d ago"
         },
         {
@@ -426,6 +426,7 @@
       ],
       "run": null,
       "sandbox": null,
+      "saved": null,
       "selected": null,
       "staged": [],
       "starred": false,

@@ -54,7 +54,7 @@
           "modified": 1794198200,
           "name": "wireframe.png",
           "path": "wireframe.png",
-          "size": 48213
+          "size": 632
         },
         {
           "modified": 1794192800,
@@ -356,6 +356,7 @@
       "rows": [],
       "run": null,
       "sandbox": "web-app",
+      "saved": null,
       "selected": {
         "can_delete": true,
         "id": "/tmp/build.log",
@@ -372,14 +373,20 @@
           "index": 1,
           "name": "brief.pdf",
           "problem": null,
-          "size": "29.3 KB"
+          "progress": 0.0,
+          "size": "29.3 KB",
+          "state": null,
+          "to": "web-app"
         },
         {
           "from": "/Users/me/Desktop/dump.iso",
           "index": 2,
           "name": "dump.iso",
           "problem": "128.0 MB: more than the 128.0 MB the daemon takes",
-          "size": "128.0 MB"
+          "progress": 0.0,
+          "size": "128.0 MB",
+          "state": null,
+          "to": "web-app"
         }
       ],
       "starred": false,

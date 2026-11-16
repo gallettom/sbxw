@@ -76,7 +76,12 @@ fn pump(st: &mut State, d: &mut J, acts: Vec<Action>) -> Vec<Action> {
                     d[key.as_str()] = v.clone();
                     next.extend(st.on_data(&Ctx { data: d }, key, &old, &v));
                 }
-                Action::Call(c) if c.method == Method::Get => {
+                Action::Call(c) if c.method == crate::feat::Method::Get && c.raw.is_some() => {
+                    let (code, v) = daemon(d, "GET", &c.path, J::Null);
+                    let (b, ty) = crate::client::raw_of(&v);
+                    next.extend(st.on_bytes(&Ctx { data: d }, c, Ok((code, b, ty))));
+                }
+                Action::Call(c) if c.method == crate::feat::Method::Get => {
                     let r = daemon(d, "GET", &c.path, J::Null);
                     next.extend(st.on_answer(&Ctx { data: d }, c, Ok(r)));
                 }
@@ -208,7 +213,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn uploads_list_each_local_path_and_size_and_respect_the_daemons_limits() {
+fn uploads_show_the_local_path_and_size_respect_the_limits_and_type_the_path() {
     let d = fixture("standin");
     let mut st = opened(&d);
     let dir = tmp("up");
@@ -228,28 +233,58 @@ fn uploads_list_each_local_path_and_size_and_respect_the_daemons_limits() {
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };
     assert_eq!(c.title, "Upload notes.txt into web-app?");
     assert_eq!(c.lines[0], format!("{} · 5 B", small.display()));
-    assert!(c.lines.iter().any(|l| l.contains("typed into web-app's agent prompt, not submitted")));
-    assert_eq!(c.call.method, Method::Core);
-    assert_eq!(c.call.body["files"][0]["path"], json!(small));
-    // A stopped sandbox, an unknown one: refused.
-    assert!(run(&mut st, &d, "files_upload_send", json!({ "sandbox": "data-pipeline" })).unwrap_err().contains("not running"));
-    assert!(run(&mut st, &d, "files_upload_send", json!({ "sandbox": "nowhere" })).is_err());
+    assert!(c.lines.iter().any(|l| l.contains("typed into web-app's agent's prompt, not submitted")), "{:?}", c.lines);
+    assert_eq!((c.call.method, c.call.path.as_str()), (crate::feat::Method::Core, "core:upload"));
+    assert_eq!(c.call.body["file"], json!(small));
+    assert_eq!(c.call.body["route"], "/api/sandboxes/web-app/upload?name=notes.txt");
+    // The daemon's answer: the path typed into the prompt, not submitted.
+    let up = c.call.clone();
+    let a = st.on_answer(&Ctx { data: &d }, &up, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/1/notes.txt" }))));
+    let Some(Action::Call(t)) = a.iter().find(|x| matches!(x, Action::Call(_))) else { panic!("{a:?}") };
+    assert_eq!((t.path.as_str(), &t.body), ("/api/input", &json!({ "sandbox": "web-app", "data": "/tmp/sbxw-uploads/1/notes.txt " })));
+    assert!(st.staged.is_empty());
+    // No session took it: said, with the path to copy.
+    let a = st.on_answer(&Ctx { data: &d }, t, Ok((404, J::Null)));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { then: Some((n, args)), .. } if n == "copy_text" && args["text"] == "/tmp/sbxw-uploads/1/notes.txt")), "{a:?}");
+    // The daemon's refusal, in its words.
+    st.on_files(&Ctx { data: &d }, Incoming::Files(vec![small.clone()]));
+    let a = run(&mut st, &d, "files_upload_send", json!({})).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((413, json!({ "error": "length limit exceeded" }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, error: true, .. } if text == "notes.txt was not uploaded: length limit exceeded")), "{a:?}");
+    st.staged.clear();
     // Too big, empty: said on the row, and the upload refused.
     st.on_files(&Ctx { data: &d }, Incoming::Files(vec![big, empty]));
     let ui = st.ui(&Ctx { data: &d });
-    assert!(ui["staged"][1]["problem"].as_str().unwrap().contains("more than the 128.0 MB"), "{ui}");
-    assert!(ui["staged"][2]["problem"].as_str().unwrap().contains("empty"));
-    assert!(run(&mut st, &d, "files_upload_send", json!({})).unwrap_err().contains("huge.iso cannot go"));
-    run(&mut st, &d, "files_upload_remove", json!({ "index": 2 })).unwrap();
-    run(&mut st, &d, "files_upload_remove", json!({ "index": 2 })).unwrap();
+    assert!(ui["staged"][0]["problem"].as_str().unwrap().contains("more than the 128.0 MB"), "{ui}");
+    assert!(ui["staged"][1]["problem"].as_str().unwrap().contains("empty"));
+    assert!(run(&mut st, &d, "files_upload_send", json!({ "index": 1 })).unwrap_err().contains("huge.iso cannot go"));
+    assert!(run(&mut st, &d, "files_upload_send", json!({ "index": 2 })).unwrap_err().contains("empty"));
+    assert!(run(&mut st, &d, "files_upload_send", json!({ "index": 3 })).unwrap_err().contains("no file 3"));
     assert!(run(&mut st, &d, "files_upload_remove", json!({ "index": 5 })).is_err());
-    // A pasted picture: named by the app, its source said.
+    run(&mut st, &d, "files_upload_remove", json!({})).unwrap();
+    // A pasted picture: named by the app, sent as bytes to paste-image.
     st.on_files(&Ctx { data: &d }, Incoming::Png(vec![1; 2048]));
     let a = run(&mut st, &d, "files_upload_send", json!({})).unwrap();
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert_eq!(c.title, "Upload 2 files into web-app?");
-    assert_eq!(c.lines[1], "a picture from the clipboard · 2.0 KB");
-    assert_eq!(c.call.body["files"][1], json!({ "picture": 2, "name": "pasted-1.png", "size": 2048 }));
+    assert_eq!(c.title, "Upload pasted-1.png into web-app?");
+    assert_eq!(c.lines[0], "a picture from the clipboard · 2.0 KB");
+    assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
+    assert_eq!(c.call.bytes.as_ref().map(|(t, b)| (t.as_str(), b.len())), Some(("image/png", 2048)));
+    st.staged.clear();
+    // Dropped on a stopped sandbox's pane: refused when sent.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], sandbox: "data-pipeline".into(), thread: None });
+    assert!(a.iter().any(|x| matches!(x, Action::Intent { name, .. } if name == "files_upload_send")));
+    assert!(run(&mut st, &d, "files_upload_send", json!({})).unwrap_err().contains("not running"));
+    st.staged.clear();
+    // Dropped on a thread's pane: that sandbox, that thread's prompt.
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], sandbox: "api".into(), thread: Some("checkout".into()) });
+    let a = run(&mut st, &d, "files_upload_send", json!({})).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    assert_eq!(c.title, "Upload notes.txt into api?");
+    assert!(c.lines[2].contains("api's thread checkout's prompt"));
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/2/notes.txt" }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Call(t) if t.body["mode"] == "thread:checkout" && t.body["sandbox"] == "api")), "{a:?}");
     // Ten at a time at most.
     let many: Vec<_> = (0..12).map(|i| { let p = dir.join(format!("f{i}.txt")); std::fs::write(&p, b"x").unwrap(); p }).collect();
     let a = st.on_files(&Ctx { data: &d }, Incoming::Files(many));
@@ -321,30 +356,64 @@ fn text_previews_are_capped_binary_is_said_and_html_is_never_drawn() {
 }
 
 #[test]
-fn downloads_and_opening_go_through_the_core_and_name_the_file() {
+fn downloads_and_opening_go_through_the_core_and_its_verdict_makes_the_dialog() {
     let mut d = fixture("standin");
     let mut st = opened_pumped(&mut d);
-    // A hostile name an agent chose: shown as text, sent as the core's to clean.
     let a = run(&mut st, &d, "files_select", json!({ "id": "report.md" })).unwrap();
     pump(&mut st, &mut d, a);
+    // Downloads: direct, written by the core under the name it cleans.
     let a = run(&mut st, &d, "files_download", json!({})).unwrap();
-    assert!(matches!(&a[0], Action::Notice { error: true, text, .. } if text.contains("not in this build")), "CORE: {a:?}");
+    let Action::Download(dl) = &a[0] else { panic!("{a:?}") };
+    assert!(dl.direct());
+    assert_eq!((dl.get.as_str(), dl.name.as_str(), dl.to, dl.after), ("/api/sandboxes/web-app/artifacts/download?path=report.md", "report.md", Dest::Downloads, After::Nothing));
+    let a = run(&mut st, &d, "files_reveal", json!({})).unwrap();
+    assert!(matches!(&a[0], Action::Download(x) if x.after == After::Reveal && x.direct()));
+    let a = st.on_answer(&Ctx { data: &d }, &dl.call("save report.md"), Ok((200, json!({ "saved": "/Users/me/Downloads/report (1).md", "name": "report (1).md", "bytes": 10, "verdict": "plain" }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, .. } if text == "Saved report (1).md: /Users/me/Downloads/report (1).md")));
+    let a = run(&mut st, &d, "files_show_saved", json!({})).unwrap();
+    assert!(matches!(&a[0], Action::Reveal(p) if p.to_str() == Some("/Users/me/Downloads/report (1).md")));
+    // A cancelled save dialog says nothing.
+    let a = st.on_answer(&Ctx { data: &d }, &dl.call("save report.md"), Ok((499, json!({ "cancelled": true }))));
+    assert!(!a.iter().any(|x| matches!(x, Action::Notice { .. })));
+    // Elsewhere: the save dialog, behind the core's Confirm.
+    let a = run(&mut st, &d, "files_save_as", json!({})).unwrap();
+    admit("files_save_as", &a).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    assert_eq!((c.call.path.as_str(), c.call.body["to"].as_str()), ("core:download", Some("ask")));
+    // Open: the core downloads and judges it first; the dialog is built from its answer.
     let a = run(&mut st, &d, "files_open_with", json!({})).unwrap();
     admit("files_open_with", &a).unwrap();
-    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert_eq!(c.call.method, Method::Core);
-    assert_eq!(c.call.body, json!({ "get": "/api/sandboxes/web-app/artifacts/download?path=report.md", "name": "report.md", "to": "downloads", "after": "open" }));
-    assert!(c.lines[0].ends_with("/Users/me/web/.sbxw-artifacts/report.md"));
-    assert!(c.lines[1].contains("Markdown document"));
-    let a = run(&mut st, &d, "files_save_as", json!({})).unwrap();
-    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert_eq!(c.call.body["to"], "ask");
+    let [Action::Prepare(p)] = a.as_slice() else { panic!("{a:?}") };
+    assert_eq!((p.call.path.as_str(), p.call.body["after"].as_str(), p.call.body["to"].as_str()), ("core:download", Some("nothing"), Some("downloads")));
+    let cx = Ctx { data: &d };
+    let plain = (p.build)(&cx, &p.asked, &json!({ "saved": "/D/report.md", "name": "report.md", "bytes": 300, "verdict": "plain", "kind": "Markdown document", "reason": "" })).unwrap();
+    assert_eq!(plain.call.path, "core:open");
+    assert_eq!(plain.call.body, json!({ "path": "/D/report.md" }));
+    assert!(plain.ack.is_none());
+    assert_eq!(plain.lines, ["From web-app: /Users/me/web/.sbxw-artifacts/report.md", "Saved in Downloads: /D/report.md", "300 B · Markdown document"]);
+    let warn = (p.build)(&cx, &p.asked, &json!({ "saved": "/D/page.html", "name": "page.html", "bytes": 3, "verdict": "warn", "kind": "HTML page", "reason": "Your browser runs its scripts." })).unwrap();
+    assert!(warn.ack.is_some());
+    assert!(warn.lines.contains(&"Your browser runs its scripts.".to_string()));
+    let refused = (p.build)(&cx, &p.asked, &json!({ "saved": "/D/report.pdf", "name": "report.pdf", "bytes": 3, "verdict": "refuse", "kind": "a program", "reason": "Its first bytes are a Windows program." })).unwrap_err();
+    assert!(refused.contains("never opens it") && refused.contains("/D/report.pdf"), "{refused}");
+    assert!((p.build)(&cx, &p.asked, &json!({ "saved": "/D/x", "name": "x" })).is_err(), "no verdict: not opened");
     // Copy path: the path as the agent sees it, through the core's copy_text.
     let a = run(&mut st, &d, "files_copy_path", json!({})).unwrap();
     assert!(matches!(&a[0], Action::Intent { name, args } if name == "copy_text" && args["text"] == "/Users/me/web/.sbxw-artifacts/report.md"));
     // No selection: nothing to save.
     let mut st = opened(&d);
     assert!(run(&mut st, &d, "files_open_with", json!({})).is_err());
+}
+
+#[test]
+fn a_picture_artifact_is_read_raw_and_shown_through_the_core() {
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    let a = run(&mut st, &d, "files_select", json!({ "id": "wireframe.png" })).unwrap();
+    let out = pump(&mut st, &mut d, a);
+    assert!(out.iter().any(|x| matches!(x, Action::Image { key, bytes } if key.starts_with("files-preview-") && !bytes.is_empty())), "{out:?}");
+    assert_eq!(d[UI]["preview"]["state"], "image");
+    assert_eq!(d[UI]["preview"]["w"], 320);
 }
 
 #[test]
@@ -446,10 +515,11 @@ fn the_map_panel_reads_every_file_follows_links_inside_and_opens_others_in_the_b
     pump(&mut st, &mut d, a);
     let a = run(&mut st, &d, "codemap_diagram", json!({})).unwrap();
     admit("codemap_diagram", &a).unwrap();
-    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert!(c.ack.is_some());
-    assert!(c.lines[1].contains("HTML page an agent wrote"));
-    assert_eq!(c.call.body["after"], "open");
+    let [Action::Prepare(p)] = a.as_slice() else { panic!() };
+    assert_eq!(p.call.body["get"], "/api/sandboxes/web-app/artifacts/download?path=codemap%2Fdiagram%2Farchitecture.html");
+    let c = (p.build)(&Ctx { data: &d }, &p.asked, &json!({ "saved": "/D/architecture.html", "name": "architecture.html", "bytes": 120, "verdict": "warn", "kind": "HTML page", "reason": "A page an agent wrote: your browser runs its scripts." })).unwrap();
+    assert_eq!(c.ack.as_deref(), Some("I understand my browser runs this page's scripts"));
+    assert_eq!(c.lines[0], "From web-app: .sbxw-artifacts/codemap/diagram/architecture.html");
 }
 
 #[test]
@@ -535,7 +605,7 @@ fn write_files_fixtures() {
     step(&mut st, &mut d, "files_select", json!({ "id": "summary.html" }));
     save("files-preview-html", &d, &["files"], "An HTML page an agent wrote: shown as its source, never drawn.");
     step(&mut st, &mut d, "files_select", json!({ "id": "wireframe.png" }));
-    save("files-preview-picture", &d, &["files"], "A picture: in this build, the note that pictures wait for the core's raw read.");
+    save("files-preview-picture", &d, &["files"], "A picture, read raw and decoded by the core (alone, a fixture has no picture registered: picture not loaded).");
     step(&mut st, &mut d, "files_browse", json!({ "path": "/Users/me/web" }));
     save("files-browse", &d, &["files"], "Files tab: the workspace, folders first, its README previewed, the places.");
     step(&mut st, &mut d, "files_select", json!({ "id": "/Users/me/web/install.sh" }));

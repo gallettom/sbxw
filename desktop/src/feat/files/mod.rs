@@ -22,9 +22,9 @@
 //!   dialog: `on_files`); no intent takes one. Sandbox paths are arguments
 //!   (browsing), checked by the daemon as for the web UI.
 //!
-//! Parts that need the core's next operations (raw reads, downloads, opening
-//! and revealing, streamed uploads, drops on a pane) are marked `CORE:` and
-//! said in plain words until they land (see `FILES.md`).
+//! The core's file operations (`src/files.rs`) do the writing, opening,
+//! revealing and streaming; their names and verdicts are the core's
+//! (`src/safe.rs`), never this feature's.
 
 pub mod codemap;
 mod standin;
@@ -32,7 +32,7 @@ mod standin;
 mod tests;
 pub mod view;
 
-use super::{Action, Asked, Call, Confirm, Ctx, Data, Extra, Feature, Incoming, Method, Place, ScreenDecl, Slot};
+use super::{core_call, Action, After, Asked, Call, Confirm, Ctx, Data, Dest, Download, Extra, Feature, Incoming, PaneDrop, Place, Prepare, ScreenDecl, Slot};
 use crate::client::enc;
 use crate::intent::{Arg, Risk, Spec};
 use codemap::Doc;
@@ -51,10 +51,6 @@ pub const DIR: &str = "files_dir";
 pub const RECENT: &str = "files_recent";
 pub const RUNS: &str = "codemap";
 
-/// CORE: the core hands a feature a route's raw bytes (`Feature::on_bytes`).
-/// Until then text arrives through the JSON path (good for text, not for
-/// pictures), and pictures say so.
-pub const RAW_READS: bool = false;
 /// The most map files read (a map is a few dozen).
 const MAP_FILES_MAX: usize = 200;
 
@@ -83,6 +79,8 @@ pub const FEATURE: Feature = Feature {
     extras: Some(extras),
     standin: Some(standin::route),
     on_files: Some(on_files),
+    on_bytes: Some(on_bytes),
+    on_pane_drop: Some(on_pane_drop),
     ..Feature::EMPTY
 };
 
@@ -100,6 +98,7 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_copy_path", risk: Risk::Direct, args: &[], doc: "Puts the selected file's path, as the agent sees it, on the clipboard." },
     Spec { name: "files_download", risk: Risk::Direct, args: &[], doc: "Downloads the selected file into this computer's Downloads folder, under a name the core cleans (never over a file there)." },
     Spec { name: "files_reveal", risk: Risk::Direct, args: &[], doc: "Downloads the selected file into Downloads and shows it in the file manager." },
+    Spec { name: "files_show_saved", risk: Risk::Direct, args: &[], doc: "Shows the last file the panel saved in the file manager." },
     Spec { name: "files_save_as", risk: Risk::Approval("Save a sandbox file outside Downloads"), args: &[], doc: "The save dialog, for the selected file; the core's dialog names the file and its size first." },
     Spec { name: "files_open_with", risk: Risk::Approval("Open a sandbox file with this computer's app"), args: &[], doc: "Downloads the selected file, then the core's dialog says what it is (its type sniffed) and what would open it; programs, scripts, installers and shortcuts are refused." },
     Spec { name: "files_delete", risk: Risk::Approval("Delete a file in a sandbox"), args: &[], doc: "Deletes the selected file or folder (under the workspace, a read-write mount, home or /tmp only), after the core's dialog shows its path and size." },
@@ -110,9 +109,9 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_upload_remove", risk: Risk::Direct, args: &[("index", Arg::Int(1, 10), false)], doc: "Drops file `index` from the files waiting to be uploaded (none: all)." },
     Spec {
         name: "files_upload_send",
-        risk: Risk::Approval("Upload files into a sandbox"),
-        args: &[("sandbox", Arg::Str, false)],
-        doc: "Copies the files waiting into the sandbox (the panel's, or `sandbox`), then types their paths into its agent's prompt, not submitted; the core's dialog lists each local path and size first. 128 MB at most each.",
+        risk: Risk::Approval("Upload a file into a sandbox"),
+        args: &[("index", Arg::Int(1, 10), false)],
+        doc: "Copies waiting file `index` (default the first) into its sandbox (the panel's, or the pane's it was dropped on), then types its path into that agent's prompt, not submitted; the core's dialog shows the local path and size first. 128 MB at most.",
     },
     Spec { name: "codemap_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("map", Arg::Str, false)], doc: "Opens the Code map panel on that sandbox's map (or `map`: a lens's folder, as listed in `codemap_ui.maps`)." },
     Spec { name: "codemap_doc", risk: Risk::Direct, args: &[("doc", Arg::Str, true), ("anchor", Arg::Str, false)], doc: "Shows a map file, or one of its sections (`anchor`: a section id)." },
@@ -148,16 +147,19 @@ struct Sel {
 #[derive(Debug, Clone)]
 enum Payload {
     Path(PathBuf),
-    /// A picture from the clipboard (PNG). CORE: streamed by `core:upload`.
-    #[allow(dead_code)]
+    /// A picture from the clipboard (PNG), sent to `paste-image`.
     Png(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
 struct Staged {
+    /// Its upload's tag (`upload-<id>`; progress in `data.app.uploads`).
+    id: u64,
     name: String,
     size: u64,
     payload: Payload,
+    /// Dropped on a pane: that sandbox and thread (else the panel's sandbox, the main session).
+    to: Option<(String, Option<String>)>,
 }
 
 impl Staged {
@@ -216,6 +218,9 @@ pub struct State {
     seq: u64,
     staged: Vec<Staged>,
     paste_seq: u64,
+    staged_seq: u64,
+    /// The last file the panel saved (Show in folder).
+    saved: Option<(String, String)>,
     /// The sandbox each daemon answer was asked for.
     asked_for: BTreeMap<&'static str, String>,
     /// Sandboxes whose run ended before the answer to its start came back
@@ -241,37 +246,43 @@ fn on_event(cx: &Ctx, name: &str, data: &J) -> Vec<Action> {
 fn on_files(cx: &Ctx, inc: Incoming) -> Vec<Action> {
     STATE().lock().unwrap().on_files(cx, inc)
 }
+fn on_bytes(cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) -> Vec<Action> {
+    STATE().lock().unwrap().on_bytes(cx, call, r)
+}
+fn on_pane_drop(cx: &Ctx, d: &PaneDrop) -> Vec<Action> {
+    STATE().lock().unwrap().on_pane_drop(cx, d)
+}
+
+/// The core's own reading of a file it wrote (`{saved, name, bytes, verdict,
+/// kind, reason}`, from `safe.rs`) makes the Open dialog: a file the core
+/// refuses is said, never offered; one it warns about needs the box ticked.
+pub fn build_open(_cx: &Ctx, asked: &Asked, v: &J) -> Result<Confirm, String> {
+    let name = v["name"].as_str().unwrap_or("the file");
+    let saved = v["saved"].as_str().ok_or("the app did not say where it saved the file")?;
+    let kind = v["kind"].as_str().unwrap_or("a file");
+    let reason = v["reason"].as_str().unwrap_or("");
+    let size = view::size_label(v["bytes"].as_u64().unwrap_or(0));
+    let from = asked.s("from").unwrap_or("");
+    match v["verdict"].as_str() {
+        Some("plain") | Some("warn") => {}
+        Some("refuse") => return Err(format!("{name} is {kind}: {reason} The app never opens it. It is saved in Downloads ({saved}), where you can look at it.")),
+        _ => return Err(format!("the app could not tell what {name} is: it is not opened")),
+    }
+    let mut c = Confirm::new(format!("Open {name} with this computer's app?"), core_call("open", json!({ "path": saved }), format!("open {name}"), "open"))
+        .line(format!("From {from}"))
+        .line(format!("Saved in Downloads: {saved}"))
+        .line(format!("{size} · {kind}"));
+    if !reason.is_empty() {
+        c = c.line(reason.to_string());
+    }
+    if v["verdict"] == "warn" {
+        c = c.ack(if asked.s("what") == Some("diagram") { "I understand my browser runs this page's scripts" } else { "I understand what opening it can do" });
+    }
+    Ok(c.labels("Open", "Keep it closed"))
+}
 
 fn sb_route(sandbox: &str, rest: &str) -> String {
     format!("/api/sandboxes/{}{rest}", enc(sandbox))
-}
-
-/// CORE: a download written by the core (`Action::Download`). Until it
-/// lands, said in plain words.
-fn download(_get: String, name: &str, reveal: bool) -> Action {
-    Action::error(format!(
-        "Saving {name}{} needs the app's download, which is not in this build yet: use the web UI's Download meanwhile.",
-        if reveal { " and showing it in its folder" } else { "" }
-    ))
-}
-
-/// CORE: the core's own operation behind a Confirm (`core:download`,
-/// `core:upload`); its final shape is the core's.
-fn core_call(op: &str, body: J, what: String) -> Call {
-    let mut c = Call::post(format!("core:{op}"), body, what);
-    c.method = Method::Core;
-    c.tag(op)
-}
-
-/// The bytes of an answer read through the JSON path (see [`RAW_READS`]):
-/// a text body comes back as a string, or as `{"error": text}`.
-fn interim_bytes(v: &J) -> Vec<u8> {
-    match v {
-        J::Null => vec![],
-        J::String(s) => s.clone().into_bytes(),
-        J::Object(o) if o.len() == 1 && o.get("error").is_some_and(J::is_string) => o["error"].as_str().unwrap_or("").as_bytes().to_vec(),
-        other => serde_json::to_vec_pretty(other).unwrap_or_default(),
-    }
 }
 
 fn why(status: u16, body: &J) -> String {
@@ -299,7 +310,7 @@ impl State {
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
                 if self.sandbox.as_deref() != Some(&sb) {
                     let staged = std::mem::take(&mut self.staged);
-                    *self = State { map: std::mem::take(&mut self.map), staged, paste_seq: self.paste_seq, seq: self.seq, ..State::default() };
+                    *self = State { map: std::mem::take(&mut self.map), staged, paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, saved: self.saved.take(), ..State::default() };
                     self.sandbox = Some(sb.clone());
                     self.first = true;
                     for k in [ARTIFACTS, DIR, RECENT] {
@@ -376,11 +387,17 @@ impl State {
             }
             "files_download" | "files_reveal" => {
                 let s = self.file_sel()?;
-                out.push(download(self.download_route(&s)?, &s.name, a.name == "files_reveal"));
+                let after = if a.name == "files_reveal" { After::Reveal } else { After::Nothing };
+                out.push(Action::Download(Download { get: self.download_route(&s)?, name: s.name.clone(), to: Dest::Downloads, after, tag: "download".into() }));
+            }
+            "files_show_saved" => {
+                let (_, path) = self.saved.clone().ok_or("nothing saved yet")?;
+                out.push(Action::Reveal(PathBuf::from(path)));
             }
             "files_save_as" => {
                 let s = self.file_sel()?;
-                let c = Confirm::new(format!("Save {} where you choose?", s.name), core_call("download", json!({ "get": self.download_route(&s)?, "name": s.name, "to": "ask", "after": "nothing" }), format!("save {}", s.name)))
+                let d = Download { get: self.download_route(&s)?, name: s.name.clone(), to: Dest::Ask, after: After::Nothing, tag: "download".into() };
+                let c = Confirm::new(format!("Save {} where you choose?", s.name), d.call(format!("save {}", s.name)))
                     .line(format!("From {}: {}", self.sandbox()?, self.abs_path(cx, &s)))
                     .line(format!("{} · {}", view::size_label(s.size), view::kind_label(&s.name)))
                     .line("Next, the system's save dialog: the name is cleaned by the app, and nothing is written over a file without the dialog asking.")
@@ -389,15 +406,12 @@ impl State {
             }
             "files_open_with" => {
                 let s = self.file_sel()?;
-                // CORE: a Prepare whose read is the core's download and sniff; its
-                // verdict (refuse, warn, plain) builds the dialog. Until then the
-                // dialog says what will happen and the core refuses the operation.
-                let c = Confirm::new(format!("Open {} with this computer's app?", s.name), core_call("download", json!({ "get": self.download_route(&s)?, "name": s.name, "to": "downloads", "after": "open" }), format!("open {}", s.name)))
-                    .line(format!("From {}: {}", self.sandbox()?, self.abs_path(cx, &s)))
-                    .line(format!("{} · {} (by its name; the app checks its first bytes before opening it)", view::size_label(s.size), view::kind_label(&s.name)))
-                    .line("A copy is saved in Downloads, then opened with the app this computer uses for its type. Programs, scripts, installers and shortcuts are never opened.")
-                    .labels("Save and open", "Cancel");
-                return Ok(vec![c.into_action()]);
+                let sb = self.sandbox()?;
+                let d = Download { get: self.download_route(&s)?, name: s.name.clone(), to: Dest::Downloads, after: After::Nothing, tag: "open-read".into() };
+                // The core downloads it, then says what it is (its name and first
+                // bytes): the dialog is built from that, never from this panel's guess.
+                let asked = Asked { name: "files_open_with", args: json!({ "from": format!("{sb}: {}", self.abs_path(cx, &s)), "what": "file" }).as_object().cloned().unwrap_or_default() };
+                return Ok(vec![Action::Prepare(Box::new(Prepare { title: format!("Open {}?", s.name), call: d.call(format!("save {}", s.name)), asked, build: build_open }))]);
             }
             "files_delete" => return Ok(vec![self.delete(cx)?]),
             "files_star" => {
@@ -429,7 +443,7 @@ impl State {
                 Some(i) => return Err(format!("there is no file {i} waiting")),
                 None => self.staged.clear(),
             },
-            "files_upload_send" => return Ok(vec![self.upload(cx, a.s("sandbox"))?]),
+            "files_upload_send" => return Ok(vec![self.upload(cx, a.i("index").unwrap_or(1) as usize)?]),
             "codemap_open" => {
                 let sb = a.req("sandbox").to_string();
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
@@ -490,15 +504,12 @@ impl State {
             }
             "codemap_diagram" => {
                 let sb = self.map.sandbox.clone().ok_or("open a code map first")?;
-                let (path, size) = self.map.diagram.clone().ok_or("this map has no diagram")?;
+                let (path, _) = self.map.diagram.clone().ok_or("this map has no diagram")?;
                 let name = path.rsplit('/').next().unwrap_or("diagram.html").to_string();
                 let get = format!("{}?path={}", sb_route(&sb, "/artifacts/download"), enc(&path));
-                let c = Confirm::new(format!("Open {sb}'s map diagram in your browser?"), core_call("download", json!({ "get": get, "name": name, "to": "downloads", "after": "open" }), format!("open {name}")))
-                    .line(format!("{sb}: .sbxw-artifacts/{path} · {}", view::size_label(size)))
-                    .line("It is an HTML page an agent wrote. The app does not draw HTML: a copy is saved in Downloads and your browser opens it from there, running its scripts as a local file.")
-                    .ack("I understand it runs in my browser")
-                    .labels("Save and open", "Cancel");
-                return Ok(vec![c.into_action()]);
+                let d = Download { get, name: name.clone(), to: Dest::Downloads, after: After::Nothing, tag: "open-read".into() };
+                let asked = Asked { name: "codemap_diagram", args: json!({ "from": format!("{sb}: .sbxw-artifacts/{path}"), "what": "diagram" }).as_object().cloned().unwrap_or_default() };
+                return Ok(vec![Action::Prepare(Box::new(Prepare { title: format!("Open {sb}'s map diagram?"), call: d.call(format!("save {name}")), asked, build: build_open }))]);
             }
             other => return Err(format!("{other}: not a files intent")),
         }
@@ -678,8 +689,6 @@ impl State {
             self.preview = json!({ "state": "note", "text": "Not a regular file." });
         } else if let Some(p) = view::preview_without_reading(&name, size) {
             self.preview = p;
-        } else if view::kind(&name) == view::Kind::Image && !RAW_READS {
-            self.preview = json!({ "state": "note", "text": "Pictures preview once the app reads files byte for byte, which is not in this build yet: download it meanwhile." });
         } else {
             self.preview = json!({ "state": "loading" });
             let route = match (&s.src, view::kind(&name)) {
@@ -687,7 +696,8 @@ impl State {
                 (Src::Fs, view::Kind::Image) => format!("{}?path={}", sb_route(&sb, "/fs/file"), enc(&s.path)),
                 (Src::Fs, _) => format!("{}?path={}&max={}{}", sb_route(&sb, "/fs/file"), enc(&s.path), view::TEXT_MAX, if size > view::TEXT_MAX { "&head=1" } else { "" }),
             };
-            out.push(Action::Call(Call::get(route, format!("read {name}")).tag(&format!("preview:{}", self.seq)).quiet()));
+            let max = if view::kind(&name) == view::Kind::Image { view::IMAGE_MAX } else { view::TEXT_MAX };
+            out.push(Action::Call(Call::get(route, format!("read {name}")).raw(max).tag(&format!("preview:{}", self.seq)).quiet()));
         }
         self.sel = Some(s);
         Ok(out)
@@ -696,6 +706,8 @@ impl State {
     /// A preview's bytes arrived (the raw read; for now the JSON path).
     pub fn got_preview(&mut self, seq: u64, bytes: &[u8]) -> Vec<Action> {
         let Some(s) = self.sel.clone().filter(|_| seq == self.seq) else { return vec![] };
+        // More than asked (`max + 1`): the head only.
+        let bytes = &bytes[..bytes.len().min(if view::kind(&s.name) == view::Kind::Image { view::IMAGE_MAX + 1 } else { view::TEXT_MAX } as usize)];
         if view::kind(&s.name) == view::Kind::Image {
             let limits = crate::picture::Limits { max_bytes: view::IMAGE_MAX as usize, ..crate::picture::Limits::default() };
             return match crate::picture::prepare(bytes, limits, Some(1600), crate::picture::Encode::Png) {
@@ -736,39 +748,40 @@ impl State {
         Ok(c.line("This cannot be undone.").labels("Delete", "Cancel").danger().into_action())
     }
 
-    fn upload(&self, cx: &Ctx, to: Option<&str>) -> Result<Action, String> {
-        let sb = match to {
-            Some(s) => s.to_string(),
-            None => self.sandbox()?,
-        };
+    /// Where waiting file `s` goes: the pane's sandbox and thread it was dropped on, else the panel's.
+    fn target(&self, s: &Staged) -> Result<(String, Option<String>), String> {
+        match &s.to {
+            Some(t) => Ok(t.clone()),
+            None => Ok((self.sandbox()?, None)),
+        }
+    }
+
+    fn upload(&self, cx: &Ctx, index: usize) -> Result<Action, String> {
+        let s = self.staged.get(index.wrapping_sub(1)).ok_or_else(|| if self.staged.is_empty() { "nothing to upload: drop a file on the panel or a pane, paste a picture, or choose a file".to_string() } else { format!("there is no file {index} waiting") })?;
+        if let Some(p) = s.problem() {
+            return Err(format!("{} cannot go: {p}", s.name));
+        }
+        let (sb, thread) = self.target(s)?;
         let info = cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
         if info["status"] != "running" {
             return Err(format!("{sb} is not running: start it first, then upload"));
         }
-        if self.staged.is_empty() {
-            return Err("nothing to upload: drop a file on the panel, paste a picture, or choose a file".into());
-        }
-        if let Some((s, p)) = self.staged.iter().find_map(|s| s.problem().map(|p| (s, p))) {
-            return Err(format!("{} cannot go: {p}", s.name));
-        }
-        let n = self.staged.len();
-        let total: u64 = self.staged.iter().map(|s| s.size).sum();
-        let files: Vec<J> = self.staged.iter().enumerate().map(|(i, s)| match &s.payload {
-            Payload::Path(p) => json!({ "path": p, "name": s.name, "size": s.size }),
-            Payload::Png(_) => json!({ "picture": i + 1, "name": s.name, "size": s.size }),
-        }).collect();
-        let mut c = Confirm::new(
-            format!("Upload {} into {sb}?", if n == 1 { self.staged[0].name.clone() } else { format!("{n} files") }),
-            core_call("upload", json!({ "sandbox": sb, "files": files, "type_into_prompt": true }), format!("upload into {sb}")),
-        );
-        for s in &self.staged {
-            c = c.line(format!("{} · {}", s.source(), view::size_label(s.size)));
-        }
-        if n > 1 {
-            c = c.line(format!("{} in all", view::size_label(total)));
-        }
-        Ok(c.line(format!("Copied into {sb} under /tmp/sbxw-uploads/, a new folder each time; the daemon cleans the names."))
-            .line(format!("Their paths are then typed into {sb}'s agent prompt, not submitted: say what they are for, then press Return."))
+        let tag = format!("upload-{}", s.id);
+        let (call, dest) = match &s.payload {
+            Payload::Path(p) => (
+                core_call("upload", json!({ "route": format!("{}?name={}", sb_route(&sb, "/upload"), enc(&s.name)), "file": p, "content_type": "application/octet-stream", "tag": tag }), format!("upload {} into {sb}", s.name), &tag),
+                "/tmp/sbxw-uploads/, in a new folder, under its own name (cleaned by the daemon)",
+            ),
+            Payload::Png(b) => (Call::post_bytes(sb_route(&sb, "/paste-image"), "image/png", b.clone(), format!("upload {} into {sb}", s.name)).tag(&tag), "/tmp/sbxw-pastes/, as a new PNG"),
+        };
+        let session = match &thread {
+            Some(t) => format!("{sb}'s thread {t}"),
+            None => format!("{sb}'s agent"),
+        };
+        Ok(Confirm::new(format!("Upload {} into {sb}?", s.name), call)
+            .line(format!("{} · {}", s.source(), view::size_label(s.size)))
+            .line(format!("Copied into {sb} under {dest}."))
+            .line(format!("Its path is then typed into {session}'s prompt, not submitted: say what it is for, then press Return."))
             .labels("Upload", "Cancel")
             .into_action())
     }
@@ -787,7 +800,13 @@ impl State {
         let mine = |k: &str| self.asked_for.get(k) == sb.as_ref() && sb.is_some();
         let d = cx.get(DIR);
         let errors = &cx.get("app")["errors"];
-        let staged: Vec<J> = self.staged.iter().enumerate().map(|(i, s)| json!({ "index": i + 1, "name": s.name, "size": view::size_label(s.size), "from": s.source(), "problem": s.problem() })).collect();
+        let ups = &cx.get("app")["uploads"];
+        let staged: Vec<J> = self.staged.iter().enumerate().map(|(i, s)| {
+            let u = &ups[format!("upload-{}", s.id)];
+            let to = self.target(s).ok().map(|(sb, t)| match t { Some(t) => format!("{sb} · {t}"), None => sb });
+            json!({ "index": i + 1, "name": s.name, "size": view::size_label(s.size), "from": s.source(), "problem": s.problem(), "to": to,
+                "state": u["state"], "progress": match (u["sent"].as_f64(), u["total"].as_f64()) { (Some(a), Some(t)) if t > 0.0 => a / t, _ => 0.0 } })
+        }).collect();
         let sel = self.sel.as_ref().map(|s| json!({
             "id": s.path, "name": s.name, "kind": s.kind, "size": view::size_label(s.size), "type": view::kind_label(&s.name),
             "modified": view::date(s.modified), "path": self.abs_path(cx, s),
@@ -811,6 +830,7 @@ impl State {
             "recent_fresh": recent_fresh, "recent_days": cx.get(RECENT)["days"],
             "selected": sel, "preview": self.preview,
             "staged": staged, "upload_max": view::size_label(view::UPLOAD_MAX),
+            "saved": self.saved.as_ref().map(|(n, p)| json!({ "name": n, "path": p })),
         })
     }
 
@@ -859,7 +879,7 @@ impl State {
         self.map.loading = !md.is_empty();
         let gen = self.map.gen;
         md.iter()
-            .map(|p| Action::Call(Call::get(format!("{}?path={}", sb_route(&sb, "/artifacts/download"), enc(p)), format!("read {p}")).tag(&format!("doc:{gen}:{p}")).quiet()))
+            .map(|p| Action::Call(Call::get(format!("{}?path={}", sb_route(&sb, "/artifacts/download"), enc(p)), format!("read {p}")).raw(view::TEXT_MAX).tag(&format!("doc:{gen}:{p}")).quiet()))
             .collect()
     }
 
@@ -885,13 +905,17 @@ impl State {
         }
     }
 
-    pub fn on_answer(&mut self, cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
+    pub fn on_bytes(&mut self, cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) -> Vec<Action> {
         let mut out = vec![];
         let tag = call.tag.as_str();
+        let body_err = |c: u16, b: &[u8]| {
+            let v: J = serde_json::from_slice(b).unwrap_or_else(|_| json!({ "error": String::from_utf8_lossy(b).trim().to_string() }));
+            why(c, &v)
+        };
         if let Some(seq) = tag.strip_prefix("preview:").and_then(|s| s.parse::<u64>().ok()) {
             match r {
-                Ok((c, body)) if (200..300).contains(&c) => out.extend(self.got_preview(seq, &interim_bytes(&body))),
-                Ok((c, body)) if seq == self.seq => self.preview = json!({ "state": "error", "text": why(c, &body) }),
+                Ok((c, b, _)) if (200..300).contains(&c) => out.extend(self.got_preview(seq, &b)),
+                Ok((c, b, _)) if seq == self.seq => self.preview = json!({ "state": "error", "text": body_err(c, &b) }),
                 Err(e) if seq == self.seq => self.preview = json!({ "state": "error", "text": e }),
                 _ => {}
             }
@@ -899,9 +923,9 @@ impl State {
             let (gen, path) = rest.split_once(':').unwrap_or(("0", rest));
             let gen = gen.parse().unwrap_or(0);
             match r {
-                Ok((c, body)) if (200..300).contains(&c) => self.got_doc(gen, path, &interim_bytes(&body)),
-                Ok((c, body)) if gen == self.map.gen => {
-                    self.map.error = Some(format!("{path}: {}", why(c, &body)));
+                Ok((c, b, _)) if (200..300).contains(&c) => self.got_doc(gen, path, &b[..b.len().min(view::TEXT_MAX as usize)]),
+                Ok((c, b, _)) if gen == self.map.gen => {
+                    self.map.error = Some(format!("{path}: {}", body_err(c, &b)));
                     self.doc_done();
                 }
                 Err(e) if gen == self.map.gen => {
@@ -910,6 +934,70 @@ impl State {
                 }
                 _ => {}
             }
+        }
+        out.push(self.ui_action(cx));
+        out.push(self.map_ui_action(cx));
+        out
+    }
+
+    /// An upload answered: its path typed into the prompt it was meant for.
+    fn uploaded(&mut self, id: u64, r: Result<(u16, J), String>) -> Vec<Action> {
+        let Some(i) = self.staged.iter().position(|s| s.id == id) else { return vec![] };
+        let name = self.staged[i].name.clone();
+        match r {
+            Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
+                let s = self.staged.remove(i);
+                let Some(path) = body["path"].as_str() else { return vec![Action::error(format!("{name}: uploaded, but the daemon gave no path"))] };
+                let Ok((sb, thread)) = self.target(&s) else { return vec![] };
+                let mut at = json!({ "sandbox": sb, "data": format!("{path} ") });
+                if let Some(t) = thread {
+                    at["mode"] = format!("thread:{t}").into();
+                }
+                vec![Action::Call(Call::post("/api/input", at, format!("type {path}")).tag(&format!("input:{path}")).quiet())]
+            }
+            Ok((c, body)) => vec![Action::error(format!("{name} was not uploaded: {}", why(c, &body)))],
+            Err(e) => vec![Action::error(format!("{name} was not uploaded: {e}"))],
+        }
+    }
+
+    fn stage(&mut self, name: String, size: u64, payload: Payload, to: Option<(String, Option<String>)>) {
+        self.staged_seq += 1;
+        self.staged.push(Staged { id: self.staged_seq, name, size, payload, to });
+    }
+
+    /// Files dropped on a terminal pane: waiting for that sandbox's agent,
+    /// and the core's dialog for the first at once.
+    pub fn on_pane_drop(&mut self, cx: &Ctx, d: &PaneDrop) -> Vec<Action> {
+        let before = self.staged.len();
+        let mut notes = vec![];
+        for p in &d.paths {
+            if self.staged.len() >= view::STAGED_MAX {
+                notes.push(format!("{} files at a time at most: the rest were left out", view::STAGED_MAX));
+                break;
+            }
+            match std::fs::metadata(p) {
+                Ok(m) if m.is_file() => {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "upload".into());
+                    self.stage(name, m.len(), Payload::Path(p.clone()), Some((d.sandbox.clone(), d.thread.clone())));
+                }
+                Ok(_) => notes.push(format!("{}: a folder; drop the files in it instead", p.display())),
+                Err(e) => notes.push(format!("{}: {e}", p.display())),
+            }
+        }
+        let mut out: Vec<Action> = notes.into_iter().map(Action::error).collect();
+        if self.staged.len() > before {
+            out.push(Action::Intent { name: "files_open".into(), args: json!({ "sandbox": d.sandbox }) });
+            out.push(Action::Intent { name: "files_upload_send".into(), args: json!({ "index": before + 1 }) });
+        }
+        out.push(self.ui_action(cx));
+        out
+    }
+
+    pub fn on_answer(&mut self, cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
+        let mut out = vec![];
+        let tag = call.tag.as_str();
+        if let Some(id) = tag.strip_prefix("upload-").and_then(|s| s.parse::<u64>().ok()) {
+            out.extend(self.uploaded(id, r));
         } else if tag == "delete" {
             match r {
                 Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
@@ -937,17 +1025,36 @@ impl State {
                 Ok((c, body)) => out.push(Action::error(format!("{sb}: {}", why(c, &body)))),
                 Err(e) => out.push(Action::error(format!("{sb}: {e}"))),
             }
-        } else {
-            // The core's own operations (downloads, uploads): their answer, or why not.
+        } else if let Some(path) = tag.strip_prefix("input:") {
+            // The uploaded file's path typed into the prompt, or why not.
+            let sb = call.body["sandbox"].as_str().unwrap_or("");
+            match r {
+                Ok((c, _)) if (200..300).contains(&c) => out.push(Action::notice(format!("📎 {path} typed into {sb}'s prompt"))),
+                _ => out.push(Action::Notice {
+                    text: format!("Uploaded to {path}; no agent session of {sb} took the path: open it, then paste the path (click to copy)"),
+                    error: true,
+                    then: Some(("copy_text".into(), json!({ "text": path }))),
+                }),
+            }
+        } else if tag == "download" || tag == "open" {
             match r {
                 Ok((c, body)) if (200..300).contains(&c) => {
-                    if let Some(p) = body["saved"].as_str().or(body["path"].as_str()) {
-                        out.push(Action::notice(format!("{}: {p}", call.what)));
+                    if let Some(p) = body["saved"].as_str() {
+                        let name = body["name"].as_str().unwrap_or("the file").to_string();
+                        self.saved = Some((name.clone(), p.to_string()));
+                        out.push(Action::notice(format!("Saved {name}: {p}")));
                     }
-                    if call.tag == "upload" {
-                        self.staged.clear();
+                    if let Some(e) = body["after_error"].as_str() {
+                        out.push(Action::error(format!("{}: {e}", call.what)));
                     }
                 }
+                Ok((499, _)) => {}
+                Ok((c, body)) => out.push(Action::error(format!("{}: {}", call.what, why(c, &body)))),
+                Err(e) => out.push(Action::error(format!("{}: {e}", call.what))),
+            }
+        } else {
+            match r {
+                Ok((c, _)) if (200..300).contains(&c) => {}
                 Ok((c, body)) => out.push(Action::error(format!("{}: {}", call.what, why(c, &body)))),
                 Err(e) => out.push(Action::error(format!("{}: {e}", call.what))),
             }
@@ -1034,7 +1141,7 @@ impl State {
                     match std::fs::metadata(&p) {
                         Ok(m) if m.is_file() => {
                             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "upload".into());
-                            self.staged.push(Staged { name, size: m.len(), payload: Payload::Path(p) });
+                            self.stage(name, m.len(), Payload::Path(p), None);
                         }
                         Ok(_) => notes.push(format!("{}: a folder; drop the files in it instead", p.display())),
                         Err(e) => notes.push(format!("{}: {e}", p.display())),
@@ -1046,7 +1153,8 @@ impl State {
                     notes.push(format!("{} files at a time at most", view::STAGED_MAX));
                 } else {
                     self.paste_seq += 1;
-                    self.staged.push(Staged { name: format!("pasted-{}.png", self.paste_seq), size: bytes.len() as u64, payload: Payload::Png(bytes) });
+                    let n = bytes.len() as u64;
+                    self.stage(format!("pasted-{}.png", self.paste_seq), n, Payload::Png(bytes), None);
                 }
             }
         }

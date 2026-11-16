@@ -54,7 +54,7 @@
           "modified": 1794198200,
           "name": "wireframe.png",
           "path": "wireframe.png",
-          "size": 48213
+          "size": 632
         },
         {
           "modified": 1794192800,
@@ -405,6 +405,7 @@
       ],
       "run": null,
       "sandbox": "web-app",
+      "saved": null,
       "selected": {
         "can_delete": true,
         "id": "/Users/me/web/install.sh",
