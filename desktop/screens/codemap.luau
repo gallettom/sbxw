@@ -64,7 +64,7 @@ local function side(ui, d)
   kids[#kids + 1] = spacer{ h = 4 }
   kids[#kids + 1] = head("Outline")
   for i, o in ipairs(d.outline or {}) do
-    kids[#kids + 1] = row{ w = "full", px = 4 + 10 * ((o.level or 1) - 1), py = 2, radius = "xs", key = "codemap-outline-" .. i,
+    kids[#kids + 1] = row{ w = "full", px = 4 + 10 * ((o.level or 1) - 1), py = 2, radius = "xs", key = "codemap-outline-" .. o.id,
       on = "doc", arg = { doc = d.key, anchor = o.id }, text{ o.title, size = "sm", truncate = true } }
   end
   if #(d.code or {}) > 0 then
@@ -95,7 +95,7 @@ end
 local function results(m)
   local list = { gap = 1 }
   for i, d in ipairs(m.docs or {}) do
-    list[#list + 1] = row{ gap = 6, w = "full", px = 6, py = 4, radius = "xs", key = "codemap-hit-" .. i, on = "doc", arg = { doc = d.key },
+    list[#list + 1] = row{ gap = 6, w = "full", px = 6, py = 4, radius = "xs", key = "codemap-hit-" .. d.key, on = "doc", arg = { doc = d.key },
       text{ d.title, size = "sm", truncate = true, grow = 1 }, text{ d.key, size = "xs", color = "text-dim" } }
   end
   if #(m.docs or {}) == 0 then list[#list + 1] = note("No file of the map holds those words.") end

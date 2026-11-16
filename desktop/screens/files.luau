@@ -110,7 +110,7 @@ local function rowview(ui, r, i)
   local meta = {}
   if nz(r.dir) then meta[#meta + 1] = r.dir end
   if nz(r.when) then meta[#meta + 1] = r.when end
-  local kids = { gap = 6, w = "full", px = 6, py = 5, radius = "xs", key = "files-row-" .. i, on = "select", arg = r.id,
+  local kids = { gap = 6, w = "full", px = 6, py = 5, radius = "xs", key = "files-row-" .. r.id, on = "select", arg = r.id,
     fill = r.selected and "active-bg" or nil,
     icon{ r.icon or "file", size = 12, color = r.kind == "dir" and "blue" or "text-muted" },
     column{ gap = 1, grow = 1,
@@ -121,7 +121,7 @@ local function rowview(ui, r, i)
     nz(r.size) and text{ r.size, size = "xs", color = "text-muted" } or false,
   }
   if ui.tab == "recent" then
-    kids[#kids + 1] = button{ icon = "folder", key = "files-show-" .. i, on = "show", arg = r.id, variant = "ghost", help = "Show in folder" }
+    kids[#kids + 1] = button{ icon = "folder", key = "files-show-" .. r.id, on = "show", arg = r.id, variant = "ghost", help = "Show in folder" }
   end
   return row(kids)
 end

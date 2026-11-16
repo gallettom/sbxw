@@ -1034,6 +1034,15 @@ lens, Diagram.
 opens the panel); on a sandbox's row, `extra-sandbox-<name>-codemap` ("map…",
 amber) while its map or a lens is being written.
 
+**Keys** (scripts press them): rows `files-row-<id>` (`id`: an artifact's
+path under `.sbxw-artifacts`, else the file's absolute path), Recent's
+`files-show-<id>`, tabs `files-tab-<tab>`, actions `files-download`,
+`files-reveal`, `files-open-with`, `files-save-as`, `files-copy-path`,
+`files-delete`, uploads `files-drop` (the drop target), `files-upload-send-<n>`
+and `files-unstage-<n>` (by position); the map's `codemap-docs` (picker,
+items by file key), `codemap-outline-<section id>`, `codemap-hit-<file key>`,
+`codemap-diagram`.
+
 **Data** (each a route's whole answer, read for the sandbox the panel shows;
 a failed read is in `data.app.errors[key]`, a string):
 

@@ -27,7 +27,7 @@ printf 'name,qty\nmug,2\n' >"$shots/drop/order list.csv"
 long="$shots/drop/$(printf 'a-very-long-folder-name-for-the-dialog-test/%.0s' 1 2 3 4)"
 mkdir -p "$long"; printf 'x' >"$long/client-brief-signed-final.pdf"
 export RUNE_DIRS_ROOT="$shots/root"
-LONGFILE="$long/client-brief-signed-final.pdf" SHOTS="$shots" python3 - >"$script" <<'PY'
+LONGREMOTE="/tmp/$(printf 'deeply-nested-folder-of-agent-output/%.0s' 1 2 3 4 5 6 7)quarterly-report-final-v2.md" LONGFILE="$long/client-brief-signed-final.pdf" SHOTS="$shots" python3 - >"$script" <<'PY'
 import json, os
 SHOTS = os.environ["SHOTS"]
 ev = []; t = 0.6
@@ -39,13 +39,13 @@ def mark(n, hold=0):
     add(type="mark", name=n)
 add(type="tap", key="row-web-app"); mark("_pane", 800)
 add(type="tap", key="pane-1-x-project"); mark("artifacts", 600)
-add(type="tap", key="files-row-1"); mark("preview-markdown", 500)
-add(type="tap", key="files-row-2"); mark("preview-picture", 500)
+add(type="tap", key="files-row-report.md"); mark("preview-markdown", 800)
+add(type="tap", key="files-row-wireframe.png"); mark("preview-picture", 800)
 add(type="tap", key="files-open-with"); mark("open-dialog", 1200)
 add(type="tap", key="cf-cancel"); mark("_closed", 200)
-add(type="tap", key="files-tab-files"); mark("_files", 500)
-add(type="tap", key="files-up"); mark("browse", 700)
-add(type="tap", key="files-row-2"); mark("_script", 500)
+add(type="tap", key="files-tab-files"); mark("_files", 1000)
+add(type="tap", key="files-up"); mark("browse", 1200)
+add(type="tap", key="files-row-/Users/me/web/install.sh"); mark("_script", 800)
 add(type="tap", key="files-open-with"); mark("open-refused", 1200)
 add(type="tap", key="cf-cancel"); mark("_closed2", 200)
 add(type="tap", key="files-tab-recent"); mark("recent", 500)
@@ -59,7 +59,7 @@ add(type="tap", key="cf-cancel"); mark("_closed3", 200)
 add(type="tap", key="files-codemap"); mark("codemap", 1200)
 add(type="tap", key="codemap-docs"); mark("_menu", 200)
 add(type="tap", key="codemap-docs-net"); mark("codemap-net", 400)
-add(type="tap", key="codemap-outline-2"); mark("codemap-section", 400)
+add(type="tap", key="codemap-outline-net-proxy"); mark("codemap-section", 600)
 add(type="tap", key="codemap-diagram"); mark("diagram-dialog", 1200)
 mark("end", 300)
 # LONG=1: the dialogs with long paths, at the smallest window.
@@ -68,7 +68,7 @@ if os.environ.get("LONG"):
     add(type="tap", key="row-web-app"); mark("_pane", 800)
     add(type="tap", key="pane-1-x-project"); mark("_panel", 600)
     add(type="tap", key="files-tab-recent"); mark("_recent", 500)
-    add(type="tap", key="files-row-1"); mark("_sel", 500)
+    add(type="tap", key="files-row-" + os.environ["LONGREMOTE"]); mark("_sel", 800)
     add(type="tap", key="files-open-with"); mark("long-open", 1200)
     add(type="tap", key="cf-cancel"); mark("_c", 200)
     add(drop_files={"paths": [os.environ["LONGFILE"]], "key": "files-drop", "hover": 0.2}); t += 0.3
