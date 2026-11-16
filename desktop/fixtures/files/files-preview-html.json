@@ -164,6 +164,11 @@
       "days": 7,
       "files": [
         {
+          "modified": 1794199940,
+          "path": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md",
+          "size": 37
+        },
+        {
           "modified": 1794199880,
           "path": "/Users/me/web/.sbxw-artifacts/report.md",
           "size": 215

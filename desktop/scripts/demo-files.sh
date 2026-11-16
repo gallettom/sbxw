@@ -16,15 +16,18 @@
 # Downloads go to $shots/root (RUNE_DIRS_ROOT), never to your Downloads.
 # The stand-in's state changes during a run, so each picture is its own run
 # against a fresh stand-in, up to that mark. Out:
-# shots/files/window-<mark>.png, the element tree and the app log beside each.
+# $SBXW_SHOTS/files/window-<mark>.png, the element tree and the app log beside each.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/files"; mkdir -p "$shots/drop"
+shots="$shots_root/files"; mkdir -p "$shots/drop"
 script="$shots/window-script.json"
 printf '# Brief\n\nThe checkout copy, as agreed on Friday.\n' >"$shots/drop/brief.md"
 printf 'name,qty\nmug,2\n' >"$shots/drop/order list.csv"
+# A long local path, for the dialogs at the smallest window (LONG=1).
+long="$shots/drop/$(printf 'a-very-long-folder-name-for-the-dialog-test/%.0s' 1 2 3 4)"
+mkdir -p "$long"; printf 'x' >"$long/client-brief-signed-final.pdf"
 export RUNE_DIRS_ROOT="$shots/root"
-SHOTS="$shots" python3 - >"$script" <<'PY'
+LONGFILE="$long/client-brief-signed-final.pdf" SHOTS="$shots" python3 - >"$script" <<'PY'
 import json, os
 SHOTS = os.environ["SHOTS"]
 ev = []; t = 0.6
@@ -59,6 +62,19 @@ add(type="tap", key="codemap-docs-net"); mark("codemap-net", 400)
 add(type="tap", key="codemap-outline-2"); mark("codemap-section", 400)
 add(type="tap", key="codemap-diagram"); mark("diagram-dialog", 1200)
 mark("end", 300)
+# LONG=1: the dialogs with long paths, at the smallest window.
+if os.environ.get("LONG"):
+    ev.clear(); t = 0.6
+    add(type="tap", key="row-web-app"); mark("_pane", 800)
+    add(type="tap", key="pane-1-x-project"); mark("_panel", 600)
+    add(type="tap", key="files-tab-recent"); mark("_recent", 500)
+    add(type="tap", key="files-row-1"); mark("_sel", 500)
+    add(type="tap", key="files-open-with"); mark("long-open", 1200)
+    add(type="tap", key="cf-cancel"); mark("_c", 200)
+    add(drop_files={"paths": [os.environ["LONGFILE"]], "key": "files-drop", "hover": 0.2}); t += 0.3
+    mark("_staged", 400)
+    add(type="tap", key="files-upload-send-1"); mark("long-upload", 500)
+    mark("end", 300)
 print(json.dumps({"events": ev}, indent=1))
 PY
 marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-confirm codemap codemap-net codemap-section diagram-dialog})

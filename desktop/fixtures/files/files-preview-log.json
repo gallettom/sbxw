@@ -171,6 +171,11 @@
       "days": 7,
       "files": [
         {
+          "modified": 1794199940,
+          "path": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md",
+          "size": 37
+        },
+        {
           "modified": 1794199880,
           "path": "/Users/me/web/.sbxw-artifacts/report.md",
           "size": 215
@@ -285,6 +290,19 @@
       "recent_days": 7,
       "recent_fresh": 0,
       "rows": [
+        {
+          "can_delete": true,
+          "dir": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md",
+          "kind": "file",
+          "name": "quarterly-report-final-v2.md",
+          "selected": false,
+          "size": "37 B",
+          "when": "7 d ago"
+        },
         {
           "can_delete": true,
           "dir": "workspace/.sbxw-artifacts",

@@ -44,17 +44,17 @@ local function tabs(ui)
 end
 
 local function uploads(ui)
-  local kids = { gap = 6, w = "full", pad = 8, radius = "sm", border = "border", fill = "surface-alt", key = "files-drop" }
+  local kids = { gap = 6, w = "full", px = 8, py = 5, radius = "sm", border = "border", fill = "surface-alt", key = "files-drop" }
+  local staged = ui.staged or {}
   kids[#kids + 1] = row{ gap = 6, w = "full",
     icon{ "plus", size = 12, color = "text-muted" },
-    text{ "Upload into " .. (ui.sandbox or "?"), size = "sm", weight = "medium" },
-    spacer{},
+    text{ #staged == 0 and "Upload: drop files here or on a terminal" or ("Upload into " .. (ui.sandbox or "?")), size = "sm", truncate = true, grow = 1,
+      help = "Or paste a picture. Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt, not submitted." },
     button{ "Choose…", key = "files-upload-pick", on = "pick", variant = "ghost", help = "The system's file dialog" },
-    button{ "Paste picture", key = "files-upload-paste", on = "paste", variant = "ghost", help = "The picture on the clipboard" },
+    button{ "Paste", key = "files-upload-paste", on = "paste", variant = "ghost", help = "The picture on the clipboard" },
   }
-  local staged = ui.staged or {}
   if #staged == 0 then
-    kids[#kids + 1] = note("Drop files on this panel or on a terminal, or paste a picture. Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt, not submitted.")
+    -- nothing more: the line above says it
   else
     for _, s in ipairs(staged) do
       local sending = s.state == "sending"
