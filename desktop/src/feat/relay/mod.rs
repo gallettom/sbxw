@@ -928,6 +928,8 @@ impl State {
             "shots": shots,
             "max_shots": shots::MAX_SHOTS,
             "picks": picks,
+            // Rounds found in a followed session: shown with the daemon's requests.
+            "local": LOCAL().lock().unwrap().clone(),
             "sending": self.answering,
             "follow": follow::FOLLOW().lock().unwrap().to_json(),
             "voice": VOICE().lock().unwrap().as_ref().map(|(id, at)| json!({ "id": id, "index": at })),

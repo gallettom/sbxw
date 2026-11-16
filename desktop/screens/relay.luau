@@ -118,8 +118,8 @@ local function round_form(r, ui, editable)
     end
     if editable then
       qk[#qk + 1] = row{ gap = 6, w = "full",
-        column{ grow = 1, input{ id = "relay-ans-" .. r.id .. "-" .. i, value = answers[i] or "", placeholder = "Your answer, or empty to skip",
-          on = "set", arg = { id = r.id, field = "answer", index = i } } },
+        column{ grow = 1, textarea{ id = "relay-ans-" .. r.id .. "-" .. i, value = answers[i] or "", placeholder = "Your answer, or empty to skip", rows = 2,
+          on = "set", on_submit = "send_ask", arg = { id = r.id, field = "answer", index = i } } },
         nz(q.rec) and button{ "Use it", variant = "ghost", on = "use_rec", arg = { id = r.id, index = i }, key = "relay-rec-" .. r.id .. "-" .. i,
           disabled = (answers[i] or "") == q.rec, help = "Fill the answer with the recommendation" } or false,
       }
@@ -141,29 +141,35 @@ local function shots_block(r, ui)
   local room = (ui.max_shots or 6) - #held
   local kids = { gap = 6, w = "full" }
   if #held > 0 then
-    local items = {}
+    -- What is sent, in the order the agent receives it: each preview, numbered.
+    local grid, n = { gap = 8, w = "full", align = "start" }, 0
     for _, s in ipairs(held) do
-      items[#items + 1] = row{ gap = 6, w = "full",
-        icon{ "file", size = 12, color = "text-muted" },
-        text{ s.n .. ". " .. s.label, size = "sm", color = "text", truncate = true, grow = 1 },
-        button{ icon = "close", variant = "ghost", on = "shot_rm", arg = { id = r.id, index = s.n }, key = "relay-shot-rm-" .. r.id .. "-" .. s.n, help = "Remove this one" },
+      grid[#grid + 1] = column{ gap = 2, w = 116, key = "relay-shot-" .. r.id .. "-" .. s.n,
+        image{ key = s.image, max_w = 116, max_h = 80 },
+        row{ gap = 4, w = "full",
+          text{ s.n .. ". " .. s.w .. "×" .. s.h, size = "xs", color = "text-muted", truncate = true, grow = 1, help = s.label },
+          button{ icon = "close", variant = "ghost", on = "shot_rm", arg = { id = r.id, index = s.n }, key = "relay-shot-rm-" .. r.id .. "-" .. s.n, help = "Remove this one" },
+        },
       }
+      n = n + 1
+      if n % 3 == 0 then kids[#kids + 1] = row(grid); grid = { gap = 8, w = "full", align = "start" } end
     end
-    kids[#kids + 1] = list(items)
+    if n % 3 ~= 0 then kids[#kids + 1] = row(grid) end
   end
-  kids[#kids + 1] = column{ w = "full", pad = 12, radius = "sm", border = "border", fill = "surface-alt", align = "center", key = "relay-drop-" .. r.id,
-    text{ #held == 0 and "Drop images here" or ("Add another: drop, paste or choose" .. (#held > 1 and (" · " .. #held .. " attached") or "")), size = "sm", color = "text-muted" } }
+  if room > 0 then
+    kids[#kids + 1] = column{ w = "full", pad = #held == 0 and 14 or 8, radius = "sm", border = "border", fill = "surface-alt", align = "center", key = "relay-drop-" .. r.id,
+      text{ #held == 0 and "Drop images here, or paste one" or ("Add another: drop or paste" .. (#held > 1 and (" · " .. #held .. " attached") or "")), size = "sm", color = "text-muted" } }
+  else
+    kids[#kids + 1] = note("That is " .. (ui.max_shots or 6) .. " images, the most one reply carries. Remove one to swap it for another.")
+  end
   local acts = { gap = 6, w = "full" }
   if room > 0 then
     acts[#acts + 1] = button{ "Paste from clipboard", icon = "copy", on = "shot_paste", arg = r.id, key = "relay-shot-paste-" .. r.id }
-    acts[#acts + 1] = button{ "Choose a file…", icon = "folder", on = "shot_choose", arg = r.id, key = "relay-shot-choose-" .. r.id }
-  else
-    kids[#kids + 1] = note("That is " .. (ui.max_shots or 6) .. " images, the most one reply carries. Remove one to swap it for another.")
   end
   if #held > 0 then
     acts[#acts + 1] = button{ "Remove all", variant = "ghost", on = "shot_rm", arg = { id = r.id }, key = "relay-shot-clear-" .. r.id }
   end
-  kids[#kids + 1] = row(acts)
+  if #acts > 2 then kids[#kids + 1] = row(acts) end
   return column(kids), #held
 end
 
@@ -246,7 +252,7 @@ local function detail(data, ui, r)
     add(block)
     add(text{ "OR DESCRIBE IT INSTEAD", size = "xxs", weight = "semibold", color = "text-muted" })
     local cap = (ui.caption or {})[r.id] or ""
-    add(input{ id = "relay-caption-" .. r.id, value = cap, placeholder = "Words work too: say what it looks like", on = "set", arg = { id = r.id, field = "caption" } })
+    add(textarea{ id = "relay-caption-" .. r.id, value = cap, rows = 2, placeholder = "Words work too: say what it looks like", on = "set", arg = { id = r.id, field = "caption" } })
     add(foot(r, "Send to " .. r.from .. "…", n > 0 or nz(string.match(cap, "%S"))))
     return column(kids)
   end
@@ -258,7 +264,7 @@ local function detail(data, ui, r)
     add(targets(data, r, "Ask one of these sandboxes"))
     add(text{ "OR ANSWER IT YOURSELF", size = "xxs", weight = "semibold", color = "text-muted" })
     local own = (ui.own or {})[r.id] or ""
-    add(input{ id = "relay-own-" .. r.id, value = own, placeholder = "Your answer goes straight to " .. r.from, on = "set", arg = { id = r.id, field = "own" } })
+    add(textarea{ id = "relay-own-" .. r.id, value = own, rows = 3, placeholder = "Your answer goes to " .. r.from .. " once you confirm it", on = "set", arg = { id = r.id, field = "own" } })
     add(foot(r, "Send my answer…", nz(string.match(own, "%S"))))
   elseif r.state == "routed" then
     add(row{ gap = 6, w = "full", icon{ "reload", color = "blue", size = 12 },
@@ -267,9 +273,8 @@ local function detail(data, ui, r)
     add(foot(r, nil, false))
   else
     add(text{ (r.to or "?") .. " answered. Edit it freely: this is what " .. r.from .. " will receive.", size = "sm", color = "text-muted", wrap = true })
-    add(markdown{ r.answer or "", size = "sm" })
     local review = (ui.review or {})[r.id] or ""
-    add(input{ id = "relay-review-" .. r.id, value = review, on = "set", arg = { id = r.id, field = "review" } })
+    add(textarea{ id = "relay-review-" .. r.id, value = review, rows = 8, on = "set", arg = { id = r.id, field = "review" } })
     add(foot(r, "Send to " .. r.from .. "…", nz(string.match(review, "%S"))))
   end
   return column(kids)
@@ -309,7 +314,9 @@ end
 return {
   render = function(_, data)
     local ui = data.relay_ui or {}
-    local reqs = (data.relay and data.relay.requests) or {}
+    local reqs = {}
+    for _, r in ipairs((data.relay and data.relay.requests) or {}) do reqs[#reqs + 1] = r end
+    for _, r in ipairs(ui["local"] or {}) do reqs[#reqs + 1] = r end
     local closed = {}
     for _, id in ipairs(ui.closed or {}) do closed[id] = true end
     local waiting, out = {}, {}
@@ -399,6 +406,7 @@ return {
     deny = function(_, id) return intent("relay_deny", { id = id }) end,
     route = function(_, a) return intent("relay_route", { id = a.id, to = a.to }) end,
     send = function(_, id) return intent("relay_send", { id = id }) end,
+    send_ask = function(_, a) return intent("relay_send", { id = a.id }) end,
     clear = function(_, id) return intent("relay_clear", { id = id }) end,
     use_rec = function(_, a) return intent("relay_use_rec", { id = a.id, index = a.index }) end,
     set = function(_, a, text)
