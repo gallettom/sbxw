@@ -188,7 +188,7 @@ pub const REGISTRY: &[Spec] = &[
         args: &[("sandbox", Arg::Str, true), ("thread", Arg::Str, false)],
         doc: "Empties the panes showing that sandbox's session (`thread`: that thread's; none: the sandbox's own), its terminals closed.",
     },
-    Spec { name: "copy_text", risk: Risk::Direct, args: &[("text", Arg::Str, true)], doc: "Copies the text (up to 100 KB) to the clipboard; a notice says so." },
+    Spec { name: "copy_text", risk: Risk::Direct, args: &[("text", Arg::Str, true)], doc: "Writes the text (up to 100 KB) to the person's clipboard, replacing what it held; only from the person's own press (never from typing, data or a feature), and a notice shows the size and the first characters, controls made visible. Screens can never read the clipboard." },
     Spec { name: "select", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Marks a sandbox as selected (no `sandbox`: none)." },
     Spec {
         name: "set_layout",

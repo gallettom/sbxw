@@ -1044,7 +1044,13 @@ impl App {
             }
             Intent::Select { sandbox } => self.selected = sandbox,
             Intent::CopyText { text } => {
-                if text.len() > 100 * 1024 {
+                // Only the person's own press copies: not a feature's chain of
+                // actions (`feature:<name>`: data, events, answers), not an
+                // input's per-keystroke action.
+                let typing = self.screens.iter().any(|s| s.name == from && s.ui.editing);
+                if from.starts_with("feature:") || typing {
+                    self.notify(format!("{from}: a copy runs only from your own press: refused"), true);
+                } else if text.len() > 100 * 1024 {
                     self.notify(format!("{from}: more than 100 KB to copy, refused"), true);
                 } else {
                     self.feats.asks.push(("copy", features::Ask::Copy(text)));
@@ -1608,6 +1614,32 @@ end, actions = {} }"#).unwrap();
         // `local`, and what it uses is what is kept.
         assert_eq!(a.store.get("features")["create"]["host"], "local");
         assert_eq!(a.screen_data()["app"]["kept"]["create"]["host"], "local");
+    }
+
+    /// `copy_text` writes the clipboard only from the person's press, and says what it copied.
+    #[test]
+    fn copy_text_runs_only_from_a_press_and_shows_what_it_copied() {
+        let mut a = app();
+        let copy = |t: &str| Intent::CopyText { text: t.into() };
+        // A feature's chain (data, events, answers): refused.
+        a.run_intent("feature:relay", copy("rm -rf ~"));
+        assert!(a.feats.asks.is_empty());
+        assert!(a.notice.as_ref().unwrap().0.contains("only from your own press"));
+        // An input's per-keystroke action: refused.
+        a.screens.iter_mut().find(|s| s.name == "sandboxes").unwrap().ui.editing = true;
+        a.run_intent("sandboxes", copy("x"));
+        assert!(a.feats.asks.is_empty());
+        a.screens.iter_mut().find(|s| s.name == "sandboxes").unwrap().ui.editing = false;
+        // A press: copied at the next poll, the notice shows it, controls visible.
+        a.run_intent("sandboxes", copy("echo hi\n\u{1b}[31m"));
+        let mut tx = Tx::default();
+        a.run_asks(&mut tx);
+        assert_eq!(a.notice.as_ref().unwrap().0, "Copied 13 B to the clipboard: echo hi↵␛[31m");
+        // Over 100 KB: refused.
+        a.run_intent("sandboxes", copy(&"x".repeat(100 * 1024 + 1)));
+        assert!(a.feats.asks.is_empty());
+        // No intent reads the clipboard.
+        assert!(crate::intent::all().all(|s| !s.name.contains("paste") && !s.name.contains("read_clip")));
     }
 
     #[test]

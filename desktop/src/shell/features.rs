@@ -263,9 +263,11 @@ impl App {
                     });
                 }
                 Ask::Copy(text) => {
-                    let n = text.len();
+                    // What was copied is what the notice shows: its size and
+                    // its first characters, controls made visible (as OSC 52's).
+                    let line = format!("Copied {} to the clipboard: {}", approval::size_label(text.len()), approval::osc_preview(&text));
                     tx.copy(text);
-                    self.notify(format!("Copied {}", if n < 1024 { format!("{n} B") } else { format!("{:.1} KB", n as f64 / 1024.0) }), false);
+                    self.notify(line, false);
                 }
                 Ask::ReadClipboard => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| match c.image() {
                     Some(img) => s.feature_incoming(name, feat::Incoming::Png(img.png().to_vec())),

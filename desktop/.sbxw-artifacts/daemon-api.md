@@ -52,7 +52,7 @@ and its row here.
 | `GET /api/sandboxes` | `sandboxes()` | array of `SandboxItem`; unknown fields kept |
 | `POST /api/sandboxes/:name/stop` | `stop_sandbox()` | |
 | `GET /api/stream` | `subscribe()` | SSE; every event passed on as `LinkEvent::Bus` (wave 1 uses them only to refresh the list) |
-| `GET /ws?sandbox=&mode=&thread=` | `open_terminal()` | binary PTY frames, JSON `resize`, text error lines, `{"type":"attention"}`; `mode` absent is the agent (starts a stopped sandbox) |
+| `GET /ws?sandbox=&mode=&thread=` | `open_terminal()` | binary PTY frames, JSON `resize`, text error lines, `{"type":"attention"}`; `mode` absent is the agent (starts a stopped sandbox). A thread's agent is `mode=thread&thread=<t>` (`SessionKind::from_query`, `crates/core/src/session.rs`: without `mode=thread` the daemon opens the MAIN agent); its first open also sends `repo=` (may be empty: the workspace), `model=`, `checkout=1`, never sent again on a reconnect (phase 4). Its shell is `mode=bash&thread=<t>` |
 
 ### Covered in phase 2 (Jarvis, thread desktop-jarvis)
 
@@ -95,6 +95,27 @@ sandbox list again, as a stop does.
 | Setup (`feat/setup/`, SETUP.md) | `GET /api/secrets`, `POST /api/secrets/custom`, `/rm`, `GET /api/github-token`, `POST /api/github-token`, `/rm`, `/gh`, `GET`/`POST /api/kits`, `GET /api/my-skills`, `POST /api/my-skills/rm`, `GET /api/sandboxes/:name/skills`, `POST .../skills/keep`, `GET`/`POST /api/mcp`, `GET /api/mcp/:server`, `POST /api/mcp/:server/rm`, `/auth`, `POST /api/sandboxes/:name/mcp/load`, `/unload`, `GET /api/remote-hosts`, `POST /api/remote-hosts/key`, `/add`, `/reload`, `POST /api/remote-hosts/:host/edit`, `/rm`, `/test`, `GET /api/voice`, `POST /api/voice/install`, `/rm`, `/warm`, `/cancel`; bus event `voice` | secrets and tokens (core-drawn secure fields), kits that reach out, a stdio MCP server (acknowledged command), a new remote host (fingerprints read by the core) |
 | Core slots | none (open/close modal and panels, extras) | |
 
+### Covered in phase 4 (threads, relay, integrator)
+
+| Area (feature, report) | Routes | Risk Approval (core dialog) |
+|---|---|---|
+| Threads and plans (`feat/threads/`, its report) | `GET /api/sessions` (data key `sessions`, after `session`; also read by relay and once by Jarvis at connection), `GET /api/sandboxes/:name/threads`, `/repos`, `/worktrees`, `/board`, `GET .../threads/:thread`, `POST .../threads/:thread/close`, `POST /api/sandboxes/:name/lead`, `/lead/end`, `GET /api/leads`, `GET /api/plans`, `POST /api/plans/:id/approve`, `/refuse`, `/merge`, `GET /api/models`, `POST /api/input`, `GET`/`POST /api/sandboxes/:name/remote-control`, `.../remote-control/login`; `/ws` with `mode=thread` | see its report (approving and merging a plan) |
+| Relay (`feat/relay/`, its report) | `GET /api/relay` (after `relay`), `POST /api/relay/:id/route`, `/deny`, `/approve`, `POST /api/answer`, `POST /api/chat/push` to another sandbox, `POST /api/voice/anonymise` | routing and releasing a request (see its report) |
+| Templates (`feat/templates.rs`) | `GET /api/templates` (`{ok, templates: [{tag, size, created, configured, auto}], configured}`), `POST /api/templates/save` (`{sandbox, tag}`, up to 30 min), `POST /api/templates/rm` (`{tag}`), `GET /api/disk-usage[?verbose=true]` (`{ok, text}`: `sbx df` as printed; an older sbx: "unknown command") | removing a template |
+| Env file (`feat/envfile.rs`) | `POST /api/sandboxes/:name/envfile` (`{dir, save, force}` → `{ok, yaml, dest, dir, written}`; 409 when the file exists and `force` is false) | none (as the web UI) |
+| Core | none: `copy_text`, `close_panes`, global shortcuts, the app's state file (`~/.sbxw/desktop/state.json`), stale override detection, `screen_restore` (deletes `~/.sbxw/desktop/screens/<name>.luau`, a core operation behind the dialog) | restoring a built-in screen |
+
+A per-sandbox data key's failed read is `data.app.errors[key][sandbox]` (the
+daemon's words), the sandbox keeping its last good value; a plain key's is a
+string (phase 4).
+
+`GET /api/approvals` is `sbx policy approval ls --format json` unfiltered:
+the whole machine's requests, those of sandboxes sbxw does not list too
+(removed ones, `sbxw-jarvis`). The app counts and shows only those of listed
+sandboxes, as the web UI does (`svc/sandboxes.rs`, `pending_for`); a
+`network` request is a connection already refused (quiet), a `port` one a kit
+waiting (amber).
+
 ### Not covered yet
 
 Grouped by the area that will need them, with the web UI file that calls
@@ -103,12 +124,10 @@ each group, so a later thread can read what it expects.
 | Area (web UI file) | Routes |
 |---|---|
 | Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `POST /api/input`, `POST /api/answer`, `GET /api/hook/log`, `GET /api/models`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events`, `POST /api/sandboxes/:name/up` |
-| Threads and lead (`sidepanel.js`, `pane-controls.js`, `plans.js`, `board.js`) | `GET /api/sandboxes/:name/threads`, `/repos`, `/worktrees`, `GET /api/sandboxes/:name/threads/:thread`, `POST .../threads/:thread/close`, `POST /api/sandboxes/:name/lead`, `POST .../lead/end`, `GET /api/leads`, `GET /api/plans`, `POST /api/plans/:id/approve`, `/refuse`, `/merge`, `GET /api/sandboxes/:name/board` |
-| Relay (`relay.js`) | `GET /api/relay`, `POST /api/relay/:id/route`, `POST /api/relay/:id/deny`, `GET /api/relay/events` |
+| Relay events (`relay.js`) | `GET /api/relay/events` (the app reads `GET /api/relay` after the bus event `relay` instead) |
 | Files, artifacts, uploads (`files.js`, `upload.js`) | `GET /api/sandboxes/:name/artifacts`, `.../artifacts/download`, `GET /api/sandboxes/:name/fs`, `.../fs/file`, `.../fs/recent`, `POST .../fs/delete`, `POST /api/sandboxes/:name/paste-image`, `POST .../upload` |
 | Code map (`codemap.js`) | `POST /api/sandboxes/:name/codemap`, `POST .../codemap/lens`, `GET /api/codemap` |
-| Templates, env file, SSH (`templates.js`, `envfile.js`, `ssh.js`) | `GET /api/templates`, `POST /api/templates/save`, `/rm`, `GET /api/disk-usage`, `GET`/`POST /api/sandboxes/:name/envfile` |
-| Remote Control (`pane-controls.js`) | `GET`/`POST /api/sandboxes/:name/remote-control`, `POST .../remote-control/login` |
+| SSH card (`ssh.js`) | its routes |
 | Header leftovers (`main.js`) | `POST /api/initial`, `POST /api/shutdown` |
 | Browser side panel (`browser.js`) | `GET /ws/browser`, `POST /api/sandboxes/:name/browser/allow`, `GET .../browser/grants`, `POST .../browser/settle`, `GET /api/browser/active`, `GET /api/embed/resolve`, `GET`/`POST /api/embed/pairings`, `POST /api/embed/pairings/rm` |
 | Virtual Mac (`mac.js`) | `GET /api/mac`, `POST /api/mac/install`, `/up`, `/stop`, `/force-off`, `/pause`, `/show`, `/take-back` |
