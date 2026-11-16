@@ -113,6 +113,12 @@ pub const INTENTS: &[Spec] = &[
         args: &[("index", Arg::Int(1, 10), false)],
         doc: "Copies waiting file `index` (default the first) into its sandbox (the panel's, or the pane's it was dropped on), then types its path into that agent's prompt, not submitted; the core's dialog shows the local path and size first. 128 MB at most.",
     },
+    Spec {
+        name: "files_upload_dropped",
+        risk: Risk::Approval("Upload a file into a sandbox"),
+        args: &[],
+        doc: "The next file dropped on a terminal pane: the core's dialog shows its local path, size, the sandbox and session, then it is copied in and its path typed into that prompt, not submitted. Several dropped together are asked one after the other; Cancel drops the rest.",
+    },
     Spec { name: "codemap_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("map", Arg::Str, false)], doc: "Opens the Code map panel on that sandbox's map (or `map`: a lens's folder, as listed in `codemap_ui.maps`)." },
     Spec { name: "codemap_doc", risk: Risk::Direct, args: &[("doc", Arg::Str, true), ("anchor", Arg::Str, false)], doc: "Shows a map file, or one of its sections (`anchor`: a section id)." },
     Spec { name: "codemap_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "A link pressed in a map file: a `[[wiki link]]` is followed in the panel, any other opens in the browser." },
@@ -219,6 +225,10 @@ pub struct State {
     staged: Vec<Staged>,
     paste_seq: u64,
     staged_seq: u64,
+    /// Files dropped on a terminal pane, asked one after the other (never
+    /// shown as waiting: a Cancel leaves nothing behind once the next drop
+    /// replaces them, and nothing goes without its dialog).
+    dropped: Vec<Staged>,
     /// The last file the panel saved (Show in folder).
     saved: Option<(String, String)>,
     /// The sandbox each daemon answer was asked for.
@@ -310,7 +320,7 @@ impl State {
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
                 if self.sandbox.as_deref() != Some(&sb) {
                     let staged = std::mem::take(&mut self.staged);
-                    *self = State { map: std::mem::take(&mut self.map), staged, paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, saved: self.saved.take(), ..State::default() };
+                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, saved: self.saved.take(), ..State::default() };
                     self.sandbox = Some(sb.clone());
                     self.first = true;
                     for k in [ARTIFACTS, DIR, RECENT] {
@@ -443,7 +453,15 @@ impl State {
                 Some(i) => return Err(format!("there is no file {i} waiting")),
                 None => self.staged.clear(),
             },
-            "files_upload_send" => return Ok(vec![self.upload(cx, a.i("index").unwrap_or(1) as usize)?]),
+            "files_upload_send" => {
+                let s = self.staged.get((a.i("index").unwrap_or(1) as usize).wrapping_sub(1)).ok_or_else(|| if self.staged.is_empty() { "nothing to upload: drop a file on the panel or a pane, paste a picture, or choose a file".to_string() } else { format!("there is no file {} waiting", a.i("index").unwrap_or(1)) })?;
+                return Ok(vec![self.upload(cx, s, None)?]);
+            }
+            "files_upload_dropped" => {
+                let s = self.dropped.first().ok_or("no file dropped on a pane is waiting")?;
+                let left = self.dropped.len() - 1;
+                return Ok(vec![self.upload(cx, s, (left > 0).then_some(left))?]);
+            }
             "codemap_open" => {
                 let sb = a.req("sandbox").to_string();
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
@@ -756,8 +774,8 @@ impl State {
         }
     }
 
-    fn upload(&self, cx: &Ctx, index: usize) -> Result<Action, String> {
-        let s = self.staged.get(index.wrapping_sub(1)).ok_or_else(|| if self.staged.is_empty() { "nothing to upload: drop a file on the panel or a pane, paste a picture, or choose a file".to_string() } else { format!("there is no file {index} waiting") })?;
+    /// The core's dialog for one file; `more`: files dropped with it, asked next.
+    fn upload(&self, cx: &Ctx, s: &Staged, more: Option<usize>) -> Result<Action, String> {
         if let Some(p) = s.problem() {
             return Err(format!("{} cannot go: {p}", s.name));
         }
@@ -778,12 +796,14 @@ impl State {
             Some(t) => format!("{sb}'s thread {t}"),
             None => format!("{sb}'s agent"),
         };
-        Ok(Confirm::new(format!("Upload {} into {sb}?", s.name), call)
+        let mut c = Confirm::new(format!("Upload {} into {sb}?", s.name), call)
             .line(format!("{} · {}", s.source(), view::size_label(s.size)))
             .line(format!("Copied into {sb} under {dest}."))
-            .line(format!("Its path is then typed into {session}'s prompt, not submitted: say what it is for, then press Return."))
-            .labels("Upload", "Cancel")
-            .into_action())
+            .line(format!("Its path is then typed into {session}'s prompt, not submitted: say what it is for, then press Return."));
+        if let Some(n) = more {
+            c = c.line(format!("{n} more file{} dropped with it: asked next, one by one. Cancel stops here.", if n == 1 { "" } else { "s" }));
+        }
+        Ok(c.labels("Upload", "Cancel").into_action())
     }
 
     fn ui_action(&self, cx: &Ctx) -> Action {
@@ -942,22 +962,45 @@ impl State {
 
     /// An upload answered: its path typed into the prompt it was meant for.
     fn uploaded(&mut self, id: u64, r: Result<(u16, J), String>) -> Vec<Action> {
-        let Some(i) = self.staged.iter().position(|s| s.id == id) else { return vec![] };
-        let name = self.staged[i].name.clone();
-        match r {
+        let (s, from_drop) = if let Some(i) = self.staged.iter().position(|s| s.id == id) {
+            (self.staged[i].clone(), false)
+        } else if let Some(i) = self.dropped.iter().position(|s| s.id == id) {
+            (self.dropped[i].clone(), true)
+        } else {
+            return vec![];
+        };
+        let name = s.name.clone();
+        let mut out = match r {
             Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
-                let s = self.staged.remove(i);
-                let Some(path) = body["path"].as_str() else { return vec![Action::error(format!("{name}: uploaded, but the daemon gave no path"))] };
-                let Ok((sb, thread)) = self.target(&s) else { return vec![] };
-                let mut at = json!({ "sandbox": sb, "data": format!("{path} ") });
-                if let Some(t) = thread {
-                    at["mode"] = format!("thread:{t}").into();
+                self.staged.retain(|x| x.id != id);
+                self.dropped.retain(|x| x.id != id);
+                match (body["path"].as_str(), self.target(&s)) {
+                    (Some(path), Ok((sb, thread))) if typable(path) => {
+                        let mut at = json!({ "sandbox": sb, "data": format!("{path} ") });
+                        if let Some(t) = thread {
+                            at["mode"] = format!("thread:{t}").into();
+                        }
+                        vec![Action::Call(Call::post("/api/input", at, format!("type {path}")).tag(&format!("input:{path}")).quiet())]
+                    }
+                    // Not a path the daemon makes: never typed into a prompt.
+                    (Some(path), _) => vec![Action::error(format!("{name} was uploaded, but its path {path:?} is not one the app types into a prompt"))],
+                    (None, _) => vec![Action::error(format!("{name}: uploaded, but the daemon gave no path"))],
                 }
-                vec![Action::Call(Call::post("/api/input", at, format!("type {path}")).tag(&format!("input:{path}")).quiet())]
             }
-            Ok((c, body)) => vec![Action::error(format!("{name} was not uploaded: {}", why(c, &body)))],
-            Err(e) => vec![Action::error(format!("{name} was not uploaded: {e}"))],
+            Ok((c, body)) => {
+                self.dropped.clear();
+                vec![Action::error(format!("{name} was not uploaded: {}", why(c, &body)))]
+            }
+            Err(e) => {
+                self.dropped.clear();
+                vec![Action::error(format!("{name} was not uploaded: {e}"))]
+            }
+        };
+        // The next file dropped with it: its own dialog.
+        if from_drop && !self.dropped.is_empty() {
+            out.push(Action::Intent { name: "files_upload_dropped".into(), args: json!({}) });
         }
+        out
     }
 
     fn stage(&mut self, name: String, size: u64, payload: Payload, to: Option<(String, Option<String>)>) {
@@ -968,28 +1011,29 @@ impl State {
     /// Files dropped on a terminal pane: waiting for that sandbox's agent,
     /// and the core's dialog for the first at once.
     pub fn on_pane_drop(&mut self, cx: &Ctx, d: &PaneDrop) -> Vec<Action> {
-        let before = self.staged.len();
+        // A new drop replaces what an earlier one left after a Cancel.
+        self.dropped.clear();
         let mut notes = vec![];
         for p in &d.paths {
-            if self.staged.len() >= view::STAGED_MAX {
+            if self.dropped.len() >= view::STAGED_MAX {
                 notes.push(format!("{} files at a time at most: the rest were left out", view::STAGED_MAX));
                 break;
             }
             match std::fs::metadata(p) {
                 Ok(m) if m.is_file() => {
+                    self.staged_seq += 1;
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "upload".into());
-                    self.stage(name, m.len(), Payload::Path(p.clone()), Some((d.sandbox.clone(), d.thread.clone())));
+                    self.dropped.push(Staged { id: self.staged_seq, name, size: m.len(), payload: Payload::Path(p.clone()), to: Some((d.sandbox.clone(), d.thread.clone())) });
                 }
                 Ok(_) => notes.push(format!("{}: a folder; drop the files in it instead", p.display())),
                 Err(e) => notes.push(format!("{}: {e}", p.display())),
             }
         }
+        let _ = cx;
         let mut out: Vec<Action> = notes.into_iter().map(Action::error).collect();
-        if self.staged.len() > before {
-            out.push(Action::Intent { name: "files_open".into(), args: json!({ "sandbox": d.sandbox }) });
-            out.push(Action::Intent { name: "files_upload_send".into(), args: json!({ "index": before + 1 }) });
+        if !self.dropped.is_empty() {
+            out.push(Action::Intent { name: "files_upload_dropped".into(), args: json!({}) });
         }
-        out.push(self.ui_action(cx));
         out
     }
 
@@ -1163,6 +1207,17 @@ impl State {
         out.push(self.ui_action(cx));
         out
     }
+}
+
+/// A path the daemon's upload routes return (`/tmp/sbxw-uploads/<ms>/<name>`,
+/// `/tmp/sbxw-pastes/paste-<ms>.png`, names of `[A-Za-z0-9._-]`): only such
+/// a path is typed into a prompt, so nothing in it can read as more words,
+/// a quote, a new line or an option.
+pub fn typable(path: &str) -> bool {
+    (path.starts_with("/tmp/sbxw-uploads/") || path.starts_with("/tmp/sbxw-pastes/"))
+        && path.len() < 400
+        && path.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
+        && !path.split('/').any(|c| c == ".." || c.starts_with('-'))
 }
 
 fn icon_of(name: &str) -> &'static str {

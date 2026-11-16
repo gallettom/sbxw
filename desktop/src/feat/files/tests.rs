@@ -47,7 +47,7 @@ fn opened(d: &J) -> State {
 #[test]
 fn sensitive_intents_are_approvals_and_none_takes_a_local_path() {
     for s in INTENTS {
-        let gated = matches!(s.name, "files_save_as" | "files_open_with" | "files_delete" | "files_upload_send" | "codemap_diagram");
+        let gated = matches!(s.name, "files_save_as" | "files_open_with" | "files_delete" | "files_upload_send" | "files_upload_dropped" | "codemap_diagram");
         assert_eq!(matches!(s.risk, Risk::Approval(_)), gated, "{}", s.name);
         // No intent carries a file of this computer, nor bytes.
         assert!(s.args.iter().all(|(k, _, _)| !matches!(*k, "file" | "files" | "local" | "dest" | "data" | "bytes")), "{}", s.name);
@@ -272,19 +272,69 @@ fn uploads_show_the_local_path_and_size_respect_the_limits_and_type_the_path() {
     assert_eq!(c.call.path, "/api/sandboxes/web-app/paste-image");
     assert_eq!(c.call.bytes.as_ref().map(|(t, b)| (t.as_str(), b.len())), Some(("image/png", 2048)));
     st.staged.clear();
-    // Dropped on a stopped sandbox's pane: refused when sent.
+    // Dropped on a stopped sandbox's pane: the dialog is asked for, and refused.
     let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], sandbox: "data-pipeline".into(), thread: None });
-    assert!(a.iter().any(|x| matches!(x, Action::Intent { name, .. } if name == "files_upload_send")));
-    assert!(run(&mut st, &d, "files_upload_send", json!({})).unwrap_err().contains("not running"));
-    st.staged.clear();
-    // Dropped on a thread's pane: that sandbox, that thread's prompt.
-    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], sandbox: "api".into(), thread: Some("checkout".into()) });
-    let a = run(&mut st, &d, "files_upload_send", json!({})).unwrap();
+    assert!(matches!(a.as_slice(), [Action::Intent { name, .. }] if name == "files_upload_dropped"), "{a:?}");
+    assert!(run(&mut st, &d, "files_upload_dropped", json!({})).unwrap_err().contains("not running"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn files_dropped_on_a_pane_go_only_through_their_dialog_one_by_one() {
+    let d = fixture("standin");
+    let mut st = State::default();
+    let dir = tmp("pane");
+    let (a1, a2) = (dir.join("spec one.md"), dir.join("logo.png"));
+    std::fs::write(&a1, b"# spec").unwrap();
+    std::fs::write(&a2, vec![0u8; 3000]).unwrap();
+    // The drop itself uploads nothing and types nothing: it asks for the dialog.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a1.clone(), a2.clone()], sandbox: "api".into(), thread: Some("checkout".into()) });
+    assert!(matches!(a.as_slice(), [Action::Intent { name, args }] if name == "files_upload_dropped" && args == &json!({})), "{a:?}");
+    assert!(st.staged.is_empty(), "never shown as waiting in the panel");
+    let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
+    admit("files_upload_dropped", &a).unwrap();
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert_eq!(c.title, "Upload notes.txt into api?");
-    assert!(c.lines[2].contains("api's thread checkout's prompt"));
-    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/2/notes.txt" }))));
-    assert!(a.iter().any(|x| matches!(x, Action::Call(t) if t.body["mode"] == "thread:checkout" && t.body["sandbox"] == "api")), "{a:?}");
+    assert_eq!(c.title, "Upload spec one.md into api?");
+    assert_eq!(c.lines[0], format!("{} · 6 B", a1.display()));
+    assert_eq!(c.lines[2], "Its path is then typed into api's thread checkout's prompt, not submitted: say what it is for, then press Return.");
+    assert_eq!(c.lines[3], "1 more file dropped with it: asked next, one by one. Cancel stops here.");
+    assert_eq!(c.call.path, "core:upload", "the core streams it, on Confirm only");
+    assert_eq!(c.call.body["route"], "/api/sandboxes/api/upload?name=spec%20one.md");
+    // Confirmed and answered: the daemon's path typed (not submitted), then the next dialog.
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/17/spec_one.md" }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Call(t) if t.body == json!({ "sandbox": "api", "mode": "thread:checkout", "data": "/tmp/sbxw-uploads/17/spec_one.md " }))), "{a:?}");
+    assert!(a.iter().any(|x| matches!(x, Action::Intent { name, .. } if name == "files_upload_dropped")));
+    let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    assert_eq!(c.title, "Upload logo.png into api?");
+    assert_eq!(c.lines.len(), 3, "the last one");
+    // A path that is not one the daemon makes is never typed.
+    for bad in ["/tmp/sbxw-uploads/1/a b.md", "/tmp/sbxw-uploads/1/a\nrm -rf ~", "/tmp/sbxw-uploads/1/\"x", "/etc/passwd", "/tmp/sbxw-uploads/../x", "/tmp/sbxw-uploads/1/-rf"] {
+        assert!(!typable(bad), "{bad}");
+    }
+    assert!(typable("/tmp/sbxw-pastes/paste-1731744000000.png"));
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/1/a b.md\nsubmit" }))));
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))), "{a:?}");
+    assert!(st.dropped.is_empty());
+    // Cancel: the core's dialog closes, nothing was sent; the next drop starts afresh.
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a1.clone(), a2.clone()], sandbox: "api".into(), thread: None });
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a2.clone()], sandbox: "web-app".into(), thread: None });
+    assert_eq!(st.dropped.len(), 1);
+    // A refusal stops the rest.
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a1.clone(), a2.clone()], sandbox: "api".into(), thread: None });
+    let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((502, json!({ "error": "sbx exec: sandbox not ready" }))));
+    assert!(!a.iter().any(|x| matches!(x, Action::Intent { .. })));
+    assert!(st.dropped.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ten_files_at_a_time() {
+    let d = fixture("standin");
+    let mut st = opened(&d);
+    let dir = tmp("ten");
     // Ten at a time at most.
     let many: Vec<_> = (0..12).map(|i| { let p = dir.join(format!("f{i}.txt")); std::fs::write(&p, b"x").unwrap(); p }).collect();
     let a = st.on_files(&Ctx { data: &d }, Incoming::Files(many));
