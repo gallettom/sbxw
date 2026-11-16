@@ -1,0 +1,186 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-app"
+      },
+      {
+        "name": "api",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/api"
+      },
+      {
+        "name": "docs",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      }
+    ],
+    "sessions": [
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "idle",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000001
+      }
+    ],
+    "threads": {
+      "web-app": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      },
+      "api": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      }
+    },
+    "plans": [
+      {
+        "id": "p-1",
+        "sandbox": "web-app",
+        "summary": "Orders v2: the API routes, the web page that uses them, and their docs, in three threads that do not touch the same files.",
+        "threads": [
+          {
+            "name": "api-routes",
+            "goal": "Add the /v2/orders routes to the API. Keep the v1 routes untouched; write handler tests for each new route and the error shapes.",
+            "scope": "api/src/routes/v2/, api/tests/v2_orders.rs",
+            "repo": "api",
+            "model": "claude-sonnet-5-5"
+          },
+          {
+            "name": "web-orders",
+            "goal": "Build the orders page in the web app against the new routes. Use the existing table component.",
+            "scope": "web/src/pages/orders/, web/src/api/orders.ts",
+            "repo": "web"
+          },
+          {
+            "name": "docs",
+            "goal": "Document the v2 orders API in docs/api/orders.md with examples.",
+            "scope": "docs/api/orders.md"
+          }
+        ],
+        "state": "pending",
+        "variant": "split",
+        "justification": "The three areas live in different folders, so a branch each merges cleanly.",
+        "lead": "web-app lead",
+        "created_ms": 1763290000000,
+        "updated_ms": 1763290000000
+      }
+    ],
+    "leads": [],
+    "models": {
+      "ok": true,
+      "default": "claude-opus-5-5",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "label": "Opus 5.5"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "label": "Haiku 5.5"
+        }
+      ]
+    },
+    "board": {},
+    "thread_repos": {
+      "ok": true,
+      "workspace": "/Users/ana/dev/web-app",
+      "repos": [
+        {
+          "path": "api",
+          "branch": "main",
+          "dirty": 0,
+          "ahead": 0,
+          "behind": 0,
+          "detached": false
+        },
+        {
+          "path": "web",
+          "branch": "main",
+          "dirty": 2,
+          "ahead": 1,
+          "behind": 0,
+          "detached": false
+        },
+        {
+          "path": "docs",
+          "branch": "main",
+          "dirty": 0,
+          "ahead": 0,
+          "behind": 0,
+          "detached": false
+        }
+      ]
+    },
+    "threads_ui": {
+      "repos_for": "web-app",
+      "drafts": {
+        "p-1": {
+          "variant": "shared",
+          "threads": [
+            {
+              "name": "api-routes",
+              "goal": "Add the /v2/orders routes to the API. Keep the v1 routes untouched; write handler tests for each new route and the error shapes.",
+              "scope": "api/src/routes/v2/, api/tests/v2_orders.rs",
+              "repo": "api",
+              "model": "claude-sonnet-5-5",
+              "from": 0
+            },
+            {
+              "name": "docs",
+              "goal": "Document the v2 orders API, with curl examples.",
+              "scope": "docs/api/orders.md",
+              "from": 2
+            }
+          ]
+        }
+      }
+    }
+  },
+  "app": {
+    "selected": "web-app",
+    "panes": 2,
+    "open": [
+      "web-app"
+    ],
+    "modal": [
+      "plans",
+      "p-1"
+    ]
+  }
+}
