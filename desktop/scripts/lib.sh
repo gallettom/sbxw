@@ -4,6 +4,22 @@
 # --script, --strip): no display, no Xvfb, no xdotool. Rune renders offscreen
 # with wgpu; with no GPU, Mesa's software Vulkan driver (mesa-vulkan-drivers,
 # llvmpipe) does it.
+#
+# Marks the app itself acts on, in a --script (`{"type": "mark", "name": ...}`):
+#   hold:<ms>              wait that long in real time, taking in what the
+#                          daemon sends (the script's clock does not wait).
+#   wait:<key>[:<ms>]      wait in real time until an element with that key
+#                          is drawn (a screen's key or input id, the core's
+#                          dialog parts cf-*, pane bars and their extras,
+#                          terminals grid-<n>), at most <ms> (10 s by default).
+#                          Logs "waited N ms for <key>" or "gave up waiting
+#                          for <key> after N ms"; then the script goes on, so
+#                          a tap on a key that never came fails as usual.
+#   wait-gone:<key>[:<ms>] the same, until no element of that key is drawn
+#                          (a dialog closed, a busy line gone).
+#   screen:<name>=<path>   load that file as that screen now.
+# Prefer wait: before a tap on something the daemon's answer draws: a fixed
+# hold is a guess that fails under load.
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"

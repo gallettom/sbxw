@@ -115,6 +115,30 @@ enum Mark {
     Hold(u64),
     /// `screen:<name>=<path>`: load that file as that screen now.
     Screen(String, PathBuf),
+    /// `wait:<key>[:<ms>]` (`gone`: `wait-gone:<key>[:<ms>]`): hold in real
+    /// time, taking in what arrives as `hold` does, until an element with
+    /// that key is drawn (gone: no longer drawn), at most `ms` (10 s by
+    /// default); then the script goes on either way, so a tap on a key that
+    /// never came fails with Rune's own message.
+    Wait { key: String, ms: u64, gone: bool },
+}
+
+/// Parses `wait:<key>[:<ms>]` and `wait-gone:<key>[:<ms>]`.
+fn wait_mark(n: &str) -> Option<Mark> {
+    let (rest, gone) = match (n.strip_prefix("wait-gone:"), n.strip_prefix("wait:")) {
+        (Some(r), _) => (r, true),
+        (None, Some(r)) => (r, false),
+        _ => return None,
+    };
+    let (key, ms) = match rest.rsplit_once(':') {
+        Some((k, ms)) if !k.is_empty() && ms.parse::<u64>().is_ok() => (k, ms.parse().unwrap()),
+        _ => (rest, 10_000),
+    };
+    (!key.is_empty()).then(|| Mark::Wait { key: key.to_string(), ms, gone })
+}
+
+fn node_has_key(n: &crate::luau::Node, key: &str) -> bool {
+    n.key.as_deref() == Some(key) || n.id.as_deref() == Some(key) || n.children.iter().any(|c| node_has_key(c, key))
 }
 
 /// After opening the agent of a sandbox that is not running, the list is read
@@ -340,6 +364,9 @@ impl App {
                     .filter_map(|(n, t)| {
                         if let Some(ms) = n.strip_prefix("hold:") {
                             return ms.parse().ok().map(|ms| (t, Mark::Hold(ms)));
+                        }
+                        if let Some(m) = wait_mark(n) {
+                            return Some((t, m));
                         }
                         let (name, path) = n.strip_prefix("screen:")?.split_once('=')?;
                         Some((t, Mark::Screen(name.into(), path.into())))
@@ -644,6 +671,33 @@ impl App {
                         std::thread::sleep(Duration::from_millis(20));
                     }
                 }
+                Mark::Wait { key, ms, gone } => {
+                    let t0 = Instant::now();
+                    let until = t0 + Duration::from_millis(ms);
+                    loop {
+                        if self.drain(None, false) {
+                            self.push_data();
+                            changed = true;
+                        }
+                        for s in &mut self.screens {
+                            changed |= s.poll();
+                        }
+                        for p in &mut self.panes {
+                            if let Some(t) = &mut p.term {
+                                changed |= t.poll(None);
+                            }
+                        }
+                        if self.drawn(&key) != gone {
+                            log::info!("waited {} ms for {}{key}", t0.elapsed().as_millis(), if gone { "the end of " } else { "" });
+                            break;
+                        }
+                        if Instant::now() >= until {
+                            log::warn!("gave up waiting for {}{key} after {} ms", if gone { "the end of " } else { "" }, t0.elapsed().as_millis());
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                }
                 Mark::Screen(name, path) => {
                     if let Some(s) = self.screens.iter_mut().find(|s| s.name == name) {
                         s.load_file(path);
@@ -800,6 +854,52 @@ impl App {
             return false;
         };
         t.on_key_tx(ev, tx, lens(f))
+    }
+
+    /// Whether an element of that key is in what the app draws now (for
+    /// `wait:` marks): a screen's last render (keys and input ids), the
+    /// core's dialog and its parts, pane bars and their extras, terminals.
+    fn drawn(&self, key: &str) -> bool {
+        let shown_panes = self.layout.0.min(self.panes.len());
+        if self.screens.iter().any(|s| s.last_good.as_ref().is_some_and(|n| node_has_key(n, key))) {
+            return true;
+        }
+        if let Some(d) = &self.feats.dialog {
+            let built = d.confirm.is_some();
+            let ack = d.confirm.as_ref().is_some_and(|c| c.ack.is_some());
+            let secrets = d.confirm.as_ref().map_or(0, |c| c.secrets.len());
+            let fixed = matches!(key, "cf-dialog" | "cf-cancel" | "cf-close" | "cf-title") || (built && key == "cf-confirm") || (ack && key == "cf-ack") || (!built && key == "cf-loading") || (d.error.is_some() && key == "cf-error");
+            let secret = key.strip_prefix("cf-secret-").and_then(|i| i.parse::<usize>().ok()).is_some_and(|i| i < secrets);
+            if fixed || secret {
+                return true;
+            }
+        }
+        if self.jarvis.shown.is_some() && key.starts_with("jv-") {
+            return true;
+        }
+        for i in 0..shown_panes {
+            let p = &self.panes[i];
+            let n = i + 1;
+            if key == format!("pane-{n}") || key == format!("pane-{n}-bar") || (p.sandbox.is_some() && key == format!("pane-{n}-close")) {
+                return true;
+            }
+            if p.term.as_ref().is_some_and(|t| key == t.key("grid") || key == t.key("terminal")) {
+                return true;
+            }
+            let sb = p.sandbox.as_deref().unwrap_or("");
+            let has_extra = self.feats.pane_extras.iter().any(|e| {
+                key == format!("pane-{n}-x-{}", e.id)
+                    && match &e.place {
+                        crate::feat::Place::Pane(s) => s == sb,
+                        crate::feat::Place::Session { sandbox: s, thread: t } => s == sb && t.as_deref() == p.thread.as_deref(),
+                        _ => false,
+                    }
+            });
+            if has_extra {
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether a key or a paste the window did not route elsewhere may go to
@@ -1513,6 +1613,34 @@ mod tests {
             v.push(KeyEvent { key: k, mods: m(true, true, false, false, true) });
         }
         v
+    }
+
+    #[test]
+    fn wait_marks_parse_and_see_what_is_drawn() {
+        let w = |n: &str| match wait_mark(n) {
+            Some(Mark::Wait { key, ms, gone }) => Some((key, ms, gone)),
+            _ => None,
+        };
+        assert_eq!(w("wait:files-row-report.md"), Some(("files-row-report.md".into(), 10_000, false)));
+        assert_eq!(w("wait:cf-confirm:2500"), Some(("cf-confirm".into(), 2500, false)));
+        assert_eq!(w("wait-gone:cf-dialog"), Some(("cf-dialog".into(), 10_000, true)));
+        assert_eq!(w("wait:a:b"), Some(("a:b".into(), 10_000, false)), "a key may hold a colon");
+        assert_eq!(w("wait:"), None);
+        assert_eq!(w("hold:20"), None);
+        let (mut rt, _rx, _clip) = window_with_terminal();
+        assert!(rt.state.drawn("filter") && rt.state.drawn("pane-1-bar") && rt.state.drawn("grid-1"));
+        assert!(!rt.state.drawn("cf-confirm") && !rt.state.drawn("nothing-of-that-key"));
+        rt.update(|s, _| {
+            let f = App::feature_of("network").unwrap();
+            let c = crate::feat::Confirm::new("t", crate::feat::Call::post("/api/x", serde_json::json!({}), "x")).secret("Token", "value");
+            s.feature_actions(f, "network", vec![c.into_action()]);
+        });
+        rt.frame(0.02);
+        assert!(rt.state.drawn("cf-confirm") && rt.state.drawn("cf-secret-0") && !rt.state.drawn("cf-secret-1"));
+        rt.update(|s, _| {
+            s.dismiss_dialog();
+        });
+        assert!(!rt.state.drawn("cf-dialog"));
     }
 
     /// No key and no paste reaches a terminal while anything else has the
