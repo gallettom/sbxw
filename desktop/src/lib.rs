@@ -25,6 +25,7 @@ pub mod intent;
 pub mod jarvis;
 pub mod luau;
 pub mod markdown;
+pub mod picture;
 pub mod screen;
 pub mod shell;
 pub mod terminal;

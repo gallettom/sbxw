@@ -547,11 +547,12 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
             list.reverse();
             ("200 OK", json!({ "ok": true, "proposals": list }))
         }
-        // Jarvis's sessions, then the fixture's `agent_sessions` (other sandboxes' agents).
+        // Jarvis's sessions, then the fixture's `sessions` (other sandboxes' agents and threads):
+        // the one key every reader of this route uses (threads' and relay's data, Jarvis's seed).
         ("GET", "/api/sessions") => {
             let g = st.lock().unwrap();
             let mut list: Vec<serde_json::Value> = g.sessions.values().cloned().collect();
-            list.extend(g.raw["agent_sessions"].as_array().cloned().unwrap_or_default());
+            list.extend(g.raw["sessions"].as_array().cloned().unwrap_or_default());
             ("200 OK", json!(list))
         }
         ("GET", "/api/voice") if st.lock().unwrap().voice => ("200 OK", json!({ "ok": true, "compiled": true, "ready": true, "speech": { "supported": false }, "push_to_talk_key": "F8" })),
