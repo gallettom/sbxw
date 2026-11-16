@@ -446,6 +446,7 @@ impl App {
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
+        data["app"]["uploads"] = crate::files::uploads();
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
         data
     }
@@ -613,7 +614,7 @@ impl App {
                 Ok(()) => self.notify(format!("{what}: done"), false),
                 Err(e) => self.notify(format!("{what}: {e}"), true),
             },
-            ev @ (LinkEvent::Answer { .. } | LinkEvent::Data { .. } | LinkEvent::DataPer { .. }) => return self.feats_link(ev),
+            ev @ (LinkEvent::Answer { .. } | LinkEvent::Bytes { .. } | LinkEvent::Data { .. } | LinkEvent::DataPer { .. }) => return self.feats_link(ev),
         }
         true
     }
@@ -1421,6 +1422,8 @@ fn pane_view(s: &App, i: usize) -> El {
                 s.push_data();
             }
         })
+        // Files dropped on a pane: to the feature that takes them (files: the upload's dialog).
+        .on_drop_files(move |s: &mut App, files: &[std::path::PathBuf], _tx| s.pane_drop(i, files))
         .child(bar)
         .child(el().h(1.0).w_full().fill(c(if focused { "blue" } else { "elevated" })))
         .child(body)

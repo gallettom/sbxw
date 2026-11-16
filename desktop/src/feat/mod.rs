@@ -96,6 +96,79 @@ pub struct Feature {
     /// once the upgrade is accepted; return `false` at once if the route is
     /// not this feature's. Push and read lines through `peer` until it closes.
     pub standin_ws: Option<fn(&str, &mut dyn WsPeer) -> bool>,
+    /// One of its raw calls ([`Call::raw`]) answered: the status, the bytes
+    /// (at most `max + 1`, so more than `max` means truncated) and the
+    /// content type; `Err`: no answer at all.
+    pub on_bytes: Option<fn(&Ctx, &Call, Result<(u16, Vec<u8>, String), String>) -> Vec<Action>>,
+    /// Files the person dropped on a terminal pane (the first feature that
+    /// declares this gets them). The paths are handed in: an upload may read them.
+    pub on_pane_drop: Option<fn(&Ctx, &PaneDrop) -> Vec<Action>>,
+}
+
+/// Files dropped on a pane ([`Feature::on_pane_drop`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneDrop {
+    pub paths: Vec<std::path::PathBuf>,
+    /// The sandbox the pane shows, and its thread (nil: the main session).
+    pub sandbox: String,
+    pub thread: Option<String>,
+}
+
+/// Where a download goes ([`Action::Download`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Dest {
+    /// The person's Downloads folder.
+    Downloads,
+    /// The native save dialog, prefilled with the sanitised name.
+    Ask,
+}
+
+/// What the core does once a download is written.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum After {
+    Nothing,
+    /// Shows it in the file manager.
+    Reveal,
+    /// Opens it with the system's default app, by its verdict (`safe.rs`).
+    Open,
+}
+
+/// A download the core writes (see `src/files.rs`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Download {
+    /// A daemon GET route answering the raw file.
+    pub get: String,
+    /// The suggested name (the core sanitises it).
+    pub name: String,
+    pub to: Dest,
+    pub after: After,
+    /// Handed back in `on_answer` (the call's `tag`).
+    pub tag: String,
+}
+
+impl Download {
+    /// As the call of a [`Confirm`] (needed for `Dest::Ask` and `After::Open`).
+    pub fn call(&self, what: impl Into<String>) -> Call {
+        let to = match self.to {
+            Dest::Downloads => "downloads",
+            Dest::Ask => "ask",
+        };
+        let after = match self.after {
+            After::Nothing => "nothing",
+            After::Reveal => "reveal",
+            After::Open => "open",
+        };
+        Call { method: Method::Core, path: "core:download".into(), body: serde_json::json!({ "get": self.get, "name": self.name, "to": to, "after": after, "tag": self.tag }), what: what.into(), tag: self.tag.clone(), timeout: 900, ..Call::get("", "") }
+    }
+    /// Whether it may run without the core's dialog.
+    pub fn direct(&self) -> bool {
+        self.to == Dest::Downloads && self.after != After::Open
+    }
+}
+
+/// The core's own calls on files (`src/files.rs`), as `Confirm` calls or direct where allowed.
+pub fn core_call(op: &str, body: J, what: impl Into<String>, tag: &str) -> Call {
+    Call { method: Method::Core, path: format!("core:{op}"), body, what: what.into(), tag: tag.into(), timeout: 900, ..Call::get("", "") }
 }
 
 /// The stand-in's end of a feature socket ([`Feature::standin_ws`]).
@@ -135,7 +208,7 @@ pub enum Incoming {
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[], surfaces: &[], on_surface: None, on_socket: None, standin_ws: None };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[], surfaces: &[], on_surface: None, on_socket: None, standin_ws: None, on_bytes: None, on_pane_drop: None };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -294,6 +367,13 @@ pub enum Action {
     /// Moves the keyboard focus to the element of that key (an input's
     /// `id`, a surface's `surface-<id>`).
     Focus(String),
+    /// A download written by the core. Direct only to the Downloads folder
+    /// and without opening ([`Download::direct`]); else refused: use
+    /// [`Download::call`] as a [`Confirm`]'s call. The answer
+    /// (`{saved, name, bytes, verdict, kind, reason}`) goes to `on_answer`.
+    Download(Download),
+    /// Shows a file the core wrote this run in the file manager.
+    Reveal(std::path::PathBuf),
 }
 
 impl Action {
@@ -333,14 +413,19 @@ pub struct Call {
     pub timeout: u64,
     /// A tag of the feature's own, handed back in `on_answer` (which call this was).
     pub tag: String,
+    /// `GET` read as raw bytes, at most this many (+1): answered to
+    /// [`Feature::on_bytes`], not `on_answer`.
+    pub raw: Option<u64>,
+    /// `POST` with this raw body instead of JSON: `(content type, bytes)`.
+    pub bytes: Option<(String, Vec<u8>)>,
 }
 
 impl Call {
     pub fn post(path: impl Into<String>, body: J, what: impl Into<String>) -> Call {
-        Call { method: Method::Post, path: path.into(), body, what: what.into(), then: vec![], store: None, notify: true, timeout: 120, tag: String::new() }
+        Call { method: Method::Post, path: path.into(), body, what: what.into(), then: vec![], store: None, notify: true, timeout: 120, tag: String::new(), raw: None, bytes: None }
     }
     pub fn get(path: impl Into<String>, what: impl Into<String>) -> Call {
-        Call { method: Method::Get, path: path.into(), body: J::Null, what: what.into(), then: vec![], store: None, notify: false, timeout: 30, tag: String::new() }
+        Call { method: Method::Get, path: path.into(), body: J::Null, what: what.into(), then: vec![], store: None, notify: false, timeout: 30, tag: String::new(), raw: None, bytes: None }
     }
     /// Read these keys again after it answered.
     pub fn then(mut self, keys: &[&str]) -> Call {
@@ -359,6 +444,18 @@ impl Call {
     pub fn tag(mut self, tag: &str) -> Call {
         self.tag = tag.into();
         self
+    }
+    /// Read the answer as raw bytes, at most `max` (+1, to tell truncation):
+    /// answered to [`Feature::on_bytes`].
+    pub fn raw(mut self, max: u64) -> Call {
+        self.raw = Some(max);
+        self
+    }
+    /// A `POST` whose body is these bytes (a pasted picture to `paste-image`).
+    pub fn post_bytes(path: impl Into<String>, content_type: &str, bytes: Vec<u8>, what: impl Into<String>) -> Call {
+        let mut c = Call::post(path, J::Null, what);
+        c.bytes = Some((content_type.into(), bytes));
+        c
     }
     pub fn quiet(mut self) -> Call {
         self.notify = false;

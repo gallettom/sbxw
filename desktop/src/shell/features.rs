@@ -76,6 +76,9 @@ pub enum Ask {
     Focus(String),
     /// A surface's paste chord off macOS: the clipboard's text to that surface.
     PasteText(String),
+    /// A download to a place the person picks: the save dialog, then the
+    /// download runs as call `id` (answered to the feature's `on_answer`).
+    SaveAs { id: u64, call: Call },
 }
 
 /// The whole rule for an intent of risk Approval: its feature may answer only
@@ -191,6 +194,19 @@ impl App {
                 Action::OpenSocket { id, path, opts } => self.open_socket(f, id, path, opts),
                 Action::CloseSocket(id) => crate::socket::close(&id),
                 Action::Focus(key) => self.feats.asks.push((f.name, Ask::Focus(key))),
+                Action::Download(d) => {
+                    if d.direct() {
+                        let call = d.call(format!("download {}", crate::safe::file_name(&d.name)));
+                        self.core_call(f, call, true);
+                    } else {
+                        self.notify(format!("{}: a download you choose the place of, or that opens, runs only from the app's own dialog: refused", f.name), true);
+                    }
+                }
+                Action::Reveal(p) => {
+                    if let Err(e) = crate::files::reveal(&p) {
+                        self.notify(format!("{}: {e}", f.name), true);
+                    }
+                }
                 Action::Intent { name, args } => match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
                     Ok(list) => crate::screen::Host::intents(self, &format!("feature:{}", f.name), list),
                     Err(e) => self.notify(format!("{}: {e}", f.name), true),
@@ -234,9 +250,27 @@ impl App {
             feat::Incoming::Files(p) => format!("{} file(s) handed in", p.len()),
             feat::Incoming::Png(b) => format!("a picture of {} bytes handed in", b.len()),
         });
+        if let feat::Incoming::Files(p) = &inc {
+            crate::files::hand_in(p);
+        }
         let data = self.feat_ctx_data();
         let acts = on(&Ctx { data: &data }, inc);
         self.feature_actions(f, &format!("feature:{name}"), acts);
+        self.push_data();
+    }
+
+    /// Files dropped on pane `i`: handed in, to the first feature that takes pane drops.
+    pub(super) fn pane_drop(&mut self, i: usize, paths: &[std::path::PathBuf]) {
+        let Some(p) = self.panes.get(i) else { return };
+        let Some(sandbox) = p.sandbox.clone() else { return };
+        let thread = p.thread.clone();
+        let Some((f, on)) = feat::FEATURES.iter().find_map(|f| f.on_pane_drop.map(|on| (*f, on))) else {
+            return self.notify("Nothing here takes files dropped on a terminal", false);
+        };
+        crate::files::hand_in(paths);
+        let data = self.feat_ctx_data();
+        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), sandbox, thread });
+        self.feature_actions(f, &format!("feature:{}", f.name), acts);
         self.push_data();
     }
 
@@ -295,6 +329,27 @@ impl App {
                     self.notify(line, false);
                 }
                 Ask::Focus(key) => tx.focus(key, true),
+                Ask::SaveAs { id, call } => {
+                    let suggested = crate::safe::file_name(call.body["name"].as_str().unwrap_or(""));
+                    let o = rune::FileDialogOptions { title: format!("Save {suggested}"), file_name: Some(suggested), directory: crate::files::downloads_dir().ok(), ..Default::default() };
+                    tx.save_file(o, move |s: &mut App, r, _tx| match r {
+                        Ok(Some(p)) => {
+                            let dir = p.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+                            let n = p.file_name().and_then(|n| n.to_str()).map(str::to_string);
+                            s.start_download(name, id, call, dir, n);
+                        }
+                        Ok(None) => s.feats_link(LinkEvent::Answer { id, feature: name, call, result: Ok((499, json!({ "cancelled": true, "error": "cancelled" }))) }).then_some(()).unwrap_or(()),
+                        Err(e) => {
+                            log::info!("{name}: save dialog: {e}");
+                            s.notify("No save dialog here: the file goes to your Downloads folder instead.", false);
+                            match crate::files::downloads_dir() {
+                                Ok(d) => s.start_download(name, id, call, d, None),
+                                Err(e) => s.notify(e, true),
+                            }
+                            s.push_data();
+                        }
+                    });
+                }
                 Ask::PasteText(id) => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| {
                     s.surface_paste(&id, c.text());
                     s.push_data();
@@ -408,6 +463,9 @@ impl App {
             self.notify(format!("{}: {e}", f.name), true);
             return 0;
         }
+        if call.method == feat::Method::Core && call.path.starts_with("core:") && !call.path.starts_with("core:screen-restore/") {
+            return self.core_call(f, call, confirmed);
+        }
         if call.method == feat::Method::Core {
             if !confirmed {
                 self.notify(format!("{}: {} runs only from the app's own dialog: refused", f.name, call.what), true);
@@ -427,6 +485,99 @@ impl App {
         log::info!("{}: {:?} {} ({})", f.name, call.method, call.path, call.what);
         self.link.as_ref().unwrap().call(d, id, f.name, call);
         id
+    }
+
+    /// The core's file operations (`src/files.rs`), off the UI thread; the
+    /// rule of each (direct or only from the core's dialog) is checked here.
+    fn core_call(&mut self, f: &'static Feature, call: Call, confirmed: bool) -> u64 {
+        let op = call.path.strip_prefix("core:").unwrap_or("").to_string();
+        let b = call.body.clone();
+        let s = |k: &str| b[k].as_str().unwrap_or("").to_string();
+        let direct = match op.as_str() {
+            "inspect" | "reveal" => true,
+            "download" => s("to") == "downloads" && s("after") != "open",
+            "open" | "upload" => false,
+            _ => {
+                self.notify(format!("{}: no core operation {}", f.name, call.path), true);
+                return 0;
+            }
+        };
+        if !direct && !confirmed {
+            self.notify(format!("{}: {} runs only from the app's own dialog: refused", f.name, call.what), true);
+            return 0;
+        }
+        // The box of the dialog that confirmed it, ticked (a `warn` file opens only then).
+        let acked = confirmed && self.feats.dialog.as_ref().is_some_and(|d| d.acked && d.confirm.as_ref().is_some_and(|c| c.ack.is_some()));
+        if self.link.is_none() {
+            self.notify(format!("{}: not connected", call.what), true);
+            return 0;
+        }
+        let id = self.next_id();
+        let link = self.link.as_ref().unwrap();
+        let daemon = self.daemon.clone();
+        let need = |d: Option<std::sync::Arc<dyn crate::client::Daemon>>| d.ok_or_else(|| "not connected to the daemon".to_string());
+        log::info!("{}: core {op} ({})", f.name, call.what);
+        match op.as_str() {
+            "inspect" => {
+                let p = std::path::PathBuf::from(s("path"));
+                link.core(id, f.name, call, move || crate::files::inspect(&p).map(|v| (200, v)));
+            }
+            "reveal" => {
+                let p = std::path::PathBuf::from(s("path"));
+                link.core(id, f.name, call, move || crate::files::reveal(&p));
+            }
+            "open" => {
+                let p = std::path::PathBuf::from(s("path"));
+                link.core(id, f.name, call, move || crate::files::open(&p, acked));
+            }
+            "upload" => {
+                let (route, file, ct, tag) = (s("route"), std::path::PathBuf::from(s("file")), s("content_type"), s("tag"));
+                let ct = if ct.is_empty() { "application/octet-stream".to_string() } else { ct };
+                let w = self.wake_slot.lock().unwrap().clone();
+                let wake: Option<crate::client::Wake> = w.map(|w| std::sync::Arc::new(move || w()) as crate::client::Wake);
+                link.core(id, f.name, call, move || crate::files::upload(need(daemon)?.as_ref(), &route, &file, &ct, &tag, wake));
+            }
+            _ if s("to") == "ask" => self.feats.asks.push((f.name, Ask::SaveAs { id, call })),
+            _ => {
+                let dir = match crate::files::downloads_dir() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        self.notify(format!("{}: {e}", f.name), true);
+                        return 0;
+                    }
+                };
+                self.start_download(f.name, id, call, dir, None);
+            }
+        }
+        id
+    }
+
+    /// Runs a download into `dir` (under `name`, else the call's), then what comes after.
+    fn start_download(&mut self, feature: &'static str, id: u64, call: Call, dir: std::path::PathBuf, name: Option<String>) {
+        let Some(link) = &self.link else { return };
+        let daemon = self.daemon.clone();
+        let b = call.body.clone();
+        let (get, after) = (b["get"].as_str().unwrap_or("").to_string(), b["after"].as_str().unwrap_or("nothing").to_string());
+        let name = name.unwrap_or_else(|| b["name"].as_str().unwrap_or("").to_string());
+        link.core(id, feature, call, move || {
+            let d = daemon.ok_or_else(|| "not connected to the daemon".to_string())?;
+            let (code, v) = crate::files::download(d.as_ref(), &get, &dir, &name)?;
+            if (200..300).contains(&code) {
+                let p = std::path::PathBuf::from(v["saved"].as_str().unwrap_or(""));
+                let then = match after.as_str() {
+                    "reveal" => crate::files::reveal(&p).map(|_| ()),
+                    // Behind the core's dialog (core_call's rule); a `warn` file needs its box, which a download dialog has.
+                    "open" => crate::files::open(&p, true).map(|_| ()),
+                    _ => Ok(()),
+                };
+                if let Err(e) = then {
+                    let mut v = v.clone();
+                    v["after_error"] = J::String(e);
+                    return Ok((code, v));
+                }
+            }
+            Ok((code, v))
+        });
     }
 
     fn open_modal(&mut self, screen: &str, arg: J) {
@@ -619,6 +770,19 @@ impl App {
                     self.feats.errors.insert(key, J::String(e));
                 }
             },
+            LinkEvent::Bytes { id: _, feature, call, result } => {
+                let Some(f) = Self::feature_of(feature) else { return false };
+                for k in &call.then {
+                    self.refresh_key(k);
+                }
+                let Some(on) = f.on_bytes else {
+                    self.notify(format!("{feature}: a raw read answered but it has no on_bytes"), true);
+                    return true;
+                };
+                let data = self.feat_ctx_data();
+                let acts = on(&Ctx { data: &data }, &call, result);
+                self.feature_actions(f, &format!("feature:{feature}"), acts);
+            }
             LinkEvent::Answer { id, feature, call, result } => {
                 let Some(f) = Self::feature_of(feature) else { return false };
                 for k in &call.then {
@@ -1019,6 +1183,40 @@ impl ConfirmAnswers for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The core's file operations keep their rule whatever a feature asks:
+    /// open and upload only from the core's dialog, a download that picks
+    /// its place or opens likewise; dialogs and clipboard only from a press.
+    #[test]
+    fn file_operations_and_dialogs_keep_the_cores_rules() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/network/basic.json");
+        let mut a = App::new(super::super::Args { fixture: Some(fixture.into()), ..Default::default() });
+        a.drain(Some(Duration::from_secs(3)), true);
+        let f = App::feature_of("network").unwrap();
+        let last = |a: &App| a.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+        for (op, body) in [("open", json!({ "path": "/etc/passwd" })), ("upload", json!({ "route": "/api/sandboxes/web-app/upload?name=x", "file": "/etc/passwd", "tag": "u" }))] {
+            assert_eq!(a.feature_call(f, feat::core_call(op, body, op, ""), false), 0, "{op}");
+            assert!(last(&a).contains("runs only from the app's own dialog"), "{op}: {}", last(&a));
+        }
+        let dl = |to, after| feat::Download { get: "/api/x".into(), name: "../r.md".into(), to, after, tag: "t".into() };
+        a.feature_actions(f, "network", vec![Action::Download(dl(feat::Dest::Ask, feat::After::Nothing))]);
+        assert!(last(&a).contains("refused"), "{}", last(&a));
+        a.feature_actions(f, "network", vec![Action::Download(dl(feat::Dest::Downloads, feat::After::Open))]);
+        assert!(last(&a).contains("refused"));
+        assert!(dl(feat::Dest::Downloads, feat::After::Reveal).direct());
+        // A save dialog, as the call of a confirmed dialog, waits for the window.
+        let id = a.feature_call(f, dl(feat::Dest::Ask, feat::After::Nothing).call("save"), true);
+        assert!(id > 0 && a.feats.asks.iter().any(|(_, k)| matches!(k, Ask::SaveAs { .. })));
+        a.feats.asks.clear();
+        // The open dialog and the clipboard: from a press only, never from the feature's own chain.
+        a.feature_actions(f, "feature:network", vec![Action::PickFiles { title: "x".into(), extensions: vec![], multiple: false }, Action::ReadClipboard]);
+        assert!(a.feats.asks.is_empty() && last(&a).contains("only from your own press"));
+        a.feature_actions(f, "network", vec![Action::PickFiles { title: "x".into(), extensions: vec![], multiple: true }]);
+        assert!(matches!(a.feats.asks.as_slice(), [(_, Ask::PickFiles { .. })]) && last(&a).contains("one file at a time"));
+        // An upload of a path the person never handed in: refused by the core, even confirmed.
+        let r = crate::files::upload(&crate::client::FixtureDaemon::new("t", Default::default()), "/api/sandboxes/web-app/upload", std::path::Path::new("/etc/hostname"), "text/plain", "u", None);
+        assert!(r.unwrap_err().contains("not a file you handed in"));
+    }
 
     #[test]
     fn an_approval_intent_only_ever_opens_the_core_dialog() {

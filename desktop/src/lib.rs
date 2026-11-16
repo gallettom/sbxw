@@ -13,6 +13,7 @@
 //! * [`theme`], [`icons`]: the web UI's tokens; the icons screens may name.
 //! * [`fixture`]: daemon data from JSON files, for headless screens.
 //! * [`surface`]: picture surfaces drawn by the core, input back to features; [`socket`]: features' WebSockets.
+//! * [`files`]: downloads, opens, reveals and uploads the core runs; [`safe`]: its file-name and open-by-type rules.
 //! * [`terminal`]: a terminal emulator drawn with Rune's grid (thread desktop-terminal).
 
 pub mod approval;
@@ -20,6 +21,7 @@ pub mod audio;
 pub mod builtin;
 pub mod client;
 pub mod feat;
+pub mod files;
 pub mod fixture;
 pub mod icons;
 pub mod intent;
@@ -27,6 +29,7 @@ pub mod jarvis;
 pub mod luau;
 pub mod markdown;
 pub mod picture;
+pub mod safe;
 pub mod screen;
 pub mod shell;
 pub mod socket;

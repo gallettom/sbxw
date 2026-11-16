@@ -515,6 +515,11 @@ fn read_body(s: &mut TcpStream, head: &[u8], text: &str) -> anyhow::Result<serde
         }
         body.extend_from_slice(&b[..n]);
     }
+    let ct = text.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.trim().to_string())).unwrap_or_default();
+    // A raw body (an upload): what the feature's stand-in sees is its size and type.
+    if !body.is_empty() && !ct.starts_with("application/json") {
+        return Ok(serde_json::json!({ "$bytes": body.len(), "$type": ct }));
+    }
     Ok(serde_json::from_slice(&body).unwrap_or_default())
 }
 
@@ -609,6 +614,13 @@ fn feature_route(st: &Shared, m: &str, target: &str, body: &serde_json::Value, s
         200 => "200 OK".to_string(),
         c => format!("{c} {}", if c < 300 { "OK" } else if c == 404 { "Not Found" } else if c == 409 { "Conflict" } else if c < 500 { "Bad Request" } else { "Error" }),
     };
+    // A raw answer (`{"$raw": ...}`, `{"$raw_hex": ...}`): those bytes, with their type.
+    if out.get("$raw").is_some() || out.get("$raw_hex").is_some() {
+        let (bytes, ct) = sbxw_desktop::client::raw_of(&out);
+        let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len());
+        let _ = s.write_all(&bytes);
+        return;
+    }
     let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", out.to_string().len(), out);
 }
 
