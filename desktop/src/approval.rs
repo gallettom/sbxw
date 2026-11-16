@@ -134,7 +134,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     let pending = crate::jarvis::pending(p);
     let high = crate::jarvis::screen_only(p);
     let needs_ack = crate::jarvis::needs_ack(p);
-    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap().w_full().min_w(0.0);
+    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
     let badge = |t: &str, tone: &str| {
         let (fg, tint) = crate::screen::tone(tone);
         rune::el().px(6.0).py(1.0).radius(radius("xs").unwrap()).fill(crate::theme::hex(tint)).border(1.0, crate::theme::hex(fg)).child(text(t.to_string()).font(TextStyle::new(10.5, 500.0)).color(crate::theme::hex(fg)))
@@ -183,7 +183,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     let changes = p["changes"].as_array().cloned().unwrap_or_default();
     for (i, ch) in changes.iter().enumerate() {
         let mut item = col().key(format!("jv-change-{i}")).w_full().min_w(0.0).gap(6.0);
-        let mut h = row().w_full().gap(6.0).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0));
+        let mut h = row().w_full().gap(6.0).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0));
         if ch["risk"] == "high" && pending {
             h = h.child(badge("high risk", "red"));
         }
@@ -267,8 +267,12 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .radius(radius("sm").unwrap())
                     .fill(c("bg"))
                     .border(1.0, c("elevated"))
-                    .child(rune::rich(diff.to_string(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0)),
+                    .child(rune::rich(diff.to_string(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0))
+                    .on_at_bottom(move |_: &mut S, at: bool| set_more(&format!("jv-diff-{i}"), !at)),
             );
+            if let Some(e) = more_below(&format!("jv-diff-{i}")) {
+                item = item.child(e);
+            }
         }
         body = body.child(item);
     }
@@ -343,7 +347,8 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         .border(1.0, c(if high { "red-border" } else { "border" }))
         .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
         .child(head)
-        .child(col().key("jv-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 130.0).max(80.0)).child(body))
+        .child(watch::<S>(col().key("jv-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 130.0).max(80.0)).child(body), "jv-body"))
+        .children(more_below("jv-body"))
         .child(foot)
 }
 
@@ -392,6 +397,47 @@ impl ConfirmState<'_> {
     }
 }
 
+// ---- Nothing hidden: what scrolls says so ----
+//
+// Every text in these dialogs wraps anywhere (a path, a host, a command with
+// no space is never cut at the edge). A block that is taller than its box
+// scrolls, and while its end is out of view a line under it says so: the
+// person is never left approving something whose end they cannot see.
+
+thread_local! {
+    static MORE: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+fn set_more(key: &str, more: bool) {
+    MORE.with(|m| {
+        let mut m = m.borrow_mut();
+        if more {
+            m.insert(key.to_string());
+        } else {
+            m.remove(key);
+        }
+    });
+}
+
+/// Whether scroll box `key` has text below what it shows (as last laid out).
+pub fn has_more(key: &str) -> bool {
+    MORE.with(|m| m.borrow().contains(key))
+}
+
+fn watch<S: 'static>(e: El, key: &'static str) -> El {
+    e.on_at_bottom(move |_: &mut S, at: bool| set_more(key, !at))
+}
+
+/// The line under a scroll box whose end is out of view.
+fn more_below(key: &str) -> Option<El> {
+    has_more(key).then(|| {
+        rune::el()
+            .key(format!("{key}-more"))
+            .w_full()
+            .child(rune::text("More below: scroll to read it all before you answer".to_string()).font(rune::TextStyle::new(11.0, 600.0)).color(crate::theme::c("amber")).wrap_anywhere().w_full().min_w(0.0))
+    })
+}
+
 /// The lines the dialog lists as granted (`Confirm::grant_lines`), in
 /// order: exactly the strings Confirm sends.
 pub fn granted_lines(c: &crate::feat::Confirm) -> Vec<String> {
@@ -403,7 +449,7 @@ pub fn granted_lines(c: &crate::feat::Confirm) -> Vec<String> {
 pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     use crate::theme::{c, radius};
     use rune::{ScrollSpec, Span};
-    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap().w_full().min_w(0.0);
+    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
     let danger = d.confirm.is_some_and(|x| x.danger);
     let button = |key: &str, label: &str, primary: bool, enabled: bool| {
         let (fill, edge, hover) = match (primary, danger) {
@@ -432,7 +478,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .w_full()
         .gap(8.0)
         .items_center()
-        .child(text(title.to_string()).font(TextStyle::new(13.0, 600.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0).key("cf-title"))
+        .child(text(title.to_string()).font(TextStyle::new(13.0, 600.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0).key("cf-title"))
         .child(
             rune::el()
                 .key("cf-close")
@@ -445,7 +491,9 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                 .on_press(|s: &mut S| s.cancel_click())
                 .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
         );
-    let mut body = col().w_full().min_w(0.0).gap(8.0);
+    // The title scrolls with the body: a long one (a path, a host) never
+    // pushes Cancel and Confirm out of the window.
+    let mut body = col().w_full().min_w(0.0).gap(8.0).child(head);
     if d.loading {
         body = body.child(small("Reading from the daemon…".into(), 12.0, 400.0, "text-muted").key("cf-loading"));
     }
@@ -496,8 +544,12 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                     .radius(radius("sm").unwrap())
                     .fill(c("bg"))
                     .border(1.0, c("elevated"))
-                    .child(rune::rich(p.text.clone(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
+                    .child(rune::rich(p.text.clone(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0))
+                    .on_at_bottom(|_: &mut S, at: bool| set_more("cf-preview", !at)),
             );
+            if let Some(e) = more_below("cf-preview") {
+                body = body.child(e);
+            }
         }
         for (i, sec) in x.secrets.iter().enumerate() {
             let Some(edit) = d.secrets.get(i) else { continue };
@@ -537,7 +589,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                 .cursor(Cursor::Pointer)
                 .on_press(|s: &mut S| s.toggle_confirm_ack())
                 .child(b)
-                .child(text(ack).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap().min_w(0.0)),
+                .child(text(ack).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
         );
     }
     let (yes, no) = d.confirm.map(|x| (x.confirm.as_str(), x.cancel.as_str())).unwrap_or(("Confirm", "Cancel"));
@@ -555,8 +607,8 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .fill(c("surface"))
         .border(1.0, c(if danger { "red-border" } else { "border" }))
         .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
-        .child(head)
-        .child(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body))
+        .child(watch::<S>(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body), "cf-body"))
+        .children(more_below("cf-body"))
         .child(foot)
 }
 
@@ -686,7 +738,7 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
         .radius(radius("md").unwrap())
         .fill(c("surface"))
         .border(1.0, c("amber"))
-        .child(text(o.headline()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap())
+        .child(text(o.headline()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere())
         .child(
             col()
                 .w_full()
