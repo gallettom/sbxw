@@ -1007,3 +1007,76 @@ target's turns show in the log as `who = "agent"` with `from`.
 person, or "Relay" while only a sandbox is answering),
 `extra-sandbox-<asker>-relay` (`?` and a count), and on the asker's pane
 bars, "asks you".
+
+### files
+
+A sandbox's Project panel and its code map (the web UI's `files.js`,
+`upload.js`, `codemap.js`; `docs/web-ui.md`, "The Project panel"). Files:
+`src/feat/files/` (`mod.rs` rules, `view.rs` rows and previews, `codemap.rs`
+the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
+`screens/codemap.luau`, `fixtures/files/`, `scripts/demo-files.sh`. Report:
+`.sbxw-artifacts/desktop/FILES.md` in the main checkout.
+
+**Screens.** `files` (panel "Project", 460 pt): tabs Artifacts
+(`.sbxw-artifacts`, newest first), Files (a folder of the sandbox, the
+places, Hidden files, the typed path) and Recent (written lately anywhere,
+by age, Show in folder); an upload card; a filter; a preview under the list
+(text, Markdown through `markdown`, a picture through `image`, HTML as its
+source) with Download, Show in folder, Open, Save as, Copy path, Delete.
+`codemap` (panel "Code map", 520 pt): the map or a lens, a file or one of
+its sections drawn through `markdown` (a `[[wiki link]]` is a link to
+`https://sbxw-codemap.invalid/<file>#<section>`, followed in the panel; a
+broken one is marked; a source reference is code, copied from the side
+list), Referenced by, Outline, Code referenced, search, Generate, Write a
+lens, Diagram.
+
+**Extras.** On every pane bar of a sandbox, `pane-<n>-x-project` ("Project",
+opens the panel); on a sandbox's row, `extra-sandbox-<name>-codemap` ("map…",
+amber) while its map or a lens is being written.
+
+**Data** (each a route's whole answer, read for the sandbox the panel shows;
+a failed read is in `data.app.errors[key]`, a string):
+
+| Key | What |
+|---|---|
+| `artifacts` | `GET /api/sandboxes/:name/artifacts`: `{dir, entries: [{path, name, size, modified}], codemap, lenses, run}` |
+| `files_dir` | `GET /api/sandboxes/:name/fs?path=`: `{path, parent, entries: [{name, kind, link, size, modified}], offline, workspace, artifacts, home, mounts, worktrees}` |
+| `files_recent` | `GET /api/sandboxes/:name/fs/recent`: `{files: [{path, size, modified}], days, workspace, home, roots}` |
+| `codemap` | `GET /api/codemap`, read again on each `codemap` event: every run `{sandbox, kind: map\|lens, phase: writing\|done\|failed, note}` |
+| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind`, `icon`, `dir`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
+| `codemap_ui` | Set by the core: `sandbox`, `maps`, `root`, `loading`, `error`, `map` (`docs`, `count`, `broken`, `doc`: `{key, title, path, section, markdown, outline, backlinks, code}`), `diagram`, `run`, `writing`, `running`, `lens`, `lens_left` |
+
+**Rules.** File content is read raw (`Call::raw`): text and Markdown are
+drawn by the core's elements, pictures decoded by `crate::picture` (24 MB
+before decoding, scaled to 1600 px), HTML never drawn. Nothing a sandbox
+names is written on this computer by the feature: downloads, opens, reveals
+and uploads are the core's (`src/files.rs`, names and verdicts by
+`src/safe.rs`). No intent takes a local path: files come from a drop on the
+panel or a pane, a paste, or the file dialog.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `files_open` | `sandbox`, `tab` (`artifacts`, `files`, `recent`) | direct | Opens the panel on that sandbox (the last tab, else Artifacts) and reads its lists |
+| `files_tab`, `files_place`, `files_browse`, `files_up`, `files_back` | `tab` / `id` / `path` (`~` is home) / none | direct | Tabs, places, folders |
+| `files_filter`, `files_hidden` | `text` / `on` | direct | The filter, dotfiles |
+| `files_select` | `id` (a row's) | direct | A folder is listed, a file previewed; a row not listed is refused |
+| `files_show_in_folder` | `id` | direct | Recent: lists its folder, on it |
+| `files_copy_path` | none | direct | The path as the agent sees it, through `copy_text` |
+| `files_download`, `files_reveal` | none | direct | Into Downloads (never over a file); and shown in its folder |
+| `files_show_saved` | none | direct | Shows the last file saved in its folder |
+| `files_save_as` | none | approval | The save dialog, after the core's dialog names the file and its size |
+| `files_open_with` | none | approval | The core downloads it and judges it (its name and first bytes); its dialog says what it is; a program, script, installer or shortcut is never opened; a file it warns about needs the box ticked |
+| `files_delete` | none | approval | The dialog shows the path and size (a folder: everything in it); only under the workspace, a read-write mount, home or /tmp, never those folders, `.sbxw-artifacts` or `.git` |
+| `files_star` | `path` | direct | Pins a folder among the places (kept across runs) |
+| `files_refresh` | none | direct | Reads the lists again |
+| `files_upload_pick`, `files_upload_paste` | none | direct | The file dialog; the clipboard's picture |
+| `files_upload_remove` | `index` (none: all) | direct | Drops a waiting file |
+| `files_upload_send` | `index` | approval | Waiting file `index`: the dialog shows its local path, size, the sandbox and session; the core streams it (128 MB at most), then the daemon's path is typed into that prompt, not submitted |
+| `files_upload_dropped` | none | approval | The next file dropped on a terminal pane, the same dialog at once; several are asked one after the other, Cancel stops |
+| `codemap_open` | `sandbox`, `map` (a lens's folder) | direct | Opens the panel and reads the map's files |
+| `codemap_doc` | `doc`, `anchor` (a section id) | direct | A file, or one section |
+| `codemap_link` | `url` | direct | A link pressed in a map file: a wiki link followed in the panel, any other in the browser |
+| `codemap_filter` | `text` | direct | Searches the map's files |
+| `codemap_generate` | `sandbox` | direct | `/codemap` in a background session (the daemon refuses a stopped sandbox, no codemap kit, one already running) |
+| `codemap_lens_set`, `codemap_lens` | `text` / `sandbox` | direct | The reader (400 characters at most); `/codemap-lens` in the background |
+| `codemap_diagram` | none | approval | The map's Archify diagram is HTML the app does not draw: saved into Downloads, judged by the core, opened in the browser after its dialog |

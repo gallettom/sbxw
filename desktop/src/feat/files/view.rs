@@ -115,6 +115,8 @@ pub fn kind_label(name: &str) -> &'static str {
         "csv" => "CSV table",
         "txt" | "log" => "Text file",
         "json" => "JSON file",
+        "sh" | "bash" | "zsh" | "command" | "py" | "rb" | "pl" | "ps1" | "bat" | "cmd" => "Script",
+        "exe" | "app" | "dmg" | "pkg" | "msi" | "deb" | "rpm" | "appimage" => "Program or installer",
         "" => "File with no extension",
         _ => "File",
     }

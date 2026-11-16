@@ -292,7 +292,11 @@ pub fn build_open(_cx: &Ctx, asked: &Asked, v: &J) -> Result<Confirm, String> {
     let from = asked.s("from").unwrap_or("");
     match v["verdict"].as_str() {
         Some("plain") | Some("warn") => {}
-        Some("refuse") => return Err(format!("{name} is {kind}: {reason} The app never opens it. It is saved in Downloads ({saved}), where you can look at it.")),
+        Some("refuse") => {
+            let why = reason.trim().trim_end_matches('.');
+            let why = if why.is_empty() { format!("it is {kind}") } else { why.to_string() };
+            return Err(format!("{name}: {why}. The app never opens it. A copy is in Downloads, to look at: {saved}"));
+        }
         _ => return Err(format!("the app could not tell what {name} is: it is not opened")),
     }
     let mut c = Confirm::new(format!("Open {name} with this computer's app?"), core_call("open", json!({ "path": saved }), format!("open {name}"), "open"))
