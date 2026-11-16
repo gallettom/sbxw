@@ -43,6 +43,9 @@ portable-pty = "0.8"
 # Pictures handed to features (src/picture.rs): decoded with limits, scaled,
 # re-encoded. Already in the lock through Rune (0.25.10).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# NFC for file names written on the person's machine (src/safe.rs). Already
+# in the lock through url/idna, with the same one feature: adds no package.
+icu_normalizer = { version = "=2.4.0", default-features = false, features = ["compiled_data"] }
 # Native audio (src/audio.rs): microphone and speaker. See .sbxw-artifacts/AUDIO.md.
 cpal = "=0.18.2"
 

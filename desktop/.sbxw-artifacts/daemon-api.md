@@ -116,6 +116,14 @@ sandboxes, as the web UI does (`svc/sandboxes.rs`, `pending_for`); a
 `network` request is a connection already refused (quiet), a `port` one a kit
 waiting (amber).
 
+### Covered in phase 4, second wave (files, browser, Mac, integrator)
+
+| Area (feature, report) | Routes | Risk Approval (core dialog) |
+|---|---|---|
+| Core: feature sockets (`src/socket.rs`) | any `GET /ws/<route>?<query>` a feature opens (`Action::OpenSocket`), `Authorization: Bearer` as `/ws`; text and binary frames both ways; reconnect optional (new token after a daemon restart) | none (a feature's own) |
+| Core: raw reads and uploads (`Call::raw`, `Call::post_bytes`, `src/files.rs`) | a feature's `GET` read as bytes (at most `max + 1`); `POST` with a raw body of known length (`Content-Length`, streamed from a file the person handed in, 128 MB at most) | uploads: always from a `Confirm` |
+| Core: downloads, open, reveal (`src/files.rs`, `src/safe.rs`) | a feature's `GET` route written to the Downloads folder or a place the person picks (save dialog) under a sanitised name, never over a file; opened with the system's default app by the core's verdict | choosing the place, opening: from a `Confirm` |
+
 ### Not covered yet
 
 Grouped by the area that will need them, with the web UI file that calls
@@ -164,3 +172,11 @@ changes the list (a removal, a creation) makes the list follow and sends a
 `session` event. `--approval SECS` makes sbx ask (web-app wants
 api.github.com) that long after the first stream client; `GET /api/voice`
 answers the fixture's `voice` key when the stand-in has no voice of its own.
+
+Phase 4, second wave: a `GET /ws/<route>` upgrade goes to the stand-in's own
+`/ws/echo` (tests of `src/socket.rs`: a hello with the connection's number,
+every text message back, `frames K`, `bye`) or to the first feature whose
+`standin_ws` takes the target, on the connection's own thread. A feature
+route may answer raw bytes with `{"$raw": text, "$type": ...}` or
+`{"$raw_hex": ..., "$type": ...}`; a raw request body (an upload) reaches the
+feature's stand-in as `{"$bytes": length, "$type": content type}`.

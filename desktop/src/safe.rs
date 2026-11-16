@@ -37,12 +37,11 @@ fn reserved_stem(name: &str) -> bool {
 /// The name a file from a sandbox is written under: no folder, no traversal,
 /// no hidden file, nothing Windows refuses, no invisible reordering, at most
 /// [`MAX_NAME`] bytes. Never empty (`download`).
-///
-/// Not done: Unicode normalisation (NFC) needs a crate the app does not have
-/// directly; APFS and NTFS compare names as given, so a decomposed name
-/// stays as the sandbox sent it.
+/// Composed first (NFC), so a decomposed accent becomes one character and
+/// every rule after sees the name as it will be shown.
 pub fn file_name(raw: &str) -> String {
-    let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(raw);
+    let last = nfc.rsplit(['/', '\\']).next().unwrap_or("");
     let mut s: String = last.chars().filter(|c| !invisible(*c)).map(|c| if replaced(c) { '_' } else { c }).collect();
     s = s.trim_start_matches(['.', ' ']).trim_end_matches(['.', ' ']).to_string();
     if s.is_empty() {
@@ -276,6 +275,12 @@ mod tests {
             ("file.txt:stream", "file.txt_stream"),
             ("a\u{2215}b.md", "a_b.md"),
             ("日本語.md", "日本語.md"),
+            // NFC: a decomposed accent composes, then the other rules apply.
+            ("Re\u{0301}sume\u{0301}.pdf", "Résumé.pdf"),
+            (" .Cafe\u{0301} ", "Café"),
+            ("CO\u{0301}N.txt", "CÓN.txt"),
+            ("NU\u{0301}L.md", "NÚL.md"),
+            ("con\u{200E}.txt", "_con.txt"),
             (&a300, &a197),
         ];
         for (i, o) in cases {
