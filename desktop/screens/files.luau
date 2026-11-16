@@ -183,6 +183,7 @@ local function preview(ui)
   else
     body = note(p.text or "")
   end
+  body = column{ key = "files-preview-" .. (p.state == "html" and "text" or p.state or "note"), w = "full", grow = 1, body }
   return column{ gap = 6, h = "full", pad = 8,
     text{ s.name, weight = "semibold", truncate = true, color = "text-bright" },
     text{ s.type .. (isfile and (" · " .. s.size .. " · " .. s.modified) or ""), size = "xs", color = "text-muted", truncate = true },

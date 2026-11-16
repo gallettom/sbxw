@@ -34,52 +34,52 @@ ev = []; t = 0.6
 def add(**e):
     global t
     e["t"] = round(t, 2); ev.append(e); t += 0.25
-# READ: the real-time wait after a tap that needs a daemon read before the
-# next tap (a panel opened, a folder listed, a file read, a dialog prepared).
-# Rune's scripts cannot wait for an element, so it is generous; under load a
-# read can take seconds in the stand-in.
-READ = int(os.environ.get("READ_MS", "2500"))
-def mark(n, hold=0):
-    if hold: add(type="mark", name=f"hold:{hold}")
+def mark(n):
     add(type="mark", name=n)
-add(type="tap", key="row-web-app"); mark("_pane", READ)
-add(type="tap", key="pane-1-x-project"); mark("artifacts", READ)
-add(type="tap", key="files-row-report.md"); mark("preview-markdown", READ)
-add(type="tap", key="files-row-wireframe.png"); mark("preview-picture", READ)
-add(type="tap", key="files-open-with"); mark("open-dialog", READ)
-add(type="tap", key="cf-cancel"); mark("_closed", 200)
-add(type="tap", key="files-tab-files"); mark("_files", READ)
-add(type="tap", key="files-up"); mark("browse", READ)
-add(type="tap", key="files-row-/Users/me/web/install.sh"); mark("_script", READ)
-add(type="tap", key="files-open-with"); mark("open-refused", READ)
-add(type="tap", key="cf-cancel"); mark("_closed2", 200)
-add(type="tap", key="files-tab-recent"); mark("recent", READ)
-add(drop_files={"paths": [f"{SHOTS}/drop/brief.md"], "key": "files-drop", "hover": 0.2}); t += 0.3
-mark("staged", READ)
-add(type="tap", key="files-upload-send-1"); mark("upload-confirm", READ)
-add(type="tap", key="cf-confirm"); mark("uploaded", READ)
-add(drop_files={"paths": [f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}); t += 0.3
-mark("pane-drop-confirm", READ)
-add(type="tap", key="cf-cancel"); mark("_closed3", 200)
-add(type="tap", key="files-codemap"); mark("codemap", READ)
-add(type="tap", key="codemap-docs"); mark("_menu", 200)
-add(type="tap", key="codemap-docs-net"); mark("codemap-net", READ)
-add(type="tap", key="codemap-outline-net-proxy"); mark("codemap-section", READ)
-add(type="tap", key="codemap-diagram"); mark("diagram-dialog", READ)
-mark("end", 300)
-# LONG=1: the dialogs with long paths, at the smallest window.
-if os.environ.get("LONG"):
-    ev.clear(); t = 0.6
-    add(type="tap", key="row-web-app"); mark("_pane", READ)
-    add(type="tap", key="pane-1-x-project"); mark("_panel", READ)
-    add(type="tap", key="files-tab-recent"); mark("_recent", READ)
-    add(type="tap", key="files-row-" + os.environ["LONGREMOTE"]); mark("_sel", READ)
-    add(type="tap", key="files-open-with"); mark("long-open", READ)
-    add(type="tap", key="cf-cancel"); mark("_c", 200)
-    add(drop_files={"paths": [os.environ["LONGFILE"]], "key": "files-drop", "hover": 0.2}); t += 0.3
-    mark("_staged", READ)
-    add(type="tap", key="files-upload-send-1"); mark("long-upload", READ)
-    mark("end", 300)
+# A tap, then a real-time wait until what it brings is drawn (the core's
+# `wait:<key>` / `wait-gone:<key>` marks, 10 s at most, logged with the time
+# waited), then the mark named for the picture.
+def step(key, until, name=None, gone=False):
+    if isinstance(key, dict):
+        add(**key)
+    else:
+        add(type="tap", key=key)
+    add(type="mark", name=("wait-gone:" if gone else "wait:") + until)
+    if name: mark(name)
+add(type="tap", key="row-web-app")
+add(type="mark", name="wait:pane-1-x-project")
+if not os.environ.get("LONG"):
+    step("pane-1-x-project", "files-row-report.md", "artifacts")
+    step("files-row-report.md", "files-preview-markdown", "preview-markdown")
+    step("files-row-wireframe.png", "files-preview-image", "preview-picture")
+    step("files-open-with", "cf-confirm", "open-dialog")
+    step("cf-cancel", "cf-dialog", gone=True)
+    step("files-tab-files", "files-row-/Users/me/web/.sbxw-artifacts/report.md")
+    step("files-up", "files-preview-markdown", "browse")
+    step("files-row-/Users/me/web/install.sh", "files-preview-text")
+    step("files-open-with", "cf-error", "open-refused")
+    step("cf-cancel", "cf-dialog", gone=True)
+    step("files-tab-recent", "files-show-/tmp/build.log", "recent")
+    step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md"], "key": "files-drop", "hover": 0.2}}, "files-staged-1", "staged")
+    step("files-upload-send-1", "cf-confirm", "upload-confirm")
+    step("cf-confirm", "files-staged-1", "uploaded", gone=True)
+    step({"drop_files": {"paths": [f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-confirm")
+    step("cf-cancel", "cf-dialog", gone=True)
+    step("files-codemap", "codemap-docs", "codemap")
+    step("codemap-docs", "codemap-docs-net")
+    step("codemap-docs-net", "codemap-outline-net-proxy", "codemap-net")
+    step("codemap-outline-net-proxy", "codemap-whole", "codemap-section")
+    step("codemap-diagram", "cf-ack", "diagram-dialog")
+else:
+    # LONG=1: the dialogs with long paths, at the smallest window.
+    step("pane-1-x-project", "files-row-report.md")
+    step("files-tab-recent", "files-show-" + os.environ["LONGREMOTE"])
+    step("files-row-" + os.environ["LONGREMOTE"], "files-preview-markdown")
+    step("files-open-with", "cf-confirm", "long-open")
+    step("cf-cancel", "cf-dialog", gone=True)
+    step({"drop_files": {"paths": [os.environ["LONGFILE"]], "key": "files-drop", "hover": 0.2}}, "files-staged-1")
+    step("files-upload-send-1", "cf-confirm", "long-upload")
+mark("end")
 print(json.dumps({"events": ev}, indent=1))
 PY
 marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-confirm codemap codemap-net codemap-section diagram-dialog})
