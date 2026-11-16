@@ -13,7 +13,7 @@ mod jarvis;
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
-use crate::intent::{Intent, Mode, PaneTarget, Risk, Split};
+use crate::intent::{Intent, Mode, PaneTarget, Risk, Split, ThreadStart};
 use crate::screen::{self, Host, ScreenState};
 use crate::terminal::{self, TerminalEvent, TerminalState};
 use crate::theme::{self, c, layout};
@@ -78,11 +78,15 @@ pub struct Pane {
     pub attention: bool,
     /// Lost the socket; the terminal is reconnecting on its own.
     pub reconnecting: Option<String>,
+    /// When it was last opened or focused (the app's own counter): the
+    /// least recently used pane is the one a new sandbox may replace when no
+    /// pane is free and the layout is full.
+    pub used: u64,
 }
 
 impl Pane {
     fn empty() -> Pane {
-        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None }
+        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None, used: 0 }
     }
 
     fn status(&self) -> String {
@@ -168,7 +172,12 @@ pub struct App {
     pub window: (f32, f32),
     /// Features (`src/feat/`): their data, slots and dialog (shell/features.rs).
     pub feats: features::Feats,
+    /// The counter behind [`Pane::used`].
+    use_seq: u64,
 }
+
+/// The most panes the layout shows (the layout switch's largest choice).
+pub const MAX_PANES: usize = 4;
 
 /// Whether the window takes pastes at its root (see `view`).
 pub fn window_paste() -> bool {
@@ -245,6 +254,7 @@ impl App {
             wiring: jarvis::Wiring::new(),
             window: (1280.0, 800.0),
             feats: features::Feats::default(),
+            use_seq: 0,
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -400,7 +410,7 @@ impl App {
                 .iter()
                 .take(self.layout.0)
                 .enumerate()
-                .map(|(i, p)| PaneView { index: i + 1, sandbox: p.sandbox.clone(), mode: p.mode.name(), focused: i == self.focused, status: p.status() })
+                .map(|(i, p)| PaneView { index: i + 1, sandbox: p.sandbox.clone(), mode: p.mode.name(), thread: p.thread.clone(), focused: i == self.focused, status: p.status() })
                 .collect(),
             platform: std::env::consts::OS,
         }
@@ -612,6 +622,7 @@ impl App {
             if let Some(i) = (0..shown).find(|&i| self.panes[i].term.as_ref().is_some_and(|t| t.key("grid") == k)) {
                 if i != self.focused {
                     self.focused = i;
+                    self.touch(i);
                     changed = true;
                 }
             }
@@ -758,8 +769,13 @@ impl App {
 
     /// Opens a terminal in pane `i`.
     fn open(&mut self, i: usize, sandbox: &str, mode: Mode, thread: Option<String>) {
+        self.open_with(i, sandbox, mode, thread, ThreadStart::default());
+    }
+
+    fn open_with(&mut self, i: usize, sandbox: &str, mode: Mode, thread: Option<String>, start: ThreadStart) {
         self.ensure_panes(i + 1);
         let waker = self.waker.clone();
+        self.touch(i);
         let p = &mut self.panes[i];
         p.sandbox = Some(sandbox.to_string());
         p.mode = mode;
@@ -769,7 +785,8 @@ impl App {
         p.title = None;
         p.attention = false;
         p.reconnecting = None;
-        let req = TerminalRequest { sandbox: sandbox.to_string(), mode: mode.query(), thread };
+        let req = TerminalRequest::new(sandbox, mode, thread, start);
+        let again = req.again();
         let r = match (&self.daemon, waker) {
             (Some(d), Some(w)) => d.open_terminal(&req, w).map_err(|e| format!("{e:#}")),
             (None, _) => Err(format!("not connected: {}", self.connection.text)),
@@ -780,7 +797,7 @@ impl App {
                 let (current, wake) = (self.current.clone(), self.waker.clone().expect("setup ran"));
                 let reopen: terminal::Reconnect = Arc::new(move || {
                     let d = current.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("not connected to the daemon"))?;
-                    d.open_terminal(&req, wake.clone())
+                    d.open_terminal(&again, wake.clone())
                 });
                 let mut t = TerminalState::with_reconnect(conn, reopen);
                 // Element keys `grid-N`, `terminal-N` (N the pane's number).
@@ -802,6 +819,25 @@ impl App {
         }
     }
 
+    /// Marks pane `i` as just used (opened or focused).
+    pub(crate) fn touch(&mut self, i: usize) {
+        self.use_seq += 1;
+        if let Some(p) = self.panes.get_mut(i) {
+            p.used = self.use_seq;
+        }
+    }
+
+    /// Where an `open_terminal` goes. `spare` is the web UI's rule
+    /// (`assets/js/sandboxes.js`, `openInSparePane`), with one more step: a
+    /// new terminal never takes the place of a live one while there is room.
+    ///
+    /// 1. the first empty pane on screen;
+    /// 2. else the layout grows by one pane, up to [`MAX_PANES`]: the pane
+    ///    revealed is used if it is empty; one hidden by a smaller layout that
+    ///    still holds a terminal is swapped with an empty hidden one first, so
+    ///    the hidden terminal is kept (not replaced, as it was in phase 3);
+    /// 3. else (four panes, all in use) the least recently used pane is
+    ///    replaced, never the focused one, and a notice names what it closed.
     fn pane_for(&mut self, target: &PaneTarget) -> usize {
         match target {
             PaneTarget::Focused => self.focused,
@@ -812,14 +848,47 @@ impl App {
                 }
                 i
             }
-            PaneTarget::Spare => match (0..self.layout.0).find(|&i| self.panes.get(i).is_none_or(|p| p.sandbox.is_none())) {
-                Some(i) => i,
-                None if self.layout.0 < 4 => {
-                    self.layout.0 += 1;
-                    self.layout.0 - 1
+            PaneTarget::Spare => self.spare_pane(),
+        }
+    }
+
+    fn spare_pane(&mut self) -> usize {
+        self.ensure_panes(self.layout.0);
+        let free = |p: &Pane| p.sandbox.is_none();
+        if let Some(i) = (0..self.layout.0).find(|&i| free(&self.panes[i])) {
+            return i;
+        }
+        if self.layout.0 < MAX_PANES {
+            let i = self.layout.0;
+            self.ensure_panes(MAX_PANES);
+            if !free(&self.panes[i]) {
+                if let Some(j) = (i + 1..MAX_PANES).find(|&j| free(&self.panes[j])) {
+                    self.swap_panes(i, j);
                 }
-                None => self.focused,
-            },
+            }
+            if free(&self.panes[i]) {
+                self.layout.0 = i + 1;
+                return i;
+            }
+            // Every pane, hidden ones included, holds a terminal: show one
+            // more and take the least recently used of all (below).
+            self.layout.0 = i + 1;
+        }
+        let shown = self.layout.0;
+        let lru = (0..shown).filter(|&i| i != self.focused || shown == 1).min_by_key(|&i| self.panes[i].used).unwrap_or(self.focused);
+        if let Some(old) = self.panes[lru].sandbox.clone() {
+            self.notify(format!("No free pane: pane {} ({old}, the least recently used) now shows the new terminal", lru + 1), false);
+        }
+        lru
+    }
+
+    /// Swaps two panes, terminals included (their element keys follow the index).
+    fn swap_panes(&mut self, a: usize, b: usize) {
+        self.panes.swap(a, b);
+        for i in [a, b] {
+            if let Some(t) = self.panes[i].term.as_mut() {
+                t.id = (i + 1).to_string();
+            }
         }
     }
 
@@ -827,9 +896,9 @@ impl App {
     pub fn run_intent(&mut self, from: &str, intent: Intent) {
         log::info!("intent from {from}: {intent:?}");
         match intent {
-            Intent::OpenTerminal { sandbox, mode, thread, pane } => {
+            Intent::OpenTerminal { sandbox, mode, thread, pane, start } => {
                 let i = self.pane_for(&pane);
-                self.open(i, &sandbox, mode, thread);
+                self.open_with(i, &sandbox, mode, thread, start);
                 self.focused = i;
             }
             Intent::StartSandbox { sandbox, pane } => {
@@ -1078,7 +1147,7 @@ fn pane_view(s: &App, i: usize) -> El {
     }
     if let Some(p) = pane.filter(|p| p.sandbox.is_some()) {
         bar = bar.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(10.5, 400.0)).color(c("text-muted"))));
-        for x in s.pane_extras(i, p.sandbox.as_deref().unwrap_or("")) {
+        for x in s.pane_extras(i, p.sandbox.as_deref().unwrap_or(""), p.thread.as_deref()) {
             bar = bar.child(x);
         }
         if !connected {
@@ -1130,6 +1199,7 @@ fn pane_view(s: &App, i: usize) -> El {
         .on_press(move |s: &mut App| {
             if s.focused != i {
                 s.focused = i;
+                s.touch(i);
                 s.push_data();
             }
         })
@@ -1206,6 +1276,62 @@ mod tests {
         a.approve_click();
         wait(&mut a);
         assert!(a.jarvis.dialog_error.as_ref().unwrap().1.contains("changed since the proposal"), "{:?}", a.jarvis.dialog_error);
+    }
+
+    /// Phase 3 bug (user, macOS): a new sandbox opened in a "spare" pane took
+    /// the place of a live terminal. A spare pane is an empty one on screen,
+    /// else one more pane; a terminal hidden by a smaller layout is kept; only
+    /// with four busy panes is one replaced: the least recently used, not the focused.
+    #[test]
+    fn a_spare_pane_never_replaces_a_live_terminal_while_there_is_room() {
+        let open = |a: &mut App, i: usize, sb: &str| {
+            a.ensure_panes(i + 1);
+            a.panes[i].sandbox = Some(sb.into());
+            a.touch(i);
+        };
+        let spare = |a: &mut App, sb: &str| a.run_intent("test", Intent::OpenTerminal { sandbox: sb.into(), mode: Mode::Agent, thread: None, pane: PaneTarget::Spare, start: ThreadStart::default() });
+        let shown = |a: &App| a.panes.iter().take(a.layout.0).map(|p| p.sandbox.clone().unwrap_or_default()).collect::<Vec<_>>();
+        let app = || {
+            let mut a = app();
+            a.panes = vec![Pane::empty()];
+            (a.layout.0, a.focused) = (2, 0);
+            a
+        };
+        // One pane in use, layout "1 terminal": a second pane is added.
+        let mut a = app();
+        a.layout.0 = 1;
+        open(&mut a, 0, "web-app");
+        spare(&mut a, "new-1");
+        assert_eq!(shown(&a), ["web-app", "new-1"]);
+        assert_eq!(a.focused, 1);
+        // Two terminals, then the layout set back to 1: the second is hidden,
+        // still live. The next spare open must not replace it.
+        let mut a = app();
+        open(&mut a, 0, "web-app");
+        open(&mut a, 1, "web-api");
+        a.run_intent("test", Intent::SetLayout { panes: 1, split: Split::Columns });
+        spare(&mut a, "new-2");
+        assert_eq!(a.layout.0, 2);
+        assert_eq!(shown(&a), ["web-app", "new-2"]);
+        assert!(a.panes.iter().any(|p| p.sandbox.as_deref() == Some("web-api")), "the hidden terminal is kept: {:?}", a.panes.iter().map(|p| &p.sandbox).collect::<Vec<_>>());
+        // An empty pane on screen is taken first.
+        let mut a = app();
+        a.layout.0 = 3;
+        open(&mut a, 0, "a");
+        open(&mut a, 2, "c");
+        spare(&mut a, "new-3");
+        assert_eq!(shown(&a), ["a", "new-3", "c"]);
+        // Four busy panes: the least recently used one, never the focused one.
+        let mut a = app();
+        a.layout.0 = 4;
+        for (i, sb) in ["a", "b", "c", "d"].iter().enumerate() {
+            open(&mut a, i, sb);
+        }
+        a.touch(0);
+        a.focused = 3;
+        spare(&mut a, "new-4");
+        assert_eq!(shown(&a), ["a", "new-4", "c", "d"], "b was the least recently used");
+        assert!(a.notice.as_ref().unwrap().0.contains("pane 2 (b, the least recently used)"));
     }
 
     #[test]

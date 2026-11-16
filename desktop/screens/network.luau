@@ -45,7 +45,14 @@ end
 local function requests(data)
   local a = data.approvals or {}
   local out = { gap = 6, w = "full" }
-  local list = a.approvals or {}
+  -- Only the requests of sandboxes in the list, as the web UI shows them:
+  -- sbx lists the whole machine's (removed sandboxes, Jarvis's own).
+  local listed = {}
+  for _, sb in ipairs(data.sandboxes or {}) do listed[sb.name] = true end
+  local list = {}
+  for _, r in ipairs(a.approvals or {}) do
+    if listed[r.sandbox] then table.insert(list, r) end
+  end
   table.insert(out, section("Waiting for you", #list))
   local err = (data.app.errors or {}).approvals
   if a.ok == false or err then
@@ -61,9 +68,9 @@ local function requests(data)
         variant = (o.id == "allow") and "primary" or "neutral",
         on = "answer", arg = { id = r.id, option = o.id }, key = "answer-" .. r.id .. "-" .. o.id })
     end
-    table.insert(out, column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "amber", key = "req-" .. r.id,
+    table.insert(out, column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = r.kind == "network" and "elevated" or "amber", key = "req-" .. r.id,
       row{ gap = 6, w = "full",
-        badge{ kinds[r.kind] or r.kind or "request", tone = "amber" },
+        badge{ kinds[r.kind] or r.kind or "request", tone = r.kind == "network" and "neutral" or "amber" },
         text{ r.title or "", mono = true, color = "text-bright", truncate = true, grow = 1 },
       },
       text{ (r.sandbox or "") .. ((r.detail and r.detail ~= "") and (" · " .. string.gsub(r.detail, "\n", " · ")) or ""), size = "sm", color = "text-muted", wrap = true },

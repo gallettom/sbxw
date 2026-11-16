@@ -31,11 +31,24 @@ pub enum PaneTarget {
     Index(usize),
 }
 
+/// A thread's first open (`open_terminal` with `thread`, agent mode): the
+/// web UI's `connectPane` query (`assets/js/panes.js`). The daemon remembers
+/// them, so a reconnection does not send them again.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThreadStart {
+    /// The repository folder, relative to the workspace; `""` is the workspace itself.
+    pub repo: Option<String>,
+    /// A model id for the thread's agent.
+    pub model: Option<String>,
+    /// A session in the main checkout, no worktree.
+    pub checkout: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Intent {
     /// Opens a terminal on a sandbox. `mode`: `agent` (default; starts a stopped
     /// sandbox), `bash`. `thread` for a thread's session.
-    OpenTerminal { sandbox: String, mode: Mode, thread: Option<String>, pane: PaneTarget },
+    OpenTerminal { sandbox: String, mode: Mode, thread: Option<String>, pane: PaneTarget, start: ThreadStart },
     /// Starts a stopped sandbox: as the web UI does, by opening its agent terminal.
     StartSandbox { sandbox: String, pane: PaneTarget },
     StopSandbox { sandbox: String },
@@ -123,6 +136,8 @@ pub enum Risk {
 pub enum Arg {
     /// A non-empty string.
     Str,
+    /// A string, possibly empty (a thread's `repo`: `""` is the workspace).
+    Text,
     /// One of these strings.
     OneOf(&'static [&'static str]),
     /// A whole number in this range.
@@ -151,8 +166,8 @@ pub const REGISTRY: &[Spec] = &[
     Spec {
         name: "open_terminal",
         risk: Risk::Direct,
-        args: &[("sandbox", Arg::Str, true), ("mode", Arg::OneOf(MODES), false), ("thread", Arg::Str, false), ("pane", Arg::Pane, false)],
-        doc: "Opens a terminal on a sandbox, in the focused pane by default. The agent mode starts a stopped sandbox.",
+        args: &[("sandbox", Arg::Str, true), ("mode", Arg::OneOf(MODES), false), ("thread", Arg::Str, false), ("pane", Arg::Pane, false), ("repo", Arg::Text, false), ("model", Arg::Str, false), ("checkout", Arg::Bool, false)],
+        doc: "Opens a terminal on a sandbox, in the focused pane by default. The agent mode starts a stopped sandbox. With `thread`: that thread's agent (bash: its shell); `repo` (\"\" is the workspace), `model` and `checkout` (no worktree) are for the thread's first open, agent mode only. `pane: \"spare\"` takes an empty pane, else adds one (up to 4), and only then replaces the least recently used.",
     },
     Spec {
         name: "start_sandbox",
@@ -307,6 +322,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
             },
             thread: s("thread"),
             pane: pane(),
+            start: ThreadStart { repo: s("repo"), model: s("model"), checkout: m.get("checkout").and_then(Value::as_bool).unwrap_or(false) },
         },
         "start_sandbox" => Intent::StartSandbox { sandbox: s("sandbox").unwrap(), pane: pane() },
         "stop_sandbox" => Intent::StopSandbox { sandbox: s("sandbox").unwrap() },
@@ -337,6 +353,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
 fn check(name: &str, a: &str, ty: Arg, v: &Value) -> Result<(), String> {
     let ok = match (ty, v) {
         (Arg::Str, Value::String(s)) => !s.is_empty(),
+        (Arg::Text, Value::String(s)) => s.len() <= 4096 && !s.chars().any(char::is_control),
         (Arg::OneOf(set), Value::String(s)) => set.contains(&s.as_str()),
         (Arg::Int(lo, hi), Value::Number(n)) => n.as_f64().is_some_and(|f| f.fract() == 0.0 && f >= lo as f64 && f <= hi as f64),
         (Arg::Pane, Value::String(s)) => s == "focused" || s == "spare",
@@ -350,6 +367,7 @@ fn check(name: &str, a: &str, ty: Arg, v: &Value) -> Result<(), String> {
     }
     Err(match ty {
         Arg::Str => format!("{name}: '{a}' must be a non-empty string"),
+        Arg::Text => format!("{name}: '{a}' must be a string without control characters"),
         Arg::OneOf(set) => format!("{name}: '{a}' must be one of {}", set.join(", ")),
         Arg::Int(lo, hi) => format!("{name}: '{a}' must be a whole number from {lo} to {hi}"),
         Arg::Pane => format!("{name}: '{a}' must be \"focused\", \"spare\" or a pane number 1 to 4"),
@@ -374,7 +392,7 @@ mod tests {
             parse(&json!([i("select", json!({ "sandbox": "a" })), i("open_terminal", json!({ "sandbox": "a", "mode": "bash", "pane": 2 }))])).unwrap(),
             vec![
                 Intent::Select { sandbox: Some("a".into()) },
-                Intent::OpenTerminal { sandbox: "a".into(), mode: Mode::Bash, thread: None, pane: PaneTarget::Index(2) }
+                Intent::OpenTerminal { sandbox: "a".into(), mode: Mode::Bash, thread: None, pane: PaneTarget::Index(2), start: ThreadStart::default() }
             ]
         );
         assert_eq!(parse(&i("set_layout", json!({ "panes": 2, "split": "rows" }))).unwrap(), vec![Intent::SetLayout { panes: 2, split: Split::Rows }]);

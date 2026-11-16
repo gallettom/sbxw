@@ -92,6 +92,51 @@ pub struct TerminalRequest {
     /// `None` is the agent; `bash`, `monitor`, `thread`.
     pub mode: Option<String>,
     pub thread: Option<String>,
+    /// A thread's first open only (mode `thread`): see [`crate::intent::ThreadStart`].
+    pub repo: Option<String>,
+    pub model: Option<String>,
+    pub checkout: bool,
+}
+
+impl TerminalRequest {
+    /// A pane's request. The agent of a thread is the daemon's `mode=thread`
+    /// (`crates/core/src/session.rs`, `SessionKind::from_query`): sent with no
+    /// mode, it would open the sandbox's main agent.
+    pub fn new(sandbox: &str, mode: crate::intent::Mode, thread: Option<String>, start: crate::intent::ThreadStart) -> TerminalRequest {
+        let wire = match (&thread, mode) {
+            (Some(_), crate::intent::Mode::Agent) => Some("thread".to_string()),
+            _ => mode.query(),
+        };
+        TerminalRequest { sandbox: sandbox.to_string(), mode: wire, thread, repo: start.repo, model: start.model, checkout: start.checkout }
+    }
+
+    /// The `/ws` query string, as `assets/js/panes.js` `connectPane` builds it.
+    pub fn query(&self) -> String {
+        let mut q = format!("sandbox={}", enc(&self.sandbox));
+        if let Some(m) = &self.mode {
+            q += &format!("&mode={}", enc(m));
+        }
+        if let Some(t) = &self.thread {
+            q += &format!("&thread={}", enc(t));
+        }
+        if self.mode.as_deref() == Some("thread") {
+            if let Some(r) = &self.repo {
+                q += &format!("&repo={}", enc(r));
+            }
+            if let Some(m) = &self.model {
+                q += &format!("&model={}", enc(m));
+            }
+            if self.checkout {
+                q += "&checkout=1";
+            }
+        }
+        q
+    }
+
+    /// What a reconnection sends: the same session, without the first open's choices.
+    pub fn again(&self) -> TerminalRequest {
+        TerminalRequest { repo: None, model: None, checkout: false, ..self.clone() }
+    }
 }
 
 pub enum TermEvent {
@@ -384,13 +429,7 @@ impl Daemon for HttpDaemon {
     }
 
     fn open_terminal(&self, req: &TerminalRequest, wake: Wake) -> Result<TerminalConn> {
-        let mut url = format!("ws://{}/ws?sandbox={}", self.addr, enc(&req.sandbox));
-        if let Some(m) = &req.mode {
-            url += &format!("&mode={}", enc(m));
-        }
-        if let Some(t) = &req.thread {
-            url += &format!("&thread={}", enc(t));
-        }
+        let url = format!("ws://{}/ws?{}", self.addr, req.query());
         let mut request = url.as_str().into_client_request()?;
         request.headers_mut().insert("Authorization", self.auth().parse()?);
         let sock = self.addr.to_socket_addrs()?.next().ok_or_else(|| anyhow!("no address for {}", self.addr))?;
@@ -1126,6 +1165,18 @@ fn refresher(current: Current, send: Sender, kicks: mpsc::Receiver<Duration>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_threads_agent_is_mode_thread_and_its_first_open_choices_go_once() {
+        use crate::intent::{Mode, ThreadStart};
+        let st = ThreadStart { repo: Some(String::new()), model: Some("claude-opus-5-5".into()), checkout: true };
+        let r = TerminalRequest::new("web app", Mode::Agent, Some("t1".into()), st.clone());
+        assert_eq!(r.query(), "sandbox=web%20app&mode=thread&thread=t1&repo=&model=claude-opus-5-5&checkout=1");
+        assert_eq!(r.again().query(), "sandbox=web%20app&mode=thread&thread=t1");
+        assert_eq!(TerminalRequest::new("x", Mode::Bash, Some("t1".into()), st.clone()).query(), "sandbox=x&mode=bash&thread=t1");
+        assert_eq!(TerminalRequest::new("x", Mode::Agent, None, st).query(), "sandbox=x");
+        assert_eq!(TerminalRequest::new("x", Mode::KitAdd, None, ThreadStart::default()).query(), "sandbox=x&mode=kit-add");
+    }
+
     use super::*;
 
     #[test]

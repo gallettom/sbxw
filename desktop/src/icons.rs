@@ -31,7 +31,8 @@ icons! {
     CHECK "check" st!("polyline", r#"points="3,8.5 6.5,12 13,4.5""#);
     WARNING "warning" concat!(st!("path", r#"d="M8 2 14.5 13.5h-13z""#), st!("line", r#"x1="8" y1="6.5" x2="8" y2="9.5""#), r#"<circle cx="8" cy="11.6" r="0.9" fill="currentColor"/>"#);
     INFO "info" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("line", r#"x1="8" y1="7.5" x2="8" y2="11""#), r#"<circle cx="8" cy="5.2" r="0.9" fill="currentColor"/>"#);
-    GEAR "gear" concat!(st!("circle", r#"cx="8" cy="8" r="2.2""#), st!("path", r#"d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4""#));
+    // A cog: eight square teeth round a ring and a hole (phase 3's spokes read as a sun).
+    GEAR "gear" concat!(st!("path", r#"d="M12.69 6.57 L14.50 6.85 L14.50 9.15 L12.69 9.43 L12.33 10.30 L13.41 11.79 L11.79 13.41 L10.30 12.33 L9.43 12.69 L9.15 14.50 L6.85 14.50 L6.57 12.69 L5.70 12.33 L4.21 13.41 L2.59 11.79 L3.67 10.30 L3.31 9.43 L1.50 9.15 L1.50 6.85 L3.31 6.57 L3.67 5.70 L2.59 4.21 L4.21 2.59 L5.70 3.67 L6.57 3.31 L6.85 1.50 L9.15 1.50 L9.43 3.31 L10.30 3.67 L11.79 2.59 L13.41 4.21 L12.33 5.70z""#), st!("circle", r#"cx="8" cy="8" r="2""#));
     SEARCH "search" concat!(st!("circle", r#"cx="7" cy="7" r="4.5""#), st!("line", r#"x1="10.5" y1="10.5" x2="14" y2="14""#));
     FOLDER "folder" st!("path", r#"d="M1.5 4.5a1 1 0 0 1 1-1h3.5l1.5 1.5h6a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z""#);
     FILE "file" concat!(st!("path", r#"d="M4 1.5h5l3.5 3.5v9.5h-8.5z""#), st!("polyline", r#"points="9,1.5 9,5 12.5,5""#));

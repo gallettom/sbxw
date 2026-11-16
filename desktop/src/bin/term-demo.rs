@@ -190,7 +190,7 @@ fn setup(s: &mut Demo, waker: Waker) {
             return;
         }
     };
-    let req = TerminalRequest { sandbox: s.args.sandbox.clone(), mode: Some(s.args.mode.clone()).filter(|m| m != "agent"), thread: None };
+    let req = TerminalRequest { sandbox: s.args.sandbox.clone(), mode: Some(s.args.mode.clone()).filter(|m| m != "agent"), thread: None, ..Default::default() };
     let conn = match d.open_terminal(&req, waker.clone()) {
         Ok(c) => c,
         Err(e) => {
@@ -416,7 +416,7 @@ fn bench_echo(n: usize) {
     };
     // Through client.rs (its 5 ms read timeout loop).
     let d = HttpDaemon::connect(&addr, &token).expect("bench daemon");
-    let conn = d.open_terminal(&TerminalRequest { sandbox: "x".into(), mode: None, thread: None }, Arc::new(|| {})).unwrap();
+    let conn = d.open_terminal(&TerminalRequest { sandbox: "x".into(), mode: None, thread: None, ..Default::default() }, Arc::new(|| {})).unwrap();
     let mut v = vec![];
     for i in 0..n {
         // Spread the keys like typing, out of phase with the 5 ms loop.

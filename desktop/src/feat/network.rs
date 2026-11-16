@@ -114,6 +114,24 @@ pub fn approvals(cx: &Ctx) -> Vec<J> {
     cx.get("approvals")["approvals"].as_array().cloned().unwrap_or_default()
 }
 
+/// The requests the app counts and shows: those of a sandbox in the list,
+/// exactly as the web UI does (`crates/daemon/src/svc/sandboxes.rs`,
+/// `pending_for`, counts one sandbox's; `assets/js/approvals.js` lists one
+/// sandbox's). `sbx policy approval ls` lists the whole machine's, so it also
+/// has the requests of sandboxes sbxw does not list (removed ones, Jarvis's
+/// `sbxw-jarvis`): phase 3 counted those in the top bar ("sbx asks 85").
+pub fn waiting(cx: &Ctx) -> Vec<J> {
+    let listed: Vec<&str> = cx.get("sandboxes").as_array().map(|l| l.iter().filter_map(|s| s["name"].as_str()).collect()).unwrap_or_default();
+    approvals(cx).into_iter().filter(|a| a["sandbox"].as_str().is_some_and(|n| listed.contains(&n))).collect()
+}
+
+/// Whether a request holds something until answered. A `network` request is
+/// a connection sbx already refused (allowing it helps the next try; nothing
+/// waits); a `port` request is a kit waiting, and lapses after 45 s.
+pub fn holds(a: &J) -> bool {
+    a["kind"] != "network"
+}
+
 /// What sbx's option means, in plain words, from its id and label.
 fn option_words(id: &str, label: &str) -> String {
     let l = label.to_lowercase();
@@ -364,13 +382,15 @@ fn on_data(cx: &Ctx, key: &str, old: &J, new: &J) -> Vec<Action> {
     if key != "approvals" {
         return vec![];
     }
+    // The first read is what was already there: said only if something waits.
+    let first = old.is_null();
     let seen: Vec<&J> = old["approvals"].as_array().map(|l| l.iter().map(|a| &a["id"]).collect()).unwrap_or_default();
-    let fresh: Vec<&J> = new["approvals"].as_array().map(|l| l.iter().filter(|a| !seen.contains(&&a["id"])).collect()).unwrap_or_default();
+    let listed = waiting(&Ctx { data: &json!({ "sandboxes": cx.get("sandboxes"), "approvals": new }) });
+    let fresh: Vec<&J> = listed.iter().filter(|a| !seen.contains(&&a["id"]) && (!first || holds(a))).collect();
     match fresh.as_slice() {
         [] => vec![],
         [a] => {
             let who = a["sandbox"].as_str().unwrap_or("a sandbox");
-            let _ = cx;
             vec![Action::Notice { text: format!("{who} asks: {}", a["title"].as_str().unwrap_or("a decision")), error: false, then: Some(("network_show".into(), json!({ "sandbox": who }))) }]
         }
         many => vec![Action::Notice { text: format!("{} requests from sbx wait for you", many.len()), error: false, then: Some(("network_show".into(), json!({}))) }],
@@ -378,31 +398,38 @@ fn on_data(cx: &Ctx, key: &str, old: &J, new: &J) -> Vec<Action> {
 }
 
 fn extras(cx: &Ctx) -> Vec<Extra> {
-    let all = approvals(cx);
+    let all = waiting(cx);
     let known = cx.get("approvals")["approvals"].is_array();
+    // Amber (and a primary button) only when something is held until
+    // answered; refused hosts alone are a quiet count.
+    let tone = |l: &[&J]| if l.iter().any(|a| holds(a)) { "amber" } else { "muted" };
     let mut v = vec![];
     if !all.is_empty() {
+        let refs: Vec<&J> = all.iter().collect();
+        let held = refs.iter().any(|a| holds(a));
         v.push(Extra {
             place: Place::Topbar,
             id: "approvals".into(),
             label: "sbx asks".into(),
             icon: Some("flag".into()),
-            tone: "amber".into(),
-            help: "Requests from sbx wait for your answer".into(),
+            tone: tone(&refs).into(),
+            help: if held { "Requests from sbx wait for your answer".into() } else { "Hosts sbx refused, which you may allow (nothing is held waiting)".into() },
             count: Some(all.len() as u64),
             intent: Some(("network_show".into(), json!({}))),
         });
     }
     for sb in cx.get("sandboxes").as_array().cloned().unwrap_or_default() {
         let name = sb["name"].as_str().unwrap_or("").to_string();
-        let n = if known { all.iter().filter(|a| a["sandbox"] == name.as_str()).count() as u64 } else { sb["approvals"].as_u64().unwrap_or(0) };
+        let mine: Vec<&J> = all.iter().filter(|a| a["sandbox"] == name.as_str()).collect();
+        let n = if known { mine.len() as u64 } else { sb["approvals"].as_u64().unwrap_or(0) };
+        let tone = if known { tone(&mine) } else { "amber" };
         if n > 0 {
             v.push(Extra {
                 place: Place::Sandbox(name.clone()),
                 id: "approvals".into(),
                 label: "⚑".into(),
                 icon: None,
-                tone: "amber".into(),
+                tone: tone.into(),
                 help: format!("sbx waits for you to decide something for {name}"),
                 count: Some(n),
                 intent: Some(("network_show".into(), json!({ "sandbox": name }))),
@@ -412,7 +439,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
                 id: "approvals".into(),
                 label: "sbx asks".into(),
                 icon: Some("flag".into()),
-                tone: "amber".into(),
+                tone: tone.into(),
                 help: "Answer in the Network panel".into(),
                 count: Some(n),
                 intent: Some(("network_show".into(), json!({ "sandbox": name }))),
@@ -617,6 +644,36 @@ mod tests {
         assert!(c.danger && c.lines.iter().any(|l| l.contains("other machines")));
         // Open: the URL comes from the daemon's list.
         assert_eq!(act(&cx, &ask("port_open", json!({ "sandbox": "web-app", "spec": "127.0.0.1:43000:3000/tcp" }))).unwrap(), vec![Action::OpenLink("http://127.0.0.1:43000".into())]);
+    }
+
+    /// Phase 3 bug (user, macOS): "sbx asks 85" in the top bar. The daemon's
+    /// `GET /api/approvals` is `sbx policy approval ls`, the whole machine's;
+    /// the web UI counts only a listed sandbox's. Refused hosts alone are quiet.
+    #[test]
+    fn only_listed_sandboxes_requests_count_and_refused_hosts_are_quiet() {
+        let f = crate::fixture::Fixture::load(&crate::fixture::dir().join("network/machine-wide.json")).unwrap();
+        let d = f.raw.clone();
+        let cx = Ctx { data: &d };
+        assert_eq!(approvals(&cx).len(), 83);
+        assert_eq!(waiting(&cx).len(), 2);
+        let x = extras(&cx);
+        let top = x.iter().find(|e| e.place == Place::Topbar).unwrap();
+        assert_eq!((top.count, top.tone.as_str()), (Some(2), "muted"));
+        let row = x.iter().find(|e| e.place == Place::Sandbox("web-app".into()) && e.id == "approvals").unwrap();
+        assert_eq!((row.count, row.tone.as_str()), (Some(2), "muted"));
+        // A kit's port request holds something: amber.
+        let mut d2 = d.clone();
+        d2["approvals"]["approvals"].as_array_mut().unwrap().push(json!({ "id": "port:k1", "kind": "port", "sandbox": "web-app", "title": "5173", "detail": "", "created_at": "", "options": [{ "id": "allow", "label": "Allow" }] }));
+        let top = extras(&Ctx { data: &d2 }).into_iter().find(|e| e.place == Place::Topbar).unwrap();
+        assert_eq!((top.count, top.tone.as_str()), (Some(3), "amber"));
+        // The first read says nothing about refused hosts; a new one later is said.
+        assert!(on_data(&cx, "approvals", &J::Null, &d["approvals"]).is_empty());
+        let a = on_data(&Ctx { data: &d2 }, "approvals", &J::Null, &d2["approvals"]);
+        assert!(matches!(a.as_slice(), [Action::Notice { text, .. }] if text == "web-app asks: 5173"), "{a:?}");
+        // Requests of unlisted sandboxes never make a notice.
+        let mut d3 = d.clone();
+        d3["approvals"]["approvals"].as_array_mut().unwrap().push(json!({ "id": "network:x", "kind": "network", "sandbox": "sbxw-jarvis", "title": "x.com:443", "options": [{ "id": "allow" }] }));
+        assert!(on_data(&Ctx { data: &d3 }, "approvals", &d["approvals"], &d3["approvals"]).is_empty());
     }
 
     #[test]

@@ -418,6 +418,15 @@ pub enum Place {
     Topbar,
     /// On the bar of every pane showing that sandbox (drawn by the core).
     Pane(String),
+    /// On the bar of every pane showing that session of that sandbox: its
+    /// main agent (`thread: None`, any mode but a thread's) or that thread
+    /// (drawn by the core).
+    Session { sandbox: String, thread: Option<String> },
+    /// A sub-row under that sandbox's row in the sidebar
+    /// (`data.app.extras.rows[name]`, a list, drawn by `sandboxes.luau`):
+    /// a dot of `tone`, the label, a right badge (`count`, else `help`),
+    /// pressable with its `intent`; key `extra-row-<sandbox>-<id>`.
+    SandboxRow(String),
 }
 
 /// A button or a badge a feature adds to a slot drawn by someone else.

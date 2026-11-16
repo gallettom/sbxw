@@ -844,6 +844,25 @@ return {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Session sub-rows (`Place::SandboxRow`) are drawn under their sandbox.
+    #[test]
+    fn the_sandbox_list_draws_session_rows() {
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+        data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): [
+            { "id": "main", "label": "main agent", "tone": "green", "help": "working", "count": null, "icon": null, "intent": { "name": "open_terminal", "args": { "sandbox": name } } },
+            { "id": "t1", "label": "t1: fix the login", "tone": "amber", "help": "", "count": 2, "icon": null, "intent": null }
+        ] } });
+        let s = ScreenState::new("sandboxes", &dir, data);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let tree = format!("{:?}", s.last_good.unwrap());
+        for k in [format!("extra-row-{name}-main"), format!("extra-row-{name}-t1"), "t1: fix the login".into()] {
+            assert!(tree.contains(&k), "{k} not drawn");
+        }
+    }
+
     #[test]
     fn builtins_load_against_their_fixtures() {
         for (name, _) in BUILTIN {

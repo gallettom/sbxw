@@ -419,18 +419,20 @@ impl App {
         let mut topbar = vec![];
         let mut sandboxes = Map::new();
         let mut panes = vec![];
+        let mut rows = Map::new();
         for f in feat::FEATURES {
             let Some(x) = f.extras else { continue };
             for e in x(&Ctx { data }) {
                 match &e.place {
                     Place::Topbar => topbar.push(e.to_json()),
                     Place::Sandbox(n) => sandboxes.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
-                    Place::Pane(_) => panes.push(e),
+                    Place::SandboxRow(n) => rows.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
+                    Place::Pane(_) | Place::Session { .. } => panes.push(e),
                 }
             }
         }
         let _ = &self.feats.errors;
-        (modal, panels, json!({ "topbar": topbar, "sandboxes": sandboxes }), panes)
+        (modal, panels, json!({ "topbar": topbar, "sandboxes": sandboxes, "rows": rows }), panes)
     }
 
     /// A press on an extra the core draws (pane bars) or on a notice's offer.
@@ -554,11 +556,15 @@ impl App {
     }
 
     /// Feature buttons and badges on the bar of pane `i`.
-    pub(super) fn pane_extras(&self, i: usize, sandbox: &str) -> Vec<El> {
+    pub(super) fn pane_extras(&self, i: usize, sandbox: &str, thread: Option<&str>) -> Vec<El> {
         self.feats
             .pane_extras
             .iter()
-            .filter(|e| matches!(&e.place, Place::Pane(s) if s == sandbox))
+            .filter(|e| match &e.place {
+                Place::Pane(s) => s == sandbox,
+                Place::Session { sandbox: s, thread: t } => s == sandbox && t.as_deref() == thread,
+                _ => false,
+            })
             .map(|e| {
                 let (fg, tint) = crate::screen::tone(&e.tone);
                 let mut b = row()
