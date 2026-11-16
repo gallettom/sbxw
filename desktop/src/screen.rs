@@ -73,6 +73,14 @@ pub trait Host: Sized + 'static {
     fn screen(&mut self, name: &str) -> &mut ScreenState;
     /// A screen's action returned these (already checked against the closed list).
     fn intents(&mut self, screen: &str, intents: Vec<Intent>);
+    /// An event on a feature's picture surface (`surface{ id }`): to its owner.
+    fn surface_event(&mut self, ev: crate::surface::SurfaceEvent, tx: &mut rune::Tx) {
+        let _ = (ev, tx);
+    }
+    /// Whether a key on a surface is the app's (see [`crate::surface::view`]).
+    fn surface_key(&mut self, ev: &rune::KeyEvent, down: bool, tx: &mut rune::Tx) -> bool {
+        crate::surface::reserved(ev, &[], false) && { let _ = (down, tx); true }
+    }
 }
 
 /// The core-held part of elements.
@@ -802,6 +810,10 @@ impl Build<'_> {
                 }
                 None => el().px(6.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(10.5, 400.0)).color(c("text-dim"))),
             },
+            Kind::Surface if crate::feat::surface_owner(n.id.as_deref().unwrap_or("")).is_none() => {
+                el().grow(1.0).w_full().padding(8.0).fill(c("elevated")).child(text(format!("no feature owns a surface '{}'", n.id.as_deref().unwrap_or(""))).font(body(11.0, 400.0)).color(c("text-dim")))
+            }
+            Kind::Surface => crate::surface::view::<S>(n.id.as_deref().unwrap_or(""), |s: &mut S, ev, tx| s.surface_event(ev, tx), |s: &mut S, ev, down, tx| s.surface_key(ev, down, tx)),
             Kind::Progress => {
                 let v = n.value.as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));

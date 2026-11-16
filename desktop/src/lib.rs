@@ -12,6 +12,7 @@
 //! * [`builtin`]: the built-in screens written out for the daemon.
 //! * [`theme`], [`icons`]: the web UI's tokens; the icons screens may name.
 //! * [`fixture`]: daemon data from JSON files, for headless screens.
+//! * [`surface`]: picture surfaces drawn by the core, input back to features; [`socket`]: features' WebSockets.
 //! * [`terminal`]: a terminal emulator drawn with Rune's grid (thread desktop-terminal).
 
 pub mod approval;
@@ -28,6 +29,8 @@ pub mod markdown;
 pub mod picture;
 pub mod screen;
 pub mod shell;
+pub mod socket;
+pub mod surface;
 pub mod terminal;
 pub mod theme;
 pub mod voice;

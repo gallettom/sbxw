@@ -398,6 +398,11 @@ impl App {
             self.audio = factory(Arc::new(move || w()));
             log::info!("audio: native");
         }
+        {
+            // Features' sockets hand their actions to this thread (socket.rs).
+            let w = waker.clone();
+            crate::socket::set_wake(Arc::new(move || w()));
+        }
         self.waker = Some(waker);
         if let Some((sb, mode)) = self.start.take() {
             self.open(0, &sb, mode, None);
@@ -440,6 +445,8 @@ impl App {
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
+        // Picture surfaces: the key that gives the keyboard back, and which one has it.
+        data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
         data
     }
 
@@ -706,6 +713,7 @@ impl App {
                 }
             }
         }
+        changed |= self.surfaces_poll(tx);
         let settle = headless().then_some(Duration::from_millis(1500));
         let mut notes = vec![];
         let mut copies = vec![];
@@ -772,6 +780,10 @@ impl App {
             self.push_data();
             return true;
         }
+        // A picture surface has the keyboard: what it passed on is the app's, never a terminal's.
+        if crate::surface::focused().is_some() {
+            return false;
+        }
         let f = self.focused;
         if let Some(p) = self.panes.get_mut(f) {
             p.attention = false;
@@ -787,6 +799,14 @@ impl App {
 
     /// The input method (dead keys, CJK, emoji): to the focused pane.
     pub fn on_ime(&mut self, ime: &rune::Ime) -> bool {
+        if let Some(id) = crate::surface::focused() {
+            if let rune::Ime::Commit(t) = ime {
+                if !t.is_empty() {
+                    self.feats_surface(crate::surface::SurfaceEvent::Text { surface: id, text: t.clone() });
+                }
+            }
+            return true;
+        }
         let f = self.focused;
         self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_ime(ime))
     }
@@ -798,6 +818,9 @@ impl App {
     /// `on_key`. Elsewhere Ctrl+Shift+V reads the clipboard from the key
     /// (`TerminalState::on_key_tx`), and plain Ctrl+V stays the program's.
     pub fn paste(&mut self, text: &str) {
+        if let Some(id) = crate::surface::focused() {
+            return self.surface_paste(&id, text);
+        }
         let f = self.focused;
         let t = self.panes.get_mut(f).and_then(|p| p.term.as_mut());
         if terminal::debug_keys() {
@@ -1097,6 +1120,14 @@ impl Host for App {
         }
         self.wiring.start_and_send = false;
         self.push_data();
+    }
+
+    fn surface_event(&mut self, ev: crate::surface::SurfaceEvent, _tx: &mut Tx) {
+        self.feats_surface(ev);
+    }
+
+    fn surface_key(&mut self, ev: &KeyEvent, down: bool, tx: &mut Tx) -> bool {
+        self.surface_key_app(ev, down, tx)
     }
 }
 

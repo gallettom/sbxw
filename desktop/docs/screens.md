@@ -73,6 +73,7 @@ unchanged.
 | `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
 | `overrides` | Screens running an override file, by name: `path`, `stale` (made for an older built-in; see "Where screens live") |
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
+| `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -270,6 +271,28 @@ draws "picture not loaded".
 
 ```lua
 image{ key = "shot-web-app-1", max_w = 320, max_h = 200 }
+```
+
+### `surface`
+
+A feature's live picture (a sandbox's browser): drawn and fed by the core
+(`src/surface.rs`), it takes the space its parent leaves (put it last in a
+`column` that fills the panel). The picture is scaled to fit, aspect kept,
+letterboxed. A press gives it the keyboard; the person's pointer, keys,
+input-method text and paste go to the owning feature's Rust in the picture's
+own pixels, never to the screen. The app keeps its own keys: the global
+shortcuts, push-to-talk, F6 (the feature may move the focus to its own
+field), ⌘ or Ctrl with + - = 0, and the release key, ⌘Esc on macOS and
+Ctrl+Esc elsewhere, which gives the keyboard back: say it in the chrome
+(`data.app.surface.release`). The screen draws only the chrome around it; an
+`id` no feature owns draws a grey line saying so.
+
+| Prop | Value | Effect |
+|---|---|---|
+| `id` | string | Required. The surface's id, as its feature declares it in `surfaces` |
+
+```lua
+surface{ id = "browser" }
 ```
 
 ### `icon`

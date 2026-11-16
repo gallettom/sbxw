@@ -181,6 +181,11 @@ pub trait Daemon: Send + Sync + 'static {
     /// `GET /api/stream`: calls `sink` for each event until the stream ends
     /// (an error, or `sink` returning false). Blocks.
     fn subscribe(&self, sink: &mut dyn FnMut(BusEvent) -> bool) -> Result<()>;
+    /// A feature's WebSocket (`/ws/...` with its query), authenticated as
+    /// `/ws`, connected and blocking (`crate::socket` runs it).
+    fn open_socket(&self, path: &str) -> Result<tungstenite::WebSocket<TcpStream>> {
+        bail!("{path}: no sockets with {}", self.describe())
+    }
 
     /// Any route, for features (`src/feat/`): `method` `GET` or `POST`, a
     /// JSON body for a POST. Answers the HTTP status and the JSON body, a
@@ -443,6 +448,26 @@ impl Daemon for HttpDaemon {
         let send = Events { tx: ev_tx, wake };
         std::thread::Builder::new().name("terminal-ws".into()).spawn(move || pump(socket, send, in_rx))?;
         Ok(TerminalConn { events: ev_rx, input: in_tx })
+    }
+
+    fn open_socket(&self, path: &str) -> Result<tungstenite::WebSocket<TcpStream>> {
+        if !path.starts_with("/ws/") {
+            bail!("{path}: a feature socket is a /ws/ route");
+        }
+        let url = format!("ws://{}{path}", self.addr);
+        let mut request = url.as_str().into_client_request()?;
+        request.headers_mut().insert("Authorization", self.auth().parse()?);
+        let sock = self.addr.to_socket_addrs()?.next().ok_or_else(|| anyhow!("no address for {}", self.addr))?;
+        let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(3)).map_err(|e| anyhow!(Unreachable(e.to_string())))?;
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        let (socket, resp) = tungstenite::client(request, stream).map_err(|e| match e {
+            tungstenite::HandshakeError::Failure(tungstenite::Error::Http(r)) => anyhow!("{path}: the daemon answered {}", r.status()),
+            e => anyhow!("{path}: WebSocket handshake: {e}"),
+        })?;
+        log::debug!("socket {path} open ({})", resp.status());
+        socket.get_ref().set_read_timeout(None)?;
+        Ok(socket)
     }
 
     fn subscribe(&self, sink: &mut dyn FnMut(BusEvent) -> bool) -> Result<()> {

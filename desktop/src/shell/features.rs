@@ -72,6 +72,10 @@ pub enum Ask {
     ReadClipboard,
     /// `copy_text`: onto the clipboard.
     Copy(String),
+    /// Move Rune's keyboard focus to that element key.
+    Focus(String),
+    /// A surface's paste chord off macOS: the clipboard's text to that surface.
+    PasteText(String),
 }
 
 /// The whole rule for an intent of risk Approval: its feature may answer only
@@ -158,7 +162,12 @@ impl App {
                 Action::PickFiles { .. } | Action::ReadClipboard if !self.pressed(from) => {
                     self.notify(format!("{}: opening a file or reading the clipboard runs only from your own press: refused", f.name), true);
                 }
-                Action::PickFiles { title, extensions, multiple: _ } => self.feats.asks.push((f.name, Ask::PickFiles { title, extensions })),
+                Action::PickFiles { title, extensions, multiple } => {
+                    if multiple {
+                        self.notify(format!("{}: the file dialog picks one file at a time; drop several files on the panel to hand them in at once", f.name), false);
+                    }
+                    self.feats.asks.push((f.name, Ask::PickFiles { title, extensions }));
+                }
                 Action::ReadClipboard => self.feats.asks.push((f.name, Ask::ReadClipboard)),
                 Action::Image { key, bytes } => {
                     if bytes.is_empty() {
@@ -179,6 +188,9 @@ impl App {
                     }
                     self.store.set_in("features", f.name, if mine.is_empty() { J::Null } else { J::Object(mine) });
                 }
+                Action::OpenSocket { id, path, opts } => self.open_socket(f, id, path, opts),
+                Action::CloseSocket(id) => crate::socket::close(&id),
+                Action::Focus(key) => self.feats.asks.push((f.name, Ask::Focus(key))),
                 Action::Intent { name, args } => match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
                     Ok(list) => crate::screen::Host::intents(self, &format!("feature:{}", f.name), list),
                     Err(e) => self.notify(format!("{}: {e}", f.name), true),
@@ -282,6 +294,11 @@ impl App {
                     tx.copy(text);
                     self.notify(line, false);
                 }
+                Ask::Focus(key) => tx.focus(key, true),
+                Ask::PasteText(id) => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| {
+                    s.surface_paste(&id, c.text());
+                    s.push_data();
+                }),
                 Ask::ReadClipboard => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| match c.image() {
                     Some(img) => s.feature_incoming(name, feat::Incoming::Png(img.png().to_vec())),
                     None => {
@@ -291,6 +308,91 @@ impl App {
                 }),
             }
         }
+    }
+
+    /// Opens a feature's socket ([`crate::socket`]): its events to its
+    /// `on_socket` on the socket's thread, the actions back here.
+    fn open_socket(&mut self, f: &'static Feature, id: String, path: String, opts: crate::socket::Opts) {
+        let Some(on) = f.on_socket else {
+            return self.notify(format!("{}: opens a socket but has no on_socket", f.name), true);
+        };
+        if !path.starts_with("/ws/") {
+            return self.notify(format!("{}: {path} is not a /ws/ route", f.name), true);
+        }
+        let name = f.name;
+        let sid = id.clone();
+        crate::socket::open(self.current.clone(), &id, &path, opts, Box::new(move |ev| crate::socket::post(name, on(&sid, ev))));
+    }
+
+    /// Runs what features' socket threads asked, and surface focus and size changes.
+    pub(super) fn surfaces_poll(&mut self, tx: &mut rune::Tx) -> bool {
+        let mut changed = false;
+        for (name, acts) in crate::socket::take_actions() {
+            if let Some(f) = Self::feature_of(name) {
+                self.feature_actions(f, &format!("feature:{name}"), acts);
+                changed = true;
+            }
+        }
+        let mut evs = crate::surface::focus_changed(tx.focused());
+        let (sizes, next) = crate::surface::due_resizes(Instant::now());
+        evs.extend(sizes);
+        if let Some(n) = next {
+            tx.wake_after(n.saturating_duration_since(Instant::now()));
+        }
+        for ev in evs {
+            self.feats_surface(ev);
+            changed = true;
+        }
+        changed
+    }
+
+    /// A surface event to the feature that owns the surface.
+    pub(super) fn feats_surface(&mut self, ev: crate::surface::SurfaceEvent) {
+        let Some(f) = feat::surface_owner(ev.surface()) else { return };
+        let Some(on) = f.on_surface else { return };
+        let acts = on(&ev);
+        if !acts.is_empty() {
+            self.feature_actions(f, &format!("feature:{}", f.name), acts);
+            self.push_data();
+        }
+    }
+
+    /// The person pasted on a surface: its text to the feature, and a
+    /// notice saying how much left for it.
+    pub(super) fn surface_paste(&mut self, id: &str, text: &str) {
+        if text.is_empty() {
+            return self.notify("The clipboard holds no text", false);
+        }
+        let owner = feat::surface_owner(id).map(|f| f.name).unwrap_or("the surface");
+        self.notify(format!("Pasted {} into {owner}: {}", approval::size_label(text.len()), approval::osc_preview(text)), false);
+        self.feats_surface(crate::surface::SurfaceEvent::Paste { surface: id.to_string(), text: text.to_string() });
+    }
+
+    /// The app's keys on a surface (down or up): true when the app takes it
+    /// (it then never reaches the picture).
+    pub(super) fn surface_key_app(&mut self, ev: &rune::KeyEvent, down: bool, tx: &mut rune::Tx) -> bool {
+        let Some(id) = crate::surface::focused() else { return false };
+        let ptt = self.wiring.reserved;
+        if !down {
+            return crate::surface::reserved(ev, ptt, false);
+        }
+        if crate::surface::is_release(ev) {
+            tx.blur();
+            return true;
+        }
+        if ev.key == rune::Key::Function(6) {
+            self.feats_surface(crate::surface::SurfaceEvent::F6 { surface: id });
+            return true;
+        }
+        if crate::surface::is_paste(ev) {
+            self.feats.asks.push(("surface", Ask::PasteText(id)));
+            return true;
+        }
+        if self.shortcut(ev, tx) {
+            self.push_data();
+            return true;
+        }
+        crate::surface::reserved(ev, ptt, false)
     }
 
     fn next_id(&mut self) -> u64 {

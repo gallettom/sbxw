@@ -23,7 +23,7 @@ path = "src/main.rs"
 [dependencies]
 # Rune, pinned to one rev of its `dev` branch (never rewritten). Pre-release, git only.
 # `tooling` keeps the headless flags (--snap, --tree, --script) in release builds too.
-rune = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac", features = ["tooling"] }
+rune = { git = "https://github.com/anomalyco/rune", rev = "09ab92a5c83b906adb6fbf92637323b49e86d7ac", features = ["tooling", "native-file-dialog"] }
 alacritty_terminal = "=0.26.0"
 mlua = { version = "=0.12.2", features = ["luau"] }
 tungstenite = "=0.30.0"

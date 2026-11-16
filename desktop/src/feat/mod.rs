@@ -78,6 +78,36 @@ pub struct Feature {
     pub on_files: Option<fn(&Ctx, Incoming) -> Vec<Action>>,
     /// Global keyboard shortcuts: the window takes them before any pane.
     pub shortcuts: &'static [Shortcut],
+    /// Picture surfaces it owns, by id (`crate::surface`): a screen places
+    /// one with `surface{ id = "..." }`; its frames come from the feature's
+    /// Rust ([`crate::surface::set_rgba`], [`crate::surface::set_encoded`]).
+    pub surfaces: &'static [&'static str],
+    /// The person's pointer and keys on one of its surfaces, in picture
+    /// pixels, on the UI thread (keep it cheap: send and return). The app's
+    /// reserved keys never come here ([`crate::surface::reserved`]).
+    pub on_surface: Option<fn(&crate::surface::SurfaceEvent) -> Vec<Action>>,
+    /// An event of one of its sockets ([`Action::OpenSocket`]): `(socket id,
+    /// event)`, on that socket's own thread, never the UI's; the actions
+    /// returned run on the UI thread at its next poll. Frames go straight
+    /// to [`crate::surface`] from here.
+    pub on_socket: Option<fn(&str, crate::socket::SocketEvent) -> Vec<Action>>,
+    /// The stand-in daemon's side of a feature socket: called on the
+    /// connection's own thread with the request target (`/ws/browser?sandbox=x`)
+    /// once the upgrade is accepted; return `false` at once if the route is
+    /// not this feature's. Push and read lines through `peer` until it closes.
+    pub standin_ws: Option<fn(&str, &mut dyn WsPeer) -> bool>,
+}
+
+/// The stand-in's end of a feature socket ([`Feature::standin_ws`]).
+pub trait WsPeer {
+    /// Sends a text message; false once closed.
+    fn send(&mut self, text: &str) -> bool;
+    fn send_binary(&mut self, bytes: &[u8]) -> bool;
+    /// The next text message from the app, waiting at most `wait`:
+    /// `Ok(None)` when nothing came, `Err` once closed.
+    fn recv(&mut self, wait: std::time::Duration) -> Result<Option<String>, String>;
+    /// Closes it (a lost browser process).
+    fn close(&mut self);
 }
 
 /// A global shortcut: the web UI's rule (`assets/js/util.js`,
@@ -105,7 +135,7 @@ pub enum Incoming {
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[] };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[], surfaces: &[], on_surface: None, on_socket: None, standin_ws: None };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -254,6 +284,16 @@ pub enum Action {
     /// by the core ([`crate::picture`], its default limits, scaled to 2048 px
     /// at most). Empty `bytes`: forgets it. A picture refused is a notice.
     Image { key: String, bytes: Vec<u8> },
+    /// Opens a WebSocket on the daemon (`path`: a `/ws/...` route and its
+    /// query) under `id`, with the app's authentication ([`crate::socket`]);
+    /// its events go to [`Feature::on_socket`]; send with
+    /// [`crate::socket::send`]. An `id` already open is closed first.
+    OpenSocket { id: String, path: String, opts: crate::socket::Opts },
+    /// Closes socket `id` (its handler hears `Closed("closed")`).
+    CloseSocket(String),
+    /// Moves the keyboard focus to the element of that key (an input's
+    /// `id`, a surface's `surface-<id>`).
+    Focus(String),
 }
 
 impl Action {
@@ -550,6 +590,7 @@ features! {
     relay,
     setup,
     shell_extras,
+    mac,
     templates,
     threads,
 }
@@ -634,6 +675,17 @@ fn decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The stand-in's feature sockets: the first feature whose `standin_ws`
+/// takes `target`. False: no feature serves that route.
+pub fn standin_socket(target: &str, peer: &mut dyn WsPeer) -> bool {
+    FEATURES.iter().filter_map(|f| f.standin_ws).any(|h| h(target, peer))
+}
+
+/// The feature that owns surface `id`.
+pub fn surface_owner(id: &str) -> Option<&'static Feature> {
+    FEATURES.iter().copied().find(|f| f.surfaces.contains(&id))
 }
 
 /// What a fixture daemon (and the stand-in) answers for a feature route:

@@ -137,6 +137,14 @@ fn prepare_inner(bytes: &[u8], limits: Limits, fit: Option<u32>, out: Encode) ->
     encode(img, out)
 }
 
+/// The stream path (a surface's frames, [`crate::surface::set_encoded`]):
+/// the same checks and limits as [`prepare`], then the RGBA pixels only (no
+/// scaling, no re-encoding). Any thread.
+pub fn decode_rgba(bytes: &[u8], limits: Limits) -> Result<(u32, u32, Vec<u8>), String> {
+    let p = prepare(bytes, limits, None, Encode::Pixels)?;
+    Ok((p.width, p.height, p.rgba))
+}
+
 fn encode(img: DynamicImage, out: Encode) -> Result<Picture, String> {
     let (width, height) = (img.width(), img.height());
     let rgba = img.to_rgba8().into_raw();
