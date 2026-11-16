@@ -17,9 +17,14 @@ local function head(t)
   return text{ string.upper(t), size = "xxs", weight = "semibold", color = "text-muted" }
 end
 
-local function lens_box(ui)
+local function lens_box(ui, open)
+  if not open then
+    return row{ w = "full", spacer{}, button{ "Write a lens…", key = "codemap-lens-open", icon = "plus", on = "lens_toggle", variant = "ghost",
+      help = "Retell the map for one reader (a product owner, a new joiner)" } }
+  end
   return column{ gap = 4, w = "full", pad = 8, radius = "sm", border = "border",
-    text{ "Write a lens", size = "sm", weight = "medium" },
+    row{ w = "full", text{ "Write a lens", size = "sm", weight = "medium" }, spacer{},
+      button{ icon = "close", key = "codemap-lens-close", on = "lens_toggle", variant = "ghost", help = "Close" } },
     note("Retell the map for one reader, in a background session of this sandbox's agent."),
     input{ id = "codemap-lens", value = ui.lens or "", placeholder = "a product owner: what each part delivers, for whom, what it costs to change", on = "lens_typed" },
     row{ gap = 6, w = "full",
@@ -76,12 +81,11 @@ end
 local function doc_view(ui, m)
   local d = m.doc
   if not d then return note("Pick a file of the map.") end
-  return column{ gap = 6, h = "full",
+  return column{ gap = 6, grow = 1,
     row{ gap = 6, w = "full",
-      text{ d.section and d.section.title or d.title, weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
+      text{ ".sbxw-artifacts/" .. (d.path or "") .. (d.section and ("  ›  " .. d.section.title) or ""), size = "xs", mono = true, color = "text-dim", truncate = true, grow = 1 },
       d.section and button{ "Whole file", key = "codemap-whole", on = "doc", arg = { doc = d.key }, variant = "ghost" } or false,
     },
-    text{ ".sbxw-artifacts/" .. (d.path or ""), size = "xs", mono = true, color = "text-dim", truncate = true },
     split{ id = "codemap-split", ratio = 0.68,
       scroll{ markdown{ d.markdown or "", on = "link", size = "sm" } },
       side(ui, d) },
@@ -99,7 +103,8 @@ local function results(m)
 end
 
 return {
-  render = function(_, data)
+  init = function() return { lens_open = false } end,
+  render = function(state, data)
     local ui = data.codemap_ui
     if not ui or not ui.sandbox then
       return column{ pad = 12, note("Open a code map from a sandbox's Project panel.") }
@@ -121,7 +126,7 @@ return {
     elseif (m.count or 0) == 0 then
       body = empty(ui)
     else
-      body = column{ gap = 6, h = "full", grow = 1,
+      body = column{ gap = 6, grow = 1,
         row{ gap = 6, w = "full",
           select{ id = "codemap-docs", items = docs, value = m.doc and m.doc.key or nil, placeholder = "File", on = "pick" },
           input{ id = "codemap-filter", value = ui.filter or "", placeholder = "Search the map", on = "filter", grow = 1 },
@@ -138,7 +143,7 @@ return {
       top,
       nz(ui.error) and note(ui.error, "red") or false,
       body,
-      (m.count or 0) > 0 and lens_box(ui) or false,
+      (m.count or 0) > 0 and lens_box(ui, state.lens_open or (ui.lens or "") ~= "") or false,
     }
   end,
   actions = {
@@ -153,7 +158,8 @@ return {
     copy = function(_, c) return intent("copy_text", { text = c }) end,
     generate = function(_, sb) return intent("codemap_generate", { sandbox = sb }) end,
     lens_typed = function(_, _, t) return intent("codemap_lens_set", { text = t or "" }) end,
-    lens = function(_, sb) return intent("codemap_lens", { sandbox = sb }) end,
+    lens = function(state, sb) state.lens_open = false return intent("codemap_lens", { sandbox = sb }) end,
+    lens_toggle = function(state) state.lens_open = not state.lens_open end,
     diagram = function() return intent("codemap_diagram", {}) end,
   },
 }

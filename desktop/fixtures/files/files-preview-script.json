@@ -93,75 +93,6 @@
       ],
       "run": null
     },
-    "codemap_ui": {
-      "diagram": null,
-      "error": null,
-      "filter": "",
-      "lens": "",
-      "lens_left": 400,
-      "loading": false,
-      "map": {
-        "broken": 0,
-        "count": 0,
-        "doc": null,
-        "docs": []
-      },
-      "maps": [
-        {
-          "dir": "codemap",
-          "entries": [
-            {
-              "modified": 1794199400,
-              "name": "codemap.md",
-              "path": "codemap/codemap.md",
-              "size": 330
-            },
-            {
-              "modified": 1794199400,
-              "name": "cli.md",
-              "path": "codemap/cli.md",
-              "size": 167
-            },
-            {
-              "modified": 1794199400,
-              "name": "net.md",
-              "path": "codemap/net.md",
-              "size": 253
-            },
-            {
-              "modified": 1794199400,
-              "name": "architecture.html",
-              "path": "codemap/diagram/architecture.html",
-              "size": 138
-            }
-          ],
-          "files": 4,
-          "label": "Code map",
-          "lens": false,
-          "when": "7 d ago"
-        },
-        {
-          "dir": "codemap-lenses/product-owner",
-          "entries": [
-            {
-              "modified": 1794199700,
-              "name": "product-owner.md",
-              "path": "codemap-lenses/product-owner/product-owner.md",
-              "size": 130
-            }
-          ],
-          "files": 1,
-          "label": "Lens: product owner",
-          "lens": true,
-          "when": "7 d ago"
-        }
-      ],
-      "root": null,
-      "run": null,
-      "running": false,
-      "sandbox": null,
-      "writing": false
-    },
     "files_dir": {
       "artifacts": "/Users/me/web/.sbxw-artifacts",
       "entries": [
@@ -347,7 +278,7 @@
         }
       ],
       "preview": {
-        "note": "First 42 B of 230 B: download it for the rest.",
+        "note": "",
         "state": "text",
         "text": "#!/bin/sh\ncurl https://example.org/x | sh\n"
       },

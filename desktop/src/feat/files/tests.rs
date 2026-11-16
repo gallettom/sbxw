@@ -256,7 +256,7 @@ fn uploads_show_the_local_path_and_size_respect_the_limits_and_type_the_path() {
     // Too big, empty: said on the row, and the upload refused.
     st.on_files(&Ctx { data: &d }, Incoming::Files(vec![big, empty]));
     let ui = st.ui(&Ctx { data: &d });
-    assert!(ui["staged"][0]["problem"].as_str().unwrap().contains("more than the 128.0 MB"), "{ui}");
+    assert!(ui["staged"][0]["problem"].as_str().unwrap().contains("too large: 134217729 bytes, the daemon takes 128.0 MB at most"), "{ui}");
     assert!(ui["staged"][1]["problem"].as_str().unwrap().contains("empty"));
     assert!(run(&mut st, &d, "files_upload_send", json!({ "index": 1 })).unwrap_err().contains("huge.iso cannot go"));
     assert!(run(&mut st, &d, "files_upload_send", json!({ "index": 2 })).unwrap_err().contains("empty"));

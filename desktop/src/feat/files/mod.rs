@@ -173,7 +173,7 @@ impl Staged {
         if self.size == 0 {
             Some("empty: the daemon takes no empty file".into())
         } else if self.size > view::UPLOAD_MAX {
-            Some(format!("{}: more than the {} the daemon takes", view::size_label(self.size), view::size_label(view::UPLOAD_MAX)))
+            Some(format!("too large: {} bytes, the daemon takes {} at most", self.size, view::size_label(view::UPLOAD_MAX)))
         } else {
             None
         }
@@ -531,8 +531,8 @@ impl State {
             }
             other => return Err(format!("{other}: not a files intent")),
         }
-        out.push(self.ui_action(cx));
-        out.push(self.map_ui_action(cx));
+        out.extend(self.ui_action(cx));
+        out.extend(self.map_ui_action(cx));
         Ok(out)
     }
 
@@ -740,7 +740,9 @@ impl State {
                 }
             };
         }
-        self.preview = view::text_preview(&s.name, bytes, s.size);
+        // Cut short only when the read hit its cap (the listing's size may be older).
+        let size = if bytes.len() as u64 >= view::TEXT_MAX { s.size.max(bytes.len() as u64 + 1) } else { bytes.len() as u64 };
+        self.preview = view::text_preview(&s.name, bytes, size);
         vec![]
     }
 
@@ -806,12 +808,14 @@ impl State {
         Ok(c.labels("Upload", "Cancel").into_action())
     }
 
-    fn ui_action(&self, cx: &Ctx) -> Action {
-        Action::Set { key: UI.into(), value: self.ui(cx) }
+    /// `data.files_ui`, once the panel was opened (before, nothing is set:
+    /// a fixture's own view stays).
+    fn ui_action(&self, cx: &Ctx) -> Option<Action> {
+        self.sandbox.as_ref().map(|_| Action::Set { key: UI.into(), value: self.ui(cx) })
     }
 
-    fn map_ui_action(&self, cx: &Ctx) -> Action {
-        Action::Set { key: MAP_UI.into(), value: self.map_ui(cx) }
+    fn map_ui_action(&self, cx: &Ctx) -> Option<Action> {
+        self.map.sandbox.as_ref().map(|_| Action::Set { key: MAP_UI.into(), value: self.map_ui(cx) })
     }
 
     /// `data.files_ui`, what the Project panel draws.
@@ -955,8 +959,8 @@ impl State {
                 _ => {}
             }
         }
-        out.push(self.ui_action(cx));
-        out.push(self.map_ui_action(cx));
+        out.extend(self.ui_action(cx));
+        out.extend(self.map_ui_action(cx));
         out
     }
 
@@ -1103,8 +1107,8 @@ impl State {
                 Err(e) => out.push(Action::error(format!("{}: {e}", call.what))),
             }
         }
-        out.push(self.ui_action(cx));
-        out.push(self.map_ui_action(cx));
+        out.extend(self.ui_action(cx));
+        out.extend(self.map_ui_action(cx));
         out
     }
 
@@ -1118,7 +1122,7 @@ impl State {
                     self.path = a.to_string();
                     let sb = self.sandbox.clone().unwrap();
                     out.push(self.fetch_dir(&sb));
-                    out.push(self.ui_action(cx));
+                    out.extend(self.ui_action(cx));
                     return out;
                 }
             }
@@ -1137,8 +1141,8 @@ impl State {
         if key == ARTIFACTS && self.map.loading && self.map.sandbox.is_some() && self.asked_for.get(ARTIFACTS) == self.map.sandbox.as_ref() {
             out.extend(self.load_map(cx));
         }
-        out.push(self.ui_action(cx));
-        out.push(self.map_ui_action(cx));
+        out.extend(self.ui_action(cx));
+        out.extend(self.map_ui_action(cx));
         out
     }
 
@@ -1168,8 +1172,8 @@ impl State {
             Some("failed") => out.push(Action::error(format!("{sb}: {} ended without one{}", if lens { "the lens" } else { "the code map" }, run["note"].as_str().map(|n| format!(": {n}")).unwrap_or_default()))),
             _ => {}
         }
-        out.push(self.ui_action(cx));
-        out.push(self.map_ui_action(cx));
+        out.extend(self.ui_action(cx));
+        out.extend(self.map_ui_action(cx));
         out
     }
 
@@ -1204,7 +1208,7 @@ impl State {
         }
         let mut out: Vec<Action> = notes.into_iter().map(Action::error).collect();
         out.push(Action::OpenPanel(SCREEN.into()));
-        out.push(self.ui_action(cx));
+        out.extend(self.ui_action(cx));
         out
     }
 }
