@@ -167,6 +167,10 @@ impl App {
                 Action::PickFiles { .. } | Action::ReadClipboard if !self.pressed(from) => {
                     self.notify(format!("{}: opening a file or reading the clipboard runs only from your own press: refused", f.name), true);
                 }
+                // A file written to the person's machine, a file manager opened: from a press too.
+                Action::Download(_) | Action::Reveal(_) if !self.pressed(from) => {
+                    self.notify(format!("{}: a download or showing a file runs only from your own press: refused", f.name), true);
+                }
                 Action::PickFiles { title, extensions, multiple } => {
                     if multiple {
                         self.notify(format!("{}: the file dialog picks one file at a time; drop several files on the panel to hand them in at once", f.name), false);
@@ -1232,6 +1236,8 @@ mod tests {
         // The open dialog and the clipboard: from a press only, never from the feature's own chain.
         a.feature_actions(f, "feature:network", vec![Action::PickFiles { title: "x".into(), extensions: vec![], multiple: false }, Action::ReadClipboard]);
         assert!(a.feats.asks.is_empty() && last(&a).contains("only from your own press"));
+        a.feature_actions(f, "feature:network", vec![Action::Download(dl(feat::Dest::Downloads, feat::After::Nothing))]);
+        assert!(last(&a).contains("only from your own press"), "{}", last(&a));
         a.feature_actions(f, "network", vec![Action::PickFiles { title: "x".into(), extensions: vec![], multiple: true }]);
         assert!(matches!(a.feats.asks.as_slice(), [(_, Ask::PickFiles { .. })]) && last(&a).contains("one file at a time"));
         // An upload of a path the person never handed in: refused by the core, even confirmed.
