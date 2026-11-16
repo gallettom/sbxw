@@ -4,6 +4,22 @@
 # --script, --strip): no display, no Xvfb, no xdotool. Rune renders offscreen
 # with wgpu; with no GPU, Mesa's software Vulkan driver (mesa-vulkan-drivers,
 # llvmpipe) does it.
+#
+# Marks the app itself acts on, in a --script (`{"type": "mark", "name": ...}`):
+#   hold:<ms>              wait that long in real time, taking in what the
+#                          daemon sends (the script's clock does not wait).
+#   wait:<key>[:<ms>]      wait in real time until an element with that key
+#                          is drawn (a screen's key or input id, the core's
+#                          dialog parts cf-*, pane bars and their extras,
+#                          terminals grid-<n>), at most <ms> (10 s by default).
+#                          Logs "waited N ms for <key>" or "gave up waiting
+#                          for <key> after N ms"; then the script goes on, so
+#                          a tap on a key that never came fails as usual.
+#   wait-gone:<key>[:<ms>] the same, until no element of that key is drawn
+#                          (a dialog closed, a busy line gone).
+#   screen:<name>=<path>   load that file as that screen now.
+# Prefer wait: before a tap on something the daemon's answer draws: a fixed
+# hold is a guess that fails under load.
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"
@@ -12,9 +28,16 @@ profile=${SBXW_PROFILE:-debug}
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
+# Where scripts write their shots and logs: never into a tracked path. The
+# root artifacts folder of the checkout they run in (git-ignored), or
+# SBXW_SHOTS when set.
+root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null || dirname "$here")
+export SBXW_SHOTS="${SBXW_SHOTS:-$root/.sbxw-artifacts/desktop/shots}"
+shots_root="$SBXW_SHOTS"
+mkdir -p "$shots_root"
 # No override folder of the person's leaks into a run: screens come from the
 # binary unless a script points SBXW_DESKTOP_SCREENS somewhere on purpose.
-export SBXW_DESKTOP_SCREENS="${SBXW_DESKTOP_SCREENS:-$here/shots/.no-overrides}"
+export SBXW_DESKTOP_SCREENS="${SBXW_DESKTOP_SCREENS:-$shots_root/.no-overrides}"
 
 build() {
   local flag=(); [ "$profile" = release ] && flag=(--release)

@@ -2,3 +2,7 @@ target/
 shots/
 .gpui-spike/
 target-*/
+
+# Reports and screenshots live outside git, in the root artifacts folder of
+# the checkout (.sbxw-artifacts/desktop/): never under desktop/.
+/.sbxw-artifacts/

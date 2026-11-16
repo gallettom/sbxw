@@ -9,11 +9,11 @@
 #   t=2.5  the copy is deleted: the built-in comes back, the filter still kept.
 # At each time the app holds (`hold:` mark) and this script, watching the
 # app's log for that hold, edits the file; the app's watcher thread sees it
-# as it would in a window. Output: shots/reload-strip.png (five frames 0.5 s
+# as it would in a window. Output: $SBXW_SHOTS/reload-strip.png (five frames 0.5 s
 # apart from 0.8 s, the sidebar), the log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots"; mkdir -p "$shots"
+shots="$shots_root"; mkdir -p "$shots"
 dir=$(mktemp -d); export SBXW_DESKTOP_SCREENS="$dir"
 f="$dir/sandboxes.luau"
 edited=$(mktemp)

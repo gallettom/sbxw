@@ -28,7 +28,9 @@ local function extra(e)
   if e.intent then
     extra_intents[e.id] = e.intent
     return button{ label, icon = e.icon, key = "extra-topbar-" .. e.id, on = "extra", arg = e.id, help = e.help,
-      variant = (e.tone == "amber" or e.tone == "red") and "primary" or "neutral" }
+      -- The tone's own colour (an amber "needs you" reads amber, not green); red is danger.
+      variant = e.tone == "red" and "danger" or "neutral",
+      color = (e.tone ~= "muted" and e.tone ~= "red" and e.tone ~= "") and e.tone or nil }
   end
   return badge{ label, tone = badge_tones[e.tone] or "neutral", help = e.help, key = "extra-topbar-" .. e.id }
 end

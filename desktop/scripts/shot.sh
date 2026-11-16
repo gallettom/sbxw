@@ -15,7 +15,7 @@
 # under them. SHOT_SIZE (1280x800) and SHOT_SCALE (1) set the output.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-out="$here/shots/shot.png"; type_text=""; script=""; at=""; tree=""; fixture=""; sandbox="${SBXW_SANDBOX-web-app}"; extra=()
+out="$shots_root/shot.png"; type_text=""; script=""; at=""; tree=""; fixture=""; sandbox="${SBXW_SANDBOX-web-app}"; extra=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --type) type_text="$2"; shift 2 ;;

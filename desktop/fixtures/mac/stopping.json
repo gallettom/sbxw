@@ -1,0 +1,52 @@
+{
+ "about": "A shutdown that hangs: Force off (confirmed) and Open its window.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   }
+  ],
+  "mac": {
+   "ok": true,
+   "mac": {
+    "supported": true,
+    "installed": true,
+    "program": "/Users/me/.sbxw/terminal-mac/bin/terminal-mac",
+    "pinned": "v0.3.0-rc.2",
+    "vm": "sbxw-mac",
+    "state": "stopping",
+    "guest_ready": false,
+    "guest": null,
+    "holder": null,
+    "managed": true,
+    "busy": null,
+    "error": null,
+    "ports": [],
+    "settings": {
+     "vm": "sbxw-mac",
+     "idle_release_minutes": 10,
+     "pause_after_minutes": 15,
+     "stop_after_minutes": 60,
+     "force_stop_after_minutes": 5,
+     "guest_host_ip": ""
+    },
+    "stop_requested_ms": 1763290000000,
+    "pending": []
+   }
+  }
+ },
+ "app": {
+  "panels": [
+   "mac"
+  ]
+ }
+}

@@ -1,0 +1,91 @@
+{
+  "about": "No map yet: Generate code map.",
+  "app": {
+    "open": [
+      "web-app"
+    ],
+    "panels": [
+      "codemap"
+    ]
+  },
+  "daemon": {
+    "artifacts": {
+      "codemap": null,
+      "dir": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "modified": 1794199880,
+          "name": "report.md",
+          "path": "report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198200,
+          "name": "wireframe.png",
+          "path": "wireframe.png",
+          "size": 632
+        },
+        {
+          "modified": 1794192800,
+          "name": "summary.html",
+          "path": "summary.html",
+          "size": 138
+        },
+        {
+          "modified": 1794027200,
+          "name": "meeting.md",
+          "path": "notes/meeting.md",
+          "size": 412
+        },
+        {
+          "modified": 1793940800,
+          "name": "budget.xlsx",
+          "path": "budget.xlsx",
+          "size": 18874
+        }
+      ],
+      "lenses": [],
+      "run": null
+    },
+    "codemap_ui": {
+      "diagram": null,
+      "error": null,
+      "filter": "",
+      "lens": "",
+      "lens_left": 400,
+      "loading": false,
+      "map": {
+        "broken": 0,
+        "count": 0,
+        "doc": null,
+        "docs": []
+      },
+      "maps": [],
+      "root": null,
+      "run": null,
+      "running": true,
+      "sandbox": "web-app",
+      "writing": false
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "running",
+        "workspace": "/Users/me/web"
+      },
+      {
+        "agent": "claude",
+        "name": "api",
+        "status": "running",
+        "workspace": "/Users/me/api"
+      },
+      {
+        "agent": "codex",
+        "name": "data-pipeline",
+        "status": "stopped",
+        "workspace": "/Users/me/data"
+      }
+    ]
+  }
+}

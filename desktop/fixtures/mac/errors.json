@@ -1,0 +1,28 @@
+{
+ "about": "The daemon could not read the Mac's state.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   }
+  ],
+  "mac": {
+   "ok": false,
+   "error": "terminal-mac status: timed out after 20 s"
+  }
+ },
+ "app": {
+  "panels": [
+   "mac"
+  ]
+ }
+}

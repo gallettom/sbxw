@@ -1,0 +1,96 @@
+{
+ "about": "A device the agent chose, shown as it is; nothing blocked.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "browser_active": {
+   "ok": true,
+   "sandboxes": [
+    "web-app"
+   ]
+  },
+  "browser_grants": {
+   "web-app": {
+    "ok": true,
+    "grants": [
+     {
+      "host": "registry.npmjs.org",
+      "rules": [
+       "r1"
+      ]
+     }
+    ]
+   }
+  },
+  "browser_ui": {
+   "sandbox": "web-app",
+   "status": "live",
+   "url": "https://example.com/login",
+   "title": "Sign in",
+   "viewport": "iPhone 15 · 393x852",
+   "viewports": [
+    {
+     "id": "auto",
+     "label": "Auto"
+    },
+    {
+     "id": "mobile",
+     "label": "Mobile · 390"
+    },
+    {
+     "id": "tablet",
+     "label": "Tablet · 820"
+    },
+    {
+     "id": "desktop",
+     "label": "Desktop · 1280"
+    },
+    {
+     "id": "iPhone 15 · 393x852",
+     "label": "iPhone 15 · 393x852",
+     "disabled": true
+    }
+   ],
+   "blocked": [],
+   "allowed": 0,
+   "error": null,
+   "focused": false,
+   "release_key": "Ctrl+Esc",
+   "frame": {
+    "w": 1280,
+    "h": 800
+   },
+   "stats": {
+    "frames": 412,
+    "refused": 2,
+    "fps": 29.8,
+    "latency_ms": 14
+   }
+  }
+ },
+ "app": {
+  "panels": [
+   "browser"
+  ],
+  "open": [
+   "web-app"
+  ]
+ }
+}

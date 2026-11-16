@@ -3,7 +3,7 @@
 //! of a sandbox.
 //!
 //! It speaks what the real daemon speaks (see `src/client.rs` and
-//! `.sbxw-artifacts/daemon-api.md`): `GET /api/health?nonce=` (proof), `GET
+//! the route list in `.sbxw-artifacts/desktop/daemon-api.md` at the repository root, outside git): `GET /api/health?nonce=` (proof), `GET
 //! /api/sandboxes`, `POST /api/sandboxes/:name/stop`, `GET /api/stream`
 //! (server-sent events) and `GET /ws` (binary PTY bytes both ways, JSON
 //! `resize` text frames in), all behind `Authorization: Bearer`.
@@ -304,6 +304,21 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                 s.flush()?;
             }
         }
+        // Features' sockets (`/ws/<route>`): the stand-in's own echo route
+        // (tests), else the first feature whose `standin_ws` takes it.
+        ("GET", p) if p.starts_with("/ws/") => {
+            let stream = Prefixed { pre: Cursor::new(head), s: s.try_clone()? };
+            let ws = tungstenite::accept_hdr(stream, |_req: &Request, resp: Response| Ok(resp))?;
+            eprintln!("standin: socket opened ({target})");
+            let mut peer = Peer { ws, raw: s.try_clone()? };
+            if p == "/ws/echo" {
+                echo(&mut peer);
+            } else if !sbxw_desktop::feat::standin_socket(&target, &mut peer) {
+                use sbxw_desktop::feat::WsPeer;
+                peer.send(&serde_json::json!({ "error": format!("no feature serves {p}") }).to_string());
+                peer.close();
+            }
+        }
         ("GET", "/ws") => {
             let sandbox = query_value(query, "sandbox").map(decode).unwrap_or_default();
             let mode = query_value(query, "mode").map(decode);
@@ -349,6 +364,66 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
 }
 
 /// sbx asks: web-app tried to reach api.github.com (`--approval`).
+/// The stand-in's end of a feature socket.
+struct Peer {
+    ws: tungstenite::WebSocket<Prefixed>,
+    raw: TcpStream,
+}
+
+impl sbxw_desktop::feat::WsPeer for Peer {
+    fn send(&mut self, text: &str) -> bool {
+        self.ws.send(Message::Text(text.to_string().into())).is_ok()
+    }
+    fn send_binary(&mut self, bytes: &[u8]) -> bool {
+        self.ws.send(Message::Binary(bytes.to_vec().into())).is_ok()
+    }
+    fn recv(&mut self, wait: Duration) -> Result<Option<String>, String> {
+        let _ = self.raw.set_read_timeout(Some(wait.max(Duration::from_millis(1))));
+        match self.ws.read() {
+            Ok(Message::Text(t)) => Ok(Some(t.to_string())),
+            Ok(Message::Close(_)) => Err("closed by the app".into()),
+            Ok(_) => Ok(None),
+            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn close(&mut self) {
+        let _ = self.ws.close(None);
+        let _ = self.ws.flush();
+    }
+}
+
+/// How many `/ws/echo` sockets were opened (each hello says its number).
+static ECHOES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `/ws/echo`, for tests of feature sockets: `{"t":"hello","n":N}` on open,
+/// then every text message back; `frames K` sends K frames
+/// (`{"t":"frame","i":i}`) at once then `{"t":"done"}`; `bye` closes.
+fn echo(peer: &mut Peer) {
+    use sbxw_desktop::feat::WsPeer;
+    let n = ECHOES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    peer.send(&serde_json::json!({ "t": "hello", "n": n }).to_string());
+    loop {
+        match peer.recv(Duration::from_millis(200)) {
+            Ok(Some(t)) if t == "bye" => return peer.close(),
+            Ok(Some(t)) if t.starts_with("frames ") => {
+                let k: u64 = t[7..].trim().parse().unwrap_or(0);
+                for i in 0..k {
+                    peer.send(&serde_json::json!({ "t": "frame", "i": i }).to_string());
+                }
+                peer.send("{\"t\":\"done\"}");
+            }
+            Ok(Some(t)) => {
+                if !peer.send(&t) {
+                    return;
+                }
+            }
+            Ok(None) => {}
+            Err(_) => return,
+        }
+    }
+}
+
 fn new_approval(st: &Shared) {
     {
         let mut g = st.lock().unwrap();
@@ -439,6 +514,11 @@ fn read_body(s: &mut TcpStream, head: &[u8], text: &str) -> anyhow::Result<serde
             break;
         }
         body.extend_from_slice(&b[..n]);
+    }
+    let ct = text.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("content-type")).map(|(_, v)| v.trim().to_string())).unwrap_or_default();
+    // A raw body (an upload): what the feature's stand-in sees is its size and type.
+    if !body.is_empty() && !ct.starts_with("application/json") {
+        return Ok(serde_json::json!({ "$bytes": body.len(), "$type": ct }));
     }
     Ok(serde_json::from_slice(&body).unwrap_or_default())
 }
@@ -534,6 +614,13 @@ fn feature_route(st: &Shared, m: &str, target: &str, body: &serde_json::Value, s
         200 => "200 OK".to_string(),
         c => format!("{c} {}", if c < 300 { "OK" } else if c == 404 { "Not Found" } else if c == 409 { "Conflict" } else if c < 500 { "Bad Request" } else { "Error" }),
     };
+    // A raw answer (`{"$raw": ...}`, `{"$raw_hex": ...}`): those bytes, with their type.
+    if out.get("$raw").is_some() || out.get("$raw_hex").is_some() {
+        let (bytes, ct) = sbxw_desktop::client::raw_of(&out);
+        let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len());
+        let _ = s.write_all(&bytes);
+        return;
+    }
     let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", out.to_string().len(), out);
 }
 

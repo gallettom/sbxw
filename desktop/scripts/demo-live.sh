@@ -8,11 +8,11 @@
 #          own (`--change`), as `sbx` would behind the daemon; the stream
 #          event makes the app read the list again.
 # `hold:<ms>` marks make the app wait in real time (the virtual clock would
-# not wait for the daemon). Output: shots/live-strip.png (five frames 0.5 s
-# apart from 0.2 s, sidebar and pane bar), shots/live-end.png, the logs.
+# not wait for the daemon). Output: $SBXW_SHOTS/live-strip.png (five frames 0.5 s
+# apart from 0.2 s, sidebar and pane bar), $SBXW_SHOTS/live-end.png, the logs.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots"; mkdir -p "$shots"
+shots="$shots_root"; mkdir -p "$shots"
 script="$shots/live-script.json"
 cat >"$script" <<JSON
 {"events": [

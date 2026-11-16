@@ -1,0 +1,551 @@
+{
+  "about": "The code map's index: wiki links, a broken one, backlinks, outline, the source it names.",
+  "app": {
+    "open": [
+      "web-app"
+    ],
+    "panels": [
+      "codemap"
+    ]
+  },
+  "daemon": {
+    "artifacts": {
+      "codemap": {
+        "dir": "codemap",
+        "entries": [
+          {
+            "modified": 1794199400,
+            "name": "codemap.md",
+            "path": "codemap/codemap.md",
+            "size": 330
+          },
+          {
+            "modified": 1794199400,
+            "name": "cli.md",
+            "path": "codemap/cli.md",
+            "size": 167
+          },
+          {
+            "modified": 1794199400,
+            "name": "net.md",
+            "path": "codemap/net.md",
+            "size": 253
+          },
+          {
+            "modified": 1794199400,
+            "name": "architecture.html",
+            "path": "codemap/diagram/architecture.html",
+            "size": 138
+          }
+        ],
+        "files": 4,
+        "modified": 1794199400,
+        "slug": "codemap"
+      },
+      "dir": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "modified": 1794199880,
+          "name": "report.md",
+          "path": "report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198200,
+          "name": "wireframe.png",
+          "path": "wireframe.png",
+          "size": 632
+        },
+        {
+          "modified": 1794192800,
+          "name": "summary.html",
+          "path": "summary.html",
+          "size": 138
+        },
+        {
+          "modified": 1794027200,
+          "name": "meeting.md",
+          "path": "notes/meeting.md",
+          "size": 412
+        },
+        {
+          "modified": 1793940800,
+          "name": "budget.xlsx",
+          "path": "budget.xlsx",
+          "size": 18874
+        }
+      ],
+      "lenses": [
+        {
+          "dir": "codemap-lenses/product-owner",
+          "entries": [
+            {
+              "modified": 1794199700,
+              "name": "product-owner.md",
+              "path": "codemap-lenses/product-owner/product-owner.md",
+              "size": 130
+            }
+          ],
+          "files": 1,
+          "modified": 1794199700,
+          "slug": "product-owner"
+        }
+      ],
+      "run": null
+    },
+    "codemap_ui": {
+      "diagram": {
+        "path": "codemap/diagram/architecture.html",
+        "size": "138 B"
+      },
+      "error": null,
+      "filter": "",
+      "lens": "",
+      "lens_left": 400,
+      "loading": false,
+      "map": {
+        "broken": 1,
+        "count": 3,
+        "doc": {
+          "backlinks": [
+            {
+              "anchor": "net-proxy",
+              "from": "net",
+              "section": "Net › Proxy"
+            }
+          ],
+          "code": [
+            "src/main.ts"
+          ],
+          "key": "codemap",
+          "markdown": "# Web app\n\nThe storefront and its API client. Start with [cli](https://sbxw-codemap.invalid/cli) for the commands, then [net#Proxy](https://sbxw-codemap.invalid/net#net-proxy) for how requests leave.\n\n## Areas\n\n- [cli](https://sbxw-codemap.invalid/cli): the command line\n- [the network layer](https://sbxw-codemap.invalid/net), see `src/net/proxy.ts`\n- billing *(broken link: no such file)*: gone since the rewrite\n\nSource entry point: `src/main.ts`. More at https://example.org/web-app.\n",
+          "outline": [
+            {
+              "id": "web-app",
+              "level": 1,
+              "title": "Web app"
+            },
+            {
+              "id": "web-app-areas",
+              "level": 2,
+              "title": "Areas"
+            }
+          ],
+          "path": "codemap/codemap.md",
+          "section": null,
+          "title": "Web app"
+        },
+        "docs": [
+          {
+            "current": false,
+            "key": "cli",
+            "sections": 3,
+            "title": "CLI"
+          },
+          {
+            "current": true,
+            "key": "codemap",
+            "sections": 2,
+            "title": "Web app"
+          },
+          {
+            "current": false,
+            "key": "net",
+            "sections": 3,
+            "title": "Net"
+          }
+        ]
+      },
+      "maps": [
+        {
+          "dir": "codemap",
+          "entries": [
+            {
+              "modified": 1794199400,
+              "name": "codemap.md",
+              "path": "codemap/codemap.md",
+              "size": 330
+            },
+            {
+              "modified": 1794199400,
+              "name": "cli.md",
+              "path": "codemap/cli.md",
+              "size": 167
+            },
+            {
+              "modified": 1794199400,
+              "name": "net.md",
+              "path": "codemap/net.md",
+              "size": 253
+            },
+            {
+              "modified": 1794199400,
+              "name": "architecture.html",
+              "path": "codemap/diagram/architecture.html",
+              "size": 138
+            }
+          ],
+          "files": 4,
+          "label": "Code map",
+          "lens": false,
+          "when": "7 d ago"
+        },
+        {
+          "dir": "codemap-lenses/product-owner",
+          "entries": [
+            {
+              "modified": 1794199700,
+              "name": "product-owner.md",
+              "path": "codemap-lenses/product-owner/product-owner.md",
+              "size": 130
+            }
+          ],
+          "files": 1,
+          "label": "Lens: product owner",
+          "lens": true,
+          "when": "7 d ago"
+        }
+      ],
+      "root": "codemap",
+      "run": null,
+      "running": true,
+      "sandbox": "web-app",
+      "writing": false
+    },
+    "files_dir": {
+      "artifacts": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199880,
+          "name": ".sbxw-artifacts",
+          "size": 4096
+        },
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199940,
+          "name": ".git",
+          "size": 4096
+        },
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199100,
+          "name": "src",
+          "size": 4096
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793768000,
+          "name": "README.md",
+          "size": 1320
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793768000,
+          "name": "package.json",
+          "size": 812
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793422400,
+          "name": "install.sh",
+          "size": 230
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793422400,
+          "name": ".env",
+          "size": 64
+        }
+      ],
+      "home": "/home/agent",
+      "mounts": [
+        {
+          "path": "/Users/me/shared-lib",
+          "readonly": true
+        }
+      ],
+      "offline": false,
+      "ok": true,
+      "parent": "/Users/me",
+      "path": "/Users/me/web",
+      "workspace": "/Users/me/web",
+      "worktrees": [
+        {
+          "artifacts": null,
+          "path": "/Users/me/web/.sbxw-worktrees/checkout",
+          "repo": "",
+          "thread": "checkout"
+        }
+      ]
+    },
+    "files_recent": {
+      "days": 7,
+      "files": [
+        {
+          "modified": 1794199940,
+          "path": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md",
+          "size": 37
+        },
+        {
+          "modified": 1794199880,
+          "path": "/Users/me/web/.sbxw-artifacts/report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198500,
+          "path": "/tmp/build.log",
+          "size": 10690
+        },
+        {
+          "modified": 1794199100,
+          "path": "/Users/me/web/src/app.ts",
+          "size": 2210
+        },
+        {
+          "modified": 1794178400,
+          "path": "/home/agent/.claude/plans/checkout.md",
+          "size": 980
+        },
+        {
+          "modified": 1794027200,
+          "path": "/Users/me/web/.sbxw-artifacts/notes/meeting.md",
+          "size": 412
+        }
+      ],
+      "home": "/home/agent",
+      "offline": false,
+      "ok": true,
+      "roots": [
+        "/Users/me/web",
+        "/home/agent",
+        "/tmp"
+      ],
+      "workspace": "/Users/me/web"
+    },
+    "files_ui": {
+      "artifacts_dir": "/Users/me/web/.sbxw-artifacts",
+      "can_back": true,
+      "can_up": true,
+      "errors": {
+        "artifacts": null,
+        "files": null,
+        "recent": null
+      },
+      "filter": "",
+      "has_map": true,
+      "hidden": false,
+      "lenses": 1,
+      "loading": {
+        "artifacts": false,
+        "files": false,
+        "recent": false
+      },
+      "offline": false,
+      "path": "/Users/me/web",
+      "places": [
+        {
+          "icon": "search",
+          "id": "recent",
+          "label": "Recent",
+          "recent": true
+        },
+        {
+          "icon": "sparkle",
+          "id": "/Users/me/web/.sbxw-artifacts",
+          "label": ".sbxw-artifacts",
+          "path": "/Users/me/web/.sbxw-artifacts"
+        },
+        {
+          "icon": "folder",
+          "id": "/Users/me/web",
+          "label": "Workspace",
+          "path": "/Users/me/web"
+        },
+        {
+          "icon": "folder",
+          "id": "/Users/me/shared-lib",
+          "label": "shared-lib (read only)",
+          "path": "/Users/me/shared-lib"
+        },
+        {
+          "icon": "columns",
+          "id": "/Users/me/web/.sbxw-worktrees/checkout",
+          "label": "thread checkout",
+          "path": "/Users/me/web/.sbxw-worktrees/checkout"
+        },
+        {
+          "icon": "folder",
+          "id": "/home/agent",
+          "label": "Home",
+          "path": "/home/agent"
+        },
+        {
+          "icon": "file",
+          "id": "/var/log",
+          "label": "Kit logs",
+          "path": "/var/log",
+          "select": "sbx-kit-startup.log"
+        },
+        {
+          "icon": "folder",
+          "id": "/",
+          "label": "Root",
+          "path": "/"
+        }
+      ],
+      "preview": {
+        "note": "",
+        "state": "text",
+        "text": "[0000] compiled module 0\n[0001] compiled module 1\n[0002] compiled module 2\n[0003] compiled module 3\n[0004] compiled module 4\n[0005] compiled module 5\n[0006] compiled module 6\n[0007] compiled module 7\n[0008] compiled module 8\n[0009] compiled module 9\n[0010] compiled module 10\n[0011] compiled module 11\n[0012] compiled module 12\n[0013] compiled module 13\n[0014] compiled module 14\n[0015] compiled module 15\n[0016] compiled module 16\n[0017] compiled module 17\n[0018] compiled module 18\n[0019] compiled module 19\n[0020] compiled module 20\n[0021] compiled module 21\n[0022] compiled module 22\n[0023] compiled module 23\n[0024] compiled module 24\n[0025] compiled module 25\n[0026] compiled module 26\n[0027] compiled module 27\n[0028] compiled module 28\n[0029] compiled module 29\n[0030] compiled module 30\n[0031] compiled module 31\n[0032] compiled module 32\n[0033] compiled module 33\n[0034] compiled module 34\n[0035] compiled module 35\n[0036] compiled module 36\n[0037] compiled module 37\n[0038] compiled module 38\n[0039] compiled module 39\n[0040] compiled module 40\n[0041] compiled module 41\n[0042] compiled module 42\n[0043] compiled module 43\n[0044] compiled module 44\n[0045] compiled module 45\n[0046] compiled module 46\n[0047] compiled module 47\n[0048] compiled module 48\n[0049] compiled module 49\n[0050] compiled module 50\n[0051] compiled module 51\n[0052] compiled module 52\n[0053] compiled module 53\n[0054] compiled module 54\n[0055] compiled module 55\n[0056] compiled module 56\n[0057] compiled module 57\n[0058] compiled module 58\n[0059] compiled module 59\n[0060] compiled module 60\n[0061] compiled module 61\n[0062] compiled module 62\n[0063] compiled module 63\n[0064] compiled module 64\n[0065] compiled module 65\n[0066] compiled module 66\n[0067] compiled module 67\n[0068] compiled module 68\n[0069] compiled module 69\n[0070] compiled module 70\n[0071] compiled module 71\n[0072] compiled module 72\n[0073] compiled module 73\n[0074] compiled module 74\n[0075] compiled module 75\n[0076] compiled module 76\n[0077] compiled module 77\n[0078] compiled module 78\n[0079] compiled module 79\n[0080] compiled module 80\n[0081] compiled module 81\n[0082] compiled module 82\n[0083] compiled module 83\n[0084] compiled module 84\n[0085] compiled module 85\n[0086] compiled module 86\n[0087] compiled module 87\n[0088] compiled module 88\n[0089] compiled module 89\n[0090] compiled module 90\n[0091] compiled module 91\n[0092] compiled module 92\n[0093] compiled module 93\n[0094] compiled module 94\n[0095] compiled module 95\n[0096] compiled module 96\n[0097] compiled module 97\n[0098] compiled module 98\n[0099] compiled module 99\n[0100] compiled module 100\n[0101] compiled module 101\n[0102] compiled module 102\n[0103] compiled module 103\n[0104] compiled module 104\n[0105] compiled module 105\n[0106] compiled module 106\n[0107] compiled module 107\n[0108] compiled module 108\n[0109] compiled module 109\n[0110] compiled module 110\n[0111] compiled module 111\n[0112] compiled module 112\n[0113] compiled module 113\n[0114] compiled module 114\n[0115] compiled module 115\n[0116] compiled module 116\n[0117] compiled module 117\n[0118] compiled module 118\n[0119] compiled module 119\n[0120] compiled module 120\n[0121] compiled module 121\n[0122] compiled module 122\n[0123] compiled module 123\n[0124] compiled module 124\n[0125] compiled module 125\n[0126] compiled module 126\n[0127] compiled module 127\n[0128] compiled module 128\n[0129] compiled module 129\n[0130] compiled module 130\n[0131] compiled module 131\n[0132] compiled module 132\n[0133] compiled module 133\n[0134] compiled module 134\n[0135] compiled module 135\n[0136] compiled module 136\n[0137] compiled module 137\n[0138] compiled module 138\n[0139] compiled module 139\n[0140] compiled module 140\n[0141] compiled module 141\n[0142] compiled module 142\n[0143] compiled module 143\n[0144] compiled module 144\n[0145] compiled module 145\n[0146] compiled module 146\n[0147] compiled module 147\n[0148] compiled module 148\n[0149] compiled module 149\n[0150] compiled module 150\n[0151] compiled module 151\n[0152] compiled module 152\n[0153] compiled module 153\n[0154] compiled module 154\n[0155] compiled module 155\n[0156] compiled module 156\n[0157] compiled module 157\n[0158] compiled module 158\n[0159] compiled module 159\n[0160] compiled module 160\n[0161] compiled module 161\n[0162] compiled module 162\n[0163] compiled module 163\n[0164] compiled module 164\n[0165] compiled module 165\n[0166] compiled module 166\n[0167] compiled module 167\n[0168] compiled module 168\n[0169] compiled module 169\n[0170] compiled module 170\n[0171] compiled module 171\n[0172] compiled module 172\n[0173] compiled module 173\n[0174] compiled module 174\n[0175] compiled module 175\n[0176] compiled module 176\n[0177] compiled module 177\n[0178] compiled module 178\n[0179] compiled module 179\n[0180] compiled module 180\n[0181] compiled module 181\n[0182] compiled module 182\n[0183] compiled module 183\n[0184] compiled module 184\n[0185] compiled module 185\n[0186] compiled module 186\n[0187] compiled module 187\n[0188] compiled module 188\n[0189] compiled module 189\n[0190] compiled module 190\n[0191] compiled module 191\n[0192] compiled module 192\n[0193] compiled module 193\n[0194] compiled module 194\n[0195] compiled module 195\n[0196] compiled module 196\n[0197] compiled module 197\n[0198] compiled module 198\n[0199] compiled module 199\n[0200] compiled module 200\n[0201] compiled module 201\n[0202] compiled module 202\n[0203] compiled module 203\n[0204] compiled module 204\n[0205] compiled module 205\n[0206] compiled module 206\n[0207] compiled module 207\n[0208] compiled module 208\n[0209] compiled module 209\n[0210] compiled module 210\n[0211] compiled module 211\n[0212] compiled module 212\n[0213] compiled module 213\n[0214] compiled module 214\n[0215] compiled module 215\n[0216] compiled module 216\n[0217] compiled module 217\n[0218] compiled module 218\n[0219] compiled module 219\n[0220] compiled module 220\n[0221] compiled module 221\n[0222] compiled module 222\n[0223] compiled module 223\n[0224] compiled module 224\n[0225] compiled module 225\n[0226] compiled module 226\n[0227] compiled module 227\n[0228] compiled module 228\n[0229] compiled module 229\n[0230] compiled module 230\n[0231] compiled module 231\n[0232] compiled module 232\n[0233] compiled module 233\n[0234] compiled module 234\n[0235] compiled module 235\n[0236] compiled module 236\n[0237] compiled module 237\n[0238] compiled module 238\n[0239] compiled module 239\n[0240] compiled module 240\n[0241] compiled module 241\n[0242] compiled module 242\n[0243] compiled module 243\n[0244] compiled module 244\n[0245] compiled module 245\n[0246] compiled module 246\n[0247] compiled module 247\n[0248] compiled module 248\n[0249] compiled module 249\n[0250] compiled module 250\n[0251] compiled module 251\n[0252] compiled module 252\n[0253] compiled module 253\n[0254] compiled module 254\n[0255] compiled module 255\n[0256] compiled module 256\n[0257] compiled module 257\n[0258] compiled module 258\n[0259] compiled module 259\n[0260] compiled module 260\n[0261] compiled module 261\n[0262] compiled module 262\n[0263] compiled module 263\n[0264] compiled module 264\n[0265] compiled module 265\n[0266] compiled module 266\n[0267] compiled module 267\n[0268] compiled module 268\n[0269] compiled module 269\n[0270] compiled module 270\n[0271] compiled module 271\n[0272] compiled module 272\n[0273] compiled module 273\n[0274] compiled module 274\n[0275] compiled module 275\n[0276] compiled module 276\n[0277] compiled module 277\n[0278] compiled module 278\n[0279] compiled module 279\n[0280] compiled module 280\n[0281] compiled module 281\n[0282] compiled module 282\n[0283] compiled module 283\n[0284] compiled module 284\n[0285] compiled module 285\n[0286] compiled module 286\n[0287] compiled module 287\n[0288] compiled module 288\n[0289] compiled module 289\n[0290] compiled module 290\n[0291] compiled module 291\n[0292] compiled module 292\n[0293] compiled module 293\n[0294] compiled module 294\n[0295] compiled module 295\n[0296] compiled module 296\n[0297] compiled module 297\n[0298] compiled module 298\n[0299] compiled module 299\n[0300] compiled module 300\n[0301] compiled module 301\n[0302] compiled module 302\n[0303] compiled module 303\n[0304] compiled module 304\n[0305] compiled module 305\n[0306] compiled module 306\n[0307] compiled module 307\n[0308] compiled module 308\n[0309] compiled module 309\n[0310] compiled module 310\n[0311] compiled module 311\n[0312] compiled module 312\n[0313] compiled module 313\n[0314] compiled module 314\n[0315] compiled module 315\n[0316] compiled module 316\n[0317] compiled module 317\n[0318] compiled module 318\n[0319] compiled module 319\n[0320] compiled module 320\n[0321] compiled module 321\n[0322] compiled module 322\n[0323] compiled module 323\n[0324] compiled module 324\n[0325] compiled module 325\n[0326] compiled module 326\n[0327] compiled module 327\n[0328] compiled module 328\n[0329] compiled module 329\n[0330] compiled module 330\n[0331] compiled module 331\n[0332] compiled module 332\n[0333] compiled module 333\n[0334] compiled module 334\n[0335] compiled module 335\n[0336] compiled module 336\n[0337] compiled module 337\n[0338] compiled module 338\n[0339] compiled module 339\n[0340] compiled module 340\n[0341] compiled module 341\n[0342] compiled module 342\n[0343] compiled module 343\n[0344] compiled module 344\n[0345] compiled module 345\n[0346] compiled module 346\n[0347] compiled module 347\n[0348] compiled module 348\n[0349] compiled module 349\n[0350] compiled module 350\n[0351] compiled module 351\n[0352] compiled module 352\n[0353] compiled module 353\n[0354] compiled module 354\n[0355] compiled module 355\n[0356] compiled module 356\n[0357] compiled module 357\n[0358] compiled module 358\n[0359] compiled module 359\n[0360] compiled module 360\n[0361] compiled module 361\n[0362] compiled module 362\n[0363] compiled module 363\n[0364] compiled module 364\n[0365] compiled module 365\n[0366] compiled module 366\n[0367] compiled module 367\n[0368] compiled module 368\n[0369] compiled module 369\n[0370] compiled module 370\n[0371] compiled module 371\n[0372] compiled module 372\n[0373] compiled module 373\n[0374] compiled module 374\n[0375] compiled module 375\n[0376] compiled module 376\n[0377] compiled module 377\n[0378] compiled module 378\n[0379] compiled module 379\n[0380] compiled module 380\n[0381] compiled module 381\n[0382] compiled module 382\n[0383] compiled module 383\n[0384] compiled module 384\n[0385] compiled module 385\n[0386] compiled module 386\n[0387] compiled module 387\n[0388] compiled module 388\n[0389] compiled module 389\n[0390] compiled module 390\n[0391] compiled module 391\n[0392] compiled module 392\n[0393] compiled module 393\n[0394] compiled module 394\n[0395] compiled module 395\n[0396] compiled module 396\n[0397] compiled module 397\n[0398] compiled module 398\n[0399] compiled module 399\n"
+      },
+      "recent_days": 7,
+      "recent_fresh": 0,
+      "rows": [
+        {
+          "can_delete": true,
+          "dir": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/tmp/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/deeply-nested-folder-of-agent-output/quarterly-report-final-v2.md",
+          "kind": "file",
+          "name": "quarterly-report-final-v2.md",
+          "selected": false,
+          "size": "37 B",
+          "when": "7 d ago"
+        },
+        {
+          "can_delete": true,
+          "dir": "workspace/.sbxw-artifacts",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/Users/me/web/.sbxw-artifacts/report.md",
+          "kind": "file",
+          "name": "report.md",
+          "selected": false,
+          "size": "215 B",
+          "when": "7 d ago"
+        },
+        {
+          "can_delete": true,
+          "dir": "/tmp",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/tmp/build.log",
+          "kind": "file",
+          "name": "build.log",
+          "selected": true,
+          "size": "10.4 KB",
+          "when": "7 d ago"
+        },
+        {
+          "can_delete": true,
+          "dir": "workspace/src",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/Users/me/web/src/app.ts",
+          "kind": "file",
+          "name": "app.ts",
+          "selected": false,
+          "size": "2.2 KB",
+          "when": "7 d ago"
+        },
+        {
+          "can_delete": true,
+          "dir": "~/.claude/plans",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/home/agent/.claude/plans/checkout.md",
+          "kind": "file",
+          "name": "checkout.md",
+          "selected": false,
+          "size": "980 B",
+          "when": "7 d ago"
+        },
+        {
+          "can_delete": true,
+          "dir": "workspace/.sbxw-artifacts/notes",
+          "fresh": false,
+          "group": "This week",
+          "icon": "file",
+          "id": "/Users/me/web/.sbxw-artifacts/notes/meeting.md",
+          "kind": "file",
+          "name": "meeting.md",
+          "selected": false,
+          "size": "412 B",
+          "when": "9 d ago"
+        }
+      ],
+      "run": null,
+      "sandbox": "web-app",
+      "saved": null,
+      "selected": {
+        "can_delete": true,
+        "id": "/tmp/build.log",
+        "kind": "file",
+        "modified": "2026-11-09",
+        "name": "build.log",
+        "path": "/tmp/build.log",
+        "size": "10.4 KB",
+        "type": "Text file"
+      },
+      "staged": [
+        {
+          "from": "/Users/me/Desktop/brief.pdf",
+          "index": 1,
+          "name": "brief.pdf",
+          "problem": null,
+          "progress": 0.0,
+          "size": "29.3 KB",
+          "state": null,
+          "to": "web-app"
+        },
+        {
+          "from": "/Users/me/Desktop/dump.iso",
+          "index": 2,
+          "name": "dump.iso",
+          "problem": "too large: 134217733 bytes, the daemon takes 128.0 MB at most",
+          "progress": 0.0,
+          "size": "128.0 MB",
+          "state": null,
+          "to": "web-app"
+        }
+      ],
+      "starred": false,
+      "tab": "recent",
+      "upload_max": "128.0 MB"
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "running",
+        "workspace": "/Users/me/web"
+      },
+      {
+        "agent": "claude",
+        "name": "api",
+        "status": "running",
+        "workspace": "/Users/me/api"
+      },
+      {
+        "agent": "codex",
+        "name": "data-pipeline",
+        "status": "stopped",
+        "workspace": "/Users/me/data"
+      }
+    ]
+  }
+}

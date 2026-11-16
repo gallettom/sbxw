@@ -1,0 +1,52 @@
+{
+ "about": "terminal-mac not installed: Install (confirmed).",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   }
+  ],
+  "mac": {
+   "ok": true,
+   "mac": {
+    "supported": true,
+    "installed": false,
+    "program": null,
+    "pinned": "v0.3.0-rc.2",
+    "vm": "sbxw-mac",
+    "state": "missing",
+    "guest_ready": false,
+    "guest": null,
+    "holder": null,
+    "managed": false,
+    "busy": null,
+    "error": null,
+    "ports": [],
+    "settings": {
+     "vm": "sbxw-mac",
+     "idle_release_minutes": 10,
+     "pause_after_minutes": 15,
+     "stop_after_minutes": 60,
+     "force_stop_after_minutes": 5,
+     "guest_host_ip": ""
+    },
+    "stop_requested_ms": null,
+    "pending": []
+   }
+  }
+ },
+ "app": {
+  "panels": [
+   "mac"
+  ]
+ }
+}

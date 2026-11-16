@@ -15,11 +15,11 @@
 #
 # The stand-in fixture is fixtures/relay/standin.json. The stand-in's state
 # changes during a run, so each picture is its own run against a fresh
-# stand-in, up to that mark. Out: shots/relay/window-<mark>.png, the element
+# stand-in, up to that mark. Out: $SBXW_SHOTS/relay/window-<mark>.png, the element
 # tree and the app log beside each.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/relay"; mkdir -p "$shots"
+shots="$shots_root/relay"; mkdir -p "$shots"
 script="$shots/window-script.json"
 # Pictures for the screenshot request: a mock settings header, plain PNG.
 python3 - "$shots" <<'PY'

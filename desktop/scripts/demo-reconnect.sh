@@ -4,10 +4,10 @@
 # this script kills the stand-in and starts a new one on the same port with a
 # NEW token in that file, as a daemon restart does. The link reconnects with
 # the new token, the pane's terminal reconnects on its own, and typing works
-# again. Output: shots/reconnect-before.png, shots/reconnect-after.png, the log.
+# again. Output: $SBXW_SHOTS/reconnect-before.png, $SBXW_SHOTS/reconnect-after.png, the log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots"; mkdir -p "$shots"
+shots="$shots_root"; mkdir -p "$shots"
 build
 port=$(free_port); addr="127.0.0.1:$port"
 tokdir=$(mktemp -d); tokfile="$tokdir/ui-token"

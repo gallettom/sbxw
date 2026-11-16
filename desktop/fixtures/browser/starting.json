@@ -1,0 +1,91 @@
+{
+ "about": "Just opened: waiting for the first picture.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "browser_active": {
+   "ok": true,
+   "sandboxes": [
+    "web-app"
+   ]
+  },
+  "browser_grants": {
+   "web-app": {
+    "ok": true,
+    "grants": [
+     {
+      "host": "registry.npmjs.org",
+      "rules": [
+       "r1"
+      ]
+     }
+    ]
+   }
+  },
+  "browser_ui": {
+   "sandbox": "web-app",
+   "status": "starting",
+   "url": "",
+   "title": "",
+   "viewport": "auto",
+   "viewports": [
+    {
+     "id": "auto",
+     "label": "Auto"
+    },
+    {
+     "id": "mobile",
+     "label": "Mobile · 390"
+    },
+    {
+     "id": "tablet",
+     "label": "Tablet · 820"
+    },
+    {
+     "id": "desktop",
+     "label": "Desktop · 1280"
+    }
+   ],
+   "blocked": [],
+   "allowed": 0,
+   "error": null,
+   "focused": false,
+   "release_key": "Ctrl+Esc",
+   "frame": {
+    "w": 0,
+    "h": 0
+   },
+   "stats": {
+    "frames": 0,
+    "refused": 0,
+    "fps": 0,
+    "latency_ms": null
+   }
+  }
+ },
+ "app": {
+  "panels": [
+   "browser"
+  ],
+  "open": [
+   "web-app"
+  ]
+ }
+}

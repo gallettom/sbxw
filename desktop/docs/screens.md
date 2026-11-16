@@ -73,6 +73,7 @@ unchanged.
 | `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
 | `overrides` | Screens running an override file, by name: `path`, `stale` (made for an older built-in; see "Where screens live") |
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
+| `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -270,6 +271,28 @@ draws "picture not loaded".
 
 ```lua
 image{ key = "shot-web-app-1", max_w = 320, max_h = 200 }
+```
+
+### `surface`
+
+A feature's live picture (a sandbox's browser): drawn and fed by the core
+(`src/surface.rs`), it takes the space its parent leaves (put it last in a
+`column` that fills the panel). The picture is scaled to fit, aspect kept,
+letterboxed. A press gives it the keyboard; the person's pointer, keys,
+input-method text and paste go to the owning feature's Rust in the picture's
+own pixels, never to the screen. The app keeps its own keys: the global
+shortcuts, push-to-talk, F6 (the feature may move the focus to its own
+field), ⌘ or Ctrl with + - = 0, and the release key, ⌘Esc on macOS and
+Ctrl+Esc elsewhere, which gives the keyboard back: say it in the chrome
+(`data.app.surface.release`). The screen draws only the chrome around it; an
+`id` no feature owns draws a grey line saying so.
+
+| Prop | Value | Effect |
+|---|---|---|
+| `id` | string | Required. The surface's id, as its feature declares it in `surfaces` |
+
+```lua
+surface{ id = "browser" }
 ```
 
 ### `icon`
@@ -603,7 +626,7 @@ desktop/scripts/screen.sh <screen> [fixture] [--file my.luau] [--script s.json]
 ```
 
 draws the screen alone from `desktop/fixtures/<screen>/<fixture>.json` and
-writes a PNG and the element tree. `desktop/.sbxw-artifacts/testing.md` has the rest:
+writes a PNG and the element tree. `.sbxw-artifacts/desktop/testing.md` (the repository root's artifacts folder, outside git) has the rest:
 fixtures, scripts that press elements by key, the whole window.
 
 ## Adding a feature
@@ -634,6 +657,11 @@ What a feature declares:
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
 | `shortcuts` | `&[Shortcut { key, intent, args, help }]`: global keys, taken by the window before any pane, as the web UI's: Alt+<key> off macOS, Ctrl+Option+<key> on macOS (Option alone types characters). `key` is the letter by its place on the keyboard; `args` a JSON object. Create declares N (New) and M (chat) |
 | `on_files` | `fn(&Ctx, Incoming) -> Vec<Action>`: what the person handed it, `Incoming::Files(paths)` or `Incoming::Png(bytes)`. Files dropped on its shown panel or dialog; a picture pasted (⌘V) while its panel is shown and no terminal has the keyboard (a paste into a terminal stays the terminal's); the answers of `PickFiles` and `ReadClipboard`. The only ways a feature gets a path to read: never from a screen or a sandbox. Decode pictures with `crate::picture::prepare` (limits, no animation, scaling, PNG or JPEG out), then apply the feature's own policy |
+| `surfaces`, `on_surface` | Picture surfaces it owns, by id (`src/surface.rs`), placed by a screen with `surface{ id }`. Frames from its Rust on any thread: `surface::set_encoded(id, bytes)` (PNG, JPEG, WebP decoded with `surface::frame_limits()`) or `surface::set_rgba(id, w, h, rgba)`; Rune redraws without running Luau. `on_surface: fn(&SurfaceEvent) -> Vec<Action>` on the UI thread: `Move`, `Press`, `Release`, `Wheel` in picture pixels, `Key` (DOM key name, physical code, text), `Text` (input method), `Paste` (text; the core shows a notice with its size), `Focus`, `F6`, `Resized` (logical points, debounced). The app keeps its own keys (see the `surface` element) |
+| `on_socket`, `standin_ws` | `Action::OpenSocket { id, path, opts }` opens a `/ws/...` route of the daemon with the app's auth (`src/socket.rs`); `on_socket: fn(&str, SocketEvent) -> Vec<Action>` runs on the socket's own thread (`Open`, `Text`, `Binary`, `Reconnecting`, `Closed`), its actions on the UI thread at the next poll; `socket::send(id, text)` from anywhere. `Opts { reconnect, droppable, max_in, max_out, one_line }`: reconnect is off by default; `droppable` messages (frames) keep only the newest when the handler is behind. `standin_ws: fn(target, &mut dyn WsPeer) -> bool` serves the route in the stand-in |
+| `on_bytes` | `fn(&Ctx, &Call, Result<(status, bytes, content type), String>)`: the answer of a `Call::get(path).raw(max)` (at most `max + 1` bytes). Fixture and stand-in routes answer raw with `{"$raw": text, "$type": ...}` or `{"$raw_hex": ...}` |
+| `on_pane_drop` | `fn(&Ctx, &PaneDrop { paths, sandbox, thread })`: files dropped on a terminal pane (the first feature declaring it); the paths are handed in, so an upload may read them |
+| `on_dismiss` | `fn(&Ctx, tag)`: one of its core dialogs closed without its call going out (Cancel, close, Escape, a press outside, replaced, a failed `Prepare` closed); `tag` is the dialog's call tag |
 
 Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 `Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
@@ -644,11 +672,23 @@ Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
 exactly as from a screen), `Remember { key, value }` (kept across runs in the
 app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
-A `Call` of method `Core` is one of the core's own operations (restoring a
-screen), run only from the core's dialog. `PickFiles { title, extensions,
-multiple }` opens the native open dialog (Rune's picks one file; it needs
-Rune's `native-file-dialog` feature, not enabled: until then a notice says
-"Drop the file on this panel, or paste an image."),
+`OpenSocket`, `CloseSocket(id)`, `Focus(element key)`. A `Call` of method
+`Core` is one of the core's own operations: restoring a screen (from the
+core's dialog only), and the file operations of `src/files.rs` built with
+`feat::core_call(op, body, what, tag)`: `inspect {path}` and `reveal {path}`
+(direct, files the core wrote this run), `open {path}` and `upload {route,
+file, content_type, tag}` (from a `Confirm` only; `open` follows `safe.rs`'s
+verdict, a `warn` file needs the dialog's ack box; `upload` reads only a file
+the person handed in this run, 128 MB at most, progress in
+`data.app.uploads[tag]`). `Download(feat::Download { get, name, to, after,
+tag })` writes a daemon route's bytes under a sanitised new name: direct only
+to the Downloads folder without opening, else as the call of a `Confirm`
+(`Download::call`); `to: Dest::Ask` opens the native save dialog. `Reveal(path)`,
+`ForgetFiles(paths)`. `Call::post_bytes(path, content_type, bytes, what)` posts
+a raw body. `PickFiles { title, extensions, multiple }` opens the native open
+dialog (Rune's `native-file-dialog` feature: one file per dialog, `multiple`
+says so in a notice; where no dialog can open, headless or Linux without a
+desktop portal, a notice says "Drop the file on this panel, or paste an image."),
 `ReadClipboard` reads the clipboard for a picture, both answering through
 `on_files` (both run only from the person's own press on a screen, never from
 a feature's data, events or answers; a screen never gets the clipboard's
@@ -850,7 +890,7 @@ forgotten; a screen only sees names and whether a value is set.
 Threads, plans and the lead (the web UI's thread parts of `panes.js`,
 `plans.js`, `board.js`, `worktrees.js`). Files: `src/feat/threads/`,
 `screens/threads.luau`, `plans.luau`, `threads-new.luau`,
-`fixtures/threads/`. Report: `.sbxw-artifacts/THREADS.md`.
+`fixtures/threads/`. Report: `.sbxw-artifacts/desktop/THREADS.md` in the main checkout.
 
 **Screens.** `threads` (panel "Threads"): one sandbox's sessions, Team
 mode, its plans, and the Worktrees and Board tabs. `plans` (modal, `arg` =
@@ -967,3 +1007,171 @@ target's turns show in the log as `who = "agent"` with `from`.
 person, or "Relay" while only a sandbox is answering),
 `extra-sandbox-<asker>-relay` (`?` and a count), and on the asker's pane
 bars, "asks you".
+
+### files
+
+A sandbox's Project panel and its code map (the web UI's `files.js`,
+`upload.js`, `codemap.js`; `docs/web-ui.md`, "The Project panel"). Files:
+`src/feat/files/` (`mod.rs` rules, `view.rs` rows and previews, `codemap.rs`
+the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
+`screens/codemap.luau`, `fixtures/files/`, `scripts/demo-files.sh`. Report:
+`.sbxw-artifacts/desktop/FILES.md` in the main checkout.
+
+**Screens.** `files` (panel "Project", 460 pt): tabs Artifacts
+(`.sbxw-artifacts`, newest first), Files (a folder of the sandbox, the
+places, Hidden files, the typed path) and Recent (written lately anywhere,
+by age, Show in folder); an upload card; a filter; a preview under the list
+(text, Markdown through `markdown`, a picture through `image`, HTML as its
+source) with Download, Show in folder, Open, Save as, Copy path, Delete.
+`codemap` (panel "Code map", 520 pt): the map or a lens, a file or one of
+its sections drawn through `markdown` (a `[[wiki link]]` is a link to
+`https://sbxw-codemap.invalid/<file>#<section>`, followed in the panel; a
+broken one is marked; a source reference is code, copied from the side
+list), Referenced by, Outline, Code referenced, search, Generate, Write a
+lens, Diagram.
+
+**Extras.** On every pane bar of a sandbox, `pane-<n>-x-project` ("Project",
+opens the panel); on a sandbox's row, `extra-sandbox-<name>-codemap` ("map…",
+amber) while its map or a lens is being written.
+
+**Keys** (scripts press them): rows `files-row-<id>` (`id`: an artifact's
+path under `.sbxw-artifacts`, else the file's absolute path), Recent's
+`files-show-<id>`, tabs `files-tab-<tab>`, actions `files-download`,
+`files-reveal`, `files-open-with`, `files-save-as`, `files-copy-path`,
+`files-delete`, the preview's body `files-preview-<state>` (`loading`, `text` (HTML too), `markdown`, `image`, `note`, `error`), uploads `files-drop` (the drop target), `files-upload-send-<n>`
+and `files-unstage-<n>` (by position); the map's `codemap-docs` (picker,
+items by file key), `codemap-outline-<section id>`, `codemap-hit-<file key>`,
+`codemap-diagram`.
+
+**Data** (each a route's whole answer, read for the sandbox the panel shows;
+a failed read is in `data.app.errors[key]`, a string):
+
+| Key | What |
+|---|---|
+| `artifacts` | `GET /api/sandboxes/:name/artifacts`: `{dir, entries: [{path, name, size, modified}], codemap, lenses, run}` |
+| `files_dir` | `GET /api/sandboxes/:name/fs?path=`: `{path, parent, entries: [{name, kind, link, size, modified}], offline, workspace, artifacts, home, mounts, worktrees}` |
+| `files_recent` | `GET /api/sandboxes/:name/fs/recent`: `{files: [{path, size, modified}], days, workspace, home, roots}` |
+| `codemap` | `GET /api/codemap`, read again on each `codemap` event: every run `{sandbox, kind: map\|lens, phase: writing\|done\|failed, note}` |
+| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind`, `icon`, `dir`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
+| `codemap_ui` | Set by the core: `sandbox`, `maps`, `root`, `loading`, `error`, `map` (`docs`, `count`, `broken`, `doc`: `{key, title, path, section, markdown, outline, backlinks, code}`), `diagram`, `run`, `writing`, `running`, `lens`, `lens_left` |
+
+**Rules.** File content is read raw (`Call::raw`): text and Markdown are
+drawn by the core's elements, pictures decoded by `crate::picture` (24 MB
+before decoding, scaled to 1600 px), HTML never drawn. Nothing a sandbox
+names is written on this computer by the feature: downloads, opens, reveals
+and uploads are the core's (`src/files.rs`, names and verdicts by
+`src/safe.rs`). No intent takes a local path: files come from a drop on the
+panel or a pane, a paste, or the file dialog.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `files_open` | `sandbox`, `tab` (`artifacts`, `files`, `recent`) | direct | Opens the panel on that sandbox (the last tab, else Artifacts) and reads its lists |
+| `files_tab`, `files_place`, `files_browse`, `files_up`, `files_back` | `tab` / `id` / `path` (`~` is home) / none | direct | Tabs, places, folders |
+| `files_filter`, `files_hidden` | `text` / `on` | direct | The filter, dotfiles |
+| `files_select` | `id` (a row's) | direct | A folder is listed, a file previewed; a row not listed is refused |
+| `files_show_in_folder` | `id` | direct | Recent: lists its folder, on it |
+| `files_copy_path` | none | direct | The path as the agent sees it, through `copy_text` |
+| `files_download`, `files_reveal` | none | direct | Into Downloads (never over a file); and shown in its folder |
+| `files_show_saved` | none | direct | Shows the last file saved in its folder |
+| `files_save_as` | none | approval | The save dialog, after the core's dialog names the file and its size |
+| `files_open_with` | none | approval | The core downloads it and judges it (its name and first bytes); its dialog says what it is; a program, script, installer or shortcut is never opened; a file it warns about needs the box ticked |
+| `files_delete` | none | approval | The dialog shows the path and size (a folder: everything in it); only under the workspace, a read-write mount, home or /tmp, never those folders, `.sbxw-artifacts` or `.git` |
+| `files_star` | `path` | direct | Pins a folder among the places (kept across runs) |
+| `files_refresh` | none | direct | Reads the lists again |
+| `files_upload_pick`, `files_upload_paste` | none | direct | The file dialog; the clipboard's picture |
+| `files_upload_remove` | `index` (none: all) | direct | Drops a waiting file |
+| `files_upload_send` | `index` | approval | Waiting file `index`: the dialog shows its local path, size, the sandbox and session; the core streams it (128 MB at most), then the daemon's path is typed into that prompt, not submitted |
+| `files_upload_dropped` | none | approval | The next file dropped on a terminal pane, the same dialog at once; several are asked one after the other, Cancel stops |
+| `codemap_open` | `sandbox`, `map` (a lens's folder) | direct | Opens the panel and reads the map's files |
+| `codemap_doc` | `doc`, `anchor` (a section id) | direct | A file, or one section |
+| `codemap_link` | `url` | direct | A link pressed in a map file: a wiki link followed in the panel, any other in the browser |
+| `codemap_filter` | `text` | direct | Searches the map's files |
+| `codemap_generate` | `sandbox` | direct | `/codemap` in a background session (the daemon refuses a stopped sandbox, no codemap kit, one already running) |
+| `codemap_lens_set`, `codemap_lens` | `text` / `sandbox` | direct | The reader (400 characters at most); `/codemap-lens` in the background |
+| `codemap_diagram` | none | approval | The map's Archify diagram is HTML the app does not draw: saved into Downloads, judged by the core, opened in the browser after its dialog |
+
+### browser
+
+The sandbox's own Chromium, watched and driven from a docked panel (the web
+UI's `browser.js`; `docs/chat.md`, "The browser side panel"). Files:
+`src/feat/browser/` (`mod.rs` the session and rules, `proto.rs` the
+`/ws/browser` line protocol, `standin.rs`, `tests.rs`), `screens/browser.luau`,
+`screens/browser-settle.luau`, `fixtures/browser/`, `fixtures/browser-settle/`,
+`scripts/demo-browser.sh`. Report: `.sbxw-artifacts/desktop/BROWSER-MAC.md`
+in the main checkout.
+
+**Screens.** `browser` (panel "Browser", 720 pt): the sandbox's name, Hide,
+Close browser; back, forward, reload, the address bar (input
+`browser-url`), the device select (`browser-viewport`); the hosts the
+sandbox's network policy refused (`browser-allow-<host>`,
+`browser-ignore-<host>`; an organisation or deny-rule host says why it cannot
+be allowed); how many hosts were allowed from here; the error; the picture,
+`surface{ id = "browser" }`, last; a line with the keyboard hint and the
+measured frames per second and input-to-picture latency. `browser-settle`
+(dialog, 440 pt): on close, the hosts allowed from the panel, Keep them
+(first) or Remove them.
+
+**Extras.** On every pane bar of a running sandbox, `pane-<n>-x-browser`
+("Browser"): blue while its agent uses its browser (`browser_active`), a
+press opens the panel on it, or hides it when it shows that sandbox.
+
+**Data.** `browser_active`: `GET /api/browser/active` (`{ok, sandboxes}`),
+read again on the `browser` event. `browser_ui`, set by the feature:
+`sandbox`, `status` (`idle`, `starting`, `live`, `closing`, `ended`), `url`,
+`title`, `viewport`, `viewports` (`{id, label, disabled}`), `blocked`
+(`{host, kind, fixed}`), `allowed`, `error`, `focused`, `release_key`,
+`frame` (`{w, h}`), `stats` (`frames`, `refused`, `fps`, `latency_ms`).
+`browser_settle`: `{sandbox, hosts}` while the close question is open.
+
+**Intents.** `browser_open {sandbox}`, `browser_hide`, `browser_close`,
+`browser_nav {url}`, `browser_back`, `browser_forward`, `browser_reload`,
+`browser_viewport {value}`, `browser_ignore {host}`, `browser_settle
+{keep}`, `browser_page` (the keyboard to the picture): direct.
+`browser_allow {host}`: **Approval**, the core's dialog, only for a host the
+bridge reported and that is not an organisation or deny-rule host; it posts
+to `POST /api/sandboxes/:name/browser/allow` (the rule for that sandbox only,
+remembered as the panel's so closing can remove it).
+
+**Rules.** Frames go from the socket's thread to the core's surface
+(`surface::set_encoded`, JPEG only, base64 checked strictly): Luau never sees
+a pixel or an input event, and is not re-rendered per frame (the chrome's
+state is set on a change, and at most once a second for the numbers).
+Everything else the sandbox sends is cleaned, bounded one-line text. An
+address typed in the bar is sent to the sandbox's browser (`nav`) and never
+opened on the person's machine; nothing from the sandbox reaches the
+clipboard or `open_link`. A paste is the person's own ⌘V / Ctrl+V on the
+picture, text only. Hiding the panel leaves the browser running; no
+automatic reconnect (a new socket runs a new bridge in the sandbox).
+
+### mac
+
+The virtual Mac (the web UI's Setup, Mac: `mac.js`;
+`assets/terminal-mac/README.md`). Files: `src/feat/mac/` (`mod.rs`,
+`tests.rs`), `screens/mac.luau`, `fixtures/mac/`, `scripts/demo-mac.sh`.
+Report: `.sbxw-artifacts/desktop/BROWSER-MAC.md` in the main checkout.
+
+**Screen.** `mac` (panel "Virtual Mac", 440 pt): not available on a host
+that is not an Apple silicon Mac; else Install, or the VM's card (state,
+guest ready, who holds the lease, release, ports) with Start / Resume /
+Create and start, Open its window, Pause, Take it back, Shut down, Force off
+(while stopping), Refresh (keys `mac-<action>`); the busy banner, the last
+error; the requests waiting on the person, each with sbxw's sentence and, in
+a block of its own labelled as the sandbox's words, its reason, and a button
+to the Requests panel (`relay_open`); the guest's one-time setup while it is
+not ready; the idle timers.
+
+**Extras.** `extra-topbar-mac` ("Mac", on a host that can run it): green
+running, amber when requests wait (with their count) or the guest setup is
+unfinished, red after a failure, blue while busy.
+
+**Data.** `mac`: `GET /api/mac`, the whole answer `{ok, mac}`, read again on
+the `mac` event and every 10 s (the VM's state and the guest's readiness
+change without an event).
+
+**Intents.** `mac_open`, `mac_refresh`, `mac_up` (direct; creating a missing
+VM goes through the core's dialog first: macOS is downloaded, several GB),
+`mac_pause`, `mac_window` (terminal-mac shows the VM's own window: the live
+view): direct. `mac_install`, `mac_stop`, `mac_force_off`, `mac_take_back`:
+**Approval**, the core's dialog built from `data.mac`. The in-app live screen
+is not ported: the daemon has no person-facing route for the guest's screen
+and input (BROWSER-MAC.md says which it would need).

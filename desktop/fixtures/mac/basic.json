@@ -1,0 +1,58 @@
+{
+ "about": "Running, held by web-app, guest ready, one port published.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   }
+  ],
+  "mac": {
+   "ok": true,
+   "mac": {
+    "supported": true,
+    "installed": true,
+    "program": "/Users/me/.sbxw/terminal-mac/bin/terminal-mac",
+    "pinned": "v0.3.0-rc.2",
+    "vm": "sbxw-mac",
+    "state": "running",
+    "guest_ready": true,
+    "guest": {
+     "screen_recording": true,
+     "accessibility": true,
+     "logged_in": true
+    },
+    "holder": "web-app",
+    "managed": true,
+    "busy": null,
+    "error": null,
+    "ports": [
+     "web-app 127.0.0.1:5173:5173/tcp"
+    ],
+    "settings": {
+     "vm": "sbxw-mac",
+     "idle_release_minutes": 10,
+     "pause_after_minutes": 15,
+     "stop_after_minutes": 60,
+     "force_stop_after_minutes": 5,
+     "guest_host_ip": ""
+    },
+    "stop_requested_ms": null,
+    "pending": []
+   }
+  }
+ },
+ "app": {
+  "panels": [
+   "mac"
+  ]
+ }
+}

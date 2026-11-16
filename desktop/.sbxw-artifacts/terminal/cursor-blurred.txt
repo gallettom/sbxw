@@ -1,5 +1,0 @@
-111x33 offset 0 history 0 status connected
-selection: None
-events: []
-bytes in 271, rows rebuilt 69 in 7 rebuilds, build 1.3 ms, polls 54 (460.9 ms)
-✓ agent@sbxw-2:~$ printf '\e[6 q\e[?1004h'; cat -v

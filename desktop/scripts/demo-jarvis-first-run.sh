@@ -9,10 +9,10 @@
 # `session` event per session on every hook, as the daemon does. A second
 # run shows that editing the input hides the error, and a third the notice
 # when another client (a browser tab) follows Jarvis too.
-# Output: shots/jarvis/first-*.png and the logs.
+# Output: $SBXW_SHOTS/jarvis/first-*.png and the logs.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/jarvis"; mkdir -p "$shots"
+shots="$shots_root/jarvis"; mkdir -p "$shots"
 script="$shots/first-script.json"
 python3 - >"$script" <<'PY'
 import json

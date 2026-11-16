@@ -1,0 +1,54 @@
+{
+ "about": "Nothing shown.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "browser_active": {
+   "ok": true,
+   "sandboxes": [
+    "web-app"
+   ]
+  },
+  "browser_grants": {
+   "web-app": {
+    "ok": true,
+    "grants": [
+     {
+      "host": "registry.npmjs.org",
+      "rules": [
+       "r1"
+      ]
+     }
+    ]
+   }
+  },
+  "browser_ui": {
+   "status": "idle"
+  }
+ },
+ "app": {
+  "panels": [
+   "browser"
+  ],
+  "open": [
+   "web-app"
+  ]
+ }
+}

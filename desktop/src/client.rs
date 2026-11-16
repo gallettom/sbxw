@@ -6,7 +6,7 @@
 //! The rest of the app sees only the trait and [`LinkEvent`]s.
 //!
 //! What it speaks (daemon side, read from the code, not changed). The full
-//! route list, covered or not, is `desktop/.sbxw-artifacts/daemon-api.md`.
+//! route list, covered or not, is `.sbxw-artifacts/desktop/daemon-api.md` (the repository root's artifacts folder, outside git).
 //! * `GET /api/health?nonce=`: `{ok, proof}`, `proof = sha256(token || nonce)`
 //!   (`crates/daemon/src/http/guard.rs`, `token.rs`). Checked before any
 //!   request carries the token, so a process squatting the port never sees it.
@@ -33,11 +33,11 @@
 //!
 //! Adding a route is mechanical: one method on [`Daemon`], implemented on
 //! [`HttpDaemon`] with [`HttpDaemon::get`] / [`HttpDaemon::post`], on
-//! [`FixtureDaemon`] from its JSON, and a line in `.sbxw-artifacts/daemon-api.md`.
+//! [`FixtureDaemon`] from its JSON, and a line in `.sbxw-artifacts/desktop/daemon-api.md` (repository root, outside git).
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, ErrorKind};
+use std::io::{BufRead, BufReader, ErrorKind, Read as _};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
@@ -181,6 +181,11 @@ pub trait Daemon: Send + Sync + 'static {
     /// `GET /api/stream`: calls `sink` for each event until the stream ends
     /// (an error, or `sink` returning false). Blocks.
     fn subscribe(&self, sink: &mut dyn FnMut(BusEvent) -> bool) -> Result<()>;
+    /// A feature's WebSocket (`/ws/...` with its query), authenticated as
+    /// `/ws`, connected and blocking (`crate::socket` runs it).
+    fn open_socket(&self, path: &str) -> Result<tungstenite::WebSocket<TcpStream>> {
+        bail!("{path}: no sockets with {}", self.describe())
+    }
 
     /// Any route, for features (`src/feat/`): `method` `GET` or `POST`, a
     /// JSON body for a POST. Answers the HTTP status and the JSON body, a
@@ -189,6 +194,20 @@ pub trait Daemon: Send + Sync + 'static {
     fn request(&self, method: &str, path: &str, body: &serde_json::Value, timeout: Duration) -> Result<(u16, serde_json::Value)> {
         let _ = (body, timeout);
         bail!("{method} {path}: not supported by {}", self.describe())
+    }
+
+    /// `GET path` read as raw bytes, at most `max + 1` of them (so the
+    /// caller can say "truncated"): `(status, bytes, content type)`.
+    fn request_raw(&self, path: &str, max: u64, timeout: Duration) -> Result<(u16, Vec<u8>, String)> {
+        let _ = (max, timeout);
+        bail!("GET {path}: raw reads not supported by {}", self.describe())
+    }
+
+    /// `POST path` with a raw body of `len` bytes streamed from `body` (an
+    /// upload): the status and the JSON answer.
+    fn send_body(&self, path: &str, content_type: &str, body: Box<dyn std::io::Read + Send>, len: u64, timeout: Duration) -> Result<(u16, serde_json::Value)> {
+        let _ = (content_type, body, len, timeout);
+        bail!("POST {path}: uploads not supported by {}", self.describe())
     }
 
     // ---- Jarvis (crates/daemon/src/http/jarvis.rs) ----
@@ -350,6 +369,21 @@ impl HttpDaemon {
     }
 }
 
+/// A raw answer from a stand-in or fixture route (their answers are JSON):
+/// `{"$raw": text, "$type": ...}` or `{"$raw_hex": hex, "$type": ...}` are
+/// those bytes; anything else is its JSON text.
+pub fn raw_of(v: &serde_json::Value) -> (Vec<u8>, String) {
+    let ct = v["$type"].as_str().unwrap_or("application/octet-stream").to_string();
+    if let Some(t) = v["$raw"].as_str() {
+        return (t.as_bytes().to_vec(), ct);
+    }
+    if let Some(h) = v["$raw_hex"].as_str() {
+        let b = (0..h.len() / 2).filter_map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect();
+        return (b, ct);
+    }
+    (v.to_string().into_bytes(), "application/json".into())
+}
+
 /// A body as JSON; plain text becomes `{"error": text}`, nothing `null`.
 fn json_body(text: &str) -> serde_json::Value {
     if text.trim().is_empty() {
@@ -445,6 +479,26 @@ impl Daemon for HttpDaemon {
         Ok(TerminalConn { events: ev_rx, input: in_tx })
     }
 
+    fn open_socket(&self, path: &str) -> Result<tungstenite::WebSocket<TcpStream>> {
+        if !path.starts_with("/ws/") {
+            bail!("{path}: a feature socket is a /ws/ route");
+        }
+        let url = format!("ws://{}{path}", self.addr);
+        let mut request = url.as_str().into_client_request()?;
+        request.headers_mut().insert("Authorization", self.auth().parse()?);
+        let sock = self.addr.to_socket_addrs()?.next().ok_or_else(|| anyhow!("no address for {}", self.addr))?;
+        let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(3)).map_err(|e| anyhow!(Unreachable(e.to_string())))?;
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        let (socket, resp) = tungstenite::client(request, stream).map_err(|e| match e {
+            tungstenite::HandshakeError::Failure(tungstenite::Error::Http(r)) => anyhow!("{path}: the daemon answered {}", r.status()),
+            e => anyhow!("{path}: WebSocket handshake: {e}"),
+        })?;
+        log::debug!("socket {path} open ({})", resp.status());
+        socket.get_ref().set_read_timeout(None)?;
+        Ok(socket)
+    }
+
     fn subscribe(&self, sink: &mut dyn FnMut(BusEvent) -> bool) -> Result<()> {
         // No overall timeout (the stream is long-lived); the daemon sends a
         // keep-alive comment every 15 s, so 45 s of silence means it is gone.
@@ -523,6 +577,37 @@ impl Daemon for HttpDaemon {
     fn voice_cancel(&self) -> Result<()> {
         let _: serde_json::Value = self.post("/api/voice/cancel", &serde_json::json!({}))?;
         Ok(())
+    }
+    fn request_raw(&self, path: &str, max: u64, timeout: Duration) -> Result<(u16, Vec<u8>, String)> {
+        use std::io::Read;
+        let r = self.agent.get(&format!("http://{}{path}", self.addr)).set("Authorization", &self.auth()).timeout(timeout).call();
+        let resp = match r {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(anyhow!(Unreachable(e.to_string()))),
+        };
+        let (code, ct) = (resp.status(), resp.content_type().to_string());
+        let mut out = vec![];
+        resp.into_reader().take(max.saturating_add(1)).read_to_end(&mut out)?;
+        Ok((code, out, ct))
+    }
+    fn send_body(&self, path: &str, content_type: &str, body: Box<dyn std::io::Read + Send>, len: u64, timeout: Duration) -> Result<(u16, serde_json::Value)> {
+        let r = self
+            .agent
+            .post(&format!("http://{}{path}", self.addr))
+            .set("Authorization", &self.auth())
+            .set("Content-Type", content_type)
+            .set("Content-Length", &len.to_string())
+            .timeout(timeout)
+            .send(body);
+        match r {
+            Ok(r) => {
+                let code = r.status();
+                Ok((code, json_body(&r.into_string().unwrap_or_default())))
+            }
+            Err(ureq::Error::Status(code, r)) => Ok((code, json_body(&r.into_string().unwrap_or_default()))),
+            Err(e) => Err(anyhow!(Unreachable(e.to_string()))),
+        }
     }
 }
 
@@ -759,6 +844,17 @@ impl Daemon for FixtureDaemon {
         }
         Ok(r)
     }
+    fn request_raw(&self, path: &str, max: u64, timeout: Duration) -> Result<(u16, Vec<u8>, String)> {
+        let (code, v) = self.request("GET", path, &serde_json::Value::Null, timeout)?;
+        let (mut bytes, ct) = raw_of(&v);
+        bytes.truncate(max.saturating_add(1) as usize);
+        Ok((code, bytes, ct))
+    }
+    fn send_body(&self, path: &str, content_type: &str, mut body: Box<dyn std::io::Read + Send>, _len: u64, timeout: Duration) -> Result<(u16, serde_json::Value)> {
+        let mut b = vec![];
+        body.read_to_end(&mut b)?;
+        self.request("POST", path, &serde_json::json!({ "$bytes": b.len(), "$type": content_type }), timeout)
+    }
     fn stop_sandbox(&self, name: &str) -> Result<()> {
         let mut d = self.data.lock().unwrap();
         let s = d.sandboxes.iter_mut().find(|s| s.name == name).ok_or_else(|| anyhow!("no sandbox {name}"))?;
@@ -893,6 +989,8 @@ pub enum LinkEvent {
     Done { what: String, result: Result<(), String> },
     /// A feature's call answered (`Link::call`): status and JSON body, or why there was no answer.
     Answer { id: u64, feature: &'static str, call: crate::feat::Call, result: Result<(u16, serde_json::Value), String> },
+    /// A feature's raw call answered (`Call::raw`): status, bytes, content type.
+    Bytes { id: u64, feature: &'static str, call: crate::feat::Call, result: Result<(u16, Vec<u8>, String), String> },
     /// A feature's data was read (`Link::fetch`).
     Data { key: String, result: Result<serde_json::Value, String> },
     /// A per-sandbox key was read: each sandbox's value, or why its read failed.
@@ -988,7 +1086,16 @@ impl Link {
                 // The core runs those itself (shell/features.rs); never sent.
                 crate::feat::Method::Core => "CORE",
             };
-            let result = daemon.request(method, &call.path, &call.body, Duration::from_secs(call.timeout.max(1))).map_err(|e| format!("{e:#}"));
+            let t = Duration::from_secs(call.timeout.max(1));
+            if let (Some(max), "GET") = (call.raw, method) {
+                let result = daemon.request_raw(&call.path, max, t).map_err(|e| format!("{e:#}"));
+                return LinkEvent::Bytes { id, feature, call, result };
+            }
+            let result = match (&call.bytes, method) {
+                (Some((ct, b)), "POST") => daemon.send_body(&call.path, ct, Box::new(std::io::Cursor::new(b.clone())), b.len() as u64, t),
+                _ => daemon.request(method, &call.path, &call.body, t),
+            }
+            .map_err(|e| format!("{e:#}"));
             // As after a stop: a change (a sandbox removed, created) reaches the list at once.
             if method == "POST" {
                 if let Ok(l) = daemon.sandboxes() {
@@ -997,6 +1104,12 @@ impl Link {
             }
             LinkEvent::Answer { id, feature, call, result }
         });
+    }
+
+    /// Runs one of the core's own operations off the UI thread (a download,
+    /// an upload, an open: `src/files.rs`); answers `Answer` with `id`.
+    pub fn core(&self, id: u64, feature: &'static str, call: crate::feat::Call, job: impl FnOnce() -> Result<(u16, serde_json::Value), String> + Send + 'static) {
+        self.job(move || LinkEvent::Answer { id, feature, call, result: job() });
     }
 
     /// Reads data key `key`: one path, or one per sandbox (`(sandbox, path)`),

@@ -3,7 +3,7 @@
     {
       "t": 0.3,
       "type": "paste",
-      "text": "clear; cat /Users/thomasgallet/dev/sbxw/.sbxw-worktrees/desktop-terminal/desktop/.sbxw-artifacts/terminal/samples/glyphs.ans"
+      "text": "clear; cat /Users/thomasgallet/dev/sbxw/.sbxw-artifacts/desktop/terminal/samples/glyphs.ans"
     },
     {
       "t": 0.6,

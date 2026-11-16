@@ -13,11 +13,11 @@
 # The stand-in's state changes during a run, so each picture is its own run
 # against a fresh stand-in, up to that mark. A headless run waits for the
 # app's own pending calls before drawing on, so the steps in between are not
-# pictured here (fixtures/create-jobs/basic.json shows a bring-up mid-way). Out: shots/create/window-<mark>.png,
+# pictured here (fixtures/create-jobs/basic.json shows a bring-up mid-way). Out: $SBXW_SHOTS/create/window-<mark>.png,
 # the element tree and the app log beside each.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/create"; mkdir -p "$shots"
+shots="$shots_root/create"; mkdir -p "$shots"
 script="$shots/window-script.json"
 python3 - >"$script" <<'PY'
 import json

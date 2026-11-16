@@ -8,7 +8,7 @@
 # SCREEN is a built-in name (sandboxes, topbar) or any name with --file.
 # FIXTURE is a name under fixtures/SCREEN/ (default: basic) or a JSON file.
 # --file runs that Luau file as SCREEN (a screen being written, not yet built
-# in). Out: shots/screen-SCREEN-FIXTURE.png and .json (the --tree dump),
+# in). Out: $SBXW_SHOTS/screen-SCREEN-FIXTURE.png and .json (the --tree dump),
 # plus the app log beside them; screen errors are printed.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 fname=$(basename "$fixture" .json)
-out="${out:-$here/shots/screen-$screen-$fname.png}"
+out="${out:-$shots_root/screen-$screen-$fname.png}"
 tree="${tree:-${out%.png}.json}"
 mkdir -p "$(dirname "$out")"
 case "$fixture" in */*|*.json) fx="$fixture" ;; *) fx="$here/fixtures/$screen/$fixture.json" ;; esac

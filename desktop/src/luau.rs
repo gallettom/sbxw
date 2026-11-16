@@ -56,6 +56,9 @@ pub enum Kind {
     Textarea,
     /// A picture a feature registered with the core (`Action::Image`), by its key.
     Image,
+    /// A feature's live picture surface (`crate::surface`), by its `id`:
+    /// drawn and fed by the core, it takes the space left.
+    Surface,
 }
 
 /// A width or height.
@@ -225,6 +228,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg"]),
     ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows"]),
     ("image", Kind::Image, Positional::None, &["fit"]),
+    ("surface", Kind::Surface, Positional::None, &["id"]),
 ];
 
 /// Tones of `badge`, `dot` and `progress`.
@@ -260,7 +264,7 @@ local function mk(kind) return function(t)
   return t
 end end
 for _, k in ipairs({ "text", "row", "column", "list", "scroll", "button", "input", "icon", "badge",
-                     "dot", "split", "spacer", "divider", "menu", "select", "checkbox", "progress", "markdown", "textarea", "image" }) do
+                     "dot", "split", "spacer", "divider", "menu", "select", "checkbox", "progress", "markdown", "textarea", "image", "surface" }) do
   _G[k] = mk(k)
 end
 intent = function(name, args)
@@ -539,7 +543,8 @@ fn to_node(v: &Value, depth: usize, count: &mut usize, max: usize) -> Result<Nod
 }
 
 fn check(n: &Node, name: &str) -> Result<(), String> {
-    let needs_id = matches!(n.kind, Kind::Input | Kind::Textarea | Kind::Split | Kind::Menu | Kind::Select);
+    let needs_id = matches!(n.kind, Kind::Input | Kind::Textarea | Kind::Split | Kind::Menu | Kind::Select | Kind::Surface);
+
     if n.kind == Kind::Image && n.key.is_none() {
         return Err(format!("{name} needs a 'key' (the picture's, as the feature registered it)"));
     }

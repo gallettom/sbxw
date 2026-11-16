@@ -78,6 +78,117 @@ pub struct Feature {
     pub on_files: Option<fn(&Ctx, Incoming) -> Vec<Action>>,
     /// Global keyboard shortcuts: the window takes them before any pane.
     pub shortcuts: &'static [Shortcut],
+    /// Picture surfaces it owns, by id (`crate::surface`): a screen places
+    /// one with `surface{ id = "..." }`; its frames come from the feature's
+    /// Rust ([`crate::surface::set_rgba`], [`crate::surface::set_encoded`]).
+    pub surfaces: &'static [&'static str],
+    /// The person's pointer and keys on one of its surfaces, in picture
+    /// pixels, on the UI thread (keep it cheap: send and return). The app's
+    /// reserved keys never come here ([`crate::surface::reserved`]).
+    pub on_surface: Option<fn(&crate::surface::SurfaceEvent) -> Vec<Action>>,
+    /// An event of one of its sockets ([`Action::OpenSocket`]): `(socket id,
+    /// event)`, on that socket's own thread, never the UI's; the actions
+    /// returned run on the UI thread at its next poll. Frames go straight
+    /// to [`crate::surface`] from here.
+    pub on_socket: Option<fn(&str, crate::socket::SocketEvent) -> Vec<Action>>,
+    /// The stand-in daemon's side of a feature socket: called on the
+    /// connection's own thread with the request target (`/ws/browser?sandbox=x`)
+    /// once the upgrade is accepted; return `false` at once if the route is
+    /// not this feature's. Push and read lines through `peer` until it closes.
+    pub standin_ws: Option<fn(&str, &mut dyn WsPeer) -> bool>,
+    /// One of its raw calls ([`Call::raw`]) answered: the status, the bytes
+    /// (at most `max + 1`, so more than `max` means truncated) and the
+    /// content type; `Err`: no answer at all.
+    pub on_bytes: Option<fn(&Ctx, &Call, Result<(u16, Vec<u8>, String), String>) -> Vec<Action>>,
+    /// Files the person dropped on a terminal pane (the first feature that
+    /// declares this gets them). The paths are handed in: an upload may read them.
+    pub on_pane_drop: Option<fn(&Ctx, &PaneDrop) -> Vec<Action>>,
+    /// One of its core dialogs closed without its call being sent: Cancel,
+    /// the close button, Escape, a press outside, a newer dialog replacing
+    /// it, or a `Prepare` whose read failed and was closed. The argument is
+    /// the dialog's call tag (the `Confirm`'s call, or the `Prepare`'s call
+    /// while nothing was built yet), so the feature can clear what it kept
+    /// for that dialog. Not called once the call went out (its answer comes
+    /// to `on_answer`).
+    pub on_dismiss: Option<fn(&Ctx, &str) -> Vec<Action>>,
+}
+
+/// Files dropped on a pane ([`Feature::on_pane_drop`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneDrop {
+    pub paths: Vec<std::path::PathBuf>,
+    /// The sandbox the pane shows, and its thread (nil: the main session).
+    pub sandbox: String,
+    pub thread: Option<String>,
+}
+
+/// Where a download goes ([`Action::Download`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Dest {
+    /// The person's Downloads folder.
+    Downloads,
+    /// The native save dialog, prefilled with the sanitised name.
+    Ask,
+}
+
+/// What the core does once a download is written.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum After {
+    Nothing,
+    /// Shows it in the file manager.
+    Reveal,
+    /// Opens it with the system's default app, by its verdict (`safe.rs`).
+    Open,
+}
+
+/// A download the core writes (see `src/files.rs`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Download {
+    /// A daemon GET route answering the raw file.
+    pub get: String,
+    /// The suggested name (the core sanitises it).
+    pub name: String,
+    pub to: Dest,
+    pub after: After,
+    /// Handed back in `on_answer` (the call's `tag`).
+    pub tag: String,
+}
+
+impl Download {
+    /// As the call of a [`Confirm`] (needed for `Dest::Ask` and `After::Open`).
+    pub fn call(&self, what: impl Into<String>) -> Call {
+        let to = match self.to {
+            Dest::Downloads => "downloads",
+            Dest::Ask => "ask",
+        };
+        let after = match self.after {
+            After::Nothing => "nothing",
+            After::Reveal => "reveal",
+            After::Open => "open",
+        };
+        Call { method: Method::Core, path: "core:download".into(), body: serde_json::json!({ "get": self.get, "name": self.name, "to": to, "after": after, "tag": self.tag }), what: what.into(), tag: self.tag.clone(), timeout: 900, ..Call::get("", "") }
+    }
+    /// Whether it may run without the core's dialog.
+    pub fn direct(&self) -> bool {
+        self.to == Dest::Downloads && self.after != After::Open
+    }
+}
+
+/// The core's own calls on files (`src/files.rs`), as `Confirm` calls or direct where allowed.
+pub fn core_call(op: &str, body: J, what: impl Into<String>, tag: &str) -> Call {
+    Call { method: Method::Core, path: format!("core:{op}"), body, what: what.into(), tag: tag.into(), timeout: 900, ..Call::get("", "") }
+}
+
+/// The stand-in's end of a feature socket ([`Feature::standin_ws`]).
+pub trait WsPeer {
+    /// Sends a text message; false once closed.
+    fn send(&mut self, text: &str) -> bool;
+    fn send_binary(&mut self, bytes: &[u8]) -> bool;
+    /// The next text message from the app, waiting at most `wait`:
+    /// `Ok(None)` when nothing came, `Err` once closed.
+    fn recv(&mut self, wait: std::time::Duration) -> Result<Option<String>, String>;
+    /// Closes it (a lost browser process).
+    fn close(&mut self);
 }
 
 /// A global shortcut: the web UI's rule (`assets/js/util.js`,
@@ -105,7 +216,7 @@ pub enum Incoming {
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[] };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[], surfaces: &[], on_surface: None, on_socket: None, standin_ws: None, on_bytes: None, on_pane_drop: None, on_dismiss: None };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -254,6 +365,27 @@ pub enum Action {
     /// by the core ([`crate::picture`], its default limits, scaled to 2048 px
     /// at most). Empty `bytes`: forgets it. A picture refused is a notice.
     Image { key: String, bytes: Vec<u8> },
+    /// Opens a WebSocket on the daemon (`path`: a `/ws/...` route and its
+    /// query) under `id`, with the app's authentication ([`crate::socket`]);
+    /// its events go to [`Feature::on_socket`]; send with
+    /// [`crate::socket::send`]. An `id` already open is closed first.
+    OpenSocket { id: String, path: String, opts: crate::socket::Opts },
+    /// Closes socket `id` (its handler hears `Closed("closed")`).
+    CloseSocket(String),
+    /// Moves the keyboard focus to the element of that key (an input's
+    /// `id`, a surface's `surface-<id>`).
+    Focus(String),
+    /// A download written by the core. Direct only to the Downloads folder
+    /// and without opening ([`Download::direct`]); else refused: use
+    /// [`Download::call`] as a [`Confirm`]'s call. The answer
+    /// (`{saved, name, bytes, verdict, kind, reason}`) goes to `on_answer`.
+    Download(Download),
+    /// Shows a file the core wrote this run in the file manager.
+    Reveal(std::path::PathBuf),
+    /// The core forgets these handed-in paths: an upload can no longer read
+    /// them (the feature cleared the queue they were in). A path is also
+    /// forgotten once an upload of it is done.
+    ForgetFiles(Vec<std::path::PathBuf>),
 }
 
 impl Action {
@@ -293,14 +425,19 @@ pub struct Call {
     pub timeout: u64,
     /// A tag of the feature's own, handed back in `on_answer` (which call this was).
     pub tag: String,
+    /// `GET` read as raw bytes, at most this many (+1): answered to
+    /// [`Feature::on_bytes`], not `on_answer`.
+    pub raw: Option<u64>,
+    /// `POST` with this raw body instead of JSON: `(content type, bytes)`.
+    pub bytes: Option<(String, Vec<u8>)>,
 }
 
 impl Call {
     pub fn post(path: impl Into<String>, body: J, what: impl Into<String>) -> Call {
-        Call { method: Method::Post, path: path.into(), body, what: what.into(), then: vec![], store: None, notify: true, timeout: 120, tag: String::new() }
+        Call { method: Method::Post, path: path.into(), body, what: what.into(), then: vec![], store: None, notify: true, timeout: 120, tag: String::new(), raw: None, bytes: None }
     }
     pub fn get(path: impl Into<String>, what: impl Into<String>) -> Call {
-        Call { method: Method::Get, path: path.into(), body: J::Null, what: what.into(), then: vec![], store: None, notify: false, timeout: 30, tag: String::new() }
+        Call { method: Method::Get, path: path.into(), body: J::Null, what: what.into(), then: vec![], store: None, notify: false, timeout: 30, tag: String::new(), raw: None, bytes: None }
     }
     /// Read these keys again after it answered.
     pub fn then(mut self, keys: &[&str]) -> Call {
@@ -319,6 +456,18 @@ impl Call {
     pub fn tag(mut self, tag: &str) -> Call {
         self.tag = tag.into();
         self
+    }
+    /// Read the answer as raw bytes, at most `max` (+1, to tell truncation):
+    /// answered to [`Feature::on_bytes`].
+    pub fn raw(mut self, max: u64) -> Call {
+        self.raw = Some(max);
+        self
+    }
+    /// A `POST` whose body is these bytes (a pasted picture to `paste-image`).
+    pub fn post_bytes(path: impl Into<String>, content_type: &str, bytes: Vec<u8>, what: impl Into<String>) -> Call {
+        let mut c = Call::post(path, J::Null, what);
+        c.bytes = Some((content_type.into(), bytes));
+        c
     }
     pub fn quiet(mut self) -> Call {
         self.notify = false;
@@ -544,12 +693,15 @@ macro_rules! features {
 }
 
 features! {
+    browser,
     create,
     envfile,
+    files,
     network,
     relay,
     setup,
     shell_extras,
+    mac,
     templates,
     threads,
 }
@@ -634,6 +786,17 @@ fn decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The stand-in's feature sockets: the first feature whose `standin_ws`
+/// takes `target`. False: no feature serves that route.
+pub fn standin_socket(target: &str, peer: &mut dyn WsPeer) -> bool {
+    FEATURES.iter().filter_map(|f| f.standin_ws).any(|h| h(target, peer))
+}
+
+/// The feature that owns surface `id`.
+pub fn surface_owner(id: &str) -> Option<&'static Feature> {
+    FEATURES.iter().copied().find(|f| f.surfaces.contains(&id))
 }
 
 /// What a fixture daemon (and the stand-in) answers for a feature route:
