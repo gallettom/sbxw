@@ -45,6 +45,8 @@ pub struct Feats {
     /// Open panels, in the order opened; `panel` the one shown.
     pub panels: Vec<String>,
     pub panel: Option<String>,
+    /// Open panels shown side by side, each in its own column, instead of as tabs.
+    pub split: bool,
     pub dialog: Option<Dialog>,
     /// Data keys to read again at that time (bursts of events merged).
     due: HashMap<String, Instant>,
@@ -222,7 +224,11 @@ impl App {
                     tx.open_file(o, move |s: &mut App, r, _tx| match r {
                         Ok(Some(p)) => s.feature_incoming(name, feat::Incoming::Files(vec![p])),
                         Ok(None) => {}
-                        Err(e) => s.notify(format!("{name}: no file dialog here: {e}"), true),
+                        Err(e) => {
+                            log::info!("{name}: file dialog: {e}");
+                            s.notify("Drop the file on this panel, or paste an image.", false);
+                            s.push_data();
+                        }
                     });
                 }
                 Ask::ReadClipboard => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| match c.image() {
@@ -550,7 +556,7 @@ impl App {
             Some((s, a)) => json!({ "screen": s, "arg": a }),
             None => J::Null,
         };
-        let panels = json!({ "open": self.feats.panels, "shown": self.feats.panel });
+        let panels = json!({ "open": self.feats.panels, "shown": self.feats.panel, "split": self.feats.split });
         let mut topbar = vec![];
         let mut sandboxes = Map::new();
         let mut panes = vec![];
@@ -639,9 +645,14 @@ impl App {
     }
 
     /// The docked feature panel: tabs when more than one is open, the screen below.
-    pub(super) fn feat_panel_view(&self, screen: El, width: f32) -> El {
-        let mut tabs = row().key("panel-tabs").w_full().gap(4.0).items_center();
-        for name in &self.feats.panels {
+    /// A docked panel: tabs of every open panel, or (side by side) only
+    /// `only`'s; the switch between the two when more than one is open.
+    pub(super) fn feat_panel_view(&self, screen: El, width: f32, only: Option<&str>) -> El {
+        let mut tabs = row().key(match only {
+            Some(n) => format!("panel-tabs-{n}"),
+            None => "panel-tabs".into(),
+        }).w_full().gap(4.0).items_center();
+        for name in self.feats.panels.iter().filter(|n| only.is_none_or(|o| o == n.as_str())) {
             let Some((_, decl)) = feat::screen(name) else { continue };
             let Slot::Panel { title, icon, .. } = decl.slot else { continue };
             let shown = self.feats.panel.as_deref() == Some(name.as_str());
@@ -680,8 +691,29 @@ impl App {
             );
             tabs = tabs.child(tab);
         }
+        if self.feats.panels.len() > 1 && only.is_none_or(|o| self.feats.panels.first().map(String::as_str) == Some(o)) {
+            let split = self.feats.split;
+            tabs = tabs.child(el().grow(1.0)).child(
+                el().key("panel-split")
+                    .role("button")
+                    .label(if split { "Show panels as tabs" } else { "Show panels side by side" })
+                    .help(if split { "Show panels as tabs" } else { "Show panels side by side" })
+                    .padding(3.0)
+                    .radius(radius("xs").unwrap())
+                    .hover(c("border"))
+                    .cursor(Cursor::Pointer)
+                    .on_press(|s: &mut App| {
+                        s.feats.split = !s.feats.split;
+                        s.push_data();
+                    })
+                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 12.0).color(c("text-muted"))),
+            );
+        }
         col()
-            .key("feature-panel")
+            .key(match only {
+                Some(n) => format!("feature-panel-{n}"),
+                None => "feature-panel".into(),
+            })
             .role("complementary")
             .w(width)
             .h_full()

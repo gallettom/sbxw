@@ -1147,14 +1147,19 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let (side_el, more) = screen::view_parts::<App>(side);
     overlays.extend(more);
     // A feature's panel, docked left of Jarvis's.
-    let fpanel = s.feats.panel.as_ref().and_then(|name| {
-        let (_, decl) = crate::feat::screen(name)?;
-        let crate::feat::Slot::Panel { width, .. } = decl.slot else { return None };
-        let sc = s.screens.iter().find(|x| &x.name == name)?;
+    // Features' docked panels: the shown one with tabs, or (side by side)
+    // every open one in its own column.
+    let shown: Vec<String> = if s.feats.split && s.feats.panels.len() > 1 { s.feats.panels.clone() } else { s.feats.panel.iter().cloned().collect() };
+    let split = shown.len() > 1;
+    let mut fpanels = vec![];
+    for name in &shown {
+        let Some((_, decl)) = crate::feat::screen(name) else { continue };
+        let crate::feat::Slot::Panel { width, .. } = decl.slot else { continue };
+        let Some(sc) = s.screens.iter().find(|x| &x.name == name) else { continue };
         let (el_, more) = screen::view_parts::<App>(sc);
         overlays.extend(more);
-        Some(s.feat_panel_view(el_, width))
-    });
+        fpanels.push(s.feat_panel_view(el_, width, split.then_some(name.as_str())));
+    }
     let modal = s.feats.modal.as_ref().and_then(|(name, _)| {
         let (_, decl) = crate::feat::screen(name)?;
         let crate::feat::Slot::Modal { width } = decl.slot else { return None };
@@ -1184,7 +1189,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(top_el));
     let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
     let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
-    if let Some(p) = fpanel {
+    for p in fpanels {
         main = main.child(p);
     }
     // Docked on the right: it narrows the panes instead of covering them.

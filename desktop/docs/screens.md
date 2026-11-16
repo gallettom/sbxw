@@ -645,7 +645,8 @@ app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
 A `Call` of method `Core` is one of the core's own operations (restoring a
 screen), run only from the core's dialog. `PickFiles { title, extensions,
 multiple }` opens the native open dialog (Rune's picks one file; it needs
-Rune's `native-file-dialog` feature, else a notice says there is none),
+Rune's `native-file-dialog` feature, not enabled: until then a notice says
+"Drop the file on this panel, or paste an image."),
 `ReadClipboard` reads the clipboard for a picture, both answering through
 `on_files`; `Image { key, bytes }` registers a picture for `image{ key }`
 (decoded by the core; empty bytes forget it). Headless scripts drive them with
@@ -667,7 +668,7 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 `Confirm` (more confirmation, never less). Screens never see the dialog.
 
 **What screens get.** The feature's keys under `data`, and in `data.app`:
-`modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown}`),
+`modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown, split}`: `split` when the person shows the open panels side by side, each in its own column, with the switch at the right of the tabs),
 `extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
 label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
