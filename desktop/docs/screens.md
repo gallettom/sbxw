@@ -428,7 +428,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 
 | Intent | Arguments | What the core does |
 |---|---|---|
-| `open_terminal` | `sandbox` (string, required), `mode` (`agent` default, or `bash`), `thread` (string), `pane` | Opens that terminal in a pane and focuses it. The agent of a stopped sandbox starts it (the daemon runs `sbx run`); the list then shows it running |
+| `open_terminal` | `sandbox` (string, required), `mode` (`agent` default, `bash`, or `kit-add`: the pane where sbx's prompt for a waiting kit is answered), `thread` (string), `pane` | Opens that terminal in a pane and focuses it. The agent of a stopped sandbox starts it (the daemon runs `sbx run`); the list then shows it running |
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
@@ -442,6 +442,15 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `approve_proposal` | `id` (string) | **Risk: approval.** Opens the core's dialog for that proposal. It approves nothing: only the person's click on the dialog does |
 | `refuse_proposal` | `id` (string), `reason` (string) | Refuses that proposal; Jarvis is told the reason |
 | `open_link` | `url` (an `http://` or `https://` URL) | Opens it in the browser. Any other scheme is refused |
+| `open_modal` | `screen` (required), `arg` (string) | Shows a feature's dialog screen over the window, one at a time; Escape or a press outside closes it. The screen reads `data.app.modal.screen` and `data.app.modal.arg` |
+| `close_modal` | none | Closes the dialog screen |
+| `open_panel` | `screen` (required) | Opens a feature's panel docked on the right, beside Jarvis's; several open show as tabs, one shown at a time |
+| `close_panel` | `screen` (none: the one shown) | Closes that panel |
+
+Features (`src/feat/`, see [Adding a feature](#adding-a-feature)) add
+their own rows: each is listed, with its arguments, risk and what it does,
+in `intents.json` next to the built-in screens, and in its feature's
+section below.
 
 `pane` is `"focused"` (default), `"spare"` (the first pane with nothing in
 it, or a new pane while there are fewer than 4) or a number 1 to 4.
@@ -518,9 +527,9 @@ The VM has `string`, `table`, `math`, `utf8` and `bit32`, and nothing else:
 no `io`, `os`, `require`, `load`, `loadstring`, `dofile`, `getfenv`,
 `setfenv`, `collectgarbage`. Libraries and `theme` are read only. Each call
 into the screen (`init`, `render`, an action) gets 200,000 interrupt checks
-(calls and loop turns) and 50 ms; memory is capped at 16 MB; one render may
-return 5,000 elements, nested 32 deep. Going over is an error in the banner;
-the app keeps running.
+(calls and loop turns), the hard limit, which does not depend on how busy the machine is, and 1 s of wall clock, which only catches a call that blocks; memory is capped at 16 MB; one render may
+return 5,000 elements, nested 32 deep. Going over is an error in the banner
+over the last good view, retried on the next change; the app keeps running.
 
 ## Checking your screen
 
@@ -531,3 +540,222 @@ desktop/scripts/screen.sh <screen> [fixture] [--file my.luau] [--script s.json]
 draws the screen alone from `desktop/fixtures/<screen>/<fixture>.json` and
 writes a PNG and the element tree. `desktop/.sbxw-artifacts/testing.md` has the rest:
 fixtures, scripts that press elements by key, the whole window.
+
+## Adding a feature
+
+A feature is one area of the web UI ported to the app (network, create,
+settings, and later threads, relay, files...). Its Rust lives in
+`desktop/src/feat/<area>.rs` (or `feat/<area>/`), its screens in
+`desktop/screens/`, its fixtures in `desktop/fixtures/<area>/`. It is
+declared in **one** place, a `pub const FEATURE: Feature`, and registered by
+**one** line, `<area>,`, in the `features! { }` list at the bottom of
+`src/feat/mod.rs` (the core's owner adds that line). The core does the rest:
+reading its data, loading its screens, checking and running its intents,
+drawing its dialog and slots.
+
+What a feature declares:
+
+| Field | What |
+|---|---|
+| `name` | Short name, the notices' prefix |
+| `data` | `Data { key, path, on, every, lazy }`: a `GET` route read into `data.<key>` at connection, again 300 ms after a stream event in `on`, every `every` seconds, or when an action asks (`lazy`: only then). `{sandbox}` in the path: read for each running sandbox, `data.<key>` is then an object by sandbox name. A fixture holds the same key in its `daemon` object |
+| `events` | Stream events handed to `on_event`, which answers actions |
+| `screens` | `ScreenDecl { name, src: include_str!(..), slot }`; `Slot::Modal { width }` (a dialog over the window) or `Slot::Panel { title, icon, width }` (docked on the right, beside Jarvis; several open show as tabs) |
+| `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
+| `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
+| `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
+| `extras` | Buttons and badges in others' slots: `Extra { place: Sandbox(name) / Topbar / Pane(sandbox), id, label, icon, tone, help, count, intent }` |
+| `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
+| `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
+
+Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
+`Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
+`.store(key)`, `.timeout(secs)`, `.tag(t)`, `.quiet()`), `Confirm`,
+`Prepare`, `Refresh(key)`, `Fetch { key, path }`, `Set { key, value }`,
+`OpenModal { screen, arg }`, `CloseModal`, `OpenPanel(screen)`,
+`ClosePanel(screen)`, `Notice { text, error, then }` (`then`: an intent a
+click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
+exactly as from a screen).
+
+**Approval.** An intent of risk `Approval` may only answer one `Confirm` or
+one `Prepare`; anything else is refused and nothing runs. `Confirm` is the
+core's own dialog, built in Rust from the daemon's data: `Confirm::new(title,
+call).line(..).preview(text, diff).ack(text).secret(label, "secrets.KEY")
+.optional_secret(label, field, placeholder).grant("approved").labels(yes,
+no).danger()`. Secret fields are Rune secure inputs drawn by the core:
+masked, no copy, no accessibility text, absent from the tree and from
+screen data; their values go into the call's body (a dotted path, never over
+a field already there) on Confirm, and the inputs are wiped. `Prepare {
+title, call, asked, build }` shows the dialog loading, reads `call` itself,
+and `build` makes the `Confirm` from the answer (a host key's fingerprints),
+so a screen cannot forge what is shown. A Direct intent may also answer a
+`Confirm` (more confirmation, never less). Screens never see the dialog.
+
+**What screens get.** The feature's keys under `data`, and in `data.app`:
+`modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown}`),
+`extras` (`topbar`, a list; `sandboxes`, lists by sandbox name; each `{id,
+label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
+data key, why its last read failed (the daemon's words), until a read works;
+the key keeps its last good value meanwhile.
+
+The built-in screens draw extras with these element keys (scripts press
+them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a
+sandbox's row; a feature extra there replaces the plain approvals flag),
+and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
+`intent` is a button, without one a badge.
+
+### Worked example
+
+```rust
+// src/feat/hello.rs
+use super::*;
+use crate::intent::{Arg, Risk, Spec};
+
+pub const FEATURE: Feature = Feature {
+    name: "hello",
+    data: &[Data { key: "hello_rules", path: "/api/hello", on: &["hello"], every: 0, lazy: false }],
+    screens: &[ScreenDecl { name: "hello", src: include_str!("../../screens/hello.luau"), slot: Slot::Panel { title: "Hello", icon: "info", width: 320.0 } }],
+    intents: &[
+        Spec { name: "hello_allow", risk: Risk::Approval("Allow a host"), args: &[("host", Arg::Str, true)], doc: "Asks the core's dialog to allow a host." },
+        Spec { name: "hello_remove", risk: Risk::Direct, args: &[("host", Arg::Str, true)], doc: "Removes a rule." },
+    ],
+    act,
+    ..Feature::EMPTY
+};
+
+fn act(_cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
+    let host = a.req("host");
+    Ok(match a.name {
+        "hello_allow" => vec![Confirm::new(format!("Allow {host}?"), Call::post("/api/hello/allow", serde_json::json!({ "host": host }), format!("allow {host}")).then(&["hello_rules"]))
+            .line(format!("Every sandbox may reach {host}, until you remove the rule."))
+            .labels("Allow", "Cancel")
+            .into_action()],
+        _ => vec![Action::Call(Call::post("/api/hello/rm", serde_json::json!({ "host": host }), format!("remove {host}")).then(&["hello_rules"]))],
+    })
+}
+```
+
+```lua
+-- screens/hello.luau: a button in a list row
+button{ "Allow", action = "allow", arg = row.host }
+-- actions
+allow = function(_, host) return intent("hello_allow", { host = host }) end,
+```
+
+Then `hello,` in `features! { }`, a fixture `fixtures/hello/basic.json`
+with `daemon.hello_rules`, and `scripts/screen.sh hello basic`.
+
+## Features
+
+Each feature's own section: its data keys, screens, intents and extras.
+Each thread owns the text under its heading.
+
+### network
+
+### create
+
+New sandbox (the web UI's `create.js`, and the bring-up cards of
+`sandboxes.js`). The form is the core's: the screens show it and change it
+one intent at a time, so what is sent and what the core's dialogs list is
+never text from a screen.
+
+**Screens.** `create` (modal, 640 pt): the chooser, the workspace form and
+the chat form, by `data.create.dialog`. `create-jobs` (panel "New
+sandboxes"): every bring-up in progress, failed or waiting for an answer.
+
+**Extras.** In the top bar: `extra-topbar-create` ("New", opens the
+chooser), and `extra-topbar-create-jobs` ("Creating", with a count) while a
+bring-up runs.
+
+**Data.** `data.create` (set by the core, not read from a route):
+
+| Key | What |
+|---|---|
+| `dialog` | `chooser`, `workspace`, `chat`, or nil |
+| `hosts`, `host`, `remote` | Host items (`id`, `label`; empty with no remote host), the chosen one, whether it is remote |
+| `name`, `name_note`, `name_problem` | The name as cleaned, the rule when a character was dropped, why it cannot be used (taken, rule) |
+| `chat_name`, `chat_suggestion`, `chat_note`, `chat_problem` | The same for a chat; empty uses the suggestion |
+| `path`, `path_tag` | The folder shown; `Selected` (it is the workspace) or `Browsing` (extra folders are added) |
+| `listing` | `path`, `parent`, `can_up`, `entries` (`name`, `path`, `starred`, `added`); `listing_error` when it failed |
+| `favourites` | `path`, `name`, `missing` |
+| `repos`, `repo_hint`, `repo_hint_error`, `can_add_repo` | The sandbox's folders (`path`, `readonly`; the first is the workspace) |
+| `carve_parents`, `carves`, `carve_pick`, `preview` | Restricted sub-folders: where one can go, each (`rel`, `access`, `enforce`, `note`, `hidden_count`, `error`), the pick in progress (`root`, `cur`, `can_use`, `typed`, `error`), the daemon's preview (`summary`, `bad`, `warnings`, `files`, `more`, `stub`) |
+| `ports`, `kit_mounts` | Port rows (`sandbox`, `host`, `alias`, as typed); kit folders (`kit`, `target`, `host`) |
+| `template`, `rebuild`, `remote_control`, `chrome`, `git_url` | The template offer (`note`, `help`) when `template = "auto"`; the boxes; the git URL (remote host only) |
+| `can_create`, `create_problem`, `error` | Create is pressable; why not; the last refusal of the picker or the favourites |
+| `jobs` | `sandbox`, `state` (`running`, `asking`, `ready`, `failed`), `headline`, `steps` (`label`, `state`: `done`, `running`, `failed`, `waiting`; `detail`), `error`, `warnings`, `can_retry` |
+
+**Intents** (all Direct; indexes count from 1):
+
+| Intent | Arguments | What the core does |
+|---|---|---|
+| `create_open` | `dialog` (`chooser` default, `workspace`, `chat`) | Opens the dialog; the workspace form starts empty and reads the folders, favourites, remote hosts, kit folders and template state |
+| `create_host` | `host` (`local` or a remote host) | The folder list, kit folders and git field follow |
+| `create_browse` | `path` (none: home) | Lists that folder; while picking a restricted sub-folder, a folder outside it is refused |
+| `create_pick` | `kit` (number) | The system's folder picker (`POST /api/fs/pick`); browses to the folder, or fills kit folder `kit` |
+| `create_star` | `path` | Stars or unstars it (`POST /api/fs/favourites`; the daemon's refusal shows in `error`) |
+| `create_repo` | `action` (`toggle` with `path`, `add`, or `main`, `rw`, `ro`, `remove` with `index`) | The sandbox's folders |
+| `create_carve` | `action` (`pick` with `path`; `use`, `typed`, `cancel`; `none`, `ro`, `strict`, `soft`, `remove` with `index`) | Restricted sub-folders; the preview is asked again (`POST /api/carve/preview`) |
+| `create_port` | `action` (`add`, `remove` with `index`) | Port rows |
+| `create_set` | `field` (`name`, `chat_name`, `git_url`, `port_sandbox`, `port_host`, `port_alias`, `kit_mount`, `carve_typed`), `value` (none: empty), `index` | A text field; give it on every edit |
+| `create_toggle` | `field` (`remote_control`, `chrome`, `rebuild`), `on` | A box |
+| `create_submit` | none | Creates (`POST /api/sandboxes/create`). When the sandbox reaches more of this machine than its workspace (extra folders, kit folders, ports, Chrome) the core lists what in its own dialog first |
+| `create_chat` | none | Creates the chat sandbox (`POST /api/sandboxes/chat`) |
+| `create_retry` | `sandbox` | Sends a failed creation again, as first sent |
+| `create_dismiss` | `sandbox` | Forgets a finished or failed one |
+
+When the daemon refuses a bring-up for want of host access its `sbxw.toml`
+asks for (409 with `consent`), the core shows the daemon's lines in its own
+dialog and sends them back as `approved` only on Allow (`core_only`). Once
+ready, the core selects the sandbox and opens its agent in a spare pane.
+
+### setup
+
+The web UI's Setup dialog (`assets/js/setup.js` and its tabs): secrets and
+the GitHub token, kits lines, kept skills, MCP servers, remote hosts, the
+voice models. A modal, opened by the gear in the top bar
+(`open_modal { screen = "setup", arg = <tab> }`). A sandbox with a kit
+waiting gets an amber ✓ on its row (`open_terminal` with `mode = "kit-add"`).
+
+Files: `src/feat/setup/` (rules, stand-in, tests), `screens/setup.luau`,
+`fixtures/setup/`. Data, each key one route's answer as the daemon gives
+it (why a read failed: `data.app.errors[key]`, shown as a red line in its
+tab): `data.secrets` (`GET /api/secrets`:
+names, scopes and kinds, never a value), `data.github_token` (`{set, gh}`),
+`data.kits` (`GET /api/kits`), `data.my_skills`, `data.mcp`,
+`data.remote_hosts`, `data.voice` (`GET /api/voice`, then each `voice`
+event). Set by its intents: `data.skills_for` and `data.sandbox_skills`
+(`skills_look`), `data.mcp_inspect_for` and `data.mcp_inspect`
+(`mcp_inspect`), `data.provision` (`{host, command}`, `host_provision`).
+
+**No intent carries a secret value.** The value of a token, a custom secret
+or an MCP header placeholder is typed in the core's dialog, sent once and
+forgotten; a screen only sees names and whether a value is set.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `setup_load` | `section` (`secrets`, `kits`, `skills`, `mcp`, `hosts`, `voice`) | direct | Reads that tab's data again |
+| `github_token_set` | none | approval | Asks for the token in its dialog, stores it as sbx's `github` secret |
+| `github_token_gh` | none | approval | Makes sbx use this machine's `gh auth token` |
+| `github_token_rm` | none | approval | Removes the `github` secret |
+| `secret_custom_set` | `hosts` (comma or space separated), `env` | approval | Asks for the value in its dialog; the proxy puts it in requests to those hosts |
+| `secret_rm` | `name` | approval | Removes a global secret |
+| `kits_save` | `path`, `kits` (one reference per line) or `defaults = true` | approval | Rewrites that file's `kits` line (or removes it); the dialog lists what is added and removed and asks for an acknowledgement for kits that reach outside the sandbox |
+| `skills_look` | `sandbox` | direct | Lists that sandbox's skills (`data.sandbox_skills`) |
+| `skill_keep` | `sandbox`, `name` | approval | Keeps a skill found by `skills_look` for every new sandbox |
+| `skill_forget` | `name` | approval | Stops keeping it |
+| `mcp_load` | `server`, `sandbox` | direct | Loads a server into a running sandbox |
+| `mcp_unload` | `server`, `sandbox` | approval | Unloads it |
+| `mcp_auth` | `server` | direct | `sbx mcp auth`, in this machine's browser |
+| `mcp_inspect`, `mcp_inspect_close` | `server` / none | direct | Shows or hides `sbx mcp inspect` |
+| `mcp_rm` | `server` | approval | Unregisters a server |
+| `mcp_save` | `name`, `kind` (`remote`, `stdio`), `url`, `headers` (`;` or new lines), `command`, `args`, `dir`, `replace` | approval | Registers (or replaces) a server; one secret field per `${KEY}`; a `stdio` one shows its host command and needs "I have read this command" |
+| `host_save` | `name`, `ssh` or `host`/`user`/`port`/`key`, `agent_port`, `sbx_path`, `trust_secrets`, `editing` | approval | For a new address, reads the host key first and shows its fingerprints; adds or edits the host |
+| `host_rm` | `name` | approval | Unregisters a host (with records there: an acknowledgement, then forced) |
+| `host_test` | `name` | direct | `sbx version` over the link |
+| `host_provision`, `host_provision_close` | `name` / none | direct | Shows or hides the command that installs sbx there |
+| `hosts_reload` | none | direct | Reads hosts.toml again |
+| `voice_install` | none | approval | Downloads the voice models; progress in `data.voice.job` |
+| `voice_cancel` | none | direct | Stops the download |
+| `voice_rm` | none | approval | Deletes the models |
+| `voice_warm` | none | direct | Loads the models now |

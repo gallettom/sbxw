@@ -42,6 +42,12 @@ pub struct AppInit {
     /// Messages already in the conversation: `[who, text]` (`me`, `jarvis`, `note`, `error`).
     #[serde(default)]
     pub jarvis_log: Vec<(String, String)>,
+    /// Features' panels open at start (screen names; the last is shown).
+    #[serde(default)]
+    pub panels: Vec<String>,
+    /// A feature's modal open at start: `[screen, arg]`.
+    #[serde(default)]
+    pub modal: Option<(String, serde_json::Value)>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

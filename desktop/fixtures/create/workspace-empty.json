@@ -1,0 +1,84 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": true,
+      "can_create": false,
+      "carve_parents": [
+        {
+          "label": "you",
+          "path": "/home/you"
+        }
+      ],
+      "carve_pick": null,
+      "carves": [],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "",
+      "chrome": false,
+      "create_problem": "Give the sandbox a name.",
+      "dialog": "workspace",
+      "error": null,
+      "favourites": [
+        {
+          "missing": false,
+          "name": "dev",
+          "path": "/home/you/dev"
+        }
+      ],
+      "git_url": "",
+      "host": "local",
+      "hosts": [],
+      "jobs": [],
+      "kit_mounts": [],
+      "listing": {
+        "can_up": true,
+        "entries": [
+          {
+            "added": false,
+            "name": "dev",
+            "path": "/home/you/dev",
+            "starred": true
+          },
+          {
+            "added": false,
+            "name": "notes",
+            "path": "/home/you/notes",
+            "starred": false
+          }
+        ],
+        "parent": "/home",
+        "path": "/home/you"
+      },
+      "listing_error": null,
+      "name": "",
+      "name_note": null,
+      "name_problem": "Give the sandbox a name.",
+      "path": "/home/you",
+      "path_tag": "Selected",
+      "ports": [],
+      "preview": null,
+      "rebuild": false,
+      "remote": false,
+      "remote_control": false,
+      "repo_hint": "Other repos the agent can read, or change, next to the project folder.",
+      "repo_hint_error": false,
+      "repos": [],
+      "template": null
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}

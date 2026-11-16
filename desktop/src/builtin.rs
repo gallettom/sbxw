@@ -18,7 +18,7 @@
 //!               "risk": "approval", "asks": "Approve a Jarvis proposal", "doc": "..."}]}
 //! ```
 
-use crate::intent::{Arg, Risk, REGISTRY};
+use crate::intent::{Arg, Risk};
 use serde_json::{json, Map, Value as J};
 use std::path::{Path, PathBuf};
 
@@ -44,8 +44,7 @@ fn arg_type(a: Arg) -> String {
 
 /// The registry as JSON.
 pub fn intents_json() -> J {
-    let list: Vec<J> = REGISTRY
-        .iter()
+    let list: Vec<J> = crate::intent::all()
         .map(|s| {
             let mut args = Map::new();
             for (name, ty, required) in s.args {
@@ -73,7 +72,7 @@ pub fn export(dir: &Path) -> std::io::Result<()> {
     let tmp = parent.join(format!(".{name}.tmp-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("screens"))?;
-    for (screen, src) in crate::screen::BUILTIN {
+    for (screen, src) in crate::screen::all_builtin() {
         std::fs::write(tmp.join("screens").join(format!("{screen}.luau")), src)?;
     }
     std::fs::write(tmp.join("screens.md"), SCREENS_MD)?;
@@ -105,15 +104,15 @@ mod tests {
         std::fs::write(dir.join("screens").join("gone.luau"), "old").unwrap();
         export(&dir).unwrap();
         assert!(!dir.join("screens/gone.luau").exists(), "replaced whole");
-        for (name, src) in crate::screen::BUILTIN {
+        for (name, src) in crate::screen::all_builtin() {
             assert!(name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'), "{name}: the daemon takes [a-z0-9-] names");
-            assert_eq!(std::fs::read_to_string(dir.join(format!("screens/{name}.luau"))).unwrap(), *src);
+            assert_eq!(std::fs::read_to_string(dir.join(format!("screens/{name}.luau"))).unwrap(), src);
         }
         let md = std::fs::read_to_string(dir.join("screens.md")).unwrap();
         assert!(md.contains("### `markdown`"));
         let v: J = serde_json::from_str(&std::fs::read_to_string(dir.join("intents.json")).unwrap()).unwrap();
         let list = v["intents"].as_array().unwrap();
-        assert_eq!(list.len(), REGISTRY.len());
+        assert_eq!(list.len(), crate::intent::all().count());
         let ap = list.iter().find(|i| i["name"] == "approve_proposal").unwrap();
         assert_eq!((ap["risk"].as_str(), ap["args"]["id"].as_str()), (Some("approval"), Some("string, required")));
         assert_eq!(list.iter().find(|i| i["name"] == "stop_sandbox").unwrap()["risk"], "direct");

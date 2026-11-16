@@ -4,6 +4,7 @@
 //! * [`shell`]: the window, its panes, and the intents screens ask for.
 //! * [`screen`]: draws a Luau screen with Rune elements and reloads it on change.
 //! * [`luau`]: the sandboxed VM that runs screen files, and the frozen element set.
+//! * [`feat`]: the features (network, create, settings...), each declared in one place.
 //! * [`intent`]: the closed list of what a screen may ask.
 //! * [`approval`]: the core's own approval dialogs (Jarvis proposals, clipboard offers).
 //! * [`jarvis`]: Jarvis's conversation, state and proposal rule; [`markdown`]: the `markdown` element.
@@ -17,6 +18,7 @@ pub mod approval;
 pub mod audio;
 pub mod builtin;
 pub mod client;
+pub mod feat;
 pub mod fixture;
 pub mod icons;
 pub mod intent;

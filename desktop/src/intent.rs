@@ -63,12 +63,22 @@ pub enum Intent {
     RefuseProposal { id: String, reason: Option<String> },
     /// Opens an http(s) link in the browser (a link in a `markdown` element).
     OpenLink { url: String },
+    /// Shows a feature's modal screen (`feat::Slot::Modal`), with an argument it reads as `data.app.modal.arg`.
+    OpenModal { screen: String, arg: Option<String> },
+    CloseModal,
+    /// Opens a feature's docked panel (`feat::Slot::Panel`); `close_panel` without `screen` closes the shown one.
+    OpenPanel { screen: String },
+    ClosePanel { screen: Option<String> },
+    /// One of a feature's own intents (`src/feat/`), checked against its row.
+    Feature(crate::feat::Asked),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
     Agent,
     Bash,
+    /// The web UI's "kit waiting" pane, where sbx's kit prompt is answered (`/ws?mode=kit-add`).
+    KitAdd,
 }
 
 impl Mode {
@@ -77,12 +87,14 @@ impl Mode {
         match self {
             Mode::Agent => None,
             Mode::Bash => Some("bash".into()),
+            Mode::KitAdd => Some("kit-add".into()),
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Mode::Agent => "agent",
             Mode::Bash => "bash",
+            Mode::KitAdd => "kit-add",
         }
     }
 }
@@ -131,7 +143,7 @@ pub struct Spec {
     pub doc: &'static str,
 }
 
-const MODES: &[&str] = &["agent", "bash"];
+const MODES: &[&str] = &["agent", "bash", "kit-add"];
 
 /// The closed list. Widening it later is a row here plus the variant and its
 /// code; screens that use the existing rows do not change.
@@ -176,7 +188,21 @@ pub const REGISTRY: &[Spec] = &[
     },
     Spec { name: "refuse_proposal", risk: Risk::Direct, args: &[("id", Arg::Str, true), ("reason", Arg::Str, false)], doc: "Refuses a Jarvis proposal, with an optional reason Jarvis is told." },
     Spec { name: "open_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "Opens an `http://` or `https://` link in the browser." },
+    Spec {
+        name: "open_modal",
+        risk: Risk::Direct,
+        args: &[("screen", Arg::Str, true), ("arg", Arg::Str, false)],
+        doc: "Shows a feature's dialog screen over the window (one at a time; Escape closes it). The screen reads `data.app.modal.arg`.",
+    },
+    Spec { name: "close_modal", risk: Risk::Direct, args: &[], doc: "Closes the dialog screen showing." },
+    Spec { name: "open_panel", risk: Risk::Direct, args: &[("screen", Arg::Str, true)], doc: "Opens a feature's panel docked on the right (several open show as tabs)." },
+    Spec { name: "close_panel", risk: Risk::Direct, args: &[("screen", Arg::Str, false)], doc: "Closes that panel (no `screen`: the one shown)." },
 ];
+
+/// Every row: the core's [`REGISTRY`], then each feature's (`src/feat/`).
+pub fn all() -> impl Iterator<Item = &'static Spec> {
+    REGISTRY.iter().chain(crate::feat::FEATURES.iter().flat_map(|f| f.intents.iter()))
+}
 
 impl Intent {
     pub fn name(&self) -> &'static str {
@@ -196,6 +222,11 @@ impl Intent {
             Intent::ApproveProposal { .. } => "approve_proposal",
             Intent::RefuseProposal { .. } => "refuse_proposal",
             Intent::OpenLink { .. } => "open_link",
+            Intent::OpenModal { .. } => "open_modal",
+            Intent::CloseModal => "close_modal",
+            Intent::OpenPanel { .. } => "open_panel",
+            Intent::ClosePanel { .. } => "close_panel",
+            Intent::Feature(a) => a.name,
         }
     }
 
@@ -209,7 +240,7 @@ impl Intent {
 }
 
 pub fn spec(name: &str) -> Option<&'static Spec> {
-    REGISTRY.iter().find(|s| s.name == name)
+    all().find(|s| s.name == name)
 }
 
 /// What an action returned: `nil`, one intent, or a list of them. All or nothing.
@@ -238,7 +269,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
     if name.is_empty() {
         return Err("an intent without a name".into());
     }
-    let spec = spec(name).ok_or_else(|| format!("unknown intent '{name}' (known: {})", REGISTRY.iter().map(|s| s.name).collect::<Vec<_>>().join(", ")))?;
+    let spec = spec(name).ok_or_else(|| format!("unknown intent '{name}' (known: {})", all().map(|s| s.name).collect::<Vec<_>>().join(", ")))?;
     let empty = Map::new();
     let m = match o.get("args") {
         None | Some(Value::Null) => &empty,
@@ -269,7 +300,11 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
     Ok(match name {
         "open_terminal" => Intent::OpenTerminal {
             sandbox: s("sandbox").unwrap(),
-            mode: if s("mode").as_deref() == Some("bash") { Mode::Bash } else { Mode::Agent },
+            mode: match s("mode").as_deref() {
+                Some("bash") => Mode::Bash,
+                Some("kit-add") => Mode::KitAdd,
+                _ => Mode::Agent,
+            },
             thread: s("thread"),
             pane: pane(),
         },
@@ -290,6 +325,11 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
         "approve_proposal" => Intent::ApproveProposal { id: s("id").unwrap() },
         "refuse_proposal" => Intent::RefuseProposal { id: s("id").unwrap(), reason: s("reason") },
         "open_link" => Intent::OpenLink { url: s("url").unwrap() },
+        "open_modal" => Intent::OpenModal { screen: s("screen").unwrap(), arg: s("arg") },
+        "close_modal" => Intent::CloseModal,
+        "open_panel" => Intent::OpenPanel { screen: s("screen").unwrap() },
+        "close_panel" => Intent::ClosePanel { screen: s("screen") },
+        _ if crate::feat::intent(name).is_some() => Intent::Feature(crate::feat::Asked { name: spec.name, args: m.clone() }),
         _ => unreachable!("{name} is registered but not built"),
     })
 }
@@ -358,7 +398,7 @@ mod tests {
             (i("stop_sandbox", json!({ "sandbox": 3 })), "must be a non-empty string"),
             (i("stop_sandbox", json!({ "sandbox": "a", "force": true })), "unknown argument 'force'"),
             (i("set_layout", json!({ "panes": 9 })), "from 1 to 4"),
-            (i("open_terminal", json!({ "sandbox": "a", "mode": "root" })), "must be one of agent, bash"),
+            (i("open_terminal", json!({ "sandbox": "a", "mode": "root" })), "must be one of agent, bash, kit-add"),
             (json!([i("select", json!({})), { "name": "stop_sandbox" }]), "item 2"),
             (json!("stop everything"), "must return nil"),
             (i("send_to_jarvis", json!({ "text": "yes" })), "unknown argument 'text'"),
@@ -374,6 +414,9 @@ mod tests {
     #[test]
     fn every_name_is_documented() {
         let doc = include_str!("../docs/screens.md");
+        for s in all().filter(|s| !REGISTRY.iter().any(|r| r.name == s.name)) {
+            assert!(!s.doc.is_empty(), "feature intent {} has no doc (it goes to intents.json)", s.name);
+        }
         for n in REGISTRY.iter().map(|s| s.name) {
             assert!(doc.contains(&format!("`{n}`")), "docs/screens.md does not describe the intent {n}");
         }

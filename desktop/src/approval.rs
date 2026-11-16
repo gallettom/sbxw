@@ -347,6 +347,219 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         .child(foot)
 }
 
+// ---- The generic confirmation, for every feature intent of risk Approval ----
+//
+// A feature (`src/feat/`) answers an intent of risk Approval with a
+// `feat::Confirm` built in Rust from the daemon's data: a title, plain lines,
+// an optional block (a command, a diff, fingerprints), an optional
+// acknowledgement to tick, optional secret fields drawn here (Rune's secure
+// inputs: masked, no copy, no accessibility text, wiped on drop), and the
+// two labels. Nothing here comes from a screen, and no screen can see or
+// press it: it is drawn in the core's layer above every screen.
+
+/// What the confirmation's buttons do, in the app.
+pub trait ConfirmAnswers: Sized + 'static {
+    fn confirm_click(&mut self);
+    fn cancel_click(&mut self);
+    fn toggle_confirm_ack(&mut self);
+    /// Secret field `i`'s edit.
+    fn secret_edit(&mut self, i: usize) -> &mut TextEdit;
+}
+
+/// What the confirmation needs from the app's state.
+pub struct ConfirmState<'a> {
+    /// `None` while it loads (`feat::Action::Prepare`) or when preparing failed.
+    pub confirm: Option<&'a crate::feat::Confirm>,
+    /// The title while there is no `confirm` yet.
+    pub title: &'a str,
+    pub loading: bool,
+    /// Preparing failed, or the daemon refused the call: shown beside the buttons.
+    pub error: Option<&'a str>,
+    pub busy: bool,
+    pub acked: bool,
+    pub secrets: &'a [TextEdit],
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub max_h: f32,
+}
+
+impl ConfirmState<'_> {
+    /// Confirm works: loaded, not busy, ticked if asked, every required secret filled.
+    pub fn can_confirm(&self) -> bool {
+        let Some(c) = self.confirm else { return false };
+        !self.busy && (c.ack.is_none() || self.acked) && c.secrets.iter().enumerate().all(|(i, s)| s.optional || self.secrets.get(i).is_some_and(|e| !e.text.is_empty()))
+    }
+}
+
+/// The lines the dialog lists as granted (`Confirm::grant_lines`), in
+/// order: exactly the strings Confirm sends.
+pub fn granted_lines(c: &crate::feat::Confirm) -> Vec<String> {
+    c.grants.iter().filter_map(|g| g.lines.clone()).flatten().collect()
+}
+
+/// The confirmation (key `cf-dialog`; buttons `cf-confirm`, `cf-cancel`,
+/// `cf-ack`; secret fields `cf-secret-<i>`; lines `cf-line-<i>`; the block `cf-preview`).
+pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
+    use crate::theme::{c, radius};
+    use rune::{ScrollSpec, Span};
+    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap().w_full().min_w(0.0);
+    let danger = d.confirm.is_some_and(|x| x.danger);
+    let button = |key: &str, label: &str, primary: bool, enabled: bool| {
+        let (fill, edge, hover) = match (primary, danger) {
+            (true, true) => ("red-tint", "red", "red-border"),
+            (true, false) => ("green-deep", "green-strong", "green-strong"),
+            _ => ("elevated", "border", "dim"),
+        };
+        let b = rune::el()
+            .key(key)
+            .role("button")
+            .label(label)
+            .px(12.0)
+            .py(5.0)
+            .radius(radius("sm").unwrap())
+            .fill(c(fill))
+            .border(1.0, c(edge))
+            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")));
+        if enabled {
+            b.hover(c(hover)).cursor(Cursor::Pointer)
+        } else {
+            b.opacity(0.45).disabled(true)
+        }
+    };
+    let title = d.confirm.map(|x| x.title.as_str()).unwrap_or(d.title);
+    let head = row()
+        .w_full()
+        .gap(8.0)
+        .items_center()
+        .child(text(title.to_string()).font(TextStyle::new(13.0, 600.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0).key("cf-title"))
+        .child(
+            rune::el()
+                .key("cf-close")
+                .role("button")
+                .label("Cancel")
+                .padding(3.0)
+                .radius(radius("xs").unwrap())
+                .hover(c("border"))
+                .cursor(Cursor::Pointer)
+                .on_press(|s: &mut S| s.cancel_click())
+                .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
+        );
+    let mut body = col().w_full().min_w(0.0).gap(8.0);
+    if d.loading {
+        body = body.child(small("Reading from the daemon…".into(), 12.0, 400.0, "text-muted").key("cf-loading"));
+    }
+    if let Some(x) = d.confirm {
+        for (i, l) in x.lines.iter().enumerate() {
+            body = body.child(small(l.clone(), 12.5, 400.0, "text-bright").key(format!("cf-line-{i}")));
+        }
+        let granted = granted_lines(x);
+        if !granted.is_empty() {
+            let mut list = col().key("cf-grants").w_full().gap(3.0).padding(8.0).radius(radius("sm").unwrap()).fill(c("surface-alt")).border(1.0, c("elevated"));
+            list = list.child(small("You grant:".into(), 11.5, 600.0, "text-bright"));
+            for (i, g) in granted.iter().enumerate() {
+                list = list.child(small(format!("• {g}"), 12.0, 400.0, "text").key(format!("cf-grant-{i}")));
+            }
+            body = body.child(list);
+        }
+        if let Some(p) = &x.preview {
+            let mut spans = vec![];
+            if p.diff {
+                let mut at = 0;
+                for line in p.text.split_inclusive('\n') {
+                    let colour = if line.starts_with("+++") || line.starts_with("---") {
+                        Some("text-bright")
+                    } else if line.starts_with('+') {
+                        Some("green")
+                    } else if line.starts_with('-') {
+                        Some("red")
+                    } else if line.starts_with("@@") {
+                        Some("blue")
+                    } else {
+                        None
+                    };
+                    if let Some(col_) = colour {
+                        spans.push(Span::new(at, at + line.len()).color(c(col_)));
+                    }
+                    at += line.len();
+                }
+            }
+            body = body.child(
+                col()
+                    .key("cf-preview")
+                    .role("document")
+                    .scroll(ScrollSpec { stick_bottom: false })
+                    .w_full()
+                    .max_h(260.0)
+                    .min_h(0.0)
+                    .padding(8.0)
+                    .radius(radius("sm").unwrap())
+                    .fill(c("bg"))
+                    .border(1.0, c("elevated"))
+                    .child(rune::rich(p.text.clone(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
+            );
+        }
+        for (i, sec) in x.secrets.iter().enumerate() {
+            let Some(edit) = d.secrets.get(i) else { continue };
+            let label = if sec.optional { format!("{} (optional)", sec.label) } else { sec.label.clone() };
+            let mut input = rune::text_input(edit, TextStyle::new(12.0, 400.0)).key(format!("cf-secret-{i}")).label(sec.label.clone()).color(c("text-bright")).w_full().on_edit(move |s: &mut S| s.secret_edit(i));
+            if !sec.multiline {
+                input = input.single_line();
+            }
+            if !sec.placeholder.is_empty() {
+                input = input.placeholder(sec.placeholder.clone(), c("text-dim"));
+            }
+            let input = input.secure();
+            body = body.child(small(label, 11.5, 500.0, "text-muted")).child(
+                rune::el().w_full().min_h(28.0).px(8.0).py(4.0).items_center().fill(c("bg")).border(1.0, c("border")).radius(radius("sm").unwrap()).child(input),
+            );
+        }
+    }
+    if let Some(e) = d.error {
+        body = body.child(small(e.to_string(), 12.0, 500.0, "red").key("cf-error"));
+    }
+    let mut foot = row().w_full().gap(8.0).items_center();
+    if let Some(ack) = d.confirm.and_then(|x| x.ack.clone()) {
+        let on = d.acked;
+        let mut b = rune::el().w(14.0).h(14.0).radius(4.0).border(1.0, c(if on { "blue" } else { "dim" })).items_center().justify_center();
+        if on {
+            b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
+        }
+        foot = foot.child(
+            row()
+                .key("cf-ack")
+                .role("checkbox")
+                .checked(on)
+                .label(ack.clone())
+                .gap(6.0)
+                .items_center()
+                .min_w(0.0)
+                .cursor(Cursor::Pointer)
+                .on_press(|s: &mut S| s.toggle_confirm_ack())
+                .child(b)
+                .child(text(ack).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap().min_w(0.0)),
+        );
+    }
+    let (yes, no) = d.confirm.map(|x| (x.confirm.as_str(), x.cancel.as_str())).unwrap_or(("Confirm", "Cancel"));
+    foot = foot.child(rune::el().grow(1.0)).child(button("cf-cancel", no, false, true).on_press(|s: &mut S| s.cancel_click()));
+    foot = foot.child(if d.can_confirm() { button("cf-confirm", yes, true, true).on_press(|s: &mut S| s.confirm_click()) } else { button("cf-confirm", yes, true, false) });
+    col()
+        .key("cf-dialog")
+        .role("dialog")
+        .label(title.to_string())
+        .pin(Some(d.left), Some(d.top), Some(d.right), None)
+        .max_h(d.max_h.max(160.0))
+        .padding(14.0)
+        .gap(10.0)
+        .radius(radius("lg").unwrap())
+        .fill(c("surface"))
+        .border(1.0, c(if danger { "red-border" } else { "border" }))
+        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
+        .child(head)
+        .child(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body))
+        .child(foot)
+}
+
 // ---- OSC 52: a program in the sandbox asking to write the clipboard ----
 //
 // The web UI's policy (assets/js/panes.js, "An OSC 52 copy: done, offered or

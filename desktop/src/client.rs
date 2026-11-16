@@ -137,6 +137,15 @@ pub trait Daemon: Send + Sync + 'static {
     /// (an error, or `sink` returning false). Blocks.
     fn subscribe(&self, sink: &mut dyn FnMut(BusEvent) -> bool) -> Result<()>;
 
+    /// Any route, for features (`src/feat/`): `method` `GET` or `POST`, a
+    /// JSON body for a POST. Answers the HTTP status and the JSON body, a
+    /// non-2xx one included (a plain-text body comes as `{"error": text}`).
+    /// `Err` only when there is no answer at all.
+    fn request(&self, method: &str, path: &str, body: &serde_json::Value, timeout: Duration) -> Result<(u16, serde_json::Value)> {
+        let _ = (body, timeout);
+        bail!("{method} {path}: not supported by {}", self.describe())
+    }
+
     // ---- Jarvis (crates/daemon/src/http/jarvis.rs) ----
 
     /// `GET /api/jarvis/status`: `{state: absent|creating|starting|running|stopped|failed, error?}`.
@@ -296,6 +305,14 @@ impl HttpDaemon {
     }
 }
 
+/// A body as JSON; plain text becomes `{"error": text}`, nothing `null`.
+fn json_body(text: &str) -> serde_json::Value {
+    if text.trim().is_empty() {
+        return serde_json::Value::Null;
+    }
+    serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({ "error": text.trim() }))
+}
+
 /// The daemon's errors come back as `{"error": "..."}` or plain text: show that, not ureq's chain.
 fn answer(r: Result<ureq::Response, ureq::Error>, path: &str) -> Result<ureq::Response> {
     match r {
@@ -444,6 +461,25 @@ impl Daemon for HttpDaemon {
         let resp = answer(r, path)?;
         let rate = resp.header("x-sample-rate").and_then(|r| r.parse().ok()).unwrap_or(24_000);
         Ok((rate, Box::new(resp.into_reader())))
+    }
+    fn request(&self, method: &str, path: &str, body: &serde_json::Value, timeout: Duration) -> Result<(u16, serde_json::Value)> {
+        let url = format!("http://{}{path}", self.addr);
+        let req = match method {
+            "GET" => self.agent.get(&url),
+            "POST" => self.agent.post(&url),
+            m => bail!("{m} {path}: only GET and POST"),
+        }
+        .set("Authorization", &self.auth())
+        .timeout(timeout);
+        let r = if method == "POST" { req.send_json(body.clone()) } else { req.call() };
+        match r {
+            Ok(r) => {
+                let code = r.status();
+                Ok((code, json_body(&r.into_string().unwrap_or_default())))
+            }
+            Err(ureq::Error::Status(code, r)) => Ok((code, json_body(&r.into_string().unwrap_or_default()))),
+            Err(e) => Err(anyhow!(Unreachable(e.to_string()))),
+        }
     }
     fn voice_cancel(&self) -> Result<()> {
         let _: serde_json::Value = self.post("/api/voice/cancel", &serde_json::json!({}))?;
@@ -610,6 +646,9 @@ fn pump_loop(ws: &mut tungstenite::WebSocket<TcpStream>, tx: &Events, rx: mpsc::
 pub struct FixtureDaemon {
     name: String,
     data: std::sync::Mutex<FixtureData>,
+    /// The fixture's whole `daemon` object: features' keys, answered by
+    /// their stand-in routes (`Feature::standin`) or by their data keys.
+    raw: std::sync::Mutex<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -641,7 +680,18 @@ pub struct FixtureData {
 
 impl FixtureDaemon {
     pub fn new(name: &str, data: FixtureData) -> Self {
-        Self { name: name.to_string(), data: std::sync::Mutex::new(data) }
+        Self { name: name.to_string(), data: std::sync::Mutex::new(data), raw: std::sync::Mutex::new(serde_json::json!({})) }
+    }
+
+    /// With the fixture's whole `daemon` object, for features' routes.
+    pub fn with_raw(self, raw: serde_json::Value) -> Self {
+        *self.raw.lock().unwrap() = raw;
+        self
+    }
+
+    /// The `daemon` object now (features' routes may have changed it).
+    pub fn raw(&self) -> serde_json::Value {
+        self.raw.lock().unwrap().clone()
     }
 
     /// The messages pushed so far, `(name, text)`.
@@ -656,6 +706,19 @@ impl Daemon for FixtureDaemon {
     }
     fn sandboxes(&self) -> Result<Vec<Sandbox>> {
         Ok(self.data.lock().unwrap().sandboxes.clone())
+    }
+    fn request(&self, method: &str, path: &str, body: &serde_json::Value, _timeout: Duration) -> Result<(u16, serde_json::Value)> {
+        let mut raw = self.raw.lock().unwrap();
+        let before = serde_json::to_value(self.data.lock().unwrap().sandboxes.clone()).unwrap_or_default();
+        raw["sandboxes"] = before.clone();
+        let r = crate::feat::answer_from(&mut raw, method, path, body, &mut |_, _| {});
+        // A route that changed the list (a sandbox removed or created): the list follows.
+        if raw["sandboxes"] != before {
+            if let Ok(l) = serde_json::from_value::<Vec<Sandbox>>(raw["sandboxes"].clone()) {
+                self.data.lock().unwrap().sandboxes = l;
+            }
+        }
+        Ok(r)
     }
     fn stop_sandbox(&self, name: &str) -> Result<()> {
         let mut d = self.data.lock().unwrap();
@@ -789,6 +852,10 @@ pub enum LinkEvent {
     Bus(BusEvent),
     /// An action the UI asked for finished.
     Done { what: String, result: Result<(), String> },
+    /// A feature's call answered (`Link::call`): status and JSON body, or why there was no answer.
+    Answer { id: u64, feature: &'static str, call: crate::feat::Call, result: Result<(u16, serde_json::Value), String> },
+    /// A feature's data was read (`Link::fetch`).
+    Data { key: String, result: Result<serde_json::Value, String> },
 }
 
 /// Events on `/api/stream` after which the sandbox list is read again: the
@@ -855,6 +922,71 @@ impl Link {
             (send.wake)();
         });
     }
+}
+
+impl Link {
+    fn job(&self, f: impl FnOnce() -> LinkEvent + Send + 'static) {
+        use std::sync::atomic::Ordering;
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        let send = Sender { tx: self.tx.clone(), wake: self.wake.clone() };
+        let pending = self.pending.clone();
+        std::thread::spawn(move || {
+            send.send(f());
+            pending.fetch_sub(1, Ordering::SeqCst);
+            (send.wake)();
+        });
+    }
+
+    /// Runs a feature's call off the UI thread; answers `Answer` with `id`.
+    pub fn call(&self, daemon: Arc<dyn Daemon>, id: u64, feature: &'static str, call: crate::feat::Call) {
+        let send2 = Sender { tx: self.tx.clone(), wake: self.wake.clone() };
+        self.job(move || {
+            let method = match call.method {
+                crate::feat::Method::Get => "GET",
+                crate::feat::Method::Post => "POST",
+            };
+            let result = daemon.request(method, &call.path, &call.body, Duration::from_secs(call.timeout.max(1))).map_err(|e| format!("{e:#}"));
+            // As after a stop: a change (a sandbox removed, created) reaches the list at once.
+            if method == "POST" {
+                if let Ok(l) = daemon.sandboxes() {
+                    send_now(&send2, LinkEvent::Sandboxes(l));
+                }
+            }
+            LinkEvent::Answer { id, feature, call, result }
+        });
+    }
+
+    /// Reads data key `key`: one path, or one per sandbox (`(sandbox, path)`),
+    /// gathered in an object by sandbox name (a sandbox whose read failed is left out).
+    pub fn fetch(&self, daemon: Arc<dyn Daemon>, key: String, paths: Vec<(Option<String>, String)>) {
+        self.job(move || {
+            let get = |p: &str| match daemon.request("GET", p, &serde_json::Value::Null, Duration::from_secs(30)) {
+                Ok((c, v)) if (200..300).contains(&c) => Ok(v),
+                Ok((c, v)) => Err(v["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}"))),
+                Err(e) => Err(format!("{e:#}")),
+            };
+            let result = match paths.as_slice() {
+                [(None, p)] => get(p),
+                _ => {
+                    let mut o = serde_json::Map::new();
+                    for (sb, p) in &paths {
+                        match get(p) {
+                            Ok(v) => {
+                                o.insert(sb.clone().unwrap_or_default(), v);
+                            }
+                            Err(e) => log::warn!("{key}: {e}"),
+                        }
+                    }
+                    Ok(serde_json::Value::Object(o))
+                }
+            };
+            LinkEvent::Data { key, result }
+        });
+    }
+}
+
+fn send_now(s: &Sender, ev: LinkEvent) {
+    s.send(ev);
 }
 
 /// The daemon the link is connected to right now, if any.

@@ -1,0 +1,131 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": false,
+      "can_create": true,
+      "carve_parents": [
+        {
+          "label": "backend",
+          "path": "/home/you/dev/shop/backend"
+        },
+        {
+          "label": "frontend",
+          "path": "/home/you/dev/shop/frontend"
+        }
+      ],
+      "carve_pick": null,
+      "carves": [
+        {
+          "access": "none",
+          "enforce": "strict",
+          "error": null,
+          "hidden_count": 1,
+          "note": "Strict: the folder never enters the sandbox. The parent is shared folder by folder, so files lying directly in it are not visible.",
+          "parent_label": "backend",
+          "path": "/home/you/dev/shop/backend/src",
+          "rel": "src"
+        }
+      ],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "",
+      "chrome": true,
+      "create_problem": null,
+      "dialog": "workspace",
+      "error": null,
+      "favourites": [
+        {
+          "missing": false,
+          "name": "dev",
+          "path": "/home/you/dev"
+        },
+        {
+          "missing": true,
+          "name": "gone",
+          "path": "/home/you/gone"
+        }
+      ],
+      "git_url": "",
+      "host": "local",
+      "hosts": [],
+      "jobs": [],
+      "kit_mounts": [
+        {
+          "host": "/home/you/.ssh",
+          "kit": "sbxw:ssh-agent",
+          "target": "/home/agent/.ssh"
+        }
+      ],
+      "listing": {
+        "can_up": true,
+        "entries": [
+          {
+            "added": false,
+            "name": "src",
+            "path": "/home/you/dev/shop/backend/src",
+            "starred": false
+          }
+        ],
+        "parent": "/home/you/dev/shop",
+        "path": "/home/you/dev/shop/backend"
+      },
+      "listing_error": null,
+      "name": "shop",
+      "name_note": null,
+      "name_problem": null,
+      "path": "/home/you/dev/shop/backend",
+      "path_tag": "Browsing",
+      "ports": [
+        {
+          "alias": "shop.local",
+          "host": "",
+          "sandbox": "3000"
+        }
+      ],
+      "preview": {
+        "bad": false,
+        "files": [
+          "/home/you/dev/shop/backend/README.md"
+        ],
+        "more": 0,
+        "stub": false,
+        "summary": "1 folder mounted, 1 excluded, 1 file not visible in the sandbox",
+        "warnings": []
+      },
+      "rebuild": false,
+      "remote": false,
+      "remote_control": false,
+      "repo_hint": "The agent works in the first one. The others sit beside it, at the same path.",
+      "repo_hint_error": false,
+      "repos": [
+        {
+          "path": "/home/you/dev/shop/backend",
+          "readonly": true
+        },
+        {
+          "path": "/home/you/dev/shop/frontend",
+          "readonly": false
+        }
+      ],
+      "template": {
+        "help": "sbxw-auto:7 is out of date (sbx 0.52.1 → 0.53.0).",
+        "note": "Wait for this sandbox to be saved as the starting point. Left unticked, it opens now and the template is built in the background."
+      }
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": true,
+      "can_create": true,
+      "carve_parents": [
+        {
+          "label": "you",
+          "path": "/home/you"
+        }
+      ],
+      "carve_pick": null,
+      "carves": [],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "",
+      "chrome": false,
+      "create_problem": null,
+      "dialog": "workspace",
+      "error": null,
+      "favourites": [],
+      "git_url": "https://github.com/you/api.git",
+      "host": "buildbox",
+      "hosts": [
+        {
+          "id": "local",
+          "label": "local (this machine)"
+        },
+        {
+          "id": "buildbox",
+          "label": "buildbox (you@buildbox.lan)"
+        },
+        {
+          "id": "gpu",
+          "label": "gpu (gpu.lan, down)"
+        }
+      ],
+      "jobs": [],
+      "kit_mounts": [],
+      "listing": {
+        "can_up": true,
+        "entries": [
+          {
+            "added": false,
+            "name": "dev",
+            "path": "/home/you/dev",
+            "starred": false
+          },
+          {
+            "added": false,
+            "name": "notes",
+            "path": "/home/you/notes",
+            "starred": false
+          }
+        ],
+        "parent": "/home",
+        "path": "/home/you"
+      },
+      "listing_error": null,
+      "name": "api",
+      "name_note": null,
+      "name_problem": null,
+      "path": "/home/you",
+      "path_tag": "Selected",
+      "ports": [],
+      "preview": null,
+      "rebuild": false,
+      "remote": true,
+      "remote_control": false,
+      "repo_hint": "Other repos the agent can read, or change, next to the project folder.",
+      "repo_hint_error": false,
+      "repos": [],
+      "template": null
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}

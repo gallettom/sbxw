@@ -35,7 +35,12 @@ pub const BUILTIN: &[(&str, &str)] = &[
 ];
 
 pub fn builtin(name: &str) -> Option<&'static str> {
-    BUILTIN.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+    all_builtin().find(|(n, _)| *n == name).map(|(_, s)| s)
+}
+
+/// The core's screens, then every feature's (`src/feat/`).
+pub fn all_builtin() -> impl Iterator<Item = (&'static str, &'static str)> {
+    BUILTIN.iter().copied().chain(crate::feat::screens())
 }
 
 /// The override folder: `$SBXW_DESKTOP_SCREENS`, else `~/.sbxw/desktop/screens`.

@@ -77,27 +77,41 @@ Gone on the daemon: `/api/voice/chat` and `/api/voice/conversations` answer
 404 (no language model in the daemon; `http/tests.rs`). Words go to Jarvis
 through `/api/chat/push` like any agent's message.
 
+### Covered in phase 3 (features, `src/feat/`)
+
+Features call the daemon through one generic method, `Daemon::request(method,
+path, body, timeout)` (`HttpDaemon`: the JSON body of any status, non-2xx
+included; `FixtureDaemon`: the features' stand-in routes, then their data
+keys), run off the UI thread by `Link::call` and `Link::fetch`. A feature
+declares its reads (`feat::Data`) and its calls (`feat::Call`); the core does
+the rest (`shell/features.rs`). A POST through a feature also reads the
+sandbox list again, as a stop does.
+
+| Area (feature, report) | Routes | Risk Approval (core dialog) |
+|---|---|---|
+| Network (`feat/network.rs`, NETWORK.md) | `GET /api/approvals` (every 5 s, after `session`), `POST /api/approvals/respond`, `GET /api/sandboxes/:name/policy`, `POST .../policy/rules`, `POST .../policy/rules/rm`, `POST /api/policy/refresh`, `GET /api/sandboxes/:name/ports`, `POST .../ports/publish`, `POST .../ports/unpublish`, `GET /api/hosts` | every answer to a request, an allow rule, removing a deny rule, a fixed host port |
+| Shell extras (`feat/shell_extras.rs`, NETWORK.md) | `POST /api/sandboxes/:name/rm`, `/recreate`, `/duplicate`, `/detach`, `GET /api/usage` (every 30 s), `GET /api/state` (versions, at connection) | remove, recreate |
+| Create (`feat/create/`, CREATE.md) | `POST /api/sandboxes/create` (409 consent answered with `approved` lines through `Confirm::grant_lines`), `POST /api/sandboxes/chat`, `POST /api/carve/preview`, `GET /api/fs`, `POST /api/fs/pick`, `GET`/`POST /api/fs/favourites`, `GET /api/kit-mounts`, `GET /api/template/status`, `GET /api/remote-hosts`, `POST /api/remote-hosts/:host/clone`; bus event `provision` | grants a sandbox would get beyond its workspace |
+| Setup (`feat/setup/`, SETUP.md) | `GET /api/secrets`, `POST /api/secrets/custom`, `/rm`, `GET /api/github-token`, `POST /api/github-token`, `/rm`, `/gh`, `GET`/`POST /api/kits`, `GET /api/my-skills`, `POST /api/my-skills/rm`, `GET /api/sandboxes/:name/skills`, `POST .../skills/keep`, `GET`/`POST /api/mcp`, `GET /api/mcp/:server`, `POST /api/mcp/:server/rm`, `/auth`, `POST /api/sandboxes/:name/mcp/load`, `/unload`, `GET /api/remote-hosts`, `POST /api/remote-hosts/key`, `/add`, `/reload`, `POST /api/remote-hosts/:host/edit`, `/rm`, `/test`, `GET /api/voice`, `POST /api/voice/install`, `/rm`, `/warm`, `/cancel`; bus event `voice` | secrets and tokens (core-drawn secure fields), kits that reach out, a stdio MCP server (acknowledged command), a new remote host (fingerprints read by the core) |
+| Core slots | none (open/close modal and panels, extras) | |
+
 ### Not covered yet
 
-Grouped by the screen that will need them, with the web UI file that calls
+Grouped by the area that will need them, with the web UI file that calls
 each group, so a later thread can read what it expects.
 
 | Area (web UI file) | Routes |
 |---|---|
-| Sandbox lifecycle (`lifecycle.js`, `sandboxes.js`, `create.js`) | `POST /api/sandboxes/create`, `POST /api/sandboxes/chat`, `POST /api/sandboxes/:name/up`, `/detach`, `/duplicate`, `/recreate`, `/rm`, `POST /api/carve/preview`, `GET /api/fs`, `POST /api/fs/pick`, `GET`/`POST /api/fs/favourites` |
-| Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `POST /api/input`, `POST /api/answer`, `GET /api/hook/log`, `GET /api/models`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events` |
+| Sessions and agents (`main.js`, `panes.js`) | `GET /api/ptys`, `POST /api/input`, `POST /api/answer`, `GET /api/hook/log`, `GET /api/models`, `POST /api/focus`, `POST /api/watching`, `GET /api/events` (sessions only), `GET /api/watch-events`, `POST /api/sandboxes/:name/up` |
 | Threads and lead (`sidepanel.js`, `pane-controls.js`, `plans.js`, `board.js`) | `GET /api/sandboxes/:name/threads`, `/repos`, `/worktrees`, `GET /api/sandboxes/:name/threads/:thread`, `POST .../threads/:thread/close`, `POST /api/sandboxes/:name/lead`, `POST .../lead/end`, `GET /api/leads`, `GET /api/plans`, `POST /api/plans/:id/approve`, `/refuse`, `/merge`, `GET /api/sandboxes/:name/board` |
 | Relay (`relay.js`) | `GET /api/relay`, `POST /api/relay/:id/route`, `POST /api/relay/:id/deny`, `GET /api/relay/events` |
-| Approvals, ports, network (`approvals.js`, `ports.js`) | `GET /api/approvals`, `POST /api/approvals/respond`, `GET /api/sandboxes/:name/ports`, `POST .../ports/publish`, `/unpublish`, `GET /api/sandboxes/:name/policy`, `POST .../policy/rules`, `POST .../policy/rules/rm`, `POST /api/policy/refresh`, `GET /api/hosts` |
 | Files, artifacts, uploads (`files.js`, `upload.js`) | `GET /api/sandboxes/:name/artifacts`, `.../artifacts/download`, `GET /api/sandboxes/:name/fs`, `.../fs/file`, `.../fs/recent`, `POST .../fs/delete`, `POST /api/sandboxes/:name/paste-image`, `POST .../upload` |
 | Code map (`codemap.js`) | `POST /api/sandboxes/:name/codemap`, `POST .../codemap/lens`, `GET /api/codemap` |
-| Setup: secrets, GitHub, kits, skills, MCP, templates (`setup.js`, `kits.js`, `skills.js`, `mcp.js`, `templates.js`, `github.js`, `envfile.js`, `ssh.js`) | `GET /api/secrets`, `POST /api/secrets/custom`, `/rm`, `GET`/`POST /api/github-token`, `POST /api/github-token/rm`, `/gh`, `GET`/`POST /api/kits`, `GET /api/kit-mounts`, `GET /api/my-skills`, `POST /api/my-skills/rm`, `GET /api/sandboxes/:name/skills`, `POST .../skills/keep`, `GET`/`POST /api/mcp`, `GET /api/mcp/:server`, `POST /api/mcp/:server/rm`, `/auth`, `POST /api/sandboxes/:name/mcp/load`, `/unload`, `GET /api/template/status`, `GET /api/templates`, `POST /api/templates/save`, `/rm`, `GET /api/disk-usage`, `GET`/`POST /api/sandboxes/:name/envfile` |
-| Remote hosts (`hosts.js`) | `GET /api/remote-hosts`, `POST /api/remote-hosts/key`, `/add`, `/reload`, `POST /api/remote-hosts/:host/edit`, `/rm`, `/test`, `/clone` |
+| Templates, env file, SSH (`templates.js`, `envfile.js`, `ssh.js`) | `GET /api/templates`, `POST /api/templates/save`, `/rm`, `GET /api/disk-usage`, `GET`/`POST /api/sandboxes/:name/envfile` |
 | Remote Control (`pane-controls.js`) | `GET`/`POST /api/sandboxes/:name/remote-control`, `POST .../remote-control/login` |
-| Usage, state (`main.js`) | `GET /api/usage`, `GET /api/state`, `POST /api/initial`, `POST /api/shutdown` |
+| Header leftovers (`main.js`) | `POST /api/initial`, `POST /api/shutdown` |
 | Browser side panel (`browser.js`) | `GET /ws/browser`, `POST /api/sandboxes/:name/browser/allow`, `GET .../browser/grants`, `POST .../browser/settle`, `GET /api/browser/active`, `GET /api/embed/resolve`, `GET`/`POST /api/embed/pairings`, `POST /api/embed/pairings/rm` |
 | Virtual Mac (`mac.js`) | `GET /api/mac`, `POST /api/mac/install`, `/up`, `/stop`, `/force-off`, `/pause`, `/show`, `/take-back` |
-| Voice setup (`concierge.js`) | `POST /api/voice/install`, `/rm`, `/warm` (the Jarvis routes are covered above) |
 
 Routes a client never calls: `GET /` and `/sidepanel` (pages), and the
 agent-listener routes the UI listener answers with "moved" (`/api/hook`,
@@ -106,10 +120,11 @@ own token: `/api/relay/*`, `/api/plans/*`, `/api/board/*`,
 `/api/jarvis/state|propose|wait`, `/api/mac/*` actions, `/api/browser/state`)
 is not for the desktop app.
 
-**Sensitive routes.** `POST /api/approvals/respond`, the policy rules, the
-Jarvis approve/refuse and `POST /api/plans/:id/approve|merge` answer a
-question for the person. When they are added, their intents get the
-`Approval` risk, so only a dialog drawn by the core can call them.
+**Sensitive routes.** Every route that answers a question for the person
+or widens access is called only from a `feat::Confirm` the core draws
+(table above). Still to come with the same rule: `POST
+/api/plans/:id/approve|merge`, `POST /api/relay/:id/route`, `POST
+.../fs/delete`, the browser allow.
 
 ## The stand-in daemon
 
@@ -120,3 +135,13 @@ the daemon roughly does (opening the agent of a stopped sandbox makes it
 running 0.5 s later; a stop takes 0.3 s) and sends a `session` event after
 each change. `--change SECS:NAME=STATUS` changes a sandbox behind the app's
 back; `--token-file` writes the token like the daemon writes `ui-token`.
+
+Phase 3: every other `/api/` route goes to the features' stand-in routes
+(`feat::answer_later`: each `Feature::standin`, else a `GET` of a declared
+data path answers the fixture's key), with the fixture's whole `daemon`
+object as their data. Events a route publishes go out with the lock
+released; `publish_after` events are played before the answer. A route that
+changes the list (a removal, a creation) makes the list follow and sends a
+`session` event. `--approval SECS` makes sbx ask (web-app wants
+api.github.com) that long after the first stream client; `GET /api/voice`
+answers the fixture's `voice` key when the stand-in has no voice of its own.

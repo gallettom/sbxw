@@ -1,0 +1,117 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": false,
+      "can_create": false,
+      "carve_parents": [
+        {
+          "label": "backend",
+          "path": "/home/you/dev/shop/backend"
+        }
+      ],
+      "carve_pick": null,
+      "carves": [
+        {
+          "access": "ro",
+          "enforce": "strict",
+          "error": "/home/you/dev/shop/backend/src: cannot be read-only here, sbx shares /home/you/dev/shop once",
+          "hidden_count": 0,
+          "note": "Strict: the folder never enters the sandbox. The parent is shared folder by folder, so files lying directly in it are not visible.",
+          "parent_label": null,
+          "path": "/home/you/dev/shop/backend/src",
+          "rel": "src"
+        }
+      ],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "",
+      "chrome": false,
+      "create_problem": "\"docs\" already exists: pick another name",
+      "dialog": "workspace",
+      "error": "Could not update favourites: '/home/you/nope' is not a folder",
+      "favourites": [
+        {
+          "missing": false,
+          "name": "dev",
+          "path": "/home/you/dev"
+        }
+      ],
+      "git_url": "",
+      "host": "local",
+      "hosts": [],
+      "jobs": [],
+      "kit_mounts": [],
+      "listing": {
+        "can_up": true,
+        "entries": [
+          {
+            "added": true,
+            "name": "backend",
+            "path": "/home/you/dev/shop/backend",
+            "starred": false
+          },
+          {
+            "added": false,
+            "name": "frontend",
+            "path": "/home/you/dev/shop/frontend",
+            "starred": false
+          },
+          {
+            "added": false,
+            "name": "secrets",
+            "path": "/home/you/dev/shop/secrets",
+            "starred": false
+          }
+        ],
+        "parent": "/home/you/dev",
+        "path": "/home/you/dev/shop"
+      },
+      "listing_error": null,
+      "name": "docs",
+      "name_note": "Lowercase letters, digits, and hyphens only; must start and end with a letter or digit",
+      "name_problem": "\"docs\" already exists: pick another name",
+      "path": "/home/you/dev/shop",
+      "path_tag": "Browsing",
+      "ports": [],
+      "preview": {
+        "bad": true,
+        "files": [],
+        "more": 0,
+        "stub": false,
+        "summary": "Preview: /home/you/dev/shop/backend/src: cannot be read-only here, sbx shares /home/you/dev/shop once",
+        "warnings": []
+      },
+      "rebuild": false,
+      "remote": false,
+      "remote_control": false,
+      "repo_hint": "/home/you/dev/shop/backend is inside /home/you/dev/shop. Pick folders side by side, not one inside another.",
+      "repo_hint_error": true,
+      "repos": [
+        {
+          "path": "/home/you/dev/shop/backend",
+          "readonly": true
+        },
+        {
+          "path": "/home/you/dev/shop",
+          "readonly": true
+        }
+      ],
+      "template": null
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}

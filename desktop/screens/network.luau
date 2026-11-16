@@ -1,0 +1,304 @@
+-- The Network panel (docked on the right): what sbx waits for you to
+-- decide, then one sandbox's network policy (blocked hosts, rules, recent
+-- egress) and its published ports. The web UI's approvals.js and ports.js.
+--
+-- Every answer and every change that widens access returns an intent the
+-- core confirms in its own dialog, with the daemon's words; this screen only
+-- asks.
+
+local kinds = { network = "Network", port = "Host port" }
+
+-- The sandbox shown, kept by render for the actions (they do not get `data`).
+local current = nil
+
+local function at(view, row, role)
+  for i, r in ipairs(view.roles or {}) do
+    if r == role then return row[i] or "" end
+  end
+  return ""
+end
+
+local function scope_label(v)
+  v = v or ""
+  if v == "" then return "?" end
+  if string.lower(v) == "all" then return "all sandboxes" end
+  if string.sub(string.lower(v), 1, 8) == "sandbox:" then return "this sandbox" end
+  return v
+end
+
+local function governed(src)
+  src = string.lower(src or "")
+  return src == "org" or src == "corporate" or src == "system"
+end
+
+local function section(title, count)
+  return row{ gap = 6, w = "full", pad = 2,
+    text{ string.upper(title), size = "xxs", weight = "semibold", color = "text-muted" },
+    count and badge{ tostring(count), tone = "neutral" } or false,
+  }
+end
+
+local function note(t, color)
+  return text{ t, size = "sm", color = color or "text-muted", wrap = true }
+end
+
+local function requests(data)
+  local a = data.approvals or {}
+  local out = { gap = 6, w = "full" }
+  local list = a.approvals or {}
+  table.insert(out, section("Waiting for you", #list))
+  local err = (data.app.errors or {}).approvals
+  if a.ok == false or err then
+    table.insert(out, note(a.error or err or "Could not read what sbx is waiting for", "red"))
+  end
+  if #list == 0 and a.ok ~= false then
+    table.insert(out, note("Nothing waiting: sbx has no pending request."))
+  end
+  for _, r in ipairs(list) do
+    local buttons = { gap = 6, w = "full" }
+    for _, o in ipairs(r.options or {}) do
+      table.insert(buttons, button{ o.label ~= "" and o.label or o.id,
+        variant = (o.id == "allow") and "primary" or "neutral",
+        on = "answer", arg = { id = r.id, option = o.id }, key = "answer-" .. r.id .. "-" .. o.id })
+    end
+    table.insert(out, column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "amber", key = "req-" .. r.id,
+      row{ gap = 6, w = "full",
+        badge{ kinds[r.kind] or r.kind or "request", tone = "amber" },
+        text{ r.title or "", mono = true, color = "text-bright", truncate = true, grow = 1 },
+      },
+      text{ (r.sandbox or "") .. ((r.detail and r.detail ~= "") and (" · " .. string.gsub(r.detail, "\n", " · ")) or ""), size = "sm", color = "text-muted", wrap = true },
+      row(buttons),
+    })
+  end
+  return column(out)
+end
+
+local function blocked_view(sb, policy)
+  local hosts = policy.blocked or {}
+  if #hosts == 0 then return false end
+  local rows = {}
+  for _, b in ipairs(hosts) do
+    local action
+    if b.governed then
+      action = badge{ "org", tone = "neutral", help = b.reason ~= "" and b.reason or "Blocked by organisation policy" }
+    elseif b.resource ~= "" then
+      action = button{ "Allow", variant = "neutral", on = "allow_blocked", arg = b.host, help = "Allow " .. b.resource .. " for " .. sb, key = "allow-" .. b.host }
+    else
+      action = false
+    end
+    table.insert(rows, row{ gap = 6, w = "full",
+      text{ b.host, mono = true, size = "sm", color = "text", truncate = true, grow = 1, help = b.reason },
+      (b.count or 0) > 1 and text{ "×" .. b.count, size = "sm", color = "text-dim" } or false,
+      action,
+    })
+  end
+  return column{ gap = 4, w = "full", section("Blocked recently", #hosts), list(rows) }
+end
+
+local function rules_view(sb, policy, state)
+  local v = policy.rules or {}
+  local out = { gap = 4, w = "full" }
+  local rows = v.rows or {}
+  table.insert(out, section("Rules", #rows))
+  if v.error then table.insert(out, note(v.error, "red")) end
+  if #rows > 8 then
+    table.insert(out, input{ id = "rule-filter", value = state.rule_filter, placeholder = "Filter rules: domain, decision, source", on = "rule_filter" })
+  end
+  local items = {}
+  local q = string.lower(state.rule_filter or "")
+  for _, r in ipairs(rows) do
+    local line = table.concat(r, " ")
+    if q == "" or string.find(string.lower(line), q, 1, true) then
+      local action = string.lower(at(v, r, "action"))
+      local id = at(v, r, "rule_id")
+      local host = at(v, r, "host")
+      local src = at(v, r, "source")
+      local rm
+      if id == "" or id == "-" then
+        rm = false
+      elseif governed(src) then
+        rm = badge{ "org", tone = "neutral", help = "Set by organisation policy: sbx does not let sbxw remove it" }
+      else
+        rm = button{ icon = "close", variant = "ghost", on = action == "allow" and "rule_rm" or "unblock", arg = id,
+          help = "Remove this rule", key = "rule-rm-" .. id }
+      end
+      table.insert(items, row{ gap = 6, w = "full",
+        badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
+        text{ host ~= "" and host or line, mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
+        text{ scope_label(at(v, r, "applies") ~= "" and at(v, r, "applies") or at(v, r, "sandbox")), size = "xs", color = "text-dim" },
+        src ~= "" and text{ src, size = "xs", color = "text-dim" } or false,
+        rm,
+      })
+    end
+  end
+  if #items > 0 then table.insert(out, list(items)) end
+  if #rows == 0 and not v.error then table.insert(out, note("sbx reported no rules for this sandbox.")) end
+  if (v.truncated or 0) > 0 then table.insert(out, note("+ " .. v.truncated .. " more not shown: run `sbx policy ls --wide`.")) end
+  -- Add a rule.
+  table.insert(out, column{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
+    input{ id = "rule-res", value = state.res, placeholder = "example.com, *.acme.dev, host:443", on = "res", on_submit = "add_rule" },
+    row{ gap = 8, w = "full",
+      select{ id = "rule-decision", items = { { id = "allow", label = "allow" }, { id = "deny", label = "deny" } }, value = state.decision or "allow", on = "decision" },
+      checkbox{ "all sandboxes", value = state.global or false, on = "global", key = "rule-global" },
+      spacer{},
+      button{ "Add rule", icon = "plus", on = "add_rule", disabled = (state.res or "") == "", key = "rule-add" },
+    },
+    checkbox{ "Only some HTTP requests", value = state.http or false, on = "http", key = "rule-http" },
+    state.http and row{ gap = 6, w = "full",
+      input{ id = "rule-methods", value = state.methods, placeholder = "GET, HEAD", on = "methods" },
+      input{ id = "rule-path", value = state.path, placeholder = "/v1/**", on = "path" },
+      input{ id = "rule-query", value = state.query, placeholder = "org=acme", on = "query" },
+    } or false,
+  })
+  return column(out)
+end
+
+local function log_view(policy)
+  local v = policy.log or {}
+  if v.error or not v.rows or #v.rows == 0 then return false end
+  local items = {}
+  for i, r in ipairs(v.rows) do
+    if i > 12 then break end
+    local action = string.lower(at(v, r, "action"))
+    table.insert(items, row{ gap = 6, w = "full",
+      text{ at(v, r, "time"), size = "xs", color = "text-dim" },
+      badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
+      text{ at(v, r, "host"), mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
+    })
+  end
+  return column{ gap = 4, w = "full", section("Recent egress", #v.rows), list(items) }
+end
+
+local function ports_view(sb, ports, hosts, state)
+  local list_ = (ports or {}).ports or {}
+  local items = {}
+  for _, p in ipairs(list_) do
+    table.insert(items, row{ gap = 6, w = "full",
+      text{ tostring(p.sandbox_port), weight = "semibold", color = "text-bright" },
+      text{ "→ " .. (p.host_ip or "") .. ":" .. tostring(p.host_port), mono = true, size = "sm", color = "text-muted", grow = 1 },
+      badge{ p.proto or "tcp", tone = "neutral" },
+      button{ "Open", icon = "link", variant = "ghost", on = "port_open", arg = p.spec, key = "port-open-" .. p.spec, help = "Open in the browser" },
+      button{ icon = "close", variant = "ghost", on = "port_rm", arg = p.spec, key = "port-rm-" .. p.spec, help = "Unpublish" },
+    })
+  end
+  local out = { gap = 4, w = "full", section("Ports", #list_) }
+  if #items > 0 then table.insert(out, list(items)) else table.insert(out, note("No ports published.")) end
+  table.insert(out, column{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
+    row{ gap = 6, w = "full",
+      input{ id = "port-sbx", value = state.sport, placeholder = "sandbox port", on = "sport" },
+      input{ id = "port-host", value = state.hport, placeholder = "host port (sbx picks)", on = "hport" },
+    },
+    row{ gap = 6, w = "full",
+      input{ id = "port-ip", value = state.hip, placeholder = "host address (127.0.0.1)", on = "hip" },
+      input{ id = "port-alias", value = state.alias, placeholder = "alias (optional)", on = "alias" },
+    },
+    row{ gap = 6, w = "full", spacer{},
+      button{ "Publish", icon = "plus", on = "publish", disabled = tonumber(state.sport or "") == nil, key = "port-publish" },
+    },
+  })
+  local h = hosts or {}
+  if #h > 0 then
+    local hi = {}
+    for _, e in ipairs(h) do
+      table.insert(hi, row{ gap = 6, w = "full", text{ e.hostname or "", size = "sm", grow = 1 }, text{ e.ip or "", mono = true, size = "sm", color = "text-muted" } })
+    end
+    table.insert(out, text{ "/etc/hosts aliases", size = "xs", color = "text-dim" })
+    table.insert(out, list(hi))
+  end
+  return column(out)
+end
+
+return {
+  init = function() return { decision = "allow", res = "", rule_filter = "" } end,
+
+  render = function(state, data)
+    local sb = data.network_for
+    current = sb
+    local running = {}
+    for _, s in ipairs(data.sandboxes or {}) do
+      if s.status == "running" then table.insert(running, { id = s.name, label = s.name }) end
+    end
+    local body = { gap = 14, w = "full", requests(data) }
+    table.insert(body, divider{})
+    table.insert(body, row{ gap = 8, w = "full",
+      text{ "Sandbox", size = "sm", color = "text-muted" },
+      select{ id = "net-sandbox", items = running, value = sb, placeholder = "Choose a running sandbox", on = "pick" },
+      spacer{},
+      button{ icon = "reload", variant = "ghost", on = "refresh", help = "Read again", key = "net-refresh" },
+    })
+    if sb then
+      local policy = data.network_policy
+      if policy == nil then
+        table.insert(body, note("Reading " .. sb .. "'s policy…"))
+      else
+        if policy.ok == false and policy.error then table.insert(body, note(policy.error, "red")) end
+        local b = blocked_view(sb, policy)
+        if b then table.insert(body, b) end
+        table.insert(body, rules_view(sb, policy, state))
+        local l = log_view(policy)
+        if l then table.insert(body, l) end
+        local allow = policy.configured_allow or {}
+        if #allow > 0 then
+          table.insert(body, note("sbxw.toml allows on up: " .. table.concat(allow, ", ")))
+        end
+        table.insert(body, row{ gap = 6, w = "full", spacer{},
+          button{ "Re-read policy now", icon = "reload", variant = "ghost", on = "policy_refresh", key = "policy-refresh", help = "sbx policy refresh" } })
+      end
+      table.insert(body, divider{})
+      table.insert(body, ports_view(sb, data.network_ports, data.network_hosts, state))
+    else
+      table.insert(body, note("Choose a running sandbox to see its network policy and ports."))
+    end
+    return column{ h = "full", w = "full", scroll{ gap = 0, column(body) } }
+  end,
+
+  actions = {
+    answer = function(_, a) return intent("approval_answer", { id = a.id, option = a.option }) end,
+    pick = function(_, _, name) return intent("network_show", { sandbox = name }) end,
+    refresh = function() return intent("network_refresh") end,
+    policy_refresh = function() return intent("policy_refresh") end,
+    allow_blocked = function(_, host) return intent("network_allow_blocked", { sandbox = current, host = host }) end,
+    rule_rm = function(_, id) return intent("network_rule_rm", { sandbox = current, rule = id }) end,
+    unblock = function(_, id) return intent("network_unblock", { sandbox = current, rule = id }) end,
+    add_rule = function(state)
+      local res = state.res or ""
+      if res == "" or not current then return nil end
+      local args = { sandbox = current, resources = res, global = state.global or false }
+      if state.http then
+        if (state.methods or "") ~= "" then args.methods = state.methods end
+        if (state.path or "") ~= "" then args.path = state.path end
+        if (state.query or "") ~= "" then args.query = state.query end
+      end
+      state.res = ""
+      return intent(state.decision == "deny" and "network_deny" or "network_allow", args)
+    end,
+    port_open = function(_, spec) return intent("port_open", { sandbox = current, spec = spec }) end,
+    port_rm = function(_, spec) return intent("port_unpublish", { sandbox = current, spec = spec }) end,
+    publish = function(state)
+      local sport = tonumber(state.sport or "")
+      if not sport or not current then return nil end
+      local hport = tonumber(state.hport or "")
+      local args = { sandbox = current, sandbox_port = sport }
+      if (state.alias or "") ~= "" then args.alias = state.alias end
+      state.sport, state.hport = "", ""
+      if hport then
+        args.host_port = hport
+        if (state.hip or "") ~= "" then args.host_ip = state.hip end
+        return intent("port_publish_fixed", args)
+      end
+      return intent("port_publish", args)
+    end,
+    rule_filter = function(state, _, t) state.rule_filter = t or "" end,
+    res = function(state, _, t) state.res = t or "" end,
+    decision = function(state, _, d) state.decision = d end,
+    global = function(state, _, on) state.global = on end,
+    http = function(state, _, on) state.http = on end,
+    methods = function(state, _, t) state.methods = t end,
+    path = function(state, _, t) state.path = t end,
+    query = function(state, _, t) state.query = t end,
+    sport = function(state, _, t) state.sport = t end,
+    hport = function(state, _, t) state.hport = t end,
+    hip = function(state, _, t) state.hip = t end,
+    alias = function(state, _, t) state.alias = t end,
+  },
+}

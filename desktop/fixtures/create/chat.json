@@ -1,0 +1,55 @@
+{
+  "daemon": {
+    "create": {
+      "can_add_repo": false,
+      "can_create": false,
+      "carve_parents": [],
+      "carve_pick": null,
+      "carves": [],
+      "chat_name": "",
+      "chat_note": null,
+      "chat_problem": null,
+      "chat_suggestion": "chat-3f9a1c",
+      "chrome": false,
+      "create_problem": "Give the sandbox a name.",
+      "dialog": "chat",
+      "error": null,
+      "favourites": [],
+      "git_url": "",
+      "host": "local",
+      "hosts": [],
+      "jobs": [],
+      "kit_mounts": [],
+      "listing": null,
+      "listing_error": null,
+      "name": "",
+      "name_note": null,
+      "name_problem": "Give the sandbox a name.",
+      "path": "",
+      "path_tag": "Selected",
+      "ports": [],
+      "preview": null,
+      "rebuild": false,
+      "remote": false,
+      "remote_control": false,
+      "repo_hint": "Other repos the agent can read, or change, next to the project folder.",
+      "repo_hint_error": false,
+      "repos": [],
+      "template": null
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "docs",
+        "status": "running",
+        "workspace": "/home/you/dev/docs"
+      },
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "stopped",
+        "workspace": "/home/you/dev/web-app"
+      }
+    ]
+  }
+}
