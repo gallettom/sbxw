@@ -137,6 +137,14 @@ fn wait_mark(n: &str) -> Option<Mark> {
     (!key.is_empty()).then(|| Mark::Wait { key: key.to_string(), ms, gone })
 }
 
+/// The item ids of the menu or select whose id is `id`.
+fn menu_items(n: &crate::luau::Node, id: &str) -> Vec<String> {
+    if n.id.as_deref() == Some(id) && !n.items.is_empty() {
+        return n.items.iter().map(|i| i.id.clone()).collect();
+    }
+    n.children.iter().map(|c| menu_items(c, id)).find(|v| !v.is_empty()).unwrap_or_default()
+}
+
 fn node_has_key(n: &crate::luau::Node, key: &str) -> bool {
     n.key.as_deref() == Some(key) || n.id.as_deref() == Some(key) || n.children.iter().any(|c| node_has_key(c, key))
 }
@@ -863,6 +871,13 @@ impl App {
         let shown_panes = self.layout.0.min(self.panes.len());
         if self.screens.iter().any(|s| s.last_good.as_ref().is_some_and(|n| node_has_key(n, key))) {
             return true;
+        }
+        // An open menu's or select's list and its items (`<id>-list`, `<id>-<item>`).
+        for sc in &self.screens {
+            let (Some(open), Some(n)) = (sc.ui.open.as_deref(), sc.last_good.as_ref()) else { continue };
+            if key == format!("{open}-list") || menu_items(n, open).iter().any(|i| key == format!("{open}-{i}")) {
+                return true;
+            }
         }
         if let Some(d) = &self.feats.dialog {
             let built = d.confirm.is_some();
@@ -1630,6 +1645,22 @@ mod tests {
         let (mut rt, _rx, _clip) = window_with_terminal();
         assert!(rt.state.drawn("filter") && rt.state.drawn("pane-1-bar") && rt.state.drawn("grid-1"));
         assert!(!rt.state.drawn("cf-confirm") && !rt.state.drawn("nothing-of-that-key"));
+        // A menu's items count once it is open (the layout switch of the top bar).
+        let ids = rt.state.screens.iter().find_map(|sc| sc.last_good.as_ref().and_then(|n| {
+            fn first_menu(n: &crate::luau::Node) -> Option<(String, String)> {
+                if matches!(n.kind, crate::luau::Kind::Menu | crate::luau::Kind::Select) && !n.items.is_empty() {
+                    return Some((n.id.clone()?, n.items[0].id.clone()));
+                }
+                n.children.iter().find_map(first_menu)
+            }
+            first_menu(n).map(|m| (sc.name.clone(), m))
+        }));
+        if let Some((screen, (id, item))) = ids {
+            assert!(!rt.state.drawn(&format!("{id}-{item}")), "closed: not drawn");
+            rt.update(|s, _| crate::screen::Host::screen(s, &screen).ui.open = Some(id.clone()));
+            assert!(rt.state.drawn(&format!("{id}-{item}")) && rt.state.drawn(&format!("{id}-list")), "open: drawn");
+            rt.update(|s, _| crate::screen::Host::screen(s, &screen).ui.open = None);
+        }
         rt.update(|s, _| {
             let f = App::feature_of("network").unwrap();
             let c = crate::feat::Confirm::new("t", crate::feat::Call::post("/api/x", serde_json::json!({}), "x")).secret("Token", "value");
