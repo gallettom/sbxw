@@ -34,46 +34,51 @@ ev = []; t = 0.6
 def add(**e):
     global t
     e["t"] = round(t, 2); ev.append(e); t += 0.25
+# READ: the real-time wait after a tap that needs a daemon read before the
+# next tap (a panel opened, a folder listed, a file read, a dialog prepared).
+# Rune's scripts cannot wait for an element, so it is generous; under load a
+# read can take seconds in the stand-in.
+READ = int(os.environ.get("READ_MS", "2500"))
 def mark(n, hold=0):
     if hold: add(type="mark", name=f"hold:{hold}")
     add(type="mark", name=n)
-add(type="tap", key="row-web-app"); mark("_pane", 800)
-add(type="tap", key="pane-1-x-project"); mark("artifacts", 600)
-add(type="tap", key="files-row-report.md"); mark("preview-markdown", 800)
-add(type="tap", key="files-row-wireframe.png"); mark("preview-picture", 800)
-add(type="tap", key="files-open-with"); mark("open-dialog", 1200)
+add(type="tap", key="row-web-app"); mark("_pane", READ)
+add(type="tap", key="pane-1-x-project"); mark("artifacts", READ)
+add(type="tap", key="files-row-report.md"); mark("preview-markdown", READ)
+add(type="tap", key="files-row-wireframe.png"); mark("preview-picture", READ)
+add(type="tap", key="files-open-with"); mark("open-dialog", READ)
 add(type="tap", key="cf-cancel"); mark("_closed", 200)
-add(type="tap", key="files-tab-files"); mark("_files", 1000)
-add(type="tap", key="files-up"); mark("browse", 1200)
-add(type="tap", key="files-row-/Users/me/web/install.sh"); mark("_script", 800)
-add(type="tap", key="files-open-with"); mark("open-refused", 1200)
+add(type="tap", key="files-tab-files"); mark("_files", READ)
+add(type="tap", key="files-up"); mark("browse", READ)
+add(type="tap", key="files-row-/Users/me/web/install.sh"); mark("_script", READ)
+add(type="tap", key="files-open-with"); mark("open-refused", READ)
 add(type="tap", key="cf-cancel"); mark("_closed2", 200)
-add(type="tap", key="files-tab-recent"); mark("recent", 500)
+add(type="tap", key="files-tab-recent"); mark("recent", READ)
 add(drop_files={"paths": [f"{SHOTS}/drop/brief.md"], "key": "files-drop", "hover": 0.2}); t += 0.3
-mark("staged", 400)
-add(type="tap", key="files-upload-send-1"); mark("upload-confirm", 400)
-add(type="tap", key="cf-confirm"); mark("uploaded", 1200)
+mark("staged", READ)
+add(type="tap", key="files-upload-send-1"); mark("upload-confirm", READ)
+add(type="tap", key="cf-confirm"); mark("uploaded", READ)
 add(drop_files={"paths": [f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}); t += 0.3
-mark("pane-drop-confirm", 500)
+mark("pane-drop-confirm", READ)
 add(type="tap", key="cf-cancel"); mark("_closed3", 200)
-add(type="tap", key="files-codemap"); mark("codemap", 1200)
+add(type="tap", key="files-codemap"); mark("codemap", READ)
 add(type="tap", key="codemap-docs"); mark("_menu", 200)
-add(type="tap", key="codemap-docs-net"); mark("codemap-net", 400)
-add(type="tap", key="codemap-outline-net-proxy"); mark("codemap-section", 600)
-add(type="tap", key="codemap-diagram"); mark("diagram-dialog", 1200)
+add(type="tap", key="codemap-docs-net"); mark("codemap-net", READ)
+add(type="tap", key="codemap-outline-net-proxy"); mark("codemap-section", READ)
+add(type="tap", key="codemap-diagram"); mark("diagram-dialog", READ)
 mark("end", 300)
 # LONG=1: the dialogs with long paths, at the smallest window.
 if os.environ.get("LONG"):
     ev.clear(); t = 0.6
-    add(type="tap", key="row-web-app"); mark("_pane", 800)
-    add(type="tap", key="pane-1-x-project"); mark("_panel", 600)
-    add(type="tap", key="files-tab-recent"); mark("_recent", 500)
-    add(type="tap", key="files-row-" + os.environ["LONGREMOTE"]); mark("_sel", 800)
-    add(type="tap", key="files-open-with"); mark("long-open", 1200)
+    add(type="tap", key="row-web-app"); mark("_pane", READ)
+    add(type="tap", key="pane-1-x-project"); mark("_panel", READ)
+    add(type="tap", key="files-tab-recent"); mark("_recent", READ)
+    add(type="tap", key="files-row-" + os.environ["LONGREMOTE"]); mark("_sel", READ)
+    add(type="tap", key="files-open-with"); mark("long-open", READ)
     add(type="tap", key="cf-cancel"); mark("_c", 200)
     add(drop_files={"paths": [os.environ["LONGFILE"]], "key": "files-drop", "hover": 0.2}); t += 0.3
-    mark("_staged", 400)
-    add(type="tap", key="files-upload-send-1"); mark("long-upload", 500)
+    mark("_staged", READ)
+    add(type="tap", key="files-upload-send-1"); mark("long-upload", READ)
     mark("end", 300)
 print(json.dumps({"events": ev}, indent=1))
 PY
