@@ -681,6 +681,7 @@ macro_rules! features {
 }
 
 features! {
+    browser,
     create,
     envfile,
     files,
