@@ -1,0 +1,444 @@
+{
+  "about": "Searching the map.",
+  "app": {
+    "open": [
+      "web-app"
+    ],
+    "panels": [
+      "codemap"
+    ]
+  },
+  "daemon": {
+    "artifacts": {
+      "codemap": {
+        "dir": "codemap",
+        "entries": [
+          {
+            "modified": 1794199400,
+            "name": "codemap.md",
+            "path": "codemap/codemap.md",
+            "size": 330
+          },
+          {
+            "modified": 1794199400,
+            "name": "cli.md",
+            "path": "codemap/cli.md",
+            "size": 167
+          },
+          {
+            "modified": 1794199400,
+            "name": "net.md",
+            "path": "codemap/net.md",
+            "size": 253
+          },
+          {
+            "modified": 1794199400,
+            "name": "architecture.html",
+            "path": "codemap/diagram/architecture.html",
+            "size": 138
+          }
+        ],
+        "files": 4,
+        "modified": 1794199400,
+        "slug": "codemap"
+      },
+      "dir": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "modified": 1794199880,
+          "name": "report.md",
+          "path": "report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198200,
+          "name": "wireframe.png",
+          "path": "wireframe.png",
+          "size": 48213
+        },
+        {
+          "modified": 1794192800,
+          "name": "summary.html",
+          "path": "summary.html",
+          "size": 138
+        },
+        {
+          "modified": 1794027200,
+          "name": "meeting.md",
+          "path": "notes/meeting.md",
+          "size": 412
+        },
+        {
+          "modified": 1793940800,
+          "name": "budget.xlsx",
+          "path": "budget.xlsx",
+          "size": 18874
+        }
+      ],
+      "lenses": [
+        {
+          "dir": "codemap-lenses/product-owner",
+          "entries": [
+            {
+              "modified": 1794199700,
+              "name": "product-owner.md",
+              "path": "codemap-lenses/product-owner/product-owner.md",
+              "size": 130
+            }
+          ],
+          "files": 1,
+          "modified": 1794199700,
+          "slug": "product-owner"
+        }
+      ],
+      "run": null
+    },
+    "codemap_ui": {
+      "diagram": {
+        "path": "codemap/diagram/architecture.html",
+        "size": "138 B"
+      },
+      "error": null,
+      "filter": "retry",
+      "lens": "",
+      "lens_left": 400,
+      "loading": false,
+      "map": {
+        "broken": 1,
+        "count": 3,
+        "doc": {
+          "backlinks": [
+            {
+              "anchor": "cli-commands",
+              "from": "cli",
+              "section": "CLI › Commands"
+            },
+            {
+              "anchor": "web-app",
+              "from": "codemap",
+              "section": "Web app"
+            },
+            {
+              "anchor": "web-app-areas",
+              "from": "codemap",
+              "section": "Web app › Areas"
+            }
+          ],
+          "code": [
+            "src/net/proxy.ts"
+          ],
+          "key": "net",
+          "markdown": "## Proxy\n\nRequests go through the proxy in `src/net/proxy.ts`. Back to [the index](https://sbxw-codemap.invalid/codemap).\n",
+          "outline": [
+            {
+              "id": "net",
+              "level": 1,
+              "title": "Net"
+            },
+            {
+              "id": "net-proxy",
+              "level": 2,
+              "title": "Proxy"
+            },
+            {
+              "id": "net-retries",
+              "level": 2,
+              "title": "Retries"
+            }
+          ],
+          "path": "codemap/net.md",
+          "section": {
+            "id": "net-proxy",
+            "title": "Net › Proxy"
+          },
+          "title": "Net"
+        },
+        "docs": [
+          {
+            "current": true,
+            "key": "net",
+            "sections": 3,
+            "title": "Net"
+          }
+        ]
+      },
+      "maps": [
+        {
+          "dir": "codemap",
+          "entries": [
+            {
+              "modified": 1794199400,
+              "name": "codemap.md",
+              "path": "codemap/codemap.md",
+              "size": 330
+            },
+            {
+              "modified": 1794199400,
+              "name": "cli.md",
+              "path": "codemap/cli.md",
+              "size": 167
+            },
+            {
+              "modified": 1794199400,
+              "name": "net.md",
+              "path": "codemap/net.md",
+              "size": 253
+            },
+            {
+              "modified": 1794199400,
+              "name": "architecture.html",
+              "path": "codemap/diagram/architecture.html",
+              "size": 138
+            }
+          ],
+          "files": 4,
+          "label": "Code map",
+          "lens": false,
+          "when": "7 d ago"
+        },
+        {
+          "dir": "codemap-lenses/product-owner",
+          "entries": [
+            {
+              "modified": 1794199700,
+              "name": "product-owner.md",
+              "path": "codemap-lenses/product-owner/product-owner.md",
+              "size": 130
+            }
+          ],
+          "files": 1,
+          "label": "Lens: product owner",
+          "lens": true,
+          "when": "7 d ago"
+        }
+      ],
+      "root": "codemap",
+      "run": null,
+      "running": true,
+      "sandbox": "web-app",
+      "writing": false
+    },
+    "files_dir": {
+      "artifacts": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199880,
+          "name": ".sbxw-artifacts",
+          "size": 4096
+        },
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199940,
+          "name": ".git",
+          "size": 4096
+        },
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199100,
+          "name": "src",
+          "size": 4096
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793768000,
+          "name": "README.md",
+          "size": 1320
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793768000,
+          "name": "package.json",
+          "size": 812
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793422400,
+          "name": "install.sh",
+          "size": 230
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793422400,
+          "name": ".env",
+          "size": 64
+        }
+      ],
+      "home": "/home/agent",
+      "mounts": [
+        {
+          "path": "/Users/me/shared-lib",
+          "readonly": true
+        }
+      ],
+      "offline": false,
+      "ok": true,
+      "parent": "/Users/me",
+      "path": "/Users/me/web",
+      "workspace": "/Users/me/web",
+      "worktrees": [
+        {
+          "artifacts": null,
+          "path": "/Users/me/web/.sbxw-worktrees/checkout",
+          "repo": "",
+          "thread": "checkout"
+        }
+      ]
+    },
+    "files_recent": {
+      "days": 7,
+      "files": [
+        {
+          "modified": 1794199880,
+          "path": "/Users/me/web/.sbxw-artifacts/report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198500,
+          "path": "/tmp/build.log",
+          "size": 10690
+        },
+        {
+          "modified": 1794199100,
+          "path": "/Users/me/web/src/app.ts",
+          "size": 2210
+        },
+        {
+          "modified": 1794178400,
+          "path": "/home/agent/.claude/plans/checkout.md",
+          "size": 980
+        },
+        {
+          "modified": 1794027200,
+          "path": "/Users/me/web/.sbxw-artifacts/notes/meeting.md",
+          "size": 412
+        }
+      ],
+      "home": "/home/agent",
+      "offline": false,
+      "ok": true,
+      "roots": [
+        "/Users/me/web",
+        "/home/agent",
+        "/tmp"
+      ],
+      "workspace": "/Users/me/web"
+    },
+    "files_ui": {
+      "artifacts_dir": "/Users/me/web/.sbxw-artifacts",
+      "can_back": false,
+      "can_up": true,
+      "errors": {
+        "artifacts": null,
+        "files": null,
+        "recent": null
+      },
+      "filter": "",
+      "has_map": true,
+      "hidden": false,
+      "lenses": 1,
+      "loading": {
+        "artifacts": true,
+        "files": false,
+        "recent": false
+      },
+      "offline": false,
+      "path": "/Users/me/web",
+      "places": [],
+      "preview": null,
+      "recent_days": 7,
+      "recent_fresh": 0,
+      "rows": [
+        {
+          "dir": "",
+          "fresh": false,
+          "icon": "file",
+          "id": "report.md",
+          "kind": "file",
+          "name": "report.md",
+          "selected": false,
+          "size": "215 B",
+          "when": "7 d ago"
+        },
+        {
+          "dir": "",
+          "fresh": false,
+          "icon": "sparkle",
+          "id": "wireframe.png",
+          "kind": "file",
+          "name": "wireframe.png",
+          "selected": false,
+          "size": "47.1 KB",
+          "when": "7 d ago"
+        },
+        {
+          "dir": "",
+          "fresh": false,
+          "icon": "link",
+          "id": "summary.html",
+          "kind": "file",
+          "name": "summary.html",
+          "selected": false,
+          "size": "138 B",
+          "when": "7 d ago"
+        },
+        {
+          "dir": "notes",
+          "fresh": false,
+          "icon": "file",
+          "id": "notes/meeting.md",
+          "kind": "file",
+          "name": "meeting.md",
+          "selected": false,
+          "size": "412 B",
+          "when": "9 d ago"
+        },
+        {
+          "dir": "",
+          "fresh": false,
+          "icon": "file",
+          "id": "budget.xlsx",
+          "kind": "file",
+          "name": "budget.xlsx",
+          "selected": false,
+          "size": "18.4 KB",
+          "when": "10 d ago"
+        }
+      ],
+      "run": null,
+      "sandbox": null,
+      "selected": null,
+      "staged": [],
+      "starred": false,
+      "tab": "artifacts",
+      "upload_max": "128.0 MB"
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "running",
+        "workspace": "/Users/me/web"
+      },
+      {
+        "agent": "claude",
+        "name": "api",
+        "status": "running",
+        "workspace": "/Users/me/api"
+      },
+      {
+        "agent": "codex",
+        "name": "data-pipeline",
+        "status": "stopped",
+        "workspace": "/Users/me/data"
+      }
+    ]
+  }
+}

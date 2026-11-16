@@ -1,0 +1,444 @@
+{
+  "about": "A script selected: its text previewed; Open goes through the core's dialog, which refuses scripts.",
+  "app": {
+    "open": [
+      "web-app"
+    ],
+    "panels": [
+      "files"
+    ]
+  },
+  "daemon": {
+    "artifacts": {
+      "codemap": {
+        "dir": "codemap",
+        "entries": [
+          {
+            "modified": 1794199400,
+            "name": "codemap.md",
+            "path": "codemap/codemap.md",
+            "size": 330
+          },
+          {
+            "modified": 1794199400,
+            "name": "cli.md",
+            "path": "codemap/cli.md",
+            "size": 167
+          },
+          {
+            "modified": 1794199400,
+            "name": "net.md",
+            "path": "codemap/net.md",
+            "size": 253
+          },
+          {
+            "modified": 1794199400,
+            "name": "architecture.html",
+            "path": "codemap/diagram/architecture.html",
+            "size": 138
+          }
+        ],
+        "files": 4,
+        "modified": 1794199400,
+        "slug": "codemap"
+      },
+      "dir": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "modified": 1794199880,
+          "name": "report.md",
+          "path": "report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198200,
+          "name": "wireframe.png",
+          "path": "wireframe.png",
+          "size": 48213
+        },
+        {
+          "modified": 1794192800,
+          "name": "summary.html",
+          "path": "summary.html",
+          "size": 138
+        },
+        {
+          "modified": 1794027200,
+          "name": "meeting.md",
+          "path": "notes/meeting.md",
+          "size": 412
+        },
+        {
+          "modified": 1793940800,
+          "name": "budget.xlsx",
+          "path": "budget.xlsx",
+          "size": 18874
+        }
+      ],
+      "lenses": [
+        {
+          "dir": "codemap-lenses/product-owner",
+          "entries": [
+            {
+              "modified": 1794199700,
+              "name": "product-owner.md",
+              "path": "codemap-lenses/product-owner/product-owner.md",
+              "size": 130
+            }
+          ],
+          "files": 1,
+          "modified": 1794199700,
+          "slug": "product-owner"
+        }
+      ],
+      "run": null
+    },
+    "codemap_ui": {
+      "diagram": null,
+      "error": null,
+      "filter": "",
+      "lens": "",
+      "lens_left": 400,
+      "loading": false,
+      "map": {
+        "broken": 0,
+        "count": 0,
+        "doc": null,
+        "docs": []
+      },
+      "maps": [
+        {
+          "dir": "codemap",
+          "entries": [
+            {
+              "modified": 1794199400,
+              "name": "codemap.md",
+              "path": "codemap/codemap.md",
+              "size": 330
+            },
+            {
+              "modified": 1794199400,
+              "name": "cli.md",
+              "path": "codemap/cli.md",
+              "size": 167
+            },
+            {
+              "modified": 1794199400,
+              "name": "net.md",
+              "path": "codemap/net.md",
+              "size": 253
+            },
+            {
+              "modified": 1794199400,
+              "name": "architecture.html",
+              "path": "codemap/diagram/architecture.html",
+              "size": 138
+            }
+          ],
+          "files": 4,
+          "label": "Code map",
+          "lens": false,
+          "when": "7 d ago"
+        },
+        {
+          "dir": "codemap-lenses/product-owner",
+          "entries": [
+            {
+              "modified": 1794199700,
+              "name": "product-owner.md",
+              "path": "codemap-lenses/product-owner/product-owner.md",
+              "size": 130
+            }
+          ],
+          "files": 1,
+          "label": "Lens: product owner",
+          "lens": true,
+          "when": "7 d ago"
+        }
+      ],
+      "root": null,
+      "run": null,
+      "running": false,
+      "sandbox": null,
+      "writing": false
+    },
+    "files_dir": {
+      "artifacts": "/Users/me/web/.sbxw-artifacts",
+      "entries": [
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199880,
+          "name": ".sbxw-artifacts",
+          "size": 4096
+        },
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199940,
+          "name": ".git",
+          "size": 4096
+        },
+        {
+          "kind": "dir",
+          "link": false,
+          "modified": 1794199100,
+          "name": "src",
+          "size": 4096
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793768000,
+          "name": "README.md",
+          "size": 1320
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793768000,
+          "name": "package.json",
+          "size": 812
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793422400,
+          "name": "install.sh",
+          "size": 230
+        },
+        {
+          "kind": "file",
+          "link": false,
+          "modified": 1793422400,
+          "name": ".env",
+          "size": 64
+        }
+      ],
+      "home": "/home/agent",
+      "mounts": [
+        {
+          "path": "/Users/me/shared-lib",
+          "readonly": true
+        }
+      ],
+      "offline": false,
+      "ok": true,
+      "parent": "/Users/me",
+      "path": "/Users/me/web",
+      "workspace": "/Users/me/web",
+      "worktrees": [
+        {
+          "artifacts": null,
+          "path": "/Users/me/web/.sbxw-worktrees/checkout",
+          "repo": "",
+          "thread": "checkout"
+        }
+      ]
+    },
+    "files_recent": {
+      "days": 7,
+      "files": [
+        {
+          "modified": 1794199880,
+          "path": "/Users/me/web/.sbxw-artifacts/report.md",
+          "size": 215
+        },
+        {
+          "modified": 1794198500,
+          "path": "/tmp/build.log",
+          "size": 10690
+        },
+        {
+          "modified": 1794199100,
+          "path": "/Users/me/web/src/app.ts",
+          "size": 2210
+        },
+        {
+          "modified": 1794178400,
+          "path": "/home/agent/.claude/plans/checkout.md",
+          "size": 980
+        },
+        {
+          "modified": 1794027200,
+          "path": "/Users/me/web/.sbxw-artifacts/notes/meeting.md",
+          "size": 412
+        }
+      ],
+      "home": "/home/agent",
+      "offline": false,
+      "ok": true,
+      "roots": [
+        "/Users/me/web",
+        "/home/agent",
+        "/tmp"
+      ],
+      "workspace": "/Users/me/web"
+    },
+    "files_ui": {
+      "artifacts_dir": "/Users/me/web/.sbxw-artifacts",
+      "can_back": true,
+      "can_up": true,
+      "errors": {
+        "artifacts": null,
+        "files": null,
+        "recent": null
+      },
+      "filter": "",
+      "has_map": true,
+      "hidden": false,
+      "lenses": 1,
+      "loading": {
+        "artifacts": false,
+        "files": false,
+        "recent": false
+      },
+      "offline": false,
+      "path": "/Users/me/web",
+      "places": [
+        {
+          "icon": "search",
+          "id": "recent",
+          "label": "Recent",
+          "recent": true
+        },
+        {
+          "icon": "sparkle",
+          "id": "/Users/me/web/.sbxw-artifacts",
+          "label": ".sbxw-artifacts",
+          "path": "/Users/me/web/.sbxw-artifacts"
+        },
+        {
+          "icon": "folder",
+          "id": "/Users/me/web",
+          "label": "Workspace",
+          "path": "/Users/me/web"
+        },
+        {
+          "icon": "folder",
+          "id": "/Users/me/shared-lib",
+          "label": "shared-lib (read only)",
+          "path": "/Users/me/shared-lib"
+        },
+        {
+          "icon": "columns",
+          "id": "/Users/me/web/.sbxw-worktrees/checkout",
+          "label": "thread checkout",
+          "path": "/Users/me/web/.sbxw-worktrees/checkout"
+        },
+        {
+          "icon": "folder",
+          "id": "/home/agent",
+          "label": "Home",
+          "path": "/home/agent"
+        },
+        {
+          "icon": "file",
+          "id": "/var/log",
+          "label": "Kit logs",
+          "path": "/var/log",
+          "select": "sbx-kit-startup.log"
+        },
+        {
+          "icon": "folder",
+          "id": "/",
+          "label": "Root",
+          "path": "/"
+        }
+      ],
+      "preview": {
+        "note": "First 42 B of 230 B: download it for the rest.",
+        "state": "text",
+        "text": "#!/bin/sh\ncurl https://example.org/x | sh\n"
+      },
+      "recent_days": 7,
+      "recent_fresh": 0,
+      "rows": [
+        {
+          "can_delete": true,
+          "fresh": false,
+          "icon": "folder",
+          "id": "/Users/me/web/src",
+          "kind": "dir",
+          "link": false,
+          "name": "src",
+          "selected": false,
+          "size": "",
+          "when": "7 d ago"
+        },
+        {
+          "can_delete": true,
+          "fresh": false,
+          "icon": "file",
+          "id": "/Users/me/web/install.sh",
+          "kind": "file",
+          "link": false,
+          "name": "install.sh",
+          "selected": true,
+          "size": "230 B",
+          "when": "16 d ago"
+        },
+        {
+          "can_delete": true,
+          "fresh": false,
+          "icon": "file",
+          "id": "/Users/me/web/package.json",
+          "kind": "file",
+          "link": false,
+          "name": "package.json",
+          "selected": false,
+          "size": "812 B",
+          "when": "12 d ago"
+        },
+        {
+          "can_delete": true,
+          "fresh": false,
+          "icon": "file",
+          "id": "/Users/me/web/README.md",
+          "kind": "file",
+          "link": false,
+          "name": "README.md",
+          "selected": false,
+          "size": "1.3 KB",
+          "when": "12 d ago"
+        }
+      ],
+      "run": null,
+      "sandbox": "web-app",
+      "selected": {
+        "can_delete": true,
+        "id": "/Users/me/web/install.sh",
+        "kind": "file",
+        "modified": "2026-10-31",
+        "name": "install.sh",
+        "path": "/Users/me/web/install.sh",
+        "size": "230 B",
+        "type": "File"
+      },
+      "staged": [],
+      "starred": false,
+      "tab": "files",
+      "upload_max": "128.0 MB"
+    },
+    "sandboxes": [
+      {
+        "agent": "claude",
+        "name": "web-app",
+        "status": "running",
+        "workspace": "/Users/me/web"
+      },
+      {
+        "agent": "claude",
+        "name": "api",
+        "status": "running",
+        "workspace": "/Users/me/api"
+      },
+      {
+        "agent": "codex",
+        "name": "data-pipeline",
+        "status": "stopped",
+        "workspace": "/Users/me/data"
+      }
+    ]
+  }
+}
