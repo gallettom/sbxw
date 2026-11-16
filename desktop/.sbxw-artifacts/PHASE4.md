@@ -285,8 +285,11 @@ UI open beside it helps to compare.
     and no terminal has the focus: the picture is attached; Send lists each
     picture with its size. A 10 MB PDF or an animated picture is refused with
     a notice. `/grill-me` in a sandbox: the round opens as one form. In
-    Jarvis, pick web-app in the title: your words become a draft for web-app
-    in the app's dialog, never a yes to a Jarvis proposal.
+    Jarvis, pick web-app in the title: the panel shows web-app's state (no
+    "Jarvis absent", no Start Jarvis), and your words become a draft for
+    web-app in the app's dialog, never a yes to a Jarvis proposal. Stop
+    web-app from the sidebar: the panel goes back to Jarvis and says nothing
+    was sent.
 13. A notice (for example after step 6's Copy) sits at the right end of the
     top bar. While it shows, click the Jarvis input and type: the text goes
     into the input; the notice only acts when clicked itself.
