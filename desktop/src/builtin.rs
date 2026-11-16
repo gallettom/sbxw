@@ -33,6 +33,7 @@ pub fn default_dir() -> PathBuf {
 fn arg_type(a: Arg) -> String {
     match a {
         Arg::Str => "string".into(),
+        Arg::Text => "string, may be empty".into(),
         Arg::OneOf(set) => format!("one of {}", set.join(", ")),
         Arg::Int(lo, hi) if hi == i64::MAX => format!("whole number from {lo}"),
         Arg::Int(lo, hi) => format!("whole number {lo} to {hi}"),

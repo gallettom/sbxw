@@ -3377,6 +3377,7 @@ dependencies = [
  "cpal",
  "env_logger",
  "getrandom 0.2.17",
+ "image",
  "log",
  "mio",
  "mlua",

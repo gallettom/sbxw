@@ -34,6 +34,8 @@ return {
         text{ "Keyboard shortcuts", weight = "semibold", color = "text-bright" },
         list{
           key(mac and "⌘J" or "F7", "Open or close the Jarvis panel"),
+          key(mac and "⌃⌥N" or "Alt+N", "New sandbox"),
+          key(mac and "⌃⌥M" or "Alt+M", "New chat"),
           key(ptt, "Push to talk to Jarvis (hold)"),
           key("Escape", "Close the dialog or menu showing"),
           key(mac and "⌘V" or "Ctrl+Shift+V", "Paste into the focused terminal"),

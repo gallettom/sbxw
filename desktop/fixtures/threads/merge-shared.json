@@ -1,0 +1,354 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-app"
+      },
+      {
+        "name": "api",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/api"
+      },
+      {
+        "name": "docs",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      }
+    ],
+    "sessions": [
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "working",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000005
+      },
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "working",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000006,
+        "thread": "t1"
+      },
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "attention",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": true,
+        "ts": 1763290000007,
+        "thread": "t2"
+      },
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "idle",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000003,
+        "thread": "s1"
+      },
+      {
+        "sandbox": "api",
+        "mode": "claude",
+        "state": "idle",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000002
+      }
+    ],
+    "threads": {
+      "web-app": {
+        "ok": true,
+        "threads": [
+          {
+            "name": "api-routes",
+            "open": true,
+            "repo": "",
+            "model": null,
+            "worktree": "team"
+          },
+          {
+            "name": "web-orders",
+            "open": true,
+            "repo": "",
+            "model": null,
+            "worktree": "team"
+          },
+          {
+            "name": "docs",
+            "open": true,
+            "repo": "",
+            "model": null,
+            "worktree": "team"
+          }
+        ],
+        "open": 4,
+        "max": 5
+      },
+      "api": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      }
+    },
+    "plans": [
+      {
+        "id": "p-2",
+        "sandbox": "web-app",
+        "summary": "Orders v2: the API routes, the web page that uses them, and their docs, in three threads that do not touch the same files.",
+        "threads": [
+          {
+            "name": "api-routes",
+            "goal": "Add the /v2/orders routes to the API. Keep the v1 routes untouched; write handler tests for each new route and the error shapes.",
+            "scope": "api/src/routes/v2/, api/tests/v2_orders.rs",
+            "repo": "api",
+            "model": "claude-sonnet-5-5",
+            "state": "working",
+            "summary": ""
+          },
+          {
+            "name": "web-orders",
+            "goal": "Build the orders page in the web app against the new routes. Use the existing table component.",
+            "scope": "web/src/pages/orders/, web/src/api/orders.ts",
+            "repo": "web",
+            "state": "working",
+            "summary": ""
+          },
+          {
+            "name": "docs",
+            "goal": "Document the v2 orders API in docs/api/orders.md with examples.",
+            "scope": "docs/api/orders.md",
+            "state": "done",
+            "summary": ""
+          }
+        ],
+        "state": "approved",
+        "variant": "shared",
+        "justification": "The three areas live in different folders, so a branch each merges cleanly.",
+        "lead": "web-app lead",
+        "created_ms": 1763290000000,
+        "updated_ms": 1763290000000,
+        "worktree": "/work/.sbxw-worktrees/team-p-2",
+        "merge": {
+          "order": [
+            "api-routes",
+            "web-orders",
+            "docs"
+          ],
+          "note": "one branch",
+          "state": "proposed",
+          "base": null,
+          "results": [],
+          "distillate": [
+            {
+              "kind": "decision",
+              "text": "Orders v2 routes live under /v2; v1 stays frozen."
+            },
+            {
+              "kind": "warning",
+              "text": "The orders table sorts by created_at on the server: do not sort again client side."
+            }
+          ]
+        }
+      }
+    ],
+    "leads": [],
+    "models": {
+      "ok": true,
+      "default": "claude-opus-5-5",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "label": "Opus 5.5"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "label": "Haiku 5.5"
+        }
+      ]
+    },
+    "board": {
+      "web-app": {
+        "sandbox": "web-app",
+        "plan": {
+          "id": "p-2",
+          "sandbox": "web-app",
+          "summary": "Orders v2: the API routes, the web page that uses them, and their docs, in three threads that do not touch the same files.",
+          "threads": [
+            {
+              "name": "api-routes",
+              "goal": "Add the /v2/orders routes to the API. Keep the v1 routes untouched; write handler tests for each new route and the error shapes.",
+              "scope": "api/src/routes/v2/, api/tests/v2_orders.rs",
+              "repo": "api",
+              "model": "claude-sonnet-5-5",
+              "state": "working",
+              "summary": ""
+            },
+            {
+              "name": "web-orders",
+              "goal": "Build the orders page in the web app against the new routes. Use the existing table component.",
+              "scope": "web/src/pages/orders/, web/src/api/orders.ts",
+              "repo": "web",
+              "state": "working",
+              "summary": ""
+            },
+            {
+              "name": "docs",
+              "goal": "Document the v2 orders API in docs/api/orders.md with examples.",
+              "scope": "docs/api/orders.md",
+              "state": "done",
+              "summary": ""
+            }
+          ],
+          "state": "approved",
+          "variant": "shared",
+          "justification": "The three areas live in different folders, so a branch each merges cleanly.",
+          "lead": "web-app lead",
+          "created_ms": 1763290000000,
+          "updated_ms": 1763290000000,
+          "worktree": "/work/.sbxw-worktrees/team-p-2",
+          "merge": {
+            "order": [
+              "api-routes",
+              "web-orders",
+              "docs"
+            ],
+            "note": "one branch",
+            "state": "proposed",
+            "base": null,
+            "results": [],
+            "distillate": [
+              {
+                "kind": "decision",
+                "text": "Orders v2 routes live under /v2; v1 stays frozen."
+              },
+              {
+                "kind": "warning",
+                "text": "The orders table sorts by created_at on the server: do not sort again client side."
+              }
+            ]
+          }
+        },
+        "claims": [
+          {
+            "file": "web/src/api/orders.ts",
+            "owner": "web-orders",
+            "since": 1763290000,
+            "until": 1763293600,
+            "extensions": 1,
+            "held_ms": 5700000
+          },
+          {
+            "file": "api/src/routes/v2/orders.rs",
+            "owner": "api-routes",
+            "since": 1763291000,
+            "until": 1763294600,
+            "extensions": 0,
+            "held_ms": 1320000
+          }
+        ],
+        "entries": [
+          {
+            "id": 1,
+            "at": 1763290100,
+            "kind": "decision",
+            "by": "api-routes",
+            "text": "Orders v2 routes live under /v2; v1 stays frozen."
+          },
+          {
+            "id": 2,
+            "at": 1763290200,
+            "kind": "question",
+            "by": "web-orders",
+            "to": "api-routes",
+            "text": "Is created_at an RFC 3339 string or epoch ms?"
+          },
+          {
+            "id": 3,
+            "at": 1763290300,
+            "kind": "commit",
+            "by": "api-routes",
+            "hash": "5eed0011aabbcc",
+            "text": "v2 orders routes",
+            "files": [
+              "api/src/routes/v2/orders.rs"
+            ]
+          },
+          {
+            "id": 4,
+            "at": 1763290400,
+            "kind": "warning",
+            "by": "docs",
+            "text": "The orders table sorts server side.",
+            "files": [
+              "docs/api/orders.md"
+            ]
+          },
+          {
+            "id": 5,
+            "at": 1763290500,
+            "kind": "conflict",
+            "by": "web-orders",
+            "text": "orders.ts edited without the claim",
+            "files": [
+              "web/src/api/orders.ts"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "app": {
+    "selected": "web-app",
+    "panes": 2,
+    "open": [
+      "web-app"
+    ],
+    "modal": [
+      "plans",
+      "p-2"
+    ]
+  }
+}

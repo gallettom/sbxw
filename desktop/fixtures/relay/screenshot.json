@@ -1,0 +1,56 @@
+{
+ "about": "A screenshot request: the drop zone, paste and choose, words instead.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "requests": [
+    {
+     "id": "r-2",
+     "from": "web-app",
+     "kind": "screenshot",
+     "question": "The settings header at mobile width (375px), after I moved the save button to the right.",
+     "shot_count": 0,
+     "state": "pending",
+     "created_ms": 2000,
+     "updated_ms": 2000
+    }
+   ]
+  },
+  "sessions": []
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}

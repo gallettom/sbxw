@@ -9,11 +9,12 @@
 
 mod features;
 mod jarvis;
+pub mod store;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
-use crate::intent::{Intent, Mode, PaneTarget, Risk, Split};
+use crate::intent::{Intent, Mode, PaneTarget, Risk, Split, ThreadStart};
 use crate::screen::{self, Host, ScreenState};
 use crate::terminal::{self, TerminalEvent, TerminalState};
 use crate::theme::{self, c, layout};
@@ -78,11 +79,15 @@ pub struct Pane {
     pub attention: bool,
     /// Lost the socket; the terminal is reconnecting on its own.
     pub reconnecting: Option<String>,
+    /// When it was last opened or focused (the app's own counter): the
+    /// least recently used pane is the one a new sandbox may replace when no
+    /// pane is free and the layout is full.
+    pub used: u64,
 }
 
 impl Pane {
     fn empty() -> Pane {
-        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None }
+        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None, used: 0 }
     }
 
     fn status(&self) -> String {
@@ -168,7 +173,14 @@ pub struct App {
     pub window: (f32, f32),
     /// Features (`src/feat/`): their data, slots and dialog (shell/features.rs).
     pub feats: features::Feats,
+    /// The counter behind [`Pane::used`].
+    use_seq: u64,
+    /// The app's state across runs (store.rs).
+    pub store: store::Store,
 }
+
+/// The most panes the layout shows (the layout switch's largest choice).
+pub const MAX_PANES: usize = 4;
 
 /// Whether the window takes pastes at its root (see `view`).
 pub fn window_paste() -> bool {
@@ -245,6 +257,8 @@ impl App {
             wiring: jarvis::Wiring::new(),
             window: (1280.0, 800.0),
             feats: features::Feats::default(),
+            use_seq: 0,
+            store: store::Store::open(),
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -341,6 +355,8 @@ impl App {
                 app.notify(line, false);
             }
         }
+        // After that line: an old override matters more.
+        app.check_overrides();
         if let Target::Fixture(f) = &app.target {
             // A fixture answers at once: no thread, so the first frame has it all.
             let d: Arc<dyn Daemon> = f.clone();
@@ -400,7 +416,7 @@ impl App {
                 .iter()
                 .take(self.layout.0)
                 .enumerate()
-                .map(|(i, p)| PaneView { index: i + 1, sandbox: p.sandbox.clone(), mode: p.mode.name(), focused: i == self.focused, status: p.status() })
+                .map(|(i, p)| PaneView { index: i + 1, sandbox: p.sandbox.clone(), mode: p.mode.name(), thread: p.thread.clone(), focused: i == self.focused, status: p.status() })
                 .collect(),
             platform: std::env::consts::OS,
         }
@@ -422,7 +438,70 @@ impl App {
         data["app"]["panels"] = panels;
         data["app"]["extras"] = extras;
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
+        data["app"]["overrides"] = self.overrides_view();
+        data["app"]["kept"] = self.store.get("features").clone();
         data
+    }
+
+    /// `data.app.overrides`: each screen running an override, `{path, stale}`.
+    fn overrides_view(&self) -> J {
+        let mut o = serde_json::Map::new();
+        for sc in self.screens.iter().filter(|sc| sc.override_hash.is_some()) {
+            o.insert(sc.name.clone(), serde_json::json!({ "path": sc.override_file(), "stale": sc.stale }));
+        }
+        J::Object(o)
+    }
+
+    /// Finds overrides made for an older built-in screen (phase 3 bug: an
+    /// old `sandboxes.luau` copy hid the new row extras, with no word).
+    ///
+    /// The state file keeps, per override, the hash of the built-in that was
+    /// current when the override appeared or last changed. An override is
+    /// stale when the built-in compiled in now has another hash. An override
+    /// with no record yet (made before this check existed) is stale when its
+    /// file is older than the running app: it was made for an earlier build.
+    /// The built-in is never read back from `builtin/` on disk.
+    pub(crate) fn check_overrides(&mut self) {
+        let exe = std::env::current_exe().and_then(std::fs::metadata).and_then(|m| m.modified()).ok();
+        let mut newly = vec![];
+        for i in 0..self.screens.len() {
+            let sc = &self.screens[i];
+            let name = sc.name.clone();
+            let bh = store::hash(screen::builtin(&name).unwrap_or(""));
+            let rec = self.store.get("overrides")[&name].clone();
+            let stale = match sc.override_hash.clone() {
+                None => {
+                    if !rec.is_null() {
+                        self.store.set_in("overrides", &name, J::Null);
+                    }
+                    false
+                }
+                Some(oh) if rec["override"] != oh.as_str() => {
+                    let file = match &sc.source {
+                        screen::Source::File(p) => p.clone(),
+                        screen::Source::Builtin => sc.override_file().to_path_buf(),
+                    };
+                    let mtime = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+                    let older = rec.is_null() && matches!((mtime, exe), (Some(m), Some(e)) if m < e);
+                    let b = if older { "older than this app".to_string() } else { bh.clone() };
+                    self.store.set_in("overrides", &name, serde_json::json!({ "builtin": b, "override": oh }));
+                    older
+                }
+                Some(_) => rec["builtin"] != bh.as_str(),
+            };
+            if stale && !self.screens[i].stale {
+                newly.push(name.clone());
+            }
+            self.screens[i].stale = stale;
+        }
+        if let Some(first) = newly.first() {
+            let text = match newly.as_slice() {
+                [one] => format!("Your {one} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."),
+                many => format!("Your {} screens are customised copies made for an older version; new features may be missing. Ask Jarvis to update them, or restore the built-ins.", many.join(", ")),
+            };
+            self.notify(text, false);
+            self.feats.notice_then = Some(("screen_restore".into(), serde_json::json!({ "screen": first })));
+        }
     }
 
     fn push_data(&mut self) {
@@ -527,13 +606,17 @@ impl App {
                 Ok(()) => self.notify(format!("{what}: done"), false),
                 Err(e) => self.notify(format!("{what}: {e}"), true),
             },
-            ev @ (LinkEvent::Answer { .. } | LinkEvent::Data { .. }) => return self.feats_link(ev),
+            ev @ (LinkEvent::Answer { .. } | LinkEvent::Data { .. } | LinkEvent::DataPer { .. }) => return self.feats_link(ev),
         }
         true
     }
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        if !self.feats.asks.is_empty() {
+            self.run_asks(tx);
+            changed = true;
+        }
         while self.marks.first().is_some_and(|(t, _)| *t <= clock) {
             match self.marks.remove(0).1 {
                 Mark::Hold(ms) => {
@@ -563,6 +646,12 @@ impl App {
         }
         changed |= self.drain(headless().then_some(Duration::from_millis(1500)), true);
         changed |= self.poll_jarvis(tx);
+        if self.screens.iter().any(|s| s.loads != s.checked) {
+            self.check_overrides();
+            for s in &mut self.screens {
+                s.checked = s.loads;
+            }
+        }
         if let Some(t) = self.feats_poll() {
             tx.wake_after(t.saturating_duration_since(Instant::now()));
         }
@@ -612,6 +701,7 @@ impl App {
             if let Some(i) = (0..shown).find(|&i| self.panes[i].term.as_ref().is_some_and(|t| t.key("grid") == k)) {
                 if i != self.focused {
                     self.focused = i;
+                    self.touch(i);
                     changed = true;
                 }
             }
@@ -671,6 +761,10 @@ impl App {
             if self.feats.dialog.take().is_none() {
                 self.feats.modal = None;
             }
+            self.push_data();
+            return true;
+        }
+        if self.shortcut(ev, tx) {
             self.push_data();
             return true;
         }
@@ -758,8 +852,13 @@ impl App {
 
     /// Opens a terminal in pane `i`.
     fn open(&mut self, i: usize, sandbox: &str, mode: Mode, thread: Option<String>) {
+        self.open_with(i, sandbox, mode, thread, ThreadStart::default());
+    }
+
+    fn open_with(&mut self, i: usize, sandbox: &str, mode: Mode, thread: Option<String>, start: ThreadStart) {
         self.ensure_panes(i + 1);
         let waker = self.waker.clone();
+        self.touch(i);
         let p = &mut self.panes[i];
         p.sandbox = Some(sandbox.to_string());
         p.mode = mode;
@@ -769,7 +868,8 @@ impl App {
         p.title = None;
         p.attention = false;
         p.reconnecting = None;
-        let req = TerminalRequest { sandbox: sandbox.to_string(), mode: mode.query(), thread };
+        let req = TerminalRequest::new(sandbox, mode, thread, start);
+        let again = req.again();
         let r = match (&self.daemon, waker) {
             (Some(d), Some(w)) => d.open_terminal(&req, w).map_err(|e| format!("{e:#}")),
             (None, _) => Err(format!("not connected: {}", self.connection.text)),
@@ -780,7 +880,7 @@ impl App {
                 let (current, wake) = (self.current.clone(), self.waker.clone().expect("setup ran"));
                 let reopen: terminal::Reconnect = Arc::new(move || {
                     let d = current.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("not connected to the daemon"))?;
-                    d.open_terminal(&req, wake.clone())
+                    d.open_terminal(&again, wake.clone())
                 });
                 let mut t = TerminalState::with_reconnect(conn, reopen);
                 // Element keys `grid-N`, `terminal-N` (N the pane's number).
@@ -802,6 +902,25 @@ impl App {
         }
     }
 
+    /// Marks pane `i` as just used (opened or focused).
+    pub(crate) fn touch(&mut self, i: usize) {
+        self.use_seq += 1;
+        if let Some(p) = self.panes.get_mut(i) {
+            p.used = self.use_seq;
+        }
+    }
+
+    /// Where an `open_terminal` goes. `spare` is the web UI's rule
+    /// (`assets/js/sandboxes.js`, `openInSparePane`), with one more step: a
+    /// new terminal never takes the place of a live one while there is room.
+    ///
+    /// 1. the first empty pane on screen;
+    /// 2. else the layout grows by one pane, up to [`MAX_PANES`]: the pane
+    ///    revealed is used if it is empty; one hidden by a smaller layout that
+    ///    still holds a terminal is swapped with an empty hidden one first, so
+    ///    the hidden terminal is kept (not replaced, as it was in phase 3);
+    /// 3. else (four panes, all in use) the least recently used pane is
+    ///    replaced, never the focused one, and a notice names what it closed.
     fn pane_for(&mut self, target: &PaneTarget) -> usize {
         match target {
             PaneTarget::Focused => self.focused,
@@ -812,14 +931,82 @@ impl App {
                 }
                 i
             }
-            PaneTarget::Spare => match (0..self.layout.0).find(|&i| self.panes.get(i).is_none_or(|p| p.sandbox.is_none())) {
-                Some(i) => i,
-                None if self.layout.0 < 4 => {
-                    self.layout.0 += 1;
-                    self.layout.0 - 1
+            PaneTarget::Spare => self.spare_pane(),
+        }
+    }
+
+    fn spare_pane(&mut self) -> usize {
+        self.ensure_panes(self.layout.0);
+        let free = |p: &Pane| p.sandbox.is_none();
+        if let Some(i) = (0..self.layout.0).find(|&i| free(&self.panes[i])) {
+            return i;
+        }
+        if self.layout.0 < MAX_PANES {
+            let i = self.layout.0;
+            self.ensure_panes(MAX_PANES);
+            if !free(&self.panes[i]) {
+                if let Some(j) = (i + 1..MAX_PANES).find(|&j| free(&self.panes[j])) {
+                    self.swap_panes(i, j);
                 }
-                None => self.focused,
-            },
+            }
+            if free(&self.panes[i]) {
+                self.layout.0 = i + 1;
+                return i;
+            }
+            // Every pane, hidden ones included, holds a terminal: show one
+            // more and take the least recently used of all (below).
+            self.layout.0 = i + 1;
+        }
+        let shown = self.layout.0;
+        let lru = (0..shown).filter(|&i| i != self.focused || shown == 1).min_by_key(|&i| self.panes[i].used).unwrap_or(self.focused);
+        if let Some(old) = self.panes[lru].sandbox.clone() {
+            self.notify(format!("No free pane: pane {} ({old}, the least recently used) now shows the new terminal", lru + 1), false);
+        }
+        lru
+    }
+
+    /// Empties the panes showing that session; with more than one pane shown,
+    /// such a pane goes and the layout shrinks (as `panes.js` closes it).
+    fn close_panes(&mut self, sandbox: &str, thread: Option<&str>) {
+        let mut i = self.layout.0.min(self.panes.len());
+        while i > 0 {
+            i -= 1;
+            let p = &self.panes[i];
+            if p.sandbox.as_deref() != Some(sandbox) || p.thread.as_deref() != thread {
+                continue;
+            }
+            if self.layout.0 > 1 {
+                self.panes.remove(i);
+                self.panes.push(Pane::empty());
+                self.layout.0 -= 1;
+                for (k, p) in self.panes.iter_mut().enumerate() {
+                    if let Some(t) = p.term.as_mut() {
+                        t.id = (k + 1).to_string();
+                    }
+                }
+                if self.focused >= self.layout.0 || self.focused > i {
+                    self.focused = self.focused.saturating_sub(1).min(self.layout.0 - 1);
+                }
+            } else {
+                self.panes[i] = Pane::empty();
+            }
+        }
+        // Hidden panes of that session close too.
+        for p in self.panes.iter_mut().skip(self.layout.0) {
+            if p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread {
+                *p = Pane::empty();
+            }
+        }
+        self.refocus = true;
+    }
+
+    /// Swaps two panes, terminals included (their element keys follow the index).
+    fn swap_panes(&mut self, a: usize, b: usize) {
+        self.panes.swap(a, b);
+        for i in [a, b] {
+            if let Some(t) = self.panes[i].term.as_mut() {
+                t.id = (i + 1).to_string();
+            }
         }
     }
 
@@ -827,9 +1014,9 @@ impl App {
     pub fn run_intent(&mut self, from: &str, intent: Intent) {
         log::info!("intent from {from}: {intent:?}");
         match intent {
-            Intent::OpenTerminal { sandbox, mode, thread, pane } => {
+            Intent::OpenTerminal { sandbox, mode, thread, pane, start } => {
                 let i = self.pane_for(&pane);
-                self.open(i, &sandbox, mode, thread);
+                self.open_with(i, &sandbox, mode, thread, start);
                 self.focused = i;
             }
             Intent::StartSandbox { sandbox, pane } => {
@@ -856,6 +1043,19 @@ impl App {
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
             Intent::Select { sandbox } => self.selected = sandbox,
+            Intent::CopyText { text } => {
+                // Only the person's own press copies: not a feature's chain of
+                // actions (`feature:<name>`: data, events, answers), not an
+                // input's per-keystroke action.
+                if !self.pressed(from) {
+                    self.notify(format!("{from}: a copy runs only from your own press: refused"), true);
+                } else if text.len() > 100 * 1024 {
+                    self.notify(format!("{from}: more than 100 KB to copy, refused"), true);
+                } else {
+                    self.feats.asks.push(("copy", features::Ask::Copy(text)));
+                }
+            }
+            Intent::ClosePanes { sandbox, thread } => self.close_panes(&sandbox, thread.as_deref()),
             Intent::SetLayout { panes, split } => {
                 self.layout = (panes, split);
                 self.ensure_panes(panes);
@@ -936,7 +1136,22 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // elsewhere, which a terminal must send (^V: Bash's quoted insert, Vim's
     // block selection). So off macOS there is none, and Ctrl+Shift+V pastes
     // through the key. Headless runs keep it for scripted pastes.
-    let root = if window_paste() { root.on_paste(|s: &mut App, text: &str, _tx: &mut Tx| s.paste(text)) } else { root };
+    // A picture pasted while a feature's panel that takes files is shown,
+    // and no terminal has the keyboard, goes to that feature; text pastes as before.
+    let root = if window_paste() {
+        root.on_paste_content(|s: &mut App, content: &rune::ClipboardContent, tx: &mut Tx| {
+            let in_terminal = tx.focused().is_some_and(|k| k.starts_with("grid-"));
+            if let (Some(img), Some(f), false) = (content.image(), s.files_target(), in_terminal) {
+                s.feature_incoming(f, crate::feat::Incoming::Png(img.png().to_vec()));
+                return;
+            }
+            if !content.text().is_empty() {
+                s.paste(content.text());
+            }
+        })
+    } else {
+        root
+    };
     if let Some(name) = &s.solo {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
         return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
@@ -948,14 +1163,19 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let (side_el, more) = screen::view_parts::<App>(side);
     overlays.extend(more);
     // A feature's panel, docked left of Jarvis's.
-    let fpanel = s.feats.panel.as_ref().and_then(|name| {
-        let (_, decl) = crate::feat::screen(name)?;
-        let crate::feat::Slot::Panel { width, .. } = decl.slot else { return None };
-        let sc = s.screens.iter().find(|x| &x.name == name)?;
+    // Features' docked panels: the shown one with tabs, or (side by side)
+    // every open one in its own column.
+    let shown: Vec<String> = if s.feats.split && s.feats.panels.len() > 1 { s.feats.panels.clone() } else { s.feats.panel.iter().cloned().collect() };
+    let split = shown.len() > 1;
+    let mut fpanels = vec![];
+    for name in &shown {
+        let Some((_, decl)) = crate::feat::screen(name) else { continue };
+        let crate::feat::Slot::Panel { width, .. } = decl.slot else { continue };
+        let Some(sc) = s.screens.iter().find(|x| &x.name == name) else { continue };
         let (el_, more) = screen::view_parts::<App>(sc);
         overlays.extend(more);
-        Some(s.feat_panel_view(el_, width))
-    });
+        fpanels.push(s.feat_panel_view(el_, width, split.then_some(name.as_str())));
+    }
     let modal = s.feats.modal.as_ref().and_then(|(name, _)| {
         let (_, decl) = crate::feat::screen(name)?;
         let crate::feat::Slot::Modal { width } = decl.slot else { return None };
@@ -983,9 +1203,17 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         // The traffic lights (macOS) sit over this band: nothing goes under them.
         .child(el().key("traffic-lights-room").w(inset + 4.0).h_full())
         .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(top_el));
+    // The notice lives IN the top bar, at its right end, part of its layout:
+    // it covers nothing (phase 3 pinned it over the bottom right, where the
+    // Jarvis input and its buttons are, and took their clicks), and it sits
+    // under any modal or core dialog drawn later.
+    let bar = match notice_view(s) {
+        Some(n) => bar.child(n),
+        None => bar,
+    };
     let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
     let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
-    if let Some(p) = fpanel {
+    for p in fpanels {
         main = main.child(p);
     }
     // Docked on the right: it narrows the panes instead of covering them.
@@ -999,33 +1227,6 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(m) = modal {
         root = root.child(m);
     }
-    if let Some((t, err, _)) = &s.notice {
-        let offer = s.feats.notice_then.is_some();
-        let mut note = col().gap(3.0).child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap());
-        if offer {
-            note = note.child(text("Click to open").font(small(11.0, 500.0)).color(c("blue")));
-        }
-        root = root.child(
-            el().key("notice")
-                .pin(None, None, Some(16.0), Some(16.0))
-                .max_w(420.0)
-                .px(12.0)
-                .py(8.0)
-                .radius(theme::radius("sm").unwrap())
-                .fill(c(if *err { "red-tint" } else { "surface" }))
-                .border(1.0, c(if *err { "red" } else { "border" }))
-                .cursor(Cursor::Pointer)
-                .on_press(|s: &mut App| {
-                    s.notice = None;
-                    // The notice's offer: a click runs it, checked as any intent.
-                    if let Some((name, args)) = s.feats.notice_then.take() {
-                        s.press_extra("notice", &name, &args);
-                    }
-                    s.push_data();
-                })
-                .child(note),
-        );
-    }
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
@@ -1036,6 +1237,61 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         root = root.child(dialog);
     }
     root
+}
+
+/// The notice (key `notice`): one line of text, its full text as a tooltip,
+/// and what a click on it does; clickable only on itself. A × dismisses it.
+fn notice_view(s: &App) -> Option<El> {
+    let (t, err, _) = s.notice.as_ref()?;
+    let what = s.feats.notice_then.as_ref().map(|t| match t.0.as_str() {
+        "screen_restore" => "Click to see the file and restore the built-in",
+        _ => "Click to open",
+    });
+    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(11.5, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
+    if let Some(w) = what {
+        body = body.child(text(w).font(small(10.5, 500.0)).color(c("blue")).truncate().min_w(0.0));
+    }
+    let close = el()
+        .key("notice-close")
+        .role("button")
+        .label("Dismiss")
+        .padding(3.0)
+        .radius(theme::radius("xs").unwrap())
+        .hover(c("border"))
+        .cursor(Cursor::Pointer)
+        .on_press(|s: &mut App| {
+            s.notice = None;
+            s.feats.notice_then = None;
+            s.push_data();
+        })
+        .child(rune::icon(crate::icons::get("close").unwrap(), 10.0).color(c("text-muted")));
+    Some(
+        row()
+            .key("notice")
+            .role("status")
+            .help(t.clone())
+            .gap(6.0)
+            .items_center()
+            .max_w(380.0f32.min(s.window.0 * 0.35))
+            .min_w(0.0)
+            .mr(8.0)
+            .px(8.0)
+            .py(4.0)
+            .radius(theme::radius("sm").unwrap())
+            .fill(c(if *err { "red-tint" } else { "bg" }))
+            .border(1.0, c(if *err { "red" } else { "border" }))
+            .cursor(Cursor::Pointer)
+            .on_press(|s: &mut App| {
+                s.notice = None;
+                // The notice's offer: a click runs it, checked as any intent.
+                if let Some((name, args)) = s.feats.notice_then.take() {
+                    s.press_extra("notice", &name, &args);
+                }
+                s.push_data();
+            })
+            .child(body)
+            .child(close),
+    )
 }
 
 fn panes_view(s: &App) -> El {
@@ -1078,7 +1334,7 @@ fn pane_view(s: &App, i: usize) -> El {
     }
     if let Some(p) = pane.filter(|p| p.sandbox.is_some()) {
         bar = bar.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(10.5, 400.0)).color(c("text-muted"))));
-        for x in s.pane_extras(i, p.sandbox.as_deref().unwrap_or("")) {
+        for x in s.pane_extras(i, p.sandbox.as_deref().unwrap_or(""), p.thread.as_deref()) {
             bar = bar.child(x);
         }
         if !connected {
@@ -1130,6 +1386,7 @@ fn pane_view(s: &App, i: usize) -> El {
         .on_press(move |s: &mut App| {
             if s.focused != i {
                 s.focused = i;
+                s.touch(i);
                 s.push_data();
             }
         })
@@ -1206,6 +1463,214 @@ mod tests {
         a.approve_click();
         wait(&mut a);
         assert!(a.jarvis.dialog_error.as_ref().unwrap().1.contains("changed since the proposal"), "{:?}", a.jarvis.dialog_error);
+    }
+
+    /// Phase 3 bug (user, macOS): a new sandbox opened in a "spare" pane took
+    /// the place of a live terminal. A spare pane is an empty one on screen,
+    /// else one more pane; a terminal hidden by a smaller layout is kept; only
+    /// with four busy panes is one replaced: the least recently used, not the focused.
+    #[test]
+    fn a_spare_pane_never_replaces_a_live_terminal_while_there_is_room() {
+        let open = |a: &mut App, i: usize, sb: &str| {
+            a.ensure_panes(i + 1);
+            a.panes[i].sandbox = Some(sb.into());
+            a.touch(i);
+        };
+        let spare = |a: &mut App, sb: &str| a.run_intent("test", Intent::OpenTerminal { sandbox: sb.into(), mode: Mode::Agent, thread: None, pane: PaneTarget::Spare, start: ThreadStart::default() });
+        let shown = |a: &App| a.panes.iter().take(a.layout.0).map(|p| p.sandbox.clone().unwrap_or_default()).collect::<Vec<_>>();
+        let app = || {
+            let mut a = app();
+            a.panes = vec![Pane::empty()];
+            (a.layout.0, a.focused) = (2, 0);
+            a
+        };
+        // One pane in use, layout "1 terminal": a second pane is added.
+        let mut a = app();
+        a.layout.0 = 1;
+        open(&mut a, 0, "web-app");
+        spare(&mut a, "new-1");
+        assert_eq!(shown(&a), ["web-app", "new-1"]);
+        assert_eq!(a.focused, 1);
+        // Two terminals, then the layout set back to 1: the second is hidden,
+        // still live. The next spare open must not replace it.
+        let mut a = app();
+        open(&mut a, 0, "web-app");
+        open(&mut a, 1, "web-api");
+        a.run_intent("test", Intent::SetLayout { panes: 1, split: Split::Columns });
+        spare(&mut a, "new-2");
+        assert_eq!(a.layout.0, 2);
+        assert_eq!(shown(&a), ["web-app", "new-2"]);
+        assert!(a.panes.iter().any(|p| p.sandbox.as_deref() == Some("web-api")), "the hidden terminal is kept: {:?}", a.panes.iter().map(|p| &p.sandbox).collect::<Vec<_>>());
+        // An empty pane on screen is taken first.
+        let mut a = app();
+        a.layout.0 = 3;
+        open(&mut a, 0, "a");
+        open(&mut a, 2, "c");
+        spare(&mut a, "new-3");
+        assert_eq!(shown(&a), ["a", "new-3", "c"]);
+        // Four busy panes: the least recently used one, never the focused one.
+        let mut a = app();
+        a.layout.0 = 4;
+        for (i, sb) in ["a", "b", "c", "d"].iter().enumerate() {
+            open(&mut a, i, sb);
+        }
+        a.touch(0);
+        a.focused = 3;
+        spare(&mut a, "new-4");
+        assert_eq!(shown(&a), ["a", "new-4", "c", "d"], "b was the least recently used");
+        assert!(a.notice.as_ref().unwrap().0.contains("pane 2 (b, the least recently used)"));
+    }
+
+    /// Phase 3 bug (user, macOS): an old override of `sandboxes.luau` hid the
+    /// new row extras with no word. Now: a notice and a marker on the screen,
+    /// the extras it does not draw drawn by the core under it, and Restore
+    /// (the core's dialog, naming the file) deletes it.
+    #[test]
+    fn an_override_older_than_its_builtin_is_flagged_and_restorable() {
+        let dir = std::env::temp_dir().join(format!("sbxw-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sandboxes.luau");
+        // Jarvis's old copy: names only, no extras.
+        std::fs::write(&file, r#"return { render = function(_, data)
+  local t = { gap = 4 }
+  for _, sb in ipairs(data.sandboxes) do table.insert(t, text{ sb.name, key = "row-" .. sb.name }) end
+  return column(t)
+end, actions = {} }"#).unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/network/machine-wide.json");
+        let mut a = App::new(Args { fixture: Some(fixture.into()), screens_dir: Some(dir.clone()), ..Args::default() });
+        a.push_data();
+        let sc = |a: &App| a.screens.iter().find(|s| s.name == "sandboxes").unwrap().stale;
+        assert!(sc(&a), "made before this app: stale");
+        assert!(a.notice.as_ref().unwrap().0.starts_with("Your sandboxes screen is a customised copy made for an older version"), "{:?}", a.notice);
+        assert_eq!(a.feats.notice_then, Some(("screen_restore".into(), serde_json::json!({ "screen": "sandboxes" }))));
+        assert_eq!(a.screen_data()["app"]["overrides"]["sandboxes"]["stale"], true);
+        // The extras the copy does not draw are listed for the core to draw (no double drawing).
+        let s = a.screens.iter().find(|s| s.name == "sandboxes").unwrap();
+        let missing: Vec<String> = s.undrawn_extras().iter().map(|(g, e)| format!("{g}/{}", e["id"].as_str().unwrap())).collect();
+        assert!(missing.contains(&"web-app/approvals".to_string()) && missing.contains(&"web-app/network".to_string()), "{missing:?}");
+        let builtin_drawn = ScreenState::new("sandboxes", &std::env::temp_dir().join("sbxw-no-overrides"), a.screen_data());
+        assert!(builtin_drawn.undrawn_extras().is_empty(), "{:?}", builtin_drawn.undrawn_extras());
+        // Updated (by Jarvis, for this version): no longer stale.
+        std::fs::write(&file, std::fs::read_to_string(&file).unwrap() + "\n-- updated\n").unwrap();
+        let i = a.screens.iter().position(|s| s.name == "sandboxes").unwrap();
+        a.screens[i].load_file(file.clone());
+        a.check_overrides();
+        assert!(!sc(&a));
+        // The built-in changes later (another release): stale again.
+        let mut rec = a.store.get("overrides")["sandboxes"].clone();
+        rec["builtin"] = "0000000000000000".into();
+        a.store.set_in("overrides", "sandboxes", rec);
+        a.check_overrides();
+        assert!(sc(&a));
+        // Restore: the core's dialog names the file; Confirm deletes it.
+        a.intents("test", crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "screen_restore", "args": { "screen": "sandboxes" } })).unwrap());
+        let c = a.feats.dialog.as_ref().unwrap().confirm.clone().unwrap();
+        assert!(c.lines[0].contains(&file.display().to_string()), "{:?}", c.lines);
+        assert!(file.exists(), "nothing deleted before Confirm");
+        crate::approval::ConfirmAnswers::confirm_click(&mut a);
+        assert!(!file.exists());
+        assert!(a.feats.dialog.is_none(), "closed once done");
+        assert!(a.store.get("overrides")["sandboxes"].is_null());
+        // A core operation is never run without the dialog.
+        let mut call = crate::feat::Call::post("core:screen-restore/topbar", J::Null, "x");
+        call.method = crate::feat::Method::Core;
+        a.feature_actions(App::feature_of("shell").unwrap(), "test", vec![crate::feat::Action::Call(call)]);
+        assert!(a.notice.as_ref().unwrap().0.contains("runs only from the app's own dialog"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn closing_a_threads_panes_empties_only_that_session() {
+        let mut a = app();
+        a.panes = vec![Pane::empty(), Pane::empty(), Pane::empty()];
+        a.layout.0 = 3;
+        for (i, t) in [None, Some("t1"), Some("t2")].iter().enumerate() {
+            a.panes[i].sandbox = Some("web-app".into());
+            a.panes[i].thread = t.map(str::to_string);
+        }
+        a.focused = 2;
+        a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t1".into()) });
+        assert_eq!(a.layout.0, 2);
+        let shown: Vec<_> = a.panes.iter().take(2).map(|p| p.thread.clone()).collect();
+        assert_eq!(shown, [None, Some("t2".to_string())]);
+        assert_eq!(a.focused, 1, "the focus follows its pane");
+        a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: None });
+        a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t2".into()) });
+        assert_eq!(a.layout.0, 1);
+        assert!(a.panes[0].sandbox.is_none(), "the last pane empties, it does not go");
+    }
+
+    /// A per-sandbox key's failed read: `errors[key][sandbox]`, the last good value kept.
+    #[test]
+    fn a_failed_per_sandbox_read_says_why_for_that_sandbox() {
+        let mut a = app();
+        let ev = |r: Vec<(&str, Result<J, String>)>| LinkEvent::DataPer { key: "network_ports".into(), results: r.into_iter().map(|(s, r)| (s.to_string(), r)).collect() };
+        a.feats_link(ev(vec![("web-app", Ok(serde_json::json!([1]))), ("docs", Ok(serde_json::json!([2])))]));
+        assert!(a.screen_data()["app"]["errors"].get("network_ports").is_none());
+        a.feats_link(ev(vec![("web-app", Ok(serde_json::json!([3]))), ("docs", Err("sbx: no such sandbox".into()))]));
+        let d = a.screen_data();
+        assert_eq!(d["app"]["errors"]["network_ports"], serde_json::json!({ "docs": "sbx: no such sandbox" }));
+        assert_eq!(d["network_ports"], serde_json::json!({ "web-app": [3], "docs": [2] }), "docs keeps its last good value");
+        a.feats_link(ev(vec![("web-app", Ok(serde_json::json!([3]))), ("docs", Ok(serde_json::json!([4])))]));
+        assert!(a.screen_data()["app"]["errors"].get("network_ports").is_none(), "cleared once it reads again");
+        // A plain key: a string.
+        a.feats_link(LinkEvent::Data { key: "usage".into(), result: Err("down".into()) });
+        assert_eq!(a.screen_data()["app"]["errors"]["usage"], "down");
+    }
+
+    /// Alt+N (Ctrl+Option+N on macOS) opens New; the host chosen is kept across runs.
+    #[test]
+    fn alt_n_opens_new_and_the_host_is_remembered() {
+        let mut a = app();
+        let tx = Tx::default();
+        let mut ev = KeyEvent { key: Key::Text("n".into()), mods: Default::default() };
+        ev.mods.alt = true;
+        ev.mods.ctrl = cfg!(target_os = "macos");
+        assert!(a.shortcut(&ev, &tx));
+        assert_eq!(a.feats.modal.as_ref().map(|m| m.0.as_str()), Some("create"));
+        ev.mods.shift = true;
+        assert!(!a.shortcut(&ev, &tx), "Shift: not ours");
+        ev.mods.shift = false;
+        ev.mods.alt = false;
+        assert!(!a.shortcut(&ev, &tx), "no Alt: the terminal's");
+        a.intents("test", crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "create_host", "args": { "host": "build-box" } })).unwrap());
+        // No remote host is listed in this fixture: the form falls back to
+        // `local`, and what it uses is what is kept.
+        assert_eq!(a.store.get("features")["create"]["host"], "local");
+        assert_eq!(a.screen_data()["app"]["kept"]["create"]["host"], "local");
+    }
+
+    /// `copy_text` writes the clipboard only from the person's press, and says what it copied.
+    #[test]
+    fn copy_text_runs_only_from_a_press_and_shows_what_it_copied() {
+        let mut a = app();
+        let copy = |t: &str| Intent::CopyText { text: t.into() };
+        // A feature's chain (data, events, answers): refused.
+        a.run_intent("feature:relay", copy("rm -rf ~"));
+        assert!(a.feats.asks.is_empty());
+        assert!(a.notice.as_ref().unwrap().0.contains("only from your own press"));
+        // An input's per-keystroke action: refused.
+        a.screens.iter_mut().find(|s| s.name == "sandboxes").unwrap().ui.editing = true;
+        a.run_intent("sandboxes", copy("x"));
+        assert!(a.feats.asks.is_empty());
+        a.screens.iter_mut().find(|s| s.name == "sandboxes").unwrap().ui.editing = false;
+        // A press: copied at the next poll, the notice shows it, controls visible.
+        a.run_intent("sandboxes", copy("echo hi\n\u{1b}[31m"));
+        let mut tx = Tx::default();
+        a.run_asks(&mut tx);
+        assert_eq!(a.notice.as_ref().unwrap().0, "Copied 13 B to the clipboard: echo hi↵␛[31m");
+        // Over 100 KB: refused.
+        a.run_intent("sandboxes", copy(&"x".repeat(100 * 1024 + 1)));
+        assert!(a.feats.asks.is_empty());
+        // Reading the clipboard (for a feature's Rust, never a screen) also
+        // needs a press: a feature's own chain is refused.
+        a.feature_actions(App::feature_of("relay").unwrap(), "feature:relay", vec![crate::feat::Action::ReadClipboard]);
+        assert!(a.feats.asks.is_empty());
+        a.feature_actions(App::feature_of("relay").unwrap(), "relay", vec![crate::feat::Action::ReadClipboard]);
+        assert_eq!(a.feats.asks.len(), 1);
     }
 
     #[test]

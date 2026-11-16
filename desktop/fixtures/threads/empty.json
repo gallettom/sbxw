@@ -1,0 +1,99 @@
+{
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "web-app",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/web-app"
+      },
+      {
+        "name": "api",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/api"
+      },
+      {
+        "name": "docs",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/ana/dev/docs"
+      }
+    ],
+    "sessions": [
+      {
+        "sandbox": "web-app",
+        "mode": "claude",
+        "state": "idle",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000001
+      }
+    ],
+    "threads": {
+      "web-app": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      },
+      "api": {
+        "ok": true,
+        "threads": [],
+        "open": 1,
+        "max": 5
+      }
+    },
+    "plans": [],
+    "leads": [],
+    "models": {
+      "ok": true,
+      "default": "claude-opus-5-5",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "label": "Opus 5.5"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "label": "Haiku 5.5"
+        }
+      ]
+    },
+    "board": {}
+  },
+  "app": {
+    "selected": "web-app",
+    "panes": 2,
+    "open": [
+      "web-app"
+    ],
+    "panels": [
+      "threads"
+    ]
+  }
+}

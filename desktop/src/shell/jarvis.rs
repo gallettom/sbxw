@@ -6,6 +6,7 @@
 use super::{headless, App};
 use crate::approval::{self, ProposalAnswers};
 use crate::client::{self, Daemon};
+use crate::feat::relay;
 use crate::intent::Intent;
 use crate::jarvis::{self, Heard, ProposalNews, Who};
 use crate::theme::{c, layout};
@@ -183,7 +184,8 @@ impl App {
             "session" => {
                 let v: J = serde_json::from_str(data).unwrap_or_default();
                 if v["sandbox"] != jarvis::SANDBOX {
-                    return false;
+                    // The sandbox the panel follows, if any (feat/relay/follow.rs).
+                    return self.follow_session(&v);
                 }
                 if !self.jarvis.running() {
                     self.wiring.status_due = Some(Instant::now());
@@ -209,6 +211,76 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// A `session` event of the followed sandbox: its agents' turns shown in
+    /// the log (read only when Follow is on or a round runs), a round of
+    /// questions put on the Requests panel's form. Their text never answers
+    /// a proposal: it does not go through `hear`.
+    fn follow_session(&mut self, v: &J) -> bool {
+        let news = relay::follow::ingest(v);
+        let changed = !news.is_empty();
+        for n in news {
+            match n {
+                relay::follow::News::Say { from, text, read } => {
+                    let id = self.jarvis.say_from(&from, text);
+                    if read {
+                        self.follow_read(id);
+                    }
+                }
+                relay::follow::News::Round { sandbox, thread, text } => {
+                    let id = relay::add_local_round(&sandbox, thread.as_deref(), &text);
+                    self.relay_intent("relay_open", serde_json::json!({ "id": id }));
+                }
+            }
+        }
+        changed
+    }
+
+    /// The followed sandbox stopped or is gone: the panel says so and its
+    /// words go to Jarvis again. Nothing is sent. Only once the list is known.
+    fn follow_check(&mut self) -> bool {
+        let Some(t) = relay::follow::target() else { return false };
+        if self.sandboxes.is_empty() {
+            return false;
+        }
+        let why = match self.sandboxes.iter().find(|s| s.name == t) {
+            Some(s) if s.status == "running" => return false,
+            Some(s) => format!("{t} is {}", s.status.trim_end_matches('…')),
+            None => format!("{t} is gone"),
+        };
+        self.relay_intent("follow_target", serde_json::json!({}));
+        let line = format!("{why}: your words go to Jarvis again. Nothing was sent.");
+        log::info!("follow: {line}");
+        self.jarvis.say(Who::Note, line.clone());
+        self.notify(line, false);
+        true
+    }
+
+    /// Reads a message of the followed sandbox (or the relay's voice) once,
+    /// never while the microphone is open. Shown first, by the caller.
+    fn follow_read(&mut self, msg: u64) {
+        if self.jarvis.recording || !self.jarvis.auto_read.insert(msg) {
+            return;
+        }
+        self.read(msg);
+    }
+
+    /// One of the relay feature's intents, from the core (checked as any).
+    fn relay_intent(&mut self, name: &'static str, args: J) {
+        let a = crate::feat::Asked { name, args: args.as_object().cloned().unwrap_or_default() };
+        self.run_feature_intent("jarvis", Intent::Feature(a));
+    }
+
+    /// What the relay's voice queued: shown in the log, then read.
+    fn relay_speech(&mut self) -> bool {
+        let said = relay::take_speech();
+        let changed = !said.is_empty();
+        for t in said {
+            let id = self.jarvis.say(Who::Note, t);
+            self.follow_read(id);
+        }
+        changed
     }
 
     pub(super) fn set_voice(&mut self, v: Option<J>) {
@@ -260,7 +332,7 @@ impl App {
     /// Drains the calls' answers and the audio's events; checks Jarvis's
     /// status while it is being created or started.
     pub(super) fn poll_jarvis(&mut self, tx: &mut Tx) -> bool {
-        let mut changed = false;
+        let mut changed = self.relay_speech() | self.follow_check();
         // Headless: the virtual clock does not wait for the daemon.
         let until = headless().then(|| Instant::now() + Duration::from_millis(1500));
         loop {
@@ -446,6 +518,22 @@ impl App {
             return;
         }
         self.wiring.spoken = spoken;
+        // A round answered by voice takes what is said (feat/relay).
+        if spoken && relay::voice_armed() {
+            self.jarvis.say(Who::Me, &text);
+            self.relay_intent("relay_heard", serde_json::json!({ "text": text }));
+            self.relay_speech();
+            return;
+        }
+        // Another sandbox picked at the top: the words are a draft for its
+        // agent, confirmed in the core's dialog. Never a yes to Jarvis.
+        if relay::follow::target().is_some() {
+            self.jarvis.say(Who::Me, &text);
+            self.clear_input(&input.map(|i| i.0));
+            let name = if relay::follow::choosing().is_some() { "follow_choose" } else { "follow_send" };
+            self.relay_intent(name, serde_json::json!({ "text": text }));
+            return;
+        }
         // Only words the person said or typed and sent may answer a proposal.
         let person = spoken || input.as_ref().is_some_and(|i| i.1);
         let heard = if person { self.jarvis.hear(&text) } else { Heard::Send(text.clone()) };
@@ -1043,6 +1131,96 @@ mod tests {
     /// Spoken words: whatever is read aloud is in the log first, each answer
     /// read once; the microphone stops the reading for good, including the
     /// speech still being made, and nothing is read while it is open.
+    fn follow(target: Option<&str>, on: bool) {
+        let mut f = relay::follow::FOLLOW().lock().unwrap();
+        f.target = target.map(str::to_string);
+        f.on = on;
+        f.loaded = true;
+    }
+
+    fn other(state: &str, extra: J) -> J {
+        let mut v = sess("w1", 5, state, extra);
+        v["sandbox"] = "web-app".into();
+        v
+    }
+
+    /// Another sandbox picked: a typed yes is a draft for its agent, in the
+    /// core's dialog; it never approves Jarvis's low-risk proposal, and
+    /// nothing is pushed until the person confirms.
+    #[test]
+    fn words_for_a_followed_sandbox_are_a_draft_and_never_a_yes_to_jarvis() {
+        let mut r = Run::new("running");
+        r.a.take_proposal(json!({ "id": "p-1", "summary": "Use the English voice", "risk": "low", "state": "pending", "created": 1, "changes": [] }), false);
+        assert_eq!(r.a.jarvis.armed.as_deref(), Some("p-1"));
+        follow(Some("web-app"), false);
+        r.enter("yes");
+        assert!(r.a.jarvis.proposal("p-1").is_some_and(jarvis::pending), "the proposal still waits");
+        assert!(r.pushed().is_empty(), "nothing typed into any session");
+        let d = r.a.feats.dialog.as_ref().expect("the core's dialog");
+        assert_eq!(d.feature, "relay");
+        let p = d.prepare.as_ref().expect("masked first");
+        assert_eq!((p.asked.name, p.asked.req("text"), p.asked.req("sandbox")), ("follow_send", "yes", "web-app"));
+        assert_eq!(r.input(), "", "the words left the input for the dialog");
+        // Back to Jarvis: a yes answers its proposal again.
+        r.a.feats.dialog = None;
+        follow(None, false);
+        assert_eq!(r.a.jarvis.hear("yes"), Heard::Approve("p-1".into()), "still armed: a yes for Jarvis answers it");
+    }
+
+    /// The followed sandbox stops: the panel says so, the words go to Jarvis
+    /// again, nothing is sent.
+    #[test]
+    fn a_followed_sandbox_that_stops_falls_back_to_jarvis() {
+        let mut r = Run::new("running");
+        r.a.sandboxes = serde_json::from_value(json!([{ "name": "web-app", "status": "running" }, { "name": "docs", "status": "running" }])).unwrap();
+        follow(Some("web-app"), true);
+        r.settle();
+        assert_eq!(relay::follow::target().as_deref(), Some("web-app"), "running: kept");
+        r.a.sandboxes[0].status = "stopped".into();
+        r.settle();
+        assert_eq!(relay::follow::target(), None);
+        assert!(r.shown().iter().any(|(w, t)| *w == Who::Note && t == "web-app is stopped: your words go to Jarvis again. Nothing was sent."), "{:?}", r.shown());
+        assert!(r.pushed().is_empty());
+        follow(Some("docs"), false);
+        r.a.sandboxes.retain(|s| s.name != "docs");
+        r.settle();
+        assert_eq!(relay::follow::target(), None, "gone: back to Jarvis");
+        assert!(r.shown().iter().any(|(_, t)| t.starts_with("docs is gone")));
+    }
+
+    /// A followed agent's turn: shown once, read only with Follow on, never
+    /// while the microphone is open; a round goes to the Requests panel.
+    #[test]
+    fn a_followed_agent_is_shown_once_and_read_only_when_followed() {
+        let mut r = Run::new("running");
+        follow(Some("web-app"), false);
+        r.hook(&[other("working", json!({}))]);
+        r.hook(&[other("idle", json!({ "reply": "Tests pass." }))]);
+        assert!(r.shown().iter().all(|(w, _)| *w != Who::Agent), "Follow off: an ordinary turn is not shown");
+        follow(Some("web-app"), true);
+        r.hook(&[other("working", json!({}))]);
+        r.hook(&[other("idle", json!({ "reply": "Migration written." }))]);
+        r.hook(&[other("idle", json!({ "reply": "Migration written." }))]);
+        let agent: Vec<_> = r.a.jarvis.log.iter().filter(|m| m.who == Who::Agent).collect();
+        assert_eq!(agent.len(), 1, "shown once");
+        assert_eq!(agent[0].from.as_deref(), Some("web-app"));
+        assert_eq!(r.played(), 1, "read once");
+        r.a.intents("jarvis", vec![Intent::TalkStart]);
+        r.hook(&[other("working", json!({}))]);
+        r.hook(&[other("idle", json!({ "reply": "Pushed the branch." }))]);
+        assert_eq!(r.a.jarvis.log.last().unwrap().text, "Pushed the branch.");
+        assert_eq!(r.played(), 1, "nothing read while the microphone is open");
+        r.a.intents("jarvis", vec![Intent::TalkStop]);
+        r.settle();
+        // A round with Follow off: put on the form, said in one line.
+        follow(Some("web-app"), false);
+        r.hook(&[other("working", json!({ "thread": "t1" }))]);
+        r.hook(&[other("idle", json!({ "thread": "t1", "reply": "❓ **Q1 - Port** : which port?\n➡️ 8080" }))]);
+        assert!(r.shown().iter().any(|(w, t)| *w == Who::Agent && t.contains("one question")), "{:?}", r.shown());
+        assert!(relay::requests(&crate::feat::Ctx { data: &json!({}) }).iter().any(|q| q["local"] == true && q["from_thread"] == "t1"));
+        follow(None, false);
+    }
+
     #[test]
     fn talk_stops_the_reading_for_good_and_nothing_is_read_twice() {
         let mut r = Run::new("running");

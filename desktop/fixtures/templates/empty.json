@@ -1,0 +1,39 @@
+{
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web",
+    "approvals": 1
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "templates": {
+   "ok": true,
+   "configured": null,
+   "templates": []
+  },
+  "disk_usage": {
+   "ok": false,
+   "error": "unknown command \"df\" for \"sbx\""
+  }
+ },
+ "app": {
+  "modal": [
+   "templates",
+   null
+  ]
+ }
+}

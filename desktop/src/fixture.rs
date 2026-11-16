@@ -60,6 +60,10 @@ pub struct ConnInit {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
+    /// What the fixture shows and why (not read).
+    #[serde(default)]
+    #[allow(dead_code)]
+    about: Option<String>,
     #[serde(default)]
     daemon: serde_json::Value,
     #[serde(default)]
@@ -145,6 +149,8 @@ pub struct PaneView {
     pub index: usize,
     pub sandbox: Option<String>,
     pub mode: &'static str,
+    /// The thread whose session it shows (`None`: the sandbox's own).
+    pub thread: Option<String>,
     pub focused: bool,
     /// `empty`, `connecting`, `connected`, `closed`, `error`.
     pub status: String,

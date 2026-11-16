@@ -1,0 +1,45 @@
+{
+ "about": "Nothing waits: the empty state.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "requests": []
+  },
+  "sessions": []
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}

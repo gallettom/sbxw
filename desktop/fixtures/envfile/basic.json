@@ -1,0 +1,41 @@
+{
+ "about": "POST /api/sandboxes/:name/envfile (crates/daemon/src/http/ui.rs, envfile): the card after a preview",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web",
+    "approvals": 1
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "envfile": {
+   "sandbox": "web-app",
+   "loading": false,
+   "yaml": "# sbxenv.yaml for web-app, written by sbxw\nname: web-app\nagent: claude\nworkspace: ./web\n",
+   "dest": "/Users/me/sbxenv.yaml",
+   "dir": "/Users/me",
+   "asked": "",
+   "written": null,
+   "error": null
+  }
+ },
+ "app": {
+  "modal": [
+   "envfile",
+   "web-app"
+  ]
+ }
+}

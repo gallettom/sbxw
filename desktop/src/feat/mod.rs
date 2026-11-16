@@ -69,11 +69,43 @@ pub struct Feature {
     /// has one at the top level, sent any other way, is refused. (Create's
     /// `approved`: a screen or its arguments can never send it.)
     pub core_only: &'static [&'static str],
+    /// Files or a picture the PERSON handed this feature: files dropped on
+    /// its shown panel or dialog, a picture pasted (⌘V) while its panel is
+    /// shown and no terminal has the keyboard, the answer to its
+    /// [`Action::PickFiles`] or [`Action::ReadClipboard`]. These are the
+    /// only ways a feature gets a path to read: never from a screen or a
+    /// sandbox. Pictures go through [`crate::picture::prepare`].
+    pub on_files: Option<fn(&Ctx, Incoming) -> Vec<Action>>,
+    /// Global keyboard shortcuts: the window takes them before any pane.
+    pub shortcuts: &'static [Shortcut],
+}
+
+/// A global shortcut: the web UI's rule (`assets/js/util.js`,
+/// `isAppShortcut`): Alt+<key> off macOS; Ctrl+Option+<key> on macOS, where
+/// Option alone types characters (⌥N is the `~` dead key). Shift and Cmd off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shortcut {
+    /// The letter, by its place on the keyboard (`n` is the key labelled N on a US layout).
+    pub key: char,
+    /// The intent it runs (checked as any), with these arguments as JSON.
+    pub intent: &'static str,
+    pub args: &'static str,
+    /// For Help: what it does.
+    pub help: &'static str,
+}
+
+/// What the person handed a feature (see [`Feature::on_files`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Incoming {
+    /// Paths dropped or chosen in the native dialog.
+    Files(Vec<std::path::PathBuf>),
+    /// A picture from the clipboard, as PNG bytes (Rune's).
+    Png(Vec<u8>),
 }
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[] };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[] };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -206,6 +238,22 @@ pub enum Action {
     /// or argument is refused, and an intent of risk `Approval` still goes
     /// through the core's dialog.
     Intent { name: String, args: J },
+    /// Keeps `value` across runs under this feature's `key` (the app's state
+    /// file, `shell/store.rs`); null forgets it. Read back in
+    /// `data.app.kept.<feature>.<key>`. Small values only (a host name, a tab).
+    Remember { key: String, value: J },
+    /// The native open dialog; the path chosen comes back to
+    /// [`Feature::on_files`] as `Incoming::Files`. Rune's dialog picks one
+    /// file (`multiple` is kept for when it can pick several); `extensions`
+    /// filter it (empty: any file). A cancel says nothing.
+    PickFiles { title: String, extensions: Vec<String>, multiple: bool },
+    /// Reads the clipboard: a picture comes back to [`Feature::on_files`]
+    /// as `Incoming::Png`; anything else is a notice.
+    ReadClipboard,
+    /// Shows a picture under `key` for screens' `image{ key = ... }`, decoded
+    /// by the core ([`crate::picture`], its default limits, scaled to 2048 px
+    /// at most). Empty `bytes`: forgets it. A picture refused is a notice.
+    Image { key: String, bytes: Vec<u8> },
 }
 
 impl Action {
@@ -221,6 +269,10 @@ impl Action {
 pub enum Method {
     Get,
     Post,
+    /// Run by the core itself, never sent: `path` names one of the core's
+    /// own operations (`core:screen-restore/<screen>`: deletes that screen's
+    /// override file). Only behind the core's dialog.
+    Core,
 }
 
 /// One daemon request.
@@ -418,6 +470,15 @@ pub enum Place {
     Topbar,
     /// On the bar of every pane showing that sandbox (drawn by the core).
     Pane(String),
+    /// On the bar of every pane showing that session of that sandbox: its
+    /// main agent (`thread: None`, any mode but a thread's) or that thread
+    /// (drawn by the core).
+    Session { sandbox: String, thread: Option<String> },
+    /// A sub-row under that sandbox's row in the sidebar
+    /// (`data.app.extras.rows[name]`, a list, drawn by `sandboxes.luau`):
+    /// a dot of `tone`, the label, a right badge (`count`, else `help`),
+    /// pressable with its `intent`; key `extra-row-<sandbox>-<id>`.
+    SandboxRow(String),
 }
 
 /// A button or a badge a feature adds to a slot drawn by someone else.
@@ -484,9 +545,13 @@ macro_rules! features {
 
 features! {
     create,
+    envfile,
     network,
+    relay,
     setup,
     shell_extras,
+    templates,
+    threads,
 }
 
 // ---------------------------------------------------------------------------

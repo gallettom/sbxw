@@ -1,0 +1,58 @@
+{
+ "about": "The round out with api for a draft: read only, re-route or refuse.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "requests": [
+    {
+     "id": "r-3",
+     "from": "web-app",
+     "from_thread": "checkout",
+     "kind": "ask",
+     "question": "Two things to settle before I write the checkout migration.\n\n❓ **Q1 - Port** : which port should the payments API listen on?\n➡️ 8080, as in staging.\n\n---\n\n❓ **Q2 - Auth** : keep the session cookie, or move to tokens?\nIt changes the mobile client too.\n➡️ Keep the cookie for now.\n",
+     "shot_count": 0,
+     "state": "routed",
+     "created_ms": 3000,
+     "updated_ms": 3200,
+     "to": "api"
+    }
+   ]
+  },
+  "sessions": []
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}

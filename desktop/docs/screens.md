@@ -70,7 +70,9 @@ unchanged.
 | `selected` | The selected sandbox's name, or nil |
 | `focused` | The focused pane's number, from 1 |
 | `layout.panes`, `layout.split` | 1 to 4; `columns` or `rows` |
-| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
+| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
+| `overrides` | Screens running an override file, by name: `path`, `stale` (made for an older built-in; see "Where screens live") |
+| `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `platform` | `macos`, `linux`, `windows` |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -231,6 +233,43 @@ screen hears it through its actions.
 ```lua
 input{ id = "filter", value = state.filter, placeholder = "Filter", on = "filter" }
 -- actions.filter = function(state, _, text) state.filter = text end
+```
+
+### `textarea`
+
+A text field of several lines: Return is a new line, Cmd+Return (Ctrl+Return
+off macOS) submits. The core holds the text, as for `input`.
+
+| Prop | Value | Effect |
+|---|---|---|
+| `id` | string | Required. Names the field (also its key) |
+| `value` | string | The text, applied as `input`'s |
+| `placeholder` | string | Shown while empty |
+| `rows` | number | Visible lines, 1 to 40 (default 4); more text scrolls |
+| `on` | action name | Called on every edit, `value` = the text |
+| `on_submit` | action name | Called on Cmd/Ctrl+Return, `value` = the text |
+| `arg` | any value | Passed to both |
+| `disabled` | bool | Read only |
+
+```lua
+textarea{ id = "answer", value = state.answer, rows = 5, placeholder = "Your answer", on = "typed", on_submit = "send" }
+```
+
+### `image`
+
+A picture a feature gave the core (`Action::Image { key, bytes }`): the core
+decoded it, with its limits, so a screen never touches the bytes. Drawn at its
+own size, scaled down to fit `max_w` and `max_h`. A key nothing registered
+draws "picture not loaded".
+
+| Prop | Value | Effect |
+|---|---|---|
+| `key` | string | Required. The picture's key, as the feature registered it |
+| `max_w`, `max_h` | number | The largest size it is drawn at |
+| `fit` | `fit` or `fill` | Letterboxed (default) or cropped to the box |
+
+```lua
+image{ key = "shot-web-app-1", max_w = 320, max_h = 200 }
 ```
 
 ### `icon`
@@ -433,6 +472,8 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | How many panes show, and how two split |
+| `copy_text` | `text` (string, up to 100 KB) | Puts it on the clipboard; a notice says how much |
+| `close_panes` | `sandbox` (string), `thread` (string; none: the sandbox's own session) | Empties the panes showing that session, terminals closed; with several panes shown, such a pane goes and the layout shrinks (after a thread is closed) |
 | `toggle_jarvis_panel` | `open` (bool; none: toggles) | Opens or closes the Jarvis panel docked on the right; it narrows the terminals |
 | `start_jarvis` | none | Creates Jarvis's sandbox the first time (a minute or two), or starts it, and opens its session; `data.jarvis.status` follows |
 | `send_to_jarvis` | `input` (the `id` of this screen's input, required) | Sends what the person typed there to Jarvis, masked first. **The core reads the text itself**, from its own copy of the input: a screen cannot pass words of its own. Emptied once sent; kept, with the reason in the log, when it could not leave. A `yes` / `oui` or `no` / `non` typed and submitted with Enter answers the waiting proposal instead: a yes approves only a low-risk one, else the log says a click is needed |
@@ -516,6 +557,30 @@ Jarvis can propose changes to these screens (the daemon writes the file in
 `$SBXW_DESKTOP_SCREENS` set (tests), the app reads that folder instead and
 says so: Jarvis's changes do not reach it.
 
+**An override made for an older version.** The app keeps, in its state
+file (`~/.sbxw/desktop/state.json`), the hash of the built-in screen that was
+current when each override appeared or last changed. When a new version of
+the app changes that built-in, the override is *stale*: the app says so once
+("Your sandboxes screen is a customised copy made for an older version; new
+features may be missing. Ask Jarvis to update it, or restore the built-in.")
+and draws a small amber marker at the top of that screen for as long as it
+lasts. A press on either opens the app's own dialog, which names the file;
+**Delete and restore** removes it (intent `screen_restore`, risk Approval)
+and the built-in comes back. An override saved again (by Jarvis, or by hand)
+counts as made for the version running. An override the app has no record
+of (made before this check existed) is stale when the file is older than the
+app itself.
+
+**Extras.** A screen that is the place of extras (`topbar`: `data.app.extras.topbar`;
+`sandboxes`: `data.app.extras.sandboxes[name]` and `data.app.extras.rows[name]`)
+must draw them, with their keys (`extra-topbar-<id>`, `extra-sandbox-<sandbox>-<id>`,
+`extra-row-<sandbox>-<id>`): that is how features (network, threads, ...) reach
+the person. Whatever extra a screen does not draw (an old copy that predates
+it), the core draws itself in a strip under the screen (beside it for the top
+bar), so an override cannot hide a feature; one it draws is never drawn twice.
+A sandbox's extras are looked for only when its row is drawn (a row key
+`row-<name>`, or its name as a text), so a filter does not bring them back.
+
 At every start the app writes what it has built in to
 `~/.sbxw/desktop/builtin/` (`screens/<name>.luau`, this document as
 `screens.md`, and `intents.json`), for the daemon to show Jarvis. The app
@@ -564,9 +629,11 @@ What a feature declares:
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
-| `extras` | Buttons and badges in others' slots: `Extra { place: Sandbox(name) / Topbar / Pane(sandbox), id, label, icon, tone, help, count, intent }` |
+| `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one) |
 | `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
+| `shortcuts` | `&[Shortcut { key, intent, args, help }]`: global keys, taken by the window before any pane, as the web UI's: Alt+<key> off macOS, Ctrl+Option+<key> on macOS (Option alone types characters). `key` is the letter by its place on the keyboard; `args` a JSON object. Create declares N (New) and M (chat) |
+| `on_files` | `fn(&Ctx, Incoming) -> Vec<Action>`: what the person handed it, `Incoming::Files(paths)` or `Incoming::Png(bytes)`. Files dropped on its shown panel or dialog; a picture pasted (⌘V) while its panel is shown and no terminal has the keyboard (a paste into a terminal stays the terminal's); the answers of `PickFiles` and `ReadClipboard`. The only ways a feature gets a path to read: never from a screen or a sandbox. Decode pictures with `crate::picture::prepare` (limits, no animation, scaling, PNG or JPEG out), then apply the feature's own policy |
 
 Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 `Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
@@ -575,7 +642,20 @@ Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 `OpenModal { screen, arg }`, `CloseModal`, `OpenPanel(screen)`,
 `ClosePanel(screen)`, `Notice { text, error, then }` (`then`: an intent a
 click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
-exactly as from a screen).
+exactly as from a screen), `Remember { key, value }` (kept across runs in the
+app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
+A `Call` of method `Core` is one of the core's own operations (restoring a
+screen), run only from the core's dialog. `PickFiles { title, extensions,
+multiple }` opens the native open dialog (Rune's picks one file; it needs
+Rune's `native-file-dialog` feature, not enabled: until then a notice says
+"Drop the file on this panel, or paste an image."),
+`ReadClipboard` reads the clipboard for a picture, both answering through
+`on_files` (both run only from the person's own press on a screen, never from
+a feature's data, events or answers; a screen never gets the clipboard's
+content, only the feature's Rust does); `Image { key, bytes }` registers a picture for `image{ key }`
+(decoded by the core; empty bytes forget it). Headless scripts drive them with
+Rune's `drop_files`, `paste` (`{"paste": {"png": "file.png"}}`) and
+`file-dialog` events.
 
 **Approval.** An intent of risk `Approval` may only answer one `Confirm` or
 one `Prepare`; anything else is refused and nothing runs. `Confirm` is the
@@ -592,16 +672,21 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 `Confirm` (more confirmation, never less). Screens never see the dialog.
 
 **What screens get.** The feature's keys under `data`, and in `data.app`:
-`modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown}`),
-`extras` (`topbar`, a list; `sandboxes`, lists by sandbox name; each `{id,
+`modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown, split}`: `split` when the person shows the open panels side by side, each in its own column, with the switch at the right of the tabs),
+`extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
 label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
-the key keeps its last good value meanwhile.
+the key keeps its last good value meanwhile. For a plain key the reason is a
+string; for a per-sandbox key (`{sandbox}` in its path) it is an object by
+sandbox name (`{ "web-app" = "..." }`), each entry gone once that sandbox's
+read works, each sandbox keeping its own last good value.
 
 The built-in screens draw extras with these element keys (scripts press
 them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a
 sandbox's row; a feature extra there replaces the plain approvals flag),
-and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
+`extra-row-<sandbox>-<id>` (a session sub-row: a dot of `tone`, or `icon`,
+the label, a badge of `count` or else `help` in dim text, the whole row
+pressable), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
 `intent` is a button, without one a badge.
 
 ### Worked example
@@ -759,3 +844,126 @@ forgotten; a screen only sees names and whether a value is set.
 | `voice_cancel` | none | direct | Stops the download |
 | `voice_rm` | none | approval | Deletes the models |
 | `voice_warm` | none | direct | Loads the models now |
+
+### threads
+
+Threads, plans and the lead (the web UI's thread parts of `panes.js`,
+`plans.js`, `board.js`, `worktrees.js`). Files: `src/feat/threads/`,
+`screens/threads.luau`, `plans.luau`, `threads-new.luau`,
+`fixtures/threads/`. Report: `.sbxw-artifacts/THREADS.md`.
+
+**Screens.** `threads` (panel "Threads"): one sandbox's sessions, Team
+mode, its plans, and the Worktrees and Board tabs. `plans` (modal, `arg` =
+a plan id): the review while it waits, its threads' state once approved,
+the merge once proposed. `threads-new` (modal, `arg` = the sandbox): New
+thread, or a session on the main checkout.
+
+**Data** (each a route's answer; a per-sandbox read that failed is in
+`data.app.errors[key][sandbox]`):
+
+| Key | What |
+|---|---|
+| `sessions` | `GET /api/sessions`: every hook report (`sandbox`, `thread`, `state`: `working`, `idle`, `attention`, `exited`, ...) |
+| `threads` | By sandbox, `GET /api/sandboxes/:name/threads`: `{ok, threads: [{name, open, repo, model, worktree: same\|own\|team}], open, max}` |
+| `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `closed`, `merge`: `{order, note, state, base, results, distillate}`) |
+| `leads`, `models` | `GET /api/leads`, `GET /api/models` (`{ok, default, models: [{id, label}]}`) |
+| `board` | By sandbox, `GET /api/sandboxes/:name/board`: `{plan, claims, entries}` |
+| `threads_view` | Set by the core: by sandbox, `{sessions: [{thread, kind, running, state, word, tone, label, summary, repo, model}], open, max, leading, pending, merge}` |
+| `threads_ui` | Set by the core: `sandbox`, `tab`, `new` (`{sandbox, kind, suggest}`), `drafts` (by plan id: `{threads, variant}`), `plan_error`, `merge_close`, `merge_note` (by plan id), `repos_for`, `worktrees_for`, `remote` |
+| `thread_repos`, `worktrees` | Read on demand: `GET .../repos` (for `threads_ui.repos_for`), `GET .../worktrees` (for `worktrees_for`) |
+
+**Extras.** Rows under a sandbox (`extra-row-<sandbox>-<main|thread>`)
+once it has a second session; `extra-sandbox-<name>-threads` (opens the
+panel; amber when a session waits); on each session's pane bar
+(`pane-<n>-x-<id>`): `model`, `state`, `interrupt`, `remote`, `close`; on
+the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
+`extra-topbar-plan` while a plan waits.
+
+**Intents** (indexes from 1):
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `threads_show` | `sandbox`, `tab` (`sessions`, `worktrees`, `board`) | direct | Opens the panel on that sandbox and tab |
+| `thread_new` | `sandbox`, `kind` (`thread`, `session`) | direct | Opens New thread and reads the repositories |
+| `thread_open` | `sandbox`, `name`, `repo` (`=` then its path; `=` is the workspace), `model`, `checkout`, `pane` | direct | Opens that session (spare pane); repo, model and checkout only for a new one. Refused: a bad name, one of the other kind, no place free under `max_agent_sessions` (said with the names) |
+| `thread_bash` | `sandbox`, `thread` | direct | A shell in its worktree |
+| `session_interrupt` | `sandbox`, `thread` | direct | Escape into that Claude session (`POST /api/input`) |
+| `remote_control` | `sandbox`, `thread` | direct | Reads the login, then turns Remote Control on, or says why not |
+| `remote_login` | `sandbox`, `thread` | approval | Stops injecting the setup token, types /login |
+| `worktrees_load` | `sandbox` | direct | Reads `data.worktrees` |
+| `lead_start`, `lead_end` | `sandbox` | direct | Team mode on; off after the core's dialog says what it leaves |
+| `plan_review` | `id` | direct | Opens the plan dialog (and its draft) |
+| `plans_reload` | none | direct | Reads plans and boards again |
+| `plan_edit` | `id`, `index`, `field` (`name`, `goal`, `scope`, `repo`, `model`), `value` (none: empty, default repo, default model) | direct | Edits the draft |
+| `plan_remove`, `plan_add`, `plan_reset` | `id` (`index`) | direct | Removes, adds, resets |
+| `plan_variant` | `id`, `variant` (`split`, `shared`) | direct | The draft's variant |
+| `plan_refuse` | `id`, `note` | direct | Refuses; the lead reads the note |
+| `merge_close_set` | `id`, `on` | direct | Close the threads once merged (default on) |
+| `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one |
+| `plan_merge` | `id` | approval | The core's dialog: order, note, base, distillate, whether threads close; refused while a shared plan's files are claimed |
+| `thread_close` | `sandbox`, `thread` | approval | Reads what closing loses; the dialog needs uncommitted files discarded explicitly; its panes go once closed |
+
+### relay
+
+What agents ask the person through the relay (`assets/js/relay.js`,
+`docs/relay.md`), the multiple-choice questions agents wait on
+(`AskUserQuestion`), and following a sandbox other than Jarvis from the
+Jarvis panel (the non-Jarvis parts of `concierge.js`). Files:
+`src/feat/relay/` (`mod.rs` rules, `round.rs` rounds, `shots.rs` pictures,
+`follow.rs` following, `standin.rs`, `tests.rs`), `screens/relay.luau`,
+`fixtures/relay/`, `scripts/demo-relay.sh`.
+
+**Screen.** `relay` (panel "Requests"): the requests waiting, the one shown
+(a question, a screenshot request, a round of questions, a virtual Mac
+request, each in its state), those out with another sandbox, and agents
+waiting on a choice. It opens by itself when a request arrives.
+
+**Data.** `data.relay` (`GET /api/relay`, read again on each `relay` event:
+`{requests}`, each `{id, from, from_thread?, kind: question|screenshot|ask|mac,
+question, to?, answer?, shot_count, state: pending|routed|answered|approved|denied,
+note?, created_ms}`); `data.sessions` (threads' key) for `AskUserQuestion`;
+`data.relay_ui`, set by the core: `current`, `closed`, `rounds` (by id:
+`{intro, questions: [{id, title, body, rec}]}`), `forms` (by id: answers),
+`own`, `review`, `caption` (by id: what was typed), `shots` (by id: `{n,
+source, w, h, kb, label, image}`, `image` a key for `image{}`; never the
+bytes), `max_shots`, `picks` and `sending` (by session key
+`sandbox::thread`), `local` (rounds found in a followed session, shown as
+requests with `local = true`), `follow` (`{target, follow, choosing}`),
+`voice` (`{id, index}`: the round answered by voice).
+
+**Pictures.** Dropped on the panel, pasted (⌘V on macOS while the panel is
+shown and no terminal has the keyboard), or read with "Paste from
+clipboard" (`Action::ReadClipboard`). Decoded by `crate::picture` (limits
+before decoding), scaled to 1600 px, PNG else JPEG; six at most, 6 MB each,
+16 MB together, as the daemon checks. No intent takes a path.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `relay_open` | `id` | direct | Opens the panel on that request |
+| `relay_later` | `id` | direct | Puts it aside (it stays in the list), or closes a settled one |
+| `relay_route` | `id`, `to` | approval | The dialog shows the question and the target; sends it to that running sandbox (a round: for a draft). Never a screenshot, a Mac request, the asker, or a stopped sandbox |
+| `relay_deny` | `id` | direct | Refuses; a round from a followed session is set aside |
+| `relay_set` | `id`, `field` (`own`, `review`, `caption`, `answer`), `value`, `index` | direct | What the person typed; give it on every edit |
+| `relay_use_rec`, `relay_clear` | `id`, `index` / `id` | direct | A recommendation into an answer; a round's answers emptied |
+| `relay_send` | `id` | approval | The dialog shows exactly what leaves (the text; the pictures' count, sizes and weight) and to whom; a round is masked first (`/api/voice/anonymise`, nothing sent if it fails). A round from a followed session is typed into it (`/api/chat/push`) |
+| `relay_shot_paste`, `relay_shot_choose` | `id` | direct | Reads the clipboard's picture; the file dialog (not in this build: a notice says to drop or paste) |
+| `relay_shot_remove` | `id`, `index` | direct | Removes a picture (none: all) |
+| `relay_voice` | `id`, `on`, `index` | direct | Answers a round by voice: each question read, the next words spoken fill it (repeat, skip, back) |
+| `relay_heard` | `text` | direct | The transcript for that round (the core sends it) |
+| `relay_read` | `id` | direct | Reads a round aloud |
+| `agent_pick` | `sandbox`, `thread`, `step`, `option` | direct | Picks an option of an `AskUserQuestion`; once every step has one, `POST /api/answer` |
+| `follow_target` | `sandbox` | direct | Where the Jarvis panel's words go (none: Jarvis); kept across runs |
+| `follow_toggle` | `on` | direct | Follow: every turn of the target's agents shown and read (off: rounds and `/grill-me` only) |
+| `follow_send` | `text` | approval | Words for the target: masked, then a draft in the dialog; sent on Confirm only |
+| `follow_choose` | `text` | approval | Words naming an option of the target's question: the dialog says which |
+
+**Jarvis panel.** With a sandbox running, the panel's title is a picker
+(`jarvis-target`): Jarvis, or a running sandbox. With a sandbox picked, a
+Follow box (`jarvis-follow`) shows; typed or spoken words become
+`follow_send` (or `follow_choose`) and never answer a Jarvis proposal; the
+target's turns show in the log as `who = "agent"` with `from`.
+
+**Extras.** `extra-topbar-relay` ("Requests" with the count waiting on the
+person, or "Relay" while only a sandbox is answering),
+`extra-sandbox-<asker>-relay` (`?` and a count), and on the asker's pane
+bars, "asks you".

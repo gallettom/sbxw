@@ -27,6 +27,14 @@ local function message(m, speaks)
           help = m.reading and "Stop reading" or "Read aloud" },
       } or false,
     }
+  elseif m.who == "agent" then
+    -- An agent of the sandbox the panel follows: its words, framed as its.
+    return column{ w = "full", gap = 4, key = "msg-" .. m.id,
+      row{ gap = 6, w = "full", badge{ m.from or "agent", tone = "blue" }, spacer{},
+        speaks and button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
+          color = m.reading and "blue" or "text-dim", help = m.reading and "Stop reading" or "Read aloud" } or false },
+      markdown{ m.text, on = "link" },
+    }
   elseif m.who == "error" then
     return text{ m.text, wrap = true, size = "sm", color = "red" }
   end
@@ -60,10 +68,41 @@ return {
     local v = j.voice
     local running = j.status == "running"
 
+    -- Where the words go (feat/relay, follow): Jarvis, or a running sandbox's agent.
+    local f = (data.relay_ui and data.relay_ui.follow) or {}
+    local target = f.target
+    local items = { { id = "sbxw-jarvis", label = "Jarvis", icon = "sparkle" } }
+    local listed = false
+    for _, sb in ipairs(data.sandboxes or {}) do
+      if sb.status == "running" and not sb.unreachable_since and sb.name ~= "sbxw-jarvis" then
+        items[#items + 1] = { id = sb.name, label = sb.name, icon = "terminal" }
+        if sb.name == target then listed = true end
+      end
+    end
+    if target and not listed then items[#items + 1] = { id = target, label = target .. " (stopped)", icon = "terminal" } end
+
+    -- With a sandbox picked, its state, not Jarvis's: its newest session
+    -- waiting on the person, working, or the sandbox's own status.
+    local tstate
+    if target then
+      local newest
+      for _, i in ipairs(data.sessions or {}) do
+        if i.sandbox == target and (newest == nil or (i.ts or 0) > (newest.ts or 0)) then newest = i end
+      end
+      local status = "gone"
+      for _, sb in ipairs(data.sandboxes or {}) do if sb.name == target then status = sb.status end end
+      if status == "running" and newest and newest.state == "attention" then tstate = { "wants you", "amber" }
+      elseif status == "running" and newest and newest.state == "working" then tstate = { "working", "blue" }
+      else tstate = { status, status == "running" and "green" or "red" } end
+    end
+
     local head = row{ w = "full", gap = 8, h = 28,
       icon{ "sparkle", color = "blue" },
-      text{ "Jarvis", weight = "semibold", color = "text-bright" },
-      (not running) and text{ j.status, size = "sm", color = "text-muted" } or false,
+      -- The title is the picker once there is a sandbox to pick: where the words go.
+      #items > 1 and select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target",
+        help = "Where your words go: Jarvis, or a running sandbox's agent (you confirm each message)" }
+        or text{ "Jarvis", weight = "semibold", color = "text-bright" },
+      (not target and not running) and text{ j.status, size = "sm", color = "text-muted" } or false,
       spacer{},
       #j.pending > 0 and button{ #j.pending == 1 and "1 to review" or (#j.pending .. " to review"),
         on = "review", arg = j.pending[1].id, variant = "primary",
@@ -71,9 +110,17 @@ return {
       button{ icon = "close", variant = "ghost", on = "close", help = "Close the Jarvis panel" },
     }
 
-    local note = send_note(j, state)
+    -- The picked sandbox: its state and Follow, on a line of their own.
+    local sub = target and row{ w = "full", gap = 8,
+      badge{ tstate[1], tone = tstate[2], key = "jarvis-target-state", help = target .. "'s agent" },
+      checkbox{ "Follow", value = f.follow == true, on = "follow", key = "jarvis-follow" },
+      text{ f.follow and "every turn shown and read" or "rounds only", size = "sm", color = "text-muted", truncate = true, grow = 1 },
+    } or false
+
+    -- Jarvis's own state and Start button are its business, not the picked sandbox's.
+    local note = (not target) and send_note(j, state) or false
     local log = {}
-    if not running and #j.log == 0 then
+    if not running and #j.log == 0 and not target then
       local why = WHY[j.status] or ""
       if j.status == "failed" then why = "Jarvis could not start: " .. (j.error or "unknown error") end
       log[#log + 1] = text{ why, wrap = true, color = "text-muted" }
@@ -86,10 +133,10 @@ return {
     for _, m in ipairs(j.log) do
       log[#log + 1] = message(m, v.speaks)
     end
-    if j.working or j.sending then
+    if not target and (j.working or j.sending) then
       log[#log + 1] = text{ "…", color = "text-muted", key = "jarvis-working" }
     end
-    if not running and #j.log > 0 and not note and (j.status == "absent" or j.status == "stopped" or j.status == "failed") then
+    if not target and not running and #j.log > 0 and not note and (j.status == "absent" or j.status == "stopped" or j.status == "failed") then
       log[#log + 1] = row{ button{ "Start Jarvis", icon = "play", variant = "primary", on = "start" } }
     end
     log.gap = 12
@@ -106,6 +153,7 @@ return {
 
     return column{ w = "full", h = "full", gap = 8,
       head,
+      sub,
       (j.others or 0) > 0 and text{ "sbxw is also open in another window or browser tab: Jarvis may be read aloud there too.",
         wrap = true, size = "sm", color = "text-muted" } or false,
       scroll(log),
@@ -113,7 +161,7 @@ return {
       note,
       row{ w = "full", gap = 6,
         column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited",
-          placeholder = running and "Ask Jarvis" or "Ask Jarvis (start it first)" } },
+          placeholder = target and ("Message " .. target .. " (you confirm it first)") or (running and "Ask Jarvis" or "Ask Jarvis (start it first)") } },
         talk,
         button{ icon = "send", on = "send", help = "Send (Enter)" },
       },
@@ -137,5 +185,10 @@ return {
     end,
     read = function(_, id) return intent("read_aloud", { id = id }) end,
     link = function(_, _, url) return intent("open_link", { url = url }) end,
+    target = function(_, _, id)
+      if id == "sbxw-jarvis" then return intent("follow_target", {}) end
+      return intent("follow_target", { sandbox = id })
+    end,
+    follow = function(_, _, on) return intent("follow_toggle", { on = on }) end,
   },
 }

@@ -111,6 +111,28 @@ local function item(sb, app)
   }
 end
 
+-- Features' sub-rows under a sandbox (data.app.extras.rows[name]): one per
+-- session (its main agent, each thread), indented, a dot, a label, a badge,
+-- the whole row pressable. A copy of this screen must draw these too
+-- (docs/screens.md, "Extras"), or the core draws them below it.
+local row_tones = { green = "green", amber = "amber", red = "red", blue = "blue", purple = "purple" }
+
+local function sub_rows(sb, app, into)
+  for _, e in ipairs(((app.extras or {}).rows or {})[sb.name] or {}) do
+    local right = e.count and badge{ tostring(e.count), tone = row_tones[e.tone] or "neutral" }
+      or ((e.help and e.help ~= "") and text{ e.help, size = "xs", color = "text-dim", truncate = true, max_w = 90 } or false)
+    local key = "extra-row-" .. sb.name .. "-" .. e.id
+    if e.intent then extra_intents[sb.name .. "\n" .. e.id] = e.intent end
+    table.insert(into, row{ key = key, gap = 6, w = "full", px = 9, py = 3, radius = "sm", hover = "surface",
+      on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil, help = e.help,
+      column{ w = 12 },
+      e.icon and icon{ e.icon, size = 11, color = "text-muted" } or dot{ tone = row_tones[e.tone] or "neutral" },
+      text{ e.label or "", size = "sm", color = "text", truncate = true, grow = 1 },
+      right,
+    })
+  end
+end
+
 local function matches(sb, filter)
   return filter == "" or string.find(string.lower(sb.name), string.lower(filter), 1, true) ~= nil
 end
@@ -135,7 +157,10 @@ return {
           text{ string.upper(g.label), size = "xxs", color = "text-muted", truncate = true },
         })
       end
-      for _, sb in ipairs(g.items) do table.insert(rows, item(sb, app)) end
+      for _, sb in ipairs(g.items) do
+        table.insert(rows, item(sb, app))
+        sub_rows(sb, app, rows)
+      end
       table.insert(body, column(rows))
     end
     if #data.sandboxes == 0 then

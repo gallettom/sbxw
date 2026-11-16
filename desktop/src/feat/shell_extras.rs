@@ -46,6 +46,12 @@ const INTENTS: &[Spec] = &[
     Spec { name: "sandbox_duplicate", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("new_name", Arg::Str, true)], doc: "Creates a new sandbox on the same workspace (`POST .../duplicate`)." },
     Spec { name: "sandbox_detach", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true)], doc: "Closes every terminal sbxw holds on the sandbox (`sbxw down`); the sandbox keeps running." },
     Spec { name: "show_help", risk: Risk::Direct, args: &[], doc: "Opens the help dialog: why the list may be empty, the keyboard shortcuts, the versions." },
+    Spec {
+        name: "screen_restore",
+        risk: Risk::Approval("Restore a built-in screen"),
+        args: &[("screen", Arg::Str, true)],
+        doc: "Deletes a screen's override file (`~/.sbxw/desktop/screens/<name>.luau`) after the core's dialog, which names the file: the built-in screen comes back.",
+    },
 ];
 
 /// A valid sandbox name, as the web UI checks it.
@@ -58,6 +64,18 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     let enc = crate::client::enc;
     Ok(match a.name {
         "show_help" => vec![Action::OpenModal { screen: "help".into(), arg: J::Null }],
+        "screen_restore" => {
+            let name = a.req("screen");
+            let o = &cx.get("app")["overrides"][name];
+            let path = o["path"].as_str().ok_or_else(|| format!("the {name} screen has no override to remove"))?;
+            let mut call = Call::post(format!("core:screen-restore/{name}"), J::Null, format!("restore the built-in {name} screen"));
+            call.method = Method::Core;
+            let mut c = Confirm::new(format!("Restore the built-in {name} screen?"), call).line(format!("This deletes your customised copy: {path}"));
+            if o["stale"] == true {
+                c = c.line(format!("It was made for an older version of the app, so features added since may be missing from your {name} screen."));
+            }
+            vec![c.line("Its changes are lost; Jarvis can make them again on the new built-in.").labels("Delete and restore", "Keep my copy").danger().into_action()]
+        }
         "sandbox_remove" | "sandbox_recreate" => {
             let name = a.req("sandbox");
             let sb = cx.sandbox(name).ok_or_else(|| format!("no sandbox named {name} in the list"))?;
@@ -221,7 +239,7 @@ mod tests {
         assert!(matches!(act(&cx, &ask("sandbox_recreate", json!({ "sandbox": "chat-1" }))).unwrap().as_slice(), [Action::Confirm(_)]));
         assert!(act(&cx, &ask("sandbox_duplicate", json!({ "sandbox": "web-app", "new_name": "Bad Name" }))).is_err());
         for s in INTENTS {
-            assert_eq!(matches!(s.risk, Risk::Approval(_)), matches!(s.name, "sandbox_remove" | "sandbox_recreate"), "{}", s.name);
+            assert_eq!(matches!(s.risk, Risk::Approval(_)), matches!(s.name, "sandbox_remove" | "sandbox_recreate" | "screen_restore"), "{}", s.name);
         }
     }
 

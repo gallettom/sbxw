@@ -121,6 +121,13 @@ pub struct ScreenState {
     /// starts from it, so an edit made before the watcher runs is not missed.
     seen: Option<SystemTime>,
     sources: Option<mpsc::Receiver<(Source, Result<String, String>)>>,
+    /// The running override's hash (`shell/store.rs`, `hash`); `None` on the built-in.
+    pub override_hash: Option<String>,
+    /// Set by the core when this override was made for an older built-in:
+    /// a marker is drawn over the screen, its press asks to restore.
+    pub stale: bool,
+    /// `loads` when the core last checked the override (shell.rs).
+    pub checked: u32,
 }
 
 impl ScreenState {
@@ -139,6 +146,9 @@ impl ScreenState {
             ui: Ui::default(),
             seen: None,
             sources: None,
+            override_hash: None,
+            stale: false,
+            checked: 0,
         };
         v.seen = std::fs::metadata(&v.override_path).and_then(|m| m.modified()).ok();
         let (src, text) = read_source(name, &v.override_path);
@@ -198,11 +208,16 @@ impl ScreenState {
             Source::Builtin => format!("{}.luau", self.name),
             Source::File(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
         };
+        let hash = match (&source, &src) {
+            (Source::File(_), Ok(t)) => Some(crate::shell::store::hash(t)),
+            _ => None,
+        };
         let loaded = src.map_err(|e| format!("{file}: {e}")).and_then(|src| self.host.load(&file, &src));
         self.loads += 1;
         match loaded {
             Ok(()) => {
                 log::info!("screen {} loaded from {source} (load #{})", self.name, self.loads);
+                self.override_hash = hash;
                 self.source = source;
                 self.error = None;
                 self.redraw();
@@ -216,6 +231,11 @@ impl ScreenState {
 
     pub fn data(&self) -> &J {
         &self.data
+    }
+
+    /// Where this screen's override is read from (it may not exist).
+    pub fn override_file(&self) -> &Path {
+        &self.override_path
     }
 
     pub fn set_data(&mut self, data: J) {
@@ -274,7 +294,7 @@ fn read_source(name: &str, path: &Path) -> (Source, Result<String, String>) {
 /// Keeps the core-held parts in step with what the screen rendered.
 fn sync_ui(ui: &mut Ui, n: &Node) {
     match n.kind {
-        Kind::Input => {
+        Kind::Input | Kind::Textarea => {
             let id = n.id.clone().unwrap_or_default();
             let want = n.value.as_str().map(str::to_string);
             let e = ui.edits.entry(id).or_insert_with(|| (TextEdit::new(want.clone().unwrap_or_default()), want.clone()));
@@ -335,7 +355,8 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
 pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     let name: Rc<str> = s.name.as_str().into();
     let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![] };
-    let mut panel = col().key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
+    // The top bar is one line: what the core adds goes beside it, not under it.
+    let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
         panel = panel.child(
             el().key(format!("screen-error-{}", s.name)).w_full().padding(8.0).radius(theme::radius("sm").unwrap()).fill(c("red-tint")).border(1.0, c("red")).child(
@@ -343,10 +364,141 @@ pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
             ),
         );
     }
+    if s.stale {
+        panel = panel.child(stale_marker::<S>(&s.name));
+    }
     if let Some(n) = &s.last_good {
         panel = panel.child(b.node::<S>(n));
     }
+    let missing = s.undrawn_extras();
+    if !missing.is_empty() {
+        panel = panel.child(fallback_extras::<S>(&s.name, &missing));
+    }
     (panel, b.overlays)
+}
+
+/// The press of a core-drawn element: an intent, checked as any.
+fn press_intent<S: Host>(s: &mut S, screen: &str, name: &str, args: &J) {
+    match intent::parse(&serde_json::json!({ "kind": "intent", "name": name, "args": args })) {
+        Ok(list) => s.intents(screen, list),
+        Err(e) => log::warn!("{screen}: {e}"),
+    }
+}
+
+/// The persistent marker on an override made for an older built-in: its
+/// press opens the core's dialog to restore the built-in (`screen_restore`).
+fn stale_marker<S: Host>(name: &str) -> El {
+    let screen: Rc<str> = name.into();
+    let line = if name == "topbar" { "Old copy".to_string() } else { format!("Your {name} screen is a customised copy made for an older version. Restore…") };
+    row()
+        .key(format!("screen-stale-{name}"))
+        .gap(5.0)
+        .px(6.0)
+        .py(2.0)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .fill(c("amber-tint"))
+        .border(1.0, c("amber"))
+        .role("button")
+        .cursor(Cursor::Pointer)
+        .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."))
+        .child(rune::icon(crate::icons::get("warning").unwrap(), 11.0).color(c("amber")))
+        .w_full()
+        .child(text(line).font(body(10.5, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
+        .on_press(move |s: &mut S| press_intent(s, &screen, "screen_restore", &serde_json::json!({ "screen": &*screen })))
+}
+
+/// Extras this screen did not draw, drawn by the core under it (an old
+/// override cannot hide a feature): `(group, extra)`.
+fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
+    let screen: Rc<str> = name.into();
+    let mut strip = row().key(format!("screen-extras-{name}")).gap(4.0).flex_wrap().items_center().w_full();
+    let mut group = None;
+    for (g, e) in missing {
+        if group.as_deref() != Some(g.as_str()) && !g.is_empty() {
+            strip = strip.child(text(format!("{g}:")).font(body(10.5, 500.0)).color(c("text-muted")));
+        }
+        group = Some(g.clone());
+        let (fg, tint) = tone(e["tone"].as_str().unwrap_or(""));
+        let mut label = e["label"].as_str().unwrap_or("").to_string();
+        if let Some(n) = e["count"].as_u64() {
+            label = if label.is_empty() { n.to_string() } else { format!("{label} {n}") };
+        }
+        let mut b = row()
+            .key(format!("screen-extras-{name}-{g}-{}", e["id"].as_str().unwrap_or("")))
+            .gap(4.0)
+            .px(5.0)
+            .py(1.0)
+            .items_center()
+            .radius(theme::radius("xs").unwrap())
+            .fill(hex(tint))
+            .border(1.0, hex(fg));
+        if let Some(h) = e["help"].as_str().filter(|h| !h.is_empty()) {
+            b = b.help(h.to_string());
+        }
+        if let Some(i) = e["icon"].as_str().and_then(crate::icons::get) {
+            b = b.child(rune::icon(i, 11.0).color(hex(fg)));
+        }
+        if !label.is_empty() {
+            b = b.child(text(label).font(body(10.5, 500.0)).color(hex(fg)));
+        }
+        if let (Some(n), args) = (e["intent"]["name"].as_str().map(str::to_string), e["intent"]["args"].clone()) {
+            let screen = screen.clone();
+            b = b.role("button").cursor(Cursor::Pointer).on_press(move |s: &mut S| press_intent(s, &screen, &n, &args));
+        }
+        strip = strip.child(b);
+    }
+    strip
+}
+
+impl ScreenState {
+    /// The extras of this screen's place (`data.app.extras`) its last view
+    /// did not draw (no element with the extra's key): `(group, extra)`.
+    /// Only the top bar and the sandbox list host extras; a sandbox's are
+    /// looked for only when its row is drawn (a filter hides rows).
+    pub fn undrawn_extras(&self) -> Vec<(String, J)> {
+        let Some(tree) = &self.last_good else { return vec![] };
+        let mut keys = std::collections::HashSet::new();
+        let mut texts = std::collections::HashSet::new();
+        fn walk<'a>(n: &'a Node, keys: &mut std::collections::HashSet<&'a str>, texts: &mut std::collections::HashSet<&'a str>) {
+            if let Some(k) = &n.key {
+                keys.insert(k.as_str());
+            }
+            texts.insert(n.text.as_str());
+            for c in &n.children {
+                walk(c, keys, texts);
+            }
+        }
+        walk(tree, &mut keys, &mut texts);
+        let x = &self.data["app"]["extras"];
+        let mut out = vec![];
+        match self.name.as_str() {
+            "topbar" => {
+                for e in x["topbar"].as_array().into_iter().flatten() {
+                    if !keys.contains(format!("extra-topbar-{}", e["id"].as_str().unwrap_or("")).as_str()) {
+                        out.push((String::new(), e.clone()));
+                    }
+                }
+            }
+            "sandboxes" => {
+                for sb in self.data["sandboxes"].as_array().into_iter().flatten() {
+                    let n = sb["name"].as_str().unwrap_or("");
+                    if !keys.contains(format!("row-{n}").as_str()) && !texts.contains(n) {
+                        continue;
+                    }
+                    for (place, prefix) in [("sandboxes", "extra-sandbox"), ("rows", "extra-row")] {
+                        for e in x[place][n].as_array().into_iter().flatten() {
+                            if !keys.contains(format!("{prefix}-{n}-{}", e["id"].as_str().unwrap_or("")).as_str()) {
+                                out.push((n.to_string(), e.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
+    }
 }
 
 struct Build<'a> {
@@ -368,7 +520,7 @@ fn arg_key(v: &J) -> String {
 /// reacts, else none.
 fn key_of(n: &Node) -> Option<String> {
     n.key.clone().or_else(|| match n.kind {
-        Kind::Input | Kind::Menu | Kind::Select | Kind::Split => n.id.clone(),
+        Kind::Input | Kind::Textarea | Kind::Menu | Kind::Select | Kind::Split => n.id.clone(),
         _ => n.on.as_ref().map(|on| {
             let a = arg_key(&n.arg);
             if a.is_empty() {
@@ -602,6 +754,54 @@ impl Build<'_> {
                 let k = key.clone().unwrap_or_else(|| "md".into());
                 crate::markdown::view::<S>(&n.text, &look, &k, on_link)
             }
+            Kind::Textarea => {
+                let id = n.id.clone().unwrap_or_default();
+                let edit = self.ui.edits.get(&id).map(|e| e.0.clone()).unwrap_or_else(|| TextEdit::new(""));
+                let (id2, id3) = (id.clone(), id.clone());
+                let size = st.size.unwrap_or(12.0);
+                let mut t = text_input(&edit, body(size, 400.0))
+                    .key(key.clone().unwrap_or_default())
+                    .color(c("text-bright"))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-dim"))
+                    .w_full()
+                    .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("textarea synced").0);
+                if let Some(on) = n.on.clone() {
+                    let (name, arg, id) = (self.name.clone(), n.arg.clone(), id.clone());
+                    t = t.on_input_change(move |s: &mut S, _| {
+                        let v = s.screen(&name).ui.edits.get(&id).map(|e| e.0.text.clone()).unwrap_or_default();
+                        s.screen(&name).ui.editing = true;
+                        fire(s, &name, &on, &arg, &J::String(v));
+                        s.screen(&name).ui.editing = false;
+                    });
+                }
+                // Rune submits on a plain Return in a paragraph: here that is a new
+                // line, and only Cmd (Ctrl elsewhere) + Return submits.
+                let (name2, arg, on_submit) = (self.name.clone(), n.arg.clone(), n.on_submit.clone());
+                t = t.on_submit(move |s: &mut S, tx: &mut rune::Tx| {
+                    if tx.mods().cmd {
+                        if let Some(on) = &on_submit {
+                            let v = s.screen(&name2).ui.edits.get(&id3).map(|e| e.0.text.clone()).unwrap_or_default();
+                            fire(s, &name2, on, &arg, &J::String(v));
+                        }
+                    } else if let Some(e) = s.screen(&name2).ui.edits.get_mut(&id3) {
+                        let _ = e.0.paste("\n");
+                    }
+                });
+                if n.disabled {
+                    t = t.read_only(true);
+                }
+                let h = n.rows as f32 * (size * 1.45).ceil() + 12.0;
+                col().w_full().h(h).px(8.0).py(6.0).fill(c("bg")).border(1.0, c("border")).radius(theme::radius("sm").unwrap()).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+            }
+            Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
+                Some((px, (w, h))) => {
+                    let (mw, mh) = (st.max_w.unwrap_or(w as f32), st.max_h.unwrap_or(h as f32));
+                    let scale = (mw / w as f32).min(mh / h as f32).min(1.0);
+                    let e = el().w((w as f32 * scale).max(1.0)).h((h as f32 * scale).max(1.0)).radius(theme::radius("xs").unwrap());
+                    e.pixels_fit(&px, if n.fill_image { rune::SurfaceFit::Fill } else { rune::SurfaceFit::Fit })
+                }
+                None => el().px(6.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(10.5, 400.0)).color(c("text-dim"))),
+            },
             Kind::Progress => {
                 let v = n.value.as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
@@ -610,7 +810,7 @@ impl Build<'_> {
         };
         let e = match (&key, n.kind) {
             // Inputs and menus key their inner part.
-            (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Menu | Kind::Select | Kind::Button | Kind::Markdown) => e.key(k.clone()),
+            (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Textarea | Kind::Menu | Kind::Select | Kind::Button | Kind::Markdown) => e.key(k.clone()),
             _ => e,
         };
         apply(e, st, &n.help)
@@ -842,6 +1042,51 @@ return {
         assert_eq!(s.act("bad", &J::Null, &J::Null), None);
         assert!(s.error.as_deref().unwrap().contains("unknown intent 'rm_everything'"), "{:?}", s.error);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `textarea` holds its text like `input`; `image` names a picture the core holds.
+    #[test]
+    fn textarea_and_image_elements() {
+        let dir = std::env::temp_dir().join(format!("sbxw-ta-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.luau"), r#"return { render = function(state, data)
+  return column{ textarea{ id = "answer", value = "a\nb", rows = 3, on_submit = "send", placeholder = "Your answer" },
+                 image{ key = "shot-1", max_w = 100, max_h = 100 } }
+end, actions = { send = function(_, _, v) end } }"#).unwrap();
+        let mut s = ScreenState::new("x", &dir, J::Null);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        assert_eq!(s.ui.edits["answer"].0.text, "a\nb");
+        // An image needs its key; an unknown fit is refused.
+        std::fs::write(dir.join("x.luau"), r#"return { render = function() return image{ max_w = 10 } end }"#).unwrap();
+        s.load_file(dir.join("x.luau"));
+        assert!(s.error.as_deref().unwrap_or("").contains("needs a 'key'"), "{:?}", s.error);
+        let mut png = vec![];
+        image::DynamicImage::new_rgba8(40, 20).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let p = crate::picture::prepare(&png, crate::picture::Limits::default(), None, crate::picture::Encode::Pixels).unwrap();
+        crate::picture::show("shot-1", &p);
+        assert_eq!(crate::picture::shown("shot-1").map(|x| x.1), Some((40, 20)));
+        crate::picture::forget("shot-1");
+        assert!(crate::picture::shown("shot-1").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Session sub-rows (`Place::SandboxRow`) are drawn under their sandbox.
+    #[test]
+    fn the_sandbox_list_draws_session_rows() {
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+        data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): [
+            { "id": "main", "label": "main agent", "tone": "green", "help": "working", "count": null, "icon": null, "intent": { "name": "open_terminal", "args": { "sandbox": name } } },
+            { "id": "t1", "label": "t1: fix the login", "tone": "amber", "help": "", "count": 2, "icon": null, "intent": null }
+        ] } });
+        let s = ScreenState::new("sandboxes", &dir, data);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let tree = format!("{:?}", s.last_good.unwrap());
+        for k in [format!("extra-row-{name}-main"), format!("extra-row-{name}-t1"), "t1: fix the login".into()] {
+            assert!(tree.contains(&k), "{k} not drawn");
+        }
     }
 
     #[test]

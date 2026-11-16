@@ -225,7 +225,7 @@ fn calls_go_where_the_web_ui_sends_them() {
     assert_eq!((c.method, c.path.as_str()), (Method::Post, "/api/sandboxes/web-app/mcp/load"));
     assert!(run(&data, "mcp_load", json!({ "server": "linear", "sandbox": "web-api" })).unwrap_err().contains("not running"));
     let v = run(&data, "setup_load", json!({ "section": "secrets" })).unwrap();
-    assert_eq!(v, vec![Action::Refresh("secrets"), Action::Refresh("github_token")]);
+    assert_eq!(v, vec![Action::Refresh("secrets"), Action::Refresh("github_token"), Action::Remember { key: "tab".into(), value: J::String("secrets".into()) }], "the tab is kept for next time");
     let v = run(&data, "host_provision", json!({ "name": "build-box" })).unwrap();
     assert!(matches!(&v[0], Action::Set { value, .. } if value["command"] == "/usr/local/bin/sbxw host provision build-box"));
 }

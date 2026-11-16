@@ -45,6 +45,8 @@ pub struct Feats {
     /// Open panels, in the order opened; `panel` the one shown.
     pub panels: Vec<String>,
     pub panel: Option<String>,
+    /// Open panels shown side by side, each in its own column, instead of as tabs.
+    pub split: bool,
     pub dialog: Option<Dialog>,
     /// Data keys to read again at that time (bursts of events merged).
     due: HashMap<String, Instant>,
@@ -57,6 +59,19 @@ pub struct Feats {
     next_id: u64,
     /// The running sandboxes per-sandbox data was last read for.
     running: Vec<String>,
+    /// Answers of the core's own operations ([`feat::Method::Core`]), handed on after the dialog marks the call running.
+    core_done: Vec<LinkEvent>,
+    /// Native requests a feature made, run at the next poll (they need Rune's `Tx`).
+    pub asks: Vec<(&'static str, Ask)>,
+}
+
+/// A feature's request that needs the window: a file dialog, a clipboard read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ask {
+    PickFiles { title: String, extensions: Vec<String> },
+    ReadClipboard,
+    /// `copy_text`: onto the clipboard.
+    Copy(String),
 }
 
 /// The whole rule for an intent of risk Approval: its feature may answer only
@@ -137,10 +152,143 @@ impl App {
                     self.feats.notice_then = then;
                 }
                 Action::OpenLink(url) => self.run_intent(from, Intent::OpenLink { url }),
+                // Both only from the person's own press on one of the
+                // feature's screens: never from its data, events or answers
+                // (`feature:<name>`), nor while typing.
+                Action::PickFiles { .. } | Action::ReadClipboard if !self.pressed(from) => {
+                    self.notify(format!("{}: opening a file or reading the clipboard runs only from your own press: refused", f.name), true);
+                }
+                Action::PickFiles { title, extensions, multiple: _ } => self.feats.asks.push((f.name, Ask::PickFiles { title, extensions })),
+                Action::ReadClipboard => self.feats.asks.push((f.name, Ask::ReadClipboard)),
+                Action::Image { key, bytes } => {
+                    if bytes.is_empty() {
+                        crate::picture::forget(&key);
+                    } else {
+                        match crate::picture::prepare(&bytes, crate::picture::Limits::default(), Some(2048), crate::picture::Encode::Pixels) {
+                            Ok(p) => crate::picture::show(&key, &p),
+                            Err(e) => self.notify(format!("{}: {e}", f.name), true),
+                        }
+                    }
+                }
+                Action::Remember { key, value } => {
+                    let mut mine = self.store.get("features")[f.name].as_object().cloned().unwrap_or_default();
+                    if value.is_null() {
+                        mine.remove(&key);
+                    } else {
+                        mine.insert(key, value);
+                    }
+                    self.store.set_in("features", f.name, if mine.is_empty() { J::Null } else { J::Object(mine) });
+                }
                 Action::Intent { name, args } => match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
                     Ok(list) => crate::screen::Host::intents(self, &format!("feature:{}", f.name), list),
                     Err(e) => self.notify(format!("{}: {e}", f.name), true),
                 },
+            }
+        }
+    }
+
+    /// One of the core's own operations, behind its dialog: `(status, body)` as a daemon would answer.
+    fn core_op(&mut self, path: &str) -> Result<(u16, J), String> {
+        if let Some(name) = path.strip_prefix("core:screen-restore/") {
+            let Some(sc) = self.screens.iter().find(|s| s.name == name) else { return Ok((404, json!({ "error": format!("no screen named {name}") }))) };
+            let p = sc.override_file().to_path_buf();
+            return match std::fs::remove_file(&p) {
+                Ok(()) => {
+                    log::info!("removed the override {}", p.display());
+                    self.store.set_in("overrides", name, J::Null);
+                    Ok((200, json!({ "ok": true, "removed": p })))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((200, json!({ "ok": true }))),
+                Err(e) => Ok((500, json!({ "error": format!("could not remove {}: {e}", p.display()) }))),
+            };
+        }
+        Err(format!("no core operation {path}"))
+    }
+
+    /// Whether an intent from `from` comes from the person's own press: a
+    /// screen (not while an input's per-keystroke action runs), a pane bar,
+    /// a notice or a shortcut; never a feature's own chain (`feature:<name>`).
+    pub(super) fn pressed(&self, from: &str) -> bool {
+        !from.starts_with("feature:") && !self.screens.iter().any(|s| s.name == from && s.ui.editing)
+    }
+
+    /// What the person handed a feature: its `on_files` runs (no `on_files`: said so).
+    pub(super) fn feature_incoming(&mut self, name: &str, inc: feat::Incoming) {
+        let Some(f) = Self::feature_of(name) else { return };
+        let Some(on) = f.on_files else {
+            return self.notify(format!("{name} takes no files"), true);
+        };
+        log::info!("{name}: {}", match &inc {
+            feat::Incoming::Files(p) => format!("{} file(s) handed in", p.len()),
+            feat::Incoming::Png(b) => format!("a picture of {} bytes handed in", b.len()),
+        });
+        let data = self.feat_ctx_data();
+        let acts = on(&Ctx { data: &data }, inc);
+        self.feature_actions(f, &format!("feature:{name}"), acts);
+        self.push_data();
+    }
+
+    /// A feature's global shortcut, if `ev` is one (see [`feat::Shortcut`]): runs its intent.
+    pub(super) fn shortcut(&mut self, ev: &rune::KeyEvent, tx: &rune::Tx) -> bool {
+        let m = ev.mods;
+        let mac = cfg!(target_os = "macos");
+        if !m.alt || m.shift || (mac && !m.ctrl) || (!mac && m.ctrl) || (mac && m.logo) {
+            return false;
+        }
+        // The key's place first (Option changes what a key types on macOS), else what it typed.
+        let typed = match (tx.physical_key(), &ev.key) {
+            (Some(code), _) => format!("{code:?}").strip_prefix("Key").and_then(|k| k.chars().next()).map(|c| c.to_ascii_lowercase()),
+            (None, rune::Key::Text(t)) => t.chars().next().map(|c| c.to_ascii_lowercase()),
+            (None, rune::Key::Command(c)) => Some(c.to_ascii_lowercase()),
+            _ => None,
+        };
+        let Some(k) = typed else { return false };
+        let Some(sc) = feat::FEATURES.iter().flat_map(|f| f.shortcuts.iter()).find(|s| s.key == k) else { return false };
+        let args: J = serde_json::from_str(sc.args).unwrap_or(json!({}));
+        self.press_extra("shortcut", sc.intent, &args);
+        true
+    }
+
+    /// The feature whose panel is shown, if it takes files.
+    pub(super) fn files_target(&self) -> Option<&'static str> {
+        let (f, _) = feat::screen(self.feats.panel.as_deref()?)?;
+        f.on_files.map(|_| f.name)
+    }
+
+    /// Runs the window requests features made (file dialog, clipboard read).
+    pub(super) fn run_asks(&mut self, tx: &mut rune::Tx) {
+        for (name, ask) in std::mem::take(&mut self.feats.asks) {
+            match ask {
+                Ask::PickFiles { title, extensions } => {
+                    let mut o = rune::FileDialogOptions { title, ..Default::default() };
+                    if !extensions.is_empty() {
+                        let ex: Vec<&str> = extensions.iter().map(String::as_str).collect();
+                        o = o.filter("Files", &ex);
+                    }
+                    tx.open_file(o, move |s: &mut App, r, _tx| match r {
+                        Ok(Some(p)) => s.feature_incoming(name, feat::Incoming::Files(vec![p])),
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::info!("{name}: file dialog: {e}");
+                            s.notify("Drop the file on this panel, or paste an image.", false);
+                            s.push_data();
+                        }
+                    });
+                }
+                Ask::Copy(text) => {
+                    // What was copied is what the notice shows: its size and
+                    // its first characters, controls made visible (as OSC 52's).
+                    let line = format!("Copied {} to the clipboard: {}", approval::size_label(text.len()), approval::osc_preview(&text));
+                    tx.copy(text);
+                    self.notify(line, false);
+                }
+                Ask::ReadClipboard => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| match c.image() {
+                    Some(img) => s.feature_incoming(name, feat::Incoming::Png(img.png().to_vec())),
+                    None => {
+                        s.notify("The clipboard holds no picture", false);
+                        s.push_data();
+                    }
+                }),
             }
         }
     }
@@ -157,6 +305,17 @@ impl App {
         if let Err(e) = core_only_check(f, &call, confirmed) {
             self.notify(format!("{}: {e}", f.name), true);
             return 0;
+        }
+        if call.method == feat::Method::Core {
+            if !confirmed {
+                self.notify(format!("{}: {} runs only from the app's own dialog: refused", f.name, call.what), true);
+                return 0;
+            }
+            let id = self.next_id();
+            let result = self.core_op(&call.path);
+            // Answered once the dialog marks it running (`confirm_click`).
+            self.feats.core_done.push(LinkEvent::Answer { id, feature: f.name, call, result });
+            return id;
         }
         let (Some(d), Some(_)) = (self.daemon.clone(), &self.link) else {
             self.notify(format!("{}: not connected: {}", call.what, self.connection.text), true);
@@ -306,6 +465,39 @@ impl App {
     /// What the link answered for features.
     pub(super) fn feats_link(&mut self, ev: LinkEvent) -> bool {
         match ev {
+            LinkEvent::DataPer { key, results } => {
+                // Per sandbox: a failed read keeps that sandbox's last good
+                // value, and its reason goes in `errors[key][sandbox]`.
+                let old = self.feats.data.get(&key).cloned().unwrap_or(J::Null);
+                let mut v = Map::new();
+                let mut errs = Map::new();
+                for (sb, r) in results {
+                    match r {
+                        Ok(x) => {
+                            v.insert(sb, x);
+                        }
+                        Err(e) => {
+                            log::warn!("{key} ({sb}): {e}");
+                            if let Some(x) = old.get(&sb) {
+                                v.insert(sb.clone(), x.clone());
+                            }
+                            errs.insert(sb, J::String(e));
+                        }
+                    }
+                }
+                let errs = (!errs.is_empty()).then_some(J::Object(errs));
+                let errors_changed = self.feats.errors.get(&key) != errs.as_ref();
+                match errs {
+                    Some(e) => self.feats.errors.insert(key.clone(), e),
+                    None => self.feats.errors.remove(&key),
+                };
+                let v = J::Object(v);
+                if v == old {
+                    return errors_changed;
+                }
+                self.feats.data.insert(key.clone(), v.clone());
+                self.feats_data_changed(&key, &old, &v);
+            }
             LinkEvent::Data { key, result } => match result {
                 Ok(v) => {
                     let had_error = self.feats.errors.remove(&key).is_some();
@@ -415,22 +607,24 @@ impl App {
             Some((s, a)) => json!({ "screen": s, "arg": a }),
             None => J::Null,
         };
-        let panels = json!({ "open": self.feats.panels, "shown": self.feats.panel });
+        let panels = json!({ "open": self.feats.panels, "shown": self.feats.panel, "split": self.feats.split });
         let mut topbar = vec![];
         let mut sandboxes = Map::new();
         let mut panes = vec![];
+        let mut rows = Map::new();
         for f in feat::FEATURES {
             let Some(x) = f.extras else { continue };
             for e in x(&Ctx { data }) {
                 match &e.place {
                     Place::Topbar => topbar.push(e.to_json()),
                     Place::Sandbox(n) => sandboxes.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
-                    Place::Pane(_) => panes.push(e),
+                    Place::SandboxRow(n) => rows.entry(n.clone()).or_insert_with(|| J::Array(vec![])).as_array_mut().unwrap().push(e.to_json()),
+                    Place::Pane(_) | Place::Session { .. } => panes.push(e),
                 }
             }
         }
         let _ = &self.feats.errors;
-        (modal, panels, json!({ "topbar": topbar, "sandboxes": sandboxes }), panes)
+        (modal, panels, json!({ "topbar": topbar, "sandboxes": sandboxes, "rows": rows }), panes)
     }
 
     /// A press on an extra the core draws (pane bars) or on a notice's offer.
@@ -485,6 +679,11 @@ impl App {
             .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
             // A press inside stays inside (it does not reach the scrim).
             .on_press(|_s: &mut App| {})
+            .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                if let Some(f) = s.feats.modal.as_ref().and_then(|(m, _)| feat::screen(m)).filter(|(f, _)| f.on_files.is_some()).map(|(f, _)| f.name) {
+                    s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
+                }
+            })
             .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
         el().key("modal-scrim")
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
@@ -497,9 +696,14 @@ impl App {
     }
 
     /// The docked feature panel: tabs when more than one is open, the screen below.
-    pub(super) fn feat_panel_view(&self, screen: El, width: f32) -> El {
-        let mut tabs = row().key("panel-tabs").w_full().gap(4.0).items_center();
-        for name in &self.feats.panels {
+    /// A docked panel: tabs of every open panel, or (side by side) only
+    /// `only`'s; the switch between the two when more than one is open.
+    pub(super) fn feat_panel_view(&self, screen: El, width: f32, only: Option<&str>) -> El {
+        let mut tabs = row().key(match only {
+            Some(n) => format!("panel-tabs-{n}"),
+            None => "panel-tabs".into(),
+        }).w_full().gap(4.0).items_center();
+        for name in self.feats.panels.iter().filter(|n| only.is_none_or(|o| o == n.as_str())) {
             let Some((_, decl)) = feat::screen(name) else { continue };
             let Slot::Panel { title, icon, .. } = decl.slot else { continue };
             let shown = self.feats.panel.as_deref() == Some(name.as_str());
@@ -538,8 +742,29 @@ impl App {
             );
             tabs = tabs.child(tab);
         }
+        if self.feats.panels.len() > 1 && only.is_none_or(|o| self.feats.panels.first().map(String::as_str) == Some(o)) {
+            let split = self.feats.split;
+            tabs = tabs.child(el().grow(1.0)).child(
+                el().key("panel-split")
+                    .role("button")
+                    .label(if split { "Show panels as tabs" } else { "Show panels side by side" })
+                    .help(if split { "Show panels as tabs" } else { "Show panels side by side" })
+                    .padding(3.0)
+                    .radius(radius("xs").unwrap())
+                    .hover(c("border"))
+                    .cursor(Cursor::Pointer)
+                    .on_press(|s: &mut App| {
+                        s.feats.split = !s.feats.split;
+                        s.push_data();
+                    })
+                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 12.0).color(c("text-muted"))),
+            );
+        }
         col()
-            .key("feature-panel")
+            .key(match only {
+                Some(n) => format!("feature-panel-{n}"),
+                None => "feature-panel".into(),
+            })
             .role("complementary")
             .w(width)
             .h_full()
@@ -549,16 +774,26 @@ impl App {
             .fill(c("bg"))
             .border(1.0, c("elevated"))
             .radius(radius("md").unwrap())
+            // Files dropped on the shown panel go to its feature (if it takes them).
+            .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                if let Some(f) = s.files_target() {
+                    s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
+                }
+            })
             .child(tabs)
             .child(col().w_full().grow(1.0).min_h(0.0).child(screen))
     }
 
     /// Feature buttons and badges on the bar of pane `i`.
-    pub(super) fn pane_extras(&self, i: usize, sandbox: &str) -> Vec<El> {
+    pub(super) fn pane_extras(&self, i: usize, sandbox: &str, thread: Option<&str>) -> Vec<El> {
         self.feats
             .pane_extras
             .iter()
-            .filter(|e| matches!(&e.place, Place::Pane(s) if s == sandbox))
+            .filter(|e| match &e.place {
+                Place::Pane(s) => s == sandbox,
+                Place::Session { sandbox: s, thread: t } => s == sandbox && t.as_deref() == thread,
+                _ => false,
+            })
             .map(|e| {
                 let (fg, tint) = crate::screen::tone(&e.tone);
                 let mut b = row()
@@ -650,11 +885,14 @@ impl ConfirmAnswers for App {
                 e.replace_text(String::new());
             }
             if id == 0 {
-                d.error = Some(format!("Not connected: {}", self.connection.text));
+                d.error = d.error.take().or_else(|| Some(format!("Not connected: {}", self.connection.text)));
             } else {
                 d.running = Some(id);
                 d.error = None;
             }
+        }
+        for ev in std::mem::take(&mut self.feats.core_done) {
+            self.feats_link(ev);
         }
         self.push_data();
     }

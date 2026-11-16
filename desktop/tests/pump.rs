@@ -65,6 +65,10 @@ fn key_to_echo_and_idle_wakeups() {
     ms.sort_by(f64::total_cmp);
     let q = |p: f64| ms[((ms.len() - 1) as f64 * p) as usize];
     eprintln!("key to echo over {} keys: p50 {:.3} ms, p90 {:.3}, p99 {:.3}, max {:.3}", ms.len(), q(0.5), q(0.9), q(0.99), ms[ms.len() - 1]);
+    // The last echo's wake-up may land just after its event was taken (the
+    // socket thread sends, then wakes): let it, so a loaded machine (several
+    // builds at once) does not count it as idle traffic.
+    std::thread::sleep(Duration::from_millis(100));
     let before = wakes.load(Ordering::SeqCst);
     std::thread::sleep(Duration::from_secs(1));
     let idle = wakes.load(Ordering::SeqCst) - before;
