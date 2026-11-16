@@ -69,11 +69,27 @@ pub struct Feature {
     /// has one at the top level, sent any other way, is refused. (Create's
     /// `approved`: a screen or its arguments can never send it.)
     pub core_only: &'static [&'static str],
+    /// Files or a picture the PERSON handed this feature: files dropped on
+    /// its shown panel or dialog, a picture pasted (⌘V) while its panel is
+    /// shown and no terminal has the keyboard, the answer to its
+    /// [`Action::PickFiles`] or [`Action::ReadClipboard`]. These are the
+    /// only ways a feature gets a path to read: never from a screen or a
+    /// sandbox. Pictures go through [`crate::picture::prepare`].
+    pub on_files: Option<fn(&Ctx, Incoming) -> Vec<Action>>,
+}
+
+/// What the person handed a feature (see [`Feature::on_files`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Incoming {
+    /// Paths dropped or chosen in the native dialog.
+    Files(Vec<std::path::PathBuf>),
+    /// A picture from the clipboard, as PNG bytes (Rune's).
+    Png(Vec<u8>),
 }
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[] };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -210,6 +226,18 @@ pub enum Action {
     /// file, `shell/store.rs`); null forgets it. Read back in
     /// `data.app.kept.<feature>.<key>`. Small values only (a host name, a tab).
     Remember { key: String, value: J },
+    /// The native open dialog; the path chosen comes back to
+    /// [`Feature::on_files`] as `Incoming::Files`. Rune's dialog picks one
+    /// file (`multiple` is kept for when it can pick several); `extensions`
+    /// filter it (empty: any file). A cancel says nothing.
+    PickFiles { title: String, extensions: Vec<String>, multiple: bool },
+    /// Reads the clipboard: a picture comes back to [`Feature::on_files`]
+    /// as `Incoming::Png`; anything else is a notice.
+    ReadClipboard,
+    /// Shows a picture under `key` for screens' `image{ key = ... }`, decoded
+    /// by the core ([`crate::picture`], its default limits, scaled to 2048 px
+    /// at most). Empty `bytes`: forgets it. A picture refused is a notice.
+    Image { key: String, bytes: Vec<u8> },
 }
 
 impl Action {

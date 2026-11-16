@@ -52,6 +52,10 @@ pub enum Kind {
     Checkbox,
     Progress,
     Markdown,
+    /// A multi-line `input`: Return is a new line, Cmd/Ctrl+Return submits.
+    Textarea,
+    /// A picture a feature registered with the core (`Action::Image`), by its key.
+    Image,
 }
 
 /// A width or height.
@@ -142,6 +146,10 @@ pub struct Node {
     /// `split` and `divider`: true for side by side (a vertical divider).
     pub vertical: bool,
     pub stick_bottom: bool,
+    /// `textarea`: visible lines (default 4).
+    pub rows: u32,
+    /// `image`: `fit` (letterboxed, default) or `fill` (cropped).
+    pub fill_image: bool,
     pub style: Style,
     pub children: Vec<Node>,
 }
@@ -166,6 +174,8 @@ impl Node {
             secure: false,
             vertical: false,
             stick_bottom: false,
+            rows: 4,
+            fill_image: false,
             style: Style::default(),
             children: vec![],
         }
@@ -213,6 +223,8 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
     ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg"]),
+    ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows"]),
+    ("image", Kind::Image, Positional::None, &["fit"]),
 ];
 
 /// Tones of `badge`, `dot` and `progress`.
@@ -248,7 +260,7 @@ local function mk(kind) return function(t)
   return t
 end end
 for _, k in ipairs({ "text", "row", "column", "list", "scroll", "button", "input", "icon", "badge",
-                     "dot", "split", "spacer", "divider", "menu", "select", "checkbox", "progress", "markdown" }) do
+                     "dot", "split", "spacer", "divider", "menu", "select", "checkbox", "progress", "markdown", "textarea", "image" }) do
   _G[k] = mk(k)
 end
 intent = function(name, args)
@@ -527,7 +539,10 @@ fn to_node(v: &Value, depth: usize, count: &mut usize, max: usize) -> Result<Nod
 }
 
 fn check(n: &Node, name: &str) -> Result<(), String> {
-    let needs_id = matches!(n.kind, Kind::Input | Kind::Split | Kind::Menu | Kind::Select);
+    let needs_id = matches!(n.kind, Kind::Input | Kind::Textarea | Kind::Split | Kind::Menu | Kind::Select);
+    if n.kind == Kind::Image && n.key.is_none() {
+        return Err(format!("{name} needs a 'key' (the picture's, as the feature registered it)"));
+    }
     if needs_id && n.id.is_none() {
         return Err(format!("{name} needs an 'id'"));
     }
@@ -660,8 +675,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "value" => {
             n.value = lua_to_json(v, 0)?;
             match (n.kind, &n.value) {
-                (Kind::Input | Kind::Select, J::String(_) | J::Null) => {}
-                (Kind::Input | Kind::Select, J::Number(x)) => n.value = J::String(x.to_string()),
+                (Kind::Input | Kind::Textarea | Kind::Select, J::String(_) | J::Null) => {}
+                (Kind::Input | Kind::Textarea | Kind::Select, J::Number(x)) => n.value = J::String(x.to_string()),
                 (Kind::Checkbox, J::Bool(_) | J::Null) => {}
                 (Kind::Progress, J::Number(_)) => {}
                 _ => return Err("wrong type for this element (see docs/screens.md)".into()),
@@ -676,6 +691,8 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "secure" => n.secure = bool_of(v)?,
         "vertical" => n.vertical = bool_of(v)?,
         "stick_bottom" => n.stick_bottom = bool_of(v)?,
+        "rows" => n.rows = num_of(v)?.clamp(1.0, 40.0) as u32,
+        "fit" => n.fill_image = one_of(v, &["fit", "fill"])? == "fill",
         "items" => {
             let Value::Table(t) = v else { return Err("expected a list of { id = ..., label = ... }".into()) };
             for (i, x) in t.sequence_values::<Value>().enumerate() {

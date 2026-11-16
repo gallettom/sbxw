@@ -235,6 +235,43 @@ input{ id = "filter", value = state.filter, placeholder = "Filter", on = "filter
 -- actions.filter = function(state, _, text) state.filter = text end
 ```
 
+### `textarea`
+
+A text field of several lines: Return is a new line, Cmd+Return (Ctrl+Return
+off macOS) submits. The core holds the text, as for `input`.
+
+| Prop | Value | Effect |
+|---|---|---|
+| `id` | string | Required. Names the field (also its key) |
+| `value` | string | The text, applied as `input`'s |
+| `placeholder` | string | Shown while empty |
+| `rows` | number | Visible lines, 1 to 40 (default 4); more text scrolls |
+| `on` | action name | Called on every edit, `value` = the text |
+| `on_submit` | action name | Called on Cmd/Ctrl+Return, `value` = the text |
+| `arg` | any value | Passed to both |
+| `disabled` | bool | Read only |
+
+```lua
+textarea{ id = "answer", value = state.answer, rows = 5, placeholder = "Your answer", on = "typed", on_submit = "send" }
+```
+
+### `image`
+
+A picture a feature gave the core (`Action::Image { key, bytes }`): the core
+decoded it, with its limits, so a screen never touches the bytes. Drawn at its
+own size, scaled down to fit `max_w` and `max_h`. A key nothing registered
+draws "picture not loaded".
+
+| Prop | Value | Effect |
+|---|---|---|
+| `key` | string | Required. The picture's key, as the feature registered it |
+| `max_w`, `max_h` | number | The largest size it is drawn at |
+| `fit` | `fit` or `fill` | Letterboxed (default) or cropped to the box |
+
+```lua
+image{ key = "shot-web-app-1", max_w = 320, max_h = 200 }
+```
+
 ### `icon`
 
 Positional: an [icon](#icons) name.
@@ -594,6 +631,7 @@ What a feature declares:
 | `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one) |
 | `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
+| `on_files` | `fn(&Ctx, Incoming) -> Vec<Action>`: what the person handed it, `Incoming::Files(paths)` or `Incoming::Png(bytes)`. Files dropped on its shown panel or dialog; a picture pasted (⌘V) while its panel is shown and no terminal has the keyboard (a paste into a terminal stays the terminal's); the answers of `PickFiles` and `ReadClipboard`. The only ways a feature gets a path to read: never from a screen or a sandbox. Decode pictures with `crate::picture::prepare` (limits, no animation, scaling, PNG or JPEG out), then apply the feature's own policy |
 
 Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 `Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
@@ -605,7 +643,14 @@ click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
 exactly as from a screen), `Remember { key, value }` (kept across runs in the
 app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
 A `Call` of method `Core` is one of the core's own operations (restoring a
-screen), run only from the core's dialog.
+screen), run only from the core's dialog. `PickFiles { title, extensions,
+multiple }` opens the native open dialog (Rune's picks one file; it needs
+Rune's `native-file-dialog` feature, else a notice says there is none),
+`ReadClipboard` reads the clipboard for a picture, both answering through
+`on_files`; `Image { key, bytes }` registers a picture for `image{ key }`
+(decoded by the core; empty bytes forget it). Headless scripts drive them with
+Rune's `drop_files`, `paste` (`{"paste": {"png": "file.png"}}`) and
+`file-dialog` events.
 
 **Approval.** An intent of risk `Approval` may only answer one `Confirm` or
 one `Prepare`; anything else is refused and nothing runs. `Confirm` is the

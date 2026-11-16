@@ -59,6 +59,15 @@ pub struct Feats {
     running: Vec<String>,
     /// Answers of the core's own operations ([`feat::Method::Core`]), handed on after the dialog marks the call running.
     core_done: Vec<LinkEvent>,
+    /// Native requests a feature made, run at the next poll (they need Rune's `Tx`).
+    pub asks: Vec<(&'static str, Ask)>,
+}
+
+/// A feature's request that needs the window: a file dialog, a clipboard read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Ask {
+    PickFiles { title: String, extensions: Vec<String> },
+    ReadClipboard,
 }
 
 /// The whole rule for an intent of risk Approval: its feature may answer only
@@ -139,6 +148,18 @@ impl App {
                     self.feats.notice_then = then;
                 }
                 Action::OpenLink(url) => self.run_intent(from, Intent::OpenLink { url }),
+                Action::PickFiles { title, extensions, multiple: _ } => self.feats.asks.push((f.name, Ask::PickFiles { title, extensions })),
+                Action::ReadClipboard => self.feats.asks.push((f.name, Ask::ReadClipboard)),
+                Action::Image { key, bytes } => {
+                    if bytes.is_empty() {
+                        crate::picture::forget(&key);
+                    } else {
+                        match crate::picture::prepare(&bytes, crate::picture::Limits::default(), Some(2048), crate::picture::Encode::Pixels) {
+                            Ok(p) => crate::picture::show(&key, &p),
+                            Err(e) => self.notify(format!("{}: {e}", f.name), true),
+                        }
+                    }
+                }
                 Action::Remember { key, value } => self.store.set_in("features", &format!("{}.{key}", f.name), value),
                 Action::Intent { name, args } => match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
                     Ok(list) => crate::screen::Host::intents(self, &format!("feature:{}", f.name), list),
@@ -164,6 +185,55 @@ impl App {
             };
         }
         Err(format!("no core operation {path}"))
+    }
+
+    /// What the person handed a feature: its `on_files` runs (no `on_files`: said so).
+    pub(super) fn feature_incoming(&mut self, name: &str, inc: feat::Incoming) {
+        let Some(f) = Self::feature_of(name) else { return };
+        let Some(on) = f.on_files else {
+            return self.notify(format!("{name} takes no files"), true);
+        };
+        log::info!("{name}: {}", match &inc {
+            feat::Incoming::Files(p) => format!("{} file(s) handed in", p.len()),
+            feat::Incoming::Png(b) => format!("a picture of {} bytes handed in", b.len()),
+        });
+        let data = self.feat_ctx_data();
+        let acts = on(&Ctx { data: &data }, inc);
+        self.feature_actions(f, &format!("feature:{name}"), acts);
+        self.push_data();
+    }
+
+    /// The feature whose panel is shown, if it takes files.
+    pub(super) fn files_target(&self) -> Option<&'static str> {
+        let (f, _) = feat::screen(self.feats.panel.as_deref()?)?;
+        f.on_files.map(|_| f.name)
+    }
+
+    /// Runs the window requests features made (file dialog, clipboard read).
+    pub(super) fn run_asks(&mut self, tx: &mut rune::Tx) {
+        for (name, ask) in std::mem::take(&mut self.feats.asks) {
+            match ask {
+                Ask::PickFiles { title, extensions } => {
+                    let mut o = rune::FileDialogOptions { title, ..Default::default() };
+                    if !extensions.is_empty() {
+                        let ex: Vec<&str> = extensions.iter().map(String::as_str).collect();
+                        o = o.filter("Files", &ex);
+                    }
+                    tx.open_file(o, move |s: &mut App, r, _tx| match r {
+                        Ok(Some(p)) => s.feature_incoming(name, feat::Incoming::Files(vec![p])),
+                        Ok(None) => {}
+                        Err(e) => s.notify(format!("{name}: no file dialog here: {e}"), true),
+                    });
+                }
+                Ask::ReadClipboard => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| match c.image() {
+                    Some(img) => s.feature_incoming(name, feat::Incoming::Png(img.png().to_vec())),
+                    None => {
+                        s.notify("The clipboard holds no picture", false);
+                        s.push_data();
+                    }
+                }),
+            }
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -552,6 +622,11 @@ impl App {
             .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
             // A press inside stays inside (it does not reach the scrim).
             .on_press(|_s: &mut App| {})
+            .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                if let Some(f) = s.feats.modal.as_ref().and_then(|(m, _)| feat::screen(m)).filter(|(f, _)| f.on_files.is_some()).map(|(f, _)| f.name) {
+                    s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
+                }
+            })
             .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
         el().key("modal-scrim")
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
@@ -616,6 +691,12 @@ impl App {
             .fill(c("bg"))
             .border(1.0, c("elevated"))
             .radius(radius("md").unwrap())
+            // Files dropped on the shown panel go to its feature (if it takes them).
+            .on_drop_files(|s: &mut App, files: &[std::path::PathBuf], _tx| {
+                if let Some(f) = s.files_target() {
+                    s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
+                }
+            })
             .child(tabs)
             .child(col().w_full().grow(1.0).min_h(0.0).child(screen))
     }

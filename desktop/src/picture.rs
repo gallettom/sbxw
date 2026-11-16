@@ -35,6 +35,8 @@ pub enum Encode {
     Png,
     /// Quality 1 to 100.
     Jpeg(u8),
+    /// No bytes out, the pixels only (to show it).
+    Pixels,
 }
 
 /// A decoded picture, as RGBA, and its re-encoded bytes.
@@ -149,8 +151,52 @@ fn encode(img: DynamicImage, out: Encode) -> Result<Picture, String> {
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, q.clamp(1, 100)).encode_image(&rgb).map_err(|e| format!("could not encode JPEG: {e}"))?;
             "image/jpeg"
         }
+        Encode::Pixels => "",
     };
     Ok(Picture { width, height, bytes, mime, rgba })
+}
+
+// ---------------------------------------------------------------------------
+// Pictures shown by the `image` element
+
+thread_local! {
+    /// Registered by `Action::Image` (UI thread only): key, pixels, size.
+    static SHOWN: std::cell::RefCell<std::collections::HashMap<String, (rune::Pixels, (u32, u32))>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// At most this many pictures are kept for `image` elements; the oldest
+/// registered goes first.
+pub const MAX_SHOWN: usize = 64;
+
+thread_local! {
+    static ORDER: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Registers a decoded picture under `key` for `image{ key = ... }`.
+pub fn show(key: &str, p: &Picture) {
+    let px = rune::Pixels::new();
+    px.set(p.width, p.height, p.rgba.clone());
+    SHOWN.with(|m| m.borrow_mut().insert(key.to_string(), (px, (p.width, p.height))));
+    ORDER.with(|o| {
+        let mut o = o.borrow_mut();
+        o.retain(|k| k != key);
+        o.push(key.to_string());
+        while o.len() > MAX_SHOWN {
+            let old = o.remove(0);
+            SHOWN.with(|m| m.borrow_mut().remove(&old));
+        }
+    });
+}
+
+/// Forgets a registered picture.
+pub fn forget(key: &str) {
+    SHOWN.with(|m| m.borrow_mut().remove(key));
+    ORDER.with(|o| o.borrow_mut().retain(|k| k != key));
+}
+
+/// The picture registered under `key`, and its size.
+pub fn shown(key: &str) -> Option<(rune::Pixels, (u32, u32))> {
+    SHOWN.with(|m| m.borrow().get(key).cloned())
 }
 
 #[cfg(test)]

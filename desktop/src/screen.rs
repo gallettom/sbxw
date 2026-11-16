@@ -294,7 +294,7 @@ fn read_source(name: &str, path: &Path) -> (Source, Result<String, String>) {
 /// Keeps the core-held parts in step with what the screen rendered.
 fn sync_ui(ui: &mut Ui, n: &Node) {
     match n.kind {
-        Kind::Input => {
+        Kind::Input | Kind::Textarea => {
             let id = n.id.clone().unwrap_or_default();
             let want = n.value.as_str().map(str::to_string);
             let e = ui.edits.entry(id).or_insert_with(|| (TextEdit::new(want.clone().unwrap_or_default()), want.clone()));
@@ -520,7 +520,7 @@ fn arg_key(v: &J) -> String {
 /// reacts, else none.
 fn key_of(n: &Node) -> Option<String> {
     n.key.clone().or_else(|| match n.kind {
-        Kind::Input | Kind::Menu | Kind::Select | Kind::Split => n.id.clone(),
+        Kind::Input | Kind::Textarea | Kind::Menu | Kind::Select | Kind::Split => n.id.clone(),
         _ => n.on.as_ref().map(|on| {
             let a = arg_key(&n.arg);
             if a.is_empty() {
@@ -754,6 +754,54 @@ impl Build<'_> {
                 let k = key.clone().unwrap_or_else(|| "md".into());
                 crate::markdown::view::<S>(&n.text, &look, &k, on_link)
             }
+            Kind::Textarea => {
+                let id = n.id.clone().unwrap_or_default();
+                let edit = self.ui.edits.get(&id).map(|e| e.0.clone()).unwrap_or_else(|| TextEdit::new(""));
+                let (id2, id3) = (id.clone(), id.clone());
+                let size = st.size.unwrap_or(12.0);
+                let mut t = text_input(&edit, body(size, 400.0))
+                    .key(key.clone().unwrap_or_default())
+                    .color(c("text-bright"))
+                    .placeholder(n.placeholder.clone().unwrap_or_default(), c("text-dim"))
+                    .w_full()
+                    .on_edit(move |s: &mut S| &mut s.screen(&name).ui.edits.get_mut(&id2).expect("textarea synced").0);
+                if let Some(on) = n.on.clone() {
+                    let (name, arg, id) = (self.name.clone(), n.arg.clone(), id.clone());
+                    t = t.on_input_change(move |s: &mut S, _| {
+                        let v = s.screen(&name).ui.edits.get(&id).map(|e| e.0.text.clone()).unwrap_or_default();
+                        s.screen(&name).ui.editing = true;
+                        fire(s, &name, &on, &arg, &J::String(v));
+                        s.screen(&name).ui.editing = false;
+                    });
+                }
+                // Rune submits on a plain Return in a paragraph: here that is a new
+                // line, and only Cmd (Ctrl elsewhere) + Return submits.
+                let (name2, arg, on_submit) = (self.name.clone(), n.arg.clone(), n.on_submit.clone());
+                t = t.on_submit(move |s: &mut S, tx: &mut rune::Tx| {
+                    if tx.mods().cmd {
+                        if let Some(on) = &on_submit {
+                            let v = s.screen(&name2).ui.edits.get(&id3).map(|e| e.0.text.clone()).unwrap_or_default();
+                            fire(s, &name2, on, &arg, &J::String(v));
+                        }
+                    } else if let Some(e) = s.screen(&name2).ui.edits.get_mut(&id3) {
+                        let _ = e.0.paste("\n");
+                    }
+                });
+                if n.disabled {
+                    t = t.read_only(true);
+                }
+                let h = n.rows as f32 * (size * 1.45).ceil() + 12.0;
+                col().w_full().h(h).px(8.0).py(6.0).fill(c("bg")).border(1.0, c("border")).radius(theme::radius("sm").unwrap()).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+            }
+            Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
+                Some((px, (w, h))) => {
+                    let (mw, mh) = (st.max_w.unwrap_or(w as f32), st.max_h.unwrap_or(h as f32));
+                    let scale = (mw / w as f32).min(mh / h as f32).min(1.0);
+                    let e = el().w((w as f32 * scale).max(1.0)).h((h as f32 * scale).max(1.0)).radius(theme::radius("xs").unwrap());
+                    e.pixels_fit(&px, if n.fill_image { rune::SurfaceFit::Fill } else { rune::SurfaceFit::Fit })
+                }
+                None => el().px(6.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(10.5, 400.0)).color(c("text-dim"))),
+            },
             Kind::Progress => {
                 let v = n.value.as_f64().unwrap_or(0.0).clamp(0.0, 1.0) as f32;
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
@@ -762,7 +810,7 @@ impl Build<'_> {
         };
         let e = match (&key, n.kind) {
             // Inputs and menus key their inner part.
-            (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Menu | Kind::Select | Kind::Button | Kind::Markdown) => e.key(k.clone()),
+            (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Textarea | Kind::Menu | Kind::Select | Kind::Button | Kind::Markdown) => e.key(k.clone()),
             _ => e,
         };
         apply(e, st, &n.help)
@@ -993,6 +1041,32 @@ return {
         assert_eq!(s.act("go", &J::from("web"), &J::Null), Some(vec![Intent::StopSandbox { sandbox: "web".into() }]));
         assert_eq!(s.act("bad", &J::Null, &J::Null), None);
         assert!(s.error.as_deref().unwrap().contains("unknown intent 'rm_everything'"), "{:?}", s.error);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `textarea` holds its text like `input`; `image` names a picture the core holds.
+    #[test]
+    fn textarea_and_image_elements() {
+        let dir = std::env::temp_dir().join(format!("sbxw-ta-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.luau"), r#"return { render = function(state, data)
+  return column{ textarea{ id = "answer", value = "a\nb", rows = 3, on_submit = "send", placeholder = "Your answer" },
+                 image{ key = "shot-1", max_w = 100, max_h = 100 } }
+end, actions = { send = function(_, _, v) end } }"#).unwrap();
+        let mut s = ScreenState::new("x", &dir, J::Null);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        assert_eq!(s.ui.edits["answer"].0.text, "a\nb");
+        // An image needs its key; an unknown fit is refused.
+        std::fs::write(dir.join("x.luau"), r#"return { render = function() return image{ max_w = 10 } end }"#).unwrap();
+        s.load_file(dir.join("x.luau"));
+        assert!(s.error.as_deref().unwrap_or("").contains("needs a 'key'"), "{:?}", s.error);
+        let mut png = vec![];
+        image::DynamicImage::new_rgba8(40, 20).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let p = crate::picture::prepare(&png, crate::picture::Limits::default(), None, crate::picture::Encode::Pixels).unwrap();
+        crate::picture::show("shot-1", &p);
+        assert_eq!(crate::picture::shown("shot-1").map(|x| x.1), Some((40, 20)));
+        crate::picture::forget("shot-1");
+        assert!(crate::picture::shown("shot-1").is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 

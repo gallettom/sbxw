@@ -613,6 +613,10 @@ impl App {
 
     pub fn poll(&mut self, clock: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        if !self.feats.asks.is_empty() {
+            self.run_asks(tx);
+            changed = true;
+        }
         while self.marks.first().is_some_and(|(t, _)| *t <= clock) {
             match self.marks.remove(0).1 {
                 Mark::Hold(ms) => {
@@ -1116,7 +1120,22 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // elsewhere, which a terminal must send (^V: Bash's quoted insert, Vim's
     // block selection). So off macOS there is none, and Ctrl+Shift+V pastes
     // through the key. Headless runs keep it for scripted pastes.
-    let root = if window_paste() { root.on_paste(|s: &mut App, text: &str, _tx: &mut Tx| s.paste(text)) } else { root };
+    // A picture pasted while a feature's panel that takes files is shown,
+    // and no terminal has the keyboard, goes to that feature; text pastes as before.
+    let root = if window_paste() {
+        root.on_paste_content(|s: &mut App, content: &rune::ClipboardContent, tx: &mut Tx| {
+            let in_terminal = tx.focused().is_some_and(|k| k.starts_with("grid-"));
+            if let (Some(img), Some(f), false) = (content.image(), s.files_target(), in_terminal) {
+                s.feature_incoming(f, crate::feat::Incoming::Png(img.png().to_vec()));
+                return;
+            }
+            if !content.text().is_empty() {
+                s.paste(content.text());
+            }
+        })
+    } else {
+        root
+    };
     if let Some(name) = &s.solo {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
         return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
