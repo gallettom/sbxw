@@ -206,6 +206,10 @@ pub enum Action {
     /// or argument is refused, and an intent of risk `Approval` still goes
     /// through the core's dialog.
     Intent { name: String, args: J },
+    /// Keeps `value` across runs under this feature's `key` (the app's state
+    /// file, `shell/store.rs`); null forgets it. Read back in
+    /// `data.app.kept.<feature>.<key>`. Small values only (a host name, a tab).
+    Remember { key: String, value: J },
 }
 
 impl Action {
@@ -221,6 +225,10 @@ impl Action {
 pub enum Method {
     Get,
     Post,
+    /// Run by the core itself, never sent: `path` names one of the core's
+    /// own operations (`core:screen-restore/<screen>`: deletes that screen's
+    /// override file). Only behind the core's dialog.
+    Core,
 }
 
 /// One daemon request.

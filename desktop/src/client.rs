@@ -983,6 +983,8 @@ impl Link {
             let method = match call.method {
                 crate::feat::Method::Get => "GET",
                 crate::feat::Method::Post => "POST",
+                // The core runs those itself (shell/features.rs); never sent.
+                crate::feat::Method::Core => "CORE",
             };
             let result = daemon.request(method, &call.path, &call.body, Duration::from_secs(call.timeout.max(1))).map_err(|e| format!("{e:#}"));
             // As after a stop: a change (a sandbox removed, created) reaches the list at once.

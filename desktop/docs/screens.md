@@ -70,7 +70,9 @@ unchanged.
 | `selected` | The selected sandbox's name, or nil |
 | `focused` | The focused pane's number, from 1 |
 | `layout.panes`, `layout.split` | 1 to 4; `columns` or `rows` |
-| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
+| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
+| `overrides` | Screens running an override file, by name: `path`, `stale` (made for an older built-in; see "Where screens live") |
+| `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `platform` | `macos`, `linux`, `windows` |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -516,6 +518,30 @@ Jarvis can propose changes to these screens (the daemon writes the file in
 `$SBXW_DESKTOP_SCREENS` set (tests), the app reads that folder instead and
 says so: Jarvis's changes do not reach it.
 
+**An override made for an older version.** The app keeps, in its state
+file (`~/.sbxw/desktop/state.json`), the hash of the built-in screen that was
+current when each override appeared or last changed. When a new version of
+the app changes that built-in, the override is *stale*: the app says so once
+("Your sandboxes screen is a customised copy made for an older version; new
+features may be missing. Ask Jarvis to update it, or restore the built-in.")
+and draws a small amber marker at the top of that screen for as long as it
+lasts. A press on either opens the app's own dialog, which names the file;
+**Delete and restore** removes it (intent `screen_restore`, risk Approval)
+and the built-in comes back. An override saved again (by Jarvis, or by hand)
+counts as made for the version running. An override the app has no record
+of (made before this check existed) is stale when the file is older than the
+app itself.
+
+**Extras.** A screen that is the place of extras (`topbar`: `data.app.extras.topbar`;
+`sandboxes`: `data.app.extras.sandboxes[name]` and `data.app.extras.rows[name]`)
+must draw them, with their keys (`extra-topbar-<id>`, `extra-sandbox-<sandbox>-<id>`,
+`extra-row-<sandbox>-<id>`): that is how features (network, threads, ...) reach
+the person. Whatever extra a screen does not draw (an old copy that predates
+it), the core draws itself in a strip under the screen (beside it for the top
+bar), so an override cannot hide a feature; one it draws is never drawn twice.
+A sandbox's extras are looked for only when its row is drawn (a row key
+`row-<name>`, or its name as a text), so a filter does not bring them back.
+
 At every start the app writes what it has built in to
 `~/.sbxw/desktop/builtin/` (`screens/<name>.luau`, this document as
 `screens.md`, and `intents.json`), for the daemon to show Jarvis. The app
@@ -564,7 +590,7 @@ What a feature declares:
 | `intents` | Rows of the closed list (`intent::Spec`: name, typed arguments, risk, doc). Exported to `intents.json` |
 | `act` | `fn(&Ctx, &Asked) -> Result<Vec<Action>, String>`: runs one of its intents, already checked |
 | `on_answer` | Optional: gets every answer of its calls, status and JSON body, non-2xx included; then the core says nothing itself |
-| `extras` | Buttons and badges in others' slots: `Extra { place: Sandbox(name) / Topbar / Pane(sandbox), id, label, icon, tone, help, count, intent }` |
+| `extras` | Buttons and badges in others' slots: `Extra { place, id, label, icon, tone, help, count, intent }`; `place`: `Topbar`, `Sandbox(name)` (on its row), `SandboxRow(name)` (a sub-row under it: one per session), `Pane(sandbox)` (every pane bar of that sandbox), `Session { sandbox, thread }` (the pane bars of that session only; `thread: None` is the main one) |
 | `standin` | Its routes for the stand-in daemon and fixture daemons: `fn(&mut Standin { data, publish }, method, path, body) -> Option<(status, body)>`; `publish_after(ms, event, data)` for events sent before the answer |
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
 
@@ -575,7 +601,10 @@ Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 `OpenModal { screen, arg }`, `CloseModal`, `OpenPanel(screen)`,
 `ClosePanel(screen)`, `Notice { text, error, then }` (`then`: an intent a
 click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
-exactly as from a screen).
+exactly as from a screen), `Remember { key, value }` (kept across runs in the
+app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
+A `Call` of method `Core` is one of the core's own operations (restoring a
+screen), run only from the core's dialog.
 
 **Approval.** An intent of risk `Approval` may only answer one `Confirm` or
 one `Prepare`; anything else is refused and nothing runs. `Confirm` is the
@@ -593,7 +622,7 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 
 **What screens get.** The feature's keys under `data`, and in `data.app`:
 `modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown}`),
-`extras` (`topbar`, a list; `sandboxes`, lists by sandbox name; each `{id,
+`extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
 label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
 the key keeps its last good value meanwhile.
@@ -601,7 +630,9 @@ the key keeps its last good value meanwhile.
 The built-in screens draw extras with these element keys (scripts press
 them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a
 sandbox's row; a feature extra there replaces the plain approvals flag),
-and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
+`extra-row-<sandbox>-<id>` (a session sub-row: a dot of `tone`, or `icon`,
+the label, a badge of `count` or else `help` in dim text, the whole row
+pressable), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
 `intent` is a button, without one a badge.
 
 ### Worked example

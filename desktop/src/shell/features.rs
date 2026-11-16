@@ -57,6 +57,8 @@ pub struct Feats {
     next_id: u64,
     /// The running sandboxes per-sandbox data was last read for.
     running: Vec<String>,
+    /// Answers of the core's own operations ([`feat::Method::Core`]), handed on after the dialog marks the call running.
+    core_done: Vec<LinkEvent>,
 }
 
 /// The whole rule for an intent of risk Approval: its feature may answer only
@@ -137,12 +139,31 @@ impl App {
                     self.feats.notice_then = then;
                 }
                 Action::OpenLink(url) => self.run_intent(from, Intent::OpenLink { url }),
+                Action::Remember { key, value } => self.store.set_in("features", &format!("{}.{key}", f.name), value),
                 Action::Intent { name, args } => match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
                     Ok(list) => crate::screen::Host::intents(self, &format!("feature:{}", f.name), list),
                     Err(e) => self.notify(format!("{}: {e}", f.name), true),
                 },
             }
         }
+    }
+
+    /// One of the core's own operations, behind its dialog: `(status, body)` as a daemon would answer.
+    fn core_op(&mut self, path: &str) -> Result<(u16, J), String> {
+        if let Some(name) = path.strip_prefix("core:screen-restore/") {
+            let Some(sc) = self.screens.iter().find(|s| s.name == name) else { return Ok((404, json!({ "error": format!("no screen named {name}") }))) };
+            let p = sc.override_file().to_path_buf();
+            return match std::fs::remove_file(&p) {
+                Ok(()) => {
+                    log::info!("removed the override {}", p.display());
+                    self.store.set_in("overrides", name, J::Null);
+                    Ok((200, json!({ "ok": true, "removed": p })))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((200, json!({ "ok": true }))),
+                Err(e) => Ok((500, json!({ "error": format!("could not remove {}: {e}", p.display()) }))),
+            };
+        }
+        Err(format!("no core operation {path}"))
     }
 
     fn next_id(&mut self) -> u64 {
@@ -157,6 +178,17 @@ impl App {
         if let Err(e) = core_only_check(f, &call, confirmed) {
             self.notify(format!("{}: {e}", f.name), true);
             return 0;
+        }
+        if call.method == feat::Method::Core {
+            if !confirmed {
+                self.notify(format!("{}: {} runs only from the app's own dialog: refused", f.name, call.what), true);
+                return 0;
+            }
+            let id = self.next_id();
+            let result = self.core_op(&call.path);
+            // Answered once the dialog marks it running (`confirm_click`).
+            self.feats.core_done.push(LinkEvent::Answer { id, feature: f.name, call, result });
+            return id;
         }
         let (Some(d), Some(_)) = (self.daemon.clone(), &self.link) else {
             self.notify(format!("{}: not connected: {}", call.what, self.connection.text), true);
@@ -656,11 +688,14 @@ impl ConfirmAnswers for App {
                 e.replace_text(String::new());
             }
             if id == 0 {
-                d.error = Some(format!("Not connected: {}", self.connection.text));
+                d.error = d.error.take().or_else(|| Some(format!("Not connected: {}", self.connection.text)));
             } else {
                 d.running = Some(id);
                 d.error = None;
             }
+        }
+        for ev in std::mem::take(&mut self.feats.core_done) {
+            self.feats_link(ev);
         }
         self.push_data();
     }

@@ -9,6 +9,7 @@
 
 mod features;
 mod jarvis;
+pub mod store;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
@@ -174,6 +175,8 @@ pub struct App {
     pub feats: features::Feats,
     /// The counter behind [`Pane::used`].
     use_seq: u64,
+    /// The app's state across runs (store.rs).
+    pub store: store::Store,
 }
 
 /// The most panes the layout shows (the layout switch's largest choice).
@@ -255,6 +258,7 @@ impl App {
             window: (1280.0, 800.0),
             feats: features::Feats::default(),
             use_seq: 0,
+            store: store::Store::open(),
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -351,6 +355,8 @@ impl App {
                 app.notify(line, false);
             }
         }
+        // After that line: an old override matters more.
+        app.check_overrides();
         if let Target::Fixture(f) = &app.target {
             // A fixture answers at once: no thread, so the first frame has it all.
             let d: Arc<dyn Daemon> = f.clone();
@@ -432,7 +438,70 @@ impl App {
         data["app"]["panels"] = panels;
         data["app"]["extras"] = extras;
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
+        data["app"]["overrides"] = self.overrides_view();
+        data["app"]["kept"] = self.store.get("features").clone();
         data
+    }
+
+    /// `data.app.overrides`: each screen running an override, `{path, stale}`.
+    fn overrides_view(&self) -> J {
+        let mut o = serde_json::Map::new();
+        for sc in self.screens.iter().filter(|sc| sc.override_hash.is_some()) {
+            o.insert(sc.name.clone(), serde_json::json!({ "path": sc.override_file(), "stale": sc.stale }));
+        }
+        J::Object(o)
+    }
+
+    /// Finds overrides made for an older built-in screen (phase 3 bug: an
+    /// old `sandboxes.luau` copy hid the new row extras, with no word).
+    ///
+    /// The state file keeps, per override, the hash of the built-in that was
+    /// current when the override appeared or last changed. An override is
+    /// stale when the built-in compiled in now has another hash. An override
+    /// with no record yet (made before this check existed) is stale when its
+    /// file is older than the running app: it was made for an earlier build.
+    /// The built-in is never read back from `builtin/` on disk.
+    pub(crate) fn check_overrides(&mut self) {
+        let exe = std::env::current_exe().and_then(std::fs::metadata).and_then(|m| m.modified()).ok();
+        let mut newly = vec![];
+        for i in 0..self.screens.len() {
+            let sc = &self.screens[i];
+            let name = sc.name.clone();
+            let bh = store::hash(screen::builtin(&name).unwrap_or(""));
+            let rec = self.store.get("overrides")[&name].clone();
+            let stale = match sc.override_hash.clone() {
+                None => {
+                    if !rec.is_null() {
+                        self.store.set_in("overrides", &name, J::Null);
+                    }
+                    false
+                }
+                Some(oh) if rec["override"] != oh.as_str() => {
+                    let file = match &sc.source {
+                        screen::Source::File(p) => p.clone(),
+                        screen::Source::Builtin => sc.override_file().to_path_buf(),
+                    };
+                    let mtime = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+                    let older = rec.is_null() && matches!((mtime, exe), (Some(m), Some(e)) if m < e);
+                    let b = if older { "older than this app".to_string() } else { bh.clone() };
+                    self.store.set_in("overrides", &name, serde_json::json!({ "builtin": b, "override": oh }));
+                    older
+                }
+                Some(_) => rec["builtin"] != bh.as_str(),
+            };
+            if stale && !self.screens[i].stale {
+                newly.push(name.clone());
+            }
+            self.screens[i].stale = stale;
+        }
+        if let Some(first) = newly.first() {
+            let text = match newly.as_slice() {
+                [one] => format!("Your {one} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."),
+                many => format!("Your {} screens are customised copies made for an older version; new features may be missing. Ask Jarvis to update them, or restore the built-ins.", many.join(", ")),
+            };
+            self.notify(text, false);
+            self.feats.notice_then = Some(("screen_restore".into(), serde_json::json!({ "screen": first })));
+        }
     }
 
     fn push_data(&mut self) {
@@ -573,6 +642,12 @@ impl App {
         }
         changed |= self.drain(headless().then_some(Duration::from_millis(1500)), true);
         changed |= self.poll_jarvis(tx);
+        if self.screens.iter().any(|s| s.loads != s.checked) {
+            self.check_overrides();
+            for s in &mut self.screens {
+                s.checked = s.loads;
+            }
+        }
         if let Some(t) = self.feats_poll() {
             tx.wake_after(t.saturating_duration_since(Instant::now()));
         }
@@ -1070,13 +1145,21 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if let Some((t, err, _)) = &s.notice {
         let offer = s.feats.notice_then.is_some();
-        let mut note = col().gap(3.0).child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap());
+        let mut note = col().gap(3.0).w_full().child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap().w_full());
         if offer {
-            note = note.child(text("Click to open").font(small(11.0, 500.0)).color(c("blue")));
+            let what = match s.feats.notice_then.as_ref().map(|t| t.0.as_str()) {
+                Some("screen_restore") => "Click to see the file and restore the built-in",
+                _ => "Click to open",
+            };
+            note = note.child(text(what).font(small(11.0, 500.0)).color(c("blue")));
+        }
+        let mut ne = el().key("notice").pin(None, None, Some(16.0), Some(16.0));
+        // A long line wraps in a fixed width (an auto width measures it unwrapped).
+        if t.chars().count() > 56 {
+            ne = ne.w(420.0f32.min(s.window.0 - 32.0));
         }
         root = root.child(
-            el().key("notice")
-                .pin(None, None, Some(16.0), Some(16.0))
+            ne
                 .max_w(420.0)
                 .px(12.0)
                 .py(8.0)
@@ -1332,6 +1415,67 @@ mod tests {
         spare(&mut a, "new-4");
         assert_eq!(shown(&a), ["a", "new-4", "c", "d"], "b was the least recently used");
         assert!(a.notice.as_ref().unwrap().0.contains("pane 2 (b, the least recently used)"));
+    }
+
+    /// Phase 3 bug (user, macOS): an old override of `sandboxes.luau` hid the
+    /// new row extras with no word. Now: a notice and a marker on the screen,
+    /// the extras it does not draw drawn by the core under it, and Restore
+    /// (the core's dialog, naming the file) deletes it.
+    #[test]
+    fn an_override_older_than_its_builtin_is_flagged_and_restorable() {
+        let dir = std::env::temp_dir().join(format!("sbxw-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("sandboxes.luau");
+        // Jarvis's old copy: names only, no extras.
+        std::fs::write(&file, r#"return { render = function(_, data)
+  local t = { gap = 4 }
+  for _, sb in ipairs(data.sandboxes) do table.insert(t, text{ sb.name, key = "row-" .. sb.name }) end
+  return column(t)
+end, actions = {} }"#).unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(30 * 24 * 3600);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/network/machine-wide.json");
+        let mut a = App::new(Args { fixture: Some(fixture.into()), screens_dir: Some(dir.clone()), ..Args::default() });
+        a.push_data();
+        let sc = |a: &App| a.screens.iter().find(|s| s.name == "sandboxes").unwrap().stale;
+        assert!(sc(&a), "made before this app: stale");
+        assert!(a.notice.as_ref().unwrap().0.starts_with("Your sandboxes screen is a customised copy made for an older version"), "{:?}", a.notice);
+        assert_eq!(a.feats.notice_then, Some(("screen_restore".into(), serde_json::json!({ "screen": "sandboxes" }))));
+        assert_eq!(a.screen_data()["app"]["overrides"]["sandboxes"]["stale"], true);
+        // The extras the copy does not draw are listed for the core to draw (no double drawing).
+        let s = a.screens.iter().find(|s| s.name == "sandboxes").unwrap();
+        let missing: Vec<String> = s.undrawn_extras().iter().map(|(g, e)| format!("{g}/{}", e["id"].as_str().unwrap())).collect();
+        assert!(missing.contains(&"web-app/approvals".to_string()) && missing.contains(&"web-app/network".to_string()), "{missing:?}");
+        let builtin_drawn = ScreenState::new("sandboxes", &std::env::temp_dir().join("sbxw-no-overrides"), a.screen_data());
+        assert!(builtin_drawn.undrawn_extras().is_empty(), "{:?}", builtin_drawn.undrawn_extras());
+        // Updated (by Jarvis, for this version): no longer stale.
+        std::fs::write(&file, std::fs::read_to_string(&file).unwrap() + "\n-- updated\n").unwrap();
+        let i = a.screens.iter().position(|s| s.name == "sandboxes").unwrap();
+        a.screens[i].load_file(file.clone());
+        a.check_overrides();
+        assert!(!sc(&a));
+        // The built-in changes later (another release): stale again.
+        let mut rec = a.store.get("overrides")["sandboxes"].clone();
+        rec["builtin"] = "0000000000000000".into();
+        a.store.set_in("overrides", "sandboxes", rec);
+        a.check_overrides();
+        assert!(sc(&a));
+        // Restore: the core's dialog names the file; Confirm deletes it.
+        a.intents("test", crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "screen_restore", "args": { "screen": "sandboxes" } })).unwrap());
+        let c = a.feats.dialog.as_ref().unwrap().confirm.clone().unwrap();
+        assert!(c.lines[0].contains(&file.display().to_string()), "{:?}", c.lines);
+        assert!(file.exists(), "nothing deleted before Confirm");
+        crate::approval::ConfirmAnswers::confirm_click(&mut a);
+        assert!(!file.exists());
+        assert!(a.feats.dialog.is_none(), "closed once done");
+        assert!(a.store.get("overrides")["sandboxes"].is_null());
+        // A core operation is never run without the dialog.
+        let mut call = crate::feat::Call::post("core:screen-restore/topbar", J::Null, "x");
+        call.method = crate::feat::Method::Core;
+        a.feature_actions(App::feature_of("shell").unwrap(), "test", vec![crate::feat::Action::Call(call)]);
+        assert!(a.notice.as_ref().unwrap().0.contains("runs only from the app's own dialog"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
