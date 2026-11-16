@@ -103,6 +103,14 @@ pub struct Feature {
     /// Files the person dropped on a terminal pane (the first feature that
     /// declares this gets them). The paths are handed in: an upload may read them.
     pub on_pane_drop: Option<fn(&Ctx, &PaneDrop) -> Vec<Action>>,
+    /// One of its core dialogs closed without its call being sent: Cancel,
+    /// the close button, Escape, a press outside, a newer dialog replacing
+    /// it, or a `Prepare` whose read failed and was closed. The argument is
+    /// the dialog's call tag (the `Confirm`'s call, or the `Prepare`'s call
+    /// while nothing was built yet), so the feature can clear what it kept
+    /// for that dialog. Not called once the call went out (its answer comes
+    /// to `on_answer`).
+    pub on_dismiss: Option<fn(&Ctx, &str) -> Vec<Action>>,
 }
 
 /// Files dropped on a pane ([`Feature::on_pane_drop`]).
@@ -208,7 +216,7 @@ pub enum Incoming {
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[], surfaces: &[], on_surface: None, on_socket: None, standin_ws: None, on_bytes: None, on_pane_drop: None };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[], surfaces: &[], on_surface: None, on_socket: None, standin_ws: None, on_bytes: None, on_pane_drop: None, on_dismiss: None };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
@@ -374,6 +382,10 @@ pub enum Action {
     Download(Download),
     /// Shows a file the core wrote this run in the file manager.
     Reveal(std::path::PathBuf),
+    /// The core forgets these handed-in paths: an upload can no longer read
+    /// them (the feature cleared the queue they were in). A path is also
+    /// forgotten once an upload of it is done.
+    ForgetFiles(Vec<std::path::PathBuf>),
 }
 
 impl Action {

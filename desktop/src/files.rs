@@ -43,6 +43,16 @@ pub fn hand_in(paths: &[PathBuf]) {
     }
 }
 
+/// The person's paths no longer uploadable (`Action::ForgetFiles`, an upload done).
+pub fn forget(paths: &[PathBuf]) {
+    let mut g = HANDED.lock().unwrap();
+    if let Some(s) = g.as_mut() {
+        for p in paths {
+            s.remove(&std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()));
+        }
+    }
+}
+
 pub fn was_handed(p: &Path) -> bool {
     let c = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     HANDED.lock().unwrap().as_ref().is_some_and(|s| s.contains(&c))
@@ -259,6 +269,9 @@ pub fn upload(d: &dyn Daemon, route: &str, file: &Path, content_type: &str, tag:
         _ => "failed",
     };
     set_upload(tag, json!({ "sent": if state == "done" { total } else { 0 }, "total": total, "state": state }));
+    if state == "done" {
+        forget(&[file.to_path_buf()]);
+    }
     r
 }
 
@@ -292,6 +305,8 @@ mod tests {
         assert!(!was_handed(&other));
         hand_in(&[other.clone()]);
         assert!(was_handed(&other));
+        forget(&[other.clone()]);
+        assert!(!was_handed(&other), "forgotten: no longer uploadable");
         std::fs::remove_dir_all(&dir).ok();
     }
 

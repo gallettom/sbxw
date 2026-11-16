@@ -30,6 +30,8 @@ pub struct Dialog {
     pub acked: bool,
     /// One secure edit per `confirm.secrets`.
     pub secrets: Vec<TextEdit>,
+    /// The tag its feature hears if it closes unsent (`on_dismiss`).
+    pub tag: String,
 }
 
 /// Features' state in the app.
@@ -202,6 +204,7 @@ impl App {
                         self.notify(format!("{}: a download you choose the place of, or that opens, runs only from the app's own dialog: refused", f.name), true);
                     }
                 }
+                Action::ForgetFiles(p) => crate::files::forget(&p),
                 Action::Reveal(p) => {
                     if let Err(e) = crate::files::reveal(&p) {
                         self.notify(format!("{}: {e}", f.name), true);
@@ -609,7 +612,8 @@ impl App {
     fn open_dialog(&mut self, f: &'static Feature, from: &str, confirm: Option<Confirm>, prepare: Option<Box<feat::Prepare>>) {
         let title = confirm.as_ref().map(|c| c.title.clone()).or_else(|| prepare.as_ref().map(|p| p.title.clone())).unwrap_or_default();
         let secrets = confirm.as_ref().map(secret_edits).unwrap_or_default();
-        let mut d = Dialog { feature: f.name, from: from.to_string(), title, confirm, preparing: None, prepare: None, running: None, error: None, acked: false, secrets };
+        let tag = confirm.as_ref().map(|c| c.call.tag.clone()).or_else(|| prepare.as_ref().map(|p| p.call.tag.clone())).unwrap_or_default();
+        let mut d = Dialog { feature: f.name, from: from.to_string(), title, confirm, preparing: None, prepare: None, running: None, error: None, acked: false, secrets, tag };
         if let Some(p) = prepare {
             let id = self.feature_call(f, p.call.clone().quiet(), false);
             d.preparing = Some(id);
@@ -619,7 +623,23 @@ impl App {
             d.prepare = Some(p);
         }
         // A newer one replaces the one showing (the person answers one at a time).
+        self.dismiss_dialog();
         self.feats.dialog = Some(d);
+    }
+
+    /// Closes the core's dialog; if its call never went out, its feature
+    /// hears it (`on_dismiss`, with the call's tag).
+    pub(super) fn dismiss_dialog(&mut self) -> bool {
+        let Some(d) = self.feats.dialog.take() else { return false };
+        if d.running.is_none() {
+            let tag = d.tag.clone();
+            if let Some((f, on)) = Self::feature_of(d.feature).and_then(|f| f.on_dismiss.map(|on| (f, on))) {
+                let data = self.feat_ctx_data();
+                let acts = on(&Ctx { data: &data }, &tag);
+                self.feature_actions(f, &format!("feature:{}", f.name), acts);
+            }
+        }
+        true
     }
 
     // ---- data ----
@@ -803,6 +823,7 @@ impl App {
                         Ok(c) => {
                             d.secrets = secret_edits(&c);
                             d.title = c.title.clone();
+                            d.tag = c.call.tag.clone();
                             d.confirm = Some(c);
                         }
                         Err(e) => d.error = Some(e),
@@ -1164,7 +1185,7 @@ impl ConfirmAnswers for App {
     }
 
     fn cancel_click(&mut self) {
-        self.feats.dialog = None;
+        self.dismiss_dialog();
         self.push_data();
     }
 
@@ -1216,6 +1237,12 @@ mod tests {
         // An upload of a path the person never handed in: refused by the core, even confirmed.
         let r = crate::files::upload(&crate::client::FixtureDaemon::new("t", Default::default()), "/api/sandboxes/web-app/upload", std::path::Path::new("/etc/hostname"), "text/plain", "u", None);
         assert!(r.unwrap_err().contains("not a file you handed in"));
+        // A dialog keeps its call's tag for `on_dismiss`; a newer one replaces it.
+        let c = |t: &str| Confirm::new("t", Call::post("/api/x", json!({}), "x").tag(t)).into_action();
+        a.feature_actions(f, "network", vec![c("first")]);
+        a.feature_actions(f, "network", vec![c("second")]);
+        assert_eq!(a.feats.dialog.as_ref().map(|d| d.tag.as_str()), Some("second"));
+        assert!(a.dismiss_dialog() && a.feats.dialog.is_none() && !a.dismiss_dialog());
     }
 
     #[test]

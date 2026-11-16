@@ -767,7 +767,7 @@ impl App {
         }
         if ev.key == Key::Escape && (self.feats.dialog.is_some() || self.feats.modal.is_some()) {
             // The confirmation first, then the modal under it.
-            if self.feats.dialog.take().is_none() {
+            if !self.dismiss_dialog() {
                 self.feats.modal = None;
             }
             self.push_data();

@@ -657,6 +657,11 @@ What a feature declares:
 | `core_only` | Body fields only the core sets, after the person's Confirm (`Confirm::grant`); any other call carrying one is refused |
 | `shortcuts` | `&[Shortcut { key, intent, args, help }]`: global keys, taken by the window before any pane, as the web UI's: Alt+<key> off macOS, Ctrl+Option+<key> on macOS (Option alone types characters). `key` is the letter by its place on the keyboard; `args` a JSON object. Create declares N (New) and M (chat) |
 | `on_files` | `fn(&Ctx, Incoming) -> Vec<Action>`: what the person handed it, `Incoming::Files(paths)` or `Incoming::Png(bytes)`. Files dropped on its shown panel or dialog; a picture pasted (⌘V) while its panel is shown and no terminal has the keyboard (a paste into a terminal stays the terminal's); the answers of `PickFiles` and `ReadClipboard`. The only ways a feature gets a path to read: never from a screen or a sandbox. Decode pictures with `crate::picture::prepare` (limits, no animation, scaling, PNG or JPEG out), then apply the feature's own policy |
+| `surfaces`, `on_surface` | Picture surfaces it owns, by id (`src/surface.rs`), placed by a screen with `surface{ id }`. Frames from its Rust on any thread: `surface::set_encoded(id, bytes)` (PNG, JPEG, WebP decoded with `surface::frame_limits()`) or `surface::set_rgba(id, w, h, rgba)`; Rune redraws without running Luau. `on_surface: fn(&SurfaceEvent) -> Vec<Action>` on the UI thread: `Move`, `Press`, `Release`, `Wheel` in picture pixels, `Key` (DOM key name, physical code, text), `Text` (input method), `Paste` (text; the core shows a notice with its size), `Focus`, `F6`, `Resized` (logical points, debounced). The app keeps its own keys (see the `surface` element) |
+| `on_socket`, `standin_ws` | `Action::OpenSocket { id, path, opts }` opens a `/ws/...` route of the daemon with the app's auth (`src/socket.rs`); `on_socket: fn(&str, SocketEvent) -> Vec<Action>` runs on the socket's own thread (`Open`, `Text`, `Binary`, `Reconnecting`, `Closed`), its actions on the UI thread at the next poll; `socket::send(id, text)` from anywhere. `Opts { reconnect, droppable, max_in, max_out, one_line }`: reconnect is off by default; `droppable` messages (frames) keep only the newest when the handler is behind. `standin_ws: fn(target, &mut dyn WsPeer) -> bool` serves the route in the stand-in |
+| `on_bytes` | `fn(&Ctx, &Call, Result<(status, bytes, content type), String>)`: the answer of a `Call::get(path).raw(max)` (at most `max + 1` bytes). Fixture and stand-in routes answer raw with `{"$raw": text, "$type": ...}` or `{"$raw_hex": ...}` |
+| `on_pane_drop` | `fn(&Ctx, &PaneDrop { paths, sandbox, thread })`: files dropped on a terminal pane (the first feature declaring it); the paths are handed in, so an upload may read them |
+| `on_dismiss` | `fn(&Ctx, tag)`: one of its core dialogs closed without its call going out (Cancel, close, Escape, a press outside, replaced, a failed `Prepare` closed); `tag` is the dialog's call tag |
 
 Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 `Call::post(path, body, what)` / `Call::get`, `.then(&[keys])`,
@@ -667,11 +672,23 @@ Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
 click on the notice runs), `OpenLink(url)`, `Intent { name, args }` (checked
 exactly as from a screen), `Remember { key, value }` (kept across runs in the
 app's state file, read back as `data.app.kept.<feature>.<key>`; null forgets).
-A `Call` of method `Core` is one of the core's own operations (restoring a
-screen), run only from the core's dialog. `PickFiles { title, extensions,
-multiple }` opens the native open dialog (Rune's picks one file; it needs
-Rune's `native-file-dialog` feature, not enabled: until then a notice says
-"Drop the file on this panel, or paste an image."),
+`OpenSocket`, `CloseSocket(id)`, `Focus(element key)`. A `Call` of method
+`Core` is one of the core's own operations: restoring a screen (from the
+core's dialog only), and the file operations of `src/files.rs` built with
+`feat::core_call(op, body, what, tag)`: `inspect {path}` and `reveal {path}`
+(direct, files the core wrote this run), `open {path}` and `upload {route,
+file, content_type, tag}` (from a `Confirm` only; `open` follows `safe.rs`'s
+verdict, a `warn` file needs the dialog's ack box; `upload` reads only a file
+the person handed in this run, 128 MB at most, progress in
+`data.app.uploads[tag]`). `Download(feat::Download { get, name, to, after,
+tag })` writes a daemon route's bytes under a sanitised new name: direct only
+to the Downloads folder without opening, else as the call of a `Confirm`
+(`Download::call`); `to: Dest::Ask` opens the native save dialog. `Reveal(path)`,
+`ForgetFiles(paths)`. `Call::post_bytes(path, content_type, bytes, what)` posts
+a raw body. `PickFiles { title, extensions, multiple }` opens the native open
+dialog (Rune's `native-file-dialog` feature: one file per dialog, `multiple`
+says so in a notice; where no dialog can open, headless or Linux without a
+desktop portal, a notice says "Drop the file on this panel, or paste an image."),
 `ReadClipboard` reads the clipboard for a picture, both answering through
 `on_files` (both run only from the person's own press on a screen, never from
 a feature's data, events or answers; a screen never gets the clipboard's
