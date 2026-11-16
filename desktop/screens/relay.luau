@@ -115,7 +115,7 @@ local function round_form(r, ui, editable)
     end
     if editable then
       qk[#qk + 1] = row{ gap = 6, w = "full",
-        column{ grow = 1, input{ id = "relay-ans-" .. r.id .. "-" .. i, value = answers[i] or "", placeholder = "Your answer to " .. q.id .. ", or leave empty to skip it",
+        column{ grow = 1, input{ id = "relay-ans-" .. r.id .. "-" .. i, value = answers[i] or "", placeholder = "Your answer, or empty to skip",
           on = "set", arg = { id = r.id, field = "answer", index = i } } },
         nz(q.rec) and button{ "Use it", variant = "ghost", on = "use_rec", arg = { id = r.id, index = i }, key = "relay-rec-" .. r.id .. "-" .. i,
           disabled = (answers[i] or "") == q.rec, help = "Fill the answer with the recommendation" } or false,
@@ -307,7 +307,27 @@ return {
       if r.id == ui.current and not closed[r.id] then current = r end
     end
     current = current or waiting[1]
-    local asks = ui.asks or {}
+    local asks = {}
+    -- Agents waiting on AskUserQuestion: sbxw's own sessions, not Jarvis's
+    -- (its panel asks them), the newest per sandbox and thread.
+    local by = {}
+    for _, i in ipairs(data.sessions or {}) do
+      local th = (i.thread ~= nil and i.thread ~= "") and i.thread or nil
+      if i.state == "attention" and not (i.origin == "remote" and not th) and not (i.sandbox == "sbxw-jarvis" and not th) then
+        local key = th and (i.sandbox .. "::" .. th) or i.sandbox
+        local steps = i.steps
+        if not steps or #steps == 0 then steps = i.question and { i.question } or {} end
+        local a = { key = key, sandbox = i.sandbox, thread = th, answerable = i.answerable == true, activity = i.activity, steps = steps,
+          picks = (ui.picks or {})[key] or {}, sending = (ui.sending or {})[key], ts = i.ts or 0 }
+        if not by[key] then
+          by[key] = a
+          asks[#asks + 1] = a
+        elseif (by[key].ts or 0) < a.ts then
+          for n, x in ipairs(asks) do if x.key == key then asks[n] = a end end
+          by[key] = a
+        end
+      end
+    end
 
     local body = { gap = 12, w = "full" }
     local err = (data.app.errors or {}).relay

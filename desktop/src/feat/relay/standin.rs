@@ -5,7 +5,7 @@
 //! request is answered by a scripted agent a moment later.
 //!
 //! Fixture keys: `relay` (`{requests}`, as `GET /api/relay`),
-//! `agent_sessions` (`GET /api/sessions`, a list of `SessionInfo`).
+//! `sessions` (`GET /api/sessions`, a list of `SessionInfo`).
 
 use super::round;
 use crate::feat::{match_path, Standin};
@@ -49,7 +49,7 @@ pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u1
         let sb = body["sandbox"].as_str().unwrap_or("").to_string();
         let mode = body["mode"].as_str().unwrap_or("claude");
         let thread = mode.strip_prefix("thread:").map(str::to_string);
-        let list = st.data["agent_sessions"].as_array_mut()?;
+        let list = st.data["sessions"].as_array_mut()?;
         let Some(i) = list.iter_mut().find(|i| i["sandbox"] == sb.as_str() && i["thread"].as_str().map(str::to_string) == thread && i["state"] == "attention") else {
             return Some((404, J::Null));
         };

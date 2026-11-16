@@ -36,7 +36,7 @@
    "status": 500,
    "error": "relay: the daemon is shutting down"
   },
-  "agent_sessions": [
+  "sessions": [
    {
     "sandbox": "shop",
     "mode": "claude",

@@ -35,7 +35,7 @@
   "relay": {
    "requests": []
   },
-  "agent_sessions": [
+  "sessions": [
    {
     "sandbox": "shop",
     "mode": "claude",

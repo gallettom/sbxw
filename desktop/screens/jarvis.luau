@@ -27,6 +27,14 @@ local function message(m, speaks)
           help = m.reading and "Stop reading" or "Read aloud" },
       } or false,
     }
+  elseif m.who == "agent" then
+    -- An agent of the sandbox the panel follows: its words, framed as its.
+    return column{ w = "full", gap = 4, key = "msg-" .. m.id,
+      row{ gap = 6, w = "full", badge{ m.from or "agent", tone = "blue" }, spacer{},
+        speaks and button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
+          color = m.reading and "blue" or "text-dim", help = m.reading and "Stop reading" or "Read aloud" } or false },
+      markdown{ m.text, on = "link" },
+    }
   elseif m.who == "error" then
     return text{ m.text, wrap = true, size = "sm", color = "red" }
   end
@@ -60,10 +68,25 @@ return {
     local v = j.voice
     local running = j.status == "running"
 
+    -- Where the words go (feat/relay, follow): Jarvis, or a running sandbox's agent.
+    local f = (data.relay_ui and data.relay_ui.follow) or {}
+    local target = f.target
+    local items = { { id = "sbxw-jarvis", label = "Jarvis", icon = "sparkle" } }
+    local listed = false
+    for _, sb in ipairs(data.sandboxes or {}) do
+      if sb.status == "running" and not sb.unreachable_since and sb.name ~= "sbxw-jarvis" then
+        items[#items + 1] = { id = sb.name, label = sb.name, icon = "terminal" }
+        if sb.name == target then listed = true end
+      end
+    end
+    if target and not listed then items[#items + 1] = { id = target, label = target .. " (stopped)", icon = "terminal" } end
+
     local head = row{ w = "full", gap = 8, h = 28,
       icon{ "sparkle", color = "blue" },
       text{ "Jarvis", weight = "semibold", color = "text-bright" },
       (not running) and text{ j.status, size = "sm", color = "text-muted" } or false,
+      #items > 1 and select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target" } or false,
+      target and checkbox{ "Follow", value = f.follow == true, on = "follow", key = "jarvis-follow" } or false,
       spacer{},
       #j.pending > 0 and button{ #j.pending == 1 and "1 to review" or (#j.pending .. " to review"),
         on = "review", arg = j.pending[1].id, variant = "primary",
@@ -113,7 +136,7 @@ return {
       note,
       row{ w = "full", gap = 6,
         column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited",
-          placeholder = running and "Ask Jarvis" or "Ask Jarvis (start it first)" } },
+          placeholder = target and ("Message " .. target .. " (you confirm it first)") or (running and "Ask Jarvis" or "Ask Jarvis (start it first)") } },
         talk,
         button{ icon = "send", on = "send", help = "Send (Enter)" },
       },
@@ -137,5 +160,10 @@ return {
     end,
     read = function(_, id) return intent("read_aloud", { id = id }) end,
     link = function(_, _, url) return intent("open_link", { url = url }) end,
+    target = function(_, _, id)
+      if id == "sbxw-jarvis" then return intent("follow_target", {}) end
+      return intent("follow_target", { sandbox = id })
+    end,
+    follow = function(_, _, on) return intent("follow_toggle", { on = on }) end,
   },
 }

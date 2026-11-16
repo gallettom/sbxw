@@ -27,6 +27,7 @@
 //! screen: the screen shows `data.relay_ui` and changes it one intent at a
 //! time; images never reach Luau, only their labels.
 
+pub mod follow;
 pub mod round;
 pub mod shots;
 mod standin;
@@ -39,7 +40,6 @@ use crate::intent::{Arg, Risk, Spec};
 use serde_json::{json, Map, Value as J};
 use shots::Shot;
 use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex};
 
 pub const SCREEN: &str = "relay";
 /// `data.relay_ui`: what the person typed and attached, as the screen sees it.
@@ -52,11 +52,12 @@ pub const FEATURE: Feature = Feature {
     name: "relay",
     data: &[
         Data { key: "relay", path: "/api/relay", on: &["relay"], every: 0, lazy: false },
-        Data { key: "agent_sessions", path: "/api/sessions", on: &["session"], every: 0, lazy: false },
     ],
     screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/relay.luau"), slot: Slot::Panel { title: "Requests", icon: "chat", width: 420.0 } }],
     intents: INTENTS,
+    events: &["session"],
     act,
+    on_event: Some(on_event),
     on_answer: Some(on_answer),
     on_data: Some(on_data),
     extras: Some(extras),
@@ -87,6 +88,23 @@ pub const INTENTS: &[Spec] = &[
         risk: Risk::Approval("Release an answer to a sandbox"),
         args: &[("id", Arg::Str, true)],
         doc: "Releases what the person typed or attached to the asking sandbox (a round's answers masked first), or approves a virtual Mac request, after the core's dialog shows exactly what leaves.",
+    },
+    Spec { name: "relay_voice", risk: Risk::Direct, args: &[("id", Arg::Str, true), ("on", Arg::Bool, true), ("index", Arg::Int(1, 64), false)], doc: "Answers a round by voice: each question is read, and the next words spoken fill its answer (repeat, skip, back). `on = false` stops." },
+    Spec { name: "relay_heard", risk: Risk::Direct, args: &[("text", Arg::Str, true)], doc: "Words heard for the round answered by voice (the core sends the transcript here)." },
+    Spec { name: "relay_read", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Reads a round aloud: the intro, then each question with its recommendation." },
+    Spec { name: "follow_target", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Where the Jarvis panel's words go: a running sandbox's agent (none: Jarvis)." },
+    Spec { name: "follow_toggle", risk: Risk::Direct, args: &[("on", Arg::Bool, true)], doc: "Follow: every turn of the target sandbox's agents is shown in the Jarvis panel and read aloud (off: only rounds of questions)." },
+    Spec {
+        name: "follow_send",
+        risk: Risk::Approval("Send words to a sandbox's agent"),
+        args: &[("text", Arg::Str, true)],
+        doc: "Words for the followed sandbox's agent: masked, then shown in the core's dialog as a draft the person confirms before it is typed into the session.",
+    },
+    Spec {
+        name: "follow_choose",
+        risk: Risk::Approval("Answer an agent's question"),
+        args: &[("text", Arg::Str, true)],
+        doc: "Words naming an option of the followed agent's question (a number, a rank, a label): the core's dialog says which option before it is sent.",
     },
     Spec { name: "relay_shot_choose", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Opens the system's file dialog to attach images to a screenshot request." },
     Spec { name: "relay_shot_paste", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Attaches the image on the clipboard to a screenshot request." },
@@ -123,29 +141,105 @@ pub struct State {
     review: HashMap<String, (String, String)>,
     caption: HashMap<String, String>,
     shots: HashMap<String, Vec<Shot>>,
+    /// Questions already announced, by session key and question.
+    seen_asks: HashSet<String>,
     /// AskUserQuestion picks, by session key: (the question's text, pick per step).
     picks: HashMap<String, (String, Vec<Option<usize>>)>,
     /// Answers on their way, by session key (the labels sent).
     answering: HashMap<String, String>,
 }
 
-pub static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
+// The UI thread's own state (the core calls a feature from its UI thread
+// only): one per thread, so tests running side by side never share it.
+macro_rules! per_thread {
+    ($name:ident, $t:ty) => {
+        #[allow(non_snake_case)]
+        pub fn $name() -> &'static std::sync::Mutex<$t> {
+            thread_local! {
+                static CELL: &'static std::sync::Mutex<$t> = Box::leak(Box::new(std::sync::Mutex::new(<$t>::default())));
+            }
+            CELL.with(|c| *c)
+        }
+    };
+}
+pub(crate) use per_thread;
+
+per_thread!(STATE, State);
 
 fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
-    STATE.lock().unwrap().act(cx, a)
+    STATE().lock().unwrap().act(cx, a)
 }
 fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
-    STATE.lock().unwrap().on_answer(cx, call, r)
+    STATE().lock().unwrap().on_answer(cx, call, r)
+}
+fn on_event(cx: &Ctx, name: &str, data: &J) -> Vec<Action> {
+    STATE().lock().unwrap().on_event(cx, name, data)
 }
 fn on_data(cx: &Ctx, key: &str, old: &J, new: &J) -> Vec<Action> {
-    STATE.lock().unwrap().on_data(cx, key, old, new)
+    STATE().lock().unwrap().on_data(cx, key, old, new)
 }
 
 // ---------------------------------------------------------------------------
 // Reading the daemon's data
 
+/// The daemon's requests, then the rounds found in a followed session
+/// (`local`: answered by typing into that session, never routed).
 pub fn requests(cx: &Ctx) -> Vec<J> {
-    cx.get("relay")["requests"].as_array().cloned().unwrap_or_default()
+    let mut v = cx.get("relay")["requests"].as_array().cloned().unwrap_or_default();
+    v.extend(LOCAL().lock().unwrap().iter().cloned());
+    v
+}
+
+// Rounds of questions found in a followed sandbox's turn (`follow`), shown
+// on the same form as a relay round; their answers are typed into the
+// session that asked.
+per_thread!(LOCAL, Vec<J>);
+static LOCAL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A round in a followed session's turn: added to the Requests panel; its id.
+pub fn add_local_round(sandbox: &str, thread: Option<&str>, text: &str) -> String {
+    let n = LOCAL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let id = format!("s-{n}");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let mut r = json!({ "id": id, "from": sandbox, "kind": "ask", "question": text, "state": "pending", "shot_count": 0, "local": true, "created_ms": now, "updated_ms": now });
+    if let Some(t) = thread {
+        r["from_thread"] = t.into();
+    }
+    let mut l = LOCAL().lock().unwrap();
+    // A newer round from the same session replaces the one before.
+    l.retain(|x| !(x["from"] == sandbox && x["from_thread"].as_str() == thread));
+    l.push(r);
+    id
+}
+
+fn drop_local(id: &str) -> bool {
+    let mut l = LOCAL().lock().unwrap();
+    let n = l.len();
+    l.retain(|x| x["id"] != id);
+    l.len() != n
+}
+
+fn is_local(r: &J) -> bool {
+    r["local"] == true
+}
+
+// Words the core reads aloud (and shows in the Jarvis log first), queued by
+// the relay's voice: a round read, its next question.
+per_thread!(SPEECH, Vec<String>);
+
+pub fn take_speech() -> Vec<String> {
+    std::mem::take(&mut *SPEECH().lock().unwrap())
+}
+
+fn speak(t: String) {
+    SPEECH().lock().unwrap().push(t);
+}
+
+// The round the person answers by voice, and its question: spoken words go there.
+per_thread!(VOICE, Option<(String, usize)>);
+
+pub fn voice_armed() -> bool {
+    VOICE().lock().unwrap().is_some()
 }
 
 fn find(cx: &Ctx, id: &str) -> Result<J, String> {
@@ -206,7 +300,7 @@ fn can_answer(cx: &Ctx, r: &J, to: &str) -> Result<(), String> {
 /// questions), the newest per sandbox and thread.
 pub fn asking(cx: &Ctx) -> Vec<J> {
     let mut by: Vec<(String, J)> = vec![];
-    for i in cx.get("agent_sessions").as_array().cloned().unwrap_or_default() {
+    for i in cx.get("sessions").as_array().cloned().unwrap_or_default() {
         if i["state"] != "attention" {
             continue;
         }
@@ -283,6 +377,15 @@ impl State {
                 if settled(&r) {
                     return Err(format!("request {id} is already settled"));
                 }
+                if is_local(&r) {
+                    // A round found in a session: set aside here, nothing is typed into it.
+                    drop_local(&id);
+                    self.forget(&id);
+                    if self.current.as_deref() == Some(id.as_str()) {
+                        self.current = None;
+                    }
+                    return Ok(vec![self.ui_action(cx)]);
+                }
                 vec![Action::Call(Call::post(format!("/api/relay/{}/deny", enc(&id)), json!({}), format!("refuse {}'s request", s(&r, "from"))).tag("deny"))]
             }
             "relay_set" => {
@@ -349,6 +452,79 @@ impl State {
                 vec![]
             }
             "agent_pick" => return self.pick(cx, a),
+            "relay_voice" => {
+                let r = find(cx, &id)?;
+                if !a.b("on").unwrap_or(false) {
+                    *VOICE().lock().unwrap() = None;
+                } else {
+                    if s(&r, "kind") != "ask" || !matches!(s(&r, "state"), "pending" | "answered") {
+                        return Err(format!("request {id} is not a round waiting for your answers"));
+                    }
+                    let rd = round::parse(s(&r, "question"));
+                    let answers = self.form(&r).answers.clone();
+                    let at = a.i("index").map(|i| i as usize).unwrap_or_else(|| answers.iter().position(|x| x.trim().is_empty()).map(|i| i + 1).unwrap_or(1)).clamp(1, rd.questions.len());
+                    *VOICE().lock().unwrap() = Some((id.clone(), at));
+                    self.current = Some(id.clone());
+                    speak(question_words(&rd, at));
+                }
+                vec![]
+            }
+            "relay_heard" => {
+                let Some((rid, at)) = VOICE().lock().unwrap().clone() else { return Err("no round is answered by voice".into()) };
+                let r = find(cx, &rid)?;
+                let rd = round::parse(s(&r, "question"));
+                let n = rd.questions.len();
+                let said = a.req("text").trim().to_string();
+                let next = match follow::command(&said) {
+                    follow::Command::Repeat => at,
+                    follow::Command::Back => at.saturating_sub(1).max(1),
+                    follow::Command::Skip => at + 1,
+                    follow::Command::Answer => {
+                        let f = self.form(&r);
+                        f.answers[at - 1] = said;
+                        at + 1
+                    }
+                };
+                if next > n {
+                    *VOICE().lock().unwrap() = None;
+                    speak("Every question has its turn. Read your answers over, then press Send answers.".into());
+                } else {
+                    *VOICE().lock().unwrap() = Some((rid, next));
+                    speak(question_words(&rd, next));
+                }
+                vec![]
+            }
+            "relay_read" => {
+                let r = find(cx, &id)?;
+                if s(&r, "kind") != "ask" {
+                    return Err(format!("request {id} is not a round of questions"));
+                }
+                speak(round::spoken(&round::parse(s(&r, "question"))));
+                vec![]
+            }
+            "follow_target" => {
+                let t = a.s("sandbox").filter(|t| *t != JARVIS).map(str::to_string);
+                if let Some(t) = &t {
+                    let sb = cx.sandbox(t).ok_or_else(|| format!("{t} is not a sandbox sbxw knows"))?;
+                    if sb["status"] != "running" {
+                        return Err(format!("{t} is not running: start it first"));
+                    }
+                }
+                let mut f = follow::FOLLOW().lock().unwrap();
+                f.target = t;
+                f.choose = None;
+                f.reply_to = None;
+                f.loaded = true;
+                vec![Action::Remember { key: "follow".into(), value: json!({ "target": f.target, "on": f.on }) }]
+            }
+            "follow_toggle" => {
+                let mut f = follow::FOLLOW().lock().unwrap();
+                f.on = a.b("on").unwrap_or(false);
+                f.loaded = true;
+                vec![Action::Remember { key: "follow".into(), value: json!({ "target": f.target, "on": f.on }) }]
+            }
+            "follow_send" => return follow_send(cx, a.req("text")),
+            "follow_choose" => return follow_choose(cx, a.req("text")),
             other => return Err(format!("{other}: not a relay intent")),
         };
         out.push(self.ui_action(cx));
@@ -380,6 +556,9 @@ impl State {
 
     fn route(&mut self, cx: &Ctx, id: &str, to: &str) -> Result<Vec<Action>, String> {
         let r = find(cx, id)?;
+        if is_local(&r) {
+            return Err("a round found in a session is answered by you, in that session: it is not routed".into());
+        }
         match s(&r, "kind") {
             "screenshot" => return Err(format!("request {id} asks for a screenshot: no other sandbox can see this screen")),
             "mac" => return Err(format!("request {id} asks you to approve something on the virtual Mac: only you can")),
@@ -440,6 +619,9 @@ impl State {
                 let mut asked = Asked { name: "relay_send", args: Map::new() };
                 asked.args.insert("id".into(), id.into());
                 asked.args.insert("answer".into(), text.clone().into());
+                if VOICE().lock().unwrap().as_ref().is_some_and(|v| v.0 == id) {
+                    *VOICE().lock().unwrap() = None;
+                }
                 Ok(vec![Action::Prepare(Box::new(Prepare {
                     title: format!("Masking personal data before it goes to {from}"),
                     call: Call::post("/api/voice/anonymise", json!({ "text": text }), "mask personal data").quiet().timeout(30),
@@ -556,12 +738,22 @@ impl State {
         };
         let mut v = vec![];
         if let Some(key) = call.tag.strip_prefix("pick:") {
-            let labels = self.answering.remove(key).unwrap_or_default();
+            let labels = self.answering.remove(key).unwrap_or_else(|| call.what.rsplit(": ").next().unwrap_or("").to_string());
+            {
+                let mut f = follow::FOLLOW().lock().unwrap();
+                if f.choose.as_ref().is_some_and(|c| session_key(&c.sandbox, c.thread.as_deref()) == key) {
+                    f.choose = None;
+                }
+            }
             self.picks.remove(key);
             v.push(if ok { Action::notice(format!("Answered {key}: {labels}")) } else { Action::error(format!("Answer not sent to {key}: {why}. Answer in its terminal instead.")) });
-            v.push(Action::Refresh("agent_sessions"));
+            v.push(Action::Refresh("sessions"));
         } else {
             v.push(if ok { Action::notice(format!("{}: done", call.what)) } else { Action::error(format!("{}: {why}", call.what)) });
+            if let (true, Some(id)) = (ok, call.tag.strip_prefix("local:")) {
+                drop_local(id);
+                self.forget(id);
+            }
             if ok && call.tag == "send" {
                 // What was attached has left: the core keeps no copy of someone's screen.
                 if let Some(id) = call.path.split('/').nth(3) {
@@ -577,6 +769,16 @@ impl State {
 
     fn on_data(&mut self, cx: &Ctx, key: &str, old: &J, new: &J) -> Vec<Action> {
         let mut v = vec![];
+        {
+            // The target and Follow as the person left them (the core's store).
+            let mut f = follow::FOLLOW().lock().unwrap();
+            if !f.loaded {
+                f.loaded = true;
+                let kept = &cx.get("app")["kept"]["relay"]["follow"];
+                f.target = kept["target"].as_str().filter(|t| !t.is_empty() && *t != JARVIS).map(str::to_string);
+                f.on = kept["on"] == true;
+            }
+        }
         if key == "relay" {
             let before: Vec<J> = old["requests"].as_array().cloned().unwrap_or_default();
             let now: Vec<J> = new["requests"].as_array().cloned().unwrap_or_default();
@@ -638,20 +840,32 @@ impl State {
             }
             self.closed.retain(|id| live.contains(id));
         }
-        if key == "agent_sessions" {
-            let was: Vec<String> = asking(&Ctx { data: &json!({ "agent_sessions": old }) }).iter().map(|i| format!("{}{}", session_key(s(i, "sandbox"), i["thread"].as_str()), signature(&steps(i)))).collect();
-            for i in asking(cx) {
-                let k = session_key(s(&i, "sandbox"), i["thread"].as_str());
-                if !old.is_null() && !was.contains(&format!("{k}{}", signature(&steps(&i)))) {
-                    let q = steps(&i).first().and_then(|q| q["text"].as_str().map(str::to_string)).or_else(|| i["activity"].as_str().map(str::to_string)).unwrap_or_else(|| "Claude is waiting for you.".into());
-                    v.push(Action::Notice { text: format!("{k} asks: {q}"), error: false, then: Some(("relay_open".into(), json!({}))) });
-                }
-            }
-            let live: Vec<String> = asking(cx).iter().map(|i| session_key(s(i, "sandbox"), i["thread"].as_str())).collect();
-            self.picks.retain(|k, _| live.contains(k));
-        }
         v.push(self.ui_action(cx));
         v
+    }
+
+    /// A `session` event: an agent that starts waiting on a question is a
+    /// notice (once per question); picks for a question gone are dropped.
+    fn on_event(&mut self, cx: &Ctx, name: &str, info: &J) -> Vec<Action> {
+        if name != "session" {
+            return vec![];
+        }
+        let thread = info["thread"].as_str().filter(|t| !t.is_empty());
+        let key = session_key(s(info, "sandbox"), thread);
+        let mine = !(info["origin"] == "remote" && thread.is_none()) && !(s(info, "sandbox") == JARVIS && thread.is_none());
+        let st = steps(info);
+        if info["state"] != "attention" || !mine {
+            self.seen_asks.retain(|k| !k.starts_with(&format!("{key}\n")));
+            if info["state"] != "attention" && self.picks.remove(&key).is_some() {
+                return vec![self.ui_action(cx)];
+            }
+            return vec![];
+        }
+        if !self.seen_asks.insert(format!("{key}\n{}", signature(&st))) {
+            return vec![];
+        }
+        let q = st.first().and_then(|q| q["text"].as_str().map(str::to_string)).or_else(|| info["activity"].as_str().map(str::to_string)).unwrap_or_else(|| "Claude is waiting for you.".into());
+        vec![Action::Notice { text: format!("{} asks: {q}", key.replace("::", " · ")), error: false, then: Some(("relay_open".into(), json!({}))) }]
     }
 
     // -----------------------------------------------------------------------
@@ -682,22 +896,16 @@ impl State {
             }
         }
         let shots: Map<String, J> = self.shots.iter().map(|(k, v)| (k.clone(), J::Array(v.iter().enumerate().map(|(i, s)| s.to_json(i + 1)).collect()))).collect();
-        let asks: Vec<J> = asking(cx)
-            .iter()
-            .map(|i| {
-                let thread = i["thread"].as_str().filter(|t| !t.is_empty());
-                let key = session_key(s(i, "sandbox"), thread);
-                let st = steps(i);
-                let picks: Vec<J> = match self.picks.get(&key) {
-                    Some((sig, p)) if *sig == signature(&st) => p.iter().map(|x| x.map(|n| J::from(n as u64)).unwrap_or(J::from(0))).collect(),
-                    _ => vec![],
-                };
-                json!({
-                    "key": key, "sandbox": s(i, "sandbox"), "thread": thread, "answerable": i["answerable"] == true,
-                    "activity": i["activity"], "steps": st, "picks": picks, "sending": self.answering.get(&key),
-                })
-            })
-            .collect();
+        // The questions themselves are drawn from `data.sessions`; here only
+        // what the person picked, for the question as it still stands.
+        let mut picks = Map::new();
+        for i in asking(cx) {
+            let key = session_key(s(&i, "sandbox"), i["thread"].as_str().filter(|t| !t.is_empty()));
+            if let Some((sig, p)) = self.picks.get(&key).filter(|(sig, _)| *sig == signature(&steps(&i))) {
+                let _ = sig;
+                picks.insert(key, J::Array(p.iter().map(|x| J::from(x.unwrap_or(0) as u64)).collect()));
+            }
+        }
         json!({
             "current": self.current,
             "closed": self.closed.iter().collect::<Vec<_>>(),
@@ -708,7 +916,10 @@ impl State {
             "caption": self.caption,
             "shots": shots,
             "max_shots": shots::MAX_SHOTS,
-            "asks": asks,
+            "picks": picks,
+            "sending": self.answering,
+            "follow": follow::FOLLOW().lock().unwrap().to_json(),
+            "voice": VOICE().lock().unwrap().as_ref().map(|(id, at)| json!({ "id": id, "index": at })),
         })
     }
 
@@ -753,8 +964,18 @@ fn build_ask(cx: &Ctx, asked: &Asked, masked: &J) -> Result<Confirm, String> {
     let n = masked["masked"].as_u64().unwrap_or(0);
     let from = who(&r);
     let lines = safe.lines().count();
-    let mut c = Confirm::new(format!("Send {lines} answer{} to {from}?", if lines == 1 { "" } else { "s" }), Call::post(format!("/api/relay/{}/approve", enc(id)), json!({ "answer": safe }), format!("send the answers to {from}")).tag("send"))
-        .line(format!("To: {from}. Its tool call returns these lines; nothing is typed into a terminal."));
+    let title = format!("Send {lines} answer{} to {from}?", if lines == 1 { "" } else { "s" });
+    let mut c = if is_local(&r) {
+        let mut body = json!({ "text": safe, "name": s(&r, "from") });
+        if let Some(t) = r["from_thread"].as_str() {
+            body["thread"] = t.into();
+        }
+        Confirm::new(title, Call::post("/api/chat/push", body, format!("send the answers to {from}")).tag(&format!("local:{id}")))
+            .line(format!("To: {from}. These lines are typed into its session, as one message."))
+    } else {
+        Confirm::new(title, Call::post(format!("/api/relay/{}/approve", enc(id)), json!({ "answer": safe }), format!("send the answers to {from}")).tag("send"))
+            .line(format!("To: {from}. Its tool call returns these lines; nothing is typed into a terminal."))
+    };
     if s(&r, "state") == "answered" {
         c = c.line(format!("Drafted by {}, as you left them.", s(&r, "to")));
     }
@@ -829,4 +1050,89 @@ pub mod intake {
     pub fn ask(paste: bool) -> Action {
         Action::error(if paste { "Pasting an image is not in this build yet: drop the image on the panel instead" } else { "The file dialog is not in this build yet: drop the image on the panel instead" })
     }
+}
+
+/// A question of a round, as read when it is answered by voice.
+fn question_words(rd: &round::Round, at: usize) -> String {
+    let Some(q) = rd.questions.get(at - 1) else { return String::new() };
+    let mut t = format!("{}{}. {}", q.id, if q.title.is_empty() { String::new() } else { format!(", {}", round::plain(&q.title)) }, round::plain(&q.body));
+    if !q.rec.is_empty() {
+        t.push_str(&format!(" Recommended: {}", round::plain(&q.rec)));
+    }
+    t
+}
+
+/// The person's words for the followed sandbox: masked first, then the core's
+/// dialog shows them as a draft, with where they go.
+fn follow_send(_cx: &Ctx, text: &str) -> Result<Vec<Action>, String> {
+    let f = follow::FOLLOW().lock().unwrap();
+    let Some(target) = f.target.clone() else { return Err("the Jarvis panel's words go to Jarvis: pick a sandbox at the top first".into()) };
+    let thread = f.reply_to.as_ref().filter(|(sb, _)| *sb == target).and_then(|(_, t)| t.clone());
+    let mut asked = Asked { name: "follow_send", args: Map::new() };
+    asked.args.insert("text".into(), text.trim().into());
+    asked.args.insert("sandbox".into(), target.clone().into());
+    if let Some(t) = &thread {
+        asked.args.insert("thread".into(), t.clone().into());
+    }
+    Ok(vec![Action::Prepare(Box::new(Prepare {
+        title: format!("Masking personal data before it goes to {}", follow::who(&target, thread.as_deref())),
+        call: Call::post("/api/voice/anonymise", json!({ "text": text.trim() }), "mask personal data").quiet().timeout(30),
+        asked,
+        build: build_follow,
+    }))])
+}
+
+fn build_follow(cx: &Ctx, asked: &Asked, masked: &J) -> Result<Confirm, String> {
+    if masked["ok"] == false {
+        return Err(format!("Not sent: the masking of personal data failed ({}).", masked["error"].as_str().unwrap_or("no reason given")));
+    }
+    let safe = masked["text"].as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or("Not sent: the masking of personal data gave nothing back.")?;
+    let sb = asked.req("sandbox");
+    // The target as it is now: still picked, still running.
+    if follow::target().as_deref() != Some(sb) {
+        return Err(format!("Not sent: {sb} is no longer the sandbox your words go to."));
+    }
+    if cx.sandbox(sb).is_some_and(|x| x["status"] != "running") {
+        return Err(format!("Not sent: {sb} is not running."));
+    }
+    let thread = asked.s("thread");
+    let to = follow::who(sb, thread);
+    let mut body = json!({ "text": safe, "name": sb });
+    if let Some(t) = thread {
+        body["thread"] = t.into();
+    }
+    let n = masked["masked"].as_u64().unwrap_or(0);
+    let mut c = Confirm::new(format!("Send this to {to}?"), Call::post("/api/chat/push", body, format!("send your words to {to}")).tag("follow"))
+        .line(format!("To: {to}'s agent, typed into its session as one message."))
+        .line("A draft of what you said or typed: Cancel keeps nothing; say it again to change it.");
+    if n > 0 {
+        c = c.line(format!("{n} piece{} of personal data masked before sending.", if n == 1 { "" } else { "s" }));
+    }
+    Ok(c.preview(safe.to_string(), false).labels(&format!("Send to {sb}"), "Cancel"))
+}
+
+/// Words naming one option of the followed agent's question: the dialog says which.
+fn follow_choose(cx: &Ctx, text: &str) -> Result<Vec<Action>, String> {
+    let c = follow::choosing().ok_or("the followed agent is not waiting on a choice")?;
+    let key = session_key(&c.sandbox, c.thread.as_deref());
+    // Still asked, as the daemon lists it.
+    let live = asking(cx).into_iter().any(|i| session_key(s(&i, "sandbox"), i["thread"].as_str().filter(|t| !t.is_empty())) == key && i["answerable"] == true);
+    if !live {
+        return Err(format!("{key} is not waiting on that question any more"));
+    }
+    let n = follow::pick_option(text, &c.options);
+    if n == 0 {
+        return Err(format!("\"{text}\" matches no option: give its number, or press it in the Requests panel"));
+    }
+    let label = c.options[n - 1].clone();
+    let mode = match &c.thread {
+        Some(t) => format!("thread:{t}"),
+        None => "claude".into(),
+    };
+    let to = follow::who(&c.sandbox, c.thread.as_deref());
+    Ok(vec![Confirm::new(format!("Answer \u{201c}{label}\u{201d} to {to}?"), Call::post("/api/answer", json!({ "sandbox": c.sandbox, "mode": mode, "index": n, "indices": [n] }), format!("answer {to}: {label}")).tag(&format!("pick:{key}")).timeout(30))
+        .line(format!("Question: {}", c.text))
+        .line(format!("You said: \"{}\", which reads as option {n} of {}.", text.trim(), c.options.len()))
+        .labels(&format!("Answer {label}"), "Cancel")
+        .into_action()])
 }

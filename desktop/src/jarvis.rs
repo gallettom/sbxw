@@ -35,6 +35,9 @@ pub enum Who {
     /// A short line from the core (an approval's outcome, a click needed).
     Note,
     Error,
+    /// An agent of the sandbox the panel follows (`Msg::from` names it):
+    /// shown, never an answer to anything of Jarvis's.
+    Agent,
 }
 
 impl Who {
@@ -44,6 +47,7 @@ impl Who {
             Who::Jarvis => "jarvis",
             Who::Note => "note",
             Who::Error => "error",
+            Who::Agent => "agent",
         }
     }
 }
@@ -53,6 +57,8 @@ pub struct Msg {
     pub id: u64,
     pub who: Who,
     pub text: String,
+    /// Who wrote it, for an agent of a followed sandbox (`web-app · t1`).
+    pub from: Option<String>,
 }
 
 /// Where the words came from: the panel's input, or the microphone.
@@ -255,10 +261,19 @@ impl Jarvis {
     pub fn say(&mut self, who: Who, text: impl Into<String>) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        self.log.push(Msg { id, who, text: text.into() });
+        self.log.push(Msg { id, who, text: text.into(), from: None });
         // The conversation keeps its last 200 lines.
         if self.log.len() > 200 {
             self.log.drain(..self.log.len() - 200);
+        }
+        id
+    }
+
+    /// A message of a followed sandbox's agent.
+    pub fn say_from(&mut self, from: &str, text: impl Into<String>) -> u64 {
+        let id = self.say(Who::Agent, text);
+        if let Some(m) = self.log.iter_mut().find(|m| m.id == id) {
+            m.from = Some(from.to_string());
         }
         id
     }
@@ -475,7 +490,7 @@ impl Jarvis {
             "sending": self.sending,
             "send": self.send_error.as_ref().map(|e| json!({ "text": e.text, "offer": e.offer, "queued": e.queued, "input": e.input })),
             "others": self.clients.saturating_sub(1),
-            "log": self.log.iter().map(|m| json!({ "id": m.id, "who": m.who.name(), "text": m.text, "reading": self.reading == Some(m.id) })).collect::<Vec<_>>(),
+            "log": self.log.iter().map(|m| json!({ "id": m.id, "who": m.who.name(), "text": m.text, "from": m.from, "reading": self.reading == Some(m.id) })).collect::<Vec<_>>(),
             "pending": self.pending_list().iter().map(|p| json!({
                 "id": p["id"], "summary": p["summary"], "risk": if screen_only(p) { "high" } else { "low" },
             })).collect::<Vec<_>>(),

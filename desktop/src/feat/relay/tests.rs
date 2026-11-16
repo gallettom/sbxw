@@ -41,7 +41,7 @@ fn ui(acts: &[Action]) -> J {
 #[test]
 fn routing_and_releasing_are_approvals_and_refusing_is_direct() {
     for s in INTENTS {
-        let gated = matches!(s.name, "relay_route" | "relay_send");
+        let gated = matches!(s.name, "relay_route" | "relay_send" | "follow_send" | "follow_choose");
         assert_eq!(matches!(s.risk, Risk::Approval(_)), gated, "{}", s.name);
         // No intent takes a file or an image.
         assert!(s.args.iter().all(|(k, _, _)| !matches!(*k, "path" | "paths" | "file" | "files" | "data" | "url")), "{}", s.name);
@@ -178,7 +178,7 @@ fn an_agents_choice_is_sent_once_every_question_has_a_pick() {
     // Two questions in a thread: nothing goes until both are picked.
     let a = run(&mut st, &d, "agent_pick", json!({ "sandbox": "api", "thread": "auth", "step": 1, "option": 1 })).unwrap();
     assert!(!a.iter().any(|x| matches!(x, Action::Call(_))));
-    assert_eq!(ui(&a)["asks"].as_array().unwrap().iter().find(|x| x["key"] == "api::auth").unwrap()["picks"], json!([1, 0]));
+    assert_eq!(ui(&a)["picks"]["api::auth"], json!([1, 0]));
     let a = run(&mut st, &d, "agent_pick", json!({ "sandbox": "api", "thread": "auth", "step": 2, "option": 2 })).unwrap();
     let Some(Action::Call(c)) = a.first() else { panic!() };
     assert_eq!(c.body, json!({ "sandbox": "api", "mode": "thread:auth", "index": 1, "indices": [1, 2] }));

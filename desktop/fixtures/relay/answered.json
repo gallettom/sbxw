@@ -82,7 +82,7 @@
     }
    ]
   },
-  "agent_sessions": []
+  "sessions": []
  },
  "app": {
   "panels": [
