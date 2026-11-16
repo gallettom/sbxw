@@ -521,6 +521,7 @@ local function hosts_tab(state, d)
       row{ w = "full", note("To install sbx on " .. hs.provision.host .. ", run this in a terminal on this machine (sudo is asked there, never here):"),
         spacer{}, button{ icon = "close", variant = "ghost", on = "provision_close", help = "Hide" } },
       text{ hs.provision.command, mono = true, wrap = true, size = "sm" },
+      row{ w = "full", spacer{}, button{ "Copy the command", icon = "copy", key = "provision-copy", on = "provision_copy", arg = hs.provision.command } },
     } or false,
   }
 
@@ -653,7 +654,8 @@ end
 local BODY = { secrets = secrets_tab, kits = kits_tab, skills = skills_tab, mcp = mcp_tab, hosts = hosts_tab, voice = voice_tab }
 
 return {
-  init = function() return { tab = "secrets" } end,
+  -- No tab yet: the one the core passes (the last one shown, kept across runs).
+  init = function() return { tab = nil } end,
 
   render = function(state, data)
     local d = view(data)
@@ -808,6 +810,7 @@ return {
     end,
     host_provision = function(_, name) return intent("host_provision", { name = name }) end,
     provision_close = function() return intent("host_provision_close") end,
+    provision_copy = function(_, cmd) return intent("copy_text", { text = cmd }) end,
     host_save = function(state)
       state.host = state.host or {}
       state.host.sent = trim(state.host.name)

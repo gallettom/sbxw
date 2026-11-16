@@ -262,7 +262,12 @@ fn refresh(keys: &[&'static str]) -> Vec<Action> {
 
 pub fn act(ctx: &Ctx, q: &Asked) -> Result<Vec<Action>, String> {
     match q.name {
-        "setup_load" => Ok(refresh(section_keys(q.req("section")))),
+        "setup_load" => {
+            // The tab shown last opens next time, across runs too.
+            let mut v = refresh(section_keys(q.req("section")));
+            v.push(Action::Remember { key: "tab".into(), value: J::String(q.req("section").to_string()) });
+            Ok(v)
+        }
 
         // ── Secrets ─────────────────────────────────────────────────────
         "github_token_set" => {
@@ -735,7 +740,10 @@ fn extras(ctx: &Ctx) -> Vec<Extra> {
         tone: "muted".into(),
         help: "Setup: secrets, kits, skills, MCP, hosts, voice".into(),
         count: None,
-        intent: Some(("open_modal".into(), json!({ "screen": "setup" }))),
+        intent: Some(("open_modal".into(), match ctx.get("app")["kept"]["setup"]["tab"].as_str() {
+            Some(t) => json!({ "screen": "setup", "arg": t }),
+            None => json!({ "screen": "setup" }),
+        })),
     }];
     for sb in ctx.get("sandboxes").as_array().map(Vec::as_slice).unwrap_or(&[]) {
         let n = sb["kits_waiting"].as_u64().unwrap_or(0);
