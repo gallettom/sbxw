@@ -52,6 +52,10 @@ pub enum Intent {
     /// Starts a stopped sandbox: as the web UI does, by opening its agent terminal.
     StartSandbox { sandbox: String, pane: PaneTarget },
     StopSandbox { sandbox: String },
+    /// Empties every pane showing that session: the sandbox's own (`thread`
+    /// None) or that thread's (after it is closed, as `panes.js`
+    /// `afterThreadClosed` does). A pane other than the last shown one closes.
+    ClosePanes { sandbox: String, thread: Option<String> },
     /// Marks a sandbox as the selected one (the sidebar's highlight).
     Select { sandbox: Option<String> },
     /// Pane count (1 to 4) and how two panes split.
@@ -176,6 +180,12 @@ pub const REGISTRY: &[Spec] = &[
         doc: "Starts a stopped sandbox by opening its agent terminal, as the web UI's Connect does.",
     },
     Spec { name: "stop_sandbox", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true)], doc: "Stops a sandbox (`POST /api/sandboxes/:name/stop`)." },
+    Spec {
+        name: "close_panes",
+        risk: Risk::Direct,
+        args: &[("sandbox", Arg::Str, true), ("thread", Arg::Str, false)],
+        doc: "Empties the panes showing that sandbox's session (`thread`: that thread's; none: the sandbox's own), its terminals closed.",
+    },
     Spec { name: "select", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Marks a sandbox as selected (no `sandbox`: none)." },
     Spec {
         name: "set_layout",
@@ -227,6 +237,7 @@ impl Intent {
             Intent::StopSandbox { .. } => "stop_sandbox",
             Intent::Select { .. } => "select",
             Intent::SetLayout { .. } => "set_layout",
+            Intent::ClosePanes { .. } => "close_panes",
             Intent::StartJarvis => "start_jarvis",
             Intent::SendToJarvis { .. } => "send_to_jarvis",
             Intent::ToggleJarvisPanel { .. } => "toggle_jarvis_panel",
@@ -331,6 +342,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
             panes: m.get("panes").and_then(Value::as_u64).unwrap_or(1) as usize,
             split: if s("split").as_deref() == Some("rows") { Split::Rows } else { Split::Columns },
         },
+        "close_panes" => Intent::ClosePanes { sandbox: s("sandbox").unwrap(), thread: s("thread") },
         "start_jarvis" => Intent::StartJarvis,
         "send_to_jarvis" => Intent::SendToJarvis { input: s("input").unwrap() },
         "toggle_jarvis_panel" => Intent::ToggleJarvisPanel { open: m.get("open").and_then(Value::as_bool) },

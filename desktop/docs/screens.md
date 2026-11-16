@@ -435,6 +435,7 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
 | `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | How many panes show, and how two split |
+| `close_panes` | `sandbox` (string), `thread` (string; none: the sandbox's own session) | Empties the panes showing that session, terminals closed; with several panes shown, such a pane goes and the layout shrinks (after a thread is closed) |
 | `toggle_jarvis_panel` | `open` (bool; none: toggles) | Opens or closes the Jarvis panel docked on the right; it narrows the terminals |
 | `start_jarvis` | none | Creates Jarvis's sandbox the first time (a minute or two), or starts it, and opens its session; `data.jarvis.status` follows |
 | `send_to_jarvis` | `input` (the `id` of this screen's input, required) | Sends what the person typed there to Jarvis, masked first. **The core reads the text itself**, from its own copy of the input: a screen cannot pass words of its own. Emptied once sent; kept, with the reason in the log, when it could not leave. A `yes` / `oui` or `no` / `non` typed and submitted with Enter answers the waiting proposal instead: a yes approves only a low-risk one, else the log says a click is needed |
@@ -625,7 +626,10 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 `extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
 label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
-the key keeps its last good value meanwhile.
+the key keeps its last good value meanwhile. For a plain key the reason is a
+string; for a per-sandbox key (`{sandbox}` in its path) it is an object by
+sandbox name (`{ "web-app" = "..." }`), each entry gone once that sandbox's
+read works, each sandbox keeping its own last good value.
 
 The built-in screens draw extras with these element keys (scripts press
 them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a

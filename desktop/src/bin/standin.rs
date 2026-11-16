@@ -310,6 +310,21 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
             let stream = Prefixed { pre: Cursor::new(head), s: s.try_clone()? };
             let ws = tungstenite::accept_hdr(stream, |_req: &Request, resp: Response| Ok(resp))?;
             eprintln!("standin: terminal opened ({query})");
+            // A thread's session opened: features' stand-ins hear it as `OPEN /ws?<query>`
+            // (threads records a new thread, as the daemon does on its first open).
+            if mode.as_deref() == Some("thread") {
+                let mut events = vec![];
+                {
+                    let mut g = st.lock().unwrap();
+                    let mut raw = std::mem::take(&mut g.raw);
+                    raw["sandboxes"] = serde_json::to_value(&g.sandboxes).unwrap_or_default();
+                    let _ = sbxw_desktop::feat::answer_later(&mut raw, "OPEN", &target, &serde_json::Value::Null, &mut |n, d| events.push((n.to_string(), d)));
+                    g.raw = raw;
+                }
+                for (n, d) in events {
+                    publish(st, &n, &d.to_string());
+                }
+            }
             // The agent of a stopped sandbox: the daemon runs `sbx run`, which starts it.
             if matches!(mode.as_deref(), None | Some("claude")) {
                 let stopped = st.lock().unwrap().sandboxes.iter().any(|x| x.name == sandbox && x.status != "running");

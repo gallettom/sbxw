@@ -606,7 +606,7 @@ impl App {
                 Ok(()) => self.notify(format!("{what}: done"), false),
                 Err(e) => self.notify(format!("{what}: {e}"), true),
             },
-            ev @ (LinkEvent::Answer { .. } | LinkEvent::Data { .. }) => return self.feats_link(ev),
+            ev @ (LinkEvent::Answer { .. } | LinkEvent::Data { .. } | LinkEvent::DataPer { .. }) => return self.feats_link(ev),
         }
         true
     }
@@ -957,6 +957,41 @@ impl App {
         lru
     }
 
+    /// Empties the panes showing that session; with more than one pane shown,
+    /// such a pane goes and the layout shrinks (as `panes.js` closes it).
+    fn close_panes(&mut self, sandbox: &str, thread: Option<&str>) {
+        let mut i = self.layout.0.min(self.panes.len());
+        while i > 0 {
+            i -= 1;
+            let p = &self.panes[i];
+            if p.sandbox.as_deref() != Some(sandbox) || p.thread.as_deref() != thread {
+                continue;
+            }
+            if self.layout.0 > 1 {
+                self.panes.remove(i);
+                self.panes.push(Pane::empty());
+                self.layout.0 -= 1;
+                for (k, p) in self.panes.iter_mut().enumerate() {
+                    if let Some(t) = p.term.as_mut() {
+                        t.id = (k + 1).to_string();
+                    }
+                }
+                if self.focused >= self.layout.0 || self.focused > i {
+                    self.focused = self.focused.saturating_sub(1).min(self.layout.0 - 1);
+                }
+            } else {
+                self.panes[i] = Pane::empty();
+            }
+        }
+        // Hidden panes of that session close too.
+        for p in self.panes.iter_mut().skip(self.layout.0) {
+            if p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread {
+                *p = Pane::empty();
+            }
+        }
+        self.refocus = true;
+    }
+
     /// Swaps two panes, terminals included (their element keys follow the index).
     fn swap_panes(&mut self, a: usize, b: usize) {
         self.panes.swap(a, b);
@@ -1000,6 +1035,7 @@ impl App {
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
             Intent::Select { sandbox } => self.selected = sandbox,
+            Intent::ClosePanes { sandbox, thread } => self.close_panes(&sandbox, thread.as_deref()),
             Intent::SetLayout { panes, split } => {
                 self.layout = (panes, split);
                 self.ensure_panes(panes);
@@ -1476,6 +1512,45 @@ end, actions = {} }"#).unwrap();
         a.feature_actions(App::feature_of("shell").unwrap(), "test", vec![crate::feat::Action::Call(call)]);
         assert!(a.notice.as_ref().unwrap().0.contains("runs only from the app's own dialog"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn closing_a_threads_panes_empties_only_that_session() {
+        let mut a = app();
+        a.panes = vec![Pane::empty(), Pane::empty(), Pane::empty()];
+        a.layout.0 = 3;
+        for (i, t) in [None, Some("t1"), Some("t2")].iter().enumerate() {
+            a.panes[i].sandbox = Some("web-app".into());
+            a.panes[i].thread = t.map(str::to_string);
+        }
+        a.focused = 2;
+        a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t1".into()) });
+        assert_eq!(a.layout.0, 2);
+        let shown: Vec<_> = a.panes.iter().take(2).map(|p| p.thread.clone()).collect();
+        assert_eq!(shown, [None, Some("t2".to_string())]);
+        assert_eq!(a.focused, 1, "the focus follows its pane");
+        a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: None });
+        a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t2".into()) });
+        assert_eq!(a.layout.0, 1);
+        assert!(a.panes[0].sandbox.is_none(), "the last pane empties, it does not go");
+    }
+
+    /// A per-sandbox key's failed read: `errors[key][sandbox]`, the last good value kept.
+    #[test]
+    fn a_failed_per_sandbox_read_says_why_for_that_sandbox() {
+        let mut a = app();
+        let ev = |r: Vec<(&str, Result<J, String>)>| LinkEvent::DataPer { key: "network_ports".into(), results: r.into_iter().map(|(s, r)| (s.to_string(), r)).collect() };
+        a.feats_link(ev(vec![("web-app", Ok(serde_json::json!([1]))), ("docs", Ok(serde_json::json!([2])))]));
+        assert!(a.screen_data()["app"]["errors"].get("network_ports").is_none());
+        a.feats_link(ev(vec![("web-app", Ok(serde_json::json!([3]))), ("docs", Err("sbx: no such sandbox".into()))]));
+        let d = a.screen_data();
+        assert_eq!(d["app"]["errors"]["network_ports"], serde_json::json!({ "docs": "sbx: no such sandbox" }));
+        assert_eq!(d["network_ports"], serde_json::json!({ "web-app": [3], "docs": [2] }), "docs keeps its last good value");
+        a.feats_link(ev(vec![("web-app", Ok(serde_json::json!([3]))), ("docs", Ok(serde_json::json!([4])))]));
+        assert!(a.screen_data()["app"]["errors"].get("network_ports").is_none(), "cleared once it reads again");
+        // A plain key: a string.
+        a.feats_link(LinkEvent::Data { key: "usage".into(), result: Err("down".into()) });
+        assert_eq!(a.screen_data()["app"]["errors"]["usage"], "down");
     }
 
     #[test]

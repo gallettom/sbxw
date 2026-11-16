@@ -895,6 +895,8 @@ pub enum LinkEvent {
     Answer { id: u64, feature: &'static str, call: crate::feat::Call, result: Result<(u16, serde_json::Value), String> },
     /// A feature's data was read (`Link::fetch`).
     Data { key: String, result: Result<serde_json::Value, String> },
+    /// A per-sandbox key was read: each sandbox's value, or why its read failed.
+    DataPer { key: String, results: Vec<(String, Result<serde_json::Value, String>)> },
 }
 
 /// Events on `/api/stream` after which the sandbox list is read again: the
@@ -1006,22 +1008,10 @@ impl Link {
                 Ok((c, v)) => Err(v["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("the daemon answered {c}"))),
                 Err(e) => Err(format!("{e:#}")),
             };
-            let result = match paths.as_slice() {
-                [(None, p)] => get(p),
-                _ => {
-                    let mut o = serde_json::Map::new();
-                    for (sb, p) in &paths {
-                        match get(p) {
-                            Ok(v) => {
-                                o.insert(sb.clone().unwrap_or_default(), v);
-                            }
-                            Err(e) => log::warn!("{key}: {e}"),
-                        }
-                    }
-                    Ok(serde_json::Value::Object(o))
-                }
-            };
-            LinkEvent::Data { key, result }
+            match paths.as_slice() {
+                [(None, p)] => LinkEvent::Data { key, result: get(p) },
+                _ => LinkEvent::DataPer { key, results: paths.iter().map(|(sb, p)| (sb.clone().unwrap_or_default(), get(p))).collect() },
+            }
         });
     }
 }

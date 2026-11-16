@@ -338,6 +338,39 @@ impl App {
     /// What the link answered for features.
     pub(super) fn feats_link(&mut self, ev: LinkEvent) -> bool {
         match ev {
+            LinkEvent::DataPer { key, results } => {
+                // Per sandbox: a failed read keeps that sandbox's last good
+                // value, and its reason goes in `errors[key][sandbox]`.
+                let old = self.feats.data.get(&key).cloned().unwrap_or(J::Null);
+                let mut v = Map::new();
+                let mut errs = Map::new();
+                for (sb, r) in results {
+                    match r {
+                        Ok(x) => {
+                            v.insert(sb, x);
+                        }
+                        Err(e) => {
+                            log::warn!("{key} ({sb}): {e}");
+                            if let Some(x) = old.get(&sb) {
+                                v.insert(sb.clone(), x.clone());
+                            }
+                            errs.insert(sb, J::String(e));
+                        }
+                    }
+                }
+                let errs = (!errs.is_empty()).then_some(J::Object(errs));
+                let errors_changed = self.feats.errors.get(&key) != errs.as_ref();
+                match errs {
+                    Some(e) => self.feats.errors.insert(key.clone(), e),
+                    None => self.feats.errors.remove(&key),
+                };
+                let v = J::Object(v);
+                if v == old {
+                    return errors_changed;
+                }
+                self.feats.data.insert(key.clone(), v.clone());
+                self.feats_data_changed(&key, &old, &v);
+            }
             LinkEvent::Data { key, result } => match result {
                 Ok(v) => {
                     let had_error = self.feats.errors.remove(&key).is_some();
