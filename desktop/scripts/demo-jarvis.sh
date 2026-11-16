@@ -5,11 +5,11 @@
 # risk), ask for a review command, type "yes" and be told to click (high
 # risk), click Approve, ask for a screen change, click Approve and see the
 # sandbox list's title change (the stand-in writes the override, the app's
-# watcher reloads it). Output: shots/jarvis/demo-*.png (one per step) and
+# watcher reloads it). Output: $SBXW_SHOTS/jarvis/demo-*.png (one per step) and
 # the logs.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/jarvis"; mkdir -p "$shots"
+shots="$shots_root/jarvis"; mkdir -p "$shots"
 ovr=$(mktemp -d); export SBXW_DESKTOP_SCREENS="$ovr"
 script="$shots/demo-script.json"
 python3 - >"$script" <<'PY'

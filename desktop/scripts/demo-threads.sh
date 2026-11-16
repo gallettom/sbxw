@@ -5,7 +5,7 @@
 #   desktop/scripts/demo-threads.sh window     # the whole window against the stand-in, scripted
 #
 # Part 1: `screen.sh <screen> fixtures/threads/<fixture>.json` for each pair
-# below. Out: shots/threads/<screen>-<fixture>.png and the element tree.
+# below. Out: $SBXW_SHOTS/threads/<screen>-<fixture>.png and the element tree.
 #
 # Part 2 (`window`): the whole window against the stand-in daemon with
 # fixtures/threads/standin.json. The script opens web-app's main session,
@@ -16,10 +16,10 @@
 # plan dialog's status reads the plan again (the stand-in moves it one step
 # per read) until the lead proposes the merge; Merge, confirmed in the
 # core's dialog, stops at a conflict on web-orders; Retry merges the rest.
-# One PNG per step in shots/threads/window-*.png, and the app log.
+# One PNG per step in $SBXW_SHOTS/threads/window-*.png, and the app log.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/threads"; mkdir -p "$shots"
+shots="$shots_root/threads"; mkdir -p "$shots"
 fx="$here/fixtures/threads"
 
 pairs=(

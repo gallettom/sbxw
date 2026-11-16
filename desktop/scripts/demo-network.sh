@@ -10,10 +10,10 @@
 #          words (who, what, the option, how long); nothing is sent yet;
 #   t=2.0  tap Confirm in that dialog: POST /api/approvals/respond; the list
 #          empties and the host shows as an allow rule of web-app.
-# Output: shots/network-strip.png (six frames), shots/network-end.png, logs.
+# Output: $SBXW_SHOTS/network-strip.png (six frames), $SBXW_SHOTS/network-end.png, logs.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots"; mkdir -p "$shots"
+shots="$shots_root"; mkdir -p "$shots"
 script="$shots/network-script.json"
 cat >"$script" <<JSON
 {"events": [

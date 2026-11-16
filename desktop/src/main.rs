@@ -14,7 +14,7 @@
 //!
 //! Rune's own flags work in every build (the `tooling` feature): `--snap
 //! out.png`, `--tree tree.json`, `--script s.json`, `--size WxH`, `--at T`,
-//! `--chrome`. `desktop/.sbxw-artifacts/testing.md` has the whole harness.
+//! `--chrome`. `.sbxw-artifacts/desktop/testing.md` (repository root, outside git) has the whole harness.
 
 use rune::{AppSpec, Cx, El, KeyEvent, Tx, Waker};
 use sbxw_desktop::shell::{self, App, Args};

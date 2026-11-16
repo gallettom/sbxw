@@ -12,9 +12,16 @@ profile=${SBXW_PROFILE:-debug}
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
+# Where scripts write their shots and logs: never into a tracked path. The
+# root artifacts folder of the checkout they run in (git-ignored), or
+# SBXW_SHOTS when set.
+root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null || dirname "$here")
+export SBXW_SHOTS="${SBXW_SHOTS:-$root/.sbxw-artifacts/desktop/shots}"
+shots_root="$SBXW_SHOTS"
+mkdir -p "$shots_root"
 # No override folder of the person's leaks into a run: screens come from the
 # binary unless a script points SBXW_DESKTOP_SCREENS somewhere on purpose.
-export SBXW_DESKTOP_SCREENS="${SBXW_DESKTOP_SCREENS:-$here/shots/.no-overrides}"
+export SBXW_DESKTOP_SCREENS="${SBXW_DESKTOP_SCREENS:-$shots_root/.no-overrides}"
 
 build() {
   local flag=(); [ "$profile" = release ] && flag=(--release)

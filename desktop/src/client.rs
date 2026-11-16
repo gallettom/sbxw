@@ -6,7 +6,7 @@
 //! The rest of the app sees only the trait and [`LinkEvent`]s.
 //!
 //! What it speaks (daemon side, read from the code, not changed). The full
-//! route list, covered or not, is `desktop/.sbxw-artifacts/daemon-api.md`.
+//! route list, covered or not, is `.sbxw-artifacts/desktop/daemon-api.md` (the repository root's artifacts folder, outside git).
 //! * `GET /api/health?nonce=`: `{ok, proof}`, `proof = sha256(token || nonce)`
 //!   (`crates/daemon/src/http/guard.rs`, `token.rs`). Checked before any
 //!   request carries the token, so a process squatting the port never sees it.
@@ -33,7 +33,7 @@
 //!
 //! Adding a route is mechanical: one method on [`Daemon`], implemented on
 //! [`HttpDaemon`] with [`HttpDaemon::get`] / [`HttpDaemon::post`], on
-//! [`FixtureDaemon`] from its JSON, and a line in `.sbxw-artifacts/daemon-api.md`.
+//! [`FixtureDaemon`] from its JSON, and a line in `.sbxw-artifacts/desktop/daemon-api.md` (repository root, outside git).
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};

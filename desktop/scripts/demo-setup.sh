@@ -5,7 +5,7 @@
 #   desktop/scripts/demo-setup.sh window     # the whole window, scripted (see below)
 #
 # Part 1: `screen.sh setup <fixture>` with a script that presses the tab
-# first, for each pair below. Out: shots/setup/<fixture>-<tab>.png and the
+# first, for each pair below. Out: $SBXW_SHOTS/setup/<fixture>-<tab>.png and the
 # element tree beside it.
 #
 # Part 2 (`window`): the whole window against the fixture `full` (the
@@ -16,11 +16,11 @@
 # fingerprints read by the core), starts the voice download, saves a kits
 # line adding sbxw:ssh-agent (acknowledged), closes Setup and presses the
 # amber check on docs (a kit-add pane). One PNG
-# per step in shots/setup/window-*.png, and the app log, where the token
+# per step in $SBXW_SHOTS/setup/window-*.png, and the app log, where the token
 # must not appear.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
-shots="$here/shots/setup"; mkdir -p "$shots"
+shots="$shots_root/setup"; mkdir -p "$shots"
 size="${SHOT_SIZE:-760x820}"
 
 pairs=(

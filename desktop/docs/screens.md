@@ -626,7 +626,7 @@ desktop/scripts/screen.sh <screen> [fixture] [--file my.luau] [--script s.json]
 ```
 
 draws the screen alone from `desktop/fixtures/<screen>/<fixture>.json` and
-writes a PNG and the element tree. `desktop/.sbxw-artifacts/testing.md` has the rest:
+writes a PNG and the element tree. `.sbxw-artifacts/desktop/testing.md` (the repository root's artifacts folder, outside git) has the rest:
 fixtures, scripts that press elements by key, the whole window.
 
 ## Adding a feature
@@ -890,7 +890,7 @@ forgotten; a screen only sees names and whether a value is set.
 Threads, plans and the lead (the web UI's thread parts of `panes.js`,
 `plans.js`, `board.js`, `worktrees.js`). Files: `src/feat/threads/`,
 `screens/threads.luau`, `plans.luau`, `threads-new.luau`,
-`fixtures/threads/`. Report: `.sbxw-artifacts/THREADS.md`.
+`fixtures/threads/`. Report: `.sbxw-artifacts/desktop/THREADS.md` in the main checkout.
 
 **Screens.** `threads` (panel "Threads"): one sandbox's sessions, Team
 mode, its plans, and the Worktrees and Board tabs. `plans` (modal, `arg` =

@@ -3,7 +3,7 @@
 //! of a sandbox.
 //!
 //! It speaks what the real daemon speaks (see `src/client.rs` and
-//! `.sbxw-artifacts/daemon-api.md`): `GET /api/health?nonce=` (proof), `GET
+//! the route list in `.sbxw-artifacts/desktop/daemon-api.md` at the repository root, outside git): `GET /api/health?nonce=` (proof), `GET
 //! /api/sandboxes`, `POST /api/sandboxes/:name/stop`, `GET /api/stream`
 //! (server-sent events) and `GET /ws` (binary PTY bytes both ways, JSON
 //! `resize` text frames in), all behind `Authorization: Bearer`.
