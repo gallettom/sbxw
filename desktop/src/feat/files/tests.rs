@@ -701,3 +701,35 @@ fn write_files_fixtures() {
     pump(&mut st, &mut d, a);
     save("codemap-writing", &d, &["codemap"], "A map being written in a background session.");
 }
+
+#[test]
+fn a_cancelled_pane_drop_leaves_no_file_waiting_nor_uploadable() {
+    let d = fixture("standin");
+    let mut st = State::default();
+    let dir = tmp("cancel");
+    let paths: Vec<_> = ["a.txt", "b.txt", "c.txt"].iter().map(|n| { let p = dir.join(n); std::fs::write(&p, b"x").unwrap(); p }).collect();
+    // As the core does on a drop: handed in, then the feature.
+    crate::files::hand_in(&paths);
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: paths.clone(), sandbox: "web-app".into(), thread: None });
+    assert!(paths.iter().all(|p| crate::files::was_handed(p)));
+    let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
+    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+    // Cancel on the first: the queue empties, the core forgets all three.
+    let a = st.on_dismiss(&Ctx { data: &d }, &c.call.tag);
+    assert!(st.dropped.is_empty());
+    let Some(Action::ForgetFiles(f)) = a.iter().find(|x| matches!(x, Action::ForgetFiles(_))) else { panic!("{a:?}") };
+    assert_eq!(f, &paths);
+    crate::files::forget(f);
+    assert!(paths.iter().all(|p| !crate::files::was_handed(p)));
+    assert!(run(&mut st, &d, "files_upload_dropped", json!({})).is_err(), "nothing left to ask");
+    // A tag that is not an upload's: nothing.
+    assert!(st.on_dismiss(&Ctx { data: &d }, "open-read").iter().all(|x| !matches!(x, Action::ForgetFiles(_))));
+    // The panel's waiting files: forgotten when removed or cleared.
+    st.sandbox = Some("web-app".into());
+    st.on_files(&Ctx { data: &d }, Incoming::Files(paths.clone()));
+    let a = run(&mut st, &d, "files_upload_remove", json!({ "index": 1 })).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::ForgetFiles(f) if f == &paths[..1])));
+    let a = run(&mut st, &d, "files_upload_remove", json!({})).unwrap();
+    assert!(a.iter().any(|x| matches!(x, Action::ForgetFiles(f) if f == &paths[1..])));
+    let _ = std::fs::remove_dir_all(&dir);
+}

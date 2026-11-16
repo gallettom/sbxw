@@ -64,6 +64,18 @@ fn content(data: &J, path: &str, max: Option<usize>) -> Option<(u16, J)> {
     }
 }
 
+/// `crates/daemon/src/http/ui.rs`, `upload_name`.
+fn upload_name(raw: &str) -> String {
+    let base = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let safe: String = base.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+    let safe: String = safe.trim_start_matches('.').chars().take(120).collect();
+    if safe.is_empty() {
+        "upload".into()
+    } else {
+        safe
+    }
+}
+
 pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16, J)> {
     if (method, path.split('?').next().unwrap_or("")) == ("GET", "/api/codemap") {
         // A run settles 1.5 s after it started (its `done` event goes then),
@@ -148,6 +160,18 @@ pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u1
             c.remove(&p);
         }
         return Some((200, json!({ "ok": true, "path": p })));
+    }
+    for (pat, paste) in [("/api/sandboxes/{name}/upload", false), ("/api/sandboxes/{name}/paste-image", true)] {
+        if match_path(pat, path).is_none() || method != "POST" {
+            continue;
+        }
+        // The daemon's rules: an empty body is refused; the name becomes one
+        // safe component (`upload_name`); a new folder each time.
+        if body["$bytes"].as_u64().unwrap_or(0) == 0 {
+            return err(400, "empty file");
+        }
+        let dest = if paste { format!("/tmp/sbxw-pastes/paste-{}.png", now_ms()) } else { format!("/tmp/sbxw-uploads/{}/{}", now_ms(), upload_name(&query(path, "name").unwrap_or_default())) };
+        return Some((200, json!({ "ok": true, "path": dest })));
     }
     for (pat, lens) in [("/api/sandboxes/{name}/codemap", false), ("/api/sandboxes/{name}/codemap/lens", true)] {
         let Some(c) = match_path(pat, path).filter(|_| method == "POST") else { continue };

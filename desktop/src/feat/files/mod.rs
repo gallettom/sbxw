@@ -81,6 +81,7 @@ pub const FEATURE: Feature = Feature {
     on_files: Some(on_files),
     on_bytes: Some(on_bytes),
     on_pane_drop: Some(on_pane_drop),
+    on_dismiss: Some(on_dismiss),
     ..Feature::EMPTY
 };
 
@@ -261,6 +262,22 @@ fn on_bytes(cx: &Ctx, call: &Call, r: Result<(u16, Vec<u8>, String), String>) ->
 }
 fn on_pane_drop(cx: &Ctx, d: &PaneDrop) -> Vec<Action> {
     STATE().lock().unwrap().on_pane_drop(cx, d)
+}
+fn on_dismiss(cx: &Ctx, tag: &str) -> Vec<Action> {
+    STATE().lock().unwrap().on_dismiss(cx, tag)
+}
+
+/// The local paths among these files (a pasted picture has none).
+fn paths_of<'a>(v: impl IntoIterator<Item = &'a Staged>) -> Vec<PathBuf> {
+    v.into_iter().filter_map(|s| match &s.payload {
+        Payload::Path(p) => Some(p.clone()),
+        Payload::Png(_) => None,
+    }).collect()
+}
+
+/// The core forgets these handed-in paths (no longer uploadable); nothing when none.
+fn forget(paths: Vec<PathBuf>) -> Option<Action> {
+    (!paths.is_empty()).then_some(Action::ForgetFiles(paths))
 }
 
 /// The core's own reading of a file it wrote (`{saved, name, bytes, verdict,
@@ -448,10 +465,11 @@ impl State {
             "files_upload_paste" => out.push(Action::ReadClipboard),
             "files_upload_remove" => match a.i("index") {
                 Some(i) if (i as usize) <= self.staged.len() => {
-                    self.staged.remove(i as usize - 1);
+                    let s = self.staged.remove(i as usize - 1);
+                    out.extend(forget(paths_of([&s])));
                 }
                 Some(i) => return Err(format!("there is no file {i} waiting")),
-                None => self.staged.clear(),
+                None => out.extend(forget(paths_of(std::mem::take(&mut self.staged).iter()))),
             },
             "files_upload_send" => {
                 let s = self.staged.get((a.i("index").unwrap_or(1) as usize).wrapping_sub(1)).ok_or_else(|| if self.staged.is_empty() { "nothing to upload: drop a file on the panel or a pane, paste a picture, or choose a file".to_string() } else { format!("there is no file {} waiting", a.i("index").unwrap_or(1)) })?;
@@ -992,12 +1010,18 @@ impl State {
                 }
             }
             Ok((c, body)) => {
-                self.dropped.clear();
-                vec![Action::error(format!("{name} was not uploaded: {}", why(c, &body)))]
+                let mut v = vec![Action::error(format!("{name} was not uploaded: {}", why(c, &body)))];
+                if from_drop {
+                    v.extend(forget(paths_of(std::mem::take(&mut self.dropped).iter())));
+                }
+                v
             }
             Err(e) => {
-                self.dropped.clear();
-                vec![Action::error(format!("{name} was not uploaded: {e}"))]
+                let mut v = vec![Action::error(format!("{name} was not uploaded: {e}"))];
+                if from_drop {
+                    v.extend(forget(paths_of(std::mem::take(&mut self.dropped).iter())));
+                }
+                v
             }
         };
         // The next file dropped with it: its own dialog.
@@ -1015,8 +1039,9 @@ impl State {
     /// Files dropped on a terminal pane: waiting for that sandbox's agent,
     /// and the core's dialog for the first at once.
     pub fn on_pane_drop(&mut self, cx: &Ctx, d: &PaneDrop) -> Vec<Action> {
-        // A new drop replaces what an earlier one left after a Cancel.
-        self.dropped.clear();
+        // A new drop replaces what an earlier one left (normally nothing: a
+        // Cancel empties it), and those paths are forgotten.
+        let mut out: Vec<Action> = forget(paths_of(std::mem::take(&mut self.dropped).iter())).into_iter().collect();
         let mut notes = vec![];
         for p in &d.paths {
             if self.dropped.len() >= view::STAGED_MAX {
@@ -1034,10 +1059,24 @@ impl State {
             }
         }
         let _ = cx;
-        let mut out: Vec<Action> = notes.into_iter().map(Action::error).collect();
+        out.extend(notes.into_iter().map(Action::error));
         if !self.dropped.is_empty() {
             out.push(Action::Intent { name: "files_upload_dropped".into(), args: json!({}) });
         }
+        out
+    }
+
+    /// One of this feature's dialogs closed without its call going out
+    /// (Cancel, Escape, replaced): a drop's upload ends there, and every
+    /// file left of that drop stops being uploadable.
+    pub fn on_dismiss(&mut self, cx: &Ctx, tag: &str) -> Vec<Action> {
+        let Some(id) = tag.strip_prefix("upload-").and_then(|s| s.parse::<u64>().ok()) else { return vec![] };
+        let mut out = vec![];
+        if self.dropped.iter().any(|s| s.id == id) {
+            out.extend(forget(paths_of(std::mem::take(&mut self.dropped).iter())));
+        }
+        // A file waiting on the panel stays there (its row has Upload and ×).
+        out.extend(self.ui_action(cx));
         out
     }
 
