@@ -237,6 +237,11 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
     let stop = path.strip_prefix("/api/sandboxes/").and_then(|r| r.strip_suffix("/stop")).map(decode);
     if authed && (path.starts_with("/api/jarvis") || matches!(path, "/api/sessions" | "/api/chat/push" | "/api/voice" | "/api/voice/anonymise" | "/api/voice/transcribe")) {
         let body = read_body(&mut s, &head, &text)?;
+        // A push to another sandbox than Jarvis's: features' stand-ins (relay follows one).
+        if path == "/api/chat/push" && body["name"].as_str().is_some_and(|n| n != "sbxw-jarvis") {
+            feature_route(st, &method, &target, &body, &mut s);
+            return Ok(());
+        }
         let (code, out) = jarvis_route(st, &method, path, &body);
         reply(&mut s, code, out.to_string());
         return Ok(());
@@ -321,37 +326,7 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
         // Features' routes (src/feat/): their stand-in, else their data keys.
         (m, p) if p.starts_with("/api/") => {
             let body = read_body(&mut s, &head, &text)?;
-            let mut events = vec![];
-            let (code, out, later, list) = {
-                let mut g = st.lock().unwrap();
-                let mut raw = std::mem::take(&mut g.raw);
-                raw["sandboxes"] = serde_json::to_value(&g.sandboxes)?;
-                let before = raw["sandboxes"].clone();
-                let ((code, out), later) = sbxw_desktop::feat::answer_later(&mut raw, m, &target, &body, &mut |n, d| events.push((n.to_string(), d)));
-                // A route that changed the list (a sandbox removed, created): the list follows.
-                let list = (raw["sandboxes"] != before).then(|| serde_json::from_value::<Vec<Sandbox>>(raw["sandboxes"].clone()).unwrap_or_default());
-                if let Some(l) = &list {
-                    g.sandboxes = l.clone();
-                }
-                g.raw = raw;
-                (code, out, later, list)
-            };
-            eprintln!("standin: {m} {target} -> {code}");
-            for (n, d) in events {
-                publish(st, &n, &d.to_string());
-            }
-            for (ms, n, d) in later {
-                std::thread::sleep(Duration::from_millis(ms));
-                publish(st, &n, &d.to_string());
-            }
-            if list.is_some() {
-                publish(st, "session", "{}");
-            }
-            let status = match code {
-                200 => "200 OK".to_string(),
-                c => format!("{c} {}", if c < 300 { "OK" } else if c == 404 { "Not Found" } else if c == 409 { "Conflict" } else if c < 500 { "Bad Request" } else { "Error" }),
-            };
-            let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", out.to_string().len(), out);
+            feature_route(st, m, &target, &body, &mut s);
         }
         _ => reply(&mut s, "404 Not Found", "\"no such route\"".into()),
     }
@@ -511,6 +486,42 @@ fn jarvis_answer(text: &str, n: u64) -> (String, Option<serde_json::Value>) {
 
 const SCREEN_EDIT: &str = include_str!("../../screens/sandboxes.luau");
 
+
+/// A feature's route (`feat::answer_later`): its stand-in, else its data keys.
+fn feature_route(st: &Shared, m: &str, target: &str, body: &serde_json::Value, s: &mut TcpStream) {
+    let mut events = vec![];
+    let (code, out, later, list) = {
+        let mut g = st.lock().unwrap();
+        let mut raw = std::mem::take(&mut g.raw);
+        raw["sandboxes"] = serde_json::to_value(&g.sandboxes).unwrap_or_default();
+        let before = raw["sandboxes"].clone();
+        let ((code, out), later) = sbxw_desktop::feat::answer_later(&mut raw, m, target, body, &mut |n, d| events.push((n.to_string(), d)));
+        // A route that changed the list (a sandbox removed, created): the list follows.
+        let list = (raw["sandboxes"] != before).then(|| serde_json::from_value::<Vec<Sandbox>>(raw["sandboxes"].clone()).unwrap_or_default());
+        if let Some(l) = &list {
+            g.sandboxes = l.clone();
+        }
+        g.raw = raw;
+        (code, out, later, list)
+    };
+    eprintln!("standin: {m} {target} -> {code}");
+    for (n, d) in events {
+        publish(st, &n, &d.to_string());
+    }
+    for (ms, n, d) in later {
+        std::thread::sleep(Duration::from_millis(ms));
+        publish(st, &n, &d.to_string());
+    }
+    if list.is_some() {
+        publish(st, "session", "{}");
+    }
+    let status = match code {
+        200 => "200 OK".to_string(),
+        c => format!("{c} {}", if c < 300 { "OK" } else if c == 404 { "Not Found" } else if c == 409 { "Conflict" } else if c < 500 { "Bad Request" } else { "Error" }),
+    };
+    let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", out.to_string().len(), out);
+}
+
 fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value) -> (&'static str, serde_json::Value) {
     use serde_json::json;
     let err = |code: &'static str, m: String| (code, json!({ "ok": false, "error": m }));
@@ -536,7 +547,13 @@ fn jarvis_route(st: &Shared, method: &str, path: &str, body: &serde_json::Value)
             list.reverse();
             ("200 OK", json!({ "ok": true, "proposals": list }))
         }
-        ("GET", "/api/sessions") => ("200 OK", json!(st.lock().unwrap().sessions.values().cloned().collect::<Vec<_>>())),
+        // Jarvis's sessions, then the fixture's `agent_sessions` (other sandboxes' agents).
+        ("GET", "/api/sessions") => {
+            let g = st.lock().unwrap();
+            let mut list: Vec<serde_json::Value> = g.sessions.values().cloned().collect();
+            list.extend(g.raw["agent_sessions"].as_array().cloned().unwrap_or_default());
+            ("200 OK", json!(list))
+        }
         ("GET", "/api/voice") if st.lock().unwrap().voice => ("200 OK", json!({ "ok": true, "compiled": true, "ready": true, "speech": { "supported": false }, "push_to_talk_key": "F8" })),
         // No voice of its own: the fixture's `voice` key if it has one (Setup's Voice tab), else 404.
         ("GET", "/api/voice") => {

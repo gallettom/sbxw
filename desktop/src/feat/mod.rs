@@ -502,6 +502,7 @@ macro_rules! features {
 features! {
     create,
     network,
+    relay,
     setup,
     shell_extras,
 }
