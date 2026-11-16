@@ -902,3 +902,68 @@ the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
 | `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one |
 | `plan_merge` | `id` | approval | The core's dialog: order, note, base, distillate, whether threads close; refused while a shared plan's files are claimed |
 | `thread_close` | `sandbox`, `thread` | approval | Reads what closing loses; the dialog needs uncommitted files discarded explicitly; its panes go once closed |
+
+### relay
+
+What agents ask the person through the relay (`assets/js/relay.js`,
+`docs/relay.md`), the multiple-choice questions agents wait on
+(`AskUserQuestion`), and following a sandbox other than Jarvis from the
+Jarvis panel (the non-Jarvis parts of `concierge.js`). Files:
+`src/feat/relay/` (`mod.rs` rules, `round.rs` rounds, `shots.rs` pictures,
+`follow.rs` following, `standin.rs`, `tests.rs`), `screens/relay.luau`,
+`fixtures/relay/`, `scripts/demo-relay.sh`.
+
+**Screen.** `relay` (panel "Requests"): the requests waiting, the one shown
+(a question, a screenshot request, a round of questions, a virtual Mac
+request, each in its state), those out with another sandbox, and agents
+waiting on a choice. It opens by itself when a request arrives.
+
+**Data.** `data.relay` (`GET /api/relay`, read again on each `relay` event:
+`{requests}`, each `{id, from, from_thread?, kind: question|screenshot|ask|mac,
+question, to?, answer?, shot_count, state: pending|routed|answered|approved|denied,
+note?, created_ms}`); `data.sessions` (threads' key) for `AskUserQuestion`;
+`data.relay_ui`, set by the core: `current`, `closed`, `rounds` (by id:
+`{intro, questions: [{id, title, body, rec}]}`), `forms` (by id: answers),
+`own`, `review`, `caption` (by id: what was typed), `shots` (by id: `{n,
+source, w, h, kb, label, image}`, `image` a key for `image{}`; never the
+bytes), `max_shots`, `picks` and `sending` (by session key
+`sandbox::thread`), `local` (rounds found in a followed session, shown as
+requests with `local = true`), `follow` (`{target, follow, choosing}`),
+`voice` (`{id, index}`: the round answered by voice).
+
+**Pictures.** Dropped on the panel, pasted (⌘V on macOS while the panel is
+shown and no terminal has the keyboard), or read with "Paste from
+clipboard" (`Action::ReadClipboard`). Decoded by `crate::picture` (limits
+before decoding), scaled to 1600 px, PNG else JPEG; six at most, 6 MB each,
+16 MB together, as the daemon checks. No intent takes a path.
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `relay_open` | `id` | direct | Opens the panel on that request |
+| `relay_later` | `id` | direct | Puts it aside (it stays in the list), or closes a settled one |
+| `relay_route` | `id`, `to` | approval | The dialog shows the question and the target; sends it to that running sandbox (a round: for a draft). Never a screenshot, a Mac request, the asker, or a stopped sandbox |
+| `relay_deny` | `id` | direct | Refuses; a round from a followed session is set aside |
+| `relay_set` | `id`, `field` (`own`, `review`, `caption`, `answer`), `value`, `index` | direct | What the person typed; give it on every edit |
+| `relay_use_rec`, `relay_clear` | `id`, `index` / `id` | direct | A recommendation into an answer; a round's answers emptied |
+| `relay_send` | `id` | approval | The dialog shows exactly what leaves (the text; the pictures' count, sizes and weight) and to whom; a round is masked first (`/api/voice/anonymise`, nothing sent if it fails). A round from a followed session is typed into it (`/api/chat/push`) |
+| `relay_shot_paste`, `relay_shot_choose` | `id` | direct | Reads the clipboard's picture; the file dialog (not in this build: a notice says to drop or paste) |
+| `relay_shot_remove` | `id`, `index` | direct | Removes a picture (none: all) |
+| `relay_voice` | `id`, `on`, `index` | direct | Answers a round by voice: each question read, the next words spoken fill it (repeat, skip, back) |
+| `relay_heard` | `text` | direct | The transcript for that round (the core sends it) |
+| `relay_read` | `id` | direct | Reads a round aloud |
+| `agent_pick` | `sandbox`, `thread`, `step`, `option` | direct | Picks an option of an `AskUserQuestion`; once every step has one, `POST /api/answer` |
+| `follow_target` | `sandbox` | direct | Where the Jarvis panel's words go (none: Jarvis); kept across runs |
+| `follow_toggle` | `on` | direct | Follow: every turn of the target's agents shown and read (off: rounds and `/grill-me` only) |
+| `follow_send` | `text` | approval | Words for the target: masked, then a draft in the dialog; sent on Confirm only |
+| `follow_choose` | `text` | approval | Words naming an option of the target's question: the dialog says which |
+
+**Jarvis panel.** With a sandbox running, the panel's title is a picker
+(`jarvis-target`): Jarvis, or a running sandbox. With a sandbox picked, a
+Follow box (`jarvis-follow`) shows; typed or spoken words become
+`follow_send` (or `follow_choose`) and never answer a Jarvis proposal; the
+target's turns show in the log as `who = "agent"` with `from`.
+
+**Extras.** `extra-topbar-relay` ("Requests" with the count waiting on the
+person, or "Relay" while only a sandbox is answering),
+`extra-sandbox-<asker>-relay` (`?` and a count), and on the asker's pane
+bars, "asks you".
