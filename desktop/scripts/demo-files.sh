@@ -85,7 +85,9 @@ PY
 marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-confirm codemap codemap-net codemap-section diagram-dialog})
 build
 for m in "${marks[@]}"; do
-  rm -rf "$RUNE_DIRS_ROOT"
+  # Nothing of an earlier run of this mark is read back: the downloads root
+  # and the app's state file (a remembered tab would open the panel on Files).
+  rm -rf "$RUNE_DIRS_ROOT"; rm -f "$shots/state-$m.json"
   start_daemon "$shots/standin-$m" --fixture "$here/fixtures/files/standin.json"
   SHOT_SIZE="${SHOT_SIZE:-1400x900}" SBXW_DESKTOP_STATE="$shots/state-$m.json" run_app "$shots/window-$m.log" \
     --script "$script" --snap "$shots/window-$m.png" --tree "$shots/window-$m.tree.json" --at "mark:$m+0.05"
