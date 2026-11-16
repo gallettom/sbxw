@@ -842,3 +842,61 @@ forgotten; a screen only sees names and whether a value is set.
 | `voice_cancel` | none | direct | Stops the download |
 | `voice_rm` | none | approval | Deletes the models |
 | `voice_warm` | none | direct | Loads the models now |
+
+### threads
+
+Threads, plans and the lead (the web UI's thread parts of `panes.js`,
+`plans.js`, `board.js`, `worktrees.js`). Files: `src/feat/threads/`,
+`screens/threads.luau`, `plans.luau`, `threads-new.luau`,
+`fixtures/threads/`. Report: `.sbxw-artifacts/THREADS.md`.
+
+**Screens.** `threads` (panel "Threads"): one sandbox's sessions, Team
+mode, its plans, and the Worktrees and Board tabs. `plans` (modal, `arg` =
+a plan id): the review while it waits, its threads' state once approved,
+the merge once proposed. `threads-new` (modal, `arg` = the sandbox): New
+thread, or a session on the main checkout.
+
+**Data** (each a route's answer; a per-sandbox read that failed is in
+`data.app.errors[key][sandbox]`):
+
+| Key | What |
+|---|---|
+| `sessions` | `GET /api/sessions`: every hook report (`sandbox`, `thread`, `state`: `working`, `idle`, `attention`, `exited`, ...) |
+| `threads` | By sandbox, `GET /api/sandboxes/:name/threads`: `{ok, threads: [{name, open, repo, model, worktree: same\|own\|team}], open, max}` |
+| `plans` | `GET /api/plans`: every plan (`id`, `sandbox`, `summary`, `threads` with `state` and `summary`, `state`, `variant`, `justification`, `closed`, `merge`: `{order, note, state, base, results, distillate}`) |
+| `leads`, `models` | `GET /api/leads`, `GET /api/models` (`{ok, default, models: [{id, label}]}`) |
+| `board` | By sandbox, `GET /api/sandboxes/:name/board`: `{plan, claims, entries}` |
+| `threads_view` | Set by the core: by sandbox, `{sessions: [{thread, kind, running, state, word, tone, label, summary, repo, model}], open, max, leading, pending, merge}` |
+| `threads_ui` | Set by the core: `sandbox`, `tab`, `new` (`{sandbox, kind, suggest}`), `drafts` (by plan id: `{threads, variant}`), `plan_error`, `merge_close`, `merge_note` (by plan id), `repos_for`, `worktrees_for`, `remote` |
+| `thread_repos`, `worktrees` | Read on demand: `GET .../repos` (for `threads_ui.repos_for`), `GET .../worktrees` (for `worktrees_for`) |
+
+**Extras.** Rows under a sandbox (`extra-row-<sandbox>-<main|thread>`)
+once it has a second session; `extra-sandbox-<name>-threads` (opens the
+panel; amber when a session waits); on each session's pane bar
+(`pane-<n>-x-<id>`): `model`, `state`, `interrupt`, `remote`, `close`; on
+the main session's: `lead`, `plan`, `merge`, `threads`; in the top bar
+`extra-topbar-plan` while a plan waits.
+
+**Intents** (indexes from 1):
+
+| Intent | Arguments | Risk | What the core does |
+|---|---|---|---|
+| `threads_show` | `sandbox`, `tab` (`sessions`, `worktrees`, `board`) | direct | Opens the panel on that sandbox and tab |
+| `thread_new` | `sandbox`, `kind` (`thread`, `session`) | direct | Opens New thread and reads the repositories |
+| `thread_open` | `sandbox`, `name`, `repo` (`=` then its path; `=` is the workspace), `model`, `checkout`, `pane` | direct | Opens that session (spare pane); repo, model and checkout only for a new one. Refused: a bad name, one of the other kind, no place free under `max_agent_sessions` (said with the names) |
+| `thread_bash` | `sandbox`, `thread` | direct | A shell in its worktree |
+| `session_interrupt` | `sandbox`, `thread` | direct | Escape into that Claude session (`POST /api/input`) |
+| `remote_control` | `sandbox`, `thread` | direct | Reads the login, then turns Remote Control on, or says why not |
+| `remote_login` | `sandbox`, `thread` | approval | Stops injecting the setup token, types /login |
+| `worktrees_load` | `sandbox` | direct | Reads `data.worktrees` |
+| `lead_start`, `lead_end` | `sandbox` | direct | Team mode on; off after the core's dialog says what it leaves |
+| `plan_review` | `id` | direct | Opens the plan dialog (and its draft) |
+| `plans_reload` | none | direct | Reads plans and boards again |
+| `plan_edit` | `id`, `index`, `field` (`name`, `goal`, `scope`, `repo`, `model`), `value` (none: empty, default repo, default model) | direct | Edits the draft |
+| `plan_remove`, `plan_add`, `plan_reset` | `id` (`index`) | direct | Removes, adds, resets |
+| `plan_variant` | `id`, `variant` (`split`, `shared`) | direct | The draft's variant |
+| `plan_refuse` | `id`, `note` | direct | Refuses; the lead reads the note |
+| `merge_close_set` | `id`, `on` | direct | Close the threads once merged (default on) |
+| `plan_approve` | `id` | approval | The core reads the sessions, its dialog lists the draft, the changes and the sessions it starts; over the ceiling it says how many are open, which, how many are free, how to free one |
+| `plan_merge` | `id` | approval | The core's dialog: order, note, base, distillate, whether threads close; refused while a shared plan's files are claimed |
+| `thread_close` | `sandbox`, `thread` | approval | Reads what closing loses; the dialog needs uncommitted files discarded explicitly; its panes go once closed |
