@@ -1080,3 +1080,89 @@ panel or a pane, a paste, or the file dialog.
 | `codemap_generate` | `sandbox` | direct | `/codemap` in a background session (the daemon refuses a stopped sandbox, no codemap kit, one already running) |
 | `codemap_lens_set`, `codemap_lens` | `text` / `sandbox` | direct | The reader (400 characters at most); `/codemap-lens` in the background |
 | `codemap_diagram` | none | approval | The map's Archify diagram is HTML the app does not draw: saved into Downloads, judged by the core, opened in the browser after its dialog |
+
+### browser
+
+The sandbox's own Chromium, watched and driven from a docked panel (the web
+UI's `browser.js`; `docs/chat.md`, "The browser side panel"). Files:
+`src/feat/browser/` (`mod.rs` the session and rules, `proto.rs` the
+`/ws/browser` line protocol, `standin.rs`, `tests.rs`), `screens/browser.luau`,
+`screens/browser-settle.luau`, `fixtures/browser/`, `fixtures/browser-settle/`,
+`scripts/demo-browser.sh`. Report: `.sbxw-artifacts/desktop/BROWSER-MAC.md`
+in the main checkout.
+
+**Screens.** `browser` (panel "Browser", 720 pt): the sandbox's name, Hide,
+Close browser; back, forward, reload, the address bar (input
+`browser-url`), the device select (`browser-viewport`); the hosts the
+sandbox's network policy refused (`browser-allow-<host>`,
+`browser-ignore-<host>`; an organisation or deny-rule host says why it cannot
+be allowed); how many hosts were allowed from here; the error; the picture,
+`surface{ id = "browser" }`, last; a line with the keyboard hint and the
+measured frames per second and input-to-picture latency. `browser-settle`
+(dialog, 440 pt): on close, the hosts allowed from the panel, Keep them
+(first) or Remove them.
+
+**Extras.** On every pane bar of a running sandbox, `pane-<n>-x-browser`
+("Browser"): blue while its agent uses its browser (`browser_active`), a
+press opens the panel on it, or hides it when it shows that sandbox.
+
+**Data.** `browser_active`: `GET /api/browser/active` (`{ok, sandboxes}`),
+read again on the `browser` event. `browser_ui`, set by the feature:
+`sandbox`, `status` (`idle`, `starting`, `live`, `closing`, `ended`), `url`,
+`title`, `viewport`, `viewports` (`{id, label, disabled}`), `blocked`
+(`{host, kind, fixed}`), `allowed`, `error`, `focused`, `release_key`,
+`frame` (`{w, h}`), `stats` (`frames`, `refused`, `fps`, `latency_ms`).
+`browser_settle`: `{sandbox, hosts}` while the close question is open.
+
+**Intents.** `browser_open {sandbox}`, `browser_hide`, `browser_close`,
+`browser_nav {url}`, `browser_back`, `browser_forward`, `browser_reload`,
+`browser_viewport {value}`, `browser_ignore {host}`, `browser_settle
+{keep}`, `browser_page` (the keyboard to the picture): direct.
+`browser_allow {host}`: **Approval**, the core's dialog, only for a host the
+bridge reported and that is not an organisation or deny-rule host; it posts
+to `POST /api/sandboxes/:name/browser/allow` (the rule for that sandbox only,
+remembered as the panel's so closing can remove it).
+
+**Rules.** Frames go from the socket's thread to the core's surface
+(`surface::set_encoded`, JPEG only, base64 checked strictly): Luau never sees
+a pixel or an input event, and is not re-rendered per frame (the chrome's
+state is set on a change, and at most once a second for the numbers).
+Everything else the sandbox sends is cleaned, bounded one-line text. An
+address typed in the bar is sent to the sandbox's browser (`nav`) and never
+opened on the person's machine; nothing from the sandbox reaches the
+clipboard or `open_link`. A paste is the person's own ⌘V / Ctrl+V on the
+picture, text only. Hiding the panel leaves the browser running; no
+automatic reconnect (a new socket runs a new bridge in the sandbox).
+
+### mac
+
+The virtual Mac (the web UI's Setup, Mac: `mac.js`;
+`assets/terminal-mac/README.md`). Files: `src/feat/mac/` (`mod.rs`,
+`tests.rs`), `screens/mac.luau`, `fixtures/mac/`, `scripts/demo-mac.sh`.
+Report: `.sbxw-artifacts/desktop/BROWSER-MAC.md` in the main checkout.
+
+**Screen.** `mac` (panel "Virtual Mac", 440 pt): not available on a host
+that is not an Apple silicon Mac; else Install, or the VM's card (state,
+guest ready, who holds the lease, release, ports) with Start / Resume /
+Create and start, Open its window, Pause, Take it back, Shut down, Force off
+(while stopping), Refresh (keys `mac-<action>`); the busy banner, the last
+error; the requests waiting on the person, each with sbxw's sentence and, in
+a block of its own labelled as the sandbox's words, its reason, and a button
+to the Requests panel (`relay_open`); the guest's one-time setup while it is
+not ready; the idle timers.
+
+**Extras.** `extra-topbar-mac` ("Mac", on a host that can run it): green
+running, amber when requests wait (with their count) or the guest setup is
+unfinished, red after a failure, blue while busy.
+
+**Data.** `mac`: `GET /api/mac`, the whole answer `{ok, mac}`, read again on
+the `mac` event and every 10 s (the VM's state and the guest's readiness
+change without an event).
+
+**Intents.** `mac_open`, `mac_refresh`, `mac_up` (direct; creating a missing
+VM goes through the core's dialog first: macOS is downloaded, several GB),
+`mac_pause`, `mac_window` (terminal-mac shows the VM's own window: the live
+view): direct. `mac_install`, `mac_stop`, `mac_force_off`, `mac_take_back`:
+**Approval**, the core's dialog built from `data.mac`. The in-app live screen
+is not ported: the daemon has no person-facing route for the guest's screen
+and input (BROWSER-MAC.md says which it would need).
