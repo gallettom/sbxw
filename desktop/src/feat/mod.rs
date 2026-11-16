@@ -683,6 +683,7 @@ macro_rules! features {
 features! {
     create,
     envfile,
+    files,
     network,
     relay,
     setup,
