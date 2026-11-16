@@ -451,3 +451,47 @@ fn the_standin_routes_keep_and_settle_grants() {
     assert_eq!(s["settled"]["removed"], json!(["a.test"]));
     assert_eq!(standin::route(&mut st, "GET", "/api/sandboxes/docs/browser/grants", &J::Null).unwrap().1["grants"], json!([]));
 }
+
+/// Where the time of one frame goes, on this machine: run by hand,
+/// `cargo test [--release] --lib frame_cost -- --ignored --nocapture`.
+/// Numbers in BROWSER-MAC.md.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn frame_cost() {
+    let _t = turn();
+    let jpeg = standin::picture(1280, 800, 1, 7, Some((300, 200)), 12);
+    let line = format!(r#"{{"t":"frame","d":"{}","w":1280,"h":800}}"#, proto::b64_encode(&jpeg));
+    let n = 60;
+    let time = |what: &str, f: &mut dyn FnMut()| {
+        f();
+        let t = Instant::now();
+        for _ in 0..n {
+            f();
+        }
+        let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("{what:<44} {per:8.2} ms");
+        per
+    };
+    println!("one 1280x800 frame: JPEG {} KB, line {} KB", jpeg.len() / 1024, line.len() / 1024);
+    time("stand-in: draw and JPEG-encode", &mut || {
+        let _ = standin::picture(1280, 800, 1, 7, Some((300, 200)), 12);
+    });
+    time("is_frame (socket I/O thread)", &mut || assert!(proto::is_frame(&line)));
+    let a = time("parse: JSON + base64 + checks", &mut || assert!(proto::parse(&line).is_some()));
+    let b = time("decode: picture::decode_rgba", &mut || {
+        crate::picture::decode_rgba(&jpeg, crate::surface::frame_limits()).unwrap();
+    });
+    let (w, h, rgba) = crate::picture::decode_rgba(&jpeg, crate::surface::frame_limits()).unwrap();
+    let c = time("hand-over: surface::set_rgba (copy)", &mut || crate::surface::set_rgba("bench", w, h, rgba.clone()).unwrap());
+    opened("web-app");
+    let t0 = Instant::now();
+    let mut k = 0u32;
+    let d = time("all of `incoming` (parse, decode, set, stats)", &mut || {
+        k += 1;
+        incoming(&line, t0 + Duration::from_millis(k as u64 * 5));
+    });
+    println!("parse + decode + hand-over {:.2} ms; the feature's whole path {d:.2} ms: at most {:.0} frames/s on the socket's thread", a + b + c, 1000.0 / d);
+    with(|s| *s = None);
+    crate::surface::clear("bench");
+    crate::surface::clear(ID);
+}

@@ -239,7 +239,7 @@ impl Stats {
     }
 
     fn view(&self) -> J {
-        json!({ "frames": self.frames, "refused": self.refused, "fps": (self.fps * 10.0).round() / 10.0, "latency_ms": self.median() })
+        json!({ "frames": self.frames, "refused": self.refused, "fps": (self.fps as f64 * 10.0).round() / 10.0, "latency_ms": self.median() })
     }
 }
 

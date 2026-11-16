@@ -18,7 +18,12 @@ use crate::feat::{match_path, query, Standin, WsPeer};
 use serde_json::{json, Value as J};
 use std::time::{Duration, Instant};
 
-const FRAME_EVERY: Duration = Duration::from_millis(33);
+/// Pictures a second while the page animates: `SBXW_STANDIN_BROWSER_FPS`
+/// (default 30; 0: a picture only when the page loads or answers input).
+fn frame_every() -> Option<Duration> {
+    let fps: u64 = std::env::var("SBXW_STANDIN_BROWSER_FPS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    (fps > 0).then(|| Duration::from_millis(1000 / fps.min(120)))
+}
 const ANIMATE_FOR: Duration = Duration::from_secs(2);
 
 pub fn route(st: &mut Standin, method: &str, path: &str, body: &J) -> Option<(u16, J)> {
@@ -159,7 +164,7 @@ pub fn socket(target: &str, peer: &mut dyn WsPeer) -> bool {
         return false;
     }
     let sb = query(target, "sandbox").unwrap_or_default();
-    log::info!("standin: browser of {sb} opened");
+    eprintln!("standin: browser of {sb} opened");
     let start = Instant::now();
     let mut p = Page { history: vec!["https://example.com/".into()], at: 0, size: (1280, 800), viewport: "auto".into(), click: None, typed: 0, tick: 0, animate_until: start + ANIMATE_FOR };
     let say = |peer: &mut dyn WsPeer, v: J| peer.send(&v.to_string());
@@ -172,7 +177,9 @@ pub fn socket(target: &str, peer: &mut dyn WsPeer) -> bool {
     say(peer, json!({ "t": "frame", "d": "!!not base64!!", "w": 1280, "h": 800 }));
     say(peer, json!({ "t": "frame", "d": proto::b64_encode(b"GIF89a not a jpeg"), "w": 1280, "h": 800 }));
     let mut told_blocked = false;
-    let mut last_frame = start - FRAME_EVERY;
+    let every = frame_every();
+    let tick = every.unwrap_or(Duration::from_millis(200));
+    let mut last_frame = start - tick;
     let mut sent = 0u64;
     loop {
         let now = Instant::now();
@@ -183,7 +190,8 @@ pub fn socket(target: &str, peer: &mut dyn WsPeer) -> bool {
             // Said again while the page retries: the app shows it once.
             say(peer, json!({ "t": "blocked", "host": "fonts.googleapis.com", "kind": "" }));
         }
-        if p.animating(now) && now.duration_since(last_frame) >= FRAME_EVERY {
+        // With no frame rate, one picture when the page loads.
+        if (p.animating(now) && every.is_some() || sent == 0) && now.duration_since(last_frame) >= tick {
             p.tick += 1;
             if !peer.send(&frame_line(&p)) {
                 break;
@@ -191,14 +199,14 @@ pub fn socket(target: &str, peer: &mut dyn WsPeer) -> bool {
             sent += 1;
             last_frame = now;
         }
-        let wait = if p.animating(now) { FRAME_EVERY.saturating_sub(now.duration_since(last_frame)).max(Duration::from_millis(2)) } else { Duration::from_millis(200) };
+        let wait = if p.animating(now) && every.is_some() { tick.saturating_sub(now.duration_since(last_frame)).max(Duration::from_millis(2)) } else { Duration::from_millis(200) };
         let msg = match peer.recv(wait) {
             Ok(Some(m)) => m,
             Ok(None) => continue,
             Err(_) => break,
         };
         let Ok(m) = serde_json::from_str::<J>(&msg) else { continue };
-        log::info!("standin: browser got {}", short(&msg));
+        eprintln!("standin: browser got {}", short(&msg));
         let now = Instant::now();
         let mut answer = false;
         match m["t"].as_str().unwrap_or("") {
@@ -264,7 +272,7 @@ pub fn socket(target: &str, peer: &mut dyn WsPeer) -> bool {
                 say(peer, json!({ "t": "closed" }));
                 say(peer, json!({ "t": "gone" }));
                 peer.close();
-                log::info!("standin: browser of {sb} closed ({sent} frames sent)");
+                eprintln!("standin: browser of {sb} closed ({sent} frames sent)");
                 return true;
             }
             _ => {}
@@ -279,7 +287,7 @@ pub fn socket(target: &str, peer: &mut dyn WsPeer) -> bool {
             last_frame = Instant::now();
         }
     }
-    log::info!("standin: browser of {sb}: the app left ({sent} frames sent); the browser keeps running");
+    eprintln!("standin: browser of {sb}: the app left ({sent} frames sent); the browser keeps running");
     true
 }
 

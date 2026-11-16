@@ -1,0 +1,32 @@
+{
+ "about": "For the stand-in daemon (demo-browser.sh): web-app's agent is using its browser; nothing shown yet.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   }
+  ],
+  "browser_active": {
+   "ok": true,
+   "sandboxes": [
+    "web-app"
+   ]
+  },
+  "browser_grants": {
+   "web-app": {
+    "ok": true,
+    "grants": []
+   }
+  },
+  "sessions": []
+ }
+}
