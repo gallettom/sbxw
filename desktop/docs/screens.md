@@ -650,7 +650,9 @@ multiple }` opens the native open dialog (Rune's picks one file; it needs
 Rune's `native-file-dialog` feature, not enabled: until then a notice says
 "Drop the file on this panel, or paste an image."),
 `ReadClipboard` reads the clipboard for a picture, both answering through
-`on_files`; `Image { key, bytes }` registers a picture for `image{ key }`
+`on_files` (both run only from the person's own press on a screen, never from
+a feature's data, events or answers; a screen never gets the clipboard's
+content, only the feature's Rust does); `Image { key, bytes }` registers a picture for `image{ key }`
 (decoded by the core; empty bytes forget it). Headless scripts drive them with
 Rune's `drop_files`, `paste` (`{"paste": {"png": "file.png"}}`) and
 `file-dialog` events.

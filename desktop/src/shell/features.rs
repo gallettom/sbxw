@@ -152,6 +152,12 @@ impl App {
                     self.feats.notice_then = then;
                 }
                 Action::OpenLink(url) => self.run_intent(from, Intent::OpenLink { url }),
+                // Both only from the person's own press on one of the
+                // feature's screens: never from its data, events or answers
+                // (`feature:<name>`), nor while typing.
+                Action::PickFiles { .. } | Action::ReadClipboard if !self.pressed(from) => {
+                    self.notify(format!("{}: opening a file or reading the clipboard runs only from your own press: refused", f.name), true);
+                }
                 Action::PickFiles { title, extensions, multiple: _ } => self.feats.asks.push((f.name, Ask::PickFiles { title, extensions })),
                 Action::ReadClipboard => self.feats.asks.push((f.name, Ask::ReadClipboard)),
                 Action::Image { key, bytes } => {
@@ -197,6 +203,13 @@ impl App {
             };
         }
         Err(format!("no core operation {path}"))
+    }
+
+    /// Whether an intent from `from` comes from the person's own press: a
+    /// screen (not while an input's per-keystroke action runs), a pane bar,
+    /// a notice or a shortcut; never a feature's own chain (`feature:<name>`).
+    pub(super) fn pressed(&self, from: &str) -> bool {
+        !from.starts_with("feature:") && !self.screens.iter().any(|s| s.name == from && s.ui.editing)
     }
 
     /// What the person handed a feature: its `on_files` runs (no `on_files`: said so).

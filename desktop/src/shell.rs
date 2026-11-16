@@ -1047,8 +1047,7 @@ impl App {
                 // Only the person's own press copies: not a feature's chain of
                 // actions (`feature:<name>`: data, events, answers), not an
                 // input's per-keystroke action.
-                let typing = self.screens.iter().any(|s| s.name == from && s.ui.editing);
-                if from.starts_with("feature:") || typing {
+                if !self.pressed(from) {
                     self.notify(format!("{from}: a copy runs only from your own press: refused"), true);
                 } else if text.len() > 100 * 1024 {
                     self.notify(format!("{from}: more than 100 KB to copy, refused"), true);
@@ -1638,8 +1637,12 @@ end, actions = {} }"#).unwrap();
         // Over 100 KB: refused.
         a.run_intent("sandboxes", copy(&"x".repeat(100 * 1024 + 1)));
         assert!(a.feats.asks.is_empty());
-        // No intent reads the clipboard.
-        assert!(crate::intent::all().all(|s| !s.name.contains("paste") && !s.name.contains("read_clip")));
+        // Reading the clipboard (for a feature's Rust, never a screen) also
+        // needs a press: a feature's own chain is refused.
+        a.feature_actions(App::feature_of("relay").unwrap(), "feature:relay", vec![crate::feat::Action::ReadClipboard]);
+        assert!(a.feats.asks.is_empty());
+        a.feature_actions(App::feature_of("relay").unwrap(), "relay", vec![crate::feat::Action::ReadClipboard]);
+        assert_eq!(a.feats.asks.len(), 1);
     }
 
     #[test]
