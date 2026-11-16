@@ -825,6 +825,11 @@ impl State {
             match fresh.as_slice() {
                 [] => {}
                 [r] if !first => {
+                    if s(r, "kind") == "ask" {
+                        // A short spoken cue (relay.js `vcAskCue`); the round itself is read on demand.
+                        let n = round::parse(s(r, "question")).questions.len();
+                        speak(format!("{} asks you {}: answer in the Requests panel.", who(r), if n == 1 { "one question".to_string() } else { format!("{n} questions") }));
+                    }
                     let text = match s(r, "kind") {
                         "screenshot" => format!("{} asks for a screenshot: {}", who(r), gist(s(r, "question"))),
                         "ask" => {
