@@ -207,19 +207,30 @@ Prompts are spoken in French with a French voice (`[voice] tts_voice =
   guidance in `CLAUDE.md` and leaves the agent to read it if it seems
   relevant, so sbxw writes Jarvis's role into the sandbox's
   `~/.claude/CLAUDE.md` itself, in a block between
-  `<!-- sbxw:jarvis:begin -->` and `<!-- sbxw:jarvis:end -->`, and registers
+  `<!-- sbxw:jarvis:begin -->` and `<!-- sbxw:jarvis:end -->`, replacing the
+  block, never adding a second. It also writes the `sbxw-config` server's
+  script, `/home/agent/.sbxw/jarvis/config-mcp.js`, when the sandbox's copy
+  is missing or differs from the one in this version of sbxw, and registers
   `sbxw-config` in `~/.claude.json`. It does this when it creates the
-  sandbox and again before each Claude session starts there, replacing the
-  block, never adding a second. A Jarvis made by an older sbxw is repaired
-  this way at its next start.
-- **Checking it.** `GET /api/jarvis/status` adds `role_written` and
-  `tools_registered` (what the last setup wrote; `null` when no session
-  started since the daemon did) and a `note` in plain words when something
-  is missing. A session that was already running keeps what it read when it
-  started: stop the sandbox (`sbxw stop sbxw-jarvis`) and start Jarvis again
-  to get a session that reads its role and has its tools. If the
-  `sbxw-config` server's script is missing from the sandbox, only recreating
-  it repairs that: `sbxw rm sbxw-jarvis`, then start Jarvis.
+  sandbox and again before each Claude session starts there, in one
+  command. A Jarvis made by an older sbxw is repaired and gets the new tools
+  this way at its next start, without being recreated.
+- **New tools need a new session.** Claude loads its MCP servers when its
+  session starts. When sbxw updates the script while Jarvis's sandbox is
+  already running, the session there may still have the old tools; the
+  status note then says so: stop Jarvis's sandbox
+  (`sbxw stop sbxw-jarvis`) and start Jarvis again. sbxw never restarts it
+  by itself.
+- **Checking it.** `GET /api/jarvis/status` adds `role_written`,
+  `tools_registered` and `tools_updated` (what the last setup did:
+  `tools_updated` is `true` when the script was rewritten, `false` when it
+  was already current; all three are `null` when no session started since
+  the daemon did) and a `note` in plain words when something could not be
+  written or a restart is needed. A session that was already running keeps
+  what it read when it started: stop the sandbox (`sbxw stop sbxw-jarvis`)
+  and start Jarvis again to get a session that reads its role and has its
+  tools. If the script cannot be written at all, recreating the sandbox
+  repairs that: `sbxw rm sbxw-jarvis`, then start Jarvis.
 - **Config:** sbxw's defaults, not your daemon's `sbxw.toml`. Only the
   listeners, the network policy and the model are taken from it. No mounts,
   no env, no ports, no shared skills, one session and no threads.

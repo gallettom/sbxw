@@ -180,7 +180,10 @@ mod tests {
         // Light on purpose: no lifecycle hook, no network rule, no credential.
         assert_eq!(kinds, ["com.docker.sandbox/agent-context@2"], "{kinds:?}");
         let server = format!("files{}", sbxw_core::tooling::CONFIG_MCP_PATH);
-        assert!(files.iter().any(|(r, _, _)| *r == server), "{server} is what the tooling registers");
+        let (_, mode, bytes) = files.iter().find(|(r, _, _)| *r == server).unwrap_or_else(|| panic!("{server} is what the tooling registers"));
+        // What a creation copies is what the batch refreshes an existing Jarvis with.
+        assert_eq!(*bytes, sbxw_core::tooling::CONFIG_MCP.as_bytes(), "one source for the kit and the refresh");
+        assert_eq!(*mode, 0o644, "the refresh writes it 0644, as the kit ships it");
         let rels: Vec<&str> = files.iter().map(|(r, _, _)| *r).collect();
         assert_eq!(rels.len(), 2, "the spec and the server, nothing else: {rels:?}");
         assert!(!sbxw_core::kits::BUNDLED.contains(&sbxw_core::kits::JARVIS), "never offered to a project");
