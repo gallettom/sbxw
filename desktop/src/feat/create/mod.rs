@@ -94,6 +94,11 @@ pub const FEATURE: Feature = Feature {
     standin: Some(standin::route),
     // The host-access lines go out only from the core's dialog, on Allow.
     core_only: &["approved"],
+    // The web UI's ⌥N and ⌥M (Ctrl+Option on macOS).
+    shortcuts: &[
+        crate::feat::Shortcut { key: 'n', intent: "create_open", args: "{}", help: "New sandbox" },
+        crate::feat::Shortcut { key: 'm', intent: "create_open", args: r#"{"dialog":"chat"}"#, help: "New chat" },
+    ],
     ..Feature::EMPTY
 };
 
@@ -298,6 +303,13 @@ impl State {
         let f = &mut self.form;
         match a.name {
             "create_open" => {
+                // The host last used, across runs too (the app's state file).
+                if self.last_host.is_empty() {
+                    if let Some(h) = ctx.get("app")["kept"]["create"]["host"].as_str() {
+                        self.last_host = h.to_string();
+                    }
+                }
+                let f = &mut self.form;
                 let d = a.s("dialog").and_then(Dialog::parse).unwrap_or(Dialog::Chooser);
                 match d {
                     Dialog::Chooser => f.dialog = Some(Dialog::Chooser),
@@ -316,6 +328,7 @@ impl State {
             "create_host" => {
                 f.set_host(a.req("host"));
                 self.last_host = f.host.clone();
+                out.push(Action::Remember { key: "host".into(), value: J::String(f.host.clone()) });
                 if !f.remote() {
                     out.push(Action::Call(Call::get("/api/kit-mounts", "read the kits' folders").tag("kit-mounts")));
                 }

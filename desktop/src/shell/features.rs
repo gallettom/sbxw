@@ -164,7 +164,15 @@ impl App {
                         }
                     }
                 }
-                Action::Remember { key, value } => self.store.set_in("features", &format!("{}.{key}", f.name), value),
+                Action::Remember { key, value } => {
+                    let mut mine = self.store.get("features")[f.name].as_object().cloned().unwrap_or_default();
+                    if value.is_null() {
+                        mine.remove(&key);
+                    } else {
+                        mine.insert(key, value);
+                    }
+                    self.store.set_in("features", f.name, if mine.is_empty() { J::Null } else { J::Object(mine) });
+                }
                 Action::Intent { name, args } => match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
                     Ok(list) => crate::screen::Host::intents(self, &format!("feature:{}", f.name), list),
                     Err(e) => self.notify(format!("{}: {e}", f.name), true),
@@ -205,6 +213,27 @@ impl App {
         let acts = on(&Ctx { data: &data }, inc);
         self.feature_actions(f, &format!("feature:{name}"), acts);
         self.push_data();
+    }
+
+    /// A feature's global shortcut, if `ev` is one (see [`feat::Shortcut`]): runs its intent.
+    pub(super) fn shortcut(&mut self, ev: &rune::KeyEvent, tx: &rune::Tx) -> bool {
+        let m = ev.mods;
+        let mac = cfg!(target_os = "macos");
+        if !m.alt || m.shift || (mac && !m.ctrl) || (!mac && m.ctrl) || (mac && m.logo) {
+            return false;
+        }
+        // The key's place first (Option changes what a key types on macOS), else what it typed.
+        let typed = match (tx.physical_key(), &ev.key) {
+            (Some(code), _) => format!("{code:?}").strip_prefix("Key").and_then(|k| k.chars().next()).map(|c| c.to_ascii_lowercase()),
+            (None, rune::Key::Text(t)) => t.chars().next().map(|c| c.to_ascii_lowercase()),
+            (None, rune::Key::Command(c)) => Some(c.to_ascii_lowercase()),
+            _ => None,
+        };
+        let Some(k) = typed else { return false };
+        let Some(sc) = feat::FEATURES.iter().flat_map(|f| f.shortcuts.iter()).find(|s| s.key == k) else { return false };
+        let args: J = serde_json::from_str(sc.args).unwrap_or(json!({}));
+        self.press_extra("shortcut", sc.intent, &args);
+        true
     }
 
     /// The feature whose panel is shown, if it takes files.

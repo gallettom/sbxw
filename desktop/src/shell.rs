@@ -764,6 +764,10 @@ impl App {
             self.push_data();
             return true;
         }
+        if self.shortcut(ev, tx) {
+            self.push_data();
+            return true;
+        }
         if self.jarvis_key(ev, tx) {
             self.push_data();
             return true;
@@ -1582,6 +1586,28 @@ end, actions = {} }"#).unwrap();
         // A plain key: a string.
         a.feats_link(LinkEvent::Data { key: "usage".into(), result: Err("down".into()) });
         assert_eq!(a.screen_data()["app"]["errors"]["usage"], "down");
+    }
+
+    /// Alt+N (Ctrl+Option+N on macOS) opens New; the host chosen is kept across runs.
+    #[test]
+    fn alt_n_opens_new_and_the_host_is_remembered() {
+        let mut a = app();
+        let tx = Tx::default();
+        let mut ev = KeyEvent { key: Key::Text("n".into()), mods: Default::default() };
+        ev.mods.alt = true;
+        ev.mods.ctrl = cfg!(target_os = "macos");
+        assert!(a.shortcut(&ev, &tx));
+        assert_eq!(a.feats.modal.as_ref().map(|m| m.0.as_str()), Some("create"));
+        ev.mods.shift = true;
+        assert!(!a.shortcut(&ev, &tx), "Shift: not ours");
+        ev.mods.shift = false;
+        ev.mods.alt = false;
+        assert!(!a.shortcut(&ev, &tx), "no Alt: the terminal's");
+        a.intents("test", crate::intent::parse(&serde_json::json!({ "kind": "intent", "name": "create_host", "args": { "host": "build-box" } })).unwrap());
+        // No remote host is listed in this fixture: the form falls back to
+        // `local`, and what it uses is what is kept.
+        assert_eq!(a.store.get("features")["create"]["host"], "local");
+        assert_eq!(a.screen_data()["app"]["kept"]["create"]["host"], "local");
     }
 
     #[test]

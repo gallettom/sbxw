@@ -76,6 +76,22 @@ pub struct Feature {
     /// only ways a feature gets a path to read: never from a screen or a
     /// sandbox. Pictures go through [`crate::picture::prepare`].
     pub on_files: Option<fn(&Ctx, Incoming) -> Vec<Action>>,
+    /// Global keyboard shortcuts: the window takes them before any pane.
+    pub shortcuts: &'static [Shortcut],
+}
+
+/// A global shortcut: the web UI's rule (`assets/js/util.js`,
+/// `isAppShortcut`): Alt+<key> off macOS; Ctrl+Option+<key> on macOS, where
+/// Option alone types characters (⌥N is the `~` dead key). Shift and Cmd off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shortcut {
+    /// The letter, by its place on the keyboard (`n` is the key labelled N on a US layout).
+    pub key: char,
+    /// The intent it runs (checked as any), with these arguments as JSON.
+    pub intent: &'static str,
+    pub args: &'static str,
+    /// For Help: what it does.
+    pub help: &'static str,
 }
 
 /// What the person handed a feature (see [`Feature::on_files`]).
@@ -89,7 +105,7 @@ pub enum Incoming {
 
 impl Feature {
     /// A feature with nothing declared, to fill with `..Feature::EMPTY`.
-    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None };
+    pub const EMPTY: Feature = Feature { name: "", data: &[], events: &[], screens: &[], intents: &[], act: no_act, on_event: None, on_answer: None, on_data: None, extras: None, standin: None, core_only: &[], on_files: None, shortcuts: &[] };
 }
 
 fn no_act(_: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
