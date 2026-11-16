@@ -23,7 +23,7 @@ feature": `desktop/docs/screens.md`. Shots of this thread: `integ/`.
 | Env file (desktop-integ) | The environment file card (`sbxenv.yaml`): folder, preview, copy, save, overwrite | none (as the web UI) |
 | Create and Setup leftovers (desktop-integ) | Alt+N (New) and Alt+M (chat), Ctrl+Option on macOS; the remote host remembered across runs; Setup opens on the last tab; copy the provision command | |
 | Threads and plans (desktop-threads) | See [THREADS.md](THREADS.md): sessions under each sandbox, the Threads panel, new thread or session, close, Team mode, the plan dialog with edits, approve and merge, the board, worktrees as text | Closing a thread, approving a plan, merging, ending Team mode, Remote Control login |
-| Relay (desktop-relay) | See [RELAY.md](RELAY.md) | See its report |
+| Relay (desktop-relay) | See [RELAY.md](RELAY.md): the Requests panel (questions from one sandbox to another, routed or answered yourself; screenshot requests with pictures dropped, pasted or from the clipboard button; rounds as one form with recommendations, drafts and Answer by voice; virtual Mac requests); agents waiting on AskUserQuestion answered from the panel; following another sandbox from the Jarvis panel (picker, Follow, words as a draft) | Routing a request and every release (the text that leaves, masked, and where it goes; pictures with their size and source); words to a followed sandbox; a choice for it |
 
 ## The phase 3 bugs: cause and fix
 
@@ -103,6 +103,18 @@ every shot's top bar.
 
 ## Integrator notes
 
+- Notices: phase 3 pinned them over the bottom right of the window for 4 s,
+  over the Jarvis input and its talk and send buttons, so a click meant for
+  the input ran the notice's action (found by desktop-relay). A notice now
+  sits **in the top bar's layout**, at its right end: one line (its full text
+  as a tooltip), what a click does, a × to dismiss. It covers nothing,
+  takes only its own clicks, and stays under any modal and core dialog drawn
+  over the window. Checked headless with the Jarvis panel and the Network
+  panel open and a notice showing: a tap on the Jarvis input focuses it and
+  typing goes there (`integ/notice-in-top-bar.png`; the notice's box is
+  inside the top bar's, the input's far below). Scripts no longer need to
+  wait notices out.
+
 - Registered: `envfile`, `relay`, `templates`, `threads` (and phase 3's).
 - Stand-in: `GET /api/sessions` adds the fixture's `sessions` (one key for
   threads, relay and Jarvis's seed); `POST /api/chat/push` to another sandbox
@@ -157,7 +169,11 @@ the Project/files panel of the next plan will want it.
 | Code map runs (`codemap.js`), SSH card (`ssh.js`) | Not in this plan |
 | Agent activity strips, `/api/ptys`, `/api/hook/log` | Not in this plan (threads show each session's state word instead) |
 | Threads: the worktree graph drawn (shown as text), the board's clock times, editing the distillate, a multi-line goal field | No drawing surface for graphs and no clock in Luau; the `textarea` element now exists, so the goal field can use it next ([THREADS.md](THREADS.md)) |
-| Relay | See [RELAY.md](RELAY.md) |
+| Relay: capture a window (`getDisplayMedia`) | The app has no screen capture; ⌘⇧⌃4 (to the clipboard) then paste does the same ([RELAY.md](RELAY.md)) |
+| Relay: Choose a file… | Waits on the native file dialog decision (above); drop and paste work |
+| `chat-dock.js` (the ephemeral-chat dock) | Chats open in a pane; their AskUserQuestion is answered from the Requests panel; the dock's own transcript and tabs are a feature of their own |
+| The grill one question at a time (`vcGrill`) | Replaced by one form per round, with Answer by voice (the same commands) |
+| A spoken "oui" sending a draft to a followed sandbox | The core's dialog is answered by a click only |
 | Setup: MCP edit prefill | `sbx mcp ls` gives no detail of a server; needs the daemon to answer one |
 | Setup: a kept skill's date | No date formatting in Luau; the daemon would send a readable date |
 | Network: the policy log's sort by decision, `sbx policy ls` raw fold | Unchanged since phase 3 |
@@ -261,17 +277,26 @@ UI open beside it helps to compare.
 
 **Relay** ([RELAY.md](RELAY.md), its procedure in full)
 
-12. Follow RELAY.md's procedure. For a screenshot request, drop a PNG on the
-    Requests panel, or take a screenshot to the clipboard (⌘⇧⌃4) and press ⌘V
-    while the panel shows and no terminal has the focus: the picture is
-    attached. An animated or huge picture is refused with a notice.
+12. Follow RELAY.md's 20 steps. In short: ask a question from web-app with
+    `ask_other_sandbox`; the Requests panel opens; route it (the app's dialog
+    shows the question and the target) or answer it yourself; Refuse is
+    direct. For a screenshot request, drop a PNG on the panel, or take a
+    screenshot to the clipboard (⌘⇧⌃4) and press ⌘V while the panel shows
+    and no terminal has the focus: the picture is attached; Send lists each
+    picture with its size. A 10 MB PDF or an animated picture is refused with
+    a notice. `/grill-me` in a sandbox: the round opens as one form. In
+    Jarvis, pick web-app in the title: your words become a draft for web-app
+    in the app's dialog, never a yes to a Jarvis proposal.
+13. A notice (for example after step 6's Copy) sits at the right end of the
+    top bar. While it shows, click the Jarvis input and type: the text goes
+    into the input; the notice only acts when clicked itself.
 
 **Across areas**
 
-13. Stop the daemon with panels and a dialog open: the top bar says so;
+14. Stop the daemon with panels and a dialog open: the top bar says so;
     panels keep their last values. `sbxw up`: the app reconnects within
     seconds, the lists refresh, and the panes' terminals come back.
-14. Quit and restart: panels start closed; Setup's last tab, the create host
+15. Quit and restart: panels start closed; Setup's last tab, the create host
     and the overrides' records are kept (`~/.sbxw/desktop/state.json`).
 
 If a step fails, report the step number, a screenshot and `app.log`.

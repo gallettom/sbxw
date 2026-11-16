@@ -1203,6 +1203,14 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         // The traffic lights (macOS) sit over this band: nothing goes under them.
         .child(el().key("traffic-lights-room").w(inset + 4.0).h_full())
         .child(col().grow(1.0).min_w(0.0).h_full().justify_center().pr(12.0).child(top_el));
+    // The notice lives IN the top bar, at its right end, part of its layout:
+    // it covers nothing (phase 3 pinned it over the bottom right, where the
+    // Jarvis input and its buttons are, and took their clicks), and it sits
+    // under any modal or core dialog drawn later.
+    let bar = match notice_view(s) {
+        Some(n) => bar.child(n),
+        None => bar,
+    };
     let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
     let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
     for p in fpanels {
@@ -1219,41 +1227,6 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(m) = modal {
         root = root.child(m);
     }
-    if let Some((t, err, _)) = &s.notice {
-        let offer = s.feats.notice_then.is_some();
-        let mut note = col().gap(3.0).w_full().child(text(t.clone()).font(small(12.0, 400.0)).color(c("text-bright")).wrap().w_full());
-        if offer {
-            let what = match s.feats.notice_then.as_ref().map(|t| t.0.as_str()) {
-                Some("screen_restore") => "Click to see the file and restore the built-in",
-                _ => "Click to open",
-            };
-            note = note.child(text(what).font(small(11.0, 500.0)).color(c("blue")));
-        }
-        let mut ne = el().key("notice").pin(None, None, Some(16.0), Some(16.0));
-        // A long line wraps in a fixed width (an auto width measures it unwrapped).
-        if t.chars().count() > 56 {
-            ne = ne.w(420.0f32.min(s.window.0 - 32.0));
-        }
-        root = root.child(
-            ne
-                .max_w(420.0)
-                .px(12.0)
-                .py(8.0)
-                .radius(theme::radius("sm").unwrap())
-                .fill(c(if *err { "red-tint" } else { "surface" }))
-                .border(1.0, c(if *err { "red" } else { "border" }))
-                .cursor(Cursor::Pointer)
-                .on_press(|s: &mut App| {
-                    s.notice = None;
-                    // The notice's offer: a click runs it, checked as any intent.
-                    if let Some((name, args)) = s.feats.notice_then.take() {
-                        s.press_extra("notice", &name, &args);
-                    }
-                    s.push_data();
-                })
-                .child(note),
-        );
-    }
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
@@ -1264,6 +1237,61 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         root = root.child(dialog);
     }
     root
+}
+
+/// The notice (key `notice`): one line of text, its full text as a tooltip,
+/// and what a click on it does; clickable only on itself. A × dismisses it.
+fn notice_view(s: &App) -> Option<El> {
+    let (t, err, _) = s.notice.as_ref()?;
+    let what = s.feats.notice_then.as_ref().map(|t| match t.0.as_str() {
+        "screen_restore" => "Click to see the file and restore the built-in",
+        _ => "Click to open",
+    });
+    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(11.5, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
+    if let Some(w) = what {
+        body = body.child(text(w).font(small(10.5, 500.0)).color(c("blue")).truncate().min_w(0.0));
+    }
+    let close = el()
+        .key("notice-close")
+        .role("button")
+        .label("Dismiss")
+        .padding(3.0)
+        .radius(theme::radius("xs").unwrap())
+        .hover(c("border"))
+        .cursor(Cursor::Pointer)
+        .on_press(|s: &mut App| {
+            s.notice = None;
+            s.feats.notice_then = None;
+            s.push_data();
+        })
+        .child(rune::icon(crate::icons::get("close").unwrap(), 10.0).color(c("text-muted")));
+    Some(
+        row()
+            .key("notice")
+            .role("status")
+            .help(t.clone())
+            .gap(6.0)
+            .items_center()
+            .max_w(380.0f32.min(s.window.0 * 0.35))
+            .min_w(0.0)
+            .mr(8.0)
+            .px(8.0)
+            .py(4.0)
+            .radius(theme::radius("sm").unwrap())
+            .fill(c(if *err { "red-tint" } else { "bg" }))
+            .border(1.0, c(if *err { "red" } else { "border" }))
+            .cursor(Cursor::Pointer)
+            .on_press(|s: &mut App| {
+                s.notice = None;
+                // The notice's offer: a click runs it, checked as any intent.
+                if let Some((name, args)) = s.feats.notice_then.take() {
+                    s.press_extra("notice", &name, &args);
+                }
+                s.push_data();
+            })
+            .child(body)
+            .child(close),
+    )
 }
 
 fn panes_view(s: &App) -> El {
