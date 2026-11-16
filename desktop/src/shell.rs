@@ -781,8 +781,12 @@ impl App {
             self.push_data();
             return true;
         }
-        // A picture surface has the keyboard: what it passed on is the app's, never a terminal's.
-        if crate::surface::focused().is_some() {
+        // A terminal gets keys only when its grid has the keyboard (or
+        // nothing has it): never while an input, a textarea, a secret field,
+        // a button, a modal, a core dialog or a picture surface has it,
+        // whatever the modifiers (Ctrl+C typed in a field must never reach
+        // an agent's shell).
+        if !self.terminal_may_take_keys(tx.focused()) {
             return false;
         }
         let f = self.focused;
@@ -798,8 +802,17 @@ impl App {
         t.on_key_tx(ev, tx, lens(f))
     }
 
+    /// Whether a key or a paste the window did not route elsewhere may go to
+    /// the focused pane's terminal: only with no dialog, modal or surface
+    /// up, and Rune's focus on a terminal grid (the core moves it there when
+    /// it opens or focuses a pane).
+    pub fn terminal_may_take_keys(&self, rune_focus: Option<&str>) -> bool {
+        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || crate::surface::focused().is_some();
+        !overlay && rune_focus.is_some_and(|k| k.starts_with("grid"))
+    }
+
     /// The input method (dead keys, CJK, emoji): to the focused pane.
-    pub fn on_ime(&mut self, ime: &rune::Ime) -> bool {
+    pub fn on_ime(&mut self, ime: &rune::Ime, rune_focus: Option<&str>) -> bool {
         if let Some(id) = crate::surface::focused() {
             if let rune::Ime::Commit(t) = ime {
                 if !t.is_empty() {
@@ -807,6 +820,9 @@ impl App {
                 }
             }
             return true;
+        }
+        if !self.terminal_may_take_keys(rune_focus) {
+            return false;
         }
         let f = self.focused;
         self.panes.get_mut(f).and_then(|p| p.term.as_mut()).is_some_and(|t| t.on_ime(ime))
@@ -1177,7 +1193,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 s.feature_incoming(f, crate::feat::Incoming::Png(img.png().to_vec()));
                 return;
             }
-            if !content.text().is_empty() {
+            // A paste reaches a terminal only as a key would (a field that
+            // has the keyboard takes its own paste inside Rune).
+            if !content.text().is_empty() && (crate::surface::focused().is_some() || s.terminal_may_take_keys(tx.focused())) {
                 s.paste(content.text());
             }
         })
@@ -1416,6 +1434,9 @@ fn pane_view(s: &App, i: usize) -> El {
         .radius(theme::radius("md").unwrap())
         .clip_rounded(theme::radius("md").unwrap())
         .on_press(move |s: &mut App| {
+            // A press anywhere on a pane gives its terminal the keyboard
+            // (keys reach a terminal only through its grid's focus).
+            s.refocus = true;
             if s.focused != i {
                 s.focused = i;
                 s.touch(i);
@@ -1437,6 +1458,144 @@ mod tests {
     fn app() -> App {
         let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/two-panes.json");
         App::new(Args { fixture: Some(fixture.into()), ..Args::default() })
+    }
+
+    /// The app in Rune's own runtime, its window `on_key` wired as in
+    /// main.rs, a live terminal in pane 1 whose input we read.
+    fn window_with_terminal() -> (rune::Runtime<App>, std::sync::mpsc::Receiver<crate::client::TermInput>, rune::clipboard::MemoryClipboard) {
+        let mut a = app();
+        let (_ev_tx, ev_rx) = std::sync::mpsc::channel();
+        let (in_tx, in_rx) = std::sync::mpsc::channel();
+        std::mem::forget(_ev_tx);
+        let mut t = TerminalState::new(crate::client::TerminalConn { events: ev_rx, input: in_tx });
+        t.resize(40, 5);
+        t.id = "1".into();
+        a.ensure_panes(1);
+        a.panes[0].sandbox = Some("web-app".into());
+        a.panes[0].term = Some(t);
+        a.focused = 0;
+        let mut rt = rune::Runtime::new(a, view, (1280.0, 800.0), rune::Env::new(true, 1.0));
+        rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
+        let clip = rune::clipboard::memory();
+        rt.use_clipboard(&clip);
+        rt.frame(0.0);
+        (rt, in_rx, clip)
+    }
+
+    fn sent(rx: &std::sync::mpsc::Receiver<crate::client::TermInput>) -> Vec<u8> {
+        let mut out = vec![];
+        while let Ok(i) = rx.try_recv() {
+            if let crate::client::TermInput::Bytes(b) = i {
+                out.extend(b);
+            }
+        }
+        out
+    }
+
+    fn tap(rt: &mut rune::Runtime<App>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+    }
+
+    fn chords() -> Vec<KeyEvent> {
+        let m = |cmd: bool, ctrl: bool, alt: bool, logo: bool, shift: bool| rune::Mods { cmd, ctrl, alt, logo, shift };
+        let mut v = vec![];
+        for c in ['a', 'c', 'd', 'u', 'v', 'z'] {
+            v.push(KeyEvent { key: Key::Command(c), mods: m(true, true, false, false, false) });
+            v.push(KeyEvent { key: Key::Command(c), mods: m(true, false, false, true, false) });
+            v.push(KeyEvent { key: Key::Text(c.to_string()), mods: m(false, true, true, false, false) });
+            v.push(KeyEvent { key: Key::Text(c.to_string()), mods: m(false, false, true, false, false) });
+        }
+        for k in [Key::Escape, Key::Tab, Key::Enter, Key::Up, Key::Function(5), Key::Backspace, Key::Text("x".into())] {
+            v.push(KeyEvent { key: k.clone(), mods: rune::Mods::default() });
+            v.push(KeyEvent { key: k, mods: m(true, true, false, false, true) });
+        }
+        v
+    }
+
+    /// No key and no paste reaches a terminal while anything else has the
+    /// keyboard: a screen input, a core dialog and its secret field, a modal.
+    #[test]
+    fn keys_reach_a_terminal_only_when_its_grid_has_the_keyboard() {
+        let (mut rt, rx, clip) = window_with_terminal();
+        // Nothing has the keyboard: nothing goes to the terminal either.
+        rt.key(KeyEvent { key: Key::Text("q".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"", "with nothing focused, no terminal takes a key");
+        // The control: its grid has the keyboard, it types.
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("q".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"q", "the grid with the keyboard takes it");
+        // A screen input (the sidebar's filter) has the keyboard.
+        tap(&mut rt, "filter");
+        rt.update(|_, tx| assert_eq!(tx.focused(), Some("filter")));
+        for ev in chords() {
+            rt.key(ev.clone());
+            rt.frame(0.02);
+            assert_eq!(sent(&rx), b"", "{ev:?} typed in a screen input (or after Escape left it) reached the terminal");
+        }
+        rt.paste("rm -rf ~");
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"", "a paste into an input reached the terminal");
+        // A core dialog with a secret field.
+        rt.update(|s, _| {
+            let f = App::feature_of("network").unwrap();
+            let c = crate::feat::Confirm::new("Save a secret", crate::feat::Call::post("/api/x", serde_json::json!({}), "x")).secret("Token", "value");
+            s.feature_actions(f, "network", vec![c.into_action()]);
+        });
+        rt.frame(0.02);
+        rt.update(|_, tx| tx.blur());
+        rt.frame(0.02);
+        for ev in chords() {
+            if ev.key == Key::Escape {
+                continue; // closes the dialog: tried last
+            }
+            rt.key(ev.clone());
+            rt.frame(0.02);
+            assert_eq!(sent(&rx), b"", "{ev:?} with the core dialog up reached the terminal");
+        }
+        rt.paste("hello");
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"", "a paste with the dialog up reached the terminal");
+        // In the secret field: Ctrl+V / Cmd+V paste into it, nowhere else.
+        tap(&mut rt, "cf-secret-0");
+        clip.set_text("s3cret");
+        for mods in [rune::Mods { cmd: true, ctrl: true, ..Default::default() }, rune::Mods { cmd: true, logo: true, ..Default::default() }] {
+            rt.key(KeyEvent { key: Key::Command('v'), mods });
+            rt.frame(0.02);
+            assert_eq!(sent(&rx), b"", "a paste in the secret field reached the terminal");
+        }
+        rt.update(|_, tx| assert_eq!(tx.focused(), Some("cf-secret-0")));
+        // The window's paste (what ⌘V becomes on macOS) with the field focused.
+        rt.paste("s3cret");
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"", "a window paste in the secret field reached the terminal");
+        let got = rt.state.feats.dialog.as_ref().unwrap().secrets[0].text.clone();
+        eprintln!("secret field after the pastes: {} characters", got.chars().count());
+        assert_eq!(got, "s3cret", "the paste went to the field");
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"");
+        // A modal: Escape closes it and sends nothing.
+        rt.update(|s, _| s.open_modal("templates", J::Null));
+        rt.frame(0.02);
+        rt.update(|_, tx| tx.blur());
+        rt.key(KeyEvent { key: Key::Command('c'), mods: rune::Mods { cmd: true, ctrl: true, ..Default::default() } });
+        // (Escape first leaves a field the modal focused, then closes it.)
+        for _ in 0..2 {
+            rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+            rt.frame(0.02);
+        }
+        assert!(rt.state.feats.modal.is_none(), "Escape closed the modal");
+        assert_eq!(sent(&rx), b"", "keys with the modal up reached the terminal");
+        // Back to the grid: it types again.
+        tap(&mut rt, "grid-1");
+        rt.key(KeyEvent { key: Key::Text("w".into()), mods: rune::Mods::default() });
+        rt.frame(0.02);
+        assert_eq!(sent(&rx), b"w");
     }
 
     /// A yes the screen put in the input itself is a message, never an

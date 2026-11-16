@@ -297,6 +297,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     }
 
     let mut foot = row().w_full().gap(8.0).items_center();
+    let mut ack_row = None;
     if pending {
         if needs_ack {
             let on = d.acked;
@@ -304,9 +305,10 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             if on {
                 b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
             }
-            foot = foot.child(
+            ack_row = Some(
                 row()
                     .key("jv-ack")
+                    .w_full()
                     .role("checkbox")
                     .checked(on)
                     .label("I have read this command")
@@ -315,7 +317,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .cursor(Cursor::Pointer)
                     .on_press(|s: &mut S| s.toggle_ack())
                     .child(b)
-                    .child(text("I have read this command").font(TextStyle::new(12.0, 500.0)).color(c("text-bright"))),
+                    .child(text("I have read this command").font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
             );
         }
         let reason = rune::text_input(d.reason, TextStyle::new(12.0, 400.0))
@@ -349,6 +351,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         .child(head)
         .child(watch::<S>(col().key("jv-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 130.0).max(80.0)).child(body), "jv-body"))
         .children(more_below("jv-body"))
+        .children(ack_row)
         .child(foot)
 }
 
@@ -466,7 +469,8 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             .radius(radius("sm").unwrap())
             .fill(c(fill))
             .border(1.0, c(edge))
-            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")));
+            .min_w(0.0)
+            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0));
         if enabled {
             b.hover(c(hover)).cursor(Cursor::Pointer)
         } else {
@@ -570,16 +574,19 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     if let Some(e) = d.error {
         body = body.child(small(e.to_string(), 12.0, 500.0, "red").key("cf-error"));
     }
-    let mut foot = row().w_full().gap(8.0).items_center();
+    // The acknowledgement box on its own line, above the buttons: it wraps,
+    // and it never pushes Confirm past the dialog's edge.
+    let mut ack_row = None;
     if let Some(ack) = d.confirm.and_then(|x| x.ack.clone()) {
         let on = d.acked;
         let mut b = rune::el().w(14.0).h(14.0).radius(4.0).border(1.0, c(if on { "blue" } else { "dim" })).items_center().justify_center();
         if on {
             b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
         }
-        foot = foot.child(
+        ack_row = Some(
             row()
                 .key("cf-ack")
+                .w_full()
                 .role("checkbox")
                 .checked(on)
                 .label(ack.clone())
@@ -589,12 +596,18 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                 .cursor(Cursor::Pointer)
                 .on_press(|s: &mut S| s.toggle_confirm_ack())
                 .child(b)
-                .child(text(ack).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
+                .child(text(ack).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0)),
         );
     }
     let (yes, no) = d.confirm.map(|x| (x.confirm.as_str(), x.cancel.as_str())).unwrap_or(("Confirm", "Cancel"));
-    foot = foot.child(rune::el().grow(1.0)).child(button("cf-cancel", no, false, true).on_press(|s: &mut S| s.cancel_click()));
-    foot = foot.child(if d.can_confirm() { button("cf-confirm", yes, true, true).on_press(|s: &mut S| s.confirm_click()) } else { button("cf-confirm", yes, true, false) });
+    let cancel = button("cf-cancel", no, false, true).on_press(|s: &mut S| s.cancel_click());
+    let confirm = if d.can_confirm() { button("cf-confirm", yes, true, true).on_press(|s: &mut S| s.confirm_click()) } else { button("cf-confirm", yes, true, false) };
+    // Long labels: one button per line, full width, so both always fit.
+    let foot = if yes.chars().count() + no.chars().count() > 36 {
+        col().w_full().gap(6.0).child(confirm.w_full()).child(cancel.w_full())
+    } else {
+        row().w_full().gap(8.0).items_center().child(rune::el().grow(1.0)).child(cancel).child(confirm)
+    };
     col()
         .key("cf-dialog")
         .role("dialog")
@@ -609,6 +622,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap())
         .child(watch::<S>(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body), "cf-body"))
         .children(more_below("cf-body"))
+        .children(ack_row)
         .child(foot)
 }
 

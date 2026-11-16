@@ -449,6 +449,10 @@ impl TerminalState {
                 if let Ok(ev) = self.events.recv_timeout(limit) {
                     changed |= self.on_event(ev);
                     got = true;
+                } else {
+                    // A key with no echo (Ctrl+A at an empty prompt): one
+                    // settle wait is enough, never one on every later frame.
+                    self.key_sent = None;
                 }
             }
             while let Ok(ev) = self.events.try_recv() {

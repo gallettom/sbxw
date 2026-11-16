@@ -587,7 +587,7 @@ impl App {
         });
     }
 
-    fn open_modal(&mut self, screen: &str, arg: J) {
+    pub(super) fn open_modal(&mut self, screen: &str, arg: J) {
         match feat::screen(screen) {
             Some((_, s)) if matches!(s.slot, Slot::Modal { .. }) => self.feats.modal = Some((screen.to_string(), arg)),
             _ => self.notify(format!("open_modal: no dialog screen named {screen}"), true),

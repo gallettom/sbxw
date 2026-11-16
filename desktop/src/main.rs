@@ -36,8 +36,8 @@ fn on_key(s: &mut App, ev: &KeyEvent, tx: &mut Tx) -> bool {
     s.on_key(ev, tx)
 }
 
-fn on_ime(s: &mut App, ime: &rune::Ime, _tx: &mut Tx) -> bool {
-    s.on_ime(ime)
+fn on_ime(s: &mut App, ime: &rune::Ime, tx: &mut Tx) -> bool {
+    s.on_ime(ime, tx.focused())
 }
 
 fn view(s: &App, cx: &mut Cx<App>) -> El {
