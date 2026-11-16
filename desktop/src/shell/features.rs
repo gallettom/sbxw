@@ -70,6 +70,8 @@ pub struct Feats {
 pub enum Ask {
     PickFiles { title: String, extensions: Vec<String> },
     ReadClipboard,
+    /// `copy_text`: onto the clipboard.
+    Copy(String),
 }
 
 /// The whole rule for an intent of risk Approval: its feature may answer only
@@ -230,6 +232,11 @@ impl App {
                             s.push_data();
                         }
                     });
+                }
+                Ask::Copy(text) => {
+                    let n = text.len();
+                    tx.copy(text);
+                    self.notify(format!("Copied {}", if n < 1024 { format!("{n} B") } else { format!("{:.1} KB", n as f64 / 1024.0) }), false);
                 }
                 Ask::ReadClipboard => tx.read_clipboard(move |s: &mut App, c: &rune::ClipboardContent, _tx| match c.image() {
                     Some(img) => s.feature_incoming(name, feat::Incoming::Png(img.png().to_vec())),

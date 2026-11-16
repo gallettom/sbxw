@@ -529,10 +529,12 @@ macro_rules! features {
 
 features! {
     create,
+    envfile,
     network,
     relay,
     setup,
     shell_extras,
+    templates,
     threads,
 }
 

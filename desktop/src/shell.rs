@@ -1039,6 +1039,13 @@ impl App {
                 l.run(d, format!("stop {sandbox}"), move |d| d.stop_sandbox(&name));
             }
             Intent::Select { sandbox } => self.selected = sandbox,
+            Intent::CopyText { text } => {
+                if text.len() > 100 * 1024 {
+                    self.notify(format!("{from}: more than 100 KB to copy, refused"), true);
+                } else {
+                    self.feats.asks.push(("copy", features::Ask::Copy(text)));
+                }
+            }
             Intent::ClosePanes { sandbox, thread } => self.close_panes(&sandbox, thread.as_deref()),
             Intent::SetLayout { panes, split } => {
                 self.layout = (panes, split);

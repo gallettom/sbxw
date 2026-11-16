@@ -56,6 +56,8 @@ pub enum Intent {
     /// None) or that thread's (after it is closed, as `panes.js`
     /// `afterThreadClosed` does). A pane other than the last shown one closes.
     ClosePanes { sandbox: String, thread: Option<String> },
+    /// Puts text on the clipboard (a notice says how much); up to 100 KB.
+    CopyText { text: String },
     /// Marks a sandbox as the selected one (the sidebar's highlight).
     Select { sandbox: Option<String> },
     /// Pane count (1 to 4) and how two panes split.
@@ -186,6 +188,7 @@ pub const REGISTRY: &[Spec] = &[
         args: &[("sandbox", Arg::Str, true), ("thread", Arg::Str, false)],
         doc: "Empties the panes showing that sandbox's session (`thread`: that thread's; none: the sandbox's own), its terminals closed.",
     },
+    Spec { name: "copy_text", risk: Risk::Direct, args: &[("text", Arg::Str, true)], doc: "Copies the text (up to 100 KB) to the clipboard; a notice says so." },
     Spec { name: "select", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Marks a sandbox as selected (no `sandbox`: none)." },
     Spec {
         name: "set_layout",
@@ -238,6 +241,7 @@ impl Intent {
             Intent::Select { .. } => "select",
             Intent::SetLayout { .. } => "set_layout",
             Intent::ClosePanes { .. } => "close_panes",
+            Intent::CopyText { .. } => "copy_text",
             Intent::StartJarvis => "start_jarvis",
             Intent::SendToJarvis { .. } => "send_to_jarvis",
             Intent::ToggleJarvisPanel { .. } => "toggle_jarvis_panel",
@@ -342,6 +346,7 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
             panes: m.get("panes").and_then(Value::as_u64).unwrap_or(1) as usize,
             split: if s("split").as_deref() == Some("rows") { Split::Rows } else { Split::Columns },
         },
+        "copy_text" => Intent::CopyText { text: s("text").unwrap() },
         "close_panes" => Intent::ClosePanes { sandbox: s("sandbox").unwrap(), thread: s("thread") },
         "start_jarvis" => Intent::StartJarvis,
         "send_to_jarvis" => Intent::SendToJarvis { input: s("input").unwrap() },
