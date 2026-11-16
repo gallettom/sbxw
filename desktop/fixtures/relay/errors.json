@@ -1,0 +1,74 @@
+{
+ "about": "The requests could not be read: the daemon's reason in red; the agent questions still show.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "status": 500,
+   "error": "relay: the daemon is shutting down"
+  },
+  "agent_sessions": [
+   {
+    "sandbox": "shop",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 10,
+    "activity": "Which layout should the cart page use?",
+    "steps": [
+     {
+      "text": "Which layout should the cart page use?",
+      "options": [
+       "Two columns",
+       "One column",
+       "Keep it as is"
+      ],
+      "context": [
+       "Two columns: summary on the right",
+       "One column: everything stacked",
+       "Keep it as is: no change"
+      ]
+     }
+    ],
+    "session_id": "s-shop",
+    "origin": "tty",
+    "answerable": true,
+    "ts": 5
+   }
+  ]
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}

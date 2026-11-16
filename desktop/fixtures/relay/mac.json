@@ -1,0 +1,56 @@
+{
+ "about": "A virtual Mac request: a yes or a no, never routed.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "requests": [
+    {
+     "id": "r-7",
+     "from": "web-app",
+     "kind": "mac",
+     "question": "Boot the virtual Mac: I need Safari to check the login page renders (reason given by the agent).",
+     "shot_count": 0,
+     "state": "pending",
+     "created_ms": 7000,
+     "updated_ms": 7000
+    }
+   ]
+  },
+  "agent_sessions": []
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}

@@ -1,0 +1,92 @@
+{
+ "about": "api answered the question and drafted the round: review and edit before sending.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "shop",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/shop"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "codex",
+    "status": "stopped"
+   }
+  ],
+  "relay": {
+   "requests": [
+    {
+     "id": "r-1",
+     "from": "web-app",
+     "kind": "question",
+     "question": "What shape does GET /v1/orders return in staging?\nI need the pagination field names to build the list.",
+     "shot_count": 0,
+     "state": "answered",
+     "created_ms": 1000,
+     "updated_ms": 1500,
+     "to": "api",
+     "answer": "It returns `{ \"orders\": [...], \"next\": \"cursor\" }`; `next` is null on the last page.\nPage size is `limit`, 50 by default."
+    },
+    {
+     "id": "r-3",
+     "from": "web-app",
+     "from_thread": "checkout",
+     "kind": "ask",
+     "question": "Two things to settle before I write the checkout migration.\n\n❓ **Q1 - Port** : which port should the payments API listen on?\n➡️ 8080, as in staging.\n\n---\n\n❓ **Q2 - Auth** : keep the session cookie, or move to tokens?\nIt changes the mobile client too.\n➡️ Keep the cookie for now.\n",
+     "shot_count": 0,
+     "state": "answered",
+     "created_ms": 3000,
+     "updated_ms": 3500,
+     "to": "api",
+     "answer": "Here is my draft:\nQ1 : 8081\nQ2 : Keep the cookie"
+    },
+    {
+     "id": "r-4",
+     "from": "docs",
+     "kind": "question",
+     "question": "Which environment variable holds the API base URL in production?",
+     "to": "api",
+     "shot_count": 0,
+     "state": "routed",
+     "created_ms": 4000,
+     "updated_ms": 4100
+    },
+    {
+     "id": "r-5",
+     "from": "shop",
+     "kind": "screenshot",
+     "question": "The cart at 1280px.",
+     "shot_count": 2,
+     "state": "approved",
+     "created_ms": 500,
+     "updated_ms": 900
+    }
+   ]
+  },
+  "agent_sessions": []
+ },
+ "app": {
+  "panels": [
+   "relay"
+  ]
+ }
+}
