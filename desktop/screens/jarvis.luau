@@ -83,9 +83,11 @@ return {
 
     local head = row{ w = "full", gap = 8, h = 28,
       icon{ "sparkle", color = "blue" },
-      text{ "Jarvis", weight = "semibold", color = "text-bright" },
+      -- The title is the picker once there is a sandbox to pick: where the words go.
+      #items > 1 and select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target",
+        help = "Where your words go: Jarvis, or a running sandbox's agent (you confirm each message)" }
+        or text{ "Jarvis", weight = "semibold", color = "text-bright" },
       (not running) and text{ j.status, size = "sm", color = "text-muted" } or false,
-      #items > 1 and select{ id = "jarvis-target", items = items, value = target or "sbxw-jarvis", on = "target" } or false,
       target and checkbox{ "Follow", value = f.follow == true, on = "follow", key = "jarvis-follow" } or false,
       spacer{},
       #j.pending > 0 and button{ #j.pending == 1 and "1 to review" or (#j.pending .. " to review"),
