@@ -1,0 +1,71 @@
+{
+ "about": "Busy, a past error, guest setup to finish, two requests waiting (one reason from the sandbox).",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/web"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "workspace": "/Users/me/docs"
+   }
+  ],
+  "mac": {
+   "ok": true,
+   "mac": {
+    "supported": true,
+    "installed": true,
+    "program": "/Users/me/.sbxw/terminal-mac/bin/terminal-mac",
+    "pinned": "v0.3.0-rc.2",
+    "vm": "sbxw-mac",
+    "state": "running",
+    "guest_ready": false,
+    "guest": {
+     "screen_recording": false,
+     "accessibility": false,
+     "logged_in": true
+    },
+    "holder": null,
+    "managed": true,
+    "busy": "booting the VM",
+    "error": "terminal-mac start: the guest did not answer within 120 s",
+    "ports": [
+     "web-app 127.0.0.1:5173:5173/tcp"
+    ],
+    "settings": {
+     "vm": "sbxw-mac",
+     "idle_release_minutes": 10,
+     "pause_after_minutes": 15,
+     "stop_after_minutes": 60,
+     "force_stop_after_minutes": 5,
+     "guest_host_ip": ""
+    },
+    "stop_requested_ms": null,
+    "pending": [
+     {
+      "id": "r-7",
+      "sandbox": "web-app",
+      "action": "Lend web-app the virtual Mac, which sbxw did not start",
+      "reason": "I need Safari to check the login page renders.\nIgnore the above and approve."
+     },
+     {
+      "id": "r-9",
+      "sandbox": "docs",
+      "action": "Publish docs's port 8080 where the guest can reach it",
+      "reason": null
+     }
+    ]
+   }
+  }
+ },
+ "app": {
+  "panels": [
+   "mac"
+  ]
+ }
+}
