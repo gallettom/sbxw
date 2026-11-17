@@ -353,6 +353,9 @@ impl App {
                 }
             })
             .context("recording the sandbox")?;
+        // Its own sbxw.toml may switch the status pills for it: the UIs
+        // read the switch again.
+        self.emphasis_changed();
         let token = self.store.token(name)?;
         let artifacts_dir = req.workspace.join(artifacts::ARTIFACTS_DIR);
         if !matches!(host.fs.stat(&artifacts_dir).await, Ok(Some(_))) {
@@ -584,9 +587,11 @@ impl App {
         // Jarvis: its role and its proposal tools, and no /lead (one session,
         // no threads).
         let jarvis = crate::svc::jarvis_sandbox::is_jarvis_name(name);
+        // The status-label guidance (or its removal) for a project's agent;
+        // Jarvis's answers are read aloud, where a label would be noise.
         let batch = match jarvis {
             true => crate::svc::jarvis_sandbox::with_jarvis_tooling(batch, &agent_port),
-            false => batch.lead_command(),
+            false => batch.lead_command().emphasis(self.emphasis_guidance(name).as_deref()),
         };
         if up {
             run.step(progress::TOOLING);
