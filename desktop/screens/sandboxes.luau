@@ -295,7 +295,10 @@ local function item(sb, app, data)
   else
     first = text{ st.word, size = "caption", weight = st.tone == "amber" and "semibold" or "normal", color = word_color[st.tone] }
   end
-  local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w
+  -- What is left after the state word, the model and the buttons, with
+  -- every gap of the line (4 each) counted: the model is never cut for a
+  -- badge; a badge that does not fit goes to the "+N" or the ⋯ menu.
+  local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w - 16
   local line2 = { gap = 4, w = "full", first,
     text{ model, size = "caption", color = "text-muted", truncate = true, help = model_help, key = "model-" .. name },
   }

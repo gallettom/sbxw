@@ -526,6 +526,8 @@ impl App {
         let w = if self.top_w > 0.0 { self.top_w } else { self.window.0 - 140.0 };
         let pending = data["jarvis"]["pending"].as_array().map_or(0, Vec::len);
         let jarvis = if pending > 0 { format!("Jarvis · {pending} to review") } else { "Jarvis".into() };
+        // The usage chip with its bars, as wide as drawn (none: no usage).
+        let bars_w = bar::usage_bars_w(&data["usage"]);
         let Some(list) = data["app"]["extras"]["topbar"].as_array_mut() else {
             return serde_json::json!({ "w": w, "compact": w < bar::TOP_COMPACT, "more": 0 });
         };
@@ -544,8 +546,13 @@ impl App {
         // badge; Setup, Help, the Mac and usage in the right group.
         let measured: Vec<bar::TopExtra> = order
             .iter()
-            .map(|&i| bar::TopExtra { label: label(&list[i]), icon: !list[i]["icon"].is_null(), button: !list[i]["intent"].is_null(), tool: matches!(list[i]["id"].as_str(), Some("usage" | "setup" | "help" | "mac")) })
+            .map(|&i| bar::TopExtra { label: label(&list[i]), icon: !list[i]["icon"].is_null(), button: !list[i]["intent"].is_null(), tool: matches!(list[i]["id"].as_str(), Some("usage" | "setup" | "help" | "mac")), drawn_w: None })
             .collect();
+        // The usage chip with its bars, when everything still fits inline
+        // that way; else its words alone (the bars go first).
+        let with_bars = |m: &[bar::TopExtra]| -> Vec<bar::TopExtra> {
+            m.iter().zip(order.iter()).map(|(x, &i)| if list[i]["id"] == "usage" { bar::TopExtra { drawn_w: bars_w, ..x.clone() } } else { x.clone() }).collect()
+        };
         // The layout switch shows the current choice (topbar.luau's labels).
         let layout = match (self.layout.0, self.layout.1) {
             (1, _) => "1 terminal",
@@ -560,11 +567,18 @@ impl App {
             "down" => "offline",
             other => other,
         };
-        let (compact, k) = bar::top_fit(w, &jarvis, layout, word, &measured);
+        // The bars only where they cost nothing else: the same parts inline
+        // as with the words alone, and the bar not compact (they go before
+        // the title and the layout's words do).
+        let plain = bar::top_fit(w, &jarvis, layout, word, &measured);
+        let barred = bar::top_fit(w, &jarvis, layout, word, &with_bars(&measured));
+        let usage_shown = order.iter().take(plain.1).any(|&i| list[i]["id"] == "usage");
+        let usage_bars = bars_w.is_some() && usage_shown && barred == plain && !plain.0;
+        let (compact, k) = plain;
         for &i in &order[k..] {
             list[i]["more"] = J::Bool(true);
         }
-        serde_json::json!({ "w": w, "compact": compact, "more": order.len() - k })
+        serde_json::json!({ "w": w, "compact": compact, "more": order.len() - k, "usage_bars": usage_bars })
     }
 
     /// `data.app.overrides`: each screen running an override, `{path, stale}`.
@@ -2314,7 +2328,11 @@ mod tests {
         rt.pointer_move(x, y);
         rt.frame(1.0 / 60.0);
         rt.pointer_move(x + 3.0, y);
-        settle(&mut rt);
+        // At once (a busy machine could take the whole delay to settle).
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
         assert!(h(&rt, "sbxw-jarvis") < 1.0, "not before the delay");
         std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
         settle(&mut rt);
@@ -2330,7 +2348,10 @@ mod tests {
         // Out to the panes: shuts after the close delay.
         let (p, _) = rt.presented("panes").unwrap();
         rt.pointer_move(p[0] + p[2] / 2.0, p[1] + p[3] / 2.0);
-        settle(&mut rt);
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
         assert!(h(&rt, "sbxw-jarvis") > 40.0, "not before the delay");
         std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
         settle(&mut rt);
@@ -2348,6 +2369,36 @@ mod tests {
         std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
         settle(&mut rt);
         assert!(h(&rt, "sbxw-jarvis") < 1.0, "a pin wins over hover");
+    }
+
+    /// A row's model is never cut for a badge: at the sidebar's normal
+    /// width, with a state of several words and counts beside it, the model
+    /// is drawn whole; what does not fit went to "+N" or the ⋯ menu.
+    #[test]
+    fn a_rows_model_is_never_cut_for_a_badge() {
+        for fixture in ["sessions", "design-1", "bubbles"] {
+            let mut rt = runtime(&format!("shell/{fixture}.json"), 1284.0, 1600.0);
+            for _ in 0..10 {
+                rt.frame(1.0 / 60.0);
+            }
+            let sc = rt.state.screens.iter().find(|x| x.name == "sandboxes").unwrap();
+            let mut models = vec![];
+            fn walk(n: &crate::luau::Node, out: &mut Vec<(String, String)>) {
+                if let Some(k) = n.key.as_deref().filter(|k| k.starts_with("model-")) {
+                    out.push((k.to_string(), n.text.clone()));
+                }
+                for c in &n.children {
+                    walk(c, out);
+                }
+            }
+            walk(sc.last_good.as_ref().unwrap(), &mut models);
+            assert!(!models.is_empty());
+            for (k, t) in models {
+                let Some((r, _)) = rt.presented(&k) else { continue };
+                let want = bar::measure(&t, 12.0, 400.0);
+                assert!(r[2] + 0.5 >= want, "{fixture}: {k} \"{t}\" cut: {} of {want}", r[2]);
+            }
+        }
     }
 
     fn chords() -> Vec<KeyEvent> {
@@ -2513,7 +2564,9 @@ mod tests {
                 rt.frame(0.016);
             }
             rt.update(|s, _| s.push_data());
-            for _ in 0..6 {
+            // Long enough for a part that changed shape (the usage chip's
+            // bars on a first, narrower guess) to land.
+            for _ in 0..40 {
                 rt.frame(0.016);
             }
             // What the top bar screen last drew from.
@@ -2528,8 +2581,9 @@ mod tests {
                     Some(n) => format!("{} {n}", e["label"].as_str().unwrap()),
                     None => e["label"].as_str().unwrap().to_string(),
                 };
-                let x = bar::TopExtra { label, icon: !e["icon"].is_null(), button: !e["intent"].is_null(), tool: false };
-                assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {}", r[2], x.width());
+                let bars = id == "usage" && data["app"]["topbar"]["usage_bars"] == true;
+                let x = bar::TopExtra { label, icon: !e["icon"].is_null(), button: !e["intent"].is_null(), tool: false, drawn_w: if bars { bar::usage_bars_w(&data["usage"]) } else { None } };
+                assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {} (bars {})", r[2], x.width(), bars);
                 assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {id} {r:?} past the bar {bar_r:?}");
             }
             for key in ["jarvis-toggle", "daemon-state", "layout"] {
@@ -2542,6 +2596,37 @@ mod tests {
                 assert_eq!(more, 0, "{w}: everything fits");
             }
         }
+    }
+
+    /// The usage chip's bars go before anything else does: wide, the chip
+    /// has its bars; narrower, its words alone while it still fits inline;
+    /// then it goes into the menu like any extra.
+    #[test]
+    fn the_usage_bars_go_first_and_the_words_stay() {
+        let mut seen = vec![];
+        for w in (720..=1800).rev().step_by(40) {
+            let mut rt = runtime("shell/usage-a.json", w as f32, 816.0);
+            rt.update(|s, _| {
+                s.notice = None;
+                s.feats.panels.clear();
+                s.feats.panel = None;
+            });
+            for _ in 0..6 {
+                rt.frame(0.016);
+            }
+            rt.update(|s, _| s.push_data());
+            for _ in 0..40 {
+                rt.frame(0.016);
+            }
+            let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
+            let inline = data["app"]["extras"]["topbar"].as_array().unwrap().iter().any(|e| e["id"] == "usage" && e["more"] != true);
+            let bars = data["app"]["topbar"]["usage_bars"] == true;
+            let state = if bars { "bars" } else if inline { "words" } else { "menu" };
+            if seen.last() != Some(&state) {
+                seen.push(state);
+            }
+        }
+        assert_eq!(seen, ["bars", "words", "menu"], "from 1800 down to 720");
     }
 
     /// The palette opens with the app's chord, filters, runs the same
