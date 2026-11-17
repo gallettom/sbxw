@@ -392,7 +392,9 @@ document.addEventListener('visibilitychange', async () => {
     live = new Map((await res.json()).map(e => [e.key, e]));
   } catch (_) { /* fall back to each pane's last-known sentSize below */ }
   panes.slice(0, paneCount).forEach(p => {
-    if (!p.ws) return;
+    // A socket with size frames already knows the PTY's size (applyPtySize),
+    // and sentSize stays what this pane asked for.
+    if (!p.ws || p.ws.ptySize) return;
     const entry = p.sandbox ? live.get(`${p.sandbox}::${p.mode}`) : null;
     if (entry && entry.cols != null && entry.rows != null)
       p.ws.sentSize = `${entry.cols}x${entry.rows}`;

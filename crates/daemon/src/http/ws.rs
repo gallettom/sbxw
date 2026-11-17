@@ -2,6 +2,20 @@
 //!
 //! Reconnect replays the last 256 KB, repainted, with terminal queries stripped
 //! (or a fresh xterm answers each one back into the shell).
+//!
+//! Messages:
+//! * Binary, both ways: PTY bytes. Typed input (not the terminal's answers to
+//!   the program, see [`crate::pty::is_typed_input`]) makes this client the
+//!   size's owner.
+//! * Text from the client: `{"type":"resize","cols","rows"}`, the size this
+//!   client wants; it becomes the owner and the PTY takes that size (one size
+//!   for all clients: see `pty.rs`, "One size for every client").
+//! * Text from the daemon: an error line to show (not JSON);
+//!   `{"type":"attention","sandbox"}` on a real bell; and, only to a client
+//!   that opened with `size=1`, `{"type":"size","cols","rows","owner"}`: the
+//!   PTY's size and whether this client sets it, sent before the replay and on
+//!   every change. Clients that did not ask never get it (the web UI before
+//!   this frame wrote unknown JSON into the terminal).
 
 use super::ui::settle_ws_thread;
 use crate::app::App;
@@ -25,6 +39,8 @@ pub struct WsQuery {
     model: Option<String>,
     /// `1` on a session's first open: in the main checkout, not a worktree.
     checkout: Option<String>,
+    /// `1`: send `{"type":"size"}` frames.
+    size: Option<String>,
 }
 
 pub async fn handler(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(app): State<Arc<App>>) -> Response {
@@ -50,8 +66,9 @@ pub async fn handler(ws: WebSocketUpgrade, Query(q): Query<WsQuery>, State(app):
     if model.as_deref().is_some_and(|m| !sbxw_core::names::is_valid_model_id(m)) {
         return (StatusCode::BAD_REQUEST, "invalid model id").into_response();
     }
+    let sizes = q.size.as_deref() == Some("1");
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = bridge(socket, app, key, repo, model, checkout).await {
+        if let Err(e) = bridge(socket, app, key, repo, model, checkout, sizes).await {
             tracing::warn!("tty bridge ended: {e:#}");
         }
     })
@@ -64,6 +81,7 @@ async fn bridge(
     repo: Option<String>,
     model: Option<String>,
     checkout: bool,
+    sizes: bool,
 ) -> anyhow::Result<()> {
     let (mut tx, mut rx) = socket.split();
     let opened = async {
@@ -84,6 +102,13 @@ async fn bridge(
     // Subscribe before reading the replay, so nothing falls in between.
     let mut out = session.subscribe();
     let mut bell = session.subscribe_bell();
+    let me = session.attach();
+    let mut size_rx = session.sizes();
+    // The size first, so the replay is drawn in a grid of the PTY's size.
+    if sizes {
+        let now = *size_rx.borrow_and_update();
+        tx.send(Message::Text(size_frame(now, me))).await.ok();
+    }
     let replay = strip_replay_side_effects(&session.replay());
     if !replay.is_empty() {
         tx.send(Message::Binary(replay)).await.ok();
@@ -93,6 +118,13 @@ async fn bridge(
         use tokio::sync::broadcast::error::RecvError;
         loop {
             tokio::select! {
+                r = size_rx.changed(), if sizes => match r {
+                    Ok(()) => {
+                        let now = *size_rx.borrow_and_update();
+                        if tx.send(Message::Text(size_frame(now, me))).await.is_err() { break }
+                    }
+                    Err(_) => break,
+                },
                 r = out.recv() => match r {
                     Ok(chunk) => if tx.send(Message::Binary(chunk)).await.is_err() { break },
                     Err(RecvError::Lagged(n)) => tracing::warn!("WebSocket lagged, dropped {n} PTY frames"),
@@ -111,27 +143,39 @@ async fn bridge(
     });
     while let Some(Ok(msg)) = rx.next().await {
         match msg {
-            Message::Binary(data) => session.write(&[&data]).await,
+            Message::Binary(data) => {
+                if crate::pty::is_typed_input(&data) {
+                    session.touch(me);
+                }
+                session.write(&[&data]).await
+            }
             Message::Text(text) => {
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
                 if v.get("type").and_then(|t| t.as_str()) == Some("resize") {
-                    let cols = v.get("cols").and_then(|c| c.as_u64()).unwrap_or(100) as u16;
-                    let rows = v.get("rows").and_then(|r| r.as_u64()).unwrap_or(30) as u16;
-                    match session.resize(cols, rows) {
-                        Ok(before) if before != Some((cols, rows)) => tracing::info!(
-                            "resize {key}: {} → {cols}x{rows}",
-                            before.map_or("?".into(), |(c, r)| format!("{c}x{r}"))
-                        ),
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!("resize {key} to {cols}x{rows} failed: {e}"),
-                    }
+                    let dim = |k: &str, d: u64| v.get(k).and_then(|c| c.as_u64()).unwrap_or(d).min(u16::MAX as u64) as u16;
+                    let (cols, rows) = (dim("cols", 100), dim("rows", 30));
+                    tracing::debug!("resize {key}: client {me} wants {cols}x{rows}");
+                    session.want(me, cols, rows);
                 }
             }
             Message::Close(_) => break,
             _ => {}
         }
     }
-    // The socket closed — the PTY stays, for the next reconnect.
+    // The socket closed; the PTY stays, for the next reconnect. Its size goes
+    // to another client after a grace period, unless one claims it first (a
+    // reload does).
     pump.abort();
+    if session.detach(me) {
+        tokio::spawn(async move {
+            tokio::time::sleep(crate::pty::HANDBACK_GRACE).await;
+            session.hand_back();
+        });
+    }
     Ok(())
+}
+
+/// The `{"type":"size"}` frame for client `me`.
+pub(crate) fn size_frame(s: crate::pty::EffectiveSize, me: u64) -> String {
+    serde_json::json!({ "type": "size", "cols": s.cols, "rows": s.rows, "owner": s.owner == Some(me) }).to_string()
 }
