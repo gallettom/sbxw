@@ -75,13 +75,15 @@ if not os.environ.get("LONG"):
     step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md"], "key": "files-drop", "hover": 0.2}}, "files-staged-1", "staged")
     step("files-upload-send-1", "cf-confirm", "upload-confirm")
     step("cf-confirm", "files-staged-1", "uploaded", gone=True)
+    # A .env file dropped on the pane: asked, saying why (for its mark the
+    # state file has "Do not ask again" chosen, so it says it asks all the
+    # same); first, so the marks after it run with the choice unset.
+    step({"drop_files": {"paths": [f"{SHOTS}/drop/.env"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-env")
+    step("cf-cancel", "cf-dialog", gone=True)
     step({"drop_files": {"paths": [f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-confirm")
     step("cf-cancel", "cf-dialog", gone=True)
-    # Two files dropped together: one dialog; a .env file: asked, saying why
-    # (with "Do not ask again" chosen in the state file for that mark).
+    # Two files dropped together: one dialog.
     step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md", f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-multi")
-    step("cf-cancel", "cf-dialog", gone=True)
-    step({"drop_files": {"paths": [f"{SHOTS}/drop/.env"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-env")
     step("cf-cancel", "cf-dialog", gone=True)
     step("files-codemap", "codemap-docs", "codemap")
     step("codemap-docs", "codemap-docs-net")
@@ -89,9 +91,11 @@ if not os.environ.get("LONG"):
     step("codemap-outline-net-proxy", "codemap-whole", "codemap-section")
     step("codemap-diagram", "cf-ack", "diagram-dialog")
     step("cf-cancel", "cf-dialog", gone=True)
-    # Only against the big stand-in: the Artifacts tab with 3,000 more files.
-    step("files-tab-artifacts", "files-more", "big")
-    step("files-row-desktop", "files-row-desktop/run-29", "big-open")
+    # Only against the big stand-in: 3,000 more files, folded into folders;
+    # logs/ opened holds 300: a page of 200 and Show more.
+    step("pane-1-x-project", "files-tab-artifacts")
+    step("files-tab-artifacts", "files-row-desktop", "big")
+    step("files-row-logs", "files-more", "big-open")
 else:
     # LONG=1: the dialogs with long paths, at the smallest window.
     step("pane-1-x-project", "files-row-report.md")
@@ -104,7 +108,7 @@ else:
 mark("end")
 print(json.dumps({"events": ev}, indent=1))
 PY
-marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-confirm pane-drop-multi pane-drop-env codemap codemap-net codemap-section diagram-dialog big big-open})
+marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-env pane-drop-confirm pane-drop-multi codemap codemap-net codemap-section diagram-dialog big big-open})
 build
 for m in "${marks[@]}"; do
   # Nothing of an earlier run of this mark is read back: the downloads root
