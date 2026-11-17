@@ -858,7 +858,7 @@ What a feature declares:
 | `surfaces`, `on_surface` | Picture surfaces it owns, by id (`src/surface.rs`), placed by a screen with `surface{ id }`. Frames from its Rust on any thread: `surface::set_encoded(id, bytes)` (PNG, JPEG, WebP decoded with `surface::frame_limits()`) or `surface::set_rgba(id, w, h, rgba)`; Rune redraws without running Luau. `on_surface: fn(&SurfaceEvent) -> Vec<Action>` on the UI thread: `Move`, `Press`, `Release`, `Wheel` in picture pixels, `Key` (DOM key name, physical code, text), `Text` (input method), `Paste` (text; the core shows a notice with its size), `Focus`, `F6`, `Resized` (logical points, debounced). The app keeps its own keys (see the `surface` element) |
 | `on_socket`, `standin_ws` | `Action::OpenSocket { id, path, opts }` opens a `/ws/...` route of the daemon with the app's auth (`src/socket.rs`); `on_socket: fn(&str, SocketEvent) -> Vec<Action>` runs on the socket's own thread (`Open`, `Text`, `Binary`, `Reconnecting`, `Closed`), its actions on the UI thread at the next poll; `socket::send(id, text)` from anywhere. `Opts { reconnect, droppable, max_in, max_out, one_line }`: reconnect is off by default; `droppable` messages (frames) keep only the newest when the handler is behind. `standin_ws: fn(target, &mut dyn WsPeer) -> bool` serves the route in the stand-in |
 | `on_bytes` | `fn(&Ctx, &Call, Result<(status, bytes, content type), String>)`: the answer of a `Call::get(path).raw(max)` (at most `max + 1` bytes). Fixture and stand-in routes answer raw with `{"$raw": text, "$type": ...}` or `{"$raw_hex": ...}` |
-| `on_pane_drop` | `fn(&Ctx, &PaneDrop { paths, sandbox, thread })`: files dropped on a terminal pane (the first feature declaring it); the paths are handed in, so an upload may read them |
+| `on_pane_drop` | `fn(&Ctx, &PaneDrop { paths, skip_dialog, sandbox, thread })`: files dropped on a terminal pane (the first feature declaring it); the paths are handed in, so an upload may read them. `skip_dialog`: the person ticked "Do not ask again for files I drop"; the core then lets ONE unconfirmed `core:uploads` through, from this drop's own actions only, of these paths only, into this pane's sandbox, when the guardrails (`feat::files::drops`) find nothing |
 | `on_dismiss` | `fn(&Ctx, tag)`: one of its core dialogs closed without its call going out (Cancel, close, Escape, a press outside, replaced, a failed `Prepare` closed); `tag` is the dialog's call tag |
 
 Actions (`feat::Action`): `Call(Call)` (a daemon request off the UI thread:
@@ -1342,6 +1342,20 @@ and uploads are the core's (`src/files.rs`, names and verdicts by
 `src/safe.rs`). No intent takes a local path: files come from a drop on the
 panel or a pane, a paste, or the file dialog.
 
+**Dropped files.** A drop on a terminal pane asks once for the whole drop.
+Once the person ticked "Do not ask again for files I drop" (kept in the
+app's state file, `uploads.skip_drop_dialog`; Setup, Secrets, "Dropped
+files" turns it off), a plain drop uploads at once and a notice says
+"Uploading brief.md to web-app…", then "Uploaded …". The dialog still asks,
+saying why, for a name that looks like a secret (`.env*`, `*.pem`, `*.key`,
+`id_rsa*`, `id_ed25519*`, `*.p12`, `*.pfx`, `credentials*`, `.npmrc`,
+`.netrc`, `*.kdbx`), a file in a `.ssh`, `.aws` or `.gnupg` folder, more
+than 10 files, more than 25 MB in all, or a file that cannot be checked
+(`src/feat/files/drops.rs`, one list read by the feature and the core).
+The refusals stay: empty, over 128 MB, a folder, a stopped sandbox. A drop
+on the panel, Choose… and Paste are unchanged: each file waits on the
+panel and its Upload button opens its own dialog.
+
 | Intent | Arguments | Risk | What the core does |
 |---|---|---|---|
 | `files_open` | `sandbox`, `tab` (`artifacts`, `files`, `recent`) | direct | Opens the panel on that sandbox (the last tab, else Artifacts) and reads its lists |
@@ -1362,7 +1376,8 @@ panel or a pane, a paste, or the file dialog.
 | `files_upload_pick`, `files_upload_paste` | none | direct | The file dialog; the clipboard's picture |
 | `files_upload_remove` | `index` (none: all) | direct | Drops a waiting file |
 | `files_upload_send` | `index` | approval | Waiting file `index`: the dialog shows its local path, size, the sandbox and session; the core streams it (128 MB at most), then the daemon's path is typed into that prompt, not submitted |
-| `files_upload_dropped` | none | approval | The next file dropped on a terminal pane, the same dialog at once; several are asked one after the other, Cancel stops |
+| `files_upload_dropped` | none | approval | The files dropped together on a terminal pane: ONE dialog lists them (local paths, sizes, total, the sandbox and session) and says what happens; until the person chose otherwise it carries the box "Do not ask again for files I drop" (core-drawn, unticked; only it sets that choice). The core then uploads them one after the other (`core:uploads`); a failure stops the rest and the notice says what was sent and what was not; the paths the daemon made are typed together, not submitted |
+| `files_upload_ask_again` | none | direct | Setup's "Ask before uploading dropped files": the dialog comes back for every drop. The only direction an intent can take |
 | `codemap_open` | `sandbox`, `map` (a lens's folder) | direct | Opens the panel and reads the map's files |
 | `codemap_doc` | `doc`, `anchor` (a section id) | direct | A file, or one section |
 | `codemap_link` | `url` | direct | A link pressed in a map file: a wiki link followed in the panel, any other in the browser |

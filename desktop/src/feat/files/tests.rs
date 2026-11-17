@@ -273,60 +273,142 @@ fn uploads_show_the_local_path_and_size_respect_the_limits_and_type_the_path() {
     assert_eq!(c.call.bytes.as_ref().map(|(t, b)| (t.as_str(), b.len())), Some(("image/png", 2048)));
     st.staged.clear();
     // Dropped on a stopped sandbox's pane: the dialog is asked for, and refused.
-    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], sandbox: "data-pipeline".into(), thread: None });
+    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![small.clone()], skip_dialog: false, sandbox: "data-pipeline".into(), thread: None });
     assert!(matches!(a.as_slice(), [Action::Intent { name, .. }] if name == "files_upload_dropped"), "{a:?}");
     assert!(run(&mut st, &d, "files_upload_dropped", json!({})).unwrap_err().contains("not running"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn files_dropped_on_a_pane_go_only_through_their_dialog_one_by_one() {
-    let d = fixture("standin");
+fn files_dropped_together_go_through_one_dialog_that_explains_it_and_offers_to_stop_asking() {
+    let mut d = fixture("standin");
     let mut st = State::default();
     let dir = tmp("pane");
     let (a1, a2) = (dir.join("spec one.md"), dir.join("logo.png"));
     std::fs::write(&a1, b"# spec").unwrap();
     std::fs::write(&a2, vec![0u8; 3000]).unwrap();
+    let drop = |paths: Vec<std::path::PathBuf>, skip: bool| PaneDrop { paths, skip_dialog: skip, sandbox: "api".into(), thread: Some("checkout".into()) };
     // The drop itself uploads nothing and types nothing: it asks for the dialog.
-    let a = st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a1.clone(), a2.clone()], sandbox: "api".into(), thread: Some("checkout".into()) });
+    let a = st.on_pane_drop(&Ctx { data: &d }, &drop(vec![a1.clone(), a2.clone()], false));
     assert!(matches!(a.as_slice(), [Action::Intent { name, args }] if name == "files_upload_dropped" && args == &json!({})), "{a:?}");
     assert!(st.staged.is_empty(), "never shown as waiting in the panel");
     let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
     admit("files_upload_dropped", &a).unwrap();
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert_eq!(c.title, "Upload spec one.md into api?");
+    // ONE dialog for both: each file, the total, what happens, the box.
+    assert_eq!(c.title, "Upload 2 files into api?");
     assert_eq!(c.lines[0], format!("{} · 6 B", a1.display()));
-    assert_eq!(c.lines[2], "Its path is then typed into api's thread checkout's prompt, not submitted: say what it is for, then press Return.");
-    assert_eq!(c.lines[3], "1 more file dropped with it: asked next, one by one. Cancel stops here.");
-    assert_eq!(c.call.path, "core:upload", "the core streams it, on Confirm only");
-    assert_eq!(c.call.body["route"], "/api/sandboxes/api/upload?name=spec%20one.md");
-    // Confirmed and answered: the daemon's path typed (not submitted), then the next dialog.
-    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/17/spec_one.md" }))));
-    assert!(a.iter().any(|x| matches!(x, Action::Call(t) if t.body == json!({ "sandbox": "api", "mode": "thread:checkout", "data": "/tmp/sbxw-uploads/17/spec_one.md " }))), "{a:?}");
-    assert!(a.iter().any(|x| matches!(x, Action::Intent { name, .. } if name == "files_upload_dropped")));
-    let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
-    let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    assert_eq!(c.title, "Upload logo.png into api?");
-    assert_eq!(c.lines.len(), 3, "the last one");
+    assert_eq!(c.lines[1], format!("{} · 2.9 KB", a2.display()));
+    assert_eq!(c.lines[2], "2 files, 2.9 KB in all.");
+    assert_eq!(c.lines[3], "They are copied into api under /tmp/sbxw-uploads/, where its agent can read them.");
+    assert_eq!(c.lines[4], "Their paths are then typed into api's thread checkout's prompt, not sent: say what they are for, then press Return.");
+    assert_eq!(c.dont_ask.as_deref(), Some("Do not ask again for files I drop"));
+    assert_eq!(c.call.path, "core:uploads", "the core streams them, on Confirm only");
+    assert_eq!(c.call.body["items"][0]["route"], "/api/sandboxes/api/upload?name=spec%20one.md");
+    assert_eq!(c.call.body["items"][1]["file"], json!(a2));
+    // Answered: both paths typed in one go (not submitted), a notice, the drop forgotten.
+    let ids: Vec<u64> = st.dropped.iter().map(|s| s.id).collect();
+    let ok = |id: u64, p: &str| json!({ "tag": format!("upload-{id}"), "code": 200, "body": { "ok": true, "path": p } });
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "results": [ok(ids[0], "/tmp/sbxw-uploads/17/spec_one.md"), ok(ids[1], "/tmp/sbxw-uploads/18/logo.png")] }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Call(t) if t.body == json!({ "sandbox": "api", "mode": "thread:checkout", "data": "/tmp/sbxw-uploads/17/spec_one.md /tmp/sbxw-uploads/18/logo.png " }))), "{a:?}");
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, error: false, .. } if text == "Uploaded 2 files (spec one.md, logo.png) to api")), "{a:?}");
+    assert!(a.iter().any(|x| matches!(x, Action::ForgetFiles(f) if f.len() == 2)));
+    assert!(st.dropped.is_empty());
     // A path that is not one the daemon makes is never typed.
     for bad in ["/tmp/sbxw-uploads/1/a b.md", "/tmp/sbxw-uploads/1/a\nrm -rf ~", "/tmp/sbxw-uploads/1/\"x", "/etc/passwd", "/tmp/sbxw-uploads/../x", "/tmp/sbxw-uploads/1/-rf"] {
         assert!(!typable(bad), "{bad}");
     }
     assert!(typable("/tmp/sbxw-pastes/paste-1731744000000.png"));
-    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "ok": true, "path": "/tmp/sbxw-uploads/1/a b.md\nsubmit" }))));
-    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))), "{a:?}");
-    assert!(st.dropped.is_empty());
-    // Cancel: the core's dialog closes, nothing was sent; the next drop starts afresh.
-    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a1.clone(), a2.clone()], sandbox: "api".into(), thread: None });
-    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a2.clone()], sandbox: "web-app".into(), thread: None });
-    assert_eq!(st.dropped.len(), 1);
-    // A refusal stops the rest.
-    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: vec![a1.clone(), a2.clone()], sandbox: "api".into(), thread: None });
+    // A failure stops the rest and says what was sent and what was not.
+    let a3 = dir.join("c.txt");
+    std::fs::write(&a3, b"c").unwrap();
+    st.on_pane_drop(&Ctx { data: &d }, &drop(vec![a1.clone(), a2.clone(), a3.clone()], false));
     let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };
-    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((502, json!({ "error": "sbx exec: sandbox not ready" }))));
-    assert!(!a.iter().any(|x| matches!(x, Action::Intent { .. })));
+    let ids: Vec<u64> = st.dropped.iter().map(|s| s.id).collect();
+    let bad = json!({ "tag": format!("upload-{}", ids[1]), "code": 502, "body": { "error": "sbx exec: sandbox not ready" } });
+    let a = st.on_answer(&Ctx { data: &d }, &c.call, Ok((200, json!({ "results": [ok(ids[0], "/tmp/sbxw-uploads/1/a\nsubmit"), bad] }))));
+    assert!(!a.iter().any(|x| matches!(x, Action::Call(_))), "an untypable path is never typed: {a:?}");
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, error: true, .. } if text.starts_with("logo.png was not uploaded: ") && text.ends_with(". Sent: spec one.md. Not sent: c.txt"))), "{a:?}");
     assert!(st.dropped.is_empty());
+    // A stopped sandbox, an empty file: refused before any dialog, nothing sent.
+    let empty = dir.join("empty.txt");
+    std::fs::write(&empty, b"").unwrap();
+    st.on_pane_drop(&Ctx { data: &d }, &drop(vec![a1.clone(), empty.clone()], false));
+    assert!(run(&mut st, &d, "files_upload_dropped", json!({})).unwrap_err().contains("Nothing was uploaded: empty.txt: empty"));
+    d["sandboxes"] = json!([]);
+    st.on_pane_drop(&Ctx { data: &d }, &drop(vec![a1.clone()], true));
+    assert!(st.dropped.is_empty(), "a sandbox sbxw does not know: refused at once");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn chosen_not_to_be_asked_a_plain_drop_goes_at_once_and_a_guardrail_still_asks() {
+    let d = fixture("standin");
+    let mut st = State::default();
+    let dir = tmp("skip");
+    let brief = dir.join("brief.md");
+    std::fs::write(&brief, b"# Brief").unwrap();
+    let drop = |paths: Vec<std::path::PathBuf>| PaneDrop { paths, skip_dialog: true, sandbox: "web-app".into(), thread: None };
+    // Plain: the batch at once, said by a notice; no dialog asked for.
+    let a = st.on_pane_drop(&Ctx { data: &d }, &drop(vec![brief.clone()]));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, .. } if text == "Uploading brief.md to web-app…")), "{a:?}");
+    let Some(Action::Call(c)) = a.iter().find(|x| matches!(x, Action::Call(_))) else { panic!("{a:?}") };
+    assert_eq!(c.path, "core:uploads");
+    assert!(!a.iter().any(|x| matches!(x, Action::Intent { .. } | Action::Confirm(_))));
+    let id = st.dropped[0].id;
+    let a = st.on_answer(&Ctx { data: &d }, c, Ok((200, json!({ "results": [{ "tag": format!("upload-{id}"), "code": 200, "body": { "ok": true, "path": "/tmp/sbxw-uploads/3/brief.md" } }] }))));
+    assert!(a.iter().any(|x| matches!(x, Action::Notice { text, .. } if text == "Uploaded brief.md to web-app")), "{a:?}");
+    // Each guardrail: the dialog all the same, saying why, without the box.
+    let env = dir.join(".env.local");
+    std::fs::write(&env, b"KEY=x").unwrap();
+    let ssh = dir.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let known = ssh.join("known_hosts");
+    std::fs::write(&known, b"x").unwrap();
+    let big = dir.join("big.bin");
+    std::fs::File::create(&big).unwrap().set_len(drops::ASK_ABOVE_BYTES + 1).unwrap();
+    let many: Vec<_> = (0..11).map(|i| { let p = dir.join(format!("f{i}.txt")); std::fs::write(&p, b"x").unwrap(); p }).collect();
+    for (paths, why) in [
+        (vec![brief.clone(), env.clone()], ".env.local: its name looks like a secret"),
+        (vec![known.clone()], "known_hosts: it is in a .ssh folder"),
+        (vec![big.clone()], "in all (more than 25.0 MB)"),
+        (many.clone(), "11 files dropped at once (more than 10)"),
+    ] {
+        let a = st.on_pane_drop(&Ctx { data: &d }, &drop(paths));
+        assert!(a.iter().any(|x| matches!(x, Action::Intent { name, .. } if name == "files_upload_dropped")), "{why}: {a:?}");
+        assert!(!a.iter().any(|x| matches!(x, Action::Call(_))), "{why}");
+        let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
+        let [Action::Confirm(c)] = a.as_slice() else { panic!() };
+        assert!(c.lines.iter().any(|l| l.starts_with("Asked even though you chose not to be asked, because: ") && l.contains(why)), "{why}: {:?}", c.lines);
+        assert!(c.dont_ask.is_none(), "already chosen");
+        st.on_dismiss(&Ctx { data: &d }, &c.call.tag);
+        assert!(st.dropped.is_empty());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_guardrails_read_one_list_and_fail_closed() {
+    for n in [".env", ".ENV.production", "server.pem", "tls.key", "id_rsa", "id_rsa.pub", "id_ed25519", "cert.p12", "cert.pfx", "credentials", "credentials.json", ".npmrc", ".netrc", "vault.kdbx"] {
+        assert!(drops::secret_name(n), "{n}");
+    }
+    for n in ["brief.md", "environment.md", "keys.txt", "key.md", "npmrc.md", "my.env.md"] {
+        assert!(!drops::secret_name(n), "{n}");
+    }
+    let dir = tmp("guard");
+    let gone = dir.join("gone.txt");
+    let why = drops::guardrails(std::slice::from_ref(&gone), 1);
+    assert!(why.iter().any(|w| w.starts_with("gone.txt: could not be checked")), "fail closed: {why:?}");
+    for d in [".aws", ".gnupg"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+        let p = dir.join(d).join("config");
+        std::fs::write(&p, b"x").unwrap();
+        assert!(drops::guardrails(&[p], 1).iter().any(|w| w.contains(&format!("in a {d} folder"))), "{d}");
+    }
+    let plain = dir.join("notes.md");
+    std::fs::write(&plain, b"x").unwrap();
+    assert!(drops::guardrails(&[plain], 1).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -710,7 +792,7 @@ fn a_cancelled_pane_drop_leaves_no_file_waiting_nor_uploadable() {
     let paths: Vec<_> = ["a.txt", "b.txt", "c.txt"].iter().map(|n| { let p = dir.join(n); std::fs::write(&p, b"x").unwrap(); p }).collect();
     // As the core does on a drop: handed in, then the feature.
     crate::files::hand_in(&paths);
-    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: paths.clone(), sandbox: "web-app".into(), thread: None });
+    st.on_pane_drop(&Ctx { data: &d }, &PaneDrop { paths: paths.clone(), skip_dialog: false, sandbox: "web-app".into(), thread: None });
     assert!(paths.iter().all(|p| crate::files::was_handed(p)));
     let a = run(&mut st, &d, "files_upload_dropped", json!({})).unwrap();
     let [Action::Confirm(c)] = a.as_slice() else { panic!() };

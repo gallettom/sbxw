@@ -370,6 +370,8 @@ pub trait ConfirmAnswers: Sized + 'static {
     fn confirm_click(&mut self);
     fn cancel_click(&mut self);
     fn toggle_confirm_ack(&mut self);
+    /// The optional "do not ask again" box ([`crate::feat::Confirm::dont_ask`]).
+    fn toggle_confirm_dont_ask(&mut self);
     /// Secret field `i`'s edit.
     fn secret_edit(&mut self, i: usize) -> &mut TextEdit;
 }
@@ -385,6 +387,8 @@ pub struct ConfirmState<'a> {
     pub error: Option<&'a str>,
     pub busy: bool,
     pub acked: bool,
+    /// The "do not ask again" box, ticked (never needed to confirm).
+    pub dont_ask: bool,
     pub secrets: &'a [TextEdit],
     pub left: f32,
     pub top: f32,
@@ -579,29 +583,27 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     }
     // The acknowledgement box on its own line, above the buttons: it wraps,
     // and it never pushes Confirm past the dialog's edge.
-    let mut ack_row = None;
-    if let Some(ack) = d.confirm.and_then(|x| x.ack.clone()) {
-        let on = d.acked;
+    let checkbox = |key: &str, label: String, on: bool| {
         let mut b = rune::el().w(16.0).h(16.0).radius(4.0).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
         if on {
             b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
         }
-        ack_row = Some(
-            row()
-                .key("cf-ack")
-                .w_full()
-                .role("checkbox")
-                .checked(on)
-                .label(ack.clone())
-                .gap(6.0)
-                .items_center()
-                .min_w(0.0)
-                .cursor(Cursor::Pointer)
-                .on_press(|s: &mut S| s.toggle_confirm_ack())
-                .child(b)
-                .child(text(ack).font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0)),
-        );
-    }
+        row()
+            .key(key)
+            .w_full()
+            .role("checkbox")
+            .checked(on)
+            .label(label.clone())
+            .gap(6.0)
+            .items_center()
+            .min_w(0.0)
+            .cursor(Cursor::Pointer)
+            .child(b)
+            .child(text(label).font(crate::screen::body(13.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0))
+    };
+    let ack_row = d.confirm.and_then(|x| x.ack.clone()).map(|ack| checkbox("cf-ack", ack, d.acked).on_press(|s: &mut S| s.toggle_confirm_ack()));
+    // Unticked by default, and Confirm works either way.
+    let dont_ask_row = d.confirm.and_then(|x| x.dont_ask.clone()).map(|l| checkbox("cf-dont-ask", l, d.dont_ask).on_press(|s: &mut S| s.toggle_confirm_dont_ask()));
     let (yes, no) = d.confirm.map(|x| (x.confirm.as_str(), x.cancel.as_str())).unwrap_or(("Confirm", "Cancel"));
     let cancel = button("cf-cancel", no, false, true).on_press(|s: &mut S| s.cancel_click());
     let confirm = if d.can_confirm() { button("cf-confirm", yes, true, true).on_press(|s: &mut S| s.confirm_click()) } else { button("cf-confirm", yes, true, false) };
@@ -628,6 +630,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .child(watch::<S>(col().key("cf-body").scroll(ScrollSpec { stick_bottom: false }).w_full().min_h(0.0).max_h((d.max_h - 110.0).max(80.0)).child(body), "cf-body"))
         .children(more_below("cf-body"))
         .children(ack_row)
+        .children(dont_ask_row)
         .child(foot)
 }
 

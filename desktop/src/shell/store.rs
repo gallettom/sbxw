@@ -13,6 +13,10 @@
 //!   `check_overrides`).
 //! * `features`: `{<feature>: {<key>: value}}`, what a feature asked to
 //!   keep (the remote host last used, Setup's last tab).
+//! * `uploads`: `{skip_drop_dialog: true}` once the person ticked "Do not
+//!   ask again for files I drop" in the core's upload dialog; only that box
+//!   sets it, Setup's "Ask before uploading dropped files" clears it
+//!   (`shell/features.rs`, "Files dropped on a pane").
 
 use serde_json::{Map, Value as J};
 use std::path::PathBuf;

@@ -23,6 +23,18 @@ shots="$shots_root/files"; mkdir -p "$shots/drop"
 script="$shots/window-script.json"
 printf '# Brief\n\nThe checkout copy, as agreed on Friday.\n' >"$shots/drop/brief.md"
 printf 'name,qty\nmug,2\n' >"$shots/drop/order list.csv"
+printf 'API_KEY=example\n' >"$shots/drop/.env"
+# The stand-in with 3,000 more deliverables in nested folders (mark big).
+python3 - "$here/fixtures/files/standin.json" "$shots/standin-big.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+e = d["daemon"]["artifacts"]["entries"]
+for i in range(3000):
+    name = "shot-%04d.png" % i
+    path = "desktop/run-%02d/%s/%s" % (i % 30, "solo" if i % 2 == 0 else "window", name) if i < 2700 else "logs/" + name
+    e.append({"path": path, "name": name, "size": 1000 + i, "modified": 1794000000 - i})
+json.dump(d, open(sys.argv[2], "w"))
+PY
 # A long local path, for the dialogs at the smallest window (LONG=1).
 long="$shots/drop/$(printf 'a-very-long-folder-name-for-the-dialog-test/%.0s' 1 2 3 4)"
 mkdir -p "$long"; printf 'x' >"$long/client-brief-signed-final.pdf"
@@ -65,11 +77,21 @@ if not os.environ.get("LONG"):
     step("cf-confirm", "files-staged-1", "uploaded", gone=True)
     step({"drop_files": {"paths": [f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-confirm")
     step("cf-cancel", "cf-dialog", gone=True)
+    # Two files dropped together: one dialog; a .env file: asked, saying why
+    # (with "Do not ask again" chosen in the state file for that mark).
+    step({"drop_files": {"paths": [f"{SHOTS}/drop/brief.md", f"{SHOTS}/drop/order list.csv"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-multi")
+    step("cf-cancel", "cf-dialog", gone=True)
+    step({"drop_files": {"paths": [f"{SHOTS}/drop/.env"], "key": "pane-1", "hover": 0.2}}, "cf-confirm", "pane-drop-env")
+    step("cf-cancel", "cf-dialog", gone=True)
     step("files-codemap", "codemap-docs", "codemap")
     step("codemap-docs", "codemap-docs-net")
     step("codemap-docs-net", "codemap-outline-net-proxy", "codemap-net")
     step("codemap-outline-net-proxy", "codemap-whole", "codemap-section")
     step("codemap-diagram", "cf-ack", "diagram-dialog")
+    step("cf-cancel", "cf-dialog", gone=True)
+    # Only against the big stand-in: the Artifacts tab with 3,000 more files.
+    step("files-tab-artifacts", "files-more", "big")
+    step("files-row-desktop", "files-row-desktop/run-29", "big-open")
 else:
     # LONG=1: the dialogs with long paths, at the smallest window.
     step("pane-1-x-project", "files-row-report.md")
@@ -82,13 +104,17 @@ else:
 mark("end")
 print(json.dumps({"events": ev}, indent=1))
 PY
-marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-confirm codemap codemap-net codemap-section diagram-dialog})
+marks=(${MARKS:-artifacts preview-markdown preview-picture open-dialog browse open-refused recent staged upload-confirm uploaded pane-drop-confirm pane-drop-multi pane-drop-env codemap codemap-net codemap-section diagram-dialog big big-open})
 build
 for m in "${marks[@]}"; do
   # Nothing of an earlier run of this mark is read back: the downloads root
   # and the app's state file (a remembered tab would open the panel on Files).
   rm -rf "$RUNE_DIRS_ROOT"; rm -f "$shots/state-$m.json"
-  start_daemon "$shots/standin-$m" --fixture "$here/fixtures/files/standin.json"
+  fx="$here/fixtures/files/standin.json"
+  case "$m" in big*) fx="$shots/standin-big.json" ;; esac
+  # The .env mark: "Do not ask again" already chosen, so the dialog says why it asks.
+  [ "$m" = pane-drop-env ] && printf '{"uploads":{"skip_drop_dialog":true}}' >"$shots/state-$m.json"
+  start_daemon "$shots/standin-$m" --fixture "$fx"
   SHOT_SIZE="${SHOT_SIZE:-1400x900}" SBXW_DESKTOP_STATE="$shots/state-$m.json" run_app "$shots/window-$m.log" \
     --script "$script" --snap "$shots/window-$m.png" --tree "$shots/window-$m.tree.json" --at "mark:$m+0.05"
   cleanup; pids=()

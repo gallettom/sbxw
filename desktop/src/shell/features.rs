@@ -28,6 +28,8 @@ pub struct Dialog {
     pub running: Option<u64>,
     pub error: Option<String>,
     pub acked: bool,
+    /// Its "do not ask again" box ticked ([`Confirm::dont_ask`]).
+    pub dont_ask: bool,
     /// One secure edit per `confirm.secrets`.
     pub secrets: Vec<TextEdit>,
     /// The tag its feature hears if it closes unsent (`on_dismiss`).
@@ -65,6 +67,9 @@ pub struct Feats {
     core_done: Vec<LinkEvent>,
     /// Native requests a feature made, run at the next poll (they need Rune's `Tx`).
     pub asks: Vec<(&'static str, Ask)>,
+    /// The one drop allowed to upload without its dialog, while that drop's
+    /// actions run ([`DropGrant`]).
+    drop_grant: Option<DropGrant>,
 }
 
 /// A feature's request that needs the window: a file dialog, a clipboard read.
@@ -209,6 +214,7 @@ impl App {
                     }
                 }
                 Action::ForgetFiles(p) => crate::files::forget(&p),
+                Action::UploadsAskAgain => self.uploads_ask_again(),
                 Action::Reveal(p) => {
                     if let Err(e) = crate::files::reveal(&p) {
                         self.notify(format!("{}: {e}", f.name), true);
@@ -276,8 +282,12 @@ impl App {
         };
         crate::files::hand_in(paths);
         let data = self.feat_ctx_data();
-        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), sandbox, thread });
+        let skip_dialog = self.drops_skip_dialog();
+        // Only for the actions of this very drop, and only these paths.
+        self.feats.drop_grant = skip_dialog.then(|| DropGrant::of_drop(paths, &sandbox));
+        let acts = on(&Ctx { data: &data }, &feat::PaneDrop { paths: paths.to_vec(), skip_dialog, sandbox, thread });
         self.feature_actions(f, &format!("feature:{}", f.name), acts);
+        self.feats.drop_grant = None;
         self.push_data();
     }
 
@@ -503,13 +513,13 @@ impl App {
         let direct = match op.as_str() {
             "inspect" | "reveal" => true,
             "download" => s("to") == "downloads" && s("after") != "open",
-            "open" | "upload" => false,
+            "open" | "upload" | "uploads" => false,
             _ => {
                 self.notify(format!("{}: no core operation {}", f.name, call.path), true);
                 return 0;
             }
         };
-        if !direct && !confirmed {
+        if !direct && !confirmed && !(op == "uploads" && self.drop_without_dialog(f, &b)) {
             self.notify(format!("{}: {} runs only from the app's own dialog: refused", f.name, call.what), true);
             return 0;
         }
@@ -544,6 +554,7 @@ impl App {
                 let wake: Option<crate::client::Wake> = w.map(|w| std::sync::Arc::new(move || w()) as crate::client::Wake);
                 link.core(id, f.name, call, move || crate::files::upload(need(daemon)?.as_ref(), &route, &file, &ct, &tag, wake));
             }
+            "uploads" => self.run_uploads(id, f, call),
             _ if s("to") == "ask" => self.feats.asks.push((f.name, Ask::SaveAs { id, call })),
             _ => {
                 let dir = match crate::files::downloads_dir() {
@@ -618,7 +629,7 @@ impl App {
         let title = confirm.as_ref().map(|c| c.title.clone()).or_else(|| prepare.as_ref().map(|p| p.title.clone())).unwrap_or_default();
         let secrets = confirm.as_ref().map(secret_edits).unwrap_or_default();
         let tag = confirm.as_ref().map(|c| c.call.tag.clone()).or_else(|| prepare.as_ref().map(|p| p.call.tag.clone())).unwrap_or_default();
-        let mut d = Dialog { feature: f.name, from: from.to_string(), title, confirm, preparing: None, prepare: None, running: None, error: None, acked: false, secrets, tag };
+        let mut d = Dialog { feature: f.name, from: from.to_string(), title, confirm, preparing: None, prepare: None, running: None, error: None, acked: false, dont_ask: false, secrets, tag };
         if let Some(p) = prepare {
             let id = self.feature_call(f, p.call.clone().quiet(), false);
             d.preparing = Some(id);
@@ -949,6 +960,7 @@ impl App {
             error: d.error.as_deref(),
             busy: d.running.is_some(),
             acked: d.acked,
+            dont_ask: d.dont_ask,
             secrets: &d.secrets,
             left: side,
             top,
@@ -1158,7 +1170,7 @@ fn secret_edits(c: &Confirm) -> Vec<TextEdit> {
 impl ConfirmAnswers for App {
     fn confirm_click(&mut self) {
         let Some(d) = self.feats.dialog.as_ref() else { return };
-        let st = approval::ConfirmState { confirm: d.confirm.as_ref(), title: "", loading: false, error: None, busy: d.running.is_some(), acked: d.acked, secrets: &d.secrets, left: 0.0, top: 0.0, right: 0.0, max_h: 0.0 };
+        let st = approval::ConfirmState { confirm: d.confirm.as_ref(), title: "", loading: false, error: None, busy: d.running.is_some(), acked: d.acked, dont_ask: d.dont_ask, secrets: &d.secrets, left: 0.0, top: 0.0, right: 0.0, max_h: 0.0 };
         if !st.can_confirm() {
             return;
         }
@@ -1187,6 +1199,8 @@ impl ConfirmAnswers for App {
             }
         }
         log::info!("{}: confirmed '{}' ({:?} {})", f.name, confirm.title, call.method, call.path);
+        let dont_ask = d.dont_ask;
+        self.record_dont_ask(f, &confirm, &call, dont_ask);
         let id = self.feature_call(f, call, true);
         if let Some(d) = self.feats.dialog.as_mut() {
             for e in &mut d.secrets {
@@ -1216,15 +1230,219 @@ impl ConfirmAnswers for App {
         }
     }
 
+    fn toggle_confirm_dont_ask(&mut self) {
+        if let Some(d) = self.feats.dialog.as_mut() {
+            d.dont_ask = !d.dont_ask;
+        }
+    }
+
     fn secret_edit(&mut self, i: usize) -> &mut TextEdit {
         let d = self.feats.dialog.as_mut().expect("dialog open");
         &mut d.secrets[i]
     }
 }
 
+// ---- Files dropped on a pane: one dialog for the whole drop, or none ----
+//
+// The person may choose "Do not ask again for files I drop" in the core's
+// upload dialog (only that box sets it: no intent, no screen, no Remember).
+// Then a later drop on a terminal pane may upload without the dialog, and
+// only when all of these hold: the batch comes from that drop's own actions
+// (the grant below, which only `pane_drop` makes and which is gone once the
+// drop's actions ran), every file is one of that drop's paths, the target is
+// the pane's sandbox, and the files feature's guardrails (re-run here, fail
+// closed) find nothing. Anything else needs the dialog, as before.
+
+/// The one drop allowed to upload without its dialog. Its fields are private
+/// to this module and [`DropGrant::of_drop`] is called by `pane_drop` alone:
+/// a feature or a screen cannot make one.
+pub(super) struct DropGrant {
+    paths: Vec<std::path::PathBuf>,
+    sandbox: String,
+}
+
+impl DropGrant {
+    fn of_drop(paths: &[std::path::PathBuf], sandbox: &str) -> DropGrant {
+        DropGrant { paths: paths.to_vec(), sandbox: sandbox.to_string() }
+    }
+}
+
+/// The store's key for uploads, and its one entry.
+const UPLOADS_KEY: &str = "uploads";
+const SKIP_DROP_DIALOG: &str = "skip_drop_dialog";
+
+impl App {
+    /// The person chose not to be asked about files they drop.
+    pub(super) fn drops_skip_dialog(&self) -> bool {
+        self.store.get(UPLOADS_KEY)[SKIP_DROP_DIALOG] == true
+    }
+
+    /// Whether an unconfirmed `core:uploads` may run: see the block's comment.
+    /// Takes the grant, so one drop sends at most one batch.
+    fn drop_without_dialog(&mut self, f: &Feature, body: &J) -> bool {
+        let Some(g) = self.feats.drop_grant.take() else { return false };
+        if f.name != "files" || !self.drops_skip_dialog() {
+            return false;
+        }
+        let Some(items) = body["items"].as_array().filter(|i| !i.is_empty()) else { return false };
+        let prefix = feat::files::upload_route_prefix(&g.sandbox);
+        let mut files = vec![];
+        for it in items {
+            let file = std::path::PathBuf::from(it["file"].as_str().unwrap_or(""));
+            if !g.paths.contains(&file) || !it["route"].as_str().is_some_and(|r| r.starts_with(&prefix)) {
+                return false;
+            }
+            files.push(file);
+        }
+        feat::files::drops::guardrails(&files, g.paths.len()).is_empty()
+    }
+
+    /// A batch of uploads, one after the other off the UI thread; the first
+    /// failure stops the rest. Answered once, with each file's result in
+    /// order (`{results: [{tag, code, body} | {tag, error}]}`).
+    fn run_uploads(&self, id: u64, f: &'static Feature, call: Call) {
+        let Some(link) = &self.link else { return };
+        let daemon = self.daemon.clone();
+        let w = self.wake_slot.lock().unwrap().clone();
+        let wake: Option<crate::client::Wake> = w.map(|w| std::sync::Arc::new(move || w()) as crate::client::Wake);
+        let s = |v: &J, k: &str| v[k].as_str().unwrap_or("").to_string();
+        let items: Vec<(String, std::path::PathBuf, String, String)> = call.body["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|it| {
+                let ct = s(it, "content_type");
+                (s(it, "route"), std::path::PathBuf::from(s(it, "file")), if ct.is_empty() { "application/octet-stream".into() } else { ct }, s(it, "tag"))
+            })
+            .collect();
+        link.core(id, f.name, call, move || {
+            let d = daemon.ok_or_else(|| "not connected to the daemon".to_string())?;
+            let mut results = vec![];
+            for (route, file, ct, tag) in items {
+                match crate::files::upload(d.as_ref(), &route, &file, &ct, &tag, wake.clone()) {
+                    Ok((code, body)) => {
+                        let ok = (200..300).contains(&code) && body["ok"] != false;
+                        results.push(json!({ "tag": tag, "code": code, "body": body }));
+                        if !ok {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        results.push(json!({ "tag": tag, "error": e }));
+                        break;
+                    }
+                }
+            }
+            Ok((200, json!({ "results": results })))
+        });
+    }
+
+    /// The upload dialog's "do not ask again", ticked and confirmed: kept,
+    /// for files dropped on a pane only.
+    fn record_dont_ask(&mut self, f: &Feature, confirm: &Confirm, call: &Call, ticked: bool) {
+        if ticked && confirm.dont_ask.is_some() && f.name == "files" && call.path == "core:uploads" {
+            log::info!("files: the person chose not to be asked about dropped files");
+            self.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Bool(true));
+        }
+    }
+
+    /// Setup's "Ask before uploading dropped files": back to the dialog.
+    fn uploads_ask_again(&mut self) {
+        self.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Null);
+        self.notify("Files you drop on a terminal are asked about again before they upload", false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A drop on a pane: the dialog for the whole drop until the person
+    /// ticks "Do not ask again" in it; then a plain drop uploads at once,
+    /// and only that very drop can: an unconfirmed batch from anything else
+    /// is refused, a guardrail still asks, no intent nor Remember sets the
+    /// choice, and Setup's intent turns the asking back on.
+    #[test]
+    fn dropped_files_skip_their_dialog_only_from_the_drop_itself_once_chosen() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/files/standin.json");
+        let mut a = App::new(super::super::Args { fixture: Some(fixture.into()), ..Default::default() });
+        a.drain(Some(Duration::from_secs(3)), true);
+        if a.panes.is_empty() {
+            let id = a.fresh();
+            a.panes.push(super::super::Pane::empty(id));
+        }
+        a.panes[0].sandbox = Some("web-app".into());
+        let f = App::feature_of("files").unwrap();
+        let last = |a: &App| a.notice.as_ref().map(|n| n.0.clone()).unwrap_or_default();
+        let dir = std::env::temp_dir().join(format!("sbxw-drop-core-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let brief = dir.join("brief.md");
+        std::fs::write(&brief, b"# Brief").unwrap();
+        assert!(!a.drops_skip_dialog() && a.screen_data()["app"]["ask_dropped_uploads"] == true);
+
+        // First drop: the dialog, its box unticked; confirmed unticked, it keeps asking.
+        a.pane_drop(0, std::slice::from_ref(&brief));
+        let c = a.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("the dialog");
+        assert_eq!(c.dont_ask.as_deref(), Some("Do not ask again for files I drop"));
+        assert_eq!(c.call.path, "core:uploads");
+        a.confirm_click();
+        a.drain(Some(Duration::from_secs(3)), true);
+        assert!(!a.drops_skip_dialog(), "unticked: still asked");
+        a.feats.dialog = None;
+        // Ticked and confirmed: kept.
+        a.pane_drop(0, std::slice::from_ref(&brief));
+        assert!(a.feats.dialog.is_some());
+        a.toggle_confirm_dont_ask();
+        a.confirm_click();
+        a.drain(Some(Duration::from_secs(3)), true);
+        assert!(a.drops_skip_dialog());
+        assert_eq!(a.screen_data()["app"]["ask_dropped_uploads"], false);
+        a.feats.dialog = None;
+
+        // A plain drop now: no dialog, a notice, and it is uploaded.
+        a.pane_drop(0, std::slice::from_ref(&brief));
+        assert!(a.feats.dialog.is_none(), "no dialog for a plain drop");
+        assert!(last(&a).starts_with("Uploading brief.md to web-app"), "{}", last(&a));
+        a.drain(Some(Duration::from_secs(3)), true);
+        assert!(last(&a).contains("Uploaded brief.md to web-app") || last(&a).contains("typed"), "{}", last(&a));
+        assert!(a.feats.drop_grant.is_none(), "the grant ends with the drop");
+
+        // The same batch from anything but the drop: refused, chosen or not.
+        crate::files::hand_in(std::slice::from_ref(&brief));
+        let batch = feat::core_call("uploads", json!({ "sandbox": "web-app", "items": [{ "route": "/api/sandboxes/web-app/upload?name=brief.md", "file": brief, "tag": "upload-1" }] }), "upload", "drop-x");
+        assert_eq!(a.feature_call(f, batch.clone(), false), 0);
+        assert!(last(&a).contains("runs only from the app's own dialog"), "{}", last(&a));
+        // ... and a screen's intent asking for one gets the dialog, as ever.
+        a.run_feature_intent("files", Intent::Feature(Asked { name: "files_upload_dropped", args: Map::new() }));
+        assert!(a.feats.dialog.is_none() && !last(&a).starts_with("Uploading"), "nothing waiting: nothing sent");
+
+        // A guardrail asks all the same, and says why.
+        let env = dir.join(".env");
+        std::fs::write(&env, b"KEY=x").unwrap();
+        a.pane_drop(0, std::slice::from_ref(&env));
+        let c = a.feats.dialog.as_ref().and_then(|d| d.confirm.clone()).expect("asked");
+        assert!(c.lines.iter().any(|l| l.contains("Asked even though you chose not to be asked") && l.contains(".env")), "{:?}", c.lines);
+        assert!(c.dont_ask.is_none());
+        a.cancel_click();
+
+        // Nothing but the box sets it: not a Remember, not a dialog of another call.
+        a.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Null);
+        a.feature_actions(f, "files", vec![Action::Remember { key: SKIP_DROP_DIALOG.into(), value: J::Bool(true) }]);
+        assert!(!a.drops_skip_dialog());
+        let other = Confirm::new("x", feat::core_call("upload", json!({ "route": "/api/sandboxes/web-app/upload?name=brief.md", "file": brief, "tag": "u" }), "u", "u")).dont_ask("Do not ask again for files I drop");
+        a.record_dont_ask(f, &other, &other.call, true);
+        assert!(!a.drops_skip_dialog(), "only a batch of dropped files");
+        let net = App::feature_of("network").unwrap();
+        a.record_dont_ask(net, &Confirm::new("x", batch.clone()).dont_ask("x"), &batch, true);
+        assert!(!a.drops_skip_dialog(), "only the files feature's dialog");
+
+        // Setup turns the asking back on.
+        a.store.set_in(UPLOADS_KEY, SKIP_DROP_DIALOG, J::Bool(true));
+        a.run_feature_intent("setup", Intent::Feature(Asked { name: "files_upload_ask_again", args: Map::new() }));
+        assert!(!a.drops_skip_dialog(), "{}", last(&a));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The core's file operations keep their rule whatever a feature asks:
     /// open and upload only from the core's dialog, a download that picks
