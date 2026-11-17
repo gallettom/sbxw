@@ -331,6 +331,40 @@ fn sync_ui(ui: &mut Ui, n: &Node) {
 // ---------------------------------------------------------------------------
 // Drawing
 
+/// An action's colour by meaning (docs/screens.md, "Colour by meaning"):
+/// its icon or label colour and the tint under it on hover and focus.
+/// Neutral is the plain text colour on the quiet hover.
+pub fn action_tone(name: &str) -> (u32, u32) {
+    let v = |n| theme::color_value(n).unwrap();
+    match name {
+        "green" => (v("green"), v("green-tint")),
+        "red" => (v("red"), v("red-tint")),
+        "amber" => (v("amber"), v("amber-tint")),
+        "blue" => (v("blue"), v("blue-tint")),
+        "purple" => (v("purple"), v("purple-tint")),
+        _ => (v("text"), v("border")),
+    }
+}
+
+/// The app's one motion curve for things that open and shut (a sandbox's
+/// sessions, a group, a menu's fade): 0.18 s, no bounce, settling like an
+/// ease-out. Only a press or a key starts it (Rune plays nothing for data
+/// that arrives); never a loop.
+pub const FOLD: rune::Spring = rune::Spring::new(0.18, 0.0);
+
+thread_local! {
+    static REDUCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The system asks for reduced motion (`Cx::is_reduced_motion`, set by the
+/// shell's view each frame): folds land at once, menus show without a fade.
+pub fn set_reduced_motion(on: bool) {
+    REDUCED.with(|r| r.set(on));
+}
+pub fn reduced_motion() -> bool {
+    REDUCED.with(|r| r.get())
+}
+
 pub fn tone(name: &str) -> (u32, u32) {
     // (foreground, tint)
     let v = |n| theme::color_value(n).unwrap();
@@ -663,6 +697,7 @@ impl Build<'_> {
             }
             Kind::Row | Kind::Column => {
                 let nav = self.nav.take();
+                let folds = n.folds && n.kind == Kind::Column && !reduced_motion();
                 let mut b = boxed(if n.kind == Kind::Row { row().items_center() } else { col() }, st);
                 // A list group: each pressable item learns its neighbours' keys.
                 let items: Vec<Option<String>> = if n.group.is_some() { n.children.iter().map(|k| k.on.as_ref().and(key_of(k))).collect() } else { vec![] };
@@ -672,8 +707,14 @@ impl Build<'_> {
                         let next = items[i + 1..].iter().flatten().next().cloned();
                         self.nav = Some((prev, next));
                     }
-                    b = b.child(self.node::<S>(k));
+                    let child = self.node::<S>(k);
+                    // A folding column: each child glides to its new height.
+                    let child = if folds { child.fold_glide(FOLD) } else { child };
+                    b = b.child(child);
                     self.nav = None;
+                }
+                if folds {
+                    b = b.growth(rune::GrowthSpec { spring: FOLD, ..Default::default() });
                 }
                 if let Some(on) = &n.on {
                     let (on, arg) = (on.clone(), n.arg.clone());
@@ -790,6 +831,12 @@ impl Build<'_> {
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
                 rune::icon(i, st.size.unwrap_or(14.0)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())))
+            }
+            Kind::Badge if n.pill => {
+                // A count alone in a round bubble: the tone's colour filled,
+                // the number in the page's dark (a mark and its label at once).
+                let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
+                el().h(18.0).min_w(18.0).px(5.0).items_center().justify_center().radius(9.0).fill(hex(fg)).child(text(n.text.clone()).font(body(12.0, 600.0)).color(c("bg")))
             }
             Kind::Badge => {
                 let (fg, tint) = tone(n.variant.as_deref().unwrap_or("neutral"));
@@ -914,6 +961,9 @@ impl Build<'_> {
     }
 
     fn button<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
+        if n.compact {
+            return self.compact_button::<S>(n, key);
+        }
         let variant = n.variant.as_deref().unwrap_or("neutral");
         let (fill, border, fg, hover) = match variant {
             "primary" => ("green-deep", "green-deep", "white", "primary-hover"),
@@ -951,6 +1001,38 @@ impl Build<'_> {
         }
         let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
         b.hover(n.style.hover.map(hex).unwrap_or_else(|| c(hover))).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
+    }
+
+    /// A button one text line tall: a 20 pt framed square (or a label
+    /// padded 6), inside a 24 pt target with no fill of its own. Its tone
+    /// colours the icon and tints the target on hover.
+    fn compact_button<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
+        let tone = n.tone.as_deref().unwrap_or("neutral");
+        let (fg, tint) = action_tone(tone);
+        let only_icon = n.text.is_empty();
+        let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
+        let mut face = row().gap(4.0).items_center().justify_center().h(20.0).min_w(20.0).px(if only_icon { 0.0 } else { 6.0 }).radius(theme::radius("xs").unwrap()).fill(c("elevated")).border(1.0, c("border"));
+        if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
+            face = face.child(rune::icon(i, 12.0).color(hex(fg)));
+        }
+        if !only_icon {
+            face = face.child(text(n.text.clone()).font(body(12.0, 500.0)).color(hex(fg)));
+        }
+        let mut b = row().items_center().justify_center().h(theme::layout::DENSE_H).min_w(theme::layout::DENSE_H).radius(theme::radius("xs").unwrap()).role("button").label(name).child(face);
+        if let Some(k) = key {
+            b = b.key(k);
+        }
+        if let Some(h) = &n.help {
+            b = b.help(h.clone()).help_keys(n.keys.clone());
+        }
+        if n.disabled {
+            return b.opacity(theme::DISABLED_OPACITY).disabled(true);
+        }
+        if n.skip_tab {
+            b = b.tab_index(-1);
+        }
+        let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
+        b.hover(hex(tint)).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
     }
 
     fn menu<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
@@ -1233,7 +1315,13 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         for w in ["\"running\"", "\"working\"", "\"wants you\"", "\"stopped\"", "\"starting…\"", "\"unreachable\""] {
             assert!(tree.contains(w), "no row says {w}");
         }
-        assert!(tree.contains("1 asking"), "the amber count shows as a text badge");
+        // The amber request says itself in the state word's place, pressable.
+        assert!(tree.contains("asks you 1") && node_has(&n, "extra-sandbox-sbxw-desktop-design-relay"), "the amber count shows as a text badge");
+        // The model in place of the agent's name, short and lower case.
+        assert!(tree.contains("\"opus 5.5\"") && tree.contains("\"sonnet 5.5\"") && tree.contains("\"haiku 5.5\""), "models shown");
+        for k in ["add-test-sbx", "add-chat-release-notes"] {
+            assert!(node_has(&n, k), "{k} not drawn");
+        }
         for k in ["row-test-sbx", "stop-test-sbx", "start-chat-release-notes", "extra-sandbox-test-sbx"] {
             assert!(node_has(&n, k), "{k} not drawn");
         }

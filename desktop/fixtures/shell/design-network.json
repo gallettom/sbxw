@@ -36,7 +36,8 @@
     "approvals": 0,
     "kits_waiting": 0,
     "old_sbx": false,
-    "workspace": "/Users/me/dev/sbxw"
+    "workspace": "/Users/me/dev/sbxw",
+    "model": "claude-sonnet-5-5"
    },
    {
     "name": "sbxw-desktop-design",
@@ -48,7 +49,9 @@
     "approvals": 0,
     "kits_waiting": 0,
     "old_sbx": false,
-    "workspace": "/Users/me/dev/sbxw"
+    "workspace": "/Users/me/dev/sbxw",
+    "model": "claude-opus-5-5",
+    "model_name": "Opus 5.5"
    },
    {
     "name": "sbxw-voice",
@@ -72,7 +75,9 @@
     "approvals": 3,
     "kits_waiting": 0,
     "old_sbx": false,
-    "workspace": "/Users/me/dev/shop"
+    "workspace": "/Users/me/dev/shop",
+    "model": "claude-opus-5-5",
+    "model_name": "Opus 5.5"
    },
    {
     "name": "better-search",
@@ -96,7 +101,8 @@
     "approvals": 2,
     "kits_waiting": 0,
     "old_sbx": false,
-    "workspace": "/Users/me/dev/test-sbx"
+    "workspace": "/Users/me/dev/test-sbx",
+    "model": "claude-haiku-5-5"
    },
    {
     "name": "data-pipeline-with-a-long-name",
@@ -121,7 +127,8 @@
     "approvals": 0,
     "kits_waiting": 0,
     "old_sbx": false,
-    "workspace": "/Users/me/dev/docs"
+    "workspace": "/Users/me/dev/docs",
+    "model": "gpt-5-codex"
    }
   ],
   "sessions": [
@@ -133,7 +140,9 @@
     "started_ms": 1763290000000,
     "origin": "tty",
     "answerable": false,
-    "ts": 1763290000001
+    "ts": 1763290000001,
+    "model": "claude-sonnet-5-5",
+    "model_name": "Sonnet 5.5"
    },
    {
     "sandbox": "sbxw-jarvis",
@@ -185,7 +194,9 @@
     "origin": "tty",
     "answerable": false,
     "ts": 1763290000001,
-    "thread": "payments"
+    "thread": "payments",
+    "model": "claude-sonnet-5-5",
+    "model_name": "Sonnet 5.5"
    },
    {
     "sandbox": "test-sbx",

@@ -1408,6 +1408,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     cx.focus_ring(2.0, 2.0, c("focus"));
     // The app's zoom (Cmd/Ctrl with + − 0 outside a terminal, or the palette).
     cx.zoom(s.zoom());
+    // Folds and fades follow the system's reduced-motion setting (screen.rs).
+    screen::set_reduced_motion(cx.is_reduced_motion());
     let root = col()
         .w_full()
         .h_full()

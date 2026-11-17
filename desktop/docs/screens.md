@@ -167,6 +167,7 @@ Children side by side. Children are centred vertically.
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
+| `folds` | bool | `column`: its children fold open and shut smoothly. A child that grows or shrinks (a block that expands) glides to its new height over about 0.18 s, ease-out, and what it gains or loses fades; only in answer to the person's press or key, never for data that arrives; off under the system's reduced motion |
 
 ```lua
 row{ gap = 8, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
@@ -230,6 +231,8 @@ the focus ring (2 pt, blue, 2 pt outside) when the keyboard reaches it.
 | `keys` | list of strings | Its shortcut, drawn as keycaps in its tooltip after the `help` text: `keys = { "⌘", "K" }` |
 | `tab_stop` | bool | `false`: left out of the Tab order, still pressable (a row's secondary actions, which its own keys and its menu reach) |
 | `hover` | colour | The fill under the pointer, in place of the variant's (a stop button that turns `red-tint`) |
+| `tone` | `green`, `red`, `amber`, `blue`, `purple`, `neutral` | Its colour by meaning ([Colour by meaning](#colour-by-meaning)): the icon (and a ghost button's label) in that colour, its tint under it on hover and keyboard focus |
+| `compact` | bool | One text line tall: a 20 pt framed face inside a 24 pt target (a row's start, stop and +) |
 
 ```lua
 button{ icon = "stop", on = "stop", arg = sb.name, color = "red", help = "Stop", keys = { "Space" } }
@@ -335,6 +338,7 @@ A small framed label. Positional: its text.
 | Prop | Value | Default |
 |---|---|---|
 | `tone` | `neutral`, `blue`, `green`, `amber`, `red`, `purple` | `neutral` |
+| `pill` | bool | A round bubble holding a count alone: the tone's colour filled, the number in the page's dark (the list's network count) |
 
 The web UI's meaning: blue is focus or "a pane", amber "needs you", green
 "done" or running, red an error.
