@@ -44,6 +44,9 @@ pub enum Event {
     Browser(crate::svc::browser::BrowserState),
     /// A Jarvis proposal was made or settled: re-read `/api/jarvis`.
     Jarvis(sbxw_core::jarvis::Proposal),
+    /// CPU and memory, every few seconds while a `/api/stream` is open:
+    /// `GET /api/stats`'s answer.
+    Stats(sbxw_core::stats::Stats),
 }
 
 impl Event {
@@ -64,6 +67,7 @@ impl Event {
             Event::Voice(_) => "voice",
             Event::Browser(_) => "browser",
             Event::Jarvis(_) => "jarvis",
+            Event::Stats(_) => "stats",
         }
     }
 
@@ -82,6 +86,7 @@ impl Event {
             Event::Voice(v) => v.to_string(),
             Event::Browser(v) => json(v),
             Event::Jarvis(v) => v.ui_view().to_string(),
+            Event::Stats(v) => json(v),
         }
     }
 }

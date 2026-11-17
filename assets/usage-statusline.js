@@ -95,6 +95,21 @@ process.stdin.on("end", () => {
   const costIn = d.cost || {};
   const num = (v) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : undefined);
   const whole = (v) => (num(v) === undefined ? undefined : Math.round(v));
+  // The sandbox's own CPU and memory, raw: the daemon turns two successive
+  // reports into a percentage. A microVM's /proc is its own. Absent off Linux.
+  let procStat = "";
+  let cores = 0;
+  let procMem = "";
+  try {
+    const lines = fs.readFileSync("/proc/stat", "utf8").split("\n");
+    procStat = lines[0].startsWith("cpu ") ? lines[0] : "";
+    cores = lines.filter((l) => /^cpu\d+ /.test(l)).length;
+    procMem = fs
+      .readFileSync("/proc/meminfo", "utf8")
+      .split("\n")
+      .filter((l) => l.startsWith("MemTotal:") || l.startsWith("MemAvailable:"))
+      .join("\n");
+  } catch (_) {}
   const payload = Buffer.from(
     JSON.stringify({
       five_hour_pct: fh,
@@ -113,6 +128,9 @@ process.stdin.on("end", () => {
       duration_ms: whole(costIn.total_duration_ms),
       lines_added: whole(costIn.total_lines_added),
       lines_removed: whole(costIn.total_lines_removed),
+      proc_stat_cpu: procStat || undefined,
+      cpu_cores: cores || undefined,
+      proc_meminfo: procMem || undefined,
       // See status-hook.js.
       sandbox: process.env.SANDBOX_NAME || os.hostname(),
     }),

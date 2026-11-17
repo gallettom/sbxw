@@ -182,6 +182,62 @@ An existing sandbox reports costs after one `sbxw up <name>` (the script is
 rewritten at each bring-up); until then, its older script's reports change
 nothing.
 
+### CPU and memory
+
+`GET /api/stats` (UI token, like every `/api` route) answers what the daemon
+and each sandbox use; the same body goes out as a `stats` event on
+`/api/stream` every 5 s while at least one `/api/stream` is open, and not at
+all otherwise.
+
+```json
+{ "daemon_cpu_pct": 0.8,
+  "sandboxes": [
+    { "name": "myapp", "cpu_pct": 143.5, "cpu_age_s": 4, "cpu_cores": 4,
+      "mem_bytes": 2147483648, "mem_total_bytes": 8589934592 },
+    { "name": "cx", "cpu_pct": null, "cpu_age_s": null, "cpu_cores": null,
+      "mem_bytes": null, "mem_total_bytes": null } ],
+  "total_cpu_pct": 144.3, "sandboxes_counted": 1, "sandboxes_unknown": 1,
+  "ts": 1763380000000 }
+```
+
+- **Percent of one core**, so it exceeds 100: four busy cores read 400.
+- **Unknown is `null`, never `0`.** `total_cpu_pct` is the daemon plus every
+  sandbox with a `cpu_pct`, `null` only when none is known; it is partial
+  when `sandboxes_unknown > 0` or `daemon_cpu_pct` is `null`, and a bar
+  should say so.
+- **`sandboxes`** lists every sandbox the daemon's 15 s `sbx ls` last saw
+  running, plus any that reported since; a stopped one drops out.
+
+**Where a sandbox's numbers come from.** sbx exposes no CPU figure, and a
+sandbox is a microVM the host's Docker does not list. So each sandbox
+measures itself: the status line script reads the first `cpu` line of the
+VM's `/proc/stat`, its number of `cpuN` lines and `MemTotal` /
+`MemAvailable` from `/proc/meminfo`, and sends them raw with its throttled
+report (`proc_stat_cpu`, `cpu_cores`, `proc_meminfo`). The daemon turns two
+successive reports of the same sandbox into `cpu_pct`; `mem_bytes` is total
+minus available. Nothing is polled and no sandbox is woken for it. What
+follows from that:
+
+- It covers the whole microVM (the agent, its tools, a build, Docker inside
+  it), not one process.
+- A sandbox reports only while a Claude session renders its status line:
+  about every 10 s while an agent works. Claude Code renders it when the
+  conversation changes, so a long single tool call (a two-minute build)
+  sends nothing until it ends. A sandbox with no Claude session (another
+  agent, a plain shell) never has a value.
+- `cpu_pct` is `null` after the first report (one sample is no rate), when
+  the last sample is older than 30 s, and when two samples are more than
+  60 s apart. `cpu_age_s` is the age of the last sample (`null` if none), so
+  a client can say "no recent report" rather than show a frozen number.
+
+**The daemon's own CPU** is read from the OS when asked (the `stats` tick or
+a request, at most once a second): `/proc/self/schedstat` on Linux, `ps -o
+cputime= -p <pid>` on macOS with a 2 s timeout. A failed or late reading
+makes it `null`; the first reading after the daemon starts is `null` too
+(it takes two).
+
+An existing sandbox sends these after one `sbxw up <name>`, like the cost.
+
 Every request the island makes carries the daemon's UI token
 (`Authorization: Bearer`, read from `~/.sbxw/run/ui-token` before each
 request, since the daemon writes a new one each time it starts). Opening a
@@ -197,6 +253,7 @@ Daemon endpoints the island uses:
 | `GET /api/events` | Server-Sent Events, one per hook-driven change |
 | `GET /api/hook/log` | Recent raw hook events, for debugging |
 | `GET /api/sandboxes` | Running sandboxes, shown as `idle` right away |
+| `GET /api/stats` | CPU and memory, the daemon's and each sandbox's ([above](#cpu-and-memory)) |
 | `POST /api/answer`, `POST /api/input` | Send a menu choice, or raw bytes, into a session |
 | `POST /api/chat/push` | `{ "text", "name"?, "fresh"? }`: send a message, creating the sandbox if needed. `fresh` takes the next free `ephemeral-chat[-N]` |
 
