@@ -599,6 +599,29 @@ function fitPane(pane, why = 'fit') {
   pane.fit.fit();
   termLog(pane, why, box);
   if (termSize(pane) !== pane.ws?.sentSize) sendPaneResize(pane);
+  // The box has not changed, and another client sets the PTY's size: draw at
+  // the PTY's size, not the box's (see applyPtySize).
+  else if (pane.ws?.ptySize && !pane.ws.ptySize.owner) pane.term.resize(pane.ws.ptySize.cols, pane.ws.ptySize.rows);
+}
+
+// The daemon's {"type":"size","cols","rows","owner"} frame (asked for with
+// `size=1`): the PTY has ONE size for every client attached to it (other tabs,
+// the desktop app), set by the one used last. When another client sets it,
+// xterm is drawn at the PTY's size (top-left, clipped or with room to spare)
+// so the program's output lands where it was meant to; typing here, or this
+// pane's box changing, makes this tab the owner again and the PTY takes its
+// size. Nothing is sent from here: a resize is only ever sent by fitPane.
+function applyPtySize(pane, msg) {
+  if (!pane.ws) return;
+  const was = pane.ws.ptySize;
+  pane.ws.ptySize = { cols: msg.cols, rows: msg.rows, owner: !!msg.owner };
+  pane.termEl.style.overflow = 'hidden';
+  if (!msg.owner) {
+    if (pane.term.cols !== msg.cols || pane.term.rows !== msg.rows) pane.term.resize(msg.cols, msg.rows);
+  } else if (was && !was.owner && pane.termEl.offsetWidth && pane.termEl.offsetHeight) {
+    // Owner again: back to the box's size, which is what the PTY took.
+    pane.fit.fit();
+  }
 }
 
 function refitPanes(why = 'refit') {
@@ -648,7 +671,7 @@ function notifyAttention(sandboxName) {
 }
 
 // Shared onmessage handler: binary frames are PTY output, text frames are
-// JSON control messages (currently only "attention").
+// JSON control messages ("attention", "size").
 function handlePaneData(pane, ev) {
   // When the terminal last drew: what "its TUI has settled" is timed from
   // before something is typed into it (upload.js).
@@ -657,6 +680,7 @@ function handlePaneData(pane, ev) {
     try {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'attention') { notifyAttention(msg.sandbox || pane.sandbox); return; }
+      if (msg.type === 'size') { applyPtySize(pane, msg); return; }
     } catch (_) { /* not JSON — fall through and write it verbatim */ }
     pane.term.write(ev.data);
   } else {
@@ -821,7 +845,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
       + (pane.mode === 'thread' && model != null ? `&model=${encodeURIComponent(model)}` : '')
       + (pane.mode === 'thread' && checkout ? '&checkout=1' : '')
     : '';
-  pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}${threadParam}`);
+  pane.ws = new WebSocket(`${proto}://${location.host}/ws?sandbox=${encodeURIComponent(name)}&mode=${encodeURIComponent(pane.mode)}${threadParam}&size=1`);
   pane.ws.binaryType = 'arraybuffer';
 
   pane.ws.onopen = () => {

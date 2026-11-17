@@ -28,8 +28,11 @@
 //!   plus a slow re-read in case `sbx` changed something behind the daemon.
 //! * `GET /ws?sandbox=&mode=&thread=`: the terminal (`crates/daemon/src/http/ws.rs`).
 //!   Binary frames both ways are PTY bytes; text frames from the client are JSON
-//!   `{"type":"resize","cols","rows"}`; text frames from the daemon are an error
-//!   line to show, or `{"type":"attention"}` (the bell).
+//!   `{"type":"resize","cols","rows"}` (the size this client wants; it becomes
+//!   the owner of the PTY's one size); text frames from the daemon are an error
+//!   line to show, `{"type":"attention"}` (the bell), or, because this app
+//!   opens with `size=1`, `{"type":"size","cols","rows","owner"}`: the PTY's
+//!   size, before the replay and on every change (`TermEvent::Size`).
 //!
 //! Adding a route is mechanical: one method on [`Daemon`], implemented on
 //! [`HttpDaemon`] with [`HttpDaemon::get`] / [`HttpDaemon::post`], on
@@ -144,6 +147,9 @@ pub enum TermEvent {
     /// A text frame that is not JSON: the daemon's error line for the pane.
     Notice(String),
     Attention,
+    /// The daemon's `{"type":"size"}` frame: the PTY's size, and whether this
+    /// client is the one that sets it.
+    Size { cols: u16, rows: u16, owner: bool },
     Closed(String),
 }
 
@@ -463,7 +469,8 @@ impl Daemon for HttpDaemon {
     }
 
     fn open_terminal(&self, req: &TerminalRequest, wake: Wake) -> Result<TerminalConn> {
-        let url = format!("ws://{}/ws?{}", self.addr, req.query());
+        // `size=1`: the daemon says the PTY's size (one for every client).
+        let url = format!("ws://{}/ws?{}&size=1", self.addr, req.query());
         let mut request = url.as_str().into_client_request()?;
         request.headers_mut().insert("Authorization", self.auth().parse()?);
         let sock = self.addr.to_socket_addrs()?.next().ok_or_else(|| anyhow!("no address for {}", self.addr))?;
@@ -708,6 +715,10 @@ fn pump_loop(ws: &mut tungstenite::WebSocket<TcpStream>, tx: &Events, rx: mpsc::
                 Ok(Message::Text(t)) => {
                     let ev = match serde_json::from_str::<serde_json::Value>(&t) {
                         Ok(v) if v["type"] == "attention" => TermEvent::Attention,
+                        Ok(v) if v["type"] == "size" => match (v["cols"].as_u64(), v["rows"].as_u64()) {
+                            (Some(c), Some(r)) if c > 0 && r > 0 => TermEvent::Size { cols: c.min(1000) as u16, rows: r.min(1000) as u16, owner: v["owner"] == true },
+                            _ => continue,
+                        },
                         Ok(_) => continue,
                         Err(_) => TermEvent::Notice(t.to_string()),
                     };

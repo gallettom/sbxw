@@ -6,7 +6,8 @@
 //! the route list in `.sbxw-artifacts/desktop/daemon-api.md` at the repository root, outside git): `GET /api/health?nonce=` (proof), `GET
 //! /api/sandboxes`, `POST /api/sandboxes/:name/stop`, `GET /api/stream`
 //! (server-sent events) and `GET /ws` (binary PTY bytes both ways, JSON
-//! `resize` text frames in), all behind `Authorization: Bearer`.
+//! `resize` text frames in, `size` frames out with `size=1`), all behind
+//! `Authorization: Bearer`.
 //!
 //! Sandbox states change as on the real daemon, roughly: opening the agent
 //! (`/ws` without `mode`, or `mode=claude`) of a stopped sandbox makes it
@@ -32,6 +33,14 @@
 //! `session` event per session of the sandbox, with `session_id` and
 //! `started_ms`, as the daemon does; `--stale-session yes` keeps an older
 //! session left as `working`. `--clients N` reports N stream clients.
+//!
+//! Terminal size, as the daemon: the PTY has one size, the client used last
+//! sets it, and a socket opened with `size=1` hears
+//! `{"type":"size","cols","rows","owner"}` first and on every change. There
+//! is one client per PTY here, so a second client is simulated: `POST
+//! /api/standin/other-client` with `{"cols","rows","type"}` makes "another
+//! window" take every open terminal's size (and type `type` into it, as that
+//! window's person would); typing in the app, or its `resize`, takes it back.
 //!
 //! What it does not do: keep the PTY across reconnects, replay the last
 //! 256 KB, Host/Origin checks, threads, monitor mode.
@@ -78,6 +87,26 @@ struct State {
 }
 
 type Shared = Arc<Mutex<State>>;
+
+/// "Another window" takes the size: (cols, rows, text it types).
+type OtherClient = (u16, u16, String);
+
+/// Every open terminal's line for [`OtherClient`] messages.
+static TERMINALS: Mutex<Vec<mpsc::Sender<OtherClient>>> = Mutex::new(Vec::new());
+
+/// The daemon's rule (`crates/daemon/src/pty.rs`, `is_typed_input`), short:
+/// the terminal's answers to the program (cursor, attributes, focus) are not
+/// someone typing.
+fn is_typed(d: &[u8]) -> bool {
+    match d {
+        [] | [0x1b, b']' | b'P', ..] => false,
+        [0x1b, b'[', rest @ ..] => {
+            let last = rest.last().copied().unwrap_or(0);
+            !(rest == b"I" || rest == b"O" || matches!(last, b'R' | b'c' | b'n' | b't' | b'y') && rest[..rest.len() - 1].iter().all(|c| c.is_ascii_digit() || b";?>=$ ".contains(c)))
+        }
+        _ => true,
+    }
+}
 
 fn publish(st: &Shared, name: &str, data: &str) {
     let frame = format!("event: {name}\ndata: {data}\n\n");
@@ -235,6 +264,17 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
         let _ = write!(s, "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     };
     let stop = path.strip_prefix("/api/sandboxes/").and_then(|r| r.strip_suffix("/stop")).map(decode);
+    if authed && method == "POST" && path == "/api/standin/other-client" {
+        let body = read_body(&mut s, &head, &text)?;
+        let cols = body["cols"].as_u64().unwrap_or(70) as u16;
+        let rows = body["rows"].as_u64().unwrap_or(16) as u16;
+        let typed = body["type"].as_str().unwrap_or("").to_string();
+        let mut list = TERMINALS.lock().unwrap();
+        list.retain(|t| t.send((cols, rows, typed.clone())).is_ok());
+        eprintln!("standin: another client takes {cols}x{rows} ({} terminals)", list.len());
+        reply(&mut s, "200 OK", serde_json::json!({ "ok": true, "terminals": list.len() }).to_string());
+        return Ok(());
+    }
     if authed && (path.starts_with("/api/jarvis") || matches!(path, "/api/sessions" | "/api/chat/push" | "/api/voice" | "/api/voice/anonymise" | "/api/voice/transcribe")) {
         let body = read_body(&mut s, &head, &text)?;
         // A push to another sandbox than Jarvis's: features' stand-ins (relay follows one).
@@ -351,7 +391,7 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                     });
                 }
             }
-            terminal(ws, &s)?;
+            terminal(ws, &s, query_value(query, "size") == Some("1"))?;
         }
         // Features' routes (src/feat/): their stand-in, else their data keys.
         (m, p) if p.starts_with("/api/") => {
@@ -442,7 +482,7 @@ fn new_approval(st: &Shared) {
     publish(st, "session", &serde_json::json!({ "sandbox": "web-app", "state": "working" }).to_string());
 }
 
-fn terminal(mut ws: tungstenite::WebSocket<Prefixed>, raw: &TcpStream) -> anyhow::Result<()> {
+fn terminal(mut ws: tungstenite::WebSocket<Prefixed>, raw: &TcpStream, sizes: bool) -> anyhow::Result<()> {
     let pty = native_pty_system().openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 })?;
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
     let mut cmd = CommandBuilder::new(shell);
@@ -466,15 +506,48 @@ fn terminal(mut ws: tungstenite::WebSocket<Prefixed>, raw: &TcpStream) -> anyhow
         }
     });
     raw.set_read_timeout(Some(Duration::from_millis(5)))?;
+    let (other_tx, other_rx) = mpsc::channel::<OtherClient>();
+    TERMINALS.lock().unwrap().push(other_tx);
+    // The app's wanted size, whether it owns the PTY's, and the size now.
+    let (mut want, mut mine, mut now): (Option<(u16, u16)>, bool, (u16, u16)) = (None, false, (100, 30));
+    let size_frame = |ws: &mut tungstenite::WebSocket<Prefixed>, (cols, rows): (u16, u16), owner: bool| {
+        if sizes {
+            let _ = ws.send(Message::Text(serde_json::json!({ "type": "size", "cols": cols, "rows": rows, "owner": owner }).to_string().into()));
+        }
+    };
+    size_frame(&mut ws, now, false);
     'outer: loop {
+        if let Ok((cols, rows, typed)) = other_rx.try_recv() {
+            mine = false;
+            now = (cols, rows);
+            pty.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+            size_frame(&mut ws, now, false);
+            if !typed.is_empty() {
+                writer.write_all(typed.as_bytes())?;
+            }
+        }
         match ws.read() {
-            Ok(Message::Binary(d)) => writer.write_all(&d)?,
+            Ok(Message::Binary(d)) => {
+                if !mine && is_typed(&d) {
+                    if let Some(w) = want {
+                        mine = true;
+                        now = w;
+                        pty.master.resize(PtySize { rows: w.1, cols: w.0, pixel_width: 0, pixel_height: 0 })?;
+                        size_frame(&mut ws, now, true);
+                    }
+                }
+                writer.write_all(&d)?
+            }
             Ok(Message::Text(t)) => {
                 let v: serde_json::Value = serde_json::from_str(&t).unwrap_or_default();
                 if v["type"] == "resize" {
                     let cols = v["cols"].as_u64().unwrap_or(100) as u16;
                     let rows = v["rows"].as_u64().unwrap_or(30) as u16;
+                    want = Some((cols, rows));
+                    mine = true;
+                    now = (cols, rows);
                     pty.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+                    size_frame(&mut ws, now, true);
                 }
             }
             Ok(Message::Close(_)) => break,

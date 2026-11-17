@@ -876,6 +876,9 @@ impl App {
                     TerminalEvent::Reconnected => p.reconnecting = None,
                 }
             }
+            // "wants you": this pane's own session (terminal/attention.rs).
+            let wants = t.wants_you(terminal::session_for(self.feats.data.get("sessions"), p.sandbox.as_deref(), p.thread.as_deref(), p.mode == Mode::Agent).as_ref());
+            ch |= std::mem::replace(&mut p.attention, wants) != wants;
             if let (true, true, Some(path)) = (ch, i == self.focused, &self.dump_text) {
                 let _ = std::fs::write(path, format!("{}x{} offset {} selection {:?}\n{}\n", t.size.0, t.size.1, t.display_offset(), t.selection_text(), t.visible_text().trim_end()));
             }

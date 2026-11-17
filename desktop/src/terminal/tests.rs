@@ -325,7 +325,7 @@ fn osc8_links_hover_and_open_with_the_primary_modifier() {
 #[test]
 fn resize_is_debounced_with_poll_tx() {
     let (mut t, _ev, rx) = term();
-    assert_eq!(resizes(&rx), vec![(100, 30), (40, 5)]);
+    assert_eq!(resizes(&rx), vec![(40, 5)], "the default 100x30 is never sent");
     let mut tx = Tx::default();
     let w = |cols: usize| PAD * 2.0 + cols as f32 * cell_width() + 0.5;
     let h = PAD * 2.0 + STATUS_H + 10.0 * LINE_HEIGHT + 0.5;
@@ -708,4 +708,210 @@ fn reserved_keys_stay_with_the_shell() {
     assert_eq!(written(&rx), b"\x1b[19;5~", "Ctrl+F8 is the program's");
     assert!(t.on_key_tx(&key(Key::Function(9), |_| {}), &mut tx, lens));
     assert_eq!(written(&rx), b"\x1b[20~", "other keys unchanged");
+}
+
+#[test]
+fn nothing_is_sent_before_the_pane_has_a_layout() {
+    let (ev_tx, ev_rx) = mpsc::channel::<TermEvent>();
+    let (in_tx, in_rx) = mpsc::channel();
+    let mut t = TerminalState::new(TerminalConn { events: ev_rx, input: in_tx });
+    let mut tx = Tx::default();
+    t.poll_tx(None, 0.0, &mut tx);
+    t.poll(None);
+    assert_eq!(resizes(&in_rx), vec![]);
+    assert_eq!(t.wanted_size(), None);
+    drop(ev_tx);
+}
+
+#[test]
+fn a_size_frame_sets_the_grid_and_sends_nothing_back() {
+    let (mut t, ev, rx) = term();
+    let mut tx = Tx::default();
+    let _ = resizes(&rx);
+    // Another window owns the PTY at 100x30.
+    ev.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    t.poll_tx(None, 1.0, &mut tx);
+    assert_eq!(t.size, (100, 30), "the grid is the PTY's size");
+    assert_eq!(t.wanted_size(), Some((40, 5)), "what this pane wants is kept");
+    assert!(t.sized_elsewhere());
+    t.poll_tx(None, 2.0, &mut tx);
+    assert_eq!(resizes(&rx), vec![], "a size frame is never answered with a resize");
+    // The same layout again (a frame redrawn): still nothing.
+    let w = PAD * 2.0 + 40.0 * cell_width() + 0.5;
+    let h = PAD * 2.0 + STATUS_H + 5.0 * LINE_HEIGHT + 0.5;
+    t.fit_at(w, h, 3.0);
+    t.poll_tx(None, 4.0, &mut tx);
+    assert_eq!(resizes(&rx), vec![]);
+    assert_eq!(t.size, (100, 30));
+    // Output drawn for 100 columns lands in 100 columns.
+    ev.send(TermEvent::Output(format!("{}|", "x".repeat(99)).into_bytes())).unwrap();
+    t.poll(None);
+    assert_eq!(t.screen_text().lines().next().unwrap().trim_end(), format!("{}|", "x".repeat(99)));
+    // The daemon gives the size back to this pane: the grid follows.
+    ev.send(TermEvent::Size { cols: 40, rows: 5, owner: true }).unwrap();
+    t.poll(None);
+    assert_eq!(t.size, (40, 5));
+    assert!(!t.sized_elsewhere());
+    assert_eq!(resizes(&rx), vec![]);
+}
+
+#[test]
+fn typing_or_clicking_takes_the_size_back() {
+    let (mut t, ev, rx) = term();
+    let _ = resizes(&rx);
+    ev.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    t.poll(None);
+    // A key is plain input: the daemon counts it as use, no resize needed.
+    t.on_key(&key(Key::Text("a".into()), |_| {}));
+    let got: Vec<TermInput> = rx.try_iter().collect();
+    assert!(matches!(got.as_slice(), [TermInput::Bytes(b)] if b == b"a"));
+    // A click sends the wanted size again, which claims it.
+    drag(&mut t, Phase::Down, (1, 1), (1, 1), 1, Mods::default());
+    assert_eq!(resizes(&rx), vec![(40, 5)]);
+    // As owner, a click sends nothing.
+    ev.send(TermEvent::Size { cols: 40, rows: 5, owner: true }).unwrap();
+    t.poll(None);
+    drag(&mut t, Phase::Up, (1, 1), (1, 1), 1, Mods::default());
+    drag(&mut t, Phase::Down, (1, 1), (1, 1), 1, Mods::default());
+    assert_eq!(resizes(&rx), vec![]);
+}
+
+#[test]
+fn the_own_window_changing_claims_the_size_at_once() {
+    let (mut t, ev, rx) = term();
+    let _ = resizes(&rx);
+    ev.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    t.poll(None);
+    t.resize(50, 8);
+    assert_eq!(t.size, (50, 8), "the grid follows this window");
+    t.poll(None);
+    assert_eq!(resizes(&rx), vec![(50, 8)]);
+}
+
+#[test]
+fn a_reconnect_sends_the_wanted_size_again_and_forgets_the_old_owner() {
+    let (ev_tx, ev_rx) = mpsc::channel();
+    let (in_tx, _in_rx) = mpsc::channel();
+    let (ev2_tx, ev2_rx) = mpsc::channel::<TermEvent>();
+    let (in2_tx, in2_rx) = mpsc::channel();
+    let next = std::sync::Mutex::new(Some(TerminalConn { events: ev2_rx, input: in2_tx }));
+    let reopen: Reconnect = Arc::new(move || next.lock().unwrap().take().ok_or_else(|| anyhow::anyhow!("no more")));
+    let mut t = TerminalState::with_reconnect(TerminalConn { events: ev_rx, input: in_tx }, reopen);
+    t.resize(60, 12);
+    t.poll(None);
+    ev_tx.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    ev_tx.send(TermEvent::Closed("daemon restarted".into())).unwrap();
+    t.poll(None);
+    // The new socket: size frame first (the PTY kept the other size), then the replay.
+    ev2_tx.send(TermEvent::Size { cols: 100, rows: 30, owner: false }).unwrap();
+    t.settle_reconnect(Duration::from_secs(5));
+    t.poll(None);
+    assert_eq!(resizes(&in2_rx), vec![(60, 12)], "the new socket is told the wanted size");
+    assert_eq!(t.size, (100, 30), "until the daemon answers, the grid is the PTY's");
+    ev2_tx.send(TermEvent::Size { cols: 60, rows: 12, owner: true }).unwrap();
+    t.poll(None);
+    assert_eq!(t.size, (60, 12));
+    assert!(!t.sized_elsewhere());
+}
+
+/// A pane laid out in Rune: the first layout fits the terminal, and a
+/// terminal that replaces another in the same pane (same keys, same rect,
+/// in the same update) is fitted too (it used to keep the default 100x30).
+#[test]
+fn a_terminal_is_fitted_at_open_even_when_it_replaces_another() {
+    use rune::{Cx, El, Env, Runtime};
+    struct S(Option<TerminalState>, Vec<Receiver<TermInput>>, Vec<Sender<TermEvent>>);
+    fn lens(s: &mut S) -> Option<&mut TerminalState> {
+        s.0.as_mut()
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        rune::row().w_full().h_full().child(super::pane(s.0.as_ref().unwrap(), lens))
+    }
+    fn open(s: &mut S) {
+        let (ev_tx, ev_rx) = mpsc::channel();
+        let (in_tx, in_rx) = mpsc::channel();
+        let mut t = TerminalState::new(TerminalConn { events: ev_rx, input: in_tx });
+        t.id = "1".into();
+        s.0 = Some(t);
+        s.1.push(in_rx);
+        s.2.push(ev_tx);
+    }
+    let mut st = S(None, vec![], vec![]);
+    open(&mut st);
+    let mut rt = Runtime::new(st, view, (900.0, 600.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(0.016);
+    let want = |w: f32, h: f32| (((w - 2.0 * PAD) / cell_width()).floor() as usize, ((h - 2.0 * PAD - STATUS_H) / LINE_HEIGHT).floor() as usize);
+    let first = rt.state.0.as_ref().unwrap().wanted_size();
+    assert_eq!(first, Some(want(900.0, 600.0)), "fitted at the first layout");
+    rt.update(|s, _| open(s));
+    rt.frame(0.032);
+    rt.frame(0.048);
+    let t = rt.state.0.as_mut().unwrap();
+    assert_eq!(t.wanted_size(), first, "the replacing terminal is fitted too");
+    assert_eq!(t.size, first.unwrap());
+    t.poll(None);
+    let f = first.unwrap();
+    assert_eq!(resizes(&rt.state.1[1]), vec![(f.0 as u16, f.1 as u16)]);
+}
+
+/// Two panes on one sandbox (its main session and a thread): only the pane
+/// whose session waits shows "wants you", and it clears when that session
+/// works again or the person types there.
+#[test]
+fn wants_you_follows_the_pane_s_own_session() {
+    use serde_json::json;
+    let (mut main, _ev1, _rx1) = term();
+    let (mut thread, ev2, _rx2) = term();
+    let sessions = |main_state: &str, thread_state: &str, ts: u64| {
+        json!([
+            { "sandbox": "web-app", "mode": "claude", "state": main_state, "ts": ts, "session_id": "a" },
+            { "sandbox": "web-app", "mode": "claude", "state": thread_state, "ts": ts, "session_id": "b", "thread": "fix-login" },
+            { "sandbox": "docs", "mode": "claude", "state": "attention", "ts": ts, "session_id": "c" },
+        ])
+    };
+    let check = |main: &mut TerminalState, thread: &mut TerminalState, data: &serde_json::Value| {
+        let m = session_for(Some(data), Some("web-app"), None, true);
+        let t = session_for(Some(data), Some("web-app"), Some("fix-login"), true);
+        (main.wants_you(m.as_ref()), thread.wants_you(t.as_ref()))
+    };
+    let d = sessions("working", "working", 1);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, false), "both working: no badge (docs waits, not these)");
+    let d = sessions("working", "attention", 2);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, true), "only the thread's pane");
+    let d = sessions("working", "working", 3);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, false), "cleared when it works again");
+    // The thread's PTY rings: lit until the session reports working.
+    ev2.send(TermEvent::Attention).unwrap();
+    thread.poll(None);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, true), "a bell, no report since");
+    let d = sessions("working", "working", 4);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, false), "worked since the bell");
+    // Waiting again; the person types in the pane: cleared, until a new report asks.
+    let d = sessions("working", "attention", 5);
+    assert!(check(&mut main, &mut thread, &d).1);
+    thread.on_key(&key(Key::Text("y".into()), |_| {}));
+    assert!(!check(&mut main, &mut thread, &d).1, "typed in the pane");
+    let d = sessions("working", "attention", 6);
+    assert!(check(&mut main, &mut thread, &d).1, "asked again after the key");
+    // An exited session is no session: the bell rule.
+    let d = sessions("working", "exited", 7);
+    assert!(session_for(Some(&d), Some("web-app"), Some("fix-login"), true).is_none());
+}
+
+#[test]
+fn a_plain_shell_keeps_the_bell_rule() {
+    let (mut t, ev, _rx) = term();
+    let sessions = serde_json::json!([{ "sandbox": "web-app", "mode": "claude", "state": "attention", "ts": 1 }]);
+    // A bash pane is never matched to the agent's session.
+    let s = session_for(Some(&sessions), Some("web-app"), None, false);
+    assert!(s.is_none());
+    assert!(!t.wants_you(None));
+    ev.send(TermEvent::Attention).unwrap();
+    t.poll(None);
+    assert!(t.wants_you(None));
+    t.on_key(&key(Key::Text("x".into()), |_| {}));
+    assert!(!t.wants_you(None));
+    // No sessions data at all (the feature not loaded): the bell rule too.
+    assert!(session_for(None, Some("web-app"), None, true).is_none());
 }
