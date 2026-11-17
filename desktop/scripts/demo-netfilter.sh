@@ -8,16 +8,19 @@
 # each, at 1284x816:
 #   bubble   press test-sbx's blue bubble: only its 2 requests, the chip
 #            "test-sbx x", "Show all 113", "Dismiss these 2";
-#   empty    open notes's Network item: "Nothing waits in notes.";
+#   empty    select notes, open its Network item: "Nothing waits in notes.";
 #   all      press the top bar's "sbx asks": every sandbox's, 25 cards drawn,
 #            "Show 25 more", "Dismiss all 113".
 # Out: $SBXW_SHOTS/netfilter/<mark>.png, the element tree and the app log beside each.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root/netfilter"; mkdir -p "$shots"
-tap() { # <mark> <key>
+tap() { # <mark> <key> [<key tapped first>]
+  local first=""
+  [ -n "${3:-}" ] && first="{\"t\": 0.2, \"type\": \"tap\", \"key\": \"$3\"},"
   cat >"$shots/$1-script.json" <<JSON
 {"events": [
+  $first
   {"t": 0.3, "type": "mark", "name": "wait:$2:8000"},
   {"t": 0.5, "type": "tap", "key": "$2"},
   {"t": 0.7, "type": "mark", "name": "wait:net-sandbox:8000"},
@@ -27,7 +30,7 @@ tap() { # <mark> <key>
 JSON
 }
 tap bubble extra-sandbox-test-sbx-approvals
-tap empty extra-sandbox-notes-network
+tap empty extra-sandbox-notes-network extra-sandbox-notes
 tap all extra-topbar-approvals
 build
 for m in ${MARKS:-bubble empty all}; do
