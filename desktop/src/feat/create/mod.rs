@@ -48,7 +48,7 @@ pub const FEATURE: Feature = Feature {
     name: "create",
     events: &["provision"],
     screens: &[
-        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/create.luau"), slot: Slot::Modal { width: 640.0 } },
+        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/create.luau"), slot: Slot::Modal { width: 640.0, light_dismiss: false } },
         ScreenDecl { name: JOBS, src: include_str!("../../../screens/create-jobs.luau"), slot: Slot::Panel { title: "New sandboxes", icon: "plus", width: 320.0 } },
     ],
     intents: &[

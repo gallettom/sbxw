@@ -270,7 +270,11 @@ pub struct ScreenDecl {
 pub enum Slot {
     /// A dialog over the window, centred, one at a time (`open_modal`,
     /// `close_modal`, Escape). The screen reads `data.app.modal.arg`.
-    Modal { width: f32 },
+    /// `light_dismiss`: a press outside closes it too. Only for a modal
+    /// that holds nothing the person may have typed or changed (Help): a
+    /// form keeps its cross, Cancel and Escape, so a stray click loses
+    /// nothing. The safe default is false.
+    Modal { width: f32, light_dismiss: bool },
     /// A panel docked on the right, beside Jarvis's (`open_panel`,
     /// `close_panel`). Several open show as tabs; one is shown at a time.
     Panel { title: &'static str, icon: &'static str, width: f32 },

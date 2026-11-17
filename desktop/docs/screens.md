@@ -167,6 +167,8 @@ Children side by side. Children are centred vertically.
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
+| `shortcuts` | list of `{ what, key, ... }` | Lines under its `help` in the tooltip, each what a key does with its keycaps: `shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } }` |
+| `folds` | bool | `column`: its children fold open and shut smoothly. A child that grows or shrinks (a block that expands) glides to its new height over about 0.18 s, ease-out, and what it gains or loses fades; only in answer to the person's press or key, never for data that arrives; off under the system's reduced motion |
 
 ```lua
 row{ gap = 8, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
@@ -230,6 +232,8 @@ the focus ring (2 pt, blue, 2 pt outside) when the keyboard reaches it.
 | `keys` | list of strings | Its shortcut, drawn as keycaps in its tooltip after the `help` text: `keys = { "⌘", "K" }` |
 | `tab_stop` | bool | `false`: left out of the Tab order, still pressable (a row's secondary actions, which its own keys and its menu reach) |
 | `hover` | colour | The fill under the pointer, in place of the variant's (a stop button that turns `red-tint`) |
+| `tone` | `green`, `red`, `amber`, `blue`, `purple`, `neutral` | Its colour by meaning ([Colour by meaning](#colour-by-meaning)): the icon (and a ghost button's label) in that colour, its tint under it on hover and keyboard focus |
+| `compact` | bool | One text line tall: a 20 pt framed face inside a 24 pt target (a row's start, stop and +) |
 
 ```lua
 button{ icon = "stop", on = "stop", arg = sb.name, color = "red", help = "Stop", keys = { "Space" } }
@@ -335,6 +339,7 @@ A small framed label. Positional: its text.
 | Prop | Value | Default |
 |---|---|---|
 | `tone` | `neutral`, `blue`, `green`, `amber`, `red`, `purple` | `neutral` |
+| `pill` | bool | A round bubble holding a count alone: the tone's colour filled, the number in the page's dark (the list's network count) |
 
 The web UI's meaning: blue is focus or "a pane", amber "needs you", green
 "done" or running, red an error.
@@ -400,7 +405,7 @@ Positional: the button's label.
 | Prop | Value | Effect |
 |---|---|---|
 | `id` | string | Required. The button's key (unless `key`); the list is `<id>-list`, each item `<id>-<item id>` |
-| `items` | list of items | Each a string (id and label) or `{ id = "...", label = "...", icon = "...", disabled = bool }` |
+| `items` | list of items | Each a string (id and label) or `{ id = "...", label = "...", icon = "...", disabled = bool, help = "...", tone = "red", keys = { "Space" } }`, or `{ divider = true }`: a line between two groups |
 | `on` | action name | Required unless `disabled`. Called with `value` = the picked item's id |
 | `arg` | any value | Passed too |
 | `icon` | icon name | On the button |
@@ -408,9 +413,30 @@ Positional: the button's label.
 | `disabled` | bool | |
 | `dense`, `keys`, `tab_stop` | as `button` | 24 pt; the shortcut in its tooltip (its `help`); out of the Tab order |
 
-The list closes on a pick, on Escape, or on a second press of the button. A
-press elsewhere does not close it (yet). Up and Down move between its
-items, Enter picks.
+The core draws every menu the same way (the row menus, selects, the pane
+bars' overflow, the layout picker): 6 pt padding, 28 pt rows, the icons in
+one column 12 pt before the labels, as wide as its longest row up to 320 pt
+(a longer label truncates; its tooltip has it whole). Write labels short,
+verb first ("Open shell", "Network", "Requests (3)", "Manage…", "Stop") and
+put the explanation in the item's `help`, its tooltip. A `tone` colours the
+item's icon by meaning; `red` (destructive) colours its label too. `keys`
+are drawn as keycaps at the row's right end. It fades in over 0.1 s (at once
+under reduced motion).
+
+The list closes on a pick, on Escape, on a second press of the button, or
+on a press anywhere outside it (light dismiss, below). Up and Down move
+between its items, Enter picks.
+
+**Light dismiss, one rule.** A press outside closes, and does nothing else
+(as a native menu does: it never reaches a terminal, a row or a button
+under it): every menu and select, the pane bars' overflow, the command
+palette, and a modal that holds nothing the person may have typed or
+changed (Help; its feature declares `Slot::Modal { light_dismiss: true }`).
+A modal with fields (New sandbox, the env file, templates, Setup, a plan,
+New thread, the sandbox actions) does not close on a press outside: only its
+cross, its Cancel and Escape close it, so a stray click loses nothing; that
+is the default (`light_dismiss: false`). The core's approval dialogs keep
+their own behaviour.
 
 ```lua
 menu{ "Actions", id = "acts", icon = "more", on = "act", arg = sb.name,
@@ -587,12 +613,38 @@ gives the `#rrggbb`.
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover` |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover`, `red-text` (red words on a group's tint) |
 | `theme.radius` | `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 |
 | `theme.text` | `caption` 12, `body` 13, `title` 14, `heading` 16; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 14, `xl` 16 |
 | `theme.space` | `xxs` 2, `xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24 |
 | `theme.line_height` | 1.4 (a multiple of the size) |
 | `theme.layout` | `top_bar_h` 44, `gutter` 8, `sidebar_w` 264 (`sidebar_min` 200, `sidebar_max` 420), `pane_bar_h` 32, `control_h` 28, `dense_h` 24, `traffic_lights_w` |
+
+### Colour by meaning
+
+Actions carry a colour by what they mean, the same everywhere, so a glance
+reads the window before the words do. Give a `button` (or a menu item) a
+`tone` and the core draws its icon (and a ghost or neutral button's label)
+in it, with its tint under the pointer and the keyboard focus.
+
+| Tone | Means | Examples |
+|---|---|---|
+| `green` | start, open, allow, confirm | Start, + (open in a new pane), Open shell, Allow, Add rule, Publish, New |
+| `red` | stop, remove, refuse, anything destructive | Stop, Remove, Refuse, Unpublish, Close thread |
+| `amber` | needs you | a request waiting, sbx holding something, a session that wants you |
+| `blue` | go to, informative | Network, Requests, Threads and plans, Project, Browser, the network count |
+| `purple` | Jarvis and the team | Jarvis, a lead |
+| `neutral` | everything else | Manage…, Setup, Help, Later, layout |
+
+- The words and the icon's shape always say it too: colour is never the
+  only signal.
+- **One filled button per view**: the `primary` (green, filled) is the one
+  thing a dialog is for (Create, Save, Send my answer, Approve). Everything
+  else is tinted, not filled: in the Network panel each card's Allow is a
+  green-toned button, not a filled one, so a list of ten requests is not ten
+  primaries.
+- Every coloured label or icon meets the contrast test on what it sits on
+  (its surface, its tint, a group's tint): `theme::tests`.
 
 **The rules the built-in screens follow** (write yours the same way):
 
@@ -683,6 +735,9 @@ bar puts the extras that do not fit into its menu `extra-topbar`, whose items
 are then `extra-topbar-<id>`, the same keys as when they show inline.
 A sandbox's extras are looked for only when its row is drawn (a row key
 `row-<name>`, or its name as a text), so a filter does not bring them back.
+A sandbox's session rows are accounted for by its sessions disclosure (an
+element keyed `sessions-<name>`, the built-in list's "4 sessions" line),
+whether the block is open or shut.
 
 At every start the app writes what it has built in to
 `~/.sbxw/desktop/builtin/` (`screens/<name>.luau`, this document as

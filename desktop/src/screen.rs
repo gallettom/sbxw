@@ -331,6 +331,168 @@ fn sync_ui(ui: &mut Ui, n: &Node) {
 // ---------------------------------------------------------------------------
 // Drawing
 
+// ---------------------------------------------------------------------------
+// Menus: one look for every list that drops from a button (a screen's menu
+// and select, the pane bars' overflow, the layout picker, the row's ⋯).
+
+/// A menu's padding all round, its rows' height and padding, the icon's
+/// column and the gap after it, the widest it grows.
+pub const MENU_PAD: f32 = 6.0;
+pub const MENU_ROW_H: f32 = 28.0;
+pub const MENU_ROW_PX: f32 = 8.0;
+pub const MENU_ICON: f32 = 14.0;
+pub const MENU_ICON_GAP: f32 = 12.0;
+pub const MENU_MIN_W: f32 = 160.0;
+pub const MENU_MAX_W: f32 = 320.0;
+
+/// One row of a menu as the shared look draws it.
+pub struct MenuRow<'a> {
+    pub key: String,
+    pub label: &'a str,
+    pub icon: Option<&'a str>,
+    /// `red` is destructive: its icon and label in red. Any other tone colours the icon.
+    pub tone: Option<&'a str>,
+    pub help: Option<&'a str>,
+    pub keys: &'a [String],
+    pub count: Option<u64>,
+    pub chosen: bool,
+    pub disabled: bool,
+}
+
+/// About how wide a menu's text is: the UI is monospace, 0.6 em a character.
+fn chars_w(t: &str, size: f32) -> f32 {
+    t.chars().count() as f32 * size * 0.6
+}
+
+/// The width a menu needs for its longest row (label, keycaps, count,
+/// check), between [`MENU_MIN_W`] and [`MENU_MAX_W`]. A row longer than
+/// that truncates, and its tooltip has the whole label.
+pub fn menu_width(rows: &[MenuRow]) -> f32 {
+    let w = rows.iter().map(|r| {
+        let keys: f32 = r.keys.iter().map(|k| chars_w(k, 12.0).max(10.0) + 10.0 + 4.0).sum::<f32>() + if r.keys.is_empty() { 0.0 } else { 12.0 };
+        let count = r.count.map_or(0.0, |c| chars_w(&c.to_string(), 12.0) + 12.0 + 8.0);
+        MENU_ROW_PX * 2.0 + MENU_ICON + MENU_ICON_GAP + chars_w(r.label, 13.0) + keys + count + if r.chosen { 20.0 } else { 0.0 }
+    }).fold(0.0, f32::max);
+    (w + MENU_PAD * 2.0 + 2.0).ceil().clamp(MENU_MIN_W, MENU_MAX_W)
+}
+
+/// The list's surface, anchored under (or beside) `anchor`, `w` wide; it
+/// fades in over 0.1 s (at once under reduced motion).
+pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> El {
+    let e = col()
+        .key(key)
+        .role("menu")
+        .focus_group()
+        .anchored(anchor, Side::Bottom, align, 4.0)
+        .w(w)
+        .padding(MENU_PAD)
+        .gap(0.0)
+        .fill(c("surface"))
+        .border(1.0, c("border"))
+        .radius(theme::radius("md").unwrap())
+        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+    if reduced_motion() {
+        e
+    } else {
+        e.transition(quick_fade())
+    }
+}
+
+/// Menus and the palette: in over 0.1 s, out over 0.08 s.
+pub fn quick_fade() -> rune::Transition {
+    rune::Transition::opacity().springs(rune::SpringPair::new(rune::Spring::new(0.1, 0.0), rune::Spring::new(0.08, 0.0)))
+}
+
+/// A line between two groups of a menu's rows.
+pub fn menu_divider() -> El {
+    el().w_full().py(4.0).child(el().w_full().h(1.0).fill(c("elevated")))
+}
+
+/// One row: the icon in one aligned column (an empty slot when it has none),
+/// 12 pt to the label, keycaps or a count at the right end; a red row is
+/// destructive. It is a menu item for screen readers, highlighted on hover
+/// and keyboard focus (with the focus ring), and its tooltip is its help,
+/// else its whole label (in case it truncates).
+pub fn menu_row(r: &MenuRow) -> El {
+    let danger = r.tone == Some("red");
+    let icon_c = match r.tone {
+        Some(t) if t != "neutral" => hex(action_tone(t).0),
+        _ => c("text-muted"),
+    };
+    let label_c = if danger { c("red-text") } else { c("text-bright") };
+    let mut row_ = row().key(r.key.clone()).w_full().h(MENU_ROW_H).px(MENU_ROW_PX).gap(0.0).items_center().radius(theme::radius("xs").unwrap()).role("menuitem").label(r.label.to_string()).focusable(!r.disabled);
+    let slot = el().w(MENU_ICON).h(MENU_ICON).items_center().justify_center();
+    row_ = row_.child(match r.icon.and_then(crate::icons::get) {
+        Some(i) => slot.child(rune::icon(i, MENU_ICON).color(icon_c)),
+        None => slot,
+    });
+    row_ = row_.child(el().w(MENU_ICON_GAP));
+    row_ = row_.child(text(r.label.to_string()).font(body(13.0, if r.chosen { 600.0 } else { 400.0 })).color(label_c).truncate().min_w(0.0).grow(1.0));
+    if let Some(n) = r.count {
+        row_ = row_.child(el().w(8.0)).child(el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(n.to_string()).font(body(12.0, 500.0)).color(c("text"))));
+    }
+    if !r.keys.is_empty() {
+        let mut caps = row().gap(4.0).items_center().pl(12.0);
+        for k in r.keys {
+            caps = caps.child(el().h(18.0).min_w(18.0).px(5.0).items_center().justify_center().radius(4.0).fill(c("bg")).border(1.0, c("border")).child(text(k.clone()).font(body(12.0, 500.0)).color(c("text-muted"))));
+        }
+        row_ = row_.child(caps);
+    }
+    if r.chosen {
+        row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
+    }
+    // Its help, else its whole label when the label may be cut.
+    let cut = chars_w(r.label, 13.0) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
+    if let Some(h) = r.help.map(str::to_string).or_else(|| cut.then(|| r.label.to_string())) {
+        row_ = row_.help(h);
+    }
+    if r.disabled {
+        return row_.opacity(theme::DISABLED_OPACITY).disabled(true);
+    }
+    row_.hover(c(if danger { "red-tint" } else { "elevated" })).focus_highlight(c(if danger { "red-tint" } else { "elevated" })).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer)
+}
+
+/// What sits under an open menu: nothing to see, the whole window, so a
+/// press anywhere outside the menu closes it and does nothing else (as a
+/// native menu does): it never reaches a terminal, a button or a row.
+pub fn menu_scrim<S: 'static>(key: String, close: impl Fn(&mut S) + 'static) -> El {
+    el().key(key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close)
+}
+
+/// An action's colour by meaning (docs/screens.md, "Colour by meaning"):
+/// its icon or label colour and the tint under it on hover and focus.
+/// Neutral is the plain text colour on the quiet hover.
+pub fn action_tone(name: &str) -> (u32, u32) {
+    let v = |n| theme::color_value(n).unwrap();
+    match name {
+        "green" => (v("green"), v("green-tint")),
+        "red" => (v("red"), v("red-tint")),
+        "amber" => (v("amber"), v("amber-tint")),
+        "blue" => (v("blue"), v("blue-tint")),
+        "purple" => (v("purple"), v("purple-tint")),
+        _ => (v("text"), v("border")),
+    }
+}
+
+/// The app's one motion curve for things that open and shut (a sandbox's
+/// sessions, a group, a menu's fade): 0.18 s, no bounce, settling like an
+/// ease-out. Only a press or a key starts it (Rune plays nothing for data
+/// that arrives); never a loop.
+pub const FOLD: rune::Spring = rune::Spring::new(0.18, 0.0);
+
+thread_local! {
+    static REDUCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The system asks for reduced motion (`Cx::is_reduced_motion`, set by the
+/// shell's view each frame): folds land at once, menus show without a fade.
+pub fn set_reduced_motion(on: bool) {
+    REDUCED.with(|r| r.set(on));
+}
+pub fn reduced_motion() -> bool {
+    REDUCED.with(|r| r.get())
+}
+
 pub fn tone(name: &str) -> (u32, u32) {
     // (foreground, tint)
     let v = |n| theme::color_value(n).unwrap();
@@ -364,7 +526,7 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
 /// window so they paint over every other tile.
 pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     let name: Rc<str> = s.name.as_str().into();
-    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: None };
+    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: HashMap::new() };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
@@ -511,7 +673,13 @@ impl ScreenState {
                     if !keys.contains(format!("row-{n}").as_str()) && !texts.contains(n) {
                         continue;
                     }
+                    // A sessions disclosure (`sessions-<name>`) accounts for the
+                    // rows it holds, open or shut.
+                    let folded = keys.contains(format!("sessions-{n}").as_str());
                     for (place, prefix) in [("sandboxes", "extra-sandbox"), ("rows", "extra-row")] {
+                        if folded && place == "rows" {
+                            continue;
+                        }
                         for e in x[place][n].as_array().into_iter().flatten() {
                             if !keys.contains(format!("{prefix}-{n}-{}", e["id"].as_str().unwrap_or("")).as_str()) {
                                 out.push((n.to_string(), e.clone()));
@@ -530,9 +698,24 @@ struct Build<'a> {
     name: Rc<str>,
     ui: &'a Ui,
     overlays: Vec<El>,
-    /// Set by a `group = "list"` parent for the child being built: the keys
-    /// of the items before and after it (Up and Down move there).
-    nav: Option<(Option<String>, Option<String>)>,
+    /// Filled by a `group = "list"` container for its items (the pressable
+    /// rows inside it, at any depth, not inside another item): the keys of
+    /// the items before and after each (Up and Down move there).
+    nav: HashMap<String, (Option<String>, Option<String>)>,
+}
+
+/// The items of a list group, in reading order: rows and columns with `on`,
+/// at any depth (a group's rows may sit inside blocks), not inside another.
+fn list_items(n: &Node, out: &mut Vec<String>) {
+    for k in &n.children {
+        if matches!(k.kind, Kind::Row | Kind::Column) && k.on.is_some() {
+            if let Some(key) = key_of(k) {
+                out.push(key);
+            }
+        } else {
+            list_items(k, out);
+        }
+    }
 }
 
 fn arg_key(v: &J) -> String {
@@ -662,18 +845,26 @@ impl Build<'_> {
                 t
             }
             Kind::Row | Kind::Column => {
-                let nav = self.nav.take();
+                let nav = if n.on.is_some() { key.as_ref().and_then(|k| self.nav.get(k).cloned()) } else { None };
+                let folds = n.folds && n.kind == Kind::Column && !reduced_motion();
                 let mut b = boxed(if n.kind == Kind::Row { row().items_center() } else { col() }, st);
                 // A list group: each pressable item learns its neighbours' keys.
-                let items: Vec<Option<String>> = if n.group.is_some() { n.children.iter().map(|k| k.on.as_ref().and(key_of(k))).collect() } else { vec![] };
-                for (i, k) in n.children.iter().enumerate() {
-                    if items.get(i).is_some_and(Option::is_some) {
-                        let prev = items[..i].iter().rev().flatten().next().cloned();
-                        let next = items[i + 1..].iter().flatten().next().cloned();
-                        self.nav = Some((prev, next));
+                if n.group.is_some() {
+                    let mut items = vec![];
+                    list_items(n, &mut items);
+                    for (i, k) in items.iter().enumerate() {
+                        let prev = i.checked_sub(1).map(|j| items[j].clone());
+                        self.nav.insert(k.clone(), (prev, items.get(i + 1).cloned()));
                     }
-                    b = b.child(self.node::<S>(k));
-                    self.nav = None;
+                }
+                for k in n.children.iter() {
+                    let child = self.node::<S>(k);
+                    // A folding column: each child glides to its new height.
+                    let child = if folds { child.fold_glide(FOLD) } else { child };
+                    b = b.child(child);
+                }
+                if folds {
+                    b = b.growth(rune::GrowthSpec { spring: FOLD, ..Default::default() });
                 }
                 if let Some(on) = &n.on {
                     let (on, arg) = (on.clone(), n.arg.clone());
@@ -790,6 +981,12 @@ impl Build<'_> {
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
                 rune::icon(i, st.size.unwrap_or(14.0)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())))
+            }
+            Kind::Badge if n.pill => {
+                // A count alone in a round bubble: the tone's colour filled,
+                // the number in the page's dark (a mark and its label at once).
+                let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
+                el().h(18.0).min_w(18.0).px(5.0).items_center().justify_center().radius(9.0).fill(hex(fg)).child(text(n.text.clone()).font(body(12.0, 600.0)).color(c("bg")))
             }
             Kind::Badge => {
                 let (fg, tint) = tone(n.variant.as_deref().unwrap_or("neutral"));
@@ -910,10 +1107,17 @@ impl Build<'_> {
         };
         // Buttons and menus set their own tooltip, with the shortcut's keycaps.
         let help = if matches!(n.kind, Kind::Button | Kind::Menu | Kind::Select) { &None } else { &n.help };
-        apply(e, st, help)
+        let mut e = apply(e, st, help);
+        for (what, keys) in &n.shortcuts {
+            e = e.help_row(what.clone()).help_keys(keys.clone());
+        }
+        e
     }
 
     fn button<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
+        if n.compact {
+            return self.compact_button::<S>(n, key);
+        }
         let variant = n.variant.as_deref().unwrap_or("neutral");
         let (fill, border, fg, hover) = match variant {
             "primary" => ("green-deep", "green-deep", "white", "primary-hover"),
@@ -921,7 +1125,10 @@ impl Build<'_> {
             "ghost" => ("", "", "text-muted", "elevated"),
             _ => ("elevated", "border", "text", "border"),
         };
-        let fg = n.style.color.map(hex).unwrap_or_else(|| c(fg));
+        // A tone (colour by meaning) colours the icon and the label, and
+        // tints the button under the pointer and the keyboard focus.
+        let toned = n.tone.as_deref().filter(|t| *t != "neutral" && variant != "primary").map(action_tone);
+        let fg = n.style.color.map(hex).or(toned.map(|t| hex(t.0))).unwrap_or_else(|| c(fg));
         // At least 28 pt square (24 dense), the icon centred; a label pads 10 (8 dense).
         let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, 14.0) } else { (theme::layout::CONTROL_H, 13.0, 16.0) };
         let only_icon = n.text.is_empty();
@@ -949,8 +1156,44 @@ impl Build<'_> {
         if n.skip_tab {
             b = b.tab_index(-1);
         }
+        if let Some((_, tint)) = toned {
+            b = b.focus_highlight(hex(tint));
+        }
         let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
-        b.hover(n.style.hover.map(hex).unwrap_or_else(|| c(hover))).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
+        let hover = n.style.hover.map(hex).or(toned.map(|t| hex(t.1))).unwrap_or_else(|| c(hover));
+        b.hover(hover).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
+    }
+
+    /// A button one text line tall: a 20 pt framed square (or a label
+    /// padded 6), inside a 24 pt target with no fill of its own. Its tone
+    /// colours the icon and tints the target on hover.
+    fn compact_button<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
+        let tone = n.tone.as_deref().unwrap_or("neutral");
+        let (fg, tint) = action_tone(tone);
+        let only_icon = n.text.is_empty();
+        let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
+        let mut face = row().gap(4.0).items_center().justify_center().h(20.0).min_w(20.0).px(if only_icon { 0.0 } else { 6.0 }).radius(theme::radius("xs").unwrap()).fill(c("elevated")).border(1.0, c("border"));
+        if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
+            face = face.child(rune::icon(i, 12.0).color(hex(fg)));
+        }
+        if !only_icon {
+            face = face.child(text(n.text.clone()).font(body(12.0, 500.0)).color(hex(fg)));
+        }
+        let mut b = row().items_center().justify_center().h(theme::layout::DENSE_H).min_w(theme::layout::DENSE_H).radius(theme::radius("xs").unwrap()).role("button").label(name).child(face);
+        if let Some(k) = key {
+            b = b.key(k);
+        }
+        if let Some(h) = &n.help {
+            b = b.help(h.clone()).help_keys(n.keys.clone());
+        }
+        if n.disabled {
+            return b.opacity(theme::DISABLED_OPACITY).disabled(true);
+        }
+        if n.skip_tab {
+            b = b.tab_index(-1);
+        }
+        let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
+        b.hover(hex(tint)).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
     }
 
     fn menu<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
@@ -993,30 +1236,45 @@ impl Build<'_> {
             ui.open = if ui.open.as_deref() == Some(id2.as_str()) { None } else { Some(id2.clone()) };
         });
         if open {
-            let mut list = col().key(format!("{id}-list")).role("menu").focus_group().anchored(key.clone(), Side::Bottom, rune::Align::Start, 4.0).min_w(180.0).padding(4.0).gap(2.0).fill(c("surface")).border(1.0, c("border")).radius(theme::radius("md").unwrap()).shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+            let rows: Vec<MenuRow> = n.items.iter().filter(|i| !i.divider).map(|it| self.menu_row_of(n, &id, it)).collect();
+            let mut list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows));
             for it in &n.items {
-                list = list.child(self.item::<S>(n, &id, it));
+                list = list.child(if it.divider { menu_divider() } else { self.item::<S>(n, &id, it) });
             }
+            // A press outside closes the menu, and only that (light dismiss).
+            let (name, id3) = (self.name.clone(), id.clone());
+            self.overlays.push(menu_scrim(format!("{id}-scrim"), move |s: &mut S| {
+                let ui = &mut s.screen(&name).ui;
+                if ui.open.as_deref() == Some(id3.as_str()) {
+                    ui.open = None;
+                }
+            }));
             self.overlays.push(list);
         }
         t
     }
 
+    fn menu_row_of<'a>(&self, n: &Node, id: &str, it: &'a Item) -> MenuRow<'a> {
+        MenuRow {
+            key: format!("{id}-{}", it.id),
+            label: &it.label,
+            icon: it.icon.as_deref(),
+            tone: it.tone.as_deref(),
+            help: it.help.as_deref(),
+            keys: &it.keys,
+            count: None,
+            chosen: n.kind == Kind::Select && n.value.as_str() == Some(it.id.as_str()),
+            disabled: it.disabled,
+        }
+    }
+
     fn item<S: Host>(&self, n: &Node, id: &str, it: &Item) -> El {
-        let chosen = n.kind == Kind::Select && n.value.as_str() == Some(it.id.as_str());
-        let mut r = row().key(format!("{id}-{}", it.id)).gap(8.0).items_center().px(8.0).h(theme::layout::CONTROL_H).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.label.clone()).focusable(!it.disabled);
-        if let Some(i) = it.icon.as_deref().and_then(crate::icons::get) {
-            r = r.child(rune::icon(i, 14.0).color(c("text")));
-        }
-        r = r.child(text(it.label.clone()).font(body(13.0, if chosen { 600.0 } else { 400.0 })).color(c("text-bright")).grow(1.0));
-        if chosen {
-            r = r.child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
-        }
+        let r = menu_row(&self.menu_row_of(n, id, it));
         if it.disabled {
-            return r.opacity(theme::DISABLED_OPACITY).disabled(true);
+            return r;
         }
         let (name, on, arg, value) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone(), J::String(it.id.clone()));
-        r.focus_highlight(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut S| {
+        r.on_press(move |s: &mut S| {
             s.screen(&name).ui.open = None;
             fire(s, &name, &on, &arg, &value);
         })
@@ -1233,17 +1491,33 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         for w in ["\"running\"", "\"working\"", "\"wants you\"", "\"stopped\"", "\"starting…\"", "\"unreachable\""] {
             assert!(tree.contains(w), "no row says {w}");
         }
-        assert!(tree.contains("1 asking"), "the amber count shows as a text badge");
+        // The amber request says itself in the state word's place, pressable.
+        assert!(tree.contains("asks you 1") && node_has(&n, "extra-sandbox-sbxw-desktop-design-relay"), "the amber count shows as a text badge");
+        // The model in place of the agent's name, short and lower case.
+        assert!(tree.contains("\"opus 5.5\"") && tree.contains("\"sonnet 5.5\"") && tree.contains("\"haiku 5.5\""), "models shown");
+        for k in ["add-test-sbx", "add-chat-release-notes"] {
+            assert!(node_has(&n, k), "{k} not drawn");
+        }
         for k in ["row-test-sbx", "stop-test-sbx", "start-chat-release-notes", "extra-sandbox-test-sbx"] {
             assert!(node_has(&n, k), "{k} not drawn");
         }
         // The menu holds the extras under their old keys (extra-sandbox-<name>-<id>).
         let menu = find(&n, "extra-sandbox-test-sbx").unwrap();
-        let ids: Vec<&str> = menu.items.iter().map(|i| i.id.as_str()).collect();
+        let ids: Vec<&str> = menu.items.iter().filter(|i| !i.divider).map(|i| i.id.as_str()).collect();
         assert_eq!(ids, ["bash", "spare", "network", "more", "stop"]);
+        // In groups, a line between: open, go to, manage, then stop (red).
+        assert_eq!(menu.items.iter().filter(|i| i.divider).count(), 3);
+        assert!(menu.items.iter().any(|i| i.id == "stop" && i.tone.as_deref() == Some("red")));
         // Every row is one item of the list: Up and Down move between them.
         let list = find_where(&n, &|x| x.group.is_some()).expect("the list group");
-        assert!(list.children.iter().filter(|c| c.on.as_deref() == Some("open")).count() >= 10);
+        // Rows sit in their group's block; every one is an item of the list.
+        let mut items = vec![];
+        list_items(list, &mut items);
+        assert!(items.iter().filter(|k| k.starts_with("row-")).count() >= 10, "{items:?}");
+        // Each group is its own tinted block; ungrouped rows are on the plain ground.
+        // (The tint needs data.app.groups, which the shell fills: see the shots.)
+        assert!(find(&n, "block-Chats").is_some(), "the Chats block");
+        assert!(find(&n, "block-ungrouped").is_some_and(|b| b.style.fill.is_none()), "ungrouped rows are not");
     }
 
     fn node_has(n: &Node, key: &str) -> bool {

@@ -62,6 +62,9 @@ pub const COLORS: &[(&str, u32)] = &[
     ("control-border", 0x6e7681),
     // The primary button hovered: lighter than green-deep, white still 4.5:1.
     ("primary-hover", 0x2a7f3a),
+    // Red as words on a group's tint (the list's "unreachable", a menu's
+    // destructive label): `red` falls under 4.5:1 on the lighter tints.
+    ("red-text", 0xff7b72),
 ];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
@@ -239,6 +242,13 @@ pub fn contrast(a: u32, b: u32) -> f64 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
+/// A group's tint behind its block in the list (sandboxes.luau): its colour
+/// at this opacity over the sidebar's surface; hovered (the group's header)
+/// a little more. Its label is the colour lightened toward white.
+pub const GROUP_TINT: f32 = 0.10;
+pub const GROUP_TINT_HOVER: f32 = 0.16;
+pub const GROUP_LABEL_LIGHT: f32 = 0.40;
+
 /// `a` drawn at `alpha` over `b`.
 pub fn over(a: u32, alpha: f32, b: u32) -> u32 {
     let ch = |s: u32| {
@@ -324,8 +334,21 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("red", "bg", Need::Text),
     ("red", "surface", Need::Text),
     ("red", "elevated", Need::Text),
+    ("red-text", "surface", Need::Text),
+    ("red-text", "elevated", Need::Text),
+    ("red-text", "red-tint", Need::Text),
     ("purple", "surface", Need::Text),
     ("purple", "elevated", Need::Text),
+    // Colour by meaning on the controls' own grounds: a toned button's
+    // label on its frame (elevated) and its hover or focus tint; the
+    // compact row buttons' face; the network bubble's number on its fill.
+    ("purple", "purple-tint", Need::Mark),
+    ("green", "elevated", Need::Mark),
+    ("red", "elevated", Need::Mark),
+    ("blue", "elevated", Need::Mark),
+    ("purple", "elevated", Need::Mark),
+    ("bg", "blue", Need::Text),
+    ("bg", "amber", Need::Text),
     // The primary button's label, at rest and hovered.
     ("white", "green-deep", Need::Text),
     ("white", "primary-hover", Need::Text),
@@ -457,6 +480,45 @@ mod tests {
         for h in 0..360 {
             assert!(contrast(hsl(h as f32, 0.55, 0.62), color_value("surface").unwrap()) >= 3.0, "hue {h}");
         }
+    }
+
+    /// Over every group tint (every hue the web UI's hash can give, and the
+    /// chats' colour), what the list draws there stays readable: the row's
+    /// words and the group's label 4.5:1, the rails and the group's square
+    /// 3:1; on the header's hover tint too. Prints the worst of each.
+    #[test]
+    fn text_and_rails_read_on_every_group_tint() {
+        let surface = color_value("surface").unwrap();
+        let mut worst: Vec<(String, f64, f64)> = vec![];
+        let mut note = |what: &str, r: f64, need: f64| match worst.iter_mut().find(|w| w.0 == what) {
+            Some(w) => w.1 = w.1.min(r),
+            None => worst.push((what.to_string(), r, need)),
+        };
+        let hues: Vec<u32> = (0..360).map(|h| hsl(h as f32, 0.55, 0.62)).chain([hsl(265.0, 0.60, 0.68)]).collect();
+        for g in hues {
+            let tint = over(g, GROUP_TINT, surface);
+            let hover = over(g, GROUP_TINT_HOVER, surface);
+            let label = over(0xffffff, GROUP_LABEL_LIGHT, g);
+            for t in ["text-bright", "text", "text-muted", "amber", "blue", "red-text"] {
+                note(&format!("`{t}` on a tint (text)"), contrast(color_value(t).unwrap(), tint), 4.5);
+            }
+            for m in ["green", "blue", "amber", "red", "text-muted"] {
+                note(&format!("`{m}` on a tint (rail)"), contrast(color_value(m).unwrap(), tint), 3.0);
+            }
+            note("group label on its tint (text)", contrast(label, tint), 4.5);
+            note("group label on its hover tint (text)", contrast(label, hover), 4.5);
+            note("group square on its tint (mark)", contrast(g, tint), 3.0);
+            note("`text-muted` chevron on the hover tint (mark)", contrast(color_value("text-muted").unwrap(), hover), 3.0);
+            // The bubble's number on its fill, and the selected row over a tint (opaque).
+            note("`bg` on `blue` (the bubble)", contrast(color_value("bg").unwrap(), color_value("blue").unwrap()), 4.5);
+            note("`bg` on `amber` (the bubble)", contrast(color_value("bg").unwrap(), color_value("amber").unwrap()), 4.5);
+        }
+        println!("| Over every group tint | Worst | Needs |\n|---|---|---|");
+        for (w, r, need) in &worst {
+            println!("| {w} | {r:.2} | {need} |");
+        }
+        let bad: Vec<_> = worst.iter().filter(|(_, r, n)| r < n).collect();
+        assert!(bad.is_empty(), "{bad:#?}");
     }
 
     #[test]

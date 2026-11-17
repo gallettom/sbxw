@@ -18,7 +18,7 @@ pub const FEATURE: Feature = Feature {
         Data { key: "templates", path: "/api/templates", on: &[], every: 0, lazy: true },
         Data { key: "disk_usage", path: "/api/disk-usage", on: &[], every: 0, lazy: true },
     ],
-    screens: &[ScreenDecl { name: "templates", src: include_str!("../../screens/templates.luau"), slot: Slot::Modal { width: 560.0 } }],
+    screens: &[ScreenDecl { name: "templates", src: include_str!("../../screens/templates.luau"), slot: Slot::Modal { width: 560.0, light_dismiss: false } }],
     intents: INTENTS,
     act,
     on_answer: Some(on_answer),

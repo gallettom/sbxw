@@ -31,7 +31,7 @@ pub const FEATURE: Feature = Feature {
     name: "setup",
     data: DATA,
     events: &["voice"],
-    screens: &[ScreenDecl { name: "setup", src: include_str!("../../../screens/setup.luau"), slot: Slot::Modal { width: 720.0 } }],
+    screens: &[ScreenDecl { name: "setup", src: include_str!("../../../screens/setup.luau"), slot: Slot::Modal { width: 720.0, light_dismiss: false } }],
     intents: INTENTS,
     act,
     on_event: Some(on_event),

@@ -107,7 +107,9 @@ local function requests(data)
           on = "dismiss_group", arg = { sandbox = r.sandbox, title = r.title }, key = "answer-" .. r.id .. "-" .. o.id })
       else
         table.insert(buttons, button{ o.label ~= "" and o.label or o.id,
-          variant = (o.id == "allow") and "primary" or "neutral",
+          -- Colour by meaning, not a filled button on every card: allow is
+          -- green, refuse red; the one filled button is the dialog's.
+          tone = (o.id == "allow") and "green" or ((o.id == "deny" or o.id == "refuse") and "red" or nil),
           on = "answer", arg = { id = r.id, option = o.id }, key = "answer-" .. r.id .. "-" .. o.id })
       end
     end
@@ -133,7 +135,7 @@ local function blocked_view(sb, policy)
     if b.governed then
       action = badge{ "org", tone = "neutral", help = b.reason ~= "" and b.reason or "Blocked by organisation policy" }
     elseif b.resource ~= "" then
-      action = button{ "Allow", variant = "neutral", on = "allow_blocked", arg = b.host, help = "Allow " .. b.resource .. " for " .. sb, key = "allow-" .. b.host }
+      action = button{ "Allow", variant = "neutral", tone = "green", on = "allow_blocked", arg = b.host, help = "Allow " .. b.resource .. " for " .. sb, key = "allow-" .. b.host }
     else
       action = false
     end
@@ -170,7 +172,7 @@ local function rules_view(sb, policy, state)
       elseif governed(src) then
         rm = badge{ "org", tone = "neutral", help = "Set by organisation policy: sbx does not let sbxw remove it" }
       else
-        rm = button{ icon = "close", variant = "ghost", on = action == "allow" and "rule_rm" or "unblock", arg = id,
+        rm = button{ icon = "close", variant = "ghost", tone = "red", on = action == "allow" and "rule_rm" or "unblock", arg = id,
           help = "Remove this rule", key = "rule-rm-" .. id }
       end
       table.insert(items, row{ gap = 8, w = "full",
@@ -192,7 +194,7 @@ local function rules_view(sb, policy, state)
       select{ id = "rule-decision", items = { { id = "allow", label = "allow" }, { id = "deny", label = "deny" } }, value = state.decision or "allow", on = "decision" },
       checkbox{ "all sandboxes", value = state.global or false, on = "global", key = "rule-global" },
       spacer{},
-      button{ "Add rule", icon = "plus", on = "add_rule", disabled = (state.res or "") == "", key = "rule-add" },
+      button{ "Add rule", icon = "plus", tone = "green", on = "add_rule", disabled = (state.res or "") == "", key = "rule-add" },
     },
     checkbox{ "Only some HTTP requests", value = state.http or false, on = "http", key = "rule-http" },
     state.http and row{ gap = 8, w = "full",
@@ -228,8 +230,8 @@ local function ports_view(sb, ports, hosts, state)
       text{ tostring(p.sandbox_port), weight = "semibold", color = "text-bright" },
       text{ "→ " .. (p.host_ip or "") .. ":" .. tostring(p.host_port), mono = true, size = "sm", color = "text-muted", grow = 1 },
       badge{ p.proto or "tcp", tone = "neutral" },
-      button{ "Open", icon = "link", variant = "ghost", on = "port_open", arg = p.spec, key = "port-open-" .. p.spec, help = "Open in the browser" },
-      button{ icon = "close", variant = "ghost", on = "port_rm", arg = p.spec, key = "port-rm-" .. p.spec, help = "Unpublish" },
+      button{ "Open", icon = "link", variant = "ghost", tone = "blue", on = "port_open", arg = p.spec, key = "port-open-" .. p.spec, help = "Open in the browser" },
+      button{ icon = "close", variant = "ghost", tone = "red", on = "port_rm", arg = p.spec, key = "port-rm-" .. p.spec, help = "Unpublish" },
     })
   end
   local out = { gap = 4, w = "full", section("Ports", #list_) }
@@ -244,7 +246,7 @@ local function ports_view(sb, ports, hosts, state)
       input{ id = "port-alias", value = state.alias, placeholder = "alias (optional)", on = "alias" },
     },
     row{ gap = 8, w = "full", spacer{},
-      button{ "Publish", icon = "plus", on = "publish", disabled = tonumber(state.sport or "") == nil, key = "port-publish" },
+      button{ "Publish", icon = "plus", tone = "green", on = "publish", disabled = tonumber(state.sport or "") == nil, key = "port-publish" },
     },
   })
   local h = hosts or {}

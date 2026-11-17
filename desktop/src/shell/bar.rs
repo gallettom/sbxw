@@ -24,6 +24,18 @@ pub fn rank(tone: &str, count: Option<u64>) -> u8 {
     }
 }
 
+/// The colour an extra means when it is quiet, by its id: what it goes to
+/// (network, requests, threads, the project, the browser) blue, the team
+/// (a lead, Jarvis) purple, an interrupt red, anything else neutral.
+pub fn meaning(id: &str) -> &'static str {
+    match id {
+        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" => "blue",
+        "lead" | "jarvis" | "team" => "purple",
+        "interrupt" => "red",
+        _ => "neutral",
+    }
+}
+
 /// One thing a bar may show inline or in its overflow menu.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {

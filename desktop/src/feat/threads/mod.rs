@@ -37,8 +37,8 @@ pub const FEATURE: Feature = Feature {
     data: DATA,
     screens: &[
         ScreenDecl { name: "threads", src: include_str!("../../../screens/threads.luau"), slot: Slot::Panel { title: "Threads", icon: "terminal", width: 360.0 } },
-        ScreenDecl { name: "plans", src: include_str!("../../../screens/plans.luau"), slot: Slot::Modal { width: 760.0 } },
-        ScreenDecl { name: "threads-new", src: include_str!("../../../screens/threads-new.luau"), slot: Slot::Modal { width: 520.0 } },
+        ScreenDecl { name: "plans", src: include_str!("../../../screens/plans.luau"), slot: Slot::Modal { width: 760.0, light_dismiss: false } },
+        ScreenDecl { name: "threads-new", src: include_str!("../../../screens/threads-new.luau"), slot: Slot::Modal { width: 520.0, light_dismiss: false } },
     ],
     intents: INTENTS,
     act,

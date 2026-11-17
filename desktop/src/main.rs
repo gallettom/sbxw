@@ -56,5 +56,9 @@ fn main() {
         ..AppSpec::new("sbxw", (1280.0, 800.0), init, view)
     };
     // `on_ime`: dead keys, CJK and emoji composed by the input method reach the focused terminal.
-    rune::App::new(spec).on_ime(on_ime).run();
+    // The window buttons on the top bar's line (shell::window_chrome).
+    // Help in the menu bar's own Help menu (macOS; Rune reports native
+    // menus unsupported elsewhere, where the shortcut and the palette have it).
+    let help = rune::MenuItem::new("sbxw Help", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
+    rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).run();
 }

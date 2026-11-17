@@ -123,6 +123,21 @@ pub struct Item {
     pub label: String,
     pub icon: Option<String>,
     pub disabled: bool,
+    /// The item's tooltip: the long explanation a short label leaves out.
+    pub help: Option<String>,
+    /// Its colour by meaning (`green`, `red`, `amber`, `blue`, `purple`):
+    /// the icon in that colour, and a `red` item's label too (destructive).
+    pub tone: Option<String>,
+    /// The shortcut's keycaps, at the item's right end.
+    pub keys: Vec<String>,
+    /// A line between two groups of items (`{ divider = true }`, no id).
+    pub divider: bool,
+}
+
+impl Item {
+    pub fn plain(id: &str, label: &str, icon: Option<&str>) -> Item {
+        Item { id: id.into(), label: label.into(), icon: icon.map(str::to_string), disabled: false, help: None, tone: None, keys: vec![], divider: false }
+    }
 }
 
 /// One element, checked: every prop known, every value of the right type.
@@ -178,6 +193,20 @@ pub struct Node {
     pub skip_tab: bool,
     /// `button`, `menu`: the shortcut's keycaps shown in its tooltip.
     pub keys: Vec<String>,
+    /// `button`, `menu`: its colour by meaning (the action colour code,
+    /// docs/screens.md "Colour by meaning"): the icon in it, a tint under it
+    /// on hover and focus.
+    pub tone: Option<String>,
+    /// `button`: one text line tall (20 pt drawn, a 24 pt target).
+    pub compact: bool,
+    /// `badge`: a round bubble (a count alone).
+    pub pill: bool,
+    /// `column`: its children fold open and shut smoothly (a growth stack
+    /// whose rows glide to their new height and fade what they gain or lose).
+    pub folds: bool,
+    /// `row`/`column`: lines under its `help` in the tooltip, each what a
+    /// key does and its keycaps (`{ { "Open", "Enter" }, { "Start or stop", "Space" } }`).
+    pub shortcuts: Vec<(String, Vec<String>)>,
     pub style: Style,
     pub children: Vec<Node>,
 }
@@ -213,6 +242,11 @@ impl Node {
             skip_tab: false,
             dense: false,
             keys: vec![],
+            tone: None,
+            compact: false,
+            pill: false,
+            folds: false,
+            shortcuts: vec![],
             style: Style::default(),
             children: vec![],
         }
@@ -238,7 +272,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space", "clip"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space", "clip", "folds", "shortcuts"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -247,15 +281,15 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("column", Kind::Column, Positional::Children, BOX_PROPS),
     ("list", Kind::List, Positional::Children, &["gap"]),
     ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom"]),
-    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop", "hover"]),
+    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop", "hover", "tone", "compact"]),
     ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
-    ("badge", Kind::Badge, Positional::Text, &["tone"]),
+    ("badge", Kind::Badge, Positional::Text, &["tone", "pill"]),
     ("dot", Kind::Dot, Positional::None, &["tone"]),
     ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio"]),
     ("spacer", Kind::Spacer, Positional::None, &[]),
     ("divider", Kind::Divider, Positional::None, &["vertical", "color"]),
-    ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys", "tab_stop"]),
+    ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys", "tab_stop", "tone"]),
     ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
@@ -724,7 +758,26 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "ratio" => n.value = J::from(num_of(v)?.clamp(0.1, 0.9) as f64),
         "placeholder" => n.placeholder = Some(string_of(v)?),
         "variant" => n.variant = Some(one_of(v, VARIANTS)?),
+        "tone" if matches!(n.kind, Kind::Button | Kind::Menu) => n.tone = Some(one_of(v, TONES)?),
         "tone" => n.variant = Some(one_of(v, TONES)?),
+        "compact" => n.compact = bool_of(v)?,
+        "pill" => n.pill = bool_of(v)?,
+        "folds" => n.folds = bool_of(v)?,
+        "shortcuts" => {
+            let Value::Table(t) = v else { return Err("expected a list of { \"what\", \"key\", ... }".into()) };
+            for line in t.sequence_values::<Value>() {
+                let Value::Table(l) = line.map_err(|e| e.to_string())? else { return Err("each shortcut is { \"what\", \"key\", ... }".into()) };
+                let mut parts = vec![];
+                for x in l.sequence_values::<Value>() {
+                    parts.push(string_of(&x.map_err(|e| e.to_string())?)?);
+                }
+                if parts.len() < 2 {
+                    return Err("each shortcut is { \"what\", \"key\", ... }".into());
+                }
+                let what = parts.remove(0);
+                n.shortcuts.push((what, parts));
+            }
+        }
         "icon" => n.icon = Some(string_of(v)?),
         "disabled" => n.disabled = bool_of(v)?,
         "secure" => n.secure = bool_of(v)?,
@@ -761,23 +814,39 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
             for (i, x) in t.sequence_values::<Value>().enumerate() {
                 let x = x.map_err(|e| e.to_string())?;
                 let item = match &x {
-                    Value::String(s) => Item { id: s.to_string_lossy(), label: s.to_string_lossy(), icon: None, disabled: false },
+                    Value::String(s) => Item::plain(&s.to_string_lossy(), &s.to_string_lossy(), None),
                     Value::Table(it) => {
                         let get = |k: &str| -> Result<Option<String>, String> { it.get::<Option<String>>(k).map_err(|_| format!("item {}: '{k}' must be a string", i + 1)) };
                         for pair in it.pairs::<String, Value>() {
                             let (k, _) = pair.map_err(|_| format!("item {}: keys must be names", i + 1))?;
-                            if !["id", "label", "icon", "disabled"].contains(&k.as_str()) {
-                                return Err(format!("item {}: unknown key '{k}' (id, label, icon, disabled)", i + 1));
+                            if !["id", "label", "icon", "disabled", "help", "tone", "keys", "divider"].contains(&k.as_str()) {
+                                return Err(format!("item {}: unknown key '{k}' (id, label, icon, disabled, help, tone, keys, divider)", i + 1));
                             }
                         }
+                        if it.get::<Option<bool>>("divider").ok().flatten().unwrap_or(false) {
+                            n.items.push(Item { divider: true, ..Item::plain(&format!("divider-{}", i + 1), "", None) });
+                            continue;
+                        }
                         let id = get("id")?.ok_or_else(|| format!("item {} has no id", i + 1))?;
+                        let tone = get("tone")?;
+                        if let Some(t) = &tone {
+                            if !TONES.contains(&t.as_str()) {
+                                return Err(format!("item {}: unknown tone '{t}' ({})", i + 1, TONES.join(", ")));
+                            }
+                        }
+                        let mut keys = vec![];
+                        if let Some(Value::Table(kt)) = it.get::<Option<Value>>("keys").ok().flatten() {
+                            for k in kt.sequence_values::<String>() {
+                                keys.push(k.map_err(|_| format!("item {}: keys must be strings", i + 1))?);
+                            }
+                        }
                         let icon = get("icon")?;
                         if let Some(ic) = &icon {
                             if !crate::icons::exists(ic) {
                                 return Err(format!("item {}: unknown icon '{ic}'", i + 1));
                             }
                         }
-                        Item { label: get("label")?.unwrap_or_else(|| id.clone()), id, icon, disabled: it.get::<Option<bool>>("disabled").ok().flatten().unwrap_or(false) }
+                        Item { label: get("label")?.unwrap_or_else(|| id.clone()), id, icon, disabled: it.get::<Option<bool>>("disabled").ok().flatten().unwrap_or(false), help: get("help")?, tone, keys, divider: false }
                     }
                     _ => return Err(format!("item {} must be a string or a table", i + 1)),
                 };
@@ -921,7 +990,7 @@ mod tests {
         assert_eq!(n.children[0].style.size, Some(12.0));
         assert_eq!(n.children[0].style.weight, Some(700.0));
         assert_eq!(n.children[1].arg, serde_json::json!({ "name": "x", "n": 2 }));
-        assert_eq!(n.children[3].items[1], Item { id: "b".into(), label: "Bee".into(), icon: Some("check".into()), disabled: false });
+        assert_eq!(n.children[3].items[1], Item::plain("b", "Bee", Some("check")));
         assert_eq!(n.children[4].value, serde_json::json!(0.30000001192092896));
 
         for (src, want) in [
