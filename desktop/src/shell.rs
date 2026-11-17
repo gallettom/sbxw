@@ -850,7 +850,6 @@ impl App {
         }
         changed |= self.surfaces_poll(tx);
         let settle = headless().then_some(Duration::from_millis(1500));
-        let mut notes = vec![];
         let mut copies = vec![];
         for (i, p) in self.panes.iter_mut().enumerate() {
             let Some(t) = &mut p.term else { continue };
@@ -862,10 +861,9 @@ impl App {
                 ch = true;
                 let name = p.sandbox.clone().unwrap_or_default();
                 match ev {
-                    TerminalEvent::Attention => {
-                        p.attention = true;
-                        notes.push((format!("{name} wants you (pane {})", i + 1), false));
-                    }
+                    // No notice: the pane bar's amber "wants you" and the
+                    // list's state already say it (the user found it noise).
+                    TerminalEvent::Attention => p.attention = true,
                     TerminalEvent::Bell => log::info!("pane {}: bell", i + 1),
                     TerminalEvent::Title(title) => p.title = Some(title).filter(|t| !t.is_empty()),
                     // OSC 52: a program in the sandbox asking to write the
@@ -880,9 +878,6 @@ impl App {
                 let _ = std::fs::write(path, format!("{}x{} offset {} selection {:?}\n{}\n", t.size.0, t.size.1, t.display_offset(), t.selection_text(), t.visible_text().trim_end()));
             }
             changed |= ch;
-        }
-        for (n, e) in notes {
-            self.notify(n, e);
         }
         for (i, name, text) in copies {
             self.osc_copy(i, &name, text, now, tx);
