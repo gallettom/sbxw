@@ -532,7 +532,15 @@ impl App {
         let Some(list) = data["app"]["extras"]["topbar"].as_array_mut() else {
             return serde_json::json!({ "w": w, "compact": w < bar::TOP_COMPACT, "more": 0 });
         };
-        let mut order: Vec<usize> = (0..list.len()).collect();
+        // "New" lives in the sidebar's header while the sidebar shows
+        // (sandboxes.luau); the top bar has it only when the sidebar is hidden.
+        let in_sidebar = self.sidebar_shown();
+        for e in list.iter_mut() {
+            if e["id"] == "create" && in_sidebar {
+                e["in_sidebar"] = J::Bool(true);
+            }
+        }
+        let mut order: Vec<usize> = (0..list.len()).filter(|&i| list[i]["in_sidebar"] != true).collect();
         let rank = |e: &J| bar::rank(e["tone"].as_str().unwrap_or(""), e["count"].as_u64());
         order.sort_by_key(|&i| rank(&list[i]));
         let label = |e: &J| {
@@ -2406,6 +2414,26 @@ mod tests {
         }
     }
 
+    /// New sits in the sidebar's header; with the sidebar hidden it is back
+    /// in the top bar, so it is never only in the palette.
+    #[test]
+    fn new_is_in_the_sidebar_and_in_the_top_bar_when_the_sidebar_is_hidden() {
+        let mut rt = runtime("shell/design-2.json", 1284.0, 816.0);
+        for _ in 0..10 {
+            rt.frame(0.016);
+        }
+        assert!(rt.presented("sidebar-new").is_some() && rt.presented("extra-topbar-create").is_none());
+        rt.update(|s, _| {
+            s.toggle_sidebar();
+            s.push_data();
+        });
+        // Past the sidebar's exit fade.
+        for _ in 0..40 {
+            rt.frame(0.016);
+        }
+        assert!(rt.presented("sidebar-new").is_none() && rt.presented("extra-topbar-create").is_some());
+    }
+
     fn chords() -> Vec<KeyEvent> {
         let m = |cmd: bool, ctrl: bool, alt: bool, logo: bool, shift: bool| rune::Mods { cmd, ctrl, alt, logo, shift };
         let mut v = vec![];
@@ -2578,7 +2606,7 @@ mod tests {
             let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
             let list = data["app"]["extras"]["topbar"].as_array().unwrap().clone();
             let (bar_r, _) = rt.presented("top-bar").unwrap();
-            for e in list.iter().filter(|e| e["more"] != true) {
+            for e in list.iter().filter(|e| e["more"] != true && e["in_sidebar"] != true) {
                 let id = e["id"].as_str().unwrap();
                 let (r, _) = rt.presented(&format!("extra-topbar-{id}")).unwrap_or_else(|| panic!("{w}: {id} inline but not drawn"));
                 let label = match e["count"].as_u64() {
@@ -2609,7 +2637,8 @@ mod tests {
     #[test]
     fn the_usage_bars_go_first_and_the_words_stay() {
         let mut seen = vec![];
-        for w in (720..=1800).rev().step_by(40) {
+        // Under 720: what the app's zoom gives.
+        for w in (440..=1800).rev().step_by(40) {
             let mut rt = runtime("shell/usage-a.json", w as f32, 816.0);
             rt.update(|s, _| {
                 s.notice = None;
@@ -2631,7 +2660,7 @@ mod tests {
                 seen.push(state);
             }
         }
-        assert_eq!(seen, ["bars", "words", "menu"], "from 1800 down to 720");
+        assert_eq!(seen, ["bars", "words", "menu"], "from 1800 down to 440");
     }
 
     /// The palette opens with the app's chord, filters, runs the same

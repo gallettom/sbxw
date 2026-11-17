@@ -657,6 +657,9 @@ return {
       end
     end
 
+    local header_extra = new_extra(app)
+    local header_new = header_extra ~= nil
+    if header_extra then new_intent = header_extra.intent end
     -- Empty and failed states: one sentence, one action.
     local empty = false
     if #data.sandboxes == 0 then
@@ -682,9 +685,19 @@ return {
     end
 
     return column{ gap = 12, h = "full", w = "full",
+      -- New's right edge lines up with the rows' stop buttons (4 of
+      -- padding, then 8 of gap before an empty column).
       row{ gap = 8, w = "full", h = 28, px = 4,
         text{ "Sandboxes", size = "title", weight = "semibold", color = "text-bright" },
         text{ tostring(#data.sandboxes), size = "caption", color = "text-muted" },
+        spacer{},
+        -- New sandbox, at the header's right end (the create feature's extra;
+        -- the top bar shows it only while the sidebar is hidden). The word
+        -- goes under a narrow sidebar.
+        header_new and button{ ((app.sidebar or {}).w or 264) >= 240 and "New" or "", icon = "plus", dense = true, variant = "ghost", tone = "green",
+          on = "new", key = "sidebar-new", help = "New sandbox",
+          keys = app.platform == "macos" and { "⌃", "⌥", "N" } or { "Alt", "N" } } or false,
+        header_new and column{ w = 0 } or false,
       },
       app.connection.state ~= "up" and row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "amber-tint",
         icon{ "warning", size = 14, color = "amber" },

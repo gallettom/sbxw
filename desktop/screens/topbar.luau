@@ -127,7 +127,9 @@ return {
     local compact = fit.compact == true
     local centre, right, hidden = { gap = 8 }, { gap = 4 }, {}
     for _, e in ipairs((app.extras or {}).topbar or {}) do
-      if e.more then table.insert(hidden, e)
+      -- New sits in the sidebar's header while the sidebar shows.
+      if e.in_sidebar then
+      elseif e.more then table.insert(hidden, e)
       elseif tools[e.id] then table.insert(right, extra(e, mac, data))
       else table.insert(centre, extra(e, mac, data)) end
     end
