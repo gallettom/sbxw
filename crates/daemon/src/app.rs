@@ -78,6 +78,9 @@ pub struct App {
     /// agent can write, and a kit planted there must not reach the next
     /// sandbox the web UI creates.
     pub(crate) daemon_kits: Mutex<Vec<String>>,
+    /// The daemon config's `[emphasis]`, read at start and replaced when
+    /// Jarvis changes it (svc/emphasis.rs).
+    pub(crate) emphasis: Mutex<sbxw_core::emphasis::EmphasisSettings>,
     /// `caffeinate`, the battery and who is on Remote Control.
     pub(crate) awake: Mutex<crate::svc::awake::Awake>,
     /// Remote hosts acted on so far, each with its link (see `remotes`).
@@ -131,6 +134,7 @@ impl AppBuilder {
         let store = Store::open(self.paths);
         let plans = load_plans(&store.paths.plans());
         let daemon_kits = Mutex::new(self.cfg.kits.clone());
+        let emphasis = Mutex::new(self.cfg.emphasis.clone());
         let jarvis = sbxw_core::jarvis::Book::load(crate::svc::jarvis::load(&store.paths.state().join("jarvis.json")));
         Arc::new(App {
             store,
@@ -160,6 +164,7 @@ impl AppBuilder {
             kit_approvals: Mutex::new(HashMap::new()),
             template_builds: Mutex::new(HashSet::new()),
             daemon_kits,
+            emphasis,
             awake: Mutex::new(Default::default()),
             remotes: Mutex::new(HashMap::new()),
             ssh_program: Mutex::new("ssh".into()),

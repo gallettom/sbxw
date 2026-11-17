@@ -47,6 +47,9 @@ pub enum Event {
     /// CPU and memory, every few seconds while a `/api/stream` is open:
     /// `GET /api/stats`'s answer.
     Stats(sbxw_core::stats::Stats),
+    /// The status pills' vocabulary or a switch changed: `GET
+    /// /api/emphasis`'s answer.
+    Emphasis(serde_json::Value),
 }
 
 impl Event {
@@ -68,6 +71,7 @@ impl Event {
             Event::Browser(_) => "browser",
             Event::Jarvis(_) => "jarvis",
             Event::Stats(_) => "stats",
+            Event::Emphasis(_) => "emphasis",
         }
     }
 
@@ -83,7 +87,7 @@ impl Event {
             Event::Plan(v) => json(v),
             Event::Focus(s) | Event::Watching(s) | Event::Lead(s) | Event::LeadEnd(s) | Event::Board(s) => s.to_string(),
             Event::Mac => String::new(),
-            Event::Voice(v) => v.to_string(),
+            Event::Voice(v) | Event::Emphasis(v) => v.to_string(),
             Event::Browser(v) => json(v),
             Event::Jarvis(v) => v.ui_view().to_string(),
             Event::Stats(v) => json(v),
