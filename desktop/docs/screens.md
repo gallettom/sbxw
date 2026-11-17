@@ -601,6 +601,9 @@ must draw them, with their keys (`extra-topbar-<id>`, `extra-sandbox-<sandbox>-<
 the person. Whatever extra a screen does not draw (an old copy that predates
 it), the core draws itself in a strip under the screen (beside it for the top
 bar), so an override cannot hide a feature; one it draws is never drawn twice.
+An item of a `menu` counts as drawn (`<menu id>-<item id>`): the built-in top
+bar puts the extras that do not fit into its menu `extra-topbar`, whose items
+are then `extra-topbar-<id>`, the same keys as when they show inline.
 A sandbox's extras are looked for only when its row is drawn (a row key
 `row-<name>`, or its name as a text), so a filter does not bring them back.
 
@@ -714,7 +717,11 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 **What screens get.** The feature's keys under `data`, and in `data.app`:
 `modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown, split}`: `split` when the person shows the open panels side by side, each in its own column, with the switch at the right of the tabs),
 `extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
-label, icon, tone, help, count, intent = {name, args}}`), and `errors`: by
+label, icon, tone, help, count, intent = {name, args}}`; a top bar extra that
+does not fit has `more = true`), `topbar` (how the top bar fits: `w`, its
+column's width in points; `compact`, under 720 pt or when its parts do not
+fit: no title, the layout switch as an icon menu; `more`, how many extras go
+into its menu), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
 the key keeps its last good value meanwhile. For a plain key the reason is a
 string; for a per-sandbox key (`{sandbox}` in its path) it is an object by
@@ -728,6 +735,24 @@ sandbox's row; a feature extra there replaces the plain approvals flag),
 the label, a badge of `count` or else `help` in dim text, the whole row
 pressable), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
 `intent` is a button, without one a badge.
+
+**What fits in a bar** (`src/shell/bar.rs`). A pane bar always shows its
+state dot, the sandbox's name (and the thread's, `web-app · t2`; at least
+about eight characters, its tooltip whole; key `pane-<n>-name`), the session
+kind and the close button (`pane-<n>-close`) at its right end. The extras
+take the room left, by priority: an amber tone first (sbx holding something,
+"wants you", a plan waiting, an agent's request), then those with a count or
+a green tone, then the rest, each group in its features' order. What does not
+fit goes into one menu, `pane-<n>-more` ("…" and how many; a dot in amber
+when it hides something amber, in blue when it hides a count), whose list is
+`pane-<n>-more-list` and whose items keep the chip's key, label, icon, tone,
+count and intent. So a script taps `pane-<n>-x-<id>` directly while it shows,
+and `pane-<n>-more` first when it does not; `wait:pane-<n>-x-<id>` returns
+for either (an item counts while its menu is open). The core's "wants you"
+(`pane-<n>-attention`) and connection word (`pane-<n>-status`) go through
+the same fit. Escape closes the menu. The fit follows each bar's laid-out
+width, at every resize. The top bar's extras get the same order; the core
+marks those that do not fit `more` (above).
 
 ### Worked example
 
@@ -776,6 +801,27 @@ Each feature's own section: its data keys, screens, intents and extras.
 Each thread owns the text under its heading.
 
 ### network
+
+**The counts.** `GET /api/approvals` is `sbx policy approval ls --format
+json`: the whole machine's requests, unfiltered (sbx lists a refused host
+again at each retry; a `network` request is a host sbx already refused,
+nothing waits on it; a `port` request holds a kit and lapses after 45 s).
+Only listed sandboxes' requests count. A sandbox's row (`⚑ N`) and its pane
+bars (`pane-<n>-x-approvals`, "sbx asks N") count every request of it, as
+the web UI's row does (it has no total). The top bar's `extra-topbar-approvals`
+counts one per sandbox and host; its tooltip says the requests, the distinct
+hosts and the sandboxes. Amber when a request holds something, else quiet.
+
+**Panel.** Requests grouped by sandbox and host (`×N`), the newest's options
+(`answer-<id>-<option>`; answering goes through the core's dialog); a group's
+Dismiss takes all its copies; `approvals-dismiss-all` dismisses every refused
+host listed.
+
+**Intents** (beside the policy and port ones): `approvals_dismiss {sandbox?,
+title?}`: direct; sbx's own `dismiss` option on each `network` request of the
+listed sandboxes (narrowed to one sandbox and host when given), one
+`POST /api/approvals/respond` after the other, a notice at the end. A request
+that holds something is never dismissed this way.
 
 ### create
 
@@ -1107,7 +1153,12 @@ sandbox's network policy refused (`browser-allow-<host>`,
 `browser-ignore-<host>`; an organisation or deny-rule host says why it cannot
 be allowed); how many hosts were allowed from here; the error; the picture,
 `surface{ id = "browser" }`, last; a line with the keyboard hint and the
-measured frames per second and input-to-picture latency. `browser-settle`
+measured frames per second and input-to-picture latency. When the browser
+could not start (an error before its first picture) or has ended: no
+picture and no hint, the controls off, the error kept, and the next steps
+`browser-kits` (Setup on its Kits tab, `open_modal`) and `browser-recreate`
+(the sandbox's actions, where Recreate goes through the core's dialog).
+`browser-settle`
 (dialog, 440 pt): on close, the hosts allowed from the panel, Keep them
 (first) or Remove them.
 
