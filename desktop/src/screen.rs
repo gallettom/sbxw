@@ -1584,6 +1584,59 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         }
     }
 
+    /// A live session no pane shows gets a green "+" where the P chip would
+    /// be: the line's own `open_terminal`, in a new pane. An attached one
+    /// keeps its chip; a done one gets neither (user, macOS: "when sessions
+    /// are working and not attached, add a plus to attach the session").
+    #[test]
+    fn a_live_unattached_session_line_has_a_plus_that_opens_a_new_pane() {
+        fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+            if n.key.as_deref() == Some(key) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, key))
+        }
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let name = data["sandboxes"][0]["name"].as_str().unwrap().to_string();
+        data["app"]["selected"] = name.clone().into();
+        let line = |id: &str, label: &str, tone: &str, count: J, thread: Option<&str>| {
+            let mut args = serde_json::json!({ "sandbox": name, "pane": "focused" });
+            if let Some(t) = thread {
+                args["thread"] = t.into();
+            }
+            serde_json::json!({ "id": id, "label": label, "tone": tone, "help": "", "count": count, "icon": null, "intent": { "name": "open_terminal", "args": args } })
+        };
+        data["app"]["extras"] = serde_json::json!({ "rows": { name.clone(): [
+            line("main", "✦ main · working", "green", 2.into(), None),
+            line("t1", "⑂ t1 · working", "green", J::Null, Some("t1")),
+            line("t2", "⑂ t2 · wants you", "amber", J::Null, Some("t2")),
+            line("t3", "⑂ t3 · done", "blue", J::Null, Some("t3")),
+            line("t4", "⑂ t4 · stopped", "muted", J::Null, Some("t4")),
+            line("t5", "✦ t5", "muted", J::Null, Some("t5")),
+        ] } });
+        let mut s = ScreenState::new("sandboxes", &dir, data);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let n = s.last_good.clone().unwrap();
+        let plus = |id: &str| find(&n, &format!("session-add-{name}-{id}")).cloned();
+        for id in ["t1", "t2", "t5"] {
+            let p = plus(id).unwrap_or_else(|| panic!("{id}: no +"));
+            assert_eq!(p.help.as_deref(), Some(format!("Open {id} in a new pane").as_str()));
+        }
+        for id in ["main", "t3", "t4"] {
+            assert!(plus(id).is_none(), "{id}: attached, done or stopped: no +");
+        }
+        let p = plus("t1").unwrap();
+        let asked = s.act(p.on.as_deref().unwrap(), &p.arg, &J::Null).unwrap();
+        let [crate::intent::Intent::OpenTerminal { sandbox, thread, pane, .. }] = asked.as_slice() else { panic!("{asked:?}") };
+        assert_eq!((sandbox.as_str(), thread.as_deref(), pane), (name.as_str(), Some("t1"), &crate::intent::PaneTarget::Spare));
+        // The line's own press still opens it in the focused pane.
+        let l = find(&n, &format!("extra-row-{name}-t1")).cloned().unwrap();
+        let asked = s.act(l.on.as_deref().unwrap(), &l.arg, &J::Null).unwrap();
+        assert!(matches!(asked.as_slice(), [crate::intent::Intent::OpenTerminal { pane: crate::intent::PaneTarget::Focused, .. }]), "{asked:?}");
+    }
+
     /// The status rail: each row says its state in a word and a rail shape;
     /// the name has its own line; start or stop is always there; every
     /// other action is in the row's menu, keyed as the inline extras were.

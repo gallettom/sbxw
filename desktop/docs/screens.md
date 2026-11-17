@@ -890,7 +890,9 @@ them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a
 sandbox's row; a feature extra there replaces the plain approvals flag),
 `extra-row-<sandbox>-<id>` (a session sub-row: a dot of `tone`, or `icon`,
 the label, a badge of `count` or else `help` in dim text, the whole row
-pressable), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
+pressable; a live session no pane shows, starting, working, wanting you or
+idle, has instead of the count a green "+" `session-add-<sandbox>-<id>`
+that runs the row's own `open_terminal` with `pane: "spare"`), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
 `intent` is a button, without one a badge.
 
 **What fits in a bar** (`src/shell/bar.rs`). A pane bar always shows its

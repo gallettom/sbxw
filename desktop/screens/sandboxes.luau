@@ -26,8 +26,8 @@
 -- -start, -stop; a badge or the bubble keeps its extra's key when it shows
 -- inline; more-<name> is the "+N" of badges that did not fit.
 -- Sessions: sessions-<name> (the disclosure line), sessions-block-<name>,
--- extra-row-<name>-<id> (a line). Groups: block-<label> (the tinted block),
--- group-<label> (its header); block-ungrouped (the rest, on the plain ground).
+-- extra-row-<name>-<id> (a line), session-add-<name>-<id> (its "+": a new
+-- pane). Groups: block-<label> (the tinted block), group-<label> (its header); block-ungrouped (the rest, on the plain ground).
 -- What opens and shuts (a group, a sandbox's sessions) folds: its height
 -- glides over 0.18 s and its lines fade (docs/screens.md, `folds`).
 --
@@ -476,11 +476,16 @@ local function session_line(sb, e, data, base_model)
     or (e.tone == "red" and "broken") or ((tone == "muted") and "hollow") or "solid"
   if word == "working" then tone = "blue" end
   local done = word == "done"
+  -- A live session no pane shows (starting, working, wants you, idle):
+  -- a green "+" where the P chip would be opens it in a new pane. Done,
+  -- failed or stopped ones get none (the line's press starts them again).
+  local plus = not e.count and e.intent ~= nil and (word == "" or word == "starting" or word == "working" or word == "wants you")
+  local chip = e.count or plus
   local m = e.id ~= "main" and thread_model(data, sb.name, e.id) or nil
   local mw = m and (string.find(m, " ") and string.lower(m) or short_model(m)) or nil
   if mw == base_model then mw = nil end
   -- The name first; the model only where it fits beside the name and word.
-  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (e.count and 32 or 0)
+  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (chip and 32 or 0)
   -- A thread on its own worktree reads as the worktree's path (a branch
   -- glyph before it); its name too when the path does not end with it.
   local path, full = nil, nil
@@ -491,7 +496,7 @@ local function session_line(sb, e, data, base_model)
     local both = last ~= name
     -- The line's own room: the sidebar less its paddings, the two 12 pt
     -- columns, the glyph and the gaps, then the state word and the P chip.
-    local line_room = ((data.app.sidebar or {}).w or 264) - 92 - (e.count and 32 or 0)
+    local line_room = ((data.app.sidebar or {}).w or 264) - 92 - (chip and 32 or 0)
     local avail = line_room - est(word) - 8 - (both and (est(name) + 8) or 0)
     label = middle(path, math.max(avail, 60))
     if both then label = name .. " · " .. label end
@@ -512,6 +517,8 @@ local function session_line(sb, e, data, base_model)
       mw and text{ mw, size = "caption", color = "text-muted", truncate = true } or false,
       spacer{},
       e.count and badge{ "P" .. e.count, tone = "blue", help = "Shown in pane " .. e.count .. " (" .. (data.app.platform == "macos" and "⌘" or "Ctrl+") .. e.count .. " focuses it)" } or false,
+      plus and button{ icon = "plus", compact = true, tone = "green", on = "session_spare", arg = sb.name .. "\n" .. e.id,
+        key = "session-add-" .. sb.name .. "-" .. e.id, tab_stop = false, help = "Open " .. name .. " in a new pane" } or false,
     },
   }
 end
@@ -738,6 +745,15 @@ return {
     extra = function(_, key)
       local i = extra_intents[key]
       if i then return intent(i.name, i.args) end
+    end,
+    -- A session line's "+": the line's own open_terminal, in a new pane.
+    session_spare = function(_, key)
+      local i = extra_intents[key]
+      if not i then return nil end
+      local args = {}
+      for k, v in pairs(i.args or {}) do args[k] = v end
+      args.pane = "spare"
+      return intent(i.name, args)
     end,
     row_menu = function(_, name, id)
       if id == "bash" then return intent("open_terminal", { sandbox = name, mode = "bash", pane = "spare" }) end
