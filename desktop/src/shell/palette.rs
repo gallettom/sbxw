@@ -33,6 +33,8 @@ pub enum Run {
     FocusPane(usize),
     ClosePane,
     Zoom(i32),
+    /// The team leads view on and off (leads.rs).
+    Leads,
 }
 
 /// One row of the palette.
@@ -248,6 +250,10 @@ impl App {
         for (side, label) in [("left", "Move pane left"), ("right", "Move pane right"), ("up", "Move pane up"), ("down", "Move pane down")] {
             v.push(core(&format!("move-{side}"), label, "The focused pane trades places, or docks along that edge", "columns", vec![], i("pane_move", serde_json::json!({ "to": side }))));
         }
+        if self.leads_on() || !self.leaders().is_empty() {
+            let (label, hint) = if self.leads_on() { ("Leave the team leads view", "The layout before it") } else { ("Team leads view", "Only the team leaders' terminals") };
+            v.push(core("leads", label, hint, "people", vec![], Run::Leads));
+        }
         v.push(core("rotate", "Rotate split", "The focused pane and its neighbour: side by side or stacked", "rows", vec![], i("pane_rotate", J::Null)));
         v.push(core("equalise", "Make the panes equal", "This page's splits share their room equally", "grid", vec![], i("panes_equalise", J::Null)));
         for k in (0..n).filter(|&k| k != self.pages.current) {
@@ -311,6 +317,7 @@ impl App {
                 self.remove_pane(i);
             }
             Run::Zoom(step) => self.zoom_by(step),
+            Run::Leads => self.toggle_leads(),
         }
         self.push_data();
     }

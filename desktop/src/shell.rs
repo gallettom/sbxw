@@ -11,6 +11,7 @@ mod bar;
 mod drag;
 mod features;
 mod jarvis;
+mod leads;
 mod pager;
 pub mod pages;
 mod palette;
@@ -198,6 +199,8 @@ pub struct App {
     /// The grid's pages as they were when the person switched to Tabs, to
     /// put back on Grid (`PageOp::View`); in memory only.
     pub grid_saved: Option<Vec<pages::Page>>,
+    /// The team leads view while it shows, with the layout it replaced (leads.rs).
+    pub leads: Option<leads::LeadsView>,
     /// The last pane id given.
     next_uid: Uid,
     /// Each split's length as laid out (points), by its path, for its divider.
@@ -338,6 +341,7 @@ impl App {
             focused: 0,
             pages: Pages::new(1),
             grid_saved: None,
+            leads: None,
             next_uid: 1,
             split_len: HashMap::new(),
             rects: Rects::default(),
@@ -1474,6 +1478,26 @@ impl App {
     /// Pages and panes, for the state file: each pane's session (not its
     /// terminal) and each page's tiling.
     fn save_layout(&mut self) {
+        // In the team leads view: the layout it replaced (leads.rs), with the
+        // sessions its panes held (shown, parked, or closed in the view).
+        if let Some(l) = &self.leads {
+            let order = l.saved.all();
+            let info = |u: Uid| -> J {
+                match self.panes.iter().chain(&l.parked).find(|p| p.uid == u) {
+                    Some(p) => serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread }),
+                    None => match l.sessions.get(&u) {
+                        Some((sb, m, t)) => serde_json::json!({ "sandbox": sb, "mode": m.name(), "thread": t }),
+                        None => serde_json::json!({ "sandbox": null, "mode": "agent", "thread": null }),
+                    },
+                }
+            };
+            let panes: Vec<J> = order.iter().map(|u| info(*u)).collect();
+            let idx: HashMap<Uid, Uid> = order.iter().enumerate().map(|(i, u)| (*u, i as Uid)).collect();
+            let mut v = l.saved.to_json(&|u| idx.get(&u).copied());
+            v["panes"] = J::Array(panes);
+            self.store.set("layout", v);
+            return;
+        }
         let panes: Vec<J> = self.panes.iter().map(|p| serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread })).collect();
         let idx: HashMap<Uid, Uid> = self.panes.iter().enumerate().map(|(i, p)| (p.uid, i as Uid)).collect();
         let mut v = self.pages.to_json(&|u| idx.get(&u).copied());

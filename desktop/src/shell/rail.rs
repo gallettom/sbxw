@@ -2,8 +2,9 @@
 //! bar, always shown (Cmd/Ctrl+B hides the sidebar, not the rail).
 //!
 //! Top: Requests and Network, with their counts as small badges (amber when
-//! something holds on the person). The view switch (Tabs | Grid) is the
-//! pager's alone. Bottom: Jarvis and
+//! something holds on the person), then Team leads (the leads view,
+//! `leads.rs`; disabled when no team runs). The view switch (Tabs | Grid)
+//! is the pager's alone. Bottom: Jarvis and
 //! Settings (Setup). Each entry runs the intent its old top bar button ran
 //! (`relay_open`, `network_show`, `toggle_jarvis_panel`, Setup's
 //! `open_modal`); nothing new is asked of the daemon.
@@ -15,7 +16,7 @@
 //! What moved here leaves the top bar (shell.rs, `top_layout`, marks those
 //! extras `in_rail`): no entry is shown twice.
 //!
-//! Keys: `rail`, `rail-requests`, `rail-network`,
+//! Keys: `rail`, `rail-requests`, `rail-network`, `rail-leads`,
 //! `jarvis-toggle` (Jarvis's button keeps its key), `rail-setup`; a badge is
 //! `<key>-badge`.
 
@@ -43,12 +44,15 @@ pub struct Entry {
     /// The badge's tone: amber when something waits on the person.
     pub badge: &'static str,
     pub run: RailRun,
+    /// Nothing to do now (no team running): drawn dim, no press.
+    pub disabled: bool,
 }
 
 #[derive(Clone)]
 pub enum RailRun {
-    Op(PageOp),
     Intent(String, J),
+    /// The team leads view on and off (leads.rs).
+    Leads,
 }
 
 impl App {
@@ -83,11 +87,21 @@ impl App {
         let relay = self.top_extra("relay");
         let (count, badge) = badge_of(&relay);
         let help = relay.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).unwrap_or_else(|| "Requests: what agents ask you, and answers for other sandboxes".into());
-        top.push(Entry { key: "rail-requests", icon: "chat".into(), help: format!("Requests. {help}"), keys: App::shortcut_for("relay_open"), tone: "blue", on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})) });
+        top.push(Entry { key: "rail-requests", icon: "chat".into(), help: format!("Requests. {help}"), keys: App::shortcut_for("relay_open"), tone: "blue", on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false });
         let net = self.top_extra("approvals");
         let (count, badge) = badge_of(&net);
         let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).unwrap_or_else(|| "Network: what sbx asks you to allow, the hosts sandboxes reach".into());
-        top.push(Entry { key: "rail-network", icon: "flag".into(), help: format!("Network. {help}"), keys: App::shortcut_for("network_show"), tone: "blue", on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})) });
+        top.push(Entry { key: "rail-network", icon: "flag".into(), help: format!("Network. {help}"), keys: App::shortcut_for("network_show"), tone: "blue", on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false });
+        // The team leads view (leads.rs): only the leaders' terminals.
+        let leaders = self.leaders();
+        let help = if self.leads_on() {
+            "Team leads: showing only the team leaders' terminals. Press for the layout before".to_string()
+        } else if leaders.is_empty() {
+            "Team leads: No team is running".to_string()
+        } else {
+            format!("Team leads: show only the {} team leader{}' terminals; press again for this layout", leaders.len(), if leaders.len() == 1 { "" } else { "s" })
+        };
+        top.push(Entry { key: "rail-leads", icon: "people".into(), help, keys: vec![], tone: "purple", on: self.leads_on(), count: None, badge: "", run: RailRun::Leads, disabled: leaders.is_empty() && !self.leads_on() });
         let pending = self.jarvis.pending_list().len();
         let mut bottom = vec![Entry {
             key: "jarvis-toggle",
@@ -99,10 +113,11 @@ impl App {
             count: (pending > 0).then_some(pending as u64),
             badge: "amber",
             run: RailRun::Intent("toggle_jarvis_panel".into(), serde_json::json!({})),
+            disabled: false,
         }];
         if let Some(e) = self.top_extra("setup") {
             if let Some(name) = e["intent"]["name"].as_str() {
-                bottom.push(Entry { key: "rail-setup", icon: "gear".into(), help: e["help"].as_str().unwrap_or("Setup").to_string(), keys: App::shortcut_for(name), tone: "neutral", on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()) });
+                bottom.push(Entry { key: "rail-setup", icon: "gear".into(), help: e["help"].as_str().unwrap_or("Setup").to_string(), keys: App::shortcut_for(name), tone: "neutral", on: self.feats.modal.as_ref().is_some_and(|m| m.0 == "setup"), count: None, badge: "", run: RailRun::Intent(name.to_string(), e["intent"]["args"].clone()), disabled: false });
             }
         }
         (top, bottom)
@@ -123,6 +138,7 @@ fn button(e: &Entry, prev: Option<&'static str>, next: Option<&'static str>) -> 
     let (fg, tint) = crate::screen::action_tone(e.tone);
     let icon_c = if e.tone == "neutral" { c(if e.on { "text-bright" } else { "text-muted" }) } else { theme::hex(fg) };
     let run = e.run.clone();
+    let disabled = e.disabled;
     let mut b = el()
         .key(e.key)
         .role("button")
@@ -137,9 +153,12 @@ fn button(e: &Entry, prev: Option<&'static str>, next: Option<&'static str>) -> 
         .hover(theme::hex(tint))
         .cursor(Cursor::Pointer)
         .on_press(move |s: &mut App| {
+            if disabled {
+                return;
+            }
             match run.clone() {
-                RailRun::Op(op) => s.run_intent("rail", Intent::Pages(op)),
                 RailRun::Intent(name, args) => s.press_extra("rail", &name, &args),
+                RailRun::Leads => s.toggle_leads(),
             }
             s.push_data();
         })
@@ -154,6 +173,9 @@ fn button(e: &Entry, prev: Option<&'static str>, next: Option<&'static str>) -> 
             }
             true
         });
+    if e.disabled {
+        b = b.opacity(theme::DISABLED_OPACITY).cursor(Cursor::NotAllowed);
+    }
     if e.on {
         b = b.fill(if e.tone == "neutral" { c("elevated") } else { theme::hex(tint) }).checked(true);
     }

@@ -88,6 +88,13 @@ fn controls_w(per: usize) -> f32 {
     seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
 }
 
+/// The leads view's mark at the pager's left.
+const LEADS_LABEL: &str = "Team leads";
+
+fn leads_w() -> f32 {
+    16.0 + 14.0 + 6.0 + bar::measure(LEADS_LABEL, TAB_TEXT, 600.0) + GAP
+}
+
 /// The "Gather" button beside the per-page menu.
 fn gather_w() -> f32 {
     bar::measure("Gather", TAB_TEXT, 500.0) + 16.0
@@ -155,7 +162,7 @@ impl App {
     pub fn pager_fit_as(&self) -> (usize, usize, bool) {
         let n = self.pages.list.len();
         let w = if self.pager_w > 0.0 { self.pager_w } else { self.window.0 - self.left_w() - layout::GUTTER * 2.0 };
-        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 };
+        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 } + if self.leads_on() { leads_w() } else { 0.0 };
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
@@ -179,7 +186,7 @@ impl App {
     pub(super) fn pager_drawn(&self, key: &str) -> bool {
         let n = self.pages.list.len();
         let (a, b) = self.pager_fit();
-        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move());
+        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move()) || (key == "pager-leads" && self.leads_on());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
@@ -369,6 +376,31 @@ pub fn view(s: &App) -> El {
         tabs = tabs.child(tab(s, k, compact));
     }
     let mut left = row().gap(GAP).items_center().grow(1.0).min_w(0.0);
+    // The team leads view says so before its tabs (leads.rs).
+    if s.leads_on() {
+        let (fg, tint) = crate::screen::action_tone("purple");
+        left = left.child(
+            row()
+                .key("pager-leads")
+                .role("button")
+                .label("Team leads view: press for the layout before")
+                .help("Only the team leaders' terminals. Press (or the rail's Team leads) for the layout before")
+                .h(H - 6.0)
+                .px(8.0)
+                .gap(6.0)
+                .items_center()
+                .radius(theme::radius("xs").unwrap())
+                .fill(theme::hex(tint))
+                .hover(theme::hex(theme::over(fg, 0.12, tint)))
+                .cursor(Cursor::Pointer)
+                .on_press(|s: &mut App| {
+                    s.toggle_leads();
+                    s.push_data();
+                })
+                .child(small_icon("people", 14.0, theme::hex(fg)))
+                .child(text(LEADS_LABEL).font(small(TAB_TEXT, 600.0)).color(theme::hex(fg))),
+        );
+    }
     if a > 0 || b < n {
         let hidden = n - (b - a);
         let open = s.pager_menu.as_deref() == Some("more");
