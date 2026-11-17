@@ -173,6 +173,10 @@ pub struct Node {
     /// `row`/`column`: children with `reveal` show while it is hovered or
     /// holds keyboard focus (Rune's hover group).
     pub hover_group: bool,
+    /// `row`/`column`: one hover zone with every element of the same name;
+    /// the core tells the screen which zone the pointer rests in
+    /// (`data.app.hover_zone`, screen.rs `Zones`).
+    pub hover_zone: Option<String>,
     /// Any element: drawn only while the nearest `hover_group` is hovered or
     /// focused (still pressable and reachable with Tab, which lights it).
     pub reveal: bool,
@@ -234,6 +238,7 @@ impl Node {
             rows: 4,
             fill_image: false,
             hover_group: false,
+            hover_zone: None,
             reveal: false,
             group: None,
             selected: false,
@@ -272,7 +277,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space", "clip", "folds", "shortcuts"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "clip", "folds", "shortcuts"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -796,6 +801,7 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
             st.pin = Some(e);
         }
         "hover_group" => n.hover_group = bool_of(v)?,
+        "hover_zone" => n.hover_zone = Some(string_of(v)?).filter(|z| !z.is_empty() && z.len() <= 200),
         "reveal" => n.reveal = bool_of(v)?,
         "group" => n.group = Some(one_of(v, &["list"])?),
         "selected" => n.selected = bool_of(v)?,

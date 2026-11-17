@@ -29,7 +29,7 @@ pub fn rank(tone: &str, count: Option<u64>) -> u8 {
 /// (a lead, Jarvis) purple, an interrupt red, anything else neutral.
 pub fn meaning(id: &str) -> &'static str {
     match id {
-        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" => "blue",
+        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" | "remote" => "blue",
         "lead" | "jarvis" | "team" => "purple",
         "interrupt" => "red",
         _ => "neutral",
@@ -327,7 +327,7 @@ mod tests {
     fn a_chip_keeps_its_colour_in_the_overflow_menu() {
         let tones: Vec<(String, String)> = many().iter().map(|i| (i.id.clone(), menu_tone(i).to_string())).collect();
         let get = |id: &str| tones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
-        assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "neutral".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
+        assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "blue".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
         assert_eq!(get("plan"), "amber", "a toned extra keeps its own tone");
         assert_eq!(get("env"), "neutral");
     }

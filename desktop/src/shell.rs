@@ -826,6 +826,22 @@ impl App {
         for s in &mut self.screens {
             changed |= s.poll();
         }
+        // Hover zones that became due: what opens or shuts on them glides
+        // (a poll's commit would land at once), except under reduced motion.
+        let zone_now = Instant::now();
+        let mut zoned = false;
+        for s in &mut self.screens {
+            zoned |= s.tick_zones(zone_now);
+            if let Some(t) = s.ui.zones.due() {
+                tx.wake_after(t.saturating_duration_since(zone_now));
+            }
+        }
+        if zoned {
+            changed = true;
+            if !screen::reduced_motion() {
+                tx.animated();
+            }
+        }
         let now = Instant::now();
         let mut kick = false;
         for (_, step, due) in &mut self.expect {
@@ -2228,16 +2244,22 @@ mod tests {
     /// frames (about 0.18 s), not at once, and lands where it should.
     #[test]
     fn the_sessions_block_folds_smoothly() {
-        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/design-1.json");
+        // sbxw-jarvis: sessions, none in a pane, not selected: shut until pinned open.
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/sessions.json");
         let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
         let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
         for _ in 0..10 {
             rt.frame(1.0 / 60.0);
         }
-        let h = |rt: &rune::Runtime<App>| rt.presented("sessions-block-better-checkout").map(|(r, _)| r[3]).unwrap_or(-1.0);
+        let h = |rt: &rune::Runtime<App>| rt.presented("sessions-block-sbxw-jarvis").map(|(r, _)| r[3]).unwrap_or(-1.0);
+        assert!(h(&rt) < 1.0, "shut at rest: {}", h(&rt));
+        tap(&mut rt, "sessions-sbxw-jarvis");
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+        }
         let open = h(&rt);
-        assert!(open > 100.0, "open at first (the selected sandbox): {open}");
-        tap(&mut rt, "sessions-better-checkout");
+        assert!(open > 50.0, "pinned open: {open}");
+        tap(&mut rt, "sessions-sbxw-jarvis");
         let mut seen = vec![h(&rt)];
         for _ in 0..30 {
             rt.frame(1.0 / 60.0);
@@ -2258,6 +2280,74 @@ mod tests {
         let shut = *seen.last().unwrap();
         assert!(shut < open - 100.0, "the group shut: {open} -> {seen:?}");
         assert!(seen.iter().filter(|&&x| x > shut + 1.0 && x < open - 1.0).count() >= 4, "glides: {seen:?}");
+    }
+
+    /// The sessions block: open while one of its sessions is in a pane
+    /// (pressing its line changes nothing then); a press pins it, and a pin
+    /// wins over hover; resting the pointer on the row opens it (after
+    /// screen::ZONE_OPEN), moving into the block keeps it open, leaving the
+    /// zone shuts it (after ZONE_CLOSE).
+    #[test]
+    fn the_sessions_block_opens_on_hover_and_stays_open_when_attached() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/sessions.json");
+        let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+        let settle = |rt: &mut rune::Runtime<App>| {
+            for _ in 0..40 {
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                rt.frame(1.0 / 60.0);
+            }
+        };
+        settle(&mut rt);
+        let h = |rt: &rune::Runtime<App>, sb: &str| rt.presented(&format!("sessions-block-{sb}")).map(|(r, _)| r[3]).unwrap_or(-1.0);
+        // better-checkout is in pane 1: open, and its line's press does not shut it.
+        assert!(h(&rt, "better-checkout") > 100.0);
+        tap(&mut rt, "sessions-better-checkout");
+        settle(&mut rt);
+        assert!(h(&rt, "better-checkout") > 100.0, "attached: stays open");
+        // Hover sbxw-jarvis's row: opens after the rest delay.
+        assert!(h(&rt, "sbxw-jarvis") < 1.0);
+        let (r, _) = rt.presented("row-sbxw-jarvis").unwrap();
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_move(x, y);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_move(x + 3.0, y);
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "not before the delay");
+        std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        let open = h(&rt, "sbxw-jarvis");
+        assert!(open > 40.0, "opened on hover: {open}");
+        // Down into the block: still open.
+        let (b, _) = rt.presented("sessions-block-sbxw-jarvis").unwrap();
+        rt.pointer_move(b[0] + 20.0, b[1] + b[3] / 2.0);
+        settle(&mut rt);
+        std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") > 40.0, "the block is the same zone");
+        // Out to the panes: shuts after the close delay.
+        let (p, _) = rt.presented("panes").unwrap();
+        rt.pointer_move(p[0] + p[2] / 2.0, p[1] + p[3] / 2.0);
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") > 40.0, "not before the delay");
+        std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "shut after leaving: {}", h(&rt, "sbxw-jarvis"));
+        // Pinned shut wins over hover.
+        tap(&mut rt, "sessions-sbxw-jarvis");
+        settle(&mut rt);
+        tap(&mut rt, "sessions-sbxw-jarvis");
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "pinned shut");
+        let (r, _) = rt.presented("row-sbxw-jarvis").unwrap();
+        rt.pointer_move(r[0] + 10.0, r[1] + 10.0);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_move(r[0] + 14.0, r[1] + 10.0);
+        std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "a pin wins over hover");
     }
 
     fn chords() -> Vec<KeyEvent> {

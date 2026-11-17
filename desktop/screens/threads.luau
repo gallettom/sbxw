@@ -144,7 +144,7 @@ local function sessions_tab(data, sb, sbx)
   for _, s in ipairs(ses) do
     if s.thread == nil or s.kind == "same" then table.insert(same, s) else table.insert(own, s) end
   end
-  if #own > 0 then table.insert(out, text{ "✦ Main checkout", size = "sm", color = "text-muted", help = "Same files as the main session: no worktree, no branch" }) end
+  if #own > 0 then table.insert(out, text{ "✦ Shared checkout", size = "sm", color = "text-muted", help = "Same files as the main session: no worktree, no branch" }) end
   for _, s in ipairs(same) do table.insert(out, session_row(data, sb, s, running)) end
   if #own > 0 then table.insert(out, text{ "⑂ Own worktree", size = "sm", color = "text-muted", help = "Each thread on a git worktree and branch of its own" }) end
   for _, s in ipairs(own) do table.insert(out, session_row(data, sb, s, running)) end

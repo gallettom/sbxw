@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Screens compiled into the binary: `(name, source)`.
 pub const BUILTIN: &[(&str, &str)] = &[
@@ -83,6 +83,84 @@ pub trait Host: Sized + 'static {
     }
 }
 
+/// Hover zones (`hover_zone`): which one the pointer rests in, with intent
+/// delays so a pointer sweeping a list opens nothing. A zone becomes active
+/// [`ZONE_OPEN`] after the pointer MOVED inside it (an element that slides
+/// under a still pointer, because something above it opened, does not
+/// count), and stops [`ZONE_CLOSE`] after it left every element of the zone
+/// (moving between two of them is no leave). One zone is active at a time.
+#[derive(Default, Debug)]
+pub struct Zones {
+    /// Per zone, its elements the pointer is over.
+    inside: HashMap<String, std::collections::HashSet<String>>,
+    pub active: Option<String>,
+    /// What becomes active (none: nothing), and when.
+    pending: Option<(Option<String>, Instant)>,
+}
+
+pub const ZONE_OPEN: Duration = Duration::from_millis(180);
+pub const ZONE_CLOSE: Duration = Duration::from_millis(280);
+
+impl Zones {
+    fn over(&self, zone: &str) -> bool {
+        self.inside.get(zone).is_some_and(|s| !s.is_empty())
+    }
+
+    /// The pointer entered or left element `el` of `zone` (a layout shift
+    /// included).
+    pub fn hover(&mut self, zone: &str, el: &str, inside: bool, now: Instant) {
+        let set = self.inside.entry(zone.to_string()).or_default();
+        if inside {
+            set.insert(el.to_string());
+        } else {
+            set.remove(el);
+        }
+        if self.over(zone) {
+            if self.active.as_deref() == Some(zone) && matches!(self.pending, Some((None, _))) {
+                self.pending = None;
+            }
+            return;
+        }
+        match &self.pending {
+            // Left before it opened.
+            Some((Some(z), _)) if z == zone => self.pending = self.active.is_some().then_some((None, now + ZONE_CLOSE)),
+            _ if self.active.as_deref() == Some(zone) && self.pending.is_none() => self.pending = Some((None, now + ZONE_CLOSE)),
+            _ => {}
+        }
+    }
+
+    /// The pointer moved inside `zone`.
+    pub fn moved(&mut self, zone: &str, now: Instant) {
+        if self.active.as_deref() == Some(zone) {
+            if matches!(self.pending, Some((None, _))) {
+                self.pending = None;
+            }
+            return;
+        }
+        if !matches!(&self.pending, Some((Some(z), _)) if z == zone) {
+            self.pending = Some((Some(zone.to_string()), now + ZONE_OPEN));
+        }
+    }
+
+    /// Applies what is due; whether the active zone changed.
+    pub fn tick(&mut self, now: Instant) -> bool {
+        match self.pending.clone() {
+            Some((to, at)) if at <= now => {
+                self.pending = None;
+                let changed = self.active != to;
+                self.active = to;
+                changed
+            }
+            _ => false,
+        }
+    }
+
+    /// When [`Zones::tick`] has something to do.
+    pub fn due(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|p| p.1)
+    }
+}
+
 /// The core-held part of elements.
 #[derive(Default)]
 pub struct Ui {
@@ -96,6 +174,7 @@ pub struct Ui {
     /// was not asked for by the person (no Enter, no press). Intents that
     /// act on what the person typed refuse to answer a proposal then.
     pub editing: bool,
+    pub zones: Zones,
 }
 
 impl Ui {
@@ -253,8 +332,28 @@ impl ScreenState {
         }
     }
 
+    /// Hover zones: what became due. Whether the screen drew again (the
+    /// active zone changed; it reads it in `data.app.hover_zone`).
+    pub fn tick_zones(&mut self, now: Instant) -> bool {
+        if self.ui.zones.tick(now) {
+            self.redraw();
+            return true;
+        }
+        false
+    }
+
     fn redraw(&mut self) {
-        match self.host.render(&self.data) {
+        let with_zone;
+        let data = match &self.ui.zones.active {
+            Some(z) => {
+                let mut d = self.data.clone();
+                d["app"]["hover_zone"] = J::String(z.clone());
+                with_zone = d;
+                &with_zone
+            }
+            None => &self.data,
+        };
+        match self.host.render(data) {
             Ok(n) => {
                 sync_ui(&mut self.ui, &n);
                 self.last_good = Some(n);
@@ -916,6 +1015,20 @@ impl Build<'_> {
                 if n.hover_group {
                     b = b.hover_group();
                 }
+                if let Some(z) = n.hover_zone.clone() {
+                    // The pointer over this element and moving in it, for the zone (`Zones`).
+                    let el_key = key.clone().unwrap_or_else(|| format!("{z}#{}", n.children.len()));
+                    let (nm, nm2, z2) = (self.name.clone(), self.name.clone(), z.clone());
+                    b = b
+                        .on_hover_change(move |s: &mut S, inside: bool, tx: &mut rune::Tx| {
+                            s.screen(&nm).ui.zones.hover(&z, &el_key, inside, Instant::now());
+                            tx.wake_after(ZONE_CLOSE + Duration::from_millis(10));
+                        })
+                        .on_pointer_move_local(move |s: &mut S, _p: rune::PointerEvent, tx: &mut rune::Tx| {
+                            s.screen(&nm2).ui.zones.moved(&z2, Instant::now());
+                            tx.wake_after(ZONE_OPEN + Duration::from_millis(10));
+                        });
+                }
                 if n.clip {
                     b = b.clip_rounded(st.radius.unwrap_or(0.0));
                 }
@@ -1555,5 +1668,79 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
             }
             assert!(n > 0, "fixtures/{name}/ is empty");
         }
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+
+    /// On a virtual clock: a zone opens 180 ms after the pointer moved in
+    /// it, not before; moving from one of its elements to another is no
+    /// leave; leaving all of them shuts it 280 ms later.
+    #[test]
+    fn a_zone_opens_after_a_rest_and_shuts_after_leaving() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut z = Zones::default();
+        z.hover("sb:a", "row-a", true, ms(0));
+        z.moved("sb:a", ms(0));
+        assert!(!z.tick(ms(170)) && z.active.is_none(), "not yet");
+        assert!(z.tick(ms(180)) && z.active.as_deref() == Some("sb:a"));
+        // Down from the row into its block: one zone, no leave.
+        z.hover("sb:a", "row-a", false, ms(300));
+        z.hover("sb:a", "sessions-block-a", true, ms(301));
+        z.moved("sb:a", ms(305));
+        assert!(!z.tick(ms(900)) && z.active.as_deref() == Some("sb:a"), "still open");
+        // Out of the zone: shut 280 ms later.
+        z.hover("sb:a", "sessions-block-a", false, ms(1000));
+        assert!(!z.tick(ms(1270)));
+        assert_eq!(z.due(), Some(ms(1280)));
+        assert!(z.tick(ms(1280)) && z.active.is_none());
+    }
+
+    /// Sweeping the pointer down a list opens nothing; resting on one row
+    /// opens that one only, and the one open before shuts.
+    #[test]
+    fn a_sweep_opens_nothing_and_one_zone_is_open_at_a_time() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut z = Zones::default();
+        for (i, row) in ["a", "b", "c", "d"].iter().enumerate() {
+            let at = i as u64 * 60;
+            z.hover(&format!("sb:{row}"), "row", true, ms(at));
+            z.moved(&format!("sb:{row}"), ms(at));
+            assert!(!z.tick(ms(at + 50)));
+            z.hover(&format!("sb:{row}"), "row", false, ms(at + 59));
+        }
+        assert!(!z.tick(ms(2000)) && z.active.is_none(), "a sweep opened {:?}", z.active);
+        // Rest on b: b opens. Then rest on c: c opens and b is no longer open.
+        z.hover("sb:b", "row", true, ms(3000));
+        z.moved("sb:b", ms(3000));
+        assert!(z.tick(ms(3200)) && z.active.as_deref() == Some("sb:b"));
+        z.hover("sb:b", "row", false, ms(3300));
+        z.hover("sb:c", "row", true, ms(3300));
+        z.moved("sb:c", ms(3301));
+        assert!(z.tick(ms(3500)) && z.active.as_deref() == Some("sb:c"));
+    }
+
+    /// A row that slides under a still pointer (a block above it opened)
+    /// gets an enter but no move: it does not open, so blocks never open
+    /// each other in a chain.
+    #[test]
+    fn a_layout_shift_alone_does_not_open_a_zone() {
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        let mut z = Zones::default();
+        z.hover("sb:a", "row", true, ms(0));
+        z.moved("sb:a", ms(0));
+        assert!(z.tick(ms(200)));
+        // a's block opened: b's row moved down... and c's row slid under the pointer.
+        z.hover("sb:a", "row", false, ms(250));
+        z.hover("sb:c", "row", true, ms(250));
+        assert!(z.tick(ms(600)) && z.active.is_none(), "a shut (the pointer is not over it)");
+        assert!(!z.tick(ms(2000)) && z.active.is_none(), "c did not open without a move");
+        z.moved("sb:c", ms(2100));
+        assert!(z.tick(ms(2300)) && z.active.as_deref() == Some("sb:c"), "the next move opens it");
     }
 }

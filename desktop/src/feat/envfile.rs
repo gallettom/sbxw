@@ -110,7 +110,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
             place: Place::Pane(n.to_string()),
             id: "envfile".into(),
             label: "Env".into(),
-            icon: None,
+            icon: Some("file".into()),
             tone: "muted".into(),
             help: "Environment file (sbxenv.yaml): preview, copy, save".into(),
             count: None,

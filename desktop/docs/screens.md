@@ -77,6 +77,7 @@ unchanged.
 | `platform` | `macos`, `linux`, `windows` |
 | `groups` | Each sandbox's group colour (`#rrggbb`, the web UI's: chats share one, a workspace folder's from its path), by name; absent for a sandbox in no group |
 | `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
+| `hover_zone` | The [hover zone](#hover-zones) the pointer rests in (this screen's), or nil |
 | `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
@@ -164,6 +165,7 @@ Children side by side. Children are centred vertically.
 | `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers, named by its `help`); `hover` defaults to `surface`. Enter presses it when it has the keyboard |
 | `on_space` | action name | With `on`: called with the same `arg` when Space is pressed while it has the keyboard (the sandbox list: start or stop) |
 | `hover_group` | bool | Its `reveal` children show while it is hovered or the keyboard focus is in it |
+| `hover_zone` | string | `row`/`column`: one hover zone with every element of this screen that names the same zone, even apart in the tree (a row and the block under it). The core tells the screen where the pointer rests in `data.app.hover_zone` ([Hover zones](#hover-zones)) |
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
@@ -605,6 +607,26 @@ lists them all (Help draws it). What a screen does for the keyboard:
   each row (Enter), `on_space` for its second action (Space);
 - name every icon-only control with `help`, and give its shortcut in `keys`.
 
+### Hover zones
+
+Elements with the same `hover_zone` name are one zone: moving the pointer
+from one to another is not leaving it. `data.app.hover_zone` names the zone
+the pointer rests in, with delays the core keeps, so a screen only reads it:
+
+- a zone becomes the one **180 ms** after the pointer *moved* inside it
+  (`screen::ZONE_OPEN`). An element that slides under a still pointer,
+  because something above it opened, does not count: no chain of blocks
+  opening each other. A pointer sweeping down a list opens nothing;
+- it stops **280 ms** after the pointer left every element of the zone
+  (`screen::ZONE_CLOSE`);
+- one zone at a time: resting on another makes that one the zone.
+
+The screen draws again when it changes, and what opens or shuts on it glides
+like a press (at once under reduced motion). Hover is never the only way in:
+keep a press (a disclosure line) and the keyboard (the selected row) doing
+the same. The sandbox list opens a sandbox's sessions on its zone (its row,
+the sessions line and block, `sb:<name>`).
+
 ## Theme
 
 The global `theme` (read only) is the web UI's design tokens
@@ -632,7 +654,7 @@ in it, with its tint under the pointer and the keyboard focus.
 | `green` | start, open, allow, confirm | Start, + (open in a new pane), Open shell, Allow, Add rule, Publish, New |
 | `red` | stop, remove, refuse, anything destructive | Stop, Remove, Refuse, Unpublish, Close thread |
 | `amber` | needs you | a request waiting, sbx holding something, a session that wants you |
-| `blue` | go to, informative | Network, Requests, Threads and plans, Project, Browser, the network count |
+| `blue` | go to, informative | Network, Requests, Threads and plans, Project, Browser, Remote, the network count |
 | `purple` | Jarvis and the team | Jarvis, a lead |
 | `neutral` | everything else | Manage…, Setup, Help, Later, layout |
 
@@ -691,7 +713,7 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
-`coin`, `help`.
+`coin`, `help`, `branch`.
 
 ## Where screens live
 
