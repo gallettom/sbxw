@@ -1076,7 +1076,9 @@ impl App {
     }
 
     /// Feature buttons and badges on the bar of pane `i`.
-    pub(super) fn pane_extras(&self, i: usize, sandbox: &str, thread: Option<&str>) -> Vec<El> {
+    /// The extras of a pane bar showing that session (`Pane(sandbox)`, and
+    /// `Session` of that thread), as the bar lays them out (bar.rs).
+    pub(super) fn pane_items(&self, sandbox: &str, thread: Option<&str>) -> Vec<super::bar::Item> {
         self.feats
             .pane_extras
             .iter()
@@ -1085,39 +1087,7 @@ impl App {
                 Place::Session { sandbox: s, thread: t } => s == sandbox && t.as_deref() == thread,
                 _ => false,
             })
-            .map(|e| {
-                let (fg, tint) = crate::screen::tone(&e.tone);
-                let mut b = row()
-                    .key(format!("pane-{}-x-{}", i + 1, e.id))
-                    .gap(4.0)
-                    .px(5.0)
-                    .py(1.0)
-                    .items_center()
-                    .radius(radius("xs").unwrap())
-                    .fill(crate::theme::hex(tint))
-                    .border(1.0, crate::theme::hex(fg));
-                if !e.help.is_empty() {
-                    b = b.help(e.help.clone());
-                }
-                if let Some(i) = e.icon.as_deref().and_then(crate::icons::get) {
-                    b = b.child(rune::icon(i, 11.0).color(crate::theme::hex(fg)));
-                }
-                let label = match e.count {
-                    Some(n) if e.label.is_empty() => n.to_string(),
-                    Some(n) => format!("{} {n}", e.label),
-                    None => e.label.clone(),
-                };
-                if !label.is_empty() {
-                    b = b.child(text(label).font(TextStyle::new(10.5, 500.0)).color(crate::theme::hex(fg)));
-                }
-                if let Some((name, args)) = e.intent.clone() {
-                    b = b.role("button").cursor(Cursor::Pointer).on_press(move |s: &mut App| {
-                        s.press_extra("pane", &name, &args);
-                        s.push_data();
-                    });
-                }
-                b
-            })
+            .map(super::bar::Item::from_extra)
             .collect()
     }
 }

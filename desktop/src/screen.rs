@@ -478,6 +478,21 @@ impl ScreenState {
             }
         }
         walk(tree, &mut keys, &mut texts);
+        // A menu's items count as drawn (`<id>-<item>`): the top bar puts the
+        // extras that do not fit into one (topbar.luau, "extra-topbar").
+        let mut items = std::collections::HashSet::new();
+        fn menus(n: &Node, items: &mut std::collections::HashSet<String>) {
+            if let Some(id) = &n.id {
+                for it in &n.items {
+                    items.insert(format!("{id}-{}", it.id));
+                }
+            }
+            for c in &n.children {
+                menus(c, items);
+            }
+        }
+        menus(tree, &mut items);
+        keys.extend(items.iter().map(String::as_str));
         let x = &self.data["app"]["extras"];
         let mut out = vec![];
         match self.name.as_str() {

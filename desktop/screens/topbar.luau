@@ -35,26 +35,68 @@ local function extra(e)
   return badge{ label, tone = badge_tones[e.tone] or "neutral", help = e.help, key = "extra-topbar-" .. e.id }
 end
 
+-- What does not fit in the bar (the core marks it `more`, by priority:
+-- what needs you stays inline longest) goes into one menu, "…" and how
+-- many, with a dot in the tone of the most urgent thing it holds.
+local function more_menu(hidden)
+  local items, tone = {}, nil
+  for _, e in ipairs(hidden) do
+    -- An icon-only extra is named by its help, up to the first colon, or
+    -- its first word when that is still long ("Help and keyboard shortcuts").
+    local label = e.label
+    if label == "" then
+      label = string.match(e.help or "", "^([^:]+)") or e.id
+      if #label > 18 then label = string.match(label, "^(%S+)") or label end
+    end
+    if e.count then label = label .. " (" .. tostring(e.count) .. ")" end
+    table.insert(items, { id = e.id, label = label, icon = e.icon })
+    if e.intent then extra_intents[e.id] = e.intent end
+    if e.tone == "amber" then tone = "amber"
+    elseif e.count and tone == nil then tone = "blue" end
+  end
+  return row{ gap = 4,
+    menu{ tostring(#hidden), id = "extra-topbar", icon = "more", items = items, on = "extra_more", variant = "ghost" },
+    tone and dot{ tone = tone } or false,
+  }
+end
+
 return {
   render = function(_, data)
     local app = data.app
     local j = data.jarvis or { open = false, pending = {}, voice = {} }
     local n = #j.pending
     local key = app.platform == "macos" and "⌘J" or "F7"
+    -- How the bar fits its width (the core measures it): compact drops the
+    -- title and draws the layout switch as an icon menu.
+    local fit = app.topbar or {}
+    local compact = fit.compact == true
     local extras = { gap = 8 }
-    for _, e in ipairs((app.extras or {}).topbar or {}) do table.insert(extras, extra(e)) end
+    local hidden = {}
+    for _, e in ipairs((app.extras or {}).topbar or {}) do
+      if e.more then table.insert(hidden, e) else table.insert(extras, extra(e)) end
+    end
+    if #hidden > 0 then table.insert(extras, more_menu(hidden)) end
+    local switch
+    if compact then
+      local icon = "single"
+      for _, l in ipairs(layouts) do if l.id == current(app.layout) then icon = l.icon end end
+      switch = menu{ id = "layout", icon = icon, items = layouts, on = "layout", variant = "ghost", help = "How many terminals show" }
+    else
+      switch = select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" }
+    end
     return row{ gap = 14, w = "full", h = "full",
-      text{ "sbxw", weight = "bold", size = "lg", color = "text-bright" },
-      select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" },
+      (not compact) and text{ "sbxw", weight = "bold", size = "lg", color = "text-bright" } or false,
+      switch,
       spacer{},
       row(extras),
       button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
         key = "jarvis-toggle", on = "jarvis", variant = (j.open or n > 0) and "primary" or "neutral",
         help = (j.open and "Close Jarvis (" or "Open Jarvis (") .. key .. ")" },
-      spacer{},
-      row{ gap = 6, max_w = 520, help = app.connection.text,
+      -- The daemon state takes the rest, at the right end, and keeps its dot
+      -- and at least a word; its whole line is the tooltip.
+      row{ gap = 6, min_w = 96, grow = 1, justify = "end", help = app.connection.text,
         dot{ tone = tones[app.connection.state] or "neutral" },
-        text{ app.connection.state == "up" and app.connection.text or app.connection.state, size = "sm", color = "text-muted", truncate = true },
+        text{ app.connection.state == "up" and app.connection.text or app.connection.state, size = "sm", color = "text-muted", truncate = true, max_w = 500 },
       },
     }
   end,
@@ -66,6 +108,10 @@ return {
     end,
     jarvis = function() return intent("toggle_jarvis_panel") end,
     extra = function(_, id)
+      local i = extra_intents[id]
+      if i then return intent(i.name, i.args) end
+    end,
+    extra_more = function(_, _, id)
       local i = extra_intents[id]
       if i then return intent(i.name, i.args) end
     end,
