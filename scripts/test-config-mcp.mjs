@@ -86,7 +86,7 @@ await test("initialize names the server", async () => {
 await test("tools/list lists every tool, each with its rules", async () => {
   const r = await rpc("tools/list", {});
   const names = r.result.tools.map((t) => t.name);
-  assert.deepEqual(names, ["sbxw_state", "propose_kit", "remove_kit", "set_kits", "set_setting", "set_voice_word", "allow_network", "propose_mcp_server", "remove_mcp_server", "read_desktop_screen", "read_desktop_docs", "propose_desktop_screen", "remove_desktop_screen", "check_proposal"]);
+  assert.deepEqual(names, ["sbxw_state", "propose_kit", "remove_kit", "set_kits", "set_setting", "set_voice_word", "set_status_label", "switch_status_labels", "allow_network", "propose_mcp_server", "remove_mcp_server", "read_desktop_screen", "read_desktop_docs", "propose_desktop_screen", "remove_desktop_screen", "check_proposal"]);
   for (const t of r.result.tools.filter((t) => !["sbxw_state", "check_proposal", "read_desktop_screen", "read_desktop_docs"].includes(t.name))) {
     assert.match(t.description, /PROPOSAL, not a change/, t.name);
     assert.match(t.description, /Never put a secret/, t.name);
@@ -103,6 +103,11 @@ await test("tools/list lists every tool, each with its rules", async () => {
   const word = r.result.tools.find((t) => t.name === "set_voice_word").description;
   assert.match(word, /pronounced badly/);
   assert.match(word, /never what dictation writes/);
+  const label = r.result.tools.find((t) => t.name === "set_status_label").description;
+  assert.match(label, /HIGH: that text goes into every sandbox's CLAUDE\.md/);
+  assert.match(label, /terminals redraw\s+at once/);
+  const sw = r.result.tools.find((t) => t.name === "switch_status_labels").description;
+  assert.match(sw, /next bring-up/);
   const mcp = r.result.tools.find((t) => t.name === "propose_mcp_server").description;
   assert.match(mcp, /Prefer `remote`/);
   assert.match(mcp, /tick an acknowledgement/);
@@ -161,6 +166,10 @@ await test("every other kind is shaped as the contract says", async () => {
     ["set_voice_word", { word: "nginx", fr: " engine ixe ", en: "engine X" }, { kind: "voice_word", word: "nginx", fr: "engine ixe", en: "engine X" }],
     ["set_voice_word", { word: "sbxw", en: "S B X W" }, { kind: "voice_word", word: "sbxw", en: "S B X W" }],
     ["set_voice_word", { word: "sbxw", remove: true }, { kind: "voice_word", word: "sbxw" }],
+    ["set_status_label", { word: "Shipped", tone: "green", also: ["live"], use: " deployed " }, { kind: "emphasis_word", word: "Shipped", tone: "green", also: ["live"], use: "deployed" }],
+    ["set_status_label", { word: "team", remove: true }, { kind: "emphasis_word", word: "team" }],
+    ["switch_status_labels", { enabled: false }, { kind: "emphasis_switch", file: "daemon", enabled: false }],
+    ["switch_status_labels", { file: "myapp", guidance: false }, { kind: "emphasis_switch", file: "myapp", guidance: false }],
     ["allow_network", { add: ["pypi.org"] }, { kind: "network_allow", add: ["pypi.org"], remove: [] }],
     ["propose_mcp_server", { spec: { name: "docs", kind: "remote", url: "https://example.org/mcp" } }, { kind: "mcp_server", spec: { name: "docs", kind: "remote", url: "https://example.org/mcp" } }],
     ["remove_mcp_server", { name: "docs" }, { kind: "mcp_remove", name: "docs" }],
@@ -208,6 +217,10 @@ await test("a secret, a bundled kit or a missing summary never leaves the sandbo
   assert.match(text(unsaid), /Say how the word is said/);
   const both = await call("set_voice_word", { summary: "s", word: "nginx", fr: "x", remove: true });
   assert.match(text(both), /not both/);
+  const toneless = await call("set_status_label", { summary: "s", word: "Shipped" });
+  assert.match(text(toneless), /Give the family's tone/);
+  const noswitch = await call("switch_status_labels", { summary: "s" });
+  assert.match(text(noswitch), /Say what to switch/);
   const path = await call("propose_desktop_screen", { summary: "s", name: "../../x", content: "return {}" });
   assert.match(text(path), /not a screen name/);
   const empty = await call("propose_desktop_screen", { summary: "s", name: "topbar", content: " " });

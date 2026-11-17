@@ -53,6 +53,8 @@ Each proposal holds one or more changes. Jarvis can propose:
 | **Kits line** (`kits_line`) | Add or remove a kit in the `kits` list of the daemon's `sbxw.toml` or of one sandbox's. Only bundled kits (`sbxw:<name>`) and Jarvis kits | Low when it only adds bundled kits or only removes; high when it adds a Jarvis kit, or `sbxw:ssh-agent`, `sbxw:git-identity`, `sbxw:dev-ports` or `sbxw:terminal-mac` (they reach your keys, identity, ports or a Mac) |
 | **Setting** (`setting`) | One key of the daemon's `sbxw.toml`, from a fixed list: the `[voice]` keys, `claude_model`, the terminal colours, `keep_awake`, `keep_awake_min_battery`, `battery_warn_below`, `cache_ttl_days`. It takes effect when the daemon restarts | Low |
 | **Pronunciation** (`voice_word`) | How the voice reads one word aloud: add or replace its entry in `[voice.words]` of the daemon's `sbxw.toml`, in French, English or both, or remove that entry (a built-in word gets its own pronunciation back). Only what is read aloud changes, never dictation. Used from the next sentence read, no restart. See [Words read aloud](configuration.md#words-read-aloud) | Low |
+| **Status label** (`emphasis_word`) | One family of the [status pills](configuration.md#status-pills) in `[emphasis.words]` of the daemon's `sbxw.toml`, whole: its main word, tone, other words and `use` line, or its removal. The first change copies the built-in labels into the file. The terminals redraw at once; agents read the new guidance after their sandbox's next bring-up, in a new session | Low when it only removes words or changes a tone; high when it adds a word or writes a new `use` line, since that text goes into every sandbox's `CLAUDE.md` |
+| **Status pills switch** (`emphasis_switch`) | `enabled` and `guidance` under `[emphasis]`, in the daemon's `sbxw.toml` (every sandbox: the terminals follow at once, the guidance at each next bring-up) or one sandbox's own (at its next bring-up) | Low |
 | **Network** (`network_allow`) | Add or remove hosts in the daemon's `network_allow`, for sandboxes created after the daemon restarts. Bare host names only: no address, no port, no wildcard, not this machine. Approving records the same consent as any new grant | High |
 | **Desktop screen** (`desktop_screen`, `desktop_screen_remove`) | Replace one screen of sbxw's desktop app with your own version, `~/.sbxw/desktop/screens/<name>.luau`, or remove your version so the app's built-in one comes back. Only a screen the app has (no new screen). The app reloads it at once. See [Desktop screens](#desktop-screens) | High |
 | **MCP server** (`mcp_server`, `mcp_remove`) | Add, replace or remove an MCP server, as the MCP tab of Setup does. A remote server is a URL; a **stdio** server is a command that runs on your machine, outside any sandbox (see below) | High |
@@ -61,7 +63,7 @@ Ask Jarvis "how do you say sbxw?" or tell it a word is said badly: it reads
 the dictionary (the built-in words and yours, marked which) and proposes the
 fix. The tools it has for all this, in its `sbxw-config` MCP server:
 `sbxw_state` (read), `propose_kit`, `remove_kit`, `set_kits`, `set_setting`,
-`set_voice_word`, `allow_network`, `propose_mcp_server`, `remove_mcp_server`,
+`set_voice_word`, `set_status_label`, `switch_status_labels`, `allow_network`, `propose_mcp_server`, `remove_mcp_server`,
 `read_desktop_screen`, `read_desktop_docs`, `propose_desktop_screen`,
 `remove_desktop_screen` and `check_proposal`.
 

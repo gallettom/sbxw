@@ -18,6 +18,7 @@
 
 use crate::anonymise;
 use crate::config::Config;
+use crate::emphasis::{self, EmphasisSettings, Family};
 use crate::kits;
 use crate::mcp::McpSpec;
 use crate::my_skills::{self, KitFile};
@@ -200,6 +201,29 @@ pub enum Change {
         #[serde(default)]
         en: Option<String>,
     },
+    /// One family of `[emphasis.words]` (status pills) in the daemon's
+    /// sbxw.toml, whole: its main word, tone, other words and `use` line.
+    /// No `tone` removes the family. The first change copies the built-in
+    /// vocabulary into the file, since a configured table replaces it.
+    EmphasisWord {
+        word: String,
+        #[serde(default)]
+        tone: Option<String>,
+        #[serde(default)]
+        also: Vec<String>,
+        #[serde(default, rename = "use")]
+        when: Option<String>,
+    },
+    /// `[emphasis]`'s switches in an sbxw.toml the daemon uses:
+    /// [`DAEMON_FILE`] (the default) or a sandbox name (its own file).
+    EmphasisSwitch {
+        #[serde(default)]
+        file: Option<String>,
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[serde(default)]
+        guidance: Option<bool>,
+    },
     /// The daemon config's `network_allow`.
     NetworkAllow {
         #[serde(default)]
@@ -225,6 +249,8 @@ impl Change {
             Change::KitsLine { .. } => "kits_line",
             Change::Setting { .. } => "setting",
             Change::VoiceWord { .. } => "voice_word",
+            Change::EmphasisWord { .. } => "emphasis_word",
+            Change::EmphasisSwitch { .. } => "emphasis_switch",
             Change::NetworkAllow { .. } => "network_allow",
             Change::McpServer { .. } => "mcp_server",
             Change::McpRemove { .. } => "mcp_remove",
@@ -444,6 +470,105 @@ pub fn set_voice_word(raw: &str, word: &str, said: Option<&Said>) -> Result<(Str
 }
 
 // ---------------------------------------------------------------------------
+// Status pills
+
+/// Low when the change only removes words, recolours or rewords nothing the
+/// agents read anew; high when it puts new text into every sandbox's
+/// `CLAUDE.md` (a new word or synonym, a new or changed `use` line): that
+/// text is an instruction every agent reads, as a kit's context is.
+pub fn emphasis_risk(before: &BTreeMap<String, Family>, after: &BTreeMap<String, Family>) -> Risk {
+    let words = |v: &BTreeMap<String, Family>| -> std::collections::BTreeSet<String> {
+        v.iter().flat_map(|(m, f)| std::iter::once(m.clone()).chain(f.also.iter().cloned())).map(|w| emphasis::key(&w)).collect()
+    };
+    let old = words(before);
+    let new_word = words(after).iter().any(|w| !old.contains(w));
+    let new_use = after.iter().any(|(m, f)| f.when.is_some() && before.get(m).and_then(|b| b.when.as_ref()) != f.when.as_ref());
+    if new_word || new_use {
+        Risk::High
+    } else {
+        Risk::Low
+    }
+}
+
+fn family_item(f: &Family) -> toml_edit::Item {
+    let mut t = toml_edit::InlineTable::new();
+    t.insert("tone", f.tone.as_str().into());
+    if !f.also.is_empty() {
+        t.insert("also", toml_edit::Value::Array(f.also.iter().map(String::as_str).collect()));
+    }
+    if let Some(u) = &f.when {
+        t.insert("use", u.as_str().into());
+    }
+    toml_edit::value(t)
+}
+
+fn emphasis_table(doc: &mut toml_edit::DocumentMut) -> Result<&mut dyn toml_edit::TableLike, String> {
+    if !doc.contains_key("emphasis") {
+        let mut t = toml_edit::Table::new();
+        t.set_implicit(true);
+        doc["emphasis"] = toml_edit::Item::Table(t);
+    }
+    doc["emphasis"].as_table_like_mut().ok_or_else(|| "[emphasis] in the sbxw.toml is not a table".to_string())
+}
+
+/// `raw` (the daemon's sbxw.toml) with the family `word` of
+/// `[emphasis.words]` set to `family` (`None`: removed), and the settings
+/// after it. When the file has no table yet, the built-in vocabulary is
+/// written first, since a configured table replaces it whole. Checked as
+/// Config parsing checks it; comments and order are kept.
+pub fn set_emphasis_word(raw: &str, word: &str, family: Option<&Family>) -> Result<(String, EmphasisSettings), String> {
+    let word = word.trim();
+    emphasis::check_word(word)?;
+    let main = emphasis::key(word);
+    let mut doc: toml_edit::DocumentMut = raw.parse().map_err(|e| format!("the daemon's sbxw.toml is not valid TOML: {e}"))?;
+    let em = emphasis_table(&mut doc)?;
+    if em.get("words").is_none() {
+        let mut t = toml_edit::Table::new();
+        for f in emphasis::families(&emphasis::built_in()) {
+            t.insert(&f.word, family_item(&Family { tone: f.tone, also: f.also, when: f.when }));
+        }
+        em.insert("words", toml_edit::Item::Table(t));
+    }
+    let Some(words) = em.get_mut("words").and_then(|w| w.as_table_like_mut()) else {
+        return Err("[emphasis.words] in the daemon's sbxw.toml is not a table".into());
+    };
+    let existing: Vec<String> = words.iter().map(|(k, _)| k.to_string()).filter(|k| emphasis::key(k) == main).collect();
+    match family {
+        Some(f) => {
+            for k in existing.iter().filter(|k| **k != main) {
+                words.remove(k);
+            }
+            words.insert(&main, family_item(f));
+        }
+        None => {
+            if existing.is_empty() {
+                return Err(format!("'{main}' is not a family of the status labels, so there is none to remove"));
+            }
+            for k in &existing {
+                words.remove(k);
+            }
+        }
+    }
+    let next = doc.to_string();
+    let cfg = Config::parse(&next).map_err(|e| format!("{e:#}"))?;
+    Ok((next, cfg.emphasis))
+}
+
+/// `raw` with `[emphasis]`'s `enabled` and `guidance` set where given.
+pub fn set_emphasis_switch(raw: &str, enabled: Option<bool>, guidance: Option<bool>) -> Result<(String, EmphasisSettings), String> {
+    let mut doc: toml_edit::DocumentMut = raw.parse().map_err(|e| format!("the sbxw.toml is not valid TOML: {e}"))?;
+    let em = emphasis_table(&mut doc)?;
+    for (k, v) in [("enabled", enabled), ("guidance", guidance)] {
+        if let Some(v) = v {
+            em.insert(k, toml_edit::value(v));
+        }
+    }
+    let next = doc.to_string();
+    let cfg = Config::parse(&next).map_err(|e| format!("{e:#}"))?;
+    Ok((next, cfg.emphasis))
+}
+
+// ---------------------------------------------------------------------------
 // Kits
 
 /// A Jarvis kit as sbxw keeps it: what it renders from.
@@ -646,6 +771,10 @@ pub enum Op {
     /// The daemon's sbxw.toml rewritten in place, with `[voice.words]` as
     /// `words` after it: the voice takes the table at once.
     VoiceWords { path: String, text: String, words: BTreeMap<String, Said> },
+    /// An sbxw.toml rewritten in place for `[emphasis]`; `live`: the daemon's
+    /// settings after it, when the file is the daemon's (the UIs redraw at
+    /// once). A sandbox's own file takes effect at its next bring-up.
+    Emphasis { path: String, text: String, live: Option<EmphasisSettings> },
     McpAdd { replace: bool, spec: McpSpec },
     McpRm { name: String },
     /// The override of screen `name` written with `content`. The daemon
@@ -897,6 +1026,65 @@ fn plan_one(w: &mut World, c: &Change) -> Result<Planned, String> {
             Ok(Planned {
                 view: view(format!("{what}{} (the voice uses it from the next sentence it reads)", f.creates()), diff, Risk::Low),
                 op: Op::VoiceWords { path: f.path, text, words },
+            })
+        }
+        Change::EmphasisWord { word, tone, also, when } => {
+            let f = daemon_file(w)?;
+            let before = Config::parse(&f.raw).map_err(|e| format!("the daemon's sbxw.toml: {e:#}"))?.emphasis.vocabulary();
+            let family = tone.as_ref().map(|t| Family { tone: t.trim().to_string(), also: also.iter().map(|a| a.trim().to_string()).collect(), when: when.as_ref().map(|u| u.trim().to_string()) });
+            if family.is_none() && (!also.is_empty() || when.is_some()) {
+                return Err("no tone removes the family; give its tone to change it".into());
+            }
+            let (text, settings) = set_emphasis_word(&f.raw, word, family.as_ref())?;
+            let main = emphasis::key(word.trim());
+            if text == f.raw {
+                return Err(format!("'{main}' already is exactly this"));
+            }
+            let after = settings.vocabulary();
+            let risk = emphasis_risk(&before, &after);
+            let what = match (&family, before.contains_key(&main)) {
+                (None, _) => format!("Remove the status label '{main}' and its other words"),
+                (Some(fam), false) => format!("Add the status label '{main}' ({})", fam.tone),
+                (Some(fam), true) => format!("Change the status label '{main}' ({})", fam.tone),
+            };
+            let diff = f.diff_to(&text);
+            w.files.insert(DAEMON_FILE.into(), f.written(text.clone()));
+            Ok(Planned {
+                view: view(format!("{what}{} (the terminals redraw at once; agents read the new guidance from their next bring-up and new session)", f.creates()), diff, risk),
+                op: Op::Emphasis { path: f.path, text, live: Some(settings) },
+            })
+        }
+        Change::EmphasisSwitch { file, enabled, guidance } => {
+            let file = file.clone().unwrap_or_else(|| DAEMON_FILE.to_string());
+            let keys = || w.files.keys().cloned().collect::<Vec<_>>().join(", ");
+            let Some(f) = w.files.get(&file).cloned() else {
+                return Err(format!("'{file}' is not an sbxw.toml sbxw uses; the ones it uses: {}", keys()));
+            };
+            if enabled.is_none() && guidance.is_none() {
+                return Err("nothing to switch: give enabled, guidance or both".into());
+            }
+            let (text, settings) = set_emphasis_switch(&f.raw, *enabled, *guidance)?;
+            if text == f.raw {
+                return Err(format!("[emphasis] of '{file}' already is this"));
+            }
+            let live = w.files.get(DAEMON_FILE).is_some_and(|d| d.path == f.path).then_some(settings);
+            let onoff = |b: bool| if b { "on" } else { "off" };
+            let mut parts = Vec::new();
+            if let Some(e) = enabled {
+                parts.push(format!("status pills {}", onoff(*e)));
+            }
+            if let Some(g) = guidance {
+                parts.push(format!("their guidance {}", onoff(*g)));
+            }
+            let when = match (&live, file == DAEMON_FILE) {
+                (Some(_), true) => "the terminals follow at once; the guidance changes at each sandbox's next bring-up".to_string(),
+                _ => format!("takes effect at '{file}''s next bring-up"),
+            };
+            let diff = f.diff_to(&text);
+            w.files.insert(file.clone(), f.written(text.clone()));
+            Ok(Planned {
+                view: view(format!("Turn {} for {} ({}){} ({when})", parts.join(" and "), if file == DAEMON_FILE { "every sandbox".to_string() } else { format!("'{file}'") }, f.path, f.creates()), diff, Risk::Low),
+                op: Op::Emphasis { path: f.path, text, live },
             })
         }
         Change::NetworkAllow { add, remove } => {
@@ -1905,6 +2093,66 @@ mod tests {
 
     fn kit_write(kit: &str, files: Value) -> Change {
         change(json!({"kind": "kit_write", "kit": kit, "files": files}))
+    }
+
+    #[test]
+    fn an_emphasis_word_copies_the_built_ins_then_changes_one_family() {
+        let w = world();
+        // A recolour of a built-in word: low, the table is written whole.
+        let p = plan(&w, &[change(json!({"kind": "emphasis_word", "word": "Done", "tone": "cyan", "also": ["verified", "fixed", "passed"], "use": "finished and checked"}))]).unwrap();
+        assert_eq!((p[0].view.kind.as_str(), p[0].view.risk), ("emphasis_word", Risk::Low));
+        assert!(p[0].view.title.contains("redraw at once") && p[0].view.title.contains("next bring-up"), "{}", p[0].view.title);
+        let Op::Emphasis { text, live: Some(live), .. } = &p[0].op else { panic!("{:?}", p[0].op) };
+        assert!(text.starts_with("# mine\n") && text.contains("[emphasis.words]") && text.contains("\"needs you\" = {"), "{text}");
+        assert_eq!(live.vocabulary()["done"].tone, "cyan");
+        assert_eq!(live.vocabulary().len(), emphasis::built_in().len());
+        // A new word, or a new `use` line, is text every agent reads: high.
+        let p = plan(&w, &[change(json!({"kind": "emphasis_word", "word": "Shipped", "tone": "green"}))]).unwrap();
+        assert_eq!(p[0].view.risk, Risk::High);
+        assert!(p[0].view.title.starts_with("Add the status label 'shipped'"));
+        let p = plan(&w, &[change(json!({"kind": "emphasis_word", "word": "done", "tone": "green", "also": ["verified"], "use": "do whatever"}))]).unwrap();
+        assert_eq!(p[0].view.risk, Risk::High);
+        // Removing a family, or a synonym, is low.
+        let p = plan(&w, &[change(json!({"kind": "emphasis_word", "word": "team"}))]).unwrap();
+        assert_eq!(p[0].view.risk, Risk::Low);
+        let Op::Emphasis { live: Some(live), .. } = &p[0].op else { panic!() };
+        assert!(!live.vocabulary().contains_key("team"));
+        let p = plan(&w, &[change(json!({"kind": "emphasis_word", "word": "failed", "tone": "red", "also": ["error"], "use": "something did not work; say what"}))]).unwrap();
+        assert_eq!(p[0].view.risk, Risk::Low, "dropping 'broken' adds nothing");
+        // Refused with the reason, never dropped.
+        let e = |v: Value| plan(&w, &[change(v)]).unwrap_err();
+        assert!(e(json!({"kind": "emphasis_word", "word": "done", "tone": "pink"})).contains("tone \"pink\""));
+        assert!(e(json!({"kind": "emphasis_word", "word": "a]]b", "tone": "green"})).contains("is not a word"));
+        assert!(e(json!({"kind": "emphasis_word", "word": "done", "tone": "green", "also": ["failed"]})).contains("listed twice"));
+        assert!(e(json!({"kind": "emphasis_word", "word": "nope"})).contains("none to remove"));
+        assert!(e(json!({"kind": "emphasis_word", "word": "done", "also": ["x"]})).contains("no tone removes"));
+        assert!(e(json!({"kind": "emphasis_word", "word": "done", "tone": "green", "use": "a\nb"})).contains("one line"));
+        assert!(serde_json::from_value::<Change>(json!({"kind": "emphasis_word", "word": "x", "colour": "y"})).is_err());
+        // Two in one proposal: the second sees the first.
+        let both = plan(&w, &[change(json!({"kind": "emphasis_word", "word": "shipped", "tone": "green"})), change(json!({"kind": "emphasis_word", "word": "Shipped"}))]).unwrap();
+        let Op::Emphasis { live: Some(live), .. } = &both[1].op else { panic!() };
+        assert!(!live.vocabulary().contains_key("shipped"));
+    }
+
+    #[test]
+    fn an_emphasis_switch_is_low_and_says_when_it_takes_effect() {
+        let w = world();
+        let p = plan(&w, &[change(json!({"kind": "emphasis_switch", "enabled": false}))]).unwrap();
+        assert_eq!((p[0].view.kind.as_str(), p[0].view.risk), ("emphasis_switch", Risk::Low));
+        assert!(p[0].view.title.contains("at once"), "{}", p[0].view.title);
+        let Op::Emphasis { text, live: Some(live), .. } = &p[0].op else { panic!() };
+        assert!(text.contains("[emphasis]\nenabled = false\n"), "{text}");
+        assert!(!live.enabled() && live.guidance());
+        // A sandbox's own file: at its next bring-up, nothing live.
+        let p = plan(&w, &[change(json!({"kind": "emphasis_switch", "file": "myapp", "guidance": false}))]).unwrap();
+        assert!(p[0].view.title.contains("'myapp''s next bring-up"), "{}", p[0].view.title);
+        let Op::Emphasis { text, live: None, path } = &p[0].op else { panic!() };
+        assert_eq!((path.as_str(), text.as_str()), ("/p/sbxw.toml", "[emphasis]\nguidance = false\n"));
+        let e = |v: Value| plan(&w, &[change(v)]).unwrap_err();
+        assert!(e(json!({"kind": "emphasis_switch"})).contains("nothing to switch"));
+        assert!(e(json!({"kind": "emphasis_switch", "file": "other", "enabled": true})).contains("not an sbxw.toml"));
+        let again = { let mut w = w.clone(); w.files.get_mut("myapp").unwrap().raw = "[emphasis]\nenabled = true\n".into(); w };
+        assert!(plan(&again, &[change(json!({"kind": "emphasis_switch", "file": "myapp", "enabled": true}))]).unwrap_err().contains("already"));
     }
 
     #[test]

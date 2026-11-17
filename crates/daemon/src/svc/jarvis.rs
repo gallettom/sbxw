@@ -131,7 +131,7 @@ fn creatable(path: &Path) -> Result<(), String> {
 /// The sbxw.toml an op writes, if any.
 fn op_toml(op: &Op) -> Option<&str> {
     match op {
-        Op::KitsLine { path, .. } | Op::WriteToml { path, .. } | Op::VoiceWords { path, .. } => Some(path),
+        Op::KitsLine { path, .. } | Op::WriteToml { path, .. } | Op::VoiceWords { path, .. } | Op::Emphasis { path, .. } => Some(path),
         _ => None,
     }
 }
@@ -294,6 +294,16 @@ impl App {
             .into_iter()
             .map(|w| json!({ "word": w.word, "fr": w.said.fr, "en": w.said.en, "origin": w.origin }))
             .collect();
+        // The status pills as the daemon's file has them (else as they are now).
+        let em = daemon_cfg.as_ref().map(|c| c.emphasis.clone()).unwrap_or_else(|| self.emphasis_settings());
+        let emphasis = json!({
+            "enabled": em.enabled(),
+            "guidance": em.guidance(),
+            "configured": em.words.is_some(),
+            "families": sbxw_core::emphasis::families(&em.vocabulary()),
+            "tones": sbxw_core::emphasis::TONES,
+            "sandboxes": self.emphasis_contract().sandboxes,
+        });
         let mcp: Vec<Value> = match self.sbx.mcp_ls().await {
             Ok(list) => list.into_iter().map(|s| json!({ "name": s.name, "type": s.kind })).collect(),
             Err(_) => vec![],
@@ -317,12 +327,13 @@ impl App {
             "jarvis_kits": jarvis_kits,
             "settings": settings,
             "voice_words": voice_words,
+            "emphasis": emphasis,
             "network_allow": shown.network_allow,
             "mcp_servers": mcp,
             "running_sandboxes": running,
             "desktop": desktop,
             "daemon_file": daemon_cfg.is_some() || world.files.contains_key(jarvis::DAEMON_FILE),
-            "limits": { "voice_words": sbxw_core::spoken::MAX_WORDS, "voice_word_chars": sbxw_core::spoken::MAX_WORD, "voice_said_chars": sbxw_core::spoken::MAX_SAID, "changes": jarvis::MAX_CHANGES, "kit_files": sbxw_core::my_skills::MAX_FILES, "kit_bytes": sbxw_core::my_skills::MAX_BYTES, "screen_bytes": jarvis::MAX_SCREEN },
+            "limits": { "voice_words": sbxw_core::spoken::MAX_WORDS, "voice_word_chars": sbxw_core::spoken::MAX_WORD, "voice_said_chars": sbxw_core::spoken::MAX_SAID, "emphasis_word_chars": sbxw_core::emphasis::MAX_WORD, "emphasis_words": sbxw_core::emphasis::MAX_WORDS, "emphasis_families": sbxw_core::emphasis::MAX_FAMILIES, "emphasis_use_chars": sbxw_core::emphasis::MAX_USE, "changes": jarvis::MAX_CHANGES, "kit_files": sbxw_core::my_skills::MAX_FILES, "kit_bytes": sbxw_core::my_skills::MAX_BYTES, "screen_bytes": jarvis::MAX_SCREEN },
         })
     }
 
@@ -504,6 +515,21 @@ impl App {
                 }
                 self.set_voice_words(words);
                 ok(format!("{path} {}; the voice says it this way from the next sentence it reads", if created { "created" } else { "written" }), false)
+            }
+            Op::Emphasis { path, text, live } => {
+                let p = Path::new(&path);
+                let created = !p.exists();
+                if let Err(e) = crate::svc::kits::write_in_place(p, &text) {
+                    return err(format!("{e:#}"));
+                }
+                let done = if created { "created" } else { "written" };
+                match live {
+                    Some(settings) => {
+                        self.set_emphasis(settings);
+                        ok(format!("{path} {done}; the terminals redraw the status pills now, and each sandbox's agent reads the new guidance after its next bring-up, in a new session"), false)
+                    }
+                    None => ok(format!("{path} {done}; it takes effect at that sandbox's next bring-up (sbxw up)"), false),
+                }
             }
             Op::McpAdd { replace, spec } => {
                 if replace {
@@ -719,6 +745,42 @@ mod tests {
         let app = app_at(d.path(), &gone);
         let e = app.jarvis_propose("voice", changes(json!([{"kind": "setting", "key": "keep_awake", "value": "always"}]))).await.unwrap_err();
         assert!(e.contains("does not exist") && e.contains("nowhere"), "{e}");
+    }
+
+    /// Status pills: a switch is low risk and live for the UIs; a new word
+    /// is high (its text reaches every agent's CLAUDE.md), so voice cannot
+    /// approve it.
+    #[tokio::test]
+    async fn approving_an_emphasis_change_writes_it_and_the_uis_hear_it() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("sbxw.toml");
+        std::fs::write(&file, "# mine\nkeep_awake = \"off\"\n").unwrap();
+        let app = app_at(d.path(), &file);
+        let state = app.jarvis_state().await;
+        assert_eq!(state["emphasis"]["enabled"], json!(true));
+        assert_eq!(state["emphasis"]["families"][0]["word"], json!("done"));
+
+        let mut rx = app.bus.subscribe();
+        let p = app.jarvis_propose("pills off", changes(json!([{"kind": "emphasis_switch", "enabled": false}]))).await.unwrap();
+        assert_eq!(p.risk, sbxw_core::jarvis::Risk::Low);
+        let done = app.jarvis_approve(&p.id, Via::Voice, false).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert!(done.results[0].message.contains("redraw"), "{}", done.results[0].message);
+        assert!(std::fs::read_to_string(&file).unwrap().contains("[emphasis]\nenabled = false"));
+        assert!(!app.emphasis_settings().enabled());
+        let mut heard = false;
+        while let Ok(ev) = rx.try_recv() {
+            heard |= ev.name() == "emphasis" && ev.data().contains("\"enabled\":false");
+        }
+        assert!(heard, "the UIs are told");
+
+        let p = app.jarvis_propose("a word", changes(json!([{"kind": "emphasis_word", "word": "Shipped", "tone": "green"}]))).await.unwrap();
+        assert_eq!(p.risk, sbxw_core::jarvis::Risk::High);
+        assert!(app.jarvis_approve(&p.id, Via::Voice, false).await.is_err(), "a spoken yes does not approve it");
+        let done = app.jarvis_approve(&p.id, Via::Click, false).await.unwrap();
+        assert_eq!(done.state, State::Applied, "{:?}", done.error);
+        assert_eq!(app.emphasis_contract().words["shipped"], "green");
+        assert!(app.emphasis_guidance(&sbxw_core::SandboxRef::parse("any").unwrap()).is_none(), "no guidance while the pills are off");
     }
 
     /// A word's pronunciation: low risk, so a spoken yes approves it; the

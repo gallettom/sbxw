@@ -35,10 +35,11 @@ impl App {
         emphasis::effective(&self.emphasis_settings(), self.own_emphasis(sb).as_ref())
     }
 
-    /// The guidance a bring-up writes into `sb`, `None` when it is off there.
+    /// The guidance a bring-up writes into `sb`, `None` when pills or their
+    /// guidance are off there (labels nobody draws are noise).
     pub fn emphasis_guidance(&self, sb: &SandboxRef) -> Option<String> {
-        let (_, guidance) = self.emphasis_for(sb);
-        guidance.then(|| emphasis::guidance(&self.emphasis_settings().vocabulary()))
+        let (enabled, guidance) = self.emphasis_for(sb);
+        (enabled && guidance).then(|| emphasis::guidance(&self.emphasis_settings().vocabulary()))
     }
 
     /// `GET /api/emphasis`: every sandbox sbxw knows, with its switch.
