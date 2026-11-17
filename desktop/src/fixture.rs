@@ -196,6 +196,10 @@ mod tests {
         for screen in std::fs::read_dir(dir()).unwrap() {
             for f in std::fs::read_dir(screen.unwrap().path()).unwrap() {
                 let p = f.unwrap().path();
+                // Data beside the fixtures (a terminal sample, shared test cases) is not one.
+                if p.extension().is_none_or(|x| x != "json") || p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("-cases.json")) {
+                    continue;
+                }
                 Fixture::load(&p).unwrap_or_else(|e| panic!("{e:#}"));
                 n += 1;
             }

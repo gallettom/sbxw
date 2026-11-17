@@ -1885,7 +1885,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let (_, decl) = crate::feat::screen(name)?;
         let crate::feat::Slot::Modal { width, light_dismiss } = decl.slot else { return None };
         let sc = s.screens.iter().find(|x| &x.name == name)?;
-        Some(s.modal_view(screen::view::<App>(sc), width, light_dismiss))
+        let fits = sc.last_good.as_ref().is_some_and(screen::sized_by_content);
+        Some(s.modal_view(screen::view::<App>(sc), width, light_dismiss, fits))
     });
     let panel = match s.screens.iter().find(|x| x.name == "jarvis") {
         Some(j) if s.jarvis.open => {

@@ -508,3 +508,86 @@ fn a_spare_open_from_a_screen_never_replaces_an_open_pane() {
     r.check_kept(&before, "+ with room");
     assert!(r.rt.state.notice.as_ref().map_or(true, |n| !n.0.contains("least recently used")));
 }
+
+/// Every modal fixture (a fixture whose `app.modal` opens one), at a narrow
+/// window and a wide one: no keyed element of the modal's screen lies
+/// outside the modal's rectangle (a field's button pushed out of its row,
+/// a row wider than the card), and a screen sized by its content gets a card
+/// no taller than it needs.
+#[test]
+fn modal_content_stays_inside_the_modal() {
+    fn fixtures(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                fixtures(&p, out);
+            } else if p.extension().is_some_and(|x| x == "json") {
+                let v: J = std::fs::read_to_string(&p).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(J::Null);
+                if v["app"]["modal"].is_array() {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    fn keys(n: &crate::luau::Node, out: &mut Vec<String>) {
+        if let Some(k) = crate::screen::key_of(n) {
+            out.push(k);
+        }
+        n.children.iter().for_each(|c| keys(c, out));
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    let mut found = vec![];
+    fixtures(&root, &mut found);
+    // (fixture, intent opening the modal: none when the fixture opens it).
+    let mut list: Vec<(std::path::PathBuf, J)> = found.into_iter().map(|p| (p, J::Null)).collect();
+    for f in ["setup/full.json", "setup/errors.json"] {
+        for tab in ["secrets", "kits", "skills", "mcp", "hosts", "voice"] {
+            list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "open_modal", "args": { "screen": "setup", "arg": tab } })));
+        }
+    }
+    for f in ["create/workspace-full.json", "create/workspace-errors.json", "create/chat.json"] {
+        for d in ["chooser", "workspace", "chat"] {
+            list.push((root.join(f), serde_json::json!({ "kind": "intent", "name": "create_open", "args": { "dialog": d } })));
+        }
+    }
+    list.push((root.join("envfile/basic.json"), J::Null));
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    assert!(list.len() >= 20, "{list:?}");
+    let mut bad = vec![];
+    let mut checked = 0;
+    for (path, open) in &list {
+        for (w, h) in [(420.0, 700.0), (1284.0, 816.0)] {
+            let mut a = App::new(Args { fixture: Some(path.to_string_lossy().to_string().into()), ..Args::default() });
+            if !open.is_null() {
+                for i in crate::intent::parse(open).unwrap() {
+                    a.run_intent("test", i);
+                }
+            }
+            let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+            // Past the card's entrance (it grows in).
+            for _ in 0..60 {
+                rt.frame(0.016);
+            }
+            let Some((m, _)) = rt.presented("modal") else { continue };
+            let Some((name, _)) = rt.state.feats.modal.clone() else { continue };
+            let Some(node) = rt.state.screens.iter().find(|s| s.name == name).and_then(|s| s.last_good.clone()) else { continue };
+            let mut ks = vec![];
+            keys(&node, &mut ks);
+            for k in ks {
+                let Some((r, _)) = rt.presented(&k) else { continue };
+                checked += 1;
+                // Sideways: inside the card. Down: only above its top (a
+                // long screen scrolls inside the card).
+                if r[0] < m[0] - 0.5 || r[0] + r[2] > m[0] + m[2] + 0.5 || r[1] < m[1] - 0.5 {
+                    bad.push(format!("{} at {w}: {name}: {k} at {r:?}, modal {m:?}", path.file_name().unwrap().to_string_lossy()));
+                }
+            }
+            if crate::screen::sized_by_content(&node) {
+                let body = rt.presented("modal-body").map(|b| b.0[3]).unwrap_or(0.0);
+                assert!(m[3] <= body + 32.0 + 0.5, "{}: the card ({}) is taller than its content ({body})", path.display(), m[3]);
+            }
+        }
+    }
+    assert!(checked > 50, "{checked} elements checked");
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}

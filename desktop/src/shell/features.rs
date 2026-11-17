@@ -959,17 +959,26 @@ impl App {
     }
 
     /// The modal screen over a dimmed window.
-    pub(super) fn modal_view(&self, screen: El, width: f32, light_dismiss: bool) -> El {
+    /// `fits`: the screen's height is its content's ([`crate::screen::sized_by_content`]).
+    pub(super) fn modal_view(&self, screen: El, width: f32, light_dismiss: bool, fits: bool) -> El {
         let w = width.min(self.window.0 - 32.0);
         let side = ((self.window.0 - w) / 2.0).max(16.0);
         let top = layout::GUTTER * 2.0 + layout::TOP_BAR_H + 16.0;
+        let max = (self.window.1 - top - 24.0).clamp(160.0, 720.0);
         let card = col()
             .key("modal")
             .role("dialog")
-            .pin(Some(side), Some(top), Some(side), None)
-            // A fixed height: the screen fills it and scrolls inside (its
-            // own close button; Escape and a press outside close it too).
-            .h((self.window.1 - top - 24.0).clamp(160.0, 720.0))
+            .pin(Some(side), Some(top), Some(side), None);
+        // A screen sized by its content: the card is as tall as it, up to
+        // `max`, then it scrolls inside. A screen with its own scroll area
+        // or grown parts: a fixed height it fills and scrolls in. (Its own
+        // close button; Escape and a press outside close it too.)
+        let (card, body) = if fits {
+            (card.max_h(max), col().key("modal-body").w_full().max_h(max - 32.0).scroll(rune::ScrollSpec { stick_bottom: false }).child(screen))
+        } else {
+            (card.h(max), col().w_full().min_h(0.0).grow(1.0).child(screen))
+        };
+        let card = card
             .padding(16.0)
             .gap(12.0)
             .radius(radius("lg").unwrap())
@@ -983,7 +992,7 @@ impl App {
                     s.feature_incoming(f, feat::Incoming::Files(files.to_vec()));
                 }
             })
-            .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
+            .child(body);
         super::scrim_with("modal-scrim", card, |s: &mut App| {
             s.feats.modal = None;
             s.push_data();
