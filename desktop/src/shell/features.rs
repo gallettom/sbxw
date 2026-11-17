@@ -986,74 +986,94 @@ impl App {
     /// A docked panel: tabs of every open panel, or (side by side) only
     /// `only`'s; the switch between the two when more than one is open.
     pub(super) fn feat_panel_view(&self, screen: El, width: f32, only: Option<&str>) -> El {
+        // One header for every docked panel, drawn here: the icon and the
+        // title at the left (tabs when several share the panel), the close
+        // cross always at the panel's top right corner, at the panel's own
+        // 12 pt inset, whatever the title's length (a long one truncates
+        // first). It stays put when the screen below scrolls.
+        let names: Vec<&String> = self.feats.panels.iter().filter(|n| only.is_none_or(|o| o == n.as_str())).collect();
+        let shown_name = only.map(str::to_string).or_else(|| self.feats.panel.clone()).or_else(|| names.first().map(|n| n.to_string()));
         let mut tabs = row().key(match only {
             Some(n) => format!("panel-tabs-{n}"),
             None => "panel-tabs".into(),
-        }).w_full().gap(4.0).items_center();
-        for name in self.feats.panels.iter().filter(|n| only.is_none_or(|o| o == n.as_str())) {
+        }).w_full().h(layout::CONTROL_H).gap(4.0).items_center();
+        let mut close_title = String::new();
+        for name in &names {
             let Some((_, decl)) = feat::screen(name) else { continue };
             let Slot::Panel { title, icon, .. } = decl.slot else { continue };
-            let shown = self.feats.panel.as_deref() == Some(name.as_str());
-            let n1 = name.clone();
-            let n2 = name.clone();
+            let shown = shown_name.as_deref() == Some(name.as_str());
+            if shown {
+                close_title = title.to_string();
+            }
+            let n1 = name.to_string();
             let mut tab = row()
                 .key(format!("panel-tab-{name}"))
                 .role("tab")
                 .label(title)
                 .gap(8.0)
-                .pl(8.0)
-                .pr(2.0)
                 .h(layout::CONTROL_H)
+                .min_w(0.0)
                 .items_center()
-                .radius(radius("sm").unwrap())
-                .fill(c(if shown { "elevated" } else { "bg" }))
-                .cursor(Cursor::Pointer)
-                .on_press(move |s: &mut App| {
+                .radius(radius("sm").unwrap());
+            if names.len() > 1 {
+                // Tabs: the shown one on a quiet fill, the others plain.
+                tab = tab.px(8.0).fill(c(if shown { "elevated" } else { "bg" })).hover(c("hover-subtle")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
                     s.feats.panel = Some(n1.clone());
                     s.push_data();
                 });
-            if let Some(i) = crate::icons::get(icon) {
-                tab = tab.child(rune::icon(i, 14.0).color(c(if shown { "text-bright" } else { "text-muted" })));
+            } else {
+                // One panel: a plain title, no chip.
+                tab = tab.grow(1.0).pl(4.0);
             }
-            tab = tab.child(text(title).font(crate::screen::body(13.0, 500.0)).color(c(if shown { "text-bright" } else { "text-muted" }))).child(
-                el().key(format!("panel-close-{name}"))
-                    .role("button")
-                    .label(format!("Close {title}"))
-                    .help(format!("Close {title}"))
-                    .w(layout::DENSE_H)
-                    .h(layout::DENSE_H)
-                    .items_center()
-                    .justify_center()
-                    .radius(radius("xs").unwrap())
-                    .hover(c("border"))
-                    .cursor(Cursor::Pointer)
-                    .on_press(move |s: &mut App| {
-                        s.close_panel(&n2);
-                        s.push_data();
-                    })
-                    .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
-            );
+            if let Some(i) = crate::icons::get(icon) {
+                tab = tab.child(rune::icon(i, 16.0).color(c(if shown { "text-bright" } else { "text-muted" })));
+            }
+            tab = tab.child(text(title).font(crate::screen::body(14.0, 600.0)).color(c(if shown { "text-bright" } else { "text-muted" })).truncate().min_w(0.0));
             tabs = tabs.child(tab);
+        }
+        if names.len() > 1 {
+            tabs = tabs.child(el().grow(1.0));
         }
         if self.feats.panels.len() > 1 && only.is_none_or(|o| self.feats.panels.first().map(String::as_str) == Some(o)) {
             let split = self.feats.split;
-            tabs = tabs.child(el().grow(1.0)).child(
+            tabs = tabs.child(
                 el().key("panel-split")
                     .role("button")
                     .label(if split { "Show panels as tabs" } else { "Show panels side by side" })
                     .help(if split { "Show panels as tabs" } else { "Show panels side by side" })
-                    .w(layout::DENSE_H)
-                    .h(layout::DENSE_H)
+                    .w(layout::CONTROL_H)
+                    .h(layout::CONTROL_H)
                     .items_center()
                     .justify_center()
                     .radius(radius("xs").unwrap())
-                    .hover(c("border"))
+                    .hover(c("elevated"))
                     .cursor(Cursor::Pointer)
                     .on_press(|s: &mut App| {
                         s.feats.split = !s.feats.split;
                         s.push_data();
                     })
-                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 14.0).color(c("text-muted"))),
+                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 16.0).color(c("text-muted"))),
+            );
+        }
+        if let Some(name) = shown_name {
+            let n2 = name.clone();
+            tabs = tabs.child(
+                el().key(format!("panel-close-{name}"))
+                    .role("button")
+                    .label(format!("Close {close_title}"))
+                    .help(format!("Close {close_title}"))
+                    .w(layout::CONTROL_H)
+                    .h(layout::CONTROL_H)
+                    .items_center()
+                    .justify_center()
+                    .radius(radius("xs").unwrap())
+                    .hover(c("elevated"))
+                    .cursor(Cursor::Pointer)
+                    .on_press(move |s: &mut App| {
+                        s.close_panel(&n2);
+                        s.push_data();
+                    })
+                    .child(rune::icon(crate::icons::get("close").unwrap(), 16.0).color(c("text-muted"))),
             );
         }
         col()
