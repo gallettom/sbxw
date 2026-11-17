@@ -93,6 +93,8 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_up", risk: Risk::Direct, args: &[], doc: "Lists the parent folder." },
     Spec { name: "files_back", risk: Risk::Direct, args: &[], doc: "Back to the folder listed before." },
     Spec { name: "files_filter", risk: Risk::Direct, args: &[("text", Arg::Text, false)], doc: "Filters the rows by name; give it on every edit." },
+    Spec { name: "files_more", risk: Risk::Direct, args: &[], doc: "Draws the next rows of a long list (the panel draws 200 at first, 200 more each time)." },
+    Spec { name: "files_fold", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Artifacts: opens a folder's rows, or folds them back (`id`: a folder row's id). Folders start folded, with their file count." },
     Spec { name: "files_hidden", risk: Risk::Direct, args: &[("on", Arg::Bool, true)], doc: "Shows dotfiles, or hides them." },
     Spec { name: "files_select", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Picks a row by its `id`: a folder is listed, a file previewed (text, Markdown, pictures; HTML as its source)." },
     Spec { name: "files_show_in_folder", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Recent: lists the folder a file was written to, on that file." },
@@ -222,6 +224,11 @@ pub struct State {
     select_next: Option<String>,
     filter: String,
     hidden: bool,
+    /// Pages of rows drawn beyond the first ([`PAGE`] each): reset by a new
+    /// tab, filter or folder.
+    more: usize,
+    /// Artifact folders opened (folded by default).
+    open: std::collections::BTreeSet<String>,
     sel: Option<Sel>,
     preview: J,
     seq: u64,
@@ -360,6 +367,7 @@ impl State {
             }
             "files_tab" => {
                 self.tab = a.req("tab").into();
+                self.more = 0;
                 self.sel = None;
                 self.preview = J::Null;
                 out.push(Action::Remember { key: "tab".into(), value: self.tab.clone().into() });
@@ -403,7 +411,20 @@ impl State {
                 self.tab = "files".into();
                 out.push(self.fetch_dir(&sb));
             }
-            "files_filter" => self.filter = a.s("text").unwrap_or("").into(),
+            "files_filter" => {
+                self.filter = a.s("text").unwrap_or("").into();
+                self.more = 0;
+            }
+            "files_more" => self.more += 1,
+            "files_fold" => {
+                let id = a.req("id").to_string();
+                if !artifact_dirs(cx).contains_key(&id) {
+                    return Err(format!("{id} is not a folder of .sbxw-artifacts"));
+                }
+                if !self.open.remove(&id) {
+                    self.open.insert(id);
+                }
+            }
             "files_hidden" => self.hidden = a.b("on").unwrap_or(false),
             "files_select" => out.extend(self.select(cx, a.req("id"))?),
             "files_show_in_folder" => {
@@ -589,6 +610,7 @@ impl State {
         self.path = path.to_string();
         self.tab = "files".into();
         self.filter.clear();
+        self.more = 0;
         self.sel = None;
         self.preview = J::Null;
         Ok(vec![self.fetch_dir(&sb)])
@@ -629,27 +651,77 @@ impl State {
         }
     }
 
+    /// The rows drawn: the first [`PAGE`] (more on "Show more"), and the
+    /// selected one, so a screen never builds more than it can
+    /// show (the core refuses a render past its element cap). The filter
+    /// has already run over every entry. With the count line's numbers.
+    fn page(&self, cx: &Ctx) -> (Vec<J>, J) {
+        let mut rows = self.rows(cx);
+        let total = rows.len();
+        let files = rows.iter().map(|r| if r["kind"] == "folder" { r["count"].as_u64().unwrap_or(0) as usize } else { 1 }).sum::<usize>();
+        let shown = total.min(PAGE * (1 + self.more));
+        // The selected row past the page is drawn after it, alone (never
+        // the rows between: a selection must not lift the cap).
+        let late = rows.iter().skip(shown).find(|r| r["selected"] == true).cloned();
+        rows.truncate(shown);
+        rows.extend(late);
+        let what = if self.tab() == "files" { "entries" } else { "files" };
+        let count = json!({
+            "total": total, "shown": shown, "more": PAGE.min(total - shown),
+            "label": if shown < total { format!("{} {what}, showing {}", view::thousands(files), view::thousands(shown)) } else { String::new() },
+        });
+        (rows, count)
+    }
+
     fn keep(&self, name: &str) -> bool {
         let f = self.filter.trim().to_lowercase();
         f.is_empty() || name.to_lowercase().contains(&f)
     }
 
+    /// Artifacts: with a filter, every matching file, flat, its folder said;
+    /// without, a tree in the daemon's order (newest first), each folder one
+    /// row with its file count, folded until opened.
     fn artifact_rows(&self, cx: &Ctx) -> Vec<J> {
         let now = view::now_secs();
-        cx.get(ARTIFACTS)["entries"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|e| self.keep(e["name"].as_str().unwrap_or("")))
-            .map(|e| {
-                let path = e["path"].as_str().unwrap_or("");
-                let m = e["modified"].as_u64().unwrap_or(0);
-                let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-                json!({ "id": path, "name": e["name"], "kind": "file", "icon": icon_of(e["name"].as_str().unwrap_or("")), "dir": dir,
-                    "size": view::size_label(e["size"].as_u64().unwrap_or(0)), "when": view::ago(m, now), "fresh": now.saturating_sub(m) < view::FRESH_SECS,
-                    "selected": self.sel.as_ref().is_some_and(|s| s.src == Src::Artifact && s.path == path) })
-            })
-            .collect()
+        let entries: Vec<&J> = cx.get(ARTIFACTS)["entries"].as_array().into_iter().flatten().collect();
+        let file = |e: &J, depth: usize, with_dir: bool| {
+            let path = e["path"].as_str().unwrap_or("");
+            let m = e["modified"].as_u64().unwrap_or(0);
+            let dir = if with_dir { path.rsplit_once('/').map(|(d, _)| d).unwrap_or("") } else { "" };
+            json!({ "id": path, "name": e["name"], "kind": "file", "icon": icon_of(e["name"].as_str().unwrap_or("")), "dir": dir, "depth": depth,
+                "size": view::size_label(e["size"].as_u64().unwrap_or(0)), "when": view::ago(m, now), "fresh": now.saturating_sub(m) < view::FRESH_SECS,
+                "selected": self.sel.as_ref().is_some_and(|s| s.src == Src::Artifact && s.path == path) })
+        };
+        if !self.filter.trim().is_empty() {
+            return entries.into_iter().filter(|e| self.keep(e["name"].as_str().unwrap_or(""))).map(|e| file(e, 0, true)).collect();
+        }
+        let counts = artifact_dirs(cx);
+        let is_open = |d: &str| self.open.contains(d);
+        let mut out = vec![];
+        let mut seen = std::collections::HashSet::new();
+        for e in &entries {
+            let path = e["path"].as_str().unwrap_or("");
+            // The rows this entry calls for, from the top: each folder on its
+            // way once (at its newest file), then the file if all are open.
+            let mut prefix = String::new();
+            let mut visible = true;
+            for (depth, seg) in path.split('/').collect::<Vec<_>>().split_last().map(|(_, dirs)| dirs.to_vec()).unwrap_or_default().into_iter().enumerate() {
+                let dir = if prefix.is_empty() { seg.to_string() } else { format!("{prefix}/{seg}") };
+                if seen.insert(dir.clone()) {
+                    out.push(json!({ "id": dir, "name": seg, "kind": "folder", "icon": "folder", "depth": depth,
+                        "count": counts.get(&dir).copied().unwrap_or(0), "open": is_open(&dir) }));
+                }
+                if !is_open(&dir) {
+                    visible = false;
+                    break;
+                }
+                prefix = dir;
+            }
+            if visible {
+                out.push(file(e, path.matches('/').count(), false));
+            }
+        }
+        out
     }
 
     fn dir_rows(&self, cx: &Ctx) -> Vec<J> {
@@ -706,6 +778,8 @@ impl State {
         let (src, name, size, modified, kind) = match self.tab() {
             "artifacts" => {
                 let e = cx.get(ARTIFACTS)["entries"].as_array().into_iter().flatten().find(|e| e["path"] == id).ok_or_else(|| format!("{id} is not in .sbxw-artifacts"))?;
+                // Selected inside folded folders: they open, so its row shows.
+                self.open.extend(ancestors(id));
                 (Src::Artifact, e["name"].as_str().unwrap_or("").to_string(), e["size"].as_u64().unwrap_or(0), e["modified"].as_u64().unwrap_or(0), "file".to_string())
             }
             "recent" => {
@@ -865,13 +939,14 @@ impl State {
         let recent_fresh = cx.get(RECENT)["files"].as_array().map(|v| v.iter().filter(|f| view::now_secs().saturating_sub(f["modified"].as_u64().unwrap_or(0)) < view::FRESH_SECS).count()).unwrap_or(0);
         let a = cx.get(ARTIFACTS);
         let run = run_for(cx, sb.as_deref().unwrap_or(""));
+        let (rows, count) = self.page(cx);
         json!({
             "sandbox": sb, "tab": self.tab(), "filter": self.filter, "hidden": self.hidden,
             "path": d["path"], "can_up": d["path"].as_str().is_some_and(|p| p != "/"), "can_back": !self.history.is_empty(),
             "offline": d["offline"] == true,
             "starred": d["path"].as_str().is_some_and(|p| self.starred(cx).iter().any(|x| x == p)),
             "places": if mine(DIR) { json!(view::places(d, &self.starred(cx))) } else { json!([]) },
-            "rows": self.rows(cx),
+            "rows": rows, "count": count,
             "loading": { "artifacts": !mine(ARTIFACTS) || a.is_null(), "files": d.is_null(), "recent": cx.get(RECENT).is_null() },
             "errors": { "artifacts": errors[ARTIFACTS], "files": errors[DIR], "recent": errors[RECENT] },
             "artifacts_dir": a["dir"], "has_map": a["codemap"].is_object() || a["lenses"].as_array().is_some_and(|l| !l.is_empty()),
@@ -1274,6 +1349,27 @@ pub fn typable(path: &str) -> bool {
         && path.len() < 400
         && path.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
         && !path.split('/').any(|c| c == ".." || c.starts_with('-'))
+}
+
+/// Rows drawn at first, and added by each "Show more".
+pub const PAGE: usize = 200;
+
+/// Every folder of `.sbxw-artifacts` that holds a listed file, with the
+/// number of files under it.
+fn artifact_dirs(cx: &Ctx) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    for e in cx.get(ARTIFACTS)["entries"].as_array().into_iter().flatten() {
+        for d in ancestors(e["path"].as_str().unwrap_or("")) {
+            *out.entry(d).or_insert(0) += 1;
+        }
+    }
+    out
+}
+
+/// `a/b/c.md` → `a`, `a/b`.
+fn ancestors(path: &str) -> Vec<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    (1..parts.len()).map(|n| parts[..n].join("/")).collect()
 }
 
 fn icon_of(name: &str) -> &'static str {

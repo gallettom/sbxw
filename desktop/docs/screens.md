@@ -1287,7 +1287,8 @@ the map's parser, `standin.rs`, `tests.rs`), `screens/files.luau`,
 `.sbxw-artifacts/desktop/FILES.md` in the main checkout.
 
 **Screens.** `files` (panel "Project", 460 pt): tabs Artifacts
-(`.sbxw-artifacts`, newest first), Files (a folder of the sandbox, the
+(`.sbxw-artifacts`, newest first, each folder one folded row with its file
+count until pressed), Files (a folder of the sandbox, the
 places, Hidden files, the typed path) and Recent (written lately anywhere,
 by age, Show in folder); an upload card; a filter; a preview under the list
 (text, Markdown through `markdown`, a picture through `image`, HTML as its
@@ -1299,6 +1300,14 @@ broken one is marked; a source reference is code, copied from the side
 list), Referenced by, Outline, Code referenced, search, Generate, Write a
 lens, Diagram.
 
+**Long lists.** A list draws its first 200 rows (`PAGE` in `mod.rs`), and
+200 more on each **Show N more**, under a count line ("1,240 files, showing
+200. Filter by name to find one."); the filter runs over every entry before
+the page is cut, and the selected row is always drawn (after the page when it is further down). The core refuses a
+render past 5000 elements (`luau.rs`, a safety cap on what a screen may
+build per frame), so a screen that lists the daemon's data must bound it:
+this panel at about 1,700 elements for a full page.
+
 **Extras.** On every pane bar of a sandbox, `pane-<n>-x-project` ("Project",
 opens the panel); on a sandbox's row, `extra-sandbox-<name>-codemap` ("map…",
 amber) while its map or a lens is being written.
@@ -1308,7 +1317,8 @@ path under `.sbxw-artifacts`, else the file's absolute path), Recent's
 `files-show-<id>`, tabs `files-tab-<tab>`, actions `files-download`,
 `files-reveal`, `files-open-with`, `files-save-as`, `files-copy-path`,
 `files-delete`, the preview's body `files-preview-<state>` (`loading`, `text` (HTML too), `markdown`, `image`, `note`, `error`), uploads `files-drop` (the drop target), `files-upload-send-<n>`
-and `files-unstage-<n>` (by position); the map's `codemap-docs` (picker,
+and `files-unstage-<n>` (by position), `files-more` (Show N more), a folder row
+`files-row-<folder path>`; the map's `codemap-docs` (picker,
 items by file key), `codemap-outline-<section id>`, `codemap-hit-<file key>`,
 `codemap-diagram`.
 
@@ -1321,7 +1331,7 @@ a failed read is in `data.app.errors[key]`, a string):
 | `files_dir` | `GET /api/sandboxes/:name/fs?path=`: `{path, parent, entries: [{name, kind, link, size, modified}], offline, workspace, artifacts, home, mounts, worktrees}` |
 | `files_recent` | `GET /api/sandboxes/:name/fs/recent`: `{files: [{path, size, modified}], days, workspace, home, roots}` |
 | `codemap` | `GET /api/codemap`, read again on each `codemap` event: every run `{sandbox, kind: map\|lens, phase: writing\|done\|failed, note}` |
-| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind`, `icon`, `dir`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
+| `files_ui` | Set by the core: `sandbox`, `tab`, `rows` (`id`, `name`, `kind` (`folder` for a folded artifact folder, with `count` and `open`), `icon`, `dir`, `depth`, `size`, `when`, `fresh`, `group`, `can_delete`, `selected`), `count` (`total`, `shown`, `more`, `label`), `places`, `path`, `can_up`, `can_back`, `offline`, `selected`, `preview` (`state`: `loading`, `text`, `markdown`, `html`, `image` with `key`, `note`, `error`), `staged` (`index`, `name`, `size`, `to`, `problem`, `state`, `progress`), `saved`, `run`, `has_map`, `errors`, `loading` |
 | `codemap_ui` | Set by the core: `sandbox`, `maps`, `root`, `loading`, `error`, `map` (`docs`, `count`, `broken`, `doc`: `{key, title, path, section, markdown, outline, backlinks, code}`), `diagram`, `run`, `writing`, `running`, `lens`, `lens_left` |
 
 **Rules.** File content is read raw (`Call::raw`): text and Markdown are
@@ -1337,6 +1347,8 @@ panel or a pane, a paste, or the file dialog.
 | `files_open` | `sandbox`, `tab` (`artifacts`, `files`, `recent`) | direct | Opens the panel on that sandbox (the last tab, else Artifacts) and reads its lists |
 | `files_tab`, `files_place`, `files_browse`, `files_up`, `files_back` | `tab` / `id` / `path` (`~` is home) / none | direct | Tabs, places, folders |
 | `files_filter`, `files_hidden` | `text` / `on` | direct | The filter, dotfiles |
+| `files_more` | | direct | 200 more rows of a long list |
+| `files_fold` | `id` (a folder row's) | direct | Opens or folds an artifact folder |
 | `files_select` | `id` (a row's) | direct | A folder is listed, a file previewed; a row not listed is refused |
 | `files_show_in_folder` | `id` | direct | Recent: lists its folder, on it |
 | `files_copy_path` | none | direct | The path as the agent sees it, through `copy_text` |

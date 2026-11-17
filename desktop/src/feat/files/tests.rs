@@ -746,3 +746,76 @@ fn the_map_opens_from_the_project_panel_without_a_new_answer() {
     assert_eq!(d[MAP_UI]["map"]["count"], 3);
     assert_eq!(d[MAP_UI]["loading"], false);
 }
+
+/// A sandbox with thousands of deliverables (a desktop thread's shots and
+/// logs): the panel draws a page and folded folders, never past the core's
+/// element cap, and the filter still finds a file beyond the first page.
+#[test]
+fn thousands_of_files_render_under_the_cap_and_the_filter_reaches_them_all() {
+    let mut d = fixture("standin");
+    let mut st = opened_pumped(&mut d);
+    // 3,000 files: 2,700 in 30 nested folders, 300 at the top.
+    let mut entries = vec![];
+    for i in 0..3000u64 {
+        let name = format!("shot-{i:04}.png");
+        let path = if i < 2700 { format!("desktop/run-{:02}/{}/{name}", i % 30, if i % 2 == 0 { "solo" } else { "window" }) } else { name.clone() };
+        entries.push(json!({ "path": path, "name": name, "size": 1000 + i, "modified": 1794199000 - i }));
+    }
+    d[ARTIFACTS]["entries"] = J::Array(entries);
+    let dir = std::env::temp_dir().join("sbxw-no-overrides");
+    let render = |st: &State, d: &J| {
+        let ui = st.ui(&Ctx { data: d });
+        let mut data = d.clone();
+        data[UI] = ui.clone();
+        let s = crate::screen::ScreenState::new(SCREEN, &dir, crate::fixture::screen_data(&data, &crate::fixture::AppView::default()));
+        assert!(s.error.is_none(), "{:?} with {} rows", s.error, ui["rows"].as_array().map_or(0, |r| r.len()));
+        ui
+    };
+    // Folded: the folder first (it holds the newest file), then the top files.
+    let ui = render(&st, &d);
+    assert_eq!(ui["rows"][0]["kind"], "folder");
+    assert_eq!((ui["rows"][0]["name"].as_str(), ui["rows"][0]["count"].as_u64()), (Some("desktop"), Some(2700)));
+    assert_eq!(ui["rows"].as_array().unwrap().len(), PAGE, "1 folder and 300 files: the first 200 rows");
+    assert_eq!(ui["count"]["label"], "3,000 files, showing 200");
+    assert_eq!(ui["loading"]["artifacts"], false);
+    // Show more grows by a page.
+    run(&mut st, &d, "files_more", json!({})).unwrap();
+    let ui = render(&st, &d);
+    assert_eq!(ui["rows"].as_array().unwrap().len(), 301);
+    assert_eq!(ui["count"]["more"], 0);
+    // Opening the folder: its 30 run folders, folded.
+    run(&mut st, &d, "files_fold", json!({ "id": "desktop" })).unwrap();
+    let ui = render(&st, &d);
+    let rows = ui["rows"].as_array().unwrap();
+    assert_eq!(rows.iter().filter(|r| r["depth"] == 1 && r["kind"] == "folder").count(), 30);
+    assert!(run(&mut st, &d, "files_fold", json!({ "id": "nowhere" })).is_err(), "only a listed folder");
+    // Every folder open at once: still one page, and it renders.
+    for i in 0..30 {
+        for sub in ["solo", "window"] {
+            st.open.insert(format!("desktop/run-{i:02}"));
+            st.open.insert(format!("desktop/run-{i:02}/{sub}"));
+        }
+    }
+    run(&mut st, &d, "files_tab", json!({ "tab": "artifacts" })).unwrap();
+    let ui = render(&st, &d);
+    assert_eq!(ui["rows"].as_array().unwrap().len(), PAGE);
+    // The filter runs over all 3,000 before the page: a file deep and late.
+    run(&mut st, &d, "files_filter", json!({ "text": "shot-2699" })).unwrap();
+    let ui = render(&st, &d);
+    assert_eq!(ui["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(ui["rows"][0]["id"], "desktop/run-29/window/shot-2699.png");
+    assert_eq!(ui["count"]["label"], "", "nothing cut");
+    // Selected there, then the filter cleared: its folders open and its row
+    // is drawn even past the first page.
+    run(&mut st, &d, "files_select", json!({ "id": "desktop/run-29/window/shot-2699.png" })).unwrap();
+    run(&mut st, &d, "files_filter", json!({ "text": "" })).unwrap();
+    let ui = render(&st, &d);
+    assert!(ui["rows"].as_array().unwrap().iter().any(|r| r["selected"] == true), "the selected row is drawn");
+    // The Files tab on a 3,000-entry folder: one page too.
+    let names: Vec<J> = (0..3000).map(|i| json!({ "name": format!("f{i:04}.log"), "kind": "file", "size": 10, "modified": 1794199000 })).collect();
+    d[DIR]["entries"] = J::Array(names);
+    run(&mut st, &d, "files_tab", json!({ "tab": "files" })).unwrap();
+    let ui = render(&st, &d);
+    assert_eq!(ui["rows"].as_array().unwrap().len(), PAGE);
+    assert!(ui["count"]["label"].as_str().unwrap().starts_with("3,0"), "{}", ui["count"]);
+}
