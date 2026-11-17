@@ -203,9 +203,9 @@ local function bubble_help(name, e)
   local n = e.count or 0
   local what = n == 1 and "1 network request" or (n .. " network requests")
   if e.tone == "amber" then
-    return what .. " for " .. name .. ": sbx holds something until you decide. Opens the Network panel"
+    return what .. " for " .. name .. ": sbx holds something until you decide. Opens the Network panel on " .. name .. "'s requests"
   end
-  return what .. " sbx refused for " .. name .. " (nothing waits on them). Opens the Network panel"
+  return what .. " sbx refused for " .. name .. " (nothing waits on them). Opens the Network panel on " .. name .. "'s requests"
 end
 
 -- Short menu labels, verb first; the feature's long sentence is the tooltip.

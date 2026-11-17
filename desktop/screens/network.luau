@@ -51,20 +51,31 @@ end
 
 local function plural(n, w, ws) return n .. " " .. (n == 1 and w or (ws or (w .. "s"))) end
 
-local function requests(data)
+-- Cards drawn at a time: 113 requests of 33 hosts are 33 cards, and the
+-- core builds the elements again each frame; past this, "Show more".
+local PAGE = 25
+
+-- The sandbox whose requests alone are listed (data.network_view.filter),
+-- kept by render for the actions.
+local filter_now = nil
+
+local function requests(data, state)
   local a = data.approvals or {}
   local out = { gap = 8, w = "full" }
+  local filter = data.network_view and data.network_view.filter or nil
   -- Only the requests of sandboxes in the list, as the web UI shows them:
   -- sbx lists the whole machine's (removed sandboxes, Jarvis's own).
   local listed = {}
   for _, sb in ipairs(data.sandboxes or {}) do listed[sb.name] = true end
   -- sbx lists a refused host again each time the sandbox retries it: one
-  -- card per sandbox and host, the newest request's options, "×N".
-  local groups, order, hosts, sbs, nsb, nhosts, total, refused = {}, {}, {}, {}, 0, 0, 0, 0
+  -- card per sandbox and host, the newest request's options, "×N". Under a
+  -- filter, everything below counts only what is shown.
+  local groups, order, hosts, sbs, nsb, nhosts, total, refused, all = {}, {}, {}, {}, 0, 0, 0, 0, {}
   for _, r in ipairs(a.approvals or {}) do
-    if listed[r.sandbox] then
+    local k = (r.sandbox or "") .. "\n" .. (r.kind or "") .. "\n" .. (r.title or "")
+    if listed[r.sandbox] then all[k] = true end
+    if listed[r.sandbox] and (not filter or r.sandbox == filter) then
       total = total + 1
-      local k = (r.sandbox or "") .. "\n" .. (r.kind or "") .. "\n" .. (r.title or "")
       local g = groups[k]
       if not g then
         g = { first = r, n = 0, dismiss = false }
@@ -79,25 +90,57 @@ local function requests(data)
       if not sbs[r.sandbox] then sbs[r.sandbox] = true; nsb = nsb + 1 end
     end
   end
-  table.insert(out, section("Waiting for you", #order))
+  local nall = 0
+  for _ in pairs(all) do nall = nall + 1 end
+  table.insert(out, row{ gap = 8, w = "full", pad = 2,
+    text{ "Waiting for you", size = "caption", weight = "semibold", color = "text-muted" },
+    badge{ tostring(#order), tone = "neutral" },
+    filter and text{ "in", size = "caption", color = "text-muted" } or false,
+    filter and button{ filter, icon = "close", dense = true, on = "filter_clear", key = "net-filter-chip",
+      help = "Showing " .. filter .. "'s requests only. Remove the filter" } or false,
+    spacer{},
+    filter and button{ "Show all " .. nall, variant = "ghost", tone = "blue", dense = true, on = "filter_clear", key = "net-filter-all",
+      help = "List the requests of every sandbox" } or false,
+  })
   local err = (data.app.errors or {}).approvals
   if a.ok == false or err then
     table.insert(out, note(a.error or err or "Could not read what sbx is waiting for", "red"))
   end
   if #order == 0 and a.ok ~= false then
-    table.insert(out, note("Nothing waiting: sbx has no pending request."))
+    if filter then
+      table.insert(out, note("Nothing waits in " .. filter .. "." .. (nall > 0 and (" " .. plural(nall, "request") .. " of other sandboxes: Show all.") or "")))
+    else
+      table.insert(out, note("Nothing waiting: sbx has no pending request."))
+    end
   end
+  -- How many cards are drawn: PAGE, more on "Show more"; back to PAGE
+  -- when the filter changes.
+  if state.more_for ~= (filter or "") then state.more_for, state.more = filter or "", 0 end
+  local shown = math.min(#order, PAGE * (1 + (state.more or 0)))
   if total > 1 then
-    table.insert(out, note(plural(total, "request") .. ": " .. plural(nhosts, "distinct host") .. " in " .. plural(nsb, "sandbox", "sandboxes") .. "."))
+    local where = filter and ("in " .. filter) or ("in " .. plural(nsb, "sandbox", "sandboxes"))
+    table.insert(out, note(plural(total, "request") .. ": " .. plural(nhosts, "distinct host") .. " " .. where .. "."
+      .. (shown < #order and (" Showing " .. shown .. " of " .. #order .. ".") or "")))
   end
   if refused > 1 then
+    -- The bulk action takes exactly what its label says: the shown
+    -- sandbox's refused hosts under a filter, the number checked again by
+    -- the core (`expect`).
+    local label, what
+    if shown < #order then
+      label = "Dismiss all " .. refused .. (filter and (" in " .. filter) or "")
+    else
+      label = filter and ("Dismiss these " .. refused) or ("Dismiss all " .. refused)
+    end
+    what = filter and (plural(refused, "refused host request") .. " of " .. filter) or ("every refused host listed here (" .. refused .. ")")
     table.insert(out, row{ gap = 8, w = "full",
       text{ plural(refused, "is a host", "are hosts") .. " sbx already refused: nothing waits on " .. (refused == 1 and "it" or "them") .. ".", size = "sm", color = "text-muted", wrap = true, grow = 1 },
-      button{ "Dismiss all " .. refused, icon = "close", on = "dismiss_all", key = "approvals-dismiss-all",
-        help = "Answer sbx's Dismiss on every refused host listed here (not a kit's port request). They stay refused; the sandbox's next try asks again" },
+      button{ label, icon = "close", on = "dismiss_all", arg = { sandbox = filter, expect = refused }, key = "approvals-dismiss-all",
+        help = "Answer sbx's Dismiss on " .. what .. ", not a kit's port request. They stay refused; the sandbox's next try asks again" },
     })
   end
-  for _, g in ipairs(order) do
+  for i, g in ipairs(order) do
+    if i > shown then break end
     local r = g.first
     local buttons = { gap = 8, w = "full" }
     for _, o in ipairs(r.options or {}) do
@@ -122,6 +165,11 @@ local function requests(data)
       text{ (r.sandbox or "") .. ((r.detail and r.detail ~= "") and (" · " .. string.gsub(r.detail, "\n", " · ")) or ""), size = "sm", color = "text-muted", wrap = true },
       row(buttons),
     })
+  end
+  if shown < #order then
+    table.insert(out, row{ gap = 8, w = "full", spacer{},
+      button{ "Show " .. math.min(PAGE, #order - shown) .. " more", variant = "ghost", tone = "blue", on = "more", key = "net-req-more",
+        help = (#order - shown) .. " more not drawn" } })
   end
   return column(out)
 end
@@ -271,7 +319,8 @@ return {
     for _, s in ipairs(data.sandboxes or {}) do
       if s.status == "running" then table.insert(running, { id = s.name, label = s.name }) end
     end
-    local body = { gap = 16, w = "full", requests(data) }
+    filter_now = data.network_view and data.network_view.filter or nil
+    local body = { gap = 16, w = "full", requests(data, state) }
     table.insert(body, divider{})
     table.insert(body, row{ gap = 8, w = "full",
       text{ "Sandbox", size = "sm", color = "text-muted" },
@@ -307,9 +356,12 @@ return {
 
   actions = {
     answer = function(_, a) return intent("approval_answer", { id = a.id, option = a.option }) end,
-    dismiss_all = function() return intent("approvals_dismiss", {}) end,
+    dismiss_all = function(_, a) return intent("approvals_dismiss", { sandbox = a.sandbox, expect = a.expect }) end,
+    filter_clear = function() return intent("network_filter", {}) end,
+    more = function(state) state.more = (state.more or 0) + 1 end,
     dismiss_group = function(_, a) return intent("approvals_dismiss", { sandbox = a.sandbox, title = a.title }) end,
-    pick = function(_, _, name) return intent("network_show", { sandbox = name }) end,
+    -- Picking another sandbox moves the filter with it, if one is on.
+    pick = function(_, _, name) return intent("network_show", { sandbox = name, filter = filter_now ~= nil }) end,
     refresh = function() return intent("network_refresh") end,
     policy_refresh = function() return intent("policy_refresh") end,
     allow_blocked = function(_, host) return intent("network_allow_blocked", { sandbox = current, host = host }) end,

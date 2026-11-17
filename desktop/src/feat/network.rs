@@ -40,7 +40,13 @@ pub const FEATURE: Feature = Feature {
 const PORT: Arg = Arg::Int(1, 65535);
 
 const INTENTS: &[Spec] = &[
-    Spec { name: "network_show", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Opens the Network panel, on that sandbox's policy and ports (none: the requests waiting only, or the sandbox shown before)." },
+    Spec {
+        name: "network_show",
+        risk: Risk::Direct,
+        args: &[("sandbox", Arg::Str, false), ("filter", Arg::Bool, false)],
+        doc: "Opens the Network panel, on that sandbox's policy and ports, listing only that sandbox's requests (`filter` false: every sandbox's). Without a sandbox: every sandbox's requests, and the policy shown before.",
+    },
+    Spec { name: "network_filter", risk: Risk::Direct, args: &[("sandbox", Arg::Str, false)], doc: "Lists only that sandbox's requests in the Network panel (none: every sandbox's). View state: nothing is read or sent." },
     Spec { name: "network_refresh", risk: Risk::Direct, args: &[], doc: "Reads the requests, the policy and the ports again." },
     Spec {
         name: "approval_answer",
@@ -51,8 +57,8 @@ const INTENTS: &[Spec] = &[
     Spec {
         name: "approvals_dismiss",
         risk: Risk::Direct,
-        args: &[("sandbox", Arg::Str, false), ("title", Arg::Str, false)],
-        doc: "Dismisses sbx's requests for hosts it already refused (kind `network`: nothing waits on them) of the listed sandboxes, narrowed to one sandbox and one host when given, with sbx's own `dismiss` option, one after the other. Requests that hold something (a kit's host port) are never dismissed here.",
+        args: &[("sandbox", Arg::Str, false), ("title", Arg::Str, false), ("expect", Arg::Int(1, i64::MAX), false)],
+        doc: "Dismisses sbx's requests for hosts it already refused (kind `network`: nothing waits on them) of the listed sandboxes, narrowed to one sandbox and one host when given, with sbx's own `dismiss` option, one after the other. `expect`: how many the person saw; another number now is refused (the list changed). Requests that hold something (a kit's host port) are never dismissed here.",
     },
     Spec {
         name: "network_allow_blocked",
@@ -103,6 +109,16 @@ fn enc(s: &str) -> String {
 /// The sandbox the panel shows.
 fn shown(cx: &Ctx) -> Option<String> {
     cx.get("network_for").as_str().map(str::to_string)
+}
+
+/// The sandbox whose requests alone the panel lists (`network_view.filter`):
+/// view state, dropped when the panel closes (`<screen>_view`).
+pub fn filter(cx: &Ctx) -> Option<String> {
+    cx.get("network_view")["filter"].as_str().map(str::to_string)
+}
+
+fn set_filter(sb: Option<&str>) -> Action {
+    Action::Set { key: "network_view".into(), value: sb.map(|s| json!({ "filter": s })).unwrap_or(J::Null) }
 }
 
 /// Reads the panel's sandbox data again.
@@ -237,7 +253,10 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     Ok(match a.name {
         "network_show" => {
             let target = sb.or_else(|| shown(cx));
-            let mut v = vec![Action::Set { key: "network_for".into(), value: target.clone().map(J::String).unwrap_or(J::Null) }];
+            // A sandbox's entries (its bubble, its pane bar's chip, its menu)
+            // list its requests only; the top bar's lists every sandbox's.
+            let only = sb.as_deref().filter(|_| a.b("filter") != Some(false));
+            let mut v = vec![Action::Set { key: "network_for".into(), value: target.clone().map(J::String).unwrap_or(J::Null) }, set_filter(only)];
             if target != shown(cx) {
                 v.push(Action::Set { key: "network_policy".into(), value: J::Null });
                 v.push(Action::Set { key: "network_ports".into(), value: J::Null });
@@ -247,6 +266,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             v
         }
         "network_refresh" => reload(shown(cx).as_deref()),
+        "network_filter" => vec![set_filter(sb.as_deref())],
         "approvals_dismiss" => {
             let title = a.s("title");
             let mut todo: Vec<(String, String)> = waiting(cx)
@@ -259,6 +279,10 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             if todo.is_empty() {
                 return Err("nothing to dismiss: no refused host listed here offers sbx's Dismiss".into());
             }
+            // The person saw a number on the button: act on that many or not at all.
+            if let Some(n) = a.i("expect").filter(|n| *n as usize != todo.len()) {
+                return Err(format!("the list changed since you looked: {} refused host request{} now, not {n}; look again", todo.len(), if todo.len() == 1 { " is listed" } else { "s are listed" }));
+            }
             let mut q = DISMISS.lock().unwrap_or_else(|e| e.into_inner());
             if !q.0.is_empty() {
                 return Err("a dismiss is already running".into());
@@ -267,7 +291,8 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             todo.reverse();
             let (id, opt) = todo.pop().unwrap();
             *q = (todo, 0, 0);
-            vec![Action::notice(format!("Dismissing {} refused host request{}…", q.0.len() + 1, if q.0.is_empty() { "" } else { "s" })), dismiss_call(&id, &opt)]
+            let of = sb.as_deref().map(|s| format!(" of {s}")).unwrap_or_default();
+            vec![Action::notice(format!("Dismissing {} refused host request{}{of}…", q.0.len() + 1, if q.0.is_empty() { "" } else { "s" })), dismiss_call(&id, &opt)]
         }
         "approval_answer" => {
             let (id, option) = (a.req("id"), a.req("option"));
@@ -522,7 +547,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
                 label: "sbx asks".into(),
                 icon: Some("flag".into()),
                 tone: tone.into(),
-                help: "Answer in the Network panel".into(),
+                help: format!("Answer in the Network panel: {name}'s requests"),
                 count: Some(n),
                 intent: Some(("network_show".into(), json!({ "sandbox": name }))),
             });
@@ -851,5 +876,166 @@ mod tests {
         assert_eq!(c, 200);
         assert_eq!(d["approvals"]["approvals"].as_array().unwrap().len(), 0);
         assert!(d["policy"]["web-app"]["rules"]["rows"].as_array().unwrap().iter().any(|r| r[5] == "api.github.com" && r[4] == "allow"));
+    }
+
+    // ---- the filter (phase 4, user, macOS): "clicking the blue bubble shows
+    // the 113 waiting instead of the 2 of the sandbox" ----
+
+    fn filtered() -> J {
+        let f = crate::fixture::Fixture::load(&crate::fixture::dir().join("network/filtered.json")).unwrap();
+        f.raw.clone()
+    }
+
+    /// The view the panel's actions set: `network_view`, or none.
+    fn view_set(v: &[Action]) -> Option<J> {
+        v.iter().find_map(|a| match a {
+            Action::Set { key, value } if key == "network_view" => Some(value.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_sandboxs_entries_filter_and_the_top_bars_does_not() {
+        let d = filtered();
+        let cx = Ctx { data: &d };
+        let x = extras(&cx);
+        // The bubble and the row menu's "Network requests (2)" are the row's
+        // `approvals` extra; the pane bar's chip is the pane's; the row's
+        // Network item is `network`.
+        let entry = |p: Place, id: &str| x.iter().find(|e| e.place == p && e.id == id).and_then(|e| e.intent.clone()).unwrap();
+        for (n, args) in [
+            entry(Place::Sandbox("test-sbx".into()), "approvals"),
+            entry(Place::Pane("test-sbx".into()), "approvals"),
+            entry(Place::Sandbox("test-sbx".into()), "network"),
+        ] {
+            let v = act(&cx, &Asked { name: Box::leak(n.into_boxed_str()), args: args.as_object().unwrap().clone() }).unwrap();
+            assert_eq!(view_set(&v), Some(json!({ "filter": "test-sbx" })), "{args}");
+            assert!(v.contains(&Action::OpenPanel("network".into())));
+        }
+        let (n, args) = entry(Place::Topbar, "approvals");
+        let v = act(&cx, &Asked { name: Box::leak(n.into_boxed_str()), args: args.as_object().unwrap().clone() }).unwrap();
+        assert_eq!(view_set(&v), Some(J::Null), "the global entry lists every sandbox's");
+        // The panel's own sandbox picker keeps the filter on or off.
+        assert_eq!(view_set(&act(&cx, &ask("network_show", json!({ "sandbox": "api", "filter": false }))).unwrap()), Some(J::Null));
+        // Show all, the chip's x: view state only, nothing read or sent.
+        let v = act(&cx, &ask("network_filter", json!({}))).unwrap();
+        assert_eq!(v, vec![Action::Set { key: "network_view".into(), value: J::Null }]);
+        let v = act(&cx, &ask("network_filter", json!({ "sandbox": "api" }))).unwrap();
+        assert_eq!(v, vec![Action::Set { key: "network_view".into(), value: json!({ "filter": "api" }) }]);
+    }
+
+    #[test]
+    fn under_a_filter_the_bulk_dismiss_sends_exactly_that_sandboxs_ids() {
+        let d = filtered();
+        let cx = Ctx { data: &d };
+        let a = act(&cx, &ask("approvals_dismiss", json!({ "sandbox": "test-sbx", "expect": 2 }))).unwrap();
+        assert!(matches!(&a[0], Action::Notice { text, .. } if text == "Dismissing 2 refused host requests of test-sbx…"), "{a:?}");
+        let mut call = a.iter().find_map(|a| if let Action::Call(c) = a { Some(c.clone()) } else { None }).unwrap();
+        let mut sent = vec![call.body["id"].as_str().unwrap().to_string()];
+        loop {
+            let next = on_answer(&cx, &call, Ok((200, json!({ "ok": true }))));
+            let [Action::Call(c)] = next.as_slice() else {
+                assert!(matches!(&next[0], Action::Notice { text, error: false, .. } if text == "Dismissed 2 refused host requests"), "{next:?}");
+                break;
+            };
+            sent.push(c.body["id"].as_str().unwrap().to_string());
+            call = c.clone();
+        }
+        assert_eq!(sent, ["network:f000", "network:f001"]);
+        // The number on the button no longer matches: nothing is sent.
+        let e = act(&cx, &ask("approvals_dismiss", json!({ "sandbox": "test-sbx", "expect": 3 }))).unwrap_err();
+        assert!(e.contains("changed") && e.contains("2 refused host requests are listed now, not 3"), "{e}");
+        // Unfiltered: every listed one.
+        let a = act(&cx, &ask("approvals_dismiss", json!({ "expect": 113 }))).unwrap();
+        assert!(matches!(&a[0], Action::Notice { text, .. } if text == "Dismissing 113 refused host requests…"), "{a:?}");
+        *DISMISS.lock().unwrap() = (Vec::new(), 0, 0);
+    }
+
+    /// Each element's texts, keys and helps, and the button args by key.
+    fn walk(n: &crate::luau::Node, out: &mut Vec<String>, args: &mut Vec<(String, J)>) {
+        out.push(n.text.clone());
+        out.extend(n.key.clone());
+        out.extend(n.help.clone());
+        if let (Some(k), false) = (&n.key, n.arg.is_null()) {
+            args.push((k.clone(), n.arg.clone()));
+        }
+        for c in &n.children {
+            walk(c, out, args);
+        }
+    }
+
+    fn render(mut data: J, filter: Option<&str>, more: usize) -> (Vec<String>, Vec<(String, J)>, crate::luau::LuauHost) {
+        data["network_view"] = filter.map(|f| json!({ "filter": f })).unwrap_or(J::Null);
+        if data["app"].is_null() {
+            data["app"] = json!({});
+        }
+        let mut h = crate::luau::LuauHost::new(crate::luau::Limits::default()).unwrap();
+        h.load("network", include_str!("../../screens/network.luau")).unwrap();
+        h.render(&data).unwrap();
+        for _ in 0..more {
+            h.act("more", &J::Null, &J::Null).unwrap();
+        }
+        let tree = h.render(&data).unwrap();
+        let (mut out, mut args) = (vec![], vec![]);
+        walk(&tree, &mut out, &mut args);
+        (out, args, h)
+    }
+
+    fn cards(out: &[String]) -> usize {
+        out.iter().filter(|s| s.starts_with("req-")).count()
+    }
+
+    #[test]
+    fn the_panel_filtered_counts_and_labels_only_what_it_shows() {
+        let d = filtered();
+        // Filtered from test-sbx's bubble.
+        let (out, args, h) = render(d.clone(), Some("test-sbx"), 0);
+        let all = out.join("\n");
+        assert_eq!(cards(&out), 2);
+        assert!(all.contains("net-filter-chip") && all.contains("Show all 113"), "{all}");
+        assert!(all.contains("2 requests: 2 distinct hosts in test-sbx."), "{all}");
+        assert!(all.contains("Dismiss these 2") && !all.contains("Dismiss all"), "{all}");
+        let bulk = args.iter().find(|(k, _)| k == "approvals-dismiss-all").unwrap();
+        assert_eq!(bulk.1, json!({ "sandbox": "test-sbx", "expect": 2 }));
+        // The press asks exactly that.
+        let asks = h.act("dismiss_all", &bulk.1, &J::Null).unwrap();
+        assert_eq!(asks["name"], "approvals_dismiss", "{asks}");
+        assert_eq!(asks["args"], json!({ "sandbox": "test-sbx", "expect": 2 }));
+        assert_eq!(h.act("filter_clear", &J::Null, &J::Null).unwrap(), json!({ "kind": "intent", "name": "network_filter", "args": {} }));
+        // Unfiltered: 113 cards' worth, 25 drawn, "Show more"; every sandbox's.
+        let (out, args, _) = render(d.clone(), None, 0);
+        let all = out.join("\n");
+        assert_eq!(cards(&out), 25);
+        assert!(all.contains("113 requests: 33 distinct hosts in 9 sandboxes. Showing 25 of 113."), "{all}");
+        assert!(all.contains("Show 25 more") && all.contains("Dismiss all 113") && !all.contains("net-filter-chip"), "{all}");
+        assert_eq!(args.iter().find(|(k, _)| k == "approvals-dismiss-all").unwrap().1, json!({ "expect": 113 }));
+        let (out, _, _) = render(d.clone(), None, 4);
+        assert_eq!(cards(&out), 113);
+        assert!(!out.iter().any(|s| s == "net-req-more"));
+        // A sandbox with nothing left: said so, and the way back.
+        let (out, _, _) = render(d.clone(), Some("notes"), 0);
+        let all = out.join("\n");
+        assert_eq!(cards(&out), 0);
+        assert!(all.contains("Nothing waits in notes.") && all.contains("Show all 113") && !all.contains("approvals-dismiss-all"), "{all}");
+    }
+
+    /// The filter is the panel's view state: closing the panel drops it,
+    /// so the next opening (the rail, a tab) lists every sandbox's.
+    #[test]
+    fn closing_the_panel_drops_the_filter() {
+        use crate::screen::Host;
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/network/filtered.json");
+        let mut a = crate::shell::App::new(crate::shell::Args { fixture: Some(fixture.into()), ..Default::default() });
+        let run = |a: &mut crate::shell::App, v: J| {
+            let list = crate::intent::parse(&v).unwrap();
+            a.intents("sandboxes", list);
+        };
+        run(&mut a, json!({ "kind": "intent", "name": "network_show", "args": { "sandbox": "test-sbx" } }));
+        assert_eq!(a.screen_data()["network_view"], json!({ "filter": "test-sbx" }));
+        assert_eq!(a.feats.panel.as_deref(), Some("network"));
+        run(&mut a, json!({ "kind": "intent", "name": "close_panel", "args": { "screen": "network" } }));
+        assert!(a.screen_data()["network_view"].is_null(), "dropped on close");
+        run(&mut a, json!({ "kind": "intent", "name": "open_panel", "args": { "screen": "network" } }));
+        assert!(a.screen_data()["network_view"].is_null(), "reopened unfiltered");
     }
 }

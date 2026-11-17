@@ -1,0 +1,2296 @@
+{
+ "about": "The user's case (phase 4, macOS): 113 refused-host requests of 33 hosts in 9 sandboxes, test-sbx's 2 among them; the Network panel filtered from test-sbx's bubble. notes has none.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "test-sbx",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 2,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/test-sbx"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/api"
+   },
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 13,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/web-app"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/docs"
+   },
+   {
+    "name": "data-pipeline",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/data-pipeline"
+   },
+   {
+    "name": "ml-train",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/ml-train"
+   },
+   {
+    "name": "blog",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/blog"
+   },
+   {
+    "name": "ci-runner",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/ci-runner"
+   },
+   {
+    "name": "scratch",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 14,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/scratch"
+   },
+   {
+    "name": "notes",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/notes"
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "test-sbx",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "api",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "data-pipeline-with-a-long-name",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   }
+  ],
+  "threads": {
+   "test-sbx": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "api": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "web-app": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "data-pipeline-with-a-long-name": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   }
+  },
+  "leads": [],
+  "models": {
+   "ok": true,
+   "default": "claude-opus-5-5",
+   "models": [
+    {
+     "id": "claude-opus-5-5",
+     "label": "Opus 5.5"
+    },
+    {
+     "id": "claude-sonnet-5-5",
+     "label": "Sonnet 5.5"
+    },
+    {
+     "id": "claude-haiku-5-5",
+     "label": "Haiku 5.5"
+    }
+   ]
+  },
+  "board": {},
+  "thread_repos": {
+   "ok": true,
+   "workspace": "/Users/ana/dev/web-app",
+   "repos": [
+    {
+     "path": "api",
+     "branch": "main",
+     "dirty": 0,
+     "ahead": 0,
+     "behind": 0,
+     "detached": false
+    },
+    {
+     "path": "web",
+     "branch": "main",
+     "dirty": 2,
+     "ahead": 1,
+     "behind": 0,
+     "detached": false
+    },
+    {
+     "path": "docs",
+     "branch": "main",
+     "dirty": 0,
+     "ahead": 0,
+     "behind": 0,
+     "detached": false
+    }
+   ]
+  },
+  "approvals": {
+   "ok": true,
+   "approvals": [
+    {
+     "id": "network:f000",
+     "kind": "network",
+     "sandbox": "test-sbx",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:00+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f001",
+     "kind": "network",
+     "sandbox": "test-sbx",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:01+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f002",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host0.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:02+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f003",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host1.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:03+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f004",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host2.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:04+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f005",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host3.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:05+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f006",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host4.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:06+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f007",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host5.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:07+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f008",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host6.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:08+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f009",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host7.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:09+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f010",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host8.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:10+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f011",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host9.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:11+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f012",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host10.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:12+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f013",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host11.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:13+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f014",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host12.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:14+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f015",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host13.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:15+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f016",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host14.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:16+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f017",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host15.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:17+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f018",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host16.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:18+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f019",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host17.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:19+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f020",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host18.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:20+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f021",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host19.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:21+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f022",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host20.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:22+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f023",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host21.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:23+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f024",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host22.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:24+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f025",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host23.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:25+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f026",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host24.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:26+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f027",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host25.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:27+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f028",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host26.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:28+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f029",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host27.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:29+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f030",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host28.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:30+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f031",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host29.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:31+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f032",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host30.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:32+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f033",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:33+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f034",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:34+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f035",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host0.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:35+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f036",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host1.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:36+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f037",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host2.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:37+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f038",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host3.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:38+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f039",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host4.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:39+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f040",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host5.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:40+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f041",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host6.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:41+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f042",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host7.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:42+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f043",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host8.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:43+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f044",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host9.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:44+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f045",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host10.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:45+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f046",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host11.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:46+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f047",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host12.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:47+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f048",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host13.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:48+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f049",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host14.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:49+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f050",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host15.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:50+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f051",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host16.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:51+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f052",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host17.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:52+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f053",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host18.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:53+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f054",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host19.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:54+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f055",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host20.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:55+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f056",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host21.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:56+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f057",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host22.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:57+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f058",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host23.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:58+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f059",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host24.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:00:59+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f060",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host25.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:00+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f061",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host26.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:01+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f062",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host27.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:02+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f063",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host28.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:03+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f064",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host29.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:04+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f065",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host30.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:05+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f066",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:06+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f067",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:07+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f068",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host0.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:08+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f069",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host1.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:09+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f070",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host2.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:10+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f071",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host3.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:11+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f072",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host4.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:12+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f073",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host5.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:13+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f074",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host6.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:14+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f075",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host7.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:15+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f076",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host8.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:16+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f077",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host9.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:17+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f078",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host10.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:18+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f079",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host11.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:19+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f080",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host12.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:20+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f081",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host13.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:21+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f082",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host14.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:22+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f083",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host15.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:23+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f084",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host16.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:24+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f085",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host17.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:25+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f086",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host18.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:26+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f087",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host19.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:27+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f088",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host20.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:28+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f089",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host21.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:29+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f090",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host22.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:30+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f091",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host23.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:31+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f092",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host24.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:32+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f093",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host25.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:33+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f094",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host26.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:34+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f095",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host27.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:35+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f096",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host28.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:36+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f097",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host29.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:37+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f098",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host30.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:38+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f099",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:39+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f100",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:40+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f101",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host0.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:41+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f102",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host1.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:42+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f103",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host2.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:43+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f104",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host3.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:44+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f105",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "host4.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:45+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f106",
+     "kind": "network",
+     "sandbox": "docs",
+     "title": "host5.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:46+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f107",
+     "kind": "network",
+     "sandbox": "data-pipeline",
+     "title": "host6.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:47+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f108",
+     "kind": "network",
+     "sandbox": "ml-train",
+     "title": "host7.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:48+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f109",
+     "kind": "network",
+     "sandbox": "blog",
+     "title": "host8.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:49+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f110",
+     "kind": "network",
+     "sandbox": "ci-runner",
+     "title": "host9.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:50+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f111",
+     "kind": "network",
+     "sandbox": "scratch",
+     "title": "host10.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:51+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:f112",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "host11.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-17T10:01:52+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    }
+   ]
+  },
+  "usage": {
+   "five_hour_pct": 42,
+   "seven_day_pct": 81,
+   "updated_ms": 1763290000000
+  }
+ },
+ "app": {
+  "selected": "test-sbx",
+  "panes": 1,
+  "open": [
+   "test-sbx"
+  ]
+ }
+}
