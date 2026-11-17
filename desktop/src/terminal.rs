@@ -58,7 +58,8 @@
 //!
 //! Out to the shell: [`TerminalState::take_events`] gives [`TerminalEvent`]s
 //! (the daemon's `attention` frame, bell, title, OSC 52 copy requests,
-//! reconnects). Fields kept from the spike: `size`, `status`, `rows`,
+//! reconnects); [`TerminalState::wants_you`] says whether the pane's own
+//! session waits for the person ([`attention`]). Fields kept from the spike: `size`, `status`, `rows`,
 //! `cursor`, `echo_ms`, `rebuilt_rows`, `build_time`; and `screen_text`.
 //!
 //! # Drawing
@@ -70,12 +71,14 @@
 //! selection or hovered link changed, are rebuilt; an unchanged row keeps its
 //! `Rc<GridRow>`, so Rune neither shapes nor paints it again.
 
+pub mod attention;
 pub mod keys;
 pub mod mouse;
 pub mod render;
 pub mod theme;
 mod view;
 
+pub use attention::{session_for, SessionSeen};
 pub use keys::{key_bytes, key_bytes_with, paste_bytes, KeyOpts, Shortcut};
 pub use render::{rgb, CursorDraw};
 pub use theme::Theme;
@@ -281,6 +284,7 @@ pub struct TerminalState {
     /// a terminal that replaces another in the same pane (same keys, same
     /// rect) still hears its first layout.
     generation: u64,
+    attention: attention::Attention,
 }
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -383,6 +387,7 @@ impl TerminalState {
             preedit: None,
             id: String::new(),
             generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            attention: attention::Attention::default(),
         };
         t.rebuild();
         t
@@ -536,6 +541,7 @@ impl TerminalState {
             }
             TermEvent::Notice(t) => self.parser.advance(&mut self.term, t.as_bytes()),
             TermEvent::Attention => {
+                self.attention.bell();
                 self.out.push(TerminalEvent::Attention);
                 return false;
             }
@@ -708,6 +714,13 @@ impl TerminalState {
         }
     }
 
+    /// Does this terminal's session want the person now? `session` is its
+    /// own session's latest report ([`session_for`]), `None` for a plain
+    /// shell: see [`attention`].
+    pub fn wants_you(&mut self, session: Option<&SessionSeen>) -> bool {
+        self.attention.wants_you(session)
+    }
+
     /// Another client sets the PTY's size: the grid is the PTY's, not this
     /// pane's.
     pub fn sized_elsewhere(&self) -> bool {
@@ -733,6 +746,7 @@ impl TerminalState {
     /// selection goes, as in xterm.js.
     pub fn send(&mut self, bytes: Vec<u8>) {
         self.key_sent.get_or_insert_with(Instant::now);
+        self.attention.typed();
         self.blink_epoch = self.clock;
         if self.term.grid().display_offset() != 0 {
             self.term.scroll_display(Scroll::Bottom);

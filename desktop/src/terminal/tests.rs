@@ -854,3 +854,64 @@ fn a_terminal_is_fitted_at_open_even_when_it_replaces_another() {
     let f = first.unwrap();
     assert_eq!(resizes(&rt.state.1[1]), vec![(f.0 as u16, f.1 as u16)]);
 }
+
+/// Two panes on one sandbox (its main session and a thread): only the pane
+/// whose session waits shows "wants you", and it clears when that session
+/// works again or the person types there.
+#[test]
+fn wants_you_follows_the_pane_s_own_session() {
+    use serde_json::json;
+    let (mut main, _ev1, _rx1) = term();
+    let (mut thread, ev2, _rx2) = term();
+    let sessions = |main_state: &str, thread_state: &str, ts: u64| {
+        json!([
+            { "sandbox": "web-app", "mode": "claude", "state": main_state, "ts": ts, "session_id": "a" },
+            { "sandbox": "web-app", "mode": "claude", "state": thread_state, "ts": ts, "session_id": "b", "thread": "fix-login" },
+            { "sandbox": "docs", "mode": "claude", "state": "attention", "ts": ts, "session_id": "c" },
+        ])
+    };
+    let check = |main: &mut TerminalState, thread: &mut TerminalState, data: &serde_json::Value| {
+        let m = session_for(Some(data), Some("web-app"), None, true);
+        let t = session_for(Some(data), Some("web-app"), Some("fix-login"), true);
+        (main.wants_you(m.as_ref()), thread.wants_you(t.as_ref()))
+    };
+    let d = sessions("working", "working", 1);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, false), "both working: no badge (docs waits, not these)");
+    let d = sessions("working", "attention", 2);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, true), "only the thread's pane");
+    let d = sessions("working", "working", 3);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, false), "cleared when it works again");
+    // The thread's PTY rings: lit until the session reports working.
+    ev2.send(TermEvent::Attention).unwrap();
+    thread.poll(None);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, true), "a bell, no report since");
+    let d = sessions("working", "working", 4);
+    assert_eq!(check(&mut main, &mut thread, &d), (false, false), "worked since the bell");
+    // Waiting again; the person types in the pane: cleared, until a new report asks.
+    let d = sessions("working", "attention", 5);
+    assert!(check(&mut main, &mut thread, &d).1);
+    thread.on_key(&key(Key::Text("y".into()), |_| {}));
+    assert!(!check(&mut main, &mut thread, &d).1, "typed in the pane");
+    let d = sessions("working", "attention", 6);
+    assert!(check(&mut main, &mut thread, &d).1, "asked again after the key");
+    // An exited session is no session: the bell rule.
+    let d = sessions("working", "exited", 7);
+    assert!(session_for(Some(&d), Some("web-app"), Some("fix-login"), true).is_none());
+}
+
+#[test]
+fn a_plain_shell_keeps_the_bell_rule() {
+    let (mut t, ev, _rx) = term();
+    let sessions = serde_json::json!([{ "sandbox": "web-app", "mode": "claude", "state": "attention", "ts": 1 }]);
+    // A bash pane is never matched to the agent's session.
+    let s = session_for(Some(&sessions), Some("web-app"), None, false);
+    assert!(s.is_none());
+    assert!(!t.wants_you(None));
+    ev.send(TermEvent::Attention).unwrap();
+    t.poll(None);
+    assert!(t.wants_you(None));
+    t.on_key(&key(Key::Text("x".into()), |_| {}));
+    assert!(!t.wants_you(None));
+    // No sessions data at all (the feature not loaded): the bell rule too.
+    assert!(session_for(None, Some("web-app"), None, true).is_none());
+}
