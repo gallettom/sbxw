@@ -599,11 +599,13 @@ impl TerminalState {
                 got = true;
             }
             // Then until the output has been quiet for 100 ms (capped).
-            while got {
-                let left = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(100));
-                match self.events.recv_timeout(left) {
-                    Ok(ev) => changed |= self.on_event(ev),
-                    Err(_) => break,
+            if got {
+                loop {
+                    let left = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(100));
+                    match self.events.recv_timeout(left) {
+                        Ok(ev) => changed |= self.on_event(ev),
+                        Err(_) => break,
+                    }
                 }
             }
         }
