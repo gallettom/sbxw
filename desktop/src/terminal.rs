@@ -80,6 +80,7 @@
 pub mod attention;
 pub mod keys;
 pub mod mouse;
+pub mod pills;
 pub mod render;
 pub mod theme;
 mod view;
@@ -344,6 +345,16 @@ pub struct TerminalState {
     /// rect) still hears its first layout.
     generation: u64,
     attention: attention::Attention,
+    /// Keyword pills ([`pills`]): the vocabulary when on, the colours, the
+    /// counters; each screen row's pieces; the cursor's line they were
+    /// matched with; a buffer for one logical line's rows.
+    pub pills: pills::Pills,
+    row_pills: Vec<Vec<pills::Piece>>,
+    pill_cursor: Option<i32>,
+    line_pills: Vec<Vec<pills::Piece>>,
+    /// Each row's text, spans and fills as last built (tests).
+    #[cfg(test)]
+    test_parts: Vec<(String, Vec<rune::Span>, Vec<(u16, u16, u32)>)>,
 }
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -449,7 +460,14 @@ impl TerminalState {
             id: String::new(),
             generation: GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             attention: attention::Attention::default(),
+            pills: pills::Pills::default(),
+            row_pills: Vec::new(),
+            pill_cursor: None,
+            line_pills: Vec::new(),
+            #[cfg(test)]
+            test_parts: Vec::new(),
         };
+        t.pills.set_palette(t.theme.background, t.theme.foreground);
         t.rebuild();
         t
     }
@@ -474,9 +492,35 @@ impl TerminalState {
         &self.theme
     }
 
+    /// Keyword pills on (with this vocabulary) or off (`None`); every row is
+    /// drawn again when it changes. The caller combines the daemon's switch
+    /// and the app's own preference (`emphasis::enabled`).
+    pub fn set_pills(&mut self, vocab: Option<Rc<crate::emphasis::Vocab>>) {
+        let same = match (&self.pills.vocab, &vocab) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b) || a == b,
+            _ => false,
+        };
+        if !same {
+            self.pills.vocab = vocab;
+            self.force_all = true;
+            self.dirty = true;
+        }
+    }
+
+    pub fn pills_on(&self) -> bool {
+        self.pills.vocab.is_some()
+    }
+
+    /// The pill pieces on screen row `r` (what is drawn, before the selection).
+    pub fn row_pills(&self, r: usize) -> &[pills::Piece] {
+        self.row_pills.get(r).map_or(&[], Vec::as_slice)
+    }
+
     /// New colours; every row is drawn again.
     pub fn set_theme(&mut self, theme: Theme) {
         if theme != self.theme {
+            self.pills.set_palette(theme.background, theme.foreground);
             self.theme = theme;
             self.force_all = true;
             self.dirty = true;
@@ -1429,6 +1473,44 @@ impl TerminalState {
         let style = m.style();
         self.rows.resize_with(nrows, || Rc::new(GridRow::new("", vec![], style)));
         self.row_extra.resize(nrows, u64::MAX);
+        // Pills: the logical lines with a damaged row are matched again, and
+        // those the cursor came to or left (a line the cursor is on shows no
+        // pill: a marker being typed or streamed is drawn once the cursor has
+        // left its line, so it never flickers in and out).
+        let mut repill = vec![false; nrows];
+        let cursor_line = cursor_visible.then_some(cur.line.0);
+        if self.pills_on() || full || self.pill_cursor != cursor_line {
+            self.row_pills.resize_with(nrows, Vec::new);
+            let moved = self.pill_cursor != cursor_line;
+            let near = |r: usize| [self.pill_cursor, cursor_line].iter().flatten().any(|l| l + offset == r as i32);
+            let grid = self.term.grid();
+            let mut r = 0;
+            while r < nrows.min(grid.screen_lines()) {
+                if !(full || damaged[r] || (moved && near(r))) {
+                    r += 1;
+                    continue;
+                }
+                let (a, b) = pills::logical_line(grid, Line(r as i32 - offset));
+                self.pills.line(grid, a, b, &mut self.line_pills);
+                let gated = cursor_line.is_some_and(|l| (a.0..=b.0).contains(&l));
+                for (k, pieces) in self.line_pills.iter_mut().enumerate() {
+                    let rr = a.0 + k as i32 + offset;
+                    if rr < 0 || rr as usize >= nrows {
+                        continue;
+                    }
+                    if gated {
+                        pieces.clear();
+                    }
+                    let slot = &mut self.row_pills[rr as usize];
+                    if slot != pieces {
+                        std::mem::swap(slot, pieces);
+                        repill[rr as usize] = true;
+                    }
+                }
+                r = (r + 1).max((b.0 + offset + 1).max(0) as usize);
+            }
+            self.pill_cursor = cursor_line;
+        }
         let sel = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
         let colors = *self.term.colors();
         let grid = self.term.grid();
@@ -1450,8 +1532,16 @@ impl TerminalState {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (cursor, selection, link).hash(&mut h);
             let extra = h.finish();
-            if !full && !damaged[r] && self.row_extra[r] == extra {
+            if !full && !damaged[r] && !repill[r] && self.row_extra[r] == extra {
                 continue;
+            }
+            // A pill yields to the selection: one the selection touches is
+            // drawn as the plain text under the selection's highlight.
+            let mut pieces: &[pills::Piece] = self.row_pills.get(r).map_or(&[], Vec::as_slice);
+            let kept: Vec<pills::Piece>;
+            if let (Some((sa, sb)), false) = (selection, pieces.is_empty()) {
+                kept = pieces.iter().filter(|p| (p.end as usize) <= sa || (p.start as usize) >= sb).copied().collect();
+                pieces = &kept;
             }
             self.row_extra[r] = extra;
             self.rebuilt_rows += 1;
@@ -1466,8 +1556,16 @@ impl TerminalState {
                 cursor,
                 selection,
                 link,
+                pills: pieces,
+                pill_colors: &self.pills.palette,
             };
-            self.rows[r] = Rc::new(render::build_row(&grid[line], &ctx));
+            let parts = render::row_parts(&grid[line], &ctx);
+            #[cfg(test)]
+            {
+                self.test_parts.resize_with(nrows, Default::default);
+                self.test_parts[r] = (parts.text.clone(), parts.spans.clone(), parts.fills.iter().map(|f| (f.0, f.1, f.3)).collect());
+            }
+            self.rows[r] = Rc::new(render::into_row(parts, &ctx));
         }
         self.rebuilds += 1;
         self.build_time += start.elapsed();

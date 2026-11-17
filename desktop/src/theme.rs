@@ -76,6 +76,12 @@ pub const COLORS: &[(&str, u32)] = &[
     ("vendor-anthropic", 0xe2875a),
     ("vendor-openai", 0xe6edf3),
     ("vendor-google", 0x8ab4f8),
+    // Keyword pills (emphasis.rs): the kind of work, and the filled pill of
+    // an irreversible or costly consequence (white text on it, 4.5:1). The
+    // other tones are the colour-by-meaning tokens above; each pill's tint
+    // and text are derived from the ground it sits on (`emphasis::palette`).
+    ("cyan", 0x39c5cf),
+    ("pill-danger", 0xb62324),
 ];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:

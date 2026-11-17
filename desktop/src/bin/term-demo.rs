@@ -3,7 +3,7 @@
 //! the terminal's events shown in a banner.
 //!
 //! term-demo --daemon 127.0.0.1:7399 --token test-token [--sandbox web-app] [--mode bash]
-//!           [--dump-text out.txt] [--simulate-drop] [--no-blink] [--theme '#fdf6e3' --text auto]
+//!           [--dump-text out.txt] [--simulate-drop] [--no-blink] [--theme '#fdf6e3' --text auto] [--pills]
 //! term-demo --bench-echo 300      key-to-echo latency of client.rs's socket thread
 //!
 //! Rune's flags work too (`--snap`, `--script`, `--at`, `--size`, `--scale`).
@@ -34,6 +34,8 @@ struct Args {
     /// A steady cursor, so a shot does not catch it blinked off.
     no_blink: bool,
     theme: Option<(String, String)>,
+    /// Keyword pills on, with the built-in vocabulary (`emphasis.rs`).
+    pills: bool,
     bench_echo: Option<usize>,
 }
 
@@ -48,6 +50,10 @@ fn args() -> Args {
         }
         if k == "--no-blink" {
             a.no_blink = true;
+            continue;
+        }
+        if k == "--pills" {
+            a.pills = true;
             continue;
         }
         let v = it.next().cloned().unwrap_or_default();
@@ -209,6 +215,9 @@ fn setup(s: &mut Demo, waker: Waker) {
         TerminalState::with_reconnect(conn, reopen)
     };
     t.cursor_blink = !s.args.no_blink;
+    if s.args.pills {
+        t.set_pills(Some(std::rc::Rc::new(sbxw_desktop::emphasis::Vocab::default())));
+    }
     if let Some((bg, text)) = &s.args.theme {
         t.set_theme(Theme::from_setting_strings(bg, text));
     }

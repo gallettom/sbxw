@@ -20,6 +20,7 @@ pub mod approval;
 pub mod audio;
 pub mod builtin;
 pub mod client;
+pub mod emphasis;
 pub mod feat;
 pub mod files;
 pub mod fixture;
