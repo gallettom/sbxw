@@ -643,3 +643,50 @@ fn gather_shows_when_it_would_move_something() {
     assert_eq!(r.names(), [vec!["a", "b", "c"]]);
     assert!(r.rt.presented("pager-gather-now").is_none());
 }
+
+/// The pane bar's mode switch (the web UI's ✦ Claude | ❯ Bash): this pane
+/// goes to the other session of the same sandbox (a thread's pane: the
+/// thread's agent and a shell in its worktree), and back.
+#[test]
+fn the_mode_switch_goes_between_the_agent_and_a_shell() {
+    let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+    assert!(r.rt.presented("pane-1-mode-agent").is_some() && r.rt.presented("pane-1-mode-bash").is_some(), "the switch is in the bar");
+    super::tests::tap(&mut r.rt, "pane-1-mode-bash");
+    r.settle();
+    let p = &r.rt.state.panes[0];
+    assert_eq!((p.sandbox.as_deref(), p.mode, p.thread.as_deref()), (Some("a"), Mode::Bash, None));
+    assert_eq!(r.rt.state.pages.list[0].tile.order().len(), 2, "same pane, same place");
+    super::tests::tap(&mut r.rt, "pane-1-mode-agent");
+    r.settle();
+    assert_eq!(r.rt.state.panes[0].mode, Mode::Agent);
+    // A thread's pane: its shell is in the thread's worktree (the same thread).
+    r.rt.update(|s, _| {
+        s.panes[1].thread = Some("fix".into());
+        s.switch_mode(1);
+    });
+    r.settle();
+    let p = &r.rt.state.panes[1];
+    assert_eq!((p.mode, p.thread.as_deref()), (Mode::Bash, Some("fix")));
+    // What the daemon is asked: the same sessions as the web UI's switch, so
+    // switching back attaches to the session left running.
+    let q = |m: Mode, t: Option<&str>| crate::client::TerminalRequest::new("b", m, t.map(str::to_string), ThreadStart::default()).query();
+    assert_eq!(q(Mode::Bash, Some("fix")), "sandbox=b&mode=bash&thread=fix");
+    assert_eq!(q(Mode::Agent, Some("fix")), "sandbox=b&mode=thread&thread=fix");
+    assert_eq!(q(Mode::Agent, None), "sandbox=b");
+    // A session already in another pane is focused there, not opened twice.
+    r.rt.update(|s, _| s.switch_mode(0));
+    r.settle();
+    r.rt.update(|s, _| {
+        s.panes[1].thread = None;
+        s.panes[1].sandbox = Some("a".into());
+        s.panes[1].mode = Mode::Agent;
+        s.switch_mode(1);
+    });
+    assert_eq!((r.rt.state.panes[1].mode, r.rt.state.focused), (Mode::Agent, 0), "a's shell is pane 1's: focused, not duplicated");
+    // Narrow: the switch is the menu's first row.
+    let f = bar::pane_fit(200.0, "a", Some("Claude"), vec![], true);
+    assert!(!f.switch);
+    r.rt.update(|s, _| { s.bar_w.insert(s.panes[0].uid, 150.0); });
+    let f = r.rt.state.pane_fit(0).unwrap();
+    assert_eq!((f.switch, f.hidden.first().map(|i| i.label.clone())), (false, Some("Switch to Claude".into())));
+}

@@ -75,6 +75,15 @@ local function in_pane(app, name)
   return nil
 end
 
+-- Whether pane `index` shows a shell rather than the agent (a prompt glyph
+-- beside its "P<n>", so two panes of one sandbox are told apart).
+local function pane_is_bash(app, index)
+  for _, p in ipairs(app.panes or {}) do
+    if p.index == index then return p.mode == "bash" end
+  end
+  return false
+end
+
 -- Features' extras on a row (data.app.extras.sandboxes[name]): the intent of
 -- each by "<sandbox>\n<id>", for the actions (filled by render).
 local extra_intents = {}
@@ -349,6 +358,7 @@ local function item(sb, app, data, solo)
     if #rest == 0 and w + tail <= room then
       room = room - w
       if e.pane then
+        if pane_is_bash(app, e.pane) then table.insert(line2, icon{ "prompt", size = 12, color = "text-muted", help = "Pane " .. e.pane .. " shows a shell" }) end
         table.insert(line2, badge{ label, tone = "blue", help = "Shown in pane " .. e.pane, key = "pane-of-" .. name })
       else
         local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
@@ -551,6 +561,7 @@ local function session_line(sb, e, data, base_model)
       word ~= "" and text{ word, size = "caption", weight = wants and "semibold" or "normal", color = done and "text-muted" or (word_color[tone] or "text-muted") } or false,
       mw and text{ mw, size = "caption", color = vendor_of(m, sb.agent) or "text-muted", truncate = true, key = "model-" .. sb.name .. "-" .. e.id } or false,
       spacer{},
+      (e.count and pane_is_bash(data.app, e.count)) and icon{ "prompt", size = 12, color = "text-muted", help = "Pane " .. e.count .. " shows a shell" } or false,
       e.count and badge{ "P" .. e.count, tone = "blue", help = "Shown in pane " .. e.count .. " (" .. (data.app.platform == "macos" and "⌘" or "Ctrl+") .. e.count .. " focuses it)" } or false,
       plus and button{ icon = "plus", compact = true, tone = "green", on = "session_spare", arg = sb.name .. "\n" .. e.id,
         key = "session-add-" .. sb.name .. "-" .. e.id, tab_stop = false, help = "Open " .. name .. " in a new pane" } or false,

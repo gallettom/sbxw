@@ -114,13 +114,15 @@ impl App {
         };
         let relay = self.top_extra("relay");
         let (count, badge) = badge_of(&relay);
-        let help = relay.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).unwrap_or_else(|| "Requests: what agents ask you, and answers for other sandboxes".into());
+        let help = relay.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).filter(|h| !h.is_empty()).unwrap_or_else(|| "Agents waiting for your answer: questions, screenshots, choices".into());
+        // The feature's own sentence ("Agents wait for you: ...") is the line; it is not said twice.
+        let help = if help.starts_with("Agents wait for you") { "Agents waiting for your answer: questions, screenshots, choices".to_string() } else { help };
         let tone = if count.is_some() && badge == "amber" { "amber" } else if count.is_some() { "blue" } else { "quiet-blue" };
-        top.push(Entry { key: "rail-requests", icon: "ask".into(), help: format!("Requests\nAgents waiting for your answer. {help}"), keys: App::shortcut_for("relay_open"), tone, on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: 0 });
+        top.push(Entry { key: "rail-requests", icon: "ask".into(), help: format!("Requests\n{help}"), keys: App::shortcut_for("relay_open"), tone, on: self.feats.panel.as_deref() == Some("relay"), count, badge, run: RailRun::Intent("relay_open".into(), serde_json::json!({})), disabled: false, zone: 0 });
         let net = self.top_extra("approvals");
         let (count, badge) = badge_of(&net);
-        let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).unwrap_or_else(|| "Network: what sbx asks you to allow, the hosts sandboxes reach".into());
-        top.push(Entry { key: "rail-network", icon: "shield".into(), help: format!("Network\nWhat sbx asks you to allow, the hosts sandboxes reach. {help}"), keys: App::shortcut_for("network_show"), tone: "blue", on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: 0 });
+        let help = net.as_ref().and_then(|e| e["help"].as_str().map(str::to_string)).filter(|h| !h.is_empty()).unwrap_or_else(|| "What sbx asks you to allow, the hosts sandboxes reach".into());
+        top.push(Entry { key: "rail-network", icon: "shield".into(), help: format!("Network\n{help}"), keys: App::shortcut_for("network_show"), tone: "blue", on: self.feats.panel.as_deref() == Some("network"), count, badge, run: RailRun::Intent("network_show".into(), serde_json::json!({})), disabled: false, zone: 0 });
         // The team leads view (leads.rs): only the leaders' terminals.
         let leaders = self.leaders();
         let help = if self.leads_on() {

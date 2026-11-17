@@ -2311,7 +2311,51 @@ impl App {
         if p.status() != "connected" {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
-        Some(bar::pane_fit(self.bar_width(i), &pane_name(p), p.mode.name(), items, true))
+        let agent = self.agent_label(i);
+        let mut f = bar::pane_fit(self.bar_width(i), &pane_name(p), agent.as_deref(), items, true);
+        if let (false, Some(_)) = (f.switch, &agent) {
+            // Too narrow even for the switch: the menu's first row.
+            let to = if p.mode == Mode::Bash { agent.clone().unwrap_or_default() } else { bar::BASH.to_string() };
+            f.hidden.insert(0, bar::Item { id: "mode".into(), label: format!("Switch to {to}"), icon: Some(if p.mode == Mode::Bash { "sparkle" } else { "prompt" }.into()), tone: String::new(), help: format!("This pane shows {}: switch it to {to} (the other session keeps running)", if p.mode == Mode::Bash { "the shell" } else { "the agent" }), count: None, intent: None, core: true });
+        }
+        Some(f)
+    }
+
+    /// The mode switch's agent segment of pane `i`: "Thread" on a thread's
+    /// pane, else the sandbox's agent by name ("Claude", "Codex"); None for
+    /// a pane with no switch (a kit's prompt).
+    pub fn agent_label(&self, i: usize) -> Option<String> {
+        let p = self.panes.get(i)?;
+        let sb = p.sandbox.as_deref()?;
+        if p.mode == Mode::KitAdd {
+            return None;
+        }
+        if p.thread.is_some() {
+            return Some("Thread".into());
+        }
+        let agent = self.sandboxes.iter().find(|s| s.name == sb).map(|s| s.agent.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "claude".into());
+        let mut c = agent.chars();
+        Some(c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default())
+    }
+
+    /// Pane `i` between its agent and a shell of the same sandbox (a
+    /// thread's pane: its agent and a shell in its worktree), as the web
+    /// UI's mode switch: the session left keeps running in the daemon and
+    /// switching back attaches to it again. A session already open in
+    /// another pane is focused there instead of opened twice.
+    pub fn switch_mode(&mut self, i: usize) {
+        let Some(p) = self.panes.get(i) else { return };
+        let (Some(sb), true) = (p.sandbox.clone(), p.mode != Mode::KitAdd) else { return };
+        let to = if p.mode == Mode::Bash { Mode::Agent } else { Mode::Bash };
+        let thread = p.thread.clone();
+        if let Some(j) = self.panes.iter().position(|q| q.sandbox.as_deref() == Some(sb.as_str()) && q.mode == to && q.thread == thread) {
+            self.notify(format!("{} is already open in pane {}", if to == Mode::Bash { "This shell" } else { "This agent" }, j + 1), false);
+            self.show_page_of(self.panes[j].uid);
+            self.focus_pane(j);
+            return;
+        }
+        self.open_with(i, &sb, to, thread, ThreadStart::default());
+        self.save_layout();
     }
 
     /// The overflow menu of pane `i`'s bar, anchored under its button.
@@ -2334,7 +2378,15 @@ impl App {
         let room = below.max(top - 12.0) - screen::MENU_PAD * 2.0 - 4.0;
         let mut list = col().w_full().max_h(room.max(120.0)).scroll(rune::ScrollSpec { stick_bottom: false });
         for (it, r) in f.hidden.iter().zip(&rows) {
-            list = list.child(bar_menu_item(it, r));
+            list = list.child(if it.core && it.id == "mode" {
+                screen::menu_row(r).on_press(move |s: &mut App| {
+                    s.bar_menu = None;
+                    s.switch_mode(i);
+                    s.push_data();
+                })
+            } else {
+                bar_menu_item(it, r)
+            });
         }
         if !rows.is_empty() {
             list = list.child(screen::menu_divider());
@@ -2536,6 +2588,60 @@ fn drag_overlay(s: &App) -> Vec<El> {
 
 /// A pane bar chip: an extra's (or the core's) label, icon, tone and count,
 /// pressable when it has an intent.
+/// The mode switch right after a pane's name (the web UI's ✦ Claude | ❯
+/// Bash): the current segment marked, the other pressable (switch_mode).
+/// The agent's segment: its mark in its vendor's colour; the shell's: a
+/// prompt. Keys `pane-<n>-mode-agent`, `pane-<n>-mode-bash`.
+fn mode_switch(s: &App, i: usize, agent: &str, ground: u32) -> El {
+    let n = i + 1;
+    let bash = s.panes.get(i).is_some_and(|p| p.mode == Mode::Bash);
+    let thread = s.panes.get(i).is_some_and(|p| p.thread.is_some());
+    let vendor = match agent.to_ascii_lowercase().as_str() {
+        "claude" => "vendor-anthropic",
+        "codex" | "openai" => "vendor-openai",
+        "gemini" | "google" => "vendor-google",
+        _ => "purple",
+    };
+    let seg = |key: String, label: &str, icon: &str, color: u32, on: bool, help: String| {
+        let mut e = row()
+            .key(key)
+            .role("radio")
+            .label(label.to_string())
+            .help(help)
+            .checked(on)
+            .h(layout::DENSE_H - 2.0)
+            .px(bar::SEG_PX)
+            .gap(bar::SEG_GAP)
+            .items_center()
+            .radius(theme::radius("xs").unwrap())
+            .child(rune::icon(crate::icons::get(icon).unwrap(), bar::SEG_ICON).color(theme::hex(theme::mark_on(color, ground))))
+            .child(text(label.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(if on { c("text-bright") } else { theme::hex(theme::muted_on(ground)) }));
+        if on {
+            e = e.fill(c("elevated"));
+        } else {
+            e = e.hover(c("hover-subtle")).cursor(Cursor::Pointer).focusable(true).focus_ring(2.0, 1.0, c("focus")).on_press(move |s: &mut App| {
+                s.switch_mode(i);
+                s.push_data();
+            });
+        }
+        e
+    };
+    let agent_icon = if thread { "branch" } else { "sparkle" };
+    let agent_help = if bash { format!("Switch this pane to {agent} (the shell keeps running)") } else { format!("This pane shows {agent}") };
+    let bash_help = if bash { "This pane shows a shell".to_string() } else { format!("Switch this pane to a shell in {} (the agent keeps running)", if thread { "this thread's worktree" } else { "this sandbox" }) };
+    row()
+        .key(format!("pane-{n}-mode-switch"))
+        .role("radiogroup")
+        .label("Session")
+        .padding(bar::SWITCH_PAD)
+        .gap(bar::SWITCH_GAP)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .border(1.0, theme::hex(theme::over(theme::color_value("text").unwrap(), 0.18, ground)))
+        .child(seg(format!("pane-{n}-mode-agent"), agent, agent_icon, theme::color_value(vendor).unwrap(), !bash, agent_help))
+        .child(seg(format!("pane-{n}-mode-bash"), bar::BASH, "prompt", theme::color_value("text").unwrap(), bash, bash_help))
+}
+
 /// `active`: the panel it opens shows, for this pane; `ground`: the bar's tint.
 fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
     // Quiet: a muted chip is its icon in its colour by meaning and its words
@@ -2696,8 +2802,12 @@ fn pane_view(s: &App, i: usize) -> El {
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0).child(
         text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
     );
-    if let (Some(p), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
-        mid = mid.child(text(p.mode.name()).font(small(bar::CHIP_TEXT, 400.0)).color(theme::hex(theme::muted_on(bar_ground))));
+    if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
+        if f.switch {
+            if let Some(agent) = s.agent_label(i) {
+                mid = mid.child(mode_switch(s, i, &agent, bar_ground));
+            }
+        }
         // By zone (bar::zone), a hairline between two.
         let shown_panel = |name: &str| s.feats.panel.as_deref() == Some(name) || (s.feats.split && s.feats.panels.iter().any(|p| p == name));
         let mut last = None;

@@ -35,6 +35,8 @@ pub enum Run {
     Zoom(i32),
     /// The team leads view on and off (leads.rs).
     Leads,
+    /// The focused pane between its agent and a shell (`App::switch_mode`).
+    SwitchMode,
 }
 
 /// One row of the palette.
@@ -250,6 +252,11 @@ impl App {
         for (side, label) in [("left", "Move pane left"), ("right", "Move pane right"), ("up", "Move pane up"), ("down", "Move pane down")] {
             v.push(core(&format!("move-{side}"), label, "The focused pane trades places, or docks along that edge", "columns", vec![], i("pane_move", serde_json::json!({ "to": side }))));
         }
+        if let Some(agent) = self.agent_label(self.focused) {
+            let bash = self.panes.get(self.focused).is_some_and(|p| p.mode == Mode::Bash);
+            let (label, icon) = if bash { (format!("Switch pane to {agent}"), "sparkle") } else { ("Switch pane to Bash".to_string(), "prompt") };
+            v.push(core("mode", &label, "The other session of this sandbox; this one keeps running", icon, vec![], Run::SwitchMode));
+        }
         if self.leads_on() || !self.leaders().is_empty() {
             let (label, hint) = if self.leads_on() { ("Leave the team leads view", "The layout before it") } else { ("Team leads view", "Only the team leaders' terminals") };
             v.push(core("leads", label, hint, "people", vec![], Run::Leads));
@@ -318,6 +325,10 @@ impl App {
             }
             Run::Zoom(step) => self.zoom_by(step),
             Run::Leads => self.toggle_leads(),
+            Run::SwitchMode => {
+                let i = self.focused;
+                self.switch_mode(i);
+            }
         }
         self.push_data();
     }
