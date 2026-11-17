@@ -950,7 +950,7 @@ impl Build<'_> {
             b = b.tab_index(-1);
         }
         let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
-        b.hover(c(hover)).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
+        b.hover(n.style.hover.map(hex).unwrap_or_else(|| c(hover))).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
     }
 
     fn menu<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
@@ -1233,8 +1233,8 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         for w in ["\"running\"", "\"working\"", "\"wants you\"", "\"stopped\"", "\"starting…\"", "\"unreachable\""] {
             assert!(tree.contains(w), "no row says {w}");
         }
-        assert!(tree.contains("asks you 1"), "the amber count shows as a text badge");
-        for k in ["row-test-sbx", "stop-test-sbx", "start-chat-release-notes", "bash-test-sbx", "spare-test-sbx", "extra-sandbox-test-sbx"] {
+        assert!(tree.contains("1 asking"), "the amber count shows as a text badge");
+        for k in ["row-test-sbx", "stop-test-sbx", "start-chat-release-notes", "extra-sandbox-test-sbx"] {
             assert!(node_has(&n, k), "{k} not drawn");
         }
         // The menu holds the extras under their old keys (extra-sandbox-<name>-<id>).

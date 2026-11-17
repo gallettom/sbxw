@@ -226,6 +226,7 @@ the focus ring (2 pt, blue, 2 pt outside) when the keyboard reaches it.
 | `dense` | bool | 24 pt instead of 28, 12 pt label: for bars that are dense on purpose |
 | `keys` | list of strings | Its shortcut, drawn as keycaps in its tooltip after the `help` text: `keys = { "⌘", "K" }` |
 | `tab_stop` | bool | `false`: left out of the Tab order, still pressable (a row's secondary actions, which its own keys and its menu reach) |
+| `hover` | colour | The fill under the pointer, in place of the variant's (a stop button that turns `red-tint`) |
 
 ```lua
 button{ icon = "stop", on = "stop", arg = sb.name, color = "red", help = "Stop", keys = { "Space" } }

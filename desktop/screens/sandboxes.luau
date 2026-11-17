@@ -15,10 +15,12 @@
 -- shell, a spare pane, the ⋯ menu that holds every action of the row) show
 -- on hover, on keyboard focus and on the selected row.
 --
--- Keys: row-<name>, start-<name>, stop-<name>, bash-<name>, spare-<name>;
--- the row's menu extra-sandbox-<name> (its list extra-sandbox-<name>-list),
--- whose items are keyed as the inline extras were: extra-sandbox-<name>-<id>
--- (network, threads, more, ...); a badge keeps that key when it shows inline.
+-- Keys: row-<name>, start-<name>, stop-<name>; the row's menu
+-- extra-sandbox-<name> (its list extra-sandbox-<name>-list), whose items are
+-- keyed as the inline extras were: extra-sandbox-<name>-<id> (network,
+-- threads, more, ...), plus extra-sandbox-<name>-bash (open a shell),
+-- -spare (open in a spare pane), -start, -stop; a badge keeps its extra's key
+-- when it shows inline; more-<name> is the "+N" of badges that did not fit.
 -- Sessions: extra-row-<name>-<id>. Groups: group-<label>.
 --
 -- Keyboard: Up and Down move between rows, Enter opens the terminal, Space
@@ -81,7 +83,7 @@ end
 local function badge_text(e)
   local n = e.count
   if e.id == "approvals" then return "sbx asks " .. (n or "") end
-  if e.id == "relay" then return "asks you " .. (n or "") end
+  if e.id == "relay" then return (n or "") .. " asking" end
   if e.id == "threads" then return n and (n .. (n == 1 and " thread" or " threads")) or "threads" end
   if e.id == "kit-add" and n then return n .. (n == 1 and " kit waits" or " kits wait") end
   local label = e.label or ""
@@ -151,6 +153,11 @@ local function rail(tone, shape, small)
   return column{ w = w, h = "full", radius = 2, fill = c }
 end
 
+-- About how wide a text is at 12 pt: the UI is monospace, 0.6 em a character.
+local function est(t)
+  return (utf8.len(t) or #t) * 7.2
+end
+
 local word_color = { amber = "amber", blue = "blue", red = "red", green = "text-muted", muted = "text-muted" }
 
 local function item(sb, app, data)
@@ -162,58 +169,85 @@ local function item(sb, app, data)
   local st = state_of(sb, data)
   statuses[name] = sb.status
 
-  -- Line 2: the state word, what needs you as text badges, the pane, the agent.
-  local line2 = { gap = 8, w = "full", clip = true,
-    text{ st.word, size = "caption", weight = st.tone == "amber" and "semibold" or "normal", color = word_color[st.tone] },
-  }
   local menu_items = {}
   if running then
     table.insert(menu_items, { id = "bash", label = "Open a shell", icon = "terminal" })
   end
   table.insert(menu_items, { id = "spare", label = "Open in a spare pane", icon = "plus" })
+  -- What needs you, as text badges: amber first, then counts.
+  local wants, counts = {}, {}
   for _, e in ipairs(extras(sb, app)) do
-    local key = "extra-sandbox-" .. name .. "-" .. e.id
     if e.intent then extra_intents[name .. "\n" .. e.id] = e.intent end
-    -- A count or an amber tone stays visible, as a pressable text badge.
-    if e.count or e.tone == "amber" then
-      local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
-      local label = badge_text(e)
-      if e.intent then
-        table.insert(line2, row{ key = key, on = "extra", arg = name .. "\n" .. e.id, help = e.help, hover = "active-bg", radius = "xs",
-          badge{ label, tone = tone } })
-      else
-        table.insert(line2, badge{ label, tone = tone, help = e.help, key = key })
-      end
-    end
+    if e.tone == "amber" then table.insert(wants, e) elseif e.count then table.insert(counts, e) end
     if e.intent then
       table.insert(menu_items, { id = e.id, label = menu_label(e), icon = e.icon or (e.id == "threads" and "chat") or (e.id == "approvals" and "flag") or nil })
     end
   end
-  if pane then table.insert(line2, badge{ "pane " .. pane, tone = "blue", help = "Shown in pane " .. pane }) end
-  table.insert(line2, text{ sb.agent, size = "caption", color = "text-muted", truncate = true, grow = 1 })
   if running then
     table.insert(menu_items, { id = "stop", label = "Stop", icon = "stop" })
   elseif not busy then
     table.insert(menu_items, { id = "start", label = "Start", icon = "play" })
   end
 
-  -- The row's primary action, always shown: start or stop.
+  -- Line 2: the state word, the badges that fit whole (never cut: the rest
+  -- are "+N", whose tooltip names them), the agent in what is left. Its
+  -- right end is kept for the ⋯ menu, so nothing is ever drawn under it.
+  local col_w = ((app.sidebar or {}).w or 264) - 79
+  -- The ⋯ menu sits at the end of the name's line when the whole name fits
+  -- beside it, else at the end of line 2, whose room it then keeps.
+  local menu_on_name = (utf8.len(name) or #name) * 8.4 + 8 + 32 <= col_w
+  local room = col_w - est(st.word) - 4 - (menu_on_name and 0 or 36)
+  local line2 = { gap = 4, w = "full", clip = true,
+    text{ st.word, size = "caption", weight = st.tone == "amber" and "semibold" or "normal", color = word_color[st.tone] },
+  }
+  local all = {}
+  for _, e in ipairs(wants) do table.insert(all, e) end
+  for _, e in ipairs(counts) do table.insert(all, e) end
+  if pane then table.insert(all, { id = "pane", pane = pane }) end
+  local rest = {}
+  for i, e in ipairs(all) do
+    local label = e.pane and ("pane " .. e.pane) or badge_text(e)
+    local w = est(label) + 12 + 4
+    -- Keep room for a "+N" while something else follows.
+    local tail = (i < #all) and (est("+" .. (#all - i)) + 16) or 0
+    if #rest == 0 and w + tail <= room then
+      room = room - w
+      if e.pane then
+        table.insert(line2, badge{ label, tone = "blue", help = "Shown in pane " .. e.pane })
+      else
+        local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
+        local key = "extra-sandbox-" .. name .. "-" .. e.id
+        if e.intent then
+          table.insert(line2, row{ key = key, on = "extra", arg = name .. "\n" .. e.id, help = e.help, hover = "active-bg", radius = "xs", badge{ label, tone = tone } })
+        else
+          table.insert(line2, badge{ label, tone = tone, help = e.help, key = key })
+        end
+      end
+    else
+      table.insert(rest, label)
+    end
+  end
+  if #rest > 0 then
+    table.insert(line2, badge{ "+" .. #rest, tone = #wants > 0 and "amber" or "neutral", help = table.concat(rest, ", ") .. " (all in the ⋯ menu)", key = "more-" .. name })
+  end
+  table.insert(line2, text{ sb.agent, size = "caption", color = "text-muted", truncate = true, grow = 1 })
+  if not menu_on_name then table.insert(line2, column{ w = 32 }) end
+
+  -- The row's primary action, always shown, a button at rest: start or stop.
   local primary
   if running then
-    primary = button{ icon = "stop", variant = "ghost", on = "stop", arg = name, help = "Stop " .. name, keys = { "Space" }, key = "stop-" .. name, tab_stop = false }
+    primary = button{ icon = "stop", on = "stop", arg = name, help = "Stop " .. name, keys = { "Space" }, key = "stop-" .. name, tab_stop = false, hover = "red-tint" }
   elseif busy then
     primary = column{ w = 28 }
   else
-    primary = button{ icon = "play", variant = "ghost", on = "start", arg = name, help = "Start " .. name, keys = { "Space" }, key = "start-" .. name, tab_stop = false }
+    primary = button{ icon = "play", on = "start", arg = name, help = "Start " .. name, keys = { "Space" }, key = "start-" .. name, tab_stop = false, hover = "green-tint" }
   end
 
-  -- The other actions, over the end of the name: on hover, on keyboard focus,
-  -- always on the selected row. All of them are in the menu too.
-  local tools = row{ gap = 0, pin = { top = 0, right = 0 }, fill = selected and "elevated" or "hover-subtle", radius = "xs",
-    reveal = not selected,
-    running and button{ icon = "terminal", variant = "ghost", on = "bash", arg = name, help = "Open a shell", key = "bash-" .. name, tab_stop = false } or false,
-    (not pane) and button{ icon = "plus", variant = "ghost", on = "spare", arg = name, help = "Open in a spare pane", key = "spare-" .. name, tab_stop = false } or false,
-    menu{ "", id = "extra-sandbox-" .. name, icon = "more", variant = "ghost", items = menu_items, on = "row_menu", arg = name, help = "Every action of " .. name },
+  -- Every action of the row, in its ⋯ menu at the right end of line 2: shown
+  -- on hover, on keyboard focus and on the selected row; a touch or trackpad
+  -- user who never hovers finds it at the same place.
+  local tools = row{ gap = 0, pin = (not menu_on_name) and { bottom = 4, right = 0 } or nil, reveal = not selected,
+    menu{ "", id = "extra-sandbox-" .. name, icon = "more", variant = "ghost", dense = true, items = menu_items, on = "row_menu", arg = name, help = "Every action of " .. name },
   }
 
   return row{
@@ -223,11 +257,12 @@ local function item(sb, app, data)
     fill = selected and "elevated" or nil, hover = selected and "elevated" or "hover-subtle",
     column{ py = 8, rail(st.tone, st.shape) },
     column{ grow = 1, gap = 2, justify = "center",
-      row{ w = "full",
+      row{ w = "full", gap = 8,
         text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, grow = 1, help = name },
-        tools,
+        menu_on_name and tools or false,
       },
       row(line2),
+      (not menu_on_name) and tools or false,
     },
     column{ justify = "center", primary },
     column{ w = 0 },
