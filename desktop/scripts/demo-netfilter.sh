@@ -9,7 +9,7 @@
 #   bubble   press test-sbx's blue bubble: only its 2 requests, the chip
 #            "test-sbx x", "Show all 113", "Dismiss these 2";
 #   empty    select notes, open its Network item: "Nothing waits in notes.";
-#   all      press the top bar's "sbx asks": every sandbox's, 25 cards drawn,
+#   all      press the left rail's Network: every sandbox's, 25 cards drawn,
 #            "Show 25 more", "Dismiss all 113".
 # Out: $SBXW_SHOTS/netfilter/<mark>.png, the element tree and the app log beside each;
 # then sessions-plus.png (below).
@@ -32,7 +32,7 @@ JSON
 }
 tap bubble extra-sandbox-test-sbx-approvals
 tap empty extra-sandbox-notes-network extra-sandbox-notes
-tap all extra-topbar-approvals
+tap all rail-network
 build
 for m in ${MARKS:-bubble empty all}; do
   start_daemon "$shots/standin-$m" --fixture "$here/fixtures/network/filtered.json"
