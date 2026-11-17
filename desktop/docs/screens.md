@@ -690,7 +690,8 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `play`, `stop`, `reload`, `plus`, `close`, `terminal`, `chevron-down`,
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
-`single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`.
+`single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
+`coin`, `help`.
 
 ## Where screens live
 

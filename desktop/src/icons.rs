@@ -50,6 +50,10 @@ icons! {
     SPEAKER "speaker" concat!(st!("path", r#"d="M2.5 6h2.5l3.5-3v10l-3.5-3h-2.5z""#), st!("path", r#"d="M11 5.5a3.5 3.5 0 0 1 0 5""#));
     SEND "send" concat!(st!("path", r#"d="M2 8l12-5.5-4.5 12-2.5-5z""#), st!("line", r#"x1="7" y1="9.5" x2="14" y2="2.5""#));
     SPARKLE "sparkle" st!("path", r#"d="M8 1.5c.6 3.3 1.9 5.2 5.5 6.5-3.6 1.3-4.9 3.2-5.5 6.5-.6-3.3-1.9-5.2-5.5-6.5 3.6-1.3 4.9-3.2 5.5-6.5z""#);
+    // The status bar's: a chip with its pins, a coin, a question in a ring.
+    CPU "cpu" concat!(st!("rect", r#"x="4" y="4" width="8" height="8" rx="1.5""#), st!("path", r#"d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5h2.5M1.5 9.5h2.5M12 6.5h2.5M12 9.5h2.5""#));
+    COIN "coin" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M10 5.8c-.4-.6-1.1-.9-2-.9-1.2 0-2 .6-2 1.5 0 2 4 1.1 4 3.2 0 .9-.9 1.5-2 1.5-.9 0-1.7-.4-2.1-1M8 3.8v1.1M8 11.1v1.1""#));
+    HELP "help" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M6.2 6.2a1.9 1.9 0 0 1 3.7.6c0 1.3-1.9 1.6-1.9 2.8""#), r#"<circle cx="8" cy="11.5" r="0.9" fill="currentColor"/>"#);
     LINK "link" concat!(st!("path", r#"d="M6.5 9.5l3-3""#), st!("path", r#"d="M7.5 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M8.5 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1""#));
 }
 

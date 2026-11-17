@@ -11,6 +11,7 @@ mod bar;
 mod features;
 mod jarvis;
 mod palette;
+mod statusbar;
 pub mod store;
 
 use crate::approval;
@@ -1594,7 +1595,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         overlays.push(screen::menu_scrim("pane-more-scrim".into(), |s: &mut App| s.bar_menu = None));
         overlays.push(m);
     }
-    let mut root = root.child(bar).child(main);
+    // The status bar at the foot, in every layout: the panes' area shrinks by its height.
+    let mut root = root.child(bar).child(main).child(statusbar::view(s));
     for o in overlays {
         root = root.child(o);
     }

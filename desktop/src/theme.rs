@@ -65,6 +65,10 @@ pub const COLORS: &[(&str, u32)] = &[
     // Red as words on a group's tint (the list's "unreachable", a menu's
     // destructive label): `red` falls under 4.5:1 on the lighter tints.
     ("red-text", 0xff7b72),
+    // The status bar at the window's foot: the app's quietest surface (the
+    // floor itself) under one hairline.
+    ("status-bar", 0x080b0f),
+    ("status-line", 0x21262d),
 ];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:
@@ -123,6 +127,9 @@ pub mod layout {
     /// size of anything pressable.
     pub const CONTROL_H: f32 = 28.0;
     pub const DENSE_H: f32 = 24.0;
+    /// The status bar across the window's foot (shell/statusbar.rs): 24 pt
+    /// targets, a hairline above.
+    pub const STATUS_BAR_H: f32 = 26.0;
     /// Room for macOS's close / minimise / zoom buttons, which the window draws
     /// over the content's top-left corner (the window has no title bar).
     pub const TRAFFIC_LIGHTS_W: f32 = if cfg!(target_os = "macos") { 78.0 } else { 0.0 };
@@ -363,6 +370,16 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("focus", "surface", Need::Mark),
     ("focus", "elevated", Need::Mark),
     ("focus", "floor", Need::Mark),
+    // The status bar: numbers, words and their icons on its ground.
+    ("text", "status-bar", Need::Text),
+    ("text-muted", "status-bar", Need::Text),
+    ("text-muted", "hover-subtle", Need::Mark),
+    ("blue", "status-bar", Need::Text),
+    ("green", "status-bar", Need::Text),
+    ("amber", "status-bar", Need::Text),
+    ("red-text", "status-bar", Need::Text),
+    ("blue", "status-line", Need::Mark),
+    ("focus", "status-bar", Need::Mark),
     ("control-border", "bg", Need::Mark),
     ("control-border", "surface", Need::Mark),
     ("group-1", "surface", Need::Mark),
