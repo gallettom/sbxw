@@ -958,11 +958,6 @@ impl App {
         let card = col()
             .key("modal")
             .role("dialog")
-            // Keyboard focus stays inside; Escape closes it.
-            .modal(false, |s: &mut App| {
-                s.feats.modal = None;
-                s.push_data();
-            })
             .pin(Some(side), Some(top), Some(side), None)
             // A fixed height: the screen fills it and scrolls inside (its
             // own close button; Escape and a press outside close it too).
@@ -981,14 +976,10 @@ impl App {
                 }
             })
             .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
-        el().key("modal-scrim")
-            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .fill(rune::color::hex("#00000080").unwrap())
-            .on_press(|s: &mut App| {
-                s.feats.modal = None;
-                s.push_data();
-            })
-            .child(card)
+        super::scrim("modal-scrim", card, |s: &mut App| {
+            s.feats.modal = None;
+            s.push_data();
+        })
     }
 
     /// The docked feature panel: tabs when more than one is open, the screen below.

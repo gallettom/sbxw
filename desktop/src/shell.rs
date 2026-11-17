@@ -1547,13 +1547,30 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
+    // Jarvis's proposal has no scrim: it stands beside the Jarvis panel,
+    // whose input (a typed yes) and push-to-talk must stay usable while it shows.
     if let Some(dialog) = s.dialog_view() {
         root = root.child(dialog);
     }
+    // The core's confirmation: a press outside cancels, as its × and Escape do.
     if let Some(dialog) = s.confirm_view() {
-        root = root.child(dialog);
+        root = root.child(scrim("cf-scrim", dialog, |s: &mut App| approval::ConfirmAnswers::cancel_click(s)));
     }
     root
+}
+
+/// What sits under a dialog: the window's floor at 60%, so what is behind
+/// reads as inactive but stays recognisable. It is modal for the keyboard
+/// and the pointer (Tab stays inside, nothing behind takes a press or a
+/// key), Escape and a press on it run `outside`.
+pub fn scrim(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 'static) -> El {
+    let o2 = outside.clone();
+    el().key(key.to_string())
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(c("floor").alpha(0.6))
+        .modal(false, move |s: &mut App| o2(s))
+        .on_press(move |s: &mut App| outside(s))
+        .child(dialog)
 }
 
 /// The notice (key `notice`): one line of text, its full text as a tooltip,
