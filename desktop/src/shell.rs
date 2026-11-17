@@ -11,7 +11,7 @@ mod bar;
 mod features;
 mod jarvis;
 mod palette;
-mod statusbar;
+pub mod statusbar;
 pub mod store;
 
 use crate::approval;
@@ -721,6 +721,18 @@ impl App {
                 self.expect.retain(|(n, _, _)| !running.contains(n));
                 self.feats_sandboxes();
             }
+            // The status bar's numbers: only while the window shows.
+            LinkEvent::Bus(ev) if ev.name == "stats" => {
+                if !self.status.hidden {
+                    let v = serde_json::from_str(&ev.data).map_err(|e| format!("stats event: {e}"));
+                    self.statusbar_stats(v, Instant::now());
+                }
+                return false;
+            }
+            LinkEvent::Data { key, result } if key == statusbar::STATS_KEY => {
+                self.statusbar_stats(result, Instant::now());
+                return false;
+            }
             LinkEvent::Bus(ev) => {
                 log::debug!("event {} {}", ev.name, ev.data);
                 let f = self.feats_bus(&ev.name, &ev.data);
@@ -911,6 +923,9 @@ impl App {
     /// the core's dialog, then the modal under it. False when nothing was
     /// open (the key goes on: a field, a terminal).
     pub fn escape(&mut self) -> bool {
+        if self.statusbar_escape() {
+            return true;
+        }
         if self.palette.is_some() {
             self.palette_close();
             self.push_data();
@@ -994,6 +1009,9 @@ impl App {
             if fixed || secret {
                 return true;
             }
+        }
+        if key.starts_with("status-") && self.statusbar_drawn(key) {
+            return true;
         }
         if self.jarvis.shown.is_some() && key.starts_with("jv-") {
             return true;
@@ -1610,6 +1628,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     // The status bar at the foot, in every layout: the panes' area shrinks by its height.
     let mut root = root.child(bar).child(main).child(statusbar::view(s));
+    // The status bar's read-only popover, light dismiss.
+    overlays.extend(statusbar::popover(s));
     for o in overlays {
         root = root.child(o);
     }

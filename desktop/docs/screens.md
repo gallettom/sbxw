@@ -703,7 +703,9 @@ back. The folder is `~/.sbxw/desktop/screens/`, or `$SBXW_DESKTOP_SCREENS`.
 Screens: `topbar` (the bar at the top, right of macOS's window buttons),
 `sandboxes` (the side panel) and `jarvis` (the panel docked on the right,
 shown while `data.jarvis.open`). The terminals, their pane bars, the
-panel's resize handle and every approval dialog are drawn by the core.
+panel's resize handle, the status bar at the window's foot (bring-ups,
+total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
+approval dialog are drawn by the core.
 
 Jarvis can propose changes to these screens (the daemon writes the file in
 `~/.sbxw/desktop/screens/` once the person approves). With

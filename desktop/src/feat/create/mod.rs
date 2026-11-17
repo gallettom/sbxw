@@ -156,10 +156,10 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
     STATE.lock().unwrap().on_answer(ctx, call, r)
 }
 
-/// "New sandbox" in the top bar; a count while bring-ups run.
+/// "New sandbox" in the top bar, always. Bring-ups in progress show in the
+/// status bar (shell/statusbar.rs), which opens the jobs' panel.
 fn extras(_: &Ctx) -> Vec<super::Extra> {
-    let running = STATE.lock().unwrap().jobs.iter().filter(|j| j.state == JobState::Running).count();
-    let mut out = vec![super::Extra {
+    vec![super::Extra {
         place: super::Place::Topbar,
         id: "create".into(),
         label: "New".into(),
@@ -168,20 +168,7 @@ fn extras(_: &Ctx) -> Vec<super::Extra> {
         help: "New sandbox".into(),
         count: None,
         intent: Some(("create_open".into(), json!({}))),
-    }];
-    if running > 0 {
-        out.push(super::Extra {
-            place: super::Place::Topbar,
-            id: "create-jobs".into(),
-            label: "Creating".into(),
-            icon: Some("reload".into()),
-            tone: "blue".into(),
-            help: "Sandboxes being created".into(),
-            count: Some(running as u64),
-            intent: Some(("open_panel".into(), json!({ "screen": JOBS }))),
-        });
-    }
-    out
+    }]
 }
 
 /// Every sandbox ref that exists (names are refused when taken).

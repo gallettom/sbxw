@@ -40,6 +40,11 @@ fn on_ime(s: &mut App, ime: &rune::Ime, tx: &mut Tx) -> bool {
     s.on_ime(ime, tx.focused())
 }
 
+// The status bar asks for stats only while the window shows.
+fn on_visibility(s: &mut App, shown: bool, _tx: &mut Tx) {
+    s.statusbar_visible(shown);
+}
+
 fn view(s: &App, cx: &mut Cx<App>) -> El {
     shell::view(s, cx)
 }
@@ -60,5 +65,5 @@ fn main() {
     // Help in the menu bar's own Help menu (macOS; Rune reports native
     // menus unsupported elsewhere, where the shortcut and the palette have it).
     let help = rune::MenuItem::new("sbxw Help", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
-    rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).run();
+    rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).run();
 }

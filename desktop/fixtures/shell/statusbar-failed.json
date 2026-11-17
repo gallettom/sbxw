@@ -12,7 +12,8 @@
         "approvals": 0,
         "kits_waiting": 0,
         "old_sbx": false,
-        "workspace": null
+        "workspace": null,
+        "cost_usd": 0.48
       },
       {
         "name": "chat-release-notes",
@@ -37,7 +38,8 @@
         "kits_waiting": 0,
         "old_sbx": false,
         "workspace": "/Users/me/dev/sbxw",
-        "model": "claude-sonnet-5-5"
+        "model": "claude-sonnet-5-5",
+        "cost_usd": 2.1
       },
       {
         "name": "sbxw-desktop-design",
@@ -51,7 +53,8 @@
         "old_sbx": false,
         "workspace": "/Users/me/dev/sbxw",
         "model": "claude-opus-5-5",
-        "model_name": "Opus 5.5"
+        "model_name": "Opus 5.5",
+        "cost_usd": 1.62
       },
       {
         "name": "sbxw-voice",
@@ -77,7 +80,8 @@
         "old_sbx": false,
         "workspace": "/Users/me/dev/shop",
         "model": "claude-opus-5-5",
-        "model_name": "Opus 5.5"
+        "model_name": "Opus 5.5",
+        "cost_usd": 7.85
       },
       {
         "name": "better-search",
@@ -102,7 +106,8 @@
         "kits_waiting": 0,
         "old_sbx": false,
         "workspace": "/Users/me/dev/test-sbx",
-        "model": "claude-haiku-5-5"
+        "model": "claude-haiku-5-5",
+        "cost_usd": 0.35
       },
       {
         "name": "data-pipeline-with-a-long-name",
@@ -142,7 +147,8 @@
         "answerable": false,
         "ts": 1763290000001,
         "model": "claude-sonnet-5-5",
-        "model_name": "Sonnet 5.5"
+        "model_name": "Sonnet 5.5",
+        "cost_usd": 0.48
       },
       {
         "sandbox": "sbxw-jarvis",
@@ -152,7 +158,8 @@
         "started_ms": 1763290000000,
         "origin": "tty",
         "answerable": false,
-        "ts": 1763290000001
+        "ts": 1763290000001,
+        "cost_usd": 2.1
       },
       {
         "sandbox": "sbxw-desktop-design",
@@ -162,17 +169,8 @@
         "started_ms": 1763290000000,
         "origin": "tty",
         "answerable": false,
-        "ts": 1763290000001
-      },
-      {
-        "sandbox": "better-checkout",
-        "mode": "claude",
-        "state": "working",
-        "agent": "claude",
-        "started_ms": 1763290000000,
-        "origin": "tty",
-        "answerable": false,
-        "ts": 1763290000001
+        "ts": 1763290000001,
+        "cost_usd": 1.62
       },
       {
         "sandbox": "better-checkout",
@@ -183,7 +181,19 @@
         "origin": "tty",
         "answerable": false,
         "ts": 1763290000001,
-        "thread": "checkout-v2"
+        "cost_usd": 2.4
+      },
+      {
+        "sandbox": "better-checkout",
+        "mode": "claude",
+        "state": "working",
+        "agent": "claude",
+        "started_ms": 1763290000000,
+        "origin": "tty",
+        "answerable": false,
+        "ts": 1763290000001,
+        "thread": "checkout-v2",
+        "cost_usd": 1.95
       },
       {
         "sandbox": "better-checkout",
@@ -196,7 +206,8 @@
         "ts": 1763290000001,
         "thread": "payments",
         "model": "claude-sonnet-5-5",
-        "model_name": "Sonnet 5.5"
+        "model_name": "Sonnet 5.5",
+        "cost_usd": 0.9
       },
       {
         "sandbox": "test-sbx",
@@ -206,7 +217,8 @@
         "started_ms": 1763290000000,
         "origin": "tty",
         "answerable": false,
-        "ts": 1763290000001
+        "ts": 1763290000001,
+        "cost_usd": 0.35
       },
       {
         "sandbox": "docs",
@@ -549,7 +561,73 @@
         "kind": "done",
         "error": "sbx: kit 'node' failed to install: exit status 1"
       }
-    ]
+    ],
+    "stats": {
+      "daemon_cpu_pct": 0.8,
+      "sandboxes": [
+        {
+          "name": "better-checkout",
+          "cpu_pct": 143.5,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 2254857830,
+          "mem_total_bytes": 8589934592
+        },
+        {
+          "name": "sbxw-jarvis",
+          "cpu_pct": 38.2,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 1395864371,
+          "mem_total_bytes": 8589934592
+        },
+        {
+          "name": "sbxw-desktop-design",
+          "cpu_pct": 12.4,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 966367641,
+          "mem_total_bytes": 8589934592
+        },
+        {
+          "name": "chat-research",
+          "cpu_pct": 4.1,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 644245094,
+          "mem_total_bytes": 4294967296
+        },
+        {
+          "name": "test-sbx",
+          "cpu_pct": 1.6,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 429496729,
+          "mem_total_bytes": 4294967296
+        },
+        {
+          "name": "docs",
+          "cpu_pct": 0.9,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 322122547,
+          "mem_total_bytes": 4294967296
+        },
+        {
+          "name": "data-pipeline-with-a-long-name",
+          "cpu_pct": 22.7,
+          "cpu_age_s": 4,
+          "cpu_cores": 4,
+          "mem_bytes": 1932735283,
+          "mem_total_bytes": 8589934592
+        }
+      ],
+      "total_cpu_pct": 224.2,
+      "sandboxes_counted": 7,
+      "sandboxes_unknown": 0,
+      "ts": 1763380000000,
+      "app_cpu_pct": 3.1
+    }
   },
   "app": {
     "selected": "better-checkout",
