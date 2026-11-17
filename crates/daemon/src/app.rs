@@ -205,6 +205,15 @@ impl App {
     }
 
     pub fn send(&self, ev: Event) {
+        // A session that has not said which model it runs is sent with the
+        // one sbxw started it with: every `session` event, from wherever.
+        let ev = match ev {
+            Event::Session(mut info) => {
+                self.fill_model(&mut info);
+                Event::Session(info)
+            }
+            other => other,
+        };
         self.bus.send(ev);
     }
 

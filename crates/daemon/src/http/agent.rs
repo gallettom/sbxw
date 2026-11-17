@@ -12,6 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use sbxw_core::agents::ModelReport;
 use sbxw_core::plans::{DistillItem, PlanThread, ThreadState, Variant};
 use sbxw_core::relay::{agent_view, RelayKind};
 use sbxw_core::usage::Reading;
@@ -58,8 +59,25 @@ async fn hook(State(app): S, Agent(me): Agent, Json(body): Json<Value>) -> Json<
     }
 }
 
-async fn usage(State(app): S, Agent(_): Agent, Json(r): Json<Reading>) -> StatusCode {
-    app.report_usage(r);
+/// What the status line POSTs: the account's usage windows and, from a
+/// script that knows them, the reporting session and the model it runs.
+#[derive(Deserialize)]
+struct UsageBody {
+    #[serde(flatten)]
+    reading: Reading,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    model_name: Option<String>,
+}
+
+async fn usage(State(app): S, Agent(me): Agent, Json(b): Json<UsageBody>) -> StatusCode {
+    if let Some(model) = ModelReport::new(b.model.as_deref(), b.model_name.as_deref()) {
+        app.report_session_model(&me, b.session_id.as_deref().unwrap_or(""), model);
+    }
+    app.report_usage(b.reading);
     StatusCode::OK
 }
 

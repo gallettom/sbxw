@@ -69,11 +69,23 @@ process.stdin.on("end", () => {
   } catch (_) {}
 
   // 2) Throttled, fire-and-forget forward to the daemon (no output, never blocks).
+  // The model this session runs goes with it, and a session whose model is not
+  // the one it last sent (the first render, or a `/model` switch) is sent at
+  // once, whatever the throttle says. Remembered per session, in /tmp.
+  const sessionId = typeof d.session_id === "string" ? d.session_id : "";
+  const modelId = (d.model && typeof d.model.id === "string" && d.model.id) || "";
+  const modelName = (d.model && typeof d.model.display_name === "string" && d.model.display_name) || "";
+  const modelStamp = "/tmp/sbxw-model-" + sessionId.replace(/[^A-Za-z0-9_-]/g, "");
+  let sentModel = "";
+  try {
+    sentModel = fs.readFileSync(modelStamp, "utf8");
+  } catch (_) {}
+  const modelChanged = modelId !== "" && sentModel !== modelId + "\n" + modelName;
   let last = 0;
   try {
     last = parseInt(fs.readFileSync(STAMP, "utf8"), 10) || 0;
   } catch (_) {}
-  if (Date.now() - last < THROTTLE_MS) {
+  if (!modelChanged && Date.now() - last < THROTTLE_MS) {
     return; // event loop drains, process exits, stdout flushed
   }
   try {
@@ -86,6 +98,11 @@ process.stdin.on("end", () => {
       seven_day_pct: sd,
       five_hour_resets_at: (rl.five_hour && rl.five_hour.resets_at) || null,
       seven_day_resets_at: (rl.seven_day && rl.seven_day.resets_at) || null,
+      // Which session reports, and the model it runs (absent: an older daemon
+      // ignores them, a newer one keeps what it had).
+      session_id: sessionId || undefined,
+      model: modelId || undefined,
+      model_name: modelName || undefined,
       // See status-hook.js.
       sandbox: process.env.SANDBOX_NAME || os.hostname(),
     }),
@@ -104,6 +121,12 @@ process.stdin.on("end", () => {
     },
     (res) => {
       res.resume();
+      // Remembered only once the daemon has it, so a failed send is retried.
+      if (modelChanged && res.statusCode === 200) {
+        try {
+          fs.writeFileSync(modelStamp, modelId + "\n" + modelName);
+        } catch (_) {}
+      }
       process.exit(0);
     },
   );
