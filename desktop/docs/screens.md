@@ -972,13 +972,38 @@ hosts and the sandboxes. Amber when a request holds something, else quiet.
 **Panel.** Requests grouped by sandbox and host (`×N`), the newest's options
 (`answer-<id>-<option>`; answering goes through the core's dialog); a group's
 Dismiss takes all its copies; `approvals-dismiss-all` dismisses every refused
-host listed.
+host listed. At most 25 cards are drawn; `net-req-more` ("Show 25 more")
+draws the next ones, and the summary line says "Showing 25 of N".
 
-**Intents** (beside the policy and port ones): `approvals_dismiss {sandbox?,
-title?}`: direct; sbx's own `dismiss` option on each `network` request of the
-listed sandboxes (narrowed to one sandbox and host when given), one
-`POST /api/approvals/respond` after the other, a notice at the end. A request
-that holds something is never dismissed this way.
+**The filter.** A sandbox's own entries (its row's bubble and menu item
+"Network requests (N)", its pane bars' "sbx asks N", its Network item, the
+one-request notice) open the panel on that sandbox's requests only; the top
+bar and the many-requests notice open it on every sandbox's. Under a filter
+the header reads "Waiting for you N in" with the chip `net-filter-chip`
+(the sandbox's name and an x) and `net-filter-all` ("Show all M"); the
+summary line, the badge and the bulk button count only what is shown, and
+the bulk button reads "Dismiss these N" (or "Dismiss all N of <sandbox>"
+when some cards are not drawn). With nothing left: "Nothing waits in
+<sandbox>." and the way back. The sandbox picker keeps the filter on (it
+moves to the picked sandbox) or off. The filter is view state in data key
+`network_view` (`{filter}`, or null): changing it reads and sends nothing,
+and closing the panel drops it.
+
+**`<screen>_view`.** A panel's view state that must not outlive it lives
+in the data key `<screen>_view`; the core drops that key when the panel
+closes (`close_panel`, the tab's x), so the next opening starts clean.
+
+**Intents** (beside the policy and port ones): `network_show {sandbox?,
+filter?}`: opens the panel on that sandbox's policy and ports, filtered to
+its requests unless `filter` is false; without a sandbox, unfiltered.
+`network_filter {sandbox?}`: sets or clears the filter only.
+`approvals_dismiss {sandbox?, title?, expect?}`: direct; sbx's own `dismiss`
+option on each `network` request of the listed sandboxes (narrowed to one
+sandbox and host when given), one `POST /api/approvals/respond` after the
+other, a notice at the end. `expect` is the number on the button the person
+pressed: if the list now holds another number, nothing is sent and an error
+says the list changed. A request that holds something is never dismissed
+this way.
 
 ### create
 

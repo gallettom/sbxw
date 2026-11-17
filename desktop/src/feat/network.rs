@@ -252,7 +252,7 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
     let rules_path = |sb: &str| format!("/api/sandboxes/{}/policy/rules", enc(sb));
     Ok(match a.name {
         "network_show" => {
-            let target = sb.or_else(|| shown(cx));
+            let target = sb.clone().or_else(|| shown(cx));
             // A sandbox's entries (its bubble, its pane bar's chip, its menu)
             // list its requests only; the top bar's lists every sandbox's.
             let only = sb.as_deref().filter(|_| a.b("filter") != Some(false));
@@ -1001,7 +1001,10 @@ mod tests {
         let asks = h.act("dismiss_all", &bulk.1, &J::Null).unwrap();
         assert_eq!(asks["name"], "approvals_dismiss", "{asks}");
         assert_eq!(asks["args"], json!({ "sandbox": "test-sbx", "expect": 2 }));
-        assert_eq!(h.act("filter_clear", &J::Null, &J::Null).unwrap(), json!({ "kind": "intent", "name": "network_filter", "args": {} }));
+        // An empty Luau table comes as `[]`: no sandbox, the filter cleared.
+        let clear = h.act("filter_clear", &J::Null, &J::Null).unwrap();
+        assert_eq!(clear["name"], "network_filter", "{clear}");
+        assert!(clear["args"]["sandbox"].is_null(), "{clear}");
         // Unfiltered: 113 cards' worth, 25 drawn, "Show more"; every sandbox's.
         let (out, args, _) = render(d.clone(), None, 0);
         let all = out.join("\n");

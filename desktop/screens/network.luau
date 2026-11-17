@@ -126,11 +126,13 @@ local function requests(data, state)
     -- The bulk action takes exactly what its label says: the shown
     -- sandbox's refused hosts under a filter, the number checked again by
     -- the core (`expect`).
+    -- "these" only when every card it takes is drawn; past the cap the
+    -- label names the whole count (and the sandbox), as the note above.
     local label, what
-    if shown < #order then
-      label = "Dismiss all " .. refused .. (filter and (" in " .. filter) or "")
+    if filter then
+      label = shown < #order and ("Dismiss all " .. refused .. " of " .. filter) or ("Dismiss these " .. refused)
     else
-      label = filter and ("Dismiss these " .. refused) or ("Dismiss all " .. refused)
+      label = "Dismiss all " .. refused
     end
     what = filter and (plural(refused, "refused host request") .. " of " .. filter) or ("every refused host listed here (" .. refused .. ")")
     table.insert(out, row{ gap = 8, w = "full",
