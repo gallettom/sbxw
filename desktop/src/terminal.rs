@@ -24,7 +24,13 @@
 //! top-left in the pane (clipped or with room around it), and the status line
 //! says so ([`TerminalState::sized_elsewhere`]); typing in the pane (the
 //! daemon counts it) or clicking it ([`TerminalState::claim`]) takes the size
-//! back. A daemon that announces nothing (older) leaves the grid at the
+//! back. While another window sets a grid larger than the pane, the grid is
+//! drawn with a smaller font and cells so every column and row shows
+//! ([`TerminalState::display_scale`], [`TerminalState::metrics`]; never
+//! above 1, never below [`MIN_SCALE`]: under it the grid is cut and the
+//! status line says so). Drawing only: the cells and the wanted size are
+//! unchanged, mouse positions map through the drawn cell size, and nothing
+//! is sent because of it. A daemon that announces nothing (older) leaves the grid at the
 //! wanted size, as before. Nothing is sent before the pane has a layout: the
 //! default 100x30 is never told to the daemon.
 //!
@@ -102,6 +108,13 @@ pub const LINE_HEIGHT: f32 = 18.0;
 /// Space between the grid and the element's edges, and the status line above it.
 pub const PAD: f32 = 8.0;
 pub const STATUS_H: f32 = 20.0;
+/// The smallest scale a grid sized by another window is drawn at (see
+/// "Size"): half the normal size (7 pt). Below it the grid keeps this scale
+/// and is cut at the right and bottom.
+pub const MIN_SCALE: f32 = 0.5;
+/// Font sizes of a scaled grid go by this step (points), so few sizes are
+/// measured and shaped.
+const SCALE_STEP: f32 = 0.25;
 /// Lines of history, as the web UI's panes (`scrollback: 10000`).
 pub const SCROLLBACK: usize = 10_000;
 /// How long a size must hold before the daemon is told (a window drag sends
@@ -129,6 +142,47 @@ pub const MONO_FAMILIES: &str = "ui-monospace, Noto Sans Mono CJK JP, Noto Sans 
 pub fn cell_width() -> f32 {
     thread_local!(static W: f32 = rune::text::advance(&"m".repeat(100), style()) / 100.0);
     W.with(|w| *w)
+}
+
+/// [`style`] at another font size, the line height in proportion.
+pub fn style_at(font: f32) -> TextStyle {
+    TextStyle::new(font, 400.0).family(rune::Family::Mono).lh(font * LINE_HEIGHT / FONT_SIZE)
+}
+
+/// The width of one cell at font size `font`, measured once per size (the
+/// font's own advance: the row's text is laid out with it, so the cell must
+/// be exactly that wide, not `cell_width() * font / FONT_SIZE`).
+pub fn cell_width_at(font: f32) -> f32 {
+    if font == FONT_SIZE {
+        return cell_width();
+    }
+    thread_local!(static W: std::cell::RefCell<std::collections::HashMap<u32, f32>> = Default::default());
+    W.with(|w| *w.borrow_mut().entry(font.to_bits()).or_insert_with(|| rune::text::advance(&"m".repeat(100), style_at(font)) / 100.0))
+}
+
+/// How the grid is drawn: font size, cell width and line height (points),
+/// and whether it is cut even at the smallest scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Metrics {
+    pub font: f32,
+    pub cell_w: f32,
+    pub line_h: f32,
+    pub cut: bool,
+}
+
+impl Metrics {
+    /// At font size `font`.
+    pub fn at(font: f32) -> Metrics {
+        Metrics { font, cell_w: cell_width_at(font), line_h: font * LINE_HEIGHT / FONT_SIZE, cut: false }
+    }
+
+    pub fn normal() -> Metrics {
+        Metrics::at(FONT_SIZE)
+    }
+
+    pub fn style(&self) -> TextStyle {
+        style_at(self.font)
+    }
 }
 
 /// Reopens the terminal's socket (on a background thread): usually
@@ -256,6 +310,11 @@ pub struct TerminalState {
     hover_link: Option<(usize, usize, usize, String)>,
     /// The size this pane wants (its layout), once it has one.
     want: Option<(usize, usize)>,
+    /// The room the grid has in the pane (points), once laid out.
+    room: Option<(f32, f32)>,
+    /// How the grid is drawn now (smaller while another window sets a size
+    /// larger than the room).
+    metrics: Metrics,
     /// The PTY's size as the daemon last announced it, and whether this
     /// client sets it (`None`: not announced, or a daemon that does not).
     pty: Option<(usize, usize, bool)>,
@@ -371,6 +430,8 @@ impl TerminalState {
             last_report_cell: None,
             hover_link: None,
             want: None,
+            room: None,
+            metrics: Metrics::normal(),
             pty: None,
             sent_size: None,
             resize_at: None,
@@ -553,6 +614,8 @@ impl TerminalState {
                 self.pty = Some((cols, rows, owner));
                 // The grid takes the PTY's size; nothing goes back.
                 self.set_grid(cols, rows);
+                // The owner may have changed without the size.
+                self.refresh_metrics();
             }
             TermEvent::Closed(why) => {
                 self.key_sent = None;
@@ -727,6 +790,58 @@ impl TerminalState {
         matches!(self.pty, Some((_, _, false)))
     }
 
+    /// The scale the grid is drawn at, and whether it is cut even so. 1 (not
+    /// cut) unless another window sets the size and the grid is larger than
+    /// the room the pane has: then the largest scale at which every column
+    /// and row fits, `min(room w / grid w, room h / grid h)`, floored at
+    /// [`MIN_SCALE`] (cut below it). The app's zoom applies on top.
+    pub fn display_scale(&self) -> (f32, bool) {
+        (self.metrics.font / FONT_SIZE, self.metrics.cut)
+    }
+
+    /// The font, cell width and line height the grid is drawn with now.
+    pub fn metrics(&self) -> Metrics {
+        self.metrics
+    }
+
+    /// The metrics for the grid's size and the room: the largest font, in
+    /// [`SCALE_STEP`]s from `FONT_SIZE * min(room w / grid w, room h /
+    /// grid h)` down, whose cells fit the room (each size measured, since a
+    /// font's advance is not exactly proportional to its size); cut at the
+    /// floor.
+    fn scaled_metrics(&self) -> Metrics {
+        let normal = Metrics::normal();
+        let Some((rw, rh)) = self.room.filter(|_| self.sized_elsewhere()) else { return normal };
+        let (cols, rows) = (self.size.0 as f32, self.size.1 as f32);
+        let k = (rw / (cols * normal.cell_w)).min(rh / (rows * normal.line_h));
+        if !(k < 1.0) {
+            return normal;
+        }
+        let floor = FONT_SIZE * MIN_SCALE;
+        let mut font = ((FONT_SIZE * k / SCALE_STEP).floor() * SCALE_STEP).max(floor);
+        loop {
+            let m = Metrics::at(font);
+            let fits = cols * m.cell_w <= rw && rows * m.line_h <= rh;
+            if fits || font <= floor {
+                return Metrics { cut: !fits, ..m };
+            }
+            font = (font - SCALE_STEP).max(floor);
+        }
+    }
+
+    /// Recomputes the metrics (the room, the size or the owner changed); the
+    /// rows are built again at once when they change.
+    fn refresh_metrics(&mut self) {
+        let m = self.scaled_metrics();
+        if m != self.metrics {
+            self.metrics = m;
+            self.hover_link = None;
+            self.force_all = true;
+            self.dirty = true;
+            self.rebuild();
+        }
+    }
+
     /// Takes the PTY's size back (a click in the pane): the wanted size goes
     /// again, which makes this client the owner. Typing needs no call: the
     /// daemon counts typed input as use.
@@ -780,6 +895,8 @@ impl TerminalState {
     }
 
     fn fit_inner(&mut self, w: f32, h: f32) -> bool {
+        self.room = Some(((w - 2.0 * PAD).max(0.0), (h - 2.0 * PAD - STATUS_H).max(0.0)));
+        self.refresh_metrics();
         let cols = ((w - 2.0 * PAD) / cell_width()).floor().max(10.0) as usize;
         let rows = ((h - 2.0 * PAD - STATUS_H) / LINE_HEIGHT).floor().max(3.0) as usize;
         self.resize(cols, rows)
@@ -810,6 +927,8 @@ impl TerminalState {
         self.size = (cols, rows);
         self.term.resize(Size { cols, rows });
         self.hover_link = None;
+        self.metrics = self.scaled_metrics();
+        self.force_all = true;
         self.dirty = true;
         self.rebuild();
     }
@@ -1015,9 +1134,9 @@ impl TerminalState {
     /// The viewport cell under (`x`, `y`) points from the grid's top-left,
     /// as a grid point (history lines are negative) and the half of the cell.
     pub fn point_at(&self, x: f32, y: f32) -> (Point, Side) {
-        let cw = cell_width();
+        let (cw, lh) = (self.metrics.cell_w, self.metrics.line_h);
         let col = (x / cw).floor().clamp(0.0, self.size.0 as f32 - 1.0) as usize;
-        let row = (y / LINE_HEIGHT).floor().clamp(0.0, self.size.1 as f32 - 1.0) as i32;
+        let row = (y / lh).floor().clamp(0.0, self.size.1 as f32 - 1.0) as i32;
         let side = if x - col as f32 * cw < cw / 2.0 { Side::Left } else { Side::Right };
         (Point::new(Line(row - self.display_offset() as i32), Column(col)), side)
     }
@@ -1038,7 +1157,7 @@ impl TerminalState {
     /// Extends the selection to (`x`, `y`); past the top or bottom edge the
     /// view scrolls a line.
     pub fn select_update(&mut self, x: f32, y: f32) {
-        let h = self.size.1 as f32 * LINE_HEIGHT;
+        let h = self.size.1 as f32 * self.metrics.line_h;
         if y < 0.0 {
             self.scroll_lines(1);
         } else if y >= h {
@@ -1086,8 +1205,8 @@ impl TerminalState {
     }
 
     fn cell_at(&self, x: f32, y: f32) -> (usize, usize) {
-        let col = (x / cell_width()).floor().clamp(0.0, self.size.0 as f32 - 1.0) as usize;
-        let row = (y / LINE_HEIGHT).floor().clamp(0.0, self.size.1 as f32 - 1.0) as usize;
+        let col = (x / self.metrics.cell_w).floor().clamp(0.0, self.size.0 as f32 - 1.0) as usize;
+        let row = (y / self.metrics.line_h).floor().clamp(0.0, self.size.1 as f32 - 1.0) as usize;
         (col, row)
     }
 
@@ -1306,7 +1425,8 @@ impl TerminalState {
             }
         }
         self.term.reset_damage();
-        let style = style();
+        let m = self.metrics;
+        let style = m.style();
         self.rows.resize_with(nrows, || Rc::new(GridRow::new("", vec![], style)));
         self.row_extra.resize(nrows, u64::MAX);
         let sel = self.term.selection.as_ref().and_then(|s| s.to_range(&self.term));
@@ -1340,9 +1460,9 @@ impl TerminalState {
                 colors: &colors,
                 theme: &self.theme,
                 style,
-                cell_w: cell_width(),
-                line_h: LINE_HEIGHT,
-                font_size: FONT_SIZE,
+                cell_w: m.cell_w,
+                line_h: m.line_h,
+                font_size: m.font,
                 cursor,
                 selection,
                 link,
