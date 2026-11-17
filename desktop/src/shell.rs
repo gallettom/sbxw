@@ -598,6 +598,8 @@ impl App {
         data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
+        // What the screens' `pills` read (emphasis.rs): the daemon's switch and the app's own.
+        crate::emphasis::set_screen_context(&data["emphasis"], crate::feat::emphasis::app_off(&data["app"]["kept"]["emphasis"]));
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
         data["app"]["uploads"] = crate::files::uploads();
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });

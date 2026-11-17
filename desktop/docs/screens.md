@@ -148,6 +148,7 @@ Text. Positional: the string (a number is shown as its digits).
 | `mono` | bool | false. The terminal's font. The UI is monospace, as the web UI is; `mono` also keeps a wrapped text monospace (a command, a path) |
 | `wrap` | bool | false: one line. A wrapped text is a sentence or more: it is set in the prose face (Inter, bundled by Rune), as Markdown and the core dialogs' sentences are; `SBXW_DESKTOP_PROSE=mono` keeps everything monospace |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
+| `pills` | `true` or a sandbox name | none. Keyword pills: each `[[Word]]` or `[[Word: detail]]` in the string is drawn as a rounded coloured pill (the brackets dropped, the word in its tone, the detail regular), wrapping with the text, when the daemon's `[emphasis]` switch is on (`true`: the global switch; a sandbox's name: that sandbox's, and the app's own preference for it). Use it for words an agent wrote. See [Keyword pills](#keyword-pills) |
 
 Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
 `weight` of `bold` is drawn semibold (600).
@@ -523,11 +524,39 @@ links (any other link shows its label as text). Positional: the string.
 | `size` | number or text size | Text size (default 13) |
 | `on` | action name | Called when a link is pressed; `value` = its URL. Without `on`, links are drawn but do nothing |
 | `arg` | any value | Passed too |
+| `pills` | `true` or a sandbox name | Keyword pills in its prose (not in code, links, bold or italics), as `text`'s `pills` |
 
 ```lua
 markdown{ "Run **`sbxw up`** first, then see [the docs](https://example.org/sbxw).", on = "link" }
 -- actions.link = function(_, _, url) return intent("open_link", { url = url }) end
 ```
+
+### Keyword pills
+
+Agents write a short label in double brackets beside what it describes
+(`[[Done]]`, `[[Failed: 3 tests]]`, `[[Needs you]]`); `text` and `markdown`
+with `pills` draw each as a pill. The rule is emphasis-core's, the same in
+the terminal, the web UI and here (`desktop/src/emphasis.rs`): a word of 1 to
+32 letters, digits, spaces or hyphens (a letter first, a letter or digit
+last), an optional detail after `:` of 1 to 48 characters with no bracket,
+one line. The vocabulary is the daemon's (`data.emphasis.words`); a word it
+does not know is a pill in the neutral blue only when it starts with a
+capital (`[[summary]]`, a code map's link, stays text). Tones: green settled,
+red wrong, amber needs you, blue context, purple Jarvis and the team, cyan the
+kind of work, and `danger` a filled red for what cannot be undone.
+
+```lua
+text{ r.question, wrap = true, pills = r.from }   -- the sandbox that wrote it
+markdown{ m.text, on = "link", pills = true }
+```
+
+**Text, never anything else.** A screen gets a pill only as part of one
+text element: the core turns the string into characters and styles (colour,
+weight, a rounded background) of that element. No marker can make a
+control, a link, a key or an intent appear, whatever it holds (markup, an
+intent's spelling, a URL): the parts stay characters
+(`shell::layout_tests::pills_in_a_screen_never_make_a_control`). Pills are
+never drawn in tooltips (`help`): they show the marker as written.
 
 ## Events and actions
 

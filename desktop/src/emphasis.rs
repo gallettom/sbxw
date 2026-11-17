@@ -388,6 +388,74 @@ pub fn index(t: Tone) -> usize {
     TONES.iter().position(|x| *x == t).unwrap_or(3)
 }
 
+// ---------------------------------------------------------------------------
+// The app's own screens (`text{ ..., pills = true }`, `markdown{ ..., pills = ... }`)
+
+thread_local! {
+    /// The daemon's payload and the sandboxes the app's preference turns off,
+    /// as the screens' data last had them (set by the shell with the data).
+    static SCREENS: std::cell::RefCell<(J, Vec<String>)> = const { std::cell::RefCell::new((J::Null, Vec::new())) };
+}
+
+/// What screens' `pills` read: the daemon's payload (`data.emphasis`) and
+/// the app's preference (`data.app.kept.emphasis.off`).
+pub fn set_screen_context(cfg: &J, off: Vec<String>) {
+    SCREENS.with(|s| *s.borrow_mut() = (cfg.clone(), off));
+}
+
+/// The vocabulary when pills are on for `sandbox` (`""`: the global switch),
+/// else `None`.
+pub fn for_screen(sandbox: &str) -> Option<std::rc::Rc<Vocab>> {
+    SCREENS.with(|s| {
+        let s = s.borrow();
+        let cfg = (!s.0.is_null()).then_some(&s.0);
+        let sb = (!sandbox.is_empty()).then_some(sandbox);
+        let off = sb.is_some_and(|x| s.1.iter().any(|o| o == x));
+        enabled(cfg, sb, off).then(|| crate::feat::emphasis::vocab(&s.0))
+    })
+}
+
+/// The pill colours on the app's surfaces (panels and dialogs are `surface`;
+/// a pill's text reads on its own fill whatever is under it).
+pub fn screen_palette() -> [Pill; 7] {
+    let v = |n: &str| crate::theme::color_value(n).unwrap();
+    palettes(v("surface"), v("text"))
+}
+
+/// `s` as rich text: its plain parts as they are, each marker as a pill
+/// (the brackets dropped; a space of padding inside each end, the word in the
+/// tone's colour at 600, the detail regular, on the tone's rounded fill).
+/// Appends to `content` and `spans` (byte offsets into `content`). Text only:
+/// the result is one text element's characters and styles, so nothing in `s`
+/// can make a control, a link or an intent.
+pub fn rich_into(s: &str, vocab: &Vocab, palette: &[Pill; 7], content: &mut String, spans: &mut Vec<rune::Span>) {
+    for p in pieces(s, vocab) {
+        match p {
+            Piece::Text(t) => content.push_str(t),
+            Piece::Pill { word, detail, tone } => {
+                let c = palette[index(tone)];
+                let bg = Some(crate::theme::hex(c.bg));
+                let a = content.len();
+                content.push('\u{2009}');
+                content.push_str(word);
+                let w = content.len();
+                let mut sp = rune::Span::new(a, w).color(crate::theme::hex(c.strong)).weight(600.0);
+                sp.bg = bg;
+                spans.push(sp);
+                let d0 = content.len();
+                if let Some(d) = detail {
+                    content.push_str(": ");
+                    content.push_str(d);
+                }
+                content.push('\u{2009}');
+                let mut sd = rune::Span::new(d0, content.len()).color(crate::theme::hex(c.detail));
+                sd.bg = bg;
+                spans.push(sd);
+            }
+        }
+    }
+}
+
 /// The effective switch: the daemon's (global, then this sandbox's) and the
 /// app's own view preference; off wins.
 pub fn enabled(cfg: Option<&J>, sandbox: Option<&str>, app_off: bool) -> bool {
@@ -557,6 +625,44 @@ mod shared_cases {
         let original = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/core/testdata/emphasis-cases.json");
         if let Ok(o) = std::fs::read_to_string(&original) {
             assert_eq!(o, COPY, "fixtures/emphasis/emphasis-cases.json differs from {}: copy it again", original.display());
+        }
+    }
+}
+
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+
+    #[test]
+    fn rich_text_has_the_pills_and_nothing_else() {
+        let (mut content, mut spans) = (String::new(), vec![]);
+        rich_into("ok [[Failed: 3 tests]] and [[summary]].", &Vocab::default(), &screen_palette(), &mut content, &mut spans);
+        assert_eq!(content, "ok \u{2009}Failed: 3 tests\u{2009} and [[summary]].");
+        assert_eq!(spans.len(), 2, "the word and the detail");
+        assert_eq!(&content[spans[0].start as usize..spans[0].end as usize], "\u{2009}Failed");
+        assert_eq!(spans[0].weight, Some(600.0));
+        assert!(spans.iter().all(|s| s.bg.is_some() && s.underline.is_none()), "styles only");
+        assert_eq!(spans[0].bg, spans[1].bg, "one pill");
+    }
+
+    #[test]
+    fn screens_follow_the_switch() {
+        set_screen_context(&serde_json::json!({"enabled": true, "words": {"done": "green"}, "sandboxes": {"quiet": false}}), vec!["mine-off".into()]);
+        assert!(for_screen("").is_some());
+        assert!(for_screen("quiet").is_none(), "the daemon's off for that sandbox");
+        assert!(for_screen("mine-off").is_none(), "the app's off");
+        set_screen_context(&serde_json::json!({"enabled": false, "words": {"done": "green"}}), vec![]);
+        assert!(for_screen("").is_none());
+        set_screen_context(&J::Null, vec![]);
+        assert!(for_screen("").is_some(), "no answer yet: the built-in vocabulary");
+    }
+
+    /// Each tone's word and detail on its pill read at 4.5:1 (the pill is
+    /// opaque, so whatever surface it sits on).
+    #[test]
+    fn screen_pills_read() {
+        for p in screen_palette() {
+            assert!(contrast(p.strong, p.bg) >= NEED && contrast(p.detail, p.bg) >= NEED);
         }
     }
 }

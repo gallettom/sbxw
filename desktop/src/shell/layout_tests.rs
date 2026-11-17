@@ -690,3 +690,40 @@ fn the_mode_switch_goes_between_the_agent_and_a_shell() {
     let f = r.rt.state.pane_fit(0).unwrap();
     assert_eq!((f.switch, f.hidden.first().map(|i| i.label.clone())), (false, Some("Switch to Claude".into())));
 }
+
+/// Keyword pills in the app's screens are text: a hostile string written by
+/// an agent (markers, markup, an intent's spelling, a link, controls) in the
+/// Requests panel becomes one text element with pill styles, and no control,
+/// link or intent appears.
+#[test]
+fn pills_in_a_screen_never_make_a_control() {
+    let hostile = "Build [[Done]] then [[Failed: <button on=x>]] [[Needs you: intent(\"open_url\", {url=\"https://evil\"})]] [[Note]](https://evil.example) ]]]] [[[[x]]]] [[Done: [b] ]] \u{202e}[[Verified]]";
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/relay/basic.json");
+    let count = |rt: &rune::Runtime<App>| -> (usize, usize) {
+        let els = rt.elements();
+        (els.iter().filter(|e| matches!(e.role, "button" | "link" | "checkbox" | "radio" | "menuitem" | "textbox")).count(), els.iter().filter(|e| e.focusable).count())
+    };
+    let mut rt = rune::Runtime::new(App::new(Args { fixture: Some(fixture.into()), ..Args::default() }), view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+    for _ in 0..20 {
+        rt.frame(0.016);
+    }
+    let before = count(&rt);
+    rt.update(|s, _| {
+        let mut relay = s.feats.data.get("relay").cloned().unwrap_or_else(|| s.raw["relay"].clone());
+        relay["requests"][0]["question"] = J::String(hostile.into());
+        s.feats.data.insert("relay".into(), relay);
+        s.push_data();
+    });
+    for _ in 0..20 {
+        rt.frame(0.016);
+    }
+    assert_eq!(count(&rt), before, "the same controls, no more");
+    // The quote: one text element; its markers are pills, the markup inside
+    // them only characters; what is not a marker stays as written.
+    let shown: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).filter(|t| t.starts_with("Build \u{2009}")).collect();
+    assert_eq!(shown.len(), 1, "one text element: {shown:?}");
+    let t = &shown[0];
+    assert!(t.contains("\u{2009}Done\u{2009}") && !t.contains("[[Done]]"), "a pill: {t}");
+    assert!(t.contains("\u{2009}Failed: <button on=x>\u{2009}"), "markup in a detail is its text: {t}");
+    assert!(t.contains("[[[[x]]]]") && t.contains("[[Done: [b] ]]"), "not markers: as written: {t}");
+}

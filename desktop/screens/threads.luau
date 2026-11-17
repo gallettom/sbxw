@@ -82,7 +82,7 @@ local function session_row(data, sb, s, running_sb)
   return column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = s.state == "wants" and "amber" or "elevated", key = key,
     head,
     #meta > 0 and text{ table.concat(meta, " · "), size = "sm", color = "text-muted", truncate = true } or false,
-    (s.summary and s.summary ~= "") and text{ s.summary, size = "sm", color = "text-soft", wrap = true } or false,
+    (s.summary and s.summary ~= "") and text{ s.summary, size = "sm", color = "text-soft", wrap = true, pills = sb } or false,
     row(buttons),
   }
 end

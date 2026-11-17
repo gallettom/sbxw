@@ -112,6 +112,10 @@ pub struct Style {
     pub mono: bool,
     pub wrap: bool,
     pub truncate: bool,
+    /// `pills`: draw `[[Word]]` markers as keyword pills (emphasis.rs):
+    /// `Some("")` by the daemon's global switch, `Some(sandbox)` by that
+    /// sandbox's (and the app's own preference for it).
+    pub pills: Option<String>,
     /// Out of the parent's flow, pinned to some of its edges (left, top, right, bottom).
     pub pin: Option<[Option<f32>; 4]>,
 }
@@ -276,7 +280,7 @@ pub enum Positional {
 
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
-const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate"];
+const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate", "pills"];
 const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "hover_zone", "group", "selected", "on_space", "clip", "folds", "shortcuts"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
@@ -298,7 +302,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
-    ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg"]),
+    ("markdown", Kind::Markdown, Positional::Text, &["color", "size", "on", "arg", "pills"]),
     ("textarea", Kind::Textarea, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "disabled", "rows"]),
     ("image", Kind::Image, Positional::None, &["fit"]),
     ("surface", Kind::Surface, Positional::None, &["id"]),
@@ -746,6 +750,15 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "mono" => st.mono = bool_of(v)?,
         "wrap" => st.wrap = bool_of(v)?,
         "truncate" => st.truncate = bool_of(v)?,
+        // true: the global switch; a sandbox's name: its switch.
+        "pills" => {
+            st.pills = match v {
+                Value::String(s) => Some(s.to_string_lossy()),
+                Value::Boolean(true) => Some(String::new()),
+                Value::Boolean(false) | Value::Nil => None,
+                _ => return Err(format!("expected true or a sandbox name, got {}", v.type_name())),
+            }
+        }
         "on" => n.on = Some(string_of(v)?),
         "on_submit" => n.on_submit = Some(string_of(v)?),
         "arg" => n.arg = lua_to_json(v, 0)?,

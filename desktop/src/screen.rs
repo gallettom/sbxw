@@ -966,7 +966,18 @@ impl Build<'_> {
         let name = self.name.clone();
         let e = match n.kind {
             Kind::Text => {
-                let mut t = text(n.text.clone()).font(text_style(st, 13.0, 400.0)).color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())));
+                // `pills`: markers drawn as keyword pills; still one text element.
+                let vocab = st.pills.as_deref().filter(|_| n.text.contains("[[")).and_then(crate::emphasis::for_screen);
+                let mut t = match vocab {
+                    Some(v) => {
+                        let (mut content, mut spans) = (String::new(), vec![]);
+                        crate::emphasis::rich_into(&n.text, &v, &crate::emphasis::screen_palette(), &mut content, &mut spans);
+                        rune::rich(content, spans)
+                    }
+                    None => text(n.text.clone()),
+                }
+                .font(text_style(st, 13.0, 400.0))
+                .color(hex(st.color.unwrap_or(theme::color_value("text").unwrap())));
                 if st.wrap {
                     t = t.wrap();
                 }
@@ -1189,7 +1200,8 @@ impl Build<'_> {
                 r
             }
             Kind::Markdown => {
-                let look = crate::markdown::Look { color: st.color.unwrap_or(theme::color_value("text").unwrap()), size: st.size.unwrap_or(13.0) };
+                let pills = st.pills.as_deref().and_then(crate::emphasis::for_screen);
+                let look = crate::markdown::Look { color: st.color.unwrap_or(theme::color_value("text").unwrap()), size: st.size.unwrap_or(13.0), pills };
                 let on_link: Option<Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>> = n.on.clone().map(|on| {
                     let (name, arg) = (name.clone(), n.arg.clone());
                     Rc::new(move |s: &mut S, url: &str, _tx: &mut rune::Tx| fire(s, &name, &on, &arg, &J::String(url.to_string()))) as Rc<dyn Fn(&mut S, &str, &mut rune::Tx)>
