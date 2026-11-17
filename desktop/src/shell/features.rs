@@ -919,6 +919,13 @@ impl App {
     }
 
     /// A press on an extra the core draws (pane bars) or on a notice's offer.
+    /// Help, from the menu bar (main.rs): the same intent the top bar's
+    /// button ran (`show_help`), so the same dialog.
+    pub fn show_help(&mut self) {
+        self.press_extra("menu", "show_help", &json!({}));
+        self.push_data();
+    }
+
     pub(super) fn press_extra(&mut self, from: &str, name: &str, args: &J) {
         match crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })) {
             Ok(list) => crate::screen::Host::intents(self, from, list),

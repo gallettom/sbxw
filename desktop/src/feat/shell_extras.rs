@@ -23,6 +23,8 @@ pub const FEATURE: Feature = Feature {
         ScreenDecl { name: "sandbox-actions", src: include_str!("../../screens/sandbox-actions.luau"), slot: Slot::Modal { width: 460.0, light_dismiss: false } },
     ],
     intents: INTENTS,
+    // Help from anywhere, as the menu bar's Help > sbxw Help on macOS.
+    shortcuts: &[Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and keyboard shortcuts" }],
     act,
     on_answer: Some(on_answer),
     extras: Some(extras),
@@ -155,7 +157,8 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
             intent: None,
         });
     }
-    v.push(Extra { place: Place::Topbar, id: "help".into(), label: String::new(), icon: Some("info".into()), tone: "muted".into(), help: "Help and keyboard shortcuts".into(), count: None, intent: Some(("show_help".into(), json!({}))) });
+    // Help is not in the top bar: the menu bar's Help menu has it on macOS
+    // (main.rs), the shortcut below and the palette everywhere.
     for sb in cx.get("sandboxes").as_array().cloned().unwrap_or_default() {
         let name = sb["name"].as_str().unwrap_or("").to_string();
         v.push(Extra {
