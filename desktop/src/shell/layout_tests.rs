@@ -236,10 +236,11 @@ fn the_pager_menu_sets_the_count_and_tabs_show_pages() {
     super::tests::tap(&mut r.rt, "pager-view-grid");
     r.settle();
     assert_eq!(r.rt.state.pages.per, 2, "Grid goes back to the last count above one");
+    assert_eq!(r.names(), [vec!["a", "b"], vec!["c", "d"]], "and to the grid's pages");
     // Raising the count moves nothing; Gather does.
     super::tests::tap(&mut r.rt, "pager-per");
     super::tests::tap(&mut r.rt, "pager-per-4");
-    assert_eq!(r.rt.state.pages.list.len(), 4);
+    assert_eq!(r.rt.state.pages.list.len(), 2);
     super::tests::tap(&mut r.rt, "pager-per");
     super::tests::tap(&mut r.rt, "pager-gather");
     r.settle();
@@ -592,3 +593,53 @@ fn modal_content_stays_inside_the_modal() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
+
+/// Tabs, then Grid: the grid's pages and tilings come back as they were,
+/// the same terminals (no reconnect), at most one size each.
+#[test]
+fn tabs_then_grid_puts_the_grid_back() {
+    let mut r = Rig::new(&["a", "b", "c", "d", "e"], 1284.0, 816.0);
+    // A grid of our own: 3 per page, the first page rotated.
+    r.op(PageOp::Per(3));
+    r.op(PageOp::Show(0));
+    r.op(PageOp::Rotate(Some(0)));
+    let grid: Vec<Tile> = r.rt.state.pages.list.iter().map(|p| p.tile.clone()).collect();
+    let names = r.names();
+    let before = r.generations();
+    r.take();
+    r.op(PageOp::View(true));
+    assert_eq!(r.rt.state.pages.list.len(), 5, "tabs: one per page");
+    r.check_kept(&before, "to tabs");
+    r.op(PageOp::Show(3));
+    r.op(PageOp::View(false));
+    assert_eq!(r.rt.state.pages.list.iter().map(|p| p.tile.clone()).collect::<Vec<_>>(), grid, "the same pages and tilings");
+    assert_eq!(r.names(), names);
+    r.check_kept(&before, "back to grid");
+    // A terminal closed while in Tabs: its room closes; the rest as they were.
+    r.op(PageOp::View(true));
+    let b = r.rt.state.pages.list[1].tile.order()[0];
+    r.rt.update(|s, _| {
+        let i = s.index_of(b).unwrap();
+        s.remove_pane(i);
+    });
+    r.settle();
+    r.op(PageOp::View(false));
+    assert_eq!(r.names(), [vec!["a", "c"], vec!["d", "e"]]);
+}
+
+/// Raising N by hand pulls nothing back, and says it can: "Gather" shows
+/// beside the number while gathering would move something.
+#[test]
+fn gather_shows_when_it_would_move_something() {
+    let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
+    assert!(!r.rt.state.gather_would_move() && r.rt.presented("pager-gather-now").is_none());
+    r.op(PageOp::Per(1));
+    assert!(!r.rt.state.gather_would_move(), "tabs: nothing to gather");
+    r.op(PageOp::Per(4));
+    assert_eq!(r.names().len(), 3, "raising N moves nothing by itself");
+    assert!(r.rt.state.gather_would_move() && r.rt.presented("pager-gather-now").is_some());
+    super::tests::tap(&mut r.rt, "pager-gather-now");
+    r.settle();
+    assert_eq!(r.names(), [vec!["a", "b", "c"]]);
+    assert!(r.rt.presented("pager-gather-now").is_none());
+}

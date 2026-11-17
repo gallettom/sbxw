@@ -11,7 +11,7 @@
 //!
 //! Keys: `pager`, `page-<k>` (from 1), `page-<k>-close`, `page-new`,
 //! `pager-view-tabs`, `pager-view-grid`, `pager-per` (its list
-//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-more`
+//! `pager-per-list`, items `pager-per-<n>` and `pager-gather`), `pager-gather-now` (the Gather button beside it, while gathering would move something), `pager-more`
 //! (`pager-more-list`, items `page-<k>`).
 
 use super::pages::PER_CHOICES;
@@ -88,6 +88,11 @@ fn controls_w(per: usize) -> f32 {
     seg("Tabs") + seg("Grid") + GAP + bar::measure(&per_label(per), TAB_TEXT, 500.0) + 16.0 + 12.0 + 4.0 + GAP
 }
 
+/// The "Gather" button beside the per-page menu.
+fn gather_w() -> f32 {
+    bar::measure("Gather", TAB_TEXT, 500.0) + 16.0
+}
+
 fn per_label(per: usize) -> String {
     if per == 1 { "1 per page".into() } else { format!("{per} per page") }
 }
@@ -126,6 +131,19 @@ impl App {
         TabInfo { label, help: format!("Page {}: {what}{state}", k + 1), tone, group, others }
     }
 
+    /// Whether "Gather" would move something: terminals on more pages than
+    /// N per page needs, or empty panes among them (raising N by hand pulls
+    /// nothing back by itself; the button beside the number says it can).
+    pub fn gather_would_move(&self) -> bool {
+        if self.pages.tabs() {
+            return false;
+        }
+        let e = self.empty_uids();
+        let mut p = self.pages.clone();
+        p.gather(&|x| e.contains(&x));
+        p.list.iter().map(|x| &x.tile).ne(self.pages.list.iter().map(|x| &x.tile))
+    }
+
     /// Which tabs are inline: `(first, end)`; the others are in `pager-more`.
     pub fn pager_fit(&self) -> (usize, usize) {
         let (a, b, _) = self.pager_fit_as();
@@ -137,7 +155,7 @@ impl App {
     pub fn pager_fit_as(&self) -> (usize, usize, bool) {
         let n = self.pages.list.len();
         let w = if self.pager_w > 0.0 { self.pager_w } else { self.window.0 - self.left_w() - layout::GUTTER * 2.0 };
-        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP;
+        let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP + if self.gather_would_move() { gather_w() + GAP } else { 0.0 };
         let widths = |compact: bool| -> Vec<f32> {
             (0..n).map(|k| {
                 let t = self.tab_info_as(k, compact);
@@ -161,7 +179,7 @@ impl App {
     pub(super) fn pager_drawn(&self, key: &str) -> bool {
         let n = self.pages.list.len();
         let (a, b) = self.pager_fit();
-        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per");
+        let fixed = matches!(key, "pager" | "page-new" | "pager-view-tabs" | "pager-view-grid" | "pager-per") || (key == "pager-gather-now" && self.gather_would_move());
         let more = (a > 0 || b < n) && key == "pager-more";
         let tab = key.strip_prefix("page-").and_then(|r| r.strip_suffix("-close").unwrap_or(r).parse::<usize>().ok()).is_some_and(|k| k >= 1 && k <= n && ((a..b).contains(&(k - 1)) || (!key.ends_with("-close") && self.pager_menu.as_deref() == Some("more"))));
         let per = self.pager_menu.as_deref() == Some("per") && (key == "pager-per-list" || key == "pager-gather" || PER_CHOICES.iter().any(|c| key == format!("pager-per-{c}")));
@@ -436,6 +454,25 @@ pub fn view(s: &App) -> El {
         .on_press(|s: &mut App| s.pager_menu = if s.pager_menu.as_deref() == Some("per") { None } else { Some("per".into()) })
         .child(text(per_label(s.pages.per)).font(small(TAB_TEXT, 500.0)).color(c("text")))
         .child(small_icon("chevron-down", 12.0, c("text-muted")));
+    let gather = s.gather_would_move().then(|| {
+        row()
+            .key("pager-gather-now")
+            .role("button")
+            .label("Gather")
+            .help(format!("Gather the terminals onto pages of {}, in page order", s.pages.per))
+            .h(H - 6.0)
+            .px(8.0)
+            .items_center()
+            .radius(theme::radius("xs").unwrap())
+            .fill(c("surface-alt"))
+            .hover(c("elevated"))
+            .cursor(Cursor::Pointer)
+            .on_press(|s: &mut App| {
+                s.run_intent("pager", Intent::Pages(PageOp::Gather));
+                s.push_data();
+            })
+            .child(text("Gather").font(small(TAB_TEXT, 500.0)).color(c("blue")))
+    });
     row()
         .key("pager")
         .role("tablist")
@@ -451,6 +488,7 @@ pub fn view(s: &App) -> El {
         })
         .child(left)
         .child(view_switch)
+        .children(gather)
         .child(per)
 }
 

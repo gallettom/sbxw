@@ -195,6 +195,9 @@ pub struct App {
     pub focused: usize,
     /// The pages and each page's tiling (pages.rs).
     pub pages: Pages,
+    /// The grid's pages as they were when the person switched to Tabs, to
+    /// put back on Grid (`PageOp::View`); in memory only.
+    pub grid_saved: Option<Vec<pages::Page>>,
     /// The last pane id given.
     next_uid: Uid,
     /// Each split's length as laid out (points), by its path, for its divider.
@@ -334,6 +337,7 @@ impl App {
             panes: vec![Pane::empty(1)],
             focused: 0,
             pages: Pages::new(1),
+            grid_saved: None,
             next_uid: 1,
             split_len: HashMap::new(),
             rects: Rects::default(),
@@ -1561,10 +1565,35 @@ impl App {
                     }
                 });
             }
-            PageOp::View(tabs) => {
-                let n = if tabs { 1 } else { self.pages.grid_per.max(2) };
-                self.run_page_op(PageOp::Per(n));
+            // Tabs keeps the grid as it is (its pages and tilings); Grid from
+            // Tabs puts it back for the terminals still open, those opened
+            // meanwhile filling the room (pages::restore). With nothing kept,
+            // it gathers them onto pages of N.
+            PageOp::View(true) => {
+                if !self.pages.tabs() {
+                    self.grid_saved = Some(self.pages.list.clone());
+                }
+                self.run_page_op(PageOp::Per(1));
             }
+            PageOp::View(false) if self.pages.tabs() => {
+                let n = self.pages.grid_per.max(2);
+                let saved = self.grid_saved.take();
+                let e = self.empty_uids();
+                self.rearrange(|s| {
+                    let f = s.focused_uid();
+                    s.pages.per = n;
+                    match saved {
+                        Some(saved) => {
+                            s.pages.list = pages::restore(&saved, &s.pages.all(), n);
+                        }
+                        None => {
+                            s.pages.gather(&|x| e.contains(&x));
+                        }
+                    }
+                    s.pages.current = f.and_then(|u| s.pages.page_of(u)).unwrap_or(0).min(s.pages.list.len() - 1);
+                });
+            }
+            PageOp::View(false) => self.run_page_op(PageOp::Per(self.pages.grid_per.max(2))),
             PageOp::Gather => {
                 let e = self.empty_uids();
                 self.rearrange(|s| {

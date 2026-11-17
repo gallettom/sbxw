@@ -1,9 +1,9 @@
 //! The left rail: a fixed column (44 pt) at the far left, under the top
 //! bar, always shown (Cmd/Ctrl+B hides the sidebar, not the rail).
 //!
-//! Top: the view switch, Grid and Tabs (the pager's own switch, the current
-//! one marked). Then Requests and Network, with their counts as small
-//! badges (amber when something holds on the person). Bottom: Jarvis and
+//! Top: Requests and Network, with their counts as small badges (amber when
+//! something holds on the person). The view switch (Tabs | Grid) is the
+//! pager's alone. Bottom: Jarvis and
 //! Settings (Setup). Each entry runs the intent its old top bar button ran
 //! (`relay_open`, `network_show`, `toggle_jarvis_panel`, Setup's
 //! `open_modal`); nothing new is asked of the daemon.
@@ -15,7 +15,7 @@
 //! What moved here leaves the top bar (shell.rs, `top_layout`, marks those
 //! extras `in_rail`): no entry is shown twice.
 //!
-//! Keys: `rail`, `rail-grid`, `rail-tabs`, `rail-requests`, `rail-network`,
+//! Keys: `rail`, `rail-requests`, `rail-network`,
 //! `jarvis-toggle` (Jarvis's button keeps its key), `rail-setup`; a badge is
 //! `<key>-badge`.
 
@@ -73,12 +73,7 @@ impl App {
 
     /// The rail's entries, top group then bottom group.
     pub fn rail_entries(&self) -> (Vec<Entry>, Vec<Entry>) {
-        let tabs = self.pages.tabs();
-        let grid_n = self.pages.grid_per.max(2);
-        let mut top = vec![
-            Entry { key: "rail-grid", icon: "grid".into(), help: format!("Grid: up to {grid_n} terminals per page"), keys: vec![], tone: "blue", on: !tabs, count: None, badge: "", run: RailRun::Op(PageOp::View(false)) },
-            Entry { key: "rail-tabs", icon: "single".into(), help: "Tabs: one terminal per page, the pager as its tab strip".into(), keys: palette::page_keys(true), tone: "blue", on: tabs, count: None, badge: "", run: RailRun::Op(PageOp::View(true)) },
-        ];
+        let mut top = vec![];
         let badge_of = |e: &Option<J>| -> (Option<u64>, &'static str) {
             match e {
                 Some(e) => (e["count"].as_u64().filter(|n| *n > 0), if e["tone"] == "amber" || e["tone"] == "red" { "amber" } else { "blue" }),
@@ -192,10 +187,7 @@ pub fn view(s: &App) -> El {
         (i.checked_sub(1).map(|j| keys[j]), keys.get(i + 1).copied())
     };
     let mut col_ = col().key("rail").role("toolbar").label("Views and panels").w(W).h_full().min_h(0.0).py(8.0).gap(6.0).items_center().fill(c("bg")).border(1.0, c("elevated")).radius(theme::radius("md").unwrap());
-    for (i, e) in top.iter().enumerate() {
-        if i == 2 {
-            col_ = col_.child(el().w(20.0).h(1.0).fill(c("elevated")));
-        }
+    for e in top.iter() {
         let (p, n) = around(e.key);
         col_ = col_.child(button(e, p, n));
     }
@@ -218,12 +210,13 @@ mod tests {
             let r = Rig::new(&["a", "b", "c"], w, h);
             let (rail, _) = r.rt.presented("rail").unwrap();
             assert!((rail[2] - W).abs() < 0.5, "{w}: 44 pt wide");
-            for k in ["rail-grid", "rail-tabs", "rail-requests", "rail-network", "jarvis-toggle", "rail-setup"] {
+            for k in ["rail-requests", "rail-network", "jarvis-toggle", "rail-setup"] {
                 let (b, _) = r.rt.presented(k).unwrap_or_else(|| panic!("{w}: {k}"));
                 assert!(b[2] >= TARGET - 0.5 && b[3] >= TARGET - 0.5, "{w}: {k} a 28 pt target");
                 assert!(b[0] >= rail[0] && b[0] + b[2] <= rail[0] + rail[2] && b[1] + b[3] <= rail[1] + rail[3] + 0.5, "{w}: {k} {b:?} inside the rail {rail:?}");
                 assert!(r.rt.state.drawn(k));
             }
+            assert!(r.rt.presented("rail-grid").is_none() && r.rt.presented("rail-tabs").is_none(), "{w}: the view switch is the pager's alone");
             // Under the top bar, left of the sidebar.
             let (top, _) = r.rt.presented("top-bar").unwrap();
             let (side, _) = r.rt.presented("sidebar").unwrap();
@@ -234,13 +227,6 @@ mod tests {
             }
         }
         let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
-        super::super::tests::tap(&mut r.rt, "rail-tabs");
-        r.settle();
-        assert_eq!(r.rt.state.pages.list.len(), 3, "tabs: one terminal per page");
-        assert_eq!(r.rt.state.rail_entries().0[1].on, true);
-        super::super::tests::tap(&mut r.rt, "rail-grid");
-        r.settle();
-        assert_eq!(r.rt.state.pages.per, 4);
         super::super::tests::tap(&mut r.rt, "jarvis-toggle");
         assert!(r.rt.state.jarvis.open);
         super::super::tests::tap(&mut r.rt, "jarvis-toggle");
@@ -267,10 +253,10 @@ mod tests {
         super::super::tests::tap(&mut rt, "rail-setup");
         assert_eq!(rt.state.feats.modal.as_ref().map(|m| m.0.as_str()), Some("setup"));
         // Arrow keys move within the rail.
-        r.rt.update(|_, tx| tx.focus("rail-grid", true));
+        r.rt.update(|_, tx| tx.focus("rail-requests", true));
         r.rt.frame(0.016);
         r.rt.key(KeyEvent { key: Key::Down, mods: rune::Mods::default() });
         r.rt.frame(0.016);
-        r.rt.update(|_, tx| assert_eq!(tx.focused(), Some("rail-tabs")));
+        r.rt.update(|_, tx| assert_eq!(tx.focused(), Some("rail-network")));
     }
 }

@@ -807,7 +807,8 @@ Screens: `topbar` (the bar at the top, right of macOS's window buttons),
 `sandboxes` (the side panel) and `jarvis` (the panel docked on the right,
 shown while `data.jarvis.open`). The terminals, their pane bars, the
 pager above them (pages of terminals: `src/shell/pager.rs`), the left rail
-(Grid and Tabs, Requests, Network, Jarvis, Setup: `src/shell/rail.rs`), the
+(Requests, Network, Jarvis, Setup: `src/shell/rail.rs`; the view switch,
+Tabs | Grid, is the pager's), the
 panel's resize handle, the status bar at the window's foot (bring-ups,
 total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
 approval dialog are drawn by the core.
