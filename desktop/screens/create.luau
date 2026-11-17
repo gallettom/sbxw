@@ -287,7 +287,7 @@ local function workspace(c)
     },
     folder_browser(c),
     divider{},
-    text{ "OPTIONAL", size = "xs", weight = "semibold", color = "text-dim" },
+    text{ "Optional", size = "caption", weight = "semibold", color = "text-muted" },
     repos(c),
     carves(c),
     ports(c),

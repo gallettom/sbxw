@@ -591,7 +591,7 @@ local function voice_tab(state, d)
     elseif st.state == "partial" then word, tone = "partial, " .. mb(st.have), "amber"
     else word, tone = "~" .. (m.approx_mb or 0) .. " MB", "neutral" end
     models[#models + 1] = row{ w = "full", gap = 8, key = "model-" .. (m.id or m.label),
-      badge{ string.upper(m.role or "?") },
+      badge{ m.role or "?" },
       text{ m.label or m.id, truncate = true, grow = 1 },
       text{ m.license or "", size = "sm", color = "text-dim" },
       badge{ word, tone = tone },

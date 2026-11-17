@@ -15,7 +15,7 @@ local function note(t, color)
 end
 
 local function head(t)
-  return text{ string.upper(t), size = "xxs", weight = "semibold", color = "text-muted" }
+  return text{ t, size = "caption", weight = "semibold", color = "text-muted" }
 end
 
 local function tabs(ui)

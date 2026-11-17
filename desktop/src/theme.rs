@@ -183,6 +183,19 @@ pub fn to_json() -> serde_json::Value {
     })
 }
 
+/// Long prose (Jarvis's answers, Markdown in screens): the app's monospace
+/// by default, the product's voice. `SBXW_DESKTOP_PROSE=sans` sets it in
+/// Inter, the proportional face Rune bundles (no font file of ours), to
+/// compare the two; nothing else changes.
+pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
+    let t = crate::screen::body(size.max(12.0), weight);
+    if std::env::var("SBXW_DESKTOP_PROSE").is_ok_and(|v| v == "sans") {
+        t.family(rune::Family::Named("Inter"))
+    } else {
+        t
+    }
+}
+
 /// A sandbox's group colour, as the web UI gives it (`assets/js/sandboxes.js`,
 /// `groupColorOf`): chats share one hue, a workspace folder gets
 /// `hsl(hash % 360, 55%, 62%)` from its path, a sandbox with neither none.

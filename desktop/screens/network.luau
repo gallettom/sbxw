@@ -33,7 +33,7 @@ end
 
 local function section(title, count)
   return row{ gap = 8, w = "full", pad = 2,
-    text{ string.upper(title), size = "xxs", weight = "semibold", color = "text-muted" },
+    text{ title, size = "caption", weight = "semibold", color = "text-muted" },
     count and badge{ tostring(count), tone = "neutral" } or false,
   }
 end

@@ -15,7 +15,7 @@
 //! span's content is never read as Markdown. Only `http` and `https` links
 //! are links; any other scheme shows its label as plain text.
 
-use rune::{col, row, text, El, Span, TextStyle};
+use rune::{col, row, text, El, Span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
@@ -424,7 +424,7 @@ fn rich_runs<S: 'static>(runs: &[Run], look: &Look, weight: f32, size: f32, key:
             spans.push(s);
         }
     }
-    let mut e = rune::rich(content, spans).font(TextStyle::new(size, weight)).color(hex(look.color)).w_full().min_w(0.0).key(key.to_string());
+    let mut e = rune::rich(content, spans).font(crate::theme::prose(size, weight)).color(hex(look.color)).w_full().min_w(0.0).key(key.to_string());
     if !links.is_empty() {
         for (n, (range, url)) in links.into_iter().enumerate() {
             e = e.link(rune::Link::new(range, url.clone()).label(url.clone()).help(url).role("link")).key(format!("{key}-l{n}"));
@@ -465,7 +465,7 @@ pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::
                             .min_w(0.0)
                             .items_start()
                             .gap(6.0)
-                            .child(text(mark).font(TextStyle::new(look.size, 400.0)).color(c("text-muted")).min_w(if *ordered { 16.0 } else { 8.0 }))
+                            .child(text(mark).font(crate::theme::prose(look.size, 400.0)).color(c("text-muted")).min_w(if *ordered { 16.0 } else { 8.0 }))
                             .child(col().grow(1.0).min_w(0.0).child(rich_runs::<S>(it, look, 400.0, look.size, &format!("{k}-i{n}"), &on_link))),
                     );
                 }
@@ -479,7 +479,7 @@ pub fn view<S: 'static>(src: &str, look: &Look, key: &str, on_link: Option<std::
                 .radius(radius("sm").unwrap())
                 .fill(c("bg"))
                 .border(1.0, c("elevated"))
-                .child(text(code.clone()).font(TextStyle::new(look.size * 0.92, 400.0).mono()).color(hex(look.color)).wrap_anywhere().w_full().min_w(0.0)),
+                .child(text(code.clone()).font(crate::screen::body((look.size * 0.92).max(12.0), 400.0).mono()).color(hex(look.color)).wrap_anywhere().w_full().min_w(0.0)),
         });
     }
     out

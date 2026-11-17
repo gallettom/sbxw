@@ -31,7 +31,7 @@ end
 
 local function section(title, count)
   return row{ gap = 8, w = "full",
-    text{ string.upper(title), size = "xxs", weight = "semibold", color = "text-muted" },
+    text{ title, size = "caption", weight = "semibold", color = "text-muted" },
     count and badge{ tostring(count), tone = "neutral" } or false,
   }
 end
@@ -112,7 +112,7 @@ local function round_form(r, ui, editable)
     }
     if nz(q.rec) then
       qk[#qk + 1] = row{ gap = 8, w = "full", align = "start",
-        text{ "RECOMMENDED", size = "xxs", weight = "semibold", color = "green" },
+        text{ "Recommended", size = "caption", weight = "semibold", color = "green" },
         text{ q.rec, size = "sm", color = "text-soft", wrap = true, grow = 1 },
       }
     end
@@ -250,7 +250,7 @@ local function detail(data, ui, r)
     add(quote(r.question))
     local block, n = shots_block(r, ui)
     add(block)
-    add(text{ "OR DESCRIBE IT INSTEAD", size = "xxs", weight = "semibold", color = "text-muted" })
+    add(text{ "Or describe it instead", size = "caption", weight = "semibold", color = "text-muted" })
     local cap = (ui.caption or {})[r.id] or ""
     add(textarea{ id = "relay-caption-" .. r.id, value = cap, rows = 2, placeholder = "Words work too: say what it looks like", on = "set", arg = { id = r.id, field = "caption" } })
     add(foot(r, "Send to " .. r.from .. "…", n > 0 or nz(string.match(cap, "%S"))))
@@ -262,7 +262,7 @@ local function detail(data, ui, r)
   add(quote(r.question))
   if r.state == "pending" then
     add(targets(data, r, "Ask one of these sandboxes"))
-    add(text{ "OR ANSWER IT YOURSELF", size = "xxs", weight = "semibold", color = "text-muted" })
+    add(text{ "Or answer it yourself", size = "caption", weight = "semibold", color = "text-muted" })
     local own = (ui.own or {})[r.id] or ""
     add(textarea{ id = "relay-own-" .. r.id, value = own, rows = 3, placeholder = "Your answer goes to " .. r.from .. " once you confirm it", on = "set", arg = { id = r.id, field = "own" } })
     add(foot(r, "Send my answer…", nz(string.match(own, "%S"))))
