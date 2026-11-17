@@ -602,7 +602,7 @@ impl App {
         );
         if let (true, Some(tooled)) = (jarvis, &tooled) {
             // The session open that follows a bring-up need not write it again.
-            let setup = crate::svc::jarvis_sandbox::Setup::from_outcome(tooled, true);
+            let setup = crate::svc::jarvis_sandbox::Setup::from_outcome(tooled, true, false);
             crate::svc::jarvis_sandbox::record_setup(&self.store.paths, setup);
         }
         if let Some(tooled) = tooled {

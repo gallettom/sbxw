@@ -99,13 +99,17 @@ impl App {
         let cfg = self.config_for(&sandbox).await;
         // The two kinds that start a stopped sandbox: `sbx run` and `sbx exec`
         // (threads release ports in `ensure_running_for_thread`).
-        if matches!(key.kind, SessionKind::Agent | SessionKind::Bash) && !sbx.is_running(&sandbox.name).await {
+        let running = match key.kind {
+            SessionKind::Agent | SessionKind::Bash => Some(sbx.is_running(&sandbox.name).await),
+            _ => None,
+        };
+        if running == Some(false) {
             self.release_busy_ports(&sandbox, &cfg).await;
         }
         // Jarvis's role and tools, written before its Claude session starts,
         // which reads them only then: how one an older daemon made is repaired.
         if matches!(key.kind, SessionKind::Agent) && self.is_jarvis(&sandbox) {
-            self.jarvis_setup().await;
+            self.jarvis_setup(running == Some(true)).await;
         }
         Ok(match &key.kind {
             SessionKind::Monitor => unreachable!("the monitor has no sandbox"),

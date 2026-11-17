@@ -529,5 +529,5 @@ desktop/scripts/screen.sh <screen> [fixture] [--file my.luau] [--script s.json]
 ```
 
 draws the screen alone from `desktop/fixtures/<screen>/<fixture>.json` and
-writes a PNG and the element tree. `desktop/.sbxw-artifacts/testing.md` has the rest:
+writes a PNG and the element tree. `.sbxw-artifacts/desktop/testing.md` (the repository root's artifacts folder, outside git) has the rest:
 fixtures, scripts that press elements by key, the whole window.

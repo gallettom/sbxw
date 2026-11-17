@@ -32,8 +32,9 @@ pub const TEAM_GUARD_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 pub const TOKEN_PATH: &str = "/home/agent/.sbxw/token";
 pub const RELAY_MCP_NAME: &str = "sbxw-relay";
 /// Jarvis's own MCP server: proposals to change sbxw's configuration. The
-/// script is image content of the `sbxw:jarvis` kit; only its registration is
-/// written here, since the port is the daemon's.
+/// script is image content of the `sbxw:jarvis` kit, copied at creation; the
+/// batch rewrites it when this build's copy differs ([`Tooling::config_mcp_script`])
+/// and registers it with the daemon's port ([`Tooling::config_mcp`]).
 pub const CONFIG_MCP_NAME: &str = "sbxw-config";
 pub const CONFIG_MCP_PATH: &str = "/home/agent/.sbxw/jarvis/config-mcp.js";
 pub const USER_MEMORY_PATH: &str = "/home/agent/.claude/CLAUDE.md";
@@ -64,6 +65,9 @@ const RELAY_TOOL: &str = include_str!("../../../assets/relay-tool.js");
 const RELAY_MCP: &str = include_str!("../../../assets/relay-mcp.js");
 const TEAM_GUARD: &str = include_str!("../../../assets/team-guard.js");
 pub const LEAD_COMMAND: &str = include_str!("../../../assets/lead.md");
+/// The `sbxw:jarvis` kit's server, the file the daemon's `build.rs` embeds in
+/// the kit too: one source, so a refresh writes what a creation would copy.
+pub const CONFIG_MCP: &str = include_str!("../../../assets/jarvis/files/home/agent/.sbxw/jarvis/config-mcp.js");
 
 /// Names a failed piece is reported under.
 pub mod piece {
@@ -75,6 +79,7 @@ pub mod piece {
     pub const RELAY: &str = "relay";
     pub const LEAD: &str = "lead";
     pub const CONFIG_MCP: &str = "config-mcp";
+    pub const CONFIG_MCP_SCRIPT: &str = "config-mcp-script";
     pub const JARVIS_ROLE: &str = "jarvis-role";
 }
 
@@ -222,11 +227,19 @@ fn js<T: serde::Serialize + ?Sized>(v: &T) -> String {
 /// The line the script reports failures after, alone, so nothing else on
 /// stdout can be mistaken for it.
 const REPORT: &str = "SBXW-TOOLING ";
+/// The pieces that rewrote a file because it was missing or out of date, on
+/// the line before [`REPORT`]. Only pieces that compare say so.
+const CHANGED: &str = "SBXW-TOOLING-CHANGED ";
 
 const PRELUDE: &str = "\
 const fs=require('fs'),path=require('path');\
-let docs={};const touched={};const failed=[];let who='';\
+let docs={};const touched={};const failed=[];const changed=[];let who='';\
 const put=(p,s,mode)=>{fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s,mode?{mode}:undefined);if(mode)fs.chmodSync(p,mode)};\
+const refresh=(p,s,mode)=>{let cur=null;try{cur=fs.readFileSync(p,'utf8')}catch(e){}if(cur===s)return false;\
+fs.mkdirSync(path.dirname(p),{recursive:true});const tmp=p+'.sbxw-'+process.pid;\
+try{fs.writeFileSync(tmp,s,{mode});fs.chmodSync(tmp,mode);\
+if(process.getuid&&process.getuid()===0)fs.chownSync(tmp,1000,1000);fs.renameSync(tmp,p)}\
+catch(e){try{fs.unlinkSync(tmp)}catch(_){}throw e}changed.push(who);return true};\
 const json=p=>{(touched[p]=touched[p]||new Set()).add(who);\
 if(!(p in docs)){try{docs[p]=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){docs[p]={}}}return docs[p]};\
 const msg=e=>String((e&&e.message)||e);\
@@ -375,12 +388,12 @@ impl Tooling {
     /// of every project's agent too. The port goes in the server's
     /// environment, since the script itself is the kit's, byte for byte.
     ///
-    /// The script comes with the kit at creation; a sandbox whose copy is
-    /// missing cannot be repaired here, so the piece fails, registering
-    /// nothing, with the reason.
+    /// The script is written just before by [`Tooling::config_mcp_script`];
+    /// when it is still missing (that write failed), the piece fails,
+    /// registering nothing, with the reason.
     pub fn config_mcp(self, agent_port: &str) -> Self {
         let body = format!(
-            "if(!fs.existsSync({path}))throw new Error({path}+' is missing (the jarvis kit installs it at creation)');\
+            "if(!fs.existsSync({path}))throw new Error({path}+' is missing and could not be written');\
              const d=json({claude_json});d.mcpServers=d.mcpServers||{{}};\
              d.mcpServers[{name}]={{type:'stdio',command:'node',args:[{path}],env:{{SBXW_AGENT_PORT:{port}}}}};",
             claude_json = js(CLAUDE_JSON_PATH),
@@ -389,6 +402,18 @@ impl Tooling {
             port = js(agent_port),
         );
         self.piece(piece::CONFIG_MCP, body)
+    }
+
+    /// This build's `config-mcp.js` ([`CONFIG_MCP`]), written over Jarvis's
+    /// copy when it is missing or differs, so that an update of sbxw reaches
+    /// an existing Jarvis without a recreation. Atomic (a temporary file
+    /// renamed over it), mode 0644 as the kit ships it, owned by the agent
+    /// user as the kit's `COPY --chown=1000:1000` does. Reported in
+    /// [`ToolingOutcome::changed`] when it rewrote the file. Before
+    /// [`Tooling::config_mcp`], which registers it.
+    pub fn config_mcp_script(self) -> Self {
+        let body = format!("refresh({},{},0o644);", js(CONFIG_MCP_PATH), js(CONFIG_MCP));
+        self.piece(piece::CONFIG_MCP_SCRIPT, body)
     }
 
     /// Jarvis's role, fenced in `~/.claude/CLAUDE.md` and replaced in place
@@ -412,6 +437,7 @@ impl Tooling {
             s.push_str(&format!("piece({},()=>{{{body}}});", js(name)));
         }
         s.push_str(EPILOGUE);
+        s.push_str(&format!("console.log({}+JSON.stringify(changed));", js(CHANGED)));
         s.push_str(&format!("console.log({}+JSON.stringify(failed));", js(REPORT)));
         s
     }
@@ -421,6 +447,16 @@ impl Tooling {
     pub fn parse_report(&self, stdout: &str) -> Option<ToolingOutcome> {
         let line = stdout.lines().rev().find_map(|l| l.strip_prefix(REPORT))?;
         let raw: Vec<(String, String)> = serde_json::from_str(line).ok()?;
+        let changed_line = stdout.lines().rev().find_map(|l| l.strip_prefix(CHANGED));
+        let raw_changed: Vec<String> = changed_line.and_then(|l| serde_json::from_str(l).ok()).unwrap_or_default();
+        let mut changed: Vec<&'static str> = Vec::new();
+        for name in raw_changed {
+            if let Some(&(piece, _)) = self.pieces.iter().find(|(p, _)| *p == name) {
+                if !changed.contains(&piece) {
+                    changed.push(piece);
+                }
+            }
+        }
         let mut failed: Vec<(&'static str, String)> = Vec::new();
         for (name, err) in raw {
             let Some(&(piece, _)) = self.pieces.iter().find(|(p, _)| *p == name) else {
@@ -430,18 +466,24 @@ impl Tooling {
                 failed.push((piece, err));
             }
         }
-        Some(ToolingOutcome { failed })
+        Some(ToolingOutcome { failed, changed })
     }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ToolingOutcome {
     pub failed: Vec<(&'static str, String)>,
+    /// The pieces that rewrote a missing or out-of-date file.
+    pub changed: Vec<&'static str>,
 }
 
 impl ToolingOutcome {
     pub fn error(&self, piece: &str) -> Option<&str> {
         self.failed.iter().find(|(p, _)| *p == piece).map(|(_, e)| e.as_str())
+    }
+
+    pub fn changed(&self, piece: &str) -> bool {
+        self.changed.contains(&piece)
     }
 }
 
@@ -456,6 +498,7 @@ pub fn consequence(piece: &str) -> &'static str {
         piece::RELAY => "could not install the cross-sandbox relay",
         piece::LEAD => "could not install /lead",
         piece::CONFIG_MCP => "could not register Jarvis's sbxw-config tools",
+        piece::CONFIG_MCP_SCRIPT => "could not update Jarvis's sbxw-config script",
         piece::JARVIS_ROLE => "could not write Jarvis's role into its CLAUDE.md",
         _ => "a tooling step failed",
     }
@@ -659,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn a_jarvis_made_before_its_server_shipped_is_told_not_half_registered() {
+    fn jarvis_s_script_is_written_when_missing_or_stale_and_left_when_current() {
         if Command::new("node").arg("--version").output().is_err() {
             eprintln!("node not found — skipping");
             return;
@@ -667,10 +710,58 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let h = home.path();
         std::fs::write(h.join(".claude.json"), "{}").unwrap();
-        let batch = Tooling::new().jarvis_role().config_mcp("7682");
+        let file = h.join(".sbxw/jarvis/config-mcp.js");
+        let batch = Tooling::new().jarvis_role().config_mcp_script().config_mcp("7682");
+        let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
+        let run = || batch.parse_report(&run_node(&script).unwrap()).unwrap();
+        // The test's home stands for /home/agent/, in the script it carries too.
+        let current = CONFIG_MCP.replace("/home/agent/", &format!("{}/", h.display()));
+        // Missing: a Jarvis whose copy was lost, or one made before the server shipped.
+        let r = run();
+        assert_eq!((r.failed.clone(), r.changed(piece::CONFIG_MCP_SCRIPT)), (vec![], true), "{r:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), current, "this build's copy, byte for byte");
+        let c: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.join(".claude.json")).unwrap()).unwrap();
+        assert_eq!(c["mcpServers"][CONFIG_MCP_NAME]["command"], "node", "and registered in the same batch");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o644);
+        }
+        // Current: left as it is.
+        let before = std::fs::metadata(&file).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let r = run();
+        assert_eq!((r.failed.clone(), r.changed.clone()), (vec![], vec![]), "{r:?}");
+        assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), before, "not rewritten");
+        // An older daemon's copy, without the newer tools: replaced.
+        std::fs::write(&file, "// the old server\n").unwrap();
+        let r = run();
+        assert!(r.changed(piece::CONFIG_MCP_SCRIPT) && r.failed.is_empty(), "{r:?}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), current);
+        let left: Vec<_> = std::fs::read_dir(file.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("config-mcp.js")], "no temporary file left");
+        // Only Jarvis's batch carries it.
+        let plain = Tooling::new().relay("7682").lead_command().script();
+        assert!(!plain.contains(CONFIG_MCP_PATH));
+    }
+
+    #[test]
+    fn a_jarvis_whose_script_cannot_be_written_is_told_not_half_registered() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::write(h.join(".claude.json"), "{}").unwrap();
+        // A file where the script's folder should be: the write fails.
+        std::fs::create_dir_all(h.join(".sbxw")).unwrap();
+        std::fs::write(h.join(".sbxw/jarvis"), "").unwrap();
+        let batch = Tooling::new().jarvis_role().config_mcp_script().config_mcp("7682");
         let script = batch.script().replace("/home/agent/", &format!("{}/", h.display()));
         let out = run_node(&script).unwrap();
         let report = batch.parse_report(&out).unwrap();
+        assert!(report.error(piece::CONFIG_MCP_SCRIPT).is_some() && !report.changed(piece::CONFIG_MCP_SCRIPT), "{report:?}");
         assert!(report.error(piece::CONFIG_MCP).unwrap().contains("config-mcp.js is missing"), "{report:?}");
         assert!(report.error(piece::JARVIS_ROLE).is_none(), "the role is written all the same");
         let c: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.join(".claude.json")).unwrap()).unwrap();

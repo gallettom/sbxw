@@ -127,14 +127,18 @@ pub enum Status {
 }
 
 /// What the daemon wrote into Jarvis's sandbox the last time a Claude session
-/// was about to start there: its role in `~/.claude/CLAUDE.md` and the
-/// `sbxw-config` registration in `~/.claude.json`. What the commands did, not
-/// what the session read. `None` for both: no session started there since
-/// this daemon started.
+/// was about to start there: its role in `~/.claude/CLAUDE.md`, this build's
+/// `config-mcp.js` and the `sbxw-config` registration in `~/.claude.json`.
+/// What the commands did, not what the session read. `None` for all: no
+/// session started there since this daemon started.
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, Default)]
 pub struct Setup {
     pub role_written: Option<bool>,
     pub tools_registered: Option<bool>,
+    /// `true`: the sandbox's `config-mcp.js` was missing or older and was
+    /// rewritten with this build's; `false`: it was already current (or
+    /// could not be written, which the note says).
+    pub tools_updated: Option<bool>,
     /// In plain words, when something is missing or nothing was checked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -149,22 +153,46 @@ pub struct Setup {
 const RESTART: &str = "Stop Jarvis's sandbox (`sbxw stop sbxw-jarvis`), then start Jarvis again: \
                        its next Claude session reads its role and loads its tools.";
 
+/// When the script changed under a sandbox that was already running: sbx
+/// re-attaches the agent there, so the Claude session may be the one that
+/// loaded the old server.
+const NEW_TOOLS: &str = "Jarvis's sbxw-config tools were updated, but its sandbox was already running, \
+                         so its Claude session may still have the old ones: stop Jarvis's sandbox and start it again \
+                         to get the new tools (`sbxw stop sbxw-jarvis`, then start Jarvis).";
+
 impl Setup {
     /// What a tooling batch run for Jarvis says, in the status's words.
-    pub fn from_outcome(outcome: &Result<ToolingOutcome>, fresh: bool) -> Self {
+    /// `was_running`: the sandbox was running before the session open that
+    /// ran the batch (never for a bring-up's batch).
+    pub fn from_outcome(outcome: &Result<ToolingOutcome>, fresh: bool, was_running: bool) -> Self {
         let recreate = format!("Recreate it to repair this: `sbxw rm {NAME}`, then start Jarvis again.");
         match outcome {
             Ok(o) => {
                 let role = o.error(piece::JARVIS_ROLE);
+                let script = o.error(piece::CONFIG_MCP_SCRIPT);
                 let tools = o.error(piece::CONFIG_MCP);
+                let updated = o.changed(piece::CONFIG_MCP_SCRIPT);
                 let mut notes = Vec::new();
                 if let Some(e) = role {
                     notes.push(format!("Jarvis's role could not be written into its CLAUDE.md, so it may not know it is Jarvis: {e}."));
                 }
-                if let Some(e) = tools {
-                    notes.push(format!("Jarvis's sbxw-config tools could not be registered, so it cannot propose changes: {e}. {recreate}"));
+                match (script, tools) {
+                    (_, Some(e)) => notes.push(format!("Jarvis's sbxw-config tools could not be registered, so it cannot propose changes: {e}. {recreate}")),
+                    (Some(e), None) => notes.push(format!(
+                        "Jarvis's sbxw-config script could not be updated, so it keeps the tools of an older sbxw: {e}. {recreate}"
+                    )),
+                    (None, None) => {}
                 }
-                Setup { role_written: Some(role.is_none()), tools_registered: Some(tools.is_none()), note: (!notes.is_empty()).then(|| notes.join(" ")), fresh }
+                if updated && tools.is_none() && was_running {
+                    notes.push(NEW_TOOLS.to_string());
+                }
+                Setup {
+                    role_written: Some(role.is_none()),
+                    tools_registered: Some(tools.is_none()),
+                    tools_updated: Some(updated),
+                    note: (!notes.is_empty()).then(|| notes.join(" ")),
+                    fresh,
+                }
             }
             Err(e) => {
                 let e = format!("{e:#}");
@@ -172,6 +200,7 @@ impl Setup {
                 Setup {
                     role_written: Some(false),
                     tools_registered: Some(false),
+                    tools_updated: Some(false),
                     note: Some(format!("sbxw could not set up Jarvis's sandbox, so Jarvis may not know its role nor have its tools: {e}.{fix}")),
                     fresh: false,
                 }
@@ -316,14 +345,18 @@ impl App {
         Report { status, setup }
     }
 
-    /// Write Jarvis's role into its `CLAUDE.md` and register its
+    /// Write Jarvis's role into its `CLAUDE.md`, this build's
+    /// `config-mcp.js` when its copy is missing or differs, and register its
     /// `sbxw-config` server, before a Claude session starts there: the
-    /// session reads both only when it starts. Runs at every session open on
-    /// Jarvis's sandbox, so one made by an older daemon is repaired at its
-    /// next start; `sbx exec` starts a stopped sandbox first. Skipped once
-    /// right after a bring-up that wrote both. Best-effort: the outcome is
-    /// recorded for `jarvis_status`, and the session opens either way.
-    pub(crate) async fn jarvis_setup(&self) {
+    /// session reads them only when it starts. Runs at every session open on
+    /// Jarvis's sandbox, so one made by an older daemon is repaired and
+    /// updated at its next start; `sbx exec` starts a stopped sandbox first.
+    /// Skipped once right after a bring-up that wrote all of it.
+    /// `was_running`: the sandbox was running before this open, so the
+    /// session may be one sbx re-attaches to, which a new script does not
+    /// reach (said in the note). Best-effort: the outcome is recorded for
+    /// `jarvis_status`, and the session opens either way.
+    pub(crate) async fn jarvis_setup(&self, was_running: bool) {
         let paths = &self.store.paths;
         if take_fresh(paths) {
             return;
@@ -334,7 +367,7 @@ impl App {
             self.sbx.tooling(&sb.name, &jarvis_tooling(&port)).await
         }
         .await;
-        record_setup(paths, Setup::from_outcome(&outcome, false));
+        record_setup(paths, Setup::from_outcome(&outcome, false, was_running));
     }
 
     /// Make Jarvis ready to talk to, and say where it stands: create its
@@ -395,15 +428,17 @@ impl App {
     }
 }
 
-/// What only Jarvis's sandbox gets from the tooling batch: its role and its
-/// proposal tools. Part of its bring-up's batch, and on its own before each
-/// session ([`App::jarvis_setup`]).
+/// What only Jarvis's sandbox gets from the tooling batch: its role, this
+/// build's copy of its proposal tools' script, and their registration. Part
+/// of its bring-up's batch, and on its own before each session
+/// ([`App::jarvis_setup`]). The script goes first: a missing one is written
+/// before it is registered.
 pub fn jarvis_tooling(agent_port: &str) -> Tooling {
     with_jarvis_tooling(Tooling::new(), agent_port)
 }
 
 pub fn with_jarvis_tooling(batch: Tooling, agent_port: &str) -> Tooling {
-    batch.jarvis_role().config_mcp(agent_port)
+    batch.jarvis_role().config_mcp_script().config_mcp(agent_port)
 }
 
 fn foreign() -> String {
@@ -564,10 +599,19 @@ mod tests {
             .collect()
     }
 
+    /// The role, this build's server script (once, before its
+    /// registration) and the registration.
     fn writes_role_and_tools(script: &str) -> bool {
         use sbxw_core::tooling as t;
-        script.contains(&serde_json::to_string(&t::jarvis_doc()).unwrap()) && script.contains(&format!("{:?}", t::CONFIG_MCP_NAME))
+        let body = serde_json::to_string(t::CONFIG_MCP).unwrap();
+        let (written, registered) = (script.find(&body), script.find(&format!("{:?}", t::CONFIG_MCP_NAME)));
+        script.contains(&serde_json::to_string(&t::jarvis_doc()).unwrap())
+            && script.matches(&body).count() == 1
+            && matches!((written, registered), (Some(w), Some(r)) if w < r)
     }
+
+    /// What the batch prints when it rewrote the script.
+    const SCRIPT_REWRITTEN: &str = "SBXW-TOOLING-CHANGED [\"config-mcp-script\"]\nSBXW-TOOLING []\n";
 
     #[tokio::test]
     async fn creation_writes_the_role_and_the_tools_once_and_says_so() {
@@ -582,6 +626,8 @@ mod tests {
             _ => sbx_answer(a),
         });
         assert_eq!(app.jarvis_report().await.setup, Setup::default(), "nothing to say before a start");
+        let v = serde_json::to_value(app.jarvis_report().await).unwrap();
+        assert!(v["tools_updated"].is_null() && v["role_written"].is_null(), "{v}");
         app.jarvis_start().await;
         settled(&app).await;
         let ran = batches(&fake, NAME);
@@ -592,9 +638,11 @@ mod tests {
         assert!(ran[0].contains(sbxw_core::tooling::RELAY_DOC_BEGIN), "beside the relay");
         let r = app.jarvis_report().await;
         assert_eq!((r.setup.role_written, r.setup.tools_registered, r.setup.note.as_deref()), (Some(true), Some(true), None));
+        assert_eq!(r.setup.tools_updated, Some(false), "the kit just copied it");
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["role_written"], true);
         assert_eq!(v["tools_registered"], true);
+        assert_eq!(v["tools_updated"], false);
         assert!(v.get("note").is_none() && v["state"].is_string(), "{v}");
     }
 
@@ -602,6 +650,8 @@ mod tests {
     async fn an_existing_jarvis_is_repaired_at_its_next_start_before_its_session() {
         let (_dir, app, fake) = app_with(|a| match a.first().map(String::as_str) {
             Some("ls") => ls(&[(NAME, "stopped")]),
+            // Its script was an older daemon's: the batch rewrote it.
+            Some("exec") if a.iter().any(|x| x == "node") => sbxw_sbx::runner::Output::ok(SCRIPT_REWRITTEN),
             _ => sbx_answer(a),
         });
         // One an older daemon made: a record and a workspace, nothing written.
@@ -613,7 +663,8 @@ mod tests {
         assert!(writes_role_and_tools(&ran[0]));
         assert!(!ran[0].contains(sbxw_core::tooling::RELAY_DOC_BEGIN) && !ran[0].contains("SBXW_TEAM"), "Jarvis's pieces only");
         let s = app.jarvis_report().await.setup;
-        assert_eq!((s.role_written, s.tools_registered), (Some(true), Some(true)));
+        assert_eq!((s.role_written, s.tools_registered, s.tools_updated), (Some(true), Some(true), Some(true)));
+        assert_eq!(s.note, None, "a stopped sandbox: the session that opens is new and loads the new tools");
         // And again at the start after: each start, not the first only.
         app.sessions.remove(&SessionKey::agent(sandbox()));
         app.jarvis_start().await;
@@ -635,11 +686,53 @@ mod tests {
         let r = app.jarvis_report().await;
         assert_eq!((r.status.clone(), r.setup.role_written), (Status::Running, None));
         assert!(r.setup.note.as_deref().unwrap().contains("sbxw stop sbxw-jarvis"), "{r:?}");
-        app.jarvis_setup().await;
+        app.jarvis_setup(true).await;
         let s = app.jarvis_report().await.setup;
         assert_eq!((s.role_written, s.tools_registered), (Some(true), Some(false)));
         let note = s.note.unwrap();
         assert!(note.contains("cannot propose changes") && note.contains("sbxw rm sbxw-jarvis"), "{note}");
+    }
+
+    #[tokio::test]
+    async fn a_script_that_could_not_be_updated_is_said_and_the_old_one_stays_registered() {
+        let (_dir, app, _fake) = app_with(|a| match a.first().map(String::as_str) {
+            Some("ls") => ls(&[(NAME, "stopped")]),
+            Some("exec") if a.iter().any(|x| x == "node") => {
+                sbxw_sbx::runner::Output::ok("SBXW-TOOLING-CHANGED []\nSBXW-TOOLING [[\"config-mcp-script\",\"ENOSPC: no space left on device\"]]\n")
+            }
+            _ => sbx_answer(a),
+        });
+        app.store.update(sandbox(), |r| r.workspace = Some(workspace(&app.store.paths))).unwrap();
+        app.jarvis_setup(false).await;
+        let s = app.jarvis_report().await.setup;
+        assert_eq!((s.tools_registered, s.tools_updated), (Some(true), Some(false)));
+        let note = s.note.unwrap();
+        assert!(note.contains("could not be updated") && note.contains("ENOSPC") && note.contains("older sbxw"), "{note}");
+    }
+
+    #[tokio::test]
+    async fn new_tools_under_a_running_session_say_how_to_get_them() {
+        let rewrote = Arc::new(Mutex::new(true));
+        let r = rewrote.clone();
+        let (_dir, app, fake) = app_with(move |a| match a.first().map(String::as_str) {
+            Some("ls") => ls(&[(NAME, "running")]),
+            Some("exec") if a.iter().any(|x| x == "node") && *r.lock().unwrap() => sbxw_sbx::runner::Output::ok(SCRIPT_REWRITTEN),
+            _ => sbx_answer(a),
+        });
+        app.store.update(sandbox(), |r| r.workspace = Some(workspace(&app.store.paths))).unwrap();
+        // Through the open a terminal makes, on a sandbox already running.
+        let _ = app.open_session(&SessionKey::agent(sandbox())).await;
+        assert_eq!(batches(&fake, NAME).len(), 1, "{:?}", fake.log());
+        let s = app.jarvis_report().await.setup;
+        assert_eq!(s.tools_updated, Some(true));
+        let note = s.note.unwrap();
+        assert!(note.contains("stop Jarvis's sandbox and start it again to get the new tools") && note.contains("sbxw stop sbxw-jarvis"), "{note}");
+        // Already current: nothing to say.
+        *rewrote.lock().unwrap() = false;
+        app.sessions.remove(&SessionKey::agent(sandbox()));
+        let _ = app.open_session(&SessionKey::agent(sandbox())).await;
+        let s = app.jarvis_report().await.setup;
+        assert_eq!((s.tools_updated, s.note), (Some(false), None));
     }
 
     #[tokio::test]
