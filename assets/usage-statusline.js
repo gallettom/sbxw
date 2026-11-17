@@ -92,6 +92,9 @@ process.stdin.on("end", () => {
     fs.writeFileSync(STAMP, String(Date.now()));
   } catch (_) {}
 
+  const costIn = d.cost || {};
+  const num = (v) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : undefined);
+  const whole = (v) => (num(v) === undefined ? undefined : Math.round(v));
   const payload = Buffer.from(
     JSON.stringify({
       five_hour_pct: fh,
@@ -103,6 +106,13 @@ process.stdin.on("end", () => {
       session_id: sessionId || undefined,
       model: modelId || undefined,
       model_name: modelName || undefined,
+      // The session's own cost so far (Claude Code's estimate, in dollars),
+      // its wall-clock time and the lines it changed: whatever its `cost`
+      // object carries. Within the throttle: a new cost alone sends nothing.
+      cost_usd: num(costIn.total_cost_usd),
+      duration_ms: whole(costIn.total_duration_ms),
+      lines_added: whole(costIn.total_lines_added),
+      lines_removed: whole(costIn.total_lines_removed),
       // See status-hook.js.
       sandbox: process.env.SANDBOX_NAME || os.hostname(),
     }),

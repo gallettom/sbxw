@@ -232,6 +232,7 @@ impl App {
             loop {
                 tick.tick().await;
                 app.reconcile_sessions().await;
+                app.flush_session_costs();
             }
         });
         if !self.use_api_key {

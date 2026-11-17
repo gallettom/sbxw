@@ -12,7 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
-use sbxw_core::agents::ModelReport;
+use sbxw_core::agents::{CostReport, ModelReport};
 use sbxw_core::plans::{DistillItem, PlanThread, ThreadState, Variant};
 use sbxw_core::relay::{agent_view, RelayKind};
 use sbxw_core::usage::Reading;
@@ -71,12 +71,22 @@ struct UsageBody {
     model: Option<String>,
     #[serde(default)]
     model_name: Option<String>,
+    /// The session's `cost` object, flattened: dollars, wall-clock time and
+    /// lines changed so far (see `SessionInfo::cost_usd`).
+    #[serde(default)]
+    cost_usd: Option<f64>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    lines_added: Option<u64>,
+    #[serde(default)]
+    lines_removed: Option<u64>,
 }
 
 async fn usage(State(app): S, Agent(me): Agent, Json(b): Json<UsageBody>) -> StatusCode {
-    if let Some(model) = ModelReport::new(b.model.as_deref(), b.model_name.as_deref()) {
-        app.report_session_model(&me, b.session_id.as_deref().unwrap_or(""), model);
-    }
+    let model = ModelReport::new(b.model.as_deref(), b.model_name.as_deref());
+    let cost = CostReport::new(b.cost_usd, b.duration_ms, b.lines_added, b.lines_removed);
+    app.report_session(&me, b.session_id.as_deref().unwrap_or(""), model, cost);
     app.report_usage(b.reading);
     StatusCode::OK
 }

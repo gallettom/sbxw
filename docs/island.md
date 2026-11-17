@@ -139,6 +139,49 @@ each bring-up from the UI), so an existing sandbox starts reporting its model
 after its next bring-up. Until then it shows the fallback; an older script's
 reports, which name no model, change nothing.
 
+### What a session has cost
+
+Each session also carries, once its status line has reported them:
+`cost_usd` (dollars), `duration_ms` (its wall-clock time so far),
+`lines_added` and `lines_removed`. Each `GET /api/sandboxes` item carries
+`cost_usd`, the sum over that sandbox's sessions. All are optional and left
+out until something is known; never `0` for unknown.
+
+```json
+{ "sandbox": "myapp", "session_id": "s1", "cost_usd": 1.37, "duration_ms": 842000,
+  "lines_added": 120, "lines_removed": 14, "...": "..." }
+{ "name": "myapp", "status": "running", "cost_usd": 4.12, "...": "..." }
+```
+
+**What the number is.** Claude Code's own estimate of what the session's
+tokens would cost at API prices (the status line's `cost.total_cost_usd`). It
+is not an invoice: under a Pro or Max subscription it is not what the person
+pays, and under an API key the console's bill is the reference.
+
+- **Where it comes from.** The status line script sends the session's `cost`
+  object (`total_cost_usd`, `total_duration_ms`, `total_lines_added`,
+  `total_lines_removed`, whichever are numbers) with its throttled report to
+  `POST /api/usage`, at most every 10 s per sandbox. A change of cost does
+  not bypass the throttle (a model change does).
+- **Events.** A session's first cost goes out at once in a `session` event.
+  After that a change of cost alone goes out at most once per 30 s per
+  session; it goes out at once when the event is sent for another reason (a
+  hook, a model change), and a change held back is sent by the daemon's 15 s
+  tick once its 30 s are up. `GET /api/sessions` always has the latest.
+- **The sandbox's total** counts every session of that sandbox the daemon has
+  seen since it last saw the sandbox running: the main session, threads and
+  sessions that came in over SSH, live ones and ones that ended (`SessionEnd`,
+  a closed thread, `/clear`). An ended session stays in the total until the
+  sandbox stops, so the number never goes backwards under the person's eyes.
+  A session id whose cost goes down (Claude Code restarted under the same id
+  without a `SessionEnd`) keeps its old run in the total too. The total
+  starts again from nothing when the sandbox stops, and when the daemon
+  restarts (it is kept in memory only).
+
+An existing sandbox reports costs after one `sbxw up <name>` (the script is
+rewritten at each bring-up); until then, its older script's reports change
+nothing.
+
 Every request the island makes carries the daemon's UI token
 (`Authorization: Bearer`, read from `~/.sbxw/run/ui-token` before each
 request, since the daemon writes a new one each time it starts). Opening a

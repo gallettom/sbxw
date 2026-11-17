@@ -629,3 +629,69 @@ async fn a_sessions_model_reaches_sessions_and_sandboxes() {
     // Another agent that reports none: left out.
     assert!(item(&v, "cx").get("model").is_none() && item(&v, "cx").get("model_name").is_none());
 }
+
+/// A session's cost: reported by its status line, on the session and summed
+/// on its sandbox; a change of cost alone is held back, not broadcast.
+#[tokio::test]
+async fn a_sessions_cost_reaches_sessions_and_sandboxes() {
+    use sbxw_core::SandboxRef;
+    let (_d, app, _fake) = crate::testing::app_with(|a| match a.first().map(String::as_str) {
+        Some("ls") => sbxw_sbx::runner::Output::ok(&json!([{"name": "myapp", "agent": "claude", "status": "running"}]).to_string()),
+        _ => crate::testing::sbx_answer(a),
+    });
+    let myapp = SandboxRef::parse("myapp").unwrap();
+    let token = app.store.token(myapp.clone()).unwrap();
+    let agent = |path: &str, body: Value| {
+        json_req(post(path, body.clone()).header("authorization", format!("Bearer {token}")), body)
+    };
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    let session = |v: &Value, id: &str| v.as_array().unwrap().iter().find(|s| s["session_id"] == id).cloned().unwrap();
+    let item = |v: &Value| v.as_array().unwrap().iter().find(|s| s["name"] == "myapp").cloned().unwrap();
+    let report = |id: &str, usd: f64| json!({"five_hour_pct": null, "seven_day_pct": null, "session_id": id, "cost_usd": usd, "duration_ms": 1000, "lines_added": 7, "lines_removed": 2, "sandbox": "myapp"});
+
+    for id in ["s1", "s2"] {
+        let start = json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 2});
+        call(agent_router(app.clone()), agent("/api/hook", start)).await;
+    }
+    // Before any report: absent on both.
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert!(session(&v, "s1").get("cost_usd").is_none());
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert!(item(&v).get("cost_usd").is_none());
+
+    // The first cost of a session goes out at once; the next within 30 s
+    // is read at once but not broadcast.
+    let mut bus = app.bus.subscribe();
+    assert_eq!(call(agent_router(app.clone()), agent("/api/usage", report("s1", 1.0))).await.0, StatusCode::OK);
+    call(agent_router(app.clone()), agent("/api/usage", report("s2", 0.25))).await;
+    assert!(std::iter::from_fn(|| bus.try_recv().ok()).count() > 0);
+    call(agent_router(app.clone()), agent("/api/usage", report("s1", 1.5))).await;
+    assert!(bus.try_recv().is_err(), "a cost-only change is coalesced");
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    let s1 = session(&v, "s1");
+    assert_eq!((s1["cost_usd"].as_f64(), s1["duration_ms"].as_u64(), s1["lines_added"].as_u64(), s1["lines_removed"].as_u64()), (Some(1.5), Some(1000), Some(7), Some(2)));
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v)["cost_usd"].as_f64(), Some(1.75), "both sessions");
+
+    // A model change takes the cost along at once.
+    let mut with_model = report("s1", 1.6);
+    with_model["model"] = json!("claude-opus-5-5");
+    call(agent_router(app.clone()), agent("/api/usage", with_model)).await;
+    let costs: Vec<_> = std::iter::from_fn(|| bus.try_recv().ok()).filter_map(|e| match e {
+        crate::bus::Event::Session(i) if i.session_id.as_deref() == Some("s1") => i.cost_usd,
+        _ => None,
+    }).collect();
+    assert_eq!(costs, vec![1.6]);
+
+    // An older script sends none: nothing changes.
+    let old = json!({"five_hour_pct": 20.0, "seven_day_pct": null, "sandbox": "myapp", "session_id": "s1"});
+    call(agent_router(app.clone()), agent("/api/usage", old)).await;
+    assert!(bus.try_recv().is_err());
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!(session(&v, "s1")["cost_usd"].as_f64(), Some(1.6));
+
+    // A session that ends stays in its sandbox's total.
+    call(agent_router(app.clone()), agent("/api/hook", json!({"hook_event_name": "SessionEnd", "session_id": "s2", "hook_version": 2}))).await;
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v)["cost_usd"].as_f64(), Some(1.85));
+}
