@@ -512,3 +512,51 @@ mod tests {
         }
     }
 }
+
+/// emphasis-core's shared cases (`crates/core/testdata/emphasis-cases.json`,
+/// copied under `fixtures/emphasis/`): the web UI and the app must find
+/// exactly these markers.
+#[cfg(test)]
+mod shared_cases {
+    use super::*;
+
+    const COPY: &str = include_str!("../fixtures/emphasis/emphasis-cases.json");
+
+    #[test]
+    fn every_shared_case() {
+        let v: J = serde_json::from_str(COPY).unwrap();
+        let vocab = Vocab::default();
+        let mut failed = vec![];
+        for case in v["cases"].as_array().unwrap() {
+            let text = case["text"].as_str().unwrap();
+            let chars: Vec<char> = text.chars().collect();
+            let mut marks = vec![];
+            find(&chars, &vocab, &mut marks);
+            let got: Vec<J> = marks
+                .iter()
+                .map(|m| {
+                    let s = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
+                    serde_json::json!({
+                        "at": m.start, "len": m.end - m.start, "word": s(m.start + 2, m.word_end),
+                        "detail": (m.word_end < m.label_end).then(|| s(m.word_end + 1, m.label_end)),
+                        "tone": m.tone.name(),
+                    })
+                })
+                .collect();
+            if got != *case["markers"].as_array().unwrap() {
+                failed.push(format!("{text:?}: got {got:?}, want {}", case["markers"]));
+            }
+        }
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+
+    /// Once both branches are merged the original sits in the same checkout:
+    /// the copy must be the same file.
+    #[test]
+    fn the_copy_is_not_stale() {
+        let original = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/core/testdata/emphasis-cases.json");
+        if let Ok(o) = std::fs::read_to_string(&original) {
+            assert_eq!(o, COPY, "fixtures/emphasis/emphasis-cases.json differs from {}: copy it again", original.display());
+        }
+    }
+}
