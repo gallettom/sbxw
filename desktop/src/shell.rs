@@ -520,7 +520,15 @@ impl App {
             }
         };
         let measured: Vec<(String, bool)> = order.iter().map(|&i| (label(&list[i]), !list[i]["icon"].is_null())).collect();
-        let (compact, k) = bar::top_fit(w, &jarvis, "2 side by side", &measured);
+        // The layout switch shows the current choice (topbar.luau's labels).
+        let layout = match (self.layout.0, self.layout.1) {
+            (1, _) => "1 terminal",
+            (2, Split::Rows) => "2 stacked",
+            (2, _) => "2 side by side",
+            (3, _) => "3 terminals",
+            _ => "4 terminals",
+        };
+        let (compact, k) = bar::top_fit(w, &jarvis, layout, &measured);
         for &i in &order[k..] {
             list[i]["more"] = J::Bool(true);
         }
