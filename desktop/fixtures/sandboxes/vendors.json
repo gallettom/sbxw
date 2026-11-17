@@ -1,0 +1,180 @@
+{
+ "about": "Vendor colours of the sidebar's model words: Anthropic (opus, wanting you beside sonnet working), OpenAI (gpt-5-codex, o4-mini), Google (gemini, working), an unknown maker (muted).",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "opus-app",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/opus-app",
+    "model": "claude-opus-5-5",
+    "model_name": null
+   },
+   {
+    "name": "sonnet-api",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/sonnet-api",
+    "model": "claude-sonnet-5-5",
+    "model_name": null
+   },
+   {
+    "name": "haiku-docs",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/haiku-docs",
+    "model": null,
+    "model_name": "Haiku 5.5"
+   },
+   {
+    "name": "codex-cli",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/codex-cli",
+    "model": "gpt-5-codex",
+    "model_name": null
+   },
+   {
+    "name": "o4-tools",
+    "agent": "codex",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/o4-tools",
+    "model": "o4-mini",
+    "model_name": null
+   },
+   {
+    "name": "gemini-web",
+    "agent": "gemini",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/gemini-web",
+    "model": "gemini-3-pro",
+    "model_name": null
+   },
+   {
+    "name": "other-agent",
+    "agent": "kiro",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/other-agent",
+    "model": "some-model-1",
+    "model_name": null
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "opus-app",
+    "mode": "claude",
+    "state": "attention",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": true,
+    "ts": 1763290000000
+   },
+   {
+    "sandbox": "sonnet-api",
+    "mode": "claude",
+    "state": "working",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "haiku-docs",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000002
+   },
+   {
+    "sandbox": "codex-cli",
+    "mode": "codex",
+    "state": "working",
+    "agent": "codex",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000003
+   },
+   {
+    "sandbox": "o4-tools",
+    "mode": "codex",
+    "state": "idle",
+    "agent": "codex",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000004
+   },
+   {
+    "sandbox": "gemini-web",
+    "mode": "gemini",
+    "state": "working",
+    "agent": "gemini",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000005
+   },
+   {
+    "sandbox": "other-agent",
+    "mode": "kiro",
+    "state": "idle",
+    "agent": "kiro",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000006
+   }
+  ]
+ },
+ "app": {
+  "selected": "sonnet-api"
+ }
+}

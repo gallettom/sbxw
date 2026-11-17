@@ -686,6 +686,24 @@ in it, with its tint under the pointer and the keyboard focus.
 - Every coloured label or icon meets the contrast test on what it sits on
   (its surface, its tint, a group's tint): `theme::tests`.
 
+**Vendor colours** (a separate axis, not colour by meaning). The sidebar's
+model words (a row's line 2, a session line's model) take the colour of
+whoever makes the model, so "opus 5.5" and "gpt-5-codex" are told apart at a
+glance. Text colour only, regular weight, never a fill or a badge, so the
+state word before it stays the strongest thing on the line.
+
+| Token | Value | Who | Matched by (id, display name, any case; else the agent) |
+|---|---|---|---|
+| `vendor-anthropic` | `#e2875a` terracotta | Anthropic | claude, anthropic, opus, sonnet, haiku, fable, mythos |
+| `vendor-openai` | `#e6edf3` (as `text-bright`) | OpenAI | openai, chatgpt, gpt, codex, the o-series (o3, o4-mini) |
+| `vendor-google` | `#8ab4f8` | Google | gemini, google |
+
+Anything else stays `text-muted`. One function decides (`vendor_of` in
+sandboxes.luau); the tooltip keeps the full id and adds "by <vendor>". The
+terracotta's hue sits between `red-text` ("unreachable") and `amber`
+("wants you"); Gemini's blue is lighter than the `blue` "working" word.
+Both rules and the contrast on every ground are tested (`screen::tests`).
+
 **The rules the built-in screens follow** (write yours the same way):
 
 - **Spacing** on the 4 pt grid: 4, 8, 12, 16, 24 (2 only between stacked
@@ -911,7 +929,9 @@ them): `extra-topbar-<id>` (top bar), `extra-sandbox-<sandbox>-<id>` (a
 sandbox's row; a feature extra there replaces the plain approvals flag),
 `extra-row-<sandbox>-<id>` (a session sub-row: a dot of `tone`, or `icon`,
 the label, a badge of `count` or else `help` in dim text, the whole row
-pressable), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
+pressable; a live session no pane shows, starting, working, wanting you or
+idle, has instead of the count a green "+" `session-add-<sandbox>-<id>`
+that runs the row's own `open_terminal` with `pane: "spare"`), and `pane-<n>-x-<id>` (pane bars, drawn by the core). An extra with an
 `intent` is a button, without one a badge.
 
 **What fits in a bar** (`src/shell/bar.rs`). A pane bar always shows its
@@ -993,13 +1013,38 @@ hosts and the sandboxes. Amber when a request holds something, else quiet.
 **Panel.** Requests grouped by sandbox and host (`×N`), the newest's options
 (`answer-<id>-<option>`; answering goes through the core's dialog); a group's
 Dismiss takes all its copies; `approvals-dismiss-all` dismisses every refused
-host listed.
+host listed. At most 25 cards are drawn; `net-req-more` ("Show 25 more")
+draws the next ones, and the summary line says "Showing 25 of N".
 
-**Intents** (beside the policy and port ones): `approvals_dismiss {sandbox?,
-title?}`: direct; sbx's own `dismiss` option on each `network` request of the
-listed sandboxes (narrowed to one sandbox and host when given), one
-`POST /api/approvals/respond` after the other, a notice at the end. A request
-that holds something is never dismissed this way.
+**The filter.** A sandbox's own entries (its row's bubble and menu item
+"Network requests (N)", its pane bars' "sbx asks N", its Network item, the
+one-request notice) open the panel on that sandbox's requests only; the top
+bar and the many-requests notice open it on every sandbox's. Under a filter
+the header reads "Waiting for you N in" with the chip `net-filter-chip`
+(the sandbox's name and an x) and `net-filter-all` ("Show all M"); the
+summary line, the badge and the bulk button count only what is shown, and
+the bulk button reads "Dismiss these N" (or "Dismiss all N of <sandbox>"
+when some cards are not drawn). With nothing left: "Nothing waits in
+<sandbox>." and the way back. The sandbox picker keeps the filter on (it
+moves to the picked sandbox) or off. The filter is view state in data key
+`network_view` (`{filter}`, or null): changing it reads and sends nothing,
+and closing the panel drops it.
+
+**`<screen>_view`.** A panel's view state that must not outlive it lives
+in the data key `<screen>_view`; the core drops that key when the panel
+closes (`close_panel`, the tab's x), so the next opening starts clean.
+
+**Intents** (beside the policy and port ones): `network_show {sandbox?,
+filter?}`: opens the panel on that sandbox's policy and ports, filtered to
+its requests unless `filter` is false; without a sandbox, unfiltered.
+`network_filter {sandbox?}`: sets or clears the filter only.
+`approvals_dismiss {sandbox?, title?, expect?}`: direct; sbx's own `dismiss`
+option on each `network` request of the listed sandboxes (narrowed to one
+sandbox and host when given), one `POST /api/approvals/respond` after the
+other, a notice at the end. `expect` is the number on the button the person
+pressed: if the list now holds another number, nothing is sent and an error
+says the list changed. A request that holds something is never dismissed
+this way.
 
 ### create
 

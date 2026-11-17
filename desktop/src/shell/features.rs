@@ -607,6 +607,7 @@ impl App {
     }
 
     fn close_panel(&mut self, screen: &str) {
+        self.feats.data.remove(&format!("{screen}_view"));
         self.feats.panels.retain(|p| p != screen);
         if self.feats.panel.as_deref() == Some(screen) {
             self.feats.panel = self.feats.panels.last().cloned();

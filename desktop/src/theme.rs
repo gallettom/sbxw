@@ -69,6 +69,13 @@ pub const COLORS: &[(&str, u32)] = &[
     // floor itself) under one hairline.
     ("status-bar", 0x080b0f),
     ("status-line", 0x21262d),
+    // Who makes a session's model (the sidebar's model words): text colour
+    // only, regular weight, never a fill. Not colour by meaning: the
+    // terracotta sits between `red-text` and `amber` in hue, Gemini's blue
+    // is lighter than the `blue` state word beside it.
+    ("vendor-anthropic", 0xe2875a),
+    ("vendor-openai", 0xe6edf3),
+    ("vendor-google", 0x8ab4f8),
 ];
 
 /// Tokens whose desktop value differs from app.css, with app.css's value:

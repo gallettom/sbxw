@@ -26,8 +26,8 @@
 -- -start, -stop; a badge or the bubble keeps its extra's key when it shows
 -- inline; more-<name> is the "+N" of badges that did not fit.
 -- Sessions: sessions-<name> (the disclosure line), sessions-block-<name>,
--- extra-row-<name>-<id> (a line). Groups: block-<label> (the tinted block),
--- group-<label> (its header); block-ungrouped (the rest, on the plain ground).
+-- extra-row-<name>-<id> (a line), session-add-<name>-<id> (its "+": a new
+-- pane). Groups: block-<label> (the tinted block), group-<label> (its header); block-ungrouped (the rest, on the plain ground).
 -- What opens and shuts (a group, a sandbox's sessions) folds: its height
 -- glides over 0.18 s and its lines fade (docs/screens.md, `folds`).
 --
@@ -181,9 +181,37 @@ local function short_model(id)
   return m
 end
 
+-- Who makes a model, as a text colour token: a separate axis from the
+-- colour by meaning (docs/screens.md, "Vendor colours"), never a fill, never
+-- bold. From the model's id or name (any case), else the agent's name.
+-- Unknown: nil (the line's muted text, as before).
+local VENDORS = {
+  { "vendor-anthropic", { "claude", "anthropic", "opus", "sonnet", "haiku", "fable", "mythos" } },
+  { "vendor-openai", { "openai", "chatgpt", "gpt", "codex" } },
+  { "vendor-google", { "gemini", "google" } },
+}
+local VENDOR_NAMES = { ["vendor-anthropic"] = "Anthropic", ["vendor-openai"] = "OpenAI", ["vendor-google"] = "Google" }
+
+local function vendor_of(model, agent)
+  for _, v in ipairs({ model or "", agent or "" }) do
+    local m = string.lower(v)
+    if m ~= "" then
+      for _, row in ipairs(VENDORS) do
+        for _, w in ipairs(row[2]) do
+          if string.find(m, w, 1, true) then return row[1] end
+        end
+      end
+      -- OpenAI's o-series: "o3", "o4-mini", "openai/o1".
+      if string.match(m, "^o%d") or string.match(m, "[/%s]o%d") then return "vendor-openai" end
+    end
+  end
+  return nil
+end
+
 -- What the row says runs in the sandbox: its model (the sandbox's main
 -- session's, from GET /api/sandboxes or the session), else the agent's name.
--- Returns the words and the tooltip (the full id).
+-- Returns the words, the tooltip (the full id, and its maker) and the
+-- vendor's colour token (nil when unknown).
 local function model_of(sb, data)
   local name, id = sb.model_name, sb.model
   if not name and not id then
@@ -192,8 +220,10 @@ local function model_of(sb, data)
     end
   end
   local words = (name and name ~= "" and string.lower(name)) or short_model(id)
-  if not words then return sb.agent or "", (sb.agent or "") .. " (model not reported)" end
-  return words, (sb.agent or "agent") .. ": " .. (id or name)
+  local vendor = vendor_of(id or name, sb.agent)
+  local by = vendor and (", by " .. VENDOR_NAMES[vendor]) or ""
+  if not words then return sb.agent or "", (sb.agent or "") .. " (model not reported)" .. by, vendor end
+  return words, (sb.agent or "agent") .. ": " .. (id or name) .. by, vendor
 end
 
 -- The sandbox's network count as a bubble on the name's line: blue while
@@ -203,9 +233,9 @@ local function bubble_help(name, e)
   local n = e.count or 0
   local what = n == 1 and "1 network request" or (n .. " network requests")
   if e.tone == "amber" then
-    return what .. " for " .. name .. ": sbx holds something until you decide. Opens the Network panel"
+    return what .. " for " .. name .. ": sbx holds something until you decide. Opens the Network panel on " .. name .. "'s requests"
   end
-  return what .. " sbx refused for " .. name .. " (nothing waits on them). Opens the Network panel"
+  return what .. " sbx refused for " .. name .. " (nothing waits on them). Opens the Network panel on " .. name .. "'s requests"
 end
 
 -- Short menu labels, verb first; the feature's long sentence is the tooltip.
@@ -233,7 +263,7 @@ local function item(sb, app, data)
   local busy = sb.status ~= "running" and sb.status ~= "stopped"
   local st = state_of(sb, data)
   statuses[name] = sb.status
-  local model, model_help = model_of(sb, data)
+  local model, model_help, model_vendor = model_of(sb, data)
 
   local menu_items = {}
   if running then
@@ -300,7 +330,7 @@ local function item(sb, app, data)
   -- badge; a badge that does not fit goes to the "+N" or the ⋯ menu.
   local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w - 16
   local line2 = { gap = 4, w = "full", first,
-    text{ model, size = "caption", color = "text-muted", truncate = true, help = model_help, key = "model-" .. name },
+    text{ model, size = "caption", color = model_vendor or "text-muted", truncate = true, help = model_help, key = "model-" .. name },
   }
   local all = {}
   for _, e in ipairs(wants) do table.insert(all, e) end
@@ -476,11 +506,16 @@ local function session_line(sb, e, data, base_model)
     or (e.tone == "red" and "broken") or ((tone == "muted") and "hollow") or "solid"
   if word == "working" then tone = "blue" end
   local done = word == "done"
+  -- A live session no pane shows (starting, working, wants you, idle):
+  -- a green "+" where the P chip would be opens it in a new pane. Done,
+  -- failed or stopped ones get none (the line's press starts them again).
+  local plus = not e.count and e.intent ~= nil and (word == "" or word == "starting" or word == "working" or word == "wants you")
+  local chip = e.count or plus
   local m = e.id ~= "main" and thread_model(data, sb.name, e.id) or nil
   local mw = m and (string.find(m, " ") and string.lower(m) or short_model(m)) or nil
   if mw == base_model then mw = nil end
   -- The name first; the model only where it fits beside the name and word.
-  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (e.count and 32 or 0)
+  local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (chip and 32 or 0)
   -- A thread on its own worktree reads as the worktree's path (a branch
   -- glyph before it); its name too when the path does not end with it.
   local path, full = nil, nil
@@ -491,7 +526,7 @@ local function session_line(sb, e, data, base_model)
     local both = last ~= name
     -- The line's own room: the sidebar less its paddings, the two 12 pt
     -- columns, the glyph and the gaps, then the state word and the P chip.
-    local line_room = ((data.app.sidebar or {}).w or 264) - 92 - (e.count and 32 or 0)
+    local line_room = ((data.app.sidebar or {}).w or 264) - 92 - (chip and 32 or 0)
     local avail = line_room - est(word) - 8 - (both and (est(name) + 8) or 0)
     label = middle(path, math.max(avail, 60))
     if both then label = name .. " · " .. label end
@@ -509,9 +544,11 @@ local function session_line(sb, e, data, base_model)
       own and icon{ "branch", size = 12, color = "text-muted" } or false,
       text{ label, size = "body", weight = wants and "medium" or "normal", color = done and "text-muted" or (wants and "amber" or "text"), truncate = true },
       word ~= "" and text{ word, size = "caption", weight = wants and "semibold" or "normal", color = done and "text-muted" or (word_color[tone] or "text-muted") } or false,
-      mw and text{ mw, size = "caption", color = "text-muted", truncate = true } or false,
+      mw and text{ mw, size = "caption", color = vendor_of(m, sb.agent) or "text-muted", truncate = true, key = "model-" .. sb.name .. "-" .. e.id } or false,
       spacer{},
       e.count and badge{ "P" .. e.count, tone = "blue", help = "Shown in pane " .. e.count .. " (" .. (data.app.platform == "macos" and "⌘" or "Ctrl+") .. e.count .. " focuses it)" } or false,
+      plus and button{ icon = "plus", compact = true, tone = "green", on = "session_spare", arg = sb.name .. "\n" .. e.id,
+        key = "session-add-" .. sb.name .. "-" .. e.id, tab_stop = false, help = "Open " .. name .. " in a new pane" } or false,
     },
   }
 end
@@ -738,6 +775,15 @@ return {
     extra = function(_, key)
       local i = extra_intents[key]
       if i then return intent(i.name, i.args) end
+    end,
+    -- A session line's "+": the line's own open_terminal, in a new pane.
+    session_spare = function(_, key)
+      local i = extra_intents[key]
+      if not i then return nil end
+      local args = {}
+      for k, v in pairs(i.args or {}) do args[k] = v end
+      args.pane = "spare"
+      return intent(i.name, args)
     end,
     row_menu = function(_, name, id)
       if id == "bash" then return intent("open_terminal", { sandbox = name, mode = "bash", pane = "spare" }) end
