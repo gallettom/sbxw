@@ -375,3 +375,65 @@ fn write_create_fixtures() {
     r.data[KEY] = r.st.view(&[]);
     save("create-jobs", "empty", &r);
 }
+
+/// The status bar's view of bring-ups, from `provision` events alone (a
+/// bring-up another client started): the step and its detail's percentage,
+/// several at once with the most recent first, a failure, a success that
+/// says "created" for a moment.
+#[test]
+fn the_status_bar_follows_bring_ups_from_provision_events() {
+    use model::BarState;
+    let mut st = State::default();
+    let d = json!({ "sandboxes": [] });
+    let ctx = Ctx { data: &d };
+    let ev = |st: &mut State, v: J| {
+        st.on_event(&ctx, "provision", &J::String(v.to_string()));
+    };
+    let plan = json!([{ "id": "create", "label": "Create the sandbox" }, { "id": "boot", "label": "Start it" }, { "id": "kits", "label": "Install kits" }, { "id": "ports", "label": "Publish ports" }]);
+    ev(&mut st, json!({ "sandbox": "better-api", "kind": "plan", "steps": plan }));
+    let now = Instant::now();
+    let b = st.bar_jobs(now);
+    assert_eq!((b.len(), b[0].step.as_deref(), b[0].frac, &b[0].state), (1, None, 0.0, &BarState::Running), "before the first step");
+    ev(&mut st, json!({ "sandbox": "better-api", "kind": "started", "id": "create" }));
+    ev(&mut st, json!({ "sandbox": "better-api", "kind": "detail", "text": "Pulling image docker/sandbox-templates:claude-code 63%" }));
+    let b = st.bar_jobs(now);
+    assert_eq!(b[0].step.as_deref(), Some("Pulling image 63%"));
+    assert!((b[0].frac - 0.63 / 4.0).abs() < 1e-4, "{}", b[0].frac);
+    ev(&mut st, json!({ "sandbox": "better-api", "kind": "started", "id": "kits" }));
+    let b = st.bar_jobs(now);
+    assert_eq!((b[0].step.as_deref(), b[0].frac), (Some("Install kits"), 0.5), "the detail clears with the next step");
+
+    // A second one, started later, shows first.
+    std::thread::sleep(Duration::from_millis(2));
+    ev(&mut st, json!({ "sandbox": "web", "kind": "plan", "steps": plan }));
+    let b = st.bar_jobs(Instant::now());
+    assert_eq!(b.iter().map(|j| j.sandbox.as_str()).collect::<Vec<_>>(), ["web", "better-api"]);
+
+    // better-api fails: it stays, in its failed state, with the reason.
+    ev(&mut st, json!({ "sandbox": "better-api", "kind": "done", "error": "sbx: kits failed" }));
+    let b = st.bar_jobs(Instant::now());
+    let f = b.iter().find(|j| j.sandbox == "better-api").unwrap();
+    assert_eq!((&f.state, f.step.as_deref()), (&BarState::Failed("sbx: kits failed".into()), Some("Install kits failed")));
+
+    // web succeeds: gone from the list, "created" for CREATED_FOR, then nothing.
+    ev(&mut st, json!({ "sandbox": "web", "kind": "done" }));
+    let t = Instant::now();
+    let b = st.bar_jobs(t);
+    let w = b.iter().find(|j| j.sandbox == "web").unwrap();
+    assert_eq!((&w.state, w.frac), (&BarState::Created, 1.0));
+    assert!(st.bar_jobs(t + CREATED_FOR).iter().all(|j| j.sandbox != "web"), "it clears");
+    // A done for a sandbox never seen says nothing.
+    ev(&mut st, json!({ "sandbox": "ghost", "kind": "done" }));
+    assert!(st.bar_jobs(Instant::now()).iter().all(|j| j.sandbox != "ghost"));
+}
+
+#[test]
+fn a_detail_line_gives_its_words_and_percentage() {
+    use model::{percent, step_words};
+    assert_eq!(percent("Pulling image x:y 63%"), Some(63.0));
+    assert_eq!(percent("layers 12.5%,"), Some(12.5));
+    assert_eq!(percent("no number here"), None);
+    assert_eq!(step_words("Create the sandbox", "Pulling image docker/sandbox-templates:claude-code 63%"), "Pulling image 63%");
+    assert_eq!(step_words("Create the sandbox", "63%"), "Create the sandbox 63%");
+    assert_eq!(step_words("Create the sandbox", "Copying files"), "Create the sandbox");
+}

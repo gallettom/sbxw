@@ -222,6 +222,8 @@ pub struct App {
     sidebar_live: Option<f32>,
     /// The command palette, while open (palette.rs).
     pub palette: Option<palette::Palette>,
+    /// The status bar's state (statusbar.rs).
+    pub status: statusbar::Status,
 }
 
 /// The most panes the layout shows (the layout switch's largest choice).
@@ -309,6 +311,7 @@ impl App {
             bar_menu: None,
             sidebar_live: None,
             palette: None,
+            status: Default::default(),
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -423,6 +426,11 @@ impl App {
             let list = d.jarvis_proposals().unwrap_or_default();
             app.jarvis.seed_proposals(list);
             app.jarvis.seed_sessions(&d.sessions().unwrap_or_default());
+            // A fixture's stream events, replayed once (`provision`: bring-ups
+            // for the status bar and the "New sandboxes" panel).
+            for ev in app.raw["provision"].as_array().cloned().unwrap_or_default() {
+                app.feats_bus("provision", &ev.to_string());
+            }
             let data = app.screen_data();
             for s in &mut app.screens {
                 s.set_data(data.clone());
@@ -796,6 +804,11 @@ impl App {
             }
         }
         if let Some(t) = self.feats_poll() {
+            tx.wake_after(t.saturating_duration_since(Instant::now()));
+        }
+        let (bar_changed, bar_wake) = self.statusbar_poll(Instant::now());
+        changed |= bar_changed;
+        if let Some(t) = bar_wake {
             tx.wake_after(t.saturating_duration_since(Instant::now()));
         }
         for s in &mut self.screens {
