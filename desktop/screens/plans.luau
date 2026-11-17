@@ -74,8 +74,8 @@ local function card(state, data, p, t, i, repos)
   local key = "pt-" .. i
   local editing = (state.editing or {})[id .. ":" .. i]
   local hue = hues[((i - 1) % 4) + 1]
-  local items = { gap = 6, w = "full", pad = 10, radius = "md", fill = "surface-alt", border = hue, key = key }
-  table.insert(items, row{ gap = 6, w = "full",
+  local items = { gap = 8, w = "full", pad = 12, radius = "md", fill = "surface-alt", border = hue, key = key }
+  table.insert(items, row{ gap = 8, w = "full",
     text{ (t.name ~= "" and t.name) or "Unnamed thread", weight = "semibold", color = t.name ~= "" and "text-bright" or "text-dim", truncate = true, grow = 1 },
     button{ editing and "Done" or "Edit", variant = "ghost", on = "edit_toggle", arg = { id = id, i = i }, key = key .. "-edit" },
     button{ icon = "close", variant = "ghost", on = "remove", arg = { id = id, i = i }, help = "Remove this thread from the plan", key = key .. "-remove" },
@@ -107,10 +107,10 @@ local function card(state, data, p, t, i, repos)
     end
   else
     if t.repo ~= nil then
-      table.insert(items, row{ gap = 6, text{ "In", size = "sm", color = "text-muted" }, badge{ repo_label(t.repo, ws), tone = "neutral" } })
+      table.insert(items, row{ gap = 8, text{ "In", size = "sm", color = "text-muted" }, badge{ repo_label(t.repo, ws), tone = "neutral" } })
     elseif needs_repo then
       -- Asked on the card itself: the one thing that holds Approve.
-      table.insert(items, row{ gap = 6, w = "full", text{ "No repository yet:", size = "sm", color = "amber" }, repo_select() })
+      table.insert(items, row{ gap = 8, w = "full", text{ "No repository yet:", size = "sm", color = "amber" }, repo_select() })
     end
     local lead, rest = first_sentence(t.goal)
     table.insert(items, text{ lead ~= "" and lead or "No goal yet", color = lead ~= "" and "text" or "text-dim", wrap = true })
@@ -134,7 +134,7 @@ local function card(state, data, p, t, i, repos)
     local known = false
     for _, m in ipairs(models.models) do table.insert(mitems, { id = m.id, label = m.label }); if m.id == t.model then known = true end end
     if t.model and not known then table.insert(mitems, { id = t.model, label = t.model }) end
-    table.insert(items, row{ gap = 6, w = "full", text{ "Model", size = "sm", color = "text-muted" },
+    table.insert(items, row{ gap = 8, w = "full", text{ "Model", size = "sm", color = "text-muted" },
       select{ id = key .. "-model", items = mitems, value = t.model or "", on = "set_model", arg = { id = id, i = i } } })
   end
   return column(items), needs_repo
@@ -145,7 +145,7 @@ local function review(state, data, p)
   local draft = (ui.drafts or {})[p.id] or { threads = p.threads, variant = p.variant }
   local repos = (ui.repos_for == p.sandbox) and data.thread_repos or nil
   local v = (data.threads_view or {})[p.sandbox] or {}
-  local out = { gap = 10, w = "full", h = "full" }
+  local out = { gap = 12, w = "full", h = "full" }
   table.insert(out, header("Plan from the lead of " .. p.sandbox, p.summary))
   -- The variant, as the lead proposed it with its reason; the choice here is what Approve sends.
   local variant = draft.variant or "split"
@@ -156,7 +156,7 @@ local function review(state, data, p)
       { id = "shared", label = "Shared: one worktree, one branch, files claimed on a board" } } },
   })
   if p.justification and p.justification ~= "" then
-    table.insert(out, row{ gap = 6, w = "full", text{ "Why", size = "sm", color = "text-muted" }, text{ p.justification, size = "sm", wrap = true, grow = 1 } })
+    table.insert(out, row{ gap = 8, w = "full", text{ "Why", size = "sm", color = "text-muted" }, text{ p.justification, size = "sm", wrap = true, grow = 1 } })
   end
   local n = #(draft.threads or {})
   local open, max = v.open, v.max
@@ -184,7 +184,7 @@ local function review(state, data, p)
     table.insert(cards, c)
   end
   if n == 0 then table.insert(cards, note("No thread left: add one, or refuse the plan.")) end
-  table.insert(cards, row{ gap = 6, button{ "Add thread", icon = "plus", on = "add", arg = p.id, key = "plan-add" },
+  table.insert(cards, row{ gap = 8, button{ "Add thread", icon = "plus", on = "add", arg = p.id, key = "plan-add" },
     button{ "Undo my changes", variant = "ghost", on = "reset", arg = p.id, key = "plan-reset" } })
   table.insert(out, scroll{ gap = 8, grow = 1, column(cards) })
   local err = (ui.plan_error or {})[p.id]
@@ -202,14 +202,14 @@ end
 -- ── Status and merge ────────────────────────────────────────────────────
 
 local function status(data, p)
-  local items = { gap = 6, w = "full" }
+  local items = { gap = 8, w = "full" }
   for i, t in ipairs(p.threads or {}) do
     local st = t.state or "starting"
     local running = false
     local v = (data.threads_view or {})[p.sandbox] or {}
     for _, s in ipairs(v.sessions or {}) do if s.thread == t.name and s.running then running = true end end
-    table.insert(items, column{ gap = 3, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "ps-" .. t.name,
-      row{ gap = 6, w = "full",
+    table.insert(items, column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "ps-" .. t.name,
+      row{ gap = 8, w = "full",
         text{ state_marks[st] or "•", color = state_tones[st] or "text-muted" },
         text{ t.name, weight = "medium", color = "text-bright", truncate = true, grow = 1 },
         badge{ state_words[st] or st, tone = state_tones[st] or "neutral" },
@@ -234,7 +234,7 @@ local function merge_view(data, p)
   for _, r in ipairs(m.results or {}) do results[r.thread] = r end
   local shared = p.variant == "shared"
   table.insert(out, text{ shared and ("Merge the shared branch sbxw/team-" .. p.id) or "Merge, in the lead's order", weight = "semibold", color = "text-bright" })
-  if m.note and m.note ~= "" then table.insert(out, row{ gap = 6, w = "full", text{ "Lead's note", size = "sm", color = "text-muted" }, text{ m.note, size = "sm", wrap = true, grow = 1 } }) end
+  if m.note and m.note ~= "" then table.insert(out, row{ gap = 8, w = "full", text{ "Lead's note", size = "sm", color = "text-muted" }, text{ m.note, size = "sm", wrap = true, grow = 1 } }) end
   local rows = { gap = 4, w = "full" }
   local team_r = nil
   for _, r in ipairs(m.results or {}) do if string.sub(r.thread or "", 1, 5) == "team-" then team_r = r end end
@@ -246,7 +246,7 @@ local function merge_view(data, p)
     elseif m.state == "merging" then st = "pending"; txt = "pending"
     elseif m.state == "failed" or m.state == "merged" then st = "skipped"; txt = "not merged" end
     local mk = merge_marks[st]
-    table.insert(rows, row{ gap = 6, w = "full", pad = 6, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "mr-" .. name,
+    table.insert(rows, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = hues[((i - 1) % 4) + 1], key = "mr-" .. name,
       text{ i .. ".", size = "sm", color = "text-muted" },
       text{ name, weight = "medium", truncate = true },
       spacer{},
@@ -288,7 +288,7 @@ local function merge_view(data, p)
     if #dist > 0 then
       table.insert(out, text{ "Kept in auto memory with the merge", size = "sm", color = "text-muted" })
       for k, d in ipairs(dist) do
-        table.insert(out, row{ gap = 6, w = "full", key = "dist-" .. k, text{ d.kind == "warning" and "▲" or "◆", color = d.kind == "warning" and "amber" or "blue" }, text{ d.text, size = "sm", wrap = true, grow = 1 } })
+        table.insert(out, row{ gap = 8, w = "full", key = "dist-" .. k, text{ d.kind == "warning" and "▲" or "◆", color = d.kind == "warning" and "amber" or "blue" }, text{ d.text, size = "sm", wrap = true, grow = 1 } })
       end
     end
   end
@@ -297,11 +297,11 @@ end
 
 local function approved(state, data, p)
   local ui = data.threads_ui or {}
-  local out = { gap = 10, w = "full", h = "full" }
+  local out = { gap = 12, w = "full", h = "full" }
   local over = p.merge and p.merge.state == "merged"
   table.insert(out, header((p.merge and "Merge the threads of " or "Plan of ") .. p.sandbox, p.summary))
   if p.closed then table.insert(out, note("Team mode was ended: the threads run on, their reports no longer reach the lead.")) end
-  local body = { gap = 10, w = "full" }
+  local body = { gap = 12, w = "full" }
   if p.merge then table.insert(body, merge_view(data, p)) end
   table.insert(body, text{ "Threads", size = "sm", weight = "semibold", color = "text-muted" })
   table.insert(body, status(data, p))
@@ -335,18 +335,18 @@ return {
     local id = data.app.modal and data.app.modal.arg
     local p = id and find_plan(data, id)
     if not p then
-      return column{ gap = 10, pad = 16, w = "full", header("Plan"), note(((data.app.errors or {}).plans and ("Could not read the plans: " .. data.app.errors.plans)) or "This plan is gone: its lead may have been replaced."),
+      return column{ gap = 12, pad = 16, w = "full", header("Plan"), note(((data.app.errors or {}).plans and ("Could not read the plans: " .. data.app.errors.plans)) or "This plan is gone: its lead may have been replaced."),
         row{ spacer{}, button{ "Close", on = "later", key = "plan-close" } } }
     end
     local body
     if p.state == "pending" and not p.closed then body = review(state, data, p)
     elseif p.state == "approved" then body = approved(state, data, p)
     else
-      body = column{ gap = 10, w = "full", header("Plan of " .. p.sandbox, p.summary),
+      body = column{ gap = 12, w = "full", header("Plan of " .. p.sandbox, p.summary),
         note("Refused" .. ((p.note and p.note ~= "") and (": " .. p.note) or ".") .. (p.closed and " Team mode was ended." or "")),
         row{ spacer{}, button{ "Close", on = "later", key = "plan-close" } } }
     end
-    return column{ pad = 16, gap = 10, w = "full", h = 640, body }
+    return column{ pad = 16, gap = 12, w = "full", h = 640, body }
   end,
 
   actions = {

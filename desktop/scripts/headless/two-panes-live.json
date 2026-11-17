@@ -11,9 +11,14 @@
       "key": "layout-2c"
     },
     {
+      "t": 0.7,
+      "type": "tap",
+      "key": "extra-sandbox-docs"
+    },
+    {
       "t": 0.8,
       "type": "tap",
-      "key": "spare-docs"
+      "key": "extra-sandbox-docs-spare"
     },
     {
       "t": 1.2,

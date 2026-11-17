@@ -28,7 +28,7 @@ local function list(data)
     local meta = {}
     if tp.size and tp.size ~= "" then table.insert(meta, tp.size) end
     if tp.created and tp.created ~= "" then table.insert(meta, tp.created) end
-    table.insert(out, row{ gap = 6, w = "full", px = 8, py = 5, radius = "sm", fill = "surface-alt", key = "tpl-" .. tp.tag,
+    table.insert(out, row{ gap = 8, w = "full", px = 8, py = 4, radius = "sm", fill = "surface-alt", key = "tpl-" .. tp.tag,
       text{ tp.tag, mono = true, color = "text-bright", truncate = true },
       tp.configured and badge{ "in use", tone = "green", help = "sbxw.toml's template: new sandboxes start from it" } or false,
       tp.auto and badge{ "automatic", tone = "blue", help = "Kept by sbxw for template = \"auto\"" } or false,
@@ -68,16 +68,16 @@ return {
       scroll{ gap = 12,
         note("A template is a saved sandbox: new sandboxes can start from it (sbxw.toml's `template`). Saving takes the sandbox's secrets out first and can take minutes."),
         list(data),
-        column{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
+        column{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
           text{ "Save a sandbox as a template", weight = "semibold", color = "text-bright" },
-          row{ gap = 6, w = "full",
+          row{ gap = 8, w = "full",
             select{ id = "tpl-sandbox", items = items, value = chosen, on = "pick", placeholder = "No sandbox" },
             column{ grow = 1, min_w = 0, input{ id = "tpl-tag", value = state.tag, placeholder = "tag, e.g. web-base", on = "tag", on_submit = "save" } },
             button{ saving and "Saving…" or "Save", icon = "check", variant = "primary", on = "save", disabled = saving ~= nil or chosen == nil, key = "tpl-save" },
           },
           saving and note("Saving " .. saving.sandbox .. " as " .. saving.tag .. ": this can take minutes.") or false,
         },
-        column{ gap = 6, w = "full",
+        column{ gap = 8, w = "full",
           row{ gap = 8, w = "full",
             text{ "Disk usage", weight = "semibold", color = "text-bright" },
             spacer{},

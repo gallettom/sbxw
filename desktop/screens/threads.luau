@@ -10,8 +10,8 @@
 local tabs = { { "sessions", "Sessions" }, { "worktrees", "Worktrees" }, { "board", "Board" } }
 
 local function section(title, count)
-  return row{ gap = 6, w = "full", pad = 2,
-    text{ string.upper(title), size = "xxs", weight = "semibold", color = "text-muted" },
+  return row{ gap = 8, w = "full", pad = 2,
+    text{ title, size = "caption", weight = "semibold", color = "text-muted" },
     count and badge{ tostring(count), tone = "neutral" } or false,
   }
 end
@@ -55,7 +55,7 @@ local function session_row(data, sb, s, running_sb)
   local key = "ses-" .. (t or "main")
   local pane = pane_of(data, sb, t)
   local glyph = (t == nil or s.kind == "same") and "✦" or "⑂"
-  local head = row{ gap = 6, w = "full",
+  local head = row{ gap = 8, w = "full",
     dot{ tone = s.tone == "muted" and "neutral" or s.tone },
     text{ glyph .. " " .. s.label, weight = "medium", color = "text-bright", truncate = true, grow = 1 },
     s.word ~= "" and badge{ s.word, tone = s.tone == "muted" and "neutral" or s.tone } or false,
@@ -88,16 +88,16 @@ local function session_row(data, sb, s, running_sb)
 end
 
 local function plan_block(data, v, sb)
-  local out = { gap = 6, w = "full" }
+  local out = { gap = 8, w = "full" }
   if v.pending then
-    table.insert(out, row{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "amber-tint", border = "amber",
+    table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "amber-tint", border = "amber",
       icon{ "flag", color = "amber" }, text{ "The lead's plan waits for you", color = "text-bright", grow = 1, wrap = true },
       button{ "Review plan", variant = "primary", on = "review", arg = v.pending, key = "plan-review" } })
   end
   if v.merge then
     local p = plan_by_id(data, v.merge) or {}
     local st = (p.merge or {}).state
-    table.insert(out, row{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "green-tint", border = "green",
+    table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "green-tint", border = "green",
       icon{ "check", color = "green" },
       text{ st == "merging" and "Merging the threads…" or (st == "failed" and "The merge stopped" or "The lead proposes merging its threads"), color = "text-bright", grow = 1, wrap = true },
       button{ st == "failed" and "Retry merge" or "Merge…", on = "review", arg = v.merge, key = "plan-merge" } })
@@ -107,7 +107,7 @@ local function plan_block(data, v, sb)
     if p.sandbox == sb and p.state == "approved" and not p.closed and p.id ~= v.merge and not (p.merge and p.merge.state == "merged") then
       local n, done = 0, 0
       for _, t in ipairs(p.threads or {}) do n = n + 1; if t.state == "done" then done = done + 1 end end
-      table.insert(out, row{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "elevated", key = "plan-" .. p.id,
+      table.insert(out, row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "elevated", key = "plan-" .. p.id,
         text{ "Plan: " .. done .. " of " .. plural(n, "thread") .. " done", grow = 1, truncate = true },
         button{ "Status", on = "review", arg = p.id, key = "plan-status-" .. p.id } })
     end
@@ -125,7 +125,7 @@ local function sessions_tab(data, sb, sbx)
   if err then table.insert(out, note("Could not read the threads of " .. sb .. ": " .. err, "red"))
   elseif running and v.max == nil then table.insert(out, note("The threads of " .. sb .. " are not read yet.", "amber")) end
   if running then
-    table.insert(out, row{ gap = 6, w = "full",
+    table.insert(out, row{ gap = 8, w = "full",
       v.leading and badge{ "★ Team mode on", tone = "purple" } or text{ "Team mode off", size = "sm", color = "text-muted" },
       spacer{},
       v.leading and button{ "End Team mode", on = "lead_end", arg = sb, key = "lead-end" }
@@ -149,7 +149,7 @@ local function sessions_tab(data, sb, sbx)
   if #own > 0 then table.insert(out, text{ "⑂ Own worktree", size = "sm", color = "text-muted", help = "Each thread on a git worktree and branch of its own" }) end
   for _, s in ipairs(own) do table.insert(out, session_row(data, sb, s, running)) end
   if running then
-    table.insert(out, row{ gap = 6, w = "full",
+    table.insert(out, row{ gap = 8, w = "full",
       button{ "New thread", icon = "plus", on = "new", arg = { sandbox = sb, kind = "thread" }, key = "thread-new", help = "Another Claude session in its own git worktree and branch" },
       button{ "New session", icon = "plus", on = "new", arg = { sandbox = sb, kind = "session" }, key = "session-new", help = "Another Claude session on the main checkout, beside the main one" },
     })
@@ -162,7 +162,7 @@ local function short(sha) return string.sub(sha or "", 1, 7) end
 local function worktrees_tab(data, sb)
   local ui = data.threads_ui or {}
   local out = { gap = 8, w = "full" }
-  table.insert(out, row{ gap = 6, w = "full",
+  table.insert(out, row{ gap = 8, w = "full",
     text{ "Each thread's branch against the branch its repo's main checkout is on, where a merge lands.", size = "sm", color = "text-muted", wrap = true, grow = 1 },
     button{ icon = "reload", on = "wt_load", arg = sb, key = "wt-reload", help = "Read again" } })
   local w = data.worktrees
@@ -181,7 +181,7 @@ local function worktrees_tab(data, sb)
   for i, r in ipairs(w.repos or {}) do
     local name = (r.path ~= "" and r.path) or ((w.workspace or ""):match("([^/]+)/?$") or "workspace")
     local items = { gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = "elevated", key = "wt-repo-" .. i,
-      row{ gap = 6, w = "full", icon{ "folder", size = 12, color = "text-muted" }, text{ name, weight = "medium", color = "text-bright", truncate = true, grow = 1 },
+      row{ gap = 8, w = "full", icon{ "folder", size = 12, color = "text-muted" }, text{ name, weight = "medium", color = "text-bright", truncate = true, grow = 1 },
         badge{ r.base or "HEAD", tone = "blue", help = "The branch the main checkout is on: the threads merge into it" } },
     }
     if r.error then table.insert(items, note(r.error, "red")) end
@@ -197,11 +197,11 @@ local function worktrees_tab(data, sb)
         table.insert(commits, text{ short(c.sha) .. " " .. (c.subject or ""), size = "sm", mono = true, color = "text-soft", truncate = true })
       end
       table.insert(items, column{ gap = 2, w = "full", key = "wt-thread-" .. t.name,
-        row{ gap = 6, w = "full", text{ "⑂ " .. t.name, color = "text", truncate = true, grow = 1 },
+        row{ gap = 8, w = "full", text{ "⑂ " .. t.name, color = "text", truncate = true, grow = 1 },
           text{ table.concat(bits, " · "), size = "sm", color = (t.dirty or 0) > 0 and "amber" or "text-muted" },
           button{ icon = "terminal", variant = "ghost", on = "open", arg = { sandbox = sb, thread = t.name }, key = "wt-open-" .. t.name, help = "Show " .. t.name } },
         text{ t.branch .. " · " .. (t.worktree or ""), size = "xs", color = "text-dim", truncate = true },
-        column{ gap = 1, w = "full", table.unpack(commits) },
+        column{ gap = 2, w = "full", table.unpack(commits) },
       })
     end
     table.insert(out, column(items))
@@ -252,7 +252,7 @@ local function board_tab(state, data, sb)
     end
     local long = (c.held_ms or 0) >= 90 * 60 * 1000
     table.insert(out, column{ gap = 2, w = "full", key = "claim-" .. i,
-      row{ gap = 6, w = "full",
+      row{ gap = 8, w = "full",
         dot{ tone = conflict and "red" or (long and "amber" or "blue") },
         text{ c.file, mono = true, size = "sm", truncate = true, grow = 1, help = c.file },
         (conflict or long) and badge{ conflict and "conflict" or "held long", tone = conflict and "red" or "amber" } or false },
@@ -271,7 +271,7 @@ local function board_tab(state, data, sb)
   local kitems = { { id = "", label = "All" } }
   for _, k in ipairs(filter_kinds) do table.insert(kitems, { id = k, label = marks[k][2] .. "s" }) end
   table.insert(out, section("Feed", #entries))
-  table.insert(out, row{ gap = 6, w = "full",
+  table.insert(out, row{ gap = 8, w = "full",
     select{ id = "board-thread", items = titems, value = ft, on = "board_thread" },
     select{ id = "board-kind", items = kitems, value = fk, on = "board_kind" } })
   local feed = {}
@@ -286,7 +286,7 @@ local function board_tab(state, data, sb)
     local files = {}
     for _, f in ipairs(e.files or {}) do table.insert(files, f) end
     table.insert(out, column{ gap = 2, w = "full", key = "entry-" .. (e.id or i),
-      row{ gap = 6, w = "full", text{ m[1], color = e.kind == "conflict" and "red" or (e.kind == "warning" and "amber" or "text-muted") },
+      row{ gap = 8, w = "full", text{ m[1], color = e.kind == "conflict" and "red" or (e.kind == "warning" and "amber" or "text-muted") },
         text{ m[2], weight = "medium", size = "sm" },
         text{ e.to and (e.by .. " → " .. e.to) or (e.by or ""), size = "sm", color = "text-muted", truncate = true, grow = 1 },
         e.hash and text{ short(e.hash), mono = true, size = "xs", color = "text-dim" } or false },
@@ -317,7 +317,7 @@ return {
     if tab == "worktrees" then body = worktrees_tab(data, sb)
     elseif tab == "board" then body = board_tab(state, data, sb)
     else body = sessions_tab(data, sb, sbx) end
-    return column{ h = "full", gap = 8, pad = 10,
+    return column{ h = "full", gap = 8, pad = 12,
       select{ id = "threads-sandbox", items = items, value = sb, on = "pick" },
       row(trow),
       scroll{ gap = 8, body },

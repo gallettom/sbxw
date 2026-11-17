@@ -10,6 +10,7 @@
 mod bar;
 mod features;
 mod jarvis;
+mod palette;
 pub mod store;
 
 use crate::approval;
@@ -216,6 +217,10 @@ pub struct App {
     top_w: f32,
     /// The pane whose bar's overflow menu is open.
     bar_menu: Option<usize>,
+    /// The sidebar's width while its edge is dragged (written to the store on release).
+    sidebar_live: Option<f32>,
+    /// The command palette, while open (palette.rs).
+    pub palette: Option<palette::Palette>,
 }
 
 /// The most panes the layout shows (the layout switch's largest choice).
@@ -301,6 +306,8 @@ impl App {
             bar_w: [0.0; MAX_PANES],
             top_w: 0.0,
             bar_menu: None,
+            sidebar_live: None,
+            palette: None,
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -489,6 +496,11 @@ impl App {
         data["app"]["extras"] = extras;
         data["app"]["topbar"] = self.top_layout(&mut data);
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
+        // Each sandbox's group colour (the web UI's), for rails, swatches and pane accents.
+        data["app"]["groups"] = self.sandboxes.iter().filter_map(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat).map(|c| (sb.name.clone(), J::String(format!("#{c:06x}"))))).collect::<serde_json::Map<_, _>>().into();
+        data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
+        // Every shortcut, for Help: `{keys, what}`.
+        data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
@@ -519,7 +531,12 @@ impl App {
                 None => l.to_string(),
             }
         };
-        let measured: Vec<(String, bool)> = order.iter().map(|&i| (label(&list[i]), !list[i]["icon"].is_null())).collect();
+        // As topbar.luau draws them: a button when it has an intent, else a
+        // badge; Setup, Help, the Mac and usage in the right group.
+        let measured: Vec<bar::TopExtra> = order
+            .iter()
+            .map(|&i| bar::TopExtra { label: label(&list[i]), icon: !list[i]["icon"].is_null(), button: !list[i]["intent"].is_null(), tool: matches!(list[i]["id"].as_str(), Some("usage" | "setup" | "help" | "mac")) })
+            .collect();
         // The layout switch shows the current choice (topbar.luau's labels).
         let layout = match (self.layout.0, self.layout.1) {
             (1, _) => "1 terminal",
@@ -528,7 +545,13 @@ impl App {
             (3, _) => "3 terminals",
             _ => "4 terminals",
         };
-        let (compact, k) = bar::top_fit(w, &jarvis, layout, &measured);
+        let word = match self.connection.state {
+            "up" => "connected",
+            "connecting" => "connecting",
+            "down" => "offline",
+            other => other,
+        };
+        let (compact, k) = bar::top_fit(w, &jarvis, layout, word, &measured);
         for &i in &order[k..] {
             list[i]["more"] = J::Bool(true);
         }
@@ -872,19 +895,38 @@ impl App {
     }
 
     /// The window's keys (nothing focused, or what the focused control passed on).
-    pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
-        if ev.key == Key::Escape && self.screens.iter_mut().any(|s| s.close_menus()) {
+    /// Escape closes the top-most thing: an open menu, a pane bar's menu,
+    /// the core's dialog, then the modal under it. False when nothing was
+    /// open (the key goes on: a field, a terminal).
+    pub fn escape(&mut self) -> bool {
+        if self.palette.is_some() {
+            self.palette_close();
+            self.push_data();
             return true;
         }
-        if ev.key == Key::Escape && self.bar_menu.take().is_some() {
+        if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
-        if ev.key == Key::Escape && (self.feats.dialog.is_some() || self.feats.modal.is_some()) {
+        if self.bar_menu.take().is_some() {
+            return true;
+        }
+        if self.feats.dialog.is_some() || self.feats.modal.is_some() {
             // The confirmation first, then the modal under it.
             if !self.dismiss_dialog() {
                 self.feats.modal = None;
             }
             self.push_data();
+            return true;
+        }
+        false
+    }
+
+    pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if ev.key == Key::Escape && self.escape() {
+            return true;
+        }
+        // The app's chords (palette.rs): never a terminal's.
+        if self.app_key(ev, tx.focused()) {
             return true;
         }
         if self.shortcut(ev, tx) {
@@ -944,6 +986,9 @@ impl App {
         if self.jarvis.shown.is_some() && key.starts_with("jv-") {
             return true;
         }
+        if self.palette.is_some() && (key == "palette" || key == "palette-input" || key == "palette-list" || self.palette_shown().iter().any(|c| key == format!("palette-{}", c.id))) {
+            return true;
+        }
         for i in 0..shown_panes {
             let p = &self.panes[i];
             let n = i + 1;
@@ -972,7 +1017,7 @@ impl App {
     /// up, and Rune's focus on a terminal grid (the core moves it there when
     /// it opens or focuses a pane).
     pub fn terminal_may_take_keys(&self, rune_focus: Option<&str>) -> bool {
-        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || crate::surface::focused().is_some();
+        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
         !overlay && rune_focus.is_some_and(|k| k.starts_with("grid"))
     }
 
@@ -1180,27 +1225,49 @@ impl App {
             if p.sandbox.as_deref() != Some(sandbox) || p.thread.as_deref() != thread {
                 continue;
             }
-            if self.layout.0 > 1 {
-                self.panes.remove(i);
-                self.panes.push(Pane::empty());
-                self.layout.0 -= 1;
-                for (k, p) in self.panes.iter_mut().enumerate() {
-                    if let Some(t) = p.term.as_mut() {
-                        t.id = (k + 1).to_string();
-                    }
-                }
-                if self.focused >= self.layout.0 || self.focused > i {
-                    self.focused = self.focused.saturating_sub(1).min(self.layout.0 - 1);
-                }
-            } else {
-                self.panes[i] = Pane::empty();
-            }
+            self.remove_pane(i);
         }
         // Hidden panes of that session close too.
         for p in self.panes.iter_mut().skip(self.layout.0) {
             if p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread {
                 *p = Pane::empty();
             }
+        }
+        self.refocus = true;
+    }
+
+    /// Closes pane `i`: the layout shrinks to the panes that remain, in their
+    /// order, and they take the room; the last pane is not removed, it
+    /// becomes empty. The focus goes to the pane that takes the freed place
+    /// (the next one, else the one before). Only the view goes: the sandbox
+    /// and its session go on (a terminal's socket closes as when it is
+    /// replaced).
+    pub fn remove_pane(&mut self, i: usize) {
+        if i >= self.panes.len() {
+            return;
+        }
+        if self.bar_menu.is_some() {
+            self.bar_menu = None;
+        }
+        if self.layout.0 > 1 && i < self.layout.0 {
+            self.panes.remove(i);
+            self.panes.push(Pane::empty());
+            self.layout.0 -= 1;
+            if self.layout.0 < 2 {
+                self.layout.1 = Split::Columns;
+            }
+            for (k, p) in self.panes.iter_mut().enumerate() {
+                if let Some(t) = p.term.as_mut() {
+                    t.id = (k + 1).to_string();
+                }
+            }
+            if self.focused >= self.layout.0 || self.focused > i {
+                self.focused = self.focused.saturating_sub(1).min(self.layout.0 - 1);
+            }
+            // The bars' widths change with the layout: measured again.
+            self.bar_w = [0.0; MAX_PANES];
+        } else {
+            self.panes[i] = Pane::empty();
         }
         self.refocus = true;
     }
@@ -1317,7 +1384,7 @@ impl Host for App {
 // Drawing
 
 fn small(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight)
+    screen::body(size, weight)
 }
 
 fn tile(e: El) -> El {
@@ -1325,6 +1392,13 @@ fn tile(e: El) -> El {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
+    // Keyboard focus as a web page has it: every pressable control is a Tab
+    // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
+    // keyboard put it there (never for a click).
+    cx.web_focus();
+    cx.focus_ring(2.0, 2.0, c("focus"));
+    // The app's zoom (Cmd/Ctrl with + − 0 outside a terminal, or the palette).
+    cx.zoom(s.zoom());
     let root = col()
         .w_full()
         .h_full()
@@ -1337,6 +1411,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             }
             took
         })
+        // Escape closes the top-most thing even while a control inside it
+        // has the keyboard (Rune would only take the focus off it).
+        .on_key(|s: &mut App, ev: &KeyEvent, _tx: &mut Tx| ev.key == Key::Escape && ev.mods == rune::Mods::default() && s.escape())
         .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| {
             s.window_focused = focused;
             // A key held while the window loses focus never comes up here.
@@ -1423,11 +1500,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
                 .min_w(0.0)
                 .h_full()
                 .justify_center()
-                .pr(12.0)
+                .pr(8.0)
                 .clip_rounded(0.0)
                 .on_layout(|s: &mut App, r: [f32; 4]| {
                     // What fits in the top bar follows its width (bar.rs, top_layout).
-                    let w = r[2] - 12.0;
+                    let w = r[2] - 8.0;
                     if (s.top_w - w).abs() > 1.0 {
                         s.top_w = w;
                         s.push_data();
@@ -1443,8 +1520,33 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         Some(n) => bar.child(n),
         None => bar,
     };
-    let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
-    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
+    // The sidebar: its width remembered, its right edge dragged (200 to 420 pt).
+    let edge = el()
+        .key("sidebar-edge")
+        .pin(None, Some(0.0), Some(-layout::GUTTER), Some(0.0))
+        .w(layout::GUTTER)
+        .cursor(Cursor::ResizeColumn)
+        .hover(c("border"))
+        .help("Drag to resize the sidebar")
+        .on_drag(|s: &mut App, d: &mut rune::Drag, _tx| {
+            if matches!(d.phase, rune::Phase::Down) {
+                d.data = s.sidebar_w();
+            }
+            let w = (d.data + d.dx).clamp(layout::SIDEBAR_MIN, layout::SIDEBAR_MAX);
+            if matches!(d.phase, rune::Phase::Up) {
+                s.sidebar_live = None;
+                s.store.set_in("sidebar", "w", serde_json::json!(w.round()));
+            } else {
+                s.sidebar_live = Some(w);
+            }
+            s.push_data();
+        });
+    let sidebar = tile(col().key("sidebar").w(s.sidebar_w()).h_full().min_h(0.0).padding(layout::SIDEBAR_PAD)).child(side_el).child(edge);
+    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER);
+    if s.sidebar_shown() {
+        main = main.child(sidebar);
+    }
+    main = main.child(panes_view(s));
     for p in fpanels {
         main = main.child(p);
     }
@@ -1465,13 +1567,33 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
     }
+    if let Some(p) = palette::view(s) {
+        root = root.child(p);
+    }
+    // Jarvis's proposal has no scrim: it stands beside the Jarvis panel,
+    // whose input (a typed yes) and push-to-talk must stay usable while it shows.
     if let Some(dialog) = s.dialog_view() {
         root = root.child(dialog);
     }
+    // The core's confirmation: a press outside cancels, as its × and Escape do.
     if let Some(dialog) = s.confirm_view() {
-        root = root.child(dialog);
+        root = root.child(scrim("cf-scrim", dialog, |s: &mut App| approval::ConfirmAnswers::cancel_click(s)));
     }
     root
+}
+
+/// What sits under a dialog: the window's floor at 60%, so what is behind
+/// reads as inactive but stays recognisable. It is modal for the keyboard
+/// and the pointer (Tab stays inside, nothing behind takes a press or a
+/// key), Escape and a press on it run `outside`.
+pub fn scrim(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 'static) -> El {
+    let o2 = outside.clone();
+    el().key(key.to_string())
+        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+        .fill(c("floor").alpha(0.6))
+        .modal(false, move |s: &mut App| o2(s))
+        .on_press(move |s: &mut App| outside(s))
+        .child(dialog)
 }
 
 /// The notice (key `notice`): one line of text, its full text as a tooltip,
@@ -1482,15 +1604,19 @@ fn notice_view(s: &App) -> Option<El> {
         "screen_restore" => "Click to see the file and restore the built-in",
         _ => "Click to open",
     });
-    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(11.5, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
+    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(13.0, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
     if let Some(w) = what {
-        body = body.child(text(w).font(small(10.5, 500.0)).color(c("blue")).truncate().min_w(0.0));
+        body = body.child(text(w).font(small(12.0, 500.0)).color(c("blue")).truncate().min_w(0.0));
     }
     let close = el()
         .key("notice-close")
         .role("button")
         .label("Dismiss")
-        .padding(3.0)
+        .help("Dismiss")
+        .w(layout::DENSE_H)
+        .h(layout::DENSE_H)
+        .items_center()
+        .justify_center()
         .radius(theme::radius("xs").unwrap())
         .hover(c("border"))
         .cursor(Cursor::Pointer)
@@ -1499,7 +1625,7 @@ fn notice_view(s: &App) -> Option<El> {
             s.feats.notice_then = None;
             s.push_data();
         })
-        .child(rune::icon(crate::icons::get("close").unwrap(), 10.0).color(c("text-muted")));
+        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted")));
     Some(
         row()
             .key("notice")
@@ -1551,11 +1677,30 @@ fn pane_name(p: &Pane) -> String {
     match (&p.sandbox, &p.thread) {
         (Some(sb), Some(t)) => format!("{sb} · {t}"),
         (Some(sb), None) => sb.clone(),
-        (None, _) => "no sandbox".into(),
+        (None, _) => "Empty pane".into(),
     }
 }
 
 impl App {
+    /// The sidebar's width: dragged, else remembered, else the default.
+    pub fn sidebar_w(&self) -> f32 {
+        let w = self.sidebar_live.unwrap_or_else(|| self.store.get("sidebar")["w"].as_f64().map_or(layout::SIDEBAR_W, |w| w as f32));
+        // A narrow window keeps room for the panes: at most 30% of it, never under the minimum.
+        let room = if self.window.0 > 0.0 { (self.window.0 * 0.3).max(layout::SIDEBAR_MIN) } else { layout::SIDEBAR_MAX };
+        w.min(room).clamp(layout::SIDEBAR_MIN, layout::SIDEBAR_MAX)
+    }
+
+    /// Whether the sidebar shows (Cmd/Ctrl+B hides it; remembered).
+    pub fn sidebar_shown(&self) -> bool {
+        self.store.get("sidebar")["hidden"] != J::Bool(true)
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        let hidden = self.sidebar_shown();
+        self.store.set_in("sidebar", "hidden", if hidden { J::Bool(true) } else { J::Null });
+        self.push_data();
+    }
+
     /// Pane `i`'s bar width: as last laid out, else a guess from the window
     /// (the first frame; the layout's report corrects it at once).
     fn bar_width(&self, i: usize) -> f32 {
@@ -1568,7 +1713,8 @@ impl App {
             _ => 2.0,
         };
         let jarvis = if self.jarvis.open { self.jarvis.width } else { 0.0 };
-        ((self.window.0 - layout::SIDEBAR_W - jarvis - layout::GUTTER * 4.0) / across).max(160.0)
+        let side = if self.sidebar_shown() { self.sidebar_w() + layout::GUTTER } else { 0.0 };
+        ((self.window.0 - side - jarvis - layout::GUTTER * 3.0) / across).max(160.0)
     }
 
     /// What pane `i`'s bar shows inline and what goes into its overflow
@@ -1618,20 +1764,26 @@ impl App {
 /// A pane bar chip: an extra's (or the core's) label, icon, tone and count,
 /// pressable when it has an intent.
 fn bar_chip(it: &bar::Item, n: usize) -> El {
+    // Quiet: a muted chip is text on the bar; a tone is its colour on its tint.
+    let quiet = it.tone == "muted" || it.tone.is_empty();
     let (fg, tint) = crate::screen::tone(&it.tone);
-    let mut b = row().key(it.key(n)).gap(4.0).px(5.0).py(1.0).items_center().radius(theme::radius("xs").unwrap()).fill(theme::hex(tint)).border(1.0, theme::hex(fg));
+    let fg = if quiet { theme::color_value("text").unwrap() } else { fg };
+    let mut b = row().key(it.key(n)).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).min_w(layout::DENSE_H).justify_center().items_center().radius(theme::radius("xs").unwrap());
+    if !quiet {
+        b = b.fill(theme::hex(tint));
+    }
     if !it.help.is_empty() {
         b = b.help(it.help.clone());
     }
     if let Some(ic) = it.icon.as_deref().and_then(crate::icons::get) {
-        b = b.child(rune::icon(ic, 11.0).color(theme::hex(fg)));
+        b = b.child(rune::icon(ic, bar::CHIP_ICON).color(theme::hex(fg)));
     }
     let label = it.text();
     if !label.is_empty() {
-        b = b.child(text(label).font(small(10.5, 500.0)).color(theme::hex(fg)));
+        b = b.child(text(label).font(small(bar::CHIP_TEXT, 500.0)).color(theme::hex(fg)));
     }
     if let Some((name, args)) = it.intent.clone() {
-        b = b.role("button").cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).hover(c(if quiet { "elevated" } else { "active-bg" })).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
@@ -1644,21 +1796,21 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
 fn bar_menu_item(it: &bar::Item, n: usize) -> El {
     let (fg, tint) = crate::screen::tone(&it.tone);
     let fg = theme::hex(fg);
-    let mut r = row().key(it.key(n)).gap(6.0).items_center().px(8.0).h(26.0).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.text());
+    let mut r = row().key(it.key(n)).gap(8.0).items_center().px(8.0).h(layout::CONTROL_H).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.text());
     if !it.help.is_empty() {
         r = r.help(it.help.clone());
     }
     r = match it.icon.as_deref().and_then(crate::icons::get) {
-        Some(ic) => r.child(rune::icon(ic, 12.0).color(fg)),
-        None => r.child(el().w(7.0).h(7.0).radius(3.5).fill(fg)),
+        Some(ic) => r.child(rune::icon(ic, 14.0).color(fg)),
+        None => r.child(el().w(8.0).h(8.0).radius(4.0).fill(fg)),
     };
     let name = if it.label.is_empty() { it.help.clone() } else { it.label.clone() };
-    r = r.child(text(name).font(small(12.0, 400.0)).color(if it.tone == "muted" || it.tone.is_empty() { c("text-bright") } else { fg }).truncate().grow(1.0).min_w(0.0));
+    r = r.child(text(name).font(small(13.0, 400.0)).color(if it.tone == "muted" || it.tone.is_empty() { c("text-bright") } else { fg }).truncate().grow(1.0).min_w(0.0));
     if let Some(k) = it.count {
-        r = r.child(el().px(6.0).py(1.0).radius(theme::radius("pill").unwrap()).fill(theme::hex(tint)).border(1.0, fg).child(text(k.to_string()).font(small(10.5, 600.0)).color(fg)));
+        r = r.child(el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(theme::hex(tint)).child(text(k.to_string()).font(small(12.0, 500.0)).color(fg)));
     }
     match it.intent.clone() {
-        Some((name, args)) => r.hover(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        Some((name, args)) => r.focus_highlight(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.bar_menu = None;
             s.press_extra("pane", &name, &args);
             s.push_data();
@@ -1677,22 +1829,22 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
         .role("button")
         .label(format!("{count} more"))
         .expanded(open)
-        .gap(4.0)
-        .px(6.0)
-        .py(1.0)
+        .help(format!("{count} more: what does not fit in this bar"))
+        .gap(bar::MORE_GAP)
+        .px(bar::CHIP_PX)
+        .h(layout::DENSE_H)
         .items_center()
         .radius(theme::radius("xs").unwrap())
-        .fill(c("elevated"))
-        .border(1.0, c(if open { "blue" } else { "border" }))
-        .hover(c("border"))
+        .fill(c(if open { "elevated" } else { "surface" }))
+        .hover(c("elevated"))
         .cursor(Cursor::Pointer)
         .on_press(move |s: &mut App| {
             s.bar_menu = if s.bar_menu == Some(i) { None } else { Some(i) };
         })
-        .child(rune::icon(crate::icons::get("more").unwrap(), 11.0).color(c("text")))
-        .child(text(count.to_string()).font(small(10.5, 500.0)).color(c("text")));
+        .child(rune::icon(crate::icons::get("more").unwrap(), bar::CHIP_ICON).color(c("text")))
+        .child(text(count.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(c("text")));
     if let Some(t) = bar::more_tone(&f.hidden) {
-        b = b.child(el().w(6.0).h(6.0).radius(3.0).fill(theme::hex(crate::screen::tone(t).0)));
+        b = b.child(el().w(bar::MORE_DOT).h(bar::MORE_DOT).radius(bar::MORE_DOT / 2.0).fill(theme::hex(crate::screen::tone(t).0)));
     }
     b
 }
@@ -1700,9 +1852,10 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
 fn pane_view(s: &App, i: usize) -> El {
     let pane = s.panes.get(i);
     let focused = i == s.focused;
-    let label = pane.map(pane_name).unwrap_or_else(|| "no sandbox".into());
+    let label = pane.map(pane_name).unwrap_or_else(|| "Empty pane".into());
     let connected = pane.is_some_and(|p| p.status() == "connected");
-    let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(3.5).fill(c(if pane.is_some_and(|p| p.attention) { "amber" } else if connected { "blue" } else { "dim" }));
+    let (dot_tone, dot_word) = if pane.is_some_and(|p| p.attention) { ("amber", "wants you") } else if connected { ("blue", "connected") } else { ("text-muted", "not connected") };
+    let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
     // dot | name, kind, extras…, "…" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
     let mut bar = row()
@@ -1712,7 +1865,7 @@ fn pane_view(s: &App, i: usize) -> El {
         .px(bar::PANE_PAD)
         .gap(bar::PANE_GAP)
         .items_center()
-        .fill(c("pane-bar"))
+        .fill(c(if focused { "surface" } else { "surface-alt" }))
         .on_layout(move |s: &mut App, r: [f32; 4]| {
             if let Some(w) = s.bar_w.get_mut(i) {
                 if (*w - r[2]).abs() > 0.5 {
@@ -1724,10 +1877,10 @@ fn pane_view(s: &App, i: usize) -> El {
     let fit = s.pane_fit(i);
     let name_min = fit.as_ref().map_or(0.0, |f| f.name_min);
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0).child(
-        text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(12.0, 500.0)).color(c("text-bright")).truncate().min_w(name_min),
+        text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
     );
     if let (Some(p), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
-        mid = mid.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(10.5, 400.0)).color(c("text-muted"))));
+        mid = mid.child(text(p.mode.name()).font(small(bar::CHIP_TEXT, 400.0)).color(c("text-muted")));
         for it in &f.shown {
             mid = mid.child(bar_chip(it, i + 1));
         }
@@ -1741,41 +1894,51 @@ fn pane_view(s: &App, i: usize) -> El {
             el().key(format!("pane-{}-close", i + 1))
                 .role("button")
                 .label("Close pane")
-                .help("Close this terminal")
+                .help("Close this pane (the sandbox and its session go on)")
+                .help_keys(palette::close_keys())
                 .w(bar::CLOSE_W)
                 .h(bar::CLOSE_W)
                 .items_center()
                 .justify_center()
                 .radius(theme::radius("xs").unwrap())
-                .hover(c("border"))
+                .hover(c("elevated"))
                 .cursor(Cursor::Pointer)
                 .on_press(move |s: &mut App| {
-                    if let Some(p) = s.panes.get_mut(i) {
-                        *p = Pane::empty();
-                    }
-                    if s.bar_menu == Some(i) {
-                        s.bar_menu = None;
-                    }
+                    s.remove_pane(i);
                     s.push_data();
                 })
-                .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
+                .child(rune::icon(crate::icons::get("close").unwrap(), 14.0).color(c("text-muted"))),
         );
     }
     let body = match pane {
         // The pane fills a row (its width grows, its height is the row's).
         Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane(t, lens(i))),
+        Some(Pane { sandbox: None, error: None, .. }) => empty_pane(s, i),
         Some(p) => {
             let msg = match (&p.sandbox, &p.error) {
                 (_, Some(e)) => e.clone(),
                 (Some(sb), None) if matches!(s.target, Target::Fixture(_)) => format!("{sb}: no terminal in a fixture (scripts/shot.sh runs one against the stand-in daemon)"),
                 (Some(sb), None) => format!("{sb}: {}", p.status()),
-                (None, None) => if s.sandboxes.is_empty() { "No sandbox here. Create one with `sbxw up`.".into() } else { "Select a sandbox in the list to open it here.".into() },
+                (None, None) => unreachable!("the empty pane"),
             };
-            col().grow(1.0).w_full().padding(16.0).child(text(msg).font(small(12.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap())
+            let mut body = row().gap(8.0).items_start().w_full().child(text(msg).font(small(13.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap().grow(1.0).min_w(0.0));
+            if p.error.is_some() {
+                body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), 16.0).color(c("red"))).child(body);
+            }
+            col().grow(1.0).w_full().padding(16.0).child(body)
         }
         None => el().grow(1.0),
     };
-    let border = if focused { rune::color::hex("#36618f").unwrap() } else { c("elevated") };
+    // The focused pane: a clear 1.5 pt blue border; the others a quiet one.
+    // A 2 pt line on top in the sandbox's group colour (the web UI's), so
+    // panes of one piece of work read together.
+    let accent = pane
+        .and_then(|p| p.sandbox.as_deref())
+        .and_then(|n| s.sandboxes.iter().find(|x| x.name == n))
+        .and_then(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat))
+        .map(theme::hex)
+        .unwrap_or_else(|| c("border"));
+    let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
     col()
         .key(format!("pane-{}", i + 1))
         .w_full()
@@ -1783,7 +1946,7 @@ fn pane_view(s: &App, i: usize) -> El {
         .min_w(0.0)
         .min_h(0.0)
         .fill(c("bg"))
-        .border(1.0, border)
+        .border(bw, border)
         .radius(theme::radius("md").unwrap())
         .clip_rounded(theme::radius("md").unwrap())
         .on_press(move |s: &mut App| {
@@ -1798,9 +1961,73 @@ fn pane_view(s: &App, i: usize) -> El {
         })
         // Files dropped on a pane: to the feature that takes them (files: the upload's dialog).
         .on_drop_files(move |s: &mut App, files: &[std::path::PathBuf], _tx| s.pane_drop(i, files))
+        .child(el().key(format!("pane-{}-accent", i + 1)).h(2.0).w_full().fill(accent))
         .child(bar)
-        .child(el().h(1.0).w_full().fill(c(if focused { "blue" } else { "elevated" })))
+        .child(el().h(1.0).w_full().fill(c("elevated")))
         .child(body)
+}
+
+/// A core-drawn button, as the `button` element draws one: 28 pt, a label
+/// 13/500, its shortcut in its tooltip.
+fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: bool, on: impl Fn(&mut App) + 'static) -> El {
+    let (fill, fg, hover) = if primary { ("green-deep", "white", "primary-hover") } else { ("elevated", "text", "border") };
+    let mut b = row()
+        .key(key.to_string())
+        .role("button")
+        .label(label.to_string())
+        .help(label.to_string())
+        .help_keys(keys)
+        .gap(6.0)
+        .h(layout::CONTROL_H)
+        .px(10.0)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .fill(c(fill))
+        .border(1.0, c(if primary { "green-deep" } else { "border" }))
+        .hover(c(hover))
+        .cursor(Cursor::Pointer)
+        .on_press(move |s: &mut App| {
+            on(s);
+            s.push_data();
+        });
+    if let Some(ic) = crate::icons::get(icon) {
+        b = b.child(rune::icon(ic, 16.0).color(c(fg)));
+    }
+    b.child(text(label.to_string()).font(small(13.0, 500.0)).color(c(fg)))
+}
+
+/// An empty pane says what to do, centred, and offers it: open a sandbox
+/// from the list, a new sandbox, the command palette.
+fn empty_pane(s: &App, i: usize) -> El {
+    let none = s.sandboxes.is_empty();
+    let (title, line) = if none {
+        ("No sandboxes yet", "Create one to run an agent in it; its terminal opens here.")
+    } else {
+        ("Nothing open in this pane", "Pick a sandbox in the list to open its terminal here, or find it in the palette.")
+    };
+    let mut actions = row().gap(8.0).items_center().justify_center();
+    // The create feature's "New" (its top bar extra), the same intent.
+    let new = s.screens.iter().find(|x| x.name == "topbar").and_then(|t| {
+        let e = t.data()["app"]["extras"]["topbar"].as_array()?.iter().find(|e| e["id"] == "create")?.clone();
+        Some((e["intent"]["name"].as_str()?.to_string(), e["intent"]["args"].clone()))
+    });
+    if let Some((name, args)) = new {
+        let keys = if cfg!(target_os = "macos") { vec!["⌃".to_string(), "⌥".into(), "N".into()] } else { vec!["Alt".to_string(), "N".into()] };
+        actions = actions.child(core_button(&format!("pane-{}-new", i + 1), "New sandbox", "plus", keys, none, move |s: &mut App| s.press_extra("pane", &name, &args)));
+    }
+    actions = actions.child(core_button(&format!("pane-{}-palette", i + 1), "Command palette", "search", palette::chord_keys("K"), false, |s: &mut App| s.palette_open()));
+    col()
+        .key(format!("pane-{}-empty", i + 1))
+        .grow(1.0)
+        .w_full()
+        .padding(24.0)
+        .gap(12.0)
+        .items_center()
+        .justify_center()
+        .child(rune::icon(crate::icons::get("terminal").unwrap(), 24.0).color(c("text-muted")))
+        .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
+        .child(text(line).font(small(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
+        .child(actions)
 }
 
 #[cfg(test)]
@@ -1948,7 +2175,7 @@ mod tests {
                 let bar = format!("pane-{n}-bar");
                 inside(&rt, &format!("pane-{n}-close"), &bar);
                 let name = inside(&rt, &format!("pane-{n}-name"), &bar);
-                let full = bar::measure(&pane_name(&rt.state.panes[n - 1]), 12.0, 500.0);
+                let full = bar::measure(&pane_name(&rt.state.panes[n - 1]), bar::NAME_TEXT, 500.0);
                 assert!(name[2] + 1.0 >= full.min(bar::NAME_MIN), "{w}: pane {n}'s name {name:?}, {full} wide whole");
                 let f = rt.state.pane_fit(n - 1).unwrap();
                 hidden_total += f.hidden.len();
@@ -1987,6 +2214,143 @@ mod tests {
             let top = rt.state.screen_data()["app"]["topbar"].clone();
             assert_eq!(top["compact"], w < 1000.0, "{w}: {top}");
         }
+    }
+
+    fn runtime(fixture: &str, w: f32, h: f32) -> rune::Runtime<App> {
+        let a = App::new(Args { fixture: Some(format!("{}/fixtures/{fixture}", env!("CARGO_MANIFEST_DIR")).into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (w, h), rune::Env::new(true, 1.0));
+        rt.on_key = Some(|s: &mut App, ev: &KeyEvent, tx: &mut Tx| s.on_key(ev, tx));
+        for _ in 0..6 {
+            rt.frame(0.016);
+        }
+        rt
+    }
+
+    /// The top bar's fit is exact: each extra the core measured is as wide
+    /// as the screen draws it, and at every width what shows fits (nothing
+    /// clipped, nothing past the bar) while the first extra left out would not.
+    #[test]
+    fn the_top_bar_fit_measures_what_the_screen_draws() {
+        for w in [720.0, 900.0, 1100.0, 1284.0, 1400.0, 1800.0] {
+            let mut rt = runtime("shell/design-2.json", w, 816.0);
+            rt.update(|s, _| {
+                s.notice = None;
+                s.feats.panels.clear();
+                s.feats.panel = None;
+            });
+            for _ in 0..6 {
+                rt.frame(0.016);
+            }
+            rt.update(|s, _| s.push_data());
+            for _ in 0..6 {
+                rt.frame(0.016);
+            }
+            // What the top bar screen last drew from.
+            let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
+            let list = data["app"]["extras"]["topbar"].as_array().unwrap().clone();
+            let (bar_r, _) = rt.presented("top-bar").unwrap();
+            for e in list.iter().filter(|e| e["more"] != true) {
+                let id = e["id"].as_str().unwrap();
+                let (r, _) = rt.presented(&format!("extra-topbar-{id}")).unwrap_or_else(|| panic!("{w}: {id} inline but not drawn"));
+                let label = match e["count"].as_u64() {
+                    Some(n) if e["label"] == "" => n.to_string(),
+                    Some(n) => format!("{} {n}", e["label"].as_str().unwrap()),
+                    None => e["label"].as_str().unwrap().to_string(),
+                };
+                let x = bar::TopExtra { label, icon: !e["icon"].is_null(), button: !e["intent"].is_null(), tool: false };
+                assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {}", r[2], x.width());
+                assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {id} {r:?} past the bar {bar_r:?}");
+            }
+            for key in ["jarvis-toggle", "daemon-state", "layout"] {
+                let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key}"));
+                assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {key} {r:?} past the bar");
+            }
+            let more = data["app"]["topbar"]["more"].as_u64().unwrap();
+            eprintln!("top bar at {w}: {} inline, {more} in the menu, compact {}", list.len() as u64 - more, data["app"]["topbar"]["compact"]);
+            if w >= 1284.0 {
+                assert_eq!(more, 0, "{w}: everything fits");
+            }
+        }
+    }
+
+    /// The palette opens with the app's chord, filters, runs the same
+    /// intents as the list (Enter opens the sandbox's terminal), and closes
+    /// on Escape; Cmd/Ctrl+B hides the sidebar, Cmd/Ctrl+2 focuses pane 2.
+    /// A terminal keeps plain Ctrl chords off macOS.
+    #[test]
+    fn the_palette_and_the_chords() {
+        let mac = cfg!(target_os = "macos");
+        let chord = |c: char, shift: bool| KeyEvent { key: Key::Command(c), mods: rune::Mods { cmd: true, ctrl: !mac, logo: mac, shift, alt: false } };
+        let mut rt = runtime("shell/design-2.json", 1284.0, 816.0);
+        rt.update(|s, tx| {
+            s.notice = None;
+            tx.blur();
+        });
+        rt.key(chord('k', false));
+        rt.frame(0.016);
+        assert!(rt.state.palette.is_some(), "the chord opens the palette");
+        assert!(rt.presented("palette-input").is_some());
+        rt.update(|_, tx| assert_eq!(tx.focused(), Some("palette-input"), "its field has the keyboard"));
+        for ch in "open docs".chars() {
+            rt.key(KeyEvent { key: Key::Text(ch.to_string()), mods: rune::Mods::default() });
+        }
+        rt.frame(0.016);
+        let shown = rt.state.palette_shown();
+        assert_eq!(shown.first().map(|c| c.id.as_str()), Some("open-docs"), "{:?}", shown.iter().map(|c| &c.id).collect::<Vec<_>>());
+        rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods::default() });
+        rt.frame(0.016);
+        assert!(rt.state.palette.is_none(), "a pick closes it");
+        assert!(rt.state.panes.iter().take(rt.state.layout.0).any(|p| p.sandbox.as_deref() == Some("docs")), "Enter ran open_terminal on docs");
+        // Escape closes it.
+        rt.key(chord('k', false));
+        rt.frame(0.016);
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(0.016);
+        assert!(rt.state.palette.is_none());
+        // The sidebar and the panes.
+        rt.update(|_, tx| tx.blur());
+        rt.key(chord('b', false));
+        rt.frame(0.016);
+        assert!(!rt.state.sidebar_shown());
+        rt.key(chord('b', false));
+        rt.frame(0.016);
+        assert!(rt.state.sidebar_shown());
+        rt.key(chord('2', false));
+        rt.frame(0.016);
+        assert_eq!(rt.state.focused, 1);
+        // In a terminal (its grid has the keyboard): plain Ctrl+K is the shell's off macOS.
+        if !mac {
+            let taken = rt.state.app_key(&chord('k', false), Some("grid-1"));
+            assert!(!taken, "Ctrl+K in a terminal is readline's");
+            assert!(rt.state.app_key(&chord('k', true), Some("grid-1")), "Ctrl+Shift+K is the app's");
+        }
+    }
+
+    /// Closing a pane removes it: the layout shrinks to the panes that
+    /// remain, in their order, the focus goes to the one that takes the
+    /// freed place; the last pane becomes the empty pane.
+    #[test]
+    fn closing_a_pane_removes_it_and_the_others_take_the_room() {
+        let mut rt = runtime("shell/design-4.json", 1284.0, 816.0);
+        let names = |rt: &rune::Runtime<App>| rt.state.panes.iter().take(rt.state.layout.0).map(|p| p.sandbox.clone().unwrap_or_default()).collect::<Vec<_>>();
+        assert_eq!(names(&rt), ["better-checkout", "sbxw-desktop-design", "test-sbx", "docs"]);
+        rt.update(|s, _| s.focused = 1);
+        rt.frame(0.016);
+        tap(&mut rt, "pane-2-close");
+        assert_eq!(names(&rt), ["better-checkout", "test-sbx", "docs"]);
+        assert_eq!(rt.state.layout.0, 3);
+        assert_eq!(rt.state.focused, 1, "the pane that took the freed place has the focus");
+        assert_eq!(rt.state.screen_data()["app"]["layout"]["panes"], 3, "the layout switch follows");
+        // The sandbox is not stopped and no session ends: only the view went.
+        assert!(rt.state.sandboxes.iter().any(|s| s.name == "sbxw-desktop-design" && s.status == "running"));
+        tap(&mut rt, "pane-3-close");
+        assert_eq!(names(&rt), ["better-checkout", "test-sbx"]);
+        assert_eq!(rt.state.focused, 1, "the last pane closed: the one before it");
+        tap(&mut rt, "pane-1-close");
+        tap(&mut rt, "pane-1-close");
+        assert_eq!(rt.state.layout.0, 1);
+        assert!(rt.state.panes[0].sandbox.is_none(), "the last pane is the empty pane, not removed");
+        assert!(rt.presented("pane-1").is_some());
     }
 
     /// The browser could not start (phase 4, macOS: no Chromium in the
@@ -2054,12 +2418,16 @@ mod tests {
         rt.update(|_, tx| tx.blur());
         rt.frame(0.02);
         for ev in chords() {
-            if ev.key == Key::Escape {
-                continue; // closes the dialog: tried last
+            // Escape closes the dialog (tried last); Enter presses the
+            // control Tab reached inside it (its ×): the person's own press.
+            if ev.key == Key::Escape || ev.key == Key::Enter {
+                continue;
             }
             rt.key(ev.clone());
             rt.frame(0.02);
             assert_eq!(sent(&rx), b"", "{ev:?} with the core dialog up reached the terminal");
+            // Tab stays inside the dialog: it is modal for the keyboard.
+            rt.update(|_, tx| assert!(tx.focused().is_none_or(|f| f.starts_with("cf-")), "{ev:?} moved the focus out of the dialog to {:?}", tx.focused()));
         }
         rt.paste("hello");
         rt.frame(0.02);
@@ -2079,7 +2447,8 @@ mod tests {
         assert_eq!(sent(&rx), b"", "a window paste in the secret field reached the terminal");
         let got = rt.state.feats.dialog.as_ref().unwrap().secrets[0].text.clone();
         eprintln!("secret field after the pastes: {} characters", got.chars().count());
-        assert_eq!(got, "s3cret", "the paste went to the field");
+        // (Keys typed while Tab had put the keyboard in the field went there too.)
+        assert!(got.ends_with("s3cret"), "the paste went to the field: {got}");
         rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
         rt.frame(0.02);
         assert_eq!(sent(&rx), b"");

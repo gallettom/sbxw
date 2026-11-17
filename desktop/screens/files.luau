@@ -15,7 +15,7 @@ local function note(t, color)
 end
 
 local function head(t)
-  return text{ string.upper(t), size = "xxs", weight = "semibold", color = "text-muted" }
+  return text{ t, size = "caption", weight = "semibold", color = "text-muted" }
 end
 
 local function tabs(ui)
@@ -44,9 +44,9 @@ local function tabs(ui)
 end
 
 local function uploads(ui)
-  local kids = { gap = 6, w = "full", px = 8, py = 5, radius = "sm", border = "border", fill = "surface-alt", key = "files-drop" }
+  local kids = { gap = 8, w = "full", px = 8, py = 4, radius = "sm", border = "border", fill = "surface-alt", key = "files-drop" }
   local staged = ui.staged or {}
-  kids[#kids + 1] = row{ gap = 6, w = "full",
+  kids[#kids + 1] = row{ gap = 8, w = "full",
     icon{ "plus", size = 12, color = "text-muted" },
     text{ #staged == 0 and "Upload: drop files here or on a terminal" or ("Upload into " .. (ui.sandbox or "?")), size = "sm", truncate = true, grow = 1,
       help = "Or paste a picture. Up to " .. (ui.upload_max or "128 MB") .. " each; the path is typed into the agent's prompt, not submitted." },
@@ -58,7 +58,7 @@ local function uploads(ui)
   else
     for _, s in ipairs(staged) do
       local sending = s.state == "sending"
-      kids[#kids + 1] = row{ gap = 6, w = "full", key = "files-staged-" .. s.index,
+      kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-staged-" .. s.index,
         icon{ "file", size = 11, color = "text-muted" },
         column{ gap = 2, grow = 1,
           text{ s.name, size = "sm", truncate = true },
@@ -76,7 +76,7 @@ local function uploads(ui)
     end
   end
   if ui.saved then
-    kids[#kids + 1] = row{ gap = 6, w = "full", key = "files-saved",
+    kids[#kids + 1] = row{ gap = 8, w = "full", key = "files-saved",
       icon{ "check", size = 11, color = "green" },
       text{ "Saved " .. ui.saved.name, size = "xs", color = "text-muted", truncate = true, grow = 1, help = ui.saved.path },
       button{ "Show in folder", key = "files-show-saved", on = "show_saved", variant = "ghost" },
@@ -90,7 +90,7 @@ local function filebar(ui)
   for _, p in ipairs(ui.places or {}) do
     items[#items + 1] = { id = p.id, label = p.label, icon = p.icon }
   end
-  return column{ gap = 6, w = "full",
+  return column{ gap = 8, w = "full",
     row{ gap = 4, w = "full",
       button{ "←", key = "files-back", on = "back", variant = "ghost", disabled = not ui.can_back, help = "Back" },
       button{ "↑", key = "files-up", on = "up", variant = "ghost", disabled = not ui.can_up, help = "The folder above" },
@@ -99,7 +99,7 @@ local function filebar(ui)
         color = ui.starred and "amber" or "text-muted", help = ui.starred and "Unpin this folder" or "Pin this folder among the places" } or false,
       #items > 0 and menu{ "Places", id = "files-places", icon = "folder", items = items, on = "place" } or false,
     },
-    row{ gap = 6, w = "full",
+    row{ gap = 8, w = "full",
       checkbox{ "Hidden files", value = ui.hidden == true, on = "hidden", key = "files-hidden" },
       ui.offline and badge{ "stopped: workspace only", tone = "amber", help = "Read from this computer; the sandbox is not started to list a folder" } or false,
     },
@@ -110,10 +110,10 @@ local function rowview(ui, r, i)
   local meta = {}
   if nz(r.dir) then meta[#meta + 1] = r.dir end
   if nz(r.when) then meta[#meta + 1] = r.when end
-  local kids = { gap = 6, w = "full", px = 6, py = 5, radius = "xs", key = "files-row-" .. r.id, on = "select", arg = r.id,
+  local kids = { gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "files-row-" .. r.id, on = "select", arg = r.id,
     fill = r.selected and "active-bg" or nil,
     icon{ r.icon or "file", size = 12, color = r.kind == "dir" and "blue" or "text-muted" },
-    column{ gap = 1, grow = 1,
+    column{ gap = 2, grow = 1,
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, color = r.selected and "text-bright" or "text" },
       #meta > 0 and text{ table.concat(meta, " · "), size = "xs", color = "text-dim", truncate = true } or false,
     },
@@ -127,7 +127,7 @@ local function rowview(ui, r, i)
 end
 
 local function rows(ui)
-  local list = { gap = 1 }
+  local list = { gap = 2 }
   local last
   for i, r in ipairs(ui.rows or {}) do
     if ui.tab == "recent" and r.group ~= last then
@@ -184,7 +184,7 @@ local function preview(ui)
     body = note(p.text or "")
   end
   body = column{ key = "files-preview-" .. (p.state == "html" and "text" or p.state or "note"), w = "full", grow = 1, body }
-  return column{ gap = 6, h = "full", pad = 8,
+  return column{ gap = 8, h = "full", pad = 8,
     text{ s.name, weight = "semibold", truncate = true, color = "text-bright" },
     text{ s.type .. (isfile and (" · " .. s.size .. " · " .. s.modified) or ""), size = "xs", color = "text-muted", truncate = true },
     text{ s.path or "", size = "xs", mono = true, color = "text-dim", truncate = true, help = s.path },
@@ -200,8 +200,8 @@ return {
     if not ui or not ui.sandbox then
       return column{ pad = 12, note("Open a sandbox's Project from its pane bar.") }
     end
-    return column{ h = "full", gap = 8, pad = 10,
-      row{ gap = 6, w = "full", badge{ ui.sandbox, tone = "blue" },
+    return column{ h = "full", gap = 8, pad = 12,
+      row{ gap = 8, w = "full", badge{ ui.sandbox, tone = "blue" },
         nz(ui.artifacts_dir) and text{ ui.artifacts_dir, size = "xs", color = "text-dim", mono = true, truncate = true, grow = 1 } or spacer{} },
       tabs(ui),
       uploads(ui),

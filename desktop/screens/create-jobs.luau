@@ -8,7 +8,7 @@ local MARK = { done = "check", running = "reload", failed = "close", waiting = "
 local TONE = { done = "green", running = "blue", failed = "red", waiting = "text-dim" }
 
 local function job(j)
-  local kids = { w = "full", gap = 4, pad = 10, radius = "md", border = j.state == "failed" and "red-border" or "border",
+  local kids = { w = "full", gap = 4, pad = 12, radius = "md", border = j.state == "failed" and "red-border" or "border",
     fill = "surface", key = "job-" .. j.sandbox,
     row{ w = "full", gap = 8,
       dot{ tone = j.state == "ready" and "green" or j.state == "failed" and "red" or j.state == "asking" and "amber" or "blue" },
@@ -25,7 +25,7 @@ local function job(j)
     kids[#kids + 1] = text{ "Waiting for the daemon to say what it will do...", size = "sm", color = "text-muted", wrap = true }
   end
   for i, s in ipairs(j.steps) do
-    kids[#kids + 1] = row{ w = "full", gap = 6, key = "job-" .. j.sandbox .. "-step-" .. i,
+    kids[#kids + 1] = row{ w = "full", gap = 8, key = "job-" .. j.sandbox .. "-step-" .. i,
       icon{ MARK[s.state] or "chevron-right", size = 11, color = TONE[s.state] or "text-dim" },
       text{ s.label, size = "sm", color = s.state == "waiting" and "text-dim" or "text", truncate = true, grow = 1 },
     }
@@ -37,10 +37,10 @@ local function job(j)
     kids[#kids + 1] = text{ j.error, wrap = true, size = "sm", color = j.state == "asking" and "amber" or "red", key = "job-" .. j.sandbox .. "-error" }
   end
   for _, w in ipairs(j.warnings or {}) do
-    kids[#kids + 1] = row{ w = "full", gap = 6, icon{ "warning", size = 12, color = "amber" },
+    kids[#kids + 1] = row{ w = "full", gap = 8, icon{ "warning", size = 12, color = "amber" },
       text{ w, wrap = true, size = "sm", color = "amber", grow = 1 } }
   end
-  local buttons = { w = "full", gap = 6, spacer{} }
+  local buttons = { w = "full", gap = 8, spacer{} }
   if j.state == "ready" then
     buttons[#buttons + 1] = button{ "Open", icon = "terminal", variant = "primary", on = "open", arg = j.sandbox, key = "job-open-" .. j.sandbox }
   end
@@ -57,7 +57,7 @@ end
 return {
   render = function(_, data)
     local jobs = (data.create and data.create.jobs) or {}
-    local list = { gap = 10 }
+    local list = { gap = 12 }
     if #jobs == 0 then
       list[#list + 1] = text{ "Nothing is being created.", size = "sm", color = "text-muted" }
     end

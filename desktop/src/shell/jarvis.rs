@@ -874,7 +874,7 @@ impl App {
             error: self.jarvis.dialog_error.as_ref().filter(|e| e.0 == id).map(|e| e.1.as_str()),
             busy: self.jarvis.busy,
             reason: &self.wiring.reason,
-            left: layout::GUTTER * 2.0 + layout::SIDEBAR_W + 16.0,
+            left: layout::GUTTER * 2.0 + if self.sidebar_shown() { self.sidebar_w() } else { 0.0 } + 16.0,
             top,
             right: panel + layout::GUTTER + 16.0,
             max_h: self.window.1 - top - 16.0,
@@ -895,7 +895,7 @@ impl App {
                 if matches!(d.phase, rune::Phase::Down) {
                     s.wiring.drag_from = s.jarvis.width;
                 }
-                let most = (s.window.0 - layout::SIDEBAR_W - 320.0).clamp(jarvis::MIN_W, jarvis::MAX_W);
+                let most = (s.window.0 - s.sidebar_w() - 320.0).clamp(jarvis::MIN_W, jarvis::MAX_W);
                 s.jarvis.width = (s.wiring.drag_from - d.dx).clamp(jarvis::MIN_W, most);
                 if matches!(d.phase, rune::Phase::Up) {
                     save_prefs(&s.jarvis);
@@ -905,10 +905,10 @@ impl App {
             .key("jarvis-panel")
             .role("complementary")
             .label("Jarvis")
-            .w(self.jarvis.width)
+            .w(self.jarvis.width.min((self.window.0 - self.sidebar_w() - 320.0).max(jarvis::MIN_W)))
             .h_full()
             .min_h(0.0)
-            .padding(10.0)
+            .padding(12.0)
             .fill(c("bg"))
             .border(1.0, c("elevated"))
             .radius(crate::theme::radius("md").unwrap())

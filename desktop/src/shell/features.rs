@@ -9,7 +9,7 @@ use crate::client::LinkEvent;
 use crate::feat::{self, Action, Asked, Call, Confirm, Ctx, Extra, Feature, Place, Slot};
 use crate::intent::{Intent, Risk};
 use crate::theme::{c, layout, radius};
-use rune::{col, el, row, text, Cursor, El, TextEdit, TextStyle};
+use rune::{col, el, row, text, Cursor, El, TextEdit};
 use serde_json::{json, Map, Value as J};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -962,8 +962,8 @@ impl App {
             // A fixed height: the screen fills it and scrolls inside (its
             // own close button; Escape and a press outside close it too).
             .h((self.window.1 - top - 24.0).clamp(160.0, 720.0))
-            .padding(14.0)
-            .gap(8.0)
+            .padding(16.0)
+            .gap(12.0)
             .radius(radius("lg").unwrap())
             .fill(c("surface"))
             .border(1.0, c("border"))
@@ -976,14 +976,10 @@ impl App {
                 }
             })
             .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
-        el().key("modal-scrim")
-            .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .fill(rune::color::hex("#00000080").unwrap())
-            .on_press(|s: &mut App| {
-                s.feats.modal = None;
-                s.push_data();
-            })
-            .child(card)
+        super::scrim("modal-scrim", card, |s: &mut App| {
+            s.feats.modal = None;
+            s.push_data();
+        })
     }
 
     /// The docked feature panel: tabs when more than one is open, the screen below.
@@ -1004,9 +1000,10 @@ impl App {
                 .key(format!("panel-tab-{name}"))
                 .role("tab")
                 .label(title)
-                .gap(5.0)
-                .px(8.0)
-                .py(4.0)
+                .gap(8.0)
+                .pl(8.0)
+                .pr(2.0)
+                .h(layout::CONTROL_H)
                 .items_center()
                 .radius(radius("sm").unwrap())
                 .fill(c(if shown { "elevated" } else { "bg" }))
@@ -1016,20 +1013,25 @@ impl App {
                     s.push_data();
                 });
             if let Some(i) = crate::icons::get(icon) {
-                tab = tab.child(rune::icon(i, 12.0).color(c(if shown { "text-bright" } else { "text-muted" })));
+                tab = tab.child(rune::icon(i, 14.0).color(c(if shown { "text-bright" } else { "text-muted" })));
             }
-            tab = tab.child(text(title).font(TextStyle::new(12.0, 500.0)).color(c(if shown { "text-bright" } else { "text-muted" }))).child(
+            tab = tab.child(text(title).font(crate::screen::body(13.0, 500.0)).color(c(if shown { "text-bright" } else { "text-muted" }))).child(
                 el().key(format!("panel-close-{name}"))
                     .role("button")
                     .label(format!("Close {title}"))
-                    .padding(2.0)
+                    .help(format!("Close {title}"))
+                    .w(layout::DENSE_H)
+                    .h(layout::DENSE_H)
+                    .items_center()
+                    .justify_center()
                     .radius(radius("xs").unwrap())
                     .hover(c("border"))
+                    .cursor(Cursor::Pointer)
                     .on_press(move |s: &mut App| {
                         s.close_panel(&n2);
                         s.push_data();
                     })
-                    .child(rune::icon(crate::icons::get("close").unwrap(), 10.0).color(c("text-muted"))),
+                    .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted"))),
             );
             tabs = tabs.child(tab);
         }
@@ -1040,7 +1042,10 @@ impl App {
                     .role("button")
                     .label(if split { "Show panels as tabs" } else { "Show panels side by side" })
                     .help(if split { "Show panels as tabs" } else { "Show panels side by side" })
-                    .padding(3.0)
+                    .w(layout::DENSE_H)
+                    .h(layout::DENSE_H)
+                    .items_center()
+                    .justify_center()
                     .radius(radius("xs").unwrap())
                     .hover(c("border"))
                     .cursor(Cursor::Pointer)
@@ -1048,7 +1053,7 @@ impl App {
                         s.feats.split = !s.feats.split;
                         s.push_data();
                     })
-                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 12.0).color(c("text-muted"))),
+                    .child(rune::icon(crate::icons::get(if split { "single" } else { "columns" }).unwrap(), 14.0).color(c("text-muted"))),
             );
         }
         col()
@@ -1057,11 +1062,11 @@ impl App {
                 None => "feature-panel".into(),
             })
             .role("complementary")
-            .w(width)
+            .w(self.panel_width(width))
             .h_full()
             .min_h(0.0)
-            .padding(10.0)
-            .gap(8.0)
+            .padding(12.0)
+            .gap(12.0)
             .fill(c("bg"))
             .border(1.0, c("elevated"))
             .radius(radius("md").unwrap())
@@ -1073,6 +1078,20 @@ impl App {
             })
             .child(tabs)
             .child(col().w_full().grow(1.0).min_h(0.0).child(screen))
+    }
+
+    /// A docked panel's width: what it asks for, narrowed so the panes keep
+    /// at least 280 pt (never under 260: a panel narrower than that is not
+    /// usable; the window's minimum then squeezes the panes, not the panel).
+    pub(super) fn panel_width(&self, asked: f32) -> f32 {
+        let shown = if self.feats.split && self.feats.panels.len() > 1 { self.feats.panels.len() } else { 1 } as f32;
+        let side = if self.sidebar_shown() { self.sidebar_w() + layout::GUTTER } else { 0.0 };
+        let jarvis = if self.jarvis.open { self.jarvis.width + layout::GUTTER } else { 0.0 };
+        let room = self.window.0 - side - jarvis - layout::GUTTER * 2.0 - 280.0 - layout::GUTTER * shown;
+        if self.window.0 <= 0.0 {
+            return asked;
+        }
+        asked.min(room / shown).max(260.0)
     }
 
     /// Feature buttons and badges on the bar of pane `i`.

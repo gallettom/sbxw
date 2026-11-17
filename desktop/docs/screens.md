@@ -75,6 +75,9 @@ unchanged.
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
+| `groups` | Each sandbox's group colour (`#rrggbb`, the web UI's: chats share one, a workspace folder's from its path), by name; absent for a sandbox in no group |
+| `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
+| `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
 
@@ -121,6 +124,8 @@ Every element takes these.
 | `border` | colour | 1 pt border |
 | `radius` | number or radius | Rounded corners |
 | `opacity` | 0 to 1 | |
+| `pin` | `{ left =, top =, right =, bottom = }` (any of them; numbers or space) | Out of the parent's flow, pinned to those edges of its padding box: a toolbar over the end of a row |
+| `reveal` | bool | Drawn only while the nearest `hover_group` above it is hovered or holds the keyboard focus. It stays pressable and reachable with Tab (reaching it lights the group). Use it for a row's secondary actions, and keep them in the row's menu too: a touch or trackpad user who never hovers reaches them there |
 
 A key you do not set is made for you on elements that react: `<on>-<arg>`
 (`stop-docs` for `button{ on = "stop", arg = "docs" }`), or the `id` for
@@ -139,8 +144,11 @@ Text. Positional: the string (a number is shown as its digits).
 | `wrap` | bool | false: one line |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
 
+Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
+`weight` of `bold` is drawn semibold (600).
+
 ```lua
-text{ "SANDBOXES", size = "sm", weight = "semibold", color = "text-muted" }
+text{ "Sandboxes", size = "sm", weight = "semibold", color = "text-muted" }
 ```
 
 ### `row`
@@ -153,10 +161,15 @@ Children side by side. Children are centred vertically.
 | `align` | `start`, `center`, `end`, `stretch` | Cross axis (vertical); default `center` |
 | `justify` | `start`, `center`, `end`, `between` | Main axis |
 | `hover` | colour | Background under the pointer |
-| `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers); `hover` defaults to `surface` |
+| `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers, named by its `help`); `hover` defaults to `surface`. Enter presses it when it has the keyboard |
+| `on_space` | action name | With `on`: called with the same `arg` when Space is pressed while it has the keyboard (the sandbox list: start or stop) |
+| `hover_group` | bool | Its `reveal` children show while it is hovered or the keyboard focus is in it |
+| `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
+| `selected` | bool | With `on`: the selected item (screen readers say so) |
+| `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
 
 ```lua
-row{ gap = 6, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
+row{ gap = 8, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
 ```
 
 ### `column`
@@ -165,14 +178,15 @@ Children one under the other. Same props as `row`; `align` is the horizontal
 axis and defaults to `stretch`.
 
 ```lua
-column{ key = "row-docs", on = "open", arg = "docs", gap = 3, px = 9, py = 7, radius = "sm",
-  text{ "docs", weight = "medium" }, text{ "running", size = "sm", color = "text-muted" } }
+column{ key = "row-docs", on = "open", arg = "docs", on_space = "toggle", hover_group = true, gap = 2, px = 8, py = 8, radius = "sm",
+  text{ "docs", weight = "medium" }, text{ "running", size = "sm", color = "text-muted" },
+  button{ icon = "terminal", variant = "ghost", on = "bash", arg = "docs", help = "Open a shell", reveal = true } }
 ```
 
 ### `list`
 
-A bordered list: each child padded (8 pt left and right, `gap` above and
-below, default 4), with a 1 pt line between children.
+A bordered list: each child padded (12 pt left and right, `gap` above and
+below, default 8), with a 1 pt line between children.
 
 | Prop | Value |
 |---|---|
@@ -200,7 +214,9 @@ column{ h = "full", text"Log", scroll{ gap = 2, stick_bottom = true, text"line 1
 ### `button`
 
 Positional: the label (may be left out when there is an `icon`; then give it
-a `help`, which is also its name for screen readers).
+a `help`, which is also its name for screen readers). A button is at least
+28 pt square (24 with `dense`), its icon centred; it is a Tab stop and shows
+the focus ring (2 pt, blue, 2 pt outside) when the keyboard reaches it.
 
 | Prop | Value | Effect |
 |---|---|---|
@@ -210,9 +226,13 @@ a `help`, which is also its name for screen readers).
 | `icon` | icon name | Before the label |
 | `color` | colour | The label's and icon's colour |
 | `disabled` | bool | Greyed, not pressable |
+| `dense` | bool | 24 pt instead of 28, 12 pt label: for bars that are dense on purpose |
+| `keys` | list of strings | Its shortcut, drawn as keycaps in its tooltip after the `help` text: `keys = { "⌘", "K" }` |
+| `tab_stop` | bool | `false`: left out of the Tab order, still pressable (a row's secondary actions, which its own keys and its menu reach) |
+| `hover` | colour | The fill under the pointer, in place of the variant's (a stop button that turns `red-tint`) |
 
 ```lua
-button{ icon = "stop", on = "stop", arg = sb.name, color = "red", help = "Stop" }
+button{ icon = "stop", on = "stop", arg = sb.name, color = "red", help = "Stop", keys = { "Space" } }
 ```
 
 ### `input`
@@ -384,11 +404,13 @@ Positional: the button's label.
 | `on` | action name | Required unless `disabled`. Called with `value` = the picked item's id |
 | `arg` | any value | Passed too |
 | `icon` | icon name | On the button |
-| `variant` | `ghost` | No frame around the button; anything else: framed |
+| `variant` | `ghost` | No frame around the button (and, with no label, no chevron: an actions menu); anything else: framed |
 | `disabled` | bool | |
+| `dense`, `keys`, `tab_stop` | as `button` | 24 pt; the shortcut in its tooltip (its `help`); out of the Tab order |
 
 The list closes on a pick, on Escape, or on a second press of the button. A
-press elsewhere does not close it (yet).
+press elsewhere does not close it (yet). Up and Down move between its
+items, Enter picks.
 
 ```lua
 menu{ "Actions", id = "acts", icon = "more", on = "act", arg = sb.name,
@@ -538,6 +560,25 @@ The push-to-talk key (F8 by default, the daemon's `[voice]
 push_to_talk_key`) and the panel's key (⌘J on macOS, F7 elsewhere) are the
 core's: a terminal with the focus does not receive them.
 
+## Keyboard
+
+The core owns the app's chords (`src/shell/palette.rs`), and screens never
+see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
+and feature shortcut, the core's actions; a pick runs the same intents your
+buttons run, through the same checks), Cmd/Ctrl+B the sidebar, Cmd/Ctrl+1 to
+9 a pane, Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
+app (in a terminal: its text), Escape closes the top-most menu, palette,
+dialog or modal. While a terminal's grid has the keyboard only Cmd chords
+(macOS) or Ctrl+Shift chords (elsewhere) are the app's. `data.app.shortcuts`
+lists them all (Help draws it). What a screen does for the keyboard:
+
+- every `button`, `menu` and pressable `row`/`column` is a Tab stop in
+  reading order, with the focus ring; leave a row's secondary actions out
+  with `tab_stop = false` when the row's own keys and its menu reach them;
+- a list of rows: `group = "list"` on the container (Up and Down), `on` on
+  each row (Enter), `on_space` for its second action (Space);
+- name every icon-only control with `help`, and give its shortcut in `keys`.
+
 ## Theme
 
 The global `theme` (read only) is the web UI's design tokens
@@ -546,14 +587,50 @@ gives the `#rrggbb`.
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar` |
-| `theme.radius` | `xs` 6, `sm` 8, `md` 12, `lg` 16, `pill` 999 |
-| `theme.text` | `xxs` 9.5, `xs` 10.5, `sm` 11, `md` 13, `lg` 14, `xl` 16 |
-| `theme.space` | `xxs` 2, `xs` 4, `sm` 6, `md` 8, `lg` 12, `xl` 16 |
-| `theme.layout` | `top_bar_h` 48, `gutter` 6, `sidebar_w` 240, `pane_bar_h` 32, `traffic_lights_w` |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover` |
+| `theme.radius` | `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 |
+| `theme.text` | `caption` 12, `body` 13, `title` 14, `heading` 16; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 14, `xl` 16 |
+| `theme.space` | `xxs` 2, `xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24 |
+| `theme.line_height` | 1.4 (a multiple of the size) |
+| `theme.layout` | `top_bar_h` 44, `gutter` 8, `sidebar_w` 264 (`sidebar_min` 200, `sidebar_max` 420), `pane_bar_h` 32, `control_h` 28, `dense_h` 24, `traffic_lights_w` |
 
-Rounder as the surface gets bigger, as in the web UI: chips `xs`, buttons and
-rows `sm`, cards and menus `md`, dialogs `lg`.
+**The rules the built-in screens follow** (write yours the same way):
+
+- **Spacing** on the 4 pt grid: 4, 8, 12, 16, 24 (2 only between stacked
+  lines of one thing). A test fails a built-in screen that writes another
+  number for `gap`, `pad`, `px` or `py`.
+- **Type**: 12 pt for second lines, labels and badges (`caption`), 13 for
+  body (`body`), 14 for row and panel titles (`title`), 16 for dialog titles
+  (`heading`). Nothing under 12. Weights 400, 500, 600. **No capitals** for
+  labels: sentence case; weight and colour make the hierarchy.
+- **Colour**: every text and surface pair meets WCAG AA (4.5:1; 3:1 for
+  icons, marks and focus rings): `theme::tests::contrast_of_every_pair_used`
+  lists them. `text-dim` is for placeholders and hints only, never for
+  something a person needs. A state is never colour alone: say it in a word
+  too.
+- **Radii**: 6 for controls and rows (`xs`, `sm`), 10 for cards, tiles and
+  menus (`md`), 12 for dialogs (`lg`).
+- **Targets**: anything pressable is at least 28 pt (24 in a dense bar),
+  icon-only buttons have a `help` (their name for screen readers and their
+  tooltip) and, when there is one, their shortcut in `keys`.
+
+### Vocabulary
+
+One word for one thing, everywhere (labels, tooltips, notices):
+
+| Say | Not | Meaning |
+|---|---|---|
+| sandbox | box, sbx (sbx is the tool) | A Docker sandbox sbxw runs an agent in |
+| terminal | tty, console, pane (for its content) | What a pane shows: the agent's session or a shell |
+| pane | tile, slot | One of the 1 to 4 places a terminal shows in |
+| session | conversation, chat (for an agent's) | An agent's run in a sandbox: the main one or a thread's |
+| thread | branch, worker | A session working in its own worktree, planned by a lead |
+| shell | bash | A plain shell in a sandbox (`Open a shell`) |
+| request | approval, ask (for sbx's) | Something sbx or an agent waits on you for |
+| wants you | needs attention, blocked | An agent waits for your answer |
+| start, stop | run, kill, halt | A sandbox's state change |
+| panel | drawer, sidebar (for the right side) | A docked view on the right (Jarvis, Network, Requests, Project, Browser) |
+| sidebar | list (for the left) | The sandbox list on the left |
 
 ## Icons
 

@@ -17,6 +17,7 @@ shots="$shots_root"; mkdir -p "$shots"
 script="$shots/network-script.json"
 cat >"$script" <<JSON
 {"events": [
+  {"t": 0.2, "type": "tap", "key": "extra-sandbox-web-app"},
   {"t": 0.3, "type": "tap", "key": "extra-sandbox-web-app-network"},
   {"t": 0.5, "type": "mark", "name": "hold:2500"},
   {"t": 1.5, "type": "tap", "key": "answer-network:demo-allow"},

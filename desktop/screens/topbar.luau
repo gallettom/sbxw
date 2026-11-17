@@ -1,6 +1,12 @@
--- The top bar (the web UI's header): the pane-count switch, Jarvis's
--- button, and where the app is connected. The core keeps room on the left
--- for macOS's window buttons; this screen draws to the right of it.
+-- The top bar, in three groups with room between them:
+--   left    the app's name and how many terminals show;
+--   centre  New, then what needs you (sbx's requests, agents' requests, a
+--           plan waiting): quiet until something waits, then amber;
+--   right   usage, Setup, Help, the Mac, Jarvis, then the daemon's state.
+-- The core keeps room on the left for macOS's window buttons, measures the
+-- bar (data.app.topbar) and marks the extras that do not fit `more`: they
+-- go into one menu, "…" and how many, with a dot in the tone of the most
+-- urgent thing it holds.
 
 local layouts = {
   { id = "1", label = "1 terminal", icon = "single" },
@@ -16,28 +22,37 @@ local function current(layout)
 end
 
 local tones = { up = "green", connecting = "amber", down = "red" }
-local badge_tones = { blue = "blue", green = "green", amber = "amber", red = "red", purple = "purple" }
+local words = { up = "connected", connecting = "connecting", down = "offline" }
+
+-- The right group's tools; every other extra is something that needs you
+-- (or New), in the centre.
+local tools = { usage = 1, setup = 2, help = 3, mac = 4 }
 
 -- Features' buttons and badges (data.app.extras.topbar): the intent of each
 -- by id, for the action (filled by render; actions do not get `data`).
 local extra_intents = {}
 
-local function extra(e)
+local function extra(e, mac)
   local label = e.label or ""
   if e.count then label = (label ~= "" and (label .. " ") or "") .. tostring(e.count) end
-  if e.intent then
-    extra_intents[e.id] = e.intent
-    return button{ label, icon = e.icon, key = "extra-topbar-" .. e.id, on = "extra", arg = e.id, help = e.help,
-      -- The tone's own colour (an amber "needs you" reads amber, not green); red is danger.
-      variant = e.tone == "red" and "danger" or "neutral",
-      color = (e.tone ~= "muted" and e.tone ~= "red" and e.tone ~= "") and e.tone or nil }
+  local key = "extra-topbar-" .. e.id
+  if not e.intent then
+    -- A plain fact (usage): a quiet label, amber when it is high.
+    return badge{ label, tone = e.tone == "amber" and "amber" or "neutral", help = e.help, key = key }
   end
-  return badge{ label, tone = badge_tones[e.tone] or "neutral", help = e.help, key = "extra-topbar-" .. e.id }
+  extra_intents[e.id] = e.intent
+  local keys = nil
+  if e.id == "help" then keys = { "?" } end
+  local waits = e.tone == "amber" or e.tone == "red"
+  return button{ label, icon = e.icon, key = key, on = "extra", arg = e.id, help = e.help, keys = keys,
+    -- Quiet until something waits: then the tone's own colour on its tint.
+    variant = (e.id == "create") and "neutral" or "ghost",
+    color = waits and e.tone or (e.tone == "blue" and "blue" or nil),
+    fill = waits and (e.tone .. "-tint") or nil }
 end
 
 -- What does not fit in the bar (the core marks it `more`, by priority:
--- what needs you stays inline longest) goes into one menu, "…" and how
--- many, with a dot in the tone of the most urgent thing it holds.
+-- what needs you stays inline longest) goes into one menu.
 local function more_menu(hidden)
   local items, tone = {}, nil
   for _, e in ipairs(hidden) do
@@ -55,7 +70,7 @@ local function more_menu(hidden)
     elseif e.count and tone == nil then tone = "blue" end
   end
   return row{ gap = 4,
-    menu{ tostring(#hidden), id = "extra-topbar", icon = "more", items = items, on = "extra_more", variant = "ghost" },
+    menu{ tostring(#hidden), id = "extra-topbar", icon = "more", items = items, on = "extra_more", variant = "ghost", help = #hidden .. " more: what does not fit in the bar" },
     tone and dot{ tone = tone } or false,
   }
 end
@@ -65,17 +80,26 @@ return {
     local app = data.app
     local j = data.jarvis or { open = false, pending = {}, voice = {} }
     local n = #j.pending
-    local key = app.platform == "macos" and "⌘J" or "F7"
+    local mac = app.platform == "macos"
     -- How the bar fits its width (the core measures it): compact drops the
-    -- title and draws the layout switch as an icon menu.
+    -- name and draws the layout switch as an icon menu.
     local fit = app.topbar or {}
     local compact = fit.compact == true
-    local extras = { gap = 8 }
-    local hidden = {}
+    local centre, right, hidden = { gap = 8 }, { gap = 4 }, {}
     for _, e in ipairs((app.extras or {}).topbar or {}) do
-      if e.more then table.insert(hidden, e) else table.insert(extras, extra(e)) end
+      if e.more then table.insert(hidden, e)
+      elseif tools[e.id] then table.insert(right, extra(e, mac))
+      else table.insert(centre, extra(e, mac)) end
     end
-    if #hidden > 0 then table.insert(extras, more_menu(hidden)) end
+    -- The tools in a fixed order: usage, Setup, Help, the Mac.
+    local tl = {}
+    for _, e in ipairs((app.extras or {}).topbar or {}) do
+      if tools[e.id] and not e.more then table.insert(tl, e) end
+    end
+    table.sort(tl, function(a, b) return tools[a.id] < tools[b.id] end)
+    right = { gap = 4 }
+    for _, e in ipairs(tl) do table.insert(right, extra(e, mac)) end
+    if #hidden > 0 then table.insert(right, more_menu(hidden)) end
     local switch
     if compact then
       local icon = "single"
@@ -84,20 +108,26 @@ return {
     else
       switch = select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" }
     end
-    return row{ gap = 14, w = "full", h = "full",
-      (not compact) and text{ "sbxw", weight = "bold", size = "lg", color = "text-bright" } or false,
-      switch,
-      spacer{},
-      row(extras),
-      button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
-        key = "jarvis-toggle", on = "jarvis", variant = (j.open or n > 0) and "primary" or "neutral",
-        help = (j.open and "Close Jarvis (" or "Open Jarvis (") .. key .. ")" },
-      -- The daemon state takes the rest, at the right end, and keeps its dot
-      -- and at least a word; its whole line is the tooltip.
-      row{ gap = 6, min_w = 96, grow = 1, justify = "end", help = app.connection.text,
-        dot{ tone = tones[app.connection.state] or "neutral" },
-        text{ app.connection.state == "up" and app.connection.text or app.connection.state, size = "sm", color = "text-muted", truncate = true, max_w = 500 },
+    local state = app.connection.state
+    table.insert(right, button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
+      key = "jarvis-toggle", on = "jarvis", variant = (j.open or n > 0) and "primary" or "neutral",
+      keys = mac and { "⌘", "J" } or { "F7" },
+      help = j.open and "Close Jarvis" or "Open Jarvis" })
+    -- The daemon's state: a dot and a word; where it is connected, or why
+    -- not, in its tooltip.
+    table.insert(right, row{ key = "daemon-state", gap = 8, px = 8, h = 28, help = app.connection.text,
+      dot{ tone = tones[state] or "neutral" },
+      text{ words[state] or state, size = "caption", color = state == "up" and "text-muted" or (tones[state] or "text-muted") },
+    })
+    return row{ gap = 16, w = "full", h = "full",
+      row{ gap = 12,
+        (not compact) and text{ "sbxw", weight = "semibold", size = "title", color = "text-bright" } or false,
+        switch,
       },
+      spacer{},
+      row(centre),
+      spacer{},
+      row(right),
     }
   end,
 

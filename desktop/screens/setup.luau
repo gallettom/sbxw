@@ -417,7 +417,7 @@ local function mcp_tab(state, d)
 
   local rows = {}
   for _, x in ipairs(m.servers or {}) do
-    rows[#rows + 1] = row{ w = "full", gap = 6, key = "mcp-" .. x.name,
+    rows[#rows + 1] = row{ w = "full", gap = 8, key = "mcp-" .. x.name,
       text{ x.name, mono = true, truncate = true, grow = 1, help = x.name },
       text{ x.type or "", size = "sm", color = "text-muted" },
       button{ "Load", key = "mcp-load-" .. x.name, variant = "ghost", on = "mcp_load", arg = { server = x.name, sandbox = target }, disabled = not target,
@@ -591,7 +591,7 @@ local function voice_tab(state, d)
     elseif st.state == "partial" then word, tone = "partial, " .. mb(st.have), "amber"
     else word, tone = "~" .. (m.approx_mb or 0) .. " MB", "neutral" end
     models[#models + 1] = row{ w = "full", gap = 8, key = "model-" .. (m.id or m.label),
-      badge{ string.upper(m.role or "?") },
+      badge{ m.role or "?" },
       text{ m.label or m.id, truncate = true, grow = 1 },
       text{ m.license or "", size = "sm", color = "text-dim" },
       badge{ word, tone = tone },
@@ -677,7 +677,7 @@ return {
     return column{ w = "full", h = "full", gap = 8,
       row(tabs),
       divider{},
-      err and row{ w = "full", gap = 6, key = "setup-error",
+      err and row{ w = "full", gap = 8, key = "setup-error",
         icon{ "warning", size = 12, color = "red" },
         column{ grow = 1, text{ err, wrap = true, size = "sm", color = "red" } },
       } or false,

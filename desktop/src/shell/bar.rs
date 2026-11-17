@@ -76,12 +76,23 @@ pub fn measure(t: &str, size: f32, weight: f32) -> f32 {
     rune::text::measure(t, &[], TextStyle::new(size, weight), None).0
 }
 
-/// A pane bar chip's width (`shell::features`' chip: px 5, border 1, icon 11, gap 4, text 10.5/500).
+/// A pane bar chip (shell.rs, `bar_chip`): 24 pt high, px 8, icon 14, gap 6, text 12/500.
+pub const CHIP_PX: f32 = 8.0;
+pub const CHIP_GAP: f32 = 6.0;
+pub const CHIP_ICON: f32 = 14.0;
+pub const CHIP_TEXT: f32 = 12.0;
+/// The pane's name in its bar.
+pub const NAME_TEXT: f32 = 13.0;
+/// The overflow button's gap and tone dot.
+pub const MORE_GAP: f32 = 4.0;
+pub const MORE_DOT: f32 = 6.0;
+
+/// A pane bar chip's width, as laid out (at least 24 pt square).
 pub fn chip_w(it: &Item) -> f32 {
     let t = it.text();
-    let icon = it.icon.is_some() as u8 as f32 * 11.0;
-    let gap = if it.icon.is_some() && !t.is_empty() { 4.0 } else { 0.0 };
-    12.0 + icon + gap + measure(&t, 10.5, 500.0)
+    let icon = it.icon.is_some() as u8 as f32 * CHIP_ICON;
+    let gap = if it.icon.is_some() && !t.is_empty() { CHIP_GAP } else { 0.0 };
+    (CHIP_PX * 2.0 + icon + gap + measure(&t, CHIP_TEXT, 500.0)).max(24.0)
 }
 
 /// How many of `widths` (in priority order) show inline in `avail` points,
@@ -111,10 +122,10 @@ pub struct PaneFit {
 }
 
 /// The pane bar's paddings and fixed parts (see `shell::pane_view`).
-pub const PANE_PAD: f32 = 10.0;
-pub const PANE_GAP: f32 = 6.0;
-pub const DOT_W: f32 = 7.0;
-pub const CLOSE_W: f32 = 18.0;
+pub const PANE_PAD: f32 = 8.0;
+pub const PANE_GAP: f32 = 8.0;
+pub const DOT_W: f32 = 8.0;
+pub const CLOSE_W: f32 = 24.0;
 /// Room the name keeps before any extra: up to this much of it shows.
 pub const NAME_WANT: f32 = 120.0;
 /// The name's floor: about eight characters, then an ellipsis (its tooltip has it whole).
@@ -122,18 +133,18 @@ pub const NAME_MIN: f32 = 56.0;
 
 /// The overflow button: the `more` icon, the count, maybe a dot.
 pub fn more_w(hidden: usize) -> f32 {
-    12.0 + 11.0 + 4.0 + measure(&hidden.max(1).to_string(), 10.5, 500.0) + 4.0 + 6.0
+    CHIP_PX * 2.0 + CHIP_ICON + MORE_GAP + measure(&hidden.max(1).to_string(), CHIP_TEXT, 500.0) + MORE_GAP + MORE_DOT
 }
 
-/// The kind badge (`agent`, `bash`): px 5, text 10.5/400.
+/// The session's kind (`agent`, `bash`): plain text, 12/400.
 pub fn kind_w(kind: &str) -> f32 {
-    10.0 + measure(kind, 10.5, 400.0)
+    measure(kind, CHIP_TEXT, 400.0)
 }
 
 /// What shows in a pane bar `width` points wide.
 pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>) -> PaneFit {
     let items = by_priority(items);
-    let name_w = measure(name, 12.0, 500.0);
+    let name_w = measure(name, NAME_TEXT, 500.0);
     let name_min = name_w.min(NAME_MIN);
     let name_keep = name_w.min(NAME_WANT);
     // dot | name, kind, extras…, more | close
@@ -165,48 +176,99 @@ pub fn more_tone(hidden: &[Item]) -> Option<&'static str> {
 /// Under this width the top bar's own parts go compact: no "sbxw" title, the
 /// layout switch as an icon menu.
 pub const TOP_COMPACT: f32 = 720.0;
-pub const TOP_GAP: f32 = 14.0;
-pub const TOP_EXTRA_GAP: f32 = 8.0;
-/// The daemon state keeps at least its dot and a word.
-pub const TOP_STATE_MIN: f32 = 96.0;
+/// Between the bar's groups (left, centre, right, and the spacers between them).
+pub const TOP_GAP: f32 = 16.0;
+/// Inside the left group (title, layout switch), the centre's, the right's.
+pub const TOP_LEFT_GAP: f32 = 12.0;
+pub const TOP_CENTRE_GAP: f32 = 8.0;
+pub const TOP_RIGHT_GAP: f32 = 4.0;
 
-/// A built-in `button`'s width (screen.rs: px 7 or 4, border 1, icon 12, gap 4, text 11/400).
+/// A built-in `button`'s width, as screen.rs lays it out: 28 pt square at
+/// least; a label pads 10 each side, an icon is 16 with a gap of 6, the
+/// label 13/500.
 pub fn button_w(label: &str, icon: bool) -> f32 {
-    let t = measure(label, 11.0, 400.0);
-    let px = if label.is_empty() { 4.0 } else { 7.0 };
-    px * 2.0 + 2.0 + if icon { 12.0 } else { 0.0 } + if icon && !label.is_empty() { 4.0 } else { 0.0 } + t
+    if label.is_empty() {
+        return 28.0;
+    }
+    (20.0 + if icon { 16.0 + 6.0 } else { 0.0 } + measure(label, 13.0, 500.0)).max(28.0)
 }
 
-/// A built-in `menu`/`select` trigger (px 8, border 1, icon 12, gaps 6, text 12/400, chevron 10).
-pub fn menu_w(label: &str, icon: bool) -> f32 {
-    let t = measure(label, 12.0, 400.0);
-    let mut w = 16.0 + 2.0 + 10.0;
+/// A built-in `badge`: px 6 each side, text 12/500.
+pub fn badge_w(label: &str) -> f32 {
+    12.0 + measure(label, 12.0, 500.0)
+}
+
+/// A built-in `menu`/`select` trigger: px 8, icon 16, gaps 6, label 13/400,
+/// a 12 pt chevron (none on a ghost menu with no label), 28 pt at least.
+pub fn menu_w(label: &str, icon: bool, chevron: bool) -> f32 {
+    let mut w = 16.0;
+    let mut parts = 0;
     if icon {
-        w += 12.0 + 6.0;
+        w += 16.0;
+        parts += 1;
     }
     if !label.is_empty() {
-        w += t + 6.0;
+        w += measure(label, 13.0, 400.0);
+        parts += 1;
     }
-    w
+    if chevron {
+        w += 12.0;
+        parts += 1;
+    }
+    (w + 6.0 * (parts.max(1) - 1) as f32).max(28.0)
 }
 
-/// How the top bar is drawn at `width` (the screen's own column): compact
-/// or not, and how many of `extras` (each `(label with count, has icon)`,
-/// in priority order) show inline; the rest go into its menu.
-pub fn top_fit(width: f32, jarvis_label: &str, layout_label: &str, extras: &[(String, bool)]) -> (bool, usize) {
-    let full = measure("sbxw", 14.0, 700.0) + TOP_GAP + menu_w(layout_label, true);
-    let compact_parts = menu_w("", true);
-    let own = |compact: bool| {
-        // [title,] layout, spacer, extras row, jarvis, state: four gaps after the layout
-        let parts = if compact { compact_parts } else { full };
-        parts + TOP_GAP * 4.0 + button_w(jarvis_label, true) + TOP_STATE_MIN
+/// The daemon's state at the bar's right end: px 8, dot 8, gap 8, a word 12/400.
+pub fn state_w(word: &str) -> f32 {
+    16.0 + 8.0 + 8.0 + measure(word, 12.0, 400.0)
+}
+
+/// One top bar extra, as the core sees it before the screen draws it.
+#[derive(Clone, Debug)]
+pub struct TopExtra {
+    /// The label with its count.
+    pub label: String,
+    pub icon: bool,
+    /// Drawn as a button (it has an intent), else as a badge.
+    pub button: bool,
+    /// In the right group (usage, Setup, Help, Mac), else the centre.
+    pub tool: bool,
+}
+
+impl TopExtra {
+    pub fn width(&self) -> f32 {
+        if self.button { button_w(&self.label, self.icon) } else { badge_w(&self.label) }
+    }
+    fn gap(&self) -> f32 {
+        if self.tool { TOP_RIGHT_GAP } else { TOP_CENTRE_GAP }
+    }
+}
+
+/// How the top bar is drawn at `width` (the screen's own column), as
+/// topbar.luau lays it out: `[sbxw, layout] · [centre extras] · [tools,
+/// …, Jarvis, state]`. Compact or not, and how many of `extras` (in
+/// priority order) show inline; the rest go into its menu. Exact: every
+/// part is measured the way the element draws it (tested against the laid
+/// out bar).
+pub fn top_fit(width: f32, jarvis_label: &str, layout_label: &str, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
+    let left = |compact: bool| if compact { menu_w("", true, false) } else { measure("sbxw", 14.0, 600.0) + TOP_LEFT_GAP + menu_w(layout_label, false, true) };
+    // left, spacer, centre, spacer, right: four gaps; inside the right group
+    // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
+    let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + button_w(jarvis_label, true) + TOP_RIGHT_GAP + state_w(state_word);
+    let need = |compact: bool, k: usize| -> f32 {
+        let shown = &extras[..k];
+        let mut w = fixed(compact);
+        let (c, t): (Vec<&TopExtra>, Vec<&TopExtra>) = shown.iter().partition(|e| !e.tool);
+        w += c.iter().map(|e| e.width()).sum::<f32>() + TOP_CENTRE_GAP * c.len().saturating_sub(1) as f32;
+        w += t.iter().map(|e| e.width() + e.gap()).sum::<f32>();
+        if k < extras.len() {
+            // The "…" menu (its count, a dot) in the right group.
+            w += menu_w(&(extras.len() - k).to_string(), true, true) + TOP_RIGHT_GAP + 4.0 + 8.0 + TOP_RIGHT_GAP;
+        }
+        w
     };
-    let widths: Vec<f32> = extras.iter().map(|(l, i)| button_w(l, *i)).collect();
-    // The menu ("…" and how many) and the dot of what it hides.
-    let more = menu_w("9", true) + TOP_EXTRA_GAP + 8.0;
-    let compact = width < TOP_COMPACT || own(false) + widths.iter().sum::<f32>() + TOP_EXTRA_GAP * widths.len() as f32 > width;
-    // The extras row's own gaps: the first extra has none before it.
-    let k = fit(width + TOP_EXTRA_GAP, own(compact), &widths, TOP_EXTRA_GAP, more);
+    let compact = width < TOP_COMPACT || need(false, extras.len()) > width;
+    let k = (0..=extras.len()).rev().find(|&k| need(compact, k) <= width + 0.5).unwrap_or(0);
     (compact, k)
 }
 
@@ -308,12 +370,13 @@ mod tests {
 
     #[test]
     fn the_top_bar_goes_compact_then_overflows() {
-        let extras: Vec<(String, bool)> = ["New", "sbx asks 88", "Plan waiting", "", "", "Mac", "Requests 3"].iter().map(|l| (l.to_string(), true)).collect();
-        let (c, k) = top_fit(1300.0, "Jarvis", "2 side by side", &extras);
+        let x = |l: &str, tool: bool| TopExtra { label: l.into(), icon: true, button: true, tool };
+        let extras = vec![x("New", false), x("sbx asks 88", false), x("Plan waiting", false), x("", true), x("", true), x("Mac", true), x("Requests 3", false)];
+        let (c, k) = top_fit(1300.0, "Jarvis", "2 side by side", "connected", &extras);
         assert!(!c && k == extras.len(), "wide: all inline ({c}, {k})");
-        let (c, k) = top_fit(700.0, "Jarvis", "2 side by side", &extras);
+        let (c, k) = top_fit(700.0, "Jarvis", "2 side by side", "connected", &extras);
         assert!(c && k < extras.len(), "narrow: compact and an overflow ({c}, {k})");
-        let (c, k) = top_fit(330.0, "Jarvis · 2 to review", "2 side by side", &extras);
+        let (c, k) = top_fit(330.0, "Jarvis · 2 to review", "2 side by side", "connected", &extras);
         assert!(c && k == 0, "the smallest window with a notice: everything in the menu ({c}, {k})");
     }
 }

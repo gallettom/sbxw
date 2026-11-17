@@ -29,7 +29,7 @@ end
 local function card(children, border)
   children.gap = children.gap or 8
   children.w = "full"
-  children.pad = 10
+  children.pad = 12
   children.radius = "md"
   children.fill = "surface-alt"
   children.border = border or "elevated"
@@ -49,7 +49,7 @@ return {
     local answer = data.mac or {}
     local m = answer.mac or {}
     local err = (data.app.errors or {}).mac
-    local out = { gap = 10, w = "full", pad = 12 }
+    local out = { gap = 12, w = "full", pad = 12 }
 
     table.insert(out, note("A real macOS guest, run on this Mac by terminal-mac, that sandboxes with the sbxw:terminal-mac kit can drive: Safari, Mac apps, native windows. One sandbox at a time. Starting, resuming, lending a VM sbxw did not start, and publishing a port need your yes; clicks and typing do not."))
 
@@ -90,13 +90,13 @@ return {
     local st = m.state or "unknown"
     local running = st == "running"
     local stopping = st == "stopping"
-    local pills = { gap = 10, pill(tones[st] or "neutral", st) }
+    local pills = { gap = 12, pill(tones[st] or "neutral", st) }
     if running then
       table.insert(pills, m.guest_ready and pill("green", "guest ready") or pill("amber", "guest not ready", "Finish the one-time setup below"))
     end
     table.insert(pills, m.holder and pill("purple", "held by " .. m.holder) or pill("neutral", "free"))
 
-    local acts = { gap = 6, w = "full" }
+    local acts = { gap = 8, w = "full" }
     if not running and not stopping and st ~= "starting" then
       local label = (st == "paused" and "Resume") or (st == "missing" and "Create and start") or "Start"
       table.insert(acts, btn(label, "up", "primary", busy))
@@ -108,7 +108,7 @@ return {
     if running then table.insert(acts, btn("Pause", "pause", "neutral", busy)) end
     if m.holder then table.insert(acts, btn("Take it back from " .. m.holder, "take_back", "neutral", busy)) end
 
-    local ends = { gap = 6, w = "full" }
+    local ends = { gap = 8, w = "full" }
     if running or st == "paused" then table.insert(ends, btn("Shut down", "stop", "danger", busy)) end
     if stopping then table.insert(ends, btn("Force off", "force_off", "danger", busy)) end
     table.insert(ends, spacer{})
@@ -135,7 +135,7 @@ return {
         table.insert(c, column{ gap = 4, w = "full", key = "mac-pending-" .. n(p.id),
           text{ p.action or "", weight = "semibold", size = "sm", wrap = true },
           p.reason and text{ "Reason given by " .. n(p.sandbox) .. " (its own words, not checked by sbxw)", size = "xs", color = "text-muted", wrap = true } or note(n(p.sandbox) .. " gave no reason."),
-          p.reason and column{ w = "full", pad = 6, radius = "xs", fill = "surface", text{ p.reason, size = "sm", mono = true, wrap = true } } or false,
+          p.reason and column{ w = "full", pad = 8, radius = "xs", fill = "surface", text{ p.reason, size = "sm", mono = true, wrap = true } } or false,
           row{ button{ "Approve or refuse in Requests", on = "request", arg = p.id, key = "mac-request-" .. n(p.id) } },
         })
       end
@@ -147,7 +147,7 @@ return {
     if running and not m.guest_ready then
       local c = { border = "amber", key = "mac-steps", text{ "One-time guest setup", weight = "semibold", color = "text-bright" } }
       for i, s in ipairs(steps) do
-        table.insert(c, row{ gap = 6, w = "full", align = "start", text{ i .. ".", size = "sm", color = "text-muted", w = 16 }, text{ s, size = "sm", wrap = true, grow = 1 } })
+        table.insert(c, row{ gap = 8, w = "full", align = "start", text{ i .. ".", size = "sm", color = "text-muted", w = 16 }, text{ s, size = "sm", wrap = true, grow = 1 } })
       end
       table.insert(c, note("This panel notices on its own when the guest is ready."))
       table.insert(out, card(c, "amber"))

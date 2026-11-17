@@ -38,7 +38,7 @@ return {
     local dead = status == "ended" or (ui.error ~= nil and status ~= "live")
     local live = (status == "live" or status == "starting") and not dead
 
-    local top = row{ gap = 6, w = "full",
+    local top = row{ gap = 8, w = "full",
       text{ sb, weight = "semibold", color = "text-bright", truncate = true, grow = 1, help = ui.title },
       button{ "Hide", on = "hide", variant = "ghost", key = "browser-hide", help = "Hide the browser: it keeps running for the agent" },
       button{ status == "closing" and "Closing..." or "Close browser", on = "close", variant = "danger", key = "browser-close", help = "Close the sandbox's browser; then choose what to do with the hosts allowed from here" },
@@ -52,14 +52,14 @@ return {
       select{ id = "browser-viewport", value = ui.viewport or "auto", items = ui.viewports or {}, on = "viewport", disabled = not live },
     }
 
-    local out = { gap = 6, w = "full", h = "full", pad = 8, top, nav }
+    local out = { gap = 8, w = "full", h = "full", pad = 8, top, nav }
 
     -- Hosts this sandbox's network policy refused while the page loaded.
     local blocked = ui.blocked or {}
     if #blocked > 0 then
       local chips = { gap = 4, w = "full", text{ "Blocked by this sandbox's network policy", size = "xs", color = "amber", weight = "semibold" } }
       for _, b in ipairs(blocked) do
-        table.insert(chips, row{ gap = 6, w = "full", pad = 4, radius = "xs", fill = "amber-tint", key = "browser-blocked-" .. b.host,
+        table.insert(chips, row{ gap = 8, w = "full", pad = 4, radius = "xs", fill = "amber-tint", key = "browser-blocked-" .. b.host,
           text{ b.host, mono = true, size = "sm", color = "text-bright", truncate = true, grow = 1 },
           b.fixed and text{ b.fixed, size = "xs", color = "text-muted" }
             or button{ "Allow", on = "allow", arg = b.host, key = "browser-allow-" .. b.host, help = "Allow " .. b.host .. " for " .. sb .. " only" },
@@ -75,7 +75,7 @@ return {
       or "Runs inside the sandbox, under its network policy.", size = "xs", color = "text-dim", wrap = true, key = "browser-grant-note" })
 
     if ui.error then
-      table.insert(out, column{ w = "full", pad = 6, radius = "sm", fill = "red-tint", border = "red-border", key = "browser-error",
+      table.insert(out, column{ w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red-border", key = "browser-error",
         text{ ui.error, size = "sm", color = "red", wrap = true } })
     elseif status == "starting" then
       table.insert(out, note("Starting the browser in the sandbox..."))
@@ -85,7 +85,7 @@ return {
       -- The next step, through what the app already has: Setup's Kits tab
       -- (the kits line), and the sandbox's actions (Recreate, behind the
       -- core's dialog). Nothing here changes anything by itself.
-      table.insert(out, row{ gap = 6, w = "full", key = "browser-next",
+      table.insert(out, row{ gap = 8, w = "full", key = "browser-next",
         button{ "Kits in Setup", icon = "gear", on = "kits", key = "browser-kits",
           help = "Open Setup on the Kits tab: add \"sbxw:agent-skills\" to the kits line of this sandbox's sbxw.toml" },
         button{ "Recreate…", icon = "more", on = "actions", arg = sb, key = "browser-recreate",

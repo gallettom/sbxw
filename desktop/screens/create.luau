@@ -32,7 +32,7 @@ end
 
 local function card(key, ic, t, lead, points, go)
   local kids = { key = key, on = "open", arg = key == "kind-chat" and "chat" or "workspace",
-    grow = 1, gap = 6, pad = 12, radius = "md", border = "border", fill = "surface", align = "start",
+    grow = 1, gap = 8, pad = 12, radius = "md", border = "border", fill = "surface", align = "start",
     row{ gap = 8, icon{ ic, size = 16, color = "blue" }, title(t) },
     hint(lead, "text"),
   }
@@ -45,7 +45,7 @@ local function chooser()
   return column{ w = "full", gap = 12,
     head("New sandbox"),
     hint("Both run an agent in an isolated container. What differs is what the agent can see.", "text"),
-    row{ w = "full", gap = 10, align = "stretch",
+    row{ w = "full", gap = 12, align = "stretch",
       card("kind-workspace", "folder", "Workspace sandbox", "An agent on one of your project folders.",
         { "Mounts a folder from your machine", "Reads, edits and runs your code", "Port forwarding, SSH and the file browser", "You choose the name and the folder" },
         "Choose folder →"),
@@ -89,11 +89,11 @@ local function folder_browser(c)
   local rows = {}
   if l then
     if l.can_up then
-      rows[#rows + 1] = row{ key = "fs-up", on = "browse", arg = l.parent, w = "full", gap = 6, py = 3, px = 4, radius = "xs",
+      rows[#rows + 1] = row{ key = "fs-up", on = "browse", arg = l.parent, w = "full", gap = 8, py = 4, px = 4, radius = "xs",
         icon{ "chevron-right", size = 11, color = "text-dim" }, text{ "..", color = "text-muted" } }
     end
     for _, e in ipairs(l.entries) do
-      rows[#rows + 1] = row{ key = "fs-" .. e.name, on = "browse", arg = e.path, w = "full", gap = 6, py = 2, px = 4, radius = "xs",
+      rows[#rows + 1] = row{ key = "fs-" .. e.name, on = "browse", arg = e.path, w = "full", gap = 8, py = 2, px = 4, radius = "xs",
         icon{ "folder", size = 12, color = "text-muted" },
         text{ e.name, truncate = true, grow = 1 },
         (not picking) and button{ e.added and "✓" or "+", key = "add-" .. e.name, variant = e.added and "primary" or "ghost",
@@ -110,7 +110,7 @@ local function folder_browser(c)
     rows[#rows + 1] = hint("Loading...")
   end
   rows.h = 170
-  rows.gap = 1
+  rows.gap = 2
   rows.key = "fs-list"
 
   local favs = false
@@ -131,7 +131,7 @@ local function folder_browser(c)
     },
     hint("The agent works in this folder and can change its files."),
     favs,
-    row{ w = "full", gap = 6, px = 6, py = 4, radius = "xs", fill = "surface-alt",
+    row{ w = "full", gap = 8, px = 8, py = 4, radius = "xs", fill = "surface-alt",
       badge{ c.path_tag, tone = c.path_tag == "Selected" and "green" or "neutral" },
       text{ c.path ~= "" and c.path or "-", mono = true, size = "sm", truncate = true, grow = 1, key = "create-path" },
     },
@@ -145,7 +145,7 @@ local function folder_browser(c)
 end
 
 local function option(t, desc, control)
-  return row{ w = "full", gap = 10, align = "start",
+  return row{ w = "full", gap = 12, align = "start",
     column{ grow = 1, gap = 2, title(t), desc and hint(desc) or false },
     control or false,
   }
@@ -154,7 +154,7 @@ end
 local function repos(c)
   local rows = { w = "full", gap = 4 }
   for i, r in ipairs(c.repos) do
-    rows[#rows + 1] = row{ w = "full", gap = 6,
+    rows[#rows + 1] = row{ w = "full", gap = 8,
       text{ r.path, mono = true, size = "sm", truncate = true, grow = 1, help = r.path },
       i == 1 and badge{ "workspace", tone = "green", help = "The workspace is always read-write: threads write their worktrees into it" }
         or button{ "⤒ workspace", variant = "ghost", on = "repo_main", arg = i, key = "repo-main-" .. i, help = "Make this the workspace" },
@@ -163,7 +163,7 @@ local function repos(c)
       button{ icon = "close", variant = "ghost", on = "repo_rm", arg = i, key = "repo-rm-" .. i, help = "Remove" },
     }
   end
-  return column{ w = "full", gap = 6,
+  return column{ w = "full", gap = 8,
     option("Extra folders", false,
       button{ "+ Add this folder", on = "repo_add", key = "create-add-repo", disabled = not c.can_add_repo }),
     hint(c.repo_hint, c.repo_hint_error and "red" or "text-muted"),
@@ -172,10 +172,10 @@ local function repos(c)
 end
 
 local function carves(c)
-  local kids = { w = "full", gap = 6,
+  local kids = { w = "full", gap = 8,
     option("Restricted sub-folders", "Keep a folder inside a read-write folder out of the agent's reach, or read-only."),
   }
-  local adds = { gap = 6, w = "full" }
+  local adds = { gap = 8, w = "full" }
   for i, p in ipairs(c.carve_parents) do
     adds[#adds + 1] = button{ "+ Restrict a sub-folder" .. (#c.carve_parents > 1 and (" of " .. p.label) or ""),
       key = "carve-add-" .. i, on = "carve_pick", arg = p.path, disabled = c.carve_pick ~= nil, help = p.path }
@@ -186,7 +186,7 @@ local function carves(c)
     kids[#kids + 1] = column{ w = "full", gap = 4, pad = 8, radius = "sm", fill = "blue-tint",
       hint("Choose a sub-folder of " .. pk.root .. " in the list above (you cannot leave it).", "text"),
       hint("Now in: " .. pk.cur),
-      row{ w = "full", gap = 6,
+      row{ w = "full", gap = 8,
         button{ "Use this folder", on = "carve", arg = "use", key = "carve-use", disabled = not pk.can_use },
         column{ grow = 1, input{ id = "create-carve-typed", value = pk.typed, placeholder = "or type a path inside it",
           on = "set", arg = "carve_typed", on_submit = "carve_typed" } },
@@ -197,8 +197,8 @@ local function carves(c)
     }
   end
   for i, cv in ipairs(c.carves) do
-    kids[#kids + 1] = column{ w = "full", gap = 3, pad = 6, radius = "sm", border = cv.error and "red-border" or "border",
-      row{ w = "full", gap = 6,
+    kids[#kids + 1] = column{ w = "full", gap = 4, pad = 8, radius = "sm", border = cv.error and "red-border" or "border",
+      row{ w = "full", gap = 8,
         cv.parent_label and badge{ "in " .. cv.parent_label } or false,
         text{ cv.rel, mono = true, size = "sm", truncate = true, grow = 1, help = cv.path },
         switch("carve-access-" .. i, "No access", "Read-only", cv.access == "none", "carve_set",
@@ -208,7 +208,7 @@ local function carves(c)
         button{ icon = "close", variant = "ghost", on = "carve_set", arg = { i = i, v = "remove" }, key = "carve-rm-" .. i, help = "Remove" },
       },
       hint(cv.note),
-      cv.hidden_count > 0 and row{ w = "full", gap = 6,
+      cv.hidden_count > 0 and row{ w = "full", gap = 8,
         icon{ "warning", size = 12, color = "amber" },
         text{ cv.hidden_count .. (cv.hidden_count == 1 and " file" or " files") .. " next to it will not be visible in the sandbox.",
           wrap = true, size = "sm", color = "amber", grow = 1 },
@@ -219,7 +219,7 @@ local function carves(c)
   end
   local pv = c.preview
   if pv then
-    local lines = { w = "full", gap = 2, pad = 6, radius = "sm", fill = pv.bad and "red-tint" or "surface-alt", key = "carve-preview",
+    local lines = { w = "full", gap = 2, pad = 8, radius = "sm", fill = pv.bad and "red-tint" or "surface-alt", key = "carve-preview",
       text{ pv.summary, wrap = true, size = "sm", color = pv.bad and "red" or "text" } }
     for _, w in ipairs(pv.warnings or {}) do lines[#lines + 1] = hint("⚠ " .. w, "amber") end
     for _, f in ipairs(pv.files or {}) do lines[#lines + 1] = text{ f, mono = true, size = "xs", color = "text-muted", truncate = true } end
@@ -236,12 +236,12 @@ local function ports(c)
       button{ "+ Add port", on = "port_add", key = "create-add-port" }),
   }
   if #c.ports > 0 then
-    kids[#kids + 1] = row{ w = "full", gap = 6,
+    kids[#kids + 1] = row{ w = "full", gap = 8,
       text{ "In sandbox", size = "xs", color = "text-dim", w = 80 }, text{ "", w = 12 },
       text{ "On your machine", size = "xs", color = "text-dim", w = 100 }, text{ "Hostname", size = "xs", color = "text-dim", grow = 1 } }
   end
   for i, p in ipairs(c.ports) do
-    kids[#kids + 1] = row{ w = "full", gap = 6,
+    kids[#kids + 1] = row{ w = "full", gap = 8,
       column{ w = 80, input{ id = "port-" .. i .. "-sandbox", value = p.sandbox, placeholder = "3000", on = "set", arg = { f = "port_sandbox", i = i } } },
       text{ "→", w = 12, color = "text-muted" },
       column{ w = 100, input{ id = "port-" .. i .. "-host", value = p.host, placeholder = p.sandbox ~= "" and p.sandbox or "same", on = "set", arg = { f = "port_host", i = i } } },
@@ -258,7 +258,7 @@ local function kit_folders(c)
     option("Kit folders", "Folders on your machine behind the paths your kits share with it. Left empty, sbx keeps its own folder for that kit."),
   }
   for i, k in ipairs(c.kit_mounts) do
-    kids[#kids + 1] = row{ w = "full", gap = 6,
+    kids[#kids + 1] = row{ w = "full", gap = 8,
       text{ k.target, mono = true, size = "sm", w = 150, truncate = true, help = "Declared by " .. k.kit },
       column{ grow = 1, input{ id = "kit-" .. i, value = k.host, placeholder = "sbx's own folder", on = "set", arg = { f = "kit_mount", i = i } } },
       button{ "Choose...", on = "pick", arg = i, key = "kit-pick-" .. i },
@@ -276,7 +276,7 @@ local function workspace(c)
       hint("Where the sandbox runs. Remote hosts are experimental."),
     }
   end
-  local body = { gap = 14, w = "full", key = "create-scroll", grow = 1,
+  local body = { gap = 16, w = "full", key = "create-scroll", grow = 1,
     host,
     column{ w = "full", gap = 4,
       title("Name"),
@@ -287,7 +287,7 @@ local function workspace(c)
     },
     folder_browser(c),
     divider{},
-    text{ "OPTIONAL", size = "xs", weight = "semibold", color = "text-dim" },
+    text{ "Optional", size = "caption", weight = "semibold", color = "text-muted" },
     repos(c),
     carves(c),
     ports(c),
@@ -299,7 +299,7 @@ local function workspace(c)
     (c.template and not c.remote) and option("Rebuild the starting template", c.template.note,
       checkbox{ "", value = c.rebuild, on = "toggle", arg = "rebuild", key = "create-rebuild", help = c.template.help }) or false,
   }
-  return column{ w = "full", h = "full", gap = 10,
+  return column{ w = "full", h = "full", gap = 12,
     head("New sandbox"),
     scroll(body),
     c.error and hint(c.error, "red") or false,

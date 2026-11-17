@@ -62,6 +62,8 @@ add(type="tap", key="plan-approve")
 mark("approve-dialog", 500)
 add(type="tap", key="cf-confirm")
 mark("approved", 900)
+# The row's actions are in its ⋯ menu (extra-sandbox-<name>); its items keep the extras' keys.
+add(type="tap", key="extra-sandbox-web-app"); mark("_menu", 200)
 add(type="tap", key="extra-sandbox-web-app-threads")
 mark("panel", 600)
 add(type="tap", key="plan-status-" + plan)

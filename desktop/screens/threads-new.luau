@@ -66,12 +66,12 @@ return {
     local full = v.max ~= nil and (v.open or 0) >= v.max and not (known and known.running)
     form = { sandbox = sb, session = session, name = name, repo = repo, model = model, fresh = known == nil, fk = fk }
 
-    local out = { gap = 10, pad = 16, w = "full" }
+    local out = { gap = 12, pad = 16, w = "full" }
     table.insert(out, row{ gap = 8, w = "full",
       text{ session and ("New session in " .. sb .. ", on the main checkout") or ("New thread in " .. sb), size = "xl", weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
       button{ icon = "close", variant = "ghost", on = "cancel", help = "Close", key = "tn-x" } })
     if #existing > 0 then
-      local chips = { gap = 6, w = "full" }
+      local chips = { gap = 8, w = "full" }
       for _, s in ipairs(existing) do
         table.insert(chips, button{ s.thread, variant = s.running and "primary" or "neutral", on = "chip", arg = s.thread, key = "tn-chip-" .. s.thread,
           help = s.running and "Open: go to it" or (session and "Start it again" or "Worktree kept: reopen it") })
@@ -99,7 +99,7 @@ return {
         for i, r in ipairs(list) do
           local st = ((r.dirty or 0) > 0) and (r.dirty .. " uncommitted") or "clean"
           if (r.ahead or 0) > 0 or (r.behind or 0) > 0 then st = st .. "  ↑" .. (r.ahead or 0) .. " ↓" .. (r.behind or 0) end
-          table.insert(rows, row{ gap = 8, w = "full", pad = 6, radius = "sm", on = "repo", arg = r.path, key = "tn-repo-" .. i,
+          table.insert(rows, row{ gap = 8, w = "full", pad = 8, radius = "sm", on = "repo", arg = r.path, key = "tn-repo-" .. i,
             fill = r.path == repo and "blue-tint" or "surface-alt", border = r.path == repo and "blue" or "elevated",
             icon{ r.path == repo and "check" or "folder", size = 12, color = r.path == repo and "blue" or "text-muted" },
             text{ repo_label(r.path, repos.workspace) .. (r.path == "" and " (workspace)" or ""), truncate = true, grow = 1 },
