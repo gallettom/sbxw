@@ -566,7 +566,7 @@ The core owns the app's chords (`src/shell/palette.rs`), and screens never
 see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
 and feature shortcut, the core's actions; a pick runs the same intents your
 buttons run, through the same checks), Cmd/Ctrl+B the sidebar, Cmd/Ctrl+1 to
-9 a pane, Cmd/Ctrl+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
+9 a pane, Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
 app (in a terminal: its text), Escape closes the top-most menu, palette,
 dialog or modal. While a terminal's grid has the keyboard only Cmd chords
 (macOS) or Ctrl+Shift chords (elsewhere) are the app's. `data.app.shortcuts`

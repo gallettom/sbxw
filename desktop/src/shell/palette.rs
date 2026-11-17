@@ -56,6 +56,13 @@ pub fn chord_keys(k: &str) -> Vec<String> {
     if mac() { vec!["⌘".into(), k.into()] } else { vec!["Ctrl".into(), k.into()] }
 }
 
+/// Closing a pane: Shift+W with the platform's modifier everywhere. Never ⌘W
+/// alone on macOS, which the standard Window > Close item takes (it would
+/// close the window).
+pub fn close_keys() -> Vec<String> {
+    if mac() { vec!["⌘".into(), "⇧".into(), "W".into()] } else { vec!["Ctrl".into(), "Shift".into(), "W".into()] }
+}
+
 /// The app's chords, for the palette, Help (`data.app.shortcuts`) and the
 /// tooltips: (keys, what it does).
 pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
@@ -64,7 +71,7 @@ pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
         (chord_keys("B"), "Show or hide the sidebar".into()),
         (if mac() { chord_keys("J") } else { vec!["F7".into()] }, "Open or close Jarvis".into()),
         (chord_keys("1…9"), "Give pane 1 to 9 the keyboard".into()),
-        (chord_keys("W"), "Close the focused pane (the sandbox and its session go on)".into()),
+        (close_keys(), "Close the focused pane (the sandbox and its session go on)".into()),
         (chord_keys("+ / − / 0"), "Zoom the app in, out, back to 100% (in a terminal: its text size)".into()),
         (vec![ptt.to_string()], "Push to talk to Jarvis (hold)".into()),
         (vec!["Escape".into()], "Close the menu, dialog or palette on top".into()),
@@ -80,7 +87,7 @@ pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
     v.push((if mac() { vec!["⌘".into(), "V".into()] } else { vec!["Ctrl".into(), "Shift".into(), "V".into()] }, "Paste into the focused terminal".into()));
     v.push((vec!["Shift".into(), "PageUp".into()], "Scroll a terminal's history".into()));
     if !mac() {
-        v.push((vec!["Ctrl".into(), "Shift".into(), "K".into()], "The same chords with Shift while a terminal has the keyboard (Ctrl+Shift+K, +B, +1…9, +W)".into()));
+        v.push((vec!["Ctrl".into(), "Shift".into(), "K".into()], "The same chords with Shift while a terminal has the keyboard (Ctrl+Shift+K, +B, +1…9)".into()));
     }
     v
 }
@@ -191,7 +198,7 @@ impl App {
             let what = self.panes.get(i).and_then(|p| p.sandbox.clone()).unwrap_or_else(|| "empty".into());
             v.push(core(&format!("pane-{}", i + 1), &format!("Go to pane {}", i + 1), &what, "single", chord_keys(&(i + 1).to_string()), Run::FocusPane(i)));
         }
-        v.push(core("close-pane", "Close the focused pane", "The sandbox and its session go on", "close", chord_keys("W"), Run::ClosePane));
+        v.push(core("close-pane", "Close the focused pane", "The sandbox and its session go on", "close", close_keys(), Run::ClosePane));
         for (n, split, label, icon) in [(1, Split::Columns, "1 terminal", "single"), (2, Split::Columns, "2 side by side", "columns"), (2, Split::Rows, "2 stacked", "rows"), (3, Split::Columns, "3 terminals", "grid"), (4, Split::Columns, "4 terminals", "grid")] {
             v.push(core(&format!("layout-{n}{}", if split == Split::Rows { "r" } else { "" }), &format!("Layout: {label}"), "", icon, vec![], Run::Layout(n, split)));
         }
@@ -274,7 +281,8 @@ impl App {
             }
             'b' => Run::Sidebar,
             'j' if !mac() => Run::Jarvis,
-            'w' => Run::ClosePane,
+            // Shift+W only: ⌘W alone is the window's Close on macOS.
+            'w' if ev.mods.shift => Run::ClosePane,
             '1'..='9' => Run::FocusPane(c as usize - '1' as usize),
             // In a terminal these size its text (terminal/keys.rs).
             '=' | '-' | '0' if !terminal => Run::Zoom(match c {

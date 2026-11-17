@@ -218,7 +218,7 @@ local function item(sb, app, data)
         local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
         local key = "extra-sandbox-" .. name .. "-" .. e.id
         if e.intent then
-          table.insert(line2, row{ key = key, on = "extra", arg = name .. "\n" .. e.id, help = e.help, hover = "active-bg", radius = "xs", badge{ label, tone = tone } })
+          table.insert(line2, row{ key = key, on = "extra", arg = name .. "\n" .. e.id, help = e.help, hover = "active-bg", radius = "xs", h = 24, badge{ label, tone = tone } })
         else
           table.insert(line2, badge{ label, tone = tone, help = e.help, key = key })
         end
@@ -255,7 +255,7 @@ local function item(sb, app, data)
     help = name .. ": " .. st.word .. ". Enter opens its terminal, Space starts or stops it",
     h = 52, w = "full", gap = 8, align = "stretch", radius = "sm",
     fill = selected and "elevated" or nil, hover = selected and "elevated" or "hover-subtle",
-    column{ py = 8, rail(st.tone, st.shape) },
+    column{ py = 8, w = 7, align = "start", rail(st.tone, st.shape) },
     column{ grow = 1, gap = 2, justify = "center",
       row{ w = "full", gap = 8,
         text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, grow = 1, help = name },
@@ -287,7 +287,7 @@ local function sub_rows(sb, app, into)
     table.insert(into, row{ key = key, h = 28, gap = 8, w = "full", align = "stretch", radius = "sm", hover = "hover-subtle",
       on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil, help = e.help ~= "" and e.help or label,
       column{ w = 8 },
-      column{ py = 4, rail(tone, shape, true) },
+      column{ py = 4, w = 6, align = "start", rail(tone, shape, true) },
       row{ grow = 1, gap = 8,
         text{ label, size = "body", color = tone == "amber" and "amber" or "text", truncate = true, grow = 1 },
         e.count and badge{ "pane " .. e.count, tone = "blue" } or false,

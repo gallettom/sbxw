@@ -1612,7 +1612,11 @@ fn notice_view(s: &App) -> Option<El> {
         .key("notice-close")
         .role("button")
         .label("Dismiss")
-        .padding(3.0)
+        .help("Dismiss")
+        .w(layout::DENSE_H)
+        .h(layout::DENSE_H)
+        .items_center()
+        .justify_center()
         .radius(theme::radius("xs").unwrap())
         .hover(c("border"))
         .cursor(Cursor::Pointer)
@@ -1621,7 +1625,7 @@ fn notice_view(s: &App) -> Option<El> {
             s.feats.notice_then = None;
             s.push_data();
         })
-        .child(rune::icon(crate::icons::get("close").unwrap(), 10.0).color(c("text-muted")));
+        .child(rune::icon(crate::icons::get("close").unwrap(), 12.0).color(c("text-muted")));
     Some(
         row()
             .key("notice")
@@ -1891,7 +1895,7 @@ fn pane_view(s: &App, i: usize) -> El {
                 .role("button")
                 .label("Close pane")
                 .help("Close this pane (the sandbox and its session go on)")
-                .help_keys(if cfg!(target_os = "macos") { vec!["⌘", "W"] } else { vec!["Ctrl", "Shift", "W"] })
+                .help_keys(palette::close_keys())
                 .w(bar::CLOSE_W)
                 .h(bar::CLOSE_W)
                 .items_center()

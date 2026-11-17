@@ -17,7 +17,7 @@ shots="$shots_root"; mkdir -p "$shots"
 dir=$(mktemp -d); export SBXW_DESKTOP_SCREENS="$dir"
 f="$dir/sandboxes.luau"
 edited=$(mktemp)
-sed 's/text{ "SANDBOXES", size = "sm", weight = "semibold", color = "text" }/text{ "SANDBOXES (edited live)", size = "sm", weight = "semibold", color = "amber" }/' \
+sed 's/text{ "Sandboxes", size = "title", weight = "semibold", color = "text-bright" }/text{ "Sandboxes (edited live)", size = "title", weight = "semibold", color = "amber" }/' \
   "$here/screens/sandboxes.luau" >"$edited"
 grep -q "edited live" "$edited"
 script="$shots/reload-script.json"
@@ -35,7 +35,7 @@ JSON
 build
 log="$shots/app-reload.log"
 run_app "$log" --fixture "$here/fixtures/sandboxes/basic.json" --script "$script" \
-  --start 0.8 --frames 121 --every 30 --cols 5 --strip "$shots/reload-strip.png" --crop 0,0,250,420 &
+  --start 0.8 --frames 121 --every 30 --cols 5 --strip "$shots/reload-strip.png" --crop 0,0,290,420 &
 app=$!
 on_hold() { # wait for the app to enter hold <ms>, then let its watcher settle in
   for _ in $(seq 300); do grep -q "hold $1 ms" "$log" 2>/dev/null && { sleep 0.2; return; }; sleep 0.05; done
