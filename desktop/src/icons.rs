@@ -57,6 +57,8 @@ icons! {
     // A worktree: a branch off the main line.
     BRANCH "branch" concat!(st!("circle", r#"cx="4.5" cy="3.5" r="1.5""#), st!("circle", r#"cx="4.5" cy="12.5" r="1.5""#), st!("circle", r#"cx="11.5" cy="5" r="1.5""#), st!("path", r#"d="M4.5 5v6M11.5 6.5c0 3-7 2.5-7 4.5""#));
     LINK "link" concat!(st!("path", r#"d="M6.5 9.5l3-3""#), st!("path", r#"d="M7.5 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M8.5 11.5l-1 1a2.5 2.5 0 0 1-3.5-3.5l1-1""#));
+    // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
+    TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
 }
 
 pub fn get(name: &str) -> Option<&'static Icon> {

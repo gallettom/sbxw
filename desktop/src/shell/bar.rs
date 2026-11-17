@@ -85,6 +85,10 @@ impl Item {
     }
 }
 
+/// Extras that always sit in the "⋯" menu, never inline: a view setting
+/// of the pane (keyword pills), not something to act on at a glance.
+pub const MENU_ONLY: &[&str] = &["pills"];
+
 /// Sorted by [`rank`], stable: the order the bar fills in.
 pub fn by_priority(mut items: Vec<Item>) -> Vec<Item> {
     items.sort_by_key(Item::rank);
@@ -143,6 +147,14 @@ pub struct PaneFit {
     pub name_min: f32,
 }
 
+impl PaneFit {
+    /// How many extras did not fit (the menu-only ones are not counted:
+    /// they live in the menu whatever the width).
+    pub fn overflowed(&self) -> usize {
+        self.hidden.iter().filter(|i| !MENU_ONLY.contains(&i.id.as_str())).count()
+    }
+}
+
 /// The pane bar's paddings and fixed parts (see `shell::pane_view`).
 pub const PANE_PAD: f32 = 8.0;
 pub const PANE_GAP: f32 = 8.0;
@@ -168,6 +180,7 @@ pub fn kind_w(kind: &str) -> f32 {
 /// What shows in a pane bar `width` points wide. `menu`: the "⋯" button is
 /// always there (it also holds the pane's moves), so its room is kept.
 pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>, menu: bool) -> PaneFit {
+    let (only_menu, items): (Vec<Item>, Vec<Item>) = items.into_iter().partition(|i| menu && MENU_ONLY.contains(&i.id.as_str()));
     let items = by_priority(items);
     let name_w = measure(name, NAME_TEXT, 500.0);
     let name_min = name_w.min(NAME_MIN);
@@ -180,7 +193,8 @@ pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>, menu: bool
     let widths: Vec<f32> = items.iter().map(chip_w).collect();
     let k = fit(width, fixed, &widths, PANE_GAP, if menu { 0.0 } else { more_w(items.len()) });
     let mut shown = items;
-    let hidden = shown.split_off(k);
+    let mut hidden = shown.split_off(k);
+    hidden.extend(only_menu);
     PaneFit { shown, hidden, name_min }
 }
 

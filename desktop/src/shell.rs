@@ -992,6 +992,9 @@ impl App {
             // Only the pane with the keyboard shows a solid cursor and gets
             // the input method's caret (Rune wants one).
             t.set_focused(self.window_focused && i == self.focused && shown.contains(&i));
+            // Keyword pills: the daemon's switch and the app's own preference
+            // for this sandbox (feat/emphasis.rs), followed live.
+            t.set_pills(crate::feat::emphasis::for_pane(self.feats.data.get("emphasis"), &self.store.get("features")["emphasis"], p.sandbox.as_deref()));
             let mut ch = t.poll_tx(settle, clock, tx);
             for ev in t.take_events() {
                 ch = true;
@@ -2538,7 +2541,7 @@ fn bar_menu_item(it: &bar::Item, r: &screen::MenuRow) -> El {
 /// in the tone of the most urgent of them (bar::more_tone).
 fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
     let n = i + 1;
-    let count = f.hidden.len();
+    let count = f.overflowed();
     let (label, help) = if count > 0 { (format!("{count} more"), format!("{count} more: what does not fit in this bar, and this pane's moves")) } else { ("Pane menu".to_string(), "Move this pane: left, right, up, down, rotate, to another page".to_string()) };
     let mut b = row()
         .key(format!("pane-{n}-more"))

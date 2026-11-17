@@ -699,6 +699,7 @@ macro_rules! features {
 features! {
     browser,
     create,
+    emphasis,
     envfile,
     files,
     network,
