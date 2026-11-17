@@ -506,7 +506,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     }
     if let Some(x) = d.confirm {
         for (i, l) in x.lines.iter().enumerate() {
-            body = body.child(small(l.clone(), 13.0, 400.0, "text-bright").key(format!("cf-line-{i}")));
+            body = body.child(text(l.clone()).font(crate::theme::prose(13.0, 400.0)).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0).key(format!("cf-line-{i}")));
         }
         let granted = granted_lines(x);
         if !granted.is_empty() {

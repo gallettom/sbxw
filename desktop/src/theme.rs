@@ -210,17 +210,32 @@ pub fn to_json() -> serde_json::Value {
     })
 }
 
-/// Long prose (Jarvis's answers, Markdown in screens): the app's monospace
-/// by default, the product's voice. `SBXW_DESKTOP_PROSE=sans` sets it in
-/// Inter, the proportional face Rune bundles (no font file of ours), to
-/// compare the two; nothing else changes.
-pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
-    let t = crate::screen::body(size.max(12.0), weight);
-    if std::env::var("SBXW_DESKTOP_PROSE").is_ok_and(|v| v == "sans") {
+/// Whether long prose is set in the proportional face (the default);
+/// `SBXW_DESKTOP_PROSE=mono` is the way back to monospace everywhere.
+pub fn prose_sans() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !std::env::var("SBXW_DESKTOP_PROSE").is_ok_and(|v| v == "mono"))
+}
+
+/// `t` in the prose face: Inter, which Rune embeds and registers itself
+/// (its default faces, no font file of ours, so it is there on every
+/// system; a glyph Inter lacks falls back to a system face as any text's
+/// does). Unchanged under `SBXW_DESKTOP_PROSE=mono`.
+pub fn as_prose(t: rune::TextStyle) -> rune::TextStyle {
+    if prose_sans() {
         t.family(rune::Family::Named("Inter"))
     } else {
         t
     }
+}
+
+/// Long prose: Jarvis's answers and Markdown in screens (Help), a wrapped
+/// `text` in a screen (explanations, descriptions), a core dialog's
+/// sentences, the empty pane's line. Terminals, code, paths, names,
+/// numbers, badges, bars, labels and tooltips stay monospace (tooltips are
+/// Rune's, in the app's one UI face).
+pub fn prose(size: f32, weight: f32) -> rune::TextStyle {
+    as_prose(crate::screen::body(size.max(12.0), weight))
 }
 
 /// A sandbox's group colour, as the web UI gives it (`assets/js/sandboxes.js`,

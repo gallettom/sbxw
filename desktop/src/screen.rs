@@ -1483,6 +1483,9 @@ fn text_style(st: &Style, size: f32, weight: f32) -> TextStyle {
     let t = body(st.size.unwrap_or(size).max(12.0), st.weight.unwrap_or(weight));
     if st.mono {
         t.mono()
+    } else if st.wrap {
+        // A text that wraps is a sentence or more: the prose face.
+        theme::as_prose(t)
     } else {
         t
     }

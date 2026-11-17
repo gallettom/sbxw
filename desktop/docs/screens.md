@@ -142,8 +142,8 @@ Text. Positional: the string (a number is shown as its digits).
 | `color` | colour | `text` |
 | `size` | number or text size | 13 (`md`) |
 | `weight` | `normal`, `medium`, `semibold`, `bold`, or 100 to 900 | `normal` |
-| `mono` | bool | false. The terminal's font. The whole UI is already monospace, as the web UI is |
-| `wrap` | bool | false: one line |
+| `mono` | bool | false. The terminal's font. The UI is monospace, as the web UI is; `mono` also keeps a wrapped text monospace (a command, a path) |
+| `wrap` | bool | false: one line. A wrapped text is a sentence or more: it is set in the prose face (Inter, bundled by Rune), as Markdown and the core dialogs' sentences are; `SBXW_DESKTOP_PROSE=mono` keeps everything monospace |
 | `truncate` | bool | false. One line cut with an ellipsis when it does not fit (give it `grow = 1` in a row) |
 
 Sizes under 12 are drawn at 12 (nothing a person reads is smaller); a
