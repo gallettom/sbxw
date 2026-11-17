@@ -1110,6 +1110,10 @@ impl App {
         if self.pager_drawn(key) {
             return true;
         }
+        // A docked feature panel's close button (`panel-close-<screen>`).
+        if key.strip_prefix("panel-close-").is_some_and(|n| self.feats.panel.as_deref() == Some(n) || (self.feats.split && self.feats.panels.iter().any(|p| p == n))) {
+            return true;
+        }
         if self.screens.iter().any(|s| s.last_good.as_ref().is_some_and(|n| node_has_key(n, key))) {
             return true;
         }
@@ -1142,7 +1146,7 @@ impl App {
         for i in self.shown() {
             let p = &self.panes[i];
             let n = i + 1;
-            if key == format!("pane-{n}") || key == format!("pane-{n}-bar") || (p.sandbox.is_some() && key == format!("pane-{n}-close")) {
+            if key == format!("pane-{n}") || key == format!("pane-{n}-bar") || (p.sandbox.is_some() && (key == format!("pane-{n}-close") || key == format!("pane-{n}-grip"))) {
                 return true;
             }
             if p.term.as_ref().is_some_and(|t| key == t.key("grid") || key == t.key("terminal")) {
@@ -2423,38 +2427,48 @@ pub(super) struct PaneMove {
 fn drag_overlay(s: &App) -> Vec<El> {
     let Some(d) = s.drag.as_ref().filter(|d| d.active) else { return vec![] };
     let mut v = vec![];
+    let name = s.pane_by_uid(d.uid).map(pane_name).unwrap_or_default();
+    // A page tab or "+" is small: its outline there, and the words go
+    // with the chip at the pointer.
+    let mut what = None;
     if let Some((r, z)) = s.drag_preview() {
         let ok = z.acts();
         let (fg, tint) = if ok { ("blue", "blue-tint") } else { ("text-muted", "elevated") };
-        v.push(
-            col()
-                .key("drag-preview")
-                .pin(Some(r[0]), Some(r[1]), None, None)
-                .w(r[2].max(24.0))
-                .h(r[3].max(24.0))
-                .fill(c(tint).alpha(0.55))
-                .border(2.0, c(fg))
-                .radius(theme::radius("md").unwrap())
-                .items_center()
-                .justify_center()
-                .child(text(z.label()).font(small(13.0, 600.0)).color(c(if ok { "text-bright" } else { "text-muted" }))),
-        );
-    }
-    let name = s.pane_by_uid(d.uid).map(pane_name).unwrap_or_default();
-    v.push(
-        row()
-            .key("drag-ghost")
-            .pin(Some(d.at[0] + 12.0), Some(d.at[1] + 12.0), None, None)
-            .px(8.0)
-            .h(24.0)
-            .gap(6.0)
+        let small_target = r[3] < 48.0;
+        let pad = if small_target { 2.0 } else { 0.0 };
+        let mut p = col()
+            .key("drag-preview")
+            .pin(Some(r[0] - pad), Some(r[1] - pad), None, None)
+            .w(r[2].max(24.0) + pad * 2.0)
+            .h(r[3].max(24.0) + pad * 2.0)
+            .fill(c(tint).alpha(0.55))
+            .border(2.0, c(fg))
+            .radius(theme::radius(if small_target { "xs" } else { "md" }).unwrap())
             .items_center()
-            .radius(theme::radius("xs").unwrap())
-            .fill(c("elevated"))
-            .border(1.0, c("border"))
-            .child(rune::icon(crate::icons::get("terminal").unwrap(), 14.0).color(c("blue")))
-            .child(text(name).font(small(12.0, 500.0)).color(c("text-bright"))),
-    );
+            .justify_center();
+        if small_target {
+            what = Some((z.label(), ok));
+        } else {
+            p = p.child(text(z.label()).font(small(13.0, 600.0)).color(c(if ok { "text-bright" } else { "text-muted" })));
+        }
+        v.push(p);
+    }
+    let mut ghost = row()
+        .key("drag-ghost")
+        .pin(Some((d.at[0] + 14.0).min(s.window.0 - 300.0).max(4.0)), Some(d.at[1] + 14.0), None, None)
+        .px(8.0)
+        .h(24.0)
+        .gap(6.0)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .fill(c("elevated"))
+        .border(1.0, c(if what.as_ref().is_some_and(|w| w.1) { "blue" } else { "border" }))
+        .child(rune::icon(crate::icons::get("terminal").unwrap(), 14.0).color(c("blue")))
+        .child(text(name).font(small(12.0, 500.0)).color(c("text-bright")));
+    if let Some((label, ok)) = what {
+        ghost = ghost.child(text(format!("· {label}")).font(small(12.0, 600.0)).color(c(if ok { "blue" } else { "text-muted" })));
+    }
+    v.push(ghost);
     v
 }
 
