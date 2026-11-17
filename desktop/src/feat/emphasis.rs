@@ -112,14 +112,15 @@ pub fn for_pane(cfg: Option<&J>, kept: &J, sandbox: Option<&str>) -> Option<Rc<V
 /// The stand-in's default answer: the same shape as emphasis-core's
 /// `GET /api/emphasis` with its default vocabulary.
 pub fn default_payload() -> J {
+    // As crates/core/src/emphasis.rs, BUILT_IN (emphasis-core), word for word.
     let fams = [
         ("done", "green", vec!["verified", "fixed", "passed"], "finished and checked"),
-        ("failed", "red", vec!["error", "broken"], "something went wrong"),
-        ("needs you", "amber", vec!["blocked", "decide", "question"], "the person must act or answer"),
-        ("irreversible", "danger", vec!["destructive", "costly"], "cannot be undone, or costs money"),
-        ("note", "blue", vec!["context", "fyi"], "context worth knowing"),
-        ("working", "cyan", vec!["in progress", "next", "plan"], "the kind of work going on"),
-        ("team", "purple", vec!["lead", "thread", "jarvis"], "Jarvis and the team"),
+        ("failed", "red", vec!["error", "broken"], "something did not work; say what"),
+        ("needs you", "amber", vec!["blocked", "decide", "question"], "the person must act, answer or choose"),
+        ("irreversible", "danger", vec!["destructive", "costly"], "cannot be undone, or costs money: before doing it"),
+        ("note", "blue", vec!["context", "fyi"], "worth knowing, nothing to do"),
+        ("working", "cyan", vec!["in progress", "next", "plan"], "the kind of work under way or coming next"),
+        ("team", "purple", vec!["lead", "thread", "jarvis"], "from or for the lead, another thread or Jarvis"),
     ];
     let mut words = serde_json::Map::new();
     for (w, t, also, _) in &fams {
