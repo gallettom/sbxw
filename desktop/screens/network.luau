@@ -42,6 +42,15 @@ local function note(t, color)
   return text{ t, size = "sm", color = color or "text-muted", wrap = true }
 end
 
+local function has_dismiss(r)
+  for _, o in ipairs(r.options or {}) do
+    if o.id == "dismiss" or string.lower(o.label or ""):sub(1, 7) == "dismiss" then return true end
+  end
+  return false
+end
+
+local function plural(n, w, ws) return n .. " " .. (n == 1 and w or (ws or (w .. "s"))) end
+
 local function requests(data)
   local a = data.approvals or {}
   local out = { gap = 6, w = "full" }
@@ -49,29 +58,64 @@ local function requests(data)
   -- sbx lists the whole machine's (removed sandboxes, Jarvis's own).
   local listed = {}
   for _, sb in ipairs(data.sandboxes or {}) do listed[sb.name] = true end
-  local list = {}
+  -- sbx lists a refused host again each time the sandbox retries it: one
+  -- card per sandbox and host, the newest request's options, "×N".
+  local groups, order, hosts, sbs, nsb, nhosts, total, refused = {}, {}, {}, {}, 0, 0, 0, 0
   for _, r in ipairs(a.approvals or {}) do
-    if listed[r.sandbox] then table.insert(list, r) end
+    if listed[r.sandbox] then
+      total = total + 1
+      local k = (r.sandbox or "") .. "\n" .. (r.kind or "") .. "\n" .. (r.title or "")
+      local g = groups[k]
+      if not g then
+        g = { first = r, n = 0, dismiss = false }
+        groups[k] = g
+        table.insert(order, g)
+      end
+      g.n = g.n + 1
+      if (r.created_at or "") > (g.first.created_at or "") then g.first = r end
+      if r.kind == "network" and has_dismiss(r) then g.dismiss = true; refused = refused + 1 end
+      local hk = (r.kind or "") .. "\n" .. (r.title or "")
+      if not hosts[hk] then hosts[hk] = true; nhosts = nhosts + 1 end
+      if not sbs[r.sandbox] then sbs[r.sandbox] = true; nsb = nsb + 1 end
+    end
   end
-  table.insert(out, section("Waiting for you", #list))
+  table.insert(out, section("Waiting for you", #order))
   local err = (data.app.errors or {}).approvals
   if a.ok == false or err then
     table.insert(out, note(a.error or err or "Could not read what sbx is waiting for", "red"))
   end
-  if #list == 0 and a.ok ~= false then
+  if #order == 0 and a.ok ~= false then
     table.insert(out, note("Nothing waiting: sbx has no pending request."))
   end
-  for _, r in ipairs(list) do
+  if total > 1 then
+    table.insert(out, note(plural(total, "request") .. ": " .. plural(nhosts, "distinct host") .. " in " .. plural(nsb, "sandbox", "sandboxes") .. "."))
+  end
+  if refused > 1 then
+    table.insert(out, row{ gap = 6, w = "full",
+      text{ plural(refused, "is a host", "are hosts") .. " sbx already refused: nothing waits on " .. (refused == 1 and "it" or "them") .. ".", size = "sm", color = "text-muted", wrap = true, grow = 1 },
+      button{ "Dismiss all " .. refused, icon = "close", on = "dismiss_all", key = "approvals-dismiss-all",
+        help = "Answer sbx's Dismiss on every refused host listed here (not a kit's port request). They stay refused; the sandbox's next try asks again" },
+    })
+  end
+  for _, g in ipairs(order) do
+    local r = g.first
     local buttons = { gap = 6, w = "full" }
     for _, o in ipairs(r.options or {}) do
-      table.insert(buttons, button{ o.label ~= "" and o.label or o.id,
-        variant = (o.id == "allow") and "primary" or "neutral",
-        on = "answer", arg = { id = r.id, option = o.id }, key = "answer-" .. r.id .. "-" .. o.id })
+      if g.dismiss and (o.id == "dismiss" or string.lower(o.label or ""):sub(1, 7) == "dismiss") then
+        -- Dismissing is direct, and takes every copy of this host's request.
+        table.insert(buttons, button{ (o.label ~= "" and o.label or o.id) .. (g.n > 1 and (" ×" .. g.n) or ""),
+          on = "dismiss_group", arg = { sandbox = r.sandbox, title = r.title }, key = "answer-" .. r.id .. "-" .. o.id })
+      else
+        table.insert(buttons, button{ o.label ~= "" and o.label or o.id,
+          variant = (o.id == "allow") and "primary" or "neutral",
+          on = "answer", arg = { id = r.id, option = o.id }, key = "answer-" .. r.id .. "-" .. o.id })
+      end
     end
     table.insert(out, column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = r.kind == "network" and "elevated" or "amber", key = "req-" .. r.id,
       row{ gap = 6, w = "full",
         badge{ kinds[r.kind] or r.kind or "request", tone = r.kind == "network" and "neutral" or "amber" },
         text{ r.title or "", mono = true, color = "text-bright", truncate = true, grow = 1 },
+        g.n > 1 and text{ "×" .. g.n, size = "sm", color = "text-dim", help = "sbx listed this " .. g.n .. " times (each retry)" } or false,
       },
       text{ (r.sandbox or "") .. ((r.detail and r.detail ~= "") and (" · " .. string.gsub(r.detail, "\n", " · ")) or ""), size = "sm", color = "text-muted", wrap = true },
       row(buttons),
@@ -261,6 +305,8 @@ return {
 
   actions = {
     answer = function(_, a) return intent("approval_answer", { id = a.id, option = a.option }) end,
+    dismiss_all = function() return intent("approvals_dismiss", {}) end,
+    dismiss_group = function(_, a) return intent("approvals_dismiss", { sandbox = a.sandbox, title = a.title }) end,
     pick = function(_, _, name) return intent("network_show", { sandbox = name }) end,
     refresh = function() return intent("network_refresh") end,
     policy_refresh = function() return intent("policy_refresh") end,
