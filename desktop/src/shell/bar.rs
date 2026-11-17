@@ -309,7 +309,9 @@ pub const USAGE_BAR_W: f32 = 40.0;
 pub const USAGE_GAP: f32 = 4.0;
 pub const USAGE_WINDOW_GAP: f32 = 12.0;
 
-/// The bars' colour by meaning: blue under 70%, amber from 70%, red from 90%.
+/// The bars' colour by meaning: blue under 70%, amber from 70%, red from 90%
+/// (topbar.luau `usage_tone` draws it; this is the rule its test holds).
+#[cfg(test)]
 pub fn usage_tone(pct: f64) -> &'static str {
     if pct >= 90.0 {
         "red"

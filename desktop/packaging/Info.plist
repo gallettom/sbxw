@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- For a later sbxw.app (not built yet: no installer before parity).
+     Contents/MacOS/sbxw is the release binary, Contents/Resources/sbxw.icns
+     the icon from make-icon.py. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>sbxw</string>
+	<key>CFBundleDisplayName</key>
+	<string>sbxw</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.sbxw.desktop</string>
+	<key>CFBundleExecutable</key>
+	<string>sbxw</string>
+	<key>CFBundleIconFile</key>
+	<string>sbxw</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Push-to-talk with Jarvis records your voice while you hold the key.</string>
+</dict>
+</plist>

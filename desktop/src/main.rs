@@ -65,5 +65,11 @@ fn main() {
     // Help in the menu bar's own Help menu (macOS; Rune reports native
     // menus unsupported elsewhere, where the shortcut and the palette have it).
     let help = rune::MenuItem::new("Help and shortcuts", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
+    // The app's icon while it runs (packaging/make-icon.py): the Dock's on
+    // macOS, the title bar's and taskbar's on Windows; Rune sets nothing on
+    // Linux, where a desktop entry names the icon, nor headless.
+    if let Err(e) = rune::set_app_icon(include_bytes!("../packaging/icon-1024.png").to_vec()) {
+        log::warn!("app icon: {e}");
+    }
     rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).run();
 }
