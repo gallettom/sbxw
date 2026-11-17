@@ -73,6 +73,10 @@ icons! {
     PROMPT "prompt" concat!(st!("polyline", r#"points="2.5,4 6.5,8 2.5,12""#), st!("line", r#"x1="8.5" y1="12.25" x2="13.5" y2="12.25""#));
     ASK "ask" concat!(st!("path", r#"d="M2 3.5a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H7l-3 2.5v-2.5H3a1 1 0 0 1-1-1z""#), st!("path", r#"d="M6.6 5.5a1.5 1.5 0 0 1 2.9.5c0 1-1.5 1.1-1.5 2""#), r#"<circle cx="8" cy="9.4" r="0.85" fill="currentColor"/>"#);
     JARVIS "jarvis" concat!(st!("circle", r#"cx="8" cy="8" r="6.25""#), st!("path", r#"d="M5.25 7v2M8 5v6M10.75 6.25v3.5""#));
+    // The sbxw mark's prompt (the app icon's green ">", packaging/make-icon.py),
+    // heavier than the set so it holds at 14 pt; the top bar draws it on the
+    // icon's dark tile with the blue cursor beside it (topbar.luau).
+    LOGO_PROMPT "logo-prompt" r#"<polyline points="4.5,3.5 9,8 4.5,12.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"#;
     // A keyword pill: a rounded label with a dot (keyword pills, emphasis.rs).
     TAG "tag" concat!(st!("rect", r#"x="1.75" y="4.75" width="12.5" height="6.5" rx="3.25""#), st!("line", r#"x1="5.5" y1="8" x2="10.5" y2="8""#));
 }

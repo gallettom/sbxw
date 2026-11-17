@@ -777,7 +777,8 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
 `coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
-`shield`, `prompt`, `ask`, `jarvis`, `tag`.
+`shield`, `prompt`, `ask`, `jarvis`, `tag`, `logo-prompt` (the sbxw mark's
+">", for the top bar's logo).
 
 One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
 

@@ -6,7 +6,7 @@
 #   rail-<size>-network.png    Network opened from the rail
 #   rail-<size>-jarvis.png     Jarvis opened from the rail
 #   rail-<size>-nosidebar.png  the sidebar hidden (Cmd/Ctrl+B): the rail stays
-#   rail-<size>-fullscreen.png no window buttons (full screen): "sbxw" lines up with the sidebar's content
+#   rail-<size>-fullscreen.png no window buttons (full screen): the sbxw mark lines up with the sidebar's content
 # for <size> 1284x816 and 720x480. MARKS="<name> ..." runs some.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"

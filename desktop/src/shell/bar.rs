@@ -283,7 +283,7 @@ pub fn more_tone(hidden: &[Item]) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 // The top bar (screens/topbar.luau draws it; the core says what fits).
 
-/// Under this width the top bar goes compact: no "sbxw" title.
+/// Under this width the top bar goes compact: no sbxw mark.
 pub const TOP_COMPACT: f32 = 720.0;
 /// Between the bar's groups (left, centre, right, and the spacers between them).
 pub const TOP_GAP: f32 = 16.0;
@@ -364,7 +364,8 @@ impl TopExtra {
 /// inline; the rest go into its menu. Exact: every part is measured the way
 /// the element draws it (tested against the laid out bar).
 pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
-    let left = |compact: bool| if compact { 0.0 } else { measure("sbxw", 14.0, 600.0) };
+    // The sbxw mark (topbar.luau, `app-mark`): 22 pt square.
+    let left = |compact: bool| if compact { 0.0 } else { 22.0 };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
     let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + jarvis.map_or(0.0, |j| button_w(j, true) + TOP_RIGHT_GAP) + state_w(state_word);
