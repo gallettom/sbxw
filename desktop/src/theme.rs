@@ -339,6 +339,16 @@ pub const PAIRS: &[(&str, &str, Need)] = &[
     ("red-text", "red-tint", Need::Text),
     ("purple", "surface", Need::Text),
     ("purple", "elevated", Need::Text),
+    // Colour by meaning on the controls' own grounds: a toned button's
+    // label on its frame (elevated) and its hover or focus tint; the
+    // compact row buttons' face; the network bubble's number on its fill.
+    ("purple", "purple-tint", Need::Mark),
+    ("green", "elevated", Need::Mark),
+    ("red", "elevated", Need::Mark),
+    ("blue", "elevated", Need::Mark),
+    ("purple", "elevated", Need::Mark),
+    ("bg", "blue", Need::Text),
+    ("bg", "amber", Need::Text),
     // The primary button's label, at rest and hovered.
     ("white", "green-deep", Need::Text),
     ("white", "primary-hover", Need::Text),

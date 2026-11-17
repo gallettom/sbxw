@@ -613,12 +613,38 @@ gives the `#rrggbb`.
 
 | Table | Names |
 |---|---|
-| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover` |
+| `theme.color` | `bg`, `surface`, `surface-alt`, `elevated`, `border`, `dim`, `text`, `text-bright`, `text-muted`, `text-soft`, `text-dim`, `blue`, `blue-tint`, `green`, `green-strong`, `green-deep`, `green-tint`, `red`, `red-border`, `red-tint`, `amber`, `amber-strong`, `amber-tint`, `purple`, `purple-strong`, `purple-alt`, `purple-tint`, `group-1` to `group-4`, `hover-subtle`, `active-bg`, `white`, `floor`, `pane-bar`, `focus`, `control-border`, `primary-hover`, `red-text` (red words on a group's tint) |
 | `theme.radius` | `xs` 6, `sm` 6, `md` 10, `lg` 12, `pill` 999 |
 | `theme.text` | `caption` 12, `body` 13, `title` 14, `heading` 16; older names `xxs`, `xs`, `sm` 12, `md` 13, `lg` 14, `xl` 16 |
 | `theme.space` | `xxs` 2, `xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24 |
 | `theme.line_height` | 1.4 (a multiple of the size) |
 | `theme.layout` | `top_bar_h` 44, `gutter` 8, `sidebar_w` 264 (`sidebar_min` 200, `sidebar_max` 420), `pane_bar_h` 32, `control_h` 28, `dense_h` 24, `traffic_lights_w` |
+
+### Colour by meaning
+
+Actions carry a colour by what they mean, the same everywhere, so a glance
+reads the window before the words do. Give a `button` (or a menu item) a
+`tone` and the core draws its icon (and a ghost or neutral button's label)
+in it, with its tint under the pointer and the keyboard focus.
+
+| Tone | Means | Examples |
+|---|---|---|
+| `green` | start, open, allow, confirm | Start, + (open in a new pane), Open shell, Allow, Add rule, Publish, New |
+| `red` | stop, remove, refuse, anything destructive | Stop, Remove, Refuse, Unpublish, Close thread |
+| `amber` | needs you | a request waiting, sbx holding something, a session that wants you |
+| `blue` | go to, informative | Network, Requests, Threads and plans, Project, Browser, the network count |
+| `purple` | Jarvis and the team | Jarvis, a lead |
+| `neutral` | everything else | Manage…, Setup, Help, Later, layout |
+
+- The words and the icon's shape always say it too: colour is never the
+  only signal.
+- **One filled button per view**: the `primary` (green, filled) is the one
+  thing a dialog is for (Create, Save, Send my answer, Approve). Everything
+  else is tinted, not filled: in the Network panel each card's Allow is a
+  green-toned button, not a filled one, so a list of ten requests is not ten
+  primaries.
+- Every coloured label or icon meets the contrast test on what it sits on
+  (its surface, its tint, a group's tint): `theme::tests`.
 
 **The rules the built-in screens follow** (write yours the same way):
 

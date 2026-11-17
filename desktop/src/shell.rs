@@ -1803,6 +1803,9 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
     let quiet = it.tone == "muted" || it.tone.is_empty();
     let (fg, tint) = crate::screen::tone(&it.tone);
     let fg = if quiet { theme::color_value("text").unwrap() } else { fg };
+    // A quiet chip's icon by meaning (docs/screens.md, "Colour by meaning"):
+    // what it goes to blue, the team purple, stopping red; its words stay text.
+    let icon_fg = if quiet { crate::screen::action_tone(bar::meaning(&it.id)).0 } else { fg };
     let mut b = row().key(it.key(n)).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).min_w(layout::DENSE_H).justify_center().items_center().radius(theme::radius("xs").unwrap());
     if !quiet {
         b = b.fill(theme::hex(tint));
@@ -1811,7 +1814,7 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
         b = b.help(it.help.clone());
     }
     if let Some(ic) = it.icon.as_deref().and_then(crate::icons::get) {
-        b = b.child(rune::icon(ic, bar::CHIP_ICON).color(theme::hex(fg)));
+        b = b.child(rune::icon(ic, bar::CHIP_ICON).color(theme::hex(icon_fg)));
     }
     let label = it.text();
     if !label.is_empty() {

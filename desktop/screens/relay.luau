@@ -289,7 +289,7 @@ local function ask_card(a)
   if not a.answerable or #(a.steps or {}) == 0 then
     local first = (a.steps or {})[1]
     kids[#kids + 1] = text{ (first and first.text) or a.activity or "Claude is waiting for you.", wrap = true, size = "sm" }
-    kids[#kids + 1] = row{ w = "full", spacer{}, button{ "Answer in its terminal", icon = "terminal", on = "terminal", arg = { sandbox = a.sandbox, thread = a.thread }, key = base .. "-terminal" } }
+    kids[#kids + 1] = row{ w = "full", spacer{}, button{ "Answer in its terminal", icon = "terminal", tone = "green", on = "terminal", arg = { sandbox = a.sandbox, thread = a.thread }, key = base .. "-terminal" } }
     return column(kids)
   end
   for si, step in ipairs(a.steps) do
