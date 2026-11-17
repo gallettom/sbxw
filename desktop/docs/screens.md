@@ -69,8 +69,9 @@ unchanged.
 | `connection.text` | One readable line: where it is connected, or why not (`No sbxw daemon at 127.0.0.1:7681. Start it with \`sbxw up\`; retrying.`) |
 | `selected` | The selected sandbox's name, or nil |
 | `focused` | The focused pane's number, from 1 |
-| `layout.panes`, `layout.split` | 1 to 4; `columns` or `rows` |
-| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
+| `layout.panes`, `layout.split` | How many panes are open, on every page; `columns`, or `rows` when the current page's first split is stacked |
+| `pages` | The pages of terminals: `current` (from 1), `count`, `per` (terminals per page, 1 to 6), `view` (`tabs` when `per` is 1, else `grid`), `panes` (each page's pane numbers, in reading order) |
+| `panes` | One entry per pane, page by page (a pane on another page is open, not shown): `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
 | `overrides` | Screens running an override file, by name: `path`, `stale` (made for an older built-in; see "Where screens live") |
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
@@ -544,7 +545,22 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
-| `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | How many panes show, and how two split |
+| `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
+| `page_show` | `page` (from 1, required) | Shows that page of terminals |
+| `page_step` | `back` (bool) | Shows the next page (`back`: the previous one), round |
+| `page_new` | none | Adds an empty page at the end and shows it |
+| `page_close` | `page` (from 1; none: the current one) | Closes the page: its panes' views close, the sessions go on; the only page is emptied instead |
+| `pages_per` | `per` (1 to 6, required) | Terminals per page (1 is the tabbed view). Lowering it moves the overflowing terminals onto the following pages, in order; raising it moves nothing |
+| `pages_view` | `view` (`tabs` or `grid`, required) | Tabs: one terminal per page; grid: the last count above one |
+| `pages_gather` | none | Puts the open terminals back on as few pages as the count allows, in order; empty panes go |
+| `pane_move` | `pane` (from 1; none: the focused one), `to` (`left`, `right`, `up`, `down`, required) | The pane trades places with its neighbour on that side, or, at the page's edge, docks along that whole side |
+| `pane_rotate` | `pane` (as above) | The pane and its sibling switch between side by side and stacked (portrait and landscape) |
+| `pane_to_page` | `pane` (as above), `page` (from 1; none: a new page) | Moves the pane to that page, which then shows; refused when the page is full |
+| `panes_equalise` | none | The current page's splits share their room equally |
+
+These rearrange views only: nothing is started, stopped or created, and a
+terminal keeps its socket, history and size owner wherever its pane goes
+(it fits once to its new place).
 | `copy_text` | `text` (string, up to 100 KB) | Puts it on the clipboard; a notice says how much |
 | `close_panes` | `sandbox` (string), `thread` (string; none: the sandbox's own session) | Empties the panes showing that session, terminals closed; with several panes shown, such a pane goes and the layout shrinks (after a thread is closed) |
 | `toggle_jarvis_panel` | `open` (bool; none: toggles) | Opens or closes the Jarvis panel docked on the right; it narrows the terminals |

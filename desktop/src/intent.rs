@@ -90,6 +90,47 @@ pub enum Intent {
     ClosePanel { screen: Option<String> },
     /// One of a feature's own intents (`src/feat/`), checked against its row.
     Feature(crate::feat::Asked),
+    /// Pages of terminals and where panes sit (shell/pages.rs, tiling.rs).
+    /// Views only: nothing starts, stops or is created; a terminal keeps its
+    /// socket wherever its pane goes.
+    Pages(PageOp),
+}
+
+/// What a page or pane intent rearranges. Pages and panes are counted from
+/// 0 here (the intents' arguments from 1); `pane: None` is the focused pane.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PageOp {
+    Show(usize),
+    /// The next page (`1`) or the previous one (`-1`), round.
+    Step(i32),
+    New,
+    Close(Option<usize>),
+    Per(usize),
+    /// `true`: tabs (one per page); `false`: grid (the last count above one).
+    View(bool),
+    Gather,
+    Move { pane: Option<usize>, to: String },
+    Rotate(Option<usize>),
+    ToPage { pane: Option<usize>, page: Option<usize> },
+    Equalise,
+}
+
+impl PageOp {
+    pub fn name(&self) -> &'static str {
+        match self {
+            PageOp::Show(_) => "page_show",
+            PageOp::Step(_) => "page_step",
+            PageOp::New => "page_new",
+            PageOp::Close(_) => "page_close",
+            PageOp::Per(_) => "pages_per",
+            PageOp::View(_) => "pages_view",
+            PageOp::Gather => "pages_gather",
+            PageOp::Move { .. } => "pane_move",
+            PageOp::Rotate(_) => "pane_rotate",
+            PageOp::ToPage { .. } => "pane_to_page",
+            PageOp::Equalise => "panes_equalise",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,6 +237,22 @@ pub const REGISTRY: &[Spec] = &[
         args: &[("panes", Arg::Int(1, 4), false), ("split", Arg::OneOf(&["columns", "rows"]), false)],
         doc: "Sets how many terminal panes show (1 to 4) and whether two split side by side or stacked.",
     },
+    Spec { name: "page_show", risk: Risk::Direct, args: &[("page", Arg::Int(1, 99), true)], doc: "Shows that page of terminals (from 1)." },
+    Spec { name: "page_step", risk: Risk::Direct, args: &[("back", Arg::Bool, false)], doc: "Shows the next page of terminals (`back`: the previous one), round." },
+    Spec { name: "page_new", risk: Risk::Direct, args: &[], doc: "Adds an empty page of terminals at the end and shows it." },
+    Spec { name: "page_close", risk: Risk::Direct, args: &[("page", Arg::Int(1, 99), false)], doc: "Closes a page (none: the current one): its panes' views close, the sessions go on. The only page is emptied instead." },
+    Spec { name: "pages_per", risk: Risk::Direct, args: &[("per", Arg::Int(1, 6), true)], doc: "Sets how many terminals a page holds (1 is the tabbed view). Lowering it moves the overflowing terminals onto the following pages, in order; raising it moves nothing." },
+    Spec { name: "pages_view", risk: Risk::Direct, args: &[("view", Arg::OneOf(&["tabs", "grid"]), true)], doc: "Tabs: one terminal per page. Grid: the last count per page above one." },
+    Spec { name: "pages_gather", risk: Risk::Direct, args: &[], doc: "Puts the open terminals back on as few pages as the count per page allows, in order; empty panes go." },
+    Spec {
+        name: "pane_move",
+        risk: Risk::Direct,
+        args: &[("pane", Arg::Int(1, 99), false), ("to", Arg::OneOf(&["left", "right", "up", "down"]), true)],
+        doc: "Moves a pane (none: the focused one) on its page: it trades places with the pane on that side, or, at the edge, docks along that whole side.",
+    },
+    Spec { name: "pane_rotate", risk: Risk::Direct, args: &[("pane", Arg::Int(1, 99), false)], doc: "The pane (none: the focused one) and its sibling switch between side by side and stacked: portrait to landscape and back." },
+    Spec { name: "pane_to_page", risk: Risk::Direct, args: &[("pane", Arg::Int(1, 99), false), ("page", Arg::Int(1, 99), false)], doc: "Moves a pane (none: the focused one) to that page (none: a new page), which then shows; refused when that page is full." },
+    Spec { name: "panes_equalise", risk: Risk::Direct, args: &[], doc: "Gives every pane of the current page an equal share along its splits." },
     Spec { name: "start_jarvis", risk: Risk::Direct, args: &[], doc: "Creates Jarvis's sandbox (the first time) or starts it, and opens its session (`POST /api/jarvis/start`)." },
     Spec {
         name: "send_to_jarvis",
@@ -257,6 +314,7 @@ impl Intent {
             Intent::OpenPanel { .. } => "open_panel",
             Intent::ClosePanel { .. } => "close_panel",
             Intent::Feature(a) => a.name,
+            Intent::Pages(op) => op.name(),
         }
     }
 
@@ -362,6 +420,22 @@ fn parse_one(o: &Map<String, Value>) -> Result<Intent, String> {
         "close_modal" => Intent::CloseModal,
         "open_panel" => Intent::OpenPanel { screen: s("screen").unwrap() },
         "close_panel" => Intent::ClosePanel { screen: s("screen") },
+        "page_show" | "page_step" | "page_new" | "page_close" | "pages_per" | "pages_view" | "pages_gather" | "pane_move" | "pane_rotate" | "pane_to_page" | "panes_equalise" => {
+            let n = |k: &str| m.get(k).and_then(Value::as_u64).map(|v| v as usize - 1);
+            Intent::Pages(match name {
+                "page_show" => PageOp::Show(n("page").unwrap()),
+                "page_step" => PageOp::Step(if m.get("back").and_then(Value::as_bool) == Some(true) { -1 } else { 1 }),
+                "page_new" => PageOp::New,
+                "page_close" => PageOp::Close(n("page")),
+                "pages_per" => PageOp::Per(n("per").unwrap() + 1),
+                "pages_view" => PageOp::View(s("view").as_deref() == Some("tabs")),
+                "pages_gather" => PageOp::Gather,
+                "pane_move" => PageOp::Move { pane: n("pane"), to: s("to").unwrap() },
+                "pane_rotate" => PageOp::Rotate(n("pane")),
+                "pane_to_page" => PageOp::ToPage { pane: n("pane"), page: n("page") },
+                _ => PageOp::Equalise,
+            })
+        }
         _ if crate::feat::intent(name).is_some() => Intent::Feature(crate::feat::Asked { name: spec.name, args: m.clone() }),
         _ => unreachable!("{name} is registered but not built"),
     })
@@ -423,6 +497,11 @@ mod tests {
         assert_eq!(parse(&i("approve_proposal", json!({ "id": "p1" }))).unwrap()[0].risk(), Risk::Approval("Approve a Jarvis proposal"));
         assert_eq!(parse(&i("select", json!([]))).unwrap(), vec![Intent::Select { sandbox: None }]);
         assert_eq!(parse(&Value::Null).unwrap(), vec![]);
+        assert_eq!(parse(&i("page_show", json!({ "page": 2 }))).unwrap(), vec![Intent::Pages(PageOp::Show(1))]);
+        assert_eq!(parse(&i("pages_per", json!({ "per": 1 }))).unwrap(), vec![Intent::Pages(PageOp::Per(1))]);
+        assert_eq!(parse(&i("pane_to_page", json!({}))).unwrap(), vec![Intent::Pages(PageOp::ToPage { pane: None, page: None })]);
+        assert_eq!(parse(&i("pane_move", json!({ "pane": 3, "to": "up" }))).unwrap(), vec![Intent::Pages(PageOp::Move { pane: Some(2), to: "up".into() })]);
+        assert_eq!(parse(&i("page_step", json!({ "back": true }))).unwrap()[0].risk(), Risk::Direct);
     }
 
     #[test]
@@ -433,6 +512,8 @@ mod tests {
             (i("stop_sandbox", json!({ "sandbox": 3 })), "must be a non-empty string"),
             (i("stop_sandbox", json!({ "sandbox": "a", "force": true })), "unknown argument 'force'"),
             (i("set_layout", json!({ "panes": 9 })), "from 1 to 4"),
+            (i("pages_per", json!({ "per": 7 })), "from 1 to 6"),
+            (i("pane_move", json!({ "to": "away" })), "must be one of left, right, up, down"),
             (i("open_terminal", json!({ "sandbox": "a", "mode": "root" })), "must be one of agent, bash, kit-add"),
             (json!([i("select", json!({})), { "name": "stop_sandbox" }]), "item 2"),
             (json!("stop everything"), "must return nil"),

@@ -195,13 +195,11 @@ pub fn more_tone(hidden: &[Item]) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 // The top bar (screens/topbar.luau draws it; the core says what fits).
 
-/// Under this width the top bar's own parts go compact: no "sbxw" title, the
-/// layout switch as an icon menu.
+/// Under this width the top bar goes compact: no "sbxw" title.
 pub const TOP_COMPACT: f32 = 720.0;
 /// Between the bar's groups (left, centre, right, and the spacers between them).
 pub const TOP_GAP: f32 = 16.0;
-/// Inside the left group (title, layout switch), the centre's, the right's.
-pub const TOP_LEFT_GAP: f32 = 12.0;
+/// Inside the centre group and the right one.
 pub const TOP_CENTRE_GAP: f32 = 8.0;
 pub const TOP_RIGHT_GAP: f32 = 4.0;
 
@@ -272,16 +270,16 @@ impl TopExtra {
 }
 
 /// How the top bar is drawn at `width` (the screen's own column), as
-/// topbar.luau lays it out: `[sbxw, layout] · [centre extras] · [tools,
-/// …, Jarvis, state]`. Compact or not, and how many of `extras` (in
-/// priority order) show inline; the rest go into its menu. Exact: every
-/// part is measured the way the element draws it (tested against the laid
-/// out bar).
-pub fn top_fit(width: f32, jarvis_label: &str, layout_label: &str, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
-    let left = |compact: bool| if compact { menu_w("", true, false) } else { measure("sbxw", 14.0, 600.0) + TOP_LEFT_GAP + menu_w(layout_label, false, true) };
+/// topbar.luau lays it out: `[sbxw] · [centre extras] · [tools, …,
+/// Jarvis, state]` (`jarvis`: its button's label, when the bar draws it).
+/// Compact or not, and how many of `extras` (in priority order) show
+/// inline; the rest go into its menu. Exact: every part is measured the way
+/// the element draws it (tested against the laid out bar).
+pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
+    let left = |compact: bool| if compact { 0.0 } else { measure("sbxw", 14.0, 600.0) };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
-    let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + button_w(jarvis_label, true) + TOP_RIGHT_GAP + state_w(state_word);
+    let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + jarvis.map_or(0.0, |j| button_w(j, true) + TOP_RIGHT_GAP) + state_w(state_word);
     let need = |compact: bool, k: usize| -> f32 {
         let shown = &extras[..k];
         let mut w = fixed(compact);
@@ -457,11 +455,11 @@ mod tests {
     fn the_top_bar_goes_compact_then_overflows() {
         let x = |l: &str, tool: bool| TopExtra { label: l.into(), icon: true, button: true, tool, drawn_w: None };
         let extras = vec![x("New", false), x("sbx asks 88", false), x("Plan waiting", false), x("", true), x("", true), x("Mac", true), x("Requests 3", false)];
-        let (c, k) = top_fit(1300.0, "Jarvis", "2 side by side", "connected", &extras);
+        let (c, k) = top_fit(1300.0, Some("Jarvis"), "connected", &extras);
         assert!(!c && k == extras.len(), "wide: all inline ({c}, {k})");
-        let (c, k) = top_fit(700.0, "Jarvis", "2 side by side", "connected", &extras);
+        let (c, k) = top_fit(700.0, Some("Jarvis"), "connected", &extras);
         assert!(c && k < extras.len(), "narrow: compact and an overflow ({c}, {k})");
-        let (c, k) = top_fit(330.0, "Jarvis · 2 to review", "2 side by side", "connected", &extras);
+        let (c, k) = top_fit(330.0, Some("Jarvis · 2 to review"), "connected", &extras);
         assert!(c && k == 0, "the smallest window with a notice: everything in the menu ({c}, {k})");
     }
 }

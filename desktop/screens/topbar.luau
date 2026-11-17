@@ -1,5 +1,6 @@
 -- The top bar, in three groups with room between them:
---   left    the app's name and how many terminals show;
+--   left    the app's name (the pages of terminals have their own pager,
+--           above the panes, drawn by the core);
 --   centre  New, then what needs you (sbx's requests, agents' requests, a
 --           plan waiting): quiet until something waits, then amber;
 --   right   usage, Setup, Help, the Mac, Jarvis, then the daemon's state.
@@ -7,19 +8,6 @@
 -- bar (data.app.topbar) and marks the extras that do not fit `more`: they
 -- go into one menu, "…" and how many, with a dot in the tone of the most
 -- urgent thing it holds.
-
-local layouts = {
-  { id = "1", label = "1 terminal", icon = "single" },
-  { id = "2c", label = "2 side by side", icon = "columns" },
-  { id = "2r", label = "2 stacked", icon = "rows" },
-  { id = "3", label = "3 terminals", icon = "grid" },
-  { id = "4", label = "4 terminals", icon = "grid" },
-}
-
-local function current(layout)
-  if layout.panes == 2 then return layout.split == "rows" and "2r" or "2c" end
-  return tostring(layout.panes)
-end
 
 local tones = { up = "green", connecting = "amber", down = "red" }
 local words = { up = "connected", connecting = "connecting", down = "offline" }
@@ -121,8 +109,7 @@ return {
     local j = data.jarvis or { open = false, pending = {}, voice = {} }
     local n = #j.pending
     local mac = app.platform == "macos"
-    -- How the bar fits its width (the core measures it): compact drops the
-    -- name and draws the layout switch as an icon menu.
+    -- How the bar fits its width (the core measures it): compact drops the name.
     local fit = app.topbar or {}
     local compact = fit.compact == true
     local centre, right, hidden = { gap = 8 }, { gap = 4 }, {}
@@ -142,14 +129,6 @@ return {
     right = { gap = 4 }
     for _, e in ipairs(tl) do table.insert(right, extra(e, mac, data)) end
     if #hidden > 0 then table.insert(right, more_menu(hidden)) end
-    local switch
-    if compact then
-      local icon = "single"
-      for _, l in ipairs(layouts) do if l.id == current(app.layout) then icon = l.icon end end
-      switch = menu{ id = "layout", icon = icon, items = layouts, on = "layout", variant = "ghost", help = "How many terminals show" }
-    else
-      switch = select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" }
-    end
     local state = app.connection.state
     table.insert(right, button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
       key = "jarvis-toggle", on = "jarvis", variant = "neutral", tone = "purple",
@@ -167,7 +146,6 @@ return {
     return row{ gap = 16, w = "full", h = "full",
       row{ gap = 12,
         (not compact) and text{ "sbxw", weight = "semibold", size = "title", color = "text-bright" } or false,
-        switch,
       },
       spacer{},
       row(centre),
@@ -177,10 +155,6 @@ return {
   end,
 
   actions = {
-    layout = function(_, _, id)
-      local panes = tonumber(string.sub(id, 1, 1))
-      return intent("set_layout", { panes = panes, split = string.sub(id, 2, 2) == "r" and "rows" or "columns" })
-    end,
     jarvis = function() return intent("toggle_jarvis_panel") end,
     extra = function(_, id)
       local i = extra_intents[id]
