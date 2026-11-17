@@ -14,6 +14,7 @@ mod jarvis;
 mod pager;
 pub mod pages;
 mod palette;
+mod rail;
 pub mod statusbar;
 pub mod store;
 pub mod tiling;
@@ -596,8 +597,6 @@ impl App {
     /// not fit, by priority, get `more = true` in `data.app.extras.topbar`.
     fn top_layout(&self, data: &mut J) -> J {
         let w = if self.top_w > 0.0 { self.top_w } else { self.window.0 - 140.0 };
-        let pending = data["jarvis"]["pending"].as_array().map_or(0, Vec::len);
-        let jarvis = if pending > 0 { format!("Jarvis · {pending} to review") } else { "Jarvis".into() };
         // The usage chip with its bars, as wide as drawn (none: no usage).
         let bars_w = bar::usage_bars_w(&data["usage"]);
         let Some(list) = data["app"]["extras"]["topbar"].as_array_mut() else {
@@ -610,8 +609,12 @@ impl App {
             if e["id"] == "create" && in_sidebar {
                 e["in_sidebar"] = J::Bool(true);
             }
+            // Requests, Network and Setup are the left rail's (rail.rs).
+            if e["id"].as_str().is_some_and(|id| rail::IN_RAIL.contains(&id)) {
+                e["in_rail"] = J::Bool(true);
+            }
         }
-        let mut order: Vec<usize> = (0..list.len()).filter(|&i| list[i]["in_sidebar"] != true).collect();
+        let mut order: Vec<usize> = (0..list.len()).filter(|&i| list[i]["in_sidebar"] != true && list[i]["in_rail"] != true).collect();
         let rank = |e: &J| bar::rank(e["tone"].as_str().unwrap_or(""), e["count"].as_u64());
         order.sort_by_key(|&i| rank(&list[i]));
         let label = |e: &J| {
@@ -642,8 +645,8 @@ impl App {
         // The bars only where they cost nothing else: the same parts inline
         // as with the words alone, and the bar not compact (they go before
         // the title and the layout's words do).
-        let plain = bar::top_fit(w, Some(&jarvis), word, &measured);
-        let barred = bar::top_fit(w, Some(&jarvis), word, &with_bars(&measured));
+        let plain = bar::top_fit(w, None, word, &measured);
+        let barred = bar::top_fit(w, None, word, &with_bars(&measured));
         let usage_shown = order.iter().take(plain.1).any(|&i| list[i]["id"] == "usage");
         let usage_bars = bars_w.is_some() && usage_shown && barred == plain && !plain.0;
         let (compact, k) = plain;
@@ -1107,7 +1110,7 @@ impl App {
     /// `wait:` marks): a screen's last render (keys and input ids), the
     /// core's dialog and its parts, pane bars and their extras, terminals.
     fn drawn(&self, key: &str) -> bool {
-        if self.pager_drawn(key) {
+        if self.pager_drawn(key) || self.rail_drawn(key) {
             return true;
         }
         // A docked feature panel's close button (`panel-close-<screen>`).
@@ -1762,12 +1765,13 @@ fn tile(e: El) -> El {
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
 /// The room the top bar keeps at its left for the window buttons: up to 12
 /// pt clear after the zoom button (`inset` is from the window's edge, the
-/// bar starts a gutter in); none of them, the sidebar's content x.
+/// bar starts a gutter in); none of them (full screen), the sidebar's
+/// content x, right of the left rail.
 pub fn lights_room(inset: f32) -> f32 {
     if inset > 0.0 {
         inset - layout::GUTTER + 12.0
     } else {
-        layout::SIDEBAR_PAD
+        rail::W + layout::GUTTER + layout::SIDEBAR_PAD
     }
 }
 
@@ -1953,7 +1957,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             s.push_data();
         });
     let sidebar = tile(col().key("sidebar").w(s.sidebar_w()).h_full().min_h(0.0).padding(layout::SIDEBAR_PAD)).child(side_el).child(edge);
-    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER);
+    // The left rail, always there (Cmd/Ctrl+B hides only the sidebar).
+    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(rail::view(s));
     if s.sidebar_shown() {
         main = main.child(sidebar);
     }
@@ -2201,11 +2206,7 @@ impl App {
 
     /// What the window keeps at the left of the panes: the sidebar when shown.
     pub fn left_w(&self) -> f32 {
-        if self.sidebar_shown() {
-            self.sidebar_w() + layout::GUTTER
-        } else {
-            0.0
-        }
+        rail::W + layout::GUTTER + if self.sidebar_shown() { self.sidebar_w() + layout::GUTTER } else { 0.0 }
     }
 
     /// A divider between two parts of the page is dragged: its split's ratio
@@ -2590,7 +2591,7 @@ fn pane_view(s: &App, i: usize) -> El {
     let connected = pane.is_some_and(|p| p.status() == "connected");
     let (dot_tone, dot_word) = if pane.is_some_and(|p| p.attention) { ("amber", "wants you") } else if connected { ("blue", "connected") } else { ("text-muted", "not connected") };
     let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
-    // dot | name, kind, extras…, "…" | close. The middle part is clipped and
+    // grip, dot | name, kind, extras… | "⋯" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
     let bar = row()
         .key(format!("pane-{}-bar", i + 1))
@@ -2625,9 +2626,13 @@ fn pane_view(s: &App, i: usize) -> El {
         for it in &f.shown {
             mid = mid.child(bar_chip(it, i + 1));
         }
-        mid = mid.child(bar_more(f, i, s.bar_menu == Some(i)));
     }
     bar = bar.child(mid);
+    // The "⋯" menu sits outside the clipped middle, beside the close
+    // button: a narrow pane's name shrinks, never the menu.
+    if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
+        bar = bar.child(bar_more(f, i, s.bar_menu == Some(i)));
+    }
     if pane.is_some_and(|p| p.sandbox.is_some()) {
         bar = bar.child(
             el().key(format!("pane-{}-close", i + 1))
@@ -3220,7 +3225,7 @@ mod tests {
             let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
             let list = data["app"]["extras"]["topbar"].as_array().unwrap().clone();
             let (bar_r, _) = rt.presented("top-bar").unwrap();
-            for e in list.iter().filter(|e| e["more"] != true && e["in_sidebar"] != true) {
+            for e in list.iter().filter(|e| e["more"] != true && e["in_sidebar"] != true && e["in_rail"] != true) {
                 let id = e["id"].as_str().unwrap();
                 let (r, _) = rt.presented(&format!("extra-topbar-{id}")).unwrap_or_else(|| panic!("{w}: {id} inline but not drawn"));
                 let label = match e["count"].as_u64() {
@@ -3233,7 +3238,7 @@ mod tests {
                 assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {} (bars {})", r[2], x.width(), bars);
                 assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {id} {r:?} past the bar {bar_r:?}");
             }
-            for key in ["jarvis-toggle", "daemon-state"] {
+            for key in ["daemon-state"] {
                 let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key}"));
                 assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {key} {r:?} past the bar");
             }
@@ -3252,7 +3257,7 @@ mod tests {
     fn the_usage_bars_go_first_and_the_words_stay() {
         let mut seen = vec![];
         // Under 720: what the app's zoom gives.
-        for w in (440..=1800).rev().step_by(40) {
+        for w in (280..=1800).rev().step_by(40) {
             let mut rt = runtime("shell/usage-a.json", w as f32, 816.0);
             rt.update(|s, _| {
                 s.notice = None;

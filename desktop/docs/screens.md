@@ -609,8 +609,10 @@ core's: a terminal with the focus does not receive them.
 The core owns the app's chords (`src/shell/palette.rs`), and screens never
 see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
 and feature shortcut, the core's actions; a pick runs the same intents your
-buttons run, through the same checks), Cmd/Ctrl+B the sidebar, Cmd/Ctrl+1 to
-9 a pane, Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
+buttons run, through the same checks), Cmd/Ctrl+B the sidebar (the left
+rail stays), Cmd/Ctrl+1 to 9 a pane of the current page, Ctrl+Tab and
+Ctrl+Shift+Tab the next and previous page (also Cmd+Option+Right/Left on
+macOS; in a terminal Ctrl+Tab was a plain Tab, so nothing is lost), Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
 app (in a terminal: its text), Escape closes the top-most menu, palette,
 dialog or modal. While a terminal's grid has the keyboard only Cmd chords
 (macOS) or Ctrl+Shift chords (elsewhere) are the app's. `data.app.shortcuts`
@@ -741,6 +743,8 @@ back. The folder is `~/.sbxw/desktop/screens/`, or `$SBXW_DESKTOP_SCREENS`.
 Screens: `topbar` (the bar at the top, right of macOS's window buttons),
 `sandboxes` (the side panel) and `jarvis` (the panel docked on the right,
 shown while `data.jarvis.open`). The terminals, their pane bars, the
+pager above them (pages of terminals: `src/shell/pager.rs`), the left rail
+(Grid and Tabs, Requests, Network, Jarvis, Setup: `src/shell/rail.rs`), the
 panel's resize handle, the status bar at the window's foot (bring-ups,
 total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
 approval dialog are drawn by the core.
@@ -891,10 +895,11 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 `modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown, split}`: `split` when the person shows the open panels side by side, each in its own column, with the switch at the right of the tabs),
 `extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
 label, icon, tone, help, count, intent = {name, args}}`; a top bar extra that
-does not fit has `more = true`), `topbar` (how the top bar fits: `w`, its
+does not fit has `more = true`; one the core draws elsewhere has `in_sidebar`
+(New, in the sidebar's header) or `in_rail` (Requests, Network, Setup, in the
+left rail): the top bar skips those, and the core does not draw them for it), `topbar` (how the top bar fits: `w`, its
 column's width in points; `compact`, under 720 pt or when its parts do not
-fit: no title, the layout switch as an icon menu; `more`, how many extras go
-into its menu), and `errors`: by
+fit: no title; `more`, how many extras go into its menu), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
 the key keeps its last good value meanwhile. For a plain key the reason is a
 string; for a per-sandbox key (`{sandbox}` in its path) it is an object by

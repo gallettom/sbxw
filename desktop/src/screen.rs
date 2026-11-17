@@ -761,6 +761,11 @@ impl ScreenState {
         match self.name.as_str() {
             "topbar" => {
                 for e in x["topbar"].as_array().into_iter().flatten() {
+                    // Drawn elsewhere by the core's own rule: New in the
+                    // sidebar's header, Requests/Network/Setup in the left rail.
+                    if e["in_sidebar"] == true || e["in_rail"] == true {
+                        continue;
+                    }
                     if !keys.contains(format!("extra-topbar-{}", e["id"].as_str().unwrap_or("")).as_str()) {
                         out.push((String::new(), e.clone()));
                     }

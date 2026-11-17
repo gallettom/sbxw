@@ -68,7 +68,7 @@ def typ(key, text):
     global t
     add(type="tap", key=key)
     add(type="type", every=0.01, text=text); t += 0.01 * len(text)
-add(type="tap", key=os.environ.get("GEAR", "extra-topbar-setup"))
+add(type="tap", key=os.environ.get("GEAR", "rail-setup"))
 mark("opened", 400)
 add(type="tap", key="github-set")
 mark("token-dialog", 300)

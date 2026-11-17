@@ -18,7 +18,7 @@ use super::pages::PER_CHOICES;
 use super::*;
 
 /// The strip's height.
-pub const H: f32 = 28.0;
+pub const H: f32 = layout::PAGER_H;
 const TAB_PX: f32 = 8.0;
 const TAB_GAP: f32 = 6.0;
 const TAB_TEXT: f32 = 12.0;
