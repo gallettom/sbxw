@@ -69,8 +69,9 @@ unchanged.
 | `connection.text` | One readable line: where it is connected, or why not (`No sbxw daemon at 127.0.0.1:7681. Start it with \`sbxw up\`; retrying.`) |
 | `selected` | The selected sandbox's name, or nil |
 | `focused` | The focused pane's number, from 1 |
-| `layout.panes`, `layout.split` | 1 to 4; `columns` or `rows` |
-| `panes` | One entry per shown pane: `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
+| `layout.panes`, `layout.split` | How many panes are open, on every page; `columns`, or `rows` when the current page's first split is stacked |
+| `pages` | The pages of terminals: `current` (from 1), `count`, `per` (terminals per page, 1 to 6), `view` (`tabs` when `per` is 1, else `grid`), `panes` (each page's pane numbers, in reading order) |
+| `panes` | One entry per pane, page by page (a pane on another page is open, not shown): `index` (from 1), `sandbox` (or nil), `mode` (`agent`, `bash`, `kit-add`), `thread` (the thread whose session it shows, or nil: the sandbox's own), `focused` (bool), `status` (`empty`, `connecting`, `connected`, `reconnecting`, `closed`, `error`) |
 | `overrides` | Screens running an override file, by name: `path`, `stale` (made for an older built-in; see "Where screens live") |
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
@@ -544,7 +545,22 @@ missing or mistyped one). The error shows in the screen's banner; nothing runs.
 | `start_sandbox` | `sandbox` (required), `pane` | Starts a stopped sandbox by opening its agent, as the web UI's Connect does |
 | `stop_sandbox` | `sandbox` (required) | Closes its terminals, shows it `stopping…`, asks the daemon to stop it; the list follows |
 | `select` | `sandbox` (string; none: nothing selected) | Sets `data.app.selected` |
-| `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | How many panes show, and how two split |
+| `set_layout` | `panes` (1 to 4, default 1), `split` (`columns` default, `rows`) | The old layout picker's: that many terminals per page, and the current page that many panes (empty ones added) in the old arrangement |
+| `page_show` | `page` (from 1, required) | Shows that page of terminals |
+| `page_step` | `back` (bool) | Shows the next page (`back`: the previous one), round |
+| `page_new` | none | Adds an empty page at the end and shows it |
+| `page_close` | `page` (from 1; none: the current one) | Closes the page: its panes' views close, the sessions go on; the only page is emptied instead |
+| `pages_per` | `per` (1 to 6, required) | Terminals per page (1 is the tabbed view). Lowering it moves the overflowing terminals onto the following pages, in order; raising it moves nothing |
+| `pages_view` | `view` (`tabs` or `grid`, required) | Tabs: one terminal per page; grid: the last count above one |
+| `pages_gather` | none | Puts the open terminals back on as few pages as the count allows, in order; empty panes go |
+| `pane_move` | `pane` (from 1; none: the focused one), `to` (`left`, `right`, `up`, `down`, required) | The pane trades places with its neighbour on that side, or, at the page's edge, docks along that whole side |
+| `pane_rotate` | `pane` (as above) | The pane and its sibling switch between side by side and stacked (portrait and landscape) |
+| `pane_to_page` | `pane` (as above), `page` (from 1; none: a new page) | Moves the pane to that page, which then shows; refused when the page is full |
+| `panes_equalise` | none | The current page's splits share their room equally |
+
+These rearrange views only: nothing is started, stopped or created, and a
+terminal keeps its socket, history and size owner wherever its pane goes
+(it fits once to its new place).
 | `copy_text` | `text` (string, up to 100 KB) | Puts it on the clipboard; a notice says how much |
 | `close_panes` | `sandbox` (string), `thread` (string; none: the sandbox's own session) | Empties the panes showing that session, terminals closed; with several panes shown, such a pane goes and the layout shrinks (after a thread is closed) |
 | `toggle_jarvis_panel` | `open` (bool; none: toggles) | Opens or closes the Jarvis panel docked on the right; it narrows the terminals |
@@ -593,8 +609,10 @@ core's: a terminal with the focus does not receive them.
 The core owns the app's chords (`src/shell/palette.rs`), and screens never
 see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
 and feature shortcut, the core's actions; a pick runs the same intents your
-buttons run, through the same checks), Cmd/Ctrl+B the sidebar, Cmd/Ctrl+1 to
-9 a pane, Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
+buttons run, through the same checks), Cmd/Ctrl+B the sidebar (the left
+rail stays), Cmd/Ctrl+1 to 9 a pane of the current page, Ctrl+Tab and
+Ctrl+Shift+Tab the next and previous page (also Cmd+Option+Right/Left on
+macOS; in a terminal Ctrl+Tab was a plain Tab, so nothing is lost), Cmd/Ctrl+Shift+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
 app (in a terminal: its text), Escape closes the top-most menu, palette,
 dialog or modal. While a terminal's grid has the keyboard only Cmd chords
 (macOS) or Ctrl+Shift chords (elsewhere) are the app's. `data.app.shortcuts`
@@ -725,6 +743,8 @@ back. The folder is `~/.sbxw/desktop/screens/`, or `$SBXW_DESKTOP_SCREENS`.
 Screens: `topbar` (the bar at the top, right of macOS's window buttons),
 `sandboxes` (the side panel) and `jarvis` (the panel docked on the right,
 shown while `data.jarvis.open`). The terminals, their pane bars, the
+pager above them (pages of terminals: `src/shell/pager.rs`), the left rail
+(Grid and Tabs, Requests, Network, Jarvis, Setup: `src/shell/rail.rs`), the
 panel's resize handle, the status bar at the window's foot (bring-ups,
 total CPU, the sessions' cost, Help: `src/shell/statusbar.rs`) and every
 approval dialog are drawn by the core.
@@ -875,10 +895,11 @@ so a screen cannot forge what is shown. A Direct intent may also answer a
 `modal` (`{screen, arg}` or nil), `panels` (`{open = {...}, shown, split}`: `split` when the person shows the open panels side by side, each in its own column, with the switch at the right of the tabs),
 `extras` (`topbar`, a list; `sandboxes` and `rows`, lists by sandbox name; each `{id,
 label, icon, tone, help, count, intent = {name, args}}`; a top bar extra that
-does not fit has `more = true`), `topbar` (how the top bar fits: `w`, its
+does not fit has `more = true`; one the core draws elsewhere has `in_sidebar`
+(New, in the sidebar's header) or `in_rail` (Requests, Network, Setup, in the
+left rail): the top bar skips those, and the core does not draw them for it), `topbar` (how the top bar fits: `w`, its
 column's width in points; `compact`, under 720 pt or when its parts do not
-fit: no title, the layout switch as an icon menu; `more`, how many extras go
-into its menu), and `errors`: by
+fit: no title; `more`, how many extras go into its menu), and `errors`: by
 data key, why its last read failed (the daemon's words), until a read works;
 the key keeps its last good value meanwhile. For a plain key the reason is a
 string; for a per-sandbox key (`{sandbox}` in its path) it is an object by

@@ -8,16 +8,25 @@
 //! per pane, each with a 32 pt bar over its terminal.
 
 mod bar;
+mod drag;
 mod features;
 mod jarvis;
+mod pager;
+pub mod pages;
 mod palette;
+mod rail;
 pub mod statusbar;
 pub mod store;
+pub mod tiling;
+#[cfg(test)]
+mod layout_tests;
 
 use crate::approval;
 use crate::client::{Daemon, FixtureDaemon, Link, LinkEvent, Sandbox, Target, TerminalRequest, TokenSource};
 use crate::fixture::{AppView, Connection, Fixture, LayoutView, PaneView};
-use crate::intent::{Intent, Mode, PaneTarget, Risk, Split, ThreadStart};
+use crate::intent::{Intent, Mode, PageOp, PaneTarget, Risk, Split, ThreadStart};
+use pages::{Pages, Placed};
+use tiling::{Side, Tile, Uid};
 use crate::screen::{self, Host, ScreenState};
 use crate::terminal::{self, TerminalEvent, TerminalState};
 use crate::theme::{self, c, layout};
@@ -86,11 +95,19 @@ pub struct Pane {
     /// least recently used pane is the one a new sandbox may replace when no
     /// pane is free and the layout is full.
     pub used: u64,
+    /// Its id for its whole life, whatever page or place it moves to
+    /// (pages.rs and tiling.rs hold these).
+    pub uid: Uid,
 }
 
 impl Pane {
-    fn empty() -> Pane {
-        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None, used: 0 }
+    fn empty(uid: Uid) -> Pane {
+        Pane { sandbox: None, mode: Mode::Agent, thread: None, term: None, error: None, title: None, attention: false, reconnecting: None, used: 0, uid }
+    }
+
+    /// Nothing open in it any more; it keeps its place.
+    fn clear(&mut self) {
+        *self = Pane::empty(self.uid);
     }
 
     fn status(&self) -> String {
@@ -172,11 +189,27 @@ pub struct App {
     /// The fixture's daemon data (keys of later waves), when there is one.
     raw: J,
     pub screens: Vec<ScreenState>,
+    /// Every pane, page by page, each page in reading order (`pages.all()`):
+    /// pane N (keys `pane-N`, `grid-N`) is `panes[N - 1]`.
     pub panes: Vec<Pane>,
     pub focused: usize,
-    pub layout: (usize, Split),
-    /// The pane area's splits: `(ratio, length)` by id.
-    pub splits: HashMap<String, (f32, f32)>,
+    /// The pages and each page's tiling (pages.rs).
+    pub pages: Pages,
+    /// The last pane id given.
+    next_uid: Uid,
+    /// Each split's length as laid out (points), by its path, for its divider.
+    split_len: HashMap<String, f32>,
+    /// Where the panes, the page area and the pager's tabs were laid out (drag.rs).
+    pub rects: Rects,
+    /// A pane being dragged by its bar.
+    pub drag: Option<PaneDrag>,
+    /// The pager's open menu: `per` or `more`.
+    pub pager_menu: Option<String>,
+    /// The pager's width as last laid out (0: not yet).
+    pager_w: f32,
+    /// The pages and panes of the last run, until the first list says what
+    /// can come back (only running sandboxes; see `restore_layout`).
+    restore: Option<J>,
     pub selected: Option<String>,
     /// A line at the bottom right: text, is an error, until.
     pub notice: Option<(String, bool, Instant)>,
@@ -212,8 +245,8 @@ pub struct App {
     use_seq: u64,
     /// The app's state across runs (store.rs).
     pub store: store::Store,
-    /// Each pane bar's width as last laid out (0: not yet), for what fits (bar.rs).
-    bar_w: [f32; MAX_PANES],
+    /// Each pane bar's width as last laid out, by pane id, for what fits (bar.rs).
+    bar_w: HashMap<Uid, f32>,
     /// The top bar screen's column width as last laid out (0: not yet).
     top_w: f32,
     /// The pane whose bar's overflow menu is open.
@@ -226,8 +259,25 @@ pub struct App {
     pub status: statusbar::Status,
 }
 
-/// The most panes the layout shows (the layout switch's largest choice).
-pub const MAX_PANES: usize = 4;
+/// Laid-out rects (window points) the drag and drop reads.
+#[derive(Default)]
+pub struct Rects {
+    pub panes: HashMap<Uid, tiling::Rect>,
+    pub area: Option<tiling::Rect>,
+    pub tabs: HashMap<usize, tiling::Rect>,
+    pub plus: Option<tiling::Rect>,
+}
+
+/// A pane being dragged by its bar: where the press was, where the pointer
+/// is, and the zone under it once it travelled past the threshold.
+#[derive(Clone, Debug)]
+pub struct PaneDrag {
+    pub uid: Uid,
+    pub start: [f32; 2],
+    pub at: [f32; 2],
+    pub active: bool,
+    pub zone: Option<drag::Zone>,
+}
 
 /// Whether the window takes pastes at its root (see `view`).
 pub fn window_paste() -> bool {
@@ -281,10 +331,16 @@ impl App {
             fixed_connection: false,
             raw,
             screens: vec![],
-            panes: vec![Pane::empty()],
+            panes: vec![Pane::empty(1)],
             focused: 0,
-            layout: (1, Split::Columns),
-            splits: HashMap::new(),
+            pages: Pages::new(1),
+            next_uid: 1,
+            split_len: HashMap::new(),
+            rects: Rects::default(),
+            drag: None,
+            pager_menu: None,
+            pager_w: 0.0,
+            restore: None,
             selected: init.selected.clone(),
             notice: None,
             approvals: vec![],
@@ -306,7 +362,7 @@ impl App {
             feats: features::Feats::default(),
             use_seq: 0,
             store: store::Store::open(),
-            bar_w: [0.0; MAX_PANES],
+            bar_w: HashMap::new(),
             top_w: 0.0,
             bar_menu: None,
             sidebar_live: None,
@@ -342,20 +398,28 @@ impl App {
             app.feats.panel = Some(p.clone());
         }
         app.feats.modal = init.modal.clone();
-        if let Some(n) = init.panes {
-            app.layout.0 = n.clamp(1, 4);
+        // A fixture's (the old fixed layout's) panes: one page, the same
+        // panes in the same arrangement; more than a page holds go on to
+        // the following pages.
+        let k = init.panes.unwrap_or(1).clamp(1, 12).max(init.open.len().min(12));
+        if k > 1 || !init.open.is_empty() {
+            app.panes.clear();
+            let ids: Vec<Uid> = (0..k).map(|_| app.fresh()).collect();
+            for (i, &id) in ids.iter().enumerate() {
+                let mut p = Pane::empty(id);
+                p.sandbox = init.open.get(i).cloned();
+                app.panes.push(p);
+            }
+            app.pages = Pages { list: vec![pages::Page::of(tiling::default(&ids, init.split.as_deref() == Some("rows")))], current: 0, per: 4, grid_per: 4 };
+            if k > 4 {
+                app.pages.set_per(4, &|_| false);
+                app.pages.current = 0;
+            }
+            app.sync_panes(ids.get(init.focused.unwrap_or(1).saturating_sub(1)).copied());
         }
-        if init.split.as_deref() == Some("rows") {
-            app.layout.1 = Split::Rows;
+        if a.fixture.is_none() && !headless() {
+            app.restore = Some(app.store.get("layout").clone()).filter(|v| !v.is_null());
         }
-        for (i, sb) in init.open.iter().enumerate().take(4) {
-            app.ensure_panes(i + 1);
-            app.panes[i].sandbox = Some(sb.clone());
-        }
-        if let Some(f) = init.focused {
-            app.focused = f.saturating_sub(1).min(3);
-        }
-        app.ensure_panes(app.layout.0);
         if let Target::Fixture(f) = &app.target {
             app.sandboxes = f.sandboxes().unwrap_or_default();
             app.connection = Connection { state: "up", text: f.describe() };
@@ -439,10 +503,10 @@ impl App {
         app
     }
 
-    fn ensure_panes(&mut self, n: usize) {
-        while self.panes.len() < n {
-            self.panes.push(Pane::empty());
-        }
+    /// A new pane id.
+    fn fresh(&mut self) -> Uid {
+        self.next_uid += 1;
+        self.next_uid
     }
 
     pub fn setup(&mut self, waker: Waker) {
@@ -476,11 +540,12 @@ impl App {
             connection: self.connection.clone(),
             selected: self.selected.clone(),
             focused: self.focused + 1,
-            layout: LayoutView { panes: self.layout.0, split: if self.layout.1 == Split::Rows { "rows" } else { "columns" } },
+            // Every page's panes count as shown (a terminal on another page
+            // is open: a row says "in pane N"); `pane` numbers are global.
+            layout: LayoutView { panes: self.panes.len(), split: if matches!(self.pages.cur().tile, Tile::Split { dir: tiling::Dir::Col, .. }) { "rows" } else { "columns" } },
             panes: self
                 .panes
                 .iter()
-                .take(self.layout.0)
                 .enumerate()
                 .map(|(i, p)| PaneView { index: i + 1, sandbox: p.sandbox.clone(), mode: p.mode.name(), thread: p.thread.clone(), focused: i == self.focused, status: p.status() })
                 .collect(),
@@ -509,6 +574,14 @@ impl App {
         // Distinct per group (theme::group_colors), the web UI's hue first.
         data["app"]["groups"] = self.group_colors().into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
+        // The pages of terminals: which shows, how many, per page, the view.
+        data["app"]["pages"] = serde_json::json!({
+            "current": self.pages.current + 1,
+            "count": self.pages.list.len(),
+            "per": self.pages.per,
+            "view": if self.pages.tabs() { "tabs" } else { "grid" },
+            "panes": self.pages.list.iter().map(|p| p.tile.order().iter().filter_map(|u| self.index_of(*u)).map(|i| i + 1).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        });
         // Every shortcut, for Help: `{keys, what}`.
         data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
         data["app"]["overrides"] = self.overrides_view();
@@ -520,13 +593,10 @@ impl App {
     }
 
     /// `data.app.topbar`: how the top bar fits its width (bar.rs): `w` (its
-    /// column, points), `compact` (no title, the layout switch as an icon
-    /// menu), `more` (how many extras go into its menu). The extras that do
+    /// column, points), `compact` (no title), `more` (how many extras go into its menu). The extras that do
     /// not fit, by priority, get `more = true` in `data.app.extras.topbar`.
     fn top_layout(&self, data: &mut J) -> J {
         let w = if self.top_w > 0.0 { self.top_w } else { self.window.0 - 140.0 };
-        let pending = data["jarvis"]["pending"].as_array().map_or(0, Vec::len);
-        let jarvis = if pending > 0 { format!("Jarvis · {pending} to review") } else { "Jarvis".into() };
         // The usage chip with its bars, as wide as drawn (none: no usage).
         let bars_w = bar::usage_bars_w(&data["usage"]);
         let Some(list) = data["app"]["extras"]["topbar"].as_array_mut() else {
@@ -539,8 +609,12 @@ impl App {
             if e["id"] == "create" && in_sidebar {
                 e["in_sidebar"] = J::Bool(true);
             }
+            // Requests, Network and Setup are the left rail's (rail.rs).
+            if e["id"].as_str().is_some_and(|id| rail::IN_RAIL.contains(&id)) {
+                e["in_rail"] = J::Bool(true);
+            }
         }
-        let mut order: Vec<usize> = (0..list.len()).filter(|&i| list[i]["in_sidebar"] != true).collect();
+        let mut order: Vec<usize> = (0..list.len()).filter(|&i| list[i]["in_sidebar"] != true && list[i]["in_rail"] != true).collect();
         let rank = |e: &J| bar::rank(e["tone"].as_str().unwrap_or(""), e["count"].as_u64());
         order.sort_by_key(|&i| rank(&list[i]));
         let label = |e: &J| {
@@ -562,14 +636,6 @@ impl App {
         let with_bars = |m: &[bar::TopExtra]| -> Vec<bar::TopExtra> {
             m.iter().zip(order.iter()).map(|(x, &i)| if list[i]["id"] == "usage" { bar::TopExtra { drawn_w: bars_w, ..x.clone() } } else { x.clone() }).collect()
         };
-        // The layout switch shows the current choice (topbar.luau's labels).
-        let layout = match (self.layout.0, self.layout.1) {
-            (1, _) => "1 terminal",
-            (2, Split::Rows) => "2 stacked",
-            (2, _) => "2 side by side",
-            (3, _) => "3 terminals",
-            _ => "4 terminals",
-        };
         let word = match self.connection.state {
             "up" => "connected",
             "connecting" => "connecting",
@@ -579,8 +645,8 @@ impl App {
         // The bars only where they cost nothing else: the same parts inline
         // as with the words alone, and the bar not compact (they go before
         // the title and the layout's words do).
-        let plain = bar::top_fit(w, &jarvis, layout, word, &measured);
-        let barred = bar::top_fit(w, &jarvis, layout, word, &with_bars(&measured));
+        let plain = bar::top_fit(w, None, word, &measured);
+        let barred = bar::top_fit(w, None, word, &with_bars(&measured));
         let usage_shown = order.iter().take(plain.1).any(|&i| list[i]["id"] == "usage");
         let usage_bars = bars_w.is_some() && usage_shown && barred == plain && !plain.0;
         let (compact, k) = plain;
@@ -733,7 +799,7 @@ impl App {
                 if self.listed_once {
                     for p in &mut self.panes {
                         if p.sandbox.as_ref().is_some_and(|n| !l.iter().any(|s| &s.name == n)) {
-                            *p = Pane::empty();
+                            p.clear();
                         }
                     }
                 }
@@ -831,6 +897,10 @@ impl App {
             }
         }
         changed |= self.drain(headless().then_some(Duration::from_millis(1500)), true);
+        if self.restore.is_some() && self.listed && self.waker.is_some() {
+            self.restore_layout();
+            changed = true;
+        }
         changed |= self.poll_jarvis(tx);
         if self.screens.iter().any(|s| s.loads != s.checked) {
             self.check_overrides();
@@ -898,17 +968,18 @@ impl App {
         // The focused pane follows Rune's keyboard focus (a click in a
         // terminal focuses its grid, `grid-<id>`), and Rune's follows the core
         // when an intent moved it.
-        let shown = self.layout.0.min(self.panes.len());
+        let shown = self.shown();
         if self.refocus {
             self.refocus = false;
             if let Some(t) = self.panes.get(self.focused).and_then(|p| p.term.as_ref()) {
                 tx.focus(t.key("grid"), false);
             }
         } else if let Some(k) = tx.focused().map(str::to_string) {
-            if let Some(i) = (0..shown).find(|&i| self.panes[i].term.as_ref().is_some_and(|t| t.key("grid") == k)) {
+            if let Some(i) = shown.clone().find(|&i| self.panes[i].term.as_ref().is_some_and(|t| t.key("grid") == k)) {
                 if i != self.focused {
                     self.focused = i;
                     self.touch(i);
+                    self.note_focus();
                     changed = true;
                 }
             }
@@ -920,7 +991,7 @@ impl App {
             let Some(t) = &mut p.term else { continue };
             // Only the pane with the keyboard shows a solid cursor and gets
             // the input method's caret (Rune wants one).
-            t.set_focused(self.window_focused && i == self.focused && i < shown);
+            t.set_focused(self.window_focused && i == self.focused && shown.contains(&i));
             let mut ch = t.poll_tx(settle, clock, tx);
             for ev in t.take_events() {
                 ch = true;
@@ -973,7 +1044,7 @@ impl App {
         if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
-        if self.bar_menu.take().is_some() {
+        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || self.drag.take().is_some() {
             return true;
         }
         if self.feats.dialog.is_some() || self.feats.modal.is_some() {
@@ -990,6 +1061,17 @@ impl App {
     pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key == Key::Escape && self.escape() {
             return true;
+        }
+        // Pages: Ctrl+Tab, Ctrl+Shift+Tab (and ⌘⌥→/← on macOS), even in a
+        // terminal (palette.rs, `page_step`); not while a dialog, modal or
+        // the palette is up.
+        if let Some(d) = palette::page_step(ev) {
+            let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.palette.is_some();
+            if !overlay {
+                self.run_intent("keys", Intent::Pages(PageOp::Step(d)));
+                self.push_data();
+                return true;
+            }
         }
         // The app's chords (palette.rs): never a terminal's.
         if self.app_key(ev, tx.focused()) {
@@ -1028,7 +1110,13 @@ impl App {
     /// `wait:` marks): a screen's last render (keys and input ids), the
     /// core's dialog and its parts, pane bars and their extras, terminals.
     fn drawn(&self, key: &str) -> bool {
-        let shown_panes = self.layout.0.min(self.panes.len());
+        if self.pager_drawn(key) || self.rail_drawn(key) {
+            return true;
+        }
+        // A docked feature panel's close button (`panel-close-<screen>`).
+        if key.strip_prefix("panel-close-").is_some_and(|n| self.feats.panel.as_deref() == Some(n) || (self.feats.split && self.feats.panels.iter().any(|p| p == n))) {
+            return true;
+        }
         if self.screens.iter().any(|s| s.last_good.as_ref().is_some_and(|n| node_has_key(n, key))) {
             return true;
         }
@@ -1058,10 +1146,10 @@ impl App {
         if self.palette.is_some() && (key == "palette" || key == "palette-input" || key == "palette-list" || self.palette_shown().iter().any(|c| key == format!("palette-{}", c.id))) {
             return true;
         }
-        for i in 0..shown_panes {
+        for i in self.shown() {
             let p = &self.panes[i];
             let n = i + 1;
-            if key == format!("pane-{n}") || key == format!("pane-{n}-bar") || (p.sandbox.is_some() && key == format!("pane-{n}-close")) {
+            if key == format!("pane-{n}") || key == format!("pane-{n}-bar") || (p.sandbox.is_some() && (key == format!("pane-{n}-close") || key == format!("pane-{n}-grip"))) {
                 return true;
             }
             if p.term.as_ref().is_some_and(|t| key == t.key("grid") || key == t.key("terminal")) {
@@ -1073,7 +1161,10 @@ impl App {
                 if f.shown.iter().any(|x| x.key(n) == key) || (open && f.hidden.iter().any(|x| x.key(n) == key)) {
                     return true;
                 }
-                if !f.hidden.is_empty() && (key == format!("pane-{n}-more") || (open && key == format!("pane-{n}-more-list"))) {
+                if key == format!("pane-{n}-more") || (open && key == format!("pane-{n}-more-list")) {
+                    return true;
+                }
+                if open && self.pane_moves(i).iter().any(|m| m.key == key) {
                     return true;
                 }
             }
@@ -1175,7 +1266,13 @@ impl App {
     }
 
     fn open_with(&mut self, i: usize, sandbox: &str, mode: Mode, thread: Option<String>, start: ThreadStart) {
-        self.ensure_panes(i + 1);
+        if i >= self.panes.len() {
+            return;
+        }
+        // Its page shows.
+        if let Some(k) = self.pages.page_of(self.panes[i].uid) {
+            self.pages.current = k;
+        }
         let waker = self.waker.clone();
         self.touch(i);
         let p = &mut self.panes[i];
@@ -1219,6 +1316,8 @@ impl App {
             self.expect.retain(|(n, _, _)| n != sandbox);
             self.expect.push((sandbox.to_string(), 0, Instant::now() + Duration::from_millis(RUNNING_RECHECK[0])));
         }
+        self.note_focus();
+        self.save_layout();
     }
 
     /// Marks pane `i` as just used (opened or focused).
@@ -1229,126 +1328,306 @@ impl App {
         }
     }
 
-    /// Where an `open_terminal` goes. `spare` is the web UI's rule
-    /// (`assets/js/sandboxes.js`, `openInSparePane`), with one more step: a
-    /// new terminal never takes the place of a live one while there is room.
-    ///
-    /// 1. the first empty pane on screen;
-    /// 2. else the layout grows by one pane, up to [`MAX_PANES`]: the pane
-    ///    revealed is used if it is empty; one hidden by a smaller layout that
-    ///    still holds a terminal is swapped with an empty hidden one first, so
-    ///    the hidden terminal is kept (not replaced, as it was in phase 3);
-    /// 3. else (four panes, all in use) the least recently used pane is
-    ///    replaced, never the focused one, and a notice names what it closed.
+    /// Where an `open_terminal` goes: the focused pane, pane N (any page),
+    /// or a spare one (see [`App::spare_pane`]).
     fn pane_for(&mut self, target: &PaneTarget) -> usize {
         match target {
             PaneTarget::Focused => self.focused,
-            PaneTarget::Index(n) => {
-                let i = n - 1;
-                if i >= self.layout.0 {
-                    self.layout.0 = i + 1;
-                }
-                i
-            }
-            PaneTarget::Spare => self.spare_pane(),
+            PaneTarget::Index(n) if *n >= 1 && *n <= self.panes.len() => n - 1,
+            _ => self.spare_pane(),
         }
     }
 
+    /// The pane a new terminal takes, never one with a terminal in it: an
+    /// empty pane of the current page, else a new pane there while the page
+    /// has room, else the next page with room, else a new page (pages.rs,
+    /// `place`). Its page shows.
     fn spare_pane(&mut self) -> usize {
-        self.ensure_panes(self.layout.0);
-        let free = |p: &Pane| p.sandbox.is_none();
-        if let Some(i) = (0..self.layout.0).find(|&i| free(&self.panes[i])) {
-            return i;
-        }
-        if self.layout.0 < MAX_PANES {
-            let i = self.layout.0;
-            self.ensure_panes(MAX_PANES);
-            if !free(&self.panes[i]) {
-                if let Some(j) = (i + 1..MAX_PANES).find(|&j| free(&self.panes[j])) {
-                    self.swap_panes(i, j);
-                }
+        let id = self.fresh();
+        let empties = self.empty_uids();
+        let at = match self.pages.place(id, &|x| empties.contains(&x)) {
+            Placed::Into(e) => e,
+            Placed::Added => {
+                self.panes.push(Pane::empty(id));
+                id
             }
-            if free(&self.panes[i]) {
-                self.layout.0 = i + 1;
-                return i;
-            }
-            // Every pane, hidden ones included, holds a terminal: show one
-            // more and take the least recently used of all (below).
-            self.layout.0 = i + 1;
-        }
-        let shown = self.layout.0;
-        let lru = (0..shown).filter(|&i| i != self.focused || shown == 1).min_by_key(|&i| self.panes[i].used).unwrap_or(self.focused);
-        if let Some(old) = self.panes[lru].sandbox.clone() {
-            self.notify(format!("No free pane: pane {} ({old}, the least recently used) now shows the new terminal", lru + 1), false);
-        }
-        lru
+        };
+        self.sync_panes(Some(at));
+        self.index_of(at).unwrap_or(0)
     }
 
-    /// Empties the panes showing that session; with more than one pane shown,
-    /// such a pane goes and the layout shrinks (as `panes.js` closes it).
+    /// The ids of the panes with nothing open.
+    fn empty_uids(&self) -> std::collections::HashSet<Uid> {
+        self.panes.iter().filter(|p| p.sandbox.is_none()).map(|p| p.uid).collect()
+    }
+
+    /// Closes the panes showing that session, on every page (each page re-tiles).
     fn close_panes(&mut self, sandbox: &str, thread: Option<&str>) {
-        let mut i = self.layout.0.min(self.panes.len());
-        while i > 0 {
-            i -= 1;
-            let p = &self.panes[i];
-            if p.sandbox.as_deref() != Some(sandbox) || p.thread.as_deref() != thread {
-                continue;
-            }
-            self.remove_pane(i);
-        }
-        // Hidden panes of that session close too.
-        for p in self.panes.iter_mut().skip(self.layout.0) {
-            if p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread {
-                *p = Pane::empty();
+        let gone: Vec<Uid> = self.panes.iter().filter(|p| p.sandbox.as_deref() == Some(sandbox) && p.thread.as_deref() == thread).map(|p| p.uid).collect();
+        for u in gone {
+            if let Some(i) = self.index_of(u) {
+                self.remove_pane(i);
             }
         }
         self.refocus = true;
     }
 
-    /// Closes pane `i`: the layout shrinks to the panes that remain, in their
-    /// order, and they take the room; the last pane is not removed, it
-    /// becomes empty. The focus goes to the pane that takes the freed place
-    /// (the next one, else the one before). Only the view goes: the sandbox
-    /// and its session go on (a terminal's socket closes as when it is
-    /// replaced).
+    /// Closes pane `i`: its page re-tiles (the panes that remain take the
+    /// room, a default arrangement staying one); a page left empty goes,
+    /// unless it is the only one, whose pane then becomes empty. The focus
+    /// goes to the pane that takes the freed place (the next one, else the
+    /// one before). Only the view goes: the sandbox and its session go on
+    /// (a terminal's socket closes as when it is replaced).
     pub fn remove_pane(&mut self, i: usize) {
-        if i >= self.panes.len() {
+        let Some(uid) = self.panes.get(i).map(|p| p.uid) else { return };
+        self.bar_menu = None;
+        let focus = if i == self.focused {
+            let k = self.pages.page_of(uid).unwrap_or(self.pages.current);
+            let order = self.pages.list[k].tile.order();
+            let at = order.iter().position(|&x| x == uid).unwrap_or(0);
+            order.get(at + 1).or_else(|| at.checked_sub(1).and_then(|j| order.get(j))).copied()
+        } else {
+            self.focused_uid()
+        };
+        let fresh = self.fresh();
+        if self.pages.remove(uid, true, fresh) {
+            self.panes.push(Pane::empty(fresh));
+        }
+        self.sync_panes(focus);
+    }
+
+    /// The pane with that id.
+    pub fn pane_by_uid(&self, uid: Uid) -> Option<&Pane> {
+        self.panes.iter().find(|p| p.uid == uid)
+    }
+
+    pub fn index_of(&self, uid: Uid) -> Option<usize> {
+        self.panes.iter().position(|p| p.uid == uid)
+    }
+
+    pub fn focused_uid(&self) -> Option<Uid> {
+        self.panes.get(self.focused).map(|p| p.uid)
+    }
+
+    /// The panes of the current page: indices into `panes`.
+    pub fn shown(&self) -> std::ops::Range<usize> {
+        let before: usize = self.pages.list[..self.pages.current].iter().map(|p| p.tile.count()).sum();
+        before..(before + self.pages.cur().tile.count()).min(self.panes.len())
+    }
+
+    /// The current page remembers which of its panes has the keyboard.
+    fn note_focus(&mut self) {
+        let u = self.focused_uid();
+        if let (Some(u), Some(p)) = (u, self.pages.list.get_mut(self.pages.current)) {
+            if p.tile.contains(u) {
+                p.focus = Some(u);
+            }
+        }
+    }
+
+    /// After the pages changed: `panes` follows them (page by page, reading
+    /// order), a pane no page holds any more goes (its terminal closes),
+    /// each terminal's element keys follow its new number. The Pane values
+    /// move, terminals included: no socket closes or opens, no size is sent
+    /// here (a pane's terminal fits once where it lands, as on any layout).
+    /// The focus: `focus` when it is on the current page, else the page's
+    /// remembered one, else its first pane.
+    fn sync_panes(&mut self, focus: Option<Uid>) {
+        let order = self.pages.all();
+        let mut by: HashMap<Uid, Pane> = self.panes.drain(..).map(|p| (p.uid, p)).collect();
+        self.panes = order.iter().map(|u| by.remove(u).unwrap_or_else(|| Pane::empty(*u))).collect();
+        for (k, p) in self.panes.iter_mut().enumerate() {
+            if let Some(t) = p.term.as_mut() {
+                t.id = (k + 1).to_string();
+            }
+        }
+        // What no page holds closes (its terminal's socket with it).
+        drop(by);
+        let page = self.pages.cur();
+        let want = focus.filter(|u| page.tile.contains(*u)).or(page.focus.filter(|u| page.tile.contains(*u))).unwrap_or_else(|| page.tile.order()[0]);
+        self.focused = self.index_of(want).unwrap_or(0);
+        self.note_focus();
+        self.bar_menu = None;
+        self.refocus = true;
+        self.save_layout();
+    }
+
+    /// Runs a rearrangement of the pages, then puts the panes in order; the
+    /// focused pane keeps the keyboard when it stays on the current page.
+    fn rearrange(&mut self, f: impl FnOnce(&mut App)) {
+        let focus = self.focused_uid();
+        f(self);
+        self.sync_panes(focus);
+    }
+
+    /// Pages and panes, for the state file: each pane's session (not its
+    /// terminal) and each page's tiling.
+    fn save_layout(&mut self) {
+        let panes: Vec<J> = self.panes.iter().map(|p| serde_json::json!({ "sandbox": p.sandbox, "mode": p.mode.name(), "thread": p.thread })).collect();
+        let idx: HashMap<Uid, Uid> = self.panes.iter().enumerate().map(|(i, p)| (p.uid, i as Uid)).collect();
+        let mut v = self.pages.to_json(&|u| idx.get(&u).copied());
+        v["panes"] = J::Array(panes);
+        self.store.set("layout", v);
+    }
+
+    /// The last run's pages, once the first list is in: a pane comes back
+    /// (its terminal reopened) only when its sandbox is running, and a
+    /// thread's only when that session is still known; nothing is started.
+    /// The others are left out and their pages close the gap. Skipped when
+    /// something was opened already (`--sandbox`).
+    fn restore_layout(&mut self) {
+        let Some(v) = self.restore.take() else { return };
+        if self.panes.iter().any(|p| p.sandbox.is_some()) {
             return;
         }
-        if self.bar_menu.is_some() {
-            self.bar_menu = None;
+        let saved = v["panes"].as_array().cloned().unwrap_or_default();
+        let running = |n: &str| self.sandboxes.iter().any(|s| s.name == n && s.status == "running");
+        let sessions = self.feats.data.get("sessions").cloned();
+        let mut back: Vec<(Uid, String, Mode, Option<String>)> = vec![];
+        let mut next = self.next_uid;
+        let pages = Pages::from_json(&v, &mut |i| {
+            let p = saved.get(i as usize)?;
+            let sb = p["sandbox"].as_str().filter(|n| running(n))?;
+            let thread = p["thread"].as_str().map(str::to_string);
+            let mode = match p["mode"].as_str() {
+                Some("bash") => Mode::Bash,
+                Some("agent") | None => Mode::Agent,
+                _ => return None,
+            };
+            if thread.is_some() && terminal::session_for(sessions.as_ref(), Some(sb), thread.as_deref(), true).is_none() {
+                return None;
+            }
+            next += 1;
+            back.push((next, sb.to_string(), mode, thread));
+            Some(next)
+        });
+        let Some(pages) = pages else { return };
+        self.next_uid = next;
+        self.pages = pages;
+        self.panes = back.iter().map(|(u, ..)| Pane::empty(*u)).collect();
+        self.sync_panes(None);
+        for (u, sb, mode, thread) in back {
+            if let Some(i) = self.index_of(u) {
+                let cur = self.pages.current;
+                self.open(i, &sb, mode, thread);
+                self.pages.current = cur;
+            }
         }
-        if self.layout.0 > 1 && i < self.layout.0 {
-            self.panes.remove(i);
-            self.panes.push(Pane::empty());
-            self.layout.0 -= 1;
-            if self.layout.0 < 2 {
-                self.layout.1 = Split::Columns;
-            }
-            for (k, p) in self.panes.iter_mut().enumerate() {
-                if let Some(t) = p.term.as_mut() {
-                    t.id = (k + 1).to_string();
-                }
-            }
-            if self.focused >= self.layout.0 || self.focused > i {
-                self.focused = self.focused.saturating_sub(1).min(self.layout.0 - 1);
-            }
-            // The bars' widths change with the layout: measured again.
-            self.bar_w = [0.0; MAX_PANES];
-        } else {
-            self.panes[i] = Pane::empty();
-        }
-        self.refocus = true;
+        let focus = self.pages.cur().tile.order()[0];
+        self.sync_panes(Some(focus));
+        log::info!("restored {} pages, {} panes", self.pages.list.len(), self.panes.len());
     }
 
-    /// Swaps two panes, terminals included (their element keys follow the index).
-    fn swap_panes(&mut self, a: usize, b: usize) {
-        self.panes.swap(a, b);
-        for i in [a, b] {
-            if let Some(t) = self.panes[i].term.as_mut() {
-                t.id = (i + 1).to_string();
+    /// Runs a page or pane rearrangement (intents `page_*`, `pages_*`, `pane_*`).
+    fn run_page_op(&mut self, op: PageOp) {
+        self.pager_menu = None;
+        let pane = |s: &App, p: Option<usize>| p.or(Some(s.focused)).and_then(|i| s.panes.get(i)).map(|p| p.uid);
+        match op {
+            PageOp::Show(k) if k < self.pages.list.len() => self.rearrange(|s| s.pages.show(k)),
+            PageOp::Show(k) => self.notify(format!("There is no page {}", k + 1), true),
+            PageOp::Step(d) => self.rearrange(|s| s.pages.step(d)),
+            PageOp::New => {
+                let id = self.fresh();
+                self.panes.push(Pane::empty(id));
+                self.pages.new_page(id);
+                self.sync_panes(Some(id));
+            }
+            PageOp::Close(k) => {
+                let k = k.unwrap_or(self.pages.current);
+                let fresh = self.fresh();
+                let gone = self.pages.close_page(k, fresh);
+                if !gone.is_empty() {
+                    if self.pages.list.iter().any(|p| p.tile.contains(fresh)) {
+                        self.panes.push(Pane::empty(fresh));
+                    }
+                    let focus = self.focused_uid();
+                    self.sync_panes(focus);
+                }
+            }
+            PageOp::Per(n) => {
+                let e = self.empty_uids();
+                self.rearrange(|s| {
+                    let f = s.focused_uid();
+                    s.pages.set_per(n, &|x| e.contains(&x));
+                    if let Some(k) = f.and_then(|u| s.pages.page_of(u)) {
+                        s.pages.current = k;
+                    }
+                });
+            }
+            PageOp::View(tabs) => {
+                let n = if tabs { 1 } else { self.pages.grid_per.max(2) };
+                self.run_page_op(PageOp::Per(n));
+            }
+            PageOp::Gather => {
+                let e = self.empty_uids();
+                self.rearrange(|s| {
+                    let f = s.focused_uid();
+                    s.pages.gather(&|x| e.contains(&x));
+                    if let Some(k) = f.and_then(|u| s.pages.page_of(u)) {
+                        s.pages.current = k;
+                    }
+                });
+            }
+            PageOp::Move { pane: p, to } => {
+                let (Some(u), Some(side)) = (pane(self, p), Side::parse(&to)) else { return };
+                if let Err(e) = self.move_pane(u, side) {
+                    self.notify(e, false);
+                }
+            }
+            PageOp::Rotate(p) => {
+                let Some(u) = pane(self, p) else { return };
+                self.show_page_of(u);
+                if !self.pages.tile_mut().rotate(u) {
+                    return self.notify("Nothing to rotate: this pane is alone on its page", false);
+                }
+                self.sync_panes(Some(u));
+            }
+            PageOp::ToPage { pane: p, page } => {
+                let Some(u) = pane(self, p) else { return };
+                let e = self.empty_uids();
+                match self.pages.move_to_page(u, page, &|x| e.contains(&x)) {
+                    Ok(_) => self.sync_panes(Some(u)),
+                    Err(err) => self.notify(format!("Cannot move pane {}: {err}", self.index_of(u).map_or(0, |i| i + 1)), true),
+                }
+            }
+            PageOp::Equalise => {
+                self.pages.tile_mut().equalise();
+                self.save_layout();
             }
         }
+    }
+
+    /// Shows the page of pane `u`.
+    fn show_page_of(&mut self, u: Uid) {
+        if let Some(k) = self.pages.page_of(u) {
+            if k != self.pages.current {
+                self.pages.current = k;
+                self.sync_panes(Some(u));
+            }
+        }
+    }
+
+    /// Moves pane `u` on its page: it trades places with its neighbour on
+    /// `side`, or, at that edge, docks along the whole side.
+    fn move_pane(&mut self, u: Uid, side: Side) -> Result<(), String> {
+        self.show_page_of(u);
+        let aspect = self.page_aspect();
+        let t = self.pages.cur().tile.clone();
+        if let Some(n) = t.neighbour(u, side, aspect) {
+            self.pages.tile_mut().swap(u, n);
+        } else if t.count() > 1 && !t.spans(u, side) {
+            let share = drag::dock_share(t.count());
+            *self.pages.tile_mut() = t.dock(u, side, share);
+        } else {
+            return Err(format!("This pane is already at the {} edge", side.name().replace("up", "top").replace("down", "bottom")));
+        }
+        self.sync_panes(Some(u));
+        Ok(())
+    }
+
+    /// The page area's width over its height, as laid out (else a guess).
+    fn page_aspect(&self) -> f32 {
+        self.rects.area.map_or(pages::ASPECT, |r| r[2] / r[3].max(1.0))
     }
 
     /// Runs one checked intent.
@@ -1397,13 +1676,27 @@ impl App {
                 }
             }
             Intent::ClosePanes { sandbox, thread } => self.close_panes(&sandbox, thread.as_deref()),
+            // The old layout picker's intent, kept for screens that ask it:
+            // that many terminals per page, the current page that many panes
+            // (empty ones added) in the old arrangement.
             Intent::SetLayout { panes, split } => {
-                self.layout = (panes, split);
-                self.ensure_panes(panes);
-                if self.focused >= panes {
-                    self.focused = 0;
-                }
+                let e = self.empty_uids();
+                self.rearrange(|s| {
+                    let f = s.focused_uid();
+                    s.pages.set_per(panes.max(1), &|x| e.contains(&x));
+                    if let Some(k) = f.and_then(|u| s.pages.page_of(u)) {
+                        s.pages.current = k;
+                    }
+                    let mut ids = s.pages.cur().tile.order();
+                    while ids.len() < panes {
+                        let id = s.fresh();
+                        s.panes.push(Pane::empty(id));
+                        ids.push(id);
+                    }
+                    *s.pages.tile_mut() = tiling::default(&ids, split == Split::Rows);
+                });
             }
+            Intent::Pages(op) => self.run_page_op(op),
             i @ (Intent::OpenModal { .. } | Intent::CloseModal | Intent::OpenPanel { .. } | Intent::ClosePanel { .. } | Intent::Feature(_)) => self.run_feature_intent(from, i),
             other => self.run_jarvis_intent(from, other),
         }
@@ -1472,12 +1765,13 @@ fn tile(e: El) -> El {
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
 /// The room the top bar keeps at its left for the window buttons: up to 12
 /// pt clear after the zoom button (`inset` is from the window's edge, the
-/// bar starts a gutter in); none of them, the sidebar's content x.
+/// bar starts a gutter in); none of them (full screen), the sidebar's
+/// content x, right of the left rail.
 pub fn lights_room(inset: f32) -> f32 {
     if inset > 0.0 {
         inset - layout::GUTTER + 12.0
     } else {
-        layout::SIDEBAR_PAD
+        rail::W + layout::GUTTER + layout::SIDEBAR_PAD
     }
 }
 
@@ -1663,7 +1957,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             s.push_data();
         });
     let sidebar = tile(col().key("sidebar").w(s.sidebar_w()).h_full().min_h(0.0).padding(layout::SIDEBAR_PAD)).child(side_el).child(edge);
-    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER);
+    // The left rail, always there (Cmd/Ctrl+B hides only the sidebar).
+    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(rail::view(s));
     if s.sidebar_shown() {
         main = main.child(sidebar);
     }
@@ -1680,7 +1975,12 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         overlays.push(screen::menu_scrim("pane-more-scrim".into(), |s: &mut App| s.bar_menu = None));
         overlays.push(m);
     }
+    if let Some(m) = s.pager_menu_view() {
+        overlays.push(screen::menu_scrim("pager-scrim".into(), |s: &mut App| s.pager_menu = None));
+        overlays.push(m);
+    }
     // The status bar at the foot, in every layout: the panes' area shrinks by its height.
+    overlays.extend(drag_overlay(s));
     let mut root = root.child(bar).child(main).child(statusbar::view(s));
     // The status bar's read-only popover, light dismiss.
     overlays.extend(statusbar::popover(s));
@@ -1791,21 +2091,56 @@ fn notice_view(s: &App) -> Option<El> {
     )
 }
 
+/// The pane area: the pager, then the current page's tiling.
 fn panes_view(s: &App) -> El {
-    let n = s.layout.0.min(4);
-    let vertical = s.layout.1 == Split::Columns;
-    let p = |i: usize| pane_view(s, i);
-    let get = |id: &str| s.splits.get(id).map(|x| x.0).unwrap_or(0.5);
-    let sp = |vertical: bool, id: &'static str, a: El, b: El| {
-        screen::split_view::<App, _>(vertical, get(id), a, b, id, |s: &mut App, id: &str| s.splits.entry(id.to_string()).or_insert((0.5, 0.0)))
-    };
-    let body = match n {
-        1 => p(0),
-        2 => sp(vertical, "panes", p(0), p(1)),
-        3 => sp(true, "panes", p(0), sp(false, "panes-right", p(1), p(2))),
-        _ => sp(true, "panes", sp(false, "panes-left", p(0), p(2)), sp(false, "panes-right", p(1), p(3))),
-    };
-    col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).child(body)
+    let page = &s.pages.cur().tile;
+    let area = col()
+        .key("page-area")
+        .grow(1.0)
+        .w_full()
+        .min_w(0.0)
+        .min_h(0.0)
+        .on_layout(|s: &mut App, r: [f32; 4]| s.rects.area = Some(r))
+        .child(tile_view(s, page, String::new()));
+    col().key("panes").grow(1.0).h_full().min_w(0.0).min_h(0.0).gap(layout::GUTTER / 2.0).child(pager::view(s)).child(area)
+}
+
+/// A split's element key: `panes` for the page's first split, then the
+/// path (`a`: its first side, `b`: its second) as `left`/`right` steps, so
+/// the old layouts keep their keys (`panes-handle`, `panes-right-handle`).
+fn split_key(path: &str) -> String {
+    let mut k = "panes".to_string();
+    for c in path.chars() {
+        k.push_str(if c == 'a' { "-left" } else { "-right" });
+    }
+    k
+}
+
+/// A page's tiling, drawn: a pane, or two sides with a divider between them.
+fn tile_view(s: &App, t: &Tile, path: String) -> El {
+    match t {
+        Tile::Leaf(u) => match s.index_of(*u) {
+            Some(i) => pane_view(s, i),
+            None => el().grow(1.0),
+        },
+        Tile::Split { dir, ratio, a, b } => {
+            let vertical = *dir == tiling::Dir::Row;
+            let key = split_key(&path);
+            let first = tile_view(s, a, format!("{path}a")).grow(*ratio).min_w(0.0).min_h(0.0);
+            let second = tile_view(s, b, format!("{path}b")).grow(1.0 - *ratio).min_w(0.0).min_h(0.0);
+            let (p1, p2) = (path.clone(), path.clone());
+            let handle = if vertical { el().w(layout::GUTTER).h_full().cursor(Cursor::ResizeColumn) } else { el().h(layout::GUTTER).w_full().cursor(Cursor::ResizeRow) };
+            let handle = handle
+                .key(format!("{key}-handle"))
+                .hover(c("border"))
+                .help("Drag to resize; double-click to make the panes equal")
+                .on_drag(move |s: &mut App, d: &mut rune::Drag, _tx| s.divider_drag(&p1, vertical, d));
+            let base = if vertical { row() } else { col() };
+            base.key(key).w_full().h_full().min_w(0.0).min_h(0.0).items_stretch().child(first).child(handle).child(second).on_layout(move |s: &mut App, r: [f32; 4]| {
+                s.split_len.insert(p2.clone(), if vertical { r[2] } else { r[3] });
+            })
+        }
+    }
 }
 
 /// The name a pane bar shows: the sandbox, and its thread when it shows one.
@@ -1818,6 +2153,17 @@ fn pane_name(p: &Pane) -> String {
 }
 
 impl App {
+    /// Gives pane `i` the keyboard.
+    pub(crate) fn focus_pane(&mut self, i: usize) {
+        self.refocus = true;
+        if self.focused != i && i < self.panes.len() {
+            self.focused = i;
+            self.touch(i);
+            self.note_focus();
+            self.push_data();
+        }
+    }
+
     /// Each sandbox's group colour, distinct per group (theme::group_colors).
     pub fn group_colors(&self) -> HashMap<String, u32> {
         theme::group_colors(self.sandboxes.iter().map(|sb| (sb.name.as_str(), sb.workspace.as_deref(), sb.chat)))
@@ -1845,17 +2191,49 @@ impl App {
     /// Pane `i`'s bar width: as last laid out, else a guess from the window
     /// (the first frame; the layout's report corrects it at once).
     fn bar_width(&self, i: usize) -> f32 {
-        let w = self.bar_w.get(i).copied().unwrap_or(0.0);
-        if w > 0.0 {
-            return w;
+        let Some(p) = self.panes.get(i) else { return 160.0 };
+        if let Some(w) = self.bar_w.get(&p.uid).filter(|w| **w > 0.0) {
+            return *w;
         }
-        let across = match (self.layout.0, self.layout.1) {
-            (1, _) | (2, Split::Rows) => 1.0,
-            _ => 2.0,
-        };
-        let jarvis = if self.jarvis.open { self.jarvis.width } else { 0.0 };
-        let side = if self.sidebar_shown() { self.sidebar_w() + layout::GUTTER } else { 0.0 };
-        ((self.window.0 - side - jarvis - layout::GUTTER * 3.0) / across).max(160.0)
+        // Not laid out yet: its rect in the page as the area would be.
+        let area = self.rects.area.unwrap_or_else(|| {
+            let jarvis = if self.jarvis.open { self.jarvis.width + layout::GUTTER } else { 0.0 };
+            [0.0, 0.0, self.window.0 - self.left_w() - jarvis - layout::GUTTER * 2.0, (self.window.1 - 120.0).max(100.0)]
+        });
+        let page = self.pages.page_of(p.uid).map_or(&self.pages.cur().tile, |k| &self.pages.list[k].tile);
+        page.rects(area, layout::GUTTER).into_iter().find(|(u, _)| *u == p.uid).map_or(160.0, |(_, r)| r[2]).max(160.0)
+    }
+
+    /// What the window keeps at the left of the panes: the sidebar when shown.
+    pub fn left_w(&self) -> f32 {
+        rail::W + layout::GUTTER + if self.sidebar_shown() { self.sidebar_w() + layout::GUTTER } else { 0.0 }
+    }
+
+    /// A divider between two parts of the page is dragged: its split's ratio
+    /// follows, each side keeping its least size (tiling::MIN_W, MIN_H); a
+    /// double press makes the panes under it equal. Saved on release.
+    fn divider_drag(&mut self, path: &str, vertical: bool, d: &mut rune::Drag) {
+        let len = self.split_len.get(path).copied().unwrap_or(1.0);
+        if !matches!(self.pages.cur().tile.at(path), Some(Tile::Split { .. })) {
+            return;
+        }
+        if matches!(d.phase, rune::Phase::Down) {
+            if d.clicks >= 2 {
+                if let Some(t) = self.pages.tile_mut().at_mut(path) {
+                    t.equalise();
+                }
+            }
+            if let Some(Tile::Split { ratio, .. }) = self.pages.cur().tile.at(path) {
+                d.data = *ratio;
+            }
+        }
+        let moved = if vertical { d.dx } else { d.dy };
+        if moved.abs() > 0.0 {
+            self.pages.tile_mut().set_ratio(path, d.data + moved / (len - layout::GUTTER).max(1.0), len, layout::GUTTER);
+        }
+        if matches!(d.phase, rune::Phase::Up) {
+            self.save_layout();
+        }
     }
 
     /// What pane `i`'s bar shows inline and what goes into its overflow
@@ -1872,25 +2250,227 @@ impl App {
         if p.status() != "connected" {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
-        Some(bar::pane_fit(self.bar_width(i), &pane_name(p), p.mode.name(), items))
+        Some(bar::pane_fit(self.bar_width(i), &pane_name(p), p.mode.name(), items, true))
     }
 
     /// The overflow menu of pane `i`'s bar, anchored under its button.
     fn bar_menu_view(&self) -> Option<El> {
         let i = self.bar_menu?;
         let f = self.pane_fit(i)?;
-        if f.hidden.is_empty() {
-            return None;
-        }
         let n = i + 1;
         let names: Vec<String> = f.hidden.iter().map(|it| if it.label.is_empty() { it.help.clone() } else { it.label.clone() }).collect();
         let rows: Vec<screen::MenuRow> = f.hidden.iter().zip(&names).map(|(it, l)| bar_menu_row(it, n, l)).collect();
-        let mut list = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, screen::menu_width(&rows));
+        let moves = self.pane_moves(i);
+        let move_rows: Vec<screen::MenuRow> = moves
+            .iter()
+            .map(|m| screen::MenuRow { key: m.key.clone(), label: &m.label, icon: Some(m.icon), tone: None, help: Some(m.help.as_str()), keys: &[], count: None, chosen: false, disabled: m.op.is_none() })
+            .collect();
+        let w = screen::menu_width(&rows).max(screen::menu_width(&move_rows));
+        let surface = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, w);
+        // Extras and moves can be more than a small window's height: the list scrolls.
+        let top = self.panes.get(i).and_then(|p| self.rects.panes.get(&p.uid)).map_or(120.0, |r| r[1]);
+        let below = self.window.1 - (top + layout::PANE_BAR_H + 6.0) - layout::STATUS_BAR_H - 12.0;
+        let room = below.max(top - 12.0) - screen::MENU_PAD * 2.0 - 4.0;
+        let mut list = col().w_full().max_h(room.max(120.0)).scroll(rune::ScrollSpec { stick_bottom: false });
         for (it, r) in f.hidden.iter().zip(&rows) {
             list = list.child(bar_menu_item(it, r));
         }
-        Some(list)
+        if !rows.is_empty() {
+            list = list.child(screen::menu_divider());
+        }
+        for (m, r) in moves.iter().zip(&move_rows) {
+            let e = screen::menu_row(r);
+            list = list.child(match m.op.clone() {
+                Some(op) => e.on_press(move |s: &mut App| {
+                    s.bar_menu = None;
+                    s.run_intent("pane", Intent::Pages(op.clone()));
+                    s.push_data();
+                }),
+                None => e,
+            });
+        }
+        Some(surface.child(list))
     }
+
+    /// Pane `i`'s moves, for its "⋯" menu (keys `pane-<n>-move-<side>`,
+    /// `pane-<n>-rotate`, `pane-<n>-to-page-<k>`, `pane-<n>-to-new-page`):
+    /// what each does, and None when it would do nothing.
+    pub(super) fn pane_moves(&self, i: usize) -> Vec<PaneMove> {
+        let Some(p) = self.panes.get(i) else { return vec![] };
+        let n = i + 1;
+        let page = self.pages.page_of(p.uid).unwrap_or(self.pages.current);
+        let tile = &self.pages.list[page].tile;
+        let aspect = self.page_aspect();
+        let mut v = vec![];
+        for side in Side::ALL {
+            let can = tile.neighbour(p.uid, side, aspect).is_some() || (tile.count() > 1 && !tile.spans(p.uid, side));
+            let word = side.name();
+            let label = format!("Move {word}");
+            let help = if tile.neighbour(p.uid, side, aspect).is_some() { format!("Trade places with the pane {}", match side { Side::Left => "on the left", Side::Right => "on the right", Side::Top => "above", Side::Bottom => "below" }) } else { "Dock along that whole side of the page".to_string() };
+            v.push(PaneMove { key: format!("pane-{n}-move-{word}"), label, icon: match side { Side::Left | Side::Right => "columns", _ => "rows" }, help, op: can.then(|| PageOp::Move { pane: Some(i), to: word.to_string() }) });
+        }
+        let rotate_help = "This pane and its neighbour switch between side by side and stacked (portrait and landscape)".to_string();
+        v.push(PaneMove { key: format!("pane-{n}-rotate"), label: "Rotate split".into(), icon: "grid", help: rotate_help, op: (tile.count() > 1).then_some(PageOp::Rotate(Some(i))) });
+        let e = self.empty_uids();
+        for k in (0..self.pages.list.len()).filter(|&k| k != page) {
+            let room = self.pages.has_room(k, &|x| e.contains(&x));
+            let help = if room { self.tab_info(k).help } else { format!("Page {} is full ({} per page)", k + 1, self.pages.per) };
+            v.push(PaneMove { key: format!("pane-{n}-to-page-{}", k + 1), label: format!("Move to page {}", k + 1), icon: "single", help, op: room.then_some(PageOp::ToPage { pane: Some(i), page: Some(k) }) });
+        }
+        v.push(PaneMove { key: format!("pane-{n}-to-new-page"), label: "Move to a new page".into(), icon: "plus", help: "A page of its own, at the end".into(), op: (tile.count() > 1 || self.pages.list.len() > 1).then_some(PageOp::ToPage { pane: Some(i), page: None }) });
+        v
+    }
+
+    /// A press on pane `uid`'s bar moved: past [`drag::THRESHOLD`] it is a
+    /// drag, and the zone under the pointer is found; on release the drop
+    /// is made (or, cancelled or outside a zone, nothing). A press that did
+    /// not travel gives the pane the keyboard, as a press on the pane does.
+    /// Nothing reaches a terminal and nothing is resized until the drop.
+    fn pane_drag(&mut self, uid: Uid, d: &rune::Drag) {
+        let p = d.window_point();
+        match d.phase {
+            rune::Phase::Down => {
+                self.drag = Some(PaneDrag { uid, start: p, at: p, active: false, zone: None });
+            }
+            rune::Phase::Up => {
+                let Some(dr) = self.drag.take() else { return };
+                if d.cancelled() {
+                    return;
+                }
+                if !dr.active {
+                    if let Some(i) = self.index_of(uid) {
+                        self.focus_pane(i);
+                    }
+                    return;
+                }
+                match dr.zone {
+                    Some(z) if z.acts() => self.drop_pane(uid, z),
+                    Some(z) => self.notify(z.label(), false),
+                    None => {}
+                }
+                self.push_data();
+            }
+            _ => {
+                let Some(dr) = self.drag.as_mut() else { return };
+                dr.at = p;
+                if !dr.active && (p[0] - dr.start[0]).hypot(p[1] - dr.start[1]) >= drag::THRESHOLD {
+                    dr.active = true;
+                    self.bar_menu = None;
+                    self.pager_menu = None;
+                }
+                if self.drag.as_ref().is_some_and(|d| d.active) {
+                    let z = self.zone_at(uid, p);
+                    if let Some(dr) = self.drag.as_mut() {
+                        dr.zone = z;
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the page and the pager look like to a drag (drag.rs).
+    fn drag_scene<R>(&self, uid: Uid, f: impl FnOnce(&drag::Scene) -> R) -> R {
+        let cur = &self.pages.cur().tile;
+        let panes: Vec<(Uid, tiling::Rect)> = cur.leaves().into_iter().filter_map(|u| self.rects.panes.get(&u).map(|r| (u, *r))).collect();
+        let tabs: Vec<(usize, tiling::Rect)> = {
+            let (a, b) = self.pager_fit();
+            (a..b).filter_map(|k| self.rects.tabs.get(&k).map(|r| (k, *r))).collect()
+        };
+        let e = self.empty_uids();
+        let room = |k: usize| self.pages.has_room(k, &|x| e.contains(&x));
+        let scene = drag::Scene { area: self.rects.area.unwrap_or([0.0; 4]), panes: &panes, tabs: &tabs, plus: self.rects.plus, current: self.pages.current, dragged: uid, room: &room };
+        f(&scene)
+    }
+
+    fn zone_at(&self, uid: Uid, p: [f32; 2]) -> Option<drag::Zone> {
+        self.drag_scene(uid, |s| drag::zone_at(s, p))
+    }
+
+    /// The rectangle the dragged pane would take, and what it would do.
+    fn drag_preview(&self) -> Option<(tiling::Rect, drag::Zone)> {
+        let d = self.drag.as_ref().filter(|d| d.active)?;
+        let z = d.zone?;
+        self.drag_scene(d.uid, |s| drag::preview(s, &z)).map(|r| (r, z))
+    }
+
+    /// The drop: the page's tiling changes once, then the panes follow
+    /// (their terminals move with them and fit once to their new place).
+    fn drop_pane(&mut self, uid: Uid, z: drag::Zone) {
+        match z {
+            drag::Zone::Split { target, side } => {
+                self.pages.split_into(uid, target, side);
+            }
+            drag::Zone::Swap { target } => self.pages.tile_mut().swap(uid, target),
+            drag::Zone::Dock { side } => {
+                let t = self.pages.cur().tile.clone();
+                let share = drag::dock_share(t.count());
+                *self.pages.tile_mut() = t.dock(uid, side, share);
+            }
+            drag::Zone::Page { page, .. } => return self.run_page_op(PageOp::ToPage { pane: self.index_of(uid), page: Some(page) }),
+            drag::Zone::NewPage => return self.run_page_op(PageOp::ToPage { pane: self.index_of(uid), page: None }),
+        }
+        self.sync_panes(Some(uid));
+    }
+}
+
+/// One of a pane's moves in its menu.
+pub(super) struct PaneMove {
+    pub key: String,
+    pub label: String,
+    pub icon: &'static str,
+    pub help: String,
+    pub op: Option<PageOp>,
+}
+
+/// While a pane is dragged: the zone's outline and a translucent preview of
+/// the rectangle the pane would take, with what a drop there does; a chip
+/// with the pane's name follows the pointer.
+fn drag_overlay(s: &App) -> Vec<El> {
+    let Some(d) = s.drag.as_ref().filter(|d| d.active) else { return vec![] };
+    let mut v = vec![];
+    let name = s.pane_by_uid(d.uid).map(pane_name).unwrap_or_default();
+    // A page tab or "+" is small: its outline there, and the words go
+    // with the chip at the pointer.
+    let mut what = None;
+    if let Some((r, z)) = s.drag_preview() {
+        let ok = z.acts();
+        let (fg, tint) = if ok { ("blue", "blue-tint") } else { ("text-muted", "elevated") };
+        let small_target = r[3] < 48.0;
+        let pad = if small_target { 2.0 } else { 0.0 };
+        let mut p = col()
+            .key("drag-preview")
+            .pin(Some(r[0] - pad), Some(r[1] - pad), None, None)
+            .w(r[2].max(24.0) + pad * 2.0)
+            .h(r[3].max(24.0) + pad * 2.0)
+            .fill(c(tint).alpha(0.55))
+            .border(2.0, c(fg))
+            .radius(theme::radius(if small_target { "xs" } else { "md" }).unwrap())
+            .items_center()
+            .justify_center();
+        if small_target {
+            what = Some((z.label(), ok));
+        } else {
+            p = p.child(text(z.label()).font(small(13.0, 600.0)).color(c(if ok { "text-bright" } else { "text-muted" })));
+        }
+        v.push(p);
+    }
+    let mut ghost = row()
+        .key("drag-ghost")
+        .pin(Some((d.at[0] + 14.0).min(s.window.0 - 300.0).max(4.0)), Some(d.at[1] + 14.0), None, None)
+        .px(8.0)
+        .h(24.0)
+        .gap(6.0)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .fill(c("elevated"))
+        .border(1.0, c(if what.as_ref().is_some_and(|w| w.1) { "blue" } else { "border" }))
+        .child(rune::icon(crate::icons::get("terminal").unwrap(), 14.0).color(c("blue")))
+        .child(text(name).font(small(12.0, 500.0)).color(c("text-bright")));
+    if let Some((label, ok)) = what {
+        ghost = ghost.child(text(format!("· {label}")).font(small(12.0, 600.0)).color(c(if ok { "blue" } else { "text-muted" })));
+    }
+    v.push(ghost);
+    v
 }
 
 /// A pane bar chip: an extra's (or the core's) label, icon, tone and count,
@@ -1959,12 +2539,13 @@ fn bar_menu_item(it: &bar::Item, r: &screen::MenuRow) -> El {
 fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
     let n = i + 1;
     let count = f.hidden.len();
+    let (label, help) = if count > 0 { (format!("{count} more"), format!("{count} more: what does not fit in this bar, and this pane's moves")) } else { ("Pane menu".to_string(), "Move this pane: left, right, up, down, rotate, to another page".to_string()) };
     let mut b = row()
         .key(format!("pane-{n}-more"))
         .role("button")
-        .label(format!("{count} more"))
+        .label(label)
         .expanded(open)
-        .help(format!("{count} more: what does not fit in this bar"))
+        .help(help)
         .gap(bar::MORE_GAP)
         .px(bar::CHIP_PX)
         .h(layout::DENSE_H)
@@ -1976,24 +2557,43 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
         .on_press(move |s: &mut App| {
             s.bar_menu = if s.bar_menu == Some(i) { None } else { Some(i) };
         })
-        .child(rune::icon(crate::icons::get("more").unwrap(), bar::CHIP_ICON).color(c("text")))
-        .child(text(count.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(c("text")));
+        .child(rune::icon(crate::icons::get("more").unwrap(), bar::CHIP_ICON).color(c("text")));
+    if count > 0 {
+        b = b.child(text(count.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(c("text")));
+    }
     if let Some(t) = bar::more_tone(&f.hidden) {
         b = b.child(el().w(bar::MORE_DOT).h(bar::MORE_DOT).radius(bar::MORE_DOT / 2.0).fill(theme::hex(crate::screen::tone(t).0)));
     }
     b
 }
 
+/// The grip a pane is dragged by: two columns of three dots.
+fn grip(n: usize) -> El {
+    let dot = || el().w(2.0).h(2.0).radius(1.0).fill(c("text-dim"));
+    let column = || col().gap(2.0).child(dot()).child(dot()).child(dot());
+    row()
+        .key(format!("pane-{n}-grip"))
+        .help("Drag to move this pane: onto another pane's side or middle, the page's edge, or a page in the pager")
+        .w(bar::GRIP_W)
+        .h(layout::DENSE_H)
+        .gap(2.0)
+        .items_center()
+        .justify_center()
+        .child(column())
+        .child(column())
+}
+
 fn pane_view(s: &App, i: usize) -> El {
     let pane = s.panes.get(i);
+    let uid = pane.map_or(0, |p| p.uid);
     let focused = i == s.focused;
     let label = pane.map(pane_name).unwrap_or_else(|| "Empty pane".into());
     let connected = pane.is_some_and(|p| p.status() == "connected");
     let (dot_tone, dot_word) = if pane.is_some_and(|p| p.attention) { ("amber", "wants you") } else if connected { ("blue", "connected") } else { ("text-muted", "not connected") };
     let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
-    // dot | name, kind, extras…, "…" | close. The middle part is clipped and
+    // grip, dot | name, kind, extras… | "⋯" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
-    let mut bar = row()
+    let bar = row()
         .key(format!("pane-{}-bar", i + 1))
         .h(layout::PANE_BAR_H)
         .w_full()
@@ -2002,13 +2602,20 @@ fn pane_view(s: &App, i: usize) -> El {
         .items_center()
         .fill(c(if focused { "surface" } else { "surface-alt" }))
         .on_layout(move |s: &mut App, r: [f32; 4]| {
-            if let Some(w) = s.bar_w.get_mut(i) {
-                if (*w - r[2]).abs() > 0.5 {
-                    *w = r[2];
-                }
+            let w = s.bar_w.entry(uid).or_insert(0.0);
+            if (*w - r[2]).abs() > 0.5 {
+                *w = r[2];
             }
-        })
-        .child(dot);
+        });
+    // The bar drags its pane (its buttons keep their presses): drag.rs.
+    let bar = if pane.is_some_and(|p| p.sandbox.is_some()) {
+        bar.cursor(if s.drag.as_ref().is_some_and(|d| d.active && d.uid == uid) { Cursor::Grabbing } else { Cursor::Grab })
+            .on_drag(move |s: &mut App, d: &mut rune::Drag, _tx| s.pane_drag(uid, d))
+            .child(grip(i + 1))
+    } else {
+        bar
+    };
+    let mut bar = bar.child(dot);
     let fit = s.pane_fit(i);
     let name_min = fit.as_ref().map_or(0.0, |f| f.name_min);
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0).child(
@@ -2019,11 +2626,13 @@ fn pane_view(s: &App, i: usize) -> El {
         for it in &f.shown {
             mid = mid.child(bar_chip(it, i + 1));
         }
-        if !f.hidden.is_empty() {
-            mid = mid.child(bar_more(f, i, s.bar_menu == Some(i)));
-        }
     }
     bar = bar.child(mid);
+    // The "⋯" menu sits outside the clipped middle, beside the close
+    // button: a narrow pane's name shrinks, never the menu.
+    if let (Some(_), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
+        bar = bar.child(bar_more(f, i, s.bar_menu == Some(i)));
+    }
     if pane.is_some_and(|p| p.sandbox.is_some()) {
         bar = bar.child(
             el().key(format!("pane-{}-close", i + 1))
@@ -2083,15 +2692,13 @@ fn pane_view(s: &App, i: usize) -> El {
         .border(bw, border)
         .radius(theme::radius("md").unwrap())
         .clip_rounded(theme::radius("md").unwrap())
+        .on_layout(move |s: &mut App, r: [f32; 4]| {
+            s.rects.panes.insert(uid, r);
+        })
         .on_press(move |s: &mut App| {
             // A press anywhere on a pane gives its terminal the keyboard
             // (keys reach a terminal only through its grid's focus).
-            s.refocus = true;
-            if s.focused != i {
-                s.focused = i;
-                s.touch(i);
-                s.push_data();
-            }
+            s.focus_pane(i);
         })
         // Files dropped on a pane: to the feature that takes them (files: the upload's dialog).
         .on_drop_files(move |s: &mut App, files: &[std::path::PathBuf], _tx| s.pane_drop(i, files))
@@ -2174,6 +2781,19 @@ mod tests {
         App::new(Args { fixture: Some(fixture.into()), ..Args::default() })
     }
 
+    /// One page with these panes (None: empty) in the default arrangement.
+    pub(super) fn set_panes(a: &mut App, names: &[Option<&str>]) {
+        a.panes.clear();
+        let ids: Vec<Uid> = names.iter().map(|_| a.fresh()).collect();
+        for (id, n) in ids.iter().zip(names) {
+            let mut p = Pane::empty(*id);
+            p.sandbox = n.map(str::to_string);
+            a.panes.push(p);
+        }
+        a.pages = Pages { list: vec![pages::Page::of(tiling::default(&ids, false))], current: 0, per: ids.len().max(4), grid_per: ids.len().max(4) };
+        a.sync_panes(Some(ids[0]));
+    }
+
     /// The app in Rune's own runtime, its window `on_key` wired as in
     /// main.rs, a live terminal in pane 1 whose input we read.
     fn window_with_terminal() -> (rune::Runtime<App>, std::sync::mpsc::Receiver<crate::client::TermInput>, rune::clipboard::MemoryClipboard) {
@@ -2184,7 +2804,6 @@ mod tests {
         let mut t = TerminalState::new(crate::client::TerminalConn { events: ev_rx, input: in_tx });
         t.resize(40, 5);
         t.id = "1".into();
-        a.ensure_panes(1);
         a.panes[0].sandbox = Some("web-app".into());
         a.panes[0].term = Some(t);
         a.focused = 0;
@@ -2206,7 +2825,7 @@ mod tests {
         out
     }
 
-    fn tap(rt: &mut rune::Runtime<App>, key: &str) {
+    pub(super) fn tap(rt: &mut rune::Runtime<App>, key: &str) {
         let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} drawn"));
         rt.pointer_down(x, y);
         rt.pointer_up(x, y);
@@ -2562,7 +3181,7 @@ mod tests {
                 assert!(!rt.state.drawn("pane-1-more-list"));
             }
             // The top bar: nothing leaves the window.
-            for key in ["jarvis-toggle", "layout"] {
+            for key in ["jarvis-toggle", "pager-per", "pager-view-grid"] {
                 let (r, _) = rt.presented(key).unwrap();
                 assert!(r[0] + r[2] <= w + 0.5, "{w}: {key} {r:?}");
             }
@@ -2606,7 +3225,7 @@ mod tests {
             let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
             let list = data["app"]["extras"]["topbar"].as_array().unwrap().clone();
             let (bar_r, _) = rt.presented("top-bar").unwrap();
-            for e in list.iter().filter(|e| e["more"] != true && e["in_sidebar"] != true) {
+            for e in list.iter().filter(|e| e["more"] != true && e["in_sidebar"] != true && e["in_rail"] != true) {
                 let id = e["id"].as_str().unwrap();
                 let (r, _) = rt.presented(&format!("extra-topbar-{id}")).unwrap_or_else(|| panic!("{w}: {id} inline but not drawn"));
                 let label = match e["count"].as_u64() {
@@ -2619,7 +3238,7 @@ mod tests {
                 assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {} (bars {})", r[2], x.width(), bars);
                 assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {id} {r:?} past the bar {bar_r:?}");
             }
-            for key in ["jarvis-toggle", "daemon-state", "layout"] {
+            for key in ["daemon-state"] {
                 let (r, _) = rt.presented(key).unwrap_or_else(|| panic!("{w}: {key}"));
                 assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {key} {r:?} past the bar");
             }
@@ -2638,7 +3257,7 @@ mod tests {
     fn the_usage_bars_go_first_and_the_words_stay() {
         let mut seen = vec![];
         // Under 720: what the app's zoom gives.
-        for w in (440..=1800).rev().step_by(40) {
+        for w in (280..=1800).rev().step_by(40) {
             let mut rt = runtime("shell/usage-a.json", w as f32, 816.0);
             rt.update(|s, _| {
                 s.notice = None;
@@ -2690,7 +3309,7 @@ mod tests {
         rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods::default() });
         rt.frame(0.016);
         assert!(rt.state.palette.is_none(), "a pick closes it");
-        assert!(rt.state.panes.iter().take(rt.state.layout.0).any(|p| p.sandbox.as_deref() == Some("docs")), "Enter ran open_terminal on docs");
+        assert!(rt.state.panes.iter().any(|p| p.sandbox.as_deref() == Some("docs")), "Enter ran open_terminal on docs");
         // Escape closes it.
         rt.key(chord('k', false));
         rt.frame(0.016);
@@ -2722,15 +3341,16 @@ mod tests {
     #[test]
     fn closing_a_pane_removes_it_and_the_others_take_the_room() {
         let mut rt = runtime("shell/design-4.json", 1284.0, 816.0);
-        let names = |rt: &rune::Runtime<App>| rt.state.panes.iter().take(rt.state.layout.0).map(|p| p.sandbox.clone().unwrap_or_default()).collect::<Vec<_>>();
+        let names = |rt: &rune::Runtime<App>| rt.state.panes.iter().map(|p| p.sandbox.clone().unwrap_or_default()).collect::<Vec<_>>();
         assert_eq!(names(&rt), ["better-checkout", "sbxw-desktop-design", "test-sbx", "docs"]);
         rt.update(|s, _| s.focused = 1);
         rt.frame(0.016);
         tap(&mut rt, "pane-2-close");
         assert_eq!(names(&rt), ["better-checkout", "test-sbx", "docs"]);
-        assert_eq!(rt.state.layout.0, 3);
+        assert_eq!(rt.state.panes.len(), 3);
+        assert_eq!(rt.state.pages.cur().tile, tiling::default(&rt.state.pages.cur().tile.order(), false), "the page re-tiled to the 3-pane arrangement");
         assert_eq!(rt.state.focused, 1, "the pane that took the freed place has the focus");
-        assert_eq!(rt.state.screen_data()["app"]["layout"]["panes"], 3, "the layout switch follows");
+        assert_eq!(rt.state.screen_data()["app"]["layout"]["panes"], 3, "the screens see three panes");
         // The sandbox is not stopped and no session ends: only the view went.
         assert!(rt.state.sandboxes.iter().any(|s| s.name == "sbxw-desktop-design" && s.status == "running"));
         tap(&mut rt, "pane-3-close");
@@ -2738,7 +3358,7 @@ mod tests {
         assert_eq!(rt.state.focused, 1, "the last pane closed: the one before it");
         tap(&mut rt, "pane-1-close");
         tap(&mut rt, "pane-1-close");
-        assert_eq!(rt.state.layout.0, 1);
+        assert_eq!(rt.state.panes.len(), 1);
         assert!(rt.state.panes[0].sandbox.is_none(), "the last pane is the empty pane, not removed");
         assert!(rt.presented("pane-1").is_some());
     }
@@ -2927,54 +3547,29 @@ mod tests {
     /// with four busy panes is one replaced: the least recently used, not the focused.
     #[test]
     fn a_spare_pane_never_replaces_a_live_terminal_while_there_is_room() {
-        let open = |a: &mut App, i: usize, sb: &str| {
-            a.ensure_panes(i + 1);
-            a.panes[i].sandbox = Some(sb.into());
-            a.touch(i);
-        };
         let spare = |a: &mut App, sb: &str| a.run_intent("test", Intent::OpenTerminal { sandbox: sb.into(), mode: Mode::Agent, thread: None, pane: PaneTarget::Spare, start: ThreadStart::default() });
-        let shown = |a: &App| a.panes.iter().take(a.layout.0).map(|p| p.sandbox.clone().unwrap_or_default()).collect::<Vec<_>>();
-        let app = || {
-            let mut a = app();
-            a.panes = vec![Pane::empty()];
-            (a.layout.0, a.focused) = (2, 0);
-            a
-        };
-        // One pane in use, layout "1 terminal": a second pane is added.
+        let pages = |a: &App| a.pages.list.iter().map(|p| p.tile.order().iter().map(|u| a.pane_by_uid(*u).and_then(|p| p.sandbox.clone()).unwrap_or_default()).collect::<Vec<_>>()).collect::<Vec<_>>();
+        // One pane in use: a second pane is added on the page.
         let mut a = app();
-        a.layout.0 = 1;
-        open(&mut a, 0, "web-app");
+        set_panes(&mut a, &[Some("web-app")]);
         spare(&mut a, "new-1");
-        assert_eq!(shown(&a), ["web-app", "new-1"]);
+        assert_eq!(pages(&a), [["web-app", "new-1"]]);
         assert_eq!(a.focused, 1);
-        // Two terminals, then the layout set back to 1: the second is hidden,
-        // still live. The next spare open must not replace it.
+        // An empty pane on the page is taken first.
         let mut a = app();
-        open(&mut a, 0, "web-app");
-        open(&mut a, 1, "web-api");
-        a.run_intent("test", Intent::SetLayout { panes: 1, split: Split::Columns });
-        spare(&mut a, "new-2");
-        assert_eq!(a.layout.0, 2);
-        assert_eq!(shown(&a), ["web-app", "new-2"]);
-        assert!(a.panes.iter().any(|p| p.sandbox.as_deref() == Some("web-api")), "the hidden terminal is kept: {:?}", a.panes.iter().map(|p| &p.sandbox).collect::<Vec<_>>());
-        // An empty pane on screen is taken first.
-        let mut a = app();
-        a.layout.0 = 3;
-        open(&mut a, 0, "a");
-        open(&mut a, 2, "c");
+        set_panes(&mut a, &[Some("a"), None, Some("c")]);
         spare(&mut a, "new-3");
-        assert_eq!(shown(&a), ["a", "new-3", "c"]);
-        // Four busy panes: the least recently used one, never the focused one.
+        assert_eq!(pages(&a), [["a", "new-3", "c"]]);
+        // A full page: the next page with room, else a new page; nothing is replaced.
         let mut a = app();
-        a.layout.0 = 4;
-        for (i, sb) in ["a", "b", "c", "d"].iter().enumerate() {
-            open(&mut a, i, sb);
-        }
-        a.touch(0);
-        a.focused = 3;
+        set_panes(&mut a, &[Some("a"), Some("b"), Some("c"), Some("d")]);
         spare(&mut a, "new-4");
-        assert_eq!(shown(&a), ["a", "new-4", "c", "d"], "b was the least recently used");
-        assert!(a.notice.as_ref().unwrap().0.contains("pane 2 (b, the least recently used)"));
+        assert_eq!(pages(&a), vec![vec!["a", "b", "c", "d"], vec!["new-4"]]);
+        assert_eq!(a.pages.current, 1, "its page shows");
+        assert!(a.notice.is_none(), "no pane was taken over");
+        a.run_intent("test", Intent::Pages(PageOp::Show(0)));
+        spare(&mut a, "new-5");
+        assert_eq!(pages(&a), vec![vec!["a", "b", "c", "d"], vec!["new-4", "new-5"]], "page 2 had room");
     }
 
     /// Phase 3 bug (user, macOS): an old override of `sandboxes.luau` hid the
@@ -3041,21 +3636,19 @@ end, actions = {} }"#).unwrap();
     #[test]
     fn closing_a_threads_panes_empties_only_that_session() {
         let mut a = app();
-        a.panes = vec![Pane::empty(), Pane::empty(), Pane::empty()];
-        a.layout.0 = 3;
+        set_panes(&mut a, &[Some("web-app"), Some("web-app"), Some("web-app")]);
         for (i, t) in [None, Some("t1"), Some("t2")].iter().enumerate() {
-            a.panes[i].sandbox = Some("web-app".into());
             a.panes[i].thread = t.map(str::to_string);
         }
         a.focused = 2;
         a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t1".into()) });
-        assert_eq!(a.layout.0, 2);
+        assert_eq!(a.panes.len(), 2);
         let shown: Vec<_> = a.panes.iter().take(2).map(|p| p.thread.clone()).collect();
         assert_eq!(shown, [None, Some("t2".to_string())]);
         assert_eq!(a.focused, 1, "the focus follows its pane");
         a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: None });
         a.run_intent("test", Intent::ClosePanes { sandbox: "web-app".into(), thread: Some("t2".into()) });
-        assert_eq!(a.layout.0, 1);
+        assert_eq!(a.panes.len(), 1);
         assert!(a.panes[0].sandbox.is_none(), "the last pane empties, it does not go");
     }
 

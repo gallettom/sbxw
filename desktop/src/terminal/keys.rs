@@ -93,6 +93,11 @@ pub fn key_bytes_with(ev: &KeyEvent, app_cursor: bool, opts: KeyOpts) -> Option<
         Key::Enter => alt(b"\r".to_vec()),
         Key::Backspace if m.ctrl => alt(vec![0x08]),
         Key::Backspace => alt(vec![0x7f]),
+        // The app's page keys (shell/palette.rs, `page_step`): Ctrl+Tab and
+        // Ctrl+Shift+Tab, and ⌘⌥← / ⌘⌥→ on macOS. A plain Tab for the
+        // program before, so nothing it could tell apart is lost.
+        Key::Tab if m.ctrl && !m.alt => None,
+        Key::Left | Key::Right if opts.mac && m.logo && m.alt && !m.ctrl => None,
         Key::Tab if m.shift => Some(b"\x1b[Z".to_vec()),
         Key::Tab => alt(b"\t".to_vec()),
         Key::Escape => alt(vec![0x1b]),
@@ -232,6 +237,10 @@ mod tests {
         assert_eq!(key_bytes(&k(Key::Right, |m| m.ctrl = true), false), Some(b"\x1b[1;5C".to_vec()));
         assert_eq!(key_bytes(&k(Key::Left, |m| (m.shift, m.alt) = (true, true)), true), Some(b"\x1b[1;4D".to_vec()));
         assert_eq!(key_bytes(&k(Key::Tab, |m| m.shift = true), false), Some(b"\x1b[Z".to_vec()));
+        assert_eq!(key_bytes(&k(Key::Tab, |m| m.ctrl = true), false), None, "Ctrl+Tab turns pages");
+        assert_eq!(key_bytes(&k(Key::Tab, |m| (m.ctrl, m.shift) = (true, true)), false), None);
+        assert_eq!(key_bytes_with(&k(Key::Right, |m| (m.logo, m.cmd, m.alt) = (true, true, true)), false, MAC), None, "⌘⌥→ turns pages on macOS");
+        assert_eq!(key_bytes_with(&k(Key::Right, |m| m.alt = true), false, MAC), Some(b"\x1b[1;3C".to_vec()), "⌥→ stays the program's");
         assert_eq!(key_bytes_with(&k(Key::Text("b".into()), |m| m.alt = true), false, LINUX), Some(b"\x1bb".to_vec()));
         assert_eq!(key_bytes(&k(Key::Delete, none), false), Some(b"\x1b[3~".to_vec()));
         assert_eq!(key_bytes(&k(Key::PageUp, |m| m.ctrl = true), false), Some(b"\x1b[5;5~".to_vec()));

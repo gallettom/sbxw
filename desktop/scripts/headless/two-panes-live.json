@@ -1,16 +1,6 @@
 {
   "events": [
     {
-      "t": 0.3,
-      "type": "tap",
-      "key": "layout"
-    },
-    {
-      "t": 0.5,
-      "type": "tap",
-      "key": "layout-2c"
-    },
-    {
       "t": 0.7,
       "type": "tap",
       "key": "extra-sandbox-docs"
@@ -68,7 +58,7 @@
     {
       "t": 4.0,
       "type": "ime",
-      "commit": "ê"
+      "commit": "\u00ea"
     },
     {
       "t": 4.2,

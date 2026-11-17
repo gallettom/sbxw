@@ -127,6 +127,10 @@ pub mod layout {
     /// size of anything pressable.
     pub const CONTROL_H: f32 = 28.0;
     pub const DENSE_H: f32 = 24.0;
+    /// The left rail (shell/rail.rs): always shown, left of the sidebar.
+    pub const RAIL_W: f32 = 44.0;
+    /// The pager strip above the panes (shell/pager.rs).
+    pub const PAGER_H: f32 = 28.0;
     /// The status bar across the window's foot (shell/statusbar.rs): 24 pt
     /// targets, a hairline above.
     pub const STATUS_BAR_H: f32 = 26.0;
@@ -188,7 +192,7 @@ pub fn to_json() -> serde_json::Value {
         "layout": {
             "top_bar_h": layout::TOP_BAR_H, "gutter": layout::GUTTER, "sidebar_w": layout::SIDEBAR_W,
             "pane_bar_h": layout::PANE_BAR_H, "traffic_lights_w": layout::TRAFFIC_LIGHTS_W,
-            "control_h": layout::CONTROL_H, "dense_h": layout::DENSE_H, "sidebar_min": layout::SIDEBAR_MIN, "sidebar_max": layout::SIDEBAR_MAX,
+            "rail_w": layout::RAIL_W, "pager_h": layout::PAGER_H, "control_h": layout::CONTROL_H, "dense_h": layout::DENSE_H, "sidebar_min": layout::SIDEBAR_MIN, "sidebar_max": layout::SIDEBAR_MAX,
         },
     })
 }

@@ -147,6 +147,8 @@ pub struct PaneFit {
 pub const PANE_PAD: f32 = 8.0;
 pub const PANE_GAP: f32 = 8.0;
 pub const DOT_W: f32 = 8.0;
+/// The grip a pane is dragged by (its bar's empty part drags it too).
+pub const GRIP_W: f32 = 10.0;
 pub const CLOSE_W: f32 = 24.0;
 /// Room the name keeps before any extra: up to this much of it shows.
 pub const NAME_WANT: f32 = 120.0;
@@ -163,16 +165,20 @@ pub fn kind_w(kind: &str) -> f32 {
     measure(kind, CHIP_TEXT, 400.0)
 }
 
-/// What shows in a pane bar `width` points wide.
-pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>) -> PaneFit {
+/// What shows in a pane bar `width` points wide. `menu`: the "⋯" button is
+/// always there (it also holds the pane's moves), so its room is kept.
+pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>, menu: bool) -> PaneFit {
     let items = by_priority(items);
     let name_w = measure(name, NAME_TEXT, 500.0);
     let name_min = name_w.min(NAME_MIN);
     let name_keep = name_w.min(NAME_WANT);
-    // dot | name, kind, extras…, more | close
-    let fixed = PANE_PAD * 2.0 + DOT_W + PANE_GAP + name_keep + PANE_GAP + kind_w(kind) + PANE_GAP + CLOSE_W;
+    // grip, dot | name, kind, extras…, more | close
+    let mut fixed = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name_keep + PANE_GAP + kind_w(kind) + PANE_GAP + CLOSE_W;
+    if menu {
+        fixed += PANE_GAP + more_w(items.len());
+    }
     let widths: Vec<f32> = items.iter().map(chip_w).collect();
-    let k = fit(width, fixed, &widths, PANE_GAP, more_w(items.len()));
+    let k = fit(width, fixed, &widths, PANE_GAP, if menu { 0.0 } else { more_w(items.len()) });
     let mut shown = items;
     let hidden = shown.split_off(k);
     PaneFit { shown, hidden, name_min }
@@ -195,13 +201,11 @@ pub fn more_tone(hidden: &[Item]) -> Option<&'static str> {
 // ---------------------------------------------------------------------------
 // The top bar (screens/topbar.luau draws it; the core says what fits).
 
-/// Under this width the top bar's own parts go compact: no "sbxw" title, the
-/// layout switch as an icon menu.
+/// Under this width the top bar goes compact: no "sbxw" title.
 pub const TOP_COMPACT: f32 = 720.0;
 /// Between the bar's groups (left, centre, right, and the spacers between them).
 pub const TOP_GAP: f32 = 16.0;
-/// Inside the left group (title, layout switch), the centre's, the right's.
-pub const TOP_LEFT_GAP: f32 = 12.0;
+/// Inside the centre group and the right one.
 pub const TOP_CENTRE_GAP: f32 = 8.0;
 pub const TOP_RIGHT_GAP: f32 = 4.0;
 
@@ -272,16 +276,16 @@ impl TopExtra {
 }
 
 /// How the top bar is drawn at `width` (the screen's own column), as
-/// topbar.luau lays it out: `[sbxw, layout] · [centre extras] · [tools,
-/// …, Jarvis, state]`. Compact or not, and how many of `extras` (in
-/// priority order) show inline; the rest go into its menu. Exact: every
-/// part is measured the way the element draws it (tested against the laid
-/// out bar).
-pub fn top_fit(width: f32, jarvis_label: &str, layout_label: &str, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
-    let left = |compact: bool| if compact { menu_w("", true, false) } else { measure("sbxw", 14.0, 600.0) + TOP_LEFT_GAP + menu_w(layout_label, false, true) };
+/// topbar.luau lays it out: `[sbxw] · [centre extras] · [tools, …,
+/// Jarvis, state]` (`jarvis`: its button's label, when the bar draws it).
+/// Compact or not, and how many of `extras` (in priority order) show
+/// inline; the rest go into its menu. Exact: every part is measured the way
+/// the element draws it (tested against the laid out bar).
+pub fn top_fit(width: f32, jarvis: Option<&str>, state_word: &str, extras: &[TopExtra]) -> (bool, usize) {
+    let left = |compact: bool| if compact { 0.0 } else { measure("sbxw", 14.0, 600.0) };
     // left, spacer, centre, spacer, right: four gaps; inside the right group
     // Jarvis and the state, and the gap before Jarvis when a tool precedes it.
-    let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + button_w(jarvis_label, true) + TOP_RIGHT_GAP + state_w(state_word);
+    let fixed = |compact: bool| left(compact) + TOP_GAP * 4.0 + jarvis.map_or(0.0, |j| button_w(j, true) + TOP_RIGHT_GAP) + state_w(state_word);
     let need = |compact: bool, k: usize| -> f32 {
         let shown = &extras[..k];
         let mut w = fixed(compact);
@@ -404,15 +408,13 @@ mod tests {
         for width in [1100.0, 700.0, 560.0, 450.0, 330.0, 230.0, 200.0, 160.0] {
             for n in [0, 1, 3, 9] {
                 let items: Vec<Item> = many().into_iter().take(n).collect();
-                let f = pane_fit(width, "test-sbx", "agent", items.clone());
+                let f = pane_fit(width, "test-sbx", "agent", items.clone(), true);
                 assert_eq!(f.shown.len() + f.hidden.len(), n, "{width} {n}");
                 let name = measure("test-sbx", 12.0, 500.0).min(NAME_WANT);
-                let mut used = PANE_PAD * 2.0 + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W;
+                // The "⋯" menu is always there (it holds the pane's moves).
+                let mut used = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
                 used += f.shown.iter().map(|i| PANE_GAP + chip_w(i)).sum::<f32>();
-                if !f.hidden.is_empty() {
-                    used += PANE_GAP + more_w(n);
-                }
-                let floor = PANE_PAD * 2.0 + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
+                let floor = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
                 assert!(used <= width + 0.5 || f.shown.is_empty() && used <= floor + 0.5, "{width} {n}: {used}");
                 // Priority: nothing hidden ranks before something shown.
                 if let (Some(s), Some(h)) = (f.shown.last(), f.hidden.first()) {
@@ -424,16 +426,16 @@ mod tests {
 
     #[test]
     fn widths_decide_what_overflows() {
-        let wide = pane_fit(1100.0, "test-sbx", "agent", many());
+        let wide = pane_fit(1100.0, "test-sbx", "agent", many(), true);
         assert!(wide.hidden.is_empty(), "one pane at 1400: all inline: {:?}", ids(&wide.hidden));
-        let two = pane_fit(560.0, "test-sbx", "agent", many());
+        let two = pane_fit(560.0, "test-sbx", "agent", many(), true);
         assert_eq!(ids(&two.shown)[..2], ["plan", "approvals"], "two panes at 1400: what needs you stays inline");
         assert!(!two.hidden.is_empty());
-        let narrow = pane_fit(210.0, "test-sbx", "agent", many());
+        let narrow = pane_fit(210.0, "test-sbx", "agent", many(), true);
         assert!(narrow.shown.len() <= 1, "4 panes at 720: {:?}", ids(&narrow.shown));
         assert_eq!(narrow.hidden.len() + narrow.shown.len(), 9);
         // The name keeps its floor even with nothing else drawn.
-        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", "agent", many());
+        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", "agent", many(), true);
         assert_eq!(long.name_min, NAME_MIN);
     }
 
@@ -457,11 +459,11 @@ mod tests {
     fn the_top_bar_goes_compact_then_overflows() {
         let x = |l: &str, tool: bool| TopExtra { label: l.into(), icon: true, button: true, tool, drawn_w: None };
         let extras = vec![x("New", false), x("sbx asks 88", false), x("Plan waiting", false), x("", true), x("", true), x("Mac", true), x("Requests 3", false)];
-        let (c, k) = top_fit(1300.0, "Jarvis", "2 side by side", "connected", &extras);
+        let (c, k) = top_fit(1300.0, Some("Jarvis"), "connected", &extras);
         assert!(!c && k == extras.len(), "wide: all inline ({c}, {k})");
-        let (c, k) = top_fit(700.0, "Jarvis", "2 side by side", "connected", &extras);
+        let (c, k) = top_fit(700.0, Some("Jarvis"), "connected", &extras);
         assert!(c && k < extras.len(), "narrow: compact and an overflow ({c}, {k})");
-        let (c, k) = top_fit(330.0, "Jarvis · 2 to review", "2 side by side", "connected", &extras);
+        let (c, k) = top_fit(330.0, Some("Jarvis · 2 to review"), "connected", &extras);
         assert!(c && k == 0, "the smallest window with a notice: everything in the menu ({c}, {k})");
     }
 }

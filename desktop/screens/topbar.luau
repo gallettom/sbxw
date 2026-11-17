@@ -1,25 +1,15 @@
 -- The top bar, in three groups with room between them:
---   left    the app's name and how many terminals show;
+--   left    the app's name (the pages of terminals have their own pager,
+--           above the panes, drawn by the core);
 --   centre  New, then what needs you (sbx's requests, agents' requests, a
 --           plan waiting): quiet until something waits, then amber;
---   right   usage, Setup, Help, the Mac, Jarvis, then the daemon's state.
+--   right   usage, Help, the Mac, then the daemon's state.
+-- Requests, Network (sbx asks), Setup and Jarvis are in the left rail, drawn
+-- by the core: the core marks those extras `in_rail` and they are skipped.
 -- The core keeps room on the left for macOS's window buttons, measures the
 -- bar (data.app.topbar) and marks the extras that do not fit `more`: they
 -- go into one menu, "…" and how many, with a dot in the tone of the most
 -- urgent thing it holds.
-
-local layouts = {
-  { id = "1", label = "1 terminal", icon = "single" },
-  { id = "2c", label = "2 side by side", icon = "columns" },
-  { id = "2r", label = "2 stacked", icon = "rows" },
-  { id = "3", label = "3 terminals", icon = "grid" },
-  { id = "4", label = "4 terminals", icon = "grid" },
-}
-
-local function current(layout)
-  if layout.panes == 2 then return layout.split == "rows" and "2r" or "2c" end
-  return tostring(layout.panes)
-end
 
 local tones = { up = "green", connecting = "amber", down = "red" }
 local words = { up = "connected", connecting = "connecting", down = "offline" }
@@ -118,17 +108,14 @@ end
 return {
   render = function(_, data)
     local app = data.app
-    local j = data.jarvis or { open = false, pending = {}, voice = {} }
-    local n = #j.pending
     local mac = app.platform == "macos"
-    -- How the bar fits its width (the core measures it): compact drops the
-    -- name and draws the layout switch as an icon menu.
+    -- How the bar fits its width (the core measures it): compact drops the name.
     local fit = app.topbar or {}
     local compact = fit.compact == true
     local centre, right, hidden = { gap = 8 }, { gap = 4 }, {}
     for _, e in ipairs((app.extras or {}).topbar or {}) do
       -- New sits in the sidebar's header while the sidebar shows.
-      if e.in_sidebar then
+      if e.in_sidebar or e.in_rail then
       elseif e.more then table.insert(hidden, e)
       elseif tools[e.id] then table.insert(right, extra(e, mac, data))
       else table.insert(centre, extra(e, mac, data)) end
@@ -136,28 +123,13 @@ return {
     -- The tools in a fixed order: usage, Setup, Help, the Mac.
     local tl = {}
     for _, e in ipairs((app.extras or {}).topbar or {}) do
-      if tools[e.id] and not e.more then table.insert(tl, e) end
+      if tools[e.id] and not e.more and not e.in_rail then table.insert(tl, e) end
     end
     table.sort(tl, function(a, b) return tools[a.id] < tools[b.id] end)
     right = { gap = 4 }
     for _, e in ipairs(tl) do table.insert(right, extra(e, mac, data)) end
     if #hidden > 0 then table.insert(right, more_menu(hidden)) end
-    local switch
-    if compact then
-      local icon = "single"
-      for _, l in ipairs(layouts) do if l.id == current(app.layout) then icon = l.icon end end
-      switch = menu{ id = "layout", icon = icon, items = layouts, on = "layout", variant = "ghost", help = "How many terminals show" }
-    else
-      switch = select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" }
-    end
     local state = app.connection.state
-    table.insert(right, button{ n > 0 and ("Jarvis · " .. n .. " to review") or "Jarvis", icon = j.voice.recording and "mic" or "sparkle",
-      key = "jarvis-toggle", on = "jarvis", variant = "neutral", tone = "purple",
-      -- Jarvis is purple (the team's colour), filled with its tint while open
-      -- or while something waits for review: never a second green primary.
-      fill = (j.open or n > 0) and "purple-tint" or nil, border = (j.open or n > 0) and "purple-strong" or nil,
-      keys = mac and { "⌘", "J" } or { "F7" },
-      help = j.open and "Close Jarvis" or "Open Jarvis" })
     -- The daemon's state: a dot and a word; where it is connected, or why
     -- not, in its tooltip.
     table.insert(right, row{ key = "daemon-state", gap = 8, px = 8, h = 28, help = app.connection.text,
@@ -167,7 +139,6 @@ return {
     return row{ gap = 16, w = "full", h = "full",
       row{ gap = 12,
         (not compact) and text{ "sbxw", weight = "semibold", size = "title", color = "text-bright" } or false,
-        switch,
       },
       spacer{},
       row(centre),
@@ -177,11 +148,6 @@ return {
   end,
 
   actions = {
-    layout = function(_, _, id)
-      local panes = tonumber(string.sub(id, 1, 1))
-      return intent("set_layout", { panes = panes, split = string.sub(id, 2, 2) == "r" and "rows" or "columns" })
-    end,
-    jarvis = function() return intent("toggle_jarvis_panel") end,
     extra = function(_, id)
       local i = extra_intents[id]
       if i then return intent(i.name, i.args) end

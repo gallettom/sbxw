@@ -29,9 +29,9 @@ pub enum Run {
     Intents(Vec<(String, J)>),
     Sidebar,
     Jarvis,
+    /// The current page's pane `i` (from 0).
     FocusPane(usize),
     ClosePane,
-    Layout(usize, Split),
     Zoom(i32),
 }
 
@@ -63,6 +63,25 @@ pub fn close_keys() -> Vec<String> {
     if mac() { vec!["⌘".into(), "⇧".into(), "W".into()] } else { vec!["Ctrl".into(), "Shift".into(), "W".into()] }
 }
 
+/// The next page's keys (`back`: the previous one's). Ctrl+Tab everywhere:
+/// in a terminal it is a plain Tab (terminal/keys.rs sends `\t` for it), so
+/// taking it costs a program nothing; on macOS also ⌘⌥→ and ⌘⌥←.
+pub fn page_keys(forward: bool) -> Vec<String> {
+    if forward { vec!["Ctrl".into(), "Tab".into()] } else { vec!["Ctrl".into(), "Shift".into(), "Tab".into()] }
+}
+
+/// Whether `ev` is the next page's key (`Some(1)`) or the previous one's
+/// (`Some(-1)`): Ctrl+Tab and Ctrl+Shift+Tab, and on macOS ⌘⌥→ and ⌘⌥←.
+pub fn page_step(ev: &rune::KeyEvent) -> Option<i32> {
+    let m = ev.mods;
+    match ev.key {
+        rune::Key::Tab if m.ctrl && !m.alt && !m.logo => Some(if m.shift { -1 } else { 1 }),
+        rune::Key::Right if mac() && m.logo && m.alt && !m.ctrl && !m.shift => Some(1),
+        rune::Key::Left if mac() && m.logo && m.alt && !m.ctrl && !m.shift => Some(-1),
+        _ => None,
+    }
+}
+
 /// The app's chords, for the palette, Help (`data.app.shortcuts`) and the
 /// tooltips: (keys, what it does).
 pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
@@ -70,7 +89,9 @@ pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
         (chord_keys("K"), "Open the command palette".into()),
         (chord_keys("B"), "Show or hide the sidebar".into()),
         (if mac() { chord_keys("J") } else { vec!["F7".into()] }, "Open or close Jarvis".into()),
-        (chord_keys("1…9"), "Give pane 1 to 9 the keyboard".into()),
+        (chord_keys("1…9"), "Give the page's pane 1 to 9 the keyboard".into()),
+        (page_keys(true), "Next page of terminals".into()),
+        (page_keys(false), "Previous page of terminals".into()),
         (close_keys(), "Close the focused pane (the sandbox and its session go on)".into()),
         (chord_keys("+ / − / 0"), "Zoom the app in, out, back to 100% (in a terminal: its text size)".into()),
         (vec![ptt.to_string()], "Push to talk to Jarvis (hold)".into()),
@@ -86,6 +107,9 @@ pub fn shortcuts(ptt: &str) -> Vec<(Vec<String>, String)> {
     }
     v.push((if mac() { vec!["⌘".into(), "V".into()] } else { vec!["Ctrl".into(), "Shift".into(), "V".into()] }, "Paste into the focused terminal".into()));
     v.push((vec!["Shift".into(), "PageUp".into()], "Scroll a terminal's history".into()));
+    if mac() {
+        v.push((vec!["⌘".into(), "⌥".into(), "→ / ←".into()], "Next or previous page of terminals".into()));
+    }
     if !mac() {
         v.push((vec!["Ctrl".into(), "Shift".into(), "K".into()], "The same chords with Shift while a terminal has the keyboard (Ctrl+Shift+K, +B, +1…9)".into()));
     }
@@ -199,14 +223,37 @@ impl App {
         }
         v.push(core("sidebar", if self.sidebar_shown() { "Hide the sidebar" } else { "Show the sidebar" }, "", "columns", chord_keys("B"), Run::Sidebar));
         v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "sparkle", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
-        for i in 0..self.layout.0 {
+        let shown = self.shown();
+        for (k, i) in shown.clone().enumerate() {
             let what = self.panes.get(i).and_then(|p| p.sandbox.clone()).unwrap_or_else(|| "empty".into());
-            v.push(core(&format!("pane-{}", i + 1), &format!("Go to pane {}", i + 1), &what, "single", chord_keys(&(i + 1).to_string()), Run::FocusPane(i)));
+            v.push(core(&format!("pane-{}", k + 1), &format!("Go to pane {}", k + 1), &what, "single", chord_keys(&(k + 1).to_string()), Run::FocusPane(k)));
         }
         v.push(core("close-pane", "Close the focused pane", "The sandbox and its session go on", "close", close_keys(), Run::ClosePane));
-        for (n, split, label, icon) in [(1, Split::Columns, "1 terminal", "single"), (2, Split::Columns, "2 side by side", "columns"), (2, Split::Rows, "2 stacked", "rows"), (3, Split::Columns, "3 terminals", "grid"), (4, Split::Columns, "4 terminals", "grid")] {
-            v.push(core(&format!("layout-{n}{}", if split == Split::Rows { "r" } else { "" }), &format!("Layout: {label}"), "", icon, vec![], Run::Layout(n, split)));
+        // Pages and moving panes: the pager's and the pane menus' commands.
+        let i = |name: &str, args: J| Run::Intents(vec![(name.to_string(), args)]);
+        let n = self.pages.list.len();
+        v.push(core("page-next", "Next page", &format!("page {} of {n}", self.pages.current + 1), "chevron-right", page_keys(true), i("page_step", J::Null)));
+        v.push(core("page-prev", "Previous page", "", "chevron-right", page_keys(false), i("page_step", serde_json::json!({ "back": true }))));
+        for k in 0..n {
+            v.push(core(&format!("page-{}", k + 1), &format!("Show page {}", k + 1), &self.tab_info(k).label, "single", vec![], i("page_show", serde_json::json!({ "page": k + 1 }))));
         }
+        v.push(core("page-new", "New page", "An empty page of terminals", "plus", vec![], i("page_new", J::Null)));
+        v.push(core("page-close", "Close this page", "Its terminals' views close; the sessions go on", "close", vec![], i("page_close", J::Null)));
+        v.push(core("view-tabs", "View: tabs", "One terminal per page", "single", vec![], i("pages_view", serde_json::json!({ "view": "tabs" }))));
+        v.push(core("view-grid", "View: grid", &format!("Up to {} terminals per page", self.pages.grid_per), "grid", vec![], i("pages_view", serde_json::json!({ "view": "grid" }))));
+        for &per in super::pages::PER_CHOICES {
+            v.push(core(&format!("per-{per}"), &format!("Terminals per page: {per}"), "", "grid", vec![], i("pages_per", serde_json::json!({ "per": per }))));
+        }
+        v.push(core("gather", "Gather terminals onto fewer pages", "", "columns", vec![], i("pages_gather", J::Null)));
+        for (side, label) in [("left", "Move pane left"), ("right", "Move pane right"), ("up", "Move pane up"), ("down", "Move pane down")] {
+            v.push(core(&format!("move-{side}"), label, "The focused pane trades places, or docks along that edge", "columns", vec![], i("pane_move", serde_json::json!({ "to": side }))));
+        }
+        v.push(core("rotate", "Rotate split", "The focused pane and its neighbour: side by side or stacked", "rows", vec![], i("pane_rotate", J::Null)));
+        v.push(core("equalise", "Make the panes equal", "This page's splits share their room equally", "grid", vec![], i("panes_equalise", J::Null)));
+        for k in (0..n).filter(|&k| k != self.pages.current) {
+            v.push(core(&format!("to-page-{}", k + 1), &format!("Move pane to page {}", k + 1), &self.tab_info(k).label, "single", vec![], i("pane_to_page", serde_json::json!({ "page": k + 1 }))));
+        }
+        v.push(core("to-new-page", "Move pane to a new page", "", "plus", vec![], i("pane_to_page", J::Null)));
         v.push(core("zoom-in", "Zoom in", &format!("now {}%", (self.zoom() * 100.0).round()), "plus", chord_keys("+"), Run::Zoom(1)));
         v.push(core("zoom-out", "Zoom out", "", "search", chord_keys("−"), Run::Zoom(-1)));
         v.push(core("zoom-reset", "Actual size", "100%", "search", chord_keys("0"), Run::Zoom(0)));
@@ -253,17 +300,16 @@ impl App {
             }
             Run::Sidebar => self.toggle_sidebar(),
             Run::Jarvis => self.toggle_panel(None),
-            Run::FocusPane(i) if i < self.layout.0 => {
-                self.focused = i;
-                self.touch(i);
-                self.refocus = true;
+            Run::FocusPane(k) => {
+                let r = self.shown();
+                if k < r.len() {
+                    self.focus_pane(r.start + k);
+                }
             }
-            Run::FocusPane(_) => {}
             Run::ClosePane => {
                 let i = self.focused;
                 self.remove_pane(i);
             }
-            Run::Layout(n, split) => self.press_extra("palette", "set_layout", &serde_json::json!({ "panes": n, "split": if split == Split::Rows { "rows" } else { "columns" } })),
             Run::Zoom(step) => self.zoom_by(step),
         }
         self.push_data();

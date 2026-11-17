@@ -1,12 +1,1 @@
-{
-  "events": [
-    { "t": 0.3, "type": "tap", "key": "layout" },
-    { "t": 0.5, "type": "mark", "name": "menu-open" },
-    { "t": 0.6, "type": "tap", "key": "layout-2c" },
-    { "t": 0.8, "type": "tap", "key": "extra-sandbox-docs" },
-    { "t": 0.9, "type": "tap", "key": "extra-sandbox-docs-spare" },
-    { "t": 1.4, "type": "type", "every": 0.02, "text": "echo pane two; tput cols" },
-    { "t": 2.0, "type": "key", "name": "Enter" },
-    { "t": 2.4, "type": "mark", "name": "end" }
-  ]
-}
+{"events": [{"t": 0.8, "type": "tap", "key": "extra-sandbox-docs"}, {"t": 0.9, "type": "tap", "key": "extra-sandbox-docs-spare"}, {"t": 1.4, "type": "type", "every": 0.02, "text": "echo pane two; tput cols"}, {"t": 2.0, "type": "key", "name": "Enter"}, {"t": 2.4, "type": "mark", "name": "end"}]}
