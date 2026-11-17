@@ -160,6 +160,7 @@ pub fn routes() -> Router<Arc<App>> {
         .merge(super::jarvis::ui_routes())
         // The voice concierge.
         .route("/api/voice", get(voice_status))
+        .route("/api/emphasis", get(emphasis))
         .route("/api/voice/install", post(voice_install))
         .route("/api/voice/cancel", post(voice_cancel))
         .route("/api/voice/rm", post(voice_rm))
@@ -1846,6 +1847,12 @@ pub async fn settle_ws_thread(
 }
 
 // ── Voice ────────────────────────────────────────────────────────────────
+
+/// The status pills' contract: vocabulary, tones and each sandbox's switch
+/// (svc/emphasis.rs). Also pushed as the `emphasis` event when it changes.
+async fn emphasis(State(app): S) -> Json<sbxw_core::emphasis::Contract> {
+    Json(app.emphasis_contract())
+}
 
 async fn voice_status(State(app): S) -> Json<Value> {
     ok_with(app.voice_status())

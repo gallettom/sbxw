@@ -16,6 +16,7 @@ pub mod codemap;
 pub mod chrome;
 pub mod config;
 pub mod consent;
+pub mod emphasis;
 pub mod embed;
 pub mod envexport;
 pub mod envfile;

@@ -156,7 +156,8 @@ const TOOLS = [
       "editable sbxw.toml files and their kits lines, the bundled kits, the jarvis-* kits with " +
       "their files, the settings you may set and their allowed values, the pronunciation " +
       "dictionary (`voice_words`: each word, how it is said in French and in English, and whether " +
-      "it is built in or configured), the network allowlist, " +
+      "it is built in or configured), the status pills (`emphasis`: the switches, each label " +
+      "family with its tone, other words and `use` line, each sandbox's switch), the network allowlist, " +
       "the MCP server names, the sandboxes running, and the desktop app's screens (`desktop`: " +
       "whether the app has run on this machine, each screen and whether the person has their own " +
       "version of it, the intents a screen may emit).\n" +
@@ -321,6 +322,66 @@ const TOOLS = [
         timeout_seconds: TIMEOUT,
       },
       required: ["summary", "word"],
+    },
+  },
+  {
+    name: "set_status_label",
+    description:
+      "Propose a change to the status labels: an agent writes `[[Done]]` or `[[Failed: 3 tests]]` " +
+      "and sbxw draws it as a coloured pill in the terminal. Use it when the person wants a label " +
+      "added, recoloured, given other words, or removed (\"make Blocked red\", \"add a Shipped " +
+      "label\"). Read `emphasis` in `sbxw_state` first.\n" +
+      "\n" +
+      "A family is changed WHOLE: give its main `word`, its `tone` (green done, red failed, amber " +
+      "needs you, blue context, purple Jarvis or team, cyan kind of work, danger filled red for " +
+      "what cannot be undone or costs money), `also` (its other words: restate the ones to keep) " +
+      "and `use` (one line, at most 80 characters, on when an agent should write it). Words: 1 to " +
+      "32 letters, digits, single spaces or '-', starting with a letter; one word belongs to one " +
+      "family. Set `remove` to true to drop the family. The first change copies the built-in " +
+      "labels into the daemon's sbxw.toml, since a configured table replaces them.\n" +
+      "\n" +
+      "Risk: removing words or changing a tone is low (a spoken yes may approve it). Adding a word " +
+      "or writing a new `use` line is HIGH: that text goes into every sandbox's CLAUDE.md, so the " +
+      "person approves it by a click. When it takes effect, tell the person: the terminals redraw " +
+      "at once; agents read the new guidance only after their sandbox's next bring-up, in a new " +
+      "session." +
+      PROPOSAL_RULES,
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: SUMMARY,
+        word: { type: "string", description: "The family's main word, for example \"needs you\"." },
+        tone: { type: "string", enum: ["green", "red", "amber", "blue", "purple", "cyan", "danger"], description: "Its colour by meaning." },
+        also: { type: "array", items: { type: "string" }, description: "Its other words, all of them (the list replaces the old one)." },
+        use: { type: "string", description: "When an agent writes it, one line, at most 80 characters." },
+        remove: { type: "boolean", description: "True to drop this family instead." },
+        timeout_seconds: TIMEOUT,
+      },
+      required: ["summary", "word"],
+    },
+  },
+  {
+    name: "switch_status_labels",
+    description:
+      "Propose turning the status pills on or off (`enabled`: sbxw draws `[[Word]]` labels as " +
+      "pills), or the guidance that tells agents to write them (`guidance`), for every sandbox " +
+      "(`file` \"daemon\", the default) or for one sandbox (`file`: its name, as `sbxw_state` lists " +
+      "the files). No guidance is written while the pills are off. Low risk.\n" +
+      "\n" +
+      "When it takes effect, tell the person: for every sandbox, the terminals follow at once and " +
+      "the guidance changes at each sandbox's next bring-up (a running session keeps what it read " +
+      "until a new one starts); for one sandbox, both change at its next bring-up (sbxw up)." +
+      PROPOSAL_RULES,
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: SUMMARY,
+        file: { type: "string", description: "\"daemon\" (default) for every sandbox, or one sandbox's name." },
+        enabled: { type: "boolean", description: "Draw the pills." },
+        guidance: { type: "boolean", description: "Tell agents to write the labels." },
+        timeout_seconds: TIMEOUT,
+      },
+      required: ["summary"],
     },
   },
   {
@@ -584,6 +645,26 @@ function changesFor(name, args) {
       const change = { kind: "voice_word", word };
       if (fr) change.fr = fr;
       if (en) change.en = en;
+      return [change];
+    }
+    case "set_status_label": {
+      const word = String(args.word || "").trim();
+      if (!word) throw new Refusal("No word given.");
+      if (args.remove === true) {
+        if (args.tone || list(args.also).length || args.use) throw new Refusal("Either remove the family or describe it, not both.");
+        return [{ kind: "emphasis_word", word }];
+      }
+      const tone = String(args.tone || "").trim();
+      if (!tone) throw new Refusal("Give the family's tone, or set remove to true.");
+      const change = { kind: "emphasis_word", word, tone, also: list(args.also) };
+      if (typeof args.use === "string" && args.use.trim()) change.use = args.use.trim();
+      return [change];
+    }
+    case "switch_status_labels": {
+      const change = { kind: "emphasis_switch", file: String(args.file || "daemon").trim() || "daemon" };
+      if (typeof args.enabled === "boolean") change.enabled = args.enabled;
+      if (typeof args.guidance === "boolean") change.guidance = args.guidance;
+      if (!("enabled" in change) && !("guidance" in change)) throw new Refusal("Say what to switch: enabled, guidance or both.");
       return [change];
     }
     case "allow_network": {

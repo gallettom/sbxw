@@ -26,6 +26,8 @@ const SBXW_APP_SCRIPTS = [
   '/vendor/addon-canvas.js',
   '/js/util.js',
   '/js/term-color.js',
+  // Before panes.js, which attaches it to each terminal it builds.
+  '/js/emphasis.js',
   '/js/panes.js',
   '/js/pane-controls.js',
   '/js/sandboxes.js',

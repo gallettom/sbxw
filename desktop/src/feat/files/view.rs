@@ -17,6 +17,19 @@ pub const IMAGE_MAX: u64 = 24 * 1024 * 1024;
 /// Recent: the badge counts the last hour's files.
 pub const FRESH_SECS: u64 = 3600;
 
+/// `1240` → `1,240`.
+pub fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 pub fn size_label(n: u64) -> String {
     const K: f64 = 1024.0;
     let f = n as f64;

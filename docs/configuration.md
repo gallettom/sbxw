@@ -35,6 +35,7 @@ lists every key with its default.
 | `keep_awake_min_battery` | `5` | On battery at or below this percentage, the Mac is let go to sleep anyway |
 | `battery_warn_below` | `20` | On battery at or below this percentage, Remote Control agents are told on their next prompt (again every 5 % lost) |
 | `[voice]` | see below | Jarvis's voice: its local models, by catalog id: `stt` (`"parakeet-tdt-0.6b-v3-int8"`), `tts` (`"voxtral-tts-6bit"`, Voxtral TTS at 3.5 GB; also `"voxtral-tts-4bit"` at 2.5 GB and `"voxtral-tts-bf16"` at 8 GB), `tts_voice` (`"fr_male"`, one of Voxtral's 20 voices: `fr_female`, `casual_male`, `neutral_female`…), `push_to_talk_key` (`"F8"`, a `KeyboardEvent.code`), `dictate_key` (`"F9"`, dictation into the focused terminal), `[voice.words]` (how words are said aloud, see [below](#words-read-aloud)). Read from the daemon's config. Reading aloud needs a Mac with Apple Silicon and [uv](https://docs.astral.sh/uv/); `llm` and `retention_days` of an older sbxw are ignored. A table: write it after every root key |
+| `[emphasis]` | on | Status pills: `[[Done]]` written by an agent drawn as a coloured pill in the terminals. `enabled`, `guidance` and the vocabulary, see [below](#status-pills). A table: write it after every root key |
 | `[mac]` | see below | The [virtual Mac](../assets/terminal-mac/README.md#configuration): `vm` (`"default"`), `idle_release_minutes` (`10`), `pause_after_minutes` (`15`), `stop_after_minutes` (`120`), `force_stop_after_minutes` (`3`), `guest_host_ip` (`""`, the VM bridge's address). A table: write it after every root key |
 
 ### Sandbox creation
@@ -264,6 +265,79 @@ nginx = { en = "engine X" }
 
 A change by hand takes effect when the daemon restarts. A change Jarvis
 proposes and you approve is used from the next sentence read.
+
+## Status pills
+
+An agent writes a short label in double brackets beside what it describes,
+`[[Done]]` or `[[Failed: 3 tests]]`, and sbxw's terminals (web and desktop)
+draw it as a coloured pill. The word sets the colour. Only the drawing
+changes: copy, selection, scrollback, search and the session's bytes keep
+the brackets.
+
+```toml
+[emphasis]
+enabled = true    # draw the pills (default true)
+guidance = true   # tell agents about them in CLAUDE.md (default true)
+
+# Optional. When present it REPLACES the built-in vocabulary whole.
+[emphasis.words]
+done = { tone = "green", also = ["verified", "fixed", "passed"], use = "finished and checked" }
+"needs you" = { tone = "amber", also = ["blocked"], use = "the person must act, answer or choose" }
+```
+
+- **A family** is keyed by its main word, with a `tone`, its other words
+  (`also`) and one line on when to use it (`use`, at most 80 characters,
+  written into the agents' guidance).
+- **Tones** are names, not colours, so each UI uses its own palette:
+  `green` (settled, done), `red` (wrong, failed), `amber` (needs you, look
+  here), `blue` (context), `purple` (Jarvis, the team), `cyan` (the kind of
+  work), `danger` (a filled red: cannot be undone, or costs money).
+- **Words** are 1 to 32 letters, digits, single spaces or `-`, starting with
+  a letter and ending with a letter or digit, matched whatever their case.
+  A word belongs to one family. At most 12 families and 48 words in all:
+  each one costs guidance tokens in every session. A bad entry is refused
+  with its reason, never dropped.
+- **The built-in vocabulary** (no `[emphasis.words]`): `done` (verified,
+  fixed, passed) green; `failed` (error, broken) red; `needs you` (blocked,
+  decide, question) amber; `irreversible` (destructive, costly) danger;
+  `note` (context, fyi) blue; `working` (in progress, next, plan) cyan;
+  `team` (lead, thread, jarvis) purple.
+- **Per sandbox.** A project's own `sbxw.toml` may set `enabled` and
+  `guidance` under `[emphasis]` for its sandboxes; they apply from its next
+  bring-up. The vocabulary is read from the daemon's file only.
+
+### The guidance
+
+At each bring-up, when both `enabled` and `guidance` are on for the sandbox,
+sbxw writes a short "Status labels" section, generated from the same table,
+into the agent's `~/.claude/CLAUDE.md` (fenced, replaced in place; taken out
+when switched off). About 260 tokens (977 characters) for the built-in vocabulary. A running
+session read its `CLAUDE.md` when it started: it follows the new text from
+its next session. Jarvis's own sandbox never gets it. Agents other than
+Claude Code get no guidance: sbxw writes none for them.
+
+### The matching rule
+
+Both UIs implement the same rule (cases shared in
+`crates/core/testdata/emphasis-cases.json`):
+
+- A marker is `[[` WORD [`:` DETAIL] `]]` on one line, in JavaScript
+  `/\[\[(\p{L}(?:[\p{L}\p{N} -]{0,30}[\p{L}\p{N}])?)(?::([^\[\]\p{Cc}]{1,48}))?\]\]/gu`:
+  WORD as above (at most 32), DETAIL 1 to 48 characters with no bracket or
+  control character. Scanned left to right; brackets never nest, so in
+  `[[a [[Done]] b]]` only `[[Done]]` is a marker.
+- WORD is looked up lower-cased, runs of spaces made one. A known word takes
+  its tone. An unknown word is drawn in the `blue` (context) tone only when
+  it starts with an upper-case letter, so lower-case wiki links such as
+  `[[base-kit]]` stay text.
+- A marker cut by the terminal's soft wrap is matched on the joined line and
+  drawn as one piece per row; a hard line break ends it.
+- The pill covers exactly the marker's cells (a wide character is two), so
+  nothing shifts.
+
+A change by hand takes effect when the daemon restarts (and for the guidance,
+at each sandbox's next bring-up). A change Jarvis proposes and you approve
+redraws the terminals at once.
 
 ## Changes Jarvis proposes
 

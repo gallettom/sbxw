@@ -111,6 +111,10 @@ pub struct Config {
     pub mac: crate::mac::MacSettings,
     /// The voice concierge (`[voice]`): read from the daemon's config.
     pub voice: crate::voice::VoiceSettings,
+    /// Status pills (`[emphasis]`): the switches, read from the daemon's
+    /// config and from a project's own (which overrides `enabled` and
+    /// `guidance` for its sandboxes); the vocabulary from the daemon's only.
+    pub emphasis: crate::emphasis::EmphasisSettings,
 
     /// The file this was read from, absolute. `None` for built-in defaults.
     #[serde(skip)]
@@ -213,6 +217,7 @@ impl Default for Config {
             env_files: vec![],
             mac: Default::default(),
             voice: Default::default(),
+            emphasis: Default::default(),
             source: None,
             asked: None,
         }
@@ -438,6 +443,7 @@ impl Config {
         self.mac.validate().map_err(anyhow::Error::msg)?;
         self.voice.validate().map_err(anyhow::Error::msg)?;
         crate::spoken::check_words(&self.voice.words).map_err(anyhow::Error::msg)?;
+        self.emphasis.validate().map_err(anyhow::Error::msg)?;
         if let Some(mode) = self.skills_mode() {
             if !SKILL_MODES.contains(&mode) {
                 bail!("skills = \"{mode}\" — expected one of {}", SKILL_MODES.join(", "));
@@ -646,6 +652,32 @@ mod tests {
         assert_eq!(back.env, cfg.env);
         assert_eq!(back.ports, cfg.ports);
         assert_eq!(back.source.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn emphasis_parses_defaults_and_refuses_a_bad_entry() {
+        let cfg = Config::parse("").unwrap();
+        assert!(cfg.emphasis.enabled() && cfg.emphasis.guidance() && cfg.emphasis.words.is_none());
+        assert_eq!(cfg.emphasis.vocabulary(), crate::emphasis::built_in());
+        let cfg = Config::parse(
+            "[emphasis]\nenabled = false\n[emphasis.words]\nshipped = { tone = \"green\", also = [\"live\"], use = \"deployed\" }\n\"needs you\" = { tone = \"amber\" }\n",
+        )
+        .unwrap();
+        assert!(!cfg.emphasis.enabled() && cfg.emphasis.guidance());
+        let v = cfg.emphasis.vocabulary();
+        assert_eq!(v.len(), 2, "a configured table replaces the built-in one");
+        assert_eq!(v["shipped"].when.as_deref(), Some("deployed"));
+        let e = format!("{:#}", Config::parse("[emphasis.words]\ndone = { tone = \"pink\" }\n").unwrap_err());
+        assert!(e.contains("tone \"pink\""), "{e}");
+        let e = format!("{:#}", Config::parse("[emphasis.words]\ndone = { tone = \"green\", colour = \"x\" }\n").unwrap_err());
+        assert!(e.contains("colour"), "{e}");
+        assert!(Config::parse("[emphasis]\nenable = true\n").is_err(), "a misspelt switch is refused");
+        // A project's file overrides the switch alone, and round-trips
+        // through the record's snapshot.
+        let own = Config::parse("[emphasis]\nenabled = false\n").unwrap();
+        let back: Config = serde_json::from_value(serde_json::to_value(&own).unwrap()).unwrap();
+        assert_eq!(back.emphasis, own.emphasis);
+        assert_eq!(crate::emphasis::effective(&Config::default().emphasis, Some(&own.emphasis)), (false, true));
     }
 
     #[test]

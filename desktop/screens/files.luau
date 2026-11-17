@@ -106,12 +106,26 @@ local function filebar(ui)
   }
 end
 
+-- A folder of .sbxw-artifacts: one row with its file count, folded until
+-- pressed, so a deep tree costs one row per folder shown.
+local function folderview(r)
+  return row{ gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "files-row-" .. r.id, on = "fold", arg = r.id,
+    (r.depth or 0) > 0 and spacer{ w = 12 * r.depth, grow = 0 } or false,
+    icon{ r.open and "chevron-down" or "chevron-right", size = 10, color = "text-muted" },
+    icon{ "folder", size = 12, color = "blue" },
+    text{ r.name, size = "sm", truncate = true, grow = 1 },
+    text{ r.count .. (r.count == 1 and " file" or " files"), size = "xs", color = "text-muted" },
+  }
+end
+
 local function rowview(ui, r, i)
+  if r.kind == "folder" then return folderview(r) end
   local meta = {}
   if nz(r.dir) then meta[#meta + 1] = r.dir end
   if nz(r.when) then meta[#meta + 1] = r.when end
   local kids = { gap = 8, w = "full", px = 8, py = 4, radius = "xs", key = "files-row-" .. r.id, on = "select", arg = r.id,
     fill = r.selected and "active-bg" or nil,
+    (r.depth or 0) > 0 and spacer{ w = 12 * r.depth + 18, grow = 0 } or false,
     icon{ r.icon or "file", size = 12, color = r.kind == "dir" and "blue" or "text-muted" },
     column{ gap = 2, grow = 1,
       text{ r.name .. (r.link and " ↪" or ""), size = "sm", truncate = true, color = r.selected and "text-bright" or "text" },
@@ -135,6 +149,15 @@ local function rows(ui)
       list[#list + 1] = row{ py = 4, head(r.group or "") }
     end
     list[#list + 1] = rowview(ui, r, i)
+  end
+  -- The panel draws at most a page of rows (the core refuses a render past
+  -- its element cap); the rest is counted, and the filter runs over all.
+  local c = ui.count or {}
+  if (c.more or 0) > 0 then
+    list[#list + 1] = column{ gap = 4, w = "full", py = 4, key = "files-more-box",
+      note(c.label .. ". Filter by name to find one."),
+      button{ "Show " .. c.more .. " more", key = "files-more", on = "more", variant = "ghost", tone = "blue",
+        help = (c.total - c.shown) .. " more rows not drawn" } }
   end
   local err = ui.errors and ui.errors[ui.tab]
   if nz(err) then
@@ -229,6 +252,8 @@ return {
     place = function(_, _, id) return intent("files_place", { id = id }) end,
     hidden = function(_, _, on) return intent("files_hidden", { on = on }) end,
     filter = function(_, _, t) return intent("files_filter", { text = t or "" }) end,
+    more = function() return intent("files_more", {}) end,
+    fold = function(_, id) return intent("files_fold", { id = id }) end,
     select = function(_, id) return intent("files_select", { id = id }) end,
     show = function(_, id) return intent("files_show_in_folder", { id = id }) end,
     download = function() return intent("files_download", {}) end,

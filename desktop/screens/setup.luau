@@ -157,6 +157,9 @@ local function kb(n)
   return math.floor(n / 1024 + 0.5) .. " KB"
 end
 
+-- data.app of the render under way (set by render, read by the tabs).
+local data_app = nil
+
 -- ── Secrets ─────────────────────────────────────────────────────────────
 local function secrets_tab(state, d)
   local sec = d.secrets or {}
@@ -217,6 +220,16 @@ local function secrets_tab(state, d)
       spacer{},
       button{ "Add…", key = "secret-add", icon = "plus", on = "secret_add" },
     },
+  }
+  -- Files dropped on a terminal: only the upload dialog's own box stops it
+  -- asking; this screen can only turn the asking back on.
+  local ask = not (data_app and data_app.ask_dropped_uploads == false)
+  out[#out + 1] = card{ key = "setup-drops",
+    title("Dropped files", pill(ask, "asked first", "not asked")),
+    note(ask and "Files you drop on a terminal are uploaded into its sandbox after a dialog lists them."
+      or "You chose not to be asked: files you drop on a terminal upload at once, and a notice says so. Files that look like secrets, come from ~/.ssh, ~/.aws or ~/.gnupg, or more than 10 files or 25 MB are asked about all the same."),
+    not ask and row{ w = "full", spacer{},
+      button{ "Ask before uploading dropped files", key = "setup-drops-ask", on = "drops_ask" } } or false,
   }
   return out
 end
@@ -671,6 +684,7 @@ return {
     tabs[#tabs + 1] = button{ icon = "reload", key = "setup-reload", variant = "ghost", on = "reload", arg = tab, help = "Read it again" }
     tabs[#tabs + 1] = button{ icon = "close", key = "setup-close", variant = "ghost", on = "close", help = "Close" }
 
+    data_app = data.app
     local body = BODY[tab](state, d)
     body.key = "setup-body"
     local err = (d.errors or {})[tab]
@@ -692,6 +706,7 @@ return {
 
     -- Secrets
     github_set = function() return intent("github_token_set") end,
+    drops_ask = function() return intent("files_upload_ask_again") end,
     github_gh = function() return intent("github_token_gh") end,
     github_rm = function() return intent("github_token_rm") end,
     secret_hosts = function(state, _, v) state.secret_hosts = v end,

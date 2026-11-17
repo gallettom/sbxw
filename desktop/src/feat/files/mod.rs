@@ -27,6 +27,7 @@
 //! (`src/safe.rs`), never this feature's.
 
 pub mod codemap;
+pub mod drops;
 mod standin;
 #[cfg(test)]
 mod tests;
@@ -93,6 +94,8 @@ pub const INTENTS: &[Spec] = &[
     Spec { name: "files_up", risk: Risk::Direct, args: &[], doc: "Lists the parent folder." },
     Spec { name: "files_back", risk: Risk::Direct, args: &[], doc: "Back to the folder listed before." },
     Spec { name: "files_filter", risk: Risk::Direct, args: &[("text", Arg::Text, false)], doc: "Filters the rows by name; give it on every edit." },
+    Spec { name: "files_more", risk: Risk::Direct, args: &[], doc: "Draws the next rows of a long list (the panel draws 200 at first, 200 more each time)." },
+    Spec { name: "files_fold", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Artifacts: opens a folder's rows, or folds them back (`id`: a folder row's id). Folders start folded, with their file count." },
     Spec { name: "files_hidden", risk: Risk::Direct, args: &[("on", Arg::Bool, true)], doc: "Shows dotfiles, or hides them." },
     Spec { name: "files_select", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Picks a row by its `id`: a folder is listed, a file previewed (text, Markdown, pictures; HTML as its source)." },
     Spec { name: "files_show_in_folder", risk: Risk::Direct, args: &[("id", Arg::Str, true)], doc: "Recent: lists the folder a file was written to, on that file." },
@@ -118,8 +121,9 @@ pub const INTENTS: &[Spec] = &[
         name: "files_upload_dropped",
         risk: Risk::Approval("Upload a file into a sandbox"),
         args: &[],
-        doc: "The next file dropped on a terminal pane: the core's dialog shows its local path, size, the sandbox and session, then it is copied in and its path typed into that prompt, not submitted. Several dropped together are asked one after the other; Cancel drops the rest.",
+        doc: "The files dropped together on a terminal pane: ONE core dialog lists them (local paths, sizes, total, the sandbox and session), then they are copied in one after the other (a failure stops the rest) and their paths typed into that prompt, not submitted. Its box \"Do not ask again for files I drop\" is the only way to skip it; a drop that looks like secrets, comes from ~/.ssh, ~/.aws or ~/.gnupg, holds more than 10 files or more than 25 MB is asked all the same.",
     },
+    Spec { name: "files_upload_ask_again", risk: Risk::Direct, args: &[], doc: "Asks again before uploading files dropped on a terminal (undoes \"Do not ask again\"). Nothing can turn the dialog off but its own box." },
     Spec { name: "codemap_open", risk: Risk::Direct, args: &[("sandbox", Arg::Str, true), ("map", Arg::Str, false)], doc: "Opens the Code map panel on that sandbox's map (or `map`: a lens's folder, as listed in `codemap_ui.maps`)." },
     Spec { name: "codemap_doc", risk: Risk::Direct, args: &[("doc", Arg::Str, true), ("anchor", Arg::Str, false)], doc: "Shows a map file, or one of its sections (`anchor`: a section id)." },
     Spec { name: "codemap_link", risk: Risk::Direct, args: &[("url", Arg::Url, true)], doc: "A link pressed in a map file: a `[[wiki link]]` is followed in the panel, any other opens in the browser." },
@@ -222,16 +226,28 @@ pub struct State {
     select_next: Option<String>,
     filter: String,
     hidden: bool,
+    /// Pages of rows drawn beyond the first ([`PAGE`] each): reset by a new
+    /// tab, filter or folder.
+    more: usize,
+    /// Artifact folders opened (folded by default).
+    open: std::collections::BTreeSet<String>,
     sel: Option<Sel>,
     preview: J,
     seq: u64,
     staged: Vec<Staged>,
     paste_seq: u64,
     staged_seq: u64,
+    drop_seq: u64,
     /// Files dropped on a terminal pane, asked one after the other (never
     /// shown as waiting: a Cancel leaves nothing behind once the next drop
     /// replaces them, and nothing goes without its dialog).
     dropped: Vec<Staged>,
+    /// That drop's batch: its tag (`drop-<n>`), and why its dialog asks even
+    /// when the person chose not to be asked ([`drops::guardrails`]).
+    drop_tag: String,
+    drop_why: Vec<String>,
+    /// The person chose not to be asked (as the core said with the drop).
+    drop_skip: bool,
     /// The last file the panel saved (Show in folder).
     saved: Option<(String, String)>,
     /// The sandbox each daemon answer was asked for.
@@ -314,6 +330,12 @@ pub fn build_open(_cx: &Ctx, asked: &Asked, v: &J) -> Result<Confirm, String> {
     Ok(c.labels("Open", "Keep it closed"))
 }
 
+/// Where an upload into `sandbox` goes, up to its name (the core checks a
+/// dialog-less batch against it).
+pub fn upload_route_prefix(sandbox: &str) -> String {
+    format!("{}?name=", sb_route(sandbox, "/upload"))
+}
+
 fn sb_route(sandbox: &str, rest: &str) -> String {
     format!("/api/sandboxes/{}{rest}", enc(sandbox))
 }
@@ -343,7 +365,7 @@ impl State {
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
                 if self.sandbox.as_deref() != Some(&sb) {
                     let staged = std::mem::take(&mut self.staged);
-                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, saved: self.saved.take(), ..State::default() };
+                    *self = State { map: std::mem::take(&mut self.map), staged, dropped: std::mem::take(&mut self.dropped), paste_seq: self.paste_seq, staged_seq: self.staged_seq, seq: self.seq, drop_seq: self.drop_seq, drop_tag: std::mem::take(&mut self.drop_tag), drop_why: std::mem::take(&mut self.drop_why), drop_skip: self.drop_skip, saved: self.saved.take(), ..State::default() };
                     self.sandbox = Some(sb.clone());
                     self.first = true;
                     for k in [ARTIFACTS, DIR, RECENT] {
@@ -360,6 +382,7 @@ impl State {
             }
             "files_tab" => {
                 self.tab = a.req("tab").into();
+                self.more = 0;
                 self.sel = None;
                 self.preview = J::Null;
                 out.push(Action::Remember { key: "tab".into(), value: self.tab.clone().into() });
@@ -403,7 +426,20 @@ impl State {
                 self.tab = "files".into();
                 out.push(self.fetch_dir(&sb));
             }
-            "files_filter" => self.filter = a.s("text").unwrap_or("").into(),
+            "files_filter" => {
+                self.filter = a.s("text").unwrap_or("").into();
+                self.more = 0;
+            }
+            "files_more" => self.more += 1,
+            "files_fold" => {
+                let id = a.req("id").to_string();
+                if !artifact_dirs(cx).contains_key(&id) {
+                    return Err(format!("{id} is not a folder of .sbxw-artifacts"));
+                }
+                if !self.open.remove(&id) {
+                    self.open.insert(id);
+                }
+            }
             "files_hidden" => self.hidden = a.b("on").unwrap_or(false),
             "files_select" => out.extend(self.select(cx, a.req("id"))?),
             "files_show_in_folder" => {
@@ -481,11 +517,8 @@ impl State {
                 let s = self.staged.get((a.i("index").unwrap_or(1) as usize).wrapping_sub(1)).ok_or_else(|| if self.staged.is_empty() { "nothing to upload: drop a file on the panel or a pane, paste a picture, or choose a file".to_string() } else { format!("there is no file {} waiting", a.i("index").unwrap_or(1)) })?;
                 return Ok(vec![self.upload(cx, s, None)?]);
             }
-            "files_upload_dropped" => {
-                let s = self.dropped.first().ok_or("no file dropped on a pane is waiting")?;
-                let left = self.dropped.len() - 1;
-                return Ok(vec![self.upload(cx, s, (left > 0).then_some(left))?]);
-            }
+            "files_upload_dropped" => return Ok(vec![self.drop_dialog(cx)?]),
+            "files_upload_ask_again" => out.push(Action::UploadsAskAgain),
             "codemap_open" => {
                 let sb = a.req("sandbox").to_string();
                 cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
@@ -589,6 +622,7 @@ impl State {
         self.path = path.to_string();
         self.tab = "files".into();
         self.filter.clear();
+        self.more = 0;
         self.sel = None;
         self.preview = J::Null;
         Ok(vec![self.fetch_dir(&sb)])
@@ -629,27 +663,77 @@ impl State {
         }
     }
 
+    /// The rows drawn: the first [`PAGE`] (more on "Show more"), and the
+    /// selected one, so a screen never builds more than it can
+    /// show (the core refuses a render past its element cap). The filter
+    /// has already run over every entry. With the count line's numbers.
+    fn page(&self, cx: &Ctx) -> (Vec<J>, J) {
+        let mut rows = self.rows(cx);
+        let total = rows.len();
+        let files = rows.iter().map(|r| if r["kind"] == "folder" { r["count"].as_u64().unwrap_or(0) as usize } else { 1 }).sum::<usize>();
+        let shown = total.min(PAGE * (1 + self.more));
+        // The selected row past the page is drawn after it, alone (never
+        // the rows between: a selection must not lift the cap).
+        let late = rows.iter().skip(shown).find(|r| r["selected"] == true).cloned();
+        rows.truncate(shown);
+        rows.extend(late);
+        let what = if self.tab() == "files" { "entries" } else { "files" };
+        let count = json!({
+            "total": total, "shown": shown, "more": PAGE.min(total - shown),
+            "label": if shown < total { format!("{} {what}, showing {}", view::thousands(files), view::thousands(shown)) } else { String::new() },
+        });
+        (rows, count)
+    }
+
     fn keep(&self, name: &str) -> bool {
         let f = self.filter.trim().to_lowercase();
         f.is_empty() || name.to_lowercase().contains(&f)
     }
 
+    /// Artifacts: with a filter, every matching file, flat, its folder said;
+    /// without, a tree in the daemon's order (newest first), each folder one
+    /// row with its file count, folded until opened.
     fn artifact_rows(&self, cx: &Ctx) -> Vec<J> {
         let now = view::now_secs();
-        cx.get(ARTIFACTS)["entries"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|e| self.keep(e["name"].as_str().unwrap_or("")))
-            .map(|e| {
-                let path = e["path"].as_str().unwrap_or("");
-                let m = e["modified"].as_u64().unwrap_or(0);
-                let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-                json!({ "id": path, "name": e["name"], "kind": "file", "icon": icon_of(e["name"].as_str().unwrap_or("")), "dir": dir,
-                    "size": view::size_label(e["size"].as_u64().unwrap_or(0)), "when": view::ago(m, now), "fresh": now.saturating_sub(m) < view::FRESH_SECS,
-                    "selected": self.sel.as_ref().is_some_and(|s| s.src == Src::Artifact && s.path == path) })
-            })
-            .collect()
+        let entries: Vec<&J> = cx.get(ARTIFACTS)["entries"].as_array().into_iter().flatten().collect();
+        let file = |e: &J, depth: usize, with_dir: bool| {
+            let path = e["path"].as_str().unwrap_or("");
+            let m = e["modified"].as_u64().unwrap_or(0);
+            let dir = if with_dir { path.rsplit_once('/').map(|(d, _)| d).unwrap_or("") } else { "" };
+            json!({ "id": path, "name": e["name"], "kind": "file", "icon": icon_of(e["name"].as_str().unwrap_or("")), "dir": dir, "depth": depth,
+                "size": view::size_label(e["size"].as_u64().unwrap_or(0)), "when": view::ago(m, now), "fresh": now.saturating_sub(m) < view::FRESH_SECS,
+                "selected": self.sel.as_ref().is_some_and(|s| s.src == Src::Artifact && s.path == path) })
+        };
+        if !self.filter.trim().is_empty() {
+            return entries.into_iter().filter(|e| self.keep(e["name"].as_str().unwrap_or(""))).map(|e| file(e, 0, true)).collect();
+        }
+        let counts = artifact_dirs(cx);
+        let is_open = |d: &str| self.open.contains(d);
+        let mut out = vec![];
+        let mut seen = std::collections::HashSet::new();
+        for e in &entries {
+            let path = e["path"].as_str().unwrap_or("");
+            // The rows this entry calls for, from the top: each folder on its
+            // way once (at its newest file), then the file if all are open.
+            let mut prefix = String::new();
+            let mut visible = true;
+            for (depth, seg) in path.split('/').collect::<Vec<_>>().split_last().map(|(_, dirs)| dirs.to_vec()).unwrap_or_default().into_iter().enumerate() {
+                let dir = if prefix.is_empty() { seg.to_string() } else { format!("{prefix}/{seg}") };
+                if seen.insert(dir.clone()) {
+                    out.push(json!({ "id": dir, "name": seg, "kind": "folder", "icon": "folder", "depth": depth,
+                        "count": counts.get(&dir).copied().unwrap_or(0), "open": is_open(&dir) }));
+                }
+                if !is_open(&dir) {
+                    visible = false;
+                    break;
+                }
+                prefix = dir;
+            }
+            if visible {
+                out.push(file(e, path.matches('/').count(), false));
+            }
+        }
+        out
     }
 
     fn dir_rows(&self, cx: &Ctx) -> Vec<J> {
@@ -706,6 +790,8 @@ impl State {
         let (src, name, size, modified, kind) = match self.tab() {
             "artifacts" => {
                 let e = cx.get(ARTIFACTS)["entries"].as_array().into_iter().flatten().find(|e| e["path"] == id).ok_or_else(|| format!("{id} is not in .sbxw-artifacts"))?;
+                // Selected inside folded folders: they open, so its row shows.
+                self.open.extend(ancestors(id));
                 (Src::Artifact, e["name"].as_str().unwrap_or("").to_string(), e["size"].as_u64().unwrap_or(0), e["modified"].as_u64().unwrap_or(0), "file".to_string())
             }
             "recent" => {
@@ -834,6 +920,137 @@ impl State {
         Ok(c.labels("Upload", "Cancel").into_action())
     }
 
+    /// The dropped files' names, for a notice: one, or "N files (a, b, …)".
+    fn drop_names(&self) -> String {
+        match self.dropped.as_slice() {
+            [one] => one.name.clone(),
+            many => format!("{} files ({})", many.len(), many.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")),
+        }
+    }
+
+    /// One `core:uploads` for every file of the drop, in order. Refused, for
+    /// all of them, when one cannot go (empty, too large) or the sandbox is
+    /// not running.
+    fn drop_call(&self, cx: &Ctx) -> Result<Call, String> {
+        let first = self.dropped.first().ok_or("no file dropped on a pane is waiting")?;
+        let (sb, _) = self.target(first)?;
+        let bad: Vec<String> = self.dropped.iter().filter_map(|s| s.problem().map(|p| format!("{}: {p}", s.name))).collect();
+        if !bad.is_empty() {
+            return Err(format!("Nothing was uploaded: {}", bad.join("; ")));
+        }
+        let info = cx.sandbox(&sb).ok_or_else(|| format!("{sb} is not a sandbox sbxw knows"))?;
+        if info["status"] != "running" {
+            return Err(format!("{sb} is not running: start it first, then upload"));
+        }
+        let mut items = vec![];
+        for s in &self.dropped {
+            let Payload::Path(p) = &s.payload else { return Err("only files dropped on a pane go this way".into()) };
+            items.push(json!({ "route": format!("{}{}", upload_route_prefix(&sb), enc(&s.name)), "file": p, "content_type": "application/octet-stream", "tag": format!("upload-{}", s.id) }));
+        }
+        Ok(core_call("uploads", json!({ "sandbox": sb, "items": items }), format!("upload {} into {sb}", self.drop_names()), &self.drop_tag))
+    }
+
+    /// ONE dialog for the whole drop: every file, the total, where they go,
+    /// what happens; the first time (not yet chosen) the box to stop asking;
+    /// when a guardrail asks all the same, why.
+    fn drop_dialog(&self, cx: &Ctx) -> Result<Action, String> {
+        let call = self.drop_call(cx)?;
+        let first = &self.dropped[0];
+        let (sb, thread) = self.target(first)?;
+        let session = match &thread {
+            Some(t) => format!("{sb}'s thread {t}"),
+            None => format!("{sb}'s agent"),
+        };
+        let n = self.dropped.len();
+        let title = if n == 1 { format!("Upload {} into {sb}?", first.name) } else { format!("Upload {n} files into {sb}?") };
+        let mut c = Confirm::new(title, call);
+        for s in &self.dropped {
+            c = c.line(format!("{} · {}", s.source(), view::size_label(s.size)));
+        }
+        if n > 1 {
+            c = c.line(format!("{n} files, {} in all.", view::size_label(self.dropped.iter().map(|s| s.size).sum())));
+        }
+        let (it, its) = if n == 1 { ("It is", "Its path is") } else { ("They are", "Their paths are") };
+        c = c
+            .line(format!("{it} copied into {sb} under /tmp/sbxw-uploads/, where its agent can read {}.", if n == 1 { "it" } else { "them" }))
+            .line(format!("{its} then typed into {session}'s prompt, not sent: say what {} for, then press Return.", if n == 1 { "it is" } else { "they are" }));
+        if !self.drop_why.is_empty() {
+            let lead = if self.drop_skip { "Asked even though you chose not to be asked, because" } else { "Look before you upload" };
+            for w in &self.drop_why {
+                c = c.line(format!("{lead}: {w}."));
+            }
+        }
+        if !self.drop_skip {
+            c = c.dont_ask("Do not ask again for files I drop");
+        }
+        Ok(c.labels("Upload", "Cancel").into_action())
+    }
+
+    /// A drop's batch answered: each file in order; the paths the daemon made
+    /// typed together (not submitted); a failure says what was sent and what
+    /// was not. Every path of the drop is forgotten afterwards.
+    fn drop_uploaded(&mut self, tag: &str, r: Result<(u16, J), String>) -> Vec<Action> {
+        if tag != self.drop_tag {
+            return vec![];
+        }
+        let dropped = std::mem::take(&mut self.dropped);
+        let mut out: Vec<Action> = forget(paths_of(dropped.iter())).into_iter().collect();
+        let Some(first) = dropped.first() else { return out };
+        let Ok((sb, thread)) = self.target(first) else { return out };
+        let results = match r {
+            Ok((_, body)) => body["results"].as_array().cloned().unwrap_or_default(),
+            Err(e) => {
+                out.push(Action::error(format!("Nothing was uploaded: {e}")));
+                return out;
+            }
+        };
+        let mut sent: Vec<&str> = vec![];
+        let mut paths: Vec<String> = vec![];
+        let mut failure = None;
+        for s in &dropped {
+            let Some(res) = results.iter().find(|x| x["tag"] == format!("upload-{}", s.id).as_str()) else { break };
+            let (code, body) = (res["code"].as_u64().unwrap_or(0) as u16, &res["body"]);
+            if let Some(e) = res["error"].as_str() {
+                failure = Some(format!("{} was not uploaded: {e}", s.name));
+                break;
+            }
+            if !(200..300).contains(&code) || body["ok"] == false {
+                failure = Some(format!("{} was not uploaded: {}", s.name, why(code, body)));
+                break;
+            }
+            sent.push(&s.name);
+            match body["path"].as_str() {
+                Some(p) if typable(p) => paths.push(p.to_string()),
+                Some(p) => out.push(Action::error(format!("{} was uploaded, but its path {p:?} is not one the app types into a prompt", s.name))),
+                None => out.push(Action::error(format!("{}: uploaded, but the daemon gave no path", s.name))),
+            }
+        }
+        if !paths.is_empty() {
+            let mut at = json!({ "sandbox": sb, "data": format!("{} ", paths.join(" ")) });
+            if let Some(t) = &thread {
+                at["mode"] = format!("thread:{t}").into();
+            }
+            out.push(Action::Call(Call::post("/api/input", at, format!("type {}", paths.join(" "))).tag("input:drop").quiet()));
+        }
+        let not_sent: Vec<&str> = dropped.iter().map(|s| s.name.as_str()).filter(|n| !sent.contains(n)).collect();
+        match failure {
+            Some(f) => {
+                let mut m = f;
+                if !sent.is_empty() {
+                    m.push_str(&format!(". Sent: {}", sent.join(", ")));
+                }
+                let rest: Vec<&str> = not_sent.iter().skip(1).copied().collect();
+                if !rest.is_empty() {
+                    m.push_str(&format!(". Not sent: {}", rest.join(", ")));
+                }
+                out.push(Action::error(m));
+            }
+            None if !sent.is_empty() => out.push(Action::notice(format!("Uploaded {} to {sb}", if sent.len() == 1 { sent[0].to_string() } else { format!("{} files ({})", sent.len(), sent.join(", ")) }))),
+            None => {}
+        }
+        out
+    }
+
     /// `data.files_ui`, once the panel was opened (before, nothing is set:
     /// a fixture's own view stays).
     fn ui_action(&self, cx: &Ctx) -> Option<Action> {
@@ -865,13 +1082,14 @@ impl State {
         let recent_fresh = cx.get(RECENT)["files"].as_array().map(|v| v.iter().filter(|f| view::now_secs().saturating_sub(f["modified"].as_u64().unwrap_or(0)) < view::FRESH_SECS).count()).unwrap_or(0);
         let a = cx.get(ARTIFACTS);
         let run = run_for(cx, sb.as_deref().unwrap_or(""));
+        let (rows, count) = self.page(cx);
         json!({
             "sandbox": sb, "tab": self.tab(), "filter": self.filter, "hidden": self.hidden,
             "path": d["path"], "can_up": d["path"].as_str().is_some_and(|p| p != "/"), "can_back": !self.history.is_empty(),
             "offline": d["offline"] == true,
             "starred": d["path"].as_str().is_some_and(|p| self.starred(cx).iter().any(|x| x == p)),
             "places": if mine(DIR) { json!(view::places(d, &self.starred(cx))) } else { json!([]) },
-            "rows": self.rows(cx),
+            "rows": rows, "count": count,
             "loading": { "artifacts": !mine(ARTIFACTS) || a.is_null(), "files": d.is_null(), "recent": cx.get(RECENT).is_null() },
             "errors": { "artifacts": errors[ARTIFACTS], "files": errors[DIR], "recent": errors[RECENT] },
             "artifacts_dir": a["dir"], "has_map": a["codemap"].is_object() || a["lenses"].as_array().is_some_and(|l| !l.is_empty()),
@@ -1066,11 +1284,32 @@ impl State {
                 Err(e) => notes.push(format!("{}: {e}", p.display())),
             }
         }
-        let _ = cx;
+        self.drop_seq += 1;
+        self.drop_tag = format!("drop-{}", self.drop_seq);
+        self.drop_skip = d.skip_dialog;
+        self.drop_why = drops::guardrails(&paths_of(self.dropped.iter()), d.paths.len());
+        let plain = notes.is_empty() && self.drop_why.is_empty();
         out.extend(notes.into_iter().map(Action::error));
-        if !self.dropped.is_empty() {
-            out.push(Action::Intent { name: "files_upload_dropped".into(), args: json!({}) });
+        if self.dropped.is_empty() {
+            return out;
         }
+        // Chosen not to be asked, and nothing asks all the same: the batch
+        // goes now (the core checks it is this drop's, and the guardrails,
+        // again), and a notice says it at once.
+        if d.skip_dialog && plain {
+            match self.drop_call(cx) {
+                Ok(call) => {
+                    out.push(Action::notice(format!("Uploading {} to {}…", self.drop_names(), d.sandbox)));
+                    out.push(Action::Call(call));
+                }
+                Err(e) => {
+                    out.push(Action::error(e));
+                    out.extend(forget(paths_of(std::mem::take(&mut self.dropped).iter())));
+                }
+            }
+            return out;
+        }
+        out.push(Action::Intent { name: "files_upload_dropped".into(), args: json!({}) });
         out
     }
 
@@ -1078,6 +1317,14 @@ impl State {
     /// (Cancel, Escape, replaced): a drop's upload ends there, and every
     /// file left of that drop stops being uploadable.
     pub fn on_dismiss(&mut self, cx: &Ctx, tag: &str) -> Vec<Action> {
+        if tag.starts_with("drop-") {
+            if tag != self.drop_tag {
+                return vec![];
+            }
+            let mut out: Vec<Action> = forget(paths_of(std::mem::take(&mut self.dropped).iter())).into_iter().collect();
+            out.extend(self.ui_action(cx));
+            return out;
+        }
         let Some(id) = tag.strip_prefix("upload-").and_then(|s| s.parse::<u64>().ok()) else { return vec![] };
         let mut out = vec![];
         if self.dropped.iter().any(|s| s.id == id) {
@@ -1091,7 +1338,9 @@ impl State {
     pub fn on_answer(&mut self, cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
         let mut out = vec![];
         let tag = call.tag.as_str();
-        if let Some(id) = tag.strip_prefix("upload-").and_then(|s| s.parse::<u64>().ok()) {
+        if tag.starts_with("drop-") {
+            out.extend(self.drop_uploaded(tag, r));
+        } else if let Some(id) = tag.strip_prefix("upload-").and_then(|s| s.parse::<u64>().ok()) {
             out.extend(self.uploaded(id, r));
         } else if tag == "delete" {
             match r {
@@ -1274,6 +1523,27 @@ pub fn typable(path: &str) -> bool {
         && path.len() < 400
         && path.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-'))
         && !path.split('/').any(|c| c == ".." || c.starts_with('-'))
+}
+
+/// Rows drawn at first, and added by each "Show more".
+pub const PAGE: usize = 200;
+
+/// Every folder of `.sbxw-artifacts` that holds a listed file, with the
+/// number of files under it.
+fn artifact_dirs(cx: &Ctx) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    for e in cx.get(ARTIFACTS)["entries"].as_array().into_iter().flatten() {
+        for d in ancestors(e["path"].as_str().unwrap_or("")) {
+            *out.entry(d).or_insert(0) += 1;
+        }
+    }
+    out
+}
+
+/// `a/b/c.md` → `a`, `a/b`.
+fn ancestors(path: &str) -> Vec<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    (1..parts.len()).map(|n| parts[..n].join("/")).collect()
 }
 
 fn icon_of(name: &str) -> &'static str {

@@ -117,6 +117,11 @@ pub struct Feature {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaneDrop {
     pub paths: Vec<std::path::PathBuf>,
+    /// The person chose "Do not ask again for files I drop" (the core's
+    /// store): the feature may send a plain drop without its dialog. The
+    /// core still allows that only for this very drop, and checks the
+    /// guardrails again itself.
+    pub skip_dialog: bool,
     /// The sandbox the pane shows, and its thread (nil: the main session).
     pub sandbox: String,
     pub thread: Option<String>,
@@ -390,6 +395,10 @@ pub enum Action {
     /// them (the feature cleared the queue they were in). A path is also
     /// forgotten once an upload of it is done.
     ForgetFiles(Vec<std::path::PathBuf>),
+    /// Ask again before uploading files dropped on a pane: the core clears
+    /// the person's "do not ask again" ([`Confirm::dont_ask`]). Only this
+    /// direction exists as an action; setting it is the core dialog's box.
+    UploadsAskAgain,
 }
 
 impl Action {
@@ -492,6 +501,10 @@ pub struct Confirm {
     pub preview: Option<Preview>,
     /// A checkbox the person must tick before Confirm works.
     pub ack: Option<String>,
+    /// An optional checkbox, unticked: "Do not ask again for files I drop".
+    /// Ticked and confirmed, the core (never the feature) records it, and
+    /// only for a batch of dropped files (`core:uploads` of `files`).
+    pub dont_ask: Option<String>,
     /// Fields drawn by the core whose values never reach Luau, fixtures,
     /// logs or a headless tree: each is put in the call's body at its
     /// `field` on Confirm (handed once, then dropped).
@@ -508,7 +521,7 @@ pub struct Confirm {
 
 impl Confirm {
     pub fn new(title: impl Into<String>, call: Call) -> Confirm {
-        Confirm { title: title.into(), lines: vec![], preview: None, ack: None, secrets: vec![], confirm: "Confirm".into(), cancel: "Cancel".into(), danger: false, grants: vec![], call }
+        Confirm { title: title.into(), lines: vec![], preview: None, ack: None, dont_ask: None, secrets: vec![], confirm: "Confirm".into(), cancel: "Cancel".into(), danger: false, grants: vec![], call }
     }
     pub fn line(mut self, l: impl Into<String>) -> Confirm {
         self.lines.push(l.into());
@@ -521,6 +534,10 @@ impl Confirm {
     }
     pub fn danger(mut self) -> Confirm {
         self.danger = true;
+        self
+    }
+    pub fn dont_ask(mut self, text: &str) -> Confirm {
+        self.dont_ask = Some(text.into());
         self
     }
     pub fn ack(mut self, text: &str) -> Confirm {

@@ -355,6 +355,8 @@ const TERM_FONT_SIZE = 13;
 function setupTerminal(pane) {
   const term = new Terminal({
     cursorBlink: true, fontSize: TERM_FONT_SIZE,
+    // Decorations (the status pills, emphasis.js) are xterm's proposed API.
+    allowProposedApi: true,
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
     // The picked colour (term-color.js); --c-term paints the padding around
     // it, so the terminal and its tile stay one colour, not two.
@@ -373,6 +375,8 @@ function setupTerminal(pane) {
   term.loadAddon(fit);
   if (typeof CanvasAddon !== 'undefined') term.loadAddon(new CanvasAddon.CanvasAddon());
   term.open(pane.termEl);
+  // Status pills over `[[Done]]` and its kind, for the sandbox shown now.
+  pane.emphasis = window.sbxwEmphasis?.attach(term, () => pane.sandbox) || null;
 
   term.onSelectionChange(() => { const s = term.getSelection(); if (s) pane.lastSelection = s; });
 
@@ -478,6 +482,7 @@ function recreatePaneTerminal(idx) {
   const { sandbox, mode } = pane;
 
   if (pane.ws) { try { pane.ws.close(); } catch (_) {} pane.ws = null; }
+  pane.emphasis?.dispose();
   pane.term.dispose();
   pane.termEl.innerHTML = '';
   pane.lastSelection = '';
@@ -956,6 +961,7 @@ function connectPane(idx, name, mode, thread, repo, model, checkout) {
   pane.term.reset();
   pane.lastOutput = 0;
   pane.sandbox = name;
+  pane.emphasis?.refresh();
   // The liseret describes whoever is in the pane *now* — repainting drops the
   // outgoing session's state and picks up the incoming one's, mid-flash included.
   applyAgentStates();

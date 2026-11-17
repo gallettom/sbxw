@@ -588,6 +588,8 @@ impl App {
         data["app"]["kept"] = self.store.get("features").clone();
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
         data["app"]["uploads"] = crate::files::uploads();
+        // The upload dialog for dropped files: false once "Do not ask again" was chosen (features.rs).
+        data["app"]["ask_dropped_uploads"] = (!self.drops_skip_dialog()).into();
         data["app"]["surface"] = serde_json::json!({ "release": crate::surface::RELEASE_KEY, "focused": crate::surface::focused() });
         data
     }

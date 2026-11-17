@@ -45,6 +45,8 @@ pub const RELAY_DOC_BEGIN: &str = "<!-- sbxw:relay:begin -->";
 pub const RELAY_DOC_END: &str = "<!-- sbxw:relay:end -->";
 pub const JARVIS_DOC_BEGIN: &str = "<!-- sbxw:jarvis:begin -->";
 pub const JARVIS_DOC_END: &str = "<!-- sbxw:jarvis:end -->";
+pub const EMPHASIS_DOC_BEGIN: &str = "<!-- sbxw:emphasis:begin -->";
+pub const EMPHASIS_DOC_END: &str = "<!-- sbxw:emphasis:end -->";
 
 /// Claude Code lifecycle events forwarded to the daemon. (Permission prompts
 /// arrive as `Notification`; structured questions as `PreToolUse`.)
@@ -81,6 +83,7 @@ pub mod piece {
     pub const CONFIG_MCP: &str = "config-mcp";
     pub const CONFIG_MCP_SCRIPT: &str = "config-mcp-script";
     pub const JARVIS_ROLE: &str = "jarvis-role";
+    pub const EMPHASIS: &str = "emphasis";
 }
 
 /// The heading [`relay_guidance`] opens with. The batch looks for it to tell
@@ -431,6 +434,32 @@ impl Tooling {
         self.piece(piece::JARVIS_ROLE, body)
     }
 
+    /// The status-label guidance ([`crate::emphasis::guidance`]), fenced in
+    /// `~/.claude/CLAUDE.md` and replaced in place; `None` takes a fenced copy
+    /// out, so switching it off reaches the sandbox at the next bring-up too.
+    pub fn emphasis(self, guidance: Option<&str>) -> Self {
+        let body = match guidance {
+            Some(text) => format!(
+                "fence({memory},{begin},{end},{doc},{head});",
+                memory = js(USER_MEMORY_PATH),
+                begin = js(EMPHASIS_DOC_BEGIN),
+                end = js(EMPHASIS_DOC_END),
+                doc = js(&format!("{EMPHASIS_DOC_BEGIN}\n{text}{EMPHASIS_DOC_END}\n")),
+                // Never outside the fence: a fenced copy is always rewritten.
+                head = js(EMPHASIS_DOC_BEGIN),
+            ),
+            None => format!(
+                "const p={memory};let cur=null;try{{cur=fs.readFileSync(p,'utf8')}}catch(e){{}}\
+                 if(cur!==null){{const a=cur.indexOf({begin}),b=cur.indexOf({end});\
+                 if(a>=0&&b>a){{const rest=(cur.slice(0,a)+cur.slice(b+{end}.length)).replace(/\\n{{3,}}/g,'\\n\\n').trim();put(p,rest?rest+'\\n':'')}}}}",
+                memory = js(USER_MEMORY_PATH),
+                begin = js(EMPHASIS_DOC_BEGIN),
+                end = js(EMPHASIS_DOC_END),
+            ),
+        };
+        self.piece(piece::EMPHASIS, body)
+    }
+
     pub fn script(&self) -> String {
         let mut s = String::from(PRELUDE);
         for (name, body) in &self.pieces {
@@ -500,6 +529,7 @@ pub fn consequence(piece: &str) -> &'static str {
         piece::CONFIG_MCP => "could not register Jarvis's sbxw-config tools",
         piece::CONFIG_MCP_SCRIPT => "could not update Jarvis's sbxw-config script",
         piece::JARVIS_ROLE => "could not write Jarvis's role into its CLAUDE.md",
+        piece::EMPHASIS => "could not write the status-label guidance into CLAUDE.md",
         _ => "a tooling step failed",
     }
 }
@@ -766,6 +796,45 @@ mod tests {
         assert!(report.error(piece::JARVIS_ROLE).is_none(), "the role is written all the same");
         let c: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(h.join(".claude.json")).unwrap()).unwrap();
         assert!(c["mcpServers"][CONFIG_MCP_NAME].is_null(), "no registration of a server that cannot run");
+    }
+
+    #[test]
+    fn the_status_label_guidance_is_fenced_replaced_and_taken_out() {
+        if Command::new("node").arg("--version").output().is_err() {
+            eprintln!("node not found — skipping");
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        std::fs::create_dir_all(h.join(".claude")).unwrap();
+        std::fs::write(h.join(".claude/CLAUDE.md"), "## Mine\n\nkept\n").unwrap();
+        let read = || std::fs::read_to_string(h.join(".claude/CLAUDE.md")).unwrap();
+        let run = |t: Tooling| {
+            let out = run_node(&t.script().replace("/home/agent/", &format!("{}/", h.display()))).unwrap();
+            assert_eq!(t.parse_report(&out).unwrap(), ToolingOutcome::default(), "{out}");
+        };
+        let built_in = crate::emphasis::guidance(&crate::emphasis::built_in());
+        run(Tooling::new().relay("7682").emphasis(Some(&built_in)));
+        let first = read();
+        assert!(first.starts_with("## Mine\n\nkept\n"), "{first}");
+        assert_eq!(first.matches(crate::emphasis::GUIDANCE_HEAD).count(), 1, "{first}");
+        assert!(first.contains("[[Done]]"));
+        run(Tooling::new().relay("7682").emphasis(Some(&built_in)));
+        assert_eq!(read(), first, "idempotent");
+        let custom = std::collections::BTreeMap::from([(
+            "shipped".to_string(),
+            crate::emphasis::Family { tone: "green".into(), also: vec![], when: None },
+        )]);
+        run(Tooling::new().emphasis(Some(&crate::emphasis::guidance(&custom))));
+        let second = read();
+        assert!(second.contains("[[Shipped]]") && !second.contains("[[Done]]"), "replaced in place: {second}");
+        assert_eq!(second.matches(EMPHASIS_DOC_BEGIN).count(), 1);
+        run(Tooling::new().emphasis(None));
+        let off = read();
+        assert!(!off.contains(EMPHASIS_DOC_BEGIN) && !off.contains("Status labels"), "{off}");
+        assert!(off.contains("## Mine\n\nkept") && off.contains(RELAY_GUIDANCE_HEAD), "the rest stays: {off}");
+        run(Tooling::new().emphasis(None));
+        assert_eq!(read(), off, "nothing to take out twice");
     }
 
     #[test]

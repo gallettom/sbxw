@@ -231,6 +231,22 @@ Notes:
   (`CSI 6n`, `CSI c`) are stripped, so a reconnect doesn't type
   `37;3R37;3R…` onto your command line.
 
+## Status pills
+
+When an agent writes a status label such as `[[Done]]` or
+`[[Failed: 3 tests]]`, each terminal draws it as a coloured pill over the
+same cells, the brackets left out (their cells pad the pill, as in the
+desktop app): green for done, red for failed, amber for what needs you, a
+filled red for what cannot be undone, blue for context, cyan for the kind of
+work, purple for the team. Copying or selecting gives the text as written,
+brackets included; while a selection is on screen the pills step aside so it
+can be seen. The words, colours and switches are in the daemon's
+`sbxw.toml` (see [Status pills](configuration.md#status-pills)), and a change
+Jarvis applies redraws every open terminal without a reload.
+
+The pills are drawn in the terminals only, not yet in the requests panel or
+the session activity lines.
+
 ## The Project panel
 
 **Project** in a pane's bar opens a near-full-window panel with two tabs.
