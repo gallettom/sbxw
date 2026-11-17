@@ -11,7 +11,8 @@
 #   empty    select notes, open its Network item: "Nothing waits in notes.";
 #   all      press the top bar's "sbx asks": every sandbox's, 25 cards drawn,
 #            "Show 25 more", "Dismiss all 113".
-# Out: $SBXW_SHOTS/netfilter/<mark>.png, the element tree and the app log beside each.
+# Out: $SBXW_SHOTS/netfilter/<mark>.png, the element tree and the app log beside each;
+# then sessions-plus.png (below).
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 shots="$shots_root/netfilter"; mkdir -p "$shots"
@@ -41,3 +42,9 @@ for m in ${MARKS:-bubble empty all}; do
   echo "$shots/$m.png"
   grep -hE "intent from|waited|gave up|no element" "$shots/$m.log" | sed 's/^\[[^]]*\] //' || true
 done
+# The sidebar's sessions block (fixtures/threads/sessions-plus.json): main in
+# pane 1 (P1); s1 idle, t1 working, t2 wanting you, in no pane: a green +;
+# old-fix done: none. Out: $SBXW_SHOTS/netfilter/sessions-plus.png.
+SHOT_SIZE="${SHOT_SIZE:-1284x816}" run_app "$shots/sessions-plus.log" --fixture "$here/fixtures/threads/sessions-plus.json" \
+  --snap "$shots/sessions-plus.png" --tree "$shots/sessions-plus.tree.json"
+echo "$shots/sessions-plus.png"
