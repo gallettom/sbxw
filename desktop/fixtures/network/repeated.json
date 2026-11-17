@@ -1,0 +1,1699 @@
+{
+ "about": "The Network panel with sbx's requests as the user's machine lists them: repeated refused hosts grouped, the summary, Dismiss all.",
+ "daemon": {
+  "sandboxes": [
+   {
+    "name": "test-sbx",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/test-sbx"
+   },
+   {
+    "name": "api",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/api"
+   },
+   {
+    "name": "web-app",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/web-app"
+   },
+   {
+    "name": "data-pipeline-with-a-long-name",
+    "agent": "claude",
+    "status": "running",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/data-pipeline-with-a-long-name"
+   },
+   {
+    "name": "docs",
+    "agent": "claude",
+    "status": "stopped",
+    "chat": false,
+    "detached": false,
+    "remote_control": false,
+    "approvals": 0,
+    "kits_waiting": 0,
+    "old_sbx": false,
+    "workspace": "/Users/me/dev/docs"
+   }
+  ],
+  "sessions": [
+   {
+    "sandbox": "test-sbx",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "api",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "web-app",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   },
+   {
+    "sandbox": "data-pipeline-with-a-long-name",
+    "mode": "claude",
+    "state": "idle",
+    "agent": "claude",
+    "started_ms": 1763290000000,
+    "origin": "tty",
+    "answerable": false,
+    "ts": 1763290000001
+   }
+  ],
+  "threads": {
+   "test-sbx": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "api": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "web-app": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   },
+   "data-pipeline-with-a-long-name": {
+    "ok": true,
+    "threads": [],
+    "open": 1,
+    "max": 5
+   }
+  },
+  "leads": [],
+  "models": {
+   "ok": true,
+   "default": "claude-opus-5-5",
+   "models": [
+    {
+     "id": "claude-opus-5-5",
+     "label": "Opus 5.5"
+    },
+    {
+     "id": "claude-sonnet-5-5",
+     "label": "Sonnet 5.5"
+    },
+    {
+     "id": "claude-haiku-5-5",
+     "label": "Haiku 5.5"
+    }
+   ]
+  },
+  "board": {},
+  "thread_repos": {
+   "ok": true,
+   "workspace": "/Users/ana/dev/web-app",
+   "repos": [
+    {
+     "path": "api",
+     "branch": "main",
+     "dirty": 0,
+     "ahead": 0,
+     "behind": 0,
+     "detached": false
+    },
+    {
+     "path": "web",
+     "branch": "main",
+     "dirty": 2,
+     "ahead": 1,
+     "behind": 0,
+     "detached": false
+    },
+    {
+     "path": "docs",
+     "branch": "main",
+     "dirty": 0,
+     "ahead": 0,
+     "behind": 0,
+     "detached": false
+    }
+   ]
+  },
+  "approvals": {
+   "ok": true,
+   "approvals": [
+    {
+     "id": "network:85TMu000",
+     "kind": "network",
+     "sandbox": "test-sbx",
+     "title": "host0.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:00:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu001",
+     "kind": "network",
+     "sandbox": "test-sbx",
+     "title": "host1.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:01:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu002",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:02:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu003",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:03:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu004",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:04:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu005",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:05:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu006",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:06:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu007",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:07:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu008",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "pypi.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:08:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu009",
+     "kind": "network",
+     "sandbox": "api",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:09:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu010",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host10.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:10:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu011",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host11.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:11:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu012",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host12.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:12:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu013",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host13.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:13:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu014",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host14.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:14:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu015",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host15.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:15:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu016",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host16.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:16:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu017",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host17.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:17:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu018",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host18.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:18:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu019",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host19.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:19:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu020",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host20.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:20:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu021",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host21.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:21:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu022",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host22.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:22:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu023",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host23.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:23:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu024",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host24.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:24:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu025",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host25.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:25:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu026",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host26.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:26:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu027",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host27.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:27:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu028",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host28.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:28:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu029",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host29.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:29:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu030",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host30.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:30:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu031",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host31.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:31:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu032",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host32.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:32:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu033",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host33.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:33:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu034",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host34.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:34:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu035",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host35.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:35:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu036",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host36.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:36:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu037",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host37.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:37:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu038",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host38.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:38:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu039",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host39.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:39:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu040",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host40.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:40:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu041",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host41.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:41:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu042",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host42.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:42:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu043",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host43.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:43:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu044",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host44.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:44:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu045",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host45.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:45:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu046",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host46.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:46:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu047",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host47.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:47:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu048",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host48.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:48:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu049",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host49.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:49:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu050",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host50.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:50:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu051",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host51.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:51:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu052",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host52.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:52:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu053",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host53.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:53:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu054",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host54.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:54:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu055",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host55.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:55:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu056",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host56.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:56:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu057",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host57.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:57:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu058",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host58.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:58:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu059",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host59.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:59:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu060",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host60.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:00:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu061",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host61.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:01:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu062",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host62.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:02:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu063",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host63.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:03:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu064",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host64.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:04:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu065",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host65.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:05:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu066",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host66.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:06:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu067",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host67.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:07:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu068",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host68.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:08:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu069",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host69.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:09:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu070",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host70.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:10:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu071",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host71.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:11:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu072",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host72.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:12:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu073",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host73.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:13:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu074",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host74.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:14:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu075",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host75.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:15:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu076",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host76.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:16:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu077",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host77.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:17:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu078",
+     "kind": "network",
+     "sandbox": "sbxw-jarvis",
+     "title": "host78.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:18:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu079",
+     "kind": "network",
+     "sandbox": "old-demo",
+     "title": "host79.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:19:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu080",
+     "kind": "network",
+     "sandbox": "sbxw",
+     "title": "host80.example.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:20:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu090",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "cli.github.com:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:30:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    },
+    {
+     "id": "network:85TMu091",
+     "kind": "network",
+     "sandbox": "web-app",
+     "title": "registry.npmjs.org:443",
+     "detail": "Protocol: TCP\nResource type: domain\nno matching allow rule (default deny)",
+     "created_at": "2026-11-06T15:31:54.850902+01:00",
+     "options": [
+      {
+       "id": "allow",
+       "label": "Allow"
+      },
+      {
+       "id": "dismiss",
+       "label": "Dismiss"
+      }
+     ]
+    }
+   ]
+  },
+  "usage": {
+   "five_hour_pct": 42,
+   "seven_day_pct": 81,
+   "updated_ms": 1763290000000
+  }
+ },
+ "app": {
+  "selected": "api",
+  "panes": 1,
+  "open": [
+   "api"
+  ],
+  "panels": [
+   "network"
+  ]
+ }
+}

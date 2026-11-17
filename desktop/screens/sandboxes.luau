@@ -53,6 +53,25 @@ end
 local extra_intents = {}
 local badge_tones = { blue = "blue", green = "green", amber = "amber", red = "red", purple = "purple" }
 
+-- About how wide a row's extras draw, in points: the UI is monospace
+-- (0.6 em a character), a ghost button pads 4 (icon only) or 7, an icon is
+-- 12 and its gap 4, a badge pads 6, 6 between them. Used only to decide whether they share the name's line.
+local function extras_width(sb, app)
+  local w = 0
+  for _, e in ipairs(((app.extras or {}).sandboxes or {})[sb.name] or {}) do
+    local label = e.label or ""
+    if e.count then label = (label ~= "" and (label .. " ") or "") .. tostring(e.count) end
+    local chars = utf8.len(label) or #label
+    if e.intent then
+      w = w + (chars == 0 and 20 or (14 + (e.icon and 16 or 0) + chars * 6.6))
+    else
+      w = w + 14 + chars * 6.6
+    end
+    w = w + 6
+  end
+  return w
+end
+
 local function extras_of(sb, app)
   local out = {}
   for _, e in ipairs(((app.extras or {}).sandboxes or {})[sb.name] or {}) do
@@ -88,19 +107,27 @@ local function item(sb, app)
   end
   local extras = extras_of(sb, app)
   local top = { gap = 6, w = "full",
-    text{ sb.name, color = "text-bright", weight = "medium", truncate = true, grow = 1 },
+    text{ sb.name, color = "text-bright", weight = "medium", truncate = true, grow = 1, help = sb.name },
   }
   -- A feature that shows sbx's approvals itself replaces the plain flag.
   if #extras == 0 and sb.approvals > 0 then
     table.insert(top, badge{ "⚑ " .. sb.approvals, tone = "blue", help = "sbx waits for you to decide something" })
   end
-  for _, x in ipairs(extras) do table.insert(top, x) end
+  -- The extras share the name's line while the name keeps about twelve
+  -- characters (the sidebar is 240 pt wide); otherwise they get a line of
+  -- their own under it, so the name is never cut to "te…".
+  local name_w = math.min(utf8.len(sb.name) or #sb.name, 12) * 7.8
+  -- 206: the row's inner width; 26: the pane badge or the + button, and its gap.
+  local own_line = #extras > 0 and (name_w + extras_width(sb, app) + 26 > 206)
+  local under = { gap = 6, w = "full", justify = "end" }
+  for _, x in ipairs(extras) do table.insert(own_line and under or top, x) end
   if pane then table.insert(top, badge{ tostring(pane), tone = "blue", help = "In pane " .. pane }) end
   if not pane then table.insert(top, button{ icon = "plus", variant = "ghost", on = "spare", arg = sb.name, help = "Open in a spare pane", key = "spare-" .. sb.name }) end
   return column{
     key = "row-" .. sb.name, on = "open", arg = sb.name, gap = 3, px = 9, py = 7, radius = "sm", w = "full",
     fill = selected and "surface" or nil, hover = "surface",
     row(top),
+    own_line and row(under) or false,
     row{ gap = 6, w = "full",
       dot{ tone = tones[sb.status] or "amber" },
       text{ sb.status, size = "sm", color = "text-muted" },

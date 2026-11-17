@@ -49,6 +49,12 @@ const INTENTS: &[Spec] = &[
         doc: "Answers one of sbx's pending requests with one of its options, after the person confirms in the core's dialog (the request's own words).",
     },
     Spec {
+        name: "approvals_dismiss",
+        risk: Risk::Direct,
+        args: &[("sandbox", Arg::Str, false), ("title", Arg::Str, false)],
+        doc: "Dismisses sbx's requests for hosts it already refused (kind `network`: nothing waits on them) of the listed sandboxes, narrowed to one sandbox and one host when given, with sbx's own `dismiss` option, one after the other. Requests that hold something (a kit's host port) are never dismissed here.",
+    },
+    Spec {
         name: "network_allow_blocked",
         risk: Risk::Approval("Allow a sandbox to reach a host"),
         args: &[("sandbox", Arg::Str, true), ("host", Arg::Str, true)],
@@ -130,6 +136,33 @@ pub fn waiting(cx: &Ctx) -> Vec<J> {
 /// waits); a `port` request is a kit waiting, and lapses after 45 s.
 pub fn holds(a: &J) -> bool {
     a["kind"] != "network"
+}
+
+/// sbx's `dismiss` option of a request, if it offers one.
+fn dismiss_option(a: &J) -> Option<String> {
+    a["options"].as_array()?.iter().find(|o| o["id"] == "dismiss" || o["label"].as_str().is_some_and(|l| l.to_lowercase().starts_with("dismiss"))).and_then(|o| o["id"].as_str().map(str::to_string))
+}
+
+/// What the requests come to: `(requests, distinct (sandbox, kind, what), distinct hosts, sandboxes, held)`.
+/// sbx lists the same refused host again each time the sandbox retries it.
+pub fn summary(list: &[J]) -> (usize, usize, usize, usize, usize) {
+    let mut groups = std::collections::HashSet::new();
+    let mut hosts = std::collections::HashSet::new();
+    let mut sbs = std::collections::HashSet::new();
+    for a in list {
+        let (sb, kind, what) = (a["sandbox"].as_str().unwrap_or(""), a["kind"].as_str().unwrap_or(""), a["title"].as_str().unwrap_or(""));
+        groups.insert((sb, kind, what));
+        hosts.insert((kind, what));
+        sbs.insert(sb);
+    }
+    (list.len(), groups.len(), hosts.len(), sbs.len(), list.iter().filter(|a| holds(a)).count())
+}
+
+/// The bulk dismiss in progress: `(id, option)` still to send, done, failed.
+static DISMISS: std::sync::Mutex<(Vec<(String, String)>, usize, usize)> = std::sync::Mutex::new((Vec::new(), 0, 0));
+
+fn dismiss_call(id: &str, option: &str) -> Action {
+    Action::Call(Call::post("/api/approvals/respond", json!({ "id": id, "option": option }), "dismiss a refused host".to_string()).tag("dismiss").quiet())
 }
 
 /// What sbx's option means, in plain words, from its id and label.
@@ -214,6 +247,28 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
             v
         }
         "network_refresh" => reload(shown(cx).as_deref()),
+        "approvals_dismiss" => {
+            let title = a.s("title");
+            let mut todo: Vec<(String, String)> = waiting(cx)
+                .iter()
+                .filter(|r| !holds(r))
+                .filter(|r| sb.as_deref().is_none_or(|s| r["sandbox"] == s))
+                .filter(|r| title.is_none_or(|t| r["title"] == t))
+                .filter_map(|r| Some((r["id"].as_str()?.to_string(), dismiss_option(r)?)))
+                .collect();
+            if todo.is_empty() {
+                return Err("nothing to dismiss: no refused host listed here offers sbx's Dismiss".into());
+            }
+            let mut q = DISMISS.lock().unwrap_or_else(|e| e.into_inner());
+            if !q.0.is_empty() {
+                return Err("a dismiss is already running".into());
+            }
+            // One request at a time: each answer is one `sbx policy approval respond`.
+            todo.reverse();
+            let (id, opt) = todo.pop().unwrap();
+            *q = (todo, 0, 0);
+            vec![Action::notice(format!("Dismissing {} refused host request{}…", q.0.len() + 1, if q.0.is_empty() { "" } else { "s" })), dismiss_call(&id, &opt)]
+        }
         "approval_answer" => {
             let (id, option) = (a.req("id"), a.req("option"));
             let all = approvals(cx);
@@ -362,6 +417,23 @@ fn act(cx: &Ctx, a: &Asked) -> Result<Vec<Action>, String> {
 }
 
 fn on_answer(cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {
+    if call.tag == "dismiss" {
+        let ok = matches!(&r, Ok((c, b)) if (200..300).contains(c) && b["ok"] != false);
+        let mut q = DISMISS.lock().unwrap_or_else(|e| e.into_inner());
+        if ok { q.1 += 1 } else { q.2 += 1 }
+        if let Some((id, opt)) = q.0.pop() {
+            return vec![dismiss_call(&id, &opt)];
+        }
+        let (done, failed) = (q.1, q.2);
+        *q = (Vec::new(), 0, 0);
+        let mut v = vec![if failed == 0 {
+            Action::notice(format!("Dismissed {done} refused host request{}", if done == 1 { "" } else { "s" }))
+        } else {
+            Action::error(format!("Dismissed {done}; {failed} could not be (answered or gone already)"))
+        }];
+        v.extend(reload(shown(cx).as_deref()));
+        return v;
+    }
     let mut v = match r {
         Ok((c, body)) if (200..300).contains(&c) && body["ok"] != false => {
             let mut v = vec![Action::notice(format!("{}: done", call.what))];
@@ -406,15 +478,25 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
     let mut v = vec![];
     if !all.is_empty() {
         let refs: Vec<&J> = all.iter().collect();
-        let held = refs.iter().any(|a| holds(a));
+        // The web UI has no total: each sandbox's row says its own count
+        // (the pane bars and rows here say the same). The top bar counts
+        // what there is to decide: one per (sandbox, host), as sbx lists a
+        // refused host again at each retry.
+        let (n, groups, hosts, sbs, held) = summary(&all);
+        let plural = |n: usize, w: &str| format!("{n} {w}{}", if n == 1 { "" } else { "s" });
+        let mut help = format!("{} from sbx: {} in {}", plural(n, "request"), plural(hosts, "distinct host"), plural(sbs, "sandbox").replace("sandboxs", "sandboxes"));
+        help.push_str(&if held > 0 { format!("; {held} hold something until you answer.") } else { "; all are hosts sbx already refused (nothing waits on them).".into() });
+        if groups < n {
+            help.push_str(&format!(" The number counts each sandbox's host once ({groups}); each sandbox's own count, as in the web UI, counts every request."));
+        }
         v.push(Extra {
             place: Place::Topbar,
             id: "approvals".into(),
             label: "sbx asks".into(),
             icon: Some("flag".into()),
             tone: tone(&refs).into(),
-            help: if held { "Requests from sbx wait for your answer".into() } else { "Hosts sbx refused, which you may allow (nothing is held waiting)".into() },
-            count: Some(all.len() as u64),
+            help,
+            count: Some(groups as u64),
             intent: Some(("network_show".into(), json!({}))),
         });
     }
@@ -646,6 +728,66 @@ mod tests {
         assert_eq!(act(&cx, &ask("port_open", json!({ "sandbox": "web-app", "spec": "127.0.0.1:43000:3000/tcp" }))).unwrap(), vec![Action::OpenLink("http://127.0.0.1:43000".into())]);
     }
 
+    /// Phase 4 (user, macOS): "sbx asks 88" in the top bar, "sbx asks 2" on
+    /// test-sbx's panes. The web UI has no total; each sandbox's count is
+    /// every request of it (`pending_for`), the pane bars say the same. The
+    /// top bar counts one per (sandbox, host): sbx lists a refused host again
+    /// at each retry. Refused hosts are dismissed in bulk, one call after the
+    /// other, never a request that holds something.
+    #[test]
+    fn repeated_hosts_count_once_and_refused_ones_dismiss_in_bulk() {
+        let row = |id: &str, sb: &str, kind: &str, title: &str, at: &str| json!({ "id": id, "kind": kind, "sandbox": sb, "title": title, "detail": "", "created_at": at,
+            "options": [{ "id": "allow", "label": "Allow" }, { "id": "dismiss", "label": "Dismiss" }] });
+        let d = json!({
+            "sandboxes": [{ "name": "test-sbx", "status": "running" }, { "name": "sbxw", "status": "running" }],
+            "approvals": { "ok": true, "approvals": [
+                row("network:1", "test-sbx", "network", "a.com:443", "1"), row("network:2", "test-sbx", "network", "a.com:443", "2"),
+                row("network:3", "sbxw", "network", "a.com:443", "1"), row("network:4", "sbxw", "network", "b.com:443", "1"),
+                row("network:5", "sbxw", "network", "b.com:443", "2"), row("port:6", "sbxw", "port", "5173", "3"),
+                row("network:7", "gone", "network", "c.com:443", "1"),
+            ] },
+        });
+        let cx = Ctx { data: &d };
+        assert_eq!(summary(&waiting(&cx)), (6, 4, 3, 2, 1), "requests, (sandbox, host), hosts, sandboxes, held");
+        let x = extras(&cx);
+        let top = x.iter().find(|e| e.place == Place::Topbar).unwrap();
+        assert_eq!(top.count, Some(4));
+        assert!(top.help.contains("6 requests") && top.help.contains("3 distinct hosts") && top.help.contains("2 sandboxes"), "{}", top.help);
+        let pane = |sb: &str| x.iter().find(|e| e.place == Place::Pane(sb.into()) && e.id == "approvals").unwrap().count;
+        assert_eq!((pane("test-sbx"), pane("sbxw")), (Some(2), Some(4)), "each sandbox's own count, as the web UI's row");
+        // Dismiss all: the refused hosts of listed sandboxes, one at a time; the port request stays.
+        let a = act(&cx, &ask("approvals_dismiss", json!({}))).unwrap();
+        let first = a.iter().find_map(|a| if let Action::Call(c) = a { Some(c.clone()) } else { None }).unwrap();
+        assert_eq!((first.path.as_str(), first.body["id"].as_str(), first.body["option"].as_str()), ("/api/approvals/respond", Some("network:1"), Some("dismiss")));
+        assert!(act(&cx, &ask("approvals_dismiss", json!({}))).is_err(), "one bulk dismiss at a time");
+        let mut sent = vec![first.body["id"].as_str().unwrap().to_string()];
+        let mut call = first;
+        loop {
+            let next = on_answer(&cx, &call, Ok((200, json!({ "ok": true }))));
+            match next.as_slice() {
+                [Action::Call(c)] => {
+                    sent.push(c.body["id"].as_str().unwrap().to_string());
+                    call = c.clone();
+                }
+                v => {
+                    assert!(matches!(&v[0], Action::Notice { text, error: false, .. } if text == "Dismissed 5 refused host requests"), "{v:?}");
+                    break;
+                }
+            }
+        }
+        assert_eq!(sent, ["network:1", "network:2", "network:3", "network:4", "network:5"]);
+        // One host of one sandbox.
+        let a = act(&cx, &ask("approvals_dismiss", json!({ "sandbox": "sbxw", "title": "b.com:443" }))).unwrap();
+        let c = a.iter().find_map(|a| if let Action::Call(c) = a { Some(c.clone()) } else { None }).unwrap();
+        assert_eq!(c.body["id"], "network:4");
+        let v = on_answer(&cx, &c, Ok((200, json!({ "ok": true }))));
+        let [Action::Call(c)] = v.as_slice() else { panic!("{v:?}") };
+        assert_eq!(c.body["id"], "network:5");
+        let v = on_answer(&cx, c, Ok((400, json!({ "ok": false, "error": "gone" }))));
+        assert!(matches!(&v[0], Action::Notice { error: true, .. }), "{v:?}");
+        assert!(act(&cx, &ask("approvals_dismiss", json!({ "sandbox": "sbxw", "title": "5173" }))).is_err(), "a port request is never dismissed here");
+    }
+
     /// Phase 3 bug (user, macOS): "sbx asks 85" in the top bar. The daemon's
     /// `GET /api/approvals` is `sbx policy approval ls`, the whole machine's;
     /// the web UI counts only a listed sandbox's. Refused hosts alone are quiet.
@@ -658,6 +800,7 @@ mod tests {
         assert_eq!(waiting(&cx).len(), 2);
         let x = extras(&cx);
         let top = x.iter().find(|e| e.place == Place::Topbar).unwrap();
+        // Two requests for two hosts of web-app: one each.
         assert_eq!((top.count, top.tone.as_str()), (Some(2), "muted"));
         let row = x.iter().find(|e| e.place == Place::Sandbox("web-app".into()) && e.id == "approvals").unwrap();
         assert_eq!((row.count, row.tone.as_str()), (Some(2), "muted"));
