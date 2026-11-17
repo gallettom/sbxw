@@ -36,6 +36,16 @@ pub fn meaning(id: &str) -> &'static str {
     }
 }
 
+/// The tone an item's menu row takes: its own when it has one, else the
+/// colour its chip's icon has by meaning, so it looks the same inline and in
+/// the overflow menu.
+pub fn menu_tone(it: &Item) -> &str {
+    match it.tone.as_str() {
+        "" | "muted" => meaning(&it.id),
+        t => t,
+    }
+}
+
 /// One thing a bar may show inline or in its overflow menu.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
@@ -310,6 +320,16 @@ mod tests {
 
     fn ids(v: &[Item]) -> Vec<&str> {
         v.iter().map(|i| i.id.as_str()).collect()
+    }
+
+    /// A chip's colour by meaning is carried into its overflow menu row.
+    #[test]
+    fn a_chip_keeps_its_colour_in_the_overflow_menu() {
+        let tones: Vec<(String, String)> = many().iter().map(|i| (i.id.clone(), menu_tone(i).to_string())).collect();
+        let get = |id: &str| tones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
+        assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "neutral".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
+        assert_eq!(get("plan"), "amber", "a toned extra keeps its own tone");
+        assert_eq!(get("env"), "neutral");
     }
 
     #[test]

@@ -657,7 +657,7 @@ fn entry(key: &str, icon: &str, label: &str, color: &str, help: &str) -> El {
 /// Help at the far right: the existing `show_help` (the macOS Help menu
 /// and Ctrl+Alt+H open the same dialog).
 fn help_view(word: bool) -> El {
-    let help = if cfg!(target_os = "macos") { "Help: shortcuts and how sbxw works (⌃⌥H)" } else { "Help: shortcuts and how sbxw works (Ctrl+Alt+H)" };
+    let help = if cfg!(target_os = "macos") { "Help and shortcuts (⌃⌥H)" } else { "Help and shortcuts (Ctrl+Alt+H)" };
     entry("status-help", "help", if word { "Help" } else { "" }, "text", help).on_press(|s: &mut App| s.show_help())
 }
 

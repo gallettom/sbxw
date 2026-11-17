@@ -1431,6 +1431,17 @@ fn tile(e: El) -> El {
 /// titlebar container this makes never takes a press meant for the bar.
 /// Ignored on Linux and Windows (their native frame stays).
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
+/// The room the top bar keeps at its left for the window buttons: up to 12
+/// pt clear after the zoom button (`inset` is from the window's edge, the
+/// bar starts a gutter in); none of them, the sidebar's content x.
+pub fn lights_room(inset: f32) -> f32 {
+    if inset > 0.0 {
+        inset - layout::GUTTER + 12.0
+    } else {
+        layout::SIDEBAR_PAD
+    }
+}
+
 pub const fn window_chrome() -> rune::Chrome {
     rune::Chrome { full_size_content: true, traffic_lights: Some(LIGHTS), drag_regions: true }
 }
@@ -1512,7 +1523,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
         return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
     }
-    let inset = cx.titlebar_inset();
+    // 0 in macOS full screen and off macOS (no window buttons over the bar);
+    // SBXW_DESKTOP_NO_LIGHTS=1 draws that case in a headless shot.
+    let inset = if std::env::var_os("SBXW_DESKTOP_NO_LIGHTS").is_some() { 0.0 } else { cx.titlebar_inset() };
     let top = s.screens.iter().find(|x| x.name == "topbar").unwrap();
     let side = s.screens.iter().find(|x| x.name == "sandboxes").unwrap();
     let (top_el, mut overlays) = screen::view_parts::<App>(top);
@@ -1560,7 +1573,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         // line (`LIGHTS`): nothing goes under them, 12 pt clear after the
         // zoom button (`inset` is from the window's edge, the bar starts a
         // gutter in).
-        .child(el().key("traffic-lights-room").w(if inset > 0.0 { inset - layout::GUTTER + 12.0 } else { 4.0 }).h_full())
+        // Without them (full screen, Linux, Windows) the bar's first item
+        // starts where the sidebar's content does (its padding).
+        .child(el().key("traffic-lights-room").w(lights_room(inset)).h_full())
         .child(
             col()
                 .grow(1.0)
@@ -1874,7 +1889,7 @@ fn bar_menu_row<'a>(it: &'a bar::Item, n: usize, label: &'a str) -> screen::Menu
         key: it.key(n),
         label,
         icon: it.icon.as_deref(),
-        tone: Some(it.tone.as_str()).filter(|t| !t.is_empty() && *t != "muted"),
+        tone: Some(bar::menu_tone(it)).filter(|t| *t != "neutral"),
         help: Some(it.help.as_str()).filter(|h| !h.is_empty()),
         keys: &[],
         count: it.count,

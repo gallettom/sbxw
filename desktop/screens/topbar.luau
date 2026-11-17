@@ -32,6 +32,11 @@ local tools = { usage = 1, setup = 2, help = 3, mac = 4 }
 -- by id, for the action (filled by render; actions do not get `data`).
 local extra_intents = {}
 
+-- An extra's colour by meaning while quiet, inline or in the "⋯" menu.
+local function meaning_of(id)
+  return (id == "create" and "green") or ((id == "approvals" or id == "relay" or id == "plan") and "blue") or nil
+end
+
 local function extra(e, mac)
   local label = e.label or ""
   if e.count then label = (label ~= "" and (label .. " ") or "") .. tostring(e.count) end
@@ -46,7 +51,7 @@ local function extra(e, mac)
   local waits = e.tone == "amber" or e.tone == "red"
   -- Colour by meaning while quiet: New is green (it starts something),
   -- what it goes to blue (requests, a plan), the team purple; tools neutral.
-  local meaning = (e.id == "create" and "green") or ((e.id == "approvals" or e.id == "relay" or e.id == "plan") and "blue") or nil
+  local meaning = meaning_of(e.id)
   return button{ label, icon = e.icon, key = key, on = "extra", arg = e.id, help = e.help, keys = keys,
     tone = (not waits) and meaning or nil,
     -- Quiet until something waits: then the tone's own colour on its tint.
@@ -68,7 +73,9 @@ local function more_menu(hidden)
       if #label > 18 then label = string.match(label, "^(%S+)") or label end
     end
     if e.count then label = label .. " (" .. tostring(e.count) .. ")" end
-    table.insert(items, { id = e.id, label = label, icon = e.icon, help = e.help ~= "" and e.help or nil })
+    -- The same colour as inline: its own tone when something waits, else its meaning.
+    local t = (e.tone == "amber" or e.tone == "red") and e.tone or meaning_of(e.id)
+    table.insert(items, { id = e.id, label = label, icon = e.icon, tone = t, help = e.help ~= "" and e.help or nil })
     if e.intent then extra_intents[e.id] = e.intent end
     if e.tone == "amber" then tone = "amber"
     elseif e.count and tone == nil then tone = "blue" end

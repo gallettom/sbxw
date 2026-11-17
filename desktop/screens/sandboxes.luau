@@ -349,19 +349,24 @@ local function item(sb, app, data)
   -- Line 1: the name (it truncates, nothing is drawn over it), the network
   -- bubble, the pane chip, then the ⋯ menu that holds every action, shown
   -- on hover, on keyboard focus and on the selected row; it keeps its room.
-  local line1 = { w = "full", gap = 4,
-    text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, grow = 1, help = name },
+  -- The bubble sits right after the name (6 pt: 2 of gap, 4 of its own
+  -- padding, which keeps a 24 pt target), and moves with the name's length;
+  -- a long name truncates before the bubble is pushed out.
+  local line1 = { w = "full", gap = 2,
+    text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, help = name },
   }
   if approvals then
     table.insert(line1, row{ key = "extra-sandbox-" .. name .. "-approvals", on = approvals.intent and "extra" or nil, arg = name .. "\napprovals",
-      help = bubble_help(name, approvals), h = 24, min_w = 24, justify = "center", radius = "xs", hover = "active-bg",
+      help = bubble_help(name, approvals), h = 24, min_w = 24, px = 4, justify = "center", radius = "xs", hover = "active-bg",
       badge{ tostring(approvals.count or ""), tone = approvals.tone == "amber" and "amber" or "blue", pill = true } })
   end
+  table.insert(line1, spacer{})
   -- The ⋯ takes its room beside the name when the whole name still fits;
   -- a name too long for the line keeps all of it at rest, and the ⋯ shows
   -- over its end only on hover or focus, on the row's own fill.
-  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 28 or 0)
-  local fits = name_w + 28 <= col_w
+  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 30 or 0)
+  -- With a bubble the ⋯ always keeps its room, so it never covers the bubble.
+  local fits = approvals ~= nil or name_w + 28 <= col_w
   table.insert(line1, row{ gap = 0, reveal = not selected,
     pin = (not fits) and { right = 0, top = 0 } or nil, fill = (not fits) and (selected and "elevated" or "hover-subtle") or nil, radius = "xs",
     menu{ "", id = "extra-sandbox-" .. name, icon = "more", variant = "ghost", dense = true, items = menu_items, on = "row_menu", arg = name, help = "Every action of " .. name },

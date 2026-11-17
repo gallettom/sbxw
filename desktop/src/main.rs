@@ -64,6 +64,6 @@ fn main() {
     // The window buttons on the top bar's line (shell::window_chrome).
     // Help in the menu bar's own Help menu (macOS; Rune reports native
     // menus unsupported elsewhere, where the shortcut and the palette have it).
-    let help = rune::MenuItem::new("sbxw Help", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
+    let help = rune::MenuItem::new("Help and shortcuts", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
     rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).run();
 }

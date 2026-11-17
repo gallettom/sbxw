@@ -839,8 +839,10 @@ impl Build<'_> {
                 if st.wrap {
                     t = t.wrap();
                 }
+                // A text that truncates also gives way when its row is short
+                // (it shrinks before its siblings are pushed out).
                 if st.truncate {
-                    t = t.truncate().min_w(0.0);
+                    t = t.truncate().shrink();
                 }
                 t
             }
@@ -986,7 +988,9 @@ impl Build<'_> {
                 // A count alone in a round bubble: the tone's colour filled,
                 // the number in the page's dark (a mark and its label at once).
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("blue"));
-                el().h(18.0).min_w(18.0).px(5.0).items_center().justify_center().radius(9.0).fill(hex(fg)).child(text(n.text.clone()).font(body(12.0, 600.0)).color(c("bg")))
+                // 16 pt high, 11 pt figures (tabular in the monospace face), a
+                // pill for two digits rather than a stretched circle.
+                el().h(16.0).min_w(16.0).px(5.0).items_center().justify_center().radius(8.0).fill(hex(fg)).child(text(n.text.clone()).font(TextStyle::new(11.0, 600.0).lh(16.0)).color(c("bg")))
             }
             Kind::Badge => {
                 let (fg, tint) = tone(n.variant.as_deref().unwrap_or("neutral"));

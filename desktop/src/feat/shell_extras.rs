@@ -23,8 +23,8 @@ pub const FEATURE: Feature = Feature {
         ScreenDecl { name: "sandbox-actions", src: include_str!("../../screens/sandbox-actions.luau"), slot: Slot::Modal { width: 460.0, light_dismiss: false } },
     ],
     intents: INTENTS,
-    // Help from anywhere, as the menu bar's Help > sbxw Help on macOS.
-    shortcuts: &[Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and keyboard shortcuts" }],
+    // Help from anywhere, as the menu bar's Help > Help and shortcuts on macOS.
+    shortcuts: &[Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and shortcuts" }],
     act,
     on_answer: Some(on_answer),
     extras: Some(extras),
