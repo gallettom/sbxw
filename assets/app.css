@@ -4353,3 +4353,30 @@
   }
   .jv-ack { display: flex; align-items: center; gap: .35rem; flex-basis: 100%; color: var(--c-text-bright); font-size: 12px; cursor: pointer; }
   .jv-ack input { accent-color: var(--c-red); }
+
+/* ── Status pills (emphasis.js) ────────────────────────────────────────────
+   An xterm decoration over the cells of `[[Done]]`: the same characters in
+   the same cells, on an opaque tint so the canvas text under it does not
+   show through. Clicks and selection go to the terminal underneath; while a
+   selection exists the pills step aside so it can be seen. */
+.xterm .emph-pill {
+    display: flex; align-items: center; box-sizing: border-box;
+    pointer-events: none; overflow: hidden; white-space: pre;
+    line-height: 1; font-weight: 600;
+    --emph-fg: var(--c-blue); --emph-bg: var(--c-blue-tint);
+    color: var(--emph-fg); background: var(--emph-bg);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--emph-fg) 45%, transparent);
+}
+.xterm .emph-pill > span { display: inline-block; text-align: center; flex: none; }
+.xterm .emph-pill > .emph-br { opacity: .35; font-weight: 400; }
+.xterm .emph-pill.emph-l { border-top-left-radius: var(--r-pill); border-bottom-left-radius: var(--r-pill); }
+.xterm .emph-pill.emph-r { border-top-right-radius: var(--r-pill); border-bottom-right-radius: var(--r-pill); }
+.xterm .emph-green  { --emph-fg: var(--c-green);  --emph-bg: var(--c-green-tint); }
+.xterm .emph-red    { --emph-fg: var(--c-red);    --emph-bg: var(--c-red-tint); }
+.xterm .emph-amber  { --emph-fg: var(--c-amber-strong); --emph-bg: var(--c-amber-tint); }
+.xterm .emph-blue   { --emph-fg: var(--c-blue);   --emph-bg: var(--c-blue-tint); }
+.xterm .emph-purple { --emph-fg: var(--c-purple); --emph-bg: var(--c-purple-tint); }
+.xterm .emph-cyan   { --emph-fg: var(--c-group-2); --emph-bg: color-mix(in srgb, var(--c-group-2) 18%, var(--c-bg)); }
+.xterm .emph-danger { --emph-fg: var(--c-white);  --emph-bg: var(--c-red); }
+.xterm .emph-danger > .emph-br { opacity: .55; }
+.xterm.emph-selecting .emph-pill { visibility: hidden; }

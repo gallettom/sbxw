@@ -38,6 +38,8 @@ window.addEventListener('hashchange', applySandboxHash);
 // 8 of the browser's 6-per-origin connection slots, so a third tab's `GET /`
 // had nowhere to go and just hung. One connection per tab fixes that.
 const sbxwStream = new EventSource('/api/stream');
+// Status pills: the vocabulary and switches change live (emphasis.js).
+window.sbxwEmphasis?.listen(sbxwStream);
 
 // The macOS notch companion (island) asks an already-open tab to switch
 // sandboxes over this stream — so clicking a session focuses this tab rather
