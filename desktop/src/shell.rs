@@ -8,7 +8,6 @@
 //! per pane, each with a 32 pt bar over its terminal.
 
 mod bar;
-#[allow(dead_code)] // wired by the drag and drop (next commit)
 mod drag;
 mod features;
 mod jarvis;
@@ -1042,7 +1041,7 @@ impl App {
         if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
-        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() {
+        if self.bar_menu.take().is_some() || self.pager_menu.take().is_some() || self.drag.take().is_some() {
             return true;
         }
         if self.feats.dialog.is_some() || self.feats.modal.is_some() {
@@ -1155,7 +1154,10 @@ impl App {
                 if f.shown.iter().any(|x| x.key(n) == key) || (open && f.hidden.iter().any(|x| x.key(n) == key)) {
                     return true;
                 }
-                if !f.hidden.is_empty() && (key == format!("pane-{n}-more") || (open && key == format!("pane-{n}-more-list"))) {
+                if key == format!("pane-{n}-more") || (open && key == format!("pane-{n}-more-list")) {
+                    return true;
+                }
+                if open && self.pane_moves(i).iter().any(|m| m.key == key) {
                     return true;
                 }
             }
@@ -1969,6 +1971,7 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         overlays.push(m);
     }
     // The status bar at the foot, in every layout: the panes' area shrinks by its height.
+    overlays.extend(drag_overlay(s));
     let mut root = root.child(bar).child(main).child(statusbar::view(s));
     // The status bar's read-only popover, light dismiss.
     overlays.extend(statusbar::popover(s));
@@ -2242,25 +2245,217 @@ impl App {
         if p.status() != "connected" {
             items.push(core("status", &p.status(), "muted", "The terminal's connection"));
         }
-        Some(bar::pane_fit(self.bar_width(i), &pane_name(p), p.mode.name(), items))
+        Some(bar::pane_fit(self.bar_width(i), &pane_name(p), p.mode.name(), items, true))
     }
 
     /// The overflow menu of pane `i`'s bar, anchored under its button.
     fn bar_menu_view(&self) -> Option<El> {
         let i = self.bar_menu?;
         let f = self.pane_fit(i)?;
-        if f.hidden.is_empty() {
-            return None;
-        }
         let n = i + 1;
         let names: Vec<String> = f.hidden.iter().map(|it| if it.label.is_empty() { it.help.clone() } else { it.label.clone() }).collect();
         let rows: Vec<screen::MenuRow> = f.hidden.iter().zip(&names).map(|(it, l)| bar_menu_row(it, n, l)).collect();
-        let mut list = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, screen::menu_width(&rows));
+        let moves = self.pane_moves(i);
+        let move_rows: Vec<screen::MenuRow> = moves
+            .iter()
+            .map(|m| screen::MenuRow { key: m.key.clone(), label: &m.label, icon: Some(m.icon), tone: None, help: Some(m.help.as_str()), keys: &[], count: None, chosen: false, disabled: m.op.is_none() })
+            .collect();
+        let w = screen::menu_width(&rows).max(screen::menu_width(&move_rows));
+        let surface = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, w);
+        // Extras and moves can be more than a small window's height: the list scrolls.
+        let top = self.panes.get(i).and_then(|p| self.rects.panes.get(&p.uid)).map_or(120.0, |r| r[1]);
+        let below = self.window.1 - (top + layout::PANE_BAR_H + 6.0) - layout::STATUS_BAR_H - 12.0;
+        let room = below.max(top - 12.0) - screen::MENU_PAD * 2.0 - 4.0;
+        let mut list = col().w_full().max_h(room.max(120.0)).scroll(rune::ScrollSpec { stick_bottom: false });
         for (it, r) in f.hidden.iter().zip(&rows) {
             list = list.child(bar_menu_item(it, r));
         }
-        Some(list)
+        if !rows.is_empty() {
+            list = list.child(screen::menu_divider());
+        }
+        for (m, r) in moves.iter().zip(&move_rows) {
+            let e = screen::menu_row(r);
+            list = list.child(match m.op.clone() {
+                Some(op) => e.on_press(move |s: &mut App| {
+                    s.bar_menu = None;
+                    s.run_intent("pane", Intent::Pages(op.clone()));
+                    s.push_data();
+                }),
+                None => e,
+            });
+        }
+        Some(surface.child(list))
     }
+
+    /// Pane `i`'s moves, for its "⋯" menu (keys `pane-<n>-move-<side>`,
+    /// `pane-<n>-rotate`, `pane-<n>-to-page-<k>`, `pane-<n>-to-new-page`):
+    /// what each does, and None when it would do nothing.
+    pub(super) fn pane_moves(&self, i: usize) -> Vec<PaneMove> {
+        let Some(p) = self.panes.get(i) else { return vec![] };
+        let n = i + 1;
+        let page = self.pages.page_of(p.uid).unwrap_or(self.pages.current);
+        let tile = &self.pages.list[page].tile;
+        let aspect = self.page_aspect();
+        let mut v = vec![];
+        for side in Side::ALL {
+            let can = tile.neighbour(p.uid, side, aspect).is_some() || (tile.count() > 1 && !tile.spans(p.uid, side));
+            let word = side.name();
+            let label = format!("Move {word}");
+            let help = if tile.neighbour(p.uid, side, aspect).is_some() { format!("Trade places with the pane {}", match side { Side::Left => "on the left", Side::Right => "on the right", Side::Top => "above", Side::Bottom => "below" }) } else { "Dock along that whole side of the page".to_string() };
+            v.push(PaneMove { key: format!("pane-{n}-move-{word}"), label, icon: match side { Side::Left | Side::Right => "columns", _ => "rows" }, help, op: can.then(|| PageOp::Move { pane: Some(i), to: word.to_string() }) });
+        }
+        let rotate_help = "This pane and its neighbour switch between side by side and stacked (portrait and landscape)".to_string();
+        v.push(PaneMove { key: format!("pane-{n}-rotate"), label: "Rotate split".into(), icon: "grid", help: rotate_help, op: (tile.count() > 1).then_some(PageOp::Rotate(Some(i))) });
+        let e = self.empty_uids();
+        for k in (0..self.pages.list.len()).filter(|&k| k != page) {
+            let room = self.pages.has_room(k, &|x| e.contains(&x));
+            let help = if room { self.tab_info(k).help } else { format!("Page {} is full ({} per page)", k + 1, self.pages.per) };
+            v.push(PaneMove { key: format!("pane-{n}-to-page-{}", k + 1), label: format!("Move to page {}", k + 1), icon: "single", help, op: room.then_some(PageOp::ToPage { pane: Some(i), page: Some(k) }) });
+        }
+        v.push(PaneMove { key: format!("pane-{n}-to-new-page"), label: "Move to a new page".into(), icon: "plus", help: "A page of its own, at the end".into(), op: (tile.count() > 1 || self.pages.list.len() > 1).then_some(PageOp::ToPage { pane: Some(i), page: None }) });
+        v
+    }
+
+    /// A press on pane `uid`'s bar moved: past [`drag::THRESHOLD`] it is a
+    /// drag, and the zone under the pointer is found; on release the drop
+    /// is made (or, cancelled or outside a zone, nothing). A press that did
+    /// not travel gives the pane the keyboard, as a press on the pane does.
+    /// Nothing reaches a terminal and nothing is resized until the drop.
+    fn pane_drag(&mut self, uid: Uid, d: &rune::Drag) {
+        let p = d.window_point();
+        match d.phase {
+            rune::Phase::Down => {
+                self.drag = Some(PaneDrag { uid, start: p, at: p, active: false, zone: None });
+            }
+            rune::Phase::Up => {
+                let Some(dr) = self.drag.take() else { return };
+                if d.cancelled() {
+                    return;
+                }
+                if !dr.active {
+                    if let Some(i) = self.index_of(uid) {
+                        self.focus_pane(i);
+                    }
+                    return;
+                }
+                match dr.zone {
+                    Some(z) if z.acts() => self.drop_pane(uid, z),
+                    Some(z) => self.notify(z.label(), false),
+                    None => {}
+                }
+                self.push_data();
+            }
+            _ => {
+                let Some(dr) = self.drag.as_mut() else { return };
+                dr.at = p;
+                if !dr.active && (p[0] - dr.start[0]).hypot(p[1] - dr.start[1]) >= drag::THRESHOLD {
+                    dr.active = true;
+                    self.bar_menu = None;
+                    self.pager_menu = None;
+                }
+                if self.drag.as_ref().is_some_and(|d| d.active) {
+                    let z = self.zone_at(uid, p);
+                    if let Some(dr) = self.drag.as_mut() {
+                        dr.zone = z;
+                    }
+                }
+            }
+        }
+    }
+
+    /// What the page and the pager look like to a drag (drag.rs).
+    fn drag_scene<R>(&self, uid: Uid, f: impl FnOnce(&drag::Scene) -> R) -> R {
+        let cur = &self.pages.cur().tile;
+        let panes: Vec<(Uid, tiling::Rect)> = cur.leaves().into_iter().filter_map(|u| self.rects.panes.get(&u).map(|r| (u, *r))).collect();
+        let tabs: Vec<(usize, tiling::Rect)> = {
+            let (a, b) = self.pager_fit();
+            (a..b).filter_map(|k| self.rects.tabs.get(&k).map(|r| (k, *r))).collect()
+        };
+        let e = self.empty_uids();
+        let room = |k: usize| self.pages.has_room(k, &|x| e.contains(&x));
+        let scene = drag::Scene { area: self.rects.area.unwrap_or([0.0; 4]), panes: &panes, tabs: &tabs, plus: self.rects.plus, current: self.pages.current, dragged: uid, room: &room };
+        f(&scene)
+    }
+
+    fn zone_at(&self, uid: Uid, p: [f32; 2]) -> Option<drag::Zone> {
+        self.drag_scene(uid, |s| drag::zone_at(s, p))
+    }
+
+    /// The rectangle the dragged pane would take, and what it would do.
+    fn drag_preview(&self) -> Option<(tiling::Rect, drag::Zone)> {
+        let d = self.drag.as_ref().filter(|d| d.active)?;
+        let z = d.zone?;
+        self.drag_scene(d.uid, |s| drag::preview(s, &z)).map(|r| (r, z))
+    }
+
+    /// The drop: the page's tiling changes once, then the panes follow
+    /// (their terminals move with them and fit once to their new place).
+    fn drop_pane(&mut self, uid: Uid, z: drag::Zone) {
+        match z {
+            drag::Zone::Split { target, side } => {
+                self.pages.split_into(uid, target, side);
+            }
+            drag::Zone::Swap { target } => self.pages.tile_mut().swap(uid, target),
+            drag::Zone::Dock { side } => {
+                let t = self.pages.cur().tile.clone();
+                let share = drag::dock_share(t.count());
+                *self.pages.tile_mut() = t.dock(uid, side, share);
+            }
+            drag::Zone::Page { page, .. } => return self.run_page_op(PageOp::ToPage { pane: self.index_of(uid), page: Some(page) }),
+            drag::Zone::NewPage => return self.run_page_op(PageOp::ToPage { pane: self.index_of(uid), page: None }),
+        }
+        self.sync_panes(Some(uid));
+    }
+}
+
+/// One of a pane's moves in its menu.
+pub(super) struct PaneMove {
+    pub key: String,
+    pub label: String,
+    pub icon: &'static str,
+    pub help: String,
+    pub op: Option<PageOp>,
+}
+
+/// While a pane is dragged: the zone's outline and a translucent preview of
+/// the rectangle the pane would take, with what a drop there does; a chip
+/// with the pane's name follows the pointer.
+fn drag_overlay(s: &App) -> Vec<El> {
+    let Some(d) = s.drag.as_ref().filter(|d| d.active) else { return vec![] };
+    let mut v = vec![];
+    if let Some((r, z)) = s.drag_preview() {
+        let ok = z.acts();
+        let (fg, tint) = if ok { ("blue", "blue-tint") } else { ("text-muted", "elevated") };
+        v.push(
+            col()
+                .key("drag-preview")
+                .pin(Some(r[0]), Some(r[1]), None, None)
+                .w(r[2].max(24.0))
+                .h(r[3].max(24.0))
+                .fill(c(tint).alpha(0.55))
+                .border(2.0, c(fg))
+                .radius(theme::radius("md").unwrap())
+                .items_center()
+                .justify_center()
+                .child(text(z.label()).font(small(13.0, 600.0)).color(c(if ok { "text-bright" } else { "text-muted" }))),
+        );
+    }
+    let name = s.pane_by_uid(d.uid).map(pane_name).unwrap_or_default();
+    v.push(
+        row()
+            .key("drag-ghost")
+            .pin(Some(d.at[0] + 12.0), Some(d.at[1] + 12.0), None, None)
+            .px(8.0)
+            .h(24.0)
+            .gap(6.0)
+            .items_center()
+            .radius(theme::radius("xs").unwrap())
+            .fill(c("elevated"))
+            .border(1.0, c("border"))
+            .child(rune::icon(crate::icons::get("terminal").unwrap(), 14.0).color(c("blue")))
+            .child(text(name).font(small(12.0, 500.0)).color(c("text-bright"))),
+    );
+    v
 }
 
 /// A pane bar chip: an extra's (or the core's) label, icon, tone and count,
@@ -2329,12 +2524,13 @@ fn bar_menu_item(it: &bar::Item, r: &screen::MenuRow) -> El {
 fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
     let n = i + 1;
     let count = f.hidden.len();
+    let (label, help) = if count > 0 { (format!("{count} more"), format!("{count} more: what does not fit in this bar, and this pane's moves")) } else { ("Pane menu".to_string(), "Move this pane: left, right, up, down, rotate, to another page".to_string()) };
     let mut b = row()
         .key(format!("pane-{n}-more"))
         .role("button")
-        .label(format!("{count} more"))
+        .label(label)
         .expanded(open)
-        .help(format!("{count} more: what does not fit in this bar"))
+        .help(help)
         .gap(bar::MORE_GAP)
         .px(bar::CHIP_PX)
         .h(layout::DENSE_H)
@@ -2346,12 +2542,30 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
         .on_press(move |s: &mut App| {
             s.bar_menu = if s.bar_menu == Some(i) { None } else { Some(i) };
         })
-        .child(rune::icon(crate::icons::get("more").unwrap(), bar::CHIP_ICON).color(c("text")))
-        .child(text(count.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(c("text")));
+        .child(rune::icon(crate::icons::get("more").unwrap(), bar::CHIP_ICON).color(c("text")));
+    if count > 0 {
+        b = b.child(text(count.to_string()).font(small(bar::CHIP_TEXT, 500.0)).color(c("text")));
+    }
     if let Some(t) = bar::more_tone(&f.hidden) {
         b = b.child(el().w(bar::MORE_DOT).h(bar::MORE_DOT).radius(bar::MORE_DOT / 2.0).fill(theme::hex(crate::screen::tone(t).0)));
     }
     b
+}
+
+/// The grip a pane is dragged by: two columns of three dots.
+fn grip(n: usize) -> El {
+    let dot = || el().w(2.0).h(2.0).radius(1.0).fill(c("text-dim"));
+    let column = || col().gap(2.0).child(dot()).child(dot()).child(dot());
+    row()
+        .key(format!("pane-{n}-grip"))
+        .help("Drag to move this pane: onto another pane's side or middle, the page's edge, or a page in the pager")
+        .w(bar::GRIP_W)
+        .h(layout::DENSE_H)
+        .gap(2.0)
+        .items_center()
+        .justify_center()
+        .child(column())
+        .child(column())
 }
 
 fn pane_view(s: &App, i: usize) -> El {
@@ -2364,7 +2578,7 @@ fn pane_view(s: &App, i: usize) -> El {
     let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
     // dot | name, kind, extras…, "…" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
-    let mut bar = row()
+    let bar = row()
         .key(format!("pane-{}-bar", i + 1))
         .h(layout::PANE_BAR_H)
         .w_full()
@@ -2377,8 +2591,16 @@ fn pane_view(s: &App, i: usize) -> El {
             if (*w - r[2]).abs() > 0.5 {
                 *w = r[2];
             }
-        })
-        .child(dot);
+        });
+    // The bar drags its pane (its buttons keep their presses): drag.rs.
+    let bar = if pane.is_some_and(|p| p.sandbox.is_some()) {
+        bar.cursor(if s.drag.as_ref().is_some_and(|d| d.active && d.uid == uid) { Cursor::Grabbing } else { Cursor::Grab })
+            .on_drag(move |s: &mut App, d: &mut rune::Drag, _tx| s.pane_drag(uid, d))
+            .child(grip(i + 1))
+    } else {
+        bar
+    };
+    let mut bar = bar.child(dot);
     let fit = s.pane_fit(i);
     let name_min = fit.as_ref().map_or(0.0, |f| f.name_min);
     let mut mid = row().grow(1.0).min_w(0.0).h_full().gap(bar::PANE_GAP).items_center().clip_rounded(0.0).child(
@@ -2389,9 +2611,7 @@ fn pane_view(s: &App, i: usize) -> El {
         for it in &f.shown {
             mid = mid.child(bar_chip(it, i + 1));
         }
-        if !f.hidden.is_empty() {
-            mid = mid.child(bar_more(f, i, s.bar_menu == Some(i)));
-        }
+        mid = mid.child(bar_more(f, i, s.bar_menu == Some(i)));
     }
     bar = bar.child(mid);
     if pane.is_some_and(|p| p.sandbox.is_some()) {

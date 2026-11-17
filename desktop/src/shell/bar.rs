@@ -147,6 +147,8 @@ pub struct PaneFit {
 pub const PANE_PAD: f32 = 8.0;
 pub const PANE_GAP: f32 = 8.0;
 pub const DOT_W: f32 = 8.0;
+/// The grip a pane is dragged by (its bar's empty part drags it too).
+pub const GRIP_W: f32 = 10.0;
 pub const CLOSE_W: f32 = 24.0;
 /// Room the name keeps before any extra: up to this much of it shows.
 pub const NAME_WANT: f32 = 120.0;
@@ -163,16 +165,20 @@ pub fn kind_w(kind: &str) -> f32 {
     measure(kind, CHIP_TEXT, 400.0)
 }
 
-/// What shows in a pane bar `width` points wide.
-pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>) -> PaneFit {
+/// What shows in a pane bar `width` points wide. `menu`: the "⋯" button is
+/// always there (it also holds the pane's moves), so its room is kept.
+pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>, menu: bool) -> PaneFit {
     let items = by_priority(items);
     let name_w = measure(name, NAME_TEXT, 500.0);
     let name_min = name_w.min(NAME_MIN);
     let name_keep = name_w.min(NAME_WANT);
-    // dot | name, kind, extras…, more | close
-    let fixed = PANE_PAD * 2.0 + DOT_W + PANE_GAP + name_keep + PANE_GAP + kind_w(kind) + PANE_GAP + CLOSE_W;
+    // grip, dot | name, kind, extras…, more | close
+    let mut fixed = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name_keep + PANE_GAP + kind_w(kind) + PANE_GAP + CLOSE_W;
+    if menu {
+        fixed += PANE_GAP + more_w(items.len());
+    }
     let widths: Vec<f32> = items.iter().map(chip_w).collect();
-    let k = fit(width, fixed, &widths, PANE_GAP, more_w(items.len()));
+    let k = fit(width, fixed, &widths, PANE_GAP, if menu { 0.0 } else { more_w(items.len()) });
     let mut shown = items;
     let hidden = shown.split_off(k);
     PaneFit { shown, hidden, name_min }
@@ -402,15 +408,13 @@ mod tests {
         for width in [1100.0, 700.0, 560.0, 450.0, 330.0, 230.0, 200.0, 160.0] {
             for n in [0, 1, 3, 9] {
                 let items: Vec<Item> = many().into_iter().take(n).collect();
-                let f = pane_fit(width, "test-sbx", "agent", items.clone());
+                let f = pane_fit(width, "test-sbx", "agent", items.clone(), true);
                 assert_eq!(f.shown.len() + f.hidden.len(), n, "{width} {n}");
                 let name = measure("test-sbx", 12.0, 500.0).min(NAME_WANT);
-                let mut used = PANE_PAD * 2.0 + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W;
+                // The "⋯" menu is always there (it holds the pane's moves).
+                let mut used = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
                 used += f.shown.iter().map(|i| PANE_GAP + chip_w(i)).sum::<f32>();
-                if !f.hidden.is_empty() {
-                    used += PANE_GAP + more_w(n);
-                }
-                let floor = PANE_PAD * 2.0 + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
+                let floor = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
                 assert!(used <= width + 0.5 || f.shown.is_empty() && used <= floor + 0.5, "{width} {n}: {used}");
                 // Priority: nothing hidden ranks before something shown.
                 if let (Some(s), Some(h)) = (f.shown.last(), f.hidden.first()) {
@@ -422,16 +426,16 @@ mod tests {
 
     #[test]
     fn widths_decide_what_overflows() {
-        let wide = pane_fit(1100.0, "test-sbx", "agent", many());
+        let wide = pane_fit(1100.0, "test-sbx", "agent", many(), true);
         assert!(wide.hidden.is_empty(), "one pane at 1400: all inline: {:?}", ids(&wide.hidden));
-        let two = pane_fit(560.0, "test-sbx", "agent", many());
+        let two = pane_fit(560.0, "test-sbx", "agent", many(), true);
         assert_eq!(ids(&two.shown)[..2], ["plan", "approvals"], "two panes at 1400: what needs you stays inline");
         assert!(!two.hidden.is_empty());
-        let narrow = pane_fit(210.0, "test-sbx", "agent", many());
+        let narrow = pane_fit(210.0, "test-sbx", "agent", many(), true);
         assert!(narrow.shown.len() <= 1, "4 panes at 720: {:?}", ids(&narrow.shown));
         assert_eq!(narrow.hidden.len() + narrow.shown.len(), 9);
         // The name keeps its floor even with nothing else drawn.
-        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", "agent", many());
+        let long = pane_fit(210.0, "a-very-long-sandbox-name-for-tests", "agent", many(), true);
         assert_eq!(long.name_min, NAME_MIN);
     }
 

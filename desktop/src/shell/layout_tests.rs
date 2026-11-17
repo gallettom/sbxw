@@ -288,3 +288,187 @@ fn pages_persist_and_the_old_layout_migrates() {
     assert_eq!(b.pages.per, 2);
     assert!(b.expect.is_empty(), "nothing is being started");
 }
+
+impl Rig {
+    /// A point in the empty part of pane `n`'s bar (right of its name).
+    fn bar_point(&self, n: usize) -> (f32, f32) {
+        let (r, _) = self.rt.presented(&format!("pane-{n}-grip")).unwrap_or_else(|| panic!("pane {n}'s grip"));
+        (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0)
+    }
+
+    fn rect(&self, key: &str) -> [f32; 4] {
+        self.rt.presented(key).unwrap_or_else(|| panic!("{key} drawn")).0
+    }
+
+    /// Presses pane `n`'s bar and moves the pointer to `to` in steps; does not release.
+    fn drag_to(&mut self, n: usize, to: (f32, f32)) {
+        let (x, y) = self.bar_point(n);
+        self.rt.pointer_down(x, y);
+        self.rt.frame(0.016);
+        for k in 1..=6 {
+            let f = k as f32 / 6.0;
+            self.rt.pointer_move(x + (to.0 - x) * f, y + (to.1 - y) * f);
+            self.rt.frame(0.016);
+        }
+    }
+
+    fn release(&mut self, at: (f32, f32)) {
+        self.rt.pointer_up(at.0, at.1);
+        self.rt.frame(0.016);
+        self.settle();
+    }
+
+    fn zone(&self) -> Option<drag::Zone> {
+        self.rt.state.drag.as_ref().and_then(|d| d.zone)
+    }
+}
+
+/// Each kind of drop zone, its preview, the drop, and a cancel; nothing
+/// recreated, at most one size per terminal, no key or click to a terminal.
+#[test]
+fn dragging_a_pane_by_its_bar_shows_zones_and_drops_once() {
+    let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
+    let before = r.generations();
+    let typed = |r: &Rig| -> usize { r.inputs.iter().map(|(_, rx)| rx.try_iter().filter(|i| matches!(i, TermInput::Bytes(_))).count()).sum() };
+    let uid = |r: &Rig, name: &str| r.rt.state.panes.iter().find(|p| p.sandbox.as_deref() == Some(name)).unwrap().uid;
+    // A press on the bar that does not travel only focuses its pane.
+    let (x, y) = r.bar_point(2);
+    r.rt.pointer_down(x, y);
+    r.rt.pointer_up(x + 1.0, y);
+    r.settle();
+    assert_eq!(r.rt.state.panes[r.rt.state.focused].sandbox.as_deref(), Some("b"));
+    assert!(r.rt.state.drag.is_none());
+    // a | b over c. Drag a over b's bottom half: split, preview = b's bottom half.
+    let b = r.rect("pane-2");
+    let to = (b[0] + b[2] / 2.0, b[1] + b[3] * 0.9);
+    r.drag_to(1, to);
+    assert_eq!(r.zone(), Some(drag::Zone::Split { target: uid(&r, "b"), side: Side::Bottom }));
+    let p = r.rect("drag-preview");
+    assert!((p[1] - (b[1] + b[3] / 2.0)).abs() < 2.0 && (p[3] - b[3] / 2.0).abs() < 2.0, "preview {p:?} is b's bottom half of {b:?}");
+    assert!(r.rt.presented("drag-ghost").is_some());
+    assert_eq!(r.names(), [vec!["a", "b", "c"]], "nothing changes before the drop");
+    assert!(r.take().values().all(|v| v.is_empty()), "no size while dragging");
+    r.release(to);
+    let t = &r.rt.state.pages.cur().tile;
+    assert_eq!(t.order(), [uid(&r, "b"), uid(&r, "a"), uid(&r, "c")], "a went under b: b, a stacked, then c");
+    assert!(r.rt.presented("drag-preview").is_none());
+    r.check_kept(&before, "split");
+    // Swap: a over c's middle.
+    let n_a = r.rt.state.index_of(uid(&r, "a")).unwrap() + 1;
+    let c = r.rect(&format!("pane-{}", r.rt.state.index_of(uid(&r, "c")).unwrap() + 1));
+    let to = (c[0] + c[2] / 2.0, c[1] + c[3] / 2.0);
+    r.drag_to(n_a, to);
+    assert_eq!(r.zone(), Some(drag::Zone::Swap { target: uid(&r, "c") }));
+    let p = r.rect("drag-preview");
+    assert!((p[2] - c[2]).abs() < 2.0 && (p[3] - c[3]).abs() < 2.0, "swap preview is c whole");
+    r.release(to);
+    r.check_kept(&before, "swap");
+    // Dock: c along the page's right edge.
+    let area = r.rect("page-area");
+    let n_c = r.rt.state.index_of(uid(&r, "c")).unwrap() + 1;
+    let to = (area[0] + area[2] - 6.0, area[1] + area[3] / 2.0);
+    r.drag_to(n_c, to);
+    assert_eq!(r.zone(), Some(drag::Zone::Dock { side: Side::Right }));
+    r.release(to);
+    assert!(r.rt.state.pages.cur().tile.spans(uid(&r, "c"), Side::Right));
+    r.check_kept(&before, "dock");
+    // Cancel: Escape mid-drag puts nothing anywhere.
+    let shape = r.rt.state.pages.cur().tile.clone();
+    let b = r.rect(&format!("pane-{}", r.rt.state.index_of(uid(&r, "b")).unwrap() + 1));
+    let to = (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0);
+    let n_c = r.rt.state.index_of(uid(&r, "c")).unwrap() + 1;
+    r.drag_to(n_c, to);
+    assert!(r.zone().is_some());
+    r.rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+    r.rt.frame(0.016);
+    r.release(to);
+    assert_eq!(r.rt.state.pages.cur().tile, shape, "Escape cancelled the drop");
+    // A drop outside any zone (the sidebar) changes nothing either.
+    let side = r.rect("sidebar");
+    let to = (side[0] + 40.0, side[1] + 200.0);
+    r.drag_to(n_c, to);
+    assert_eq!(r.zone(), None);
+    r.release(to);
+    assert_eq!(r.rt.state.pages.cur().tile, shape);
+    // The pager's "+": a new page with that pane, shown.
+    let plus = r.rect("page-new");
+    let to = (plus[0] + plus[2] / 2.0, plus[1] + plus[3] / 2.0);
+    r.drag_to(n_c, to);
+    assert_eq!(r.zone(), Some(drag::Zone::NewPage));
+    r.release(to);
+    assert_eq!(r.rt.state.pages.list.len(), 2);
+    assert_eq!(r.rt.state.pages.current, 1);
+    r.check_kept(&before, "new page");
+    // Back onto page 1 by its tab.
+    r.settle();
+    let tab = r.rect("page-1");
+    let to = (tab[0] + tab[2] / 2.0, tab[1] + tab[3] / 2.0);
+    let n = r.rt.state.index_of(uid(&r, "c")).unwrap() + 1;
+    r.drag_to(n, to);
+    assert_eq!(r.zone(), Some(drag::Zone::Page { page: 0, full: false }));
+    r.release(to);
+    assert_eq!(r.rt.state.pages.list.len(), 1, "the emptied page went");
+    assert_eq!(r.rt.state.pages.current, 0);
+    r.check_kept(&before, "to page 1");
+    assert_eq!(typed(&r), 0, "no key or click reached a terminal");
+}
+
+/// The pane menu's moves: the keyboard way to the same places.
+#[test]
+fn the_pane_menu_moves_rotates_and_sends_to_a_page() {
+    let mut r = Rig::new(&["a", "b", "c"], 1284.0, 816.0);
+    let before = r.generations();
+    super::tests::tap(&mut r.rt, "pane-2-more");
+    assert!(r.rt.state.drawn("pane-2-rotate") && r.rt.state.drawn("pane-2-move-left"));
+    // b and c are stacked on the right: rotate makes them side by side.
+    super::tests::tap(&mut r.rt, "pane-2-rotate");
+    r.settle();
+    match r.rt.state.pages.cur().tile.at("b") {
+        Some(Tile::Split { dir, .. }) => assert_eq!(*dir, tiling::Dir::Row, "landscape to portrait"),
+        other => panic!("{other:?}"),
+    }
+    r.check_kept(&before, "rotate");
+    // Move left: a and b trade places.
+    let b = r.rt.state.panes.iter().position(|p| p.sandbox.as_deref() == Some("b")).unwrap() + 1;
+    super::tests::tap(&mut r.rt, &format!("pane-{b}-more"));
+    super::tests::tap(&mut r.rt, &format!("pane-{b}-move-left"));
+    r.settle();
+    assert_eq!(r.names(), [vec!["b", "a", "c"]]);
+    r.check_kept(&before, "move left");
+    // At the left edge, Move left is off (it spans the whole left side).
+    assert!(r.rt.state.pane_moves(0).iter().any(|m| m.key == "pane-1-move-left" && m.op.is_none()));
+    super::tests::tap(&mut r.rt, "pane-1-more");
+    super::tests::tap(&mut r.rt, "pane-1-to-new-page");
+    r.settle();
+    assert_eq!(r.names(), [vec!["a", "c"], vec!["b"]]);
+    r.check_kept(&before, "to a new page");
+}
+
+#[test]
+fn dividers_keep_the_least_size_and_double_press_equalises() {
+    let mut r = Rig::new(&["a", "b"], 1284.0, 816.0);
+    let h = r.rect("panes-handle");
+    let (x, y) = (h[0] + h[2] / 2.0, h[1] + h[3] / 2.0);
+    r.rt.pointer_down(x, y);
+    r.rt.frame(0.016);
+    r.rt.pointer_move(0.0, y);
+    r.rt.frame(0.016);
+    r.rt.pointer_up(0.0, y);
+    r.settle();
+    let a = r.rect("pane-1");
+    assert!((a[2] - tiling::MIN_W).abs() < 2.0, "pane 1 stops at its least width: {a:?}");
+    for (_, sizes) in r.take() {
+        assert!(sizes.len() <= 2, "the divider's live fit is debounced: {sizes:?}");
+    }
+    // Double press: equal again.
+    let h = r.rect("panes-handle");
+    let (x, y) = (h[0] + h[2] / 2.0, h[1] + h[3] / 2.0);
+    for _ in 0..2 {
+        r.rt.pointer_down(x, y);
+        r.rt.pointer_up(x, y);
+        r.rt.frame(0.05);
+    }
+    r.settle();
+    let (a, b) = (r.rect("pane-1"), r.rect("pane-2"));
+    assert!((a[2] - b[2]).abs() < 2.0, "equal: {a:?} {b:?}");
+}

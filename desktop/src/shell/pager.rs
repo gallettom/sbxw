@@ -89,17 +89,25 @@ fn per_label(per: usize) -> String {
 }
 
 impl App {
-    /// Page `k`'s tab: the names of what is open on it, shortened; in the
-    /// tabbed view the one pane's full name.
+    /// Page `k`'s tab: the names of what is open on it, whole when they fit
+    /// in a tab; else (or `compact`, when the pager is short of room) a
+    /// count, "Page 2 · 3", the names in its tooltip. One name alone is
+    /// shortened at most once.
     pub fn tab_info(&self, k: usize) -> TabInfo {
+        self.tab_info_as(k, false)
+    }
+
+    pub fn tab_info_as(&self, k: usize, compact: bool) -> TabInfo {
         let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None } };
         let panes: Vec<&Pane> = page.tile.order().into_iter().filter_map(|u| self.pane_by_uid(u)).collect();
         let open: Vec<&&Pane> = panes.iter().filter(|p| p.sandbox.is_some()).collect();
         let names: Vec<String> = open.iter().map(|p| pane_name(p)).collect();
+        let joined = names.join(", ");
         let label = match names.len() {
             0 => "Empty".to_string(),
-            1 => short(&names[0], 28),
-            _ => names.iter().map(|n| short(n, 12)).collect::<Vec<_>>().join(", "),
+            1 => short(&names[0], if compact { 16 } else { 28 }),
+            _ if !compact && bar::measure(&joined, TAB_TEXT, 500.0) <= TAB_LABEL_MAX => joined,
+            n => format!("Page {} · {n}", k + 1),
         };
         let wants = open.iter().any(|p| p.attention);
         let working = open.iter().any(|p| terminal::session_for(self.feats.data.get("sessions"), p.sandbox.as_deref(), p.thread.as_deref(), p.mode == Mode::Agent).is_some_and(|s| s.state == "working"));
@@ -111,18 +119,33 @@ impl App {
 
     /// Which tabs are inline: `(first, end)`; the others are in `pager-more`.
     pub fn pager_fit(&self) -> (usize, usize) {
+        let (a, b, _) = self.pager_fit_as();
+        (a, b)
+    }
+
+    /// [`App::pager_fit`], and whether the tabs show their compact labels
+    /// (when the whole names do not all fit).
+    pub fn pager_fit_as(&self) -> (usize, usize, bool) {
         let n = self.pages.list.len();
         let w = if self.pager_w > 0.0 { self.pager_w } else { self.window.0 - self.left_w() - layout::GUTTER * 2.0 };
-        let widths: Vec<f32> = (0..n).map(|k| {
-            let t = self.tab_info(k);
-            tab_w(&t.label, t.tone.is_some())
-        }).collect();
         let fixed = PLUS_W + GAP + controls_w(self.pages.per) + GAP;
-        let all = widths.iter().sum::<f32>() + GAP * n.saturating_sub(1) as f32;
-        if all + fixed <= w {
-            return (0, n);
+        let widths = |compact: bool| -> Vec<f32> {
+            (0..n).map(|k| {
+                let t = self.tab_info_as(k, compact);
+                tab_w(&t.label, t.tone.is_some())
+            }).collect()
+        };
+        let total = |v: &[f32]| v.iter().sum::<f32>() + GAP * n.saturating_sub(1) as f32;
+        let full = widths(false);
+        if total(&full) + fixed <= w {
+            return (0, n, false);
         }
-        fit_tabs(&widths, self.pages.current, (w - fixed - MORE_W - GAP).max(0.0))
+        let short = widths(true);
+        if total(&short) + fixed <= w {
+            return (0, n, true);
+        }
+        let (a, b) = fit_tabs(&short, self.pages.current, (w - fixed - MORE_W - GAP).max(0.0));
+        (a, b, true)
     }
 
     /// Whether the pager draws an element of that key (`wait:` marks).
@@ -206,8 +229,8 @@ fn small_icon(name: &str, size: f32, color: rune::Color) -> El {
 }
 
 /// One page's tab.
-fn tab(s: &App, k: usize) -> El {
-    let t = s.tab_info(k);
+fn tab(s: &App, k: usize, compact: bool) -> El {
+    let t = s.tab_info_as(k, compact);
     let on = k == s.pages.current;
     // While a pane is dragged over it: the drop target.
     let target = s.drag.as_ref().and_then(|d| d.zone).is_some_and(|z| z == drag::Zone::Page { page: k, full: false } || z == drag::Zone::Page { page: k, full: true });
@@ -291,10 +314,10 @@ fn segment(key: &str, label: &str, icon: &str, on: bool, help: &str, keys: Vec<S
 /// The pager strip.
 pub fn view(s: &App) -> El {
     let n = s.pages.list.len();
-    let (a, b) = s.pager_fit();
+    let (a, b, compact) = s.pager_fit_as();
     let mut tabs = row().gap(GAP).items_center().min_w(0.0).clip_rounded(0.0);
     for k in a..b {
-        tabs = tabs.child(tab(s, k));
+        tabs = tabs.child(tab(s, k, compact));
     }
     let mut left = row().gap(GAP).items_center().grow(1.0).min_w(0.0);
     if a > 0 || b < n {
