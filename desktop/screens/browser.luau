@@ -33,7 +33,10 @@ return {
       }
     end
     local sb = ui.sandbox or "?"
-    local live = status == "live" or status == "starting"
+    -- The browser could not start (an error before the first picture) or
+    -- has ended: no picture, no live controls, the message and what to do next.
+    local dead = status == "ended" or (ui.error ~= nil and status ~= "live")
+    local live = (status == "live" or status == "starting") and not dead
 
     local top = row{ gap = 6, w = "full",
       text{ sb, weight = "semibold", color = "text-bright", truncate = true, grow = 1, help = ui.title },
@@ -78,6 +81,19 @@ return {
       table.insert(out, note("Starting the browser in the sandbox..."))
     end
 
+    if dead then
+      -- The next step, through what the app already has: Setup's Kits tab
+      -- (the kits line), and the sandbox's actions (Recreate, behind the
+      -- core's dialog). Nothing here changes anything by itself.
+      table.insert(out, row{ gap = 6, w = "full", key = "browser-next",
+        button{ "Kits in Setup", icon = "gear", on = "kits", key = "browser-kits",
+          help = "Open Setup on the Kits tab: add \"sbxw:agent-skills\" to the kits line of this sandbox's sbxw.toml" },
+        button{ "Recreate…", icon = "more", on = "actions", arg = sb, key = "browser-recreate",
+          help = "Open " .. sb .. "'s actions: Recreate applies a new kits line (the app asks before it does anything)" },
+      })
+      return column(out)
+    end
+
     -- The picture: the core's, growing into what is left.
     table.insert(out, column{ grow = 1, w = "full", radius = "sm", border = ui.focused and "blue" or "elevated", fill = "floor",
       surface{ id = "browser" } })
@@ -108,6 +124,8 @@ return {
       return intent("browser_nav", { url = value })
     end,
     viewport = function(_, _, value) return intent("browser_viewport", { value = value }) end,
+    kits = function() return intent("open_modal", { screen = "setup", arg = "kits" }) end,
+    actions = function(_, sb) return intent("open_modal", { screen = "sandbox-actions", arg = sb }) end,
     allow = function(_, host) return intent("browser_allow", { host = host }) end,
     ignore = function(_, host) return intent("browser_ignore", { host = host }) end,
   },
