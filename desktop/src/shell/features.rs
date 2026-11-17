@@ -958,6 +958,11 @@ impl App {
         let card = col()
             .key("modal")
             .role("dialog")
+            // Keyboard focus stays inside; Escape closes it.
+            .modal(false, |s: &mut App| {
+                s.feats.modal = None;
+                s.push_data();
+            })
             .pin(Some(side), Some(top), Some(side), None)
             // A fixed height: the screen fills it and scrolls inside (its
             // own close button; Escape and a press outside close it too).

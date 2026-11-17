@@ -112,6 +112,8 @@ pub struct Style {
     pub mono: bool,
     pub wrap: bool,
     pub truncate: bool,
+    /// Out of the parent's flow, pinned to some of its edges (left, top, right, bottom).
+    pub pin: Option<[Option<f32>; 4]>,
 }
 
 /// One entry of a `menu` or `select`.
@@ -167,8 +169,13 @@ pub struct Node {
     /// `row`/`column` with `on`: called when Space is pressed while it has
     /// the keyboard (Enter calls `on`).
     pub on_space: Option<String>,
+    /// `row`/`column`: what overflows it is cut at its edges.
+    pub clip: bool,
     /// `button`, `menu`: the dense size (24 pt, for bars) instead of 28.
     pub dense: bool,
+    /// `button`, `menu`: `tab_stop = false` leaves it out of the Tab order
+    /// (it stays pressable): a row's secondary actions, reached by its keys.
+    pub skip_tab: bool,
     /// `button`, `menu`: the shortcut's keycaps shown in its tooltip.
     pub keys: Vec<String>,
     pub style: Style,
@@ -202,6 +209,8 @@ impl Node {
             group: None,
             selected: false,
             on_space: None,
+            clip: false,
+            skip_tab: false,
             dense: false,
             keys: vec![],
             style: Style::default(),
@@ -227,9 +236,9 @@ pub enum Positional {
 }
 
 /// Props every element takes.
-pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal"];
+pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space", "clip"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -238,7 +247,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("column", Kind::Column, Positional::Children, BOX_PROPS),
     ("list", Kind::List, Positional::Children, &["gap"]),
     ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom"]),
-    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys"]),
+    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys", "tab_stop"]),
     ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
     ("badge", Kind::Badge, Positional::Text, &["tone"]),
@@ -246,7 +255,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio"]),
     ("spacer", Kind::Spacer, Positional::None, &[]),
     ("divider", Kind::Divider, Positional::None, &["vertical", "color"]),
-    ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys"]),
+    ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys", "tab_stop"]),
     ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
@@ -723,12 +732,24 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "stick_bottom" => n.stick_bottom = bool_of(v)?,
         "rows" => n.rows = num_of(v)?.clamp(1.0, 40.0) as u32,
         "fit" => n.fill_image = one_of(v, &["fit", "fill"])? == "fill",
+        "pin" => {
+            let Value::Table(t) = v else { return Err("expected { left = n, top = n, right = n, bottom = n } (any of them)".into()) };
+            let mut e = [None; 4];
+            for pair in t.pairs::<String, Value>() {
+                let (k, x) = pair.map_err(|_| "pin: keys must be left, top, right or bottom".to_string())?;
+                let i = ["left", "top", "right", "bottom"].iter().position(|n| *n == k).ok_or_else(|| format!("pin: unknown edge '{k}' (left, top, right, bottom)"))?;
+                e[i] = Some(num_or(&x, crate::theme::space)?);
+            }
+            st.pin = Some(e);
+        }
         "hover_group" => n.hover_group = bool_of(v)?,
         "reveal" => n.reveal = bool_of(v)?,
         "group" => n.group = Some(one_of(v, &["list"])?),
         "selected" => n.selected = bool_of(v)?,
         "on_space" => n.on_space = Some(string_of(v)?),
         "dense" => n.dense = bool_of(v)?,
+        "clip" => n.clip = bool_of(v)?,
+        "tab_stop" => n.skip_tab = !bool_of(v)?,
         "keys" => {
             let Value::Table(t) = v else { return Err("expected a list of key names, { \"⌘\", \"K\" }".into()) };
             for k in t.sequence_values::<Value>() {

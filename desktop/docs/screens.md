@@ -121,6 +121,7 @@ Every element takes these.
 | `border` | colour | 1 pt border |
 | `radius` | number or radius | Rounded corners |
 | `opacity` | 0 to 1 | |
+| `pin` | `{ left =, top =, right =, bottom = }` (any of them; numbers or space) | Out of the parent's flow, pinned to those edges of its padding box: a toolbar over the end of a row |
 | `reveal` | bool | Drawn only while the nearest `hover_group` above it is hovered or holds the keyboard focus. It stays pressable and reachable with Tab (reaching it lights the group). Use it for a row's secondary actions, and keep them in the row's menu too: a touch or trackpad user who never hovers reaches them there |
 
 A key you do not set is made for you on elements that react: `<on>-<arg>`
@@ -160,8 +161,9 @@ Children side by side. Children are centred vertically.
 | `on`, `arg` | action name, any value | The whole row is pressable (a button for screen readers, named by its `help`); `hover` defaults to `surface`. Enter presses it when it has the keyboard |
 | `on_space` | action name | With `on`: called with the same `arg` when Space is pressed while it has the keyboard (the sandbox list: start or stop) |
 | `hover_group` | bool | Its `reveal` children show while it is hovered or the keyboard focus is in it |
-| `group` | `list` | Its pressable children are one keyboard group: Up and Down move between them, Tab enters at the `selected` one and leaves the group |
-| `selected` | bool | With `on`, in a `group`: the item Tab lands on |
+| `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
+| `selected` | bool | With `on`: the selected item (screen readers say so) |
+| `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
 
 ```lua
 row{ gap = 8, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
@@ -223,6 +225,7 @@ the focus ring (2 pt, blue, 2 pt outside) when the keyboard reaches it.
 | `disabled` | bool | Greyed, not pressable |
 | `dense` | bool | 24 pt instead of 28, 12 pt label: for bars that are dense on purpose |
 | `keys` | list of strings | Its shortcut, drawn as keycaps in its tooltip after the `help` text: `keys = { "⌘", "K" }` |
+| `tab_stop` | bool | `false`: left out of the Tab order, still pressable (a row's secondary actions, which its own keys and its menu reach) |
 
 ```lua
 button{ icon = "stop", on = "stop", arg = sb.name, color = "red", help = "Stop", keys = { "Space" } }
@@ -399,7 +402,7 @@ Positional: the button's label.
 | `icon` | icon name | On the button |
 | `variant` | `ghost` | No frame around the button (and, with no label, no chevron: an actions menu); anything else: framed |
 | `disabled` | bool | |
-| `dense`, `keys` | as `button` | 24 pt; the shortcut in its tooltip (its `help`) |
+| `dense`, `keys`, `tab_stop` | as `button` | 24 pt; the shortcut in its tooltip (its `help`); out of the Tab order |
 
 The list closes on a pick, on Escape, or on a second press of the button. A
 press elsewhere does not close it (yet). Up and Down move between its

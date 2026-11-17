@@ -183,6 +183,30 @@ pub fn to_json() -> serde_json::Value {
     })
 }
 
+/// A sandbox's group colour, as the web UI gives it (`assets/js/sandboxes.js`,
+/// `groupColorOf`): chats share one hue, a workspace folder gets
+/// `hsl(hash % 360, 55%, 62%)` from its path, a sandbox with neither none.
+pub fn group_color(workspace: Option<&str>, chat: bool) -> Option<u32> {
+    if chat {
+        return Some(hsl(265.0, 0.60, 0.68));
+    }
+    let ws = workspace.filter(|w| !w.is_empty())?;
+    // JavaScript's `(hash * 31 + charCode) >>> 0` over UTF-16 code units.
+    let hash = ws.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32));
+    Some(hsl((hash % 360) as f32, 0.55, 0.62))
+}
+
+/// `hsl(h, s, l)` as `0xRRGGBB` (CSS's conversion).
+pub fn hsl(h: f32, s: f32, l: f32) -> u32 {
+    let a = s * l.min(1.0 - l);
+    let f = |n: f32| {
+        let k = (n + h / 30.0) % 12.0;
+        let v = l - a * (k - 3.0).min(9.0 - k).clamp(-1.0, 1.0);
+        (v * 255.0).round().clamp(0.0, 255.0) as u32
+    };
+    f(0.0) << 16 | f(8.0) << 8 | f(4.0)
+}
+
 // ---------------------------------------------------------------------------
 // Contrast (WCAG 2.2)
 
@@ -405,6 +429,21 @@ mod tests {
             }
         }
         assert!(off.is_empty(), "off the 4 pt grid: {off:#?}");
+    }
+
+    #[test]
+    fn group_colours_match_the_web_ui() {
+        // hsl(265, 60%, 68%) and hsl(120, 100%, 50%), as a browser computes them.
+        assert_eq!(group_color(None, true), Some(0xa57cde));
+        assert_eq!(hsl(120.0, 1.0, 0.5), 0x00ff00);
+        assert_eq!(group_color(None, false), None);
+        let a = group_color(Some("/Users/me/dev/shop"), false).unwrap();
+        assert_eq!(Some(a), group_color(Some("/Users/me/dev/shop"), false));
+        assert_ne!(Some(a), group_color(Some("/Users/me/dev/sbxw"), false));
+        // Every hue at 55% / 62% is a mark on the bars' surface (3:1).
+        for h in 0..360 {
+            assert!(contrast(hsl(h as f32, 0.55, 0.62), color_value("surface").unwrap()) >= 3.0, "hue {h}");
+        }
     }
 
     #[test]

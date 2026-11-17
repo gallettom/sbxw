@@ -364,7 +364,7 @@ pub fn view<S: Host>(s: &ScreenState) -> El {
 /// window so they paint over every other tile.
 pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     let name: Rc<str> = s.name.as_str().into();
-    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![] };
+    let mut b = Build { name: name.clone(), ui: &s.ui, overlays: vec![], nav: None };
     // The top bar is one line: what the core adds goes beside it, not under it.
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
@@ -530,6 +530,9 @@ struct Build<'a> {
     name: Rc<str>,
     ui: &'a Ui,
     overlays: Vec<El>,
+    /// Set by a `group = "list"` parent for the child being built: the keys
+    /// of the items before and after it (Up and Down move there).
+    nav: Option<(Option<String>, Option<String>)>,
 }
 
 fn arg_key(v: &J) -> String {
@@ -612,6 +615,9 @@ fn apply(mut e: El, st: &Style, help: &Option<String>) -> El {
     if let Some(o) = st.opacity {
         e = e.opacity(o);
     }
+    if let Some([l, t, r, b]) = st.pin {
+        e = e.pin(l, t, r, b);
+    }
     if let Some(h) = help {
         e = e.help(h.clone());
     }
@@ -656,9 +662,18 @@ impl Build<'_> {
                 t
             }
             Kind::Row | Kind::Column => {
+                let nav = self.nav.take();
                 let mut b = boxed(if n.kind == Kind::Row { row().items_center() } else { col() }, st);
-                for k in &n.children {
+                // A list group: each pressable item learns its neighbours' keys.
+                let items: Vec<Option<String>> = if n.group.is_some() { n.children.iter().map(|k| k.on.as_ref().and(key_of(k))).collect() } else { vec![] };
+                for (i, k) in n.children.iter().enumerate() {
+                    if items.get(i).is_some_and(Option::is_some) {
+                        let prev = items[..i].iter().rev().flatten().next().cloned();
+                        let next = items[i + 1..].iter().flatten().next().cloned();
+                        self.nav = Some((prev, next));
+                    }
                     b = b.child(self.node::<S>(k));
+                    self.nav = None;
                 }
                 if let Some(on) = &n.on {
                     let (on, arg) = (on.clone(), n.arg.clone());
@@ -667,17 +682,39 @@ impl Build<'_> {
                         b = b.label(h.clone());
                     }
                     if n.selected {
-                        b = b.focus_selected(true);
+                        // Screen readers hear it as the current item.
+                        b = b.focus_selected(true).label(format!("{} (selected)", n.help.clone().unwrap_or_default()));
                     }
-                    if let Some(sp) = n.on_space.clone() {
-                        let (name, arg) = (self.name.clone(), n.arg.clone());
-                        b = b.on_key(move |s: &mut S, ev: &rune::KeyEvent, _tx: &mut rune::Tx| {
+                    if n.on_space.is_some() || nav.is_some() {
+                        let (name, arg, sp) = (self.name.clone(), n.arg.clone(), n.on_space.clone());
+                        let (prev, next) = nav.unwrap_or((None, None));
+                        let me = key.clone();
+                        b = b.on_key(move |s: &mut S, ev: &rune::KeyEvent, tx: &mut rune::Tx| {
                             let plain = !(ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo || ev.mods.shift);
-                            if plain && ev.key == rune::Key::Text(" ".into()) {
-                                fire(s, &name, &sp, &arg, &J::Null);
-                                return true;
+                            if !plain {
+                                return false;
                             }
-                            false
+                            // Only when the row itself has the keyboard, not a button inside it.
+                            if tx.focused() != me.as_deref() {
+                                return false;
+                            }
+                            match &ev.key {
+                                rune::Key::Text(t) if t == " " => {
+                                    if let Some(sp) = &sp {
+                                        fire(s, &name, sp, &arg, &J::Null);
+                                        return true;
+                                    }
+                                    false
+                                }
+                                rune::Key::Up | rune::Key::Down => {
+                                    let to = if ev.key == rune::Key::Up { &prev } else { &next };
+                                    if let Some(k) = to {
+                                        tx.focus(k.clone(), true);
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            }
                         });
                     }
                 } else if let Some(h) = st.hover {
@@ -686,8 +723,12 @@ impl Build<'_> {
                 if n.hover_group {
                     b = b.hover_group();
                 }
+                if n.clip {
+                    b = b.clip_rounded(st.radius.unwrap_or(0.0));
+                }
                 if n.group.is_some() {
-                    b = b.role("list").focus_group();
+                    // Up and Down are the items' own (above), so Rune's roving stays out.
+                    b = b.role("list");
                 }
                 b
             }
@@ -905,6 +946,9 @@ impl Build<'_> {
         if n.disabled {
             return b.opacity(theme::DISABLED_OPACITY).disabled(true);
         }
+        if n.skip_tab {
+            b = b.tab_index(-1);
+        }
         let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
         b.hover(c(hover)).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
     }
@@ -939,6 +983,9 @@ impl Build<'_> {
         }
         if n.disabled {
             return t.opacity(theme::DISABLED_OPACITY).disabled(true);
+        }
+        if n.skip_tab {
+            t = t.tab_index(-1);
         }
         let (name, id2) = (self.name.clone(), id.clone());
         t = t.cursor(Cursor::Pointer).on_press(move |s: &mut S| {
@@ -1160,6 +1207,58 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         for k in [format!("extra-row-{name}-main"), format!("extra-row-{name}-t1"), "t1: fix the login".into()] {
             assert!(tree.contains(&k), "{k} not drawn");
         }
+    }
+
+    /// The status rail: each row says its state in a word and a rail shape;
+    /// the name has its own line; start or stop is always there; every
+    /// other action is in the row's menu, keyed as the inline extras were.
+    #[test]
+    fn sandbox_rows_carry_their_state_and_keep_every_action_in_their_menu() {
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/shell/design-1.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let more = |sb: &str| serde_json::json!({ "id": "more", "label": "", "icon": "more", "tone": "muted", "help": "Remove, duplicate, recreate…", "count": null, "intent": { "name": "open_modal", "args": { "screen": "sandbox-actions", "arg": sb } } });
+        let net = |sb: &str| serde_json::json!({ "id": "network", "label": "", "icon": "ports", "tone": "muted", "help": "Network: policy, blocked hosts, ports", "count": null, "intent": { "name": "network_show", "args": { "sandbox": sb } } });
+        let asks = serde_json::json!({ "id": "relay", "label": "?", "icon": null, "tone": "amber", "help": "waits for your answer", "count": 1, "intent": { "name": "relay_open", "args": {} } });
+        data["app"]["extras"] = serde_json::json!({ "sandboxes": {
+            "test-sbx": [net("test-sbx"), more("test-sbx")],
+            "sbxw-desktop-design": [asks, more("sbxw-desktop-design")],
+            "chat-release-notes": [more("chat-release-notes")],
+        } });
+        let s = ScreenState::new("sandboxes", &dir, data);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let n = s.last_good.clone().unwrap();
+        let tree = format!("{n:?}");
+        // State words: running, working, wants you, stopped, starting…, unreachable.
+        for w in ["\"running\"", "\"working\"", "\"wants you\"", "\"stopped\"", "\"starting…\"", "\"unreachable\""] {
+            assert!(tree.contains(w), "no row says {w}");
+        }
+        assert!(tree.contains("asks you 1"), "the amber count shows as a text badge");
+        for k in ["row-test-sbx", "stop-test-sbx", "start-chat-release-notes", "bash-test-sbx", "spare-test-sbx", "extra-sandbox-test-sbx"] {
+            assert!(node_has(&n, k), "{k} not drawn");
+        }
+        // The menu holds the extras under their old keys (extra-sandbox-<name>-<id>).
+        let menu = find(&n, "extra-sandbox-test-sbx").unwrap();
+        let ids: Vec<&str> = menu.items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["bash", "spare", "network", "more", "stop"]);
+        // Every row is one item of the list: Up and Down move between them.
+        let list = find_where(&n, &|x| x.group.is_some()).expect("the list group");
+        assert!(list.children.iter().filter(|c| c.on.as_deref() == Some("open")).count() >= 10);
+    }
+
+    fn node_has(n: &Node, key: &str) -> bool {
+        find(n, key).is_some()
+    }
+
+    fn find<'a>(n: &'a Node, key: &str) -> Option<&'a Node> {
+        find_where(n, &|x| key_of(x).as_deref() == Some(key))
+    }
+
+    fn find_where<'a>(n: &'a Node, f: &dyn Fn(&Node) -> bool) -> Option<&'a Node> {
+        if f(n) {
+            return Some(n);
+        }
+        n.children.iter().find_map(|c| find_where(c, f))
     }
 
     #[test]

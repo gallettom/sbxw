@@ -216,6 +216,8 @@ pub struct App {
     top_w: f32,
     /// The pane whose bar's overflow menu is open.
     bar_menu: Option<usize>,
+    /// The sidebar's width while its edge is dragged (written to the store on release).
+    sidebar_live: Option<f32>,
 }
 
 /// The most panes the layout shows (the layout switch's largest choice).
@@ -301,6 +303,7 @@ impl App {
             bar_w: [0.0; MAX_PANES],
             top_w: 0.0,
             bar_menu: None,
+            sidebar_live: None,
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -489,6 +492,9 @@ impl App {
         data["app"]["extras"] = extras;
         data["app"]["topbar"] = self.top_layout(&mut data);
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
+        // Each sandbox's group colour (the web UI's), for rails, swatches and pane accents.
+        data["app"]["groups"] = self.sandboxes.iter().filter_map(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat).map(|c| (sb.name.clone(), J::String(format!("#{c:06x}"))))).collect::<serde_json::Map<_, _>>().into();
+        data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
@@ -872,19 +878,29 @@ impl App {
     }
 
     /// The window's keys (nothing focused, or what the focused control passed on).
-    pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
-        if ev.key == Key::Escape && self.screens.iter_mut().any(|s| s.close_menus()) {
+    /// Escape closes the top-most thing: an open menu, a pane bar's menu,
+    /// the core's dialog, then the modal under it. False when nothing was
+    /// open (the key goes on: a field, a terminal).
+    pub fn escape(&mut self) -> bool {
+        if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
-        if ev.key == Key::Escape && self.bar_menu.take().is_some() {
+        if self.bar_menu.take().is_some() {
             return true;
         }
-        if ev.key == Key::Escape && (self.feats.dialog.is_some() || self.feats.modal.is_some()) {
+        if self.feats.dialog.is_some() || self.feats.modal.is_some() {
             // The confirmation first, then the modal under it.
             if !self.dismiss_dialog() {
                 self.feats.modal = None;
             }
             self.push_data();
+            return true;
+        }
+        false
+    }
+
+    pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if ev.key == Key::Escape && self.escape() {
             return true;
         }
         if self.shortcut(ev, tx) {
@@ -1342,6 +1358,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
             }
             took
         })
+        // Escape closes the top-most thing even while a control inside it
+        // has the keyboard (Rune would only take the focus off it).
+        .on_key(|s: &mut App, ev: &KeyEvent, _tx: &mut Tx| ev.key == Key::Escape && ev.mods == rune::Mods::default() && s.escape())
         .on_window_focus(|s: &mut App, focused: bool, _tx: &mut Tx| {
             s.window_focused = focused;
             // A key held while the window loses focus never comes up here.
@@ -1448,8 +1467,33 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         Some(n) => bar.child(n),
         None => bar,
     };
-    let sidebar = tile(col().key("sidebar").w(layout::SIDEBAR_W).h_full().min_h(0.0).padding(8.0)).child(side_el);
-    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER).child(sidebar).child(panes_view(s));
+    // The sidebar: its width remembered, its right edge dragged (200 to 420 pt).
+    let edge = el()
+        .key("sidebar-edge")
+        .pin(None, Some(0.0), Some(-layout::GUTTER), Some(0.0))
+        .w(layout::GUTTER)
+        .cursor(Cursor::ResizeColumn)
+        .hover(c("border"))
+        .help("Drag to resize the sidebar")
+        .on_drag(|s: &mut App, d: &mut rune::Drag, _tx| {
+            if matches!(d.phase, rune::Phase::Down) {
+                d.data = s.sidebar_w();
+            }
+            let w = (d.data + d.dx).clamp(layout::SIDEBAR_MIN, layout::SIDEBAR_MAX);
+            if matches!(d.phase, rune::Phase::Up) {
+                s.sidebar_live = None;
+                s.store.set_in("sidebar", "w", serde_json::json!(w.round()));
+            } else {
+                s.sidebar_live = Some(w);
+            }
+            s.push_data();
+        });
+    let sidebar = tile(col().key("sidebar").w(s.sidebar_w()).h_full().min_h(0.0).padding(layout::SIDEBAR_PAD)).child(side_el).child(edge);
+    let mut main = row().grow(1.0).min_h(0.0).w_full().padding(layout::GUTTER).gap(layout::GUTTER);
+    if s.sidebar_shown() {
+        main = main.child(sidebar);
+    }
+    main = main.child(panes_view(s));
     for p in fpanels {
         main = main.child(p);
     }
@@ -1561,6 +1605,25 @@ fn pane_name(p: &Pane) -> String {
 }
 
 impl App {
+    /// The sidebar's width: dragged, else remembered, else the default.
+    pub fn sidebar_w(&self) -> f32 {
+        let w = self.sidebar_live.unwrap_or_else(|| self.store.get("sidebar")["w"].as_f64().map_or(layout::SIDEBAR_W, |w| w as f32));
+        // A narrow window keeps room for the panes: at most 30% of it, never under the minimum.
+        let room = if self.window.0 > 0.0 { (self.window.0 * 0.3).max(layout::SIDEBAR_MIN) } else { layout::SIDEBAR_MAX };
+        w.min(room).clamp(layout::SIDEBAR_MIN, layout::SIDEBAR_MAX)
+    }
+
+    /// Whether the sidebar shows (Cmd/Ctrl+B hides it; remembered).
+    pub fn sidebar_shown(&self) -> bool {
+        self.store.get("sidebar")["hidden"] != J::Bool(true)
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        let hidden = self.sidebar_shown();
+        self.store.set_in("sidebar", "hidden", if hidden { J::Bool(true) } else { J::Null });
+        self.push_data();
+    }
+
     /// Pane `i`'s bar width: as last laid out, else a guess from the window
     /// (the first frame; the layout's report corrects it at once).
     fn bar_width(&self, i: usize) -> f32 {
@@ -1573,7 +1636,8 @@ impl App {
             _ => 2.0,
         };
         let jarvis = if self.jarvis.open { self.jarvis.width } else { 0.0 };
-        ((self.window.0 - layout::SIDEBAR_W - jarvis - layout::GUTTER * 4.0) / across).max(160.0)
+        let side = if self.sidebar_shown() { self.sidebar_w() + layout::GUTTER } else { 0.0 };
+        ((self.window.0 - side - jarvis - layout::GUTTER * 3.0) / across).max(160.0)
     }
 
     /// What pane `i`'s bar shows inline and what goes into its overflow
@@ -2059,12 +2123,16 @@ mod tests {
         rt.update(|_, tx| tx.blur());
         rt.frame(0.02);
         for ev in chords() {
-            if ev.key == Key::Escape {
-                continue; // closes the dialog: tried last
+            // Escape closes the dialog (tried last); Enter presses the
+            // control Tab reached inside it (its ×): the person's own press.
+            if ev.key == Key::Escape || ev.key == Key::Enter {
+                continue;
             }
             rt.key(ev.clone());
             rt.frame(0.02);
             assert_eq!(sent(&rx), b"", "{ev:?} with the core dialog up reached the terminal");
+            // Tab stays inside the dialog: it is modal for the keyboard.
+            rt.update(|_, tx| assert!(tx.focused().is_none_or(|f| f.starts_with("cf-")), "{ev:?} moved the focus out of the dialog to {:?}", tx.focused()));
         }
         rt.paste("hello");
         rt.frame(0.02);
@@ -2084,7 +2152,8 @@ mod tests {
         assert_eq!(sent(&rx), b"", "a window paste in the secret field reached the terminal");
         let got = rt.state.feats.dialog.as_ref().unwrap().secrets[0].text.clone();
         eprintln!("secret field after the pastes: {} characters", got.chars().count());
-        assert_eq!(got, "s3cret", "the paste went to the field");
+        // (Keys typed while Tab had put the keyboard in the field went there too.)
+        assert!(got.ends_with("s3cret"), "the paste went to the field: {got}");
         rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
         rt.frame(0.02);
         assert_eq!(sent(&rx), b"");

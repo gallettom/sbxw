@@ -611,6 +611,9 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     col()
         .key("cf-dialog")
         .role("dialog")
+        // Keyboard focus stays inside while it is up (Tab cannot reach a
+        // button behind it); Escape cancels, as its × does.
+        .modal(false, |s: &mut S| s.cancel_click())
         .label(title.to_string())
         .pin(Some(d.left), Some(d.top), Some(d.right), None)
         .max_h(d.max_h.max(160.0))
