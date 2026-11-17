@@ -1637,6 +1637,100 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         assert!(matches!(asked.as_slice(), [crate::intent::Intent::OpenTerminal { pane: crate::intent::PaneTarget::Focused, .. }]), "{asked:?}");
     }
 
+    /// The model's words take their maker's colour (user, macOS: "opus 5.5
+    /// orange, chatgpt models white, gemini blue"): by id or display name in
+    /// any case, else the agent's name; unknown stays muted. The tooltip
+    /// keeps the full id and names the maker.
+    #[test]
+    fn model_words_take_their_vendors_colour() {
+        fn find<'a>(n: &'a crate::luau::Node, key: &str) -> Option<&'a crate::luau::Node> {
+            if n.key.as_deref() == Some(key) {
+                return Some(n);
+            }
+            n.children.iter().find_map(|c| find(c, key))
+        }
+        let dir = std::env::temp_dir().join("sbxw-no-overrides");
+        let fx = crate::fixture::Fixture::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/sandboxes/basic.json")).unwrap();
+        let mut data = fx.screen_data(&crate::fixture::AppView::default());
+        let rows = [
+            ("a", "claude", Some("claude-opus-5-5"), None, "vendor-anthropic"),
+            ("b", "claude", None, Some("Sonnet 5.5"), "vendor-anthropic"),
+            ("c", "claude", Some("CLAUDE-HAIKU-5-5"), None, "vendor-anthropic"),
+            ("d", "codex", Some("gpt-5-codex"), None, "vendor-openai"),
+            ("e", "codex", Some("o4-mini"), None, "vendor-openai"),
+            ("f", "codex", None, Some("ChatGPT 5"), "vendor-openai"),
+            ("g", "gemini", Some("gemini-3-pro"), None, "vendor-google"),
+            ("h", "claude", None, None, "vendor-anthropic"),
+            ("i", "codex", None, None, "vendor-openai"),
+            ("j", "gemini", None, None, "vendor-google"),
+            ("k", "kiro", Some("some-model-1"), None, "text-muted"),
+            ("l", "", None, None, "text-muted"),
+        ];
+        data["sandboxes"] = rows
+            .iter()
+            .map(|(n, agent, id, name, _)| serde_json::json!({ "name": n, "agent": agent, "status": "running", "model": id, "model_name": name }))
+            .collect::<Vec<_>>()
+            .into();
+        data["sessions"] = serde_json::json!([]);
+        let s = ScreenState::new("sandboxes", &dir, data);
+        assert!(s.error.is_none(), "{:?}", s.error);
+        let n = s.last_good.clone().unwrap();
+        for (name, _, id, _, token) in rows {
+            let m = find(&n, &format!("model-{name}")).unwrap_or_else(|| panic!("model-{name}"));
+            assert_eq!(m.style.color, crate::theme::color_value(token), "{name}: {} wants {token}", m.text);
+            assert_ne!(m.style.weight, Some(600.0), "{name}: never bold");
+            let help = m.help.clone().unwrap_or_default();
+            if let Some(id) = id {
+                assert!(help.contains(id), "{name}: the full id in {help:?}");
+            }
+            let by = match token {
+                "vendor-anthropic" => Some("by Anthropic"),
+                "vendor-openai" => Some("by OpenAI"),
+                "vendor-google" => Some("by Google"),
+                _ => None,
+            };
+            assert_eq!(by.is_some_and(|b| help.contains(b)), by.is_some(), "{name}: {help:?}");
+        }
+    }
+
+    /// The vendor colours read as text where the list draws them: the
+    /// sidebar, the selected and hovered row, every group tint the
+    /// distinct-colour rule can give; and the terracotta is told from the
+    /// `amber` of "wants you" and the `red-text` of "unreachable", Gemini's
+    /// blue from the `blue` "working" beside it.
+    #[test]
+    fn vendor_colours_read_on_every_ground_and_differ_from_the_states() {
+        use crate::theme::{color_value as cv, contrast, hsl, over, GROUP_LIGHTNESS, GROUP_TINT};
+        let surface = cv("surface").unwrap();
+        let mut grounds: Vec<(String, u32)> = ["surface", "elevated", "hover-subtle", "active-bg"].iter().map(|g| (g.to_string(), cv(g).unwrap())).collect();
+        for &l in GROUP_LIGHTNESS {
+            for h in 0..360 {
+                grounds.push((format!("tint {h}/{l}"), over(hsl(h as f32, 0.55, l), GROUP_TINT, surface)));
+            }
+        }
+        grounds.push(("chats' tint".into(), over(hsl(265.0, 0.60, 0.68), GROUP_TINT, surface)));
+        for v in ["vendor-anthropic", "vendor-openai", "vendor-google"] {
+            let c = cv(v).unwrap();
+            let (worst, on) = grounds.iter().map(|(n, g)| (contrast(c, *g), n.as_str())).fold((99.0, ""), |a, b| if b.0 < a.0 { b } else { a });
+            assert!(worst >= 4.5, "{v} on {on}: {worst:.2}");
+        }
+        // Hue in degrees, lightness 0..1.
+        let hl = |c: u32| {
+            let (r, g, b) = ((c >> 16 & 255) as f32 / 255.0, (c >> 8 & 255) as f32 / 255.0, (c & 255) as f32 / 255.0);
+            let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+            let d = mx - mn;
+            let h = if d == 0.0 { 0.0 } else if mx == r { 60.0 * (((g - b) / d) % 6.0) } else if mx == g { 60.0 * ((b - r) / d + 2.0) } else { 60.0 * ((r - g) / d + 4.0) };
+            ((h + 360.0) % 360.0, (mx + mn) / 2.0)
+        };
+        let (ta, _) = hl(cv("vendor-anthropic").unwrap());
+        let (am, _) = hl(cv("amber").unwrap());
+        let (rd, _) = hl(cv("red-text").unwrap());
+        assert!(ta - rd >= 12.0 && am - ta >= 12.0, "terracotta {ta:.0} between red-text {rd:.0} and amber {am:.0}");
+        let (_, lg) = hl(cv("vendor-google").unwrap());
+        let (_, lb) = hl(cv("blue").unwrap());
+        assert!(lg - lb >= 0.08, "Gemini's blue lighter than the working blue: {lg:.2} vs {lb:.2}");
+    }
+
     /// The status rail: each row says its state in a word and a rail shape;
     /// the name has its own line; start or stop is always there; every
     /// other action is in the row's menu, keyed as the inline extras were.

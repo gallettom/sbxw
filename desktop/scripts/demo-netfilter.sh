@@ -48,3 +48,9 @@ done
 SHOT_SIZE="${SHOT_SIZE:-1284x816}" run_app "$shots/sessions-plus.log" --fixture "$here/fixtures/threads/sessions-plus.json" \
   --snap "$shots/sessions-plus.png" --tree "$shots/sessions-plus.tree.json"
 echo "$shots/sessions-plus.png"
+# Vendor colours of the model words (fixtures/sandboxes/vendors.json): opus
+# wanting you beside sonnet working, gpt-5-codex, o4-mini, gemini working, an
+# unknown maker. Out: $SBXW_SHOTS/netfilter/vendors.png.
+SHOT_SIZE="${SHOT_SIZE:-1284x816}" run_app "$shots/vendors.log" --fixture "$here/fixtures/sandboxes/vendors.json" \
+  --snap "$shots/vendors.png" --tree "$shots/vendors.tree.json"
+echo "$shots/vendors.png"

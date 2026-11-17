@@ -668,6 +668,24 @@ in it, with its tint under the pointer and the keyboard focus.
 - Every coloured label or icon meets the contrast test on what it sits on
   (its surface, its tint, a group's tint): `theme::tests`.
 
+**Vendor colours** (a separate axis, not colour by meaning). The sidebar's
+model words (a row's line 2, a session line's model) take the colour of
+whoever makes the model, so "opus 5.5" and "gpt-5-codex" are told apart at a
+glance. Text colour only, regular weight, never a fill or a badge, so the
+state word before it stays the strongest thing on the line.
+
+| Token | Value | Who | Matched by (id, display name, any case; else the agent) |
+|---|---|---|---|
+| `vendor-anthropic` | `#e2875a` terracotta | Anthropic | claude, anthropic, opus, sonnet, haiku, fable, mythos |
+| `vendor-openai` | `#e6edf3` (as `text-bright`) | OpenAI | openai, chatgpt, gpt, codex, the o-series (o3, o4-mini) |
+| `vendor-google` | `#8ab4f8` | Google | gemini, google |
+
+Anything else stays `text-muted`. One function decides (`vendor_of` in
+sandboxes.luau); the tooltip keeps the full id and adds "by <vendor>". The
+terracotta's hue sits between `red-text` ("unreachable") and `amber`
+("wants you"); Gemini's blue is lighter than the `blue` "working" word.
+Both rules and the contrast on every ground are tested (`screen::tests`).
+
 **The rules the built-in screens follow** (write yours the same way):
 
 - **Spacing** on the 4 pt grid: 4, 8, 12, 16, 24 (2 only between stacked

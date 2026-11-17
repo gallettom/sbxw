@@ -181,9 +181,37 @@ local function short_model(id)
   return m
 end
 
+-- Who makes a model, as a text colour token: a separate axis from the
+-- colour by meaning (docs/screens.md, "Vendor colours"), never a fill, never
+-- bold. From the model's id or name (any case), else the agent's name.
+-- Unknown: nil (the line's muted text, as before).
+local VENDORS = {
+  { "vendor-anthropic", { "claude", "anthropic", "opus", "sonnet", "haiku", "fable", "mythos" } },
+  { "vendor-openai", { "openai", "chatgpt", "gpt", "codex" } },
+  { "vendor-google", { "gemini", "google" } },
+}
+local VENDOR_NAMES = { ["vendor-anthropic"] = "Anthropic", ["vendor-openai"] = "OpenAI", ["vendor-google"] = "Google" }
+
+local function vendor_of(model, agent)
+  for _, v in ipairs({ model or "", agent or "" }) do
+    local m = string.lower(v)
+    if m ~= "" then
+      for _, row in ipairs(VENDORS) do
+        for _, w in ipairs(row[2]) do
+          if string.find(m, w, 1, true) then return row[1] end
+        end
+      end
+      -- OpenAI's o-series: "o3", "o4-mini", "openai/o1".
+      if string.match(m, "^o%d") or string.match(m, "[/%s]o%d") then return "vendor-openai" end
+    end
+  end
+  return nil
+end
+
 -- What the row says runs in the sandbox: its model (the sandbox's main
 -- session's, from GET /api/sandboxes or the session), else the agent's name.
--- Returns the words and the tooltip (the full id).
+-- Returns the words, the tooltip (the full id, and its maker) and the
+-- vendor's colour token (nil when unknown).
 local function model_of(sb, data)
   local name, id = sb.model_name, sb.model
   if not name and not id then
@@ -192,8 +220,10 @@ local function model_of(sb, data)
     end
   end
   local words = (name and name ~= "" and string.lower(name)) or short_model(id)
-  if not words then return sb.agent or "", (sb.agent or "") .. " (model not reported)" end
-  return words, (sb.agent or "agent") .. ": " .. (id or name)
+  local vendor = vendor_of(id or name, sb.agent)
+  local by = vendor and (", by " .. VENDOR_NAMES[vendor]) or ""
+  if not words then return sb.agent or "", (sb.agent or "") .. " (model not reported)" .. by, vendor end
+  return words, (sb.agent or "agent") .. ": " .. (id or name) .. by, vendor
 end
 
 -- The sandbox's network count as a bubble on the name's line: blue while
@@ -233,7 +263,7 @@ local function item(sb, app, data)
   local busy = sb.status ~= "running" and sb.status ~= "stopped"
   local st = state_of(sb, data)
   statuses[name] = sb.status
-  local model, model_help = model_of(sb, data)
+  local model, model_help, model_vendor = model_of(sb, data)
 
   local menu_items = {}
   if running then
@@ -300,7 +330,7 @@ local function item(sb, app, data)
   -- badge; a badge that does not fit goes to the "+N" or the ⋯ menu.
   local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w - 16
   local line2 = { gap = 4, w = "full", first,
-    text{ model, size = "caption", color = "text-muted", truncate = true, help = model_help, key = "model-" .. name },
+    text{ model, size = "caption", color = model_vendor or "text-muted", truncate = true, help = model_help, key = "model-" .. name },
   }
   local all = {}
   for _, e in ipairs(wants) do table.insert(all, e) end
@@ -514,7 +544,7 @@ local function session_line(sb, e, data, base_model)
       own and icon{ "branch", size = 12, color = "text-muted" } or false,
       text{ label, size = "body", weight = wants and "medium" or "normal", color = done and "text-muted" or (wants and "amber" or "text"), truncate = true },
       word ~= "" and text{ word, size = "caption", weight = wants and "semibold" or "normal", color = done and "text-muted" or (word_color[tone] or "text-muted") } or false,
-      mw and text{ mw, size = "caption", color = "text-muted", truncate = true } or false,
+      mw and text{ mw, size = "caption", color = vendor_of(m, sb.agent) or "text-muted", truncate = true, key = "model-" .. sb.name .. "-" .. e.id } or false,
       spacer{},
       e.count and badge{ "P" .. e.count, tone = "blue", help = "Shown in pane " .. e.count .. " (" .. (data.app.platform == "macos" and "⌘" or "Ctrl+") .. e.count .. " focuses it)" } or false,
       plus and button{ icon = "plus", compact = true, tone = "green", on = "session_spare", arg = sb.name .. "\n" .. e.id,
