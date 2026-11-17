@@ -11,6 +11,7 @@ mod bar;
 mod features;
 mod jarvis;
 mod palette;
+pub mod statusbar;
 pub mod store;
 
 use crate::approval;
@@ -221,6 +222,8 @@ pub struct App {
     sidebar_live: Option<f32>,
     /// The command palette, while open (palette.rs).
     pub palette: Option<palette::Palette>,
+    /// The status bar's state (statusbar.rs).
+    pub status: statusbar::Status,
 }
 
 /// The most panes the layout shows (the layout switch's largest choice).
@@ -308,6 +311,7 @@ impl App {
             bar_menu: None,
             sidebar_live: None,
             palette: None,
+            status: Default::default(),
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -422,6 +426,11 @@ impl App {
             let list = d.jarvis_proposals().unwrap_or_default();
             app.jarvis.seed_proposals(list);
             app.jarvis.seed_sessions(&d.sessions().unwrap_or_default());
+            // A fixture's stream events, replayed once (`provision`: bring-ups
+            // for the status bar and the "New sandboxes" panel).
+            for ev in app.raw["provision"].as_array().cloned().unwrap_or_default() {
+                app.feats_bus("provision", &ev.to_string());
+            }
             let data = app.screen_data();
             for s in &mut app.screens {
                 s.set_data(data.clone());
@@ -497,7 +506,8 @@ impl App {
         data["app"]["topbar"] = self.top_layout(&mut data);
         data["app"]["errors"] = J::Object(self.feats.errors.clone());
         // Each sandbox's group colour (the web UI's), for rails, swatches and pane accents.
-        data["app"]["groups"] = self.sandboxes.iter().filter_map(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat).map(|c| (sb.name.clone(), J::String(format!("#{c:06x}"))))).collect::<serde_json::Map<_, _>>().into();
+        // Distinct per group (theme::group_colors), the web UI's hue first.
+        data["app"]["groups"] = self.group_colors().into_iter().map(|(n, c)| (n, J::String(format!("#{c:06x}")))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
         // Every shortcut, for Help: `{keys, what}`.
         data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
@@ -517,10 +527,20 @@ impl App {
         let w = if self.top_w > 0.0 { self.top_w } else { self.window.0 - 140.0 };
         let pending = data["jarvis"]["pending"].as_array().map_or(0, Vec::len);
         let jarvis = if pending > 0 { format!("Jarvis · {pending} to review") } else { "Jarvis".into() };
+        // The usage chip with its bars, as wide as drawn (none: no usage).
+        let bars_w = bar::usage_bars_w(&data["usage"]);
         let Some(list) = data["app"]["extras"]["topbar"].as_array_mut() else {
             return serde_json::json!({ "w": w, "compact": w < bar::TOP_COMPACT, "more": 0 });
         };
-        let mut order: Vec<usize> = (0..list.len()).collect();
+        // "New" lives in the sidebar's header while the sidebar shows
+        // (sandboxes.luau); the top bar has it only when the sidebar is hidden.
+        let in_sidebar = self.sidebar_shown();
+        for e in list.iter_mut() {
+            if e["id"] == "create" && in_sidebar {
+                e["in_sidebar"] = J::Bool(true);
+            }
+        }
+        let mut order: Vec<usize> = (0..list.len()).filter(|&i| list[i]["in_sidebar"] != true).collect();
         let rank = |e: &J| bar::rank(e["tone"].as_str().unwrap_or(""), e["count"].as_u64());
         order.sort_by_key(|&i| rank(&list[i]));
         let label = |e: &J| {
@@ -535,8 +555,13 @@ impl App {
         // badge; Setup, Help, the Mac and usage in the right group.
         let measured: Vec<bar::TopExtra> = order
             .iter()
-            .map(|&i| bar::TopExtra { label: label(&list[i]), icon: !list[i]["icon"].is_null(), button: !list[i]["intent"].is_null(), tool: matches!(list[i]["id"].as_str(), Some("usage" | "setup" | "help" | "mac")) })
+            .map(|&i| bar::TopExtra { label: label(&list[i]), icon: !list[i]["icon"].is_null(), button: !list[i]["intent"].is_null(), tool: matches!(list[i]["id"].as_str(), Some("usage" | "setup" | "help" | "mac")), drawn_w: None })
             .collect();
+        // The usage chip with its bars, when everything still fits inline
+        // that way; else its words alone (the bars go first).
+        let with_bars = |m: &[bar::TopExtra]| -> Vec<bar::TopExtra> {
+            m.iter().zip(order.iter()).map(|(x, &i)| if list[i]["id"] == "usage" { bar::TopExtra { drawn_w: bars_w, ..x.clone() } } else { x.clone() }).collect()
+        };
         // The layout switch shows the current choice (topbar.luau's labels).
         let layout = match (self.layout.0, self.layout.1) {
             (1, _) => "1 terminal",
@@ -551,11 +576,18 @@ impl App {
             "down" => "offline",
             other => other,
         };
-        let (compact, k) = bar::top_fit(w, &jarvis, layout, word, &measured);
+        // The bars only where they cost nothing else: the same parts inline
+        // as with the words alone, and the bar not compact (they go before
+        // the title and the layout's words do).
+        let plain = bar::top_fit(w, &jarvis, layout, word, &measured);
+        let barred = bar::top_fit(w, &jarvis, layout, word, &with_bars(&measured));
+        let usage_shown = order.iter().take(plain.1).any(|&i| list[i]["id"] == "usage");
+        let usage_bars = bars_w.is_some() && usage_shown && barred == plain && !plain.0;
+        let (compact, k) = plain;
         for &i in &order[k..] {
             list[i]["more"] = J::Bool(true);
         }
-        serde_json::json!({ "w": w, "compact": compact, "more": order.len() - k })
+        serde_json::json!({ "w": w, "compact": compact, "more": order.len() - k, "usage_bars": usage_bars })
     }
 
     /// `data.app.overrides`: each screen running an override, `{path, stale}`.
@@ -712,6 +744,18 @@ impl App {
                 self.expect.retain(|(n, _, _)| !running.contains(n));
                 self.feats_sandboxes();
             }
+            // The status bar's numbers: only while the window shows.
+            LinkEvent::Bus(ev) if ev.name == "stats" => {
+                if !self.status.hidden {
+                    let v = serde_json::from_str(&ev.data).map_err(|e| format!("stats event: {e}"));
+                    self.statusbar_stats(v, Instant::now());
+                }
+                return false;
+            }
+            LinkEvent::Data { key, result } if key == statusbar::STATS_KEY => {
+                self.statusbar_stats(result, Instant::now());
+                return false;
+            }
             LinkEvent::Bus(ev) => {
                 log::debug!("event {} {}", ev.name, ev.data);
                 let f = self.feats_bus(&ev.name, &ev.data);
@@ -797,8 +841,29 @@ impl App {
         if let Some(t) = self.feats_poll() {
             tx.wake_after(t.saturating_duration_since(Instant::now()));
         }
+        let (bar_changed, bar_wake) = self.statusbar_poll(Instant::now());
+        changed |= bar_changed;
+        if let Some(t) = bar_wake {
+            tx.wake_after(t.saturating_duration_since(Instant::now()));
+        }
         for s in &mut self.screens {
             changed |= s.poll();
+        }
+        // Hover zones that became due: what opens or shuts on them glides
+        // (a poll's commit would land at once), except under reduced motion.
+        let zone_now = Instant::now();
+        let mut zoned = false;
+        for s in &mut self.screens {
+            zoned |= s.tick_zones(zone_now);
+            if let Some(t) = s.ui.zones.due() {
+                tx.wake_after(t.saturating_duration_since(zone_now));
+            }
+        }
+        if zoned {
+            changed = true;
+            if !screen::reduced_motion() {
+                tx.animated();
+            }
         }
         let now = Instant::now();
         let mut kick = false;
@@ -897,6 +962,9 @@ impl App {
     /// the core's dialog, then the modal under it. False when nothing was
     /// open (the key goes on: a field, a terminal).
     pub fn escape(&mut self) -> bool {
+        if self.statusbar_escape() {
+            return true;
+        }
         if self.palette.is_some() {
             self.palette_close();
             self.push_data();
@@ -980,6 +1048,9 @@ impl App {
             if fixed || secret {
                 return true;
             }
+        }
+        if key.starts_with("status-") && self.statusbar_drawn(key) {
+            return true;
         }
         if self.jarvis.shown.is_some() && key.starts_with("jv-") {
             return true;
@@ -1399,6 +1470,17 @@ fn tile(e: El) -> El {
 /// titlebar container this makes never takes a press meant for the bar.
 /// Ignored on Linux and Windows (their native frame stays).
 pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
+/// The room the top bar keeps at its left for the window buttons: up to 12
+/// pt clear after the zoom button (`inset` is from the window's edge, the
+/// bar starts a gutter in); none of them, the sidebar's content x.
+pub fn lights_room(inset: f32) -> f32 {
+    if inset > 0.0 {
+        inset - layout::GUTTER + 12.0
+    } else {
+        layout::SIDEBAR_PAD
+    }
+}
+
 pub const fn window_chrome() -> rune::Chrome {
     rune::Chrome { full_size_content: true, traffic_lights: Some(LIGHTS), drag_regions: true }
 }
@@ -1480,7 +1562,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         let sc = s.screens.iter().find(|x| &x.name == name).expect("solo screen");
         return root.padding(layout::GUTTER).child(tile(col().w_full().h_full().min_h(0.0).padding(10.0)).child(screen::view::<App>(sc)));
     }
-    let inset = cx.titlebar_inset();
+    // 0 in macOS full screen and off macOS (no window buttons over the bar);
+    // SBXW_DESKTOP_NO_LIGHTS=1 draws that case in a headless shot.
+    let inset = if std::env::var_os("SBXW_DESKTOP_NO_LIGHTS").is_some() { 0.0 } else { cx.titlebar_inset() };
     let top = s.screens.iter().find(|x| x.name == "topbar").unwrap();
     let side = s.screens.iter().find(|x| x.name == "sandboxes").unwrap();
     let (top_el, mut overlays) = screen::view_parts::<App>(top);
@@ -1528,7 +1612,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         // line (`LIGHTS`): nothing goes under them, 12 pt clear after the
         // zoom button (`inset` is from the window's edge, the bar starts a
         // gutter in).
-        .child(el().key("traffic-lights-room").w(if inset > 0.0 { inset - layout::GUTTER + 12.0 } else { 4.0 }).h_full())
+        // Without them (full screen, Linux, Windows) the bar's first item
+        // starts where the sidebar's content does (its padding).
+        .child(el().key("traffic-lights-room").w(lights_room(inset)).h_full())
         .child(
             col()
                 .grow(1.0)
@@ -1594,7 +1680,10 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         overlays.push(screen::menu_scrim("pane-more-scrim".into(), |s: &mut App| s.bar_menu = None));
         overlays.push(m);
     }
-    let mut root = root.child(bar).child(main);
+    // The status bar at the foot, in every layout: the panes' area shrinks by its height.
+    let mut root = root.child(bar).child(main).child(statusbar::view(s));
+    // The status bar's read-only popover, light dismiss.
+    overlays.extend(statusbar::popover(s));
     for o in overlays {
         root = root.child(o);
     }
@@ -1729,6 +1818,11 @@ fn pane_name(p: &Pane) -> String {
 }
 
 impl App {
+    /// Each sandbox's group colour, distinct per group (theme::group_colors).
+    pub fn group_colors(&self) -> HashMap<String, u32> {
+        theme::group_colors(self.sandboxes.iter().map(|sb| (sb.name.as_str(), sb.workspace.as_deref(), sb.chat)))
+    }
+
     /// The sidebar's width: dragged, else remembered, else the default.
     pub fn sidebar_w(&self) -> f32 {
         let w = self.sidebar_live.unwrap_or_else(|| self.store.get("sidebar")["w"].as_f64().map_or(layout::SIDEBAR_W, |w| w as f32));
@@ -1839,7 +1933,7 @@ fn bar_menu_row<'a>(it: &'a bar::Item, n: usize, label: &'a str) -> screen::Menu
         key: it.key(n),
         label,
         icon: it.icon.as_deref(),
-        tone: Some(it.tone.as_str()).filter(|t| !t.is_empty() && *t != "muted"),
+        tone: Some(bar::menu_tone(it)).filter(|t| *t != "neutral"),
         help: Some(it.help.as_str()).filter(|h| !h.is_empty()),
         keys: &[],
         count: it.count,
@@ -1975,8 +2069,7 @@ fn pane_view(s: &App, i: usize) -> El {
     // panes of one piece of work read together.
     let accent = pane
         .and_then(|p| p.sandbox.as_deref())
-        .and_then(|n| s.sandboxes.iter().find(|x| x.name == n))
-        .and_then(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat))
+        .and_then(|n| s.group_colors().get(n).copied())
         .map(theme::hex)
         .unwrap_or_else(|| c("border"));
     let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
@@ -2178,16 +2271,22 @@ mod tests {
     /// frames (about 0.18 s), not at once, and lands where it should.
     #[test]
     fn the_sessions_block_folds_smoothly() {
-        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/design-1.json");
+        // sbxw-jarvis: sessions, none in a pane, not selected: shut until pinned open.
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/sessions.json");
         let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
         let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
         for _ in 0..10 {
             rt.frame(1.0 / 60.0);
         }
-        let h = |rt: &rune::Runtime<App>| rt.presented("sessions-block-better-checkout").map(|(r, _)| r[3]).unwrap_or(-1.0);
+        let h = |rt: &rune::Runtime<App>| rt.presented("sessions-block-sbxw-jarvis").map(|(r, _)| r[3]).unwrap_or(-1.0);
+        assert!(h(&rt) < 1.0, "shut at rest: {}", h(&rt));
+        tap(&mut rt, "sessions-sbxw-jarvis");
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+        }
         let open = h(&rt);
-        assert!(open > 100.0, "open at first (the selected sandbox): {open}");
-        tap(&mut rt, "sessions-better-checkout");
+        assert!(open > 50.0, "pinned open: {open}");
+        tap(&mut rt, "sessions-sbxw-jarvis");
         let mut seen = vec![h(&rt)];
         for _ in 0..30 {
             rt.frame(1.0 / 60.0);
@@ -2208,6 +2307,131 @@ mod tests {
         let shut = *seen.last().unwrap();
         assert!(shut < open - 100.0, "the group shut: {open} -> {seen:?}");
         assert!(seen.iter().filter(|&&x| x > shut + 1.0 && x < open - 1.0).count() >= 4, "glides: {seen:?}");
+    }
+
+    /// The sessions block: open while one of its sessions is in a pane
+    /// (pressing its line changes nothing then); a press pins it, and a pin
+    /// wins over hover; resting the pointer on the row opens it (after
+    /// screen::ZONE_OPEN), moving into the block keeps it open, leaving the
+    /// zone shuts it (after ZONE_CLOSE).
+    #[test]
+    fn the_sessions_block_opens_on_hover_and_stays_open_when_attached() {
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/shell/sessions.json");
+        let a = App::new(Args { fixture: Some(fixture.into()), ..Args::default() });
+        let mut rt = rune::Runtime::new(a, view, (1284.0, 816.0), rune::Env::new(true, 1.0));
+        let settle = |rt: &mut rune::Runtime<App>| {
+            for _ in 0..40 {
+                rt.update(|s, tx| {
+                    s.poll(0.0, tx);
+                });
+                rt.frame(1.0 / 60.0);
+            }
+        };
+        settle(&mut rt);
+        let h = |rt: &rune::Runtime<App>, sb: &str| rt.presented(&format!("sessions-block-{sb}")).map(|(r, _)| r[3]).unwrap_or(-1.0);
+        // better-checkout is in pane 1: open, and its line's press does not shut it.
+        assert!(h(&rt, "better-checkout") > 100.0);
+        tap(&mut rt, "sessions-better-checkout");
+        settle(&mut rt);
+        assert!(h(&rt, "better-checkout") > 100.0, "attached: stays open");
+        // Hover sbxw-jarvis's row: opens after the rest delay.
+        assert!(h(&rt, "sbxw-jarvis") < 1.0);
+        let (r, _) = rt.presented("row-sbxw-jarvis").unwrap();
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_move(x, y);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_move(x + 3.0, y);
+        // At once (a busy machine could take the whole delay to settle).
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "not before the delay");
+        std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        let open = h(&rt, "sbxw-jarvis");
+        assert!(open > 40.0, "opened on hover: {open}");
+        // Down into the block: still open.
+        let (b, _) = rt.presented("sessions-block-sbxw-jarvis").unwrap();
+        rt.pointer_move(b[0] + 20.0, b[1] + b[3] / 2.0);
+        settle(&mut rt);
+        std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") > 40.0, "the block is the same zone");
+        // Out to the panes: shuts after the close delay.
+        let (p, _) = rt.presented("panes").unwrap();
+        rt.pointer_move(p[0] + p[2] / 2.0, p[1] + p[3] / 2.0);
+        rt.update(|s, tx| {
+            s.poll(0.0, tx);
+        });
+        rt.frame(1.0 / 60.0);
+        assert!(h(&rt, "sbxw-jarvis") > 40.0, "not before the delay");
+        std::thread::sleep(crate::screen::ZONE_CLOSE + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "shut after leaving: {}", h(&rt, "sbxw-jarvis"));
+        // Pinned shut wins over hover.
+        tap(&mut rt, "sessions-sbxw-jarvis");
+        settle(&mut rt);
+        tap(&mut rt, "sessions-sbxw-jarvis");
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "pinned shut");
+        let (r, _) = rt.presented("row-sbxw-jarvis").unwrap();
+        rt.pointer_move(r[0] + 10.0, r[1] + 10.0);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_move(r[0] + 14.0, r[1] + 10.0);
+        std::thread::sleep(crate::screen::ZONE_OPEN + std::time::Duration::from_millis(40));
+        settle(&mut rt);
+        assert!(h(&rt, "sbxw-jarvis") < 1.0, "a pin wins over hover");
+    }
+
+    /// A row's model is never cut for a badge: at the sidebar's normal
+    /// width, with a state of several words and counts beside it, the model
+    /// is drawn whole; what does not fit went to "+N" or the ⋯ menu.
+    #[test]
+    fn a_rows_model_is_never_cut_for_a_badge() {
+        for fixture in ["sessions", "design-1", "bubbles"] {
+            let mut rt = runtime(&format!("shell/{fixture}.json"), 1284.0, 1600.0);
+            for _ in 0..10 {
+                rt.frame(1.0 / 60.0);
+            }
+            let sc = rt.state.screens.iter().find(|x| x.name == "sandboxes").unwrap();
+            let mut models = vec![];
+            fn walk(n: &crate::luau::Node, out: &mut Vec<(String, String)>) {
+                if let Some(k) = n.key.as_deref().filter(|k| k.starts_with("model-")) {
+                    out.push((k.to_string(), n.text.clone()));
+                }
+                for c in &n.children {
+                    walk(c, out);
+                }
+            }
+            walk(sc.last_good.as_ref().unwrap(), &mut models);
+            assert!(!models.is_empty());
+            for (k, t) in models {
+                let Some((r, _)) = rt.presented(&k) else { continue };
+                let want = bar::measure(&t, 12.0, 400.0);
+                assert!(r[2] + 0.5 >= want, "{fixture}: {k} \"{t}\" cut: {} of {want}", r[2]);
+            }
+        }
+    }
+
+    /// New sits in the sidebar's header; with the sidebar hidden it is back
+    /// in the top bar, so it is never only in the palette.
+    #[test]
+    fn new_is_in_the_sidebar_and_in_the_top_bar_when_the_sidebar_is_hidden() {
+        let mut rt = runtime("shell/design-2.json", 1284.0, 816.0);
+        for _ in 0..10 {
+            rt.frame(0.016);
+        }
+        assert!(rt.presented("sidebar-new").is_some() && rt.presented("extra-topbar-create").is_none());
+        rt.update(|s, _| {
+            s.toggle_sidebar();
+            s.push_data();
+        });
+        // Past the sidebar's exit fade.
+        for _ in 0..40 {
+            rt.frame(0.016);
+        }
+        assert!(rt.presented("sidebar-new").is_none() && rt.presented("extra-topbar-create").is_some());
     }
 
     fn chords() -> Vec<KeyEvent> {
@@ -2373,14 +2597,16 @@ mod tests {
                 rt.frame(0.016);
             }
             rt.update(|s, _| s.push_data());
-            for _ in 0..6 {
+            // Long enough for a part that changed shape (the usage chip's
+            // bars on a first, narrower guess) to land.
+            for _ in 0..40 {
                 rt.frame(0.016);
             }
             // What the top bar screen last drew from.
             let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
             let list = data["app"]["extras"]["topbar"].as_array().unwrap().clone();
             let (bar_r, _) = rt.presented("top-bar").unwrap();
-            for e in list.iter().filter(|e| e["more"] != true) {
+            for e in list.iter().filter(|e| e["more"] != true && e["in_sidebar"] != true) {
                 let id = e["id"].as_str().unwrap();
                 let (r, _) = rt.presented(&format!("extra-topbar-{id}")).unwrap_or_else(|| panic!("{w}: {id} inline but not drawn"));
                 let label = match e["count"].as_u64() {
@@ -2388,8 +2614,9 @@ mod tests {
                     Some(n) => format!("{} {n}", e["label"].as_str().unwrap()),
                     None => e["label"].as_str().unwrap().to_string(),
                 };
-                let x = bar::TopExtra { label, icon: !e["icon"].is_null(), button: !e["intent"].is_null(), tool: false };
-                assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {}", r[2], x.width());
+                let bars = id == "usage" && data["app"]["topbar"]["usage_bars"] == true;
+                let x = bar::TopExtra { label, icon: !e["icon"].is_null(), button: !e["intent"].is_null(), tool: false, drawn_w: if bars { bar::usage_bars_w(&data["usage"]) } else { None } };
+                assert!((r[2] - x.width()).abs() < 1.0, "{w}: {id} drawn {} wide, measured {} (bars {})", r[2], x.width(), bars);
                 assert!(r[0] + r[2] <= bar_r[0] + bar_r[2] + 0.5, "{w}: {id} {r:?} past the bar {bar_r:?}");
             }
             for key in ["jarvis-toggle", "daemon-state", "layout"] {
@@ -2402,6 +2629,38 @@ mod tests {
                 assert_eq!(more, 0, "{w}: everything fits");
             }
         }
+    }
+
+    /// The usage chip's bars go before anything else does: wide, the chip
+    /// has its bars; narrower, its words alone while it still fits inline;
+    /// then it goes into the menu like any extra.
+    #[test]
+    fn the_usage_bars_go_first_and_the_words_stay() {
+        let mut seen = vec![];
+        // Under 720: what the app's zoom gives.
+        for w in (440..=1800).rev().step_by(40) {
+            let mut rt = runtime("shell/usage-a.json", w as f32, 816.0);
+            rt.update(|s, _| {
+                s.notice = None;
+                s.feats.panels.clear();
+                s.feats.panel = None;
+            });
+            for _ in 0..6 {
+                rt.frame(0.016);
+            }
+            rt.update(|s, _| s.push_data());
+            for _ in 0..40 {
+                rt.frame(0.016);
+            }
+            let data = rt.state.screens.iter().find(|x| x.name == "topbar").unwrap().data().clone();
+            let inline = data["app"]["extras"]["topbar"].as_array().unwrap().iter().any(|e| e["id"] == "usage" && e["more"] != true);
+            let bars = data["app"]["topbar"]["usage_bars"] == true;
+            let state = if bars { "bars" } else if inline { "words" } else { "menu" };
+            if seen.last() != Some(&state) {
+                seen.push(state);
+            }
+        }
+        assert_eq!(seen, ["bars", "words", "menu"], "from 1800 down to 440");
     }
 
     /// The palette opens with the app's chord, filters, runs the same

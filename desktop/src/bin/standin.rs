@@ -50,6 +50,9 @@
 //! many seconds after the first `/api/stream` client connects (a change made
 //! behind the app's back, for the live-update demo). `--token-file` writes
 //! the token there, as the daemon writes `~/.sbxw/run/ui-token`.
+//! `--stats full|partial|none`: `GET /api/stats` and its `stats` event every
+//! 5 s (default partial: every other running sandbox without a report), and
+//! a `cost_usd` on each running sandbox; `none` is a daemon without them.
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use sbxw_desktop::client::{proof, Sandbox};
@@ -84,6 +87,10 @@ struct State {
     raw: serde_json::Value,
     /// `--approval SECS`: sbx asks (a host for web-app) that long after the first stream client.
     approval_after: Option<f64>,
+    /// `--stats full|partial|none`: GET /api/stats and the `stats` event.
+    stats: String,
+    /// Stats sent so far (the figures move a little each time).
+    stats_n: u64,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -111,6 +118,39 @@ fn is_typed(d: &[u8]) -> bool {
 fn publish(st: &Shared, name: &str, data: &str) {
     let frame = format!("event: {name}\ndata: {data}\n\n");
     st.lock().unwrap().streams.retain(|t| t.send(frame.clone()).is_ok());
+}
+
+/// GET /api/stats as the daemon answers it (`--stats`): each running
+/// sandbox's CPU (percent of one core) and memory, or nulls where it has no
+/// recent report; the daemon's own; their total.
+fn stats_body(st: &Shared) -> Option<serde_json::Value> {
+    let mut g = st.lock().unwrap();
+    if g.stats == "none" {
+        return None;
+    }
+    g.stats_n += 1;
+    let n = g.stats_n;
+    let partial = g.stats == "partial";
+    let gb = 1024.0 * 1024.0 * 1024.0;
+    let mut total = 0.8;
+    let (mut counted, mut unknown) = (0, 0);
+    let list: Vec<serde_json::Value> = g
+        .sandboxes
+        .iter()
+        .filter(|s| s.status == "running")
+        .enumerate()
+        .map(|(i, s)| {
+            if partial && i % 2 == 1 {
+                unknown += 1;
+                return serde_json::json!({ "name": s.name, "cpu_pct": null, "cpu_age_s": null, "cpu_cores": null, "mem_bytes": null, "mem_total_bytes": null });
+            }
+            counted += 1;
+            let cpu = ((40.0 + 30.0 * i as f64 + ((n + i as u64) % 5) as f64 * 3.5) * 10.0).round() / 10.0;
+            total += cpu;
+            serde_json::json!({ "name": s.name, "cpu_pct": cpu, "cpu_age_s": 4, "cpu_cores": 4, "mem_bytes": ((1.2 + i as f64 * 0.4) * gb) as u64, "mem_total_bytes": (8.0 * gb) as u64 })
+        })
+        .collect();
+    Some(serde_json::json!({ "daemon_cpu_pct": 0.8, "sandboxes": list, "total_cpu_pct": (total * 10.0f64).round() / 10.0, "sandboxes_counted": counted, "sandboxes_unknown": unknown, "ts": 1763380000000u64 + n * 5000 }))
 }
 
 fn set_status(st: &Shared, name: &str, status: &str) {
@@ -143,6 +183,7 @@ fn main() -> anyhow::Result<()> {
     let mut stale = false;
     let mut others = 0;
     let mut approval_after = None;
+    let mut stats = "partial".to_string();
     while let Some(k) = args.next() {
         let v = args.next().unwrap_or_default();
         match k.as_str() {
@@ -170,18 +211,29 @@ fn main() -> anyhow::Result<()> {
             "--stale-session" => stale = v == "yes",
             "--approval" => approval_after = Some(v.parse()?),
             "--clients" => others = v.parse::<u64>().unwrap_or(1).saturating_sub(1),
+            // `--stats full`: every running sandbox reports its CPU; `partial`
+            // (the default): every other one has no recent report; `none`:
+            // a daemon without the route (404, no event).
+            "--stats" => stats = v,
             _ => anyhow::bail!("unknown argument {k}"),
         }
     }
     let fx: serde_json::Value = serde_json::from_str(&fixture)?;
-    let sandboxes: Vec<Sandbox> = serde_json::from_value(fx["daemon"]["sandboxes"].clone()).unwrap_or_default();
+    let mut sandboxes: Vec<Sandbox> = serde_json::from_value(fx["daemon"]["sandboxes"].clone()).unwrap_or_default();
+    // What the running sandboxes' sessions cost so far (`cost_usd`, the
+    // daemon's sum per sandbox), unless the fixture says.
+    if stats != "none" {
+        for (i, sb) in sandboxes.iter_mut().filter(|s| s.status == "running").enumerate() {
+            sb.extra.entry("cost_usd").or_insert_with(|| serde_json::json!(((i as f64 + 1.0) * 1.37 * 100.0).round() / 100.0));
+        }
+    }
     let mut sessions = std::collections::BTreeMap::new();
     if stale {
         sessions.insert("z-old".to_string(), serde_json::json!({ "sandbox": "sbxw-jarvis", "mode": "claude", "state": "working", "agent": "claude",
             "started_ms": 1, "session_id": "z-old", "origin": "tty", "answerable": false, "ts": 0 }));
     }
     let raw = if fx["daemon"].is_object() { fx["daemon"].clone() } else { serde_json::json!({}) };
-    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, sessions, others, raw, approval_after, ..Default::default() }));
+    let st: Shared = Arc::new(Mutex::new(State { sandboxes, jarvis, screens_dir, voice, sessions, others, raw, approval_after, stats, ..Default::default() }));
     let listener = TcpListener::bind(&addr)?;
     eprintln!("standin: listening on {addr}");
     let changes = Arc::new(Mutex::new(Some(changes)));
@@ -307,6 +359,10 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                 reply(&mut s, "404 Not Found", serde_json::json!({ "error": format!("no sandbox '{name}'") }).to_string());
             }
         }
+        ("GET", "/api/stats") => match stats_body(st) {
+            Some(v) => reply(&mut s, "200 OK", v.to_string()),
+            None => reply(&mut s, "404 Not Found", serde_json::json!({ "error": "no route GET /api/stats" }).to_string()),
+        },
         ("GET", "/api/stream") => {
             let (tx, rx) = mpsc::channel::<String>();
             {
@@ -314,6 +370,16 @@ fn serve(mut s: TcpStream, token: &str, st: &Shared, changes: &Changes) -> anyho
                 g.streams.push(tx);
                 if !g.streamed {
                     g.streamed = true;
+                    // The daemon's `stats` event: every 5 s while a stream is open.
+                    if g.stats != "none" {
+                        let st = st.clone();
+                        std::thread::spawn(move || loop {
+                            std::thread::sleep(Duration::from_secs(5));
+                            if let Some(v) = stats_body(&st) {
+                                publish(&st, "stats", &v.to_string());
+                            }
+                        });
+                    }
                     if let Some(t) = g.approval_after {
                         let st = st.clone();
                         std::thread::spawn(move || {

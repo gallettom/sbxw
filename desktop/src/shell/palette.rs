@@ -192,6 +192,11 @@ impl App {
             v.push(Cmd { id: format!("key-{}", sc.key), label: sc.help.to_string(), hint: String::new(), icon: None, keys, run: Run::Intents(vec![(sc.intent.to_string(), serde_json::from_str(sc.args).unwrap_or(J::Null))]) });
         }
         let core = |id: &str, label: &str, hint: &str, icon: &str, keys: Vec<String>, run: Run| Cmd { id: id.into(), label: label.into(), hint: hint.into(), icon: Some(icon.into()), keys, run };
+        // The bring-ups' panel, while the status bar shows one.
+        if !self.status.jobs.is_empty() {
+            let n = self.status.jobs.len();
+            v.push(core("create-jobs", "Show the new sandboxes", &format!("{n} being created or just done"), "plus", vec![], Run::Intents(vec![("open_panel".into(), serde_json::json!({ "screen": feat::create::JOBS }))])));
+        }
         v.push(core("sidebar", if self.sidebar_shown() { "Hide the sidebar" } else { "Show the sidebar" }, "", "columns", chord_keys("B"), Run::Sidebar));
         v.push(core("jarvis", if self.jarvis.open { "Close Jarvis" } else { "Open Jarvis" }, "", "sparkle", if mac() { chord_keys("J") } else { vec!["F7".into()] }, Run::Jarvis));
         for i in 0..self.layout.0 {

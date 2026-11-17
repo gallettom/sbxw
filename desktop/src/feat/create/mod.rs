@@ -30,6 +30,7 @@ use crate::intent::{Arg, Risk, Spec};
 use model::{Answer, Dialog, Form, Job, JobState, Listing, Preview};
 use serde_json::{json, Value as J};
 use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 /// The dialog's screen and the jobs' panel.
 pub const SCREEN: &str = "create";
@@ -109,6 +110,38 @@ pub struct State {
     pub jobs: Vec<Job>,
     /// The host picked last time.
     pub last_host: String,
+    /// Bring-ups that ended ready, and when (the status bar's "created").
+    pub ready: Vec<(String, Instant)>,
+}
+
+/// How long the status bar says "created" after a bring-up ends ready.
+pub const CREATED_FOR: Duration = Duration::from_secs(4);
+
+/// The bring-ups for the status bar (shell/statusbar.rs): the ones in the
+/// list (running, asking, failed), then the ones ready in the last
+/// [`CREATED_FOR`], most recent first.
+pub fn bar_jobs() -> Vec<model::BarJob> {
+    let mut st = STATE.lock().unwrap();
+    st.bar_jobs(Instant::now())
+}
+
+impl State {
+    pub fn bar_jobs(&mut self, now: Instant) -> Vec<model::BarJob> {
+        self.ready.retain(|(_, t)| now.saturating_duration_since(*t) < CREATED_FOR);
+        let mut out: Vec<model::BarJob> = self.jobs.iter().filter_map(model::bar_job).collect();
+        for (name, t) in &self.ready {
+            if !out.iter().any(|j| &j.sandbox == name) {
+                out.push(model::BarJob { sandbox: name.clone(), step: None, frac: 1.0, state: model::BarState::Created, since: *t });
+            }
+        }
+        out.sort_by(|a, b| b.since.cmp(&a.since));
+        out
+    }
+
+    fn mark_ready(&mut self, name: &str) {
+        self.ready.retain(|(n, _)| n != name);
+        self.ready.push((name.to_string(), Instant::now()));
+    }
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
@@ -123,10 +156,10 @@ fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
     STATE.lock().unwrap().on_answer(ctx, call, r)
 }
 
-/// "New sandbox" in the top bar; a count while bring-ups run.
+/// "New sandbox" in the top bar, always. Bring-ups in progress show in the
+/// status bar (shell/statusbar.rs), which opens the jobs' panel.
 fn extras(_: &Ctx) -> Vec<super::Extra> {
-    let running = STATE.lock().unwrap().jobs.iter().filter(|j| j.state == JobState::Running).count();
-    let mut out = vec![super::Extra {
+    vec![super::Extra {
         place: super::Place::Topbar,
         id: "create".into(),
         label: "New".into(),
@@ -135,20 +168,7 @@ fn extras(_: &Ctx) -> Vec<super::Extra> {
         help: "New sandbox".into(),
         count: None,
         intent: Some(("create_open".into(), json!({}))),
-    }];
-    if running > 0 {
-        out.push(super::Extra {
-            place: super::Place::Topbar,
-            id: "create-jobs".into(),
-            label: "Creating".into(),
-            icon: Some("reload".into()),
-            tone: "blue".into(),
-            help: "Sandboxes being created".into(),
-            count: Some(running as u64),
-            intent: Some(("open_panel".into(), json!({ "screen": JOBS }))),
-        });
-    }
-    out
+    }]
 }
 
 /// Every sandbox ref that exists (names are refused when taken).
@@ -518,7 +538,14 @@ impl State {
             J::String(s) => s.clone(),
             v => v.to_string(),
         };
+        let ev: J = serde_json::from_str(&text).unwrap_or_default();
+        let had = self.jobs.iter().any(|j| ev["sandbox"] == j.sandbox.as_str());
         let Some(sandbox) = model::apply_provision(&mut self.jobs, &text) else { return vec![] };
+        // A watched bring-up that ended ready (a posted one ends with its answer).
+        let done_ok = had && ev["kind"] == "done" && ev["error"].is_null();
+        if done_ok && self.jobs.iter().find(|j| j.sandbox == sandbox).is_none_or(|j| j.state == JobState::Ready) {
+            self.mark_ready(&sandbox);
+        }
         let mut out = vec![];
         // A job held for the person's answer runs once the daemon starts it.
         if let Some(j) = self.jobs.iter_mut().find(|j| j.sandbox == sandbox) {
@@ -667,6 +694,7 @@ impl State {
         match answer {
             Answer::Ready { name: real, warnings } => {
                 j.state = JobState::Ready;
+                let shown = j.sandbox.clone();
                 let text = match warnings.last() {
                     Some(w) => format!("Sandbox \"{real}\" is ready; {w}"),
                     None if j.body.as_ref().is_some_and(|b| b["remote_control"] == true) => format!("Sandbox \"{real}\" is ready: press Remote in its pane (before sbx 0.53: /login there first)"),
@@ -674,6 +702,7 @@ impl State {
                 };
                 let error = !warnings.is_empty();
                 j.warnings.extend(warnings);
+                self.mark_ready(&shown);
                 // Done: the card goes unless something beside it did not work.
                 if !error {
                     self.jobs.retain(|j| j.sandbox != name);

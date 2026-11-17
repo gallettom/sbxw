@@ -32,8 +32,42 @@ local tools = { usage = 1, setup = 2, help = 3, mac = 4 }
 -- by id, for the action (filled by render; actions do not get `data`).
 local extra_intents = {}
 
-local function extra(e, mac)
+-- An extra's colour by meaning while quiet, inline or in the "⋯" menu.
+local function meaning_of(id)
+  return (id == "create" and "green") or ((id == "approvals" or id == "relay" or id == "plan") and "blue") or nil
+end
+
+-- The usage chip with a small bar per window (the core says when it fits:
+-- app.topbar.usage_bars): the label, a 40 by 4 pt bar filled to the share
+-- (blue under 70%, amber from 70%, red from 90%), the number. Else its
+-- words alone. shell/bar.rs measures it the same way.
+local function usage_tone(p)
+  if p >= 90 then return "red" elseif p >= 70 then return "amber" end
+  return "blue"
+end
+
+local function usage_chip(e, u)
+  local kids = { key = "extra-topbar-usage", help = e.help, px = 8, gap = 4, radius = "xs", fill = "bg", h = 20 }
+  local first = true
+  for _, w in ipairs({ { "5h", u.five_hour_pct }, { "7d", u.seven_day_pct } }) do
+    local p = tonumber(w[2])
+    if p then
+      p = math.max(0, math.min(100, p))
+      if not first then table.insert(kids, column{ w = 4 }) end
+      first = false
+      table.insert(kids, text{ w[1], size = "caption", weight = "medium", color = "text-muted" })
+      table.insert(kids, progress{ value = p / 100, tone = usage_tone(p), w = 40 })
+      table.insert(kids, text{ string.format("%d%%", math.floor(p + 0.5)), size = "caption", weight = "medium", color = p >= 70 and usage_tone(p) or "text-muted" })
+    end
+  end
+  return row(kids)
+end
+
+local function extra(e, mac, data)
   local label = e.label or ""
+  if e.id == "usage" and ((data or {}).app or {}).topbar and data.app.topbar.usage_bars and data.usage then
+    return usage_chip(e, data.usage)
+  end
   if e.count then label = (label ~= "" and (label .. " ") or "") .. tostring(e.count) end
   local key = "extra-topbar-" .. e.id
   if not e.intent then
@@ -46,7 +80,7 @@ local function extra(e, mac)
   local waits = e.tone == "amber" or e.tone == "red"
   -- Colour by meaning while quiet: New is green (it starts something),
   -- what it goes to blue (requests, a plan), the team purple; tools neutral.
-  local meaning = (e.id == "create" and "green") or ((e.id == "approvals" or e.id == "relay" or e.id == "plan") and "blue") or nil
+  local meaning = meaning_of(e.id)
   return button{ label, icon = e.icon, key = key, on = "extra", arg = e.id, help = e.help, keys = keys,
     tone = (not waits) and meaning or nil,
     -- Quiet until something waits: then the tone's own colour on its tint.
@@ -68,7 +102,9 @@ local function more_menu(hidden)
       if #label > 18 then label = string.match(label, "^(%S+)") or label end
     end
     if e.count then label = label .. " (" .. tostring(e.count) .. ")" end
-    table.insert(items, { id = e.id, label = label, icon = e.icon, help = e.help ~= "" and e.help or nil })
+    -- The same colour as inline: its own tone when something waits, else its meaning.
+    local t = (e.tone == "amber" or e.tone == "red") and e.tone or meaning_of(e.id)
+    table.insert(items, { id = e.id, label = label, icon = e.icon, tone = t, help = e.help ~= "" and e.help or nil })
     if e.intent then extra_intents[e.id] = e.intent end
     if e.tone == "amber" then tone = "amber"
     elseif e.count and tone == nil then tone = "blue" end
@@ -91,9 +127,11 @@ return {
     local compact = fit.compact == true
     local centre, right, hidden = { gap = 8 }, { gap = 4 }, {}
     for _, e in ipairs((app.extras or {}).topbar or {}) do
-      if e.more then table.insert(hidden, e)
-      elseif tools[e.id] then table.insert(right, extra(e, mac))
-      else table.insert(centre, extra(e, mac)) end
+      -- New sits in the sidebar's header while the sidebar shows.
+      if e.in_sidebar then
+      elseif e.more then table.insert(hidden, e)
+      elseif tools[e.id] then table.insert(right, extra(e, mac, data))
+      else table.insert(centre, extra(e, mac, data)) end
     end
     -- The tools in a fixed order: usage, Setup, Help, the Mac.
     local tl = {}
@@ -102,7 +140,7 @@ return {
     end
     table.sort(tl, function(a, b) return tools[a.id] < tools[b.id] end)
     right = { gap = 4 }
-    for _, e in ipairs(tl) do table.insert(right, extra(e, mac)) end
+    for _, e in ipairs(tl) do table.insert(right, extra(e, mac, data)) end
     if #hidden > 0 then table.insert(right, more_menu(hidden)) end
     local switch
     if compact then

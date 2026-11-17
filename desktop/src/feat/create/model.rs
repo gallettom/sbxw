@@ -918,6 +918,73 @@ pub fn job_view(j: &Job) -> J {
     })
 }
 
+/// How a bring-up stands in the status bar (shell/statusbar.rs).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BarState {
+    Running,
+    /// Held for the person's answer about host access.
+    Asking,
+    Failed(String),
+    /// Ready a moment ago (the bar says "created", then clears).
+    Created,
+}
+
+/// One bring-up as the status bar shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BarJob {
+    pub sandbox: String,
+    /// What runs now: the step's label, or the words of its detail line
+    /// with their percentage ("Pulling image 63%"). None before the plan.
+    pub step: Option<String>,
+    /// Done out of the plan, 0 to 1; a running step's percentage counts in.
+    pub frac: f32,
+    pub state: BarState,
+    /// When it started (the most recent one shows first).
+    pub since: Instant,
+}
+
+/// The last percentage in a detail line ("... 63%", "63.5%"), 0 to 100.
+pub fn percent(t: &str) -> Option<f32> {
+    t.split_whitespace().rev().find_map(|w| {
+        let n = w.trim_end_matches(|c: char| c == ')' || c == ',' || c == '.').strip_suffix('%')?;
+        n.parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 100.0))
+    })
+}
+
+/// A step's words for the bar: with a percentage in its detail, the
+/// detail's first plain words (an image reference or a path is left out)
+/// and the percentage, else the step's label.
+pub fn step_words(label: &str, detail: &str) -> String {
+    let Some(p) = percent(detail) else { return label.to_string() };
+    let words: Vec<&str> = detail.split_whitespace().take_while(|w| !w.contains(['/', ':', '%', '@']) && !w.chars().any(|c| c.is_ascii_digit())).take(3).collect();
+    let head = if words.is_empty() { label.to_string() } else { words.join(" ") };
+    format!("{head} {:.0}%", p.floor())
+}
+
+/// A job for the bar (none once ready: the bar says "created" from its own list).
+pub fn bar_job(j: &Job) -> Option<BarJob> {
+    let total = j.steps.len();
+    let done = j.at.max(0) as usize;
+    let running = j.steps.get(j.at.max(0) as usize).filter(|_| j.at >= 0);
+    let within = if matches!(j.state, JobState::Running) { percent(&j.detail).map_or(0.0, |p| p / 100.0) } else { 0.0 };
+    let frac = if total == 0 { 0.0 } else { ((done as f32 + within) / total as f32).clamp(0.0, 1.0) };
+    let state = match &j.state {
+        JobState::Running => BarState::Running,
+        JobState::Asking(_) => BarState::Asking,
+        JobState::Failed(e) => BarState::Failed(e.clone()),
+        JobState::Ready => return None,
+    };
+    let step = match &state {
+        BarState::Asking => Some("Waiting for you".to_string()),
+        BarState::Failed(_) => Some(match running {
+            Some((_, l)) => format!("{l} failed"),
+            None => "Not created".to_string(),
+        }),
+        _ => running.map(|(_, l)| step_words(l, &j.detail)),
+    };
+    Some(BarJob { sandbox: j.sandbox.clone(), step, frac, state, since: j.since })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

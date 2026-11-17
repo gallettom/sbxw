@@ -29,10 +29,20 @@ pub fn rank(tone: &str, count: Option<u64>) -> u8 {
 /// (a lead, Jarvis) purple, an interrupt red, anything else neutral.
 pub fn meaning(id: &str) -> &'static str {
     match id {
-        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" => "blue",
+        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" | "remote" => "blue",
         "lead" | "jarvis" | "team" => "purple",
         "interrupt" => "red",
         _ => "neutral",
+    }
+}
+
+/// The tone an item's menu row takes: its own when it has one, else the
+/// colour its chip's icon has by meaning, so it looks the same inline and in
+/// the overflow menu.
+pub fn menu_tone(it: &Item) -> &str {
+    match it.tone.as_str() {
+        "" | "muted" => meaning(&it.id),
+        t => t,
     }
 }
 
@@ -245,10 +255,15 @@ pub struct TopExtra {
     pub button: bool,
     /// In the right group (usage, Setup, Help, Mac), else the centre.
     pub tool: bool,
+    /// Drawn some other way, this wide (the usage chip with its bars).
+    pub drawn_w: Option<f32>,
 }
 
 impl TopExtra {
     pub fn width(&self) -> f32 {
+        if let Some(w) = self.drawn_w {
+            return w;
+        }
         if self.button { button_w(&self.label, self.icon) } else { badge_w(&self.label) }
     }
     fn gap(&self) -> f32 {
@@ -284,6 +299,45 @@ pub fn top_fit(width: f32, jarvis_label: &str, layout_label: &str, state_word: &
     (compact, k)
 }
 
+// ---------------------------------------------------------------------------
+// The usage chip (topbar.luau `usage_chip`): each window's label, a small
+// bar filled to its share, its number.
+
+/// A usage bar: 40 by 4 pt.
+pub const USAGE_BAR_W: f32 = 40.0;
+/// Inside a window (label, bar, number) and between the two windows.
+pub const USAGE_GAP: f32 = 4.0;
+pub const USAGE_WINDOW_GAP: f32 = 12.0;
+
+/// The bars' colour by meaning: blue under 70%, amber from 70%, red from 90%
+/// (topbar.luau `usage_tone` draws it; this is the rule its test holds).
+#[cfg(test)]
+pub fn usage_tone(pct: f64) -> &'static str {
+    if pct >= 90.0 {
+        "red"
+    } else if pct >= 70.0 {
+        "amber"
+    } else {
+        "blue"
+    }
+}
+
+/// The windows the daemon reports: label and percentage.
+pub fn usage_windows(u: &J) -> Vec<(&'static str, f64)> {
+    [("5h", &u["five_hour_pct"]), ("7d", &u["seven_day_pct"])].into_iter().filter_map(|(l, v)| v.as_f64().map(|p| (l, p.clamp(0.0, 100.0)))).collect()
+}
+
+/// The chip with its bars, as wide as topbar.luau draws it (8 pt sides,
+/// 4 pt gaps, 12 between the windows, 12/500 text).
+pub fn usage_bars_w(u: &J) -> Option<f32> {
+    let w = usage_windows(u);
+    if w.is_empty() {
+        return None;
+    }
+    let parts: f32 = w.iter().map(|(l, p)| measure(l, 12.0, 500.0) + USAGE_GAP + USAGE_BAR_W + USAGE_GAP + measure(&format!("{}%", p.round()), 12.0, 500.0)).sum();
+    Some(16.0 + parts + USAGE_WINDOW_GAP * (w.len() - 1) as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +364,16 @@ mod tests {
 
     fn ids(v: &[Item]) -> Vec<&str> {
         v.iter().map(|i| i.id.as_str()).collect()
+    }
+
+    /// A chip's colour by meaning is carried into its overflow menu row.
+    #[test]
+    fn a_chip_keeps_its_colour_in_the_overflow_menu() {
+        let tones: Vec<(String, String)> = many().iter().map(|i| (i.id.clone(), menu_tone(i).to_string())).collect();
+        let get = |id: &str| tones.iter().find(|(i, _)| *i == id).unwrap().1.clone();
+        assert_eq!((get("interrupt"), get("remote"), get("threads"), get("lead"), get("browser"), get("project")), ("red".into(), "blue".into(), "blue".into(), "purple".into(), "blue".into(), "blue".into()));
+        assert_eq!(get("plan"), "amber", "a toned extra keeps its own tone");
+        assert_eq!(get("env"), "neutral");
     }
 
     #[test]
@@ -381,8 +445,17 @@ mod tests {
     }
 
     #[test]
+    fn usage_bars_take_their_colour_from_the_share() {
+        assert_eq!((usage_tone(11.0), usage_tone(69.9), usage_tone(70.0), usage_tone(89.0), usage_tone(90.0), usage_tone(100.0)), ("blue", "blue", "amber", "amber", "red", "red"));
+        let u = serde_json::json!({ "five_hour_pct": 11.0, "seven_day_pct": 78.0 });
+        assert_eq!(usage_windows(&u), [("5h", 11.0), ("7d", 78.0)]);
+        assert!(usage_bars_w(&u).unwrap() > badge_w("5h 11% · 7d 78%"), "the bars take more room than the words");
+        assert_eq!(usage_bars_w(&serde_json::json!({})), None);
+    }
+
+    #[test]
     fn the_top_bar_goes_compact_then_overflows() {
-        let x = |l: &str, tool: bool| TopExtra { label: l.into(), icon: true, button: true, tool };
+        let x = |l: &str, tool: bool| TopExtra { label: l.into(), icon: true, button: true, tool, drawn_w: None };
         let extras = vec![x("New", false), x("sbx asks 88", false), x("Plan waiting", false), x("", true), x("", true), x("Mac", true), x("Requests 3", false)];
         let (c, k) = top_fit(1300.0, "Jarvis", "2 side by side", "connected", &extras);
         assert!(!c && k == extras.len(), "wide: all inline ({c}, {k})");

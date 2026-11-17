@@ -3,7 +3,7 @@
 #
 #   desktop/scripts/demo-create.sh
 #
-# The top bar's New, the workspace form (a folder browsed to, a name typed,
+# The sidebar's New, the workspace form (a folder browsed to, a name typed,
 # an extra folder added), the core's confirmation of what the extra folder
 # grants, the daemon's host-access question (its lines, Allow), the bring-up's
 # steps arriving on the stream, a failure at the kits step with its reason,
@@ -32,7 +32,7 @@ def typ(key, text):
     global t
     add(type="tap", key=key)
     add(type="type", every=0.02, text=text); t += 0.02 * len(text)
-add(type="tap", key="extra-topbar-create")
+add(type="tap", key="sidebar-new")
 mark("chooser", 300)
 add(type="tap", key="kind-workspace")
 mark("form", 500)

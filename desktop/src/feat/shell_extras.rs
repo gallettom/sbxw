@@ -23,8 +23,8 @@ pub const FEATURE: Feature = Feature {
         ScreenDecl { name: "sandbox-actions", src: include_str!("../../screens/sandbox-actions.luau"), slot: Slot::Modal { width: 460.0, light_dismiss: false } },
     ],
     intents: INTENTS,
-    // Help from anywhere, as the menu bar's Help > sbxw Help on macOS.
-    shortcuts: &[Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and keyboard shortcuts" }],
+    // Help from anywhere, as the menu bar's Help > Help and shortcuts on macOS.
+    shortcuts: &[Shortcut { key: 'h', intent: "show_help", args: "{}", help: "Help and shortcuts" }],
     act,
     on_answer: Some(on_answer),
     extras: Some(extras),
@@ -134,6 +134,38 @@ fn on_answer(_cx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action>
     v
 }
 
+/// When a window starts again: a number (unix seconds or milliseconds) as
+/// "in 2 h 05 min", a text as it is.
+fn resets(v: &J) -> Option<String> {
+    if let Some(t) = v.as_str().filter(|t| !t.is_empty()) {
+        return Some(format!("resets {t}"));
+    }
+    let n = v.as_f64()?;
+    let at = if n > 1e12 { n / 1000.0 } else { n };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs_f64();
+    let mins = ((at - now) / 60.0).round().max(0.0) as u64;
+    Some(match mins {
+        0 => "resets now".into(),
+        m if m < 60 => format!("resets in {m} min"),
+        m if m < 48 * 60 => format!("resets in {} h {:02} min", m / 60, m % 60),
+        m => format!("resets in {} days", m / (24 * 60)),
+    })
+}
+
+/// The usage chip's tooltip: each window's share, and when it resets.
+fn usage_help(u: &J) -> String {
+    let mut t = "Share of the subscription windows used".to_string();
+    for (name, pct, at) in [("5 hours", &u["five_hour_pct"], &u["five_hour_resets_at"]), ("7 days", &u["seven_day_pct"], &u["seven_day_resets_at"])] {
+        if let Some(p) = pct.as_f64() {
+            t.push_str(&format!("\n{name}: {}% used", p.round()));
+            if let Some(r) = resets(at) {
+                t.push_str(&format!(", {r}"));
+            }
+        }
+    }
+    t
+}
+
 /// `42%`, or nothing.
 fn pct(v: &J) -> Option<String> {
     v.as_f64().map(|p| format!("{}%", p.round()))
@@ -152,7 +184,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
             label,
             icon: None,
             tone: if high { "amber".into() } else { "muted".into() },
-            help: "Share of the subscription windows used (5 hours, 7 days)".into(),
+            help: usage_help(u),
             count: None,
             intent: None,
         });

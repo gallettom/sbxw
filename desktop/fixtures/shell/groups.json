@@ -1,0 +1,236 @@
+{
+  "about": "Chats and four workspace groups: /Users/me/dev/api and /Users/me/dev/auth2 share the web UI's hue 103, /Users/me/dev/web1 hashes to 272 near the chats' 265 (distinct group colours)",
+  "daemon": {
+    "sandboxes": [
+      {
+        "name": "chat-research",
+        "agent": "claude",
+        "status": "running",
+        "chat": true,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": null
+      },
+      {
+        "name": "chat-notes",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": true,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": null
+      },
+      {
+        "name": "api-main",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/api"
+      },
+      {
+        "name": "api-review",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/api"
+      },
+      {
+        "name": "auth2-main",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/auth2"
+      },
+      {
+        "name": "auth2-review",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/auth2"
+      },
+      {
+        "name": "web1-main",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/web1"
+      },
+      {
+        "name": "web1-review",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/web1"
+      },
+      {
+        "name": "api20-main",
+        "agent": "claude",
+        "status": "running",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/api20"
+      },
+      {
+        "name": "api20-review",
+        "agent": "claude",
+        "status": "stopped",
+        "chat": false,
+        "detached": false,
+        "remote_control": false,
+        "approvals": 0,
+        "kits_waiting": 0,
+        "old_sbx": false,
+        "workspace": "/Users/me/dev/api20"
+      }
+    ],
+    "sessions": [],
+    "threads": {},
+    "plans": [
+      {
+        "id": "p-polish",
+        "sandbox": "better-checkout",
+        "summary": "Checkout v2 in three threads.",
+        "threads": [
+          {
+            "name": "checkout-v2",
+            "goal": "The new checkout flow.",
+            "scope": "web/checkout/",
+            "repo": "",
+            "model": "claude-sonnet-5-5",
+            "state": "working",
+            "summary": "Flow in, tests next"
+          },
+          {
+            "name": "payments",
+            "goal": "The payments step.",
+            "scope": "web/payments/",
+            "repo": "",
+            "model": "claude-sonnet-5-5",
+            "state": "working",
+            "summary": ""
+          },
+          {
+            "name": "refunds",
+            "goal": "Refunds in the admin.",
+            "scope": "admin/refunds/",
+            "repo": "",
+            "model": "claude-haiku-5-5",
+            "state": "done",
+            "summary": "Refunds page written"
+          }
+        ],
+        "state": "approved",
+        "variant": "split",
+        "justification": "Separate folders.",
+        "lead": "better-checkout lead",
+        "created_ms": 1763290000000,
+        "updated_ms": 1763290000000
+      }
+    ],
+    "leads": [],
+    "models": {
+      "ok": true,
+      "default": "claude-opus-5-5",
+      "models": [
+        {
+          "id": "claude-opus-5-5",
+          "label": "Opus 5.5"
+        },
+        {
+          "id": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5"
+        },
+        {
+          "id": "claude-haiku-5-5",
+          "label": "Haiku 5.5"
+        }
+      ]
+    },
+    "board": {},
+    "thread_repos": {
+      "ok": true,
+      "workspace": "/Users/ana/dev/web-app",
+      "repos": [
+        {
+          "path": "api",
+          "branch": "main",
+          "dirty": 0,
+          "ahead": 0,
+          "behind": 0,
+          "detached": false
+        },
+        {
+          "path": "web",
+          "branch": "main",
+          "dirty": 2,
+          "ahead": 1,
+          "behind": 0,
+          "detached": false
+        },
+        {
+          "path": "docs",
+          "branch": "main",
+          "dirty": 0,
+          "ahead": 0,
+          "behind": 0,
+          "detached": false
+        }
+      ]
+    },
+    "approvals": {
+      "ok": true,
+      "approvals": []
+    },
+    "usage": {
+      "five_hour_pct": 42,
+      "seven_day_pct": 81,
+      "updated_ms": 1763290000000
+    }
+  },
+  "app": {
+    "selected": "chat-research",
+    "panes": 1,
+    "open": [],
+    "focused": 1
+  }
+}

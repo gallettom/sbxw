@@ -295,7 +295,10 @@ local function item(sb, app, data)
   else
     first = text{ st.word, size = "caption", weight = st.tone == "amber" and "semibold" or "normal", color = word_color[st.tone] }
   end
-  local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w
+  -- What is left after the state word, the model and the buttons, with
+  -- every gap of the line (4 each) counted: the model is never cut for a
+  -- badge; a badge that does not fit goes to the "+N" or the ⋯ menu.
+  local room = col_w - est(st.word) - (lead and 12 or 0) - 6 - est(model) - 6 - buttons_w - 16
   local line2 = { gap = 4, w = "full", first,
     text{ model, size = "caption", color = "text-muted", truncate = true, help = model_help, key = "model-" .. name },
   }
@@ -349,19 +352,24 @@ local function item(sb, app, data)
   -- Line 1: the name (it truncates, nothing is drawn over it), the network
   -- bubble, the pane chip, then the ⋯ menu that holds every action, shown
   -- on hover, on keyboard focus and on the selected row; it keeps its room.
-  local line1 = { w = "full", gap = 4,
-    text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, grow = 1, help = name },
+  -- The bubble sits right after the name (6 pt: 2 of gap, 4 of its own
+  -- padding, which keeps a 24 pt target), and moves with the name's length;
+  -- a long name truncates before the bubble is pushed out.
+  local line1 = { w = "full", gap = 2,
+    text{ name, size = "title", weight = "medium", color = "text-bright", truncate = true, help = name },
   }
   if approvals then
     table.insert(line1, row{ key = "extra-sandbox-" .. name .. "-approvals", on = approvals.intent and "extra" or nil, arg = name .. "\napprovals",
-      help = bubble_help(name, approvals), h = 24, min_w = 24, justify = "center", radius = "xs", hover = "active-bg",
+      help = bubble_help(name, approvals), h = 24, min_w = 24, px = 4, justify = "center", radius = "xs", hover = "active-bg",
       badge{ tostring(approvals.count or ""), tone = approvals.tone == "amber" and "amber" or "blue", pill = true } })
   end
+  table.insert(line1, spacer{})
   -- The ⋯ takes its room beside the name when the whole name still fits;
   -- a name too long for the line keeps all of it at rest, and the ⋯ shows
   -- over its end only on hover or focus, on the row's own fill.
-  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 28 or 0)
-  local fits = name_w + 28 <= col_w
+  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 30 or 0)
+  -- With a bubble the ⋯ always keeps its room, so it never covers the bubble.
+  local fits = approvals ~= nil or name_w + 28 <= col_w
   table.insert(line1, row{ gap = 0, reveal = not selected,
     pin = (not fits) and { right = 0, top = 0 } or nil, fill = (not fits) and (selected and "elevated" or "hover-subtle") or nil, radius = "xs",
     menu{ "", id = "extra-sandbox-" .. name, icon = "more", variant = "ghost", dense = true, items = menu_items, on = "row_menu", arg = name, help = "Every action of " .. name },
@@ -369,6 +377,8 @@ local function item(sb, app, data)
 
   return row{
     key = "row-" .. name, on = "open", arg = name, on_space = "toggle", selected = selected, hover_group = true,
+    -- The row, its sessions line and block are one hover zone (sessions_block).
+    hover_zone = "sb:" .. name,
     help = name .. ": " .. st.word .. ", " .. model,
     shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } },
     h = 52, w = "full", gap = 8, align = "stretch", radius = "sm",
@@ -386,12 +396,16 @@ end
 -- session (its main agent, each thread). The list draws them as the web UI's
 -- "Sessions" block, improved: a disclosure line ("4 sessions · 1 wants you",
 -- key sessions-<name>) that folds open a block grouped by where each session
--- works: "Main checkout" (main, and threads in the same checkout), then "Own
+-- works: "Shared checkout" (main, and threads in the same checkout), then "Own
 -- worktree" (a thread each). A line: its mark (the small rail; a check when
 -- done), its name, its state word, its model when it differs from the
 -- sandbox's, the pane it is in (P1). Pressing a line runs its extra (opens or
--- shows its terminal). Shut by default, except for the selected sandbox and
--- one with a session that wants you; the person's choice is kept per sandbox.
+-- shows its terminal). Open while one of its sessions is in a pane; else as
+-- the person pinned it (the line's press, kept per sandbox); else while one
+-- wants you, the row is selected, or the pointer rests on the sandbox's
+-- hover zone (row, line and block: data.app.hover_zone); else shut. A line
+-- on its own worktree shows the worktree's path after a branch glyph; one
+-- in the shared checkout, its session's name.
 local sub_tones = { green = "green", amber = "amber", red = "red", blue = "blue", purple = "blue" }
 
 local function parse_row(e)
@@ -414,10 +428,49 @@ local function thread_model(data, sb, thread)
   end
 end
 
+-- Where a thread's own worktree is, short: relative to the sandbox's
+-- workspace when under it, else with the home folder as "~". From its
+-- session's cwd (GET /api/sessions), else sbxw's own place for it.
+local function worktree_path(sb, thread, data)
+  local p
+  for _, s in ipairs(data.sessions or {}) do
+    if s.sandbox == sb.name and s.thread == thread and s.cwd and s.cwd ~= "" then p = s.cwd end
+  end
+  local ws = sb.workspace
+  if not p then
+    if not ws then return ".sbxw-worktrees/" .. thread, nil end
+    p = ws .. "/.sbxw-worktrees/" .. thread
+  end
+  local full = p
+  if ws and string.sub(p, 1, #ws + 1) == ws .. "/" then
+    p = string.sub(p, #ws + 2)
+  else
+    p = string.gsub(p, "^/Users/[^/]+", "~")
+    p = string.gsub(p, "^/home/[^/]+", "~")
+  end
+  return p, full
+end
+
+-- A path in about `room` points, its end (the worktree's own name) kept:
+-- whole when it fits, else "…/<last part>", else the last part cut in its
+-- middle.
+local function middle(t, room)
+  -- The line's 13 pt text: about 7.8 pt a character.
+  local fit = math.floor(room / 7.8)
+  local n = utf8.len(t) or #t
+  if n <= fit then return t end
+  local last = string.match(t, "([^/]+)$") or t
+  if (utf8.len(last) or #last) + 2 <= fit then return "…/" .. last end
+  if fit < 8 then return last end
+  local m = utf8.len(last) or #last
+  local tail = math.ceil((fit - 1) * 0.5)
+  return string.sub(last, 1, fit - 1 - tail) .. "…" .. string.sub(last, m - tail + 1)
+end
+
 local function session_line(sb, e, data, base_model)
   local key = "extra-row-" .. sb.name .. "-" .. e.id
   if e.intent then extra_intents[sb.name .. "\n" .. e.id] = e.intent end
-  local _, name, word = parse_row(e)
+  local own, name, word = parse_row(e)
   local tone = sub_tones[e.tone] or "muted"
   local shape = (e.tone == "amber" and "notch") or (word == "working" and "dashed") or (word == "starting" and "dashed")
     or (e.tone == "red" and "broken") or ((tone == "muted") and "hollow") or "solid"
@@ -428,16 +481,33 @@ local function session_line(sb, e, data, base_model)
   if mw == base_model then mw = nil end
   -- The name first; the model only where it fits beside the name and word.
   local room = ((data.app.sidebar or {}).w or 264) - 24 - 8 - 32 - 16 - (e.count and 32 or 0)
-  if mw and est(name) + est(word) + est(mw) + 16 > room then mw = nil end
+  -- A thread on its own worktree reads as the worktree's path (a branch
+  -- glyph before it); its name too when the path does not end with it.
+  local path, full = nil, nil
+  local label = name
+  if own then
+    path, full = worktree_path(sb, name, data)
+    local last = string.match(path, "([^/]+)$")
+    local both = last ~= name
+    -- The line's own room: the sidebar less its paddings, the two 12 pt
+    -- columns, the glyph and the gaps, then the state word and the P chip.
+    local line_room = ((data.app.sidebar or {}).w or 264) - 92 - (e.count and 32 or 0)
+    local avail = line_room - est(word) - 8 - (both and (est(name) + 8) or 0)
+    label = middle(path, math.max(avail, 60))
+    if both then label = name .. " · " .. label end
+  end
+  if mw and est(label) + (own and 18 or 0) + est(word) + est(mw) + 16 > room then mw = nil end
   local mark = done and icon{ "check", size = 12, color = "text-muted" } or rail(tone, shape, true)
   local wants = e.tone == "amber"
   return row{ key = key, h = 28, gap = 8, w = "full", align = "stretch", radius = "sm", hover = "hover-subtle",
     on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil,
-    help = name .. (word ~= "" and (": " .. word) or "") .. (m and (", " .. m) or "") .. (e.count and (". Shown in pane " .. e.count) or ""),
+    help = name .. (word ~= "" and (": " .. word) or "") .. (m and (", " .. m) or "") .. (full and (", in " .. full) or "") .. (e.count and (". Shown in pane " .. e.count) or ""),
+    hover_zone = "sb:" .. sb.name,
     column{ w = 12 },
     column{ py = done and 8 or 4, w = 12, align = done and "center" or "start", mark },
     row{ grow = 1, gap = 8,
-      text{ name, size = "body", weight = wants and "medium" or "normal", color = done and "text-muted" or (wants and "amber" or "text"), truncate = true },
+      own and icon{ "branch", size = 12, color = "text-muted" } or false,
+      text{ label, size = "body", weight = wants and "medium" or "normal", color = done and "text-muted" or (wants and "amber" or "text"), truncate = true },
       word ~= "" and text{ word, size = "caption", weight = wants and "semibold" or "normal", color = done and "text-muted" or (word_color[tone] or "text-muted") } or false,
       mw and text{ mw, size = "caption", color = "text-muted", truncate = true } or false,
       spacer{},
@@ -456,10 +526,24 @@ local function sessions_block(sb, app, data, state, into, base_model)
     local _, _, w = parse_row(e)
     if w == "done" then done = done + 1 end
   end
-  local open = (state.sessions or {})[sb.name]
-  if open == nil then open = app.selected == sb.name or waiting > 0 end
+  -- Open, in this order: always while one of its sessions is in a pane;
+  -- as the person pinned it (the line's press); while one wants you or the
+  -- row is selected (the arrows and Tab select rows: the keyboard's way
+  -- in); while the pointer rests on its zone (the row, this line and the
+  -- block: data.app.hover_zone, the core's delays). Else shut.
+  local attached = false
+  for _, p in ipairs(app.panes or {}) do
+    if p.sandbox == sb.name and (p.index or 1) <= ((app.layout or {}).panes or 1) then attached = true end
+  end
+  local pinned = (state.sessions or {})[sb.name]
+  local open
+  if attached then open = true
+  elseif pinned ~= nil then open = pinned
+  else open = waiting > 0 or app.selected == sb.name or app.hover_zone == ("sb:" .. sb.name) end
+  local zone = "sb:" .. sb.name
   table.insert(into, row{ key = "sessions-" .. sb.name, on = "toggle_sessions", arg = { name = sb.name, open = open }, h = 24, gap = 4, w = "full", radius = "xs",
-    hover = "hover-subtle", help = (open and "Hide" or "Show") .. " the sessions of " .. sb.name,
+    hover = "hover-subtle", hover_zone = zone,
+    help = attached and ("Open while a session of " .. sb.name .. " is in a pane") or ((open and "Keep shut" or "Keep open") .. ": the sessions of " .. sb.name),
     column{ w = 12 },
     icon{ open and "chevron-down" or "chevron-right", size = 12, color = "text-muted" },
     text{ #rows .. " sessions", size = "caption", color = "text-muted" },
@@ -470,7 +554,7 @@ local function sessions_block(sb, app, data, state, into, base_model)
   -- open as tall as its lines, so the height is what changes (on the
   -- layout spring, in answer to the press) and it clips what it gains or
   -- loses while they fade.
-  local block = { key = "sessions-block-" .. sb.name, gap = 0, w = "full", clip = true, h = 0 }
+  local block = { key = "sessions-block-" .. sb.name, gap = 0, w = "full", clip = true, h = 0, hover_zone = zone }
   if open then
     local main, own = {}, {}
     for _, e in ipairs(rows) do
@@ -478,7 +562,7 @@ local function sessions_block(sb, app, data, state, into, base_model)
       table.insert(is_own and own or main, e)
     end
     local h = 0
-    for _, g in ipairs({ { "Main checkout", main }, { "Own worktree", own } }) do
+    for _, g in ipairs({ { "Shared checkout", main }, { "Own worktree", own } }) do
       if #g[2] > 0 then
         table.insert(block, row{ h = 20, w = "full", column{ w = 36 }, text{ g[1], size = "caption", color = "text-muted" } })
         h = h + 20
@@ -573,6 +657,9 @@ return {
       end
     end
 
+    local header_extra = new_extra(app)
+    local header_new = header_extra ~= nil
+    if header_extra then new_intent = header_extra.intent end
     -- Empty and failed states: one sentence, one action.
     local empty = false
     if #data.sandboxes == 0 then
@@ -598,9 +685,19 @@ return {
     end
 
     return column{ gap = 12, h = "full", w = "full",
+      -- New's right edge lines up with the rows' stop buttons (4 of
+      -- padding, then 8 of gap before an empty column).
       row{ gap = 8, w = "full", h = 28, px = 4,
         text{ "Sandboxes", size = "title", weight = "semibold", color = "text-bright" },
         text{ tostring(#data.sandboxes), size = "caption", color = "text-muted" },
+        spacer{},
+        -- New sandbox, at the header's right end (the create feature's extra;
+        -- the top bar shows it only while the sidebar is hidden). The word
+        -- goes under a narrow sidebar.
+        header_new and button{ ((app.sidebar or {}).w or 264) >= 240 and "New" or "", icon = "plus", dense = true, variant = "ghost", tone = "green",
+          on = "new", key = "sidebar-new", help = "New sandbox",
+          keys = app.platform == "macos" and { "⌃", "⌥", "N" } or { "Alt", "N" } } or false,
+        header_new and column{ w = 0 } or false,
       },
       app.connection.state ~= "up" and row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "amber-tint",
         icon{ "warning", size = 14, color = "amber" },

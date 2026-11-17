@@ -40,6 +40,11 @@ fn on_ime(s: &mut App, ime: &rune::Ime, tx: &mut Tx) -> bool {
     s.on_ime(ime, tx.focused())
 }
 
+// The status bar asks for stats only while the window shows.
+fn on_visibility(s: &mut App, shown: bool, _tx: &mut Tx) {
+    s.statusbar_visible(shown);
+}
+
 fn view(s: &App, cx: &mut Cx<App>) -> El {
     shell::view(s, cx)
 }
@@ -59,6 +64,12 @@ fn main() {
     // The window buttons on the top bar's line (shell::window_chrome).
     // Help in the menu bar's own Help menu (macOS; Rune reports native
     // menus unsupported elsewhere, where the shortcut and the palette have it).
-    let help = rune::MenuItem::new("sbxw Help", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
-    rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).run();
+    let help = rune::MenuItem::new("Help and shortcuts", |s: &mut App, _tx: &mut Tx| s.show_help()).id("sbxw-help").menu("Help");
+    // The app's icon while it runs (packaging/make-icon.py): the Dock's on
+    // macOS, the title bar's and taskbar's on Windows; Rune sets nothing on
+    // Linux, where a desktop entry names the icon, nor headless.
+    if let Err(e) = rune::set_app_icon(include_bytes!("../packaging/icon-1024.png").to_vec()) {
+        log::warn!("app icon: {e}");
+    }
+    rune::App::new(spec).chrome(shell::window_chrome()).menu_item(help).on_ime(on_ime).on_visibility(on_visibility).run();
 }
