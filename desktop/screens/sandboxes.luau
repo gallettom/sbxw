@@ -239,18 +239,30 @@ local function item(sb, app, data)
   -- Line 2's text badges: what needs reading (amber first, then counts).
   -- The network count is the name line's bubble instead.
   local wants, counts, approvals = {}, {}, nil
+  local go, manage = {}, {}
   for _, e in ipairs(extras(sb, app)) do
     if e.intent then extra_intents[name .. "\n" .. e.id] = e.intent end
     if e.id == "approvals" then approvals = e
     elseif e.tone == "amber" then table.insert(wants, e) elseif e.count then table.insert(counts, e) end
     if e.intent then
-      table.insert(menu_items, { id = e.id, label = menu_label(e), help = e.help, icon = e.icon or (e.id == "threads" and "chat") or (e.id == "approvals" and "flag") or (e.id == "relay" and "chat") or nil })
+      local it = { id = e.id, label = menu_label(e), help = e.help, icon = e.icon or (e.id == "threads" and "chat") or (e.id == "approvals" and "flag") or (e.id == "relay" and "chat") or nil }
+      if e.id == "more" then table.insert(manage, it) else table.insert(go, it) end
+    end
+  end
+  -- Three groups, a line between: open things, go to what it has (network,
+  -- requests, threads), manage it; then start or stop on its own.
+  for _, group in ipairs({ go, manage }) do
+    if #group > 0 then
+      table.insert(menu_items, { divider = true })
+      for _, it in ipairs(group) do table.insert(menu_items, it) end
     end
   end
   if running then
-    table.insert(menu_items, { id = "stop", label = "Stop", icon = "stop", help = "Stop " .. name .. " (its sessions end)", keys = { "Space" } })
+    table.insert(menu_items, { divider = true })
+    table.insert(menu_items, { id = "stop", label = "Stop", icon = "stop", tone = "red", help = "Stop " .. name .. " (its sessions end)", keys = { "Space" } })
   elseif not busy then
-    table.insert(menu_items, { id = "start", label = "Start", icon = "play", help = "Start " .. name, keys = { "Space" } })
+    table.insert(menu_items, { divider = true })
+    table.insert(menu_items, { id = "start", label = "Start", icon = "play", tone = "green", help = "Start " .. name, keys = { "Space" } })
   end
 
   -- Line 2: the state word and the model, never cut while they fit the
@@ -284,20 +296,26 @@ local function item(sb, app, data)
   local all = {}
   for _, e in ipairs(wants) do table.insert(all, e) end
   for _, e in ipairs(counts) do table.insert(all, e) end
+  -- The pane it is shown in, last: the sessions block says it too.
+  if pane then table.insert(all, { id = "pane", pane = pane }) end
   local rest = {}
   for i, e in ipairs(all) do
-    local label = badge_text(e)
+    local label = e.pane and ("P" .. e.pane) or badge_text(e)
     local w = est(label) + 12 + 6
     -- Keep room for a "+N" while something else follows.
     local tail = (i < #all) and (est("+" .. (#all - i)) + 18) or 0
     if #rest == 0 and w + tail <= room then
       room = room - w
-      local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
-      local key = "extra-sandbox-" .. name .. "-" .. e.id
-      if e.intent then
-        table.insert(line2, row{ key = key, on = "extra", arg = name .. "\n" .. e.id, help = e.help, hover = "active-bg", radius = "xs", h = 24, badge{ label, tone = tone } })
+      if e.pane then
+        table.insert(line2, badge{ label, tone = "blue", help = "Shown in pane " .. e.pane, key = "pane-of-" .. name })
       else
-        table.insert(line2, badge{ label, tone = tone, help = e.help, key = key })
+        local tone = e.tone == "amber" and "amber" or (e.tone == "red" and "red" or "neutral")
+        local key = "extra-sandbox-" .. name .. "-" .. e.id
+        if e.intent then
+          table.insert(line2, row{ key = key, on = "extra", arg = name .. "\n" .. e.id, help = e.help, hover = "active-bg", radius = "xs", h = 24, badge{ label, tone = tone } })
+        else
+          table.insert(line2, badge{ label, tone = tone, help = e.help, key = key })
+        end
       end
     else
       table.insert(rest, label)
@@ -333,16 +351,20 @@ local function item(sb, app, data)
       help = bubble_help(name, approvals), h = 24, min_w = 24, justify = "center", radius = "xs", hover = "active-bg",
       badge{ tostring(approvals.count or ""), tone = approvals.tone == "amber" and "amber" or "blue", pill = true } })
   end
-  if pane then
-    table.insert(line1, badge{ "P" .. pane, tone = "blue", help = "Shown in pane " .. pane, key = "pane-of-" .. name })
-  end
+  -- The ⋯ takes its room beside the name when the whole name still fits;
+  -- a name too long for the line keeps all of it at rest, and the ⋯ shows
+  -- over its end only on hover or focus, on the row's own fill.
+  local name_w = (utf8.len(name) or #name) * 8.4 + (approvals and 28 or 0)
+  local fits = name_w + 28 <= col_w
   table.insert(line1, row{ gap = 0, reveal = not selected,
+    pin = (not fits) and { right = 0, top = 0 } or nil, fill = (not fits) and (selected and "elevated" or "hover-subtle") or nil, radius = "xs",
     menu{ "", id = "extra-sandbox-" .. name, icon = "more", variant = "ghost", dense = true, items = menu_items, on = "row_menu", arg = name, help = "Every action of " .. name },
   })
 
   return row{
     key = "row-" .. name, on = "open", arg = name, on_space = "toggle", selected = selected, hover_group = true,
-    help = name .. ": " .. st.word .. ", " .. model .. ". Enter opens its terminal, Space starts or stops it",
+    help = name .. ": " .. st.word .. ", " .. model,
+    shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } },
     h = 52, w = "full", gap = 8, align = "stretch", radius = "sm",
     fill = selected and "elevated" or nil, hover = selected and "elevated" or "hover-subtle",
     column{ py = 8, w = 7, align = "start", rail(st.tone, st.shape) },

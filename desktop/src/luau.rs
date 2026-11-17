@@ -204,6 +204,9 @@ pub struct Node {
     /// `column`: its children fold open and shut smoothly (a growth stack
     /// whose rows glide to their new height and fade what they gain or lose).
     pub folds: bool,
+    /// `row`/`column`: lines under its `help` in the tooltip, each what a
+    /// key does and its keycaps (`{ { "Open", "Enter" }, { "Start or stop", "Space" } }`).
+    pub shortcuts: Vec<(String, Vec<String>)>,
     pub style: Style,
     pub children: Vec<Node>,
 }
@@ -243,6 +246,7 @@ impl Node {
             compact: false,
             pill: false,
             folds: false,
+            shortcuts: vec![],
             style: Style::default(),
             children: vec![],
         }
@@ -268,7 +272,7 @@ pub enum Positional {
 /// Props every element takes.
 pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal", "pin"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space", "clip", "folds"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space", "clip", "folds", "shortcuts"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -759,6 +763,21 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "compact" => n.compact = bool_of(v)?,
         "pill" => n.pill = bool_of(v)?,
         "folds" => n.folds = bool_of(v)?,
+        "shortcuts" => {
+            let Value::Table(t) = v else { return Err("expected a list of { \"what\", \"key\", ... }".into()) };
+            for line in t.sequence_values::<Value>() {
+                let Value::Table(l) = line.map_err(|e| e.to_string())? else { return Err("each shortcut is { \"what\", \"key\", ... }".into()) };
+                let mut parts = vec![];
+                for x in l.sequence_values::<Value>() {
+                    parts.push(string_of(&x.map_err(|e| e.to_string())?)?);
+                }
+                if parts.len() < 2 {
+                    return Err("each shortcut is { \"what\", \"key\", ... }".into());
+                }
+                let what = parts.remove(0);
+                n.shortcuts.push((what, parts));
+            }
+        }
         "icon" => n.icon = Some(string_of(v)?),
         "disabled" => n.disabled = bool_of(v)?,
         "secure" => n.secure = bool_of(v)?,

@@ -951,7 +951,7 @@ impl App {
     }
 
     /// The modal screen over a dimmed window.
-    pub(super) fn modal_view(&self, screen: El, width: f32) -> El {
+    pub(super) fn modal_view(&self, screen: El, width: f32, light_dismiss: bool) -> El {
         let w = width.min(self.window.0 - 32.0);
         let side = ((self.window.0 - w) / 2.0).max(16.0);
         let top = layout::GUTTER * 2.0 + layout::TOP_BAR_H + 16.0;
@@ -976,10 +976,10 @@ impl App {
                 }
             })
             .child(col().w_full().min_h(0.0).grow(1.0).child(screen));
-        super::scrim("modal-scrim", card, |s: &mut App| {
+        super::scrim_with("modal-scrim", card, |s: &mut App| {
             s.feats.modal = None;
             s.push_data();
-        })
+        }, light_dismiss)
     }
 
     /// The docked feature panel: tabs when more than one is open, the screen below.

@@ -331,6 +331,129 @@ fn sync_ui(ui: &mut Ui, n: &Node) {
 // ---------------------------------------------------------------------------
 // Drawing
 
+// ---------------------------------------------------------------------------
+// Menus: one look for every list that drops from a button (a screen's menu
+// and select, the pane bars' overflow, the layout picker, the row's ⋯).
+
+/// A menu's padding all round, its rows' height and padding, the icon's
+/// column and the gap after it, the widest it grows.
+pub const MENU_PAD: f32 = 6.0;
+pub const MENU_ROW_H: f32 = 28.0;
+pub const MENU_ROW_PX: f32 = 8.0;
+pub const MENU_ICON: f32 = 14.0;
+pub const MENU_ICON_GAP: f32 = 12.0;
+pub const MENU_MIN_W: f32 = 160.0;
+pub const MENU_MAX_W: f32 = 320.0;
+
+/// One row of a menu as the shared look draws it.
+pub struct MenuRow<'a> {
+    pub key: String,
+    pub label: &'a str,
+    pub icon: Option<&'a str>,
+    /// `red` is destructive: its icon and label in red. Any other tone colours the icon.
+    pub tone: Option<&'a str>,
+    pub help: Option<&'a str>,
+    pub keys: &'a [String],
+    pub count: Option<u64>,
+    pub chosen: bool,
+    pub disabled: bool,
+}
+
+/// About how wide a menu's text is: the UI is monospace, 0.6 em a character.
+fn chars_w(t: &str, size: f32) -> f32 {
+    t.chars().count() as f32 * size * 0.6
+}
+
+/// The width a menu needs for its longest row (label, keycaps, count,
+/// check), between [`MENU_MIN_W`] and [`MENU_MAX_W`]. A row longer than
+/// that truncates, and its tooltip has the whole label.
+pub fn menu_width(rows: &[MenuRow]) -> f32 {
+    let w = rows.iter().map(|r| {
+        let keys: f32 = r.keys.iter().map(|k| chars_w(k, 12.0).max(10.0) + 10.0 + 4.0).sum::<f32>() + if r.keys.is_empty() { 0.0 } else { 12.0 };
+        let count = r.count.map_or(0.0, |c| chars_w(&c.to_string(), 12.0) + 12.0 + 8.0);
+        MENU_ROW_PX * 2.0 + MENU_ICON + MENU_ICON_GAP + chars_w(r.label, 13.0) + keys + count + if r.chosen { 20.0 } else { 0.0 }
+    }).fold(0.0, f32::max);
+    (w + MENU_PAD * 2.0 + 2.0).ceil().clamp(MENU_MIN_W, MENU_MAX_W)
+}
+
+/// The list's surface, anchored under (or beside) `anchor`, `w` wide; it
+/// fades in over 0.1 s (at once under reduced motion).
+pub fn menu_surface(key: String, anchor: String, align: rune::Align, w: f32) -> El {
+    let e = col()
+        .key(key)
+        .role("menu")
+        .focus_group()
+        .anchored(anchor, Side::Bottom, align, 4.0)
+        .w(w)
+        .padding(MENU_PAD)
+        .gap(0.0)
+        .fill(c("surface"))
+        .border(1.0, c("border"))
+        .radius(theme::radius("md").unwrap())
+        .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+    if reduced_motion() {
+        e
+    } else {
+        e.transition(rune::Transition::opacity().springs(rune::SpringPair::new(rune::Spring::new(0.1, 0.0), rune::Spring::new(0.08, 0.0))))
+    }
+}
+
+/// A line between two groups of a menu's rows.
+pub fn menu_divider() -> El {
+    el().w_full().py(4.0).child(el().w_full().h(1.0).fill(c("elevated")))
+}
+
+/// One row: the icon in one aligned column (an empty slot when it has none),
+/// 12 pt to the label, keycaps or a count at the right end; a red row is
+/// destructive. It is a menu item for screen readers, highlighted on hover
+/// and keyboard focus (with the focus ring), and its tooltip is its help,
+/// else its whole label (in case it truncates).
+pub fn menu_row(r: &MenuRow) -> El {
+    let danger = r.tone == Some("red");
+    let icon_c = match r.tone {
+        Some(t) if t != "neutral" => hex(action_tone(t).0),
+        _ => c("text-muted"),
+    };
+    let label_c = if danger { c("red") } else { c("text-bright") };
+    let mut row_ = row().key(r.key.clone()).w_full().h(MENU_ROW_H).px(MENU_ROW_PX).gap(0.0).items_center().radius(theme::radius("xs").unwrap()).role("menuitem").label(r.label.to_string()).focusable(!r.disabled);
+    let slot = el().w(MENU_ICON).h(MENU_ICON).items_center().justify_center();
+    row_ = row_.child(match r.icon.and_then(crate::icons::get) {
+        Some(i) => slot.child(rune::icon(i, MENU_ICON).color(icon_c)),
+        None => slot,
+    });
+    row_ = row_.child(el().w(MENU_ICON_GAP));
+    row_ = row_.child(text(r.label.to_string()).font(body(13.0, if r.chosen { 600.0 } else { 400.0 })).color(label_c).truncate().min_w(0.0).grow(1.0));
+    if let Some(n) = r.count {
+        row_ = row_.child(el().w(8.0)).child(el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(n.to_string()).font(body(12.0, 500.0)).color(c("text"))));
+    }
+    if !r.keys.is_empty() {
+        let mut caps = row().gap(4.0).items_center().pl(12.0);
+        for k in r.keys {
+            caps = caps.child(el().h(18.0).min_w(18.0).px(5.0).items_center().justify_center().radius(4.0).fill(c("bg")).border(1.0, c("border")).child(text(k.clone()).font(body(12.0, 500.0)).color(c("text-muted"))));
+        }
+        row_ = row_.child(caps);
+    }
+    if r.chosen {
+        row_ = row_.child(el().w(8.0)).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
+    }
+    // Its help, else its whole label when the label may be cut.
+    let cut = chars_w(r.label, 13.0) > MENU_MAX_W - MENU_PAD * 2.0 - MENU_ROW_PX * 2.0 - MENU_ICON - MENU_ICON_GAP - 24.0;
+    if let Some(h) = r.help.map(str::to_string).or_else(|| cut.then(|| r.label.to_string())) {
+        row_ = row_.help(h);
+    }
+    if r.disabled {
+        return row_.opacity(theme::DISABLED_OPACITY).disabled(true);
+    }
+    row_.hover(c(if danger { "red-tint" } else { "elevated" })).focus_highlight(c(if danger { "red-tint" } else { "elevated" })).focus_ring(2.0, -2.0, c("focus")).cursor(Cursor::Pointer)
+}
+
+/// What sits under an open menu: nothing to see, the whole window, so a
+/// press anywhere outside the menu closes it and does nothing else (as a
+/// native menu does): it never reaches a terminal, a button or a row.
+pub fn menu_scrim<S: 'static>(key: String, close: impl Fn(&mut S) + 'static) -> El {
+    el().key(key).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)).on_press(close)
+}
+
 /// An action's colour by meaning (docs/screens.md, "Colour by meaning"):
 /// its icon or label colour and the tint under it on hover and focus.
 /// Neutral is the plain text colour on the quiet hover.
@@ -957,7 +1080,11 @@ impl Build<'_> {
         };
         // Buttons and menus set their own tooltip, with the shortcut's keycaps.
         let help = if matches!(n.kind, Kind::Button | Kind::Menu | Kind::Select) { &None } else { &n.help };
-        apply(e, st, help)
+        let mut e = apply(e, st, help);
+        for (what, keys) in &n.shortcuts {
+            e = e.help_row(what.clone()).help_keys(keys.clone());
+        }
+        e
     }
 
     fn button<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
@@ -1075,30 +1202,45 @@ impl Build<'_> {
             ui.open = if ui.open.as_deref() == Some(id2.as_str()) { None } else { Some(id2.clone()) };
         });
         if open {
-            let mut list = col().key(format!("{id}-list")).role("menu").focus_group().anchored(key.clone(), Side::Bottom, rune::Align::Start, 4.0).min_w(180.0).padding(4.0).gap(2.0).fill(c("surface")).border(1.0, c("border")).radius(theme::radius("md").unwrap()).shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+            let rows: Vec<MenuRow> = n.items.iter().filter(|i| !i.divider).map(|it| self.menu_row_of(n, &id, it)).collect();
+            let mut list = menu_surface(format!("{id}-list"), key.clone(), rune::Align::Start, menu_width(&rows));
             for it in &n.items {
-                list = list.child(self.item::<S>(n, &id, it));
+                list = list.child(if it.divider { menu_divider() } else { self.item::<S>(n, &id, it) });
             }
+            // A press outside closes the menu, and only that (light dismiss).
+            let (name, id3) = (self.name.clone(), id.clone());
+            self.overlays.push(menu_scrim(format!("{id}-scrim"), move |s: &mut S| {
+                let ui = &mut s.screen(&name).ui;
+                if ui.open.as_deref() == Some(id3.as_str()) {
+                    ui.open = None;
+                }
+            }));
             self.overlays.push(list);
         }
         t
     }
 
+    fn menu_row_of<'a>(&self, n: &Node, id: &str, it: &'a Item) -> MenuRow<'a> {
+        MenuRow {
+            key: format!("{id}-{}", it.id),
+            label: &it.label,
+            icon: it.icon.as_deref(),
+            tone: it.tone.as_deref(),
+            help: it.help.as_deref(),
+            keys: &it.keys,
+            count: None,
+            chosen: n.kind == Kind::Select && n.value.as_str() == Some(it.id.as_str()),
+            disabled: it.disabled,
+        }
+    }
+
     fn item<S: Host>(&self, n: &Node, id: &str, it: &Item) -> El {
-        let chosen = n.kind == Kind::Select && n.value.as_str() == Some(it.id.as_str());
-        let mut r = row().key(format!("{id}-{}", it.id)).gap(8.0).items_center().px(8.0).h(theme::layout::CONTROL_H).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.label.clone()).focusable(!it.disabled);
-        if let Some(i) = it.icon.as_deref().and_then(crate::icons::get) {
-            r = r.child(rune::icon(i, 14.0).color(c("text")));
-        }
-        r = r.child(text(it.label.clone()).font(body(13.0, if chosen { 600.0 } else { 400.0 })).color(c("text-bright")).grow(1.0));
-        if chosen {
-            r = r.child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
-        }
+        let r = menu_row(&self.menu_row_of(n, id, it));
         if it.disabled {
-            return r.opacity(theme::DISABLED_OPACITY).disabled(true);
+            return r;
         }
         let (name, on, arg, value) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone(), J::String(it.id.clone()));
-        r.focus_highlight(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut S| {
+        r.on_press(move |s: &mut S| {
             s.screen(&name).ui.open = None;
             fire(s, &name, &on, &arg, &value);
         })
@@ -1327,8 +1469,11 @@ end, actions = { send = function(_, _, v) end } }"#).unwrap();
         }
         // The menu holds the extras under their old keys (extra-sandbox-<name>-<id>).
         let menu = find(&n, "extra-sandbox-test-sbx").unwrap();
-        let ids: Vec<&str> = menu.items.iter().map(|i| i.id.as_str()).collect();
+        let ids: Vec<&str> = menu.items.iter().filter(|i| !i.divider).map(|i| i.id.as_str()).collect();
         assert_eq!(ids, ["bash", "spare", "network", "more", "stop"]);
+        // In groups, a line between: open, go to, manage, then stop (red).
+        assert_eq!(menu.items.iter().filter(|i| i.divider).count(), 3);
+        assert!(menu.items.iter().any(|i| i.id == "stop" && i.tone.as_deref() == Some("red")));
         // Every row is one item of the list: Up and Down move between them.
         let list = find_where(&n, &|x| x.group.is_some()).expect("the list group");
         assert!(list.children.iter().filter(|c| c.on.as_deref() == Some("open")).count() >= 10);

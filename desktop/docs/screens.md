@@ -167,6 +167,7 @@ Children side by side. Children are centred vertically.
 | `group` | `list` | Its pressable children (with `on`) are one list: Up and Down move the keyboard between them |
 | `selected` | bool | With `on`: the selected item (screen readers say so) |
 | `clip` | bool | What overflows it is cut at its edges (a line of badges that may not fit) |
+| `shortcuts` | list of `{ what, key, ... }` | Lines under its `help` in the tooltip, each what a key does with its keycaps: `shortcuts = { { "Open its terminal", "Enter" }, { "Start or stop", "Space" } }` |
 | `folds` | bool | `column`: its children fold open and shut smoothly. A child that grows or shrinks (a block that expands) glides to its new height over about 0.18 s, ease-out, and what it gains or loses fades; only in answer to the person's press or key, never for data that arrives; off under the system's reduced motion |
 
 ```lua
@@ -404,7 +405,7 @@ Positional: the button's label.
 | Prop | Value | Effect |
 |---|---|---|
 | `id` | string | Required. The button's key (unless `key`); the list is `<id>-list`, each item `<id>-<item id>` |
-| `items` | list of items | Each a string (id and label) or `{ id = "...", label = "...", icon = "...", disabled = bool }` |
+| `items` | list of items | Each a string (id and label) or `{ id = "...", label = "...", icon = "...", disabled = bool, help = "...", tone = "red", keys = { "Space" } }`, or `{ divider = true }`: a line between two groups |
 | `on` | action name | Required unless `disabled`. Called with `value` = the picked item's id |
 | `arg` | any value | Passed too |
 | `icon` | icon name | On the button |
@@ -412,9 +413,30 @@ Positional: the button's label.
 | `disabled` | bool | |
 | `dense`, `keys`, `tab_stop` | as `button` | 24 pt; the shortcut in its tooltip (its `help`); out of the Tab order |
 
-The list closes on a pick, on Escape, or on a second press of the button. A
-press elsewhere does not close it (yet). Up and Down move between its
-items, Enter picks.
+The core draws every menu the same way (the row menus, selects, the pane
+bars' overflow, the layout picker): 6 pt padding, 28 pt rows, the icons in
+one column 12 pt before the labels, as wide as its longest row up to 320 pt
+(a longer label truncates; its tooltip has it whole). Write labels short,
+verb first ("Open shell", "Network", "Requests (3)", "Manage…", "Stop") and
+put the explanation in the item's `help`, its tooltip. A `tone` colours the
+item's icon by meaning; `red` (destructive) colours its label too. `keys`
+are drawn as keycaps at the row's right end. It fades in over 0.1 s (at once
+under reduced motion).
+
+The list closes on a pick, on Escape, on a second press of the button, or
+on a press anywhere outside it (light dismiss, below). Up and Down move
+between its items, Enter picks.
+
+**Light dismiss, one rule.** A press outside closes, and does nothing else
+(as a native menu does: it never reaches a terminal, a row or a button
+under it): every menu and select, the pane bars' overflow, the command
+palette, and a modal that holds nothing the person may have typed or
+changed (Help; its feature declares `Slot::Modal { light_dismiss: true }`).
+A modal with fields (New sandbox, the env file, templates, Setup, a plan,
+New thread, the sandbox actions) does not close on a press outside: only its
+cross, its Cancel and Escape close it, so a stray click loses nothing; that
+is the default (`light_dismiss: false`). The core's approval dialogs keep
+their own behaviour.
 
 ```lua
 menu{ "Actions", id = "acts", icon = "more", on = "act", arg = sb.name,

@@ -19,8 +19,8 @@ pub const FEATURE: Feature = Feature {
         Data { key: "daemon_state", path: "/api/state", on: &[], every: 0, lazy: false },
     ],
     screens: &[
-        ScreenDecl { name: "help", src: include_str!("../../screens/help.luau"), slot: Slot::Modal { width: 620.0 } },
-        ScreenDecl { name: "sandbox-actions", src: include_str!("../../screens/sandbox-actions.luau"), slot: Slot::Modal { width: 460.0 } },
+        ScreenDecl { name: "help", src: include_str!("../../screens/help.luau"), slot: Slot::Modal { width: 620.0, light_dismiss: true } },
+        ScreenDecl { name: "sandbox-actions", src: include_str!("../../screens/sandbox-actions.luau"), slot: Slot::Modal { width: 460.0, light_dismiss: false } },
     ],
     intents: INTENTS,
     act,

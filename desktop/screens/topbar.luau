@@ -64,7 +64,7 @@ local function more_menu(hidden)
       if #label > 18 then label = string.match(label, "^(%S+)") or label end
     end
     if e.count then label = label .. " (" .. tostring(e.count) .. ")" end
-    table.insert(items, { id = e.id, label = label, icon = e.icon })
+    table.insert(items, { id = e.id, label = label, icon = e.icon, help = e.help ~= "" and e.help or nil })
     if e.intent then extra_intents[e.id] = e.intent end
     if e.tone == "amber" then tone = "amber"
     elseif e.count and tone == nil then tone = "blue" end

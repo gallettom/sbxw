@@ -1408,6 +1408,24 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     cx.focus_ring(2.0, 2.0, c("focus"));
     // The app's zoom (Cmd/Ctrl with + − 0 outside a terminal, or the palette).
     cx.zoom(s.zoom());
+    // Tooltips in the app's own look (Rune draws them on macOS too, in
+    // place of AppKit's pale ones): the elevated surface, a hairline border,
+    // 12 pt text that wraps at 280 pt, 8 pt by 6 of padding, keycaps on the
+    // page's dark with a border, aligned after the text.
+    cx.help_look(
+        rune::HelpLook::system(true)
+            .fill(c("elevated"))
+            .ink(c("text-bright"))
+            .ring(1.0, c("border"))
+            .radius(6.0)
+            .padding(8.0, 6.0)
+            .font(screen::body(12.0, 400.0))
+            .max_width(Some(280.0))
+            .gap(6.0)
+            .row_gap(4.0)
+            .keycaps(c("bg"), c("text"), screen::body(12.0, 500.0), false)
+            .keycap_shape(18.0, 5.0, 4.0, 4.0, 8.0),
+    );
     // Folds and fades follow the system's reduced-motion setting (screen.rs).
     screen::set_reduced_motion(cx.is_reduced_motion());
     let root = col()
@@ -1481,9 +1499,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     let modal = s.feats.modal.as_ref().and_then(|(name, _)| {
         let (_, decl) = crate::feat::screen(name)?;
-        let crate::feat::Slot::Modal { width } = decl.slot else { return None };
+        let crate::feat::Slot::Modal { width, light_dismiss } = decl.slot else { return None };
         let sc = s.screens.iter().find(|x| &x.name == name)?;
-        Some(s.modal_view(screen::view::<App>(sc), width))
+        Some(s.modal_view(screen::view::<App>(sc), width, light_dismiss))
     });
     let panel = match s.screens.iter().find(|x| x.name == "jarvis") {
         Some(j) if s.jarvis.open => {
@@ -1569,6 +1587,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         main = main.child(p);
     }
     if let Some(m) = s.bar_menu_view() {
+        // A press outside closes it, and only that (light dismiss).
+        overlays.push(screen::menu_scrim("pane-more-scrim".into(), |s: &mut App| s.bar_menu = None));
         overlays.push(m);
     }
     let mut root = root.child(bar).child(main);
@@ -1601,12 +1621,22 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
 /// and the pointer (Tab stays inside, nothing behind takes a press or a
 /// key), Escape and a press on it run `outside`.
 pub fn scrim(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 'static) -> El {
+    scrim_with(key, dialog, outside, true)
+}
+
+/// [`scrim`], where a press on it closes the dialog only when `light`
+/// (a form's does nothing: only its cross, Cancel and Escape close it).
+pub fn scrim_with(key: &str, dialog: El, outside: impl Fn(&mut App) + Clone + 'static, light: bool) -> El {
     let o2 = outside.clone();
     el().key(key.to_string())
         .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
         .fill(c("floor").alpha(0.6))
         .modal(false, move |s: &mut App| o2(s))
-        .on_press(move |s: &mut App| outside(s))
+        .on_press(move |s: &mut App| {
+            if light {
+                outside(s)
+            }
+        })
         .child(dialog)
 }
 
@@ -1756,20 +1786,11 @@ impl App {
             return None;
         }
         let n = i + 1;
-        let mut list = col()
-            .key(format!("pane-{n}-more-list"))
-            .role("menu")
-            .anchored(format!("pane-{n}-more"), rune::Side::Bottom, rune::Align::End, 4.0)
-            .min_w(160.0)
-            .max_w(320.0)
-            .padding(4.0)
-            .gap(2.0)
-            .fill(c("surface"))
-            .border(1.0, c("border"))
-            .radius(theme::radius("md").unwrap())
-            .shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
-        for it in &f.hidden {
-            list = list.child(bar_menu_item(it, n));
+        let names: Vec<String> = f.hidden.iter().map(|it| if it.label.is_empty() { it.help.clone() } else { it.label.clone() }).collect();
+        let rows: Vec<screen::MenuRow> = f.hidden.iter().zip(&names).map(|(it, l)| bar_menu_row(it, n, l)).collect();
+        let mut list = screen::menu_surface(format!("pane-{n}-more-list"), format!("pane-{n}-more"), rune::Align::End, screen::menu_width(&rows));
+        for (it, r) in f.hidden.iter().zip(&rows) {
+            list = list.child(bar_menu_item(it, r));
         }
         Some(list)
     }
@@ -1806,30 +1827,30 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
 }
 
 /// One row of a pane bar's overflow menu: the same key, label, icon, tone,
-/// count and intent as the chip it stands for.
-fn bar_menu_item(it: &bar::Item, n: usize) -> El {
-    let (fg, tint) = crate::screen::tone(&it.tone);
-    let fg = theme::hex(fg);
-    let mut r = row().key(it.key(n)).gap(8.0).items_center().px(8.0).h(layout::CONTROL_H).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.text());
-    if !it.help.is_empty() {
-        r = r.help(it.help.clone());
+/// count and intent as the chip it stands for, in the shared menu look.
+fn bar_menu_row<'a>(it: &'a bar::Item, n: usize, label: &'a str) -> screen::MenuRow<'a> {
+    screen::MenuRow {
+        key: it.key(n),
+        label,
+        icon: it.icon.as_deref(),
+        tone: Some(it.tone.as_str()).filter(|t| !t.is_empty() && *t != "muted"),
+        help: Some(it.help.as_str()).filter(|h| !h.is_empty()),
+        keys: &[],
+        count: it.count,
+        chosen: false,
+        disabled: false,
     }
-    r = match it.icon.as_deref().and_then(crate::icons::get) {
-        Some(ic) => r.child(rune::icon(ic, 14.0).color(fg)),
-        None => r.child(el().w(8.0).h(8.0).radius(4.0).fill(fg)),
-    };
-    let name = if it.label.is_empty() { it.help.clone() } else { it.label.clone() };
-    r = r.child(text(name).font(small(13.0, 400.0)).color(if it.tone == "muted" || it.tone.is_empty() { c("text-bright") } else { fg }).truncate().grow(1.0).min_w(0.0));
-    if let Some(k) = it.count {
-        r = r.child(el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(theme::hex(tint)).child(text(k.to_string()).font(small(12.0, 500.0)).color(fg)));
-    }
+}
+
+fn bar_menu_item(it: &bar::Item, r: &screen::MenuRow) -> El {
+    let e = screen::menu_row(r);
     match it.intent.clone() {
-        Some((name, args)) => r.focus_highlight(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        Some((name, args)) => e.on_press(move |s: &mut App| {
             s.bar_menu = None;
             s.press_extra("pane", &name, &args);
             s.push_data();
         }),
-        None => r,
+        None => e,
     }
 }
 
@@ -2091,6 +2112,60 @@ mod tests {
         rt.pointer_down(x, y);
         rt.pointer_up(x, y);
         rt.frame(0.016);
+    }
+
+    /// Light dismiss: a press outside a menu (a row's ⋯, a select) or a
+    /// read-only modal (Help) closes it and does nothing else: the terminal
+    /// under it gets no click and no key, the row under it is not opened.
+    /// A modal with fields (New sandbox) stays open on such a press.
+    #[test]
+    fn a_press_outside_closes_menus_and_read_only_modals_only() {
+        let (mut rt, input, _clip) = window_with_terminal();
+        for _ in 0..4 {
+            rt.frame(0.016);
+        }
+        let _ = sent(&input);
+        let menu = rt.state.screens.iter().find(|s| s.name == "sandboxes").and_then(|s| {
+            let n = s.last_good.as_ref()?;
+            fn first(n: &crate::luau::Node) -> Option<String> {
+                if n.kind == crate::luau::Kind::Menu {
+                    return n.id.clone();
+                }
+                n.children.iter().find_map(first)
+            }
+            first(n)
+        }).expect("a row menu");
+        let selected = rt.state.selected.clone();
+        tap(&mut rt, &menu);
+        assert!(rt.state.drawn(&format!("{menu}-list")), "the menu opened");
+        // A press on the terminal's grid: the menu closes, the terminal sees nothing.
+        let (x, y) = rt.find("grid-1").expect("the terminal");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.016);
+        assert!(!rt.state.drawn(&format!("{menu}-list")), "closed by the press outside");
+        assert!(sent(&input).is_empty(), "nothing reached the terminal");
+        assert_eq!(rt.state.selected, selected, "the press only closed the menu");
+        // Help (no field): closed by a press outside.
+        rt.update(|s, _| s.open_modal("help", J::Null));
+        rt.frame(0.016);
+        assert!(rt.state.feats.modal.is_some());
+        rt.pointer_down(4.0, 790.0);
+        rt.pointer_up(4.0, 790.0);
+        rt.frame(0.016);
+        assert!(rt.state.feats.modal.is_none(), "Help closes on a press outside");
+        // A form: the press does nothing; Escape still closes it.
+        rt.update(|s, _| s.open_modal("create", J::Null));
+        rt.frame(0.016);
+        assert!(rt.state.feats.modal.is_some());
+        rt.pointer_down(4.0, 790.0);
+        rt.pointer_up(4.0, 790.0);
+        rt.frame(0.016);
+        assert!(rt.state.feats.modal.is_some(), "a form stays open on a stray press");
+        assert!(sent(&input).is_empty(), "nothing reached the terminal");
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(0.016);
+        assert!(rt.state.feats.modal.is_none(), "Escape closes the form");
     }
 
     fn chords() -> Vec<KeyEvent> {

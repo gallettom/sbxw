@@ -17,7 +17,7 @@ use serde_json::json;
 
 pub const FEATURE: Feature = Feature {
     name: "envfile",
-    screens: &[ScreenDecl { name: "envfile", src: include_str!("../../screens/envfile.luau"), slot: Slot::Modal { width: 600.0 } }],
+    screens: &[ScreenDecl { name: "envfile", src: include_str!("../../screens/envfile.luau"), slot: Slot::Modal { width: 600.0, light_dismiss: false } }],
     intents: INTENTS,
     act,
     on_answer: Some(on_answer),

@@ -66,7 +66,7 @@ pub const FEATURE: Feature = Feature {
     data: &[Data { key: ACTIVE, path: "/api/browser/active", on: &["browser"], every: 0, lazy: false }],
     screens: &[
         ScreenDecl { name: SCREEN, src: include_str!("../../../screens/browser.luau"), slot: Slot::Panel { title: "Browser", icon: "link", width: 720.0 } },
-        ScreenDecl { name: SETTLE, src: include_str!("../../../screens/browser-settle.luau"), slot: Slot::Modal { width: 440.0 } },
+        ScreenDecl { name: SETTLE, src: include_str!("../../../screens/browser-settle.luau"), slot: Slot::Modal { width: 440.0, light_dismiss: false } },
     ],
     intents: INTENTS,
     act,
