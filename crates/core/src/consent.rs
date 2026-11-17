@@ -300,7 +300,7 @@ mod tests {
             keep_awake = \"always\"\nkeep_awake_min_battery = 1\nbattery_warn_below = 50\nterminal_color = \"#000000\"\n\
             terminal_bar_color = \"#111111\"\nterminal_text_color = \"auto\"\ncache = false\nskills = \"off\"\n\
             [env]\nHTTP_PROXY = \"http://x\"\n[mac]\nidle_release_minutes = 1\npause_after_minutes = 2\nstop_after_minutes = 3\nforce_stop_after_minutes = 4\n\
-            [voice]\npush_to_talk_key = \"F7\"\n";
+            [voice]\npush_to_talk_key = \"F7\"\n[emphasis]\nenabled = false\n[emphasis.words]\nshipped = { tone = \"green\" }\n";
         assert!(lines(harmless).is_empty(), "{:?}", lines(harmless));
         // A field added to Config later must be classified here and in `grants`:
         // this fails when the default serialises a key the list does not name.
@@ -310,6 +310,8 @@ mod tests {
             "claude_model", "models", "skills", "pull", "template", "keep_running", "chrome", "max_agent_sessions", "keep_awake",
             "keep_awake_min_battery", "battery_warn_below", "monitor_cmd", "terminal_color", "terminal_bar_color",
             "terminal_text_color", "env", "env_files", "mac", "voice",
+            // Display and guidance text only: no host access.
+            "emphasis",
         ];
         let v = toml::Value::try_from(Config { fuse: Some(true), ..Config::default() }).unwrap();
         for key in v.as_table().unwrap().keys() {
