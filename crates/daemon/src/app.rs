@@ -109,6 +109,12 @@ pub struct App {
     pub(crate) voice: Mutex<crate::svc::voice::VoiceRuntime>,
     /// Jarvis's proposals (see `svc::jarvis`).
     pub(crate) jarvis: Mutex<sbxw_core::jarvis::Book>,
+    /// What each sandbox last said about its CPU and memory (see `svc::stats`).
+    pub(crate) stats: Mutex<sbxw_core::stats::StatsBook>,
+    /// The daemon's own CPU, from its last readings.
+    pub(crate) own_cpu: Mutex<sbxw_core::stats::OwnCpu>,
+    /// How the daemon reads its CPU time; tests put a script here.
+    pub cpu_probe: Mutex<crate::svc::stats::CpuProbe>,
 }
 
 pub struct AppBuilder {
@@ -167,6 +173,9 @@ impl AppBuilder {
             browser_allowing: tokio::sync::Mutex::new(()),
             voice: Mutex::new(Default::default()),
             jarvis: Mutex::new(jarvis),
+            stats: Mutex::new(Default::default()),
+            own_cpu: Mutex::new(Default::default()),
+            cpu_probe: Mutex::new(crate::svc::stats::CpuProbe::Os),
         })
     }
 }
@@ -232,12 +241,14 @@ impl App {
             loop {
                 tick.tick().await;
                 app.reconcile_sessions().await;
+                app.flush_session_costs();
             }
         });
         if !self.use_api_key {
             let app = self.clone();
             tokio::spawn(async move { app.poll_usage().await });
         }
+        self.start_stats_ticker();
         self.start_keep_awake();
         self.start_board_listener();
         self.start_mac_lifecycle();
@@ -284,6 +295,7 @@ impl App {
             }
         }
         self.keep_remote_running(&running);
+        self.stats.lock().unwrap().set_running(&running);
         let gone = self.agents.lock().unwrap().reconcile(&running, now_ms());
         for info in gone {
             tracing::info!("reconcile: dropped stale session of '{}' (sandbox gone)", info.sandbox);

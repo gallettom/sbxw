@@ -3,7 +3,7 @@
 use crate::app::{now_ms, App};
 use crate::bus::Event;
 use crate::typing;
-use sbxw_core::agents::{self, answer_keystrokes, HookEvent, ModelReport, OriginEvidence, SessionInfo, SessionOrigin};
+use sbxw_core::agents::{self, answer_keystrokes, CostReport, HookEvent, ModelReport, OriginEvidence, SessionInfo, SessionOrigin};
 use sbxw_core::session::{SessionKey, SessionKind};
 use sbxw_core::{SandboxName, SandboxRef};
 use std::sync::Arc;
@@ -62,11 +62,37 @@ impl App {
     /// The model a session's status line reports. Broadcast only when it
     /// changes (the person switched with `/model`, or the first report).
     pub fn report_session_model(&self, sandbox: &SandboxRef, session_id: &str, model: ModelReport) {
+        self.report_session(sandbox, session_id, Some(model), None);
+    }
+
+    /// What a session's status line reports, model and cost (either absent
+    /// from an older script). A new model is broadcast at once; a change of
+    /// cost alone at most every `COST_EVENT_MS` per session (see
+    /// [`agents::AgentBook::report`]), the rest by [`Self::flush_session_costs`].
+    pub fn report_session(&self, sandbox: &SandboxRef, session_id: &str, model: Option<ModelReport>, cost: Option<CostReport>) {
         let has_pty = self.sessions.is_live(&SessionKey::agent(sandbox));
-        let infos = self.agents.lock().unwrap().report_model(&sandbox.to_string(), session_id, model, has_pty, now_ms());
+        let infos = self.agents.lock().unwrap().report(&sandbox.to_string(), session_id, model, cost, has_pty, now_ms());
         for info in infos {
             self.send(Event::Session(info));
         }
+    }
+
+    /// Send the cost changes held back for 30 s: the last cent of a session
+    /// that went quiet. On the background tick.
+    pub fn flush_session_costs(&self) {
+        let sessions = self.sessions.clone();
+        let infos = self.agents.lock().unwrap().flush_costs(
+            |sb| SandboxName::parse(sb).map(|n| sessions.is_live(&SessionKey::agent(&n))).unwrap_or(false),
+            now_ms(),
+        );
+        for info in infos {
+            self.send(Event::Session(info));
+        }
+    }
+
+    /// What a sandbox's sessions have cost (see `AgentBook::sandbox_cost`).
+    pub fn sandbox_cost(&self, sandbox: &str) -> Option<f64> {
+        self.agents.lock().unwrap().sandbox_cost(sandbox)
     }
 
     /// What sbxw started a session with, for one that has not reported its

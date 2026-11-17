@@ -91,6 +91,21 @@ pub struct SessionInfo {
     /// The model's display name (`Opus 5.5`), when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// What the session has cost so far, in US dollars: Claude Code's own
+    /// estimate of the API-equivalent price of its tokens (the status line's
+    /// `cost.total_cost_usd`), not an invoice; under a subscription it is not
+    /// what the person pays. Absent until the session's status line reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// The session's wall-clock time so far (`cost.total_duration_ms`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Lines the session added and removed (`cost.total_lines_added`,
+    /// `cost.total_lines_removed`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines_added: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lines_removed: Option<u64>,
     pub origin: SessionOrigin,
     pub answerable: bool,
     pub ts: u64,
@@ -113,6 +128,31 @@ impl ModelReport {
     }
 }
 
+/// What a session's status line says it has cost: Claude Code's `cost`
+/// object. Only `usd` is required; the rest goes with it when given.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct CostReport {
+    pub usd: f64,
+    pub duration_ms: Option<u64>,
+    pub lines_added: Option<u64>,
+    pub lines_removed: Option<u64>,
+}
+
+impl CostReport {
+    /// From what a caller sent: no report without a finite, non-negative
+    /// dollar amount under a million (a broken script is not a fortune).
+    pub fn new(usd: Option<f64>, duration_ms: Option<u64>, lines_added: Option<u64>, lines_removed: Option<u64>) -> Option<Self> {
+        let usd = usd.filter(|u| u.is_finite() && (0.0..1e6).contains(u))?;
+        Some(Self { usd, duration_ms, lines_added, lines_removed })
+    }
+}
+
+/// At most one `session` event per session this often for a change of cost
+/// alone: the status line reports every ten seconds while an agent works,
+/// and a cent is not worth waking every tab. A cost that changes with
+/// something else goes out at once, with it.
+pub const COST_EVENT_MS: u64 = 30_000;
+
 /// One session's identity: its sandbox and Claude Code's `session_id` (empty
 /// for a hook script older than the field).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -132,6 +172,11 @@ struct Status {
     cwd: Option<String>,
     thread: Option<String>,
     model: Option<ModelReport>,
+    cost: Option<CostReport>,
+    /// When this session's cost last went out in an event (0: never), and
+    /// whether it changed since.
+    cost_sent_ms: u64,
+    cost_pending: bool,
     origin: SessionOrigin,
 }
 
@@ -443,14 +488,25 @@ impl std::fmt::Display for Ambiguous {
 #[derive(Default, Debug)]
 pub struct AgentBook {
     statuses: BTreeMap<AgentKey, Status>,
-    /// Models reported for sessions no hook has announced yet (the status
-    /// line and the hook race at start), applied when the session appears.
-    early_models: BTreeMap<AgentKey, ModelReport>,
+    /// What the status line reported for sessions no hook has announced yet
+    /// (the status line and the hook race at start), applied when the
+    /// session appears.
+    early: BTreeMap<AgentKey, Early>,
+    /// Per sandbox, the cost of its sessions that ended since the daemon saw
+    /// it running: kept in its total until it stops, so the total never goes
+    /// backwards when a session exits (or `/clear` starts a new one).
+    retired_cost: BTreeMap<String, f64>,
 }
 
-/// Bound on [`AgentBook::early_models`]: a session that never sends a hook
-/// event must not grow it forever.
-const EARLY_MODELS_MAX: usize = 64;
+#[derive(Default, Debug)]
+struct Early {
+    model: Option<ModelReport>,
+    cost: Option<CostReport>,
+}
+
+/// Bound on [`AgentBook::early`]: a session that never sends a hook event
+/// must not grow it forever.
+const EARLY_MAX: usize = 64;
 
 impl AgentBook {
     pub fn new() -> Self {
@@ -473,10 +529,13 @@ impl AgentBook {
             sandbox: sandbox.to_string(),
             session_id: event.session_id().to_string(),
         };
-        let early = self.early_models.remove(&key);
+        let early = self.early.remove(&key).unwrap_or_default();
         let st = self.statuses.entry(key.clone()).or_default();
-        if let Some(m) = early {
+        if let Some(m) = early.model {
             st.model.get_or_insert(m);
+        }
+        if let Some(c) = early.cost {
+            st.cost.get_or_insert(c);
         }
         if let Some(mut m) = event.model() {
             // A bare id (`SessionStart`) keeps the name the status line gave it.
@@ -497,40 +556,131 @@ impl AgentBook {
             st.origin = origin;
         }
         let ended = apply(event, st, now);
-        let mut out = self.infos_for(sandbox, has_pty, now);
+        let mut out = self.emit(sandbox, has_pty, now);
         if ended {
             if let Some(gone) = out.iter_mut().find(|i| i.session_id.as_deref().unwrap_or("") == key.session_id) {
                 gone.state = SessionState::Exited;
             }
-            self.statuses.remove(&key);
-            self.early_models.remove(&key);
+            if let Some(st) = self.statuses.remove(&key) {
+                self.retire(&key, &st);
+            }
+            self.early.remove(&key);
             // A session ending can make its sibling answerable again.
-            out.extend(self.infos_for(sandbox, has_pty, now));
+            out.extend(self.emit(sandbox, has_pty, now));
         }
         out
+    }
+
+    /// The payloads of `sandbox`'s sessions, to broadcast: their costs are
+    /// now out, so a pending cost-only change has nothing left to send.
+    fn emit(&mut self, sandbox: &str, has_pty: bool, now: u64) -> Vec<SessionInfo> {
+        let out = self.infos_for(sandbox, has_pty, now);
+        for (_, st) in self.statuses.iter_mut().filter(|(k, _)| k.sandbox == sandbox) {
+            if st.cost.is_some() {
+                st.cost_pending = false;
+                st.cost_sent_ms = now;
+            }
+        }
+        out
+    }
+
+    /// A session leaves: its cost stays in its sandbox's total.
+    fn retire(&mut self, key: &AgentKey, st: &Status) {
+        if let Some(c) = &st.cost {
+            *self.retired_cost.entry(key.sandbox.clone()).or_default() += c.usd;
+        }
+    }
+
+    /// What `sandbox`'s sessions have cost: the live ones plus those that
+    /// ended while it ran. `None` when none of them ever reported one.
+    pub fn sandbox_cost(&self, sandbox: &str) -> Option<f64> {
+        let live: Vec<f64> = self
+            .statuses
+            .iter()
+            .filter(|(k, _)| k.sandbox == sandbox)
+            .filter_map(|(_, st)| st.cost.as_ref().map(|c| c.usd))
+            .collect();
+        let retired = self.retired_cost.get(sandbox).copied();
+        if live.is_empty() && retired.is_none() {
+            return None;
+        }
+        // Rounded to a millionth: a sum of floats should not read 0.30000000000000004.
+        Some(((live.iter().sum::<f64>() + retired.unwrap_or(0.0)) * 1e6).round() / 1e6)
+    }
+
+    /// Sessions whose cost changed since its last event and whose last event
+    /// is [`COST_EVENT_MS`] old: their sandboxes' payloads. For a periodic
+    /// tick, so the last cent of a session gone quiet still goes out.
+    pub fn flush_costs(&mut self, has_pty: impl Fn(&str) -> bool, now: u64) -> Vec<SessionInfo> {
+        let due: std::collections::BTreeSet<String> = self
+            .statuses
+            .iter()
+            .filter(|(_, st)| st.cost_pending && now.saturating_sub(st.cost_sent_ms) >= COST_EVENT_MS)
+            .map(|(k, _)| k.sandbox.clone())
+            .collect();
+        due.into_iter()
+            .flat_map(|sb| {
+                let pty = has_pty(&sb);
+                self.emit(&sb, pty, now)
+            })
+            .collect()
     }
 
     /// The model a session reports (its status line). Returns the payloads to
     /// broadcast: none when nothing changed, so a report repeated at every
     /// render costs nothing. A session not seen yet keeps it for later.
     pub fn report_model(&mut self, sandbox: &str, session_id: &str, model: ModelReport, has_pty: bool, now: u64) -> Vec<SessionInfo> {
+        self.report(sandbox, session_id, Some(model), None, has_pty, now)
+    }
+
+    /// What a session's status line reports: its model and its cost, either
+    /// absent from an older script. Returns the payloads to broadcast: at
+    /// once for a new model or a session's first cost, for a new cost only
+    /// when the session's last event that carried one is [`COST_EVENT_MS`] old (else it waits for the next event or
+    /// [`Self::flush_costs`]). A cost lower than the last one is a new run of
+    /// the same session id (a restart without `SessionEnd`): the old run's
+    /// cost is kept in the sandbox's total.
+    pub fn report(&mut self, sandbox: &str, session_id: &str, model: Option<ModelReport>, cost: Option<CostReport>, has_pty: bool, now: u64) -> Vec<SessionInfo> {
         let key = AgentKey {
             sandbox: sandbox.to_string(),
             session_id: session_id.to_string(),
         };
-        match self.statuses.get_mut(&key) {
-            Some(st) if st.model.as_ref() == Some(&model) => Vec::new(),
-            Some(st) => {
-                st.model = Some(model);
-                self.infos_for(sandbox, has_pty, now)
+        let Some(st) = self.statuses.get_mut(&key) else {
+            if model.is_none() && cost.is_none() {
+                return Vec::new();
             }
-            None => {
-                if self.early_models.len() >= EARLY_MODELS_MAX && !self.early_models.contains_key(&key) {
-                    self.early_models.pop_first();
-                }
-                self.early_models.insert(key, model);
-                Vec::new()
+            if self.early.len() >= EARLY_MAX && !self.early.contains_key(&key) {
+                self.early.pop_first();
             }
+            let e = self.early.entry(key).or_default();
+            if model.is_some() {
+                e.model = model;
+            }
+            if cost.is_some() {
+                e.cost = cost;
+            }
+            return Vec::new();
+        };
+        let model_changed = model.as_ref().is_some_and(|m| st.model.as_ref() != Some(m));
+        if model_changed {
+            st.model = model;
+        }
+        let mut restarted = 0.0;
+        if let Some(c) = cost.filter(|c| st.cost.as_ref() != Some(c)) {
+            if let Some(old) = st.cost.as_ref().filter(|old| c.usd < old.usd) {
+                restarted = old.usd;
+            }
+            st.cost = Some(c);
+            st.cost_pending = true;
+        }
+        let cost_due = st.cost_pending && now.saturating_sub(st.cost_sent_ms) >= COST_EVENT_MS;
+        if restarted > 0.0 {
+            *self.retired_cost.entry(sandbox.to_string()).or_default() += restarted;
+        }
+        if model_changed || cost_due {
+            self.emit(sandbox, has_pty, now)
+        } else {
+            Vec::new()
         }
     }
 
@@ -595,7 +745,7 @@ impl AgentBook {
             st.prompt.clear();
             st.state = SessionState::Working;
         }
-        self.infos_for(&key.sandbox, has_pty, now)
+        self.emit(&key.sandbox, has_pty, now)
     }
 
     /// Drop every session whose sandbox is not in `running` — a sandbox
@@ -605,22 +755,30 @@ impl AgentBook {
         if running.is_empty() {
             return Vec::new();
         }
-        self.early_models.retain(|k, _| running.contains(&k.sandbox));
-        self.evict(now, |k, _| !running.contains(&k.sandbox))
+        self.early.retain(|k, _| running.contains(&k.sandbox));
+        let out = self.evict(now, |k, _| !running.contains(&k.sandbox));
+        // A stopped sandbox starts its total again at its next run.
+        self.retired_cost.retain(|sb, _| running.contains(sb));
+        out
     }
 
     /// Drop the sessions `gone` picks; their `Exited` payloads, in key order.
     fn evict(&mut self, now: u64, gone: impl Fn(&AgentKey, &Status) -> bool) -> Vec<SessionInfo> {
         let mut out = Vec::new();
+        let mut retired = Vec::new();
         self.statuses.retain(|k, st| {
             let go = gone(k, st);
             if go {
                 let mut info = build(k, st, false, now);
                 info.state = SessionState::Exited;
                 out.push(info);
+                retired.push((k.clone(), st.clone()));
             }
             !go
         });
+        for (k, st) in retired {
+            self.retire(&k, &st);
+        }
         out
     }
 
@@ -680,6 +838,10 @@ fn build(key: &AgentKey, st: &Status, answerable: bool, now: u64) -> SessionInfo
         thread: st.thread.clone(),
         model: st.model.as_ref().map(|m| m.id.clone()),
         model_name: st.model.as_ref().and_then(|m| m.name.clone()),
+        cost_usd: st.cost.as_ref().map(|c| c.usd),
+        duration_ms: st.cost.as_ref().and_then(|c| c.duration_ms),
+        lines_added: st.cost.as_ref().and_then(|c| c.lines_added),
+        lines_removed: st.cost.as_ref().and_then(|c| c.lines_removed),
         origin: st.origin,
         answerable,
         ts: now,
@@ -928,13 +1090,79 @@ mod tests {
     fn early_models_are_bounded_and_forgotten_with_their_sandbox() {
         let mut book = AgentBook::new();
         let m = || ModelReport::new(Some("m"), None).unwrap();
-        for i in 0..(EARLY_MODELS_MAX + 10) {
+        for i in 0..(EARLY_MAX + 10) {
             book.report_model("n", &format!("s{i:03}"), m(), true, 1);
         }
-        assert_eq!(book.early_models.len(), EARLY_MODELS_MAX);
+        assert_eq!(book.early.len(), EARLY_MAX);
         book.apply("keep", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "k"})), SessionOrigin::Tty, true, 2);
         book.reconcile(&["keep".into()], 3);
-        assert!(book.early_models.is_empty());
+        assert!(book.early.is_empty());
+    }
+
+    #[test]
+    fn costs_coalesce_and_add_up_per_sandbox() {
+        let mut book = AgentBook::new();
+        let usd = |u: f64| CostReport::new(Some(u), Some(1000), Some(3), Some(1));
+        // Reported before the first hook: applied on arrival.
+        assert!(book.report("n", "a", None, usd(0.10), true, 1).is_empty());
+        let out = book.apply("n", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "a"})), SessionOrigin::Tty, true, 2);
+        assert_eq!((out[0].cost_usd, out[0].lines_added, out[0].duration_ms), (Some(0.10), Some(3), Some(1000)));
+        // The event at 2 carried it: a change within 30 s of it waits, and is
+        // still read by a snapshot; one 30 s after goes out.
+        assert!(book.report("n", "a", None, usd(0.20), true, 3).is_empty());
+        assert!(book.report("n", "a", None, usd(0.30), true, 10_000).is_empty());
+        assert_eq!(book.snapshot(|_| true, 10_001)[0].cost_usd, Some(0.30));
+        assert_eq!(book.report("n", "a", None, usd(0.35), true, 40_000)[0].cost_usd, Some(0.35), "due 30 s after the last event");
+        assert!(book.report("n", "a", None, usd(0.40), true, 41_000).is_empty());
+        assert_eq!(book.snapshot(|_| true, 41_001)[0].cost_usd, Some(0.40));
+        // With a model change it goes out at once.
+        let opus = ModelReport::new(Some("claude-opus-5-5"), None);
+        let out = book.report("n", "a", opus, usd(0.50), true, 42_000);
+        assert_eq!(out[0].cost_usd, Some(0.50));
+        // A session gone quiet: the tick sends its last change once.
+        assert!(book.report("n", "a", None, usd(0.60), true, 50_000).is_empty());
+        assert!(book.flush_costs(|_| true, 60_000).is_empty(), "not 30 s yet");
+        assert_eq!(book.flush_costs(|_| true, 72_000)[0].cost_usd, Some(0.60));
+        assert!(book.flush_costs(|_| true, 200_000).is_empty(), "nothing pending");
+        // A hook event carries the latest cost and clears what was pending.
+        assert!(!book.report("n", "a", None, usd(0.70), true, 210_000).is_empty());
+        assert!(book.report("n", "a", None, usd(0.80), true, 211_000).is_empty());
+        let out = book.apply("n", &ev(&json!({"hook_event_name": "Stop", "session_id": "a"})), SessionOrigin::Tty, true, 212_000);
+        assert_eq!(out[0].cost_usd, Some(0.80));
+        assert!(book.flush_costs(|_| true, 500_000).is_empty());
+
+        // The sandbox's total: every session, live or ended while it runs.
+        book.apply("n", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "b", "sbxw_thread": "t"})), SessionOrigin::Tty, true, 3);
+        book.report("n", "b", None, usd(1.25), true, 4);
+        assert_eq!(book.sandbox_cost("n"), Some(2.05));
+        book.apply("n", &ev(&json!({"hook_event_name": "SessionEnd", "session_id": "b"})), SessionOrigin::Tty, true, 5);
+        assert_eq!(book.sandbox_cost("n"), Some(2.05), "an ended session stays counted");
+        book.forget_thread("n", "nope", 6);
+        // The same session id restarted (no SessionEnd): its old run stays.
+        book.report("n", "a", None, usd(0.05), true, 600_000);
+        assert_eq!(book.sandbox_cost("n"), Some(2.10), "1.25 ended + 0.80 old run + 0.05");
+        // Stopped: forgotten, and the next run starts from nothing.
+        book.reconcile(&["other".into()], 7);
+        assert_eq!(book.sandbox_cost("n"), None);
+    }
+
+    #[test]
+    fn no_cost_stays_absent() {
+        let mut book = AgentBook::new();
+        let out = book.apply("n", &ev(&json!({"hook_event_name": "SessionStart", "session_id": "s"})), SessionOrigin::Tty, true, 1);
+        let v = serde_json::to_value(&out[0]).unwrap();
+        for k in ["cost_usd", "duration_ms", "lines_added", "lines_removed"] {
+            assert!(v.get(k).is_none(), "{k} omitted, not null");
+        }
+        assert_eq!(book.sandbox_cost("n"), None);
+        // An older script: no cost, nothing broadcast, nothing kept.
+        assert!(book.report("n", "s", None, None, true, 2).is_empty());
+        assert!(book.report("n", "never", None, None, true, 2).is_empty());
+        assert!(book.early.is_empty());
+        for bad in [f64::NAN, f64::INFINITY, -1.0, 2e6] {
+            assert!(CostReport::new(Some(bad), None, None, None).is_none(), "{bad}");
+        }
+        assert!(CostReport::new(None, Some(5), None, None).is_none(), "no dollars, no report");
     }
 
     #[test]

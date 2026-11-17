@@ -313,7 +313,7 @@ fn ws_upgrade(b: axum::http::request::Builder) -> Request<Body> {
 async fn without_the_ui_token_nothing_but_the_sign_in_answers() {
     let (_d, app) = app();
     let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
-    for path in ["/api/state", "/api/sessions", "/app.css", "/js/main.js", "/vendor/xterm.js"] {
+    for path in ["/api/state", "/api/sessions", "/api/stats", "/app.css", "/js/main.js", "/vendor/xterm.js"] {
         let res = ui_router(app.clone()).oneshot(get(path)).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path}");
         let body = axum::body::to_bytes(res.into_body(), 1 << 16).await.unwrap();
@@ -628,4 +628,187 @@ async fn a_sessions_model_reaches_sessions_and_sandboxes() {
     assert!(item(&v, "tuned").get("model_name").is_none());
     // Another agent that reports none: left out.
     assert!(item(&v, "cx").get("model").is_none() && item(&v, "cx").get("model_name").is_none());
+}
+
+/// A session's cost: reported by its status line, on the session and summed
+/// on its sandbox; a change of cost alone is held back, not broadcast.
+#[tokio::test]
+async fn a_sessions_cost_reaches_sessions_and_sandboxes() {
+    use sbxw_core::SandboxRef;
+    let (_d, app, _fake) = crate::testing::app_with(|a| match a.first().map(String::as_str) {
+        Some("ls") => sbxw_sbx::runner::Output::ok(&json!([{"name": "myapp", "agent": "claude", "status": "running"}]).to_string()),
+        _ => crate::testing::sbx_answer(a),
+    });
+    let myapp = SandboxRef::parse("myapp").unwrap();
+    let token = app.store.token(myapp.clone()).unwrap();
+    let agent = |path: &str, body: Value| {
+        json_req(post(path, body.clone()).header("authorization", format!("Bearer {token}")), body)
+    };
+    let get = |path: &str| Request::builder().uri(path).header("host", HOST).body(Body::empty()).unwrap();
+    let session = |v: &Value, id: &str| v.as_array().unwrap().iter().find(|s| s["session_id"] == id).cloned().unwrap();
+    let item = |v: &Value| v.as_array().unwrap().iter().find(|s| s["name"] == "myapp").cloned().unwrap();
+    let report = |id: &str, usd: f64| json!({"five_hour_pct": null, "seven_day_pct": null, "session_id": id, "cost_usd": usd, "duration_ms": 1000, "lines_added": 7, "lines_removed": 2, "sandbox": "myapp"});
+
+    for id in ["s1", "s2"] {
+        let start = json!({"hook_event_name": "SessionStart", "session_id": id, "hook_version": 2});
+        call(agent_router(app.clone()), agent("/api/hook", start)).await;
+    }
+    // Before any report: absent on both.
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert!(session(&v, "s1").get("cost_usd").is_none());
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert!(item(&v).get("cost_usd").is_none());
+
+    // The first cost of a session goes out at once; the next within 30 s
+    // is read at once but not broadcast.
+    let mut bus = app.bus.subscribe();
+    assert_eq!(call(agent_router(app.clone()), agent("/api/usage", report("s1", 1.0))).await.0, StatusCode::OK);
+    call(agent_router(app.clone()), agent("/api/usage", report("s2", 0.25))).await;
+    assert!(std::iter::from_fn(|| bus.try_recv().ok()).count() > 0);
+    call(agent_router(app.clone()), agent("/api/usage", report("s1", 1.5))).await;
+    assert!(bus.try_recv().is_err(), "a cost-only change is coalesced");
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    let s1 = session(&v, "s1");
+    assert_eq!((s1["cost_usd"].as_f64(), s1["duration_ms"].as_u64(), s1["lines_added"].as_u64(), s1["lines_removed"].as_u64()), (Some(1.5), Some(1000), Some(7), Some(2)));
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v)["cost_usd"].as_f64(), Some(1.75), "both sessions");
+
+    // A model change takes the cost along at once.
+    let mut with_model = report("s1", 1.6);
+    with_model["model"] = json!("claude-opus-5-5");
+    call(agent_router(app.clone()), agent("/api/usage", with_model)).await;
+    let costs: Vec<_> = std::iter::from_fn(|| bus.try_recv().ok()).filter_map(|e| match e {
+        crate::bus::Event::Session(i) if i.session_id.as_deref() == Some("s1") => i.cost_usd,
+        _ => None,
+    }).collect();
+    assert_eq!(costs, vec![1.6]);
+
+    // An older script sends none: nothing changes.
+    let old = json!({"five_hour_pct": 20.0, "seven_day_pct": null, "sandbox": "myapp", "session_id": "s1"});
+    call(agent_router(app.clone()), agent("/api/usage", old)).await;
+    assert!(bus.try_recv().is_err());
+    let (_, v) = call(signed_in(app.clone()), get("/api/sessions")).await;
+    assert_eq!(session(&v, "s1")["cost_usd"].as_f64(), Some(1.6));
+
+    // A session that ends stays in its sandbox's total.
+    call(agent_router(app.clone()), agent("/api/hook", json!({"hook_event_name": "SessionEnd", "session_id": "s2", "hook_version": 2}))).await;
+    let (_, v) = call(signed_in(app.clone()), get("/api/sandboxes")).await;
+    assert_eq!(item(&v)["cost_usd"].as_f64(), Some(1.85));
+}
+
+/// A fake `ps`: logs each run to `log`, then runs `body`.
+fn fake_ps(dir: &std::path::Path, name: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let (script, log) = (dir.join(name), dir.join(format!("{name}.log")));
+    std::fs::write(&script, format!("#!/bin/sh\necho run >> '{}'\n{body}\n", log.display())).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (script, log)
+}
+
+fn runs(log: &std::path::Path) -> usize {
+    std::fs::read_to_string(log).map(|s| s.lines().count()).unwrap_or(0)
+}
+
+/// CPU and memory: each sandbox from its status line's `/proc` counters, the
+/// daemon from `ps`; unknown is `null`, never 0.
+#[tokio::test]
+async fn stats_come_from_the_sandboxes_reports_and_the_daemons_cpu_time() {
+    use crate::svc::stats::CpuProbe;
+    use sbxw_core::SandboxRef;
+    let (d, app, _fake) = crate::testing::app_with(|a| match a.first().map(String::as_str) {
+        Some("ls") => sbxw_sbx::runner::Output::ok(&json!([{"name": "myapp", "agent": "claude", "status": "running"}, {"name": "cx", "agent": "codex", "status": "running"}]).to_string()),
+        _ => crate::testing::sbx_answer(a),
+    });
+    let (ps, log) = fake_ps(d.path(), "ps-ok", "echo '  0:01.50'");
+    *app.cpu_probe.lock().unwrap() = CpuProbe::Command(ps);
+    app.stats.lock().unwrap().set_running(&["myapp".into(), "cx".into()]);
+    let token = app.store.token(SandboxRef::parse("myapp").unwrap()).unwrap();
+    let agent = |body: Value| json_req(post("/api/usage", body.clone()).header("authorization", format!("Bearer {token}")), body);
+    let get = || Request::builder().uri("/api/stats").header("host", HOST).body(Body::empty()).unwrap();
+    // Fixtures recorded in an sbx sandbox: /proc/stat's first line 10 s
+    // apart, and /proc/meminfo's two lines.
+    let mem = "MemTotal:       12417904 kB\nMemAvailable:    8297264 kB";
+    let report = |cpu: &str| json!({"five_hour_pct": null, "seven_day_pct": null, "proc_stat_cpu": cpu, "cpu_cores": 10, "proc_meminfo": mem, "sandbox": "myapp"});
+
+    // Nothing reported, first reading of the daemon's CPU: all unknown.
+    let (s, v) = call(signed_in(app.clone()), get()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["daemon_cpu_pct"].is_null() && v["total_cpu_pct"].is_null(), "{v}");
+    assert_eq!((v["sandboxes_counted"].as_u64(), v["sandboxes_unknown"].as_u64()), (Some(0), Some(2)));
+    assert_eq!(runs(&log), 1);
+
+    call(agent_router(app.clone()), agent(report("cpu  9617884 113451 1415149 177022282 68855 0 474660 0 0 0"))).await;
+    call(agent_router(app.clone()), agent(report("cpu  9619884 113451 1415649 177030282 68855 0 474760 0 0 0"))).await;
+    // The daemon used 1.5 s of CPU in the 2 s since a reading of 0.
+    app.own_cpu.lock().unwrap().update(Some(std::time::Duration::ZERO), crate::app::now_ms() - 2000);
+    let (_, v) = call(signed_in(app.clone()), get()).await;
+    let pct = v["daemon_cpu_pct"].as_f64().unwrap();
+    assert!((70.0..=80.0).contains(&pct), "{v}");
+    let myapp = v["sandboxes"].as_array().unwrap().iter().find(|s| s["name"] == "myapp").unwrap().clone();
+    assert_eq!((myapp["cpu_pct"].as_f64(), myapp["cpu_cores"].as_u64(), myapp["mem_bytes"].as_u64()), (Some(245.3), Some(10), Some((12417904 - 8297264) * 1024)));
+    let cx = v["sandboxes"].as_array().unwrap().iter().find(|s| s["name"] == "cx").unwrap().clone();
+    assert!(cx["cpu_pct"].is_null() && cx["mem_bytes"].is_null(), "a sandbox that never reported: {cx}");
+    assert_eq!((v["sandboxes_counted"].as_u64(), v["sandboxes_unknown"].as_u64()), (Some(1), Some(1)));
+    assert!((v["total_cpu_pct"].as_f64().unwrap() - (pct + 245.3)).abs() < 0.11);
+    // A burst of requests reads once.
+    call(signed_in(app.clone()), get()).await;
+    assert_eq!(runs(&log), 2);
+
+    // `ps` failing, or too slow: unknown, never 0.
+    for (name, body) in [("ps-fail", "exit 1"), ("ps-junk", "echo nope"), ("ps-slow", "sleep 5; echo 0:01.00")] {
+        let (ps, _) = fake_ps(d.path(), name, body);
+        *app.cpu_probe.lock().unwrap() = CpuProbe::Command(ps);
+        *app.own_cpu.lock().unwrap() = Default::default();
+        app.own_cpu.lock().unwrap().update(Some(std::time::Duration::ZERO), 0);
+        let t = std::time::Instant::now();
+        let (_, v) = call(signed_in(app.clone()), get()).await;
+        assert!(v["daemon_cpu_pct"].is_null(), "{name}: {v}");
+        assert!(t.elapsed() < crate::svc::stats::PROBE_TIMEOUT + std::time::Duration::from_secs(1), "{name} is bounded");
+    }
+}
+
+/// The `stats` event runs only while a `/api/stream` is open.
+#[tokio::test]
+async fn no_stats_are_read_while_nobody_listens() {
+    use crate::svc::stats::CpuProbe;
+    let (d, app) = app();
+    let (ps, log) = fake_ps(d.path(), "ps-count", "echo 0:00.10");
+    *app.cpu_probe.lock().unwrap() = CpuProbe::Command(ps);
+    let mut bus = app.bus.subscribe();
+    app.start_stats_ticker();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(runs(&log), 0, "no tab: nothing read");
+    assert!(bus.try_recv().is_err());
+
+    app.bus.clients.send_modify(|n| *n += 1);
+    let ev = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Ok(crate::bus::Event::Stats(s)) = bus.recv().await {
+                return s;
+            }
+        }
+    })
+    .await
+    .expect("a stats event once a tab is open");
+    assert_eq!(crate::bus::Event::Stats(ev.clone()).name(), "stats");
+    assert!(ev.daemon_cpu_pct.is_none(), "first reading");
+    assert_eq!(runs(&log), 1);
+
+    // The tab closes: after the tick in flight, nothing more.
+    app.bus.clients.send_modify(|n| *n -= 1);
+    tokio::time::sleep(crate::svc::stats::TICK + std::time::Duration::from_millis(500)).await;
+    let after = runs(&log);
+    tokio::time::sleep(crate::svc::stats::TICK + std::time::Duration::from_millis(500)).await;
+    assert_eq!(runs(&log), after, "no tab: nothing read");
+    assert!(after <= 2);
+}
+
+/// The real probe on this OS reads something (Linux: `/proc/self/schedstat`;
+/// macOS: `ps`).
+#[tokio::test]
+async fn the_daemons_own_cpu_is_read_from_the_os() {
+    let (_d, app) = app();
+    app.own_cpu.lock().unwrap().update(Some(std::time::Duration::ZERO), crate::app::now_ms() - 2000);
+    let pct = app.stats().await.daemon_cpu_pct;
+    assert!(pct.is_some_and(|p| p >= 0.0), "{pct:?}");
 }

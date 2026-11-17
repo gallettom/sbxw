@@ -53,6 +53,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/leads", get(leads))
         // Sandboxes.
         .route("/api/sandboxes", get(list))
+        .route("/api/stats", get(stats))
         .route("/api/sandboxes/create", post(create))
         .route("/api/carve/preview", post(carve_preview))
         .route("/api/sandboxes/chat", post(chat))
@@ -275,6 +276,11 @@ async fn leads(State(app): S) -> Json<Value> {
 }
 
 // ── Sandboxes ────────────────────────────────────────────────────────────
+
+/// CPU and memory, the daemon's and each sandbox's (see `svc::stats`).
+async fn stats(State(app): S) -> Json<sbxw_core::stats::Stats> {
+    Json(app.stats().await)
+}
 
 async fn list(State(app): S) -> Json<Value> {
     Json(json!(app.sandboxes().await))

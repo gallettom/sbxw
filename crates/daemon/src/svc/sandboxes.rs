@@ -61,6 +61,12 @@ pub struct SandboxItem {
     /// That model's display name, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
+    /// What its agent sessions have cost so far, in US dollars: the sum of
+    /// Claude Code's own estimates (see `SessionInfo::cost_usd`), counting
+    /// every session since the daemon saw it running, ended ones included,
+    /// until it stops. Absent when none reported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -166,6 +172,7 @@ impl App {
                 unreachable_since: None,
                 model: None,
                 model_name: None,
+                cost_usd: None,
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -174,6 +181,7 @@ impl App {
                 let (model, model_name) = self.main_model(&item.name, &item.agent, &infos);
                 item.model = model;
                 item.model_name = model_name;
+                item.cost_usd = self.sandbox_cost(&item.name);
                 item
             })
             .collect()
@@ -220,6 +228,7 @@ impl App {
                             unreachable_since: None,
                             model: None,
                             model_name: None,
+                            cost_usd: None,
                         });
                     }
                 }
@@ -242,6 +251,7 @@ impl App {
                             unreachable_since: Some(since),
                             model: None,
                             model_name: None,
+                            cost_usd: None,
                         });
                     }
                 }

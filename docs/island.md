@@ -139,6 +139,105 @@ each bring-up from the UI), so an existing sandbox starts reporting its model
 after its next bring-up. Until then it shows the fallback; an older script's
 reports, which name no model, change nothing.
 
+### What a session has cost
+
+Each session also carries, once its status line has reported them:
+`cost_usd` (dollars), `duration_ms` (its wall-clock time so far),
+`lines_added` and `lines_removed`. Each `GET /api/sandboxes` item carries
+`cost_usd`, the sum over that sandbox's sessions. All are optional and left
+out until something is known; never `0` for unknown.
+
+```json
+{ "sandbox": "myapp", "session_id": "s1", "cost_usd": 1.37, "duration_ms": 842000,
+  "lines_added": 120, "lines_removed": 14, "...": "..." }
+{ "name": "myapp", "status": "running", "cost_usd": 4.12, "...": "..." }
+```
+
+**What the number is.** Claude Code's own estimate of what the session's
+tokens would cost at API prices (the status line's `cost.total_cost_usd`). It
+is not an invoice: under a Pro or Max subscription it is not what the person
+pays, and under an API key the console's bill is the reference.
+
+- **Where it comes from.** The status line script sends the session's `cost`
+  object (`total_cost_usd`, `total_duration_ms`, `total_lines_added`,
+  `total_lines_removed`, whichever are numbers) with its throttled report to
+  `POST /api/usage`, at most every 10 s per sandbox. A change of cost does
+  not bypass the throttle (a model change does).
+- **Events.** A session's first cost goes out at once in a `session` event.
+  After that a change of cost alone goes out at most once per 30 s per
+  session; it goes out at once when the event is sent for another reason (a
+  hook, a model change), and a change held back is sent by the daemon's 15 s
+  tick once its 30 s are up. `GET /api/sessions` always has the latest.
+- **The sandbox's total** counts every session of that sandbox the daemon has
+  seen since it last saw the sandbox running: the main session, threads and
+  sessions that came in over SSH, live ones and ones that ended (`SessionEnd`,
+  a closed thread, `/clear`). An ended session stays in the total until the
+  sandbox stops, so the number never goes backwards under the person's eyes.
+  A session id whose cost goes down (Claude Code restarted under the same id
+  without a `SessionEnd`) keeps its old run in the total too. The total
+  starts again from nothing when the sandbox stops, and when the daemon
+  restarts (it is kept in memory only).
+
+An existing sandbox reports costs after one `sbxw up <name>` (the script is
+rewritten at each bring-up); until then, its older script's reports change
+nothing.
+
+### CPU and memory
+
+`GET /api/stats` (UI token, like every `/api` route) answers what the daemon
+and each sandbox use; the same body goes out as a `stats` event on
+`/api/stream` every 5 s while at least one `/api/stream` is open, and not at
+all otherwise.
+
+```json
+{ "daemon_cpu_pct": 0.8,
+  "sandboxes": [
+    { "name": "myapp", "cpu_pct": 143.5, "cpu_age_s": 4, "cpu_cores": 4,
+      "mem_bytes": 2147483648, "mem_total_bytes": 8589934592 },
+    { "name": "cx", "cpu_pct": null, "cpu_age_s": null, "cpu_cores": null,
+      "mem_bytes": null, "mem_total_bytes": null } ],
+  "total_cpu_pct": 144.3, "sandboxes_counted": 1, "sandboxes_unknown": 1,
+  "ts": 1763380000000 }
+```
+
+- **Percent of one core**, so it exceeds 100: four busy cores read 400.
+- **Unknown is `null`, never `0`.** `total_cpu_pct` is the daemon plus every
+  sandbox with a `cpu_pct`, `null` only when none is known; it is partial
+  when `sandboxes_unknown > 0` or `daemon_cpu_pct` is `null`, and a bar
+  should say so.
+- **`sandboxes`** lists every sandbox the daemon's 15 s `sbx ls` last saw
+  running, plus any that reported since; a stopped one drops out.
+
+**Where a sandbox's numbers come from.** sbx exposes no CPU figure, and a
+sandbox is a microVM the host's Docker does not list. So each sandbox
+measures itself: the status line script reads the first `cpu` line of the
+VM's `/proc/stat`, its number of `cpuN` lines and `MemTotal` /
+`MemAvailable` from `/proc/meminfo`, and sends them raw with its throttled
+report (`proc_stat_cpu`, `cpu_cores`, `proc_meminfo`). The daemon turns two
+successive reports of the same sandbox into `cpu_pct`; `mem_bytes` is total
+minus available. Nothing is polled and no sandbox is woken for it. What
+follows from that:
+
+- It covers the whole microVM (the agent, its tools, a build, Docker inside
+  it), not one process.
+- A sandbox reports only while a Claude session renders its status line:
+  about every 10 s while an agent works. Claude Code renders it when the
+  conversation changes, so a long single tool call (a two-minute build)
+  sends nothing until it ends. A sandbox with no Claude session (another
+  agent, a plain shell) never has a value.
+- `cpu_pct` is `null` after the first report (one sample is no rate), when
+  the last sample is older than 30 s, and when two samples are more than
+  60 s apart. `cpu_age_s` is the age of the last sample (`null` if none), so
+  a client can say "no recent report" rather than show a frozen number.
+
+**The daemon's own CPU** is read from the OS when asked (the `stats` tick or
+a request, at most once a second): `/proc/self/schedstat` on Linux, `ps -o
+cputime= -p <pid>` on macOS with a 2 s timeout. A failed or late reading
+makes it `null`; the first reading after the daemon starts is `null` too
+(it takes two).
+
+An existing sandbox sends these after one `sbxw up <name>`, like the cost.
+
 Every request the island makes carries the daemon's UI token
 (`Authorization: Bearer`, read from `~/.sbxw/run/ui-token` before each
 request, since the daemon writes a new one each time it starts). Opening a
@@ -154,6 +253,7 @@ Daemon endpoints the island uses:
 | `GET /api/events` | Server-Sent Events, one per hook-driven change |
 | `GET /api/hook/log` | Recent raw hook events, for debugging |
 | `GET /api/sandboxes` | Running sandboxes, shown as `idle` right away |
+| `GET /api/stats` | CPU and memory, the daemon's and each sandbox's ([above](#cpu-and-memory)) |
 | `POST /api/answer`, `POST /api/input` | Send a menu choice, or raw bytes, into a session |
 | `POST /api/chat/push` | `{ "text", "name"?, "fresh"? }`: send a message, creating the sandbox if needed. `fresh` takes the next free `ephemeral-chat[-N]` |
 

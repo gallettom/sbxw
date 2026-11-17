@@ -16,5 +16,6 @@ pub mod plans;
 pub mod relay;
 pub mod remote;
 pub mod sandboxes;
+pub mod stats;
 pub mod usage;
 pub mod voice;
