@@ -1673,7 +1673,7 @@ fn pane_name(p: &Pane) -> String {
     match (&p.sandbox, &p.thread) {
         (Some(sb), Some(t)) => format!("{sb} · {t}"),
         (Some(sb), None) => sb.clone(),
-        (None, _) => "no sandbox".into(),
+        (None, _) => "Empty pane".into(),
     }
 }
 
@@ -1848,7 +1848,7 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
 fn pane_view(s: &App, i: usize) -> El {
     let pane = s.panes.get(i);
     let focused = i == s.focused;
-    let label = pane.map(pane_name).unwrap_or_else(|| "no sandbox".into());
+    let label = pane.map(pane_name).unwrap_or_else(|| "Empty pane".into());
     let connected = pane.is_some_and(|p| p.status() == "connected");
     let (dot_tone, dot_word) = if pane.is_some_and(|p| p.attention) { ("amber", "wants you") } else if connected { ("blue", "connected") } else { ("text-muted", "not connected") };
     let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
@@ -1909,14 +1909,19 @@ fn pane_view(s: &App, i: usize) -> El {
     let body = match pane {
         // The pane fills a row (its width grows, its height is the row's).
         Some(Pane { term: Some(t), .. }) => row().w_full().grow(1.0).min_h(0.0).child(terminal::pane(t, lens(i))),
+        Some(Pane { sandbox: None, error: None, .. }) => empty_pane(s, i),
         Some(p) => {
             let msg = match (&p.sandbox, &p.error) {
                 (_, Some(e)) => e.clone(),
                 (Some(sb), None) if matches!(s.target, Target::Fixture(_)) => format!("{sb}: no terminal in a fixture (scripts/shot.sh runs one against the stand-in daemon)"),
                 (Some(sb), None) => format!("{sb}: {}", p.status()),
-                (None, None) => if s.sandboxes.is_empty() { "No sandbox here. Create one with `sbxw up`.".into() } else { "Select a sandbox in the list to open it here.".into() },
+                (None, None) => unreachable!("the empty pane"),
             };
-            col().grow(1.0).w_full().padding(16.0).child(text(msg).font(small(12.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap())
+            let mut body = row().gap(8.0).items_start().w_full().child(text(msg).font(small(13.0, 400.0)).color(c(if p.error.is_some() { "red" } else { "text-muted" })).wrap().grow(1.0).min_w(0.0));
+            if p.error.is_some() {
+                body = row().gap(8.0).items_start().w_full().child(rune::icon(crate::icons::get("warning").unwrap(), 16.0).color(c("red"))).child(body);
+            }
+            col().grow(1.0).w_full().padding(16.0).child(body)
         }
         None => el().grow(1.0),
     };
@@ -1956,6 +1961,69 @@ fn pane_view(s: &App, i: usize) -> El {
         .child(bar)
         .child(el().h(1.0).w_full().fill(c("elevated")))
         .child(body)
+}
+
+/// A core-drawn button, as the `button` element draws one: 28 pt, a label
+/// 13/500, its shortcut in its tooltip.
+fn core_button(key: &str, label: &str, icon: &str, keys: Vec<String>, primary: bool, on: impl Fn(&mut App) + 'static) -> El {
+    let (fill, fg, hover) = if primary { ("green-deep", "white", "primary-hover") } else { ("elevated", "text", "border") };
+    let mut b = row()
+        .key(key.to_string())
+        .role("button")
+        .label(label.to_string())
+        .help(label.to_string())
+        .help_keys(keys)
+        .gap(6.0)
+        .h(layout::CONTROL_H)
+        .px(10.0)
+        .items_center()
+        .radius(theme::radius("xs").unwrap())
+        .fill(c(fill))
+        .border(1.0, c(if primary { "green-deep" } else { "border" }))
+        .hover(c(hover))
+        .cursor(Cursor::Pointer)
+        .on_press(move |s: &mut App| {
+            on(s);
+            s.push_data();
+        });
+    if let Some(ic) = crate::icons::get(icon) {
+        b = b.child(rune::icon(ic, 16.0).color(c(fg)));
+    }
+    b.child(text(label.to_string()).font(small(13.0, 500.0)).color(c(fg)))
+}
+
+/// An empty pane says what to do, centred, and offers it: open a sandbox
+/// from the list, a new sandbox, the command palette.
+fn empty_pane(s: &App, i: usize) -> El {
+    let none = s.sandboxes.is_empty();
+    let (title, line) = if none {
+        ("No sandboxes yet", "Create one to run an agent in it; its terminal opens here.")
+    } else {
+        ("Nothing open in this pane", "Pick a sandbox in the list to open its terminal here, or find it in the palette.")
+    };
+    let mut actions = row().gap(8.0).items_center().justify_center();
+    // The create feature's "New" (its top bar extra), the same intent.
+    let new = s.screens.iter().find(|x| x.name == "topbar").and_then(|t| {
+        let e = t.data()["app"]["extras"]["topbar"].as_array()?.iter().find(|e| e["id"] == "create")?.clone();
+        Some((e["intent"]["name"].as_str()?.to_string(), e["intent"]["args"].clone()))
+    });
+    if let Some((name, args)) = new {
+        let keys = if cfg!(target_os = "macos") { vec!["⌃".to_string(), "⌥".into(), "N".into()] } else { vec!["Alt".to_string(), "N".into()] };
+        actions = actions.child(core_button(&format!("pane-{}-new", i + 1), "New sandbox", "plus", keys, none, move |s: &mut App| s.press_extra("pane", &name, &args)));
+    }
+    actions = actions.child(core_button(&format!("pane-{}-palette", i + 1), "Command palette", "search", palette::chord_keys("K"), false, |s: &mut App| s.palette_open()));
+    col()
+        .key(format!("pane-{}-empty", i + 1))
+        .grow(1.0)
+        .w_full()
+        .padding(24.0)
+        .gap(12.0)
+        .items_center()
+        .justify_center()
+        .child(rune::icon(crate::icons::get("terminal").unwrap(), 24.0).color(c("text-muted")))
+        .child(text(title).font(small(16.0, 600.0)).color(c("text-bright")))
+        .child(text(line).font(small(13.0, 400.0)).color(c("text-muted")).wrap().max_w(360.0))
+        .child(actions)
 }
 
 #[cfg(test)]
