@@ -29,11 +29,54 @@ pub fn rank(tone: &str, count: Option<u64>) -> u8 {
 /// (a lead, Jarvis) purple, an interrupt red, anything else neutral.
 pub fn meaning(id: &str) -> &'static str {
     match id {
-        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" | "remote" => "blue",
+        "approvals" | "relay" | "threads" | "project" | "browser" | "network" | "plan" | "codemap" | "remote" | "envfile" => "blue",
         "lead" | "jarvis" | "team" => "purple",
         "interrupt" => "red",
         _ => "neutral",
     }
+}
+
+/// The zone of a pane bar an extra sits in, so the eye finds a zone before
+/// a button: 0 the session's state and what waits (sbx asks, questions, a
+/// plan, the model), 1 things it opens (Browser, Project, Env), 2 the team
+/// (Team, Threads), 3 controlling the session (Esc, Remote, closing it).
+/// Zones are drawn in this order, a hairline between two.
+pub fn zone(id: &str) -> u8 {
+    match id {
+        "attention" | "status" | "approvals" | "relay" | "state" | "model" | "merge" | "plan" => 0,
+        "lead" | "threads" => 2,
+        "interrupt" | "remote" | "close" => 3,
+        _ => 1,
+    }
+}
+
+/// The hairline between two zones: drawn in the gap before a zone's first
+/// chip, so it takes no room of its own.
+pub const SEP_W: f32 = 1.0;
+
+/// The panel an extra opens, when it opens one (its chip is drawn active
+/// while that panel shows for this pane).
+pub fn panel_of(id: &str) -> Option<&'static str> {
+    match id {
+        "browser" => Some("browser"),
+        "project" => Some("files"),
+        "codemap" => Some("codemap"),
+        "threads" => Some("threads"),
+        "relay" => Some("relay"),
+        "approvals" => Some("network"),
+        _ => None,
+    }
+}
+
+/// `items` in the order the bar draws them: by zone, stable.
+pub fn by_zone(mut items: Vec<Item>) -> Vec<Item> {
+    items.sort_by_key(|i| zone(&i.id));
+    items
+}
+
+/// How wide `items` are drawn in a bar, each after a `gap`.
+pub fn chips_w(items: &[Item], gap: f32) -> f32 {
+    items.iter().map(|i| gap + chip_w(i)).sum::<f32>()
 }
 
 /// The tone an item's menu row takes: its own when it has one, else the
@@ -124,6 +167,7 @@ pub fn chip_w(it: &Item) -> f32 {
 /// How many of `widths` (in priority order) show inline in `avail` points,
 /// after `fixed`, each preceded by `gap`, keeping room for the overflow
 /// button (`more`, plus its gap) whenever one is left out.
+#[cfg(test)]
 pub fn fit(avail: f32, fixed: f32, widths: &[f32], gap: f32, more: f32) -> usize {
     let n = widths.len();
     let mut used = fixed;
@@ -190,12 +234,15 @@ pub fn pane_fit(width: f32, name: &str, kind: &str, items: Vec<Item>, menu: bool
     if menu {
         fixed += PANE_GAP + more_w(items.len());
     }
-    let widths: Vec<f32> = items.iter().map(chip_w).collect();
-    let k = fit(width, fixed, &widths, PANE_GAP, if menu { 0.0 } else { more_w(items.len()) });
+    // The most items, in priority order, whose chips (drawn by zone, with
+    // their hairlines) fit after the fixed parts.
+    let more = if menu { 0.0 } else { more_w(items.len()) };
+    let n = items.len();
+    let k = (0..=n).rev().find(|&k| fixed + chips_w(&items[..k], PANE_GAP) + if k < n { PANE_GAP + more } else { 0.0 } <= width + 0.5).unwrap_or(0);
     let mut shown = items;
     let mut hidden = shown.split_off(k);
     hidden.extend(only_menu);
-    PaneFit { shown, hidden, name_min }
+    PaneFit { shown: by_zone(shown), hidden, name_min }
 }
 
 /// The overflow button's mark for what it hides: the most urgent tone among
@@ -427,13 +474,15 @@ mod tests {
                 let name = measure("test-sbx", 12.0, 500.0).min(NAME_WANT);
                 // The "⋯" menu is always there (it holds the pane's moves).
                 let mut used = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
-                used += f.shown.iter().map(|i| PANE_GAP + chip_w(i)).sum::<f32>();
+                used += chips_w(&f.shown, PANE_GAP);
                 let floor = PANE_PAD * 2.0 + GRIP_W + PANE_GAP + DOT_W + PANE_GAP + name + PANE_GAP + kind_w("agent") + PANE_GAP + CLOSE_W + PANE_GAP + more_w(n);
                 assert!(used <= width + 0.5 || f.shown.is_empty() && used <= floor + 0.5, "{width} {n}: {used}");
                 // Priority: nothing hidden ranks before something shown.
-                if let (Some(s), Some(h)) = (f.shown.last(), f.hidden.first()) {
-                    assert!(s.rank() <= h.rank(), "{width} {n}");
+                if let (Some(s), Some(h)) = (f.shown.iter().map(Item::rank).max(), f.hidden.first()) {
+                    assert!(s <= h.rank(), "{width} {n}");
                 }
+                // Drawn by zone.
+                assert!(f.shown.windows(2).all(|w| zone(&w[0].id) <= zone(&w[1].id)), "{width} {n}");
             }
         }
     }

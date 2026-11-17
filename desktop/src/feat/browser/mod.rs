@@ -65,7 +65,7 @@ pub const FEATURE: Feature = Feature {
     name: "browser",
     data: &[Data { key: ACTIVE, path: "/api/browser/active", on: &["browser"], every: 0, lazy: false }],
     screens: &[
-        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/browser.luau"), slot: Slot::Panel { title: "Browser", icon: "link", width: 720.0 } },
+        ScreenDecl { name: SCREEN, src: include_str!("../../../screens/browser.luau"), slot: Slot::Panel { title: "Browser", icon: "globe", width: 720.0 } },
         ScreenDecl { name: SETTLE, src: include_str!("../../../screens/browser-settle.luau"), slot: Slot::Modal { width: 440.0, light_dismiss: false } },
     ],
     intents: INTENTS,
@@ -683,7 +683,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
                 place: Place::Pane(name.to_string()),
                 id: "browser".into(),
                 label: "Browser".into(),
-                icon: Some("link".into()),
+                icon: Some("globe".into()),
                 tone: if using { "blue".into() } else { "muted".into() },
                 help: match (open, using) {
                     (true, _) => "Hide the browser: it keeps running".into(),

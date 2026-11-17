@@ -177,6 +177,16 @@ Children side by side. Children are centred vertically.
 row{ gap = 8, w = "full", dot{ tone = "green" }, text{ "running" }, spacer{}, text{ "2" } }
 ```
 
+A field on a row (an `input` or `select` without its own `w`, `grow` or
+`min_w`) takes the room its neighbours leave, down to 160 pt, so a button
+beside it never leaves the row: `row{ gap = 8, w = "full", input{...},
+button{...} }` needs nothing more. A row holding a control (a button, a
+checkbox, a field, a menu) wraps onto a second line when its parts do not fit
+side by side, unless it holds a `truncate` text without `grow` (that text is
+meant to give way instead); the top bar and the sidebar keep their own fit. A
+modal whose screen has no `scroll`, `split` or grown part is as tall as its
+content, up to the window's room, then scrolls.
+
 ### `column`
 
 Children one under the other. Same props as `row`; `align` is the horizontal
@@ -686,6 +696,23 @@ in it, with its tint under the pointer and the keyboard focus.
 - Every coloured label or icon meets the contrast test on what it sits on
   (its surface, its tint, a group's tint): `theme::tests`.
 
+**Pane bars and page tabs** (drawn by the core). A pane's bar takes its
+sandbox's group colour, the sidebar's own (`App::group_colors`, one function
+for both), as a 20% tint (16% unfocused) under a 2 pt line of the colour; a
+sandbox with no workspace is on the neutral bar. A bar's actions are its
+icon in its colour by meaning and its label in `text-bright`, grouped in
+zones with a hairline between two: state and what waits (sbx asks, a
+question, a plan) | what it opens (Browser, Project, Env) | the team (Team,
+Threads) | the session (Esc, Remote). Hover and focus put the meaning's tint
+under it; an action whose panel shows for the focused pane is a tinted chip.
+A page tab takes the group colour of its first terminal (14%, the current
+one 28% with a 1 pt border and a 2 pt line of the colour, or the focus blue
+when it has none), other groups on the page as small dots, the state dot
+(amber wants you, blue working) ringed so it shows on any tint. Secondary
+words on a tint are lifted until they read (`theme::muted_on`), icons until
+they mark at 3:1 (`theme::mark_on`): `theme::tests::contrast_on_every_group_tint`
+checks every hue a group can take.
+
 **Vendor colours** (a separate axis, not colour by meaning). The sidebar's
 model words (a row's line 2, a session line's model) take the colour of
 whoever makes the model, so "opus 5.5" and "gpt-5-codex" are told apart at a
@@ -749,7 +776,25 @@ One word for one thing, everywhere (labels, tooltips, notices):
 `chevron-right`, `check`, `warning`, `info`, `gear`, `search`, `folder`,
 `file`, `flag`, `ports`, `copy`, `trash`, `more`, `columns`, `rows`, `grid`,
 `single`, `chat`, `link`, `mic`, `speaker`, `send`, `sparkle`, `cpu`,
-`coin`, `help`, `branch`.
+`coin`, `help`, `branch`, `globe`, `remote`, `key`, `people`, `threads`,
+`shield`, `prompt`, `ask`, `jarvis`, `tag`.
+
+One mark per meaning, everywhere (rail, pane bars, menus, panels, palette):
+
+| Icon | Means |
+|---|---|
+| `sparkle` | the agent (Claude, or another vendor's) |
+| `people` | the team (team mode, the leads) |
+| `jarvis` | Jarvis |
+| `threads` | a sandbox's sessions and threads (`branch` is one worktree) |
+| `globe` | the sandbox's browser |
+| `shield` | network: hosts sbx asks about, rules |
+| `ask` | an agent's question waiting for you (Requests) |
+| `key` | the environment file (sbxenv.yaml) |
+| `remote` | remote control from claude.ai |
+| `prompt` | a shell (Bash) |
+| `stop` | interrupt or stop |
+| `tag` | keyword pills |
 
 ## Where screens live
 

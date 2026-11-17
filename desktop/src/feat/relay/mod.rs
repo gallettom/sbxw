@@ -53,7 +53,7 @@ pub const FEATURE: Feature = Feature {
     data: &[
         Data { key: "relay", path: "/api/relay", on: &["relay"], every: 0, lazy: false },
     ],
-    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/relay.luau"), slot: Slot::Panel { title: "Requests", icon: "chat", width: 420.0 } }],
+    screens: &[ScreenDecl { name: SCREEN, src: include_str!("../../../screens/relay.luau"), slot: Slot::Panel { title: "Requests", icon: "ask", width: 420.0 } }],
     intents: INTENTS,
     events: &["session"],
     act,
@@ -1090,7 +1090,7 @@ fn extras(cx: &Ctx) -> Vec<Extra> {
             None => json!({}),
         };
         v.push(Extra { place: Place::Sandbox(sb.clone()), id: "relay".into(), label: "?".into(), icon: None, tone: "amber".into(), help: format!("{sb} waits for your answer"), count: Some(n), intent: Some(("relay_open".into(), args.clone())) });
-        v.push(Extra { place: Place::Pane(sb.clone()), id: "relay".into(), label: "asks you".into(), icon: Some("chat".into()), tone: "amber".into(), help: "Answer in the Requests panel".into(), count: Some(n), intent: Some(("relay_open".into(), args)) });
+        v.push(Extra { place: Place::Pane(sb.clone()), id: "relay".into(), label: "asks you".into(), icon: Some("ask".into()), tone: "amber".into(), help: "Answer in the Requests panel".into(), count: Some(n), intent: Some(("relay_open".into(), args)) });
     }
     v
 }

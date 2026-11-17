@@ -36,6 +36,10 @@ pub struct TabInfo {
     pub label: String,
     pub help: String,
     pub tone: Option<&'static str>,
+    /// The group colour of the page's first terminal (the sidebar's and the
+    /// pane bar's, `App::group_colors`), and those of the page's other groups.
+    pub group: Option<u32>,
+    pub others: Vec<u32>,
 }
 
 /// A name cut to about `n` characters.
@@ -98,7 +102,7 @@ impl App {
     }
 
     pub fn tab_info_as(&self, k: usize, compact: bool) -> TabInfo {
-        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None } };
+        let Some(page) = self.pages.list.get(k) else { return TabInfo { label: String::new(), help: String::new(), tone: None, group: None, others: vec![] } };
         let panes: Vec<&Pane> = page.tile.order().into_iter().filter_map(|u| self.pane_by_uid(u)).collect();
         let open: Vec<&&Pane> = panes.iter().filter(|p| p.sandbox.is_some()).collect();
         let names: Vec<String> = open.iter().map(|p| pane_name(p)).collect();
@@ -114,7 +118,12 @@ impl App {
         let tone = if wants { Some("amber") } else if working { Some("blue") } else { None };
         let what = if names.is_empty() { "nothing open".to_string() } else { names.join(", ") };
         let state = if wants { " (a terminal wants you)" } else if working { " (an agent is working)" } else { "" };
-        TabInfo { label, help: format!("Page {}: {what}{state}", k + 1), tone }
+        let colors = self.group_colors();
+        let groups: Vec<Option<u32>> = open.iter().map(|p| p.sandbox.as_deref().and_then(|n| colors.get(n).copied())).collect();
+        let group = groups.first().copied().flatten();
+        let mut others: Vec<u32> = groups.iter().flatten().copied().filter(|g| Some(*g) != group).collect();
+        others.dedup();
+        TabInfo { label, help: format!("Page {}: {what}{state}", k + 1), tone, group, others }
     }
 
     /// Which tabs are inline: `(first, end)`; the others are in `pager-more`.
@@ -255,16 +264,38 @@ fn tab(s: &App, k: usize, compact: bool) -> El {
             s.run_intent("pager", Intent::Pages(PageOp::Show(k)));
             s.push_data();
         });
+    // Its group's colour as a tint (stronger for the current page); the
+    // current one also has a 1 pt border and a 2 pt line at its foot in that
+    // colour (the focus blue when it has none) and a heavier label, so it
+    // reads without the colour too.
+    let ground = theme::tab_ground(t.group, on);
+    let line = theme::hex(t.group.unwrap_or_else(|| theme::color_value("focus").unwrap()));
+    e = e.fill(theme::hex(ground)).hover(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.08, ground)));
     if on {
-        e = e.fill(c("elevated")).border(1.0, c("border"));
+        e = e.border(1.0, line).child(el().key(format!("page-{}-line", k + 1)).pin(Some(0.0), None, Some(0.0), Some(0.0)).h(2.0).fill(line));
     }
     if target {
         e = e.border(1.5, c("blue"));
     }
     if let Some(tone) = t.tone {
-        e = e.child(el().w(TAB_DOT).h(TAB_DOT).radius(TAB_DOT / 2.0).fill(c(tone)));
+        // A dark ring keeps the dot clear on any tint.
+        e = e.child(el().w(TAB_DOT).h(TAB_DOT).radius(TAB_DOT / 2.0).fill(c(tone)).border(1.0, c("floor")));
     }
-    e = e.child(text(t.label).font(small(TAB_TEXT, if on { 600.0 } else { 500.0 })).color(c(if on { "text-bright" } else { "text-muted" })).truncate().min_w(0.0).max_w(TAB_LABEL_MAX));
+    // A session's tab: the sandbox muted, what tells it apart (the thread)
+    // bright; the cut falls on the second part.
+    let (prefix, rest) = match t.label.split_once(" · ") {
+        Some((a, b)) if !t.label.starts_with("Page ") => (Some(format!("{a} · ")), b.to_string()),
+        _ => (None, t.label.clone()),
+    };
+    let weight = if on { 600.0 } else { 500.0 };
+    if let Some(p) = prefix {
+        e = e.child(text(p).font(small(TAB_TEXT, 500.0)).color(theme::hex(theme::muted_on(ground))));
+    }
+    e = e.child(text(rest).font(small(TAB_TEXT, weight)).color(c("text-bright")).truncate().min_w(0.0).max_w(TAB_LABEL_MAX));
+    // Groups on the page besides the first one's: a small dot each.
+    for g in t.others.iter().take(3) {
+        e = e.child(el().w(5.0).h(5.0).radius(2.5).fill(theme::hex(*g)));
+    }
     let help = if s.pages.list.len() > 1 { format!("Close page {} (its terminals' views close; the sessions go on)", k + 1) } else { "Close this page's terminals (the sessions go on)".to_string() };
     e.child(
         el().key(format!("page-{}-close", k + 1))

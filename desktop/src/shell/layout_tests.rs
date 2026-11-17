@@ -591,3 +591,4 @@ fn modal_content_stays_inside_the_modal() {
     assert!(checked > 50, "{checked} elements checked");
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
+

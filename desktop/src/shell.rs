@@ -408,6 +408,7 @@ impl App {
             for (i, &id) in ids.iter().enumerate() {
                 let mut p = Pane::empty(id);
                 p.sandbox = init.open.get(i).cloned();
+                p.attention = p.sandbox.as_ref().is_some_and(|s| init.attention.contains(s));
                 app.panes.push(p);
             }
             app.pages = Pages { list: vec![pages::Page::of(tiling::default(&ids, init.split.as_deref() == Some("rows")))], current: 0, per: 4, grid_per: 4 };
@@ -416,6 +417,9 @@ impl App {
                 app.pages.current = 0;
             }
             app.sync_panes(ids.get(init.focused.unwrap_or(1).saturating_sub(1)).copied());
+            if init.tabs {
+                app.run_page_op(PageOp::View(true));
+            }
         }
         if a.fixture.is_none() && !headless() {
             app.restore = Some(app.store.get("layout").clone()).filter(|v| !v.is_null());
@@ -2479,17 +2483,24 @@ fn drag_overlay(s: &App) -> Vec<El> {
 
 /// A pane bar chip: an extra's (or the core's) label, icon, tone and count,
 /// pressable when it has an intent.
-fn bar_chip(it: &bar::Item, n: usize) -> El {
-    // Quiet: a muted chip is text on the bar; a tone is its colour on its tint.
+/// `active`: the panel it opens shows, for this pane; `ground`: the bar's tint.
+fn bar_chip(it: &bar::Item, n: usize, active: bool, ground: u32) -> El {
+    // Quiet: a muted chip is its icon in its colour by meaning and its words
+    // in the bright text on the bar; a tone is its colour on its tint.
     let quiet = it.tone == "muted" || it.tone.is_empty();
     let (fg, tint) = crate::screen::tone(&it.tone);
-    let fg = if quiet { theme::color_value("text").unwrap() } else { fg };
+    let fg = if quiet { theme::color_value("text-bright").unwrap() } else { fg };
     // A quiet chip's icon by meaning (docs/screens.md, "Colour by meaning"):
-    // what it goes to blue, the team purple, stopping red; its words stay text.
-    let icon_fg = if quiet { crate::screen::action_tone(bar::meaning(&it.id)).0 } else { fg };
+    // what it goes to blue, the team purple, stopping red, in its full tone.
+    let (meaning_fg, meaning_tint) = crate::screen::action_tone(bar::meaning(&it.id));
+    let icon_fg = if quiet { theme::mark_on(meaning_fg, ground) } else { fg };
+    // Hover, focus and the active state: the meaning's tint (neutral: the elevated grey).
+    let quiet_tint = if bar::meaning(&it.id) == "neutral" { theme::color_value("elevated").unwrap() } else { meaning_tint };
     let mut b = row().key(it.key(n)).gap(bar::CHIP_GAP).px(bar::CHIP_PX).h(layout::DENSE_H).min_w(layout::DENSE_H).justify_center().items_center().radius(theme::radius("xs").unwrap());
     if !quiet {
         b = b.fill(theme::hex(tint));
+    } else if active {
+        b = b.fill(theme::hex(quiet_tint)).border(1.0, theme::hex(theme::over(meaning_fg, 0.5, quiet_tint)));
     }
     if !it.help.is_empty() {
         b = b.help(it.help.clone());
@@ -2502,7 +2513,8 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
         b = b.child(text(label).font(small(bar::CHIP_TEXT, 500.0)).color(theme::hex(fg)));
     }
     if let Some((name, args)) = it.intent.clone() {
-        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).hover(c(if quiet { "elevated" } else { "active-bg" })).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
+        let hover = if quiet { theme::hex(theme::over(meaning_fg, 0.12, quiet_tint)) } else { c("active-bg") };
+        b = b.role("button").label(if it.text().is_empty() { it.help.clone() } else { it.text() }).expanded(active).hover(hover).focusable(true).focus_ring(2.0, 1.0, c("focus")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
             s.press_extra("pane", &name, &args);
             s.push_data();
         });
@@ -2595,6 +2607,12 @@ fn pane_view(s: &App, i: usize) -> El {
     let connected = pane.is_some_and(|p| p.status() == "connected");
     let (dot_tone, dot_word) = if pane.is_some_and(|p| p.attention) { ("amber", "wants you") } else if connected { ("blue", "connected") } else { ("text-muted", "not connected") };
     let dot = el().w(bar::DOT_W).h(bar::DOT_W).radius(bar::DOT_W / 2.0).fill(c(dot_tone)).help(format!("The terminal: {dot_word}"));
+    // The bar takes its sandbox's group colour, as the web UI's grouped panes
+    // do: the same hue as the sidebar's group (App::group_colors, one function
+    // for both), as a tint (theme::bar_ground); an ungrouped sandbox's bar is
+    // the neutral surface.
+    let group = pane.and_then(|p| p.sandbox.as_deref()).and_then(|n| s.group_colors().get(n).copied());
+    let bar_ground = theme::bar_ground(group, focused);
     // grip, dot | name, kind, extras… | "⋯" | close. The middle part is clipped and
     // shrinks; the dot and the close button never move out of view.
     let bar = row()
@@ -2604,7 +2622,7 @@ fn pane_view(s: &App, i: usize) -> El {
         .px(bar::PANE_PAD)
         .gap(bar::PANE_GAP)
         .items_center()
-        .fill(c(if focused { "surface" } else { "surface-alt" }))
+        .fill(theme::hex(bar_ground))
         .on_layout(move |s: &mut App, r: [f32; 4]| {
             let w = s.bar_w.entry(uid).or_insert(0.0);
             if (*w - r[2]).abs() > 0.5 {
@@ -2626,9 +2644,21 @@ fn pane_view(s: &App, i: usize) -> El {
         text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(bar::NAME_TEXT, 500.0)).color(c(if focused { "text-bright" } else { "text" })).truncate().min_w(name_min),
     );
     if let (Some(p), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
-        mid = mid.child(text(p.mode.name()).font(small(bar::CHIP_TEXT, 400.0)).color(c("text-muted")));
+        mid = mid.child(text(p.mode.name()).font(small(bar::CHIP_TEXT, 400.0)).color(theme::hex(theme::muted_on(bar_ground))));
+        // By zone (bar::zone), a hairline between two.
+        let shown_panel = |name: &str| s.feats.panel.as_deref() == Some(name) || (s.feats.split && s.feats.panels.iter().any(|p| p == name));
+        let mut last = None;
         for it in &f.shown {
-            mid = mid.child(bar_chip(it, i + 1));
+            let z = bar::zone(&it.id);
+            let active = focused && bar::panel_of(&it.id).is_some_and(shown_panel);
+            let mut chip = bar_chip(it, i + 1, active, bar_ground);
+            if last.is_some_and(|l| l != z) {
+                // In the gap before the zone's first chip (no room of its own).
+                let x = -(bar::PANE_GAP + bar::SEP_W) / 2.0;
+                chip = chip.child(el().key(format!("pane-{}-zone-{z}", i + 1)).absolute(x, (layout::DENSE_H - 14.0) / 2.0).w(bar::SEP_W).h(14.0).fill(theme::hex(theme::over(theme::color_value("text").unwrap(), 0.3, bar_ground))));
+            }
+            last = Some(z);
+            mid = mid.child(chip);
         }
     }
     bar = bar.child(mid);
@@ -2680,11 +2710,7 @@ fn pane_view(s: &App, i: usize) -> El {
     // The focused pane: a clear 1.5 pt blue border; the others a quiet one.
     // A 2 pt line on top in the sandbox's group colour (the web UI's), so
     // panes of one piece of work read together.
-    let accent = pane
-        .and_then(|p| p.sandbox.as_deref())
-        .and_then(|n| s.group_colors().get(n).copied())
-        .map(theme::hex)
-        .unwrap_or_else(|| c("border"));
+    let accent = group.map(theme::hex).unwrap_or_else(|| c("border"));
     let (bw, border) = if focused { (1.5, c("blue")) } else { (1.0, c("elevated")) };
     col()
         .key(format!("pane-{}", i + 1))
