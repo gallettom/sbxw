@@ -32,7 +32,7 @@ local function governed(src)
 end
 
 local function section(title, count)
-  return row{ gap = 6, w = "full", pad = 2,
+  return row{ gap = 8, w = "full", pad = 2,
     text{ string.upper(title), size = "xxs", weight = "semibold", color = "text-muted" },
     count and badge{ tostring(count), tone = "neutral" } or false,
   }
@@ -53,7 +53,7 @@ local function plural(n, w, ws) return n .. " " .. (n == 1 and w or (ws or (w ..
 
 local function requests(data)
   local a = data.approvals or {}
-  local out = { gap = 6, w = "full" }
+  local out = { gap = 8, w = "full" }
   -- Only the requests of sandboxes in the list, as the web UI shows them:
   -- sbx lists the whole machine's (removed sandboxes, Jarvis's own).
   local listed = {}
@@ -91,7 +91,7 @@ local function requests(data)
     table.insert(out, note(plural(total, "request") .. ": " .. plural(nhosts, "distinct host") .. " in " .. plural(nsb, "sandbox", "sandboxes") .. "."))
   end
   if refused > 1 then
-    table.insert(out, row{ gap = 6, w = "full",
+    table.insert(out, row{ gap = 8, w = "full",
       text{ plural(refused, "is a host", "are hosts") .. " sbx already refused: nothing waits on " .. (refused == 1 and "it" or "them") .. ".", size = "sm", color = "text-muted", wrap = true, grow = 1 },
       button{ "Dismiss all " .. refused, icon = "close", on = "dismiss_all", key = "approvals-dismiss-all",
         help = "Answer sbx's Dismiss on every refused host listed here (not a kit's port request). They stay refused; the sandbox's next try asks again" },
@@ -99,7 +99,7 @@ local function requests(data)
   end
   for _, g in ipairs(order) do
     local r = g.first
-    local buttons = { gap = 6, w = "full" }
+    local buttons = { gap = 8, w = "full" }
     for _, o in ipairs(r.options or {}) do
       if g.dismiss and (o.id == "dismiss" or string.lower(o.label or ""):sub(1, 7) == "dismiss") then
         -- Dismissing is direct, and takes every copy of this host's request.
@@ -112,7 +112,7 @@ local function requests(data)
       end
     end
     table.insert(out, column{ gap = 4, w = "full", pad = 8, radius = "sm", fill = "surface-alt", border = r.kind == "network" and "elevated" or "amber", key = "req-" .. r.id,
-      row{ gap = 6, w = "full",
+      row{ gap = 8, w = "full",
         badge{ kinds[r.kind] or r.kind or "request", tone = r.kind == "network" and "neutral" or "amber" },
         text{ r.title or "", mono = true, color = "text-bright", truncate = true, grow = 1 },
         g.n > 1 and text{ "×" .. g.n, size = "sm", color = "text-dim", help = "sbx listed this " .. g.n .. " times (each retry)" } or false,
@@ -137,7 +137,7 @@ local function blocked_view(sb, policy)
     else
       action = false
     end
-    table.insert(rows, row{ gap = 6, w = "full",
+    table.insert(rows, row{ gap = 8, w = "full",
       text{ b.host, mono = true, size = "sm", color = "text", truncate = true, grow = 1, help = b.reason },
       (b.count or 0) > 1 and text{ "×" .. b.count, size = "sm", color = "text-dim" } or false,
       action,
@@ -173,7 +173,7 @@ local function rules_view(sb, policy, state)
         rm = button{ icon = "close", variant = "ghost", on = action == "allow" and "rule_rm" or "unblock", arg = id,
           help = "Remove this rule", key = "rule-rm-" .. id }
       end
-      table.insert(items, row{ gap = 6, w = "full",
+      table.insert(items, row{ gap = 8, w = "full",
         badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
         text{ host ~= "" and host or line, mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
         text{ scope_label(at(v, r, "applies") ~= "" and at(v, r, "applies") or at(v, r, "sandbox")), size = "xs", color = "text-dim" },
@@ -186,7 +186,7 @@ local function rules_view(sb, policy, state)
   if #rows == 0 and not v.error then table.insert(out, note("sbx reported no rules for this sandbox.")) end
   if (v.truncated or 0) > 0 then table.insert(out, note("+ " .. v.truncated .. " more not shown: run `sbx policy ls --wide`.")) end
   -- Add a rule.
-  table.insert(out, column{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
+  table.insert(out, column{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
     input{ id = "rule-res", value = state.res, placeholder = "example.com, *.acme.dev, host:443", on = "res", on_submit = "add_rule" },
     row{ gap = 8, w = "full",
       select{ id = "rule-decision", items = { { id = "allow", label = "allow" }, { id = "deny", label = "deny" } }, value = state.decision or "allow", on = "decision" },
@@ -195,7 +195,7 @@ local function rules_view(sb, policy, state)
       button{ "Add rule", icon = "plus", on = "add_rule", disabled = (state.res or "") == "", key = "rule-add" },
     },
     checkbox{ "Only some HTTP requests", value = state.http or false, on = "http", key = "rule-http" },
-    state.http and row{ gap = 6, w = "full",
+    state.http and row{ gap = 8, w = "full",
       input{ id = "rule-methods", value = state.methods, placeholder = "GET, HEAD", on = "methods" },
       input{ id = "rule-path", value = state.path, placeholder = "/v1/**", on = "path" },
       input{ id = "rule-query", value = state.query, placeholder = "org=acme", on = "query" },
@@ -211,7 +211,7 @@ local function log_view(policy)
   for i, r in ipairs(v.rows) do
     if i > 12 then break end
     local action = string.lower(at(v, r, "action"))
-    table.insert(items, row{ gap = 6, w = "full",
+    table.insert(items, row{ gap = 8, w = "full",
       text{ at(v, r, "time"), size = "xs", color = "text-dim" },
       badge{ action ~= "" and action or "?", tone = action == "allow" and "green" or (action == "deny" and "red" or "neutral") },
       text{ at(v, r, "host"), mono = true, size = "sm", color = "text", truncate = true, grow = 1 },
@@ -224,7 +224,7 @@ local function ports_view(sb, ports, hosts, state)
   local list_ = (ports or {}).ports or {}
   local items = {}
   for _, p in ipairs(list_) do
-    table.insert(items, row{ gap = 6, w = "full",
+    table.insert(items, row{ gap = 8, w = "full",
       text{ tostring(p.sandbox_port), weight = "semibold", color = "text-bright" },
       text{ "→ " .. (p.host_ip or "") .. ":" .. tostring(p.host_port), mono = true, size = "sm", color = "text-muted", grow = 1 },
       badge{ p.proto or "tcp", tone = "neutral" },
@@ -234,16 +234,16 @@ local function ports_view(sb, ports, hosts, state)
   end
   local out = { gap = 4, w = "full", section("Ports", #list_) }
   if #items > 0 then table.insert(out, list(items)) else table.insert(out, note("No ports published.")) end
-  table.insert(out, column{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
-    row{ gap = 6, w = "full",
+  table.insert(out, column{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "surface-alt",
+    row{ gap = 8, w = "full",
       input{ id = "port-sbx", value = state.sport, placeholder = "sandbox port", on = "sport" },
       input{ id = "port-host", value = state.hport, placeholder = "host port (sbx picks)", on = "hport" },
     },
-    row{ gap = 6, w = "full",
+    row{ gap = 8, w = "full",
       input{ id = "port-ip", value = state.hip, placeholder = "host address (127.0.0.1)", on = "hip" },
       input{ id = "port-alias", value = state.alias, placeholder = "alias (optional)", on = "alias" },
     },
-    row{ gap = 6, w = "full", spacer{},
+    row{ gap = 8, w = "full", spacer{},
       button{ "Publish", icon = "plus", on = "publish", disabled = tonumber(state.sport or "") == nil, key = "port-publish" },
     },
   })
@@ -251,7 +251,7 @@ local function ports_view(sb, ports, hosts, state)
   if #h > 0 then
     local hi = {}
     for _, e in ipairs(h) do
-      table.insert(hi, row{ gap = 6, w = "full", text{ e.hostname or "", size = "sm", grow = 1 }, text{ e.ip or "", mono = true, size = "sm", color = "text-muted" } })
+      table.insert(hi, row{ gap = 8, w = "full", text{ e.hostname or "", size = "sm", grow = 1 }, text{ e.ip or "", mono = true, size = "sm", color = "text-muted" } })
     end
     table.insert(out, text{ "/etc/hosts aliases", size = "xs", color = "text-dim" })
     table.insert(out, list(hi))
@@ -269,7 +269,7 @@ return {
     for _, s in ipairs(data.sandboxes or {}) do
       if s.status == "running" then table.insert(running, { id = s.name, label = s.name }) end
     end
-    local body = { gap = 14, w = "full", requests(data) }
+    local body = { gap = 16, w = "full", requests(data) }
     table.insert(body, divider{})
     table.insert(body, row{ gap = 8, w = "full",
       text{ "Sandbox", size = "sm", color = "text-muted" },
@@ -292,7 +292,7 @@ return {
         if #allow > 0 then
           table.insert(body, note("sbxw.toml allows on up: " .. table.concat(allow, ", ")))
         end
-        table.insert(body, row{ gap = 6, w = "full", spacer{},
+        table.insert(body, row{ gap = 8, w = "full", spacer{},
           button{ "Re-read policy now", icon = "reload", variant = "ghost", on = "policy_refresh", key = "policy-refresh", help = "sbx policy refresh" } })
       end
       table.insert(body, divider{})

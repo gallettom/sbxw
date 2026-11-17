@@ -14,7 +14,7 @@ local WHY = {
 local function message(m, speaks)
   if m.who == "me" then
     return row{ w = "full", justify = "end",
-      column{ max_w = 300, px = 10, py = 6, radius = "sm", fill = "elevated",
+      column{ max_w = 300, px = 12, py = 8, radius = "sm", fill = "elevated",
         text{ m.text, wrap = true, color = "text-bright" },
       },
     }
@@ -30,7 +30,7 @@ local function message(m, speaks)
   elseif m.who == "agent" then
     -- An agent of the sandbox the panel follows: its words, framed as its.
     return column{ w = "full", gap = 4, key = "msg-" .. m.id,
-      row{ gap = 6, w = "full", badge{ m.from or "agent", tone = "blue" }, spacer{},
+      row{ gap = 8, w = "full", badge{ m.from or "agent", tone = "blue" }, spacer{},
         speaks and button{ icon = "speaker", variant = "ghost", on = "read", arg = m.id,
           color = m.reading and "blue" or "text-dim", help = m.reading and "Stop reading" or "Read aloud" } or false },
       markdown{ m.text, on = "link" },
@@ -159,7 +159,7 @@ return {
       scroll(log),
       v.recording and progress{ value = v.level, tone = "red" } or false,
       note,
-      row{ w = "full", gap = 6,
+      row{ w = "full", gap = 8,
         column{ grow = 1, input{ id = "jarvis-input", on_submit = "send", on = "edited",
           placeholder = target and ("Message " .. target .. " (you confirm it first)") or (running and "Ask Jarvis" or "Ask Jarvis (start it first)") } },
         talk,

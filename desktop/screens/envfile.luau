@@ -26,20 +26,20 @@ return {
     else
       note = "Paths are written relative to this folder. Any folder above the workspace will do."
     end
-    return column{ gap = 10, w = "full", h = "full",
+    return column{ gap = 12, w = "full", h = "full",
       row{ w = "full", gap = 8,
         icon{ "file", size = 14, color = "text-muted" },
         text{ "Environment file: " .. tostring(name), size = "lg", weight = "semibold", color = "text-bright", truncate = true, grow = 1 },
         button{ icon = "close", variant = "ghost", on = "close", key = "env-close", help = "Close" },
       },
       text{ "sbxenv.yaml describes this sandbox so `sbx` can create it again from the file, on any machine with the same folders below it.", size = "sm", color = "text-muted", wrap = true },
-      row{ gap = 6, w = "full",
+      row{ gap = 8, w = "full",
         text{ "Folder", size = "sm", color = "text-muted" },
         column{ grow = 1, min_w = 0, input{ id = "env-dir", value = dir, placeholder = "a folder above the workspace", on = "dir", on_submit = "preview" } },
         button{ "Preview", icon = "reload", on = "preview", key = "env-preview" },
       },
       text{ note, size = "xs", color = "text-dim", wrap = true },
-      e.error and row{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red",
+      e.error and row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "red-tint", border = "red",
         icon{ "warning", size = 12, color = "red" },
         text{ e.error, size = "sm", color = "text-bright", wrap = true, grow = 1 },
       } or false,

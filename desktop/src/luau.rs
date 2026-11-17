@@ -153,6 +153,24 @@ pub struct Node {
     pub rows: u32,
     /// `image`: `fit` (letterboxed, default) or `fill` (cropped).
     pub fill_image: bool,
+    /// `row`/`column`: children with `reveal` show while it is hovered or
+    /// holds keyboard focus (Rune's hover group).
+    pub hover_group: bool,
+    /// Any element: drawn only while the nearest `hover_group` is hovered or
+    /// focused (still pressable and reachable with Tab, which lights it).
+    pub reveal: bool,
+    /// `row`/`column`: `"list"` makes its focusable children one keyboard
+    /// group (arrows move between them, Tab enters at the selected one).
+    pub group: Option<String>,
+    /// `row`/`column` with `on`: the selected item of its group.
+    pub selected: bool,
+    /// `row`/`column` with `on`: called when Space is pressed while it has
+    /// the keyboard (Enter calls `on`).
+    pub on_space: Option<String>,
+    /// `button`, `menu`: the dense size (24 pt, for bars) instead of 28.
+    pub dense: bool,
+    /// `button`, `menu`: the shortcut's keycaps shown in its tooltip.
+    pub keys: Vec<String>,
     pub style: Style,
     pub children: Vec<Node>,
 }
@@ -179,6 +197,13 @@ impl Node {
             stick_bottom: false,
             rows: 4,
             fill_image: false,
+            hover_group: false,
+            reveal: false,
+            group: None,
+            selected: false,
+            on_space: None,
+            dense: false,
+            keys: vec![],
             style: Style::default(),
             children: vec![],
         }
@@ -202,9 +227,9 @@ pub enum Positional {
 }
 
 /// Props every element takes.
-pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity"];
+pub const COMMON: &[&str] = &["key", "help", "w", "h", "min_w", "max_w", "min_h", "max_h", "grow", "pad", "px", "py", "fill", "border", "radius", "opacity", "reveal"];
 const TEXT_PROPS: &[&str] = &["color", "size", "weight", "mono", "wrap", "truncate"];
-const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg"];
+const BOX_PROPS: &[&str] = &["gap", "align", "justify", "hover", "on", "arg", "hover_group", "group", "selected", "on_space"];
 
 /// The frozen element set: name, kind, positional entries, props beyond [`COMMON`].
 pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
@@ -213,7 +238,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("column", Kind::Column, Positional::Children, BOX_PROPS),
     ("list", Kind::List, Positional::Children, &["gap"]),
     ("scroll", Kind::Scroll, Positional::Children, &["gap", "stick_bottom"]),
-    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color"]),
+    ("button", Kind::Button, Positional::Text, &["on", "arg", "variant", "icon", "disabled", "color", "dense", "keys"]),
     ("input", Kind::Input, Positional::None, &["id", "value", "placeholder", "on", "on_submit", "arg", "secure", "disabled"]),
     ("icon", Kind::Icon, Positional::Text, &["color", "size"]),
     ("badge", Kind::Badge, Positional::Text, &["tone"]),
@@ -221,7 +246,7 @@ pub const SPEC: &[(&str, Kind, Positional, &[&str])] = &[
     ("split", Kind::Split, Positional::Two, &["id", "vertical", "ratio"]),
     ("spacer", Kind::Spacer, Positional::None, &[]),
     ("divider", Kind::Divider, Positional::None, &["vertical", "color"]),
-    ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled"]),
+    ("menu", Kind::Menu, Positional::Text, &["id", "items", "on", "arg", "icon", "variant", "disabled", "dense", "keys"]),
     ("select", Kind::Select, Positional::None, &["id", "items", "value", "on", "arg", "placeholder", "disabled"]),
     ("checkbox", Kind::Checkbox, Positional::Text, &["value", "on", "arg", "disabled"]),
     ("progress", Kind::Progress, Positional::None, &["value", "tone"]),
@@ -698,6 +723,18 @@ fn prop(n: &mut Node, name: &str, k: &str, v: &Value) -> Result<(), String> {
         "stick_bottom" => n.stick_bottom = bool_of(v)?,
         "rows" => n.rows = num_of(v)?.clamp(1.0, 40.0) as u32,
         "fit" => n.fill_image = one_of(v, &["fit", "fill"])? == "fill",
+        "hover_group" => n.hover_group = bool_of(v)?,
+        "reveal" => n.reveal = bool_of(v)?,
+        "group" => n.group = Some(one_of(v, &["list"])?),
+        "selected" => n.selected = bool_of(v)?,
+        "on_space" => n.on_space = Some(string_of(v)?),
+        "dense" => n.dense = bool_of(v)?,
+        "keys" => {
+            let Value::Table(t) = v else { return Err("expected a list of key names, { \"⌘\", \"K\" }".into()) };
+            for k in t.sequence_values::<Value>() {
+                n.keys.push(string_of(&k.map_err(|e| e.to_string())?)?);
+            }
+        }
         "items" => {
             let Value::Table(t) = v else { return Err("expected a list of { id = ..., label = ... }".into()) };
             for (i, x) in t.sequence_values::<Value>().enumerate() {
@@ -828,7 +865,7 @@ mod tests {
         let h = host();
         assert!(h.eval("string.rep = nil").is_err());
         assert!(h.eval("theme.color.text = '#ff0000'").is_err());
-        assert_eq!(h.eval("return theme.color['text-muted']").unwrap().to_string().unwrap(), "#8b949e");
+        assert_eq!(h.eval("return theme.color['text-muted']").unwrap().to_string().unwrap(), "#9198a1");
     }
 
     #[test]
@@ -857,10 +894,10 @@ mod tests {
         }"#)
         .unwrap();
         assert_eq!(n.kind, Kind::Row);
-        assert_eq!(n.style.gap, Some(6.0));
-        assert_eq!(n.style.radius, Some(12.0));
+        assert_eq!(n.style.gap, Some(8.0));
+        assert_eq!(n.style.radius, Some(10.0));
         assert_eq!(n.children.len(), 5, "false is skipped");
-        assert_eq!(n.children[0].style.size, Some(11.0));
+        assert_eq!(n.children[0].style.size, Some(12.0));
         assert_eq!(n.children[0].style.weight, Some(700.0));
         assert_eq!(n.children[1].arg, serde_json::json!({ "name": "x", "n": 2 }));
         assert_eq!(n.children[3].items[1], Item { id: "b".into(), label: "Bee".into(), icon: Some("check".into()), disabled: false });

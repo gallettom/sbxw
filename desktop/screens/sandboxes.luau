@@ -106,7 +106,7 @@ local function item(sb, app)
     actions = button{ icon = "play", on = "start", arg = sb.name, color = "green", help = "Start", key = "start-" .. sb.name }
   end
   local extras = extras_of(sb, app)
-  local top = { gap = 6, w = "full",
+  local top = { gap = 8, w = "full",
     text{ sb.name, color = "text-bright", weight = "medium", truncate = true, grow = 1, help = sb.name },
   }
   -- A feature that shows sbx's approvals itself replaces the plain flag.
@@ -119,16 +119,16 @@ local function item(sb, app)
   local name_w = math.min(utf8.len(sb.name) or #sb.name, 12) * 7.8
   -- 206: the row's inner width; 26: the pane badge or the + button, and its gap.
   local own_line = #extras > 0 and (name_w + extras_width(sb, app) + 26 > 206)
-  local under = { gap = 6, w = "full", justify = "end" }
+  local under = { gap = 8, w = "full", justify = "end" }
   for _, x in ipairs(extras) do table.insert(own_line and under or top, x) end
   if pane then table.insert(top, badge{ tostring(pane), tone = "blue", help = "In pane " .. pane }) end
   if not pane then table.insert(top, button{ icon = "plus", variant = "ghost", on = "spare", arg = sb.name, help = "Open in a spare pane", key = "spare-" .. sb.name }) end
   return column{
-    key = "row-" .. sb.name, on = "open", arg = sb.name, gap = 3, px = 9, py = 7, radius = "sm", w = "full",
+    key = "row-" .. sb.name, on = "open", arg = sb.name, gap = 4, px = 8, py = 8, radius = "sm", w = "full",
     fill = selected and "surface" or nil, hover = "surface",
     row(top),
     own_line and row(under) or false,
-    row{ gap = 6, w = "full",
+    row{ gap = 8, w = "full",
       dot{ tone = tones[sb.status] or "amber" },
       text{ sb.status, size = "sm", color = "text-muted" },
       text{ sb.agent, size = "sm", color = "text-dim", truncate = true, grow = 1 },
@@ -150,7 +150,7 @@ local function sub_rows(sb, app, into)
       or ((e.help and e.help ~= "") and text{ e.help, size = "xs", color = "text-dim", truncate = true, max_w = 90 } or false)
     local key = "extra-row-" .. sb.name .. "-" .. e.id
     if e.intent then extra_intents[sb.name .. "\n" .. e.id] = e.intent end
-    table.insert(into, row{ key = key, gap = 6, w = "full", px = 9, py = 3, radius = "sm", hover = "surface",
+    table.insert(into, row{ key = key, gap = 8, w = "full", px = 8, py = 4, radius = "sm", hover = "surface",
       on = e.intent and "extra" or nil, arg = e.intent and (sb.name .. "\n" .. e.id) or nil, help = e.help,
       column{ w = 12 },
       e.icon and icon{ e.icon, size = 11, color = "text-muted" } or dot{ tone = row_tones[e.tone] or "neutral" },
@@ -179,7 +179,7 @@ return {
     for _, g in ipairs(groups(shown)) do
       local rows = { gap = 2, w = "full", py = 4, radius = "md", fill = g.label and "surface-alt" or nil }
       if g.label then
-        table.insert(rows, row{ gap = 5, px = 10, py = 2, help = g.help,
+        table.insert(rows, row{ gap = 4, px = 12, py = 2, help = g.help,
           icon{ g.label == "Chats" and "chat" or "folder", size = 11, color = "text-muted" },
           text{ string.upper(g.label), size = "xxs", color = "text-muted", truncate = true },
         })
@@ -195,14 +195,14 @@ return {
     elseif #shown == 0 then
       table.insert(body, text{ "Nothing matches “" .. state.filter .. "”.", color = "text-dim", size = "sm", wrap = true })
     end
-    body.gap = 6
+    body.gap = 8
     return column{ gap = 8, h = "full", w = "full",
-      row{ gap = 6, w = "full", px = 4,
+      row{ gap = 8, w = "full", px = 4,
         text{ "SANDBOXES", size = "sm", weight = "semibold", color = "text" },
         spacer{},
         text{ tostring(#data.sandboxes), size = "sm", color = "text-dim" },
       },
-      app.connection.state ~= "up" and row{ gap = 6, w = "full", pad = 8, radius = "sm", fill = "amber-tint", border = "amber",
+      app.connection.state ~= "up" and row{ gap = 8, w = "full", pad = 8, radius = "sm", fill = "amber-tint", border = "amber",
         icon{ "warning", size = 12, color = "amber" },
         text{ app.connection.text, size = "sm", color = "amber-strong", wrap = true, grow = 1 },
       } or false,

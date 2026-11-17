@@ -84,7 +84,7 @@ return {
     else
       switch = select{ id = "layout", items = layouts, value = current(app.layout), on = "layout", help = "How many terminals show" }
     end
-    return row{ gap = 14, w = "full", h = "full",
+    return row{ gap = 16, w = "full", h = "full",
       (not compact) and text{ "sbxw", weight = "bold", size = "lg", color = "text-bright" } or false,
       switch,
       spacer{},
@@ -94,7 +94,7 @@ return {
         help = (j.open and "Close Jarvis (" or "Open Jarvis (") .. key .. ")" },
       -- The daemon state takes the rest, at the right end, and keeps its dot
       -- and at least a word; its whole line is the tooltip.
-      row{ gap = 6, min_w = 96, grow = 1, justify = "end", help = app.connection.text,
+      row{ gap = 8, min_w = 96, grow = 1, justify = "end", help = app.connection.text,
         dot{ tone = tones[app.connection.state] or "neutral" },
         text{ app.connection.state == "up" and app.connection.text or app.connection.state, size = "sm", color = "text-muted", truncate = true, max_w = 500 },
       },

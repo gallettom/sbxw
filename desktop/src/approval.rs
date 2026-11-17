@@ -129,15 +129,15 @@ pub struct DialogState<'a> {
 /// `jv-ack`, `jv-close`, `jv-next`; the reason `jv-reason`).
 pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     use crate::theme::{c, radius};
-    use rune::{col, row, text, Cursor, ScrollSpec, Span, TextStyle};
+    use rune::{col, row, text, Cursor, ScrollSpec, Span};
     let p = d.proposal;
     let pending = crate::jarvis::pending(p);
     let high = crate::jarvis::screen_only(p);
     let needs_ack = crate::jarvis::needs_ack(p);
-    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
+    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(crate::screen::body(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
     let badge = |t: &str, tone: &str| {
         let (fg, tint) = crate::screen::tone(tone);
-        rune::el().px(6.0).py(1.0).radius(radius("xs").unwrap()).fill(crate::theme::hex(tint)).border(1.0, crate::theme::hex(fg)).child(text(t.to_string()).font(TextStyle::new(10.5, 500.0)).color(crate::theme::hex(fg)))
+        rune::el().px(6.0).py(1.0).radius(radius("xs").unwrap()).fill(crate::theme::hex(tint)).border(1.0, crate::theme::hex(fg)).child(text(t.to_string()).font(crate::screen::body(12.0, 500.0)).color(crate::theme::hex(fg)))
     };
     let button = |key: &str, label: &str, primary: bool, enabled: bool| {
         let b = rune::el()
@@ -149,7 +149,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
             .radius(radius("sm").unwrap())
             .fill(c(if primary { "green-deep" } else { "elevated" }))
             .border(1.0, c(if primary { "green-strong" } else { "border" }))
-            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")));
+            .child(text(label.to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")));
         if enabled {
             b.hover(c(if primary { "green-strong" } else { "dim" })).cursor(Cursor::Pointer)
         } else {
@@ -157,9 +157,9 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
         }
     };
 
-    let mut head = row().w_full().gap(8.0).items_center().child(text("Jarvis proposes").font(TextStyle::new(13.0, 600.0)).color(c("text-bright"))).child(badge(if high { "High risk" } else { "Low risk" }, if high { "red" } else { "green" }));
+    let mut head = row().w_full().gap(8.0).items_center().child(text("Jarvis proposes").font(crate::screen::body(13.0, 600.0)).color(c("text-bright"))).child(badge(if high { "High risk" } else { "Low risk" }, if high { "red" } else { "green" }));
     if d.waiting > 0 {
-        head = head.child(text(format!("{} more waiting", d.waiting)).font(TextStyle::new(11.0, 400.0)).color(c("text-muted")));
+        head = head.child(text(format!("{} more waiting", d.waiting)).font(crate::screen::body(12.0, 400.0)).color(c("text-muted")));
     }
     head = head.child(rune::el().grow(1.0)).child(
         rune::el()
@@ -183,7 +183,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
     let changes = p["changes"].as_array().cloned().unwrap_or_default();
     for (i, ch) in changes.iter().enumerate() {
         let mut item = col().key(format!("jv-change-{i}")).w_full().min_w(0.0).gap(6.0);
-        let mut h = row().w_full().gap(6.0).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0));
+        let mut h = row().w_full().gap(6.0).items_center().child(badge(kind_label(ch["kind"].as_str().unwrap_or("change")), "neutral")).child(text(ch["title"].as_str().unwrap_or("").to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0));
         if ch["risk"] == "high" && pending {
             h = h.child(badge("high risk", "red"));
         }
@@ -213,7 +213,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .fill(c("red-tint"))
                     .border(1.0, c("red"))
                     .child(small("This command will run on this machine, outside any sandbox:".into(), 11.5, 600.0, "text-bright"))
-                    .child(text(cmd.to_string()).font(TextStyle::new(12.0, 400.0).mono()).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0)),
+                    .child(text(cmd.to_string()).font(crate::screen::body(12.0, 400.0).mono()).color(c("text-bright")).wrap_anywhere().w_full().min_w(0.0)),
             );
         }
         if let Some(list) = screen_intents(ch) {
@@ -267,7 +267,7 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .radius(radius("sm").unwrap())
                     .fill(c("bg"))
                     .border(1.0, c("elevated"))
-                    .child(rune::rich(diff.to_string(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0))
+                    .child(rune::rich(diff.to_string(), spans).font(crate::screen::body(12.0, 400.0).mono()).color(c("text-muted")).wrap_anywhere().w_full().min_w(0.0))
                     .on_at_bottom(move |_: &mut S, at: bool| set_more(&format!("jv-diff-{i}"), !at)),
             );
             if let Some(e) = more_below(&format!("jv-diff-{i}")) {
@@ -317,10 +317,10 @@ pub fn proposal_view<S: ProposalAnswers>(d: &DialogState) -> El {
                     .cursor(Cursor::Pointer)
                     .on_press(|s: &mut S| s.toggle_ack())
                     .child(b)
-                    .child(text("I have read this command").font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
+                    .child(text("I have read this command").font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0)),
             );
         }
-        let reason = rune::text_input(d.reason, TextStyle::new(12.0, 400.0))
+        let reason = rune::text_input(d.reason, crate::screen::body(12.0, 400.0))
             .single_line()
             .key("jv-reason")
             .color(c("text-bright"))
@@ -437,7 +437,7 @@ fn more_below(key: &str) -> Option<El> {
         rune::el()
             .key(format!("{key}-more"))
             .w_full()
-            .child(rune::text("More below: scroll to read it all before you answer".to_string()).font(rune::TextStyle::new(11.0, 600.0)).color(crate::theme::c("amber")).wrap_anywhere().w_full().min_w(0.0))
+            .child(rune::text("More below: scroll to read it all before you answer".to_string()).font(crate::screen::body(12.0, 600.0)).color(crate::theme::c("amber")).wrap_anywhere().w_full().min_w(0.0))
     })
 }
 
@@ -452,7 +452,7 @@ pub fn granted_lines(c: &crate::feat::Confirm) -> Vec<String> {
 pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
     use crate::theme::{c, radius};
     use rune::{ScrollSpec, Span};
-    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(TextStyle::new(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
+    let small = |t: String, size: f32, weight: f32, color: &str| text(t).font(crate::screen::body(size, weight)).color(c(color)).wrap_anywhere().w_full().min_w(0.0);
     let danger = d.confirm.is_some_and(|x| x.danger);
     let button = |key: &str, label: &str, primary: bool, enabled: bool| {
         let (fill, edge, hover) = match (primary, danger) {
@@ -470,7 +470,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
             .fill(c(fill))
             .border(1.0, c(edge))
             .min_w(0.0)
-            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0));
+            .child(text(label.to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().min_w(0.0));
         if enabled {
             b.hover(c(hover)).cursor(Cursor::Pointer)
         } else {
@@ -482,7 +482,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         .w_full()
         .gap(8.0)
         .items_center()
-        .child(text(title.to_string()).font(TextStyle::new(13.0, 600.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0).key("cf-title"))
+        .child(text(title.to_string()).font(crate::screen::body(13.0, 600.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0).key("cf-title"))
         .child(
             rune::el()
                 .key("cf-close")
@@ -548,7 +548,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                     .radius(radius("sm").unwrap())
                     .fill(c("bg"))
                     .border(1.0, c("elevated"))
-                    .child(rune::rich(p.text.clone(), spans).font(TextStyle::new(11.5, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0))
+                    .child(rune::rich(p.text.clone(), spans).font(crate::screen::body(12.0, 400.0).mono()).color(c("text")).wrap_anywhere().w_full().min_w(0.0))
                     .on_at_bottom(|_: &mut S, at: bool| set_more("cf-preview", !at)),
             );
             if let Some(e) = more_below("cf-preview") {
@@ -558,7 +558,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
         for (i, sec) in x.secrets.iter().enumerate() {
             let Some(edit) = d.secrets.get(i) else { continue };
             let label = if sec.optional { format!("{} (optional)", sec.label) } else { sec.label.clone() };
-            let mut input = rune::text_input(edit, TextStyle::new(12.0, 400.0)).key(format!("cf-secret-{i}")).label(sec.label.clone()).color(c("text-bright")).w_full().on_edit(move |s: &mut S| s.secret_edit(i));
+            let mut input = rune::text_input(edit, crate::screen::body(12.0, 400.0)).key(format!("cf-secret-{i}")).label(sec.label.clone()).color(c("text-bright")).w_full().on_edit(move |s: &mut S| s.secret_edit(i));
             if !sec.multiline {
                 input = input.single_line();
             }
@@ -596,7 +596,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
                 .cursor(Cursor::Pointer)
                 .on_press(|s: &mut S| s.toggle_confirm_ack())
                 .child(b)
-                .child(text(ack).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0)),
+                .child(text(ack).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere().grow(1.0).min_w(0.0)),
         );
     }
     let (yes, no) = d.confirm.map(|x| (x.confirm.as_str(), x.cancel.as_str())).unwrap_or(("Confirm", "Cancel"));
@@ -643,7 +643,7 @@ pub fn confirm_view<S: ConfirmAnswers>(d: &ConfirmState) -> El {
 // - above: dropped, with a notice.
 // Writes only: the read form never reaches here (terminal.rs, `new_term`).
 
-use rune::{col, row, text, Cursor, TextStyle, Tx};
+use rune::{col, row, text, Cursor, Tx};
 use std::time::Instant;
 
 pub const OSC_COPY_QUIET_MAX: usize = 4 * 1024;
@@ -739,7 +739,7 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
             .border(1.0, c(if primary { "green-strong" } else { "border" }))
             .hover(c(if primary { "green-strong" } else { "dim" }))
             .cursor(Cursor::Pointer)
-            .child(text(label.to_string()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")))
+            .child(text(label.to_string()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")))
     };
     col()
         .key("copy-offer")
@@ -752,7 +752,7 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
         .radius(radius("md").unwrap())
         .fill(c("surface"))
         .border(1.0, c("amber"))
-        .child(text(o.headline()).font(TextStyle::new(12.0, 500.0)).color(c("text-bright")).wrap_anywhere())
+        .child(text(o.headline()).font(crate::screen::body(12.0, 500.0)).color(c("text-bright")).wrap_anywhere())
         .child(
             col()
                 .w_full()
@@ -760,7 +760,7 @@ pub fn copy_offer_view<S: 'static>(o: &CopyOffer, copy: impl Fn(&mut S, &mut Tx)
                 .padding(8.0)
                 .radius(radius("sm").unwrap())
                 .fill(c("bg"))
-                .child(text(osc_preview(&o.text)).font(TextStyle::new(12.0, 400.0)).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
+                .child(text(osc_preview(&o.text)).font(crate::screen::body(12.0, 400.0)).color(c("text")).wrap_anywhere().w_full().min_w(0.0)),
         )
         .child(
             row()

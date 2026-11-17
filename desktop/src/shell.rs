@@ -1317,7 +1317,7 @@ impl Host for App {
 // Drawing
 
 fn small(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight)
+    screen::body(size, weight)
 }
 
 fn tile(e: El) -> El {
@@ -1325,6 +1325,11 @@ fn tile(e: El) -> El {
 }
 
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
+    // Keyboard focus as a web page has it: every pressable control is a Tab
+    // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
+    // keyboard put it there (never for a click).
+    cx.web_focus();
+    cx.focus_ring(2.0, 2.0, c("focus"));
     let root = col()
         .w_full()
         .h_full()
@@ -1482,9 +1487,9 @@ fn notice_view(s: &App) -> Option<El> {
         "screen_restore" => "Click to see the file and restore the built-in",
         _ => "Click to open",
     });
-    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(11.5, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
+    let mut body = col().gap(1.0).grow(1.0).min_w(0.0).child(text(t.clone()).font(small(13.0, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
     if let Some(w) = what {
-        body = body.child(text(w).font(small(10.5, 500.0)).color(c("blue")).truncate().min_w(0.0));
+        body = body.child(text(w).font(small(12.0, 500.0)).color(c("blue")).truncate().min_w(0.0));
     }
     let close = el()
         .key("notice-close")
@@ -1628,7 +1633,7 @@ fn bar_chip(it: &bar::Item, n: usize) -> El {
     }
     let label = it.text();
     if !label.is_empty() {
-        b = b.child(text(label).font(small(10.5, 500.0)).color(theme::hex(fg)));
+        b = b.child(text(label).font(small(12.0, 500.0)).color(theme::hex(fg)));
     }
     if let Some((name, args)) = it.intent.clone() {
         b = b.role("button").cursor(Cursor::Pointer).on_press(move |s: &mut App| {
@@ -1655,7 +1660,7 @@ fn bar_menu_item(it: &bar::Item, n: usize) -> El {
     let name = if it.label.is_empty() { it.help.clone() } else { it.label.clone() };
     r = r.child(text(name).font(small(12.0, 400.0)).color(if it.tone == "muted" || it.tone.is_empty() { c("text-bright") } else { fg }).truncate().grow(1.0).min_w(0.0));
     if let Some(k) = it.count {
-        r = r.child(el().px(6.0).py(1.0).radius(theme::radius("pill").unwrap()).fill(theme::hex(tint)).border(1.0, fg).child(text(k.to_string()).font(small(10.5, 600.0)).color(fg)));
+        r = r.child(el().px(6.0).py(1.0).radius(theme::radius("pill").unwrap()).fill(theme::hex(tint)).border(1.0, fg).child(text(k.to_string()).font(small(12.0, 600.0)).color(fg)));
     }
     match it.intent.clone() {
         Some((name, args)) => r.hover(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut App| {
@@ -1690,7 +1695,7 @@ fn bar_more(f: &bar::PaneFit, i: usize, open: bool) -> El {
             s.bar_menu = if s.bar_menu == Some(i) { None } else { Some(i) };
         })
         .child(rune::icon(crate::icons::get("more").unwrap(), 11.0).color(c("text")))
-        .child(text(count.to_string()).font(small(10.5, 500.0)).color(c("text")));
+        .child(text(count.to_string()).font(small(12.0, 500.0)).color(c("text")));
     if let Some(t) = bar::more_tone(&f.hidden) {
         b = b.child(el().w(6.0).h(6.0).radius(3.0).fill(theme::hex(crate::screen::tone(t).0)));
     }
@@ -1727,7 +1732,7 @@ fn pane_view(s: &App, i: usize) -> El {
         text(label.clone()).key(format!("pane-{}-name", i + 1)).help(label).font(small(12.0, 500.0)).color(c("text-bright")).truncate().min_w(name_min),
     );
     if let (Some(p), Some(f)) = (pane.filter(|p| p.sandbox.is_some()), fit.as_ref()) {
-        mid = mid.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(10.5, 400.0)).color(c("text-muted"))));
+        mid = mid.child(el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text(p.mode.name()).font(small(12.0, 400.0)).color(c("text-muted"))));
         for it in &f.shown {
             mid = mid.child(bar_chip(it, i + 1));
         }

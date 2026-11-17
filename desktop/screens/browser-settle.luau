@@ -10,7 +10,7 @@ return {
     for _, h in ipairs(q.hosts or {}) do
       table.insert(hosts, text{ h, mono = true, size = "sm", color = "text-bright" })
     end
-    return column{ gap = 10, pad = 16, w = "full",
+    return column{ gap = 12, pad = 16, w = "full",
       text{ "The browser of " .. (q.sandbox or "?") .. " closed", weight = "semibold", size = "lg", color = "text-bright" },
       text{ "These hosts were allowed from the browser, for this sandbox only. Keep them, or remove their network rules?", size = "sm", color = "text-muted", wrap = true },
       #hosts > 0 and list(hosts) or false,

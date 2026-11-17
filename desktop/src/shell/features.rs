@@ -9,7 +9,7 @@ use crate::client::LinkEvent;
 use crate::feat::{self, Action, Asked, Call, Confirm, Ctx, Extra, Feature, Place, Slot};
 use crate::intent::{Intent, Risk};
 use crate::theme::{c, layout, radius};
-use rune::{col, el, row, text, Cursor, El, TextEdit, TextStyle};
+use rune::{col, el, row, text, Cursor, El, TextEdit};
 use serde_json::{json, Map, Value as J};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -1018,7 +1018,7 @@ impl App {
             if let Some(i) = crate::icons::get(icon) {
                 tab = tab.child(rune::icon(i, 12.0).color(c(if shown { "text-bright" } else { "text-muted" })));
             }
-            tab = tab.child(text(title).font(TextStyle::new(12.0, 500.0)).color(c(if shown { "text-bright" } else { "text-muted" }))).child(
+            tab = tab.child(text(title).font(crate::screen::body(13.0, 500.0)).color(c(if shown { "text-bright" } else { "text-muted" }))).child(
                 el().key(format!("panel-close-{name}"))
                     .role("button")
                     .label(format!("Close {title}"))

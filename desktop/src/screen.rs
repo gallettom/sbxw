@@ -344,8 +344,10 @@ pub fn tone(name: &str) -> (u32, u32) {
     }
 }
 
-fn body(size: f32, weight: f32) -> TextStyle {
-    TextStyle::new(size, weight)
+/// The app's text: `size` on the type scale, `weight` 400, 500 or 600
+/// (700 is drawn 600), the theme's line height.
+pub fn body(size: f32, weight: f32) -> TextStyle {
+    TextStyle::new(size, weight.min(600.0)).lh((size * theme::LINE_HEIGHT).round())
 }
 
 /// The panel for screen `name`, drawn from its last good view, with its
@@ -367,8 +369,8 @@ pub fn view_parts<S: Host>(s: &ScreenState) -> (El, Vec<El>) {
     let mut panel = if s.name == "topbar" { row().items_center() } else { col() }.key(format!("screen-{}", s.name)).w_full().h_full().min_h(0.0).gap(8.0);
     if let Some(e) = &s.error {
         panel = panel.child(
-            el().key(format!("screen-error-{}", s.name)).w_full().padding(8.0).radius(theme::radius("sm").unwrap()).fill(c("red-tint")).border(1.0, c("red")).child(
-                text(format!("screen error, showing the last good view:\n{e}")).font(body(11.0, 400.0)).color(c("text-bright")).wrap().w_full(),
+            el().key(format!("screen-error-{}", s.name)).w_full().padding(12.0).radius(theme::radius("sm").unwrap()).fill(c("red-tint")).border(1.0, c("red")).child(
+                text(format!("Screen error, showing the last good view:\n{e}")).font(body(12.0, 400.0)).color(c("text-bright")).wrap().w_full(),
             ),
         );
     }
@@ -412,7 +414,7 @@ fn stale_marker<S: Host>(name: &str) -> El {
         .help(format!("Your {name} screen is a customised copy made for an older version; new features may be missing. Ask Jarvis to update it, or restore the built-in."))
         .child(rune::icon(crate::icons::get("warning").unwrap(), 11.0).color(c("amber")))
         .w_full()
-        .child(text(line).font(body(10.5, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
+        .child(text(line).font(body(12.0, 500.0)).color(c("text-bright")).wrap().grow(1.0).min_w(0.0))
         .on_press(move |s: &mut S| press_intent(s, &screen, "screen_restore", &serde_json::json!({ "screen": &*screen })))
 }
 
@@ -424,7 +426,7 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
     let mut group = None;
     for (g, e) in missing {
         if group.as_deref() != Some(g.as_str()) && !g.is_empty() {
-            strip = strip.child(text(format!("{g}:")).font(body(10.5, 500.0)).color(c("text-muted")));
+            strip = strip.child(text(format!("{g}:")).font(body(12.0, 500.0)).color(c("text-muted")));
         }
         group = Some(g.clone());
         let (fg, tint) = tone(e["tone"].as_str().unwrap_or(""));
@@ -448,7 +450,7 @@ fn fallback_extras<S: Host>(name: &str, missing: &[(String, J)]) -> El {
             b = b.child(rune::icon(i, 11.0).color(hex(fg)));
         }
         if !label.is_empty() {
-            b = b.child(text(label).font(body(10.5, 500.0)).color(hex(fg)));
+            b = b.child(text(label).font(body(12.0, 500.0)).color(hex(fg)));
         }
         if let (Some(n), args) = (e["intent"]["name"].as_str().map(str::to_string), e["intent"]["args"].clone()) {
             let screen = screen.clone();
@@ -661,8 +663,31 @@ impl Build<'_> {
                 if let Some(on) = &n.on {
                     let (on, arg) = (on.clone(), n.arg.clone());
                     b = b.role("button").cursor(Cursor::Pointer).hover(hex(st.hover.unwrap_or(theme::color_value("surface").unwrap()))).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null));
+                    if let Some(h) = &n.help {
+                        b = b.label(h.clone());
+                    }
+                    if n.selected {
+                        b = b.focus_selected(true);
+                    }
+                    if let Some(sp) = n.on_space.clone() {
+                        let (name, arg) = (self.name.clone(), n.arg.clone());
+                        b = b.on_key(move |s: &mut S, ev: &rune::KeyEvent, _tx: &mut rune::Tx| {
+                            let plain = !(ev.mods.cmd || ev.mods.ctrl || ev.mods.alt || ev.mods.logo || ev.mods.shift);
+                            if plain && ev.key == rune::Key::Text(" ".into()) {
+                                fire(s, &name, &sp, &arg, &J::Null);
+                                return true;
+                            }
+                            false
+                        });
+                    }
                 } else if let Some(h) = st.hover {
                     b = b.hover(hex(h));
+                }
+                if n.hover_group {
+                    b = b.hover_group();
+                }
+                if n.group.is_some() {
+                    b = b.role("list").focus_group();
                 }
                 b
             }
@@ -672,7 +697,7 @@ impl Build<'_> {
                     if i > 0 {
                         l = l.child(el().w_full().h(1.0).fill(c("elevated")));
                     }
-                    l = l.child(el().w_full().px(8.0).py(st.gap.unwrap_or(4.0)).child(self.node::<S>(k)));
+                    l = l.child(el().w_full().px(12.0).py(st.gap.unwrap_or(8.0)).child(self.node::<S>(k)));
                 }
                 l
             }
@@ -690,7 +715,7 @@ impl Build<'_> {
                 let id = n.id.clone().unwrap_or_default();
                 let edit = self.ui.edits.get(&id).map(|e| e.0.clone()).unwrap_or_else(|| TextEdit::new(""));
                 let (id2, id3) = (id.clone(), id.clone());
-                let mut t = text_input(&edit, body(st.size.unwrap_or(12.0), 400.0))
+                let mut t = text_input(&edit, body(st.size.unwrap_or(13.0), 400.0))
                     .single_line()
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
@@ -719,7 +744,7 @@ impl Build<'_> {
                 if n.disabled {
                     t = t.read_only(true);
                 }
-                el().w_full().h(28.0).px(8.0).items_center().fill(c("bg")).border(1.0, c("border")).radius(theme::radius("sm").unwrap()).child(t)
+                el().w_full().h(theme::layout::CONTROL_H).px(8.0).items_center().fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(t)
             }
             Kind::Icon => {
                 let i = crate::icons::get(&n.text).expect("checked icon");
@@ -727,12 +752,12 @@ impl Build<'_> {
             }
             Kind::Badge => {
                 let (fg, tint) = tone(n.variant.as_deref().unwrap_or("neutral"));
-                el().px(5.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(hex(tint)).border(1.0, hex(fg)).child(text(n.text.clone()).font(body(10.0, 500.0)).color(hex(fg)))
+                // A quiet label: the tone's tint, its colour as text, no frame.
+                el().px(6.0).py(1.0).radius(theme::radius("xs").unwrap()).fill(hex(tint)).child(text(n.text.clone()).font(body(12.0, 500.0)).color(hex(fg)))
             }
             Kind::Dot => {
                 let (fg, _) = tone(n.variant.as_deref().unwrap_or("neutral"));
-                let fg = if n.variant.as_deref().unwrap_or("neutral") == "neutral" { theme::color_value("dim").unwrap() } else { fg };
-                el().w(7.0).h(7.0).radius(3.5).fill(hex(fg))
+                el().w(8.0).h(8.0).radius(4.0).fill(hex(fg))
             }
             Kind::Split => self.split::<S>(n),
             Kind::Spacer => {
@@ -753,18 +778,18 @@ impl Build<'_> {
             Kind::Menu | Kind::Select => self.menu::<S>(n, key.clone()),
             Kind::Checkbox => {
                 let on = n.value.as_bool().unwrap_or(false);
-                let mut b = el().w(14.0).h(14.0).radius(4.0).border(1.0, c(if on { "blue" } else { "dim" })).items_center().justify_center();
+                let mut b = el().w(16.0).h(16.0).radius(4.0).border(1.0, c(if on { "blue" } else { "control-border" })).items_center().justify_center();
                 if on {
-                    b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("white")));
+                    b = b.fill(c("blue")).child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("bg")));
                 }
-                let mut r = row().gap(6.0).items_center().child(b).child(text(n.text.clone()).font(body(12.0, 400.0)).color(c("text"))).role("checkbox").checked(on);
+                let mut r = row().gap(8.0).min_h(theme::layout::DENSE_H).items_center().child(b).child(text(n.text.clone()).font(body(13.0, 400.0)).color(c("text"))).role("checkbox").label(n.text.clone()).checked(on);
                 if !n.disabled {
                     if let Some(act) = n.on.clone() {
                         let arg = n.arg.clone();
                         r = r.cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &act, &arg, &J::Bool(!on)));
                     }
                 } else {
-                    r = r.opacity(0.5);
+                    r = r.opacity(theme::DISABLED_OPACITY);
                 }
                 r
             }
@@ -781,7 +806,7 @@ impl Build<'_> {
                 let id = n.id.clone().unwrap_or_default();
                 let edit = self.ui.edits.get(&id).map(|e| e.0.clone()).unwrap_or_else(|| TextEdit::new(""));
                 let (id2, id3) = (id.clone(), id.clone());
-                let size = st.size.unwrap_or(12.0);
+                let size = st.size.unwrap_or(13.0);
                 let mut t = text_input(&edit, body(size, 400.0))
                     .key(key.clone().unwrap_or_default())
                     .color(c("text-bright"))
@@ -813,8 +838,8 @@ impl Build<'_> {
                 if n.disabled {
                     t = t.read_only(true);
                 }
-                let h = n.rows as f32 * (size * 1.45).ceil() + 12.0;
-                col().w_full().h(h).px(8.0).py(6.0).fill(c("bg")).border(1.0, c("border")).radius(theme::radius("sm").unwrap()).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
+                let h = n.rows as f32 * (size * theme::LINE_HEIGHT).round() + 16.0;
+                col().w_full().h(h).px(8.0).py(8.0).fill(c("bg")).border(1.0, c("control-border")).radius(theme::radius("sm").unwrap()).focus_within_ring(2.0, 1.0, c("focus")).child(col().w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false }).child(t))
             }
             Kind::Image => match crate::picture::shown(key.as_deref().unwrap_or("")) {
                 Some((px, (w, h))) => {
@@ -823,10 +848,10 @@ impl Build<'_> {
                     let e = el().w((w as f32 * scale).max(1.0)).h((h as f32 * scale).max(1.0)).radius(theme::radius("xs").unwrap());
                     e.pixels_fit(&px, if n.fill_image { rune::SurfaceFit::Fill } else { rune::SurfaceFit::Fit })
                 }
-                None => el().px(6.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(10.5, 400.0)).color(c("text-dim"))),
+                None => el().px(8.0).py(4.0).radius(theme::radius("xs").unwrap()).fill(c("elevated")).child(text("picture not loaded").font(body(12.0, 400.0)).color(c("text-muted"))),
             },
             Kind::Surface if crate::feat::surface_owner(n.id.as_deref().unwrap_or("")).is_none() => {
-                el().grow(1.0).w_full().padding(8.0).fill(c("elevated")).child(text(format!("no feature owns a surface '{}'", n.id.as_deref().unwrap_or(""))).font(body(11.0, 400.0)).color(c("text-dim")))
+                el().grow(1.0).w_full().padding(8.0).fill(c("elevated")).child(text(format!("no feature owns a surface '{}'", n.id.as_deref().unwrap_or(""))).font(body(12.0, 400.0)).color(c("text-muted")))
             }
             Kind::Surface => crate::surface::view::<S>(n.id.as_deref().unwrap_or(""), |s: &mut S, ev, tx| s.surface_event(ev, tx), |s: &mut S, ev, down, tx| s.surface_key(ev, down, tx)),
             Kind::Progress => {
@@ -835,24 +860,32 @@ impl Build<'_> {
                 el().w_full().h(4.0).radius(2.0).fill(c("elevated")).child(el().w_frac(v).h_full().radius(2.0).fill(hex(fg)))
             }
         };
+        // Shown only while the nearest hover group is hovered or focused.
+        let e = if n.reveal { e.group_opacity(0.0, 1.0) } else { e };
         let e = match (&key, n.kind) {
             // Inputs and menus key their inner part.
             (Some(k), k2) if !matches!(k2, Kind::Input | Kind::Textarea | Kind::Menu | Kind::Select | Kind::Button | Kind::Markdown) => e.key(k.clone()),
             _ => e,
         };
-        apply(e, st, &n.help)
+        // Buttons and menus set their own tooltip, with the shortcut's keycaps.
+        let help = if matches!(n.kind, Kind::Button | Kind::Menu | Kind::Select) { &None } else { &n.help };
+        apply(e, st, help)
     }
 
     fn button<S: Host>(&mut self, n: &Node, key: Option<String>) -> El {
         let variant = n.variant.as_deref().unwrap_or("neutral");
         let (fill, border, fg, hover) = match variant {
-            "primary" => ("green-deep", "green-deep", "white", "green-strong"),
+            "primary" => ("green-deep", "green-deep", "white", "primary-hover"),
             "danger" => ("elevated", "border", "red", "red-tint"),
             "ghost" => ("", "", "text-muted", "elevated"),
             _ => ("elevated", "border", "text", "border"),
         };
         let fg = n.style.color.map(hex).unwrap_or_else(|| c(fg));
-        let mut b = row().gap(4.0).items_center().px(if n.text.is_empty() { 4.0 } else { 7.0 }).py(3.0).radius(theme::radius("xs").unwrap()).role("button").label(if n.text.is_empty() { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() });
+        // At least 28 pt square (24 dense), the icon centred; a label pads 10 (8 dense).
+        let (h, size, icon) = if n.dense { (theme::layout::DENSE_H, 12.0, 14.0) } else { (theme::layout::CONTROL_H, 13.0, 16.0) };
+        let only_icon = n.text.is_empty();
+        let name = if only_icon { n.help.clone().unwrap_or_else(|| n.icon.clone().unwrap_or_default()) } else { n.text.clone() };
+        let mut b = row().gap(6.0).items_center().justify_center().h(h).min_w(h).px(if only_icon { 0.0 } else if n.dense { 8.0 } else { 10.0 }).radius(theme::radius("xs").unwrap()).role("button").label(name);
         if !fill.is_empty() {
             b = b.fill(c(fill)).border(1.0, c(border));
         }
@@ -860,13 +893,17 @@ impl Build<'_> {
             b = b.key(k);
         }
         if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
-            b = b.child(rune::icon(i, 12.0).color(fg));
+            b = b.child(rune::icon(i, icon).color(fg));
         }
-        if !n.text.is_empty() {
-            b = b.child(text(n.text.clone()).font(text_style(&n.style, 11.0, 400.0)).color(fg));
+        if !only_icon {
+            b = b.child(text(n.text.clone()).font(text_style(&n.style, size, 500.0)).color(fg).truncate().min_w(0.0));
+        }
+        if let Some(h) = &n.help {
+            // The tooltip names the action and its shortcut (apply() sets the help itself).
+            b = b.help(h.clone()).help_keys(n.keys.clone());
         }
         if n.disabled {
-            return b.opacity(0.5).disabled(true);
+            return b.opacity(theme::DISABLED_OPACITY).disabled(true);
         }
         let (name, on, arg) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone());
         b.hover(c(hover)).cursor(Cursor::Pointer).on_press(move |s: &mut S| fire(s, &name, &on, &arg, &J::Null))
@@ -880,20 +917,28 @@ impl Build<'_> {
             Kind::Select => n.items.iter().find(|i| Some(i.id.as_str()) == n.value.as_str()).map(|i| i.label.clone()).or_else(|| n.placeholder.clone()).unwrap_or_default(),
             _ => n.text.clone(),
         };
-        let mut t = row().key(key.clone()).gap(6.0).items_center().px(8.0).h(26.0).radius(theme::radius("sm").unwrap()).role(if n.kind == Kind::Select { "combobox" } else { "button" }).label(label.clone()).expanded(open);
+        let (h, size) = if n.dense { (theme::layout::DENSE_H, 12.0) } else { (theme::layout::CONTROL_H, 13.0) };
+        let name = if label.is_empty() { n.help.clone().unwrap_or_else(|| id.clone()) } else { label.clone() };
+        let mut t = row().key(key.clone()).gap(6.0).items_center().justify_center().px(8.0).h(h).min_w(h).radius(theme::radius("sm").unwrap()).role(if n.kind == Kind::Select { "combobox" } else { "button" }).label(name).expanded(open);
         t = match (n.kind, n.variant.as_deref()) {
             (Kind::Menu, Some("ghost")) => t.hover(c("elevated")),
-            _ => t.fill(c("bg")).border(1.0, c(if open { "blue" } else { "border" })).hover(c("border")),
+            _ => t.fill(c("bg")).border(1.0, c(if open { "blue" } else { "control-border" })).hover(c("elevated")),
         };
+        if let Some(h) = &n.help {
+            t = t.help(h.clone()).help_keys(n.keys.clone());
+        }
         if let Some(i) = n.icon.as_deref().and_then(crate::icons::get) {
-            t = t.child(rune::icon(i, 12.0).color(c("text")));
+            t = t.child(rune::icon(i, if n.dense { 14.0 } else { 16.0 }).color(c("text")));
         }
         if !label.is_empty() {
-            t = t.child(text(label).font(body(12.0, 400.0)).color(c("text-bright")));
+            t = t.child(text(label.clone()).font(body(size, 400.0)).color(c("text-bright")).truncate().min_w(0.0));
         }
-        t = t.child(rune::icon(crate::icons::get("chevron-down").unwrap(), 10.0).color(c("text-muted")));
+        // A ghost menu that shows only its icon (an "actions" menu) needs no chevron.
+        if !(n.variant.as_deref() == Some("ghost") && n.kind == Kind::Menu && label.is_empty()) {
+            t = t.child(rune::icon(crate::icons::get("chevron-down").unwrap(), 12.0).color(c("text-muted")));
+        }
         if n.disabled {
-            return t.opacity(0.5).disabled(true);
+            return t.opacity(theme::DISABLED_OPACITY).disabled(true);
         }
         let (name, id2) = (self.name.clone(), id.clone());
         t = t.cursor(Cursor::Pointer).on_press(move |s: &mut S| {
@@ -901,7 +946,7 @@ impl Build<'_> {
             ui.open = if ui.open.as_deref() == Some(id2.as_str()) { None } else { Some(id2.clone()) };
         });
         if open {
-            let mut list = col().key(format!("{id}-list")).role("menu").anchored(key.clone(), Side::Bottom, rune::Align::Start, 4.0).min_w(140.0).padding(4.0).gap(2.0).fill(c("surface")).border(1.0, c("border")).radius(theme::radius("md").unwrap()).shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
+            let mut list = col().key(format!("{id}-list")).role("menu").focus_group().anchored(key.clone(), Side::Bottom, rune::Align::Start, 4.0).min_w(180.0).padding(4.0).gap(2.0).fill(c("surface")).border(1.0, c("border")).radius(theme::radius("md").unwrap()).shadow(8.0, 24.0, rune::color::hex("#00000073").unwrap());
             for it in &n.items {
                 list = list.child(self.item::<S>(n, &id, it));
             }
@@ -912,19 +957,19 @@ impl Build<'_> {
 
     fn item<S: Host>(&self, n: &Node, id: &str, it: &Item) -> El {
         let chosen = n.kind == Kind::Select && n.value.as_str() == Some(it.id.as_str());
-        let mut r = row().key(format!("{id}-{}", it.id)).gap(6.0).items_center().px(8.0).h(24.0).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.label.clone());
+        let mut r = row().key(format!("{id}-{}", it.id)).gap(8.0).items_center().px(8.0).h(theme::layout::CONTROL_H).radius(theme::radius("xs").unwrap()).role("menuitem").label(it.label.clone()).focusable(!it.disabled);
         if let Some(i) = it.icon.as_deref().and_then(crate::icons::get) {
-            r = r.child(rune::icon(i, 12.0).color(c("text")));
+            r = r.child(rune::icon(i, 14.0).color(c("text")));
         }
-        r = r.child(text(it.label.clone()).font(body(12.0, if chosen { 600.0 } else { 400.0 })).color(c("text-bright")).grow(1.0));
+        r = r.child(text(it.label.clone()).font(body(13.0, if chosen { 600.0 } else { 400.0 })).color(c("text-bright")).grow(1.0));
         if chosen {
             r = r.child(rune::icon(crate::icons::get("check").unwrap(), 12.0).color(c("blue")));
         }
         if it.disabled {
-            return r.opacity(0.5).disabled(true);
+            return r.opacity(theme::DISABLED_OPACITY).disabled(true);
         }
         let (name, on, arg, value) = (self.name.clone(), n.on.clone().unwrap_or_default(), n.arg.clone(), J::String(it.id.clone()));
-        r.hover(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut S| {
+        r.focus_highlight(c("elevated")).cursor(Cursor::Pointer).on_press(move |s: &mut S| {
             s.screen(&name).ui.open = None;
             fire(s, &name, &on, &arg, &value);
         })
@@ -972,7 +1017,8 @@ where
 }
 
 fn text_style(st: &Style, size: f32, weight: f32) -> TextStyle {
-    let t = body(st.size.unwrap_or(size), st.weight.unwrap_or(weight));
+    // Nothing a person reads is under 12 pt, whatever a screen asks.
+    let t = body(st.size.unwrap_or(size).max(12.0), st.weight.unwrap_or(weight));
     if st.mono {
         t.mono()
     } else {

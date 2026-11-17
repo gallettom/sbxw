@@ -30,7 +30,7 @@ local function gist(q)
 end
 
 local function section(title, count)
-  return row{ gap = 6, w = "full",
+  return row{ gap = 8, w = "full",
     text{ string.upper(title), size = "xxs", weight = "semibold", color = "text-muted" },
     count and badge{ tostring(count), tone = "neutral" } or false,
   }
@@ -61,7 +61,7 @@ local function targets(data, r, label)
   if #names == 0 then
     return note("No other sandbox is running. Start one from the sidebar, or answer this yourself.")
   end
-  local buttons = { gap = 6, w = "full" }
+  local buttons = { gap = 8, w = "full" }
   for _, n in ipairs(names) do
     if n ~= r.to then
       buttons[#buttons + 1] = button{ n, icon = "send", on = "route", arg = { id = r.id, to = n }, key = "relay-to-" .. r.id .. "-" .. n,
@@ -72,7 +72,7 @@ local function targets(data, r, label)
 end
 
 local function foot(r, send_label, can_send, extra)
-  local kids = { gap = 6, w = "full",
+  local kids = { gap = 8, w = "full",
     button{ "Later", variant = "ghost", on = "later", arg = r.id, key = "relay-later-" .. r.id, help = "Put it aside; it stays in the list" },
     r["local"] and button{ "Set aside", variant = "danger", on = "deny", arg = r.id, key = "relay-deny-" .. r.id, help = "Drop this form; nothing is typed into the session" }
       or button{ "Refuse", variant = "danger", on = "deny", arg = r.id, key = "relay-deny-" .. r.id, help = "Nothing is shared, and the agent is told not to ask again" },
@@ -86,7 +86,7 @@ local function foot(r, send_label, can_send, extra)
 end
 
 local function from_line(r, why)
-  return row{ gap = 6, w = "full", align = "start",
+  return row{ gap = 8, w = "full", align = "start",
     badge{ who(r), tone = "blue" },
     text{ why, size = "sm", color = "text-muted", wrap = true, grow = 1 },
   }
@@ -97,27 +97,27 @@ local function round_form(r, ui, editable)
   local rd = (ui.rounds or {})[r.id] or { intro = "", questions = {} }
   local answers = (ui.forms or {})[r.id] or {}
   local listening = ui.voice and ui.voice.id == r.id and ui.voice.index or nil
-  local kids = { gap = 10, w = "full" }
+  local kids = { gap = 12, w = "full" }
   if nz(rd.intro) then
     kids[#kids + 1] = column{ w = "full", pad = 8, radius = "sm", fill = "surface-alt", markdown{ rd.intro, size = "sm", color = "text-soft" } }
   end
   for i, q in ipairs(rd.questions or {}) do
     local qk = { gap = 4, w = "full", key = "relay-q-" .. r.id .. "-" .. i,
       border = listening == i and "blue" or nil, pad = listening == i and 6 or nil, radius = listening == i and "sm" or nil,
-      row{ gap = 6, w = "full",
+      row{ gap = 8, w = "full",
         text{ q.id, weight = "semibold", color = "text-bright", size = "sm" },
         nz(q.title) and text{ q.title, size = "sm", color = "text-bright", truncate = true, grow = 1 } or false,
       },
       markdown{ q.body, size = "sm" },
     }
     if nz(q.rec) then
-      qk[#qk + 1] = row{ gap = 6, w = "full", align = "start",
+      qk[#qk + 1] = row{ gap = 8, w = "full", align = "start",
         text{ "RECOMMENDED", size = "xxs", weight = "semibold", color = "green" },
         text{ q.rec, size = "sm", color = "text-soft", wrap = true, grow = 1 },
       }
     end
     if editable then
-      qk[#qk + 1] = row{ gap = 6, w = "full",
+      qk[#qk + 1] = row{ gap = 8, w = "full",
         column{ grow = 1, textarea{ id = "relay-ans-" .. r.id .. "-" .. i, value = answers[i] or "", placeholder = "Your answer, or empty to skip", rows = 2,
           on = "set", on_submit = "send_ask", arg = { id = r.id, field = "answer", index = i } } },
         nz(q.rec) and button{ "Use it", variant = "ghost", on = "use_rec", arg = { id = r.id, index = i }, key = "relay-rec-" .. r.id .. "-" .. i,
@@ -139,7 +139,7 @@ end
 local function shots_block(r, ui)
   local held = (ui.shots or {})[r.id] or {}
   local room = (ui.max_shots or 6) - #held
-  local kids = { gap = 6, w = "full" }
+  local kids = { gap = 8, w = "full" }
   if #held > 0 then
     -- What is sent, in the order the agent receives it: each preview, numbered.
     local grid, n = { gap = 8, w = "full", align = "start" }, 0
@@ -162,7 +162,7 @@ local function shots_block(r, ui)
   else
     kids[#kids + 1] = note("That is " .. (ui.max_shots or 6) .. " images, the most one reply carries. Remove one to swap it for another.")
   end
-  local acts = { gap = 6, w = "full" }
+  local acts = { gap = 8, w = "full" }
   if room > 0 then
     acts[#acts + 1] = button{ "Paste from clipboard", icon = "copy", on = "shot_paste", arg = r.id, key = "relay-shot-paste-" .. r.id }
   end
@@ -174,8 +174,8 @@ local function shots_block(r, ui)
 end
 
 local function detail(data, ui, r)
-  local kids = { gap = 10, w = "full", pad = 10, radius = "md", fill = "surface", border = settled(r) and "border" or "amber", key = "relay-card-" .. r.id,
-    row{ gap = 6, w = "full",
+  local kids = { gap = 12, w = "full", pad = 12, radius = "md", fill = "surface", border = settled(r) and "border" or "amber", key = "relay-card-" .. r.id,
+    row{ gap = 8, w = "full",
       text{ TITLE[r.kind] or "Request", weight = "semibold", color = "text-bright", grow = 1 },
       text{ r.id, size = "xs", color = "text-dim", mono = true },
     },
@@ -186,10 +186,10 @@ local function detail(data, ui, r)
   if settled(r) then
     add(from_line(r, KIND[r.kind] and ("asked for: " .. gist(r.question)) or ""))
     if r.state == "approved" then
-      add(row{ gap = 6, icon{ "check", color = "green" }, text{ "Sent to " .. who(r) .. ".", color = "green", weight = "medium" } })
+      add(row{ gap = 8, icon{ "check", color = "green" }, text{ "Sent to " .. who(r) .. ".", color = "green", weight = "medium" } })
       if r.kind == "mac" and nz(r.answer) then add(quote(r.answer)) end
     else
-      add(row{ gap = 6, icon{ "close", color = "red" }, text{ "Refused. Nothing was shared with " .. who(r) .. ".", color = "red", wrap = true, grow = 1 } })
+      add(row{ gap = 8, icon{ "close", color = "red" }, text{ "Refused. Nothing was shared with " .. who(r) .. ".", color = "red", wrap = true, grow = 1 } })
     end
     add(row{ w = "full", spacer{}, button{ "Close", on = "later", arg = r.id, key = "relay-close-" .. r.id } })
     return column(kids)
@@ -213,7 +213,7 @@ local function detail(data, ui, r)
     if r.state == "routed" then
       add(from_line(r, "asks you " .. count .. "."))
       add(round_form(r, ui, false))
-      add(row{ gap = 6, w = "full", icon{ "reload", color = "blue", size = 12 },
+      add(row{ gap = 8, w = "full", icon{ "reload", color = "blue", size = 12 },
         text{ "Sent to " .. (r.to or "?") .. " for a draft. You review it before " .. r.from .. " receives anything.", size = "sm", color = "blue", wrap = true, grow = 1 } })
       add(targets(data, r, "Or ask another sandbox instead"))
       add(foot(r, nil, false))
@@ -223,7 +223,7 @@ local function detail(data, ui, r)
     local v = (data.jarvis and data.jarvis.voice) or {}
     if v.hears or v.speaks then
       local on = ui.voice and ui.voice.id == r.id
-      add(row{ gap = 6, w = "full",
+      add(row{ gap = 8, w = "full",
         v.hears and button{ on and "Stop answering by voice" or "Answer by voice", icon = "mic", variant = on and "primary" or "neutral",
           on = "voice", arg = { id = r.id, on = not on }, key = "relay-voice-" .. r.id,
           help = "Each question is read; what you say next (hold " .. (v.key or "F8") .. ") is its answer. Say repeat, skip or back." } or false,
@@ -267,7 +267,7 @@ local function detail(data, ui, r)
     add(textarea{ id = "relay-own-" .. r.id, value = own, rows = 3, placeholder = "Your answer goes to " .. r.from .. " once you confirm it", on = "set", arg = { id = r.id, field = "own" } })
     add(foot(r, "Send my answer…", nz(string.match(own, "%S"))))
   elseif r.state == "routed" then
-    add(row{ gap = 6, w = "full", icon{ "reload", color = "blue", size = 12 },
+    add(row{ gap = 8, w = "full", icon{ "reload", color = "blue", size = 12 },
       text{ "Sent to " .. (r.to or "?") .. ": waiting for its agent to answer. Nothing reaches " .. r.from .. " until you approve it.", size = "sm", color = "blue", wrap = true, grow = 1 } })
     add(targets(data, r, "Or ask someone else instead"))
     add(foot(r, nil, false))
@@ -284,8 +284,8 @@ end
 local function ask_card(a)
   local label = a.thread and (a.sandbox .. " · " .. a.thread) or a.sandbox
   local base = "agent-" .. a.sandbox .. (a.thread and ("-" .. a.thread) or "")
-  local kids = { gap = 6, w = "full", pad = 10, radius = "md", fill = "surface", border = "amber", key = base,
-    row{ gap = 6, w = "full", badge{ label, tone = "blue" }, text{ "asks", size = "sm", color = "text-muted", grow = 1 } } }
+  local kids = { gap = 8, w = "full", pad = 12, radius = "md", fill = "surface", border = "amber", key = base,
+    row{ gap = 8, w = "full", badge{ label, tone = "blue" }, text{ "asks", size = "sm", color = "text-muted", grow = 1 } } }
   if not a.answerable or #(a.steps or {}) == 0 then
     local first = (a.steps or {})[1]
     kids[#kids + 1] = text{ (first and first.text) or a.activity or "Claude is waiting for you.", wrap = true, size = "sm" }
@@ -294,7 +294,7 @@ local function ask_card(a)
   end
   for si, step in ipairs(a.steps) do
     kids[#kids + 1] = text{ step.text or "", wrap = true, size = "sm", color = "text-bright" }
-    local opts = { gap = 6, w = "full" }
+    local opts = { gap = 8, w = "full" }
     for oi, o in ipairs(step.options or {}) do
       local picked = (a.picks or {})[si] == oi
       opts[#opts + 1] = button{ o, variant = picked and "primary" or "neutral", disabled = a.sending ~= nil,
@@ -360,7 +360,7 @@ return {
       local rows = {}
       for _, r in ipairs(waiting) do
         local on = current and current.id == r.id
-        rows[#rows + 1] = row{ gap = 6, w = "full", on = "open", arg = r.id, key = "relay-req-" .. r.id, fill = on and "active-bg" or nil, radius = "sm", px = 4, py = 2,
+        rows[#rows + 1] = row{ gap = 8, w = "full", on = "open", arg = r.id, key = "relay-req-" .. r.id, fill = on and "active-bg" or nil, radius = "sm", px = 4, py = 2,
           badge{ KIND[r.kind] or r.kind, tone = r.state == "answered" and "green" or "amber" },
           text{ who(r), size = "sm", weight = "medium", color = "text-bright" },
           text{ gist(r.question), size = "sm", color = "text-muted", truncate = true, grow = 1 },
@@ -372,7 +372,7 @@ return {
     local others = {}
     for _, r in ipairs(out) do
       if not current or r.id ~= current.id then
-        others[#others + 1] = row{ gap = 6, w = "full", on = "open", arg = r.id, key = "relay-out-" .. r.id, radius = "sm", px = 4, py = 2,
+        others[#others + 1] = row{ gap = 8, w = "full", on = "open", arg = r.id, key = "relay-out-" .. r.id, radius = "sm", px = 4, py = 2,
           icon{ "reload", size = 12, color = "blue" },
           text{ (r.to or "?") .. " is answering", size = "sm", color = "text" },
           text{ "for " .. who(r) .. " · " .. gist(r.question), size = "sm", color = "text-muted", truncate = true, grow = 1 },

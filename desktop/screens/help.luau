@@ -10,7 +10,7 @@ local function step(n, title, body, cmd)
 end
 
 local function key(k, what)
-  return row{ gap = 10, w = "full",
+  return row{ gap = 12, w = "full",
     row{ w = 150, badge{ k, tone = "neutral" } },
     text{ what, size = "sm", color = "text", wrap = true, grow = 1 },
   }
@@ -22,7 +22,7 @@ return {
     local voice = (data.jarvis or {}).voice or {}
     local ptt = voice.push_to_talk_key or "F8"
     local v = ((data.daemon_state or {}).versions) or {}
-    return column{ h = "full", w = "full", gap = 10,
+    return column{ h = "full", w = "full", gap = 12,
       row{ w = "full", text{ "Help", size = "lg", weight = "semibold", color = "text-bright" }, spacer{},
         button{ icon = "close", variant = "ghost", on = "close", key = "help-close", help = "Close" } },
       scroll{ gap = 12,
