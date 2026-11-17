@@ -16,6 +16,9 @@ Contents: [The file](#the-file) · [Data](#data) · [Elements](#elements) ·
 [Theme](#theme) · [Icons](#icons) · [Where screens live](#where-screens-live) ·
 [Limits](#limits) · [Checking your screen](#checking-your-screen)
 
+Beside it: [daemon-api.md](daemon-api.md) (the routes behind `data`) and
+[testing.md](testing.md) (running screens and the app headless).
+
 ## The file
 
 ```lua
