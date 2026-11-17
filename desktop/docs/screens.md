@@ -75,6 +75,9 @@ unchanged.
 | `kept` | What features asked the app to keep across runs (`Action::Remember`), by feature then key |
 | `surface.release`, `surface.focused` | The key that gives the keyboard back from a picture surface (`⌘Esc`, `Ctrl+Esc`); the id of the surface that has the keyboard, or nil |
 | `platform` | `macos`, `linux`, `windows` |
+| `groups` | Each sandbox's group colour (`#rrggbb`, the web UI's: chats share one, a workspace folder's from its path), by name; absent for a sandbox in no group |
+| `sidebar` | `w` (its width in points, which the person drags, 200 to 420) and `shown` (Cmd/Ctrl+B hides it) |
+| `shortcuts` | Every keyboard shortcut of the app, in order: `keys` (keycaps, `{ "⌘", "K" }`) and `what` (what it does). Help draws this list |
 
 `data.jarvis` (every screen gets it; the `jarvis` screen draws it):
 
@@ -556,6 +559,25 @@ Refuse). A screen can neither draw that dialog, nor see it, nor press it.
 The push-to-talk key (F8 by default, the daemon's `[voice]
 push_to_talk_key`) and the panel's key (⌘J on macOS, F7 elsewhere) are the
 core's: a terminal with the focus does not receive them.
+
+## Keyboard
+
+The core owns the app's chords (`src/shell/palette.rs`), and screens never
+see them: Cmd/Ctrl+K the command palette (every sandbox, every top bar extra
+and feature shortcut, the core's actions; a pick runs the same intents your
+buttons run, through the same checks), Cmd/Ctrl+B the sidebar, Cmd/Ctrl+1 to
+9 a pane, Cmd/Ctrl+W closes the focused pane, Cmd/Ctrl with + − 0 zooms the
+app (in a terminal: its text), Escape closes the top-most menu, palette,
+dialog or modal. While a terminal's grid has the keyboard only Cmd chords
+(macOS) or Ctrl+Shift chords (elsewhere) are the app's. `data.app.shortcuts`
+lists them all (Help draws it). What a screen does for the keyboard:
+
+- every `button`, `menu` and pressable `row`/`column` is a Tab stop in
+  reading order, with the focus ring; leave a row's secondary actions out
+  with `tab_stop = false` when the row's own keys and its menu reach them;
+- a list of rows: `group = "list"` on the container (Up and Down), `on` on
+  each row (Enter), `on_space` for its second action (Space);
+- name every icon-only control with `help`, and give its shortcut in `keys`.
 
 ## Theme
 

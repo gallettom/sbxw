@@ -9,11 +9,22 @@ local function step(n, title, body, cmd)
   }
 end
 
-local function key(k, what)
+-- One shortcut: its keycaps, then what it does (data.app.shortcuts, the
+-- core's own list, so Help never disagrees with the keys).
+local function key(keys, what)
+  local caps = { gap = 4, w = 168 }
+  for _, k in ipairs(keys) do table.insert(caps, badge{ k, tone = "neutral" }) end
   return row{ gap = 12, w = "full",
-    row{ w = 150, badge{ k, tone = "neutral" } },
-    text{ what, size = "sm", color = "text", wrap = true, grow = 1 },
+    row(caps),
+    text{ what, size = "body", color = "text", wrap = true, grow = 1 },
   }
+end
+
+local function shortcut_rows(list)
+  local rows = { gap = 8 }
+  for _, s in ipairs(list) do table.insert(rows, key(s.keys, s.what)) end
+  table.insert(rows, key({ "Click a pane" }, "Give it the keyboard"))
+  return rows
 end
 
 return {
@@ -32,18 +43,9 @@ return {
         step(2, "Restart the sbx daemon", "Run sbx first: after an update it may suggest a restart. Still empty? Start its daemon again in the background; it writes to ~/.sbx/daemon-restart.log.", "nohup sbx daemon start >> ~/.sbx/daemon-restart.log 2>&1 &"),
         divider{},
         text{ "Keyboard shortcuts", weight = "semibold", color = "text-bright" },
-        list{
-          key(mac and "⌘J" or "F7", "Open or close the Jarvis panel"),
-          key(mac and "⌃⌥N" or "Alt+N", "New sandbox"),
-          key(mac and "⌃⌥M" or "Alt+M", "New chat"),
-          key(ptt, "Push to talk to Jarvis (hold)"),
-          key("Escape", "Close the dialog or menu showing"),
-          key(mac and "⌘V" or "Ctrl+Shift+V", "Paste into the focused terminal"),
-          key("Shift+PageUp / PageDown", "Scroll a terminal's history"),
-          key("Click a pane", "Give it the keyboard"),
-        },
+        list(shortcut_rows(data.app.shortcuts or {})),
         divider{},
-        text{ "sbxw " .. (v.sbxw or "?") .. " · sbx " .. (v.sbx or "?") .. " · " .. (data.app.connection.text or ""), size = "sm", color = "text-dim", wrap = true },
+        text{ "sbxw " .. (v.sbxw or "?") .. " · sbx " .. (v.sbx or "?") .. " · " .. (data.app.connection.text or ""), size = "sm", color = "text-muted", wrap = true },
       },
     }
   end,

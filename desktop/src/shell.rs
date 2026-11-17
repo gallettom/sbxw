@@ -10,6 +10,7 @@
 mod bar;
 mod features;
 mod jarvis;
+mod palette;
 pub mod store;
 
 use crate::approval;
@@ -218,6 +219,8 @@ pub struct App {
     bar_menu: Option<usize>,
     /// The sidebar's width while its edge is dragged (written to the store on release).
     sidebar_live: Option<f32>,
+    /// The command palette, while open (palette.rs).
+    pub palette: Option<palette::Palette>,
 }
 
 /// The most panes the layout shows (the layout switch's largest choice).
@@ -304,6 +307,7 @@ impl App {
             top_w: 0.0,
             bar_menu: None,
             sidebar_live: None,
+            palette: None,
         };
         jarvis::load_prefs(&mut app.jarvis);
         if init.jarvis_open {
@@ -495,6 +499,8 @@ impl App {
         // Each sandbox's group colour (the web UI's), for rails, swatches and pane accents.
         data["app"]["groups"] = self.sandboxes.iter().filter_map(|sb| theme::group_color(sb.workspace.as_deref(), sb.chat).map(|c| (sb.name.clone(), J::String(format!("#{c:06x}"))))).collect::<serde_json::Map<_, _>>().into();
         data["app"]["sidebar"] = serde_json::json!({ "w": self.sidebar_w(), "shown": self.sidebar_shown() });
+        // Every shortcut, for Help: `{keys, what}`.
+        data["app"]["shortcuts"] = palette::shortcuts(&self.jarvis.key_name).into_iter().map(|(k, w)| serde_json::json!({ "keys": k, "what": w })).collect::<Vec<_>>().into();
         data["app"]["overrides"] = self.overrides_view();
         data["app"]["kept"] = self.store.get("features").clone();
         // Picture surfaces: the key that gives the keyboard back, and which one has it.
@@ -893,6 +899,11 @@ impl App {
     /// the core's dialog, then the modal under it. False when nothing was
     /// open (the key goes on: a field, a terminal).
     pub fn escape(&mut self) -> bool {
+        if self.palette.is_some() {
+            self.palette_close();
+            self.push_data();
+            return true;
+        }
         if self.screens.iter_mut().any(|s| s.close_menus()) {
             return true;
         }
@@ -912,6 +923,10 @@ impl App {
 
     pub fn on_key(&mut self, ev: &KeyEvent, tx: &mut Tx) -> bool {
         if ev.key == Key::Escape && self.escape() {
+            return true;
+        }
+        // The app's chords (palette.rs): never a terminal's.
+        if self.app_key(ev, tx.focused()) {
             return true;
         }
         if self.shortcut(ev, tx) {
@@ -971,6 +986,9 @@ impl App {
         if self.jarvis.shown.is_some() && key.starts_with("jv-") {
             return true;
         }
+        if self.palette.is_some() && (key == "palette" || key == "palette-input" || key == "palette-list" || self.palette_shown().iter().any(|c| key == format!("palette-{}", c.id))) {
+            return true;
+        }
         for i in 0..shown_panes {
             let p = &self.panes[i];
             let n = i + 1;
@@ -999,7 +1017,7 @@ impl App {
     /// up, and Rune's focus on a terminal grid (the core moves it there when
     /// it opens or focuses a pane).
     pub fn terminal_may_take_keys(&self, rune_focus: Option<&str>) -> bool {
-        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || crate::surface::focused().is_some();
+        let overlay = self.feats.dialog.is_some() || self.feats.modal.is_some() || self.jarvis.shown.is_some() || self.palette.is_some() || crate::surface::focused().is_some();
         !overlay && rune_focus.is_some_and(|k| k.starts_with("grid"))
     }
 
@@ -1379,6 +1397,8 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // keyboard put it there (never for a click).
     cx.web_focus();
     cx.focus_ring(2.0, 2.0, c("focus"));
+    // The app's zoom (Cmd/Ctrl with + − 0 outside a terminal, or the palette).
+    cx.zoom(s.zoom());
     let root = col()
         .w_full()
         .h_full()
@@ -1546,6 +1566,9 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     }
     if let Some(o) = &s.copy_offer {
         root = root.child(approval::copy_offer_view::<App>(o, |s: &mut App, tx: &mut Tx| s.accept_copy_offer(tx), |s: &mut App| s.copy_offer = None));
+    }
+    if let Some(p) = palette::view(s) {
+        root = root.child(p);
     }
     // Jarvis's proposal has no scrim: it stands beside the Jarvis panel,
     // whose input (a typed yes) and push-to-talk must stay usable while it shows.
@@ -2175,6 +2198,59 @@ mod tests {
             if w >= 1284.0 {
                 assert_eq!(more, 0, "{w}: everything fits");
             }
+        }
+    }
+
+    /// The palette opens with the app's chord, filters, runs the same
+    /// intents as the list (Enter opens the sandbox's terminal), and closes
+    /// on Escape; Cmd/Ctrl+B hides the sidebar, Cmd/Ctrl+2 focuses pane 2.
+    /// A terminal keeps plain Ctrl chords off macOS.
+    #[test]
+    fn the_palette_and_the_chords() {
+        let mac = cfg!(target_os = "macos");
+        let chord = |c: char, shift: bool| KeyEvent { key: Key::Command(c), mods: rune::Mods { cmd: true, ctrl: !mac, logo: mac, shift, alt: false } };
+        let mut rt = runtime("shell/design-2.json", 1284.0, 816.0);
+        rt.update(|s, tx| {
+            s.notice = None;
+            tx.blur();
+        });
+        rt.key(chord('k', false));
+        rt.frame(0.016);
+        assert!(rt.state.palette.is_some(), "the chord opens the palette");
+        assert!(rt.presented("palette-input").is_some());
+        rt.update(|_, tx| assert_eq!(tx.focused(), Some("palette-input"), "its field has the keyboard"));
+        for ch in "open docs".chars() {
+            rt.key(KeyEvent { key: Key::Text(ch.to_string()), mods: rune::Mods::default() });
+        }
+        rt.frame(0.016);
+        let shown = rt.state.palette_shown();
+        assert_eq!(shown.first().map(|c| c.id.as_str()), Some("open-docs"), "{:?}", shown.iter().map(|c| &c.id).collect::<Vec<_>>());
+        rt.key(KeyEvent { key: Key::Enter, mods: rune::Mods::default() });
+        rt.frame(0.016);
+        assert!(rt.state.palette.is_none(), "a pick closes it");
+        assert!(rt.state.panes.iter().take(rt.state.layout.0).any(|p| p.sandbox.as_deref() == Some("docs")), "Enter ran open_terminal on docs");
+        // Escape closes it.
+        rt.key(chord('k', false));
+        rt.frame(0.016);
+        rt.key(KeyEvent { key: Key::Escape, mods: rune::Mods::default() });
+        rt.frame(0.016);
+        assert!(rt.state.palette.is_none());
+        // The sidebar and the panes.
+        rt.update(|_, tx| tx.blur());
+        rt.key(chord('b', false));
+        rt.frame(0.016);
+        assert!(!rt.state.sidebar_shown());
+        rt.key(chord('b', false));
+        rt.frame(0.016);
+        assert!(rt.state.sidebar_shown());
+        rt.key(chord('2', false));
+        rt.frame(0.016);
+        assert_eq!(rt.state.focused, 1);
+        // In a terminal (its grid has the keyboard): plain Ctrl+K is the shell's off macOS.
+        if !mac {
+            let taken = rt.state.app_key(&chord('k', false), Some("grid-1"));
+            assert!(!taken, "Ctrl+K in a terminal is readline's");
+            assert!(rt.state.app_key(&chord('k', true), Some("grid-1")), "Ctrl+Shift+K is the app's");
         }
     }
 
