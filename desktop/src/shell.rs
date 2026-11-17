@@ -1386,6 +1386,20 @@ fn tile(e: El) -> El {
     e.fill(c("bg")).border(1.0, c("elevated")).radius(theme::radius("md").unwrap())
 }
 
+/// The window's frame: on macOS the close, minimise and zoom buttons sit
+/// on the top bar's content line, not AppKit's default (7, 6), which put
+/// their centre 17 pt above the bar's text. Rune places them at the close
+/// button's top-left (`Chrome::traffic_lights`, Electron's
+/// `trafficLightPosition`): 12 pt into the bar, and centred on it
+/// (gutter + half the bar, less half of AppKit's 14 pt button). Only the
+/// `.window_drag()` regions move the window (the top bar), so the taller
+/// titlebar container this makes never takes a press meant for the bar.
+/// Ignored on Linux and Windows (their native frame stays).
+pub const LIGHTS: (f32, f32) = (layout::GUTTER + 12.0, layout::GUTTER + layout::TOP_BAR_H / 2.0 - rune::Chrome::TRAFFIC_LIGHT / 2.0);
+pub const fn window_chrome() -> rune::Chrome {
+    rune::Chrome { full_size_content: true, traffic_lights: Some(LIGHTS), drag_regions: true }
+}
+
 pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     // Keyboard focus as a web page has it: every pressable control is a Tab
     // stop in reading order, and shows a 2 pt ring 2 pt outside it when the
@@ -1487,8 +1501,11 @@ pub fn view(s: &App, cx: &mut Cx<App>) -> El {
         .radius(theme::radius("md").unwrap())
         .items_center()
         .window_drag()
-        // The traffic lights (macOS) sit over this band: nothing goes under them.
-        .child(el().key("traffic-lights-room").w(inset + 4.0).h_full())
+        // The traffic lights (macOS) sit over this band, centred on its
+        // line (`LIGHTS`): nothing goes under them, 12 pt clear after the
+        // zoom button (`inset` is from the window's edge, the bar starts a
+        // gutter in).
+        .child(el().key("traffic-lights-room").w(if inset > 0.0 { inset - layout::GUTTER + 12.0 } else { 4.0 }).h_full())
         .child(
             col()
                 .grow(1.0)

@@ -56,5 +56,6 @@ fn main() {
         ..AppSpec::new("sbxw", (1280.0, 800.0), init, view)
     };
     // `on_ime`: dead keys, CJK and emoji composed by the input method reach the focused terminal.
-    rune::App::new(spec).on_ime(on_ime).run();
+    // The window buttons on the top bar's line (shell::window_chrome).
+    rune::App::new(spec).chrome(shell::window_chrome()).on_ime(on_ime).run();
 }
