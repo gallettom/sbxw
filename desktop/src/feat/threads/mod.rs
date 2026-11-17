@@ -654,13 +654,11 @@ fn refusal(r: &Result<(u16, J), String>) -> Option<String> {
     }
 }
 
-/// Opens a pane for each of the plan's threads while the window has room
-/// (plans.js `openPlanPanes`): the empty panes, then new ones up to 4. A
-/// thread that does not fit still runs; the panel lists it.
+/// Opens a pane for each of the plan's threads (plans.js `openPlanPanes`),
+/// through the core's paged "spare" rule: the current page's empty panes
+/// and room first, then the following pages, then new pages. Then the page
+/// where the first thread landed shows (`page_show`), not the last one.
 fn open_plan_panes(ctx: &Ctx, plan: &J) -> Vec<Action> {
-    let panes = ctx.data["app"]["panes"].as_array().cloned().unwrap_or_default();
-    let shown = ctx.data["app"]["layout"]["panes"].as_u64().unwrap_or(panes.len() as u64);
-    let mut room = panes.iter().filter(|p| p["sandbox"].is_null()).count() as u64 + 4u64.saturating_sub(shown.max(panes.len() as u64));
     let sb = plan["sandbox"].as_str().unwrap_or("");
     let mut out = vec![];
     for t in plan["threads"].as_array().into_iter().flatten() {
@@ -668,13 +666,32 @@ fn open_plan_panes(ctx: &Ctx, plan: &J) -> Vec<Action> {
         if pane_of(ctx, sb, Some(name)).is_some() {
             continue;
         }
-        if room == 0 {
-            break;
-        }
-        room -= 1;
         out.push(Action::Intent { name: "open_terminal".into(), args: json!({ "sandbox": sb, "thread": name, "pane": "spare" }) });
     }
+    if let (false, Some(first)) = (out.is_empty(), first_spare_page(ctx)) {
+        out.push(Action::Intent { name: "page_show".into(), args: json!({ "page": first }) });
+    }
     out
+}
+
+/// The page (from 1) the next spare terminal goes to, as the core places it
+/// (`data.app.pages`: the current page, then the following ones, then the
+/// ones before; an empty pane or room below `per`; else a new page).
+fn first_spare_page(ctx: &Ctx) -> Option<u64> {
+    let pages = &ctx.data["app"]["pages"];
+    let per = pages["per"].as_u64()?;
+    let list = pages["panes"].as_array()?;
+    let current = pages["current"].as_u64()?.saturating_sub(1) as usize;
+    let panes = ctx.data["app"]["panes"].as_array().cloned().unwrap_or_default();
+    let empty = |n: &J| n.as_u64().and_then(|n| panes.get(n as usize - 1)).is_some_and(|p| p["sandbox"].is_null());
+    let order = (current..list.len()).chain(0..current.min(list.len()));
+    for k in order {
+        let on = list[k].as_array().cloned().unwrap_or_default();
+        if on.iter().any(empty) || (on.len() as u64) < per {
+            return Some(k as u64 + 1);
+        }
+    }
+    Some(list.len() as u64 + 1)
 }
 
 fn on_answer(ctx: &Ctx, call: &Call, r: Result<(u16, J), String>) -> Vec<Action> {

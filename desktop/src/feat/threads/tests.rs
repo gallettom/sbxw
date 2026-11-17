@@ -376,3 +376,40 @@ fn a_thread_opened_on_the_standins_ws_is_recorded_as_the_daemon_does() {
     answer_from(&mut d, "OPEN", "/ws?sandbox=web-app&mode=thread&thread=s9&checkout=1", &J::Null, &mut |_, _| {});
     assert!(model::sessions(&d, "web-app").iter().any(|s| s.thread.as_deref() == Some("s9") && s.kind == "same"));
 }
+
+/// Pages (the desktop's layout): a five-thread plan at three per page opens
+/// every thread (no cap of four), spilling onto following pages through the
+/// core's spare rule, then shows the page of the first one.
+#[test]
+fn an_approved_plan_opens_every_thread_and_shows_the_first_ones_page() {
+    let data = fixture("basic");
+    let mut plan = fixture("plan-pending")["plans"][0].clone();
+    plan["threads"] = json!([{ "name": "t1" }, { "name": "t2" }, { "name": "t3" }, { "name": "t4" }, { "name": "t5" }]);
+    let mut d = data.clone();
+    // Page 1 of 2 shows (web-app's main session and an empty pane), 3 per page;
+    // page 2 is full.
+    d["app"]["pages"] = json!({ "current": 1, "count": 2, "per": 3, "view": "grid", "panes": [[1, 2], [3, 4, 5]] });
+    d["app"]["panes"] = json!([
+        { "index": 1, "sandbox": "web-app", "mode": "agent", "thread": null, "focused": true, "status": "connected" },
+        { "index": 2, "sandbox": null, "mode": "agent", "thread": null, "focused": false, "status": "empty" },
+        { "index": 3, "sandbox": "api", "mode": "agent", "thread": null, "focused": false, "status": "connected" },
+        { "index": 4, "sandbox": "api", "mode": "bash", "thread": null, "focused": false, "status": "connected" },
+        { "index": 5, "sandbox": "docs", "mode": "agent", "thread": null, "focused": false, "status": "connected" }
+    ]);
+    d["app"]["layout"]["panes"] = json!(5);
+    let acts = open_plan_panes(&Ctx { data: &d }, &plan);
+    let names: Vec<String> = acts.iter().filter_map(|a| match a { Action::Intent { name, args } if name == "open_terminal" => { assert_eq!(args["pane"], "spare"); args["thread"].as_str().map(str::to_string) } _ => None }).collect();
+    assert_eq!(names, ["t1", "t2", "t3", "t4", "t5"], "all five, none dropped for a lack of room");
+    assert_eq!(acts.last(), Some(&Action::Intent { name: "page_show".into(), args: json!({ "page": 1 }) }), "the first thread lands on the page the person is on");
+    // Every page full: the first thread goes to a new page, which then shows.
+    d["app"]["pages"]["panes"] = json!([[1, 3], [4, 5]]);
+    d["app"]["pages"]["per"] = json!(2);
+    let acts = open_plan_panes(&Ctx { data: &d }, &plan);
+    assert_eq!(acts.last(), Some(&Action::Intent { name: "page_show".into(), args: json!({ "page": 3 }) }));
+    // Each intent is valid as the core checks it.
+    for a in &acts {
+        if let Action::Intent { name, args } = a {
+            crate::intent::parse(&json!({ "kind": "intent", "name": name, "args": args })).unwrap();
+        }
+    }
+}
